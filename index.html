@@ -111,6 +111,9 @@
       }
       .tab-action:hover { background: #eef5fb; color: #1a1a1a; }
       .view { flex: 1; overflow: auto; min-height: 0; min-width: 0; }
+      /* The data-grid panel lays out as a flex column (toolbar + scroller). A
+         class (not inline style) so `.view[hidden]` still wins and hides it. */
+      .ct-gridhost { display: flex; flex-direction: column; overflow: hidden; }
       .view[hidden] { display: none; }
       .results { background: var(--bg); }
 

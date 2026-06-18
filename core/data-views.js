@@ -38,10 +38,10 @@ export class DataView {
 
     // The panel becomes a flex column: a fixed toolbar (column filter + selection
     // count) above a scrolling grid area. The scroll/virtualisation math reads
-    // the inner scroller, not the host.
-    host.style.display = 'flex';
-    host.style.flexDirection = 'column';
-    host.style.overflow = 'hidden';
+    // the inner scroller, not the host. Done via a class, not inline
+    // `display:flex` — an inline style would beat the `.view[hidden]` display:none
+    // rule and leave the grid visible behind the other tabs.
+    host.classList.add('ct-gridhost');
 
     this.toolbar = document.createElement('div');
     this.toolbar.className = 'grid-toolbar';
