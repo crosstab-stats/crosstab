@@ -118,7 +118,11 @@
         font: inherit; padding: 8px 16px; border-radius: 6px; border: 1px solid var(--line);
         background: #fff; cursor: pointer;
       }
-      .ct-dialog__primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+      /* Specificity must beat `.ct-dialog__buttons button` (0,1,1) above, else the
+         white base background wins and leaves white text on white. */
+      .ct-dialog__buttons .ct-dialog__primary {
+        background: var(--accent); color: #fff; border-color: var(--accent);
+      }
     </style>
   </head>
 
