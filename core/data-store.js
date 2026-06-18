@@ -112,6 +112,13 @@ export class DataStore {
   #transforms = [];
 
   /**
+   * Undone transforms, most-recently-undone last — the redo stack. Cleared by any
+   * new transform (the standard undo/redo branch-discard) and by a load.
+   * @type {Array<{type: string, name?: string, patch?: object}>}
+   */
+  #redoStack = [];
+
+  /**
    * DERIVED: variable metadata in display order — the synchronous cache the UI
    * reads. Recomputed by {@link DataStore#rederive} from the sources' metadata
    * with the transform log applied.
@@ -197,6 +204,8 @@ export class DataStore {
       this.#sources = [await this.#createSource(1, { variables, columns, parquet, source })];
       this.#transforms = [];
     }
+    // A load is a structural change; the transform redo branch no longer applies.
+    this.#redoStack = [];
     await this.rederive();
   }
 
@@ -330,8 +339,10 @@ export class DataStore {
 
     // Append to the transform log and re-derive — never a destructive edit. The
     // retype-to-numeric cast is applied in the derived view (see rederive), so the
-    // source column is untouched and the change is reversible via undo().
+    // source column is untouched and the change is reversible via undo(). A fresh
+    // edit discards any redo branch (standard undo/redo semantics).
     this.#transforms.push({ type: 'setVariable', name, patch });
+    this.#redoStack = [];
     await this.rederive();
   }
 
@@ -344,10 +355,29 @@ export class DataStore {
     return this.#transforms.map((t) => structuredClone(t));
   }
 
-  /** Undo the most recent transform and re-derive. No-op if the log is empty. */
+  /** @returns {boolean} Whether there is a transform to undo. */
+  get canUndo() {
+    return this.#transforms.length > 0;
+  }
+
+  /** @returns {boolean} Whether there is an undone transform to redo. */
+  get canRedo() {
+    return this.#redoStack.length > 0;
+  }
+
+  /** Undo the most recent transform (onto the redo stack) and re-derive. No-op if
+   * the log is empty. */
   async undo() {
     if (this.#transforms.length === 0) return;
-    this.#transforms.pop();
+    this.#redoStack.push(this.#transforms.pop());
+    await this.rederive();
+  }
+
+  /** Re-apply the most recently undone transform and re-derive. No-op if there is
+   * nothing to redo. */
+  async redo() {
+    if (this.#redoStack.length === 0) return;
+    this.#transforms.push(this.#redoStack.pop());
     await this.rederive();
   }
 

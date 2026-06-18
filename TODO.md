@@ -459,6 +459,34 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       transform/recode surface and any analysis-history feature.
     - *Multi-file/append* entries (a library item that is several GSS years).
     - Supersedes the old "dataset persistence (IndexedDB)" line — OPFS is better.
+- [ ] **Export results / output (PDF default).** Save the Output pane (tables,
+      future plots, notes) to a shareable file — PDF as the sensible default for a
+      write-up artifact. *Approach is a real decision, hence listed not assumed:*
+  - *Rendering path:* (a) a **print stylesheet + `window.print()`** → "Save as PDF"
+    — zero deps, native, but the user goes through the print dialog and pagination
+    is the browser's; (b) **jsPDF (+ html2canvas)** — programmatic, but rasterises
+    HTML to images (fuzzy text, big files) unless content is rebuilt as PDF
+    primitives; (c) **Paged.js** — proper CSS paged media (running headers, page
+    numbers, table-aware breaks) at the cost of a vendored lib. Lean (a) for v1,
+    (c) if we want publication-grade pagination.
+  - *Wrinkle:* the results pane is **sanitised shadow-DOM** — a print/snapshot path
+    must reach into the shadow root (or render from the underlying result model
+    rather than the live DOM). Rendering from a model also enables non-PDF targets.
+  - *Scope:* output-only first. "Output + syntax + data summary" as a combined
+    report ties to export-to-syntax (transform log) and is a later combination.
+  - *Also cheap & adjacent:* HTML and single-table CSV export of individual result
+    tables; overlaps with the data-export item below.
+- [~] **Export data (exporter extension point).** Symmetric with import: a plugin
+      registers `app.exporters.register({ label, extensions, export })`, pulls the
+      current (transformed) data via `app.data`, and returns bytes; the engine owns
+      the File ▸ Export menu and the download. Exports the derived `dataset` VIEW,
+      so transforms/recodes are baked in while sources stay immutable.
+  - CSV export plugin (`plugins/builtin-csv-export/`) — RFC-4180 quoting; raw
+    values (codes, not labels) for round-tripping; missing → empty cell.
+  - *Decisions deferred (format coverage):* a labels-vs-codes toggle; SPSS `.sav` /
+    Stata `.dta` write (haven write-side, heavier); Parquet export
+    (`DuckDBManager.queryToParquet` exists — nearly free). CSV covers the common
+    need first.
 
 ## More analyses (each is just another plugin)
 

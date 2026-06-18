@@ -17,6 +17,7 @@ import { ResultsPane } from './results-pane.js';
 import { MenuShell } from './menu-shell.js';
 import { UiService } from './ui-service.js';
 import { ImportService } from './import-service.js';
+import { ExportService } from './export-service.js';
 import { DataView, VariableView } from './data-views.js';
 import { PluginLoader } from './loader.js';
 import { makeDemoDataset } from './demo-data.js';
@@ -38,6 +39,7 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-regression/index.js',
   './plugins/builtin-fred/index.js',
   './plugins/builtin-wikipedia/index.js',
+  './plugins/builtin-csv-export/index.js',
 ];
 
 /**
@@ -87,6 +89,7 @@ export async function boot(mounts) {
   const menus = new MenuShell(mounts.menubar);
   const ui = new UiService(dataStore);
   const importers = new ImportService({ menus, data: dataStore, results: results.api, bus });
+  const exporters = new ExportService({ menus, data: dataStore, results: results.api, bus });
 
   // The service bundle the plugin broker dispatches against. `data`/`results`/
   // `menus`/`ui` expose only their published `api` slices, never the full class
@@ -101,6 +104,7 @@ export async function boot(mounts) {
     menus: menus.api,
     ui: ui.api,
     importers: importers.api,
+    exporters: exporters.api,
     web: webService,
   };
   const loader = new PluginLoader(services);
@@ -120,6 +124,24 @@ export async function boot(mounts) {
   }
   const clearBtn = document.getElementById('clear-output');
   if (clearBtn) clearBtn.addEventListener('click', () => results.clear());
+
+  // Edit ▸ Undo / Redo over the transform log. Host-owned (like the data grid),
+  // not a plugin — registered through the same `menus.register` everything uses.
+  // No-ops when there's nothing to undo/redo; the views refresh on DATA_CHANGED.
+  menus.register({
+    id: 'core:undo',
+    path: ['Edit'],
+    label: 'Undo',
+    order: 10,
+    command: () => void dataStore.undo(),
+  });
+  menus.register({
+    id: 'core:redo',
+    path: ['Edit'],
+    label: 'Redo',
+    order: 20,
+    command: () => void dataStore.redo(),
+  });
 
   // --- seed data + warm up the runtimes, in parallel -------------------------
   // The two WASM runtimes are independent, so load them concurrently rather than
@@ -142,7 +164,7 @@ export async function boot(mounts) {
     }
   }
 
-  const engine = { bus, dataStore, duckdb, webr, results, menus, importers, loader, services };
+  const engine = { bus, dataStore, duckdb, webr, results, menus, importers, exporters, loader, services };
   // Expose for manual poking in the console during early development.
   // eslint-disable-next-line no-undef
   globalThis.crosstab = engine;

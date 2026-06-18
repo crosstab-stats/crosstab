@@ -240,10 +240,12 @@ export class PluginBroker {
  * @param {object} s.menus   - MenuShell#api
  * @param {object} s.ui      - UiService#api
  * @param {object} s.importers - ImportService#api
+ * @param {object} s.exporters - ExportService#api
+ * @param {object} s.web - Host network fetch (`web.get`)
  * @param {import('./event-bus.js').EventBus} s.bus
  * @returns {Object<string, Function>}
  */
-function buildDispatch({ data, transform, results, webr, menus, ui, importers, web, bus }) {
+function buildDispatch({ data, transform, results, webr, menus, ui, importers, exporters, web, bus }) {
   return {
     'data.getDataFrame': (opts) => data.getDataFrame(opts),
     'data.getColumns': (opts) => data.getColumns(opts),
@@ -277,6 +279,9 @@ function buildDispatch({ data, transform, results, webr, menus, ui, importers, w
 
     'importers.register': (spec) => importers.register(spec),
     'importers.deliver': (ticket, dataset) => importers.deliver(ticket, dataset),
+
+    'exporters.register': (spec) => exporters.register(spec),
+    'exporters.deliver': (ticket, payload) => exporters.deliver(ticket, payload),
 
     'web.get': (url) => web.get(url),
 

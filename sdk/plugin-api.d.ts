@@ -335,6 +335,51 @@ export interface WebApi {
   get(url: string): Promise<WebResponse>;
 }
 
+/** The file an exporter hands back to the engine to download. */
+export interface ExportPayload {
+  /** Suggested download filename, e.g. `"data.csv"`. */
+  filename: string;
+  /** MIME type, e.g. `"text/csv;charset=utf-8"`. */
+  mimeType: string;
+  /** File contents — text or bytes. */
+  data: string | Uint8Array | ArrayBuffer;
+}
+
+/** The request the engine passes to an exporter's {@link Exporter.export}. */
+export interface ExportRequest {
+  /** Opaque token identifying this export; pass it back to `deliver`. */
+  ticket: number;
+}
+
+/** An exporter registration — the mirror of {@link Importer}. */
+export interface Exporter {
+  /** Menu label under File ▸ Export, e.g. `"CSV…"`. */
+  label: string;
+  /** Called by the engine (in your sandbox). Read the current data via `app.data`
+   * (it returns the derived, transformed view), format it, and call
+   * {@link ExportersApi.deliver} with the bytes (or `null` to abort). Return value
+   * is ignored — delivery is via `deliver`, so async work is fine. */
+  export: (request: ExportRequest) => void;
+  /** File extensions produced, with the dot, e.g. `[".csv"]`. Informational. */
+  extensions?: string[];
+  /** Stable id (defaults to `label`). */
+  id?: string;
+  /** Sort weight within File ▸ Export (lower first). Default 100. */
+  order?: number;
+}
+
+/**
+ * Data export as an extension point — the mirror of {@link ImportersApi}.
+ * Register an exporter and the engine adds a File ▸ Export menu item and handles
+ * the download of whatever bytes you deliver.
+ */
+export interface ExportersApi {
+  /** Register an exporter; resolves to a disposer (also auto-run on unload). */
+  register(exporter: Exporter): Promise<Disposer>;
+  /** Deliver formatted bytes for the given request `ticket` (or `null` to abort). */
+  deliver(ticket: number, payload: ExportPayload | null): Promise<void>;
+}
+
 /** App-wide publish/subscribe. Payloads must be structured-cloneable. */
 export interface EventsApi {
   /** Subscribe; resolves to an unsubscribe fn (also auto-run on unload). */
@@ -362,6 +407,7 @@ export interface App {
   readonly menus: MenusApi;
   readonly ui: UiApi;
   readonly importers: ImportersApi;
+  readonly exporters: ExportersApi;
   readonly web: WebApi;
   readonly events: EventsApi;
 }
