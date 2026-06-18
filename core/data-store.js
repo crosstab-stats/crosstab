@@ -2,11 +2,26 @@
  * @file data-store.js
  * The canonical dataset and its published API surface.
  *
- * ## Storage: DuckDB-WASM, fronted by a thin synchronous metadata cache
+ * ## Source-immutable architecture: sources + transform log → derived view
  *
- * The dataset's *values* live in a DuckDB-WASM table (see
- * {@link DuckDBManager}); this class is a facade over that connection. The
- * decision to use DuckDB — rather than in-memory JS arrays — was proven out
+ * The imported data is the **immutable source of truth** and is never
+ * overwritten (see the README principle). Concretely:
+ *
+ *  - **Source tables** (`ct_source_1`, …) hold each imported/appended file's
+ *    data in DuckDB. They are created once and never altered.
+ *  - **The transform log** (`#transforms`) is an ordered list of edits the user
+ *    has made (e.g. recode/retype a variable). It is data, not mutation —
+ *    inspectable, undoable, and (later) exportable as a do-file.
+ *  - **`dataset`** is a DuckDB **VIEW** derived from the sources + the log. Every
+ *    read in the app queries it. Metadata-only transforms (relabel, designate
+ *    missing, retype-to-factor) just recompute the JS-side metadata; only
+ *    retype-to-numeric (a `CAST` in the view) and append (another source in the
+ *    `UNION ALL BY NAME`) change the view definition — a cheap DDL redefine, no
+ *    data copy. So sources stay immutable and there is no source/working
+ *    duplication.
+ *
+ * Values live in DuckDB-WASM (see {@link DuckDBManager}); this class is a facade.
+ * The decision to use DuckDB — rather than in-memory JS arrays — was proven out
  * before the rewrite; see `spike/RESULTS.md`.
  *
  * What stays in JS, synchronously, is only the small stuff every part of the UI
@@ -30,8 +45,12 @@
 import { CoreEvents } from './event-bus.js';
 import { quoteIdent } from './duckdb-manager.js';
 
-/** Name of the single DuckDB table that holds the active dataset. */
+/** Name of the working **view** the rest of the app reads. It is derived (never
+ * written directly) from the immutable source tables + the transform log. */
 const MAIN_TABLE = 'dataset';
+
+/** Prefix for the immutable per-file source tables (`ct_source_1`, …). */
+const SOURCE_TABLE_PREFIX = 'ct_source_';
 
 /** Column auto-added when stacking files, tagging each row with its origin so a
  * pooled multi-file/multi-year dataset stays distinguishable (group/filter by
@@ -78,35 +97,40 @@ export class DataStore {
   #duckdb;
 
   /**
-   * Variable metadata in display order — the synchronous cache. The values these
-   * describe live in DuckDB; this is everything the UI needs without awaiting.
+   * The immutable source tables, in load order. One per imported/appended file.
+   * @type {Array<{table: string, meta: VariableMeta[], label: string|null}>}
+   */
+  #sources = [];
+
+  /**
+   * The transform log: ordered, replayable edits applied over the sources to
+   * derive the working view + metadata. v1 entry type is `setVariable`
+   * (`{type:'setVariable', name, patch}`). Inspectable via {@link DataStore#getTransforms},
+   * reversible via {@link DataStore#undo} — the reproducibility record.
+   * @type {Array<{type: string, name?: string, patch?: object}>}
+   */
+  #transforms = [];
+
+  /**
+   * DERIVED: variable metadata in display order — the synchronous cache the UI
+   * reads. Recomputed by {@link DataStore#rederive} from the sources' metadata
+   * with the transform log applied.
    * @type {VariableMeta[]}
    */
   #variables = [];
 
-  /** name → meta, for O(1) lookup. @type {Map<string, VariableMeta>} */
+  /** DERIVED: name → meta, for O(1) lookup. @type {Map<string, VariableMeta>} */
   #byName = new Map();
 
   /**
-   * name → DuckDB SQL type string (e.g. `DOUBLE`, `BIGINT`, `DATE`,
-   * `DECIMAL(9,2)`). Cached on each `setDataset` so reads don't re-query the
-   * schema. Drives the type-aware casting in {@link DataStore#getColumns} and
-   * {@link DataStore#getInjectionParquet} — independent of `VariableMeta.type`,
-   * so it stays correct for types the metadata model doesn't yet name (the
-   * dates/int64 a `.sav`/`.dta` import will bring in).
+   * DERIVED: name → the working view's DuckDB SQL type string (e.g. `DOUBLE`,
+   * `BIGINT`, `DATE`). Refreshed on rederive; drives the type-aware casting in
+   * {@link DataStore#getColumns}/{@link DataStore#getInjectionParquet}.
    * @type {Map<string, string>}
    */
   #sqlTypes = new Map();
 
-  /**
-   * Source label of the currently-loaded data, remembered so that the first
-   * *append* to a single-file dataset can tag the pre-existing rows correctly
-   * (they have no `source_file` column yet). Null for the demo seed / unknown.
-   * @type {string|null}
-   */
-  #lastSource = null;
-
-  /** Number of cases (rows). Kept explicit so an empty dataset can have schema. */
+  /** DERIVED: number of cases (rows) in the working view. */
   #rowCount = 0;
 
   /**
@@ -141,7 +165,7 @@ export class DataStore {
    * @returns {Promise<void>}
    */
   async setDataset({ variables, columns }) {
-    await this.#replaceDataset({ variables, columns });
+    await this.loadDataset({ variables, columns, mode: 'replace' });
   }
 
   /**
@@ -150,10 +174,11 @@ export class DataStore {
    * `{ variables, parquet }` (R/`haven`-parsed) — and either **replaces** the
    * current dataset or **appends** (stacks rows) onto it.
    *
-   * Append reconciles columns by name (`UNION ALL BY NAME`, NULL-filling vars a
-   * file lacks) and tags each file's rows with a `source_file` column so a pooled
-   * multi-year dataset stays distinguishable. The engine — never a plugin — calls
-   * this, only in response to a user import action.
+   * Replace resets the sources and the transform log to a fresh import; append
+   * adds another immutable source (reconciled by name via `UNION ALL BY NAME` in
+   * the derived view, NULL-filling vars a file lacks, with each file's rows tagged
+   * by a `source_file` column). The engine — never a plugin — calls this, only in
+   * response to a user import action.
    *
    * @param {Object} dataset
    * @param {VariableMeta[]} dataset.variables
@@ -164,18 +189,27 @@ export class DataStore {
    * @returns {Promise<void>}
    */
   async loadDataset({ variables, columns, parquet, mode = 'replace', source }) {
-    // Appending to an empty store is just a load.
-    if (mode === 'append' && this.#rowCount > 0) {
-      await this.#appendDataset({ variables, columns, parquet, source });
+    if (mode === 'append' && this.#sources.length > 0) {
+      const idx = this.#sources.length + 1;
+      this.#sources.push(await this.#createSource(idx, { variables, columns, parquet, source }));
     } else {
-      await this.#replaceDataset({ variables, columns, parquet, source });
+      await this.#dropAll();
+      this.#sources = [await this.#createSource(1, { variables, columns, parquet, source })];
+      this.#transforms = [];
     }
+    await this.rederive();
   }
 
-  /** Replace the whole dataset (parquet or columnar). */
-  async #replaceDataset({ variables, columns, parquet, source }) {
+  /**
+   * Materialise one immutable source table (`ct_source_<index>`) from a loaded
+   * file and return its descriptor. Does not touch the working view.
+   *
+   * @returns {Promise<{table: string, meta: VariableMeta[], label: string|null}>}
+   */
+  async #createSource(index, { variables, columns, parquet, source }) {
+    const table = `${SOURCE_TABLE_PREFIX}${index}`;
     if (parquet) {
-      await this.#duckdb.replaceTableFromParquet(MAIN_TABLE, parquet);
+      await this.#duckdb.replaceTableFromParquet(table, parquet);
     } else {
       const cols = columns ?? {};
       const lengths = variables.map((v) => (cols[v.name] ?? []).length);
@@ -185,57 +219,36 @@ export class DataStore {
       }
       const coerced = {};
       for (const meta of variables) coerced[meta.name] = coerceColumn(meta, cols[meta.name] ?? []);
-      await this.#duckdb.replaceTable(MAIN_TABLE, coerced);
+      await this.#duckdb.replaceTable(table, coerced);
     }
-    this.#variables = variables.map((m) => ({ ...m }));
-    this.#byName = new Map(this.#variables.map((m) => [m.name, m]));
-    this.#lastSource = source ?? null;
-    await this.#postLoad();
+    return { table, meta: variables.map((m) => ({ ...m })), label: source ?? null };
+  }
+
+  /** Drop the working view and every source table; clear the source list. */
+  async #dropAll() {
+    await this.#duckdb.query(`DROP VIEW IF EXISTS ${quoteIdent(MAIN_TABLE)}`);
+    for (const s of this.#sources) {
+      await this.#duckdb.query(`DROP TABLE IF EXISTS ${quoteIdent(s.table)}`);
+    }
+    this.#sources = [];
   }
 
   /**
-   * Stack a new file's rows onto the current dataset, reconciling columns by
-   * name and tagging provenance. The incoming data is materialised into a temp
-   * table, then `UNION ALL BY NAME`-d with the main table.
+   * Recompute everything derived from `#sources` + `#transforms`: the variable
+   * metadata cache, the working `dataset` view, the SQL types, and the row count.
+   * Then emit {@link CoreEvents.DATA_CHANGED}. This is the single place the
+   * "source + log → derived" projection happens.
+   *
+   * @returns {Promise<void>}
    */
-  async #appendDataset({ variables, columns, parquet, source }) {
-    const TEMP = 'dataset_incoming';
-    if (parquet) {
-      await this.#duckdb.replaceTableFromParquet(TEMP, parquet);
-    } else {
-      const cols = columns ?? {};
-      const coerced = {};
-      for (const meta of variables) coerced[meta.name] = coerceColumn(meta, cols[meta.name] ?? []);
-      await this.#duckdb.replaceTable(TEMP, coerced);
+  async rederive() {
+    // 1) Metadata: merge sources (first wins on shared names), add source_file for
+    //    a pooled dataset, then replay the transform log.
+    const byName = new Map();
+    for (const s of this.#sources) {
+      for (const m of s.meta) if (!byName.has(m.name)) byName.set(m.name, { ...m });
     }
-
-    const q = quoteIdent;
-    const src = q(SOURCE_COL);
-    const incLit = sqlString(source ?? 'import');
-    // Existing rows: if they already carry source_file (a prior append) keep it;
-    // otherwise tag them with the dataset's remembered origin.
-    const mainSelect = this.#sqlTypes.has(SOURCE_COL)
-      ? `SELECT * FROM ${q(MAIN_TABLE)}`
-      : `SELECT *, ${sqlString(this.#lastSource ?? 'dataset 1')} AS ${src} FROM ${q(MAIN_TABLE)}`;
-    const incSelect = `SELECT *, ${incLit} AS ${src} FROM ${q(TEMP)}`;
-
-    await this.#duckdb.query(
-      `CREATE TABLE dataset_new AS ${mainSelect} UNION ALL BY NAME ${incSelect}`,
-    );
-    await this.#duckdb.query(`DROP TABLE ${q(MAIN_TABLE)}`);
-    await this.#duckdb.query(`ALTER TABLE dataset_new RENAME TO ${q(MAIN_TABLE)}`);
-    await this.#duckdb.query(`DROP TABLE ${q(TEMP)}`);
-
-    this.#mergeVariables(variables);
-    await this.#postLoad();
-  }
-
-  /** Merge an appended file's variable metadata into the cache (union by name;
-   * existing meta wins on shared names) and ensure the `source_file` entry. */
-  #mergeVariables(incoming) {
-    const byName = new Map(this.#variables.map((m) => [m.name, m]));
-    for (const m of incoming) if (!byName.has(m.name)) byName.set(m.name, { ...m });
-    if (!byName.has(SOURCE_COL)) {
+    if (this.#sources.length > 1 && !byName.has(SOURCE_COL)) {
       byName.set(SOURCE_COL, {
         name: SOURCE_COL,
         label: 'Source file',
@@ -243,18 +256,41 @@ export class DataStore {
         measurementLevel: 'nominal',
       });
     }
+    for (const t of this.#transforms) {
+      if (t.type === 'setVariable') applyPatch(byName.get(t.name), t.patch);
+    }
     this.#variables = [...byName.values()];
     this.#byName = byName;
-  }
 
-  /** Refresh row count, SQL types and selection after a load/append; emit. */
-  async #postLoad() {
-    const countTable = await this.#duckdb.query(
-      `SELECT count(*) AS n FROM ${quoteIdent(MAIN_TABLE)}`,
-    );
-    this.#rowCount = Number(countTable.get(0).n);
+    // 2) Working view: derived from the immutable sources. Numeric-typed columns
+    //    are CAST to DOUBLE here (the only "data" effect of a transform); a pooled
+    //    dataset gets the source_file column and a UNION ALL BY NAME.
+    if (this.#sources.length === 0) {
+      await this.#duckdb.query(`DROP VIEW IF EXISTS ${quoteIdent(MAIN_TABLE)}`);
+      this.#sqlTypes = new Map();
+      this.#rowCount = 0;
+    } else {
+      const numeric = new Set(this.#variables.filter((m) => m.type === 'numeric').map((m) => m.name));
+      const multi = this.#sources.length > 1;
+      const selects = this.#sources.map((s, i) => {
+        const colExprs = s.meta.map((col) => {
+          const q = quoteIdent(col.name);
+          return numeric.has(col.name) ? `TRY_CAST(${q} AS DOUBLE) AS ${q}` : q;
+        });
+        const prov = multi
+          ? `, ${sqlString(s.label ?? `dataset ${i + 1}`)} AS ${quoteIdent(SOURCE_COL)}`
+          : '';
+        return `SELECT ${colExprs.join(', ')}${prov} FROM ${quoteIdent(s.table)}`;
+      });
+      await this.#duckdb.query(
+        `CREATE OR REPLACE VIEW ${quoteIdent(MAIN_TABLE)} AS ${selects.join(' UNION ALL BY NAME ')}`,
+      );
+      await this.#refreshSqlTypes();
+      const c = await this.#duckdb.query(`SELECT count(*) AS n FROM ${quoteIdent(MAIN_TABLE)}`);
+      this.#rowCount = Number(c.get(0).n);
+    }
+
     this.#selected = this.#selected.filter((n) => this.#byName.has(n));
-    await this.#refreshSqlTypes();
     this.#bus.emit(CoreEvents.DATA_CHANGED, this.#snapshotSummary());
   }
 
@@ -275,8 +311,7 @@ export class DataStore {
    * @returns {Promise<void>}
    */
   async updateVariable(name, patch) {
-    const meta = this.#byName.get(name);
-    if (!meta) throw new Error(`updateVariable: unknown variable "${name}"`);
+    if (!this.#byName.has(name)) throw new Error(`updateVariable: unknown variable "${name}"`);
 
     // Sanitise (this is plugin-callable via app.transform): drop invalid enum
     // values rather than letting them corrupt the metadata.
@@ -291,33 +326,29 @@ export class DataStore {
     ) {
       delete patch.measurementLevel;
     }
+    if (Object.keys(patch).length === 0) return;
 
-    if (patch.type === 'numeric' && classifySqlType(this.#sqlTypes.get(name)) !== 'numeric') {
-      const q = quoteIdent(name);
-      await this.#duckdb.query(
-        `ALTER TABLE ${quoteIdent(MAIN_TABLE)} ALTER COLUMN ${q} TYPE DOUBLE ` +
-          `USING TRY_CAST(${q} AS DOUBLE)`,
-      );
-      await this.#refreshSqlTypes();
-    }
+    // Append to the transform log and re-derive — never a destructive edit. The
+    // retype-to-numeric cast is applied in the derived view (see rederive), so the
+    // source column is untouched and the change is reversible via undo().
+    this.#transforms.push({ type: 'setVariable', name, patch });
+    await this.rederive();
+  }
 
-    const updated = { ...meta };
-    for (const key of ['label', 'type', 'measurementLevel', 'valueLabels', 'missingValues']) {
-      if (!(key in patch)) continue;
-      const v = patch[key];
-      const empty =
-        v == null ||
-        v === '' ||
-        (Array.isArray(v) && v.length === 0) ||
-        (key === 'valueLabels' && typeof v === 'object' && Object.keys(v).length === 0);
-      if (empty) delete updated[key];
-      else updated[key] = v;
-    }
-    updated.name = name; // renaming is not done here
+  /**
+   * The transform log (a copy) — the ordered edits applied over the immutable
+   * sources. The basis for an undo/history UI and a future do-file export.
+   * @returns {Array<object>}
+   */
+  getTransforms() {
+    return this.#transforms.map((t) => structuredClone(t));
+  }
 
-    this.#byName.set(name, updated);
-    this.#variables = this.#variables.map((m) => (m.name === name ? updated : m));
-    this.#bus.emit(CoreEvents.DATA_CHANGED, this.#snapshotSummary());
+  /** Undo the most recent transform and re-derive. No-op if the log is empty. */
+  async undo() {
+    if (this.#transforms.length === 0) return;
+    this.#transforms.pop();
+    await this.rederive();
   }
 
   /**
@@ -521,17 +552,14 @@ export class DataStore {
     );
   }
 
-  /** Refresh the cached SQL column types from DuckDB's schema. */
+  /** Refresh the cached SQL column types from the working view. `DESCRIBE` works
+   * on views (unlike a table-name lookup in information_schema). */
   async #refreshSqlTypes() {
     this.#sqlTypes = new Map();
-    if (this.#variables.length === 0 || this.#rowCount === 0) return;
-    const rows = await this.#duckdb.query(
-      `SELECT column_name, data_type FROM information_schema.columns ` +
-        `WHERE table_name = '${MAIN_TABLE}'`,
-    );
+    const rows = await this.#duckdb.query(`DESCRIBE ${quoteIdent(MAIN_TABLE)}`);
     for (let i = 0; i < rows.numRows; i++) {
       const r = rows.get(i);
-      this.#sqlTypes.set(String(r.column_name), String(r.data_type));
+      this.#sqlTypes.set(String(r.column_name), String(r.column_type));
     }
   }
 
@@ -646,6 +674,29 @@ export class DataStore {
  */
 function sqlString(s) {
   return `'${String(s).replace(/'/g, "''")}'`;
+}
+
+/**
+ * Apply a `setVariable` patch to a variable's metadata in place (used when
+ * replaying the transform log). Empty values clear the field. No-op if the named
+ * variable isn't present (e.g. an edit to a variable a later replace removed).
+ *
+ * @param {VariableMeta|undefined} meta
+ * @param {object} patch
+ */
+function applyPatch(meta, patch) {
+  if (!meta || !patch) return;
+  for (const key of ['label', 'type', 'measurementLevel', 'valueLabels', 'missingValues']) {
+    if (!(key in patch)) continue;
+    const v = patch[key];
+    const empty =
+      v == null ||
+      v === '' ||
+      (Array.isArray(v) && v.length === 0) ||
+      (key === 'valueLabels' && typeof v === 'object' && Object.keys(v).length === 0);
+    if (empty) delete meta[key];
+    else meta[key] = v;
+  }
 }
 
 function coerceColumn(meta, raw) {

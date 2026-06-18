@@ -344,32 +344,32 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     (fixed 120px today).
 - [ ] **Data editor.** The current `VariablesSidebar` in `core/app.js` is a
       minimal stand-in. Becomes the editing layer over the data-grid view above.
-- [ ] **Source-immutability principle + transform log (FOUNDATIONAL for Phase 2).**
-      *Principle (now stated in README):* the imported dataset is the immutable
-      source of truth; every change is an **ordered transform applied over it**,
-      never a destructive edit. Working data = `source` + transforms; the log is
-      inspectable / undoable / reorderable / **exportable as a do-file** (the
-      reproducibility property the research audience needs). Build it as: an
-      immutable `source` table + a transform log + a derived working table (DuckDB
-      `VIEW` / re-materialise; metadata transforms cost nothing, column-adds and
-      cell-edit overrides are sparse, so duplication is minimal).
-  - **To-fix — where we don't honour it yet:**
-    - [ ] **No source/working/log separation (the core gap).** There's a single
-          mutable `dataset` table that is *both* source and working. The transform
-          layer must introduce the split above. Everything else here folds into it.
-    - [ ] **Retype-to-numeric mutates storage in place** —
-          `DataStore.updateVariable` runs `ALTER COLUMN … TRY_CAST → DOUBLE`
-          (`core/data-store.js`). Should be a transform over an untouched source
-          column, not a destructive cast.
-    - [ ] **Append rewrites the working table** — `#appendDataset` does
-          `CREATE TABLE … UNION ALL BY NAME` + `DROP`/`RENAME`
-          (`core/data-store.js`). Should be a logged "stack" transform over
-          retained per-file sources (and thus undoable/reproducible).
-    - [ ] **No transform log/history exists** — changes aren't recorded, so
-          nothing is reproducible, undoable, or exportable yet. Building the log
-          *is* the fix (and unlocks export-to-syntax).
-    - [ ] **Future cell editor must use a sparse override layer** (applied last in
-          the pipeline), never a destructive cell write. Preventive — not built yet.
+- [~] **Source-immutability + transform log — BUILT** (`core/data-store.js`).
+      Re-architected per the README principle: immutable per-file source tables
+      (`ct_source_N`) + an ordered transform log → a derived DuckDB **VIEW**
+      (`dataset`) that every read queries. Metadata transforms recompute only the
+      JS metadata; retype-to-numeric is a `CAST` in the view; append is another
+      source in the `UNION ALL BY NAME` — so sources are never mutated and there's
+      no data duplication. **Verified in Chrome:** retype gender→numeric reflects
+      in the view (DOUBLE) while `ct_source_1` stays VARCHAR (immutable); `undo()`
+      reverts it; append pools with `source_file` + NULL-fill; replace drops old
+      sources cleanly; injection/grid read the view.
+  - **To-fix — all the prior violations are now closed:**
+    - [x] Source/working/log separation — the core gap; now sources + log →
+          derived view.
+    - [x] Retype-to-numeric no longer `ALTER`s storage — it's a view-level `CAST`
+          over the untouched source column (reversible via `undo`).
+    - [x] Append no longer `DROP`/`RENAME`s the table — it adds an immutable
+          source and redefines the view.
+    - [x] Transform log exists — `getTransforms()` + `undo()` on `DataStore`
+          (internal/engine for now; reproducible & undoable).
+    - [ ] **Cell editor must use a sparse override transform** when built — not a
+          destructive cell write. Preventive; the override-layer transform type
+          isn't implemented yet (no cell editing yet).
+  - *Still to do (follow-ups the log unlocks):* expose the log to a **history/undo
+    UI** and to plugins; **export-to-syntax** (do-file) from the log; treat
+    append/load as logged steps too (today they manage `#sources`, edits are the
+    logged transforms) for a fully unified history; redo.
   - **Accepted boundary (not a violation):** "source" = the *as-imported* table,
     not the original file bytes. Pair with the **Dataset library** to enable full
     file→result reproduction if wanted.
