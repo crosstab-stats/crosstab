@@ -54,6 +54,23 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 - [ ] **File import** (priority order): CSV with type inference → SPSS `.sav` via
       Haven through WebR (preserves metadata) → Excel via SheetJS. Lands first,
       then delete the temporary `core/demo-data.js` seed.
+- [ ] **Import data from a web page (URL scrape).** Point the app at a URL; it
+      fetches and parses tabular data (e.g. HTML `<table>`s) into a new dataset
+      for analysis, with an option to save the parsed data locally as CSV (or
+      another suitable format) for archival.
+  - **Approach is an open decision, not a given.** The original idea named Python
+    + BeautifulSoup, but CrossTab runs entirely client-side (vanilla JS + WebR):
+    there is no Python runtime, and the browser can't fetch arbitrary
+    cross-origin URLs (CORS). Two sub-decisions:
+    - *How to fetch:* a small serverless proxy (e.g. Cloudflare Worker/Function)
+      that does the cross-origin GET — and could also run BeautifulSoup if we
+      want a Python parse step server-side — **or** a no-server fallback where
+      the user pastes page HTML / uploads a saved page.
+    - *How to parse:* client-side via the browser's `DOMParser` table extraction,
+      or R's `rvest`/`xml2` inside WebR, or (if we add the proxy) BeautifulSoup
+      server-side. Pick based on the fetch decision.
+  - Reuses the same ingest path as file import (`DataStore.setDataset`); the
+    "save as CSV" archival option overlaps with CSV export work.
 - [ ] **Data editor.** The current `VariablesSidebar` in `core/app.js` is a
       minimal stand-in.
 - [ ] **Data transform/recode API.** `app.data` is read-only by design; mutations
