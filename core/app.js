@@ -95,6 +95,8 @@ export async function boot(mounts) {
     const variableView = new VariableView(mounts.viewVars, dataStore);
     wireWorkspaceTabs(bus, mounts, { dataView, variableView, results: mounts.results });
   }
+  const clearBtn = document.getElementById('clear-output');
+  if (clearBtn) clearBtn.addEventListener('click', () => results.clear());
 
   // --- seed data + warm up the runtimes, in parallel -------------------------
   // The two WASM runtimes are independent, so load them concurrently rather than

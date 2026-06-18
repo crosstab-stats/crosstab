@@ -102,6 +102,12 @@
       }
       .tab:hover { color: #1a1a1a; }
       .tab[aria-selected="true"] { color: #1a1a1a; border-bottom-color: var(--accent); font-weight: 600; }
+      .tab-action {
+        margin-left: auto; align-self: center; background: transparent;
+        border: 1px solid var(--line); border-radius: 6px; font: inherit; font-size: 13px;
+        padding: 4px 10px; cursor: pointer; color: #5a6470;
+      }
+      .tab-action:hover { background: #eef5fb; color: #1a1a1a; }
       .view { flex: 1; overflow: auto; min-height: 0; }
       .view[hidden] { display: none; }
       .results { background: var(--bg); }
@@ -205,6 +211,7 @@
           <button class="tab" id="tab-data" role="tab" data-view="data">Data</button>
           <button class="tab" id="tab-vars" role="tab" data-view="vars">Variables</button>
           <button class="tab" id="tab-output" role="tab" data-view="output" aria-selected="true">Output</button>
+          <button class="tab-action" id="clear-output" type="button" title="Clear all output">Clear output</button>
         </div>
         <div class="view" id="view-data" role="tabpanel" aria-label="Data" hidden></div>
         <div class="view" id="view-vars" role="tabpanel" aria-label="Variables" hidden></div>
