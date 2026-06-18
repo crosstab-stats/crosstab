@@ -121,6 +121,8 @@ Safari pass is the remaining unknown.
 
 ## Status of the open questions
 
+See [`TODO.md`](./TODO.md) for the full task tracker; the highlights:
+
 - **postMessage protocol** for iframe-isolated plugins — **now resolved**, by
   necessity: because *all* plugins are sandboxed equally, this is on the critical
   path, not deferrable. The protocol is implemented in `core/plugin-broker.js`
