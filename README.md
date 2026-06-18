@@ -26,7 +26,8 @@ really is just the official mod, behind the same boundary as any third party.
 ```
 core/
   event-bus.js     app-wide pub/sub
-  data-store.js    canonical dataset + published data API
+  duckdb-manager.js DuckDB-WASM runtime; Arrow-IPC ingest, SQL query
+  data-store.js    dataset facade over DuckDB + published data API
   webr-manager.js  WebR runtime, serial job queue, host-side data injection
   results-pane.js  SPSS-style output renderer (shadow DOM)
   sanitize-html.js allowlist sanitiser for untrusted plugin output
@@ -136,8 +137,15 @@ See [`TODO.md`](./TODO.md) for the full task tracker; the highlights:
   library (DOMPurify) before public release.
 - **Shadow DOM for the results pane** — *resolved: yes* (style isolation +
   one canonical table stylesheet). See `core/results-pane.js`.
+- **Data storage engine** — *resolved: DuckDB-WASM.* The dataset lives in a
+  DuckDB-WASM table; `core/data-store.js` is a facade over it, with Apache Arrow
+  as the bridge (IPC in, query results out) and metadata cached app-side. Proven
+  by three spikes (`spike/RESULTS.md`) and now wired in — the Frequencies +
+  `lm()` paths run over DuckDB end to end in Chrome.
 - **R package pre-loading strategy** — *open.* Plugins declare `rPackages` in
   their manifest; what ships by default vs. installs on demand is undecided.
+  (Decided one case: `bit64` is install-on-demand; 64-bit ints are carried as
+  character by default — R has no native int64.)
 - **Plugin/API versioning interaction** — *partially resolved.* Loader enforces
   matching major + engine-minor-≥-plugin-minor; migration policy for major bumps
   is open.

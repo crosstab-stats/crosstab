@@ -10,13 +10,33 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
-- [ ] **Build and prove the DuckDB-WASM data engine — FOUNDATIONAL, do this first.**
-      This must be settled and demonstrated *before* file import, the data grid,
-      or any more analyses, because all of those bake in assumptions about the
-      storage shape. We can't responsibly read a file's contents until we know
-      what we're reading them *into*. This is meant to be a real tool for real
-      social-science work — datasets get large (hundreds of variables × hundreds
-      of thousands of cases) — so the engine has to scale, not just demo.
+- [~] **Build and prove the DuckDB-WASM data engine — FOUNDATIONAL.**
+      *Core engine wired in and live (desktop Chrome):* `core/duckdb-manager.js`
+      owns the runtime; `core/data-store.js` is now a facade over a DuckDB table
+      (Arrow IPC in, SQL query out) with metadata cached app-side. The demo
+      dataset loads into DuckDB and Frequencies + `lm()` run over it end to end,
+      including value labels and `-99` user-missing handling. Remaining sub-tasks
+      to fully close this out are checklisted below.
+  - [ ] **Parquet fast-lane (Bridge B).** Injection currently uses the hardened
+        JS-array path (Bridge A: `CAST … AS DOUBLE`, per-cell `.get(i)`). Add the
+        Parquet/`nanoparquet` path as the default for large reduced results
+        (spikes showed it's higher fidelity — native types/decimals/NULLs).
+  - [ ] **Full type handling in `getColumns`.** Today it casts numeric→DOUBLE and
+        passes text through. Fold in the int64→VARCHAR and temporal→ISO(+UTC)
+        rules (proven in `datatypes-spike`) so non-demo types are correct before
+        import lands.
+  - [ ] **Startup UX.** `boot()` now awaits DuckDB before first data render, so
+        the sidebar is briefly empty on cold load. Show a "loading data engine"
+        state (and ideally start DuckDB + WebR loads in parallel).
+  - [ ] **Ingest path for large/real data.** Demo uses a one-shot Arrow ingest of
+        small JS arrays; exercise/representative-test bulk ingest (and revisit
+        explicit Arrow column typing so a leading-NULL column can't mis-infer).
+  - [ ] **Vendor + pin** DuckDB-WASM + Arrow assets (currently CDN) — see below.
+  - [ ] **iPad Safari** run of the whole engine (Milestone 3).
+      Original framing kept below for context.
+  - This is meant to be a real tool for real social-science work — datasets get
+      large (hundreds of variables × hundreds of thousands of cases) — so the
+      engine has to scale, not just demo.
   - **Decision (made): DuckDB-WASM is the data backend, with Apache Arrow as the
     interchange format.** A modern tablet (e.g. M5 iPad Pro) can comfortably
     carry a second WASM runtime alongside WebR, so the earlier "lean on iPad,
@@ -137,6 +157,12 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 - [ ] **R package pre-loading strategy.** Plugins declare `rPackages` in their
       manifest, but which packages ship with the default plugin set vs. install
       on demand — and how heavy shared deps are handled — is open.
+  - *Decided: `bit64` is install-on-demand, not default.* int64 columns are
+    carried as **character** by default (storage stays native `BIGINT` in DuckDB;
+    R has no native int64 — see the data-engine item). `bit64::integer64` buys
+    nothing for storage/transport/display (JS `Number` hits the same 2⁵³ wall),
+    so it's only worth loading for genuine 64-bit *arithmetic in R* — a per-
+    variable opt-in to add later, purely additive, no debt from deferring.
 - [ ] **Multi-file plugins.** Blob-imported modules can't resolve relative
       imports. Decide on an import-map or bundling story so plugins can span files.
 

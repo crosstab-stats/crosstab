@@ -11,6 +11,7 @@
 
 import { EventBus, CoreEvents } from './event-bus.js';
 import { DataStore } from './data-store.js';
+import { DuckDBManager } from './duckdb-manager.js';
 import { WebRManager } from './webr-manager.js';
 import { ResultsPane } from './results-pane.js';
 import { MenuShell } from './menu-shell.js';
@@ -41,7 +42,8 @@ const BUILTIN_PLUGINS = ['./plugins/builtin-frequencies/index.js'];
 export async function boot(mounts) {
   // --- core services ---------------------------------------------------------
   const bus = new EventBus();
-  const dataStore = new DataStore(bus);
+  const duckdb = new DuckDBManager();
+  const dataStore = new DataStore(bus, duckdb);
   const webr = new WebRManager(
     { bus, getColumns: (opts) => dataStore.getColumns(opts) },
     { preloadPackages: [] }, // built-in plugins declare their own R deps
@@ -71,7 +73,9 @@ export async function boot(mounts) {
   bus.on(CoreEvents.SELECTION_CHANGED, () => sidebar.renderSelection());
 
   // --- seed data (temporary; replaced by file import later) ------------------
-  dataStore.setDataset(makeDemoDataset());
+  // Awaited: this loads the table into DuckDB before plugins (or the user) can
+  // ask for data.
+  await dataStore.setDataset(makeDemoDataset());
 
   // --- load built-in plugins -------------------------------------------------
   for (const url of BUILTIN_PLUGINS) {
@@ -87,7 +91,7 @@ export async function boot(mounts) {
   // Begin warming up WebR in the background so the first analysis is faster.
   webr.preload().catch((err) => console.warn('WebR preload failed', err));
 
-  const engine = { bus, dataStore, webr, results, menus, loader, services };
+  const engine = { bus, dataStore, duckdb, webr, results, menus, loader, services };
   // Expose for manual poking in the console during early development.
   // eslint-disable-next-line no-undef
   globalThis.crosstab = engine;

@@ -2,28 +2,42 @@
  * @file data-store.js
  * The canonical dataset and its published API surface.
  *
- * Internally the store keeps each variable as a columnar array (and, for
- * numeric variables, a typed `Float64Array`) because that is far more memory
- * efficient than an array of row objects — a dataset with 200 variables and
- * 100k cases is 100k tiny objects in row form, but 200 flat arrays in columnar
- * form. Columnar storage is also what R, DuckDB, and Arrow all want.
+ * ## Storage: DuckDB-WASM, fronted by a thin synchronous metadata cache
  *
- * The *public* API, however, hands plugins row-oriented objects
- * (`[{col: val}, ...]`), because that is the shape plugin authors expect and
- * the shape that maps cleanly onto an R `data.frame` when injected into WebR.
- * The conversion happens here, once, behind a stable contract.
+ * The dataset's *values* live in a DuckDB-WASM table (see
+ * {@link DuckDBManager}); this class is a facade over that connection. The
+ * decision to use DuckDB — rather than in-memory JS arrays — was proven out
+ * before the rewrite; see `spike/RESULTS.md`.
  *
- * Variable metadata follows a structure inspired by Haven / SPSS so that a
- * `.sav` round-trip can preserve labels, value labels, missing codes and
- * measurement level. See {@link VariableMeta}.
+ * What stays in JS, synchronously, is only the small stuff every part of the UI
+ * needs without awaiting: variable **metadata** (labels, value labels, missing
+ * codes, measurement level), the **row count**, and the user's **selection**.
+ * That keeps the sidebar and dialog code synchronous. Anything that pulls actual
+ * cell data — {@link DataStore#getColumns}, {@link DataStore#getDataFrame} — is
+ * **async**, because it queries DuckDB.
+ *
+ * The *public* API hands plugins row-oriented objects (`[{col: val}, ...]`) and
+ * columnar arrays, the shapes plugin authors expect and that map cleanly onto an
+ * R `data.frame`. Metadata (SPSS/Haven semantics) lives here because SQL columns
+ * don't carry labels, value labels, missing codes, or measurement level.
+ *
+ * ### Bridge rules baked in (from the spikes)
+ * Numeric columns are read back with an explicit `CAST(... AS DOUBLE)`: DuckDB
+ * can store a column as DECIMAL, and pulling a decimal through Arrow-JS without
+ * the cast silently scales it wrong (the `mean=590000` bug — see RESULTS.md).
  */
 
 import { CoreEvents } from './event-bus.js';
+import { quoteIdent } from './duckdb-manager.js';
+
+/** Name of the single DuckDB table that holds the active dataset. */
+const MAIN_TABLE = 'dataset';
 
 /**
  * @typedef {'numeric' | 'string' | 'factor'} VariableType
- * Storage/semantics of a variable. `numeric` is stored as Float64Array,
- * `string` and `factor` as plain arrays. A `factor` additionally expects
+ * Storage/semantics of a variable. `numeric` is stored as a DuckDB DOUBLE and
+ * returned as a `Float64Array`; `string` and `factor` are stored as DuckDB
+ * VARCHAR and returned as plain arrays. A `factor` additionally expects
  * `valueLabels` mapping codes to human-readable categories.
  */
 
@@ -47,14 +61,6 @@ import { CoreEvents } from './event-bus.js';
  */
 
 /**
- * A single variable's storage plus metadata.
- *
- * @typedef {Object} Column
- * @property {VariableMeta} meta
- * @property {Float64Array | Array<string|null>} values - Length === row count.
- */
-
-/**
  * The canonical dataset for the session. There is exactly one live instance,
  * created by the app bootstrap and exposed to plugins (read-mostly) through the
  * {@link DataStore#api} surface.
@@ -63,31 +69,36 @@ export class DataStore {
   /** @type {import('./event-bus.js').EventBus} */
   #bus;
 
+  /** Storage engine: the live DuckDB-WASM runtime. @type {import('./duckdb-manager.js').DuckDBManager} */
+  #duckdb;
+
   /**
-   * Insertion-ordered map of variable name → column. Order is the display order
-   * of variables (left-to-right in the data editor, order in `getDataFrame`).
-   * @type {Map<string, Column>}
+   * Variable metadata in display order — the synchronous cache. The values these
+   * describe live in DuckDB; this is everything the UI needs without awaiting.
+   * @type {VariableMeta[]}
    */
-  #columns = new Map();
+  #variables = [];
+
+  /** name → meta, for O(1) lookup. @type {Map<string, VariableMeta>} */
+  #byName = new Map();
 
   /** Number of cases (rows). Kept explicit so an empty dataset can have schema. */
   #rowCount = 0;
 
   /**
-   * Names of variables the user has highlighted in the UI. This is *selection
-   * state*, not data, but it lives here because it is dataset-scoped and every
-   * analysis dialog needs it.
+   * Names of variables the user has highlighted in the UI. Selection *state*,
+   * not data, but dataset-scoped and needed by every analysis dialog.
    * @type {string[]}
    */
   #selected = [];
 
   /**
-   * @param {import('./event-bus.js').EventBus} bus - App event bus, used to
-   *   broadcast {@link CoreEvents.DATA_CHANGED} and
-   *   {@link CoreEvents.SELECTION_CHANGED}.
+   * @param {import('./event-bus.js').EventBus} bus - App event bus.
+   * @param {import('./duckdb-manager.js').DuckDBManager} duckdb - Storage engine.
    */
-  constructor(bus) {
+  constructor(bus, duckdb) {
     this.#bus = bus;
+    this.#duckdb = duckdb;
   }
 
   // ---------------------------------------------------------------------------
@@ -96,14 +107,16 @@ export class DataStore {
 
   /**
    * Replace the entire dataset. This is how an importer (CSV, .sav, …) loads
-   * data, and how tests seed a dataset. Emits {@link CoreEvents.DATA_CHANGED}.
+   * data, and how tests/the demo seed a dataset. Loads the columns into DuckDB
+   * and refreshes the metadata cache. Emits {@link CoreEvents.DATA_CHANGED}.
    *
    * @param {Object} dataset
    * @param {VariableMeta[]} dataset.variables - Column metadata, in display order.
    * @param {Object<string, Array>} dataset.columns - name → raw value array.
    *   Each array must have the same length, which becomes the row count.
+   * @returns {Promise<void>}
    */
-  setDataset({ variables, columns }) {
+  async setDataset({ variables, columns }) {
     const names = variables.map((v) => v.name);
     const lengths = names.map((n) => (columns[n] ?? []).length);
     const rowCount = lengths.length ? lengths[0] : 0;
@@ -111,16 +124,19 @@ export class DataStore {
       throw new Error('DataStore.setDataset: all columns must have equal length');
     }
 
-    const next = new Map();
+    // Coerce to the storage representation (Float64Array / string[]) then hand
+    // the whole table to DuckDB in one Arrow ingest.
+    const coerced = {};
     for (const meta of variables) {
-      const raw = columns[meta.name] ?? [];
-      next.set(meta.name, { meta, values: coerceColumn(meta, raw) });
+      coerced[meta.name] = coerceColumn(meta, columns[meta.name] ?? []);
     }
+    await this.#duckdb.replaceTable(MAIN_TABLE, coerced);
 
-    this.#columns = next;
+    this.#variables = variables.map((m) => ({ ...m }));
+    this.#byName = new Map(this.#variables.map((m) => [m.name, m]));
     this.#rowCount = rowCount;
     // Drop any selection referring to variables that no longer exist.
-    this.#selected = this.#selected.filter((n) => next.has(n));
+    this.#selected = this.#selected.filter((n) => this.#byName.has(n));
     this.#bus.emit(CoreEvents.DATA_CHANGED, this.#snapshotSummary());
   }
 
@@ -132,7 +148,7 @@ export class DataStore {
    *   dropped silently so callers can pass UI state without pre-filtering.
    */
   setSelectedVariables(names) {
-    this.#selected = names.filter((n) => this.#columns.has(n));
+    this.#selected = names.filter((n) => this.#byName.has(n));
     this.#bus.emit(CoreEvents.SELECTION_CHANGED, [...this.#selected]);
   }
 
@@ -156,17 +172,17 @@ export class DataStore {
    * @param {Object} [opts]
    * @param {string[]} [opts.variables] - Restrict to these columns, in this
    *   order. Defaults to all variables in display order.
-   * @returns {Array<Object<string, number|string|null>>}
+   * @returns {Promise<Array<Object<string, number|string|null>>>}
    */
-  getDataFrame({ variables } = {}) {
-    const names = variables ?? [...this.#columns.keys()];
-    const cols = names.map((n) => this.#columns.get(n)).filter(Boolean);
+  async getDataFrame({ variables } = {}) {
+    const cols = await this.getColumns({ variables });
+    const names = (variables ?? this.#variables.map((v) => v.name)).filter((n) => n in cols);
     const rows = new Array(this.#rowCount);
     for (let r = 0; r < this.#rowCount; r++) {
       const row = {};
-      for (const col of cols) {
-        const v = col.values[r];
-        row[col.meta.name] = Number.isNaN(v) ? null : v;
+      for (const n of names) {
+        const v = cols[n][r];
+        row[n] = typeof v === 'number' && Number.isNaN(v) ? null : v;
       }
       rows[r] = row;
     }
@@ -174,38 +190,71 @@ export class DataStore {
   }
 
   /**
-   * Columnar view of the dataset — the efficient path for code that injects
-   * data into R or DuckDB. Returns references to the live arrays for numeric
-   * columns (do not mutate); string columns are copied defensively.
+   * Columnar view of the dataset — the efficient path for code that injects data
+   * into R. Numeric columns come back as `Float64Array` (missing → `NaN`); text
+   * and factor columns as `Array<string|null>`.
    *
    * @param {Object} [opts]
    * @param {string[]} [opts.variables] - Restrict/reorder columns.
-   * @returns {Object<string, Float64Array | Array<string|null>>}
+   * @returns {Promise<Object<string, Float64Array | Array<string|null>>>}
    */
-  getColumns({ variables } = {}) {
-    const names = variables ?? [...this.#columns.keys()];
+  async getColumns({ variables } = {}) {
+    const names = variables ?? this.#variables.map((v) => v.name);
+    const metas = names.map((n) => this.#byName.get(n)).filter(Boolean);
+    if (this.#rowCount === 0 || metas.length === 0) return {};
+
+    // CAST numeric columns to DOUBLE so a DECIMAL storage type can't come back
+    // scaled wrong through Arrow-JS (see file header / spike RESULTS.md).
+    const selectList = metas
+      .map((m) =>
+        m.type === 'numeric'
+          ? `CAST(${quoteIdent(m.name)} AS DOUBLE) AS ${quoteIdent(m.name)}`
+          : quoteIdent(m.name),
+      )
+      .join(', ');
+    const table = await this.#duckdb.query(
+      `SELECT ${selectList} FROM ${quoteIdent(MAIN_TABLE)}`,
+    );
+
     const out = {};
-    for (const n of names) {
-      const col = this.#columns.get(n);
-      if (!col) continue;
-      out[n] = col.meta.type === 'numeric' ? col.values : [...col.values];
+    const n = table.numRows;
+    for (const m of metas) {
+      const col = table.getChild(m.name);
+      if (m.type === 'numeric') {
+        const arr = new Float64Array(n);
+        // `.get(i)` (not `.toArray()`) so SQL NULLs are preserved, not dropped;
+        // map them to NaN, our numeric "missing" sentinel.
+        for (let i = 0; i < n; i++) {
+          const v = col.get(i);
+          arr[i] = v == null ? NaN : Number(v);
+        }
+        out[m.name] = arr;
+      } else {
+        const arr = new Array(n);
+        for (let i = 0; i < n; i++) {
+          const v = col.get(i);
+          arr[i] = v == null ? null : String(v);
+        }
+        out[m.name] = arr;
+      }
     }
     return out;
   }
 
   /**
-   * Variable metadata for every column (or a subset), in display order.
+   * Variable metadata for every column (or a subset), in display order. Reads
+   * from the synchronous cache.
    *
    * @param {Object} [opts]
    * @param {string[]} [opts.variables] - Restrict/reorder.
-   * @returns {VariableMeta[]} Deep-ish copies; safe for the caller to read.
+   * @returns {VariableMeta[]} Deep copies; safe for the caller to read.
    */
   getVariableMeta({ variables } = {}) {
-    const names = variables ?? [...this.#columns.keys()];
+    const names = variables ?? this.#variables.map((v) => v.name);
     return names
-      .map((n) => this.#columns.get(n))
+      .map((n) => this.#byName.get(n))
       .filter(Boolean)
-      .map((col) => structuredClone(col.meta));
+      .map((meta) => structuredClone(meta));
   }
 
   /** @returns {string[]} Names of currently selected variables. */
@@ -223,9 +272,12 @@ export class DataStore {
    * changes but do not mutate the canonical dataset directly (a future "recode"
    * plugin will go through an explicit transform API, not these methods).
    *
+   * `getDataFrame`/`getColumns` are async (they hit DuckDB); the plugin broker
+   * awaits every call, so this is transparent to plugin authors.
+   *
    * @returns {Readonly<{
-   *   getDataFrame: (opts?: {variables?: string[]}) => Array<Object>,
-   *   getColumns: (opts?: {variables?: string[]}) => Object,
+   *   getDataFrame: (opts?: {variables?: string[]}) => Promise<Array<Object>>,
+   *   getColumns: (opts?: {variables?: string[]}) => Promise<Object>,
    *   getVariableMeta: (opts?: {variables?: string[]}) => VariableMeta[],
    *   getSelectedVariables: () => string[],
    *   getRowCount: () => number,
@@ -261,14 +313,16 @@ export class DataStore {
    * @returns {{rowCount: number, variables: string[]}}
    */
   #snapshotSummary() {
-    return { rowCount: this.#rowCount, variables: [...this.#columns.keys()] };
+    return { rowCount: this.#rowCount, variables: this.#variables.map((v) => v.name) };
   }
 }
 
 /**
  * Coerce a raw value array into the storage representation for a variable's
  * type. Numeric columns become `Float64Array` with empty/`null` cells as `NaN`;
- * other columns keep `null` for empties.
+ * other columns become `Array<string|null>` with `null` for empties. These are
+ * exactly the shapes {@link DuckDBManager#replaceTable} turns into Arrow
+ * Float64 / Utf8 columns.
  *
  * @param {VariableMeta} meta
  * @param {Array} raw

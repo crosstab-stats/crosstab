@@ -67,8 +67,9 @@ export class WebRManager {
   /** @type {import('./event-bus.js').EventBus} */
   #bus;
 
-  /** Returns the current dataset as `{ name: array }`. Injected, not imported,
-   * so this module stays decoupled from DataStore internals. */
+  /** Returns the current dataset as `{ name: array }` (async — it queries the
+   * DuckDB-backed store). Injected, not imported, so this module stays decoupled
+   * from DataStore internals. */
   #getColumns;
 
   /** WebR module URL. */
@@ -92,8 +93,9 @@ export class WebRManager {
   /**
    * @param {Object} deps
    * @param {import('./event-bus.js').EventBus} deps.bus
-   * @param {() => Object<string, Array>} deps.getColumns - Supplies the current
-   *   dataset in columnar form (typically `dataStore.getColumns`).
+   * @param {(opts?: {variables?: string[]}) => Promise<Object<string, Array>>} deps.getColumns
+   *   - Supplies the current dataset in columnar form (typically
+   *   `dataStore.getColumns`). Async: it queries the DuckDB-backed store.
    * @param {Object} [opts]
    * @param {string} [opts.url] - Override the WebR module URL.
    * @param {string[]} [opts.preloadPackages] - Install on init.
@@ -162,7 +164,7 @@ export class WebRManager {
           // to null, which WebR turns into R's NA. WebR converts the resulting
           // object to a named list; we coerce that to a data.frame, with
           // `check.names = FALSE` so original variable names survive intact.
-          const rawCols = this.#getColumns(variables ? { variables } : undefined);
+          const rawCols = await this.#getColumns(variables ? { variables } : undefined);
           const cols = {};
           for (const [name, vec] of Object.entries(rawCols)) {
             cols[name] = Array.from(vec, (v) =>
