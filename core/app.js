@@ -37,6 +37,7 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-crosstabs/index.js',
   './plugins/builtin-regression/index.js',
   './plugins/builtin-fred/index.js',
+  './plugins/builtin-wikipedia/index.js',
 ];
 
 /**

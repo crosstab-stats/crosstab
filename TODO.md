@@ -278,10 +278,28 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     errors — surfaced as an error); value-label conflict policy across years (ties
     to the recode API). Also the SAS `.sas7bcat` companion-file case is a
     different "more than one file" still unhandled.
-- [ ] **Import data from a web page (URL scrape).** Point the app at a URL; it
+- [~] **Import data from a web page (URL scrape).** Point the app at a URL; it
       fetches and parses tabular data (e.g. HTML `<table>`s) into a new dataset
       for analysis, with an option to save the parsed data locally as CSV (or
       another suitable format) for archival.
+  - [x] **Wikipedia table importer built** — `plugins/builtin-wikipedia/`. The
+        first scrape-style importer and a concrete slice of this item. Paste an
+        article URL or title → fetches via Wikipedia's **CORS-open REST API**
+        (`/api/rest_v1/page/html/<Title>`), so **no proxy needed**; parses with
+        native `DOMParser` (no R, no Pyodide). Flattens `colspan`/`rowspan`,
+        strips Parsoid-inlined `<style>`/`<link>` (these leak into `textContent`
+        — caught a `font-size:80%` becoming a height of `80`), `<br>`→space for
+        multi-line headers, and infers numeric columns by leading-number match
+        (`"168.2 cm (5 ft 6 in)"`→168.2, `"1,234"`→1234). Multi-table pages show
+        a picker with `R×C` + header previews. Verified live end-to-end on the
+        height (140×8) and electricity (216×4) tables.
+    - *Known best-effort limits:* a messy mixed column like `"18–69 (N= m:…)"`
+      gets classed numeric (grabs the `18`); year ranges collapse to the first
+      year. The Variable-View retype (immutable transform) is the escape hatch.
+      Comma-decimal locales would misparse (en.wikipedia assumes `.` decimals).
+    - *Still open for the general case:* arbitrary non-Wikipedia pages still hit
+      the proxy-vs-paste fetch decision below, and JS-rendered SPAs won't expose
+      tables to a plain GET. The Wikipedia path sidesteps both via its API.
   - **Approach is an open decision, not a given.** Two independent sub-decisions:
     - *How to fetch (the real blocker):* the browser can't GET arbitrary
       cross-origin URLs (CORS) — and this is true even inside a WASM runtime,
@@ -321,6 +339,22 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     picker, calls `parse({ ticket })`, and the plugin fetches its own bytes via the
     new **`app.web.get(url)`** surface, then `deliver`s a dataset through the
     existing commit path. The URL-scrape item can reuse both primitives.
+- [ ] **Merge / join datasets by a key variable.** Today import offers only
+      *replace* and *append* (stack rows, tagged by `source_file`). Neither
+      combines two datasets *side by side* on a shared key — which is exactly what
+      cross-source analysis needs: e.g. correlate Wikipedia "Average male height"
+      against "Electricity per capita" **by country**, or join a FRED series onto
+      survey data **by year**. Append would stack them into rows that each have
+      one measure or the other, never both per key — no correlation possible.
+  - *What's needed:* a join transform (left/inner) keyed on a matching variable,
+    producing a derived view that widens the row with the other dataset's columns.
+    Fits the immutable source + transform-log model (it's a new transform type
+    over two sources, not a mutation). Fuzzy key matching is the real-world
+    wrinkle — `"United States"` vs `"United States of America"`, footnoted names,
+    case/whitespace — so a key-normalisation/preview step matters.
+  - *Why now:* the Wikipedia + FRED importers make multi-source the obvious next
+    move; without join, a user can pull two fascinating tables and still not be
+    able to relate them.
 - [~] **SPSS-style data grid view.** *Read-only v1 built* (`core/data-views.js`):
       a tabbed workspace (**Data | Variables | Output**) beside the sidebar.
   - **Data View** — **2-D virtualised** cell grid: renders only the rows *and*
