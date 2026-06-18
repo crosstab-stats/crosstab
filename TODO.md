@@ -276,6 +276,20 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 - [ ] **Data transform/recode API.** `app.data` is read-only by design; mutations
       (recode, compute) need an explicit transform surface, not direct writes
       (`core/data-store.js`).
+  - **Motivating case — GSS "designate missing" (deferred from import).** Real GSS
+    Stata files (e.g. `gss2024.dta`, verified to import: 3,986 × 980, all labelled)
+    encode missing as **negative numeric codes with value labels** (`-99 = "no
+    answer"`, `-100 = "iap"`, `-98 = "don't know"`, …) — *not* Stata native missing
+    or SPSS `na_values`. So haven reads them as real values: `age` came in with
+    `min = -99`, 127 negative codes counted as data (mean wrong), and it's typed as
+    a **factor** (continuous var mis-typed because it carries missing-code labels).
+    Decision: do **not** auto-guess at import (a blanket "negatives = missing" would
+    break legitimately negative scales like ideology −3…+3). Instead this recode
+    surface should let the user **designate which value-label codes are missing**
+    (with a GSS-aware preset matching the known missing labels: iap/dk/na/refused/
+    no answer/not available/skipped on web/uncodeable/not imputable/see codebook),
+    and **re-type** a variable factor↔numeric. Until then, imported GSS stats that
+    ignore these codes are wrong — surface this to the user somehow (a warning?).
 - [ ] **`app.ui.showForm`** — a general declarative form dialog. Only
       `selectVariables` exists today (`core/ui-service.js`); add this when a
       second analysis needs options beyond variable choice.
