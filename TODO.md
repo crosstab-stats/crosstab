@@ -319,6 +319,35 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     (fixed 120px today).
 - [ ] **Data editor.** The current `VariablesSidebar` in `core/app.js` is a
       minimal stand-in. Becomes the editing layer over the data-grid view above.
+- [ ] **Source-immutability principle + transform log (FOUNDATIONAL for Phase 2).**
+      *Principle (now stated in README):* the imported dataset is the immutable
+      source of truth; every change is an **ordered transform applied over it**,
+      never a destructive edit. Working data = `source` + transforms; the log is
+      inspectable / undoable / reorderable / **exportable as a do-file** (the
+      reproducibility property the research audience needs). Build it as: an
+      immutable `source` table + a transform log + a derived working table (DuckDB
+      `VIEW` / re-materialise; metadata transforms cost nothing, column-adds and
+      cell-edit overrides are sparse, so duplication is minimal).
+  - **To-fix — where we don't honour it yet:**
+    - [ ] **No source/working/log separation (the core gap).** There's a single
+          mutable `dataset` table that is *both* source and working. The transform
+          layer must introduce the split above. Everything else here folds into it.
+    - [ ] **Retype-to-numeric mutates storage in place** —
+          `DataStore.updateVariable` runs `ALTER COLUMN … TRY_CAST → DOUBLE`
+          (`core/data-store.js`). Should be a transform over an untouched source
+          column, not a destructive cast.
+    - [ ] **Append rewrites the working table** — `#appendDataset` does
+          `CREATE TABLE … UNION ALL BY NAME` + `DROP`/`RENAME`
+          (`core/data-store.js`). Should be a logged "stack" transform over
+          retained per-file sources (and thus undoable/reproducible).
+    - [ ] **No transform log/history exists** — changes aren't recorded, so
+          nothing is reproducible, undoable, or exportable yet. Building the log
+          *is* the fix (and unlocks export-to-syntax).
+    - [ ] **Future cell editor must use a sparse override layer** (applied last in
+          the pipeline), never a destructive cell write. Preventive — not built yet.
+  - **Accepted boundary (not a violation):** "source" = the *as-imported* table,
+    not the original file bytes. Pair with the **Dataset library** to enable full
+    file→result reproduction if wanted.
 - [~] **Data transform/recode.** *Metadata transforms built* (Phase 1) via an
       **editable Variable View** — click a variable to edit it.
   - `DataStore.updateVariable(name, patch)`: set label / type / measure / value

@@ -29,6 +29,26 @@ the built-in Frequencies analysis included — runs in its own sandboxed
 enters the engine's heap, and never touches the host DOM. The official content
 really is just the official mod, behind the same boundary as any third party.
 
+## Principle: source data is immutable
+
+The imported dataset is **the source of truth and is never overwritten**. Every
+change a user (or plugin) makes — recode, designate-missing, re-type, compute a
+new variable, even editing a single cell — is recorded as an **ordered transform
+applied over the immutable source**, not a destructive edit. The data you analyse
+is `source` + the transforms; the transforms are a log you can inspect, undo,
+reorder, and export.
+
+This is the reproducibility doctrine of serious analysis tools (R/tidyverse never
+overwrite raw; Stata `gen`/do-files; SPSS `COMPUTE`/syntax). For the research
+audience it is the load-bearing trust property: *"here is the raw data and the
+exact transforms"* is what makes a result defensible — and the transform log is,
+in effect, an exportable do-file. `app.data` is therefore read-only; mutations go
+through `app.transform`, which appends to the log.
+
+The transform layer is **not fully built yet** — today some operations still
+mutate the single working table in place. See `TODO.md` ("Source-immutability —
+to-fix list") for the gaps being closed to honour this end to end.
+
 ```
 core/
   event-bus.js     app-wide pub/sub
