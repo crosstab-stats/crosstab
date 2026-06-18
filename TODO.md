@@ -405,10 +405,28 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## More analyses (each is just another plugin)
 
-- [ ] Descriptive Statistics (means, SD, quartiles…)
-- [ ] Crosstabs (two-way tables, chi-square)
-- [ ] Linear / logistic regression (with SPSS-style coefficient tables)
-- [ ] Plots (histograms, scatter, box) — exercises `app.results.appendPlot` + SVG
+- [x] **Descriptive Statistics** (`plugins/builtin-descriptives/`) — N, missing,
+      mean, SD, min, quartiles, median, max for numeric vars. Honours
+      missingValues. Verified end to end in Chrome.
+- [x] **Crosstabs** (`plugins/builtin-crosstabs/`) — two-way table + Pearson
+      chi-square; two pickers (row, col); honours missingValues; value labels.
+      Verified end to end in Chrome (hand-checked χ²).
+- [~] **Linear regression** (`plugins/builtin-regression/`) — `lm()`, SPSS-style
+      Model Summary + Coefficients; factor IVs dummy-coded; honours missingValues.
+      *R/stats verified; two-dialog UI click-through NOT auto-confirmed* (harness
+      can't drive sequential modal dialogs — see testing note). **Needs a manual
+      click-through check.** Logistic regression still TODO (add as a method option
+      once `app.ui.showForm` exists).
+- [ ] Plots (histograms, scatter, box) — exercises `app.results.appendPlot` + SVG.
+      Note: needs R→SVG (e.g. an `svg()` device or `svglite`) since `appendPlot`
+      takes an SVG string; that path isn't proven yet.
+- *Testing note (Chrome automation):* driving **two sequential modal `<dialog>`s**
+  is flaky via CDP — a synthetic `button.click()` closes the dialog but does *not*
+  fire the `close` event (so the app's promise never resolves), and long evals
+  that hold a modal open hit the 45 s CDP timeout. Use `dialog.close('ok')`
+  (fires `close` deterministically) and keep modal-driving evals short; or verify
+  the analysis R directly and check rendering manually. Single-dialog analyses
+  (Descriptives) drive fine.
 
 ## Nice-to-have / optimisations
 
