@@ -74,6 +74,7 @@ export async function boot(mounts) {
   const services = {
     bus,
     data: dataStore.api,
+    transform: dataStore.transformApi,
     webr,
     results: results.api,
     menus: menus.api,

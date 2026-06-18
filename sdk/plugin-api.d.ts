@@ -73,6 +73,24 @@ export interface DataApi {
   onSelectionChanged(fn: (names: string[]) => void): Promise<Disposer>;
 }
 
+/**
+ * The dataset **write** surface (`app.transform`) — kept separate from the
+ * read-only {@link DataApi}. Lets a plugin apply transforms programmatically;
+ * e.g. an auto-recode plugin reads `data.getVariableMeta()`, decides, then calls
+ * `transform.updateVariable` per variable. Mutations are mediated by the engine
+ * and broadcast a data-changed event, so the grid/analyses update.
+ */
+export interface TransformApi {
+  /**
+   * Change one variable's metadata: `label`, `type`, `measurementLevel`,
+   * `valueLabels`, and/or `missingValues`. Non-destructive (the data is not
+   * rewritten) — except re-typing **to `'numeric'`**, which casts the column so
+   * numeric analyses receive numbers. Designating missing follows the SPSS model:
+   * the codes stay in the data and analyses honour `missingValues`.
+   */
+  updateVariable(name: string, patch: Partial<VariableMeta>): Promise<void>;
+}
+
 /** Append-style output into the results pane. Fragments should be pre-rendered
  * and SPSS-like; the pane sanitises and styles them. */
 export interface ResultsApi {
@@ -275,6 +293,7 @@ export interface PluginIdentity extends PluginManifest {
 export interface App {
   readonly plugin: PluginIdentity;
   readonly data: DataApi;
+  readonly transform: TransformApi;
   readonly results: ResultsApi;
   readonly webr: WebrApi;
   readonly menus: MenusApi;

@@ -278,6 +278,20 @@ export class DataStore {
     const meta = this.#byName.get(name);
     if (!meta) throw new Error(`updateVariable: unknown variable "${name}"`);
 
+    // Sanitise (this is plugin-callable via app.transform): drop invalid enum
+    // values rather than letting them corrupt the metadata.
+    patch = { ...patch };
+    if ('type' in patch && !['numeric', 'string', 'factor'].includes(patch.type)) {
+      delete patch.type;
+    }
+    if (
+      'measurementLevel' in patch &&
+      patch.measurementLevel != null &&
+      !['nominal', 'ordinal', 'scale'].includes(patch.measurementLevel)
+    ) {
+      delete patch.measurementLevel;
+    }
+
     if (patch.type === 'numeric' && classifySqlType(this.#sqlTypes.get(name)) !== 'numeric') {
       const q = quoteIdent(name);
       await this.#duckdb.query(
@@ -584,6 +598,21 @@ export class DataStore {
        * @returns {() => void} unsubscribe
        */
       onSelectionChanged: (fn) => this.#bus.on(CoreEvents.SELECTION_CHANGED, fn),
+    });
+  }
+
+  /**
+   * The plugin-facing **write** surface, exposed as `app.transform`. Kept
+   * separate from the read-only `app.data` so the distinction stays clear. This
+   * is what lets a third-party (e.g. an AI auto-recode) plugin apply metadata
+   * transforms programmatically — read with `app.data.getVariableMeta`, decide,
+   * then `app.transform.updateVariable`. Phase 2's compute/recode will join here.
+   *
+   * @returns {Readonly<{ updateVariable: (name: string, patch: object) => Promise<void> }>}
+   */
+  get transformApi() {
+    return Object.freeze({
+      updateVariable: (name, patch) => this.updateVariable(name, patch),
     });
   }
 

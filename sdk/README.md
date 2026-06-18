@@ -50,6 +50,7 @@ but event payloads, callback arguments, etc.) must be structured-cloneable.
 | Surface        | What it's for                                                        |
 | -------------- | -------------------------------------------------------------------- |
 | `app.data`     | Read the dataset, variable metadata, and the user's selection.       |
+| `app.transform`| Apply transforms (the write surface) — e.g. `updateVariable` to recode. |
 | `app.webr`     | Run R (queued, serial), install packages, read/write its filesystem. |
 | `app.results`  | Append SPSS-style tables, plots, and notes to the results pane.      |
 | `app.ui`       | Ask the engine to show dialogs (you can't draw your own).            |

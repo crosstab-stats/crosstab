@@ -233,7 +233,8 @@ export class PluginBroker {
  * reviewed allowlist: a plugin can only reach what is named here.
  *
  * @param {Object} s
- * @param {object} s.data    - DataStore#api
+ * @param {object} s.data    - DataStore#api (read-only)
+ * @param {object} s.transform - DataStore#transformApi (writes)
  * @param {object} s.results - ResultsPane#api
  * @param {object} s.webr    - { run, installPackages }
  * @param {object} s.menus   - MenuShell#api
@@ -242,7 +243,7 @@ export class PluginBroker {
  * @param {import('./event-bus.js').EventBus} s.bus
  * @returns {Object<string, Function>}
  */
-function buildDispatch({ data, results, webr, menus, ui, importers, bus }) {
+function buildDispatch({ data, transform, results, webr, menus, ui, importers, bus }) {
   return {
     'data.getDataFrame': (opts) => data.getDataFrame(opts),
     'data.getColumns': (opts) => data.getColumns(opts),
@@ -251,6 +252,8 @@ function buildDispatch({ data, results, webr, menus, ui, importers, bus }) {
     'data.getRowCount': () => data.getRowCount(),
     'data.onDataChanged': (fn) => data.onDataChanged(fn),
     'data.onSelectionChanged': (fn) => data.onSelectionChanged(fn),
+
+    'transform.updateVariable': (name, patch) => transform.updateVariable(name, patch),
 
     'results.beginSection': (t) => results.beginSection(t),
     'results.appendTable': (h) => results.appendTable(h),
