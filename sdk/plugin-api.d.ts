@@ -91,6 +91,15 @@ export interface TransformApi {
   updateVariable(name: string, patch: Partial<VariableMeta>): Promise<void>;
 }
 
+/** Options for {@link ResultsApi.appendPlot}. */
+export interface AppendPlotOptions {
+  /** Called when the user clicks "Redraw at this size", with the plot box's
+   * current content size in CSS pixels. Re-render at these dimensions (e.g.
+   * `svglite` at `width/96 × height/96` inches) and call
+   * {@link ResultsApi.updatePlot} with the new SVG. */
+  onRedraw?: (widthPx: number, heightPx: number) => void;
+}
+
 /** Append-style output into the results pane. Fragments should be pre-rendered
  * and SPSS-like; the pane sanitises and styles them. */
 export interface ResultsApi {
@@ -98,8 +107,15 @@ export interface ResultsApi {
   beginSection(title: string): Promise<void>;
   /** Append a pre-rendered HTML table (or fragment). Sanitised by the host. */
   appendTable(htmlString: string): Promise<void>;
-  /** Append a plot as an SVG string. Sanitised by the host. */
-  appendPlot(svgString: string): Promise<void>;
+  /** Append a plot as an SVG string. Sanitised by the host. Resolves to a *handle*
+   * for {@link ResultsApi.updatePlot}. The plot is shown in a user-resizable box;
+   * pass `options.onRedraw` to offer a "Redraw at this size" button that re-renders
+   * the plot at the box's current pixel dimensions (the only way to truly change
+   * the plot's aspect ratio — dragging alone just scales the SVG). */
+  appendPlot(svgString: string, options?: AppendPlotOptions): Promise<number>;
+  /** Replace a previously appended plot's SVG in place (keeps the box size), e.g.
+   * after an `onRedraw` re-render. No-op for an unknown handle. */
+  updatePlot(handle: number, svgString: string): Promise<void>;
   /** Append a note written in a small Markdown subset. */
   appendText(markdown: string): Promise<void>;
   /** Append an error block. */

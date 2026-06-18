@@ -66,22 +66,30 @@ const RESULTS_STYLES = `
     padding: 8px 12px; color: #7a201a; white-space: pre-wrap;
     font-family: ui-monospace, Menlo, monospace; font-size: 12px;
   }
-  /* Plots: scale to the pane width but cap so they don't balloon on a wide
-     screen; height tracks the viewBox aspect ratio. */
   svg { width: 100%; max-width: 720px; height: auto; display: block; }
-  /* A plot is wrapped in a user-resizable box: drag the lower-right grip to size
-     it (vector stays crisp). The SVG fills the box but keeps its aspect
-     (preserveAspectRatio), so off-ratio drags add whitespace rather than
-     distorting the plot. Initial size ~ svglite's 7×4.5in natural ratio. */
-  /* Default to ~720px wide (min() keeps it responsive on narrow screens without
-     ballooning on wide ones), but NO max-width — so a manual drag can grow the
-     plot as large as you like (poster-size). The pane scrolls if it exceeds it. */
+  /* A plot lives in a user-resizable box (drag the lower-right grip). Default ~
+     svglite's 7×4.5in (672×432px) so the first render is pixel-true; min() keeps
+     it responsive on narrow screens, and there's NO max-width so a drag can grow
+     it poster-size (the pane scrolls if it exceeds the viewport). The SVG fills
+     the box but keeps its aspect (preserveAspectRatio), so dragging just scales/
+     letterboxes — crisp (vector) but the *ratio* doesn't change until you click
+     "Redraw at this size", which re-runs the recipe at the box's dimensions. */
   .results-plot {
+    position: relative;
     resize: both; overflow: hidden; box-sizing: border-box;
-    width: min(100%, 720px); height: 460px;
+    width: min(100%, 672px); height: 432px;
     border: 1px solid #e3e7eb; border-radius: 6px; padding: 4px;
   }
-  .results-plot svg { width: 100%; height: 100%; max-width: none; }
+  .results-plot__svg { width: 100%; height: 100%; }
+  .results-plot__svg svg { width: 100%; height: 100%; max-width: none; }
+  .results-plot__redraw {
+    position: absolute; right: 18px; bottom: 4px;
+    font: inherit; font-size: 12px; padding: 3px 9px;
+    background: #fff; border: 1px solid var(--accent, #2980b9);
+    color: var(--accent, #2980b9); border-radius: 6px; cursor: pointer;
+    opacity: 0; transition: opacity .12s;
+  }
+  .results-plot:hover .results-plot__redraw, .results-plot__redraw:focus { opacity: .95; }
   .results-empty { color: #888; font-style: italic; }
 `;
 
@@ -98,6 +106,12 @@ export class ResultsPane {
 
   /** The section blocks append into, or null to append at top level. */
   #currentSection = null;
+
+  /** Plot handle → its SVG holder element, for {@link ResultsPane#updatePlot}. */
+  #plots = new Map();
+
+  /** Next plot handle id. */
+  #nextPlotId = 1;
 
   /**
    * @param {HTMLElement} host - The element to attach the shadow root to.
@@ -156,13 +170,47 @@ export class ResultsPane {
    * @param {string} svgString - An `<svg>…</svg>` fragment; sanitised before
    *   insertion (the sanitiser allows a conservative SVG drawing subset).
    */
-  appendPlot(svgString) {
+  appendPlot(svgString, opts = {}) {
     const block = this.#makeBlock();
-    // Resizable wrapper: a lower-right grab handle lets the user scale the plot
-    // (vector → stays crisp). See `.results-plot` styles.
+    // Resizable wrapper: a lower-right grip scales the plot (vector → crisp).
     block.classList.add('results-plot');
-    block.innerHTML = sanitizeHtml(svgString);
+    const holder = document.createElement('div');
+    holder.className = 'results-plot__svg';
+    holder.innerHTML = sanitizeHtml(svgString);
+    block.append(holder);
+
+    const handle = this.#nextPlotId++;
+    this.#plots.set(handle, holder);
+
+    // If the plot knows how to redraw itself (a plugin callback), offer a button
+    // that re-runs it at the box's *current* dimensions — the only way to change
+    // the plot's aspect ratio without distorting it (drag alone just scales).
+    if (typeof opts.onRedraw === 'function') {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'results-plot__redraw';
+      btn.textContent = '⟳ Redraw at this size';
+      btn.title = 'Re-render at the current box size — re-lays-out at the new ratio';
+      btn.addEventListener('click', () => {
+        opts.onRedraw(Math.max(1, holder.clientWidth), Math.max(1, holder.clientHeight));
+      });
+      block.append(btn);
+    }
     this.#place(block);
+    return handle;
+  }
+
+  /**
+   * Replace the SVG of a previously appended plot, in place (keeps the box size
+   * and the redraw button). Used by the plot plugin after a "Redraw at this
+   * size" re-render. No-op if the handle is unknown.
+   *
+   * @param {number} handle - The id returned by {@link ResultsPane#appendPlot}.
+   * @param {string} svgString - The new plot SVG; sanitised before insertion.
+   */
+  updatePlot(handle, svgString) {
+    const holder = this.#plots.get(handle);
+    if (holder) holder.innerHTML = sanitizeHtml(svgString);
   }
 
   /**
@@ -196,6 +244,7 @@ export class ResultsPane {
   clear() {
     this.#content.replaceChildren();
     this.#currentSection = null;
+    this.#plots.clear();
     this.#renderEmptyState();
   }
 
@@ -214,7 +263,8 @@ export class ResultsPane {
     return Object.freeze({
       beginSection: (t) => this.beginSection(t),
       appendTable: (h) => this.appendTable(h),
-      appendPlot: (s) => this.appendPlot(s),
+      appendPlot: (s, opts) => this.appendPlot(s, opts),
+      updatePlot: (handle, s) => this.updatePlot(handle, s),
       appendText: (m) => this.appendText(m),
       appendError: (m) => this.appendError(m),
       clear: () => this.clear(),

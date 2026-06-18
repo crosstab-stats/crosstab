@@ -259,7 +259,8 @@ function buildDispatch({ data, transform, results, webr, menus, ui, importers, e
 
     'results.beginSection': (t) => results.beginSection(t),
     'results.appendTable': (h) => results.appendTable(h),
-    'results.appendPlot': (s) => results.appendPlot(s),
+    'results.appendPlot': (s, opts) => results.appendPlot(s, opts),
+    'results.updatePlot': (handle, s) => results.updatePlot(handle, s),
     'results.appendText': (m) => results.appendText(m),
     'results.appendError': (m) => results.appendError(m),
     'results.clear': () => results.clear(),

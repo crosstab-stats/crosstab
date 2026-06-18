@@ -205,17 +205,14 @@ async function renderPlot(app, title, code, vars) {
   await app.events.emit('analysis:started', { plugin: manifest.id, title });
   await app.results.beginSection(title);
   try {
-    const R = `
-      library(svglite)
-      .ct_dev <- svgstring(width = 7, height = 4.5, pointsize = 11)
-      par(mar = c(4.2, 4.2, 2.2, 1), col.axis = "#555555", col.lab = "#333333", fg = "#999999")
-      ${code}
-      dev.off()
-      .ct_dev()`;
-    const res = await app.webr.run(R, { injectData: true, variables: vars });
-    const svg = String(Array.isArray(res.result?.values) ? res.result.values[0] : res.result);
-    if (!/<svg[\s>]/i.test(svg)) throw new Error('no SVG was produced');
-    await app.results.appendPlot(makeResponsive(svg));
+    const svg = await drawSvg(app, code, vars, 7, 4.5); // 7×4.5in default
+    // appendPlot returns a handle; the onRedraw button re-runs the recipe at the
+    // box's pixel size (the only way to truly re-flow the plot to a new ratio —
+    // dragging alone just scales the SVG).
+    let handle;
+    handle = await app.results.appendPlot(svg, {
+      onRedraw: (wpx, hpx) => void redrawPlot(app, handle, title, code, vars, wpx, hpx),
+    });
   } catch (err) {
     await app.results.appendError(`${title} failed: ${err.message}`);
     console.error(err);
@@ -223,13 +220,36 @@ async function renderPlot(app, title, code, vars) {
   await app.events.emit('analysis:finished', { plugin: manifest.id, title });
 }
 
-/** Drop svglite's fixed pt width/height so the `viewBox` scales the SVG to the
- * pane width (crisp at any size, friendly on iPad). */
-function makeResponsive(svg) {
+/**
+ * Run the plot recipe on an svglite device at the given size (inches) and return
+ * the SVG, with svglite's fixed pt width/height stripped so it fills its box via
+ * CSS (the `viewBox` keeps it crisp and undistorted).
+ */
+async function drawSvg(app, code, vars, wIn, hIn) {
+  const R = `
+    library(svglite)
+    .ct_dev <- svgstring(width = ${wIn}, height = ${hIn}, pointsize = 11)
+    par(mar = c(4.2, 4.2, 2.2, 1), col.axis = "#555555", col.lab = "#333333", fg = "#999999")
+    ${code}
+    dev.off()
+    .ct_dev()`;
+  const res = await app.webr.run(R, { injectData: true, variables: vars });
+  const svg = String(Array.isArray(res.result?.values) ? res.result.values[0] : res.result);
+  if (!/<svg[\s>]/i.test(svg)) throw new Error('no SVG was produced');
   return svg
     .replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1')
-    .replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1')
-    .replace(/<svg\b/i, "<svg width='100%'");
+    .replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1');
+}
+
+/** Re-render the plot at the box's pixel size (px → inches) and swap it in. */
+async function redrawPlot(app, handle, title, code, vars, wpx, hpx) {
+  try {
+    const svg = await drawSvg(app, code, vars, Math.max(2, wpx / 96), Math.max(1.5, hpx / 96));
+    await app.results.updatePlot(handle, svg);
+  } catch (err) {
+    await app.results.appendError(`${title} redraw failed: ${err.message}`);
+    console.error(err);
+  }
 }
 
 // --- tiny helpers ------------------------------------------------------------
