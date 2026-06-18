@@ -255,32 +255,29 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - *Note:* the Parquet return path (`DataStore.loadDataset` +
     `DuckDBManager.replaceTableFromParquet`) is built and unit-exercised by the
     contract but not yet driven end to end until the `haven` importer lands.
-- [ ] **Multi-file import / import-as-append (not just replace).** Today every
-      import *replaces* the dataset (`loadDataset` swaps the DuckDB table). Add an
-      **append** mode so data accumulates. Two motivating workflows (GSS):
-  - *Batch:* select several single-year files at once (e.g. GSS 2018/2020/2022/2024)
-    and import them in one go into a combined multi-year dataset.
-  - *Incremental:* import 2024 now; later import 2022 and have it **append** to the
-    existing data, enabling cross-year comparison without re-importing.
-  - **DuckDB makes the storage side easy** — `INSERT INTO … SELECT`, `UNION ALL`,
-    or `read_parquet([...])` over multiple files. The hard parts are above the
-    storage layer:
-    - *Schema reconciliation.* GSS variables change year to year (added/removed/
-      renamed; types drift). Align columns by name, NULL-fill columns absent from
-      a given file, and resolve type conflicts (a var numeric one year, string
-      another). Decide: strict (intersection only) vs. permissive (union + NULLs).
-    - *Provenance column.* Auto-add a source/year column (from filename or a
-      prompt) so rows from different files are distinguishable and usable as a
-      grouping variable — essential for "compare across years".
-    - *Metadata merge.* Union the `VariableMeta`; reconcile conflicting variable
-      labels / value labels / missing codes across files (last-wins? warn on
-      conflict?). Ties into the GSS missing-code issue under the recode API.
-  - **Contract/UX changes:** the picker must allow **multi-select** (and the
-    importer contract currently hands `parse` a single `file`; either pass a list
-    or call per-file and combine engine-side); `loadDataset` needs an
-    `{ mode: 'replace' | 'append' }` option; UI to choose replace-vs-append on a
-    second import. Also relevant to the SAS `.sas7bcat` companion-file case noted
-    under file import (a different flavour of "more than one file").
+- [x] **Multi-file import / import-as-append (pooled, row-stack).** Decision:
+      pool into ONE table with a `source_file` provenance column (not a
+      multi-dataset workspace); row-stack only (column-join/merge is separate).
+      Built engine-side — plugins unchanged (still parse one file → one dataset):
+  - `DataStore.loadDataset({mode:'replace'|'append', source})` + `#appendDataset`
+    stacks via DuckDB **`UNION ALL BY NAME`** (auto column-union + NULL-fill for
+    cross-year drift). `source_file` auto-added when pooling (basename per file);
+    single-file replace stays clean (no extra column). Variable metadata merged
+    (union; existing-wins on shared names).
+  - `ImportService` picks **multiple** files (importer `multiple:true` — set on
+    whole-file haven + CSV; filtered haven stays single), parses each, and
+    prompts **Replace vs. Add to current data** when a dataset is loaded.
+  - **Verified in Chrome:** batch-import 2 CSVs with differing columns → 4 rows,
+    columns unioned (NULLs filled), tagged `y2022`/`y2024`; then incremental
+    append a 3rd → 6 rows, all `source_file` tags correct; group-by `source_file`
+    in DuckDB + WebR works. Covers the multi-year GSS workflow (batch or
+    incremental; incremental + filtered importer pools huge files a year at a time).
+  - *Deferred:* column-join/merge by ID key (separate feature); "filtered +
+    batch, pick variables once for all files" (incremental filtered append covers
+    the need); richer type-conflict handling (today `UNION ALL BY NAME` coerces or
+    errors — surfaced as an error); value-label conflict policy across years (ties
+    to the recode API). Also the SAS `.sas7bcat` companion-file case is a
+    different "more than one file" still unhandled.
 - [ ] **Import data from a web page (URL scrape).** Point the app at a URL; it
       fetches and parses tabular data (e.g. HTML `<table>`s) into a new dataset
       for analysis, with an option to save the parsed data locally as CSV (or

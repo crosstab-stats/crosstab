@@ -33,6 +33,11 @@ import { quoteIdent } from './duckdb-manager.js';
 /** Name of the single DuckDB table that holds the active dataset. */
 const MAIN_TABLE = 'dataset';
 
+/** Column auto-added when stacking files, tagging each row with its origin so a
+ * pooled multi-file/multi-year dataset stays distinguishable (group/filter by
+ * it). Chosen to be unlikely to collide with real variable names. */
+const SOURCE_COL = 'source_file';
+
 /**
  * @typedef {'numeric' | 'string' | 'factor'} VariableType
  * Storage/semantics of a variable. `numeric` is stored as a DuckDB DOUBLE and
@@ -93,6 +98,14 @@ export class DataStore {
    */
   #sqlTypes = new Map();
 
+  /**
+   * Source label of the currently-loaded data, remembered so that the first
+   * *append* to a single-file dataset can tag the pre-existing rows correctly
+   * (they have no `source_file` column yet). Null for the demo seed / unknown.
+   * @type {string|null}
+   */
+  #lastSource = null;
+
   /** Number of cases (rows). Kept explicit so an empty dataset can have schema. */
   #rowCount = 0;
 
@@ -128,64 +141,121 @@ export class DataStore {
    * @returns {Promise<void>}
    */
   async setDataset({ variables, columns }) {
-    const names = variables.map((v) => v.name);
-    const lengths = names.map((n) => (columns[n] ?? []).length);
-    const rowCount = lengths.length ? lengths[0] : 0;
-    if (lengths.some((len) => len !== rowCount)) {
-      throw new Error('DataStore.setDataset: all columns must have equal length');
-    }
-
-    // Coerce to the storage representation (Float64Array / string[]) then hand
-    // the whole table to DuckDB in one Arrow ingest.
-    const coerced = {};
-    for (const meta of variables) {
-      coerced[meta.name] = coerceColumn(meta, columns[meta.name] ?? []);
-    }
-    await this.#duckdb.replaceTable(MAIN_TABLE, coerced);
-
-    this.#variables = variables.map((m) => ({ ...m }));
-    this.#byName = new Map(this.#variables.map((m) => [m.name, m]));
-    this.#rowCount = rowCount;
-    await this.#refreshSqlTypes();
-    // Drop any selection referring to variables that no longer exist.
-    this.#selected = this.#selected.filter((n) => this.#byName.has(n));
-    this.#bus.emit(CoreEvents.DATA_CHANGED, this.#snapshotSummary());
+    await this.#replaceDataset({ variables, columns });
   }
 
   /**
    * Load a dataset delivered by an importer plugin. Accepts either shape of the
-   * importer contract:
-   *  - `{ variables, columns }` — columnar JS arrays (JS-parsed formats, e.g.
-   *    CSV). Delegates to {@link DataStore#setDataset}.
-   *  - `{ variables, parquet }` — Parquet bytes (R/`haven`-parsed or large data).
-   *    DuckDB reads the Parquet directly; `variables` supplies the SPSS metadata
-   *    Parquet can't carry.
+   * importer contract — `{ variables, columns }` (JS-parsed, e.g. CSV) or
+   * `{ variables, parquet }` (R/`haven`-parsed) — and either **replaces** the
+   * current dataset or **appends** (stacks rows) onto it.
    *
-   * The engine — never a plugin — calls this, and only in response to a user
-   * import action (see {@link import('./import-service.js').ImportService}). That
-   * keeps the dataset-replacing capability mediated, not handed out wholesale.
+   * Append reconciles columns by name (`UNION ALL BY NAME`, NULL-filling vars a
+   * file lacks) and tags each file's rows with a `source_file` column so a pooled
+   * multi-year dataset stays distinguishable. The engine — never a plugin — calls
+   * this, only in response to a user import action.
    *
    * @param {Object} dataset
    * @param {VariableMeta[]} dataset.variables
    * @param {Object<string, Array>} [dataset.columns]
    * @param {Uint8Array} [dataset.parquet]
+   * @param {'replace'|'append'} [dataset.mode='replace']
+   * @param {string} [dataset.source] - Provenance label for this file's rows.
    * @returns {Promise<void>}
    */
-  async loadDataset({ variables, columns, parquet }) {
+  async loadDataset({ variables, columns, parquet, mode = 'replace', source }) {
+    // Appending to an empty store is just a load.
+    if (mode === 'append' && this.#rowCount > 0) {
+      await this.#appendDataset({ variables, columns, parquet, source });
+    } else {
+      await this.#replaceDataset({ variables, columns, parquet, source });
+    }
+  }
+
+  /** Replace the whole dataset (parquet or columnar). */
+  async #replaceDataset({ variables, columns, parquet, source }) {
     if (parquet) {
       await this.#duckdb.replaceTableFromParquet(MAIN_TABLE, parquet);
-      this.#variables = variables.map((m) => ({ ...m }));
-      this.#byName = new Map(this.#variables.map((m) => [m.name, m]));
-      const countTable = await this.#duckdb.query(
-        `SELECT count(*) AS n FROM ${quoteIdent(MAIN_TABLE)}`,
-      );
-      this.#rowCount = Number(countTable.get(0).n);
-      this.#selected = this.#selected.filter((n) => this.#byName.has(n));
-      await this.#refreshSqlTypes();
-      this.#bus.emit(CoreEvents.DATA_CHANGED, this.#snapshotSummary());
-      return;
+    } else {
+      const cols = columns ?? {};
+      const lengths = variables.map((v) => (cols[v.name] ?? []).length);
+      const rowCount = lengths.length ? lengths[0] : 0;
+      if (lengths.some((len) => len !== rowCount)) {
+        throw new Error('DataStore: all columns must have equal length');
+      }
+      const coerced = {};
+      for (const meta of variables) coerced[meta.name] = coerceColumn(meta, cols[meta.name] ?? []);
+      await this.#duckdb.replaceTable(MAIN_TABLE, coerced);
     }
-    await this.setDataset({ variables, columns: columns ?? {} });
+    this.#variables = variables.map((m) => ({ ...m }));
+    this.#byName = new Map(this.#variables.map((m) => [m.name, m]));
+    this.#lastSource = source ?? null;
+    await this.#postLoad();
+  }
+
+  /**
+   * Stack a new file's rows onto the current dataset, reconciling columns by
+   * name and tagging provenance. The incoming data is materialised into a temp
+   * table, then `UNION ALL BY NAME`-d with the main table.
+   */
+  async #appendDataset({ variables, columns, parquet, source }) {
+    const TEMP = 'dataset_incoming';
+    if (parquet) {
+      await this.#duckdb.replaceTableFromParquet(TEMP, parquet);
+    } else {
+      const cols = columns ?? {};
+      const coerced = {};
+      for (const meta of variables) coerced[meta.name] = coerceColumn(meta, cols[meta.name] ?? []);
+      await this.#duckdb.replaceTable(TEMP, coerced);
+    }
+
+    const q = quoteIdent;
+    const src = q(SOURCE_COL);
+    const incLit = sqlString(source ?? 'import');
+    // Existing rows: if they already carry source_file (a prior append) keep it;
+    // otherwise tag them with the dataset's remembered origin.
+    const mainSelect = this.#sqlTypes.has(SOURCE_COL)
+      ? `SELECT * FROM ${q(MAIN_TABLE)}`
+      : `SELECT *, ${sqlString(this.#lastSource ?? 'dataset 1')} AS ${src} FROM ${q(MAIN_TABLE)}`;
+    const incSelect = `SELECT *, ${incLit} AS ${src} FROM ${q(TEMP)}`;
+
+    await this.#duckdb.query(
+      `CREATE TABLE dataset_new AS ${mainSelect} UNION ALL BY NAME ${incSelect}`,
+    );
+    await this.#duckdb.query(`DROP TABLE ${q(MAIN_TABLE)}`);
+    await this.#duckdb.query(`ALTER TABLE dataset_new RENAME TO ${q(MAIN_TABLE)}`);
+    await this.#duckdb.query(`DROP TABLE ${q(TEMP)}`);
+
+    this.#mergeVariables(variables);
+    await this.#postLoad();
+  }
+
+  /** Merge an appended file's variable metadata into the cache (union by name;
+   * existing meta wins on shared names) and ensure the `source_file` entry. */
+  #mergeVariables(incoming) {
+    const byName = new Map(this.#variables.map((m) => [m.name, m]));
+    for (const m of incoming) if (!byName.has(m.name)) byName.set(m.name, { ...m });
+    if (!byName.has(SOURCE_COL)) {
+      byName.set(SOURCE_COL, {
+        name: SOURCE_COL,
+        label: 'Source file',
+        type: 'factor',
+        measurementLevel: 'nominal',
+      });
+    }
+    this.#variables = [...byName.values()];
+    this.#byName = byName;
+  }
+
+  /** Refresh row count, SQL types and selection after a load/append; emit. */
+  async #postLoad() {
+    const countTable = await this.#duckdb.query(
+      `SELECT count(*) AS n FROM ${quoteIdent(MAIN_TABLE)}`,
+    );
+    this.#rowCount = Number(countTable.get(0).n);
+    this.#selected = this.#selected.filter((n) => this.#byName.has(n));
+    await this.#refreshSqlTypes();
+    this.#bus.emit(CoreEvents.DATA_CHANGED, this.#snapshotSummary());
   }
 
   /**
@@ -443,6 +513,17 @@ export class DataStore {
  * @param {Array} raw
  * @returns {Float64Array | Array<string|null>}
  */
+/**
+ * Render a JS string as a single-quoted SQL string literal (internal quotes
+ * doubled). Used for the provenance tag injected into the append query.
+ *
+ * @param {string} s
+ * @returns {string}
+ */
+function sqlString(s) {
+  return `'${String(s).replace(/'/g, "''")}'`;
+}
+
 function coerceColumn(meta, raw) {
   if (meta.type === 'numeric') {
     const out = new Float64Array(raw.length);

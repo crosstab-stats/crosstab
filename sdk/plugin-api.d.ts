@@ -236,6 +236,10 @@ export interface Importer {
   id?: string;
   /** Sort weight within File ▸ Import (lower first). Default 100. */
   order?: number;
+  /** Allow selecting several files at once; they stack (append) into one pooled
+   * dataset, tagged by a `source_file` column. `parse` is still called once per
+   * file. Default false. */
+  multiple?: boolean;
 }
 
 /**

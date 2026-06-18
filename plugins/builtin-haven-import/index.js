@@ -49,6 +49,7 @@ export async function activate(app) {
     label: 'SPSS / Stata / SAS…',
     extensions: Object.keys(READERS),
     order: 20,
+    multiple: true, // batch-select several files (e.g. GSS years) to pool them
     parse: ({ ticket, name, file }) => importHaven(app, ticket, name, file, false),
   });
   // Filtered variant: read the variable catalog first and let the user pick a

@@ -36,6 +36,8 @@ export async function activate(app) {
     label: 'CSV…',
     extensions: ['.csv', '.tsv', '.txt'],
     order: 10,
+    multiple: true, // batch-select several CSVs to pool them
+
     parse: ({ ticket, name, file }) => importCsv(app, ticket, name, file),
   });
 }

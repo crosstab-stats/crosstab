@@ -43,6 +43,9 @@
  *   runtime parsers stage it via `app.webr.mountFile(file)`.
  * @property {string} [id] - Stable id (defaults to `label`).
  * @property {number} [order] - Sort weight within File ▸ Import.
+ * @property {boolean} [multiple=false] - Allow selecting several files at once
+ *   (they stack/append into one pooled dataset). `parse` is still called once
+ *   per file.
  */
 
 export class ImportService {
@@ -137,65 +140,128 @@ export class ImportService {
 
   // --- internals -------------------------------------------------------------
 
-  /** Run one import: pick a file, hand bytes to the plugin, commit the result. */
+  /**
+   * Run an import: pick file(s), and for each, hand it to the plugin and commit
+   * the result — replacing or appending (stacking) onto the current dataset.
+   */
   async #runImport(id) {
     const spec = this.#importers.get(id);
     if (!spec) return;
 
-    let file;
+    let files;
     try {
-      file = await pickFile(spec.extensions);
+      files = await pickFiles(spec.extensions, spec.multiple === true);
     } catch (err) {
       this.#results.appendError(`Import: could not open file picker: ${err.message}`);
       return;
     }
-    if (!file) return; // user cancelled
+    if (!files.length) return; // user cancelled
 
+    // If data is already loaded, ask whether to replace it or add to it.
+    let mode = 'replace';
+    if (this.#data.rowCount > 0) {
+      mode = await askMode(files.length);
+      if (!mode) return; // cancelled
+    }
+
+    let committed = 0;
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      try {
+        const dataset = await this.#parseOne(spec, file);
+        // null / empty = the importer aborted (and reported its own error).
+        if (!dataset || !Array.isArray(dataset.variables) || dataset.variables.length === 0) {
+          continue;
+        }
+        // First file of a Replace creates the table; everything else stacks.
+        const fileMode = mode === 'replace' && committed === 0 ? 'replace' : 'append';
+        // A lone single-file replace stays clean (no source_file column); any
+        // multi-file or append run tags provenance with each file's name.
+        const tag = mode === 'replace' && files.length === 1 ? undefined : baseName(file.name);
+        await this.#data.loadDataset({ ...dataset, mode: fileMode, source: tag });
+        committed += 1;
+      } catch (err) {
+        this.#results.appendError(`Import of "${file.name}" failed: ${err.message}`);
+        console.error('[import]', err);
+      }
+    }
+
+    if (committed > 0) {
+      this.#bus.emit('import:finished', {
+        importer: id,
+        files: files.length,
+        committed,
+        rowCount: this.#data.rowCount,
+      });
+    }
+  }
+
+  /** Hand one file to the plugin and resolve with the dataset it delivers. */
+  #parseOne(spec, file) {
     const ticket = this.#nextTicket++;
     const done = new Promise((resolve, reject) => {
       this.#pending.set(ticket, { resolve, reject });
     });
-    try {
-      // Hand the plugin the File itself (a Blob handle — cheap, by-reference, no
-      // byte copy into the sandbox). JS parsers call `file.arrayBuffer()`;
-      // runtime parsers mount it lazily via `app.webr.mountFile(file)`.
-      spec.parse({ ticket, name: file.name, file });
-      const dataset = await done;
-      // An importer signals failure/abort by delivering null or an empty
-      // variable list. Do NOT commit in that case — clobbering the loaded
-      // dataset with an empty one on a failed import is the wrong behaviour. The
-      // importer is responsible for reporting the specific error.
-      if (!dataset || !Array.isArray(dataset.variables) || dataset.variables.length === 0) {
-        return;
-      }
-      await this.#data.loadDataset(dataset);
-      this.#bus.emit('import:finished', {
-        importer: id,
-        name: file.name,
-        rowCount: this.#data.rowCount,
-      });
-    } catch (err) {
-      this.#results.appendError(`Import of "${file.name}" failed: ${err.message}`);
-      console.error('[import]', err);
-    } finally {
-      this.#pending.delete(ticket);
-    }
+    // Hand the plugin the File itself (a Blob handle — cheap, by-reference, no
+    // byte copy into the sandbox).
+    spec.parse({ ticket, name: file.name, file });
+    return done.finally(() => this.#pending.delete(ticket));
   }
 }
 
+/** File name without directory or extension, for the provenance tag. */
+function baseName(name) {
+  return String(name).replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '');
+}
+
 /**
- * Open a host file picker and resolve with the chosen `File`, or `null` if the
- * user cancels. Must be called within a user gesture (we are — straight off the
+ * Ask whether an import should replace the current data or add to it. Resolves
+ * to `'replace'`, `'append'`, or `null` (cancelled).
+ *
+ * @param {number} fileCount
+ * @returns {Promise<'replace'|'append'|null>}
+ */
+function askMode(fileCount) {
+  const noun = fileCount > 1 ? `${fileCount} files` : 'this file';
+  return new Promise((resolve) => {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'ct-dialog';
+    dialog.innerHTML = `
+      <form method="dialog" class="ct-dialog__form">
+        <h2 class="ct-dialog__title">Import ${fileCount > 1 ? `${fileCount} files` : 'data'}</h2>
+        <p class="ct-dialog__hint">A dataset is already loaded. Add ${noun} to it
+          (stack rows, tagged by source), or replace what's loaded?</p>
+        <menu class="ct-dialog__buttons">
+          <button value="cancel" type="submit">Cancel</button>
+          <button value="replace" type="submit">Replace</button>
+          <button value="append" type="submit" class="ct-dialog__primary">Add to current data</button>
+        </menu>
+      </form>`;
+    dialog.addEventListener('close', () => {
+      const v = dialog.returnValue;
+      dialog.remove();
+      resolve(v === 'append' || v === 'replace' ? v : null);
+    });
+    document.body.append(dialog);
+    dialog.showModal();
+  });
+}
+
+/**
+ * Open a host file picker and resolve with the chosen files (empty array if the
+ * user cancels). Must be called within a user gesture (we are — straight off the
  * menu click) so the browser allows the dialog.
  *
  * @param {string[]} extensions - Accept filter, e.g. `['.csv']`.
- * @returns {Promise<File|null>}
+ * @param {boolean} multiple - Allow selecting several files at once.
+ * @returns {Promise<File[]>}
  */
-function pickFile(extensions) {
+function pickFiles(extensions, multiple) {
   return new Promise((resolve) => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = extensions.join(',');
+    input.multiple = multiple;
     input.style.display = 'none';
     let settled = false;
     const finish = (value) => {
@@ -204,10 +270,10 @@ function pickFile(extensions) {
       input.remove();
       resolve(value);
     };
-    input.addEventListener('change', () => finish(input.files?.[0] ?? null));
+    input.addEventListener('change', () => finish([...(input.files ?? [])]));
     // `cancel` fires when the dialog is dismissed (recent browsers). Harmless
     // where unsupported — change still resolves the happy path.
-    input.addEventListener('cancel', () => finish(null));
+    input.addEventListener('cancel', () => finish([]));
     document.body.append(input);
     input.click();
   });
