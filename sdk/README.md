@@ -50,10 +50,11 @@ but event payloads, callback arguments, etc.) must be structured-cloneable.
 | Surface        | What it's for                                                        |
 | -------------- | -------------------------------------------------------------------- |
 | `app.data`     | Read the dataset, variable metadata, and the user's selection.       |
-| `app.webr`     | Run R code (queued, serial) and install R packages.                  |
+| `app.webr`     | Run R (queued, serial), install packages, read/write its filesystem. |
 | `app.results`  | Append SPSS-style tables, plots, and notes to the results pane.      |
 | `app.ui`       | Ask the engine to show dialogs (you can't draw your own).            |
 | `app.menus`    | Register menu items.                                                 |
+| `app.importers`| Register a file importer (teach CrossTab a new file format).         |
 | `app.events`   | Publish/subscribe on the app-wide event bus.                         |
 | `app.plugin`   | Your manifest, plus the effective `apiVersion`.                      |
 
@@ -100,6 +101,18 @@ const { result } = await app.webr.run(
 - Make the **last expression** a `list(...)`/`data.frame(...)`; it returns in
   `result` as plain JS. Don't return raw model objects.
 
+Need to move binary data in or out of R (e.g. an importer staging an uploaded
+file, or pulling back a file R wrote)? Use the WebR filesystem:
+
+```js
+await app.webr.writeFile('/tmp/in.sav', bytes);   // bytes: ArrayBuffer | Uint8Array
+await app.webr.run('d <- haven::read_sav("/tmp/in.sav"); nanoparquet::write_parquet(d, "/tmp/out.parquet")');
+const parquet = await app.webr.readFile('/tmp/out.parquet'); // Uint8Array
+```
+
+Calls are queued like `run`, so a `writeFile` → `run` → `readFile` sequence stays
+ordered. Install R packages you depend on first: `await app.webr.installPackages(['haven'])`.
+
 ### Producing output
 
 Compute in R, then render clean tables yourself (the pane is for SPSS-style
@@ -115,6 +128,56 @@ The pane lives in a shadow root with a built-in stylesheet, so a plain `<table>`
 already looks the part. **Your HTML is sanitised** (allowlist) before insertion,
 so `<script>`, event handlers, and external references are stripped — keep to
 tables, basic formatting, and simple inline SVG.
+
+### Importing files
+
+File import is just a plugin. Register an importer and the engine adds a
+**File ▸ Import ▸ _your label_** item, owns the file picker, and commits whatever
+you deliver — so a new file format is a first-class citizen, exactly like the
+built-in CSV importer.
+
+```js
+export async function activate(app) {
+  await app.importers.register({
+    label: 'Acme Survey…',
+    extensions: ['.acme'],          // picker filter; route by extension
+    parse: ({ ticket, name, bytes }) => parseAcme(app, ticket, bytes),
+  });
+}
+```
+
+The engine calls your `parse` with the chosen file's `bytes` (an `ArrayBuffer`)
+and a `ticket`. Parse however you like — in JS, or by handing the bytes to R via
+`app.webr` — then **deliver** the result for that ticket:
+
+```js
+async function parseAcme(app, ticket, bytes) {
+  const { variables, columns } = decode(bytes);   // your parser
+  await app.importers.deliver(ticket, { variables, columns });
+}
+```
+
+`deliver` accepts **either** shape (the dual contract):
+
+- `{ variables, columns }` — columnar JS arrays (`{ name: [...] }`). Best for
+  formats you parse in JS. Numeric columns: numbers with `null` for missing;
+  text/factor: strings with `null`. Use plain arrays.
+- `{ variables, parquet }` — a Parquet `Uint8Array` (e.g. one R wrote via
+  `nanoparquet`). DuckDB reads it directly; best for runtime-parsed or large data.
+
+`variables` is always `VariableMeta[]` — it carries the labels, value labels, and
+missing codes that neither columns nor Parquet convey.
+
+> The reference importers show both paths end to end:
+> [`plugins/builtin-csv-import`](../plugins/builtin-csv-import/index.js) (JS →
+> `columns`) and [`plugins/builtin-haven-import`](../plugins/builtin-haven-import/index.js)
+> (R `haven` → `parquet`, using `app.webr.writeFile`/`readFile`).
+
+Current limits (additions planned — see the engine `TODO.md`): the picker takes a
+**single file** (no companion files yet, e.g. a SAS `.sas7bcat` label catalog),
+and there's **no progress or structured-warning channel** — report issues via
+`app.results.appendError`. If you need any of these, say so; the API grows from
+real importer needs.
 
 ## Isolation model
 
