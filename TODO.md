@@ -184,15 +184,21 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         (quotes, embedded commas/newlines, `\r\n`, conservative numeric
         inference) → `{variables, columns}`. Verified in Chrome end to end:
         menu → picker → sandboxed parse → DuckDB; analyses run on the result.
-  - [ ] **`haven` importer plugin (covers GSS).** The General Social Survey, a
-        teaching staple, ships only as SPSS `.sav` / Stata `.dta` / SAS
-        `.sas7bdat`. R's **`haven`** reads all three and returns variable labels,
-        value labels, and user-defined missing — exactly the `VariableMeta`
-        model. Plan: stage file bytes into WebR's FS → `haven::read_*` → write
-        Parquet in R → return `{variables, parquet}` (the Parquet path is already
-        wired). Needs new `app.webr` plumbing to stage input files into WebR's FS
-        (the engine-side work). `haven` is install-on-demand (see R-package
-        strategy).
+  - [x] **`haven` importer plugin (covers GSS)** (`plugins/builtin-haven-import/`).
+        Reads SPSS `.sav`/`.por`, Stata `.dta`, SAS `.sas7bdat`/`.xpt` via R
+        `haven`, extracts variable labels + value labels + user-missing +
+        measurement level as JSON, writes label-stripped data to Parquet, and
+        returns `{variables, parquet}`. New `app.webr.writeFile`/`readFile` stage
+        the bytes into / out of WebR's FS (the engine-side work). `haven` installs
+        on demand (~5.5s first time). SPSS read uses `user_na = TRUE` so distinct
+        GSS missing codes (DK/Refused/NAP) survive as sentinels + metadata rather
+        than collapsing to NA. **Verified in Chrome** with a haven-written `.sav`
+        round-trip: value labels render in Frequencies, `-99` recodes to Missing.
+    - [ ] *Still to test:* real GSS files (the synthetic round-trip proves the
+          mechanism, not every real-file quirk); SAS value labels need the
+          separate `.sas7bcat` catalog (`read_sas(data, catalog_file)`) — not yet
+          wired; `na_range` (range-style SPSS missing) not yet captured, only
+          discrete `na_values`.
   - [ ] **Excel** via SheetJS later, if wanted (also a plugin).
   - *Note:* the Parquet return path (`DataStore.loadDataset` +
     `DuckDBManager.replaceTableFromParquet`) is built and unit-exercised by the

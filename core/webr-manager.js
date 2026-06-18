@@ -154,6 +154,36 @@ export class WebRManager {
   }
 
   /**
+   * Write bytes to a path in WebR's virtual filesystem. Lets an importer stage
+   * an uploaded file where R can read it (e.g. `haven::read_sav`). Queued so it
+   * is ordered relative to the `run` that consumes the file.
+   *
+   * Note: this is a convenience, not a new capability — a plugin could already
+   * write the FS via `webr.run('writeBin(...)')`. It just makes binary I/O clean.
+   *
+   * @param {string} path - Destination path, e.g. `/tmp/import.sav`.
+   * @param {Uint8Array | ArrayBuffer} data
+   * @returns {Promise<void>}
+   */
+  writeFile(path, data) {
+    return this.#enqueue(async (webR) => {
+      const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+      await webR.FS.writeFile(path, bytes);
+    }, 'writeFile');
+  }
+
+  /**
+   * Read a file from WebR's virtual filesystem as bytes — e.g. to pull a Parquet
+   * snapshot an importer wrote in R back out for ingestion.
+   *
+   * @param {string} path
+   * @returns {Promise<Uint8Array>}
+   */
+  readFile(path) {
+    return this.#enqueue(async (webR) => webR.FS.readFile(path), 'readFile');
+  }
+
+  /**
    * Run R code, optionally with the current dataset injected as `df`, and get
    * back structured output.
    *

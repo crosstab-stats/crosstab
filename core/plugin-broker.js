@@ -261,6 +261,8 @@ function buildDispatch({ data, results, webr, menus, ui, importers, bus }) {
 
     'webr.run': (code, opts) => webr.run(code, opts),
     'webr.installPackages': (pkgs) => webr.installPackages(pkgs),
+    'webr.writeFile': (path, data) => webr.writeFile(path, data),
+    'webr.readFile': (path) => webr.readFile(path),
 
     'menus.register': (item) => menus.register(item),
 

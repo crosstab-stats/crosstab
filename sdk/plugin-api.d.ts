@@ -120,6 +120,12 @@ export interface WebrApi {
   run(rCode: string, options?: RunOptions): Promise<RunResult>;
   /** Install R packages into the running session. */
   installPackages(packages: string[]): Promise<void>;
+  /** Write bytes into WebR's virtual filesystem (e.g. stage a file for an
+   * importer to read with `haven::read_sav`). */
+  writeFile(path: string, data: Uint8Array | ArrayBuffer): Promise<void>;
+  /** Read a file from WebR's virtual filesystem as bytes (e.g. pull back a
+   * Parquet snapshot written in R). */
+  readFile(path: string): Promise<Uint8Array>;
 }
 
 /** A menu entry contributed by a plugin. */
