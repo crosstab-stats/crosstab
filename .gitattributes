@@ -1,0 +1,8 @@
+# Normalise line endings: store text as LF in the repo, regardless of OS.
+* text=auto eol=lf
+
+# Binary assets git should never touch.
+*.png binary
+*.wasm binary
+*.sav binary
+*.xlsx binary

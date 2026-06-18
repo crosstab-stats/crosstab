@@ -1,0 +1,15 @@
+# Dependencies (none yet — everything is native ES modules + CDN)
+node_modules/
+
+# Editor / OS cruft
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/
+
+# Vendored binaries / icons placeholder (add real assets, ignore scratch)
+vendor/*.wasm
+
+# Local build output (if a bundler is added later)
+dist/

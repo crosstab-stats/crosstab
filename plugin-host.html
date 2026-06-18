@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>CrossTab plugin sandbox</title>
+  </head>
+  <body>
+    <!--
+      This page is the sandbox a plugin runs in. The engine loads it into an
+      <iframe sandbox="allow-scripts">, which forces an opaque origin and a
+      separate JS heap — the plugin cannot reach the engine's objects or the
+      host DOM. All engine access goes through the `app` proxy below, which turns
+      every call into a postMessage to the host broker (see core/plugin-broker.js
+      for the matching server side and the full wire protocol).
+
+      The runtime is INLINE on purpose: a sandboxed opaque-origin document cannot
+      fetch other same-origin files (they become cross-origin), so it must be
+      self-contained. The plugin's own source arrives later via postMessage and
+      is imported from a blob: URL (same opaque origin), which is the one way to
+      load an ES module into this isolated realm without CORS.
+    -->
+    <script>
+      'use strict';
+      (() => {
+        const PROTOCOL = 1;
+        const parentWin = window.parent;
+
+        /** Pending RPC calls awaiting a result, by id. */
+        const pending = new Map();
+        let nextCallId = 1;
+
+        /** Plugin-side callbacks the host may invoke, by id. */
+        const callbacks = new Map();
+        let nextCbId = 1;
+
+        /** The imported plugin module, captured on 'load'. */
+        let pluginModule = null;
+
+        const post = (m) => parentWin.postMessage({ __crosstab: PROTOCOL, ...m }, '*');
+
+        // --- RPC client --------------------------------------------------------
+
+        /** Issue a method call to the host and await its result. */
+        function call(method, args) {
+          const id = nextCallId++;
+          return new Promise((resolve, reject) => {
+            pending.set(id, { resolve, reject });
+            post({ t: 'call', id, method, args: marshalArgs(args) });
+          });
+        }
+
+        /** Replace functions in args with {__cb:id} markers the host can call. */
+        function marshalArgs(value) {
+          if (Array.isArray(value)) return value.map(marshalArgs);
+          if (typeof value === 'function') {
+            const cbId = nextCbId++;
+            callbacks.set(cbId, value);
+            return { __cb: cbId };
+          }
+          if (value && typeof value === 'object') {
+            const out = {};
+            for (const k of Object.keys(value)) out[k] = marshalArgs(value[k]);
+            return out;
+          }
+          return value;
+        }
+
+        /** Turn a returned {__handle} into a disposer function. */
+        function reviveValue(value) {
+          if (value && typeof value === 'object' && typeof value.__handle === 'number') {
+            return () => call('__dispose', [value.__handle]);
+          }
+          return value;
+        }
+
+        /** Build a namespace whose methods proxy to host RPC calls. */
+        function makeNamespace(ns, methods) {
+          const obj = {};
+          for (const name of methods) {
+            obj[name] = (...args) => call(`${ns}.${name}`, args).then(reviveValue);
+          }
+          return Object.freeze(obj);
+        }
+
+        /** Assemble the `app` object handed to the plugin's activate(). */
+        function makeApp(identity) {
+          return Object.freeze({
+            plugin: Object.freeze(identity),
+            data: makeNamespace('data', [
+              'getDataFrame', 'getColumns', 'getVariableMeta',
+              'getSelectedVariables', 'getRowCount',
+              'onDataChanged', 'onSelectionChanged',
+            ]),
+            results: makeNamespace('results', [
+              'beginSection', 'appendTable', 'appendPlot', 'appendText', 'appendError', 'clear',
+            ]),
+            webr: makeNamespace('webr', ['run', 'installPackages']),
+            menus: makeNamespace('menus', ['register']),
+            ui: makeNamespace('ui', ['selectVariables']),
+            events: makeNamespace('events', ['on', 'emit']),
+          });
+        }
+
+        // --- message handling --------------------------------------------------
+
+        window.addEventListener('message', async (event) => {
+          if (event.source !== parentWin) return; // only trust the host
+          const msg = event.data;
+          if (!msg || msg.__crosstab !== PROTOCOL) return;
+
+          switch (msg.t) {
+            case 'load':
+              await importPlugin(msg.code);
+              break;
+
+            case 'activate':
+              try {
+                await pluginModule.activate(makeApp(msg.plugin));
+                post({ t: 'activated', ok: true });
+              } catch (err) {
+                post({ t: 'activated', ok: false, error: String(err && err.message || err) });
+              }
+              break;
+
+            case 'result': {
+              const p = pending.get(msg.id);
+              if (!p) break;
+              pending.delete(msg.id);
+              if (msg.ok) p.resolve(msg.value);
+              else p.reject(new Error(msg.error));
+              break;
+            }
+
+            case 'cb': {
+              const fn = callbacks.get(msg.cbId);
+              if (fn) {
+                try {
+                  fn(...(msg.args || []));
+                } catch (err) {
+                  console.error('[plugin] callback threw', err);
+                }
+              }
+              break;
+            }
+
+            default:
+              break;
+          }
+        });
+
+        /** Import the plugin source from a blob URL and report its manifest. */
+        async function importPlugin(code) {
+          let url;
+          try {
+            const blob = new Blob([code], { type: 'text/javascript' });
+            url = URL.createObjectURL(blob);
+            pluginModule = await import(url);
+            if (!pluginModule.manifest || typeof pluginModule.activate !== 'function') {
+              throw new Error('plugin must export `manifest` and `activate`');
+            }
+            post({ t: 'manifest', ok: true, manifest: pluginModule.manifest });
+          } catch (err) {
+            post({ t: 'manifest', ok: false, error: String(err && err.message || err) });
+          } finally {
+            if (url) URL.revokeObjectURL(url);
+          }
+        }
+
+        // Announce readiness once the runtime is wired up.
+        post({ t: 'ready' });
+      })();
+    </script>
+  </body>
+</html>
