@@ -243,7 +243,7 @@ export class PluginBroker {
  * @param {import('./event-bus.js').EventBus} s.bus
  * @returns {Object<string, Function>}
  */
-function buildDispatch({ data, transform, results, webr, menus, ui, importers, bus }) {
+function buildDispatch({ data, transform, results, webr, menus, ui, importers, web, bus }) {
   return {
     'data.getDataFrame': (opts) => data.getDataFrame(opts),
     'data.getColumns': (opts) => data.getColumns(opts),
@@ -273,9 +273,12 @@ function buildDispatch({ data, transform, results, webr, menus, ui, importers, b
 
     'ui.selectVariables': (opts) => ui.selectVariables(opts),
     'ui.selectFromList': (opts) => ui.selectFromList(opts),
+    'ui.showForm': (opts) => ui.showForm(opts),
 
     'importers.register': (spec) => importers.register(spec),
     'importers.deliver': (ticket, dataset) => importers.deliver(ticket, dataset),
+
+    'web.get': (url) => web.get(url),
 
     'events.on': (name, fn) => bus.on(name, fn),
     'events.emit': (name, payload) => bus.emit(name, payload),

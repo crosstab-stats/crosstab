@@ -198,6 +198,36 @@ export interface UiApi {
    * (e.g. a file's variable catalog *before* import, which can be thousands of
    * entries). Resolves to the chosen `value`s, or `null` if cancelled. */
   selectFromList(options?: SelectFromListOptions): Promise<string[] | null>;
+  /** Show a modal form of labelled text inputs (the general options dialog — e.g.
+   * a FRED importer asking for a series id and API key). Resolves to a
+   * `{ [fieldName]: value }` map, or `null` if the user cancels. */
+  showForm(options?: ShowFormOptions): Promise<Record<string, string> | null>;
+}
+
+/** One input in a {@link UiApi.showForm} dialog. */
+export interface FormField {
+  /** Key the entered value is returned under. */
+  name: string;
+  /** Visible label (defaults to `name`). */
+  label?: string;
+  /** Input type. `password` masks the value. Default `text`. */
+  type?: "text" | "password" | "number";
+  /** Initial value. */
+  value?: string;
+  /** Placeholder shown when empty. */
+  placeholder?: string;
+  /** Small helper text beside the label. */
+  hint?: string;
+}
+
+/** Options for {@link UiApi.showForm}. */
+export interface ShowFormOptions {
+  title?: string;
+  /** Sub-heading explaining the form. */
+  hint?: string;
+  /** The fields to render, in order. */
+  fields: FormField[];
+  okLabel?: string;
 }
 
 /** Options for {@link UiApi.selectFromList}. */
@@ -226,37 +256,48 @@ export interface ImportedDataset {
   parquet?: Uint8Array;
 }
 
-/** The request the engine passes to an importer's {@link Importer.parse}. */
+/** The request the engine passes to an importer's {@link Importer.parse}. For a
+ * `"web"` importer only `ticket` is present (there is no file). */
 export interface ImportRequest {
   /** Opaque token identifying this import; pass it back to `deliver`. */
   ticket: number;
-  /** The chosen file's name (use it to pick a delimiter, etc.). */
-  name: string;
+  /** The chosen file's name (use it to pick a delimiter, etc.). Absent for a
+   * `"web"` importer. */
+  name?: string;
   /** The uploaded file as a `File`/`Blob` handle — passed by reference, so even a
    * large upload isn't copied into your sandbox. JS parsers call
    * `await file.arrayBuffer()`; runtime parsers stage it with
-   * `app.webr.mountFile(file)`. */
-  file: Blob;
+   * `app.webr.mountFile(file)`. Absent for a `"web"` importer. */
+  file?: Blob;
 }
+
+/** Where an importer's data comes from. `"file"` (default) opens a picker;
+ * `"web"` fetches its own bytes (via {@link WebApi}) and gets no file. */
+export type ImporterSource = "file" | "web";
 
 /** An importer registration. */
 export interface Importer {
   /** Menu label under File ▸ Import, e.g. `"CSV…"`. */
   label: string;
+  /** Data origin. Default `"file"`. A `"web"` importer opens no file picker;
+   * the engine calls `parse({ ticket })` and the plugin fetches its own data. */
+  source?: ImporterSource;
   /** File extensions handled, with the dot, e.g. `[".csv"]` or
-   * `[".sav", ".dta", ".sas7bdat"]`. Used for the picker's accept filter. */
-  extensions: string[];
-  /** Called by the engine (in your sandbox) with the chosen file's bytes. Parse
-   * them and call {@link ImportersApi.deliver} with the result. Return value is
+   * `[".sav", ".dta", ".sas7bdat"]`. Used for the picker's accept filter.
+   * Required for `"file"` importers; ignored for `"web"`. */
+  extensions?: string[];
+  /** Called by the engine (in your sandbox). For a `"file"` importer you get the
+   * chosen file's bytes; for a `"web"` importer just the `ticket`. Parse/fetch
+   * and call {@link ImportersApi.deliver} with the result. Return value is
    * ignored — delivery is via `deliver`, so async work is fine. */
   parse: (request: ImportRequest) => void;
   /** Stable id (defaults to `label`). */
   id?: string;
   /** Sort weight within File ▸ Import (lower first). Default 100. */
   order?: number;
-  /** Allow selecting several files at once; they stack (append) into one pooled
-   * dataset, tagged by a `source_file` column. `parse` is still called once per
-   * file. Default false. */
+  /** (File importers only.) Allow selecting several files at once; they stack
+   * (append) into one pooled dataset, tagged by a `source_file` column. `parse`
+   * is still called once per file. Default false. */
   multiple?: boolean;
 }
 
@@ -270,6 +311,28 @@ export interface ImportersApi {
   register(importer: Importer): Promise<Disposer>;
   /** Deliver a parsed dataset for the given request `ticket`. */
   deliver(ticket: number, dataset: ImportedDataset): Promise<void>;
+}
+
+/** Response from {@link WebApi.get}. */
+export interface WebResponse {
+  /** True for a 2xx status. */
+  ok: boolean;
+  /** HTTP status code. */
+  status: number;
+  /** Response body as text (parse JSON yourself with `JSON.parse`). */
+  text: string;
+}
+
+/**
+ * Fetch data over the network from inside a plugin. The engine performs the
+ * `fetch` host-side; only `http(s)` URLs are allowed. Useful for `"web"`
+ * importers (e.g. pulling a series from an economic-data API). Note: many APIs
+ * are not CORS-enabled and must be routed through a CORS proxy.
+ */
+export interface WebApi {
+  /** GET a URL and resolve with `{ ok, status, text }`. Rejects on a network
+   * error (e.g. CORS block) just like `fetch`. */
+  get(url: string): Promise<WebResponse>;
 }
 
 /** App-wide publish/subscribe. Payloads must be structured-cloneable. */
@@ -299,6 +362,7 @@ export interface App {
   readonly menus: MenusApi;
   readonly ui: UiApi;
   readonly importers: ImportersApi;
+  readonly web: WebApi;
   readonly events: EventsApi;
 }
 

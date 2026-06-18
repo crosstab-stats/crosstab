@@ -35,12 +35,18 @@
 /**
  * @typedef {Object} ImporterSpec
  * @property {string} label - Menu label, e.g. `'CSV…'` or `'SPSS / Stata / SAS…'`.
- * @property {string[]} extensions - File extensions handled, with the dot, e.g.
+ * @property {'file'|'web'} [source='file'] - Where the data comes from. `'file'`
+ *   importers parse an uploaded file (the engine opens a picker). `'web'`
+ *   importers fetch their own bytes (e.g. a FRED series) and get no file — the
+ *   engine calls `parse({ ticket })` once, with no `name`/`file`.
+ * @property {string[]} [extensions] - File extensions handled, with the dot, e.g.
  *   `['.csv']` or `['.sav', '.dta', '.sas7bdat']`. Used for the picker filter.
- * @property {(req: {ticket: number, name: string, file: Blob}) => void} parse
- *   - Plugin callback that parses the file and calls `importers.deliver`. Gets
- *   the upload as a `File` (Blob handle): JS parsers call `file.arrayBuffer()`,
- *   runtime parsers stage it via `app.webr.mountFile(file)`.
+ *   Required for `'file'` importers; ignored for `'web'`.
+ * @property {(req: {ticket: number, name?: string, file?: Blob}) => void} parse
+ *   - Plugin callback that parses the source and calls `importers.deliver`. For
+ *   `'file'` importers it gets the upload as a `File` (Blob handle): JS parsers
+ *   call `file.arrayBuffer()`, runtime parsers stage it via
+ *   `app.webr.mountFile(file)`. For `'web'` importers it gets only the `ticket`.
  * @property {string} [id] - Stable id (defaults to `label`).
  * @property {number} [order] - Sort weight within File ▸ Import.
  * @property {boolean} [multiple=false] - Allow selecting several files at once
@@ -92,7 +98,10 @@ export class ImportService {
     if (!spec || typeof spec.parse !== 'function') {
       throw new TypeError('importers.register: `parse` must be a function');
     }
-    if (!Array.isArray(spec.extensions) || spec.extensions.length === 0) {
+    // File importers describe the extensions they accept; a `web` importer
+    // fetches its own bytes and opens no file picker, so it needs none.
+    const isWeb = spec.source === 'web';
+    if (!isWeb && (!Array.isArray(spec.extensions) || spec.extensions.length === 0)) {
       throw new TypeError('importers.register: `extensions` must be a non-empty array');
     }
     const id = spec.id ?? spec.label;
@@ -141,12 +150,14 @@ export class ImportService {
   // --- internals -------------------------------------------------------------
 
   /**
-   * Run an import: pick file(s), and for each, hand it to the plugin and commit
-   * the result — replacing or appending (stacking) onto the current dataset.
+   * Run an import. For a `web` importer the plugin fetches its own data, so
+   * there is no file picker — we mint one ticket and commit what it delivers.
+   * For a file importer we pick file(s) and stack/replace each in turn.
    */
   async #runImport(id) {
     const spec = this.#importers.get(id);
     if (!spec) return;
+    if (spec.source === 'web') return this.#runWebImport(id, spec);
 
     let files;
     try {
@@ -196,15 +207,68 @@ export class ImportService {
     }
   }
 
+  /**
+   * Run a `web` importer: no file picker. Mint a ticket, let the plugin fetch
+   * and deliver one dataset, then commit it (asking replace-vs-append if data
+   * is already loaded). The plugin owns its own provenance tag via
+   * `dataset.source` (e.g. a FRED series id).
+   */
+  async #runWebImport(id, spec) {
+    let dataset;
+    try {
+      dataset = await this.#awaitTicket((ticket) => spec.parse({ ticket }));
+    } catch (err) {
+      this.#results.appendError(`Import failed: ${err.message}`);
+      console.error('[import]', err);
+      return;
+    }
+    // null / empty = the importer aborted (and reported its own error).
+    if (!dataset || !Array.isArray(dataset.variables) || dataset.variables.length === 0) {
+      return;
+    }
+
+    let mode = 'replace';
+    if (this.#data.rowCount > 0) {
+      mode = await askMode(1);
+      if (!mode) return; // cancelled
+    }
+    // A clean single-source replace stays untagged; anything that joins existing
+    // data carries provenance (the plugin's own label, falling back to the id).
+    const tag = mode === 'replace' ? undefined : dataset.source ?? id;
+    try {
+      await this.#data.loadDataset({ ...dataset, mode, source: tag });
+    } catch (err) {
+      this.#results.appendError(`Import failed: ${err.message}`);
+      console.error('[import]', err);
+      return;
+    }
+    this.#bus.emit('import:finished', {
+      importer: id,
+      files: 1,
+      committed: 1,
+      rowCount: this.#data.rowCount,
+    });
+  }
+
   /** Hand one file to the plugin and resolve with the dataset it delivers. */
   #parseOne(spec, file) {
+    // Hand the plugin the File itself (a Blob handle — cheap, by-reference, no
+    // byte copy into the sandbox).
+    return this.#awaitTicket((ticket) => spec.parse({ ticket, name: file.name, file }));
+  }
+
+  /**
+   * Mint a ticket, run `invoke(ticket)` (which kicks off the plugin's parse),
+   * and resolve with whatever the plugin `deliver`s for that ticket.
+   * @param {(ticket: number) => void} invoke
+   * @returns {Promise<object|null>}
+   */
+  #awaitTicket(invoke) {
     const ticket = this.#nextTicket++;
     const done = new Promise((resolve, reject) => {
       this.#pending.set(ticket, { resolve, reject });
     });
-    // Hand the plugin the File itself (a Blob handle — cheap, by-reference, no
-    // byte copy into the sandbox).
-    spec.parse({ ticket, name: file.name, file });
+    invoke(ticket);
     return done.finally(() => this.#pending.delete(ticket));
   }
 }

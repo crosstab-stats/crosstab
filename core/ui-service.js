@@ -255,16 +255,74 @@ export class UiService {
   }
 
   /**
+   * Show a modal form of text inputs and resolve with the entered values (or
+   * `null` if cancelled). The general declarative input dialog — for analysis
+   * options or, e.g., a FRED importer asking for a series ID and API key.
+   *
+   * @param {Object} [options]
+   * @param {string} [options.title='Form']
+   * @param {string} [options.hint]
+   * @param {Array<{name: string, label?: string, type?: 'text'|'password'|'number', value?: string, placeholder?: string, hint?: string}>} [options.fields]
+   * @param {string} [options.okLabel='OK']
+   * @returns {Promise<Record<string,string> | null>}
+   */
+  showForm(options = {}) {
+    const { title = 'Form', hint, fields = [], okLabel = 'OK' } = options;
+    return new Promise((resolve) => {
+      const dialog = document.createElement('dialog');
+      dialog.className = 'ct-dialog';
+      const fieldHtml = fields
+        .map((f) => {
+          const type = f.type === 'password' ? 'password' : f.type === 'number' ? 'number' : 'text';
+          return `
+            <label class="ct-field">${esc(f.label ?? f.name)}${
+              f.hint ? ` <span class="ct-hint">${esc(f.hint)}</span>` : ''
+            }
+              <input name="${attr(f.name)}" type="${type}" value="${attr(f.value ?? '')}"
+                     placeholder="${attr(f.placeholder ?? '')}" autocomplete="off">
+            </label>`;
+        })
+        .join('');
+      dialog.innerHTML = `
+        <form method="dialog" class="ct-dialog__form ct-edit">
+          <h2 class="ct-dialog__title">${esc(title)}</h2>
+          ${hint ? `<p class="ct-dialog__hint">${esc(hint)}</p>` : ''}
+          ${fieldHtml}
+          <menu class="ct-dialog__buttons">
+            <button value="cancel" type="submit">Cancel</button>
+            <button value="ok" type="submit" class="ct-dialog__primary">${esc(okLabel)}</button>
+          </menu>
+        </form>`;
+      dialog.addEventListener('close', () => {
+        const ok = dialog.returnValue === 'ok';
+        const out = {};
+        if (ok) {
+          for (const f of fields) {
+            const el = dialog.querySelector(`input[name="${attr(f.name)}"]`);
+            out[f.name] = el ? el.value : '';
+          }
+        }
+        dialog.remove();
+        resolve(ok ? out : null);
+      });
+      document.body.append(dialog);
+      dialog.showModal();
+    });
+  }
+
+  /**
    * The frozen object exposed to plugins as `app.ui`.
    * @returns {Readonly<{
    *   selectVariables: (opts?: SelectVariablesOptions) => Promise<string[]|null>,
    *   selectFromList: (opts?: object) => Promise<string[]|null>,
+   *   showForm: (opts?: object) => Promise<Record<string,string>|null>,
    * }>}
    */
   get api() {
     return Object.freeze({
       selectVariables: (opts) => this.selectVariables(opts),
       selectFromList: (opts) => this.selectFromList(opts),
+      showForm: (opts) => this.showForm(opts),
     });
   }
 }

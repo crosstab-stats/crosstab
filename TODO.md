@@ -289,6 +289,9 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       proxy (e.g. Cloudflare Worker/Function) that does the cross-origin GET,
       **or** a no-server fallback where the user pastes page HTML / uploads a
       saved page. This choice touches the "purely static, no backend" positioning.
+      (Note: the FRED work added the **`web` importer source + `app.web.get(url)`**
+      primitives and proved a public CORS proxy works through our COEP isolation —
+      a scrape plugin can reuse both; the proxy-vs-paste decision still stands.)
     - *How to parse:* Python + BeautifulSoup IS viable client-side via **Pyodide**
       (CPython-in-WASM; bs4 is pure Python, installable with `micropip`) — but
       that pulls in a *second* large WASM runtime on top of WebR. Lighter
@@ -298,31 +301,26 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       deliberately — bs4/Pyodide is the heaviest of these, not the default.
   - Reuses the same ingest path as file import (`DataStore.setDataset`); the
     "save as CSV" archival option overlaps with CSV export work.
-- [ ] **FRED import (economic time series).** Pull series from the St. Louis Fed's
-      **FRED** API by series ID (e.g. `UNRATE`, `GDP`, `CPIAUCSL`) into a dataset.
-      Economics is a social science (and not overlooking it is politically wise) —
-      FRED is *the* canonical econ data source, so this is high-value for that
-      audience. The data is clean time-series (date + value), so ingest is trivial
-      — a 2-column dataset per series, or wide (date × multiple series) when
-      pulling several. Real questions, not the parsing:
-  - *Fetch / CORS (verify — don't assume).* I previously called FRED "CORS-friendly";
-    that needs checking. FRED's API (`api.stlouisfed.org/fred/series/observations`)
-    returns JSON, but whether it sends `Access-Control-Allow-Origin` for browser
-    requests is unconfirmed. If not, it hits the **same CORS wall as the URL-scrape
-    item** → needs a serverless proxy or a paste/upload fallback. (A structured
-    JSON API is still a far cleaner target than HTML scraping either way.)
-  - *API key in a browser.* FRED requires a key; a static browser app would expose
-    it. Have the user supply their own key (stored locally, e.g. settings), never
-    bundle one — and note keys in URLs get logged (per the security rules, prefer
-    not to put it in a query string a proxy might log).
-  - *Architecture gap it surfaces:* FRED is a **network data source, not a file**,
-    so it doesn't fit the file-picker importer flow (`app.importers` parses a
-    chosen `File`). It needs a **plugin-facing "load a dataset" API** —
-    `DataStore.loadDataset` is engine-internal today (only `ImportService` calls
-    it). Generalise that into the public surface (alongside `app.transform`) so a
-    data-source plugin can fetch + deliver a dataset directly. The URL-scrape item
-    needs the same primitive — build it once, both benefit. Then FRED is just a
-    plugin: menu command → prompt for series ID(s)+key → fetch → load.
+- [x] **FRED import (economic time series).** *Built* — `plugins/builtin-fred/`.
+      Pulls a St. Louis Fed **FRED** series by ID (e.g. `UNRATE`, `GDP`, `CPIAUCSL`)
+      into a 2-column dataset (`date` + the series), best-effort labelled with the
+      series title. Economics is a social science and FRED is *the* canonical econ
+      source, so this is high-value for that audience. How the open questions resolved:
+  - *Fetch / CORS.* Verified (don't assume): FRED's API sends **no**
+    `Access-Control-Allow-Origin`, so a direct browser `fetch` is blocked. Routed
+    through a **public CORS proxy** (`corsproxy.io`) — confirmed live the proxy
+    re-serves FRED's JSON (and its error JSON) intact through our COEP isolation.
+  - *API key in a browser.* The user supplies their own key in the import dialog
+    (`app.ui.showForm`, masked field); we never bundle one. The key transits the
+    proxy — acceptable because a FRED key is a free public-data rate-limit id, not
+    a secret (documented in the plugin header). We would never proxy a real
+    credential this way.
+  - *Architecture gap it surfaced — now closed.* FRED is a network source, not a
+    file, so it needed a non-picker ingest path. Added the **`web` importer source**
+    (`Importer.source: 'web'`): the engine registers the menu item but opens no
+    picker, calls `parse({ ticket })`, and the plugin fetches its own bytes via the
+    new **`app.web.get(url)`** surface, then `deliver`s a dataset through the
+    existing commit path. The URL-scrape item can reuse both primitives.
 - [~] **SPSS-style data grid view.** *Read-only v1 built* (`core/data-views.js`):
       a tabbed workspace (**Data | Variables | Output**) beside the sidebar.
   - **Data View** — **2-D virtualised** cell grid: renders only the rows *and*

@@ -36,7 +36,24 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-descriptives/index.js',
   './plugins/builtin-crosstabs/index.js',
   './plugins/builtin-regression/index.js',
+  './plugins/builtin-fred/index.js',
 ];
+
+/**
+ * Host-side network fetch exposed to plugins as `app.web`. The engine performs
+ * the fetch from the host origin (more reliable than a sandboxed iframe's
+ * opaque-origin request). Only enables "web" data-source importers; cross-origin
+ * targets still need CORS (or a proxy). Restricted to http(s) GET.
+ *
+ * @type {Readonly<{ get: (url: string) => Promise<{ok: boolean, status: number, text: string}> }>}
+ */
+const webService = Object.freeze({
+  get: async (url) => {
+    if (!/^https?:\/\//i.test(String(url))) throw new Error('web.get: only http(s) URLs');
+    const res = await fetch(String(url));
+    return { ok: res.ok, status: res.status, text: await res.text() };
+  },
+});
 
 /**
  * Boot the application into the given root element.
@@ -83,6 +100,7 @@ export async function boot(mounts) {
     menus: menus.api,
     ui: ui.api,
     importers: importers.api,
+    web: webService,
   };
   const loader = new PluginLoader(services);
 
