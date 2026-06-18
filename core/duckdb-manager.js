@@ -108,6 +108,30 @@ export class DuckDBManager {
     await conn.insertArrowFromIPCStream(ipc, { name, create: true });
   }
 
+  /**
+   * Run a query and return its result as Parquet bytes. This is the fast lane
+   * into WebR: DuckDB writes Parquet, the bytes cross into WebR's virtual FS, and
+   * R reads them with `nanoparquet` — preserving column types (dates, decimals,
+   * …) natively, with no per-cell JS boxing. (Bridge B in `spike/RESULTS.md`.)
+   *
+   * @param {string} sql - A complete SELECT.
+   * @returns {Promise<Uint8Array>} Parquet file bytes.
+   */
+  async queryToParquet(sql) {
+    const { conn } = await this.#ensureReady();
+    const name = 'ct_export.parquet';
+    await conn.query(`COPY (${sql}) TO '${name}' (FORMAT parquet)`);
+    try {
+      return await this.#db.copyFileToBuffer(name);
+    } finally {
+      try {
+        await this.#db.dropFile(name);
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
+  }
+
   /** Shut the runtime down and reset. The next call cold-starts a new runtime. */
   async close() {
     const conn = this.#conn;

@@ -38,6 +38,10 @@ import { CoreEvents } from './event-bus.js';
  */
 const DEFAULT_WEBR_URL = 'https://webr.r-wasm.org/latest/webr.mjs';
 
+/** Path in WebR's virtual filesystem where the Parquet injection snapshot is
+ * written before R reads it. Overwritten each injecting run. */
+const INJECT_PATH = '/tmp/ct_inject.parquet';
+
 /**
  * @typedef {Object} RunResult
  * @property {any} result - The R return value converted to JS (`toJs()`), or
@@ -72,6 +76,15 @@ export class WebRManager {
    * from DataStore internals. */
   #getColumns;
 
+  /** Returns the current dataset (or a subset) as Parquet bytes, or `null`. The
+   * preferred injection path: it preserves column types natively in R. Optional;
+   * if absent, injection uses the JS-array fallback. @type {?(opts?: object) => Promise<Uint8Array|null>} */
+  #getInjectionParquet;
+
+  /** Cached probe: has `nanoparquet` been installed in WebR? `undefined` until
+   * first checked, then a `Promise<boolean>`. @type {Promise<boolean>|undefined} */
+  #nanoparquet;
+
   /** WebR module URL. */
   #url;
 
@@ -96,13 +109,17 @@ export class WebRManager {
    * @param {(opts?: {variables?: string[]}) => Promise<Object<string, Array>>} deps.getColumns
    *   - Supplies the current dataset in columnar form (typically
    *   `dataStore.getColumns`). Async: it queries the DuckDB-backed store.
+   * @param {(opts?: {variables?: string[]}) => Promise<Uint8Array|null>} [deps.getInjectionParquet]
+   *   - Optional. Supplies the dataset as Parquet bytes for the fast injection
+   *   path (typically `dataStore.getInjectionParquet`).
    * @param {Object} [opts]
    * @param {string} [opts.url] - Override the WebR module URL.
    * @param {string[]} [opts.preloadPackages] - Install on init.
    */
-  constructor({ bus, getColumns }, opts = {}) {
+  constructor({ bus, getColumns, getInjectionParquet }, opts = {}) {
     this.#bus = bus;
     this.#getColumns = getColumns;
+    this.#getInjectionParquet = getInjectionParquet ?? null;
     this.#url = opts.url ?? DEFAULT_WEBR_URL;
     this.#preload = opts.preloadPackages ?? [];
   }
@@ -158,25 +175,7 @@ export class WebRManager {
         const env = {};
         let prelude = '';
         if (injectData) {
-          // WebR's JS→R conversion wants a named object of *plain* arrays. Our
-          // columnar store holds numeric columns as Float64Array, so convert
-          // each column to a plain array and map NaN (our numeric "missing")
-          // to null, which WebR turns into R's NA. WebR converts the resulting
-          // object to a named list; we coerce that to a data.frame, with
-          // `check.names = FALSE` so original variable names survive intact.
-          const rawCols = await this.#getColumns(variables ? { variables } : undefined);
-          const cols = {};
-          for (const [name, vec] of Object.entries(rawCols)) {
-            cols[name] = Array.from(vec, (v) =>
-              typeof v === 'number' && Number.isNaN(v) ? null : v,
-            );
-          }
-          // Bind under a dot-prefixed name: valid R syntax (unlike a leading
-          // underscore) and conventionally "hidden".
-          env['.crosstab_data'] = cols;
-          prelude =
-            'df <- as.data.frame(.crosstab_data, ' +
-            'stringsAsFactors = FALSE, check.names = FALSE)\n';
+          prelude = await this.#buildInjection(webR, env, variables);
         }
 
         const capture = await shelter.captureR(prelude + code, {
@@ -249,6 +248,76 @@ export class WebRManager {
     );
     this.#queue = run.catch(() => {}); // keep the tail un-rejected
     return run;
+  }
+
+  /**
+   * Bind the current dataset as the R data.frame `df` and return the prelude
+   * that materialises it. Prefers the Parquet bridge (types preserved natively
+   * in R, no per-cell JS boxing); falls back to JS columnar arrays when Parquet
+   * isn't available (no `getInjectionParquet`, `nanoparquet` won't install, or
+   * any error). The fallback is the hardened JS-array path from the spikes.
+   *
+   * @param {any} webR
+   * @param {Object} env - captureR env; the fallback binds `.crosstab_data` here.
+   * @param {string[]} [variables]
+   * @returns {Promise<string>} R prelude source.
+   */
+  async #buildInjection(webR, env, variables) {
+    const opts = variables ? { variables } : undefined;
+
+    if (this.#getInjectionParquet && (await this.#ensureNanoparquet(webR))) {
+      try {
+        const bytes = await this.#getInjectionParquet(opts);
+        if (bytes && bytes.byteLength) {
+          await webR.FS.writeFile(INJECT_PATH, bytes);
+          return (
+            `df <- as.data.frame(nanoparquet::read_parquet("${INJECT_PATH}"), ` +
+            `stringsAsFactors = FALSE, check.names = FALSE)\n`
+          );
+        }
+      } catch (err) {
+        console.warn('[webr] Parquet injection failed; using JS-array fallback', err);
+      }
+    }
+
+    // Fallback: WebR's JS→R conversion wants a named object of *plain* arrays.
+    // Convert each column and map NaN (our numeric "missing") to null → R NA.
+    // Bind under a dot-prefixed name (valid R, conventionally "hidden").
+    const rawCols = await this.#getColumns(opts);
+    const cols = {};
+    for (const [name, vec] of Object.entries(rawCols)) {
+      cols[name] = Array.from(vec, (v) =>
+        typeof v === 'number' && Number.isNaN(v) ? null : v,
+      );
+    }
+    env['.crosstab_data'] = cols;
+    return 'df <- as.data.frame(.crosstab_data, stringsAsFactors = FALSE, check.names = FALSE)\n';
+  }
+
+  /**
+   * Ensure `nanoparquet` is installed, once. Cached so the (~1s) install is paid
+   * at most once per session; returns `false` if it can't be installed, so the
+   * caller falls back to the JS-array bridge.
+   *
+   * @param {any} webR
+   * @returns {Promise<boolean>}
+   */
+  #ensureNanoparquet(webR) {
+    if (this.#nanoparquet === undefined) {
+      this.#nanoparquet = (async () => {
+        try {
+          await webR.installPackages(['nanoparquet'], { quiet: true });
+          const ok = await webR.evalRString(
+            'tryCatch({ requireNamespace("nanoparquet", quietly=TRUE); "y" }, error=function(e) "n")',
+          );
+          return ok === 'y';
+        } catch (err) {
+          console.warn('[webr] nanoparquet unavailable; Parquet bridge disabled', err);
+          return false;
+        }
+      })();
+    }
+    return this.#nanoparquet;
   }
 
   /** Execute a single job with lifecycle events around it. */

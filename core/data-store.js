@@ -82,6 +82,17 @@ export class DataStore {
   /** name → meta, for O(1) lookup. @type {Map<string, VariableMeta>} */
   #byName = new Map();
 
+  /**
+   * name → DuckDB SQL type string (e.g. `DOUBLE`, `BIGINT`, `DATE`,
+   * `DECIMAL(9,2)`). Cached on each `setDataset` so reads don't re-query the
+   * schema. Drives the type-aware casting in {@link DataStore#getColumns} and
+   * {@link DataStore#getInjectionParquet} — independent of `VariableMeta.type`,
+   * so it stays correct for types the metadata model doesn't yet name (the
+   * dates/int64 a `.sav`/`.dta` import will bring in).
+   * @type {Map<string, string>}
+   */
+  #sqlTypes = new Map();
+
   /** Number of cases (rows). Kept explicit so an empty dataset can have schema. */
   #rowCount = 0;
 
@@ -135,6 +146,7 @@ export class DataStore {
     this.#variables = variables.map((m) => ({ ...m }));
     this.#byName = new Map(this.#variables.map((m) => [m.name, m]));
     this.#rowCount = rowCount;
+    await this.#refreshSqlTypes();
     // Drop any selection referring to variables that no longer exist.
     this.#selected = this.#selected.filter((n) => this.#byName.has(n));
     this.#bus.emit(CoreEvents.DATA_CHANGED, this.#snapshotSummary());
@@ -200,27 +212,48 @@ export class DataStore {
    */
   async getColumns({ variables } = {}) {
     const names = variables ?? this.#variables.map((v) => v.name);
-    const metas = names.map((n) => this.#byName.get(n)).filter(Boolean);
-    if (this.#rowCount === 0 || metas.length === 0) return {};
+    const present = names.filter((n) => this.#byName.has(n));
+    if (this.#rowCount === 0 || present.length === 0) return {};
 
-    // CAST numeric columns to DOUBLE so a DECIMAL storage type can't come back
-    // scaled wrong through Arrow-JS (see file header / spike RESULTS.md).
-    const selectList = metas
-      .map((m) =>
-        m.type === 'numeric'
-          ? `CAST(${quoteIdent(m.name)} AS DOUBLE) AS ${quoteIdent(m.name)}`
-          : quoteIdent(m.name),
-      )
-      .join(', ');
+    // Build a per-column SELECT expression + JS representation from the column's
+    // actual SQL type (see #sqlTypes). The casts encode the bridge rules proven
+    // in the spikes: numeric → DOUBLE (decimals can't come back scaled wrong),
+    // 64-bit ints → VARCHAR (R/JS have no exact int64; carry as character),
+    // temporal → ISO text (callers reconstruct Date/POSIXct), boolean → text.
+    const plan = present.map((name) => {
+      const kind = classifySqlType(this.#sqlTypes.get(name));
+      const q = quoteIdent(name);
+      let expr;
+      switch (kind) {
+        case 'numeric':
+          expr = `CAST(${q} AS DOUBLE) AS ${q}`;
+          break;
+        case 'date':
+          expr = `strftime(${q}, '%Y-%m-%d') AS ${q}`;
+          break;
+        case 'timestamp':
+          expr = `strftime(${q}, '%Y-%m-%d %H:%M:%S') AS ${q}`;
+          break;
+        case 'int64':
+        case 'time':
+        case 'bool':
+          expr = `CAST(${q} AS VARCHAR) AS ${q}`;
+          break;
+        default: // text
+          expr = q;
+      }
+      return { name, expr, numeric: kind === 'numeric' };
+    });
+
     const table = await this.#duckdb.query(
-      `SELECT ${selectList} FROM ${quoteIdent(MAIN_TABLE)}`,
+      `SELECT ${plan.map((p) => p.expr).join(', ')} FROM ${quoteIdent(MAIN_TABLE)}`,
     );
 
     const out = {};
     const n = table.numRows;
-    for (const m of metas) {
-      const col = table.getChild(m.name);
-      if (m.type === 'numeric') {
+    for (const p of plan) {
+      const col = table.getChild(p.name);
+      if (p.numeric) {
         const arr = new Float64Array(n);
         // `.get(i)` (not `.toArray()`) so SQL NULLs are preserved, not dropped;
         // map them to NaN, our numeric "missing" sentinel.
@@ -228,17 +261,63 @@ export class DataStore {
           const v = col.get(i);
           arr[i] = v == null ? NaN : Number(v);
         }
-        out[m.name] = arr;
+        out[p.name] = arr;
       } else {
         const arr = new Array(n);
         for (let i = 0; i < n; i++) {
           const v = col.get(i);
           arr[i] = v == null ? null : String(v);
         }
-        out[m.name] = arr;
+        out[p.name] = arr;
       }
     }
     return out;
+  }
+
+  /**
+   * Build a Parquet snapshot of the dataset (or a subset) for injection into
+   * WebR — the fast lane that preserves column types natively in R. Values are
+   * passed through *raw* (no user-missing recode; analyses do that themselves),
+   * except 64-bit integers, which are cast to VARCHAR because neither Parquet's
+   * R reader nor JS can represent them exactly.
+   *
+   * @param {Object} [opts]
+   * @param {string[]} [opts.variables]
+   * @returns {Promise<Uint8Array | null>} Parquet bytes, or `null` if empty.
+   */
+  async getInjectionParquet({ variables } = {}) {
+    const names = (variables ?? this.#variables.map((v) => v.name)).filter((n) =>
+      this.#byName.has(n),
+    );
+    if (this.#rowCount === 0 || names.length === 0) return null;
+
+    const selectList = names
+      .map((name) => {
+        const q = quoteIdent(name);
+        // Keep everything native (Parquet carries dates/decimals/bools/text
+        // faithfully); only 64-bit ints need the character cast.
+        return classifySqlType(this.#sqlTypes.get(name)) === 'int64'
+          ? `CAST(${q} AS VARCHAR) AS ${q}`
+          : q;
+      })
+      .join(', ');
+    return this.#duckdb.queryToParquet(
+      `SELECT ${selectList} FROM ${quoteIdent(MAIN_TABLE)}`,
+    );
+  }
+
+  /** Refresh the cached SQL column types from DuckDB's schema. */
+  async #refreshSqlTypes() {
+    this.#sqlTypes = new Map();
+    if (this.#variables.length === 0 || this.#rowCount === 0) return;
+    const rows = await this.#duckdb.query(
+      `SELECT column_name, data_type FROM information_schema.columns ` +
+        `WHERE table_name = '${MAIN_TABLE}'`,
+    );
+    for (let i = 0; i < rows.numRows; i++) {
+      const r = rows.get(i);
+      this.#sqlTypes.set(String(r.column_name), String(r.data_type));
+    }
   }
 
   /**
@@ -338,4 +417,26 @@ function coerceColumn(meta, raw) {
     return out;
   }
   return raw.map((v) => (v === null || v === undefined ? null : String(v)));
+}
+
+/**
+ * Map a DuckDB SQL type string to the bridge category that decides how a column
+ * is cast and represented. Order matters: 64-bit ints are matched before the
+ * general numeric family so they take the character path (R/JS have no exact
+ * int64). See `spike/datatypes-spike.html`.
+ *
+ * @param {string} [sqlType] - e.g. `DOUBLE`, `BIGINT`, `DATE`, `DECIMAL(9,2)`.
+ * @returns {'numeric'|'int64'|'date'|'timestamp'|'time'|'bool'|'text'}
+ */
+function classifySqlType(sqlType) {
+  const t = String(sqlType ?? '').toUpperCase();
+  if (/^(BIGINT|HUGEINT|UBIGINT|UHUGEINT)\b/.test(t)) return 'int64';
+  if (t.startsWith('DATE')) return 'date';
+  if (t.startsWith('TIMESTAMP')) return 'timestamp';
+  if (t.startsWith('TIME')) return 'time';
+  if (t === 'BOOLEAN' || t === 'BOOL') return 'bool';
+  if (/^(DECIMAL|NUMERIC|DOUBLE|FLOAT|REAL|TINYINT|SMALLINT|INTEGER|INT|UINTEGER|USMALLINT|UTINYINT)\b/.test(t)) {
+    return 'numeric';
+  }
+  return 'text';
 }

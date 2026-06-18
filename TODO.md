@@ -17,17 +17,22 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       dataset loads into DuckDB and Frequencies + `lm()` run over it end to end,
       including value labels and `-99` user-missing handling. Remaining sub-tasks
       to fully close this out are checklisted below.
-  - [ ] **Parquet fast-lane (Bridge B).** Injection currently uses the hardened
-        JS-array path (Bridge A: `CAST … AS DOUBLE`, per-cell `.get(i)`). Add the
-        Parquet/`nanoparquet` path as the default for large reduced results
-        (spikes showed it's higher fidelity — native types/decimals/NULLs).
-  - [ ] **Full type handling in `getColumns`.** Today it casts numeric→DOUBLE and
-        passes text through. Fold in the int64→VARCHAR and temporal→ISO(+UTC)
-        rules (proven in `datatypes-spike`) so non-demo types are correct before
-        import lands.
-  - [ ] **Startup UX.** `boot()` now awaits DuckDB before first data render, so
-        the sidebar is briefly empty on cold load. Show a "loading data engine"
-        state (and ideally start DuckDB + WebR loads in parallel).
+  - [x] **Parquet fast-lane (Bridge B).** Injection now prefers the
+        Parquet/`nanoparquet` path (`DuckDBManager.queryToParquet` →
+        `WebRManager#buildInjection` → `nanoparquet::read_parquet`), falling back
+        to the hardened JS-array path if `nanoparquet` can't install or anything
+        errors. `nanoparquet` is installed once, lazily, and cached. Verified in
+        Chrome: `lm()` and Frequencies run over the Parquet bridge with identical
+        results and no fallback warnings.
+  - [x] **Full type handling in `getColumns`.** Now driven by the column's actual
+        DuckDB SQL type (cached `#sqlTypes`), not `VariableMeta.type`: numeric→
+        DOUBLE, int64→VARCHAR, DATE/TIMESTAMP→ISO text, TIME/BOOLEAN→VARCHAR,
+        text passthrough (`classifySqlType`). The non-numeric branches mirror the
+        spike SQL but aren't exercised end to end until import brings such types.
+  - [x] **Startup UX.** DuckDB and WebR now warm up in parallel (`setDataset`
+        kicks off DuckDB; `webr.preload()` runs concurrently); status shows
+        "Loading data engine…" and the sidebar shows "Loading data…" until the
+        first `DATA_CHANGED`.
   - [ ] **Ingest path for large/real data.** Demo uses a one-shot Arrow ingest of
         small JS arrays; exercise/representative-test bulk ingest (and revisit
         explicit Arrow column typing so a leading-NULL column can't mis-infer).
@@ -168,9 +173,21 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Deferred features (intentionally not built yet)
 
-- [ ] **File import** (priority order): CSV with type inference → SPSS `.sav` via
-      Haven through WebR (preserves metadata) → Excel via SheetJS. Lands first,
-      then delete the temporary `core/demo-data.js` seed.
+- [ ] **File import.** Lands first among data-in features, then delete the
+      temporary `core/demo-data.js` seed. Two parsing tracks:
+  - *Statistical formats via `haven` (priority — covers GSS).* The General Social
+    Survey, a teaching staple, ships only as SPSS `.sav` / Stata `.dta` / SAS
+    `.sas7bdat`. R's **`haven`** reads all three with one dependency and — key —
+    returns variable labels, value labels, and user-defined missing, which is
+    exactly the `VariableMeta` model. Plan: `haven::read_*` in WebR → write the
+    data to Parquet in R → DuckDB reads the Parquet (reuse the bridge, run
+    backwards) → map `haven` attributes to `VariableMeta`. Pulls `haven` in as an
+    install-on-demand R package (see R-package strategy).
+  - *Plain tabular via DuckDB natively.* DuckDB reads **CSV** (with type
+    inference) and **Parquet** directly — no R needed; the cleanest path for
+    those. Excel via SheetJS later if wanted.
+  - Both routes end at `DataStore.setDataset` / a DuckDB table, so the rest of the
+    app is unchanged.
 - [ ] **Import data from a web page (URL scrape).** Point the app at a URL; it
       fetches and parses tabular data (e.g. HTML `<table>`s) into a new dataset
       for analysis, with an option to save the parsed data locally as CSV (or

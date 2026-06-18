@@ -45,7 +45,11 @@ export async function boot(mounts) {
   const duckdb = new DuckDBManager();
   const dataStore = new DataStore(bus, duckdb);
   const webr = new WebRManager(
-    { bus, getColumns: (opts) => dataStore.getColumns(opts) },
+    {
+      bus,
+      getColumns: (opts) => dataStore.getColumns(opts),
+      getInjectionParquet: (opts) => dataStore.getInjectionParquet(opts),
+    },
     { preloadPackages: [] }, // built-in plugins declare their own R deps
   );
   const results = new ResultsPane(mounts.results);
@@ -72,10 +76,15 @@ export async function boot(mounts) {
   bus.on(CoreEvents.DATA_CHANGED, () => sidebar.render());
   bus.on(CoreEvents.SELECTION_CHANGED, () => sidebar.renderSelection());
 
-  // --- seed data (temporary; replaced by file import later) ------------------
-  // Awaited: this loads the table into DuckDB before plugins (or the user) can
-  // ask for data.
-  await dataStore.setDataset(makeDemoDataset());
+  // --- seed data + warm up the runtimes, in parallel -------------------------
+  // The two WASM runtimes are independent, so load them concurrently rather than
+  // serially: `setDataset` cold-starts DuckDB; `webr.preload()` cold-starts R.
+  // We only need DuckDB up before continuing (plugins/UI read data), so we await
+  // the data load and let WebR keep warming in the background.
+  mounts.status.textContent = 'Loading data engine…';
+  const dataReady = dataStore.setDataset(makeDemoDataset());
+  webr.preload().catch((err) => console.warn('WebR preload failed', err));
+  await dataReady;
 
   // --- load built-in plugins -------------------------------------------------
   for (const url of BUILTIN_PLUGINS) {
@@ -87,9 +96,6 @@ export async function boot(mounts) {
       results.appendError(`Failed to load plugin ${url}: ${err.message}`);
     }
   }
-
-  // Begin warming up WebR in the background so the first analysis is faster.
-  webr.preload().catch((err) => console.warn('WebR preload failed', err));
 
   const engine = { bus, dataStore, duckdb, webr, results, menus, loader, services };
   // Expose for manual poking in the console during early development.
@@ -145,7 +151,17 @@ class VariablesSidebar {
     list.className = 'sidebar__list';
     const selected = new Set(this.store.getSelectedVariables());
 
-    for (const meta of this.store.getVariableMeta()) {
+    const allMeta = this.store.getVariableMeta();
+    if (allMeta.length === 0) {
+      // Cold start: the data engine (DuckDB) is still loading; no variables yet.
+      const note = document.createElement('p');
+      note.className = 'sidebar__empty';
+      note.textContent = 'Loading data…';
+      this.host.append(note);
+      return;
+    }
+
+    for (const meta of allMeta) {
       const li = document.createElement('li');
       const btn = document.createElement('button');
       btn.type = 'button';
