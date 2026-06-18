@@ -42,6 +42,7 @@ const BUILTIN_PLUGINS = [
  * @param {HTMLElement} mounts.sidebar - Host for the variables list.
  * @param {HTMLElement} mounts.results - Host for the results pane shadow root.
  * @param {HTMLElement} mounts.status - Small status/health line.
+ * @param {HTMLElement} [mounts.busy] - Optional "working" indicator overlay.
  * @returns {Promise<object>} The assembled engine (handy for console debugging).
  */
 export async function boot(mounts) {
@@ -79,6 +80,7 @@ export async function boot(mounts) {
 
   // --- shell wiring ----------------------------------------------------------
   wireStatusLine(bus, mounts.status, webr);
+  if (mounts.busy) wireBusyIndicator(bus, mounts.busy);
   const sidebar = new VariablesSidebar(mounts.sidebar, dataStore);
   bus.on(CoreEvents.DATA_CHANGED, () => sidebar.render());
   bus.on(CoreEvents.SELECTION_CHANGED, () => sidebar.renderSelection());
@@ -131,6 +133,50 @@ function wireStatusLine(bus, el, webr) {
     else if (status === 'failed') set(`R runtime: ${kind} failed`);
   });
   if (webr.isReady) set('R runtime: ready');
+}
+
+/**
+ * Drive the non-blocking "working" indicator from WebR job activity — the slow
+ * path (package installs, file reads, analyses). It deliberately does NOT track
+ * plugin RPCs or dialogs: while a plugin is awaiting `app.ui` input (e.g. the
+ * variable picker) the engine is idle, waiting on the user, not busy.
+ *
+ * @param {EventBus} bus
+ * @param {HTMLElement} el - The `.busy` overlay (contains a `.busy__text`).
+ */
+function wireBusyIndicator(bus, el) {
+  const text = el.querySelector('.busy__text');
+  // WebR runs jobs serially, so consecutive jobs (e.g. an import's install →
+  // mount → read sequence) would flicker the badge off/on between them. Track a
+  // count and hide on a short delay so it stays up across a burst.
+  let active = 0;
+  let hideTimer = null;
+  const labels = {
+    installPackages: 'Installing R packages (first run only)…',
+    mountFile: 'Loading file…',
+    readFile: 'Transferring data…',
+    writeFile: 'Transferring data…',
+    run: 'Running…',
+  };
+  bus.on(CoreEvents.WEBR_JOB, ({ status, kind }) => {
+    if (status === 'started') {
+      active += 1;
+      if (hideTimer) {
+        clearTimeout(hideTimer);
+        hideTimer = null;
+      }
+      if (text) text.textContent = labels[kind] ?? 'Working…';
+      el.hidden = false;
+    } else {
+      active = Math.max(0, active - 1);
+      if (active === 0 && !hideTimer) {
+        hideTimer = setTimeout(() => {
+          hideTimer = null;
+          if (active === 0) el.hidden = true;
+        }, 250);
+      }
+    }
+  });
 }
 
 /**

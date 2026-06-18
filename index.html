@@ -123,10 +123,35 @@
       .ct-dialog__buttons .ct-dialog__primary {
         background: var(--accent); color: #fff; border-color: var(--accent);
       }
+
+      /* --- busy indicator --- */
+      /* A non-blocking "working" pill, shown while WebR is running a job (the
+         slow path: package installs, file reads, analyses). pointer-events:none
+         so it never traps clicks. */
+      .busy {
+        position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+        display: flex; align-items: center; gap: 10px;
+        background: var(--bar); color: var(--bar-fg);
+        padding: 8px 16px; border-radius: 999px;
+        box-shadow: 0 2px 10px rgba(0,0,0,.28);
+        font-size: 13px; z-index: 1000; pointer-events: none;
+      }
+      .busy[hidden] { display: none; }
+      .busy__spinner {
+        width: 14px; height: 14px; border-radius: 50%; flex: none;
+        border: 2px solid rgba(255,255,255,.35); border-top-color: #fff;
+        animation: busy-spin .7s linear infinite;
+      }
+      @keyframes busy-spin { to { transform: rotate(360deg); } }
     </style>
   </head>
 
   <body>
+    <div class="busy" id="busy" role="status" aria-live="polite" hidden>
+      <span class="busy__spinner" aria-hidden="true"></span>
+      <span class="busy__text">Working…</span>
+    </div>
+
     <header>
       <span class="brand">CrossTab</span>
       <nav class="menubar" id="menubar" aria-label="Main menu"></nav>
@@ -147,6 +172,7 @@
         sidebar: document.getElementById('sidebar'),
         results: document.getElementById('results'),
         status: document.getElementById('status'),
+        busy: document.getElementById('busy'),
       }).catch((err) => {
         console.error('CrossTab failed to start', err);
         document.getElementById('status').textContent = 'Failed to start: ' + err.message;
