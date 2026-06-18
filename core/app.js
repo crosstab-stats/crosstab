@@ -34,6 +34,7 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-haven-import/index.js',
   './plugins/builtin-frequencies/index.js',
   './plugins/builtin-descriptives/index.js',
+  './plugins/builtin-crosstabs/index.js',
 ];
 
 /**
