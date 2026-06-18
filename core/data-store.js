@@ -317,39 +317,8 @@ export class DataStore {
    * @returns {Promise<Object<string, Float64Array | Array<string|null>>>}
    */
   async getColumns({ variables } = {}) {
-    const names = variables ?? this.#variables.map((v) => v.name);
-    const present = names.filter((n) => this.#byName.has(n));
-    if (this.#rowCount === 0 || present.length === 0) return {};
-
-    // Build a per-column SELECT expression + JS representation from the column's
-    // actual SQL type (see #sqlTypes). The casts encode the bridge rules proven
-    // in the spikes: numeric → DOUBLE (decimals can't come back scaled wrong),
-    // 64-bit ints → VARCHAR (R/JS have no exact int64; carry as character),
-    // temporal → ISO text (callers reconstruct Date/POSIXct), boolean → text.
-    const plan = present.map((name) => {
-      const kind = classifySqlType(this.#sqlTypes.get(name));
-      const q = quoteIdent(name);
-      let expr;
-      switch (kind) {
-        case 'numeric':
-          expr = `CAST(${q} AS DOUBLE) AS ${q}`;
-          break;
-        case 'date':
-          expr = `strftime(${q}, '%Y-%m-%d') AS ${q}`;
-          break;
-        case 'timestamp':
-          expr = `strftime(${q}, '%Y-%m-%d %H:%M:%S') AS ${q}`;
-          break;
-        case 'int64':
-        case 'time':
-        case 'bool':
-          expr = `CAST(${q} AS VARCHAR) AS ${q}`;
-          break;
-        default: // text
-          expr = q;
-      }
-      return { name, expr, numeric: kind === 'numeric' };
-    });
+    const plan = this.#columnPlan(variables);
+    if (this.#rowCount === 0 || plan.length === 0) return {};
 
     const table = await this.#duckdb.query(
       `SELECT ${plan.map((p) => p.expr).join(', ')} FROM ${quoteIdent(MAIN_TABLE)}`,
@@ -378,6 +347,84 @@ export class DataStore {
       }
     }
     return out;
+  }
+
+  /**
+   * Per-column SELECT plan from each column's actual SQL type (see `#sqlTypes`).
+   * Shared by {@link DataStore#getColumns} and {@link DataStore#getRows}. The
+   * casts encode the bridge rules: numeric → DOUBLE (decimals can't come back
+   * scaled wrong), 64-bit ints → VARCHAR (no exact int64 in R/JS), temporal → ISO
+   * text, boolean → text.
+   *
+   * @param {string[]} [variables]
+   * @returns {Array<{name: string, expr: string, numeric: boolean}>}
+   */
+  #columnPlan(variables) {
+    const names = variables ?? this.#variables.map((v) => v.name);
+    return names
+      .filter((n) => this.#byName.has(n))
+      .map((name) => {
+        const kind = classifySqlType(this.#sqlTypes.get(name));
+        const q = quoteIdent(name);
+        let expr;
+        switch (kind) {
+          case 'numeric':
+            expr = `CAST(${q} AS DOUBLE) AS ${q}`;
+            break;
+          case 'date':
+            expr = `strftime(${q}, '%Y-%m-%d') AS ${q}`;
+            break;
+          case 'timestamp':
+            expr = `strftime(${q}, '%Y-%m-%d %H:%M:%S') AS ${q}`;
+            break;
+          case 'int64':
+          case 'time':
+          case 'bool':
+            expr = `CAST(${q} AS VARCHAR) AS ${q}`;
+            break;
+          default: // text
+            expr = q;
+        }
+        return { name, expr, numeric: kind === 'numeric' };
+      });
+  }
+
+  /**
+   * A window of rows as row objects — the backing accessor for the virtualised
+   * data grid. Pushes the windowing into DuckDB (`LIMIT/OFFSET`) so only the
+   * visible rows are ever fetched, regardless of dataset size.
+   *
+   * @param {Object} [opts]
+   * @param {number} [opts.offset=0]
+   * @param {number} [opts.limit=100]
+   * @param {string[]} [opts.variables]
+   * @returns {Promise<Array<Object<string, number|string|null>>>}
+   */
+  async getRows({ offset = 0, limit = 100, variables } = {}) {
+    const plan = this.#columnPlan(variables);
+    if (this.#rowCount === 0 || plan.length === 0) return [];
+    const lim = Math.max(0, Math.floor(limit));
+    const off = Math.max(0, Math.floor(offset));
+    const table = await this.#duckdb.query(
+      `SELECT ${plan.map((p) => p.expr).join(', ')} FROM ${quoteIdent(MAIN_TABLE)} ` +
+        `LIMIT ${lim} OFFSET ${off}`,
+    );
+    const rows = [];
+    const n = table.numRows;
+    for (let i = 0; i < n; i++) {
+      const r = table.get(i);
+      const row = {};
+      for (const p of plan) {
+        const v = r[p.name];
+        if (v == null) row[p.name] = null;
+        else if (p.numeric) {
+          const num = Number(v);
+          row[p.name] = Number.isNaN(num) ? null : num;
+        } else row[p.name] = String(v);
+      }
+      rows.push(row);
+    }
+    return rows;
   }
 
   /**

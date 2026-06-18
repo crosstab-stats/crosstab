@@ -17,6 +17,7 @@ import { ResultsPane } from './results-pane.js';
 import { MenuShell } from './menu-shell.js';
 import { UiService } from './ui-service.js';
 import { ImportService } from './import-service.js';
+import { DataView, VariableView } from './data-views.js';
 import { PluginLoader } from './loader.js';
 import { makeDemoDataset } from './demo-data.js';
 
@@ -43,6 +44,9 @@ const BUILTIN_PLUGINS = [
  * @param {HTMLElement} mounts.results - Host for the results pane shadow root.
  * @param {HTMLElement} mounts.status - Small status/health line.
  * @param {HTMLElement} [mounts.busy] - Optional "working" indicator overlay.
+ * @param {HTMLElement} [mounts.tabs] - Workspace tab bar.
+ * @param {HTMLElement} [mounts.viewData] - Host for the Data View grid.
+ * @param {HTMLElement} [mounts.viewVars] - Host for the Variable View.
  * @returns {Promise<object>} The assembled engine (handy for console debugging).
  */
 export async function boot(mounts) {
@@ -84,6 +88,13 @@ export async function boot(mounts) {
   const sidebar = new VariablesSidebar(mounts.sidebar, dataStore);
   bus.on(CoreEvents.DATA_CHANGED, () => sidebar.render());
   bus.on(CoreEvents.SELECTION_CHANGED, () => sidebar.renderSelection());
+
+  // Tabbed workspace: Data View (grid) / Variable View / Output (results pane).
+  if (mounts.viewData && mounts.viewVars && mounts.tabs) {
+    const dataView = new DataView(mounts.viewData, dataStore);
+    const variableView = new VariableView(mounts.viewVars, dataStore);
+    wireWorkspaceTabs(bus, mounts, { dataView, variableView, results: mounts.results });
+  }
 
   // --- seed data + warm up the runtimes, in parallel -------------------------
   // The two WASM runtimes are independent, so load them concurrently rather than
@@ -177,6 +188,39 @@ function wireBusyIndicator(bus, el) {
       }
     }
   });
+}
+
+/**
+ * Wire the tabbed workspace (Data / Variables / Output). Switching to a tab
+ * renders that view; the data/variable views also refresh on dataset change
+ * while visible. Analyses jump focus to Output; a finished import jumps to Data
+ * so you see what came in.
+ *
+ * @param {EventBus} bus
+ * @param {Object} mounts - Must include `tabs`, `viewData`, `viewVars`, `results`.
+ * @param {{dataView: DataView, variableView: VariableView, results: HTMLElement}} views
+ */
+function wireWorkspaceTabs(bus, mounts, { dataView, variableView, results }) {
+  const panels = { data: mounts.viewData, vars: mounts.viewVars, output: results };
+  const buttons = [...mounts.tabs.querySelectorAll('.tab')];
+  let current = 'output';
+
+  const show = (name) => {
+    current = name;
+    for (const b of buttons) b.setAttribute('aria-selected', String(b.dataset.view === name));
+    for (const [key, panel] of Object.entries(panels)) panel.hidden = key !== name;
+    if (name === 'data') dataView.refresh();
+    else if (name === 'vars') variableView.render();
+  };
+
+  for (const b of buttons) b.addEventListener('click', () => show(b.dataset.view));
+  bus.on(CoreEvents.DATA_CHANGED, () => {
+    if (current === 'data') dataView.refresh();
+    else if (current === 'vars') variableView.render();
+  });
+  // Focus the relevant view for the action in progress.
+  bus.on('analysis:started', () => show('output'));
+  bus.on('import:finished', () => show('data'));
 }
 
 /**

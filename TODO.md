@@ -298,14 +298,23 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       deliberately — bs4/Pyodide is the heaviest of these, not the default.
   - Reuses the same ingest path as file import (`DataStore.setDataset`); the
     "save as CSV" archival option overlaps with CSV export work.
-- [ ] **SPSS-style data grid view.** A spreadsheet view of the dataset, like
-      SPSS's two tabs: a **Data View** (rows = cases, columns = variables, the
-      cell grid) and a **Variable View** (one row per variable, columns = its
-      metadata — name, type, label, value labels, measure level, missing). Today
-      only the minimal `VariablesSidebar` (`core/app.js`) exists. Open questions:
-      virtualised rendering for large N; whether the grid is host UI or a plugin;
-      and whether cells are editable here (read-only display first; editing
-      depends on the transform API below). Pairs with the **Data editor** item.
+- [~] **SPSS-style data grid view.** *Read-only v1 built* (`core/data-views.js`):
+      a tabbed workspace (**Data | Variables | Output**) beside the sidebar.
+  - **Data View** — virtualised cell grid: renders only the visible window,
+    fetching each via `DataStore.getRows({offset,limit})` → DuckDB `LIMIT/OFFSET`.
+    Verified: 3,000 rows → 48 DOM rows, scrolls to rows 2960–3000; scales to any
+    N. Factor codes show as value labels (raw code on hover); sticky header +
+    row-number gutter. (Resolved the old open questions: it's **host UI, not a
+    plugin** — a sandbox can't draw an interactive virtualised grid — and
+    **read-only**.)
+  - **Variable View** — per-variable metadata table (name, label, type, measure,
+    value-label summary, missing codes). The consolidated picture for recode
+    decisions (you can see GSS's `-99`/value-labels here).
+  - Tabs auto-focus: analyses → Output, finished import → Data.
+  - *Still to do:* editing cells (the **Data editor**, needs the transform API);
+    a raw-codes vs value-labels toggle; column sort/resize; horizontal
+    virtualisation for very-wide (1000s of cols) datasets — today all columns
+    render (rows are windowed, columns aren't).
 - [ ] **Data editor.** The current `VariablesSidebar` in `core/app.js` is a
       minimal stand-in. Becomes the editing layer over the data-grid view above.
 - [ ] **Data transform/recode API.** `app.data` is read-only by design; mutations
