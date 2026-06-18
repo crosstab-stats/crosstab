@@ -236,9 +236,21 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         FS channel limit and JS ArrayBuffer limits sit earlier in the path. So don't
         wait on wasm64. The real lift: compile **ReadStat** (the C lib haven wraps)
         to wasm standalone and **stream** rows → Parquet/DuckDB without R holding the
-        frame — sidesteps the 4 GiB ceiling entirely. (Or variable-subset at import,
-        which haven makes hard since it reads all columns first.)
-      - Typical GSS *extracts* (well under 128 MB) import fine today.
+        frame — sidesteps the 4 GiB ceiling entirely.
+      - **Variable-subset at import — BUILT, and it's the practical answer to the
+        4 GB wall.** (Earlier note said this was "hard with haven"; that was wrong.)
+        haven's `n_max = 0` reads the variable catalog essentially free, and
+        `col_select` reads only chosen columns — so only the selected subset is
+        materialised, keeping memory bounded by the selection, not the file. New
+        **"SPSS / Stata / SAS — choose variables…"** importer + a searchable
+        `app.ui.selectFromList` picker. **Verified:** catalog read instant,
+        `col_select` of 3 of 1000 cols ~0.2 s (`.dta` seeks, doesn't parse all),
+        end-to-end pick-and-import correct with labels intact. So the full GSS is
+        now usable in-browser via choose-variables (only the columns you pick load);
+        whole-file import of the cumulative remains OOM-bound and needs the ReadStat
+        streaming lift above. Note: `.sav` is compressed so `col_select` there must
+        stream (slower than `.dta`), but still memory-safe.
+      - Typical GSS *extracts* (well under 128 MB) import whole fine today.
   - [ ] **Excel** via SheetJS later, if wanted (also a plugin).
   - *Note:* the Parquet return path (`DataStore.loadDataset` +
     `DuckDBManager.replaceTableFromParquet`) is built and unit-exercised by the

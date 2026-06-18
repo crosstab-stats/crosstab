@@ -81,6 +81,19 @@ const vars = await app.ui.selectVariables({
 if (!vars) return; // user cancelled
 ```
 
+`selectVariables` picks from the *loaded dataset*. To choose from an arbitrary
+list you supply — e.g. a file's variable catalog *before* import, which can be
+thousands of entries — use `selectFromList` (searchable, returns the chosen
+`value`s, or `null` if cancelled):
+
+```js
+const chosen = await app.ui.selectFromList({
+  title: 'Choose variables',
+  items: catalog.map(c => ({ value: c.name, label: c.label })),
+  multiple: true,
+});
+```
+
 ### Running R
 
 ```js

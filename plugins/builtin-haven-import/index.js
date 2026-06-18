@@ -49,20 +49,33 @@ export async function activate(app) {
     label: 'SPSS / Stata / SAS…',
     extensions: Object.keys(READERS),
     order: 20,
-    parse: ({ ticket, name, file }) => importHaven(app, ticket, name, file),
+    parse: ({ ticket, name, file }) => importHaven(app, ticket, name, file, false),
+  });
+  // Filtered variant: read the variable catalog first and let the user pick a
+  // subset, so a file too big to load whole (the full GSS exceeds R's ~4 GB)
+  // still imports — only the chosen columns are materialised.
+  await app.importers.register({
+    id: 'haven-filtered',
+    label: 'SPSS / Stata / SAS — choose variables…',
+    extensions: Object.keys(READERS),
+    order: 21,
+    parse: ({ ticket, name, file }) => importHaven(app, ticket, name, file, true),
   });
 }
 
 /**
  * Parse a statistical-software file via R `haven` and deliver `{variables,
- * parquet}` to the engine.
+ * parquet}` to the engine. When `pickVariables` is set, first read the variable
+ * catalog (cheap, zero data rows) and let the user choose a subset, then read
+ * only those columns (`col_select`) — the memory-bounded path for huge files.
  *
  * @param {object} app
  * @param {number} ticket
  * @param {string} name
  * @param {Blob} file - The uploaded file (a `File` is a `Blob`).
+ * @param {boolean} pickVariables
  */
-async function importHaven(app, ticket, name, file) {
+async function importHaven(app, ticket, name, file, pickVariables) {
   let mounted = null;
   try {
     const ext = extensionOf(name);
@@ -76,7 +89,34 @@ async function importHaven(app, ticket, name, file) {
     // the ~128 MB FS.writeFile channel wall. The remaining ceiling is R's memory
     // when haven materialises the frame (wasm32 ~4 GB), not staging.
     mounted = await app.webr.mountFile(file, name);
-    const { result, stderr } = await app.webr.run(buildR(reader, mounted));
+
+    let cols = null;
+    if (pickVariables) {
+      // 1) Read the variable catalog with zero data rows (essentially free).
+      const cat = await app.webr.run(catalogR(reader, mounted));
+      const catJson = Array.isArray(cat.result?.values) ? cat.result.values[0] : cat.result;
+      if (typeof catJson !== 'string') {
+        throw new Error(cat.stderr ? cat.stderr.split('\n')[0] : 'could not read variable list');
+      }
+      const catalog = JSON.parse(catJson);
+      // 2) Let the user choose which variables to import.
+      const chosen = await app.ui.selectFromList({
+        title: `Choose variables — ${name}`,
+        hint: `${catalog.length} variables in this file. Pick the ones to import (search to filter).`,
+        items: catalog.map((c) => ({ value: c.name, label: c.label || c.name })),
+        multiple: true,
+        okLabel: 'Import selected',
+        searchPlaceholder: 'Filter by name or label…',
+      });
+      if (!chosen || chosen.length === 0) {
+        await app.importers.deliver(ticket, null); // cancelled / nothing picked → abort
+        return;
+      }
+      cols = chosen;
+    }
+
+    // 3) Read (subset or whole), extract metadata, write Parquet for DuckDB.
+    const { result, stderr } = await app.webr.run(buildR(reader, mounted, cols));
     const json = Array.isArray(result?.values) ? result.values[0] : result;
     if (typeof json !== 'string') {
       throw new Error(stderr ? stderr.split('\n')[0] : 'R returned no metadata');
@@ -104,17 +144,42 @@ async function importHaven(app, ticket, name, file) {
  * expression, so it lands in `result`), and write label-stripped data to Parquet
  * for DuckDB. Reads attributes BEFORE zapping them.
  *
- * @param {string} reader - haven reader fn name, e.g. `read_sav`.
- * @param {string} inPath - Path to the (WORKERFS-mounted) input file.
+/**
+ * R source that reads just the variable catalog (zero data rows) and emits
+ * `[{name, label}, …]` as JSON — cheap even for a multi-GB / thousands-of-column
+ * file, since no values are read.
+ *
+ * @param {string} reader
+ * @param {string} inPath
  * @returns {string}
  */
-function buildR(reader, inPath) {
+function catalogR(reader, inPath) {
+  const spss = reader === 'read_sav' || reader === 'read_por';
+  const readCall = `haven::${reader}(${rstr(inPath)}, n_max = 0${spss ? ', user_na = TRUE' : ''})`;
+  return `
+suppressMessages({ library(haven); library(jsonlite) })
+d <- ${readCall}
+toJSON(lapply(names(d), function(nm) list(
+  name  = nm,
+  label = { l <- attr(d[[nm]], "label", exact = TRUE); if (is.null(l)) "" else as.character(l)[1] }
+)), auto_unbox = TRUE)
+`;
+}
+
+/**
+ * @param {string} reader - haven reader fn name, e.g. `read_sav`.
+ * @param {string} inPath - Path to the (WORKERFS-mounted) input file.
+ * @param {string[]|null} [cols] - If set, read only these columns (`col_select`).
+ * @returns {string}
+ */
+function buildR(reader, inPath, cols) {
   // SPSS readers default to user_na=FALSE, which silently collapses user-defined
   // missing codes (e.g. GSS's distinct "Don't know"/"Refused"/"NAP") into NA.
   // Read with user_na=TRUE so the sentinel values and their na_values metadata
   // survive; analyses can then recode per the missing codes we carry along.
   const spss = reader === 'read_sav' || reader === 'read_por';
-  const readCall = `haven::${reader}(${rstr(inPath)}${spss ? ', user_na = TRUE' : ''})`;
+  const colSel = cols && cols.length ? `, col_select = c(${cols.map(rstr).join(', ')})` : '';
+  const readCall = `haven::${reader}(${rstr(inPath)}${spss ? ', user_na = TRUE' : ''}${colSel})`;
   return `
 suppressMessages({ library(haven); library(nanoparquet); library(jsonlite) })
 d <- ${readCall}

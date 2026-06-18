@@ -173,9 +173,26 @@ export interface SelectVariablesOptions {
  * it asks the engine to show UI and awaits the result.
  */
 export interface UiApi {
-  /** Show a modal variable picker; resolves to the chosen names, or `null` if
-   * the user cancels. */
+  /** Show a modal variable picker over the *loaded dataset*; resolves to the
+   * chosen names, or `null` if the user cancels. */
   selectVariables(options?: SelectVariablesOptions): Promise<string[] | null>;
+  /** Show a modal, searchable multi-select over an arbitrary caller-supplied list
+   * (e.g. a file's variable catalog *before* import, which can be thousands of
+   * entries). Resolves to the chosen `value`s, or `null` if cancelled. */
+  selectFromList(options?: SelectFromListOptions): Promise<string[] | null>;
+}
+
+/** Options for {@link UiApi.selectFromList}. */
+export interface SelectFromListOptions {
+  title?: string;
+  /** Sub-heading explaining the choice. */
+  hint?: string;
+  /** Candidate items. `value` is returned; `label` is shown (defaults to value). */
+  items: Array<{ value: string; label?: string }>;
+  /** Allow multiple selection (checkboxes) vs. single (radios). Default true. */
+  multiple?: boolean;
+  okLabel?: string;
+  searchPlaceholder?: string;
 }
 
 /** A parsed dataset an importer hands back to the engine. Provide ONE of

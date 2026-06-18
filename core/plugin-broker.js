@@ -269,6 +269,7 @@ function buildDispatch({ data, results, webr, menus, ui, importers, bus }) {
     'menus.register': (item) => menus.register(item),
 
     'ui.selectVariables': (opts) => ui.selectVariables(opts),
+    'ui.selectFromList': (opts) => ui.selectFromList(opts),
 
     'importers.register': (spec) => importers.register(spec),
     'importers.deliver': (ticket, dataset) => importers.deliver(ticket, dataset),

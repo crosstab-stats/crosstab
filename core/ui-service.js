@@ -103,12 +103,168 @@ export class UiService {
   }
 
   /**
+   * Show a modal, **searchable** multi-select over an arbitrary list of items —
+   * for choosing from data the engine doesn't hold yet (e.g. the variable
+   * catalog of a file *before* import, which can be thousands of entries).
+   * Unlike {@link UiService#selectVariables}, the candidate list is supplied by
+   * the caller rather than read from the dataset.
+   *
+   * @param {Object} [options]
+   * @param {string} [options.title='Select']
+   * @param {string} [options.hint]
+   * @param {Array<{value: string, label?: string}>} [options.items]
+   * @param {boolean} [options.multiple=true]
+   * @param {string} [options.okLabel='OK']
+   * @param {string} [options.searchPlaceholder='Filter…']
+   * @returns {Promise<string[] | null>} Chosen values, or `null` if cancelled.
+   */
+  selectFromList(options = {}) {
+    const {
+      title = 'Select',
+      hint,
+      items = [],
+      multiple = true,
+      okLabel = 'OK',
+      searchPlaceholder = 'Filter…',
+    } = options;
+    const CAP = 500; // max rows rendered at once; refine search to see more
+    const selected = new Set();
+
+    return new Promise((resolve) => {
+      const dialog = document.createElement('dialog');
+      dialog.className = 'ct-dialog';
+      const form = document.createElement('form');
+      form.method = 'dialog';
+      form.className = 'ct-dialog__form';
+
+      const h2 = document.createElement('h2');
+      h2.className = 'ct-dialog__title';
+      h2.textContent = title;
+      form.append(h2);
+      if (hint) {
+        const p = document.createElement('p');
+        p.className = 'ct-dialog__hint';
+        p.textContent = hint;
+        form.append(p);
+      }
+
+      const search = document.createElement('input');
+      search.type = 'search';
+      search.placeholder = searchPlaceholder;
+      search.style.cssText =
+        'width:100%; padding:8px; margin:0 0 8px; border:1px solid var(--line,#ccc);' +
+        ' border-radius:6px; font:inherit;';
+      // Enter in the search box would submit the form (= Cancel); suppress it.
+      search.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') e.preventDefault();
+      });
+      form.append(search);
+
+      const bar = document.createElement('div');
+      bar.style.cssText =
+        'display:flex; justify-content:space-between; align-items:center;' +
+        ' margin:0 0 8px; font-size:13px; color:#5a6470;';
+      const count = document.createElement('span');
+      bar.append(count);
+      if (multiple) {
+        const selAll = document.createElement('button');
+        selAll.type = 'button';
+        selAll.textContent = 'Select all shown';
+        selAll.style.cssText =
+          'font:inherit; font-size:13px; background:none; border:none;' +
+          ' color:var(--accent,#2980b9); cursor:pointer; padding:0;';
+        selAll.addEventListener('click', () => {
+          for (const it of shown) selected.add(it.value);
+          render();
+        });
+        bar.append(selAll);
+      }
+      form.append(bar);
+
+      const list = document.createElement('ul');
+      list.className = 'ct-dialog__vars';
+      form.append(list);
+
+      const menu = document.createElement('menu');
+      menu.className = 'ct-dialog__buttons';
+      const cancel = document.createElement('button');
+      cancel.type = 'submit';
+      cancel.value = 'cancel';
+      cancel.textContent = 'Cancel';
+      const ok = document.createElement('button');
+      ok.type = 'submit';
+      ok.value = 'ok';
+      ok.className = 'ct-dialog__primary';
+      ok.textContent = okLabel;
+      menu.append(cancel, ok);
+      form.append(menu);
+      dialog.append(form);
+
+      let shown = [];
+      const render = () => {
+        const q = search.value.trim().toLowerCase();
+        const matches = q
+          ? items.filter(
+              (it) =>
+                (it.label ?? it.value).toLowerCase().includes(q) ||
+                it.value.toLowerCase().includes(q),
+            )
+          : items;
+        shown = matches.slice(0, CAP);
+        list.replaceChildren();
+        for (const it of shown) {
+          const li = document.createElement('li');
+          const label = document.createElement('label');
+          const input = document.createElement('input');
+          input.type = multiple ? 'checkbox' : 'radio';
+          input.name = 'item';
+          input.value = it.value;
+          input.checked = selected.has(it.value);
+          input.addEventListener('change', () => {
+            if (!multiple) selected.clear();
+            if (input.checked) selected.add(it.value);
+            else selected.delete(it.value);
+            count.textContent = `${selected.size} selected`;
+          });
+          const span = document.createElement('span');
+          span.textContent = it.label ?? it.value;
+          const code = document.createElement('code');
+          code.textContent = it.value;
+          label.append(input, span, code);
+          li.append(label);
+          list.append(li);
+        }
+        if (matches.length > CAP) {
+          const li = document.createElement('li');
+          li.style.cssText = 'color:#7a8590; padding:6px;';
+          li.textContent = `Showing first ${CAP} of ${matches.length} — refine your filter.`;
+          list.append(li);
+        }
+        count.textContent = `${selected.size} selected`;
+      };
+      search.addEventListener('input', render);
+      render();
+
+      dialog.addEventListener('close', () => {
+        dialog.remove();
+        resolve(dialog.returnValue === 'ok' ? [...selected] : null);
+      });
+      document.body.append(dialog);
+      dialog.showModal();
+    });
+  }
+
+  /**
    * The frozen object exposed to plugins as `app.ui`.
-   * @returns {Readonly<{ selectVariables: (opts?: SelectVariablesOptions) => Promise<string[]|null> }>}
+   * @returns {Readonly<{
+   *   selectVariables: (opts?: SelectVariablesOptions) => Promise<string[]|null>,
+   *   selectFromList: (opts?: object) => Promise<string[]|null>,
+   * }>}
    */
   get api() {
     return Object.freeze({
       selectVariables: (opts) => this.selectVariables(opts),
+      selectFromList: (opts) => this.selectFromList(opts),
     });
   }
 }
