@@ -35,6 +35,7 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-frequencies/index.js',
   './plugins/builtin-descriptives/index.js',
   './plugins/builtin-crosstabs/index.js',
+  './plugins/builtin-regression/index.js',
 ];
 
 /**
