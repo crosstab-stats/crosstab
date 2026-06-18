@@ -101,16 +101,19 @@ const { result } = await app.webr.run(
 - Make the **last expression** a `list(...)`/`data.frame(...)`; it returns in
   `result` as plain JS. Don't return raw model objects.
 
-Need to move binary data in or out of R (e.g. an importer staging an uploaded
-file, or pulling back a file R wrote)? Use the WebR filesystem:
+Need to move binary data in or out of R? For a **large upload**, mount it
+(lazy, copy-free, no size limit) rather than `writeFile` (which has a ~128 MB
+practical cap):
 
 ```js
-await app.webr.writeFile('/tmp/in.sav', bytes);   // bytes: ArrayBuffer | Uint8Array
-await app.webr.run('d <- haven::read_sav("/tmp/in.sav"); nanoparquet::write_parquet(d, "/tmp/out.parquet")');
+const path = await app.webr.mountFile(file);   // file: a File/Blob → WORKERFS mount
+await app.webr.run(`d <- haven::read_sav("${path}"); nanoparquet::write_parquet(d, "/tmp/out.parquet")`);
 const parquet = await app.webr.readFile('/tmp/out.parquet'); // Uint8Array
+await app.webr.unmount(path);
 ```
 
-Calls are queued like `run`, so a `writeFile` → `run` → `readFile` sequence stays
+`writeFile(path, bytes)` / `readFile(path)` are also available for smaller blobs.
+Calls are queued like `run`, so a `mountFile` → `run` → `readFile` sequence stays
 ordered. Install R packages you depend on first: `await app.webr.installPackages(['haven'])`.
 
 ### Producing output
@@ -141,18 +144,20 @@ export async function activate(app) {
   await app.importers.register({
     label: 'Acme Survey…',
     extensions: ['.acme'],          // picker filter; route by extension
-    parse: ({ ticket, name, bytes }) => parseAcme(app, ticket, bytes),
+    parse: ({ ticket, name, file }) => parseAcme(app, ticket, file),
   });
 }
 ```
 
-The engine calls your `parse` with the chosen file's `bytes` (an `ArrayBuffer`)
-and a `ticket`. Parse however you like — in JS, or by handing the bytes to R via
-`app.webr` — then **deliver** the result for that ticket:
+The engine calls your `parse` with the chosen `file` (a `File`/`Blob` handle —
+by reference, *not* copied into your sandbox) and a `ticket`. Parse however you
+like — read bytes in JS, or stage the file into R with `app.webr.mountFile(file)`
+— then **deliver** the result for that ticket:
 
 ```js
-async function parseAcme(app, ticket, bytes) {
-  const { variables, columns } = decode(bytes);   // your parser
+async function parseAcme(app, ticket, file) {
+  const buf = await file.arrayBuffer();           // JS parser path
+  const { variables, columns } = decode(buf);
   await app.importers.deliver(ticket, { variables, columns });
 }
 ```
@@ -176,8 +181,10 @@ missing codes that neither columns nor Parquet convey.
 Current limits (additions planned — see the engine `TODO.md`): the picker takes a
 **single file** (no companion files yet, e.g. a SAS `.sas7bcat` label catalog),
 and there's **no progress or structured-warning channel** — report issues via
-`app.results.appendError`. If you need any of these, say so; the API grows from
-real importer needs.
+`app.results.appendError`. For runtime-parsed formats, very large files are bounded
+by WebR's wasm32 ~4 GB memory (and `readFile` on the way back has a ~128 MB cap —
+prefer keeping returned Parquet modest, or chunk it). If you need any of these,
+say so; the API grows from real importer needs.
 
 ## Isolation model
 

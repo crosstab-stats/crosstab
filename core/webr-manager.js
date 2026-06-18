@@ -103,6 +103,9 @@ export class WebRManager {
   /** Monotonic job id for logging/telemetry. */
   #nextJobId = 1;
 
+  /** Monotonic id for unique WORKERFS mountpoints. */
+  #nextMount = 1;
+
   /**
    * @param {Object} deps
    * @param {import('./event-bus.js').EventBus} deps.bus
@@ -181,6 +184,58 @@ export class WebRManager {
    */
   readFile(path) {
     return this.#enqueue(async (webR) => webR.FS.readFile(path), 'readFile');
+  }
+
+  /**
+   * Mount a `File`/`Blob` into WebR's filesystem via **WORKERFS** and return the
+   * path to it. Unlike {@link WebRManager#writeFile}, this is **lazy and
+   * copy-free**: the bytes stay in the Blob and are read on demand by the worker,
+   * so it sidesteps the ~128 MB `FS.writeFile` channel limit. Use it to stage a
+   * large upload (e.g. a `.sav` for haven) before reading it in R. Call
+   * {@link WebRManager#unmount} with the returned path when done.
+   *
+   * WebR's WORKERFS only accepts Emscripten "package" descriptors, so we wrap the
+   * single file in a one-entry descriptor (the File *is* the blob).
+   *
+   * @param {Blob} file - The upload (a `File` is a `Blob`).
+   * @param {string} [name] - Filename to expose it under (defaults to `file.name`).
+   * @returns {Promise<string>} Path to the mounted file.
+   */
+  mountFile(file, name) {
+    return this.#enqueue(async (webR) => {
+      const mountpoint = `/mnt/ct_import_${this.#nextMount++}`;
+      const fname = String(name || file.name || 'import.dat').replace(/[\\/]/g, '_');
+      try {
+        await webR.FS.mkdir('/mnt');
+      } catch {
+        /* already exists */
+      }
+      await webR.FS.mkdir(mountpoint);
+      const metadata = {
+        files: [{ filename: `/${fname}`, start: 0, end: file.size }],
+        remote_package_size: file.size,
+      };
+      await webR.FS.mount('WORKERFS', { packages: [{ blob: file, metadata }] }, mountpoint);
+      return `${mountpoint}/${fname}`;
+    }, 'mountFile');
+  }
+
+  /**
+   * Unmount a path previously returned by {@link WebRManager#mountFile}.
+   *
+   * @param {string} path
+   * @returns {Promise<void>}
+   */
+  unmount(path) {
+    return this.#enqueue(async (webR) => {
+      const mountpoint = path.slice(0, path.lastIndexOf('/'));
+      await webR.FS.unmount(mountpoint);
+      try {
+        await webR.FS.rmdir(mountpoint);
+      } catch {
+        /* best-effort */
+      }
+    }, 'unmount');
   }
 
   /**

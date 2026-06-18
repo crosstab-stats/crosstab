@@ -19,9 +19,10 @@
  * 1. A plugin calls `app.importers.register({ label, extensions, parse })`.
  *    `parse` is a plugin-side callback (marshalled by the broker).
  * 2. The engine adds a `File ▸ Import ▸ <label>…` menu item.
- * 3. On click (user activation live) the engine opens the picker, reads the
- *    chosen file's bytes, mints a `ticket`, and invokes `parse({ ticket, name,
- *    bytes })` (a one-way callback into the iframe).
+ * 3. On click (user activation live) the engine opens the picker, mints a
+ *    `ticket`, and invokes `parse({ ticket, name, file })` (a one-way callback
+ *    into the iframe). The `file` is a `File`/`Blob` handle — passed by
+ *    reference, so even a large upload is not copied into the sandbox.
  * 4. The plugin parses and calls `app.importers.deliver(ticket, dataset)` — an
  *    RPC back to the engine — with `{ variables, columns }` or
  *    `{ variables, parquet }` (the dual contract).
@@ -36,8 +37,10 @@
  * @property {string} label - Menu label, e.g. `'CSV…'` or `'SPSS / Stata / SAS…'`.
  * @property {string[]} extensions - File extensions handled, with the dot, e.g.
  *   `['.csv']` or `['.sav', '.dta', '.sas7bdat']`. Used for the picker filter.
- * @property {(req: {ticket: number, name: string, bytes: ArrayBuffer}) => void} parse
- *   - Plugin callback that parses the bytes and calls `importers.deliver`.
+ * @property {(req: {ticket: number, name: string, file: Blob}) => void} parse
+ *   - Plugin callback that parses the file and calls `importers.deliver`. Gets
+ *   the upload as a `File` (Blob handle): JS parsers call `file.arrayBuffer()`,
+ *   runtime parsers stage it via `app.webr.mountFile(file)`.
  * @property {string} [id] - Stable id (defaults to `label`).
  * @property {number} [order] - Sort weight within File ▸ Import.
  */
@@ -153,8 +156,10 @@ export class ImportService {
       this.#pending.set(ticket, { resolve, reject });
     });
     try {
-      const bytes = await file.arrayBuffer();
-      spec.parse({ ticket, name: file.name, bytes });
+      // Hand the plugin the File itself (a Blob handle — cheap, by-reference, no
+      // byte copy into the sandbox). JS parsers call `file.arrayBuffer()`;
+      // runtime parsers mount it lazily via `app.webr.mountFile(file)`.
+      spec.parse({ ticket, name: file.name, file });
       const dataset = await done;
       // An importer signals failure/abort by delivering null or an empty
       // variable list. Do NOT commit in that case — clobbering the loaded

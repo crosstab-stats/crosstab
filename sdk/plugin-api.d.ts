@@ -120,12 +120,19 @@ export interface WebrApi {
   run(rCode: string, options?: RunOptions): Promise<RunResult>;
   /** Install R packages into the running session. */
   installPackages(packages: string[]): Promise<void>;
-  /** Write bytes into WebR's virtual filesystem (e.g. stage a file for an
-   * importer to read with `haven::read_sav`). */
+  /** Write bytes into WebR's virtual filesystem. Note the ~128 MB practical
+   * limit; for large uploads prefer {@link WebrApi.mountFile}. */
   writeFile(path: string, data: Uint8Array | ArrayBuffer): Promise<void>;
   /** Read a file from WebR's virtual filesystem as bytes (e.g. pull back a
    * Parquet snapshot written in R). */
   readFile(path: string): Promise<Uint8Array>;
+  /** Mount a `File`/`Blob` into WebR's filesystem (WORKERFS) and resolve with the
+   * path to it. Lazy and copy-free — the bytes are read on demand, so this has no
+   * ~128 MB limit. The preferred way to stage a large upload for R to read.
+   * Unmount with {@link WebrApi.unmount} when done. */
+  mountFile(file: Blob, name?: string): Promise<string>;
+  /** Unmount a path previously returned by {@link WebrApi.mountFile}. */
+  unmount(path: string): Promise<void>;
 }
 
 /** A menu entry contributed by a plugin. */
@@ -190,8 +197,11 @@ export interface ImportRequest {
   ticket: number;
   /** The chosen file's name (use it to pick a delimiter, etc.). */
   name: string;
-  /** The file's raw bytes. */
-  bytes: ArrayBuffer;
+  /** The uploaded file as a `File`/`Blob` handle — passed by reference, so even a
+   * large upload isn't copied into your sandbox. JS parsers call
+   * `await file.arrayBuffer()`; runtime parsers stage it with
+   * `app.webr.mountFile(file)`. */
+  file: Blob;
 }
 
 /** An importer registration. */

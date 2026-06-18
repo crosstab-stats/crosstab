@@ -190,9 +190,9 @@ export class PluginBroker {
   #reviveArgs(args) {
     const revive = (v) => {
       if (Array.isArray(v)) return v.map(revive);
-      // Binary payloads (e.g. a Parquet `Uint8Array` from an importer) arrive
-      // intact via structured clone; don't walk their indices.
-      if (v instanceof ArrayBuffer || ArrayBuffer.isView(v)) return v;
+      // Binary payloads (Parquet `Uint8Array`) and File/Blob handles (an upload
+      // an importer mounts) arrive intact via structured clone; don't walk them.
+      if (v instanceof ArrayBuffer || ArrayBuffer.isView(v) || v instanceof Blob) return v;
       if (v && typeof v === 'object') {
         if (typeof v.__cb === 'number') return this.#makeCallback(v.__cb);
         const out = {};
@@ -263,6 +263,8 @@ function buildDispatch({ data, results, webr, menus, ui, importers, bus }) {
     'webr.installPackages': (pkgs) => webr.installPackages(pkgs),
     'webr.writeFile': (path, data) => webr.writeFile(path, data),
     'webr.readFile': (path) => webr.readFile(path),
+    'webr.mountFile': (file, name) => webr.mountFile(file, name),
+    'webr.unmount': (path) => webr.unmount(path),
 
     'menus.register': (item) => menus.register(item),
 

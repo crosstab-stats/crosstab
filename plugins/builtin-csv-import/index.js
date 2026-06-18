@@ -36,7 +36,7 @@ export async function activate(app) {
     label: 'CSV…',
     extensions: ['.csv', '.tsv', '.txt'],
     order: 10,
-    parse: ({ ticket, name, bytes }) => importCsv(app, ticket, name, bytes),
+    parse: ({ ticket, name, file }) => importCsv(app, ticket, name, file),
   });
 }
 
@@ -47,11 +47,11 @@ export async function activate(app) {
  * @param {object} app
  * @param {number} ticket - Opaque token tying this parse to the engine's request.
  * @param {string} name - Original file name (used to pick the delimiter).
- * @param {ArrayBuffer} bytes
+ * @param {Blob} file - The uploaded file (a `File` is a `Blob`).
  */
-async function importCsv(app, ticket, name, bytes) {
+async function importCsv(app, ticket, name, file) {
   try {
-    const text = new TextDecoder('utf-8').decode(bytes);
+    const text = new TextDecoder('utf-8').decode(await file.arrayBuffer());
     const delimiter = name.toLowerCase().endsWith('.tsv') ? '\t' : ',';
     const dataset = parseCsv(text, delimiter);
     if (dataset.variables.length === 0) throw new Error('no columns found');

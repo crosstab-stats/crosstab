@@ -202,14 +202,21 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     - [ ] **Large-file ceilings (the haven-in-WebR path).** Two distinct limits,
           both hit by the full GSS 1972–2024 cumulative (`.sav` 3.8 GB,
           `.sas7bdat` 2.4 GB, `.dta` 597 MB):
-      - **WebR `FS.writeFile` ~128 MB (the *first* wall, measured).** Staging the
-        uploaded bytes into WebR's filesystem throws "Invalid array length" above
-        ~128–160 MB — a channel limit far below the memory ceiling. So even the
-        597 MB `.dta` dies before R runs. The haven importer now **pre-checks
-        size** and fails with a clear message (and a failed import no longer
-        clobbers the loaded dataset — that was a bug). To lift: chunked FS writes
-        (write N chunks + concatenate in R via `file()` connections), or a
-        different WebR channel/mount.
+      - **WebR `FS.writeFile` ~128 MB (the *first* wall) — LIFTED via WORKERFS.**
+        `FS.writeFile` throws "Invalid array length" above ~128–160 MB (a channel
+        limit). The haven importer no longer uses it: it stages the upload by
+        **mounting the `File` via WORKERFS** (`app.webr.mountFile`), which is lazy
+        and copy-free, so there's no staging size limit. **Verified:** a 181 MB
+        `.sav` mounts and `haven::read_sav` reads it (700k × 30). The importer
+        contract now hands plugins the `File` (by reference, no sandbox copy)
+        rather than an `ArrayBuffer`. (A failed import also no longer clobbers the
+        loaded dataset — that was a separate bug, fixed.)
+      - **`readFile` ~128 MB on the way *back out* (the new edge).** Pulling the
+        Parquet snapshot R writes back to JS still uses the channel, so a returned
+        Parquet > ~128 MB hits the same limit. Mitigate with **chunked readFile**
+        (R splits the file, JS concatenates — exactly the trick used to test the
+        181 MB case). Not yet wired into the importer; modest Parquet outputs are
+        fine today.
       - **WebR ~4 GB wasm address space (the *second* wall).** Confirmed empirically:
         `R.version$platform` = `wasm32-unknown-emscripten`, `.Machine$sizeof.pointer`
         = 4 — WebR is a **wasm32** build, so a single linear memory caps at ~4 GiB.

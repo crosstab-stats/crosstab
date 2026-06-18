@@ -40,17 +40,7 @@ const READERS = {
   '.xpt': 'read_xpt',
 };
 
-const IN_PATH = '/tmp/ct_haven_in';
 const OUT_PATH = '/tmp/ct_haven_out.parquet';
-
-/**
- * Practical upper bound for staging a file into WebR's filesystem. WebR's
- * `FS.writeFile` throws ("Invalid array length") above ~128 MB — a channel limit
- * well below the 4 GB wasm memory ceiling. We reject earlier with a clear message
- * rather than surface that opaque error. (The full GSS cumulative is GB-scale and
- * also exceeds the R-memory ceiling regardless; use an extract.)
- */
-const MAX_BYTES = 128 * 1024 * 1024;
 
 /** @param {object} app */
 export async function activate(app) {
@@ -59,7 +49,7 @@ export async function activate(app) {
     label: 'SPSS / Stata / SAS…',
     extensions: Object.keys(READERS),
     order: 20,
-    parse: ({ ticket, name, bytes }) => importHaven(app, ticket, name, bytes),
+    parse: ({ ticket, name, file }) => importHaven(app, ticket, name, file),
   });
 }
 
@@ -70,28 +60,23 @@ export async function activate(app) {
  * @param {object} app
  * @param {number} ticket
  * @param {string} name
- * @param {ArrayBuffer} bytes
+ * @param {Blob} file - The uploaded file (a `File` is a `Blob`).
  */
-async function importHaven(app, ticket, name, bytes) {
+async function importHaven(app, ticket, name, file) {
+  let mounted = null;
   try {
     const ext = extensionOf(name);
     const reader = READERS[ext];
     if (!reader) throw new Error(`unsupported extension "${ext}"`);
 
-    if (bytes.byteLength > MAX_BYTES) {
-      const mb = Math.round(bytes.byteLength / (1024 * 1024));
-      throw new Error(
-        `file is ${mb} MB; in-browser import currently handles up to ~128 MB ` +
-          `(WebR filesystem limit). Use a smaller extract — e.g. fewer variables ` +
-          `or years from the GSS Data Explorer.`,
-      );
-    }
-
     // haven (+ helpers) installed lazily; the first import pays the download.
     await app.webr.installPackages(['haven', 'nanoparquet', 'jsonlite']);
 
-    await app.webr.writeFile(IN_PATH, bytes);
-    const { result, stderr } = await app.webr.run(buildR(reader));
+    // Stage via WORKERFS (lazy, copy-free) rather than writeFile — this avoids
+    // the ~128 MB FS.writeFile channel wall. The remaining ceiling is R's memory
+    // when haven materialises the frame (wasm32 ~4 GB), not staging.
+    mounted = await app.webr.mountFile(file, name);
+    const { result, stderr } = await app.webr.run(buildR(reader, mounted));
     const json = Array.isArray(result?.values) ? result.values[0] : result;
     if (typeof json !== 'string') {
       throw new Error(stderr ? stderr.split('\n')[0] : 'R returned no metadata');
@@ -103,6 +88,14 @@ async function importHaven(app, ticket, name, bytes) {
   } catch (err) {
     await app.results.appendError(`Import of "${name}" failed: ${err.message}`);
     await app.importers.deliver(ticket, null); // settle the ticket; abort (don't clobber)
+  } finally {
+    if (mounted) {
+      try {
+        await app.webr.unmount(mounted);
+      } catch {
+        /* best-effort */
+      }
+    }
   }
 }
 
@@ -112,15 +105,16 @@ async function importHaven(app, ticket, name, bytes) {
  * for DuckDB. Reads attributes BEFORE zapping them.
  *
  * @param {string} reader - haven reader fn name, e.g. `read_sav`.
+ * @param {string} inPath - Path to the (WORKERFS-mounted) input file.
  * @returns {string}
  */
-function buildR(reader) {
+function buildR(reader, inPath) {
   // SPSS readers default to user_na=FALSE, which silently collapses user-defined
   // missing codes (e.g. GSS's distinct "Don't know"/"Refused"/"NAP") into NA.
   // Read with user_na=TRUE so the sentinel values and their na_values metadata
   // survive; analyses can then recode per the missing codes we carry along.
   const spss = reader === 'read_sav' || reader === 'read_por';
-  const readCall = `haven::${reader}(${rstr(IN_PATH)}${spss ? ', user_na = TRUE' : ''})`;
+  const readCall = `haven::${reader}(${rstr(inPath)}${spss ? ', user_na = TRUE' : ''})`;
   return `
 suppressMessages({ library(haven); library(nanoparquet); library(jsonlite) })
 d <- ${readCall}
