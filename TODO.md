@@ -319,23 +319,29 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     (fixed 120px today).
 - [ ] **Data editor.** The current `VariablesSidebar` in `core/app.js` is a
       minimal stand-in. Becomes the editing layer over the data-grid view above.
-- [ ] **Data transform/recode API.** `app.data` is read-only by design; mutations
-      (recode, compute) need an explicit transform surface, not direct writes
-      (`core/data-store.js`).
-  - **Motivating case — GSS "designate missing" (deferred from import).** Real GSS
-    Stata files (e.g. `gss2024.dta`, verified to import: 3,986 × 980, all labelled)
-    encode missing as **negative numeric codes with value labels** (`-99 = "no
-    answer"`, `-100 = "iap"`, `-98 = "don't know"`, …) — *not* Stata native missing
-    or SPSS `na_values`. So haven reads them as real values: `age` came in with
-    `min = -99`, 127 negative codes counted as data (mean wrong), and it's typed as
-    a **factor** (continuous var mis-typed because it carries missing-code labels).
-    Decision: do **not** auto-guess at import (a blanket "negatives = missing" would
-    break legitimately negative scales like ideology −3…+3). Instead this recode
-    surface should let the user **designate which value-label codes are missing**
-    (with a GSS-aware preset matching the known missing labels: iap/dk/na/refused/
-    no answer/not available/skipped on web/uncodeable/not imputable/see codebook),
-    and **re-type** a variable factor↔numeric. Until then, imported GSS stats that
-    ignore these codes are wrong — surface this to the user somehow (a warning?).
+- [~] **Data transform/recode.** *Metadata transforms built* (Phase 1) via an
+      **editable Variable View** — click a variable to edit it.
+  - `DataStore.updateVariable(name, patch)`: set label / type / measure / value
+    labels / missing codes. **Non-destructive** (data not rewritten, reversible),
+    except re-typing **to numeric** casts the column `TRY_CAST → DOUBLE` so numeric
+    analyses get real numbers (other type changes are metadata-only). Designating
+    missing follows the SPSS model: codes stay in the data, `missingValues`
+    metadata marks them, analyses honour it.
+  - **Verified in Chrome:** edited demo `gender` → re-type factor→numeric (the
+    VARCHAR→DOUBLE cast worked, `getColumns` now returns a `Float64Array`),
+    designate code `1` missing, relabel; a Frequencies run then showed Female 15
+    valid / **15 Missing** — i.e. the recode flowed end to end into the analysis.
+    This is the GSS fix path (retype `age`→numeric + designate negative codes).
+  - **Phase 2 (deferred) — value-recode / compute (data-mutating):** collapse
+    categories into a new variable, computed vars — `CREATE TABLE … AS SELECT …`,
+    default to new-variable. Needs an expression/mapping UI.
+  - *Still to do (Phase 1 polish):* a GSS-aware "mark missing" preset (the known
+    iap/dk/na/refused/… labels); **range** missing (e.g. all `< 0`), not just a
+    discrete list; value-label conflict policy on multi-year append; and the
+    earlier idea of surfacing a warning when imported data has un-designated
+    candidate missing codes. Also: only the Frequencies plugin honours
+    `missingValues` today — future analyses must too (or centralise it at
+    injection).
 - [ ] **`app.ui.showForm`** — a general declarative form dialog. Only
       `selectVariables`/`selectFromList` exist today (`core/ui-service.js`); add
       this when a second analysis needs options beyond variable choice.

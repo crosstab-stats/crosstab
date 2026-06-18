@@ -259,6 +259,54 @@ export class DataStore {
   }
 
   /**
+   * Apply a metadata transform to one variable: change its label, type,
+   * measurement level, value labels, or missing-value codes. Non-destructive —
+   * the data is not rewritten — with one exception: re-typing **to numeric**
+   * casts the underlying column to DOUBLE (via `TRY_CAST`, non-numeric → NULL) so
+   * numeric analyses actually receive numbers. Other type changes are
+   * metadata-only (categorical analyses read the column's native storage fine).
+   *
+   * Designating missing values is the SPSS model: the codes stay in the data and
+   * analyses honour `missingValues` (the Frequencies plugin recodes them to NA),
+   * so it's fully reversible. Emits {@link CoreEvents.DATA_CHANGED}.
+   *
+   * @param {string} name
+   * @param {Partial<VariableMeta>} patch
+   * @returns {Promise<void>}
+   */
+  async updateVariable(name, patch) {
+    const meta = this.#byName.get(name);
+    if (!meta) throw new Error(`updateVariable: unknown variable "${name}"`);
+
+    if (patch.type === 'numeric' && classifySqlType(this.#sqlTypes.get(name)) !== 'numeric') {
+      const q = quoteIdent(name);
+      await this.#duckdb.query(
+        `ALTER TABLE ${quoteIdent(MAIN_TABLE)} ALTER COLUMN ${q} TYPE DOUBLE ` +
+          `USING TRY_CAST(${q} AS DOUBLE)`,
+      );
+      await this.#refreshSqlTypes();
+    }
+
+    const updated = { ...meta };
+    for (const key of ['label', 'type', 'measurementLevel', 'valueLabels', 'missingValues']) {
+      if (!(key in patch)) continue;
+      const v = patch[key];
+      const empty =
+        v == null ||
+        v === '' ||
+        (Array.isArray(v) && v.length === 0) ||
+        (key === 'valueLabels' && typeof v === 'object' && Object.keys(v).length === 0);
+      if (empty) delete updated[key];
+      else updated[key] = v;
+    }
+    updated.name = name; // renaming is not done here
+
+    this.#byName.set(name, updated);
+    this.#variables = this.#variables.map((m) => (m.name === name ? updated : m));
+    this.#bus.emit(CoreEvents.DATA_CHANGED, this.#snapshotSummary());
+  }
+
+  /**
    * Update the user's variable selection. Emits
    * {@link CoreEvents.SELECTION_CHANGED} with the new list of names.
    *

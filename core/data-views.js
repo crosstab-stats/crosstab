@@ -171,16 +171,81 @@ export class VariableView {
     const body = document.createElement('tbody');
     for (const m of metas) {
       const tr = document.createElement('tr');
+      tr.className = 'vargrid__row';
+      tr.title = 'Click to edit';
       tr.append(elCode('td', m.name));
       tr.append(el('td', m.label || ''));
       tr.append(el('td', m.type));
       tr.append(el('td', m.measurementLevel || ''));
       tr.append(el('td', summariseLabels(m.valueLabels)));
       tr.append(el('td', (m.missingValues || []).join(', ')));
+      tr.addEventListener('click', () => this.#openEditor(m));
       body.append(tr);
     }
     table.append(body);
     this.host.replaceChildren(table);
+  }
+
+  /**
+   * Modal editor for one variable's metadata. Applies a non-destructive
+   * transform via {@link DataStore#updateVariable} on save.
+   *
+   * @param {import('./data-store.js').VariableMeta} meta
+   */
+  #openEditor(meta) {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'ct-dialog';
+    const opt = (v, cur) => `<option value="${v}"${v === cur ? ' selected' : ''}>${v || '—'}</option>`;
+    const labelLines = Object.entries(meta.valueLabels || {})
+      .map(([code, label]) => `${code} = ${label}`)
+      .join('\n');
+    dialog.innerHTML = `
+      <form method="dialog" class="ct-dialog__form ct-edit">
+        <h2 class="ct-dialog__title">Edit variable</h2>
+        <p class="ct-dialog__hint"><code>${esc(meta.name)}</code></p>
+        <label class="ct-field">Label
+          <input name="label" type="text" value="${attr(meta.label || '')}">
+        </label>
+        <div class="ct-row">
+          <label class="ct-field">Type
+            <select name="type">${['numeric', 'string', 'factor'].map((t) => opt(t, meta.type)).join('')}</select>
+          </label>
+          <label class="ct-field">Measure
+            <select name="measure">${['', 'nominal', 'ordinal', 'scale'].map((t) => opt(t, meta.measurementLevel || '')).join('')}</select>
+          </label>
+        </div>
+        <label class="ct-field">Missing values <span class="ct-hint">comma-separated codes treated as missing</span>
+          <input name="missing" type="text" value="${attr((meta.missingValues || []).join(', '))}">
+        </label>
+        <label class="ct-field">Value labels <span class="ct-hint">one <code>code = label</code> per line</span>
+          <textarea name="labels" rows="4">${esc(labelLines)}</textarea>
+        </label>
+        <menu class="ct-dialog__buttons">
+          <button value="cancel" type="submit">Cancel</button>
+          <button value="ok" type="submit" class="ct-dialog__primary">Save</button>
+        </menu>
+      </form>`;
+
+    dialog.addEventListener('close', async () => {
+      const form = dialog.querySelector('form');
+      const ok = dialog.returnValue === 'ok';
+      dialog.remove();
+      if (!ok) return;
+      const patch = {
+        label: form.label.value.trim(),
+        type: form.type.value,
+        measurementLevel: form.measure.value || undefined,
+        missingValues: parseMissing(form.missing.value),
+        valueLabels: parseLabels(form.labels.value),
+      };
+      try {
+        await this.store.updateVariable(meta.name, patch);
+      } catch (err) {
+        console.error('[recode] updateVariable failed', err);
+      }
+    });
+    document.body.append(dialog);
+    dialog.showModal();
   }
 }
 
@@ -226,6 +291,41 @@ function hspacer(tag, widthPx) {
   cell.style.width = `${Math.max(0, widthPx)}px`;
   cell.style.minWidth = `${Math.max(0, widthPx)}px`;
   return cell;
+}
+
+/** Parse a comma-separated missing-codes string into numbers (or strings). */
+function parseMissing(text) {
+  return String(text)
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '')
+    .map((s) => {
+      const n = Number(s);
+      return s !== '' && Number.isFinite(n) ? n : s;
+    });
+}
+
+/** Parse a "code = label" per-line textarea into a `{code: label}` map. */
+function parseLabels(text) {
+  const out = {};
+  for (const line of String(text).split('\n')) {
+    const i = line.indexOf('=');
+    if (i < 0) continue;
+    const code = line.slice(0, i).trim();
+    const label = line.slice(i + 1).trim();
+    if (code !== '') out[code] = label;
+  }
+  return out;
+}
+
+/** HTML-escape for text content. */
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/** Escape for an HTML attribute value. */
+function attr(s) {
+  return esc(s).replace(/"/g, '&quot;');
 }
 
 /** Compact "1=Male; 2=Female" summary (truncated) for the Variable View. */

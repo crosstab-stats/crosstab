@@ -145,6 +145,19 @@
         font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #7a8590;
       }
       .vargrid code { font: 12px ui-monospace, Menlo, monospace; color: #1a1a1a; }
+      .vargrid__row { cursor: pointer; }
+      .vargrid__row:hover { background: #eef5fb; }
+
+      /* variable metadata editor (recode) */
+      .ct-edit { min-width: 380px; }
+      .ct-field { display: flex; flex-direction: column; gap: 4px; margin: 0 0 12px; font-size: 13px; }
+      .ct-field input, .ct-field select, .ct-field textarea {
+        font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
+      }
+      .ct-field textarea { resize: vertical; font: 12px ui-monospace, monospace; }
+      .ct-row { display: flex; gap: 12px; }
+      .ct-row .ct-field { flex: 1; }
+      .ct-hint { color: #7a8590; font-weight: 400; font-size: 11px; }
 
       /* --- footer / status --- */
       footer {
