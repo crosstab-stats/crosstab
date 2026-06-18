@@ -66,7 +66,9 @@ const RESULTS_STYLES = `
     padding: 8px 12px; color: #7a201a; white-space: pre-wrap;
     font-family: ui-monospace, Menlo, monospace; font-size: 12px;
   }
-  svg { max-width: 100%; height: auto; }
+  /* Plots: scale to the pane width but cap so they don't balloon on a wide
+     screen; height tracks the viewBox aspect ratio. */
+  svg { width: 100%; max-width: 720px; height: auto; display: block; }
   .results-empty { color: #888; font-style: italic; }
 `;
 

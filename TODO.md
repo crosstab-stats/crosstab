@@ -541,9 +541,25 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       render auto-capture was blocked by the same harness flakiness during this
       session (the proven Descriptives plugin failed to render the same way) —
       worth a manual eyeball.
-- [ ] Plots (histograms, scatter, box) — exercises `app.results.appendPlot` + SVG.
-      Note: needs R→SVG (e.g. an `svg()` device or `svglite`) since `appendPlot`
-      takes an SVG string; that path isn't proven yet.
+- [~] **Plots / Graphs** (`plugins/builtin-plots/`) — SVG charts via **`svglite`'s
+      `svgstring()`** (R→SVG path **spiked & proven**: `svgstring()` → valid SVG →
+      `appendPlot` renders it through the sanitiser untouched, 32/32 points). Set:
+      histogram, scatter (+ linear OLS trend line, default on), boxplot (optional
+      factor split), pie chart (category shares — included for the audience despite
+      being a poor viz), and **bar chart with error bars** (group means by a factor,
+      **±95% CI**, t-based, labelled on the plot). Honours `missingValues`,
+      app-blue theme, responsive via `viewBox`.
+  - *Future — generalise plots over piped results (deferred, design note).* Tempting
+    to let a plot consume another plugin's *output* (e.g. Descriptives' group means
+    → the error-bar chart) instead of recomputing from data. The on-architecture
+    shape is **not** a bespoke plot-input channel (which needs structured result
+    objects + a plugin↔plugin mediator + agreed schemas) but "**analyses emit a
+    derived dataset; plots consume datasets** like everything else" — one currency,
+    reusing import/transform/join primitives (the tidyverse `summarize() |> plot()`
+    shape). Build plots concretely first; the canary is the error-bar plot and
+    Descriptives both computing group means — that duplication is the real signal to
+    extract a shared "summary dataset" (ties to an aggregate/summarise step, Phase 2
+    recode territory). Don't design the pipe before there's a second consumer.
 - *Testing note (Chrome automation):* driving **two sequential modal `<dialog>`s**
   is flaky via CDP — a synthetic `button.click()` closes the dialog but does *not*
   fire the `close` event (so the app's promise never resolves), and long evals

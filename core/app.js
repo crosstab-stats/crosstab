@@ -44,6 +44,7 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-csv-export/index.js',
   './plugins/builtin-correlation/index.js',
   './plugins/builtin-logistic/index.js',
+  './plugins/builtin-plots/index.js',
 ];
 
 /**
