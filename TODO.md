@@ -339,22 +339,33 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     picker, calls `parse({ ticket })`, and the plugin fetches its own bytes via the
     new **`app.web.get(url)`** surface, then `deliver`s a dataset through the
     existing commit path. The URL-scrape item can reuse both primitives.
-- [ ] **Merge / join datasets by a key variable.** Today import offers only
-      *replace* and *append* (stack rows, tagged by `source_file`). Neither
-      combines two datasets *side by side* on a shared key — which is exactly what
-      cross-source analysis needs: e.g. correlate Wikipedia "Average male height"
-      against "Electricity per capita" **by country**, or join a FRED series onto
-      survey data **by year**. Append would stack them into rows that each have
-      one measure or the other, never both per key — no correlation possible.
-  - *What's needed:* a join transform (left/inner) keyed on a matching variable,
-    producing a derived view that widens the row with the other dataset's columns.
-    Fits the immutable source + transform-log model (it's a new transform type
-    over two sources, not a mutation). Fuzzy key matching is the real-world
-    wrinkle — `"United States"` vs `"United States of America"`, footnoted names,
-    case/whitespace — so a key-normalisation/preview step matters.
-  - *Why now:* the Wikipedia + FRED importers make multi-source the obvious next
-    move; without join, a user can pull two fascinating tables and still not be
-    able to relate them.
+- [x] **Merge / join datasets by a key variable.** *Built* — combines two datasets
+      side by side on a shared key (e.g. Wikipedia height vs. electricity **by
+      country**). Import gains a **Join** mode (alongside Replace / Add rows) for a
+      single incoming dataset.
+  - **Engine** (`core/data-store.js`): sources gained a `combine` mode —
+    base / append (UNION) / **join (LEFT JOIN)**. `rederive` composes stacked rows
+    then hangs joined columns off them. Keys are **normalised** (text/lower/trim) so
+    case/whitespace don't block a match; the redundant right key is dropped;
+    colliding columns are suffixed `col (label)`; unmatched base rows NULL-fill
+    (base preserved). Stored on the source descriptor (`combine/joinKey/aliases`),
+    so a joined dataset round-trips through the library as a join.
+  - **No fuzzy matching — manual pairing instead** (`core/import-service.js`
+    `showJoinReview`): the review dialog picks the key on each side, shows a live
+    match preview, and lists the leftovers in two columns; click-to-pair resolves
+    them by hand → recorded as `aliases` (incoming→base), applied before
+    normalisation. Honest-and-visible beats clever-and-occasionally-wrong (no
+    silent `Niger`↔`Nigeria`).
+  - **Verified end to end in Chrome:** real Wikipedia electricity table joined onto
+    a country base — auto key-guess (country↔Location), normalized match (China/US/
+    India/Japan), columns merged; and the manual path: base `USA` unmatched →
+    paired with incoming `United States` → row got US electricity. Plus headless:
+    collision suffix, NULL-fill, alias remap, save/restore preserves the join.
+  - *Deferred:* fuzzy/alias-crosswalk reuse across joins, composite (multi-col)
+    keys, INNER/FULL options (LEFT only for now), join-with-a-library-entry (today
+    it's the import path), and preview for parquet-only importers (haven — needs
+    staging the incoming key to DuckDB first; columns-based importers work today).
+    Row order isn't base-stable after a join (DuckDB join order) — polish later.
 - [~] **SPSS-style data grid view.** *Read-only v1 built* (`core/data-views.js`):
       a tabbed workspace (**Data | Variables | Output**) beside the sidebar.
   - **Data View** — **2-D virtualised** cell grid: renders only the rows *and*

@@ -168,23 +168,34 @@ export class ImportService {
     }
     if (!files.length) return; // user cancelled
 
-    // If data is already loaded, ask whether to replace it or add to it.
-    let mode = 'replace';
-    if (this.#data.rowCount > 0) {
-      mode = await askMode(files.length);
-      if (!mode) return; // cancelled
+    // No data loaded → straight import (no mode dialog). Data loaded → ask how to
+    // combine; join is offered only for a single incoming file.
+    if (this.#data.rowCount === 0) {
+      await this.#importFiles(spec, files, 'replace', id);
+      return;
     }
+    const mode = await askMode(files.length, files.length === 1);
+    if (!mode) return; // cancelled
+    if (mode === 'join') {
+      await this.#importJoin(spec, files[0], id);
+    } else {
+      await this.#importFiles(spec, files, mode, id);
+    }
+  }
 
+  /**
+   * Parse each file and commit it — the first of a Replace creates the table,
+   * everything else stacks (append). Used for replace/append (not join).
+   */
+  async #importFiles(spec, files, mode, id) {
     let committed = 0;
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
+    for (const file of files) {
       try {
         const dataset = await this.#parseOne(spec, file);
         // null / empty = the importer aborted (and reported its own error).
         if (!dataset || !Array.isArray(dataset.variables) || dataset.variables.length === 0) {
           continue;
         }
-        // First file of a Replace creates the table; everything else stacks.
         const fileMode = mode === 'replace' && committed === 0 ? 'replace' : 'append';
         // A lone single-file replace stays clean (no source_file column); any
         // multi-file or append run tags provenance with each file's name.
@@ -196,7 +207,6 @@ export class ImportService {
         console.error('[import]', err);
       }
     }
-
     if (committed > 0) {
       this.#bus.emit('import:finished', {
         importer: id,
@@ -205,6 +215,76 @@ export class ImportService {
         rowCount: this.#data.rowCount,
       });
     }
+  }
+
+  /**
+   * Parse one file and merge it into the loaded data by a key: run the join
+   * review (key pick + match preview + manual pairing), then commit a LEFT JOIN.
+   */
+  async #importJoin(spec, file, id) {
+    let dataset;
+    try {
+      dataset = await this.#parseOne(spec, file);
+    } catch (err) {
+      this.#results.appendError(`Import of "${file.name}" failed: ${err.message}`);
+      return;
+    }
+    const review = await this.#reviewAndJoin(dataset, baseName(file.name), id);
+    if (review) this.#emitFinished(id, 1);
+  }
+
+  /**
+   * Shared join path for file and web imports: validate the incoming dataset has
+   * inline columns (needed to preview matches), run the review dialog, and commit
+   * the join. Returns true if a join was committed.
+   *
+   * @param {object|null} dataset - The parsed incoming dataset.
+   * @param {string} fallbackTag - Provenance label if the dataset has none.
+   * @returns {Promise<boolean>}
+   */
+  async #reviewAndJoin(dataset, fallbackTag, id) {
+    if (!dataset || !Array.isArray(dataset.variables) || dataset.variables.length === 0) {
+      return false; // importer aborted
+    }
+    if (!dataset.columns) {
+      this.#results.appendError(
+        'Join isn’t available for this importer yet (it delivers data without inline columns).',
+      );
+      return false;
+    }
+    const review = await showJoinReview({
+      baseMeta: this.#data.getVariableMeta(),
+      getBaseColumn: async (name) => {
+        const c = await this.#data.getColumns({ variables: [name] });
+        return Array.from(c[name] ?? []);
+      },
+      incoming: dataset,
+    });
+    if (!review) return false; // cancelled
+    try {
+      await this.#data.loadDataset({
+        ...dataset,
+        mode: 'join',
+        source: dataset.source ?? fallbackTag,
+        joinKey: review.joinKey,
+        aliases: review.aliases,
+      });
+      return true;
+    } catch (err) {
+      this.#results.appendError(`Join failed: ${err.message}`);
+      console.error('[import]', err);
+      return false;
+    }
+  }
+
+  /** Emit the import:finished event (focuses the Data view). */
+  #emitFinished(id, committed) {
+    this.#bus.emit('import:finished', {
+      importer: id,
+      files: 1,
+      committed,
+      rowCount: this.#data.rowCount,
+    });
   }
 
   /**
@@ -229,11 +309,16 @@ export class ImportService {
 
     let mode = 'replace';
     if (this.#data.rowCount > 0) {
-      mode = await askMode(1);
+      mode = await askMode(1, true);
       if (!mode) return; // cancelled
     }
-    // A clean single-source replace stays untagged; anything that joins existing
-    // data carries provenance (the plugin's own label, falling back to the id).
+    if (mode === 'join') {
+      const ok = await this.#reviewAndJoin(dataset, dataset.source ?? id, id);
+      if (ok) this.#emitFinished(id, 1);
+      return;
+    }
+    // A clean single-source replace stays untagged; an append carries provenance
+    // (the plugin's own label, falling back to the id).
     const tag = mode === 'replace' ? undefined : dataset.source ?? id;
     try {
       await this.#data.loadDataset({ ...dataset, mode, source: tag });
@@ -242,12 +327,7 @@ export class ImportService {
       console.error('[import]', err);
       return;
     }
-    this.#bus.emit('import:finished', {
-      importer: id,
-      files: 1,
-      committed: 1,
-      rowCount: this.#data.rowCount,
-    });
+    this.#emitFinished(id, 1);
   }
 
   /** Hand one file to the plugin and resolve with the dataset it delivers. */
@@ -279,32 +359,39 @@ function baseName(name) {
 }
 
 /**
- * Ask whether an import should replace the current data or add to it. Resolves
- * to `'replace'`, `'append'`, or `null` (cancelled).
+ * Ask how an import should combine with the loaded data. Resolves to
+ * `'replace'`, `'append'`, `'join'`, or `null` (cancelled). `'join'` is only
+ * offered when `canJoin` (a single incoming dataset — joining a batch is
+ * ambiguous).
  *
  * @param {number} fileCount
- * @returns {Promise<'replace'|'append'|null>}
+ * @param {boolean} [canJoin=false]
+ * @returns {Promise<'replace'|'append'|'join'|null>}
  */
-function askMode(fileCount) {
+function askMode(fileCount, canJoin = false) {
   const noun = fileCount > 1 ? `${fileCount} files` : 'this file';
   return new Promise((resolve) => {
     const dialog = document.createElement('dialog');
     dialog.className = 'ct-dialog';
+    const joinBtn = canJoin
+      ? `<button value="join" type="submit">Join (match on a key)…</button>`
+      : '';
     dialog.innerHTML = `
       <form method="dialog" class="ct-dialog__form">
         <h2 class="ct-dialog__title">Import ${fileCount > 1 ? `${fileCount} files` : 'data'}</h2>
         <p class="ct-dialog__hint">A dataset is already loaded. Add ${noun} to it
-          (stack rows, tagged by source), or replace what's loaded?</p>
+          (stack rows), join it on a key (add columns), or replace what's loaded?</p>
         <menu class="ct-dialog__buttons">
           <button value="cancel" type="submit">Cancel</button>
           <button value="replace" type="submit">Replace</button>
-          <button value="append" type="submit" class="ct-dialog__primary">Add to current data</button>
+          ${joinBtn}
+          <button value="append" type="submit" class="ct-dialog__primary">Add rows</button>
         </menu>
       </form>`;
     dialog.addEventListener('close', () => {
       const v = dialog.returnValue;
       dialog.remove();
-      resolve(v === 'append' || v === 'replace' ? v : null);
+      resolve(['append', 'replace', 'join'].includes(v) ? v : null);
     });
     document.body.append(dialog);
     dialog.showModal();
@@ -340,5 +427,225 @@ function pickFiles(extensions, multiple) {
     input.addEventListener('cancel', () => finish([]));
     document.body.append(input);
     input.click();
+  });
+}
+
+/** Normalised key for matching: text, trimmed, lower-cased. */
+function normKey(v) {
+  return String(v ?? '').trim().toLowerCase();
+}
+
+/**
+ * Match base key values against incoming key values, honouring manual aliases
+ * (incoming value → base value applied before normalising). Pure; the join
+ * review's live preview and the engine's SQL use the same normalise rule.
+ *
+ * @param {Array} baseValues
+ * @param {Array} incomingValues
+ * @param {Array<{base: string, incoming: string}>} aliases
+ * @returns {{matched: number, baseCount: number, incomingCount: number,
+ *   unmatchedBase: string[], unmatchedIncoming: string[]}}
+ */
+function computeMatch(baseValues, incomingValues, aliases) {
+  const baseByNorm = new Map();
+  for (const v of baseValues) {
+    const n = normKey(v);
+    if (!baseByNorm.has(n)) baseByNorm.set(n, v);
+  }
+  const incByNorm = new Map();
+  for (const v of incomingValues) {
+    const n = normKey(v);
+    if (!incByNorm.has(n)) incByNorm.set(n, v);
+  }
+  const aliasMap = new Map(); // incoming-norm → base-norm
+  for (const a of aliases) aliasMap.set(normKey(a.incoming), normKey(a.base));
+
+  let matched = 0;
+  const matchedBaseNorms = new Set();
+  const unmatchedIncoming = [];
+  for (const [n, orig] of incByNorm) {
+    const bn = aliasMap.has(n) ? aliasMap.get(n) : n;
+    if (baseByNorm.has(bn)) {
+      matched++;
+      matchedBaseNorms.add(bn);
+    } else {
+      unmatchedIncoming.push(orig);
+    }
+  }
+  const unmatchedBase = [];
+  for (const [n, orig] of baseByNorm) if (!matchedBaseNorms.has(n)) unmatchedBase.push(orig);
+  return {
+    matched,
+    baseCount: baseByNorm.size,
+    incomingCount: incByNorm.size,
+    unmatchedBase: unmatchedBase.map(String).sort(),
+    unmatchedIncoming: unmatchedIncoming.map(String).sort(),
+  };
+}
+
+/** Guess a likely key column: first string/factor variable, else the first. */
+function guessKey(metas) {
+  const s = metas.find((m) => m.type === 'string' || m.type === 'factor');
+  return (s ?? metas[0])?.name;
+}
+
+/**
+ * Interactive join review: pick the key on each side, see the live match preview,
+ * and manually pair leftover values (the visible-not-fuzzy step). Resolves to
+ * `{ joinKey:{left,right}, aliases:[{base,incoming}] }` or `null` if cancelled.
+ *
+ * @param {Object} opts
+ * @param {import('./data-store.js').VariableMeta[]} opts.baseMeta
+ * @param {(name: string) => Promise<Array>} opts.getBaseColumn
+ * @param {{variables: object[], columns: Object<string, Array>}} opts.incoming
+ * @returns {Promise<{joinKey: {left: string, right: string}, aliases: Array}|null>}
+ */
+function showJoinReview({ baseMeta, getBaseColumn, incoming }) {
+  const incMetas = incoming.variables;
+  return new Promise((resolve) => {
+    let baseKey = guessKey(baseMeta);
+    let incKey = guessKey(incMetas);
+    const aliases = []; // {base, incoming}
+    let baseValues = [];
+    let selBase = null;
+    let selInc = null;
+
+    const dialog = document.createElement('dialog');
+    dialog.className = 'ct-dialog ct-dialog--wide';
+    dialog.innerHTML = `
+      <form method="dialog" class="ct-dialog__form ct-join">
+        <h2 class="ct-dialog__title">Join — match on a key</h2>
+        <p class="ct-dialog__hint">Match your rows to the incoming rows by a key.
+          Unmatched rows keep your data with the new columns left blank; pair up any
+          that should match below.</p>
+        <div class="ct-join__keys"></div>
+        <p class="ct-join__summary"></p>
+        <div class="ct-join__cols">
+          <div class="ct-join__side">
+            <div class="ct-join__side-head">Current — unmatched</div>
+            <ul class="ct-join__list" data-side="base"></ul>
+          </div>
+          <div class="ct-join__side">
+            <div class="ct-join__side-head">Incoming — unmatched</div>
+            <ul class="ct-join__list" data-side="inc"></ul>
+          </div>
+        </div>
+        <button type="button" class="ct-join__pair" disabled>Match selected ↔</button>
+        <div class="ct-join__manual"></div>
+        <menu class="ct-dialog__buttons">
+          <button value="cancel" type="submit">Cancel</button>
+          <button value="ok" type="submit" class="ct-dialog__primary">Join</button>
+        </menu>
+      </form>`;
+
+    const keysEl = dialog.querySelector('.ct-join__keys');
+    const summaryEl = dialog.querySelector('.ct-join__summary');
+    const baseListEl = dialog.querySelector('.ct-join__list[data-side="base"]');
+    const incListEl = dialog.querySelector('.ct-join__list[data-side="inc"]');
+    const pairBtn = dialog.querySelector('.ct-join__pair');
+    const manualEl = dialog.querySelector('.ct-join__manual');
+
+    const makeSelect = (metas, cur) => {
+      const s = document.createElement('select');
+      for (const m of metas) {
+        const o = document.createElement('option');
+        o.value = m.name;
+        o.textContent = m.label ? `${m.label} (${m.name})` : m.name;
+        if (m.name === cur) o.selected = true;
+        s.append(o);
+      }
+      return s;
+    };
+    const baseSel = makeSelect(baseMeta, baseKey);
+    const incSel = makeSelect(incMetas, incKey);
+    keysEl.append(
+      document.createTextNode('Current '),
+      baseSel,
+      document.createTextNode(' ↔ incoming '),
+      incSel,
+    );
+
+    const render = (match) => {
+      summaryEl.textContent =
+        `${match.matched} matched · ${match.unmatchedBase.length} current unmatched · ` +
+        `${match.unmatchedIncoming.length} incoming unmatched`;
+      const fill = (ul, vals, side) => {
+        ul.replaceChildren();
+        for (const v of vals) {
+          const li = document.createElement('li');
+          li.textContent = v;
+          if ((side === 'base' && v === selBase) || (side === 'inc' && v === selInc)) {
+            li.classList.add('sel');
+          }
+          li.addEventListener('click', () => {
+            if (side === 'base') selBase = selBase === v ? null : v;
+            else selInc = selInc === v ? null : v;
+            [...ul.children].forEach((c) =>
+              c.classList.toggle('sel', c.textContent === (side === 'base' ? selBase : selInc)),
+            );
+            pairBtn.disabled = !(selBase && selInc);
+          });
+          ul.append(li);
+        }
+      };
+      fill(baseListEl, match.unmatchedBase, 'base');
+      fill(incListEl, match.unmatchedIncoming, 'inc');
+
+      manualEl.replaceChildren();
+      if (aliases.length) {
+        const head = document.createElement('div');
+        head.className = 'ct-join__manual-head';
+        head.textContent = 'Manual matches';
+        manualEl.append(head);
+        aliases.forEach((a, i) => {
+          const row = document.createElement('div');
+          row.className = 'ct-join__manual-row';
+          row.append(document.createTextNode(`${a.base} ↔ ${a.incoming}`));
+          const x = document.createElement('button');
+          x.type = 'button';
+          x.textContent = '✕';
+          x.addEventListener('click', () => {
+            aliases.splice(i, 1);
+            recompute();
+          });
+          row.append(x);
+          manualEl.append(row);
+        });
+      }
+    };
+
+    const recompute = () => render(computeMatch(baseValues, incoming.columns[incKey] ?? [], aliases));
+    const reloadBase = async () => {
+      baseValues = await getBaseColumn(baseKey);
+      recompute();
+    };
+
+    baseSel.addEventListener('change', () => {
+      baseKey = baseSel.value;
+      selBase = null;
+      reloadBase();
+    });
+    incSel.addEventListener('change', () => {
+      incKey = incSel.value;
+      selInc = null;
+      recompute();
+    });
+    pairBtn.addEventListener('click', () => {
+      if (!selBase || !selInc) return;
+      aliases.push({ base: selBase, incoming: selInc });
+      selBase = null;
+      selInc = null;
+      pairBtn.disabled = true;
+      recompute();
+    });
+
+    dialog.addEventListener('close', () => {
+      const ok = dialog.returnValue === 'ok';
+      dialog.remove();
+      resolve(ok ? { joinKey: { left: baseKey, right: incKey }, aliases } : null);
+    });
+    document.body.append(dialog);
+    dialog.showModal();
+    reloadBase();
   });
 }

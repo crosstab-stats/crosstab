@@ -206,6 +206,30 @@
         box-shadow: 0 16px 48px rgba(0,0,0,.25); max-width: 420px; width: 92vw;
       }
       .ct-dialog::backdrop { background: rgba(0,0,0,.35); }
+      .ct-dialog--wide { max-width: 640px; }
+
+      /* join review dialog */
+      .ct-join__keys { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
+      .ct-join__keys select { font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; }
+      .ct-join__summary { margin: 0 0 10px; font-size: 13px; color: #5a6470; }
+      .ct-join__cols { display: flex; gap: 12px; }
+      .ct-join__side { flex: 1; min-width: 0; }
+      .ct-join__side-head { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #7a8590; margin: 0 0 4px; }
+      .ct-join__list {
+        list-style: none; margin: 0; padding: 4px; height: 30vh; overflow-y: auto;
+        border: 1px solid var(--line); border-radius: 6px;
+      }
+      .ct-join__list li { padding: 5px 8px; border-radius: 4px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .ct-join__list li:hover { background: #f0f3f6; }
+      .ct-join__list li.sel { background: #e6f0fa; outline: 1px solid var(--accent); }
+      .ct-join__pair {
+        margin: 10px 0; font: inherit; font-size: 13px; padding: 6px 12px;
+        border: 1px solid var(--line); border-radius: 6px; background: #fff; cursor: pointer;
+      }
+      .ct-join__pair:disabled { opacity: .5; cursor: default; }
+      .ct-join__manual-head { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #7a8590; margin: 4px 0; }
+      .ct-join__manual-row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 2px 0; }
+      .ct-join__manual-row button { border: 0; background: none; cursor: pointer; color: #b03030; font-size: 13px; }
       .ct-dialog__form { padding: 20px; }
       .ct-dialog__title { margin: 0 0 4px; font-size: 18px; }
       .ct-dialog__hint { margin: 0 0 12px; color: #5a6470; }
