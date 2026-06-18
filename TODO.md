@@ -329,8 +329,36 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     and **re-type** a variable factor↔numeric. Until then, imported GSS stats that
     ignore these codes are wrong — surface this to the user somehow (a warning?).
 - [ ] **`app.ui.showForm`** — a general declarative form dialog. Only
-      `selectVariables` exists today (`core/ui-service.js`); add this when a
-      second analysis needs options beyond variable choice.
+      `selectVariables`/`selectFromList` exist today (`core/ui-service.js`); add
+      this when a second analysis needs options beyond variable choice.
+- [ ] **Dataset library (save / catalog / one-click reload).** Researchers
+      revisit data constantly; importing GSS via haven is slow (minutes), so the
+      big win is **caching the post-import result** — reload should never re-parse.
+  - **Storage: OPFS, not a real directory.** The File System Access "point at a
+    folder" idea isn't on Safari/iPad (our target). **OPFS works on iPad Safari +
+    Chrome**, is persistent, and handles large files — *verified in-browser:*
+    round-trips fine, ~10 GB quota, but `navigator.storage.persisted()` is
+    `false` by default (call `navigator.storage.persist()` on first save to avoid
+    eviction). Keep "export/import to real disk" via File System Access as a
+    *secondary* feature on browsers that support it (portability/sharing/backup).
+  - **Format:** per dataset, write `<id>.parquet` (DuckDB `queryToParquet`, exists)
+    + `<id>.meta.json` (the `VariableMeta` Parquet can't carry) + one
+    `catalog.json` index (`{id, name, description, rowCount, varCount, source,
+    savedAt}`). Reload = read Parquet → `replaceTableFromParquet` (exists) +
+    restore metadata. Caches *past* the slow haven parse → reload is ~instant.
+  - **Architecture:** OPFS is origin-scoped, so a sandboxed plugin gets its *own*
+    OPFS, not the host's — persistence MUST be an **engine capability** exposed
+    like `app.importers`/`app.ui` (e.g. `app.datasets.save/list/load/delete`). The
+    "library" is then a **catalog-UI plugin** driving that primitive — on-pattern.
+  - **Shape likely hinges on decisions not yet made** (why this is deferred):
+    - *Single vs. multi-dataset model.* App holds one DuckDB table today, so
+      "load" = *switch* the active dataset. If we later support multiple loaded
+      datasets / joins, the library's model changes.
+    - *What a "saved dataset" includes.* Just data+metadata, or also recodes/
+      transforms (needs the recode API) and saved analyses? Leans on the
+      transform/recode surface and any analysis-history feature.
+    - *Multi-file/append* entries (a library item that is several GSS years).
+    - Supersedes the old "dataset persistence (IndexedDB)" line — OPFS is better.
 
 ## More analyses (each is just another plugin)
 
@@ -343,4 +371,5 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 - [ ] Batch a multi-variable Frequencies run into one R call instead of one job
       per variable (`plugins/builtin-frequencies/index.js`).
-- [ ] Settings persistence (localStorage) and dataset persistence (IndexedDB).
+- [ ] Settings persistence (localStorage). (Dataset persistence is now its own
+      item — see **Dataset library** under Deferred features; OPFS, not IndexedDB.)
