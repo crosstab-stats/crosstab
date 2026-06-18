@@ -86,7 +86,7 @@ async function importHaven(app, ticket, name, file) {
     const parquet = await app.webr.readFile(OUT_PATH);
     await app.importers.deliver(ticket, { variables, parquet });
   } catch (err) {
-    await app.results.appendError(`Import of "${name}" failed: ${err.message}`);
+    await app.results.appendError(`Import of "${name}" failed: ${friendlyError(err.message)}`);
     await app.importers.deliver(ticket, null); // settle the ticket; abort (don't clobber)
   } finally {
     if (mounted) {
@@ -187,6 +187,25 @@ function mapMeasure(measure) {
   if (measure === 'nominal' || measure === 'ordinal') return measure;
   if (measure === 'scale') return 'scale';
   return undefined; // "unknown" / absent
+}
+
+/**
+ * Translate R/WebR's cryptic out-of-memory error into a plain-language message.
+ * A large file can exhaust WebR's wasm32 ~4 GB heap while haven materialises the
+ * whole data frame; R reports this as e.g. "cannot allocate vector of size …".
+ *
+ * @param {string} msg
+ * @returns {string}
+ */
+function friendlyError(msg) {
+  if (/cannot allocate|out of memory|memory exhausted|allocation failed/i.test(msg)) {
+    return (
+      'ran out of memory reading this file. The in-browser R runtime is capped at ' +
+      '~4 GB (WebAssembly), which a very large file exceeds. Use a smaller extract ' +
+      '— e.g. fewer variables or years.'
+    );
+  }
+  return msg;
 }
 
 /** Lowercased file extension including the dot, e.g. `.sav`. */

@@ -217,7 +217,14 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         (R splits the file, JS concatenates — exactly the trick used to test the
         181 MB case). Not yet wired into the importer; modest Parquet outputs are
         fine today.
-      - **WebR ~4 GB wasm address space (the *second* wall).** Confirmed empirically:
+      - **WebR ~4 GB wasm address space (the *second* wall) — now the live limit,
+        and it fails gracefully.** Confirmed on the real 597 MB GSS `.dta`: with
+        WORKERFS staging it gets *past* the FS wall and into `haven::read_dta`,
+        then R exhausts the heap ("cannot allocate vector of size …"). Verified
+        this errors **cleanly** — the dataset is preserved (not clobbered), WebR
+        recovers (subsequent runs + `lm()` still work), and the importer now shows
+        a plain-language out-of-memory message instead of R's cryptic one.
+        Confirmed empirically:
         `R.version$platform` = `wasm32-unknown-emscripten`, `.Machine$sizeof.pointer`
         = 4 — WebR is a **wasm32** build, so a single linear memory caps at ~4 GiB.
         Even past the FS limit, haven materialises the whole frame in R (~3.9 GB of
