@@ -16,6 +16,7 @@ import { WebRManager } from './webr-manager.js';
 import { ResultsPane } from './results-pane.js';
 import { MenuShell } from './menu-shell.js';
 import { UiService } from './ui-service.js';
+import { ImportService } from './import-service.js';
 import { PluginLoader } from './loader.js';
 import { makeDemoDataset } from './demo-data.js';
 
@@ -27,7 +28,10 @@ import { makeDemoDataset } from './demo-data.js';
  * document (index.html), not this module.
  * @type {string[]}
  */
-const BUILTIN_PLUGINS = ['./plugins/builtin-frequencies/index.js'];
+const BUILTIN_PLUGINS = [
+  './plugins/builtin-csv-import/index.js',
+  './plugins/builtin-frequencies/index.js',
+];
 
 /**
  * Boot the application into the given root element.
@@ -55,6 +59,7 @@ export async function boot(mounts) {
   const results = new ResultsPane(mounts.results);
   const menus = new MenuShell(mounts.menubar);
   const ui = new UiService(dataStore);
+  const importers = new ImportService({ menus, data: dataStore, results: results.api, bus });
 
   // The service bundle the plugin broker dispatches against. `data`/`results`/
   // `menus`/`ui` expose only their published `api` slices, never the full class
@@ -67,6 +72,7 @@ export async function boot(mounts) {
     results: results.api,
     menus: menus.api,
     ui: ui.api,
+    importers: importers.api,
   };
   const loader = new PluginLoader(services);
 
@@ -97,7 +103,7 @@ export async function boot(mounts) {
     }
   }
 
-  const engine = { bus, dataStore, duckdb, webr, results, menus, loader, services };
+  const engine = { bus, dataStore, duckdb, webr, results, menus, importers, loader, services };
   // Expose for manual poking in the console during early development.
   // eslint-disable-next-line no-undef
   globalThis.crosstab = engine;

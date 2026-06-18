@@ -165,6 +165,58 @@ export interface UiApi {
   selectVariables(options?: SelectVariablesOptions): Promise<string[] | null>;
 }
 
+/** A parsed dataset an importer hands back to the engine. Provide ONE of
+ * `columns` (JS-parsed) or `parquet` (R-parsed / large); `variables` always
+ * carries the SPSS-style metadata, since neither columns nor Parquet convey it. */
+export interface ImportedDataset {
+  /** Column metadata, in display order. */
+  variables: VariableMeta[];
+  /** Columnar values: `{ name: array }`. Numeric → numbers (missing = `null`),
+   * text/factor → strings (missing = `null`). Use plain arrays. */
+  columns?: Record<string, Array<number | string | null>>;
+  /** Parquet file bytes (e.g. written by R/`haven`). DuckDB reads it directly. */
+  parquet?: Uint8Array;
+}
+
+/** The request the engine passes to an importer's {@link Importer.parse}. */
+export interface ImportRequest {
+  /** Opaque token identifying this import; pass it back to `deliver`. */
+  ticket: number;
+  /** The chosen file's name (use it to pick a delimiter, etc.). */
+  name: string;
+  /** The file's raw bytes. */
+  bytes: ArrayBuffer;
+}
+
+/** An importer registration. */
+export interface Importer {
+  /** Menu label under File ▸ Import, e.g. `"CSV…"`. */
+  label: string;
+  /** File extensions handled, with the dot, e.g. `[".csv"]` or
+   * `[".sav", ".dta", ".sas7bdat"]`. Used for the picker's accept filter. */
+  extensions: string[];
+  /** Called by the engine (in your sandbox) with the chosen file's bytes. Parse
+   * them and call {@link ImportersApi.deliver} with the result. Return value is
+   * ignored — delivery is via `deliver`, so async work is fine. */
+  parse: (request: ImportRequest) => void;
+  /** Stable id (defaults to `label`). */
+  id?: string;
+  /** Sort weight within File ▸ Import (lower first). Default 100. */
+  order?: number;
+}
+
+/**
+ * File import as an extension point. Register an importer and the engine adds a
+ * File ▸ Import menu item, shows the picker, and commits what you deliver — so a
+ * third-party format is a first-class citizen, same as the built-in CSV importer.
+ */
+export interface ImportersApi {
+  /** Register an importer; resolves to a disposer (also auto-run on unload). */
+  register(importer: Importer): Promise<Disposer>;
+  /** Deliver a parsed dataset for the given request `ticket`. */
+  deliver(ticket: number, dataset: ImportedDataset): Promise<void>;
+}
+
 /** App-wide publish/subscribe. Payloads must be structured-cloneable. */
 export interface EventsApi {
   /** Subscribe; resolves to an unsubscribe fn (also auto-run on unload). */
@@ -190,6 +242,7 @@ export interface App {
   readonly webr: WebrApi;
   readonly menus: MenusApi;
   readonly ui: UiApi;
+  readonly importers: ImportersApi;
   readonly events: EventsApi;
 }
 

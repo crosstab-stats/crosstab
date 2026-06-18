@@ -153,6 +153,42 @@ export class DataStore {
   }
 
   /**
+   * Load a dataset delivered by an importer plugin. Accepts either shape of the
+   * importer contract:
+   *  - `{ variables, columns }` — columnar JS arrays (JS-parsed formats, e.g.
+   *    CSV). Delegates to {@link DataStore#setDataset}.
+   *  - `{ variables, parquet }` — Parquet bytes (R/`haven`-parsed or large data).
+   *    DuckDB reads the Parquet directly; `variables` supplies the SPSS metadata
+   *    Parquet can't carry.
+   *
+   * The engine — never a plugin — calls this, and only in response to a user
+   * import action (see {@link import('./import-service.js').ImportService}). That
+   * keeps the dataset-replacing capability mediated, not handed out wholesale.
+   *
+   * @param {Object} dataset
+   * @param {VariableMeta[]} dataset.variables
+   * @param {Object<string, Array>} [dataset.columns]
+   * @param {Uint8Array} [dataset.parquet]
+   * @returns {Promise<void>}
+   */
+  async loadDataset({ variables, columns, parquet }) {
+    if (parquet) {
+      await this.#duckdb.replaceTableFromParquet(MAIN_TABLE, parquet);
+      this.#variables = variables.map((m) => ({ ...m }));
+      this.#byName = new Map(this.#variables.map((m) => [m.name, m]));
+      const countTable = await this.#duckdb.query(
+        `SELECT count(*) AS n FROM ${quoteIdent(MAIN_TABLE)}`,
+      );
+      this.#rowCount = Number(countTable.get(0).n);
+      this.#selected = this.#selected.filter((n) => this.#byName.has(n));
+      await this.#refreshSqlTypes();
+      this.#bus.emit(CoreEvents.DATA_CHANGED, this.#snapshotSummary());
+      return;
+    }
+    await this.setDataset({ variables, columns: columns ?? {} });
+  }
+
+  /**
    * Update the user's variable selection. Emits
    * {@link CoreEvents.SELECTION_CHANGED} with the new list of names.
    *

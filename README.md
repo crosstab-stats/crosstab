@@ -17,6 +17,12 @@ results renderer, a dynamic menu shell, and an event bus. The official analyses
 public API third-party developers use. This is the Factorio / VS Code model:
 the base content is just the official mod.
 
+**Even file import is a plugin.** Importers register through `app.importers`; the
+official CSV importer (and the planned SPSS/Stata/SAS one) use the same call a
+third party would to teach CrossTab a new file format. The engine owns only what
+the sandbox forces it to — the File ▸ Import menu, the file picker, and the
+commit into the data store — and hands the chosen bytes to the plugin to parse.
+
 **All plugins are equal.** There is no privileged loading path: every plugin —
 the built-in Frequencies analysis included — runs in its own sandboxed
 `<iframe>` and reaches the engine only over `postMessage`. Plugin code never
@@ -33,12 +39,14 @@ core/
   sanitize-html.js allowlist sanitiser for untrusted plugin output
   menu-shell.js    dynamic menubar built from plugin registrations
   ui-service.js    host-rendered dialogs (app.ui) for sandboxed plugins
+  import-service.js file-import extension point (app.importers) + picker
   plugin-broker.js host side of the plugin RPC (postMessage protocol)
   loader.js        plugin lifecycle; one sandboxed iframe per plugin
   app.js           composition root — wires it all together
   demo-data.js     temporary seed dataset (removed once import lands)
 plugins/
-  builtin-frequencies/   the reference plugin
+  builtin-frequencies/   the reference analysis plugin
+  builtin-csv-import/     the reference importer plugin
 sdk/
   plugin-api.d.ts  the formal plugin contract (every method is async)
   README.md        plugin developer guide

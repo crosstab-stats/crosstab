@@ -132,6 +132,33 @@ export class DuckDBManager {
     }
   }
 
+  /**
+   * Replace a table from Parquet bytes (e.g. produced by an importer plugin that
+   * parsed a file in R/`haven` and wrote Parquet). DuckDB reads Parquet natively,
+   * so this is the efficient ingest path for the dual importer contract.
+   *
+   * @param {string} name - Table name.
+   * @param {Uint8Array} bytes - Parquet file bytes.
+   * @returns {Promise<void>}
+   */
+  async replaceTableFromParquet(name, bytes) {
+    const { conn } = await this.#ensureReady();
+    const file = 'ct_import.parquet';
+    await this.#db.registerFileBuffer(file, bytes);
+    try {
+      await conn.query(`DROP TABLE IF EXISTS ${quoteIdent(name)}`);
+      await conn.query(
+        `CREATE TABLE ${quoteIdent(name)} AS SELECT * FROM read_parquet('${file}')`,
+      );
+    } finally {
+      try {
+        await this.#db.dropFile(file);
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
+  }
+
   /** Shut the runtime down and reset. The next call cold-starts a new runtime. */
   async close() {
     const conn = this.#conn;

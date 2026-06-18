@@ -57,6 +57,9 @@
             callbacks.set(cbId, value);
             return { __cb: cbId };
           }
+          // Binary payloads (e.g. a Parquet `Uint8Array` an importer returns)
+          // are structured-cloneable as-is; don't walk their indices.
+          if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return value;
           if (value && typeof value === 'object') {
             const out = {};
             for (const k of Object.keys(value)) out[k] = marshalArgs(value[k]);
@@ -97,6 +100,7 @@
             webr: makeNamespace('webr', ['run', 'installPackages']),
             menus: makeNamespace('menus', ['register']),
             ui: makeNamespace('ui', ['selectVariables']),
+            importers: makeNamespace('importers', ['register', 'deliver']),
             events: makeNamespace('events', ['on', 'emit']),
           });
         }

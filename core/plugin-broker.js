@@ -190,6 +190,9 @@ export class PluginBroker {
   #reviveArgs(args) {
     const revive = (v) => {
       if (Array.isArray(v)) return v.map(revive);
+      // Binary payloads (e.g. a Parquet `Uint8Array` from an importer) arrive
+      // intact via structured clone; don't walk their indices.
+      if (v instanceof ArrayBuffer || ArrayBuffer.isView(v)) return v;
       if (v && typeof v === 'object') {
         if (typeof v.__cb === 'number') return this.#makeCallback(v.__cb);
         const out = {};
@@ -235,10 +238,11 @@ export class PluginBroker {
  * @param {object} s.webr    - { run, installPackages }
  * @param {object} s.menus   - MenuShell#api
  * @param {object} s.ui      - UiService#api
+ * @param {object} s.importers - ImportService#api
  * @param {import('./event-bus.js').EventBus} s.bus
  * @returns {Object<string, Function>}
  */
-function buildDispatch({ data, results, webr, menus, ui, bus }) {
+function buildDispatch({ data, results, webr, menus, ui, importers, bus }) {
   return {
     'data.getDataFrame': (opts) => data.getDataFrame(opts),
     'data.getColumns': (opts) => data.getColumns(opts),
@@ -261,6 +265,9 @@ function buildDispatch({ data, results, webr, menus, ui, bus }) {
     'menus.register': (item) => menus.register(item),
 
     'ui.selectVariables': (opts) => ui.selectVariables(opts),
+
+    'importers.register': (spec) => importers.register(spec),
+    'importers.deliver': (ticket, dataset) => importers.deliver(ticket, dataset),
 
     'events.on': (name, fn) => bus.on(name, fn),
     'events.emit': (name, payload) => bus.emit(name, payload),

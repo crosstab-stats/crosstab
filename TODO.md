@@ -173,21 +173,30 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Deferred features (intentionally not built yet)
 
-- [ ] **File import.** Lands first among data-in features, then delete the
-      temporary `core/demo-data.js` seed. Two parsing tracks:
-  - *Statistical formats via `haven` (priority — covers GSS).* The General Social
-    Survey, a teaching staple, ships only as SPSS `.sav` / Stata `.dta` / SAS
-    `.sas7bdat`. R's **`haven`** reads all three with one dependency and — key —
-    returns variable labels, value labels, and user-defined missing, which is
-    exactly the `VariableMeta` model. Plan: `haven::read_*` in WebR → write the
-    data to Parquet in R → DuckDB reads the Parquet (reuse the bridge, run
-    backwards) → map `haven` attributes to `VariableMeta`. Pulls `haven` in as an
-    install-on-demand R package (see R-package strategy).
-  - *Plain tabular via DuckDB natively.* DuckDB reads **CSV** (with type
-    inference) and **Parquet** directly — no R needed; the cleanest path for
-    those. Excel via SheetJS later if wanted.
-  - Both routes end at `DataStore.setDataset` / a DuckDB table, so the rest of the
-    app is unchanged.
+- [~] **File import — as a plugin extension point.** Importers register via the
+      public `app.importers.register({ label, extensions, parse })`; the engine
+      (`core/import-service.js`) owns the File ▸ Import menu, the picker, and the
+      commit (`DataStore.loadDataset`), and hands the chosen file's bytes to the
+      plugin to parse. Dual return contract: `{variables, columns}` (JS-parsed)
+      or `{variables, parquet}` (R-parsed/large). Once the format coverage below
+      is enough, delete the temporary `core/demo-data.js` seed.
+  - [x] **CSV importer plugin** (`plugins/builtin-csv-import/`). Pure-JS parser
+        (quotes, embedded commas/newlines, `\r\n`, conservative numeric
+        inference) → `{variables, columns}`. Verified in Chrome end to end:
+        menu → picker → sandboxed parse → DuckDB; analyses run on the result.
+  - [ ] **`haven` importer plugin (covers GSS).** The General Social Survey, a
+        teaching staple, ships only as SPSS `.sav` / Stata `.dta` / SAS
+        `.sas7bdat`. R's **`haven`** reads all three and returns variable labels,
+        value labels, and user-defined missing — exactly the `VariableMeta`
+        model. Plan: stage file bytes into WebR's FS → `haven::read_*` → write
+        Parquet in R → return `{variables, parquet}` (the Parquet path is already
+        wired). Needs new `app.webr` plumbing to stage input files into WebR's FS
+        (the engine-side work). `haven` is install-on-demand (see R-package
+        strategy).
+  - [ ] **Excel** via SheetJS later, if wanted (also a plugin).
+  - *Note:* the Parquet return path (`DataStore.loadDataset` +
+    `DuckDBManager.replaceTableFromParquet`) is built and unit-exercised by the
+    contract but not yet driven end to end until the `haven` importer lands.
 - [ ] **Import data from a web page (URL scrape).** Point the app at a URL; it
       fetches and parses tabular data (e.g. HTML `<table>`s) into a new dataset
       for analysis, with an option to save the parsed data locally as CSV (or
