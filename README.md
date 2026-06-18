@@ -77,17 +77,21 @@ setting `Cross-Origin-Opener-Policy: same-origin` and
 The goal of this stage is **not** UI polish; it is to prove the engine and the
 plugin contract end to end:
 
-1. WebR loads in a Web Worker, receives the dataset, runs R, returns structured
-   output to the results pane. *(`core/webr-manager.js`)*
-2. A plugin loaded dynamically registers a menu item, triggers an analysis, and
-   renders output **using only the published `app` API** — from inside a
+1. ✅ WebR loads in a Web Worker, receives the dataset, runs R, returns
+   structured output to the results pane. *(`core/webr-manager.js`)*
+   **Verified in Chrome:** `lm(income ~ age)` returns coefficients; the
+   Frequencies analysis renders a correct SPSS-style table.
+2. ✅ A plugin loaded dynamically registers a menu item, triggers an analysis,
+   and renders output **using only the published `app` API** — from inside a
    sandboxed iframe, over postMessage, with no engine or host-DOM access.
    *(`plugins/builtin-frequencies/` + `plugin-host.html` + `core/plugin-broker.js`)*
-3. Works on iPad Safari.
+   **Verified in Chrome:** blob-module import in the sandbox, the postMessage RPC,
+   the `app.ui` dialog, and result sanitisation all work end to end.
+3. ⏳ Works on iPad Safari. *(still needs a hands-on device test — see note.)*
 
-All three are **built but not yet runtime-verified** — they need a browser (and,
-for #3, a real iPad), which the development environment here cannot run. See
-verification steps below; the two highest-risk spots to check first are flagged.
+Milestones 1–2 were verified against desktop Chrome with cross-origin isolation
+on (`crossOriginIsolated === true`, `SharedArrayBuffer` available). The iPad
+Safari pass is the remaining unknown.
 
 ### How to verify
 
@@ -101,15 +105,15 @@ verification steps below; the two highest-risk spots to check first are flagged.
    — `result` should contain the regression coefficients.
 5. Repeat steps 1–3 on an actual iPad in Safari, early.
 
-> **Highest-risk things to check first** (both stem from the strict sandbox):
-> 1. **Blob-module import inside a sandboxed (opaque-origin) iframe.** The plugin
->    sandbox loads your module via `import(blob:…)`. This is the standard
->    technique and works in current Chrome/Firefox/Safari, but if a plugin fails
->    to load with "Failed to fetch dynamically imported module", this is why —
->    the fallback is a `data:`-URL import or a bundling step. (`plugin-host.html`)
-> 2. **`normalizeResult()`** in the frequencies plugin defensively flattens
->    WebR's `toJs()` list shape. If the table renders empty, inspect the raw
->    `result` and adjust there first.
+> **Remaining risk — iPad Safari.** The desktop-Chrome path is confirmed; the
+> open question is whether Safari on iPadOS handles two things the same way:
+> 1. **Blob-module import inside a sandboxed (opaque-origin) iframe**
+>    (`plugin-host.html`). Confirmed working in Chrome. If a plugin fails to load
+>    on iPad with "Failed to fetch dynamically imported module", this is why —
+>    the fallback is a `data:`-URL import or a bundling step.
+> 2. **Cross-origin isolation via the `coi-serviceworker`** path (`sw.js`). The
+>    local test used real COOP/COEP headers instead; the service-worker reload
+>    dance that GitHub Pages relies on has not been exercised on Safari yet.
 
 > **Not built yet, by design:** the data editor and file import. The point of
 > this milestone is to prove the engine and plugin contract first. A small

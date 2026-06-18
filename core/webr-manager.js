@@ -156,13 +156,24 @@ export class WebRManager {
         const env = {};
         let prelude = '';
         if (injectData) {
-          // WebR auto-converts a JS object of arrays into an R named list; we
-          // then coerce it to a data.frame. `check.names = FALSE` keeps the
-          // original variable names intact (R would otherwise mangle e.g.
-          // names with spaces). check.rows guards against ragged input.
-          env.__crosstab_cols__ = this.#getColumns(variables ? { variables } : undefined);
+          // WebR's JS→R conversion wants a named object of *plain* arrays. Our
+          // columnar store holds numeric columns as Float64Array, so convert
+          // each column to a plain array and map NaN (our numeric "missing")
+          // to null, which WebR turns into R's NA. WebR converts the resulting
+          // object to a named list; we coerce that to a data.frame, with
+          // `check.names = FALSE` so original variable names survive intact.
+          const rawCols = this.#getColumns(variables ? { variables } : undefined);
+          const cols = {};
+          for (const [name, vec] of Object.entries(rawCols)) {
+            cols[name] = Array.from(vec, (v) =>
+              typeof v === 'number' && Number.isNaN(v) ? null : v,
+            );
+          }
+          // Bind under a dot-prefixed name: valid R syntax (unlike a leading
+          // underscore) and conventionally "hidden".
+          env['.crosstab_data'] = cols;
           prelude =
-            'df <- as.data.frame(__crosstab_cols__, ' +
+            'df <- as.data.frame(.crosstab_data, ' +
             'stringsAsFactors = FALSE, check.names = FALSE)\n';
         }
 
