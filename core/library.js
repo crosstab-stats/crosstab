@@ -148,10 +148,10 @@ export class LibrarySync {
       return;
     }
     if (reason === 'restore' || !this.#binding) return;
-    if (['transform', 'append', 'undo', 'redo'].includes(reason)) {
-      // An appended file adds a new immutable source, so its bytes must be written;
-      // metadata-only edits can reuse the existing Parquet (cheap path).
-      if (reason === 'append') this.#pendingWriteSources = true;
+    if (['transform', 'append', 'join', 'undo', 'redo'].includes(reason)) {
+      // An appended/joined file adds a new immutable source, so its bytes must be
+      // written; metadata-only edits can reuse the existing Parquet (cheap path).
+      if (reason === 'append' || reason === 'join') this.#pendingWriteSources = true;
       this.#schedule();
     }
   }

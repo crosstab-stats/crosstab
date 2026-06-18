@@ -191,23 +191,39 @@ export class DataStore {
    * @param {VariableMeta[]} dataset.variables
    * @param {Object<string, Array>} [dataset.columns]
    * @param {Uint8Array} [dataset.parquet]
-   * @param {'replace'|'append'} [dataset.mode='replace']
+   * @param {'replace'|'append'|'join'} [dataset.mode='replace'] - `replace` resets
+   *   to a single base source; `append` stacks rows (UNION); `join` adds the new
+   *   dataset's columns by matching a key (LEFT JOIN onto the stacked base).
    * @param {string} [dataset.source] - Provenance label for this file's rows.
+   * @param {{left: string, right: string}} [dataset.joinKey] - For `join`: the key
+   *   column on the current data (`left`) and the incoming data (`right`).
+   * @param {Array<{base: string, incoming: string}>} [dataset.aliases] - For `join`:
+   *   manual key matches the user paired up in review (incoming value → base value),
+   *   applied on top of normalized-exact matching.
    * @returns {Promise<void>}
    */
-  async loadDataset({ variables, columns, parquet, mode = 'replace', source }) {
-    const appended = mode === 'append' && this.#sources.length > 0;
-    if (appended) {
-      const idx = this.#sources.length + 1;
-      this.#sources.push(await this.#createSource(idx, { variables, columns, parquet, source }));
-    } else {
+  async loadDataset({ variables, columns, parquet, mode = 'replace', source, joinKey, aliases }) {
+    const canCombine = this.#sources.length > 0;
+    const combine = canCombine && (mode === 'append' || mode === 'join') ? mode : 'replace';
+    if (combine === 'replace') {
       await this.#dropAll();
-      this.#sources = [await this.#createSource(1, { variables, columns, parquet, source })];
+      const s = await this.#createSource(1, { variables, columns, parquet, source });
+      s.combine = 'base';
+      this.#sources = [s];
       this.#transforms = [];
+    } else {
+      const idx = this.#sources.length + 1;
+      const s = await this.#createSource(idx, { variables, columns, parquet, source });
+      s.combine = combine;
+      if (combine === 'join') {
+        s.joinKey = joinKey;
+        s.aliases = aliases ?? [];
+      }
+      this.#sources.push(s);
     }
     // A load is a structural change; the transform redo branch no longer applies.
     this.#redoStack = [];
-    await this.rederive(appended ? 'append' : 'replace');
+    await this.rederive(combine === 'replace' ? 'replace' : combine);
   }
 
   /**
@@ -256,13 +272,22 @@ export class DataStore {
    * @returns {Promise<void>}
    */
   async rederive(reason = 'change') {
-    // 1) Metadata: merge sources (first wins on shared names), add source_file for
-    //    a pooled dataset, then replay the transform log.
+    // Sources combine two ways: `append` sources stack rows onto the base (UNION),
+    // `join` sources add columns by matching a key (LEFT JOIN). Split them so the
+    // view composes as: stacked rows first, then joined columns hung off them.
+    const stacked = this.#sources.filter((s, i) => i === 0 || s.combine !== 'join');
+    const joins = this.#sources.filter((s) => s.combine === 'join');
+    const multiStacked = stacked.length > 1;
+
+    // 1) Metadata: union the stacked sources (first wins on shared names), add
+    //    source_file for a pooled dataset, add each join source's columns (minus
+    //    its key, which dups the base key) renaming on collision, then replay the
+    //    transform log.
     const byName = new Map();
-    for (const s of this.#sources) {
+    for (const s of stacked) {
       for (const m of s.meta) if (!byName.has(m.name)) byName.set(m.name, { ...m });
     }
-    if (this.#sources.length > 1 && !byName.has(SOURCE_COL)) {
+    if (multiStacked && !byName.has(SOURCE_COL)) {
       byName.set(SOURCE_COL, {
         name: SOURCE_COL,
         label: 'Source file',
@@ -270,35 +295,61 @@ export class DataStore {
         measurementLevel: 'nominal',
       });
     }
+    const joinPlans = joins.map((s) => {
+      const cols = [];
+      for (const m of s.meta) {
+        if (m.name === s.joinKey?.right) continue; // drop the redundant right key
+        let out = m.name;
+        if (byName.has(out)) out = uniqueName(`${m.name}${s.label ? ` (${s.label})` : ' (joined)'}`, byName);
+        byName.set(out, { ...m, name: out });
+        cols.push({ orig: m.name, out });
+      }
+      return { source: s, cols };
+    });
     for (const t of this.#transforms) {
       if (t.type === 'setVariable') applyPatch(byName.get(t.name), t.patch);
     }
     this.#variables = [...byName.values()];
     this.#byName = byName;
 
-    // 2) Working view: derived from the immutable sources. Numeric-typed columns
-    //    are CAST to DOUBLE here (the only "data" effect of a transform); a pooled
-    //    dataset gets the source_file column and a UNION ALL BY NAME.
+    // 2) Working view: numeric-typed columns are CAST to DOUBLE here (the only
+    //    "data" effect of a transform); a pooled dataset gets source_file +
+    //    UNION ALL BY NAME; join sources are LEFT JOINed onto the stacked rows.
     if (this.#sources.length === 0) {
       await this.#duckdb.query(`DROP VIEW IF EXISTS ${quoteIdent(MAIN_TABLE)}`);
       this.#sqlTypes = new Map();
       this.#rowCount = 0;
     } else {
       const numeric = new Set(this.#variables.filter((m) => m.type === 'numeric').map((m) => m.name));
-      const multi = this.#sources.length > 1;
-      const selects = this.#sources.map((s, i) => {
-        const colExprs = s.meta.map((col) => {
-          const q = quoteIdent(col.name);
-          return numeric.has(col.name) ? `TRY_CAST(${q} AS DOUBLE) AS ${q}` : q;
+      const stackedSql = stacked
+        .map((s, i) => {
+          const colExprs = s.meta.map((col) => {
+            const q = quoteIdent(col.name);
+            return numeric.has(col.name) ? `TRY_CAST(${q} AS DOUBLE) AS ${q}` : q;
+          });
+          const prov = multiStacked
+            ? `, ${sqlString(s.label ?? `dataset ${i + 1}`)} AS ${quoteIdent(SOURCE_COL)}`
+            : '';
+          return `SELECT ${colExprs.join(', ')}${prov} FROM ${quoteIdent(s.table)}`;
+        })
+        .join(' UNION ALL BY NAME ');
+
+      let sql = stackedSql;
+      if (joins.length > 0) {
+        let from = `(${stackedSql}) AS R`;
+        const selectCols = ['R.*'];
+        joins.forEach((s, ji) => {
+          const alias = `J${ji + 1}`;
+          from += ` LEFT JOIN ${quoteIdent(s.table)} AS ${alias} ON ${joinConditionSql('R', alias, s)}`;
+          for (const c of joinPlans[ji].cols) {
+            const ref = `${alias}.${quoteIdent(c.orig)}`;
+            const expr = numeric.has(c.out) ? `TRY_CAST(${ref} AS DOUBLE)` : ref;
+            selectCols.push(`${expr} AS ${quoteIdent(c.out)}`);
+          }
         });
-        const prov = multi
-          ? `, ${sqlString(s.label ?? `dataset ${i + 1}`)} AS ${quoteIdent(SOURCE_COL)}`
-          : '';
-        return `SELECT ${colExprs.join(', ')}${prov} FROM ${quoteIdent(s.table)}`;
-      });
-      await this.#duckdb.query(
-        `CREATE OR REPLACE VIEW ${quoteIdent(MAIN_TABLE)} AS ${selects.join(' UNION ALL BY NAME ')}`,
-      );
+        sql = `SELECT ${selectCols.join(', ')} FROM ${from}`;
+      }
+      await this.#duckdb.query(`CREATE OR REPLACE VIEW ${quoteIdent(MAIN_TABLE)} AS ${sql}`);
       await this.#refreshSqlTypes();
       const c = await this.#duckdb.query(`SELECT count(*) AS n FROM ${quoteIdent(MAIN_TABLE)}`);
       this.#rowCount = Number(c.get(0).n);
@@ -399,7 +450,15 @@ export class DataStore {
   async exportState({ includeParquet = true } = {}) {
     const sources = [];
     for (const s of this.#sources) {
-      const entry = { meta: s.meta.map((m) => ({ ...m })), label: s.label };
+      const entry = {
+        meta: s.meta.map((m) => ({ ...m })),
+        label: s.label,
+        combine: s.combine ?? 'base',
+      };
+      if (s.combine === 'join') {
+        entry.joinKey = s.joinKey;
+        entry.aliases = s.aliases ?? [];
+      }
       if (includeParquet) {
         entry.parquet = await this.#duckdb.queryToParquet(`SELECT * FROM ${quoteIdent(s.table)}`);
       }
@@ -425,13 +484,17 @@ export class DataStore {
     this.#sources = [];
     for (let i = 0; i < sources.length; i++) {
       const src = sources[i];
-      this.#sources.push(
-        await this.#createSource(i + 1, {
-          variables: src.meta,
-          parquet: src.parquet,
-          source: src.label,
-        }),
-      );
+      const s = await this.#createSource(i + 1, {
+        variables: src.meta,
+        parquet: src.parquet,
+        source: src.label,
+      });
+      s.combine = src.combine ?? (i === 0 ? 'base' : 'append');
+      if (s.combine === 'join') {
+        s.joinKey = src.joinKey;
+        s.aliases = src.aliases ?? [];
+      }
+      this.#sources.push(s);
     }
     this.#transforms = Array.isArray(transforms) ? transforms.map((t) => ({ ...t })) : [];
     this.#redoStack = [];
@@ -763,6 +826,47 @@ export class DataStore {
  */
 function sqlString(s) {
   return `'${String(s).replace(/'/g, "''")}'`;
+}
+
+/**
+ * Ensure `base` is unique against a Map/Set of taken names, appending ` 2`, ` 3`…
+ * Used when a joined source's column name collides with an existing column.
+ *
+ * @param {string} base
+ * @param {{has: (k: string) => boolean}} taken
+ * @returns {string}
+ */
+function uniqueName(base, taken) {
+  if (!taken.has(base)) return base;
+  let i = 2;
+  while (taken.has(`${base} ${i}`)) i++;
+  return `${base} ${i}`;
+}
+
+/**
+ * Build the ON condition for a LEFT JOIN of a join source. Both keys are
+ * normalised (cast to text, lower-cased, trimmed) so case/whitespace differences
+ * don't block a match; manual `aliases` remap specific incoming key values to the
+ * base value *before* normalisation (the user's review-step pairings).
+ *
+ * @param {string} left - The stacked-rows alias (e.g. `R`).
+ * @param {string} right - The join-source alias (e.g. `J1`).
+ * @param {{joinKey: {left: string, right: string}, aliases?: Array<{base: string, incoming: string}>}} s
+ * @returns {string}
+ */
+function joinConditionSql(left, right, s) {
+  const leftRaw = `CAST(${left}.${quoteIdent(s.joinKey.left)} AS VARCHAR)`;
+  const rightRaw = `CAST(${right}.${quoteIdent(s.joinKey.right)} AS VARCHAR)`;
+  let rightExpr = rightRaw;
+  const aliases = s.aliases ?? [];
+  if (aliases.length) {
+    const whens = aliases
+      .map((a) => `WHEN ${sqlString(String(a.incoming))} THEN ${sqlString(String(a.base))}`)
+      .join(' ');
+    rightExpr = `CASE ${rightRaw} ${whens} ELSE ${rightRaw} END`;
+  }
+  const norm = (e) => `lower(trim(${e}))`;
+  return `${norm(leftRaw)} = ${norm(rightExpr)}`;
 }
 
 /**

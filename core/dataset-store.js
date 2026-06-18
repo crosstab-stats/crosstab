@@ -95,12 +95,18 @@ export class DatasetStore {
 
     const sources = [];
     for (let i = 0; i < state.sources.length; i++) {
+      const s = state.sources[i];
       const file = `source_${i + 1}.parquet`;
       if (writeSources) {
-        if (!state.sources[i].parquet) throw new Error(`save: source ${i + 1} has no parquet bytes`);
-        await this.#write(dir, file, state.sources[i].parquet);
+        if (!s.parquet) throw new Error(`save: source ${i + 1} has no parquet bytes`);
+        await this.#write(dir, file, s.parquet);
       }
-      sources.push({ meta: state.sources[i].meta, label: state.sources[i].label ?? null, file });
+      const entry = { meta: s.meta, label: s.label ?? null, file, combine: s.combine ?? 'base' };
+      if (s.combine === 'join') {
+        entry.joinKey = s.joinKey;
+        entry.aliases = s.aliases ?? [];
+      }
+      sources.push(entry);
     }
 
     const manifest = { name, savedAt, sources, transforms: state.transforms ?? [] };
@@ -135,7 +141,14 @@ export class DatasetStore {
     const sources = [];
     for (const s of manifest.sources) {
       const buf = await this.#readBytes(dir, s.file);
-      sources.push({ meta: s.meta, label: s.label ?? null, parquet: new Uint8Array(buf) });
+      sources.push({
+        meta: s.meta,
+        label: s.label ?? null,
+        combine: s.combine ?? 'base',
+        joinKey: s.joinKey,
+        aliases: s.aliases,
+        parquet: new Uint8Array(buf),
+      });
     }
     return {
       id,
