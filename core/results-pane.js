@@ -73,9 +73,12 @@ const RESULTS_STYLES = `
      it (vector stays crisp). The SVG fills the box but keeps its aspect
      (preserveAspectRatio), so off-ratio drags add whitespace rather than
      distorting the plot. Initial size ~ svglite's 7×4.5in natural ratio. */
+  /* Default to ~720px wide (min() keeps it responsive on narrow screens without
+     ballooning on wide ones), but NO max-width — so a manual drag can grow the
+     plot as large as you like (poster-size). The pane scrolls if it exceeds it. */
   .results-plot {
     resize: both; overflow: hidden; box-sizing: border-box;
-    width: 100%; max-width: 720px; height: 460px;
+    width: min(100%, 720px); height: 460px;
     border: 1px solid #e3e7eb; border-radius: 6px; padding: 4px;
   }
   .results-plot svg { width: 100%; height: 100%; max-width: none; }
