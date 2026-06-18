@@ -123,6 +123,9 @@ export async function boot(mounts) {
     const dataView = new DataView(mounts.viewData, dataStore);
     const variableView = new VariableView(mounts.viewVars, dataStore);
     wireWorkspaceTabs(bus, mounts, { dataView, variableView, results: mounts.results });
+    // Keep the grid's header checkboxes in step when selection changes elsewhere
+    // (e.g. the sidebar) — both surfaces drive the one shared selection.
+    bus.on(CoreEvents.SELECTION_CHANGED, () => dataView.syncSelection());
   }
   const clearBtn = document.getElementById('clear-output');
   if (clearBtn) clearBtn.addEventListener('click', () => results.clear());

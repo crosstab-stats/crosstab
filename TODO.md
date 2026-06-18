@@ -370,10 +370,23 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - **Variable View** — per-variable metadata table (name, label, type, measure,
     value-label summary, missing codes). The consolidated picture for recode
     decisions (you can see GSS's `-99`/value-labels here).
+  - **Column selection + filter (built).** Each column header carries a checkbox
+    tied to the shared variable selection, and a toolbar filter narrows the
+    visible columns by name/label (rides the existing column virtualisation). The
+    selection is one source of truth across grid headers ↔ sidebar ↔ pickers, so:
+    **`selectVariables` now floats already-selected variables into a "Selected"
+    group at the top, pre-checked** (`core/ui-service.js`) — tick columns in the
+    grid, open a single-round analysis, glance, OK. Single-select (radio) pickers
+    only pre-check when exactly one is selected; with several, they're surfaced on
+    top but left for the user to choose. No plugin changes; two-round plugins are
+    unaffected (the dialog always shows). Verified end to end in Chrome: grid-tick
+    age+income → Descriptives picker pre-checked both → ran with no manual ticking;
+    filter, toggle, and grid↔sidebar sync all confirmed.
   - Tabs auto-focus: analyses → Output, finished import → Data.
   - *Still to do:* editing cells (the **Data editor**, needs the transform API);
     a raw-codes vs value-labels toggle; column sort/resize and per-column width
-    (fixed 120px today).
+    (fixed 120px today). Possibly retire the sidebar variable list now that grid
+    headers carry selection (under consideration).
 - [ ] **Data editor.** The current `VariablesSidebar` in `core/app.js` is a
       minimal stand-in. Becomes the editing layer over the data-grid view above.
 - [~] **Source-immutability + transform log — BUILT** (`core/data-store.js`).

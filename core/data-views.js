@@ -26,32 +26,73 @@ const COL_BUF = 3; // columns rendered left/right of the viewport.
  * display as their value labels (raw code on hover).
  */
 export class DataView {
-  /** @param {HTMLElement} host - The scroll container. @param {import('./data-store.js').DataStore} store */
+  /** @param {HTMLElement} host - The view panel. @param {import('./data-store.js').DataStore} store */
   constructor(host, store) {
     this.host = host;
     this.store = store;
     this.metas = [];
+    this.filter = ''; // column-header filter text
     this.token = 0; // guards against stale async windows
     this.raf = null;
-    this.lastKey = null; // `${startRow}:${startCol}` of the rendered block
+    this.lastKey = null; // `${startRow}:${startCol}:${filter}` of the rendered block
 
+    // The panel becomes a flex column: a fixed toolbar (column filter + selection
+    // count) above a scrolling grid area. The scroll/virtualisation math reads
+    // the inner scroller, not the host.
+    host.style.display = 'flex';
+    host.style.flexDirection = 'column';
+    host.style.overflow = 'hidden';
+
+    this.toolbar = document.createElement('div');
+    this.toolbar.className = 'grid-toolbar';
+    this.filterInput = document.createElement('input');
+    this.filterInput.type = 'search';
+    this.filterInput.className = 'grid-filter';
+    this.filterInput.placeholder = 'Filter columns…';
+    this.filterInput.addEventListener('input', () => {
+      this.filter = this.filterInput.value;
+      this.#applyFilter();
+    });
+    this.selCount = document.createElement('span');
+    this.selCount.className = 'grid-selcount';
+    this.toolbar.append(this.filterInput, this.selCount);
+
+    this.scroller = document.createElement('div');
+    this.scroller.className = 'grid-scroll';
     this.table = document.createElement('table');
     this.table.className = 'grid';
     this.thead = document.createElement('thead');
     this.tbody = document.createElement('tbody');
     this.table.append(this.thead, this.tbody);
-    this.host.replaceChildren(this.table);
-    this.host.addEventListener('scroll', () => this.#onScroll());
+    this.scroller.append(this.table);
+
+    this.host.replaceChildren(this.toolbar, this.scroller);
+    this.scroller.addEventListener('scroll', () => this.#onScroll());
   }
 
   /** Rebuild from scratch (call on data change or first show). */
   async refresh() {
     this.metas = this.store.getVariableMeta();
-    this.host.scrollTop = 0;
-    this.host.scrollLeft = 0;
+    this.scroller.scrollTop = 0;
+    this.scroller.scrollLeft = 0;
     this.lastKey = null;
-    // Size the table to the full virtual extent so both scrollbars span all data.
-    this.table.style.width = `${GUT_W + this.metas.length * COL_W}px`;
+    await this.#render(true);
+    this.#updateSelCount();
+  }
+
+  /** Columns to display, after applying the column-header filter. */
+  #visibleMetas() {
+    const q = this.filter.trim().toLowerCase();
+    if (!q) return this.metas;
+    return this.metas.filter(
+      (m) => m.name.toLowerCase().includes(q) || (m.label || '').toLowerCase().includes(q),
+    );
+  }
+
+  /** Re-render after the filter changes (column set changed → reset H-scroll). */
+  async #applyFilter() {
+    this.scroller.scrollLeft = 0;
+    this.lastKey = null;
     await this.#render(true);
   }
 
@@ -65,28 +106,39 @@ export class DataView {
 
   async #render(force) {
     const total = this.store.rowCount;
-    const nCols = this.metas.length;
+    const cols = this.#visibleMetas();
+    const nCols = cols.length;
+    // Size the table to the (filtered) virtual extent so both scrollbars are right.
+    this.table.style.width = nCols === 0 ? 'auto' : `${GUT_W + nCols * COL_W}px`;
+
     if (total === 0 || nCols === 0) {
       this.thead.replaceChildren();
       this.tbody.replaceChildren();
+      // Distinguish "no data" from "filter matched nothing".
+      if (nCols === 0 && this.metas.length > 0) {
+        const td = el('td', 'No columns match the filter.');
+        td.style.cssText = 'width:auto;max-width:none;color:#7a8590;';
+        this.tbody.append(elWrap('tr', td));
+      }
       return;
     }
 
-    const viewH = this.host.clientHeight || 400;
-    const viewW = this.host.clientWidth || 600;
-    const startRow = Math.max(0, Math.floor(this.host.scrollTop / ROW_H) - ROW_BUF);
+    const viewH = this.scroller.clientHeight || 400;
+    const viewW = this.scroller.clientWidth || 600;
+    const startRow = Math.max(0, Math.floor(this.scroller.scrollTop / ROW_H) - ROW_BUF);
     const visRows = Math.ceil(viewH / ROW_H) + ROW_BUF * 2;
     const endRow = Math.min(total, startRow + visRows);
-    const startCol = Math.max(0, Math.floor(this.host.scrollLeft / COL_W) - COL_BUF);
+    const startCol = Math.max(0, Math.floor(this.scroller.scrollLeft / COL_W) - COL_BUF);
     const visCols = Math.ceil(viewW / COL_W) + COL_BUF * 2;
     const endCol = Math.min(nCols, startCol + visCols);
 
     // Skip if the visible block hasn't moved (cheap small scrolls within buffer).
-    const key = `${startRow}:${startCol}`;
+    // The filter is part of the key so a filter change always re-renders.
+    const key = `${startRow}:${startCol}:${this.filter}`;
     if (!force && key === this.lastKey) return;
     this.lastKey = key;
 
-    const winMetas = this.metas.slice(startCol, endCol);
+    const winMetas = cols.slice(startCol, endCol);
     const token = ++this.token;
     const rows = await this.store.getRows({
       offset: startRow,
@@ -97,16 +149,14 @@ export class DataView {
 
     const leftW = startCol * COL_W;
     const rightW = (nCols - endCol) * COL_W;
+    const selected = new Set(this.store.getSelectedVariables());
 
-    // Header: corner + left spacer + visible column headers + right spacer.
+    // Header: corner + left spacer + visible column headers + right spacer. Each
+    // header carries a checkbox tied to the variable selection.
     const htr = document.createElement('tr');
     htr.append(el('th', '', 'corner'));
     if (leftW > 0) htr.append(hspacer('th', leftW));
-    for (const m of winMetas) {
-      const th = el('th', m.label || m.name);
-      th.title = `${m.name} · ${m.type}${m.measurementLevel ? ` · ${m.measurementLevel}` : ''}`;
-      htr.append(th);
-    }
+    for (const m of winMetas) htr.append(this.#headerCell(m, selected.has(m.name)));
     if (rightW > 0) htr.append(hspacer('th', rightW));
     this.thead.replaceChildren(htr);
 
@@ -118,6 +168,51 @@ export class DataView {
     const tail = total - endRow;
     if (tail > 0) frag.append(vspacerRow(tail * ROW_H, span));
     this.tbody.replaceChildren(frag);
+  }
+
+  /** A column header with a selection checkbox tied to the variable selection. */
+  #headerCell(m, isSelected) {
+    const th = document.createElement('th');
+    th.title = `${m.name} · ${m.type}${m.measurementLevel ? ` · ${m.measurementLevel}` : ''}`;
+    const wrap = document.createElement('label');
+    wrap.className = 'colhead';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'colhead__check';
+    cb.checked = isSelected;
+    cb.dataset.var = m.name;
+    cb.addEventListener('change', () => this.#toggle(m.name, cb.checked));
+    const span = el('span', m.label || m.name, 'colhead__label');
+    wrap.append(cb, span);
+    th.append(wrap);
+    return th;
+  }
+
+  /** Add/remove a variable from the shared selection (drives pickers + sidebar). */
+  #toggle(name, on) {
+    const sel = new Set(this.store.getSelectedVariables());
+    if (on) sel.add(name);
+    else sel.delete(name);
+    this.store.setSelectedVariables([...sel]);
+    this.#updateSelCount();
+  }
+
+  /**
+   * Re-sync rendered header checkboxes + the count to the store's selection.
+   * Called when the selection changes elsewhere (e.g. the sidebar). Cheap — only
+   * touches the currently-rendered headers, no refetch.
+   */
+  syncSelection() {
+    const sel = new Set(this.store.getSelectedVariables());
+    for (const cb of this.thead.querySelectorAll('.colhead__check')) {
+      cb.checked = sel.has(cb.dataset.var);
+    }
+    this.#updateSelCount();
+  }
+
+  #updateSelCount() {
+    const n = this.store.getSelectedVariables().length;
+    this.selCount.textContent = n ? `${n} selected` : '';
   }
 
   #rowEl(num, row, winMetas, leftW, rightW) {

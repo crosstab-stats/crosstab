@@ -62,6 +62,32 @@ export class UiService {
     const checked = new Set(preselect ?? this.#store.getSelectedVariables());
     const inputType = multiple ? 'checkbox' : 'radio';
 
+    // Float the already-selected variables (e.g. ticked in the data grid or the
+    // sidebar) into a "Selected" group at the top — pre-checked — so the common
+    // case is a glance-and-OK, with the full list still below for adjustments.
+    // For a single-select picker (radios) we only pre-check when exactly one is
+    // selected; with several selected we still surface them on top but let the
+    // user pick which one (several pre-checked radios can't coexist).
+    const selected = meta.filter((m) => checked.has(m.name));
+    const rest = meta.filter((m) => !checked.has(m.name));
+    const autoCheck = multiple || selected.length === 1;
+
+    const item = (m, inSelected) => `
+      <li>
+        <label>
+          <input type="${inputType}" name="var" value="${attr(m.name)}"
+                 ${inSelected && autoCheck ? 'checked' : ''}>
+          <span>${esc(m.label ?? m.name)}</span>
+          <code>${esc(m.name)}</code>
+        </label>
+      </li>`;
+    const groupLabel = (text) => `<li class="ct-dialog__group">${esc(text)}</li>`;
+    const listHtml = selected.length
+      ? groupLabel('Selected') +
+        selected.map((m) => item(m, true)).join('') +
+        (rest.length ? groupLabel('All variables') + rest.map((m) => item(m, false)).join('') : '')
+      : meta.map((m) => item(m, false)).join('');
+
     return new Promise((resolve) => {
       const dialog = document.createElement('dialog');
       dialog.className = 'ct-dialog';
@@ -69,21 +95,7 @@ export class UiService {
         <form method="dialog" class="ct-dialog__form">
           <h2 class="ct-dialog__title">${esc(title)}</h2>
           ${hint ? `<p class="ct-dialog__hint">${esc(hint)}</p>` : ''}
-          <ul class="ct-dialog__vars">
-            ${meta
-              .map(
-                (m) => `
-              <li>
-                <label>
-                  <input type="${inputType}" name="var" value="${attr(m.name)}"
-                         ${checked.has(m.name) ? 'checked' : ''}>
-                  <span>${esc(m.label ?? m.name)}</span>
-                  <code>${esc(m.name)}</code>
-                </label>
-              </li>`,
-              )
-              .join('')}
-          </ul>
+          <ul class="ct-dialog__vars">${listHtml}</ul>
           <menu class="ct-dialog__buttons">
             <button value="cancel" type="submit">Cancel</button>
             <button value="ok" type="submit" class="ct-dialog__primary">${esc(okLabel)}</button>
