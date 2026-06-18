@@ -500,8 +500,22 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       Model Summary + Coefficients; factor IVs dummy-coded; honours missingValues.
       *R/stats verified; two-dialog UI click-through NOT auto-confirmed* (harness
       can't drive sequential modal dialogs — see testing note). **Needs a manual
-      click-through check.** Logistic regression still TODO (add as a method option
-      once `app.ui.showForm` exists).
+      click-through check.**
+- [~] **Binary logistic regression** (`plugins/builtin-logistic/`) — `glm()`
+      binomial; outcome recoded 0/1 (models the higher category, named in the
+      caption); SPSS-style Model Summary (&minus;2LL, Cox & Snell / Nagelkerke R²)
+      + "Variables in the Equation" (B, S.E., Wald=z², df, Sig., Exp(B)); factor
+      predictors dummy-coded; honours missingValues. *R/stats verified directly*
+      (gender~age+income on the demo: B/z/p, &minus;2LL=31.348, Cox & Snell=.289,
+      Nagelkerke=.386, Wald all hand-checked); **two-dialog UI click-through needs
+      a manual check** (same harness limitation as Linear).
+- [x] **Bivariate correlation** (`plugins/builtin-correlation/`) — Pearson matrix
+      (r / Sig. (2-tailed) / N per pair), pairwise-complete, significance stars;
+      honours missingValues. *R verified directly* (r(age,income)=.558, p=.0014,
+      N=30; matrix flattening + NA-blanking checked). Single-dialog, but live
+      render auto-capture was blocked by the same harness flakiness during this
+      session (the proven Descriptives plugin failed to render the same way) —
+      worth a manual eyeball.
 - [ ] Plots (histograms, scatter, box) — exercises `app.results.appendPlot` + SVG.
       Note: needs R→SVG (e.g. an `svg()` device or `svglite`) since `appendPlot`
       takes an SVG string; that path isn't proven yet.
