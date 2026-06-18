@@ -12,11 +12,18 @@
  */
 
 const ROW_H = 28; // px; must match the CSS cell height for scrollbar accuracy.
+const COL_W = 120; // px; fixed column width so columns can be virtualised too.
+const GUT_W = 56; // px; the sticky row-number gutter.
+const ROW_BUF = 8; // rows rendered above/below the viewport.
+const COL_BUF = 3; // columns rendered left/right of the viewport.
 
 /**
- * Virtualised cell grid (rows = cases, columns = variables). Renders only the
- * rows in (and just around) the viewport, fetching each window from DuckDB via
- * {@link DataStore#getRows}. Factor codes display as their value labels.
+ * Virtualised cell grid (rows = cases, columns = variables), windowed in **both**
+ * dimensions: only the rows *and* columns near the viewport are in the DOM, and
+ * each scroll fetches just that block from DuckDB via {@link DataStore#getRows}.
+ * This keeps a wide dataset (e.g. GSS's ~980 variables) smooth — without column
+ * windowing a single screen would be tens of thousands of cells. Factor codes
+ * display as their value labels (raw code on hover).
  */
 export class DataView {
   /** @param {HTMLElement} host - The scroll container. @param {import('./data-store.js').DataStore} store */
@@ -26,6 +33,7 @@ export class DataView {
     this.metas = [];
     this.token = 0; // guards against stale async windows
     this.raf = null;
+    this.lastKey = null; // `${startRow}:${startCol}` of the rendered block
 
     this.table = document.createElement('table');
     this.table.className = 'grid';
@@ -36,66 +44,87 @@ export class DataView {
     this.host.addEventListener('scroll', () => this.#onScroll());
   }
 
-  /** Rebuild header + first window (call on data change or first show). */
+  /** Rebuild from scratch (call on data change or first show). */
   async refresh() {
     this.metas = this.store.getVariableMeta();
-    this.#renderHeader();
     this.host.scrollTop = 0;
-    await this.#renderWindow();
-  }
-
-  #renderHeader() {
-    const tr = document.createElement('tr');
-    tr.append(el('th', '', 'corner'));
-    for (const m of this.metas) {
-      const th = el('th', m.label || m.name);
-      th.title = `${m.name} · ${m.type}${m.measurementLevel ? ` · ${m.measurementLevel}` : ''}`;
-      tr.append(th);
-    }
-    this.thead.replaceChildren(tr);
+    this.host.scrollLeft = 0;
+    this.lastKey = null;
+    // Size the table to the full virtual extent so both scrollbars span all data.
+    this.table.style.width = `${GUT_W + this.metas.length * COL_W}px`;
+    await this.#render(true);
   }
 
   #onScroll() {
     if (this.raf) return;
     this.raf = requestAnimationFrame(() => {
       this.raf = null;
-      this.#renderWindow();
+      this.#render(false);
     });
   }
 
-  async #renderWindow() {
+  async #render(force) {
     const total = this.store.rowCount;
-    if (total === 0 || this.metas.length === 0) {
-      this.tbody.replaceChildren(spacerRow(0, 1)); // empty
+    const nCols = this.metas.length;
+    if (total === 0 || nCols === 0) {
+      this.thead.replaceChildren();
+      this.tbody.replaceChildren();
       return;
     }
-    const buffer = 10;
-    const viewH = this.host.clientHeight || 400;
-    const start = Math.max(0, Math.floor(this.host.scrollTop / ROW_H) - buffer);
-    const visible = Math.ceil(viewH / ROW_H) + buffer * 2;
-    const limit = Math.min(visible, total - start);
 
+    const viewH = this.host.clientHeight || 400;
+    const viewW = this.host.clientWidth || 600;
+    const startRow = Math.max(0, Math.floor(this.host.scrollTop / ROW_H) - ROW_BUF);
+    const visRows = Math.ceil(viewH / ROW_H) + ROW_BUF * 2;
+    const endRow = Math.min(total, startRow + visRows);
+    const startCol = Math.max(0, Math.floor(this.host.scrollLeft / COL_W) - COL_BUF);
+    const visCols = Math.ceil(viewW / COL_W) + COL_BUF * 2;
+    const endCol = Math.min(nCols, startCol + visCols);
+
+    // Skip if the visible block hasn't moved (cheap small scrolls within buffer).
+    const key = `${startRow}:${startCol}`;
+    if (!force && key === this.lastKey) return;
+    this.lastKey = key;
+
+    const winMetas = this.metas.slice(startCol, endCol);
     const token = ++this.token;
     const rows = await this.store.getRows({
-      offset: start,
-      limit,
-      variables: this.metas.map((m) => m.name),
+      offset: startRow,
+      limit: endRow - startRow,
+      variables: winMetas.map((m) => m.name),
     });
     if (token !== this.token) return; // a newer scroll superseded this fetch
 
-    const cols = this.metas.length + 1;
+    const leftW = startCol * COL_W;
+    const rightW = (nCols - endCol) * COL_W;
+
+    // Header: corner + left spacer + visible column headers + right spacer.
+    const htr = document.createElement('tr');
+    htr.append(el('th', '', 'corner'));
+    if (leftW > 0) htr.append(hspacer('th', leftW));
+    for (const m of winMetas) {
+      const th = el('th', m.label || m.name);
+      th.title = `${m.name} · ${m.type}${m.measurementLevel ? ` · ${m.measurementLevel}` : ''}`;
+      htr.append(th);
+    }
+    if (rightW > 0) htr.append(hspacer('th', rightW));
+    this.thead.replaceChildren(htr);
+
+    // Body: top spacer row + visible rows + bottom spacer row.
+    const span = winMetas.length + 1 + (leftW > 0 ? 1 : 0) + (rightW > 0 ? 1 : 0);
     const frag = document.createDocumentFragment();
-    frag.append(spacerRow(start * ROW_H, cols));
-    rows.forEach((row, i) => frag.append(this.#rowEl(start + i + 1, row)));
-    const tail = total - (start + rows.length);
-    if (tail > 0) frag.append(spacerRow(tail * ROW_H, cols));
+    if (startRow > 0) frag.append(vspacerRow(startRow * ROW_H, span));
+    rows.forEach((row, i) => frag.append(this.#rowEl(startRow + i + 1, row, winMetas, leftW, rightW)));
+    const tail = total - endRow;
+    if (tail > 0) frag.append(vspacerRow(tail * ROW_H, span));
     this.tbody.replaceChildren(frag);
   }
 
-  #rowEl(num, row) {
+  #rowEl(num, row, winMetas, leftW, rightW) {
     const tr = document.createElement('tr');
     tr.append(el('td', String(num), 'rownum'));
-    for (const m of this.metas) {
+    if (leftW > 0) tr.append(hspacer('td', leftW));
+    for (const m of winMetas) {
       const v = row[m.name];
       let td;
       if (v === null || v === undefined) {
@@ -108,6 +137,7 @@ export class DataView {
       }
       tr.append(td);
     }
+    if (rightW > 0) tr.append(hspacer('td', rightW));
     return tr;
   }
 }
@@ -177,16 +207,25 @@ function elCode(tag, text) {
   return e;
 }
 
-/** A zero-content row of a given pixel height — the virtualisation spacer. */
-function spacerRow(heightPx, colspan) {
+/** A zero-content row of a given pixel height — the vertical (row) spacer. */
+function vspacerRow(heightPx, colspan) {
   const tr = document.createElement('tr');
   const td = document.createElement('td');
   td.colSpan = colspan;
+  td.className = 'spacer';
   td.style.height = `${Math.max(0, heightPx)}px`;
-  td.style.padding = '0';
-  td.style.border = 'none';
   tr.append(td);
   return tr;
+}
+
+/** A zero-content cell of a given pixel width — the horizontal (column) spacer
+ * that holds the place of the off-screen columns so the scroll extent is right. */
+function hspacer(tag, widthPx) {
+  const cell = document.createElement(tag);
+  cell.className = 'spacer';
+  cell.style.width = `${Math.max(0, widthPx)}px`;
+  cell.style.minWidth = `${Math.max(0, widthPx)}px`;
+  return cell;
 }
 
 /** Compact "1=Male; 2=Female" summary (truncated) for the Variable View. */

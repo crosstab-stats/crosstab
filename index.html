@@ -91,7 +91,9 @@
       .sidebar__var-name { font: 12px ui-monospace, Menlo, monospace; color: #7a8590; }
 
       /* workspace: tabbed main area (Data / Variables / Output) */
-      .workspace { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+      /* min-width:0 so this flex item clips its wide grid instead of expanding to
+         the table's full width (which would defeat column virtualisation). */
+      .workspace { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
       .tabs {
         display: flex; gap: 2px; background: var(--panel);
         border-bottom: 1px solid var(--line); padding: 0 8px; flex: none;
@@ -108,24 +110,29 @@
         padding: 4px 10px; cursor: pointer; color: #5a6470;
       }
       .tab-action:hover { background: #eef5fb; color: #1a1a1a; }
-      .view { flex: 1; overflow: auto; min-height: 0; }
+      .view { flex: 1; overflow: auto; min-height: 0; min-width: 0; }
       .view[hidden] { display: none; }
       .results { background: var(--bg); }
 
-      /* data grid (Data View) — virtualised */
+      /* data grid (Data View) — 2-D virtualised, fixed column widths */
       .grid { border-collapse: collapse; font: 13px/1 system-ui, sans-serif; }
       .grid th, .grid td {
         border: 1px solid var(--line); padding: 5px 8px; height: 28px;
-        box-sizing: border-box; white-space: nowrap; text-align: left;
+        width: 120px; max-width: 120px; box-sizing: border-box;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left;
       }
       .grid thead th { position: sticky; top: 0; z-index: 1; background: var(--panel); font-weight: 600; }
       .grid td.num { text-align: right; font-variant-numeric: tabular-nums; }
       .grid .rownum, .grid th.corner {
-        position: sticky; left: 0; background: var(--panel); color: #7a8590;
+        position: sticky; left: 0; z-index: 1; width: 56px; max-width: 56px;
+        background: var(--panel); color: #7a8590;
         text-align: right; font-variant-numeric: tabular-nums;
       }
-      .grid th.corner { z-index: 2; }
+      .grid th.corner { z-index: 3; }
+      .grid thead th.rownum, .grid th.corner { z-index: 3; }
       .grid td.na { color: #c0c6cc; }
+      /* virtualisation spacers: no border/padding; size set inline */
+      .grid td.spacer { padding: 0; border: none; overflow: hidden; }
       .grid-empty { padding: 16px; color: #7a8590; }
 
       /* variable view — metadata table */
