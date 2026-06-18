@@ -196,7 +196,8 @@ export class DataStore {
    * @returns {Promise<void>}
    */
   async loadDataset({ variables, columns, parquet, mode = 'replace', source }) {
-    if (mode === 'append' && this.#sources.length > 0) {
+    const appended = mode === 'append' && this.#sources.length > 0;
+    if (appended) {
       const idx = this.#sources.length + 1;
       this.#sources.push(await this.#createSource(idx, { variables, columns, parquet, source }));
     } else {
@@ -206,7 +207,7 @@ export class DataStore {
     }
     // A load is a structural change; the transform redo branch no longer applies.
     this.#redoStack = [];
-    await this.rederive();
+    await this.rederive(appended ? 'append' : 'replace');
   }
 
   /**
@@ -248,9 +249,13 @@ export class DataStore {
    * Then emit {@link CoreEvents.DATA_CHANGED}. This is the single place the
    * "source + log → derived" projection happens.
    *
+   * @param {string} [reason='change'] - What prompted the re-derivation
+   *   (`'replace'`/`'append'`/`'transform'`/`'undo'`/`'redo'`/`'restore'`). Passed
+   *   through on the DATA_CHANGED event so the library sync can decide whether to
+   *   autosave, unbind, or ignore.
    * @returns {Promise<void>}
    */
-  async rederive() {
+  async rederive(reason = 'change') {
     // 1) Metadata: merge sources (first wins on shared names), add source_file for
     //    a pooled dataset, then replay the transform log.
     const byName = new Map();
@@ -300,7 +305,7 @@ export class DataStore {
     }
 
     this.#selected = this.#selected.filter((n) => this.#byName.has(n));
-    this.#bus.emit(CoreEvents.DATA_CHANGED, this.#snapshotSummary());
+    this.#bus.emit(CoreEvents.DATA_CHANGED, this.#snapshotSummary(reason));
   }
 
   /**
@@ -343,7 +348,7 @@ export class DataStore {
     // edit discards any redo branch (standard undo/redo semantics).
     this.#transforms.push({ type: 'setVariable', name, patch });
     this.#redoStack = [];
-    await this.rederive();
+    await this.rederive('transform');
   }
 
   /**
@@ -370,7 +375,7 @@ export class DataStore {
   async undo() {
     if (this.#transforms.length === 0) return;
     this.#redoStack.push(this.#transforms.pop());
-    await this.rederive();
+    await this.rederive('undo');
   }
 
   /** Re-apply the most recently undone transform and re-derive. No-op if there is
@@ -378,7 +383,59 @@ export class DataStore {
   async redo() {
     if (this.#redoStack.length === 0) return;
     this.#transforms.push(this.#redoStack.pop());
-    await this.rederive();
+    await this.rederive('redo');
+  }
+
+  /**
+   * Serialise the full reproducible state for the dataset library: every
+   * immutable source (metadata + label, and its Parquet bytes unless
+   * `includeParquet` is false) plus the transform log. With `includeParquet:false`
+   * this is the cheap path for a metadata-only autosave (no source bytes fetched).
+   *
+   * @param {Object} [opts]
+   * @param {boolean} [opts.includeParquet=true]
+   * @returns {Promise<import('./dataset-store.js').DatasetState>}
+   */
+  async exportState({ includeParquet = true } = {}) {
+    const sources = [];
+    for (const s of this.#sources) {
+      const entry = { meta: s.meta.map((m) => ({ ...m })), label: s.label };
+      if (includeParquet) {
+        entry.parquet = await this.#duckdb.queryToParquet(`SELECT * FROM ${quoteIdent(s.table)}`);
+      }
+      sources.push(entry);
+    }
+    return {
+      sources,
+      transforms: this.getTransforms(),
+      rowCount: this.#rowCount,
+      varCount: this.#variables.length,
+    };
+  }
+
+  /**
+   * Replace the live dataset with a saved state from the library: recreate each
+   * immutable source from its Parquet, restore the transform log, and re-derive.
+   *
+   * @param {import('./dataset-store.js').DatasetState} state
+   * @returns {Promise<void>}
+   */
+  async restoreState({ sources, transforms }) {
+    await this.#dropAll();
+    this.#sources = [];
+    for (let i = 0; i < sources.length; i++) {
+      const src = sources[i];
+      this.#sources.push(
+        await this.#createSource(i + 1, {
+          variables: src.meta,
+          parquet: src.parquet,
+          source: src.label,
+        }),
+      );
+    }
+    this.#transforms = Array.isArray(transforms) ? transforms.map((t) => ({ ...t })) : [];
+    this.#redoStack = [];
+    await this.rederive('restore');
   }
 
   /**
@@ -676,11 +733,13 @@ export class DataStore {
 
   /**
    * Lightweight description of the dataset, emitted with DATA_CHANGED so
-   * listeners can update without pulling the whole frame.
-   * @returns {{rowCount: number, variables: string[]}}
+   * listeners can update without pulling the whole frame. `reason` lets the
+   * library sync distinguish a persistable edit from a replace/restore.
+   * @param {string} [reason]
+   * @returns {{rowCount: number, variables: string[], reason?: string}}
    */
-  #snapshotSummary() {
-    return { rowCount: this.#rowCount, variables: this.#variables.map((v) => v.name) };
+  #snapshotSummary(reason) {
+    return { rowCount: this.#rowCount, variables: this.#variables.map((v) => v.name), reason };
   }
 }
 

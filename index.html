@@ -180,6 +180,25 @@
         border-top: 1px solid var(--line); background: var(--panel);
         padding: 6px 12px; font-size: 12px; color: #5a6470;
       }
+      .lib-status { margin-left: 16px; color: #7a8590; }
+
+      /* dataset library modal: one row per saved entry */
+      .ct-lib__list { max-height: 50vh; }
+      .ct-lib__row {
+        display: flex; align-items: center; gap: 12px;
+        padding: 8px; border-radius: 6px;
+      }
+      .ct-lib__row:hover { background: #f0f3f6; }
+      .ct-lib__info { flex: 1; min-width: 0; }
+      .ct-lib__name { font-weight: 600; }
+      .ct-lib__meta { font-size: 12px; color: #7a8590; }
+      .ct-lib__actions { display: flex; gap: 6px; flex: none; }
+      .ct-lib__actions button {
+        font: inherit; font-size: 13px; padding: 5px 12px;
+        border: 1px solid var(--line); border-radius: 6px; background: #fff; cursor: pointer;
+      }
+      .ct-lib__delete { color: #b03030; }
+      .ct-lib__delete:hover { background: #fbeaea; }
 
       /* --- analysis dialogs (rendered by plugins) --- */
       .ct-dialog {

@@ -18,6 +18,8 @@ import { MenuShell } from './menu-shell.js';
 import { UiService } from './ui-service.js';
 import { ImportService } from './import-service.js';
 import { ExportService } from './export-service.js';
+import { DatasetStore } from './dataset-store.js';
+import { LibrarySync } from './library.js';
 import { DataView, VariableView } from './data-views.js';
 import { PluginLoader } from './loader.js';
 import { makeDemoDataset } from './demo-data.js';
@@ -92,6 +94,7 @@ export async function boot(mounts) {
   const ui = new UiService(dataStore);
   const importers = new ImportService({ menus, data: dataStore, results: results.api, bus });
   const exporters = new ExportService({ menus, data: dataStore, results: results.api, bus });
+  const datasetStore = new DatasetStore();
 
   // The service bundle the plugin broker dispatches against. `data`/`results`/
   // `menus`/`ui` expose only their published `api` slices, never the full class
@@ -148,6 +151,23 @@ export async function boot(mounts) {
     command: () => void dataStore.redo(),
   });
 
+  // Dataset library (OPFS): File ▸ Save/Open, with autosave once a session is
+  // bound to a saved entry. A small footer span shows the save status.
+  const libStatus = document.createElement('span');
+  libStatus.id = 'lib-status';
+  libStatus.className = 'lib-status';
+  mounts.status.parentElement?.append(libStatus);
+  const library = new LibrarySync({
+    datasetStore,
+    data: dataStore,
+    ui,
+    menus,
+    bus,
+    results: results.api,
+    statusEl: libStatus,
+  });
+  library.activate();
+
   // --- seed data + warm up the runtimes, in parallel -------------------------
   // The two WASM runtimes are independent, so load them concurrently rather than
   // serially: `setDataset` cold-starts DuckDB; `webr.preload()` cold-starts R.
@@ -169,7 +189,7 @@ export async function boot(mounts) {
     }
   }
 
-  const engine = { bus, dataStore, duckdb, webr, results, menus, importers, exporters, loader, services };
+  const engine = { bus, dataStore, duckdb, webr, results, menus, importers, exporters, datasetStore, library, loader, services };
   // Expose for manual poking in the console during early development.
   // eslint-disable-next-line no-undef
   globalThis.crosstab = engine;

@@ -441,37 +441,38 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     candidate missing codes. Also: only the Frequencies plugin honours
     `missingValues` today — future analyses must too (or centralise it at
     injection).
-- [ ] **`app.ui.showForm`** — a general declarative form dialog. Only
-      `selectVariables`/`selectFromList` exist today (`core/ui-service.js`); add
-      this when a second analysis needs options beyond variable choice.
-- [ ] **Dataset library (save / catalog / one-click reload).** Researchers
-      revisit data constantly; importing GSS via haven is slow (minutes), so the
-      big win is **caching the post-import result** — reload should never re-parse.
-  - **Storage: OPFS, not a real directory.** The File System Access "point at a
-    folder" idea isn't on Safari/iPad (our target). **OPFS works on iPad Safari +
-    Chrome**, is persistent, and handles large files — *verified in-browser:*
-    round-trips fine, ~10 GB quota, but `navigator.storage.persisted()` is
-    `false` by default (call `navigator.storage.persist()` on first save to avoid
-    eviction). Keep "export/import to real disk" via File System Access as a
-    *secondary* feature on browsers that support it (portability/sharing/backup).
-  - **Format:** per dataset, write `<id>.parquet` (DuckDB `queryToParquet`, exists)
-    + `<id>.meta.json` (the `VariableMeta` Parquet can't carry) + one
-    `catalog.json` index (`{id, name, description, rowCount, varCount, source,
-    savedAt}`). Reload = read Parquet → `replaceTableFromParquet` (exists) +
-    restore metadata. Caches *past* the slow haven parse → reload is ~instant.
-  - **Architecture:** OPFS is origin-scoped, so a sandboxed plugin gets its *own*
-    OPFS, not the host's — persistence MUST be an **engine capability** exposed
-    like `app.importers`/`app.ui` (e.g. `app.datasets.save/list/load/delete`). The
-    "library" is then a **catalog-UI plugin** driving that primitive — on-pattern.
-  - **Shape likely hinges on decisions not yet made** (why this is deferred):
-    - *Single vs. multi-dataset model.* App holds one DuckDB table today, so
-      "load" = *switch* the active dataset. If we later support multiple loaded
-      datasets / joins, the library's model changes.
-    - *What a "saved dataset" includes.* Just data+metadata, or also recodes/
-      transforms (needs the recode API) and saved analyses? Leans on the
-      transform/recode surface and any analysis-history feature.
-    - *Multi-file/append* entries (a library item that is several GSS years).
-    - Supersedes the old "dataset persistence (IndexedDB)" line — OPFS is better.
+- [x] **`app.ui.showForm`** — a general declarative form dialog (text/password/
+      number fields). Built (`core/ui-service.js`) for the FRED importer; also used
+      by the dataset library's name prompt.
+- [x] **Dataset library (save / catalog / one-click reload).** *Built* —
+      `core/dataset-store.js` (OPFS) + `core/library.js` (binding, autosave, browse
+      modal, File-menu items) + `DataStore.exportState`/`restoreState`. Caches the
+      post-import result so reload never re-parses.
+  - **Storage: OPFS** under `datasets/` — `catalog.json` index + one folder per
+    entry (`manifest.json` + `source_N.parquet`). `navigator.storage.persist()` is
+    called on first save (avoids eviction). Export to real disk via File System
+    Access remains a possible *secondary* feature later (portability/backup).
+  - **Saved entry = the whole reproducible stack** (decision: "save everything,
+    sources immutable"): each immutable source as Parquet + the transform log +
+    metadata. Reload reconstructs sources + log → derived view, so **undo and
+    provenance survive a round-trip**, and a pooled multi-file dataset saves
+    naturally (N sources). *Not* saved: analysis output (regenerable).
+  - **Living-document autosave.** Saving **binds** the session to the entry;
+    thereafter any transform-log change (edit/undo/redo/append) schedules a
+    debounced save — never "unsaved work" after the first save. Cheap because
+    sources are immutable: a metadata edit rewrites only `manifest.json` + catalog
+    (`writeSources:false`), not the Parquet. Import-`replace` **unbinds** (new
+    project); `restore` doesn't autosave (already saved). Footer shows
+    saved✓/saving…. "Save as copy…" forks a named entry.
+  - **Single active dataset; load = replace the current one.** True multi-dataset
+    (several loaded at once) waits on the join feature.
+  - **Verified end to end in Chrome:** save→bind→edit→debounced autosave (catalog
+    timestamp advances); **survives a full page reload** — Open library → load
+    restored data *and* the transform log (an autosaved relabel persisted); browse
+    modal lists entries w/ rows·vars·date; replace→unbind; delete; Parquet data
+    integrity (age/income/gender values intact). Host UI, not a plugin (OPFS is
+    origin-scoped); `app.datasets` plugin API can come later. Supersedes the old
+    IndexedDB persistence idea.
 - [ ] **Export results / output (PDF default).** Save the Output pane (tables,
       future plots, notes) to a shareable file — PDF as the sensible default for a
       write-up artifact. *Approach is a real decision, hence listed not assumed:*

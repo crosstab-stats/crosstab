@@ -1,0 +1,206 @@
+/**
+ * @file dataset-store.js
+ * Persistent dataset library, backed by the **Origin Private File System** (OPFS).
+ *
+ * Re-importing data (especially via `haven`) is slow; the library caches the
+ * *post-import* result so reload is near-instant. OPFS is the right backing
+ * store: it's persistent, large (~10 GB quota), and — unlike the File System
+ * Access "pick a folder" API — works on iPad Safari as well as Chrome, which is
+ * our target. It is also **origin-scoped**, so a sandboxed plugin gets its *own*
+ * OPFS, never the host's — which is exactly why persistence has to live here, in
+ * the engine, rather than in a plugin.
+ *
+ * ## What a saved entry contains (the "save everything" model)
+ * Because sources are immutable and edits are a replayable transform log, a saved
+ * entry stores the **whole reproducible stack**, not a flattened snapshot:
+ *
+ *   datasets/
+ *     catalog.json                 — the browse index (one summary per entry)
+ *     <id>/
+ *       manifest.json              — { name, savedAt, sources:[{meta,label,file}], transforms, … }
+ *       source_1.parquet           — each immutable source, verbatim
+ *       source_2.parquet
+ *       …
+ *
+ * Reload reconstructs sources + log → the derived view, so undo and provenance
+ * survive a round-trip, and a pooled multi-file dataset saves naturally (N
+ * sources). The big Parquet files are written once; metadata-only edits rewrite
+ * just `manifest.json` + the catalog (see `writeSources:false`), which is what
+ * makes autosave-on-every-edit cheap.
+ */
+
+/** Subdirectory of OPFS that holds the library. */
+const ROOT = 'datasets';
+const CATALOG = 'catalog.json';
+
+/**
+ * @typedef {Object} SourceState
+ * @property {import('./data-store.js').VariableMeta[]} meta - The source's as-imported metadata.
+ * @property {string|null} label - Provenance label (e.g. a file basename).
+ * @property {Uint8Array} [parquet] - The source's data (omitted on a sidecar-only save).
+ */
+
+/**
+ * @typedef {Object} DatasetState
+ * @property {SourceState[]} sources
+ * @property {Array<object>} transforms - The transform log.
+ * @property {number} [rowCount]
+ * @property {number} [varCount]
+ */
+
+/**
+ * @typedef {Object} CatalogEntry
+ * @property {string} id
+ * @property {string} name
+ * @property {number} savedAt - epoch ms
+ * @property {number} rowCount
+ * @property {number} varCount
+ * @property {number} sourceCount
+ */
+
+export class DatasetStore {
+  /** @returns {Promise<boolean>} Whether OPFS is available in this browser. */
+  get available() {
+    return typeof navigator !== 'undefined' && !!navigator.storage?.getDirectory;
+  }
+
+  /** The browse index, newest first. @returns {Promise<CatalogEntry[]>} */
+  async list() {
+    const cat = await this.#readCatalog();
+    return cat.entries.slice().sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+  }
+
+  /**
+   * Create or overwrite an entry. With `writeSources:false` the source Parquet
+   * files are left untouched (the cheap autosave path) and only `manifest.json`
+   * + the catalog are rewritten — valid only when the entry already exists with
+   * its sources on disk.
+   *
+   * @param {{id?: string, name: string, savedAt: number, state: DatasetState}} entry
+   * @param {{writeSources?: boolean}} [opts]
+   * @returns {Promise<string>} The entry id (newly minted if none was given).
+   */
+  async save({ id, name, savedAt, state }, { writeSources = true } = {}) {
+    // Ask the browser to keep this data (OPFS is evictable by default).
+    if (navigator.storage?.persist) {
+      try {
+        await navigator.storage.persist();
+      } catch {
+        /* best effort */
+      }
+    }
+    const root = await this.#root(true);
+    id = id || crypto.randomUUID();
+    const dir = await root.getDirectoryHandle(id, { create: true });
+
+    const sources = [];
+    for (let i = 0; i < state.sources.length; i++) {
+      const file = `source_${i + 1}.parquet`;
+      if (writeSources) {
+        if (!state.sources[i].parquet) throw new Error(`save: source ${i + 1} has no parquet bytes`);
+        await this.#write(dir, file, state.sources[i].parquet);
+      }
+      sources.push({ meta: state.sources[i].meta, label: state.sources[i].label ?? null, file });
+    }
+
+    const manifest = { name, savedAt, sources, transforms: state.transforms ?? [] };
+    await this.#write(dir, 'manifest.json', JSON.stringify(manifest));
+
+    const cat = await this.#readCatalog();
+    const summary = {
+      id,
+      name,
+      savedAt,
+      rowCount: state.rowCount ?? 0,
+      varCount: state.varCount ?? 0,
+      sourceCount: state.sources.length,
+    };
+    const idx = cat.entries.findIndex((e) => e.id === id);
+    if (idx >= 0) cat.entries[idx] = summary;
+    else cat.entries.push(summary);
+    await this.#write(await this.#root(true), CATALOG, JSON.stringify(cat));
+
+    return id;
+  }
+
+  /**
+   * Load an entry, reading its manifest and every source Parquet.
+   * @param {string} id
+   * @returns {Promise<{id: string, name: string, savedAt: number, state: DatasetState}>}
+   */
+  async load(id) {
+    const root = await this.#root();
+    const dir = await root.getDirectoryHandle(id);
+    const manifest = JSON.parse(await this.#read(dir, 'manifest.json'));
+    const sources = [];
+    for (const s of manifest.sources) {
+      const buf = await this.#readBytes(dir, s.file);
+      sources.push({ meta: s.meta, label: s.label ?? null, parquet: new Uint8Array(buf) });
+    }
+    return {
+      id,
+      name: manifest.name,
+      savedAt: manifest.savedAt,
+      state: { sources, transforms: manifest.transforms ?? [] },
+    };
+  }
+
+  /**
+   * Delete an entry (its folder) and drop it from the catalog.
+   * @param {string} id
+   */
+  async delete(id) {
+    const root = await this.#root(true);
+    try {
+      await root.removeEntry(id, { recursive: true });
+    } catch {
+      /* already gone */
+    }
+    const cat = await this.#readCatalog();
+    cat.entries = cat.entries.filter((e) => e.id !== id);
+    await this.#write(root, CATALOG, JSON.stringify(cat));
+  }
+
+  // --- internals -------------------------------------------------------------
+
+  /** @returns {Promise<FileSystemDirectoryHandle>} the library root dir. */
+  async #root(create = false) {
+    const opfs = await navigator.storage.getDirectory();
+    return opfs.getDirectoryHandle(ROOT, { create });
+  }
+
+  /** @returns {Promise<{entries: CatalogEntry[]}>} the catalog, or an empty one. */
+  async #readCatalog() {
+    try {
+      const root = await this.#root();
+      const txt = await this.#read(root, CATALOG);
+      const parsed = JSON.parse(txt);
+      return Array.isArray(parsed.entries) ? parsed : { entries: [] };
+    } catch {
+      return { entries: [] };
+    }
+  }
+
+  /** Write a string or bytes to `name` in `dir`, replacing any existing file. */
+  async #write(dir, name, data) {
+    const fh = await dir.getFileHandle(name, { create: true });
+    const w = await fh.createWritable();
+    try {
+      await w.write(data);
+    } finally {
+      await w.close();
+    }
+  }
+
+  /** Read `name` in `dir` as text. */
+  async #read(dir, name) {
+    const fh = await dir.getFileHandle(name);
+    return (await fh.getFile()).text();
+  }
+
+  /** Read `name` in `dir` as an ArrayBuffer. */
+  async #readBytes(dir, name) {
+    const fh = await dir.getFileHandle(name);
+    return (await fh.getFile()).arrayBuffer();
+  }
+}
