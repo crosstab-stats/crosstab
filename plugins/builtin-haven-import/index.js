@@ -43,6 +43,15 @@ const READERS = {
 const IN_PATH = '/tmp/ct_haven_in';
 const OUT_PATH = '/tmp/ct_haven_out.parquet';
 
+/**
+ * Practical upper bound for staging a file into WebR's filesystem. WebR's
+ * `FS.writeFile` throws ("Invalid array length") above ~128 MB — a channel limit
+ * well below the 4 GB wasm memory ceiling. We reject earlier with a clear message
+ * rather than surface that opaque error. (The full GSS cumulative is GB-scale and
+ * also exceeds the R-memory ceiling regardless; use an extract.)
+ */
+const MAX_BYTES = 128 * 1024 * 1024;
+
 /** @param {object} app */
 export async function activate(app) {
   await app.importers.register({
@@ -69,6 +78,15 @@ async function importHaven(app, ticket, name, bytes) {
     const reader = READERS[ext];
     if (!reader) throw new Error(`unsupported extension "${ext}"`);
 
+    if (bytes.byteLength > MAX_BYTES) {
+      const mb = Math.round(bytes.byteLength / (1024 * 1024));
+      throw new Error(
+        `file is ${mb} MB; in-browser import currently handles up to ~128 MB ` +
+          `(WebR filesystem limit). Use a smaller extract — e.g. fewer variables ` +
+          `or years from the GSS Data Explorer.`,
+      );
+    }
+
     // haven (+ helpers) installed lazily; the first import pays the download.
     await app.webr.installPackages(['haven', 'nanoparquet', 'jsonlite']);
 
@@ -84,7 +102,7 @@ async function importHaven(app, ticket, name, bytes) {
     await app.importers.deliver(ticket, { variables, parquet });
   } catch (err) {
     await app.results.appendError(`Import of "${name}" failed: ${err.message}`);
-    await app.importers.deliver(ticket, { variables: [] }); // settle the ticket
+    await app.importers.deliver(ticket, null); // settle the ticket; abort (don't clobber)
   }
 }
 

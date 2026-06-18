@@ -156,8 +156,12 @@ export class ImportService {
       const bytes = await file.arrayBuffer();
       spec.parse({ ticket, name: file.name, bytes });
       const dataset = await done;
-      if (!dataset || !Array.isArray(dataset.variables)) {
-        throw new Error('importer returned no dataset');
+      // An importer signals failure/abort by delivering null or an empty
+      // variable list. Do NOT commit in that case — clobbering the loaded
+      // dataset with an empty one on a failed import is the wrong behaviour. The
+      // importer is responsible for reporting the specific error.
+      if (!dataset || !Array.isArray(dataset.variables) || dataset.variables.length === 0) {
+        return;
       }
       await this.#data.loadDataset(dataset);
       this.#bus.emit('import:finished', {

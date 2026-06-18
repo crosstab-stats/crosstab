@@ -58,9 +58,9 @@ async function importCsv(app, ticket, name, bytes) {
     await app.importers.deliver(ticket, dataset);
   } catch (err) {
     await app.results.appendError(`CSV parse failed: ${err.message}`);
-    // Deliver an empty dataset so the engine's pending import settles rather
-    // than hanging; it validates `variables` and will no-op a header-less file.
-    await app.importers.deliver(ticket, { variables: [], columns: {} });
+    // Settle the ticket but abort: delivering null tells the engine not to
+    // clobber the loaded dataset with a failed/empty import.
+    await app.importers.deliver(ticket, null);
   }
 }
 

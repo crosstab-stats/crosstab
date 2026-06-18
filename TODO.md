@@ -199,17 +199,25 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
           separate `.sas7bcat` catalog (`read_sas(data, catalog_file)`) — not yet
           wired; `na_range` (range-style SPSS missing) not yet captured, only
           discrete `na_values`.
-    - [ ] **Large-file ceiling (the haven-in-WebR path).** WebR is wasm32 with a
-          hard ~4 GB address space. The full GSS 1972–2024 cumulative (~72k ×
-          ~6,700 vars: `.sav` 3.8 GB, `.sas7bdat` 2.4 GB, `.dta` 597 MB) cannot
-          be read by haven in-browser — R materialises the whole frame (~3.9 GB of
-          doubles) and OOMs before our Parquet bridge. Typical GSS *extracts* are
-          fine; the cumulative is not. Options to lift the ceiling later:
-          (a) compile **ReadStat** (the C lib haven wraps) to wasm standalone and
-          stream rows → Parquet/DuckDB without R holding the frame — removes the R
-          memory bottleneck; (b) variable-subset *at* import (hard with haven,
-          which reads all columns first); (c) chunked reads. The DuckDB side can
-          likely hold the data; the R read is the wall.
+    - [ ] **Large-file ceilings (the haven-in-WebR path).** Two distinct limits,
+          both hit by the full GSS 1972–2024 cumulative (`.sav` 3.8 GB,
+          `.sas7bdat` 2.4 GB, `.dta` 597 MB):
+      - **WebR `FS.writeFile` ~128 MB (the *first* wall, measured).** Staging the
+        uploaded bytes into WebR's filesystem throws "Invalid array length" above
+        ~128–160 MB — a channel limit far below the memory ceiling. So even the
+        597 MB `.dta` dies before R runs. The haven importer now **pre-checks
+        size** and fails with a clear message (and a failed import no longer
+        clobbers the loaded dataset — that was a bug). To lift: chunked FS writes
+        (write N chunks + concatenate in R via `file()` connections), or a
+        different WebR channel/mount.
+      - **WebR ~4 GB wasm address space (the *second* wall).** Even past the FS
+        limit, haven materialises the whole frame in R (~3.9 GB of doubles for the
+        cumulative) and OOMs before our Parquet bridge. The real lift here:
+        compile **ReadStat** (the C lib haven wraps) to wasm standalone and stream
+        rows → Parquet/DuckDB without R holding the frame; or variable-subset at
+        import (hard with haven, which reads all columns first). The DuckDB side
+        can likely hold the data; the R read is the wall.
+      - Typical GSS *extracts* (well under 128 MB) import fine today.
   - [ ] **Excel** via SheetJS later, if wanted (also a plugin).
   - *Note:* the Parquet return path (`DataStore.loadDataset` +
     `DuckDBManager.replaceTableFromParquet`) is built and unit-exercised by the
