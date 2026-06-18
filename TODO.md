@@ -210,13 +210,20 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         clobbers the loaded dataset — that was a bug). To lift: chunked FS writes
         (write N chunks + concatenate in R via `file()` connections), or a
         different WebR channel/mount.
-      - **WebR ~4 GB wasm address space (the *second* wall).** Even past the FS
-        limit, haven materialises the whole frame in R (~3.9 GB of doubles for the
-        cumulative) and OOMs before our Parquet bridge. The real lift here:
-        compile **ReadStat** (the C lib haven wraps) to wasm standalone and stream
-        rows → Parquet/DuckDB without R holding the frame; or variable-subset at
-        import (hard with haven, which reads all columns first). The DuckDB side
-        can likely hold the data; the R read is the wall.
+      - **WebR ~4 GB wasm address space (the *second* wall).** Confirmed empirically:
+        `R.version$platform` = `wasm32-unknown-emscripten`, `.Machine$sizeof.pointer`
+        = 4 — WebR is a **wasm32** build, so a single linear memory caps at ~4 GiB.
+        Even past the FS limit, haven materialises the whole frame in R (~3.9 GB of
+        doubles for the cumulative) and OOMs before our Parquet bridge.
+        *Note on wasm64:* the WebAssembly **Memory64** proposal lifts the 4 GiB cap
+        and Chrome ships it, but WebR isn't compiled for it (would require rebuilding
+        the whole package repo + Fortran toolchain for Memory64, costs perf, and
+        regresses Safari/iPad) — and it wouldn't even help here, since the ~128 MB
+        FS channel limit and JS ArrayBuffer limits sit earlier in the path. So don't
+        wait on wasm64. The real lift: compile **ReadStat** (the C lib haven wraps)
+        to wasm standalone and **stream** rows → Parquet/DuckDB without R holding the
+        frame — sidesteps the 4 GiB ceiling entirely. (Or variable-subset at import,
+        which haven makes hard since it reads all columns first.)
       - Typical GSS *extracts* (well under 128 MB) import fine today.
   - [ ] **Excel** via SheetJS later, if wanted (also a plugin).
   - *Note:* the Parquet return path (`DataStore.loadDataset` +
