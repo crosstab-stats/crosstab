@@ -58,17 +58,20 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       fetches and parses tabular data (e.g. HTML `<table>`s) into a new dataset
       for analysis, with an option to save the parsed data locally as CSV (or
       another suitable format) for archival.
-  - **Approach is an open decision, not a given.** The original idea named Python
-    + BeautifulSoup, but CrossTab runs entirely client-side (vanilla JS + WebR):
-    there is no Python runtime, and the browser can't fetch arbitrary
-    cross-origin URLs (CORS). Two sub-decisions:
-    - *How to fetch:* a small serverless proxy (e.g. Cloudflare Worker/Function)
-      that does the cross-origin GET — and could also run BeautifulSoup if we
-      want a Python parse step server-side — **or** a no-server fallback where
-      the user pastes page HTML / uploads a saved page.
-    - *How to parse:* client-side via the browser's `DOMParser` table extraction,
-      or R's `rvest`/`xml2` inside WebR, or (if we add the proxy) BeautifulSoup
-      server-side. Pick based on the fetch decision.
+  - **Approach is an open decision, not a given.** Two independent sub-decisions:
+    - *How to fetch (the real blocker):* the browser can't GET arbitrary
+      cross-origin URLs (CORS) — and this is true even inside a WASM runtime,
+      since Pyodide/WebR fetch through the browser too. So: a small serverless
+      proxy (e.g. Cloudflare Worker/Function) that does the cross-origin GET,
+      **or** a no-server fallback where the user pastes page HTML / uploads a
+      saved page. This choice touches the "purely static, no backend" positioning.
+    - *How to parse:* Python + BeautifulSoup IS viable client-side via **Pyodide**
+      (CPython-in-WASM; bs4 is pure Python, installable with `micropip`) — but
+      that pulls in a *second* large WASM runtime on top of WebR. Lighter
+      alternatives that add zero new runtime: the browser's native `DOMParser`
+      table extraction, or R's `rvest`/`xml2` inside the WebR we already load.
+      (Server-side bs4 is also an option if we add the proxy above.) Choose
+      deliberately — bs4/Pyodide is the heaviest of these, not the default.
   - Reuses the same ingest path as file import (`DataStore.setDataset`); the
     "save as CSV" archival option overlaps with CSV export work.
 - [ ] **Data editor.** The current `VariablesSidebar` in `core/app.js` is a
