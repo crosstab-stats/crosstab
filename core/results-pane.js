@@ -69,6 +69,16 @@ const RESULTS_STYLES = `
   /* Plots: scale to the pane width but cap so they don't balloon on a wide
      screen; height tracks the viewBox aspect ratio. */
   svg { width: 100%; max-width: 720px; height: auto; display: block; }
+  /* A plot is wrapped in a user-resizable box: drag the lower-right grip to size
+     it (vector stays crisp). The SVG fills the box but keeps its aspect
+     (preserveAspectRatio), so off-ratio drags add whitespace rather than
+     distorting the plot. Initial size ~ svglite's 7×4.5in natural ratio. */
+  .results-plot {
+    resize: both; overflow: hidden; box-sizing: border-box;
+    width: 100%; max-width: 720px; height: 460px;
+    border: 1px solid #e3e7eb; border-radius: 6px; padding: 4px;
+  }
+  .results-plot svg { width: 100%; height: 100%; max-width: none; }
   .results-empty { color: #888; font-style: italic; }
 `;
 
@@ -145,6 +155,9 @@ export class ResultsPane {
    */
   appendPlot(svgString) {
     const block = this.#makeBlock();
+    // Resizable wrapper: a lower-right grab handle lets the user scale the plot
+    // (vector → stays crisp). See `.results-plot` styles.
+    block.classList.add('results-plot');
     block.innerHTML = sanitizeHtml(svgString);
     this.#place(block);
   }
