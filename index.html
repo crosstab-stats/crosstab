@@ -134,21 +134,33 @@
       .colhead__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
       /* data grid (Data View) — 2-D virtualised, fixed column widths */
-      .grid { border-collapse: collapse; font: 13px/1 system-ui, sans-serif; }
+      /* border-collapse:SEPARATE (not collapse): with collapse, a sticky header's
+         borders are shared with the first row, so the seam bleeds (data peeking
+         through) and the header's bottom edge gets clipped. Separate borders move
+         with each cell, so the sticky header stays opaque. Cells carry only
+         right+bottom borders to avoid doubled 2px lines; outer top/left edges are
+         added to the header / first column. */
+      .grid { border-collapse: separate; border-spacing: 0; font: 13px/1 system-ui, sans-serif; }
       .grid th, .grid td {
-        border: 1px solid var(--line); padding: 5px 8px; height: 28px;
+        border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
+        padding: 5px 8px; height: 28px;
         width: 120px; max-width: 120px; box-sizing: border-box;
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left;
       }
-      .grid thead th { position: sticky; top: 0; z-index: 1; background: var(--panel); font-weight: 600; }
+      /* Header above body (z2 > data z0); sits over the row-number column too. The
+         top border gives the grid its top edge (cells only carry bottom borders). */
+      .grid thead th {
+        position: sticky; top: 0; z-index: 2; background: var(--panel); font-weight: 600;
+        border-top: 1px solid var(--line);
+      }
       .grid td.num { text-align: right; font-variant-numeric: tabular-nums; }
       .grid .rownum, .grid th.corner {
         position: sticky; left: 0; z-index: 1; width: 56px; max-width: 56px;
-        background: var(--panel); color: #7a8590;
+        background: var(--panel); color: #7a8590; border-left: 1px solid var(--line);
         text-align: right; font-variant-numeric: tabular-nums;
       }
-      .grid th.corner { z-index: 3; }
-      .grid thead th.rownum, .grid th.corner { z-index: 3; }
+      /* The top-left corner must beat both the sticky header and the sticky gutter. */
+      .grid thead th.corner { z-index: 3; }
       .grid td.na { color: #c0c6cc; }
       /* virtualisation spacers: no border/padding; size set inline */
       .grid td.spacer { padding: 0; border: none; overflow: hidden; }
