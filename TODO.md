@@ -546,3 +546,12 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       per variable (`plugins/builtin-frequencies/index.js`).
 - [ ] Settings persistence (localStorage). (Dataset persistence is now its own
       item — see **Dataset library** under Deferred features; OPFS, not IndexedDB.)
+- [ ] **Variable-picker polish (later).** The "Selected" group is a snapshot taken
+      when the dialog opens — ticking a box inside the dialog deliberately does
+      *not* live-reorder it to the top (reordering rows under the cursor causes
+      mis-clicks). Possible later refinements, none urgent: a live "N selected"
+      count in the dialog; a "selected only" filter inside the picker (mirroring
+      the grid's column filter) for very long lists; and an optional
+      **picker→selection write-back** so confirming a picker updates the shared
+      selection (today the picker's choice returns to the plugin but doesn't
+      change the grid/sidebar selection — a real design call, left as-is for now).
