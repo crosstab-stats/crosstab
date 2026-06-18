@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CrossTab spike — full data-type coverage across the bridge</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 1.5rem; max-width: 80rem; }
+    h1 { font-size: 1.2rem; margin: 0 0 .25rem; }
+    p.sub { margin: 0 0 1rem; opacity: .75; }
+    button { font: inherit; padding: .5rem 1rem; border-radius: 8px; cursor: pointer; }
+    button[disabled] { opacity: .5; cursor: progress; }
+    #log {
+      white-space: pre-wrap; font: 12px/1.5 ui-monospace, monospace;
+      background: #0001; border: 1px solid #8883; border-radius: 8px;
+      padding: 1rem; min-height: 20rem; max-height: 80vh; overflow: auto;
+    }
+    .ok { color: #1a7f37; } .bad { color: #cf222e; }
+    .warn { color: #9a6700; } .head { font-weight: 700; } .dim { opacity: .65; }
+  </style>
+</head>
+<body>
+  <h1>Full data-type coverage — DuckDB-WASM ↔ WebR</h1>
+  <p class="sub">
+    Last bridge spike before building for real: confirm every column type a real
+    dataset can contain survives both bridges — int64 (beyond JS safe-integer),
+    boolean, DATE, TIMESTAMP, ±Inf/NaN doubles, DECIMAL, and beyond-BMP unicode —
+    with NULLs throughout. Surfaces the temporal + int64 traps now, not later.
+  </p>
+  <p>
+    <button id="run">Run type-coverage spike</button>
+    <button id="clear">Clear log</button>
+  </p>
+  <div id="log" aria-live="polite"></div>
+
+  <script type="module">
+    const DUCKDB_ESM = 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm';
+    const WEBR_ESM   = 'https://webr.r-wasm.org/latest/webr.mjs';
+
+    const logEl = document.getElementById('log');
+    const runBtn = document.getElementById('run');
+    function log(m, c='') { const s=document.createElement('span'); if(c)s.className=c; s.textContent=m+'\n'; logEl.appendChild(s); logEl.scrollTop=logEl.scrollHeight; console.log(m); }
+    const head=(m)=>log('\n'+m,'head'), ok=(m)=>log('  ✓ '+m,'ok'), bad=(m)=>log('  ✗ '+m,'bad'), warn=(m)=>log('  ! '+m,'warn'), info=(m)=>log('  · '+m,'dim');
+    document.getElementById('clear').onclick=()=>{logEl.textContent='';};
+
+    let pass=0, fail=0;
+    function expect(label, got, exp) {
+      const good = String(got) === String(exp);
+      if (good) { pass++; ok(`${label} = ${JSON.stringify(got)}`); }
+      else { fail++; bad(`${label}: got ${JSON.stringify(got)}, expected ${JSON.stringify(exp)}`); }
+    }
+
+    // Expected text values kept as page constants so emoji/unicode are compared
+    // in-page (avoids round-tripping them through the tool channel).
+    const EXP_TXT1 = '👋🏽 hello';      // base emoji + skin-tone modifier (beyond BMP)
+    const EXP_TXT4_NCHAR_MIN = 1000;    // repeat('x',1000)
+
+    // One row per interesting case; row 3 is all-NULL.
+    // big_id row1/2 are ±(2^53 + 1) — NOT representable as a JS/double integer.
+    const BUILD_SQL = `
+      CREATE TABLE types AS SELECT * FROM (VALUES
+        (1,  9007199254740993::BIGINT, true,  DATE '2024-02-29', TIMESTAMP '2024-02-29 13:45:30', 'Infinity'::DOUBLE,  '${EXP_TXT1}'::VARCHAR,       12345.67::DECIMAL(9,2)),
+        (2, -9007199254740993::BIGINT, false, DATE '2000-01-01', TIMESTAMP '2000-01-01 00:00:00', '-Infinity'::DOUBLE, 'short'::VARCHAR,            0.01::DECIMAL(9,2)),
+        (3, NULL,                      NULL,  NULL,              NULL,                              NULL,               NULL,                        NULL),
+        (4, 42::BIGINT,                true,  DATE '1969-12-31', TIMESTAMP '1969-12-31 23:59:59', 'NaN'::DOUBLE,       repeat('x',1000)::VARCHAR,   999999.99::DECIMAL(9,2))
+      ) AS t(id, big_id, flag, d, ts, dbl, txt, dec)`;
+
+    function parseKV(s){ const m={}; for(const l of s.split('\n')){const i=l.indexOf('=');if(i>0)m[l.slice(0,i)]=l.slice(i+1);} return m; }
+    async function runR(webR, code, env){ const sh=await new webR.Shelter(); try{ const cap=await sh.captureR(code, env?{env}:undefined); return cap.output.filter(o=>o.type==='stdout').map(o=>o.data).join('\n'); } finally{ await sh.purge(); } }
+
+    // Shared assertions over a df that holds the *strategy-converted* columns:
+    //   big_id → character (R has no native int64; IDs are identifiers, not maths)
+    //   d/ts   → Date / POSIXct (reconstructed; tz pinned to UTC)
+    // Everything else native.
+    function assertFrame(kv, b) {
+      expect(`${b} nrow`, kv.nrow, 4);
+      // int64 exact via character strategy (the headline trap)
+      expect(`${b} big_id class`, kv['class.big_id'], 'character');
+      expect(`${b} big_id[1] exact (2^53+1)`, kv['big_id1'], '9007199254740993');
+      expect(`${b} big_id[2] exact (−2^53−1)`, kv['big_id2'], '-9007199254740993');
+      expect(`${b} big_id NA`, kv['na.big_id'], 1);
+      // boolean → logical
+      expect(`${b} flag class`, kv['class.flag'], 'logical');
+      expect(`${b} flag values`, kv['flag'], 'TRUE,FALSE,NA,TRUE');
+      // DATE → Date
+      expect(`${b} d class`, kv['class.d'], 'Date');
+      expect(`${b} d[1] (leap day)`, kv['d1'], '2024-02-29');
+      expect(`${b} d[4] (pre-epoch)`, kv['d4'], '1969-12-31');
+      expect(`${b} d NA`, kv['na.d'], 1);
+      // TIMESTAMP → POSIXct (UTC)
+      expect(`${b} ts class includes POSIXct`, kv['class.ts'].includes('POSIXct'), true);
+      expect(`${b} ts[1] (UTC)`, kv['ts1'], '2024-02-29 13:45:30');
+      expect(`${b} ts[4] (pre-epoch)`, kv['ts4'], '1969-12-31 23:59:59');
+      expect(`${b} ts NA`, kv['na.ts'], 1);
+      // ±Inf / NaN doubles
+      expect(`${b} dbl infinite count`, kv['dbl.inf'], 2);
+      expect(`${b} dbl NaN count`, kv['dbl.nan'], 1);
+      expect(`${b} dbl NA count (NULL+NaN)`, kv['dbl.na'], 2);
+      // DECIMAL → double
+      expect(`${b} dec[1]`, kv['dec1'], '12345.67');
+      expect(`${b} dec[4]`, kv['dec4'], '999999.99');
+      expect(`${b} dec NA`, kv['na.dec'], 1);
+      // unicode / long string
+      expect(`${b} txt class`, kv['class.txt'], 'character');
+      expect(`${b} txt[1] unicode survives`, kv['txt1'], EXP_TXT1);
+      expect(`${b} txt[4] long-string nchar ≥ 1000`, Number(kv['txt4nchar']) >= EXP_TXT4_NCHAR_MIN, true);
+      expect(`${b} txt NA`, kv['na.txt'], 1);
+    }
+
+    // R snippet: df already in scope, big_id already character, d/ts already
+    // Date/POSIXct. Emits key=value lines.
+    const CHECK_R = `
+      emit <- function(k,v) cat(sprintf("%s=%s\\n", k, v))
+      emit("nrow", nrow(df))
+      emit("class.big_id", paste(class(df$big_id),collapse=","))
+      emit("big_id1", df$big_id[1]); emit("big_id2", df$big_id[2]); emit("na.big_id", sum(is.na(df$big_id)))
+      emit("class.flag", paste(class(df$flag),collapse=",")); emit("flag", paste(df$flag,collapse=","))
+      emit("class.d", paste(class(df$d),collapse=",")); emit("d1", format(df$d[1])); emit("d4", format(df$d[4])); emit("na.d", sum(is.na(df$d)))
+      emit("class.ts", paste(class(df$ts),collapse=","))
+      emit("ts1", format(df$ts[1], "%Y-%m-%d %H:%M:%S", tz="UTC"))
+      emit("ts4", format(df$ts[4], "%Y-%m-%d %H:%M:%S", tz="UTC")); emit("na.ts", sum(is.na(df$ts)))
+      emit("dbl.inf", sum(is.infinite(df$dbl))); emit("dbl.nan", sum(is.nan(df$dbl))); emit("dbl.na", sum(is.na(df$dbl)))
+      emit("dec1", df$dec[1]); emit("dec4", df$dec[4]); emit("na.dec", sum(is.na(df$dec)))
+      emit("class.txt", paste(class(df$txt),collapse=",")); emit("txt1", df$txt[1])
+      emit("txt4nchar", nchar(df$txt[4])); emit("na.txt", sum(is.na(df$txt)))
+    `;
+
+    runBtn.onclick = async () => {
+      runBtn.disabled = true; pass = 0; fail = 0;
+      try { await run(); } catch (e) { bad('FATAL: ' + (e?.stack || e)); }
+      finally { runBtn.disabled = false; }
+    };
+
+    async function run() {
+      head('1. Load runtimes + build the typed table');
+      const duckdb = await import(/* @vite-ignore */ DUCKDB_ESM);
+      const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
+      const wurl = URL.createObjectURL(new Blob([`importScripts("${bundle.mainWorker}");`], {type:'text/javascript'}));
+      const worker = new Worker(wurl);
+      const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(duckdb.LogLevel.ERROR), worker);
+      await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+      URL.revokeObjectURL(wurl);
+      const conn = await db.connect();
+      const { WebR } = await import(/* @vite-ignore */ WEBR_ESM);
+      const webR = new WebR(); await webR.init();
+      await conn.query(BUILD_SQL);
+      ok('DuckDB + WebR ready, typed table built');
+
+      // ---- ground-truth probe: what does nanoparquet do with NATIVE int64? ----
+      head('2. Probe — native int64 fidelity (informational)');
+      let haveNano = false;
+      try {
+        await webR.installPackages(['nanoparquet'], { quiet: true });
+        haveNano = (await webR.evalRString(`tryCatch({requireNamespace("nanoparquet",quietly=TRUE);"yes"},error=function(e)"no")`)) === 'yes';
+      } catch (e) { warn('nanoparquet install failed: ' + e); }
+      if (haveNano) {
+        await conn.query(`COPY (SELECT big_id FROM types WHERE id=1) TO 'i64.parquet' (FORMAT parquet)`);
+        await webR.FS.writeFile('/tmp/i64.parquet', await db.copyFileToBuffer('i64.parquet'));
+        const probe = await runR(webR, `d<-nanoparquet::read_parquet("/tmp/i64.parquet"); cat(sprintf("class=%s\\n", paste(class(d[[1]]),collapse=","))); cat(sprintf("val=%s\\n", format(d[[1]][1], scientific=FALSE)))`);
+        const p = parseKV(probe);
+        info(`native int64 → R class: ${p.class}, value: ${p.val} (expected 9007199254740993)`);
+        if (p.val !== '9007199254740993') warn('Native int64 LOSES precision in R → carry int64 as character/bit64. Strategy below does exactly that.');
+        else ok('Native int64 preserved exactly (bit64/integer64).');
+      }
+
+      // ---------------------------------------------------------------------
+      head('3. BRIDGE A — JS arrays (type-aware extraction)');
+      // Strategy conversions pushed into SQL: int64→VARCHAR, temporal→ISO text,
+      // decimal/double→DOUBLE. Booleans pass through natively.
+      const selA = `SELECT id,
+        CAST(big_id AS VARCHAR) AS big_id,
+        flag,
+        strftime(d, '%Y-%m-%d') AS d,
+        strftime(ts, '%Y-%m-%d %H:%M:%S') AS ts,
+        CAST(dbl AS DOUBLE) AS dbl,
+        txt,
+        CAST(dec AS DOUBLE) AS dec
+        FROM types ORDER BY id`;
+      const tblA = await conn.query(selA);
+      const STR = new Set(['big_id','d','ts','txt']);
+      const BOOL = new Set(['flag']);
+      const cols = {};
+      for (const f of tblA.schema.fields) {
+        const v = tblA.getChild(f.name), n = tblA.numRows, out = new Array(n);
+        for (let i=0;i<n;i++){ const x=v.get(i); out[i] = x==null ? null : (STR.has(f.name)?String(x):(BOOL.has(f.name)?Boolean(x):Number(x))); }
+        cols[f.name] = out;
+      }
+      // Reconstruct temporal types in R from the ISO strings (tz pinned UTC).
+      const reconA =
+        `df <- as.data.frame(.ct, stringsAsFactors=FALSE, check.names=FALSE)\n` +
+        `df$d  <- as.Date(df$d)\n` +
+        `df$ts <- as.POSIXct(df$ts, tz="UTC", format="%Y-%m-%d %H:%M:%S")\n` +
+        CHECK_R;
+      const kvA = parseKV(await runR(webR, reconA, { '.ct': cols }));
+      info(`A classes: ${Object.keys(kvA).filter(k=>k.startsWith('class.')).map(k=>k.slice(6)+':'+kvA[k]).join('  ')}`);
+      assertFrame(kvA, 'A');
+
+      // ---------------------------------------------------------------------
+      head('4. BRIDGE B — Parquet (native types; int64 as character by strategy)');
+      if (!haveNano) { warn('nanoparquet unavailable — skipping Bridge B.'); }
+      else {
+        const selB = `SELECT id, CAST(big_id AS VARCHAR) AS big_id, flag, d, ts, dbl, txt, dec FROM types ORDER BY id`;
+        await conn.query(`COPY (${selB}) TO 'types.parquet' (FORMAT parquet)`);
+        await webR.FS.writeFile('/tmp/types.parquet', await db.copyFileToBuffer('types.parquet'));
+        const reconB = `df <- as.data.frame(nanoparquet::read_parquet("/tmp/types.parquet"))\n` + CHECK_R;
+        const kvB = parseKV(await runR(webR, reconB));
+        info(`B classes: ${Object.keys(kvB).filter(k=>k.startsWith('class.')).map(k=>k.slice(6)+':'+kvB[k]).join('  ')}`);
+        assertFrame(kvB, 'B');
+      }
+
+      head('5. Verdict');
+      if (fail === 0) ok(`ALL ${pass} type-coverage checks passed.`);
+      else bad(`${fail} check(s) FAILED, ${pass} passed.`);
+      try { await conn.close(); await db.terminate(); worker.terminate(); await webR.close(); } catch {}
+    }
+  </script>
+</body>
+</html>

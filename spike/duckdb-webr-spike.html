@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CrossTab spike — DuckDB-WASM ↔ WebR bridge</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 1.5rem; max-width: 70rem; }
+    h1 { font-size: 1.2rem; margin: 0 0 .25rem; }
+    p.sub { margin: 0 0 1rem; opacity: .75; }
+    fieldset { border: 1px solid #8884; border-radius: 8px; margin-bottom: 1rem; }
+    label { display: inline-flex; gap: .4rem; align-items: center; margin-right: 1.2rem; }
+    input[type=number] { width: 8rem; }
+    button { font: inherit; padding: .5rem 1rem; border-radius: 8px; cursor: pointer; }
+    button[disabled] { opacity: .5; cursor: progress; }
+    #log {
+      white-space: pre-wrap; font: 12px/1.5 ui-monospace, monospace;
+      background: #0001; border: 1px solid #8883; border-radius: 8px;
+      padding: 1rem; min-height: 20rem; max-height: 75vh; overflow: auto;
+    }
+    .ok   { color: #1a7f37; } .bad  { color: #cf222e; }
+    .warn { color: #9a6700; } .head { font-weight: 700; }
+    .dim  { opacity: .65; }
+  </style>
+</head>
+<body>
+  <h1>DuckDB-WASM ↔ WebR bridge spike</h1>
+  <p class="sub">
+    Proves the chosen data engine before anything depends on it: load DuckDB-WASM,
+    generate a large synthetic dataset entirely in-engine, push an aggregate/sample
+    down to DuckDB, then get the reduced result into WebR and run real R on it —
+    measuring peak memory and timings throughout. Needs cross-origin isolation
+    (COOP/COEP). Throwaway; not wired into the app.
+  </p>
+
+  <fieldset>
+    <legend>Synthetic dataset</legend>
+    <label>Rows (cases) <input id="rows" type="number" value="500000" step="50000" min="1000" /></label>
+    <label>Columns (variables) <input id="cols" type="number" value="200" step="10" min="2" /></label>
+    <p class="dim" style="margin:.5rem 0 0">
+      200 × 500k doubles ≈ 800&nbsp;MB. Dial back if the runtime OOMs — finding the
+      ceiling is part of the experiment.
+    </p>
+  </fieldset>
+
+  <p>
+    <button id="run">Run full spike</button>
+    <button id="clear">Clear log</button>
+  </p>
+
+  <div id="log" aria-live="polite"></div>
+
+  <script type="module">
+    // ---- CDN modules (mirror the app's WebR-from-CDN, no-build approach) ------
+    // Pin for a release build + vendor locally; `latest`/`+esm` is fine for a spike.
+    const DUCKDB_ESM = 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm';
+    const WEBR_ESM   = 'https://webr.r-wasm.org/latest/webr.mjs';
+
+    const logEl = document.getElementById('log');
+    const runBtn = document.getElementById('run');
+
+    function log(msg, cls = '') {
+      const line = document.createElement('span');
+      if (cls) line.className = cls;
+      line.textContent = msg + '\n';
+      logEl.appendChild(line);
+      logEl.scrollTop = logEl.scrollHeight;
+      // eslint-disable-next-line no-console
+      console.log(msg);
+    }
+    const head = (m) => log('\n' + m, 'head');
+    const ok   = (m) => log('  ✓ ' + m, 'ok');
+    const bad  = (m) => log('  ✗ ' + m, 'bad');
+    const warn = (m) => log('  ! ' + m, 'warn');
+    const info = (m) => log('  · ' + m, 'dim');
+
+    const now = () => performance.now();
+    const since = (t0) => `${((now() - t0) / 1000).toFixed(2)}s`;
+    const MB = (bytes) => `${(bytes / 1048576).toFixed(1)} MB`;
+
+    // Most accurate cross-origin-isolated memory probe; falls back to the
+    // Chrome-only performance.memory heap counter.
+    async function measureMemory(labelHint) {
+      try {
+        if (typeof performance.measureUserAgentSpecificMemory === 'function') {
+          const r = await performance.measureUserAgentSpecificMemory();
+          return `${MB(r.bytes)} total (measureUserAgentSpecificMemory)`;
+        }
+      } catch (e) { /* requires isolation + may be gated */ }
+      if (performance.memory) {
+        return `${MB(performance.memory.usedJSHeapSize)} JS heap (performance.memory; excludes WASM)`;
+      }
+      return `unavailable (${labelHint})`;
+    }
+
+    document.getElementById('clear').onclick = () => { logEl.textContent = ''; };
+
+    runBtn.onclick = async () => {
+      runBtn.disabled = true;
+      try {
+        await runSpike();
+      } catch (e) {
+        bad('FATAL: ' + (e && e.stack ? e.stack : e));
+      } finally {
+        runBtn.disabled = false;
+      }
+    };
+
+    async function runSpike() {
+      const NROWS = Math.max(1000, parseInt(document.getElementById('rows').value, 10) || 0);
+      const NCOLS = Math.max(2, parseInt(document.getElementById('cols').value, 10) || 0);
+
+      head('0. Environment');
+      info(`crossOriginIsolated = ${self.crossOriginIsolated}`);
+      info(`SharedArrayBuffer   = ${typeof SharedArrayBuffer !== 'undefined'}`);
+      if (!self.crossOriginIsolated) {
+        warn('Not cross-origin isolated — DuckDB will use the slow single-thread bundle and the memory probe is limited. Serve with COOP/COEP.');
+      }
+      info(`baseline memory: ${await measureMemory('baseline')}`);
+
+      // ---------------------------------------------------------------------
+      head('1. Load DuckDB-WASM');
+      let t = now();
+      const duckdb = await import(/* @vite-ignore */ DUCKDB_ESM);
+      ok(`module imported (${since(t)})`);
+
+      t = now();
+      const bundles = duckdb.getJsDelivrBundles();
+      const bundle = await duckdb.selectBundle(bundles);
+      info(`selected bundle: ${bundle.mainModule.split('/').pop()} (${self.crossOriginIsolated ? 'threaded/COI expected' : 'single-thread'})`);
+
+      // Cross-origin worker under COEP: wrap the CDN worker in a same-origin blob.
+      const workerUrl = URL.createObjectURL(
+        new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' }),
+      );
+      const worker = new Worker(workerUrl);
+      const logger = new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING);
+      const db = new duckdb.AsyncDuckDB(logger, worker);
+      await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+      URL.revokeObjectURL(workerUrl);
+      const conn = await db.connect();
+      ok(`DuckDB instantiated + connected (${since(t)})`);
+      try {
+        const v = await conn.query('SELECT version() AS v');
+        info(`DuckDB ${v.get(0).v}`);
+      } catch { /* non-fatal */ }
+
+      // ---------------------------------------------------------------------
+      head(`2. Generate synthetic data in-engine (${NCOLS} cols × ${NROWS.toLocaleString()} rows)`);
+      // Build NCOLS-2 random doubles + one integer group key + the row id.
+      const valCols = [];
+      for (let i = 1; i <= NCOLS - 2; i++) valCols.push(`random() AS v${i}`);
+      const genSql =
+        `CREATE TABLE big AS SELECT ` +
+        `i AS id, (i % 10)::INTEGER AS grp` +
+        (valCols.length ? `, ${valCols.join(', ')}` : ``) +
+        ` FROM range(${NROWS}) t(i)`;
+      t = now();
+      try {
+        await conn.query(genSql);
+        ok(`generated (${since(t)})`);
+      } catch (e) {
+        bad(`generation failed — likely the WASM 4 GB memory ceiling. Dial rows/cols down. (${e})`);
+        await cleanup(conn, db, worker);
+        return;
+      }
+      const cnt = await conn.query('SELECT count(*) AS n FROM big');
+      info(`row count confirmed: ${Number(cnt.get(0).n).toLocaleString()}`);
+      info(`memory after load: ${await measureMemory('post-generate')}`);
+
+      // ---------------------------------------------------------------------
+      head('3. Push work down to DuckDB (the "engine does the heavy lifting" claim)');
+      t = now();
+      const agg = await conn.query(
+        `SELECT grp, count(*) AS n, avg(v1) AS mean_v1, stddev_samp(v1) AS sd_v1
+           FROM big GROUP BY grp ORDER BY grp`,
+      );
+      ok(`group-by aggregate over full table (${since(t)}) → ${agg.numRows} groups`);
+      info(`  e.g. grp ${agg.get(0).grp}: n=${Number(agg.get(0).n).toLocaleString()}, mean_v1=${agg.get(0).mean_v1.toFixed(5)}`);
+
+      // ---------------------------------------------------------------------
+      head('4. Load WebR');
+      t = now();
+      const { WebR } = await import(/* @vite-ignore */ WEBR_ESM);
+      const webR = new WebR();
+      await webR.init();
+      ok(`WebR ready (${since(t)})`);
+
+      // ---------------------------------------------------------------------
+      head('5. BRIDGE A (reliable): DuckDB → Arrow JS columns → WebR data.frame');
+      // Reduce in DuckDB to a sample we'd actually hand to R for modelling.
+      const SAMPLE_MOD = Math.max(1, Math.floor(NROWS / 5000)); // ~5k rows
+      t = now();
+      const sampleTbl = await conn.query(
+        `SELECT v1, v2, v3 FROM big WHERE (id % ${SAMPLE_MOD}) = 0`,
+      );
+      const sampleRows = sampleTbl.numRows;
+      info(`DuckDB sampled ${sampleRows.toLocaleString()} rows × 3 cols (${since(t)})`);
+
+      t = now();
+      const cols = {};
+      for (const name of ['v1', 'v2', 'v3']) {
+        // Arrow column → typed array → plain JS array (what WebR's converter wants).
+        cols[name] = Array.from(sampleTbl.getChild(name).toArray());
+      }
+      info(`extracted columns to JS arrays (${since(t)})`);
+
+      t = now();
+      const shelter = await new webR.Shelter();
+      try {
+        const cap = await shelter.captureR(
+          `df <- as.data.frame(.ct, stringsAsFactors = FALSE, check.names = FALSE)\n` +
+          `fit <- lm(v1 ~ v2 + v3, data = df)\n` +
+          `list(n = nrow(df), coefs = coef(fit))`,
+          { env: { '.ct': cols } },
+        );
+        const out = await cap.result.toJs();
+        ok(`WebR lm() over bridged data (${since(t)})`);
+        // out is an R list converted to JS; dig out values defensively.
+        const flat = JSON.stringify(out, (k, v) => (v && v.values ? v.values : v));
+        info(`R result: ${flat.slice(0, 300)}`);
+      } finally {
+        await shelter.purge();
+      }
+      ok('BRIDGE A works end to end — this is the guaranteed-viable path.');
+
+      // ---------------------------------------------------------------------
+      head('6. BRIDGE B (zero-copy probe): DuckDB → Parquet bytes → WebR FS → R');
+      info('Tests whether the ideal low-copy path is available in WebR\'s package set.');
+      let nanoparquet = false;
+      t = now();
+      try {
+        await webR.installPackages(['nanoparquet'], { quiet: true });
+        const probe = await webR.evalRString(
+          `tryCatch({ requireNamespace("nanoparquet", quietly=TRUE); "yes" }, error=function(e) "no")`,
+        );
+        nanoparquet = probe === 'yes';
+        info(`nanoparquet install/probe: ${probe} (${since(t)})`);
+      } catch (e) {
+        warn(`nanoparquet not installable in WebR: ${e}`);
+      }
+
+      if (nanoparquet) {
+        try {
+          t = now();
+          await conn.query(
+            `COPY (SELECT v1, v2, v3 FROM big WHERE (id % ${SAMPLE_MOD}) = 0)
+               TO 'sample.parquet' (FORMAT parquet)`,
+          );
+          const bytes = await db.copyFileToBuffer('sample.parquet');
+          info(`DuckDB wrote Parquet (${MB(bytes.byteLength)}, ${since(t)})`);
+
+          t = now();
+          await webR.FS.writeFile('/tmp/sample.parquet', bytes);
+          const cap = await (await new webR.Shelter()).captureR(
+            `df <- nanoparquet::read_parquet("/tmp/sample.parquet")\n` +
+            `c(nrow = nrow(df), ncol = ncol(df))`,
+          );
+          const out = await cap.result.toJs();
+          ok(`BRIDGE B works — Parquet round-trip into R (${since(t)})`);
+          info(`R saw: ${JSON.stringify(out.values ?? out)}`);
+          info('→ Zero-copy-ish path viable: DuckDB never materialises JS arrays for the hand-off.');
+        } catch (e) {
+          warn(`BRIDGE B failed despite nanoparquet present: ${e}`);
+          info('→ Fall back to BRIDGE A (JS arrays). Still removes storage-side bloat.');
+        }
+      } else {
+        warn('No Parquet reader in WebR → BRIDGE A (JS arrays) is the path. Revisit if WebR adds arrow/nanoparquet.');
+      }
+
+      // ---------------------------------------------------------------------
+      head('7. Verdict');
+      info(`final memory: ${await measureMemory('final')}`);
+      ok('Engine round-trip demonstrated: DuckDB stores + reduces, WebR does stats.');
+      info('See timings above for peak memory + transfer cost at this scale.');
+
+      await cleanup(conn, db, worker, webR);
+    }
+
+    async function cleanup(conn, db, worker, webR) {
+      try { await conn?.close?.(); } catch {}
+      try { await db?.terminate?.(); } catch {}
+      try { worker?.terminate?.(); } catch {}
+      try { await webR?.close?.(); } catch {}
+    }
+  </script>
+</body>
+</html>

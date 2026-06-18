@@ -144,10 +144,11 @@ See [`TODO.md`](./TODO.md) for the full task tracker; the highlights:
 
 ## Tech
 
-WebR (R via WASM) in a Web Worker · SharedArrayBuffer + `coi-serviceworker` ·
-vanilla JS ES modules (no framework, to stay lean on iPad Safari) · IndexedDB
-(persistence, planned) · File System Access API (file I/O, planned) ·
-DuckDB-WASM (large datasets, under consideration).
+WebR (R via WASM) in a Web Worker · DuckDB-WASM as the data engine, with Apache
+Arrow as the zero-copy bridge to R (the chosen storage backend — see `TODO.md`;
+not yet built) · SharedArrayBuffer + `coi-serviceworker` · vanilla JS ES modules
+(no framework) · IndexedDB (persistence, planned) · File System Access API
+(file I/O, planned).
 
 ## License
 

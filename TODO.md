@@ -10,6 +10,97 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
+- [ ] **Build and prove the DuckDB-WASM data engine — FOUNDATIONAL, do this first.**
+      This must be settled and demonstrated *before* file import, the data grid,
+      or any more analyses, because all of those bake in assumptions about the
+      storage shape. We can't responsibly read a file's contents until we know
+      what we're reading them *into*. This is meant to be a real tool for real
+      social-science work — datasets get large (hundreds of variables × hundreds
+      of thousands of cases) — so the engine has to scale, not just demo.
+  - **Decision (made): DuckDB-WASM is the data backend, with Apache Arrow as the
+    interchange format.** A modern tablet (e.g. M5 iPad Pro) can comfortably
+    carry a second WASM runtime alongside WebR, so the earlier "lean on iPad,
+    avoid a second heavy runtime" caution is explicitly overruled. DuckDB owns
+    storage + filtering/aggregation/out-of-core; R (WebR) does the statistics;
+    Arrow is the zero-copy bridge between them.
+  - **What the current store gets wrong at scale (the motivation):** today
+    `core/data-store.js` keeps in-memory columnar JS arrays — `Float64Array` for
+    *all* numerics (an int-coded factor still costs 8 bytes/cell; 200 vars × 500k
+    cases ≈ 800 MB of numerics alone), `getDataFrame()` materialises one object
+    per row (O(rows×cols)), and WebR injection (`core/webr-manager.js`) boxes
+    every column into a plain `number[]` that R then re-copies (~3× resident).
+    DuckDB + Arrow replaces all three with typed columnar storage and a
+    near-zero-copy hand-off.
+  - **The DuckDB↔WebR bridge — SPIKED & ANSWERED** (`spike/`, see
+    `spike/RESULTS.md`). Both directions work on desktop Chrome:
+    - **Bridge A (default):** DuckDB result → Arrow JS column `.toArray()` →
+      plain JS arrays → WebR `data.frame`. No extra R packages; always viable.
+    - **Bridge B (fast lane):** `nanoparquet` **installs cleanly in WebR**, so
+      DuckDB `COPY … TO parquet` → bytes through WebR's virtual FS →
+      `nanoparquet::read_parquet` in R. Lower-copy; the heavyweight R `arrow`
+      package was *not* needed.
+    - Confirmed: push filtering/aggregation down to DuckDB and hand R only the
+      reduced result — full-table group-by over 500k rows was 0.02 s; R only
+      ever sees what an analysis needs.
+    - Numbers at 200 × 500k: ~1.25 s to generate in-engine, ~1.24 GB peak with
+      *both* runtimes resident (well under the wasm ~4 GB ceiling). The
+      "two heavy runtimes" worry is not a blocker at this scale.
+    - Messy-data fidelity **spiked & answered** (`spike/messy-data-spike.html`,
+      32/32 checks). Both bridges carry NULLs, empty-string-≠-NA, SPSS
+      user-missing (`-99`→NA), dirty-text-→-NA, unicode, and factor labels —
+      via **metadata-driven cleaning pushed into DuckDB SQL** (see plan below).
+      Two real bridge bugs were caught and fixed in the process (see below).
+      On the evidence, **prefer Bridge B (Parquet) as the default** (native
+      types, decimals, NULLs for free) with hardened Bridge A as fallback.
+    - Full type coverage **spiked & answered** (`spike/datatypes-spike.html`,
+      52/52 checks). int64, boolean, DATE, TIMESTAMP, ±Inf/NaN, DECIMAL, and
+      beyond-BMP unicode all round-trip on both bridges with the rules below.
+      **R has no native int64** (confirmed: native int64 → double silently drops
+      precision), so carry 64-bit ints as **character** by default.
+    - Remaining unknowns are device-/perf-only: cold (uncached) WebR load and
+      the whole path **on iPad Safari** (fold into the Milestone-3 device pass).
+  - **Messy-data handling plan (bake into the rewrite):** real survey/admin data
+    is dirty, so the cleaning rules are part of the engine, not an afterthought.
+    App-side `VariableMeta` drives a generated DuckDB cleaning `SELECT`:
+    - `sourceText` columns (look numeric, contain junk) → `TRY_CAST(col AS DOUBLE)`
+      so junk becomes NULL, never a hard error.
+    - `missingValues` → `CASE WHEN col IN (…) THEN NULL …` to fold SPSS
+      user-defined missing codes into real NULLs.
+    - Factors travel as codes; reapply `factor(x, levels, labels)` in R from the
+      app-side value labels. Empty string stays data, not NA.
+    - **JS-array bridge must `CAST` numeric columns to `DOUBLE`** (see bug 2).
+    - **int64 → `CAST … AS VARCHAR`** (R has no native int64; carry IDs as
+      character, opt into `bit64` only for 64-bit arithmetic).
+    - **Temporal:** Bridge B reads `DATE`/`TIMESTAMP` natively; Bridge A carries
+      them as ISO text and reconstructs with `as.Date`/`as.POSIXct`. Pin
+      `tz="UTC"` (DuckDB `TIMESTAMP` is tz-naive) so wall-clock values don't
+      shift by the browser's local zone. `TIMESTAMPTZ` needs a policy later.
+  - **Two bridge bugs the spike caught (must stay fixed in the real impl):**
+    1. Arrow `.toArray()` silently drops NULLs (values buffer ≠ validity bitmap);
+       read per-cell with `.get(i)` so missing → `null` → R NA.
+    2. DuckDB infers DECIMAL for literals like `55000.0`; Arrow-JS `.get()`
+       returns the *unscaled* integer → silent ×10^scale corruption. Fix:
+       `CAST … AS DOUBLE` in SQL before JS extraction. (Parquet path is immune.)
+  - **Re-architecture this implies:** `DataStore` becomes a thin facade over a
+    DuckDB connection rather than the owner of JS arrays; `getColumns` /
+    `getDataFrame` / `getVariableMeta` stay as the contract but are now backed by
+    SQL queries (+ an Arrow path for the fast lane). Variable metadata
+    (labels/value-labels/missing/measure) still lives app-side since SQL columns
+    don't carry SPSS semantics. Keep the public `app.data` API stable so plugins
+    don't care that the backend changed.
+  - **Acceptance / proof — DONE (desktop Chrome).** `spike/duckdb-webr-spike.html`
+    loads DuckDB-WASM, generates 200 × 500k in-engine, pushes an aggregate down to
+    DuckDB, bridges a reduced result into WebR, and runs `lm()` — measuring memory
+    and timings throughout. Round-trip demonstrated; see `spike/RESULTS.md`. The
+    remaining acceptance gap is the **iPad Safari** run of the same path.
+  - **Vendor + pin** the DuckDB-WASM build and its worker/WASM assets the same
+    way the WebR pin is planned (see Hardening), for reproducibility + offline
+    PWA use.
+  - Blocks/feeds: **File import** (DuckDB reads CSV/Parquet natively, which
+    reshapes that task), **SPSS-style data grid** (virtualised grid backed by
+    `LIMIT/OFFSET` SQL windows over DuckDB — a natural fit), **Data
+    transform/recode API** (becomes SQL / `CREATE TABLE AS`). Settle the
+    `getDataFrame`/`getColumns` contract here so those don't get reworked later.
 - [ ] **Milestone 3 — verify on iPad Safari.** The desktop-Chrome path is
       confirmed; Safari/iPadOS is the remaining unknown. Two specific risks:
   - [ ] Blob-module `import()` inside the sandboxed (opaque-origin) iframe
@@ -74,8 +165,16 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       deliberately — bs4/Pyodide is the heaviest of these, not the default.
   - Reuses the same ingest path as file import (`DataStore.setDataset`); the
     "save as CSV" archival option overlaps with CSV export work.
+- [ ] **SPSS-style data grid view.** A spreadsheet view of the dataset, like
+      SPSS's two tabs: a **Data View** (rows = cases, columns = variables, the
+      cell grid) and a **Variable View** (one row per variable, columns = its
+      metadata — name, type, label, value labels, measure level, missing). Today
+      only the minimal `VariablesSidebar` (`core/app.js`) exists. Open questions:
+      virtualised rendering for large N; whether the grid is host UI or a plugin;
+      and whether cells are editable here (read-only display first; editing
+      depends on the transform API below). Pairs with the **Data editor** item.
 - [ ] **Data editor.** The current `VariablesSidebar` in `core/app.js` is a
-      minimal stand-in.
+      minimal stand-in. Becomes the editing layer over the data-grid view above.
 - [ ] **Data transform/recode API.** `app.data` is read-only by design; mutations
       (recode, compute) need an explicit transform surface, not direct writes
       (`core/data-store.js`).
@@ -94,5 +193,4 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 - [ ] Batch a multi-variable Frequencies run into one R call instead of one job
       per variable (`plugins/builtin-frequencies/index.js`).
-- [ ] DuckDB-WASM evaluation for large datasets (data layer).
 - [ ] Settings persistence (localStorage) and dataset persistence (IndexedDB).

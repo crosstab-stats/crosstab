@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CrossTab spike — messy real-world data across the bridge</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 1.5rem; max-width: 78rem; }
+    h1 { font-size: 1.2rem; margin: 0 0 .25rem; }
+    p.sub { margin: 0 0 1rem; opacity: .75; }
+    button { font: inherit; padding: .5rem 1rem; border-radius: 8px; cursor: pointer; }
+    button[disabled] { opacity: .5; cursor: progress; }
+    #log {
+      white-space: pre-wrap; font: 12px/1.5 ui-monospace, monospace;
+      background: #0001; border: 1px solid #8883; border-radius: 8px;
+      padding: 1rem; min-height: 20rem; max-height: 80vh; overflow: auto;
+    }
+    .ok   { color: #1a7f37; } .bad  { color: #cf222e; }
+    .warn { color: #9a6700; } .head { font-weight: 700; }
+    .dim  { opacity: .65; }
+  </style>
+</head>
+<body>
+  <h1>Messy-data fidelity spike — DuckDB-WASM ↔ WebR</h1>
+  <p class="sub">
+    Real survey/admin data is messy: missing cells, SPSS user-missing codes
+    (e.g. <code>-99</code>), categorical factors with value labels, unicode
+    names, and columns that look numeric but contain junk. This spike builds a
+    tiny dataset with all of those — where every expected value is known — and
+    asserts that <b>both bridges</b> (JS-arrays and Parquet) carry it into R
+    faithfully. The cleaning rules are driven by app-side variable metadata and
+    pushed down into DuckDB SQL. Needs cross-origin isolation.
+  </p>
+
+  <p>
+    <button id="run">Run fidelity spike</button>
+    <button id="clear">Clear log</button>
+  </p>
+  <div id="log" aria-live="polite"></div>
+
+  <script type="module">
+    const DUCKDB_ESM = 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm';
+    const WEBR_ESM   = 'https://webr.r-wasm.org/latest/webr.mjs';
+
+    const logEl = document.getElementById('log');
+    const runBtn = document.getElementById('run');
+    function log(msg, cls='') {
+      const s = document.createElement('span');
+      if (cls) s.className = cls;
+      s.textContent = msg + '\n';
+      logEl.appendChild(s); logEl.scrollTop = logEl.scrollHeight;
+      console.log(msg);
+    }
+    const head = (m) => log('\n' + m, 'head');
+    const ok   = (m) => log('  ✓ ' + m, 'ok');
+    const bad  = (m) => log('  ✗ ' + m, 'bad');
+    const warn = (m) => log('  ! ' + m, 'warn');
+    const info = (m) => log('  · ' + m, 'dim');
+    document.getElementById('clear').onclick = () => { logEl.textContent = ''; };
+
+    // ---- assertion harness ---------------------------------------------------
+    let pass = 0, fail = 0;
+    function expect(label, got, exp) {
+      const good = String(got) === String(exp);
+      if (good) { pass++; ok(`${label}: ${JSON.stringify(got)}`); }
+      else { fail++; bad(`${label}: got ${JSON.stringify(got)}, expected ${JSON.stringify(exp)}`); }
+      return good;
+    }
+
+    // ---- the messy dataset (every value known) -------------------------------
+    // age:        has a real NULL *and* a -99 user-missing sentinel
+    // income:     has a real NULL
+    // gender_code:factor codes 1/2 with a NULL; labels live app-side, not in SQL
+    // name:       unicode, an empty string (NOT null), an embedded quote+comma
+    // messy_num:  VARCHAR that *looks* numeric but has 'N/A','abc','' junk
+    const BUILD_SQL = `
+      CREATE TABLE messy AS SELECT * FROM (VALUES
+        (1, 34,   55000.0, 1,    'Alice',        '12'),
+        (2, NULL, 62000.0, 2,    'Bø',           'N/A'),
+        (3, -99,  NULL,    1,    '',             '7.5'),
+        (4, 51,   48000.0, NULL, 'Łukasz',       'abc'),
+        (5, 29,   71000.0, 2,    'O''Brien, J.', '')
+      ) AS t(id, age, income, gender_code, name, messy_num)`;
+
+    // App-side variable metadata — the SPSS-style knowledge SQL columns don't carry.
+    const META = {
+      id:          { type: 'numeric' },
+      age:         { type: 'numeric', missingValues: [-99, -98] },
+      income:      { type: 'numeric' },
+      gender_code: { type: 'factor', valueLabels: { 1: 'Male', 2: 'Female' } },
+      name:        { type: 'string' },
+      messy_num:   { type: 'numeric', sourceText: true }, // needs coercion from text
+    };
+
+    // Metadata → a cleaning SELECT pushed down into DuckDB:
+    //   sourceText      → TRY_CAST(... AS DOUBLE)  (junk becomes NULL, not an error)
+    //   missingValues   → CASE WHEN col IN (...) THEN NULL  (user-missing → real NULL)
+    function buildCleanSelect(meta, table) {
+      const exprs = Object.entries(meta).map(([name, m]) => {
+        let e = `"${name}"`;
+        if (m.sourceText) e = `TRY_CAST(${e} AS DOUBLE)`;
+        if (m.missingValues?.length) {
+          e = `CASE WHEN ${e} IN (${m.missingValues.join(',')}) THEN NULL ELSE ${e} END`;
+        }
+        return `${e} AS "${name}"`;
+      });
+      return `SELECT ${exprs.join(', ')} FROM ${table} ORDER BY id`;
+    }
+
+    const NUMERIC = new Set(
+      Object.entries(META).filter(([, m]) => m.type !== 'string').map(([n]) => n),
+    );
+
+    // R snippet (df already in scope) that emits key=value lines we parse + assert.
+    // Factor reconstruction uses the app-side value labels, applied in R.
+    const CHECK_R = `
+      emit <- function(k, v) cat(sprintf("%s=%s\\n", k, v))
+      emit("nrow", nrow(df)); emit("ncol", ncol(df))
+      for (nm in names(df)) {
+        emit(paste0("class.", nm), paste(class(df[[nm]]), collapse=","))
+        emit(paste0("na.", nm), sum(is.na(df[[nm]])))
+      }
+      emit("name2", df$name[2]); emit("name4", df$name[4]); emit("name5", df$name[5])
+      emit("name3.isna", is.na(df$name[3])); emit("name3.nchar", nchar(df$name[3]))
+      g <- factor(df$gender_code, levels=c(1,2), labels=c("Male","Female"))
+      emit("gender.levels", paste(levels(g), collapse="|"))
+      emit("gender1", as.character(g[1])); emit("gender.na", sum(is.na(g)))
+      emit("income.mean", round(mean(df$income, na.rm=TRUE), 1))
+    `;
+
+    function parseKV(stdout) {
+      const m = {};
+      for (const line of stdout.split('\n')) {
+        const i = line.indexOf('=');
+        if (i > 0) m[line.slice(0, i)] = line.slice(i + 1);
+      }
+      return m;
+    }
+
+    async function runR(webR, code, env) {
+      const sh = await new webR.Shelter();
+      try {
+        const cap = await sh.captureR(code, env ? { env } : undefined);
+        return cap.output.filter((o) => o.type === 'stdout').map((o) => o.data).join('\n');
+      } finally { await sh.purge(); }
+    }
+
+    // Shared assertions for whichever bridge produced `df` in R.
+    function assertCleanedFrame(kv, bridge) {
+      expect(`${bridge} nrow`, kv.nrow, 5);
+      expect(`${bridge} ncol`, kv.ncol, 6);
+      // age: 1 real NULL + 1 user-missing (-99) → 2 NA after cleaning
+      expect(`${bridge} na.age (NULL + -99 sentinel)`, kv['na.age'], 2);
+      expect(`${bridge} na.income`, kv['na.income'], 1);
+      expect(`${bridge} na.gender_code`, kv['na.gender_code'], 1);
+      // empty string is data, not missing:
+      expect(`${bridge} na.name (empty string ≠ NA)`, kv['na.name'], 0);
+      expect(`${bridge} name3 is empty string not NA`, kv['name3.isna'], 'FALSE');
+      expect(`${bridge} name3 nchar`, kv['name3.nchar'], 0);
+      // messy_num: '12','7.5' valid; 'N/A','abc','' → NA (3)
+      expect(`${bridge} na.messy_num (junk→NA via TRY_CAST)`, kv['na.messy_num'], 3);
+      // unicode + punctuation survive byte-for-byte:
+      expect(`${bridge} unicode name2`, kv.name2, 'Bø');
+      expect(`${bridge} unicode name4`, kv.name4, 'Łukasz');
+      expect(`${bridge} punctuation name5`, kv.name5, "O'Brien, J.");
+      // factor rebuilt from app-side labels:
+      expect(`${bridge} factor levels`, kv['gender.levels'], 'Male|Female');
+      expect(`${bridge} factor row1`, kv.gender1, 'Male');
+      expect(`${bridge} factor NA preserved`, kv['gender.na'], 1);
+      // numeric still computable with NA dropped: mean(55000,62000,48000,71000)=59000
+      expect(`${bridge} income mean (na.rm)`, kv['income.mean'], 59000);
+      return kv;
+    }
+
+    runBtn.onclick = async () => {
+      runBtn.disabled = true; pass = 0; fail = 0;
+      try { await run(); } catch (e) { bad('FATAL: ' + (e?.stack || e)); }
+      finally { runBtn.disabled = false; }
+    };
+
+    async function run() {
+      head('1. Load runtimes');
+      const duckdb = await import(/* @vite-ignore */ DUCKDB_ESM);
+      const bundles = duckdb.getJsDelivrBundles();
+      const bundle = await duckdb.selectBundle(bundles);
+      const workerUrl = URL.createObjectURL(
+        new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' }),
+      );
+      const worker = new Worker(workerUrl);
+      const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(duckdb.LogLevel.ERROR), worker);
+      await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+      URL.revokeObjectURL(workerUrl);
+      const conn = await db.connect();
+      ok('DuckDB ready');
+      const { WebR } = await import(/* @vite-ignore */ WEBR_ESM);
+      const webR = new WebR(); await webR.init();
+      ok('WebR ready');
+
+      head('2. Build the messy table + inspect it raw in DuckDB');
+      await conn.query(BUILD_SQL);
+      const raw = await conn.query(`SELECT
+        count(*) FILTER (WHERE age IS NULL) AS age_null,
+        count(*) FILTER (WHERE age = -99)  AS age_sentinel,
+        count(*) FILTER (WHERE name = '')  AS name_empty,
+        count(*) FILTER (WHERE name IS NULL) AS name_null
+        FROM messy`);
+      const r0 = raw.get(0);
+      info(`raw DuckDB: age NULLs=${r0.age_null}, age=-99 sentinels=${r0.age_sentinel}, name ''=${r0.name_empty}, name NULL=${r0.name_null}`);
+      info('note: messy_num is VARCHAR (mixed junk) — it has no numeric NULLs *yet*.');
+
+      head('3. Metadata-driven cleaning, pushed into DuckDB SQL');
+      const cleanSelect = buildCleanSelect(META, 'messy');
+      info(cleanSelect.replace(/\s+/g, ' ').trim());
+
+      // ---------------------------------------------------------------------
+      head('4. BRIDGE A — DuckDB → null-preserving JS columns → WebR data.frame');
+      info('Gotcha 1: Arrow `.toArray()` drops NULLs (validity bitmap is separate);');
+      info('must read per-cell with `.get(i)` to preserve missing.');
+      info('Gotcha 2: DuckDB infers DECIMAL for literals like 55000.0; Arrow-JS');
+      info('`.get()` returns the *unscaled* integer → silent ×10^scale corruption.');
+      info('Fix: CAST numeric columns to DOUBLE in SQL before extraction.');
+      // Type-preserving cleanSelect is right for Parquet (Bridge B). For the
+      // JS-array path, wrap it and force every numeric column to DOUBLE so Arrow
+      // hands back true floating-point values, not unscaled decimals.
+      const castList = Object.entries(META).map(([name, m]) =>
+        m.type === 'string' ? `"${name}"` : `CAST("${name}" AS DOUBLE) AS "${name}"`,
+      );
+      const cleanSelectA = `SELECT ${castList.join(', ')} FROM (${cleanSelect}) sub ORDER BY id`;
+      const tblA = await conn.query(cleanSelectA);
+      const cols = {};
+      for (const f of tblA.schema.fields) {
+        const v = tblA.getChild(f.name);
+        const n = tblA.numRows;
+        // Plain JS arrays only — WebR's object→R conversion takes arrays, not
+        // typed arrays nested in an object. `null` marks missing in both cases:
+        // → R NA (numeric) / NA_character_ (string). Mirrors core/webr-manager.js.
+        const out = new Array(n);
+        const num = NUMERIC.has(f.name);
+        for (let i = 0; i < n; i++) {
+          const x = v.get(i);
+          out[i] = x == null ? null : (num ? Number(x) : String(x));
+        }
+        cols[f.name] = out;
+      }
+      const stdoutA = await runR(
+        webR,
+        `df <- as.data.frame(.ct, stringsAsFactors=FALSE, check.names=FALSE)\n` + CHECK_R,
+        { '.ct': cols },
+      );
+      const kvA = parseKV(stdoutA);
+      info(`R column classes: ${Object.keys(kvA).filter(k=>k.startsWith('class.')).map(k=>k.slice(6)+':'+kvA[k]).join('  ')}`);
+      assertCleanedFrame(kvA, 'A');
+
+      // ---------------------------------------------------------------------
+      head('5. BRIDGE B — DuckDB → Parquet bytes → WebR FS → nanoparquet');
+      info('Higher-fidelity path: Parquet carries column *types* + NULLs natively.');
+      let haveNano = false;
+      try {
+        await webR.installPackages(['nanoparquet'], { quiet: true });
+        haveNano = (await webR.evalRString(
+          `tryCatch({requireNamespace("nanoparquet",quietly=TRUE);"yes"},error=function(e)"no")`,
+        )) === 'yes';
+      } catch (e) { warn('nanoparquet install failed: ' + e); }
+
+      if (haveNano) {
+        await conn.query(`COPY (${cleanSelect}) TO 'clean.parquet' (FORMAT parquet)`);
+        const bytes = await db.copyFileToBuffer('clean.parquet');
+        info(`Parquet written: ${(bytes.byteLength)} bytes`);
+        await webR.FS.writeFile('/tmp/clean.parquet', bytes);
+        const stdoutB = await runR(
+          webR,
+          `df <- as.data.frame(nanoparquet::read_parquet("/tmp/clean.parquet"))\n` + CHECK_R,
+        );
+        const kvB = parseKV(stdoutB);
+        info(`R column classes: ${Object.keys(kvB).filter(k=>k.startsWith('class.')).map(k=>k.slice(6)+':'+kvB[k]).join('  ')}`);
+        assertCleanedFrame(kvB, 'B');
+
+        head('6. Fidelity comparison: A vs B');
+        // Parquet should keep integers as integer; JS-array path widens to double.
+        info(`age class — Bridge A: ${kvA['class.age']} | Bridge B: ${kvB['class.age']}`);
+        info(`id  class — Bridge A: ${kvA['class.id']}  | Bridge B: ${kvB['class.id']}`);
+        if (kvB['class.age'] === 'integer' && kvA['class.age'] !== 'integer') {
+          ok('Parquet preserved integer type; JS-array path widened to double (expected).');
+        } else {
+          info('Both paths reported the same numeric class here — note for the writeup.');
+        }
+      } else {
+        warn('nanoparquet unavailable — skipping Bridge B (Bridge A still validated above).');
+      }
+
+      head('7. Verdict');
+      if (fail === 0) ok(`ALL ${pass} fidelity checks passed across the tested bridge(s).`);
+      else bad(`${fail} check(s) FAILED, ${pass} passed — see red lines above.`);
+
+      try { await conn.close(); await db.terminate(); worker.terminate(); await webR.close(); } catch {}
+    }
+  </script>
+</body>
+</html>
