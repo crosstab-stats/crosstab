@@ -771,6 +771,14 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     (loader.js) so third-party authors see the convention. Verified: sections now
     read Import / Descriptive Statistics / Correlation / Regression / Resampling /
     Graphs / Export.
+  - **Plugin menus now match the category** (dropped the generic "Analyze"
+    wrapper): each analysis registers its menu under its category as the top-level
+    (`path: ['Regression', …]` etc.), so a plugin appears in the menu where it's
+    filed — easy to find what you add. Menubar reads File · Edit · Transform ·
+    Correlation · Descriptive Statistics · Graphs · Regression · Resampling.
+    Convention documented in the `manifest.category` doc. (Importers/exporters stay
+    under the host-managed File ▸ Import / Export — File is their conventional home;
+    their category still drives the manager section.)
   - *Deferred:* manage *installed third-party* plugins too (today the catalog is
     the built-in URL set); a "reload plugin" action for the plugin-creator loop.
 - [ ] **Direct R interface / console.** The power-user escape hatch: when the

@@ -44,7 +44,7 @@ export const manifest = {
 export async function activate(app) {
   await app.menus.register({
     id: 'builtin-frequencies:open',
-    path: ['Analyze', 'Descriptive Statistics'],
+    path: ['Descriptive Statistics'],
     label: 'Frequencies…',
     order: 10,
     command: () => openFrequencies(app),

@@ -46,6 +46,9 @@ const PLUGIN_HOST_URL = './plugin-host.html';
  *   `'Comparison'`, `'Correlation'`, `'Regression'`, `'Multivariate'`,
  *   `'Time Series'`, `'Resampling'`, `'Graphs'`, `'Export'`. An unrecognised value
  *   just makes a new section (sorted after the recommended ones); missing → "Other".
+ *   **By convention, register your menu items under your category as the top-level
+ *   menu** (e.g. category `'Regression'` → `menus.register({ path: ['Regression'],
+ *   label: 'My Model…' })`) so users find a plugin in the menu where it's filed.
  * @property {string[]} [keywords] - Extra search terms for the plugin manager, so
  *   a plugin is findable by what it does even if its name doesn't say (e.g. a
  *   regression plugin keyworded with `['ols', 'linear']`).

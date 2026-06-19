@@ -29,7 +29,7 @@ export const manifest = {
 export async function activate(app) {
   await app.menus.register({
     id: 'builtin-logistic:open',
-    path: ['Analyze', 'Regression'],
+    path: ['Regression'],
     label: 'Binary Logistic…',
     order: 20,
     command: () => openLogistic(app),

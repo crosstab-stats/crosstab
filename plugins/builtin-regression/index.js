@@ -26,7 +26,7 @@ export const manifest = {
 export async function activate(app) {
   await app.menus.register({
     id: 'builtin-regression:linear',
-    path: ['Analyze', 'Regression'],
+    path: ['Regression'],
     label: 'Linear…',
     order: 10,
     command: () => openRegression(app),
