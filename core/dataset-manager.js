@@ -272,6 +272,9 @@ export class DatasetManager {
   removeOp(index) {
     return this.active.removeOp(index);
   }
+  collectImports() {
+    return this.active.collectImports();
+  }
   get canUndo() {
     return this.active?.canUndo ?? false;
   }

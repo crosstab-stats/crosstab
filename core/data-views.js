@@ -579,10 +579,27 @@ export class HistoryPanel {
     const close = ctlBtn('✕', 'Close', false, () => this.close());
     close.className = 'history-panel__close';
     head.append(close);
+
+    // Toolbar: one-click "collect imports" — pull all data-loading steps to the
+    // top, before the transforms (the clean "load, then process" order).
+    const toolbar = el('div', null, 'history-panel__toolbar');
+    const collect = el('button', '↑ Collect imports', 'history-panel__action');
+    collect.type = 'button';
+    collect.title = 'Move all data-loading steps (import, append, join) above the transforms';
+    collect.addEventListener('click', async () => {
+      this.#clearErr();
+      try {
+        await this.#store.collectImports();
+      } catch (err) {
+        this.#showErr(err.message);
+      }
+    });
+    toolbar.append(collect);
+
     this.#errEl = el('div', null, 'history-panel__err');
     this.#errEl.hidden = true;
     const content = el('div', null, 'history-panel__content');
-    panel.append(head, this.#errEl, content);
+    panel.append(head, toolbar, this.#errEl, content);
     document.body.append(panel);
     this.#panel = panel;
     this.#view = new HistoryView(content, this.#store, { onError: (m) => this.#showErr(m) });

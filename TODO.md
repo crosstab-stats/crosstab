@@ -516,6 +516,13 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       row's computed value null→value; the guard blocks "edit before create" and
       "remove a depended-on step"; base import can't be moved/removed; delete works;
       live rewind updates the grid behind the open panel.
+    - **"Collect imports" button** (panel toolbar): one click stable-partitions the
+      log so all data-loading steps (load/append/join) move above the transforms —
+      the professional "import everything, then process" order. Reuses the guarded
+      reorder (`DataStore.collectImports` → `#applyReorder`), so it's rejected/
+      rolled back if a join key depends on a transform. Verified: an interleaved
+      load/compute/append/recode collapses to load/append/compute/recode and the
+      appended row picks up the (now-earlier-than-it) compute (null → value).
       *Deferred:* drag-to-reorder (▲▼ cover it for now); a per-step timestamp.
   - **Accepted boundary (not a violation):** "source" = the *as-imported* table,
     not the original file bytes. Pair with the **Dataset library** to enable full

@@ -743,6 +743,24 @@ export class DataStore {
     await this.#applyReorder(next);
   }
 
+  /**
+   * "Collect imports": stable-partition the log so every data-loading op
+   * (load/append/join) moves to the top, ahead of the transforms — the clean
+   * "import all the data, then process it" order. No-op if already arranged.
+   * Goes through the same guard, so it's rejected (and rolled back) in the rare
+   * case a join's key depends on a transform-created column.
+   *
+   * @returns {Promise<void>}
+   */
+  async collectImports() {
+    const firstTx = this.#log.findIndex((o) => !SOURCE_OPS.has(o.type));
+    if (firstTx === -1) return; // no transforms — nothing to pull above
+    if (!this.#log.slice(firstTx).some((o) => SOURCE_OPS.has(o.type))) return; // already collected
+    const sources = this.#log.filter((o) => SOURCE_OPS.has(o.type));
+    const transforms = this.#log.filter((o) => !SOURCE_OPS.has(o.type));
+    await this.#applyReorder([...sources, ...transforms], true);
+  }
+
   /** Validate, then swap in a reordered/edited log and re-derive; on any failure
    * (dependency or SQL) restore the previous log and surface the reason. */
   async #applyReorder(next, movedOp) {
