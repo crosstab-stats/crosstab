@@ -42,6 +42,10 @@ export class ProjectSync {
   #armed = false;
   /** Guard against re-entrant auto-create from a burst of changes. */
   #creating = false;
+  /** True if any change arrived *during* the initial auto-create (when there's no
+   * binding yet to schedule against) — triggers a catch-up save once it's done, so
+   * a rapid burst right after the first edit is never lost. */
+  #changedWhileCreating = false;
 
   #timer = null;
   #saving = false;
@@ -139,10 +143,15 @@ export class ProjectSync {
     }
     // No project yet: the first real change auto-starts an autosaving "Untitled
     // project" so work is never lost. (Armed after boot, so the seed doesn't.)
-    if (this.#armed && !this.#creating) {
-      this.#creating = true;
-      void this.#autoCreate();
+    if (!this.#armed) return;
+    if (this.#creating) {
+      // A change landed mid-create — it can't schedule yet (no binding); remember
+      // so #autoCreate does a catch-up save once the project exists.
+      this.#changedWhileCreating = true;
+      return;
     }
+    this.#creating = true;
+    void this.#autoCreate();
   }
 
   /** Enable auto-creating an Untitled project on the next change. Called once the
@@ -156,6 +165,13 @@ export class ProjectSync {
       await this.#fullSave(null, 'Untitled project');
     } finally {
       this.#creating = false;
+    }
+    // Catch up on any changes that arrived during creation: #fullSave snapshotted
+    // (and cleared the dirty set) at an earlier point, so re-save the now-final
+    // state in full. Loop in case more changes land during the catch-up.
+    while (this.#changedWhileCreating && this.#binding) {
+      this.#changedWhileCreating = false;
+      await this.#fullSave(this.#binding.id, this.#binding.name);
     }
   }
 

@@ -474,9 +474,13 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       `restoreState` *and* a full project JSON round-trip (appended row stays NULL
       for the pre-append compute); undo across source ops; join + retype under
       sequential; rid cell-edits stable; no rid/source leak.
-    - *Known pre-existing issue (separate):* an autosave **auto-create race** — a
-      burst of changes during the very first project auto-create may not persist
-      until the next change (self-heals on next edit). Flagged as its own task.
+    - **Fixed an autosave auto-create race** (surfaced while testing this): a burst
+      of changes *during* the first project auto-create couldn't schedule (no
+      binding yet) and `#fullSave` then cleared the dirty set, so a rapid
+      replace→compute→append right after the first edit lost the append.
+      `ProjectSync` now records `#changedWhileCreating` and does a full catch-up
+      save once the binding exists. Verified: the no-spacing burst now round-trips
+      through project open with the full history + the appended row intact.
   - [x] **History / rewind panel — BUILT** (`core/data-views.js` `HistoryView`, a
     4th workspace tab between Variables and Output). A **linear** transform-history
     view: an as-imported base step + a numbered step per logged transform, each
