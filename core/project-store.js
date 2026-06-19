@@ -25,14 +25,51 @@ const CATALOG = 'catalog.json';
 
 export class ProjectStore {
   /** @returns {boolean} Whether OPFS is available. */
+  /** Serialises catalog read-modify-write ops so an autosave can't interleave
+   * with a delete/rename and resurrect a just-removed entry (orphan in the list). */
+  #tail = Promise.resolve();
+
   get available() {
     return typeof navigator !== 'undefined' && !!navigator.storage?.getDirectory;
   }
 
-  /** Project summaries, newest first. */
+  /** Acquire the mutex; returns a release fn. */
+  async #acquire() {
+    const prev = this.#tail;
+    let release;
+    this.#tail = new Promise((r) => {
+      release = r;
+    });
+    await prev;
+    return release;
+  }
+
+  /** Project summaries, newest first. Self-heals: drops catalog entries whose
+   * bundle folder is missing (e.g. left by an old race) so the manager never
+   * lists a project that can't be opened. */
   async list() {
-    const cat = await this.#readCatalog();
-    return cat.entries.slice().sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+    const release = await this.#acquire();
+    try {
+      const cat = await this.#readCatalog();
+      const kept = [];
+      let dropped = false;
+      const root = await this.#root(true);
+      for (const e of cat.entries) {
+        let ok = false;
+        try {
+          await root.getDirectoryHandle(e.id);
+          ok = true;
+        } catch {
+          ok = false;
+        }
+        if (ok) kept.push(e);
+        else dropped = true;
+      }
+      if (dropped) await this.#write(root, CATALOG, JSON.stringify({ entries: kept }));
+      return kept.slice().sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+    } finally {
+      release();
+    }
   }
 
   /**
@@ -89,12 +126,17 @@ export class ProjectStore {
     const manifest = { name, savedAt, activeId: bundle.activeId, datasets };
     await this.#write(dir, 'project.json', JSON.stringify(manifest));
 
-    const cat = await this.#readCatalog();
-    const summary = { id, name, savedAt, datasetCount: datasets.length };
-    const idx = cat.entries.findIndex((e) => e.id === id);
-    if (idx >= 0) cat.entries[idx] = summary;
-    else cat.entries.push(summary);
-    await this.#write(root, CATALOG, JSON.stringify(cat));
+    const release = await this.#acquire();
+    try {
+      const cat = await this.#readCatalog();
+      const summary = { id, name, savedAt, datasetCount: datasets.length };
+      const idx = cat.entries.findIndex((e) => e.id === id);
+      if (idx >= 0) cat.entries[idx] = summary;
+      else cat.entries.push(summary);
+      await this.#write(root, CATALOG, JSON.stringify(cat));
+    } finally {
+      release();
+    }
     return id;
   }
 
@@ -138,10 +180,15 @@ export class ProjectStore {
     const manifest = JSON.parse(await this.#read(dir, 'project.json'));
     manifest.name = name;
     await this.#write(dir, 'project.json', JSON.stringify(manifest));
-    const cat = await this.#readCatalog();
-    const e = cat.entries.find((x) => x.id === id);
-    if (e) e.name = name;
-    await this.#write(root, CATALOG, JSON.stringify(cat));
+    const release = await this.#acquire();
+    try {
+      const cat = await this.#readCatalog();
+      const e = cat.entries.find((x) => x.id === id);
+      if (e) e.name = name;
+      await this.#write(root, CATALOG, JSON.stringify(cat));
+    } finally {
+      release();
+    }
   }
 
   /** Delete a project bundle and drop it from the catalog. */
@@ -152,9 +199,14 @@ export class ProjectStore {
     } catch {
       /* already gone */
     }
-    const cat = await this.#readCatalog();
-    cat.entries = cat.entries.filter((e) => e.id !== id);
-    await this.#write(root, CATALOG, JSON.stringify(cat));
+    const release = await this.#acquire();
+    try {
+      const cat = await this.#readCatalog();
+      cat.entries = cat.entries.filter((e) => e.id !== id);
+      await this.#write(root, CATALOG, JSON.stringify(cat));
+    } finally {
+      release();
+    }
   }
 
   // --- internals -------------------------------------------------------------

@@ -59,15 +59,48 @@ const CATALOG = 'catalog.json';
  */
 
 export class DatasetStore {
+  /** Serialises catalog read-modify-write so concurrent saves/deletes can't
+   * interleave and orphan/resurrect entries. */
+  #tail = Promise.resolve();
+
   /** @returns {Promise<boolean>} Whether OPFS is available in this browser. */
   get available() {
     return typeof navigator !== 'undefined' && !!navigator.storage?.getDirectory;
   }
 
-  /** The browse index, newest first. @returns {Promise<CatalogEntry[]>} */
+  /** Acquire the mutex; returns a release fn. */
+  async #acquire() {
+    const prev = this.#tail;
+    let release;
+    this.#tail = new Promise((r) => {
+      release = r;
+    });
+    await prev;
+    return release;
+  }
+
+  /** The browse index, newest first. Self-heals: drops catalog entries whose
+   * folder is missing so a building block that can't be loaded isn't listed. */
   async list() {
-    const cat = await this.#readCatalog();
-    return cat.entries.slice().sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+    const release = await this.#acquire();
+    try {
+      const cat = await this.#readCatalog();
+      const root = await this.#root(true);
+      const kept = [];
+      let dropped = false;
+      for (const e of cat.entries) {
+        try {
+          await root.getDirectoryHandle(e.id);
+          kept.push(e);
+        } catch {
+          dropped = true;
+        }
+      }
+      if (dropped) await this.#write(root, CATALOG, JSON.stringify({ entries: kept }));
+      return kept.slice().sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+    } finally {
+      release();
+    }
   }
 
   /**
@@ -85,6 +118,15 @@ export class DatasetStore {
    * @returns {Promise<{id: string, version: number}>} The entry id + new version.
    */
   async save({ id, name, savedAt, state }, { writeSources = true } = {}) {
+    const release = await this.#acquire();
+    try {
+      return await this.#saveImpl({ id, name, savedAt, state }, { writeSources });
+    } finally {
+      release();
+    }
+  }
+
+  async #saveImpl({ id, name, savedAt, state }, { writeSources = true } = {}) {
     // Ask the browser to keep this data (OPFS is evictable by default).
     if (navigator.storage?.persist) {
       try {
@@ -178,9 +220,14 @@ export class DatasetStore {
     } catch {
       /* already gone */
     }
-    const cat = await this.#readCatalog();
-    cat.entries = cat.entries.filter((e) => e.id !== id);
-    await this.#write(root, CATALOG, JSON.stringify(cat));
+    const release = await this.#acquire();
+    try {
+      const cat = await this.#readCatalog();
+      cat.entries = cat.entries.filter((e) => e.id !== id);
+      await this.#write(root, CATALOG, JSON.stringify(cat));
+    } finally {
+      release();
+    }
   }
 
   // --- internals -------------------------------------------------------------
