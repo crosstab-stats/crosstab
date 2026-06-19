@@ -452,11 +452,15 @@ class ProjectSidebar {
       e.stopPropagation();
       this.#inlineRename(li, name, it.name, (v) => this.datasets.rename(it.id, v));
     }, 'proj__ds-x');
-    const x = iconBtn('✕', 'Remove from project', (e) => {
-      e.stopPropagation();
-      void this.datasets.remove(it.id);
-    }, 'proj__ds-x');
-    x.disabled = count <= 1; // can't remove the last dataset
+    const x = iconBtn(
+      '✕',
+      count <= 1 ? 'Remove — resets to a fresh empty dataset' : 'Remove from project',
+      (e) => {
+        e.stopPropagation();
+        void this.datasets.remove(it.id);
+      },
+      'proj__ds-x',
+    );
     li.append(edit, x);
     return li;
   }

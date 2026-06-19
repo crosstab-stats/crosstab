@@ -122,13 +122,22 @@ export class DatasetManager {
     this.#bus.emit(DATASETS_CHANGED, this.list());
   }
 
-  /** Remove a dataset, dropping its DuckDB tables. If it was active, activate
-   * another (or none). */
+  /** Remove a dataset, dropping its DuckDB tables. Removing the **last** dataset
+   * isn't forbidden — it resets the project to a fresh empty dataset (the
+   * "clear the clutter and start fresh" gesture), so there's always an active
+   * dataset. Otherwise, if the removed one was active, another becomes active. */
   async remove(id) {
     const ds = this.#datasets.get(id);
     if (!ds) return;
     await ds.dispose();
     this.#datasets.delete(id);
+    if (this.#datasets.size === 0) {
+      // Start fresh: a single empty dataset, ready to import into.
+      this.#activeId = null;
+      this.add('Dataset 1', { activate: true });
+      this.#emitActive('replace');
+      return;
+    }
     if (this.#activeId === id) {
       this.#activeId = this.#datasets.keys().next().value ?? null;
       this.#emitActive('switch');
