@@ -120,6 +120,7 @@ export class ProjectStore {
         libraryLink: d.libraryLink ?? null,
         sources,
         transforms: d.state.transforms ?? [],
+        order: d.state.order ?? null,
       });
     }
 
@@ -167,7 +168,7 @@ export class ProjectStore {
         id: d.id,
         name: d.name,
         libraryLink: d.libraryLink ?? null,
-        state: { sources, transforms: d.transforms ?? [] },
+        state: { sources, transforms: d.transforms ?? [], order: d.order ?? null },
       });
     }
     return { id, name: manifest.name, bundle: { activeId: manifest.activeId, datasets } };

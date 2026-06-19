@@ -373,109 +373,88 @@ export class DataStore {
    * @returns {Promise<void>}
    */
   async rederive(reason = 'change') {
-    // Project the universal log onto the source descriptors the rest of this method
-    // expects (`combine` derives from the op type: load→base, append/join as named).
-    const sources = this.#sourceOps().map((op) => ({
-      table: op.src.table,
-      meta: op.src.meta,
-      label: op.src.label,
-      combine: op.type === 'load' ? 'base' : op.type,
-      joinKey: op.joinKey,
-      aliases: op.aliases,
-    }));
+    // STRICT SEQUENTIAL REPLAY: fold the log in order, so each op sees exactly the
+    // dataset state the ops before it produced — true do-file semantics. A compute
+    // logged before a join is evaluated over the pre-join data (and appended rows
+    // added after it get NULL for it, via UNION ALL BY NAME). This guarantees the
+    // engine's result matches running the log as a script.
+    const log = this.#log;
+    // source_file provenance appears once there's >1 stacked source (load+append).
+    const multiStacked = log.filter((o) => o.type === 'load' || o.type === 'append').length > 1;
 
-    // Sources combine two ways: `append` sources stack rows onto the base (UNION),
-    // `join` sources add columns by matching a key (LEFT JOIN). Split them so the
-    // view composes as: stacked rows first, then joined columns hung off them.
-    const stacked = sources.filter((s, i) => i === 0 || s.combine !== 'join');
-    const joins = sources.filter((s) => s.combine === 'join');
-    const multiStacked = stacked.length > 1;
-
-    // 1) Metadata: union the stacked sources (first wins on shared names), add
-    //    source_file for a pooled dataset, add each join source's columns (minus
-    //    its key, which dups the base key) renaming on collision, then replay the
-    //    transform log.
+    /** @type {Map<string, VariableMeta>} */
     const byName = new Map();
-    for (const s of stacked) {
-      for (const m of s.meta) if (!byName.has(m.name)) byName.set(m.name, { ...m });
-    }
-    if (multiStacked && !byName.has(SOURCE_COL)) {
-      byName.set(SOURCE_COL, {
-        name: SOURCE_COL,
-        label: 'Source file',
-        type: 'factor',
-        measurementLevel: 'nominal',
-      });
-    }
-    const joinPlans = joins.map((s) => {
-      const cols = [];
-      for (const m of s.meta) {
-        if (m.name === s.joinKey?.right) continue; // drop the redundant right key
-        let out = m.name;
-        if (byName.has(out)) out = uniqueName(`${m.name}${s.label ? ` (${s.label})` : ' (joined)'}`, byName);
-        byName.set(out, { ...m, name: out });
-        cols.push({ orig: m.name, out });
+    let sql = null;
+
+    const addSourceFile = () => {
+      if (multiStacked && !byName.has(SOURCE_COL)) {
+        byName.set(SOURCE_COL, { name: SOURCE_COL, label: 'Source file', type: 'factor', measurementLevel: 'nominal' });
       }
-      return { source: s, cols };
-    });
-    // Replay the data ops in the log in order: metadata patches, and the new
-    // variables created by compute/recode (added after source/join columns).
-    for (const t of this.#log) {
-      if (t.type === 'setVariable') applyPatch(byName.get(t.name), t.patch);
-      else if (t.type === 'computeVar' || t.type === 'recodeVar') {
-        byName.set(t.name, {
-          name: t.name,
-          label: t.label,
-          type: normType(t.varType),
-          measurementLevel: normType(t.varType) === 'numeric' ? 'scale' : 'nominal',
+    };
+
+    for (const op of log) {
+      if (op.type === 'load') {
+        byName.clear();
+        for (const m of op.src.meta) if (!byName.has(m.name)) byName.set(m.name, { ...m });
+        addSourceFile();
+        sql = this.#sourceSelectSql(op.src, multiStacked);
+      } else if (op.type === 'append') {
+        for (const m of op.src.meta) if (!byName.has(m.name)) byName.set(m.name, { ...m });
+        addSourceFile();
+        sql = `(${sql}) UNION ALL BY NAME (${this.#sourceSelectSql(op.src, multiStacked)})`;
+      } else if (op.type === 'join') {
+        const cols = [];
+        for (const m of op.src.meta) {
+          if (m.name === op.joinKey?.right) continue; // drop the redundant right key
+          let out = m.name;
+          if (byName.has(out)) out = uniqueName(`${m.name}${op.src.label ? ` (${op.src.label})` : ' (joined)'}`, byName);
+          byName.set(out, { ...m, name: out });
+          cols.push({ orig: m.name, out });
+        }
+        const sel = ['C.*'];
+        for (const c of cols) {
+          const ref = `J.${quoteIdent(c.orig)}`;
+          sel.push(`${byName.get(c.out)?.type === 'numeric' ? `TRY_CAST(${ref} AS DOUBLE)` : ref} AS ${quoteIdent(c.out)}`);
+        }
+        sql =
+          `SELECT ${sel.join(', ')} FROM (${sql}) AS C ` +
+          `LEFT JOIN ${quoteIdent(op.src.table)} AS J ON ${joinConditionSql('C', 'J', { joinKey: op.joinKey, aliases: op.aliases })}`;
+      } else if (op.type === 'setVariable') {
+        applyPatch(byName.get(op.name), op.patch);
+        // The only op with a *data* effect: retype-to-numeric casts the column now.
+        if (op.patch && op.patch.type === 'numeric' && byName.has(op.name)) {
+          const q = quoteIdent(op.name);
+          sql = `SELECT * EXCLUDE (${q}), TRY_CAST(${q} AS DOUBLE) AS ${q} FROM (${sql})`;
+        }
+      } else if (op.type === 'computeVar' || op.type === 'recodeVar') {
+        const cast = normType(op.varType) === 'numeric' ? 'DOUBLE' : 'VARCHAR';
+        byName.set(op.name, {
+          name: op.name,
+          label: op.label,
+          type: normType(op.varType),
+          measurementLevel: cast === 'DOUBLE' ? 'scale' : 'nominal',
         });
+        const scalar = op.type === 'computeVar' ? `(${op.expr})` : recodeCaseSql(op);
+        sql = `SELECT *, TRY_CAST(${scalar} AS ${cast}) AS ${quoteIdent(op.name)} FROM (${sql})`;
+      } else if (op.type === 'setCell') {
+        if (sql && byName.has(op.column) && /^\d+$/.test(String(op.rid ?? ''))) {
+          const q = quoteIdent(op.column);
+          const isNum = byName.get(op.column)?.type === 'numeric';
+          sql =
+            `SELECT * EXCLUDE (${q}), CASE ${quoteIdent(ROWID_COL)} WHEN ${op.rid} ` +
+            `THEN ${cellLiteral(op.value, isNum)} ELSE ${q} END AS ${q} FROM (${sql})`;
+        }
       }
     }
+
     this.#variables = [...byName.values()];
     this.#byName = byName;
 
-    // 2) Working view: numeric-typed columns are CAST to DOUBLE here (the only
-    //    "data" effect of a transform); a pooled dataset gets source_file +
-    //    UNION ALL BY NAME; join sources are LEFT JOINed onto the stacked rows.
-    if (sources.length === 0) {
+    if (sql === null) {
       await this.#duckdb.query(`DROP VIEW IF EXISTS ${quoteIdent(this.#view)}`);
       this.#sqlTypes = new Map();
       this.#rowCount = 0;
     } else {
-      const numeric = new Set(this.#variables.filter((m) => m.type === 'numeric').map((m) => m.name));
-      const stackedSql = stacked
-        .map((s, i) => {
-          const colExprs = s.meta.map((col) => {
-            const q = quoteIdent(col.name);
-            return numeric.has(col.name) ? `TRY_CAST(${q} AS DOUBLE) AS ${q}` : q;
-          });
-          // Carry the stable row id through (UNION ALL BY NAME aligns it across
-          // sources); joins inherit it from the stacked base via `R.*`.
-          colExprs.push(quoteIdent(ROWID_COL));
-          const prov = multiStacked
-            ? `, ${sqlString(s.label ?? `dataset ${i + 1}`)} AS ${quoteIdent(SOURCE_COL)}`
-            : '';
-          return `SELECT ${colExprs.join(', ')}${prov} FROM ${quoteIdent(s.table)}`;
-        })
-        .join(' UNION ALL BY NAME ');
-
-      let sql = stackedSql;
-      if (joins.length > 0) {
-        let from = `(${stackedSql}) AS R`;
-        const selectCols = ['R.*'];
-        joins.forEach((s, ji) => {
-          const alias = `J${ji + 1}`;
-          from += ` LEFT JOIN ${quoteIdent(s.table)} AS ${alias} ON ${joinConditionSql('R', alias, s)}`;
-          for (const c of joinPlans[ji].cols) {
-            const ref = `${alias}.${quoteIdent(c.orig)}`;
-            const expr = numeric.has(c.out) ? `TRY_CAST(${ref} AS DOUBLE)` : ref;
-            selectCols.push(`${expr} AS ${quoteIdent(c.out)}`);
-          }
-        });
-        sql = `SELECT ${selectCols.join(', ')} FROM ${from}`;
-      }
-      sql = this.#applyComputed(sql);
-      sql = this.#applyCellOverrides(sql);
       await this.#duckdb.query(`CREATE OR REPLACE VIEW ${quoteIdent(this.#view)} AS ${sql}`);
       await this.#refreshSqlTypes();
       const c = await this.#duckdb.query(`SELECT count(*) AS n FROM ${quoteIdent(this.#view)}`);
@@ -484,6 +463,18 @@ export class DataStore {
 
     this.#selected = this.#selected.filter((n) => this.#byName.has(n));
     this.#bus.emit(CoreEvents.DATA_CHANGED, this.#snapshotSummary(reason));
+  }
+
+  /** One immutable source's SELECT: its columns (numeric-typed → cast to DOUBLE),
+   * the stable row id, and (when pooling >1 stacked source) a `source_file` tag. */
+  #sourceSelectSql(src, multiStacked) {
+    const colExprs = src.meta.map((col) => {
+      const q = quoteIdent(col.name);
+      return col.type === 'numeric' ? `TRY_CAST(${q} AS DOUBLE) AS ${q}` : q;
+    });
+    colExprs.push(quoteIdent(ROWID_COL));
+    const prov = multiStacked ? `, ${sqlString(src.label ?? 'dataset')} AS ${quoteIdent(SOURCE_COL)}` : '';
+    return `SELECT ${colExprs.join(', ')}${prov} FROM ${quoteIdent(src.table)}`;
   }
 
   /**
@@ -532,9 +523,10 @@ export class DataStore {
   /**
    * Edit a single cell — a **sparse override** logged like any transform, so it's
    * non-destructive (the source table is untouched), undoable, shows in the
-   * History panel, and exports to syntax. The override is applied in the derived
-   * view (see {@link DataStore#applyCellOverrides}); the immutable sources never
-   * change. `value` is the raw value the user typed (`''`/null clears the cell to
+   * History panel, and exports to syntax. The override is applied at its position
+   * in the sequential {@link DataStore#rederive} (a `CASE` on the stable row id);
+   * the immutable sources never change. `value` is the raw value the user typed
+   * (`''`/null clears the cell to
    * NA); numeric columns parse it, others store it as text.
    *
    * Row identity is a **stable per-row id** ({@link ROWID_COL}) carried from the
@@ -562,42 +554,6 @@ export class DataStore {
     await this.rederive('transform');
   }
 
-  /**
-   * Wrap the derived-view SQL to apply any `setCell` overrides: `CASE` each
-   * overridden cell, matched by its stable {@link ROWID_COL}, to the new value —
-   * reorder-proof (no positional row numbering). The row id is passed through so
-   * the grid can keep editing. Returns the SQL unchanged when there are no edits.
-   * Last write wins per (column, rid); overrides on a now-missing column or
-   * without a valid id are ignored.
-   *
-   * @param {string} innerSql - The composed sources view (stacked + joins), which
-   *   already carries {@link ROWID_COL}.
-   * @returns {string}
-   */
-  #applyCellOverrides(innerSql) {
-    const byCol = new Map(); // column → Map<rid(string), value>
-    for (const t of this.#log) {
-      if (t.type !== 'setCell' || !this.#byName.has(t.column)) continue;
-      const rid = String(t.rid ?? '');
-      if (!/^\d+$/.test(rid)) continue;
-      if (!byCol.has(t.column)) byCol.set(t.column, new Map());
-      byCol.get(t.column).set(rid, t.value);
-    }
-    if (byCol.size === 0) return innerSql;
-
-    const rq = quoteIdent(ROWID_COL);
-    const numeric = new Set(this.#variables.filter((m) => m.type === 'numeric').map((m) => m.name));
-    const cols = this.#variables.map((m) => {
-      const q = quoteIdent(m.name);
-      const ov = byCol.get(m.name);
-      if (!ov) return q;
-      const whens = [...ov.entries()]
-        .map(([rid, val]) => `WHEN ${rid} THEN ${cellLiteral(val, numeric.has(m.name))}`)
-        .join(' ');
-      return `CASE ${rq} ${whens} ELSE ${q} END AS ${q}`;
-    });
-    return `SELECT ${cols.join(', ')}, ${rq} FROM (${innerSql})`;
-  }
 
   /**
    * Create a **computed variable** from a SQL scalar expression over existing
@@ -670,20 +626,6 @@ export class DataStore {
     if (this.#byName.has(n)) throw new Error(`A variable named "${n}" already exists.`);
   }
 
-  /** Chain compute/recode columns onto the view in log order (each wraps the prior
-   * SQL, so a later derived var can reference an earlier one). Result is cast to
-   * the declared type so `getColumns` reads it correctly. */
-  #applyComputed(innerSql) {
-    let sql = innerSql;
-    for (const t of this.#log) {
-      if (t.type !== 'computeVar' && t.type !== 'recodeVar') continue;
-      const cast = normType(t.varType) === 'numeric' ? 'DOUBLE' : 'VARCHAR';
-      const scalar = t.type === 'computeVar' ? `(${t.expr})` : recodeCaseSql(t);
-      sql = `SELECT *, TRY_CAST(${scalar} AS ${cast}) AS ${quoteIdent(t.name)} FROM (${sql})`;
-    }
-    return sql;
-  }
-
   /**
    * The **data** transforms (a copy), in order — the metadata/recode/compute/cell
    * ops only, *not* the load/append/join source ops. This is the contract the
@@ -728,8 +670,8 @@ export class DataStore {
    * operations (chronological) and the undone ones still **ahead** of the current
    * position (`future`, also chronological — the redo stack un-reversed). The
    * current position is `applied.length` steps in. Includes load/append/join, so
-   * data loads appear as their own steps. (Within a session the order is exact;
-   * across a save/restore, sources are grouped before transforms — see exportState.)
+   * data loads appear as their own steps. Order is exact and survives save/restore
+   * (the `order` hint in {@link DataStore#exportState}).
    *
    * @returns {{applied: object[], future: object[]}}
    */
@@ -790,6 +732,12 @@ export class DataStore {
     return {
       sources,
       transforms: this.getTransforms(),
+      // The exact interleaving of source ops ('s') and data transforms ('t'), so a
+      // restore replays the log in true order (sequential rederive is order-
+      // sensitive). Omitted-on-old-saves → restore falls back to sources-then-
+      // transforms. `sources`/`transforms` each stay in their own relative order,
+      // so this single tag stream reconstructs the full log.
+      order: this.#log.map((op) => (SOURCE_OPS.has(op.type) ? 's' : 't')),
       rowCount: this.#rowCount,
       varCount: this.#variables.length,
     };
@@ -797,27 +745,39 @@ export class DataStore {
 
   /**
    * Replace the live dataset with a saved state: recreate each immutable source
-   * from its Parquet and rebuild the operation log (source ops first, then the
-   * data transforms), then re-derive. The persisted shape stays `{sources,
-   * transforms}` (so projects/library are unchanged); the only cost is that a
-   * restored log groups loads before transforms rather than preserving the exact
-   * in-session interleaving.
+   * from its Parquet and rebuild the operation log, then re-derive. The persisted
+   * shape stays `{sources, transforms}` (so projects/library are unchanged), plus
+   * an `order` tag stream that interleaves them back into the exact log — so a
+   * restore reproduces the in-session order (and the same result on another
+   * machine). Old saves without `order` fall back to source-ops-then-transforms.
    *
-   * @param {import('./dataset-store.js').DatasetState} state
+   * @param {import('./dataset-store.js').DatasetState & {order?: string[]}} state
    * @returns {Promise<void>}
    */
-  async restoreState({ sources, transforms }) {
+  async restoreState({ sources, transforms, order }) {
     await this.#dropAll();
-    const log = [];
     const srcs = Array.isArray(sources) ? sources : [];
+    const txs = Array.isArray(transforms) ? transforms : [];
+
+    // Materialise each source first (a queue), then weave per `order`.
+    const srcOps = [];
     for (let i = 0; i < srcs.length; i++) {
       const src = srcs[i];
       const created = await this.#createSource({ variables: src.meta, parquet: src.parquet, source: src.label });
-      const combine = i === 0 ? 'load' : src.combine === 'join' ? 'join' : 'append';
-      if (combine === 'join') log.push({ type: 'join', src: created, joinKey: src.joinKey, aliases: src.aliases ?? [] });
-      else log.push({ type: combine === 'load' ? 'load' : 'append', src: created });
+      const type = i === 0 ? 'load' : src.combine === 'join' ? 'join' : 'append';
+      srcOps.push(type === 'join' ? { type, src: created, joinKey: src.joinKey, aliases: src.aliases ?? [] } : { type, src: created });
     }
-    for (const t of Array.isArray(transforms) ? transforms : []) log.push({ ...t });
+
+    const log = [];
+    if (Array.isArray(order) && order.length === srcs.length + txs.length) {
+      let si = 0;
+      let ti = 0;
+      for (const tag of order) log.push(tag === 's' ? srcOps[si++] : { ...txs[ti++] });
+    } else {
+      // Backward-compatible fallback: sources first, then transforms.
+      for (const op of srcOps) log.push(op);
+      for (const t of txs) log.push({ ...t });
+    }
     this.#log = log;
     this.#redoStack = [];
     await this.rederive('restore');

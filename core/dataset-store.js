@@ -159,7 +159,7 @@ export class DatasetStore {
       sources.push(entry);
     }
 
-    const manifest = { name, savedAt, version, sources, transforms: state.transforms ?? [] };
+    const manifest = { name, savedAt, version, sources, transforms: state.transforms ?? [], order: state.order ?? null };
     await this.#write(dir, 'manifest.json', JSON.stringify(manifest));
 
     const summary = {
@@ -205,7 +205,7 @@ export class DatasetStore {
       name: manifest.name,
       savedAt: manifest.savedAt,
       version: manifest.version ?? 1,
-      state: { sources, transforms: manifest.transforms ?? [] },
+      state: { sources, transforms: manifest.transforms ?? [], order: manifest.order ?? null },
     };
   }
 

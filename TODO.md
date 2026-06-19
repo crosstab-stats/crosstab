@@ -449,22 +449,34 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     - [x] **Cell editor uses a sparse override transform** — not a destructive
           cell write. `{type:'setCell', row, column, value}` applied as a `CASE` in
           the derived view; the source stays immutable (see the Data editor item).
-  - [x] **Universal log (fully unified history) — BUILT.** `#sources` + a separate
-    transform log were merged into **one ordered `#log`** in `core/data-store.js`:
-    every operation — `load`/`append`/`join` (data loads) and `setVariable`/
-    `setCell`/`computeVar`/`recodeVar` (data transforms) — is a single, ordered,
-    undoable entry. `rederive` partitions the log by op kind (so the derived view
-    is byte-identical to the old split), and `getHistory()` returns the whole log,
-    so **imports/appends/joins are now first-class History steps you can undo,
-    redo, and rewind across** (e.g. undo an accidental append). The persisted shape
-    stays `{sources, transforms}` (`exportState` derives it; `restoreState` rebuilds
-    the log), so projects/library/`getTransforms` (data-only) are untouched —
-    backward-compatible. *Only cost:* a restored log groups source ops before
-    transforms (exact in-session interleaving isn't persisted) — a later polish.
-    **Verified in Chrome:** load/append/recode/cell-edit all appear as ordered
-    steps; undo of an append reverts rows (32→30) while keeping the recode; redo
-    restores; rewind across source ops; project open + library promote/add
-    round-trip; rid cell-edits stable; no rid/source leak into analyses.
+  - [x] **Universal log + strict sequential replay — BUILT.** `#sources` + a
+    separate transform log were merged into **one ordered `#log`** in
+    `core/data-store.js`: every operation — `load`/`append`/`join` (data loads) and
+    `setVariable`/`setCell`/`computeVar`/`recodeVar` (data transforms) — is a
+    single, ordered, undoable entry. `rederive` **folds the log strictly in order**
+    (sequential replay), so each op sees exactly the state the prior ops produced —
+    true do-file semantics. So **imports/appends/joins are first-class History
+    steps you can undo, redo, and rewind across**, AND order is honoured: a compute
+    logged before an append is evaluated over the pre-append data, and the appended
+    rows get NULL for it (via `UNION ALL BY NAME`). The engine result therefore
+    matches running the log as a script.
+    - **Reproducibility (the point):** persisted shape stays `{sources, transforms}`
+      *plus* an `order` tag stream (`['s','t','s',…]`) so a restore replays the
+      exact interleaving — same result on another machine. Old saves without
+      `order` fall back to source-ops-then-transforms. `getTransforms` stays
+      data-only, so projects/library/version-pull are untouched (backward-compat).
+      `order` threaded through `project-store` + `dataset-store`.
+    - *Tradeoff (faithful, less forgiving):* a retype/recode *before* an append no
+      longer auto-covers the appended rows — sequence the cleaning *after* loading,
+      exactly like a real do-file.
+    - **Verified in Chrome:** compute-before-append → appended rows NULL for it;
+      compute-after-append → all rows; the `order` hint survives `exportState`/
+      `restoreState` *and* a full project JSON round-trip (appended row stays NULL
+      for the pre-append compute); undo across source ops; join + retype under
+      sequential; rid cell-edits stable; no rid/source leak.
+    - *Known pre-existing issue (separate):* an autosave **auto-create race** — a
+      burst of changes during the very first project auto-create may not persist
+      until the next change (self-heals on next edit). Flagged as its own task.
   - [x] **History / rewind panel — BUILT** (`core/data-views.js` `HistoryView`, a
     4th workspace tab between Variables and Output). A **linear** transform-history
     view: an as-imported base step + a numbered step per logged transform, each
