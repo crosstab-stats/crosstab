@@ -266,6 +266,12 @@ export class DatasetManager {
   rewindTo(n) {
     return this.active.rewindTo(n);
   }
+  moveOp(from, to) {
+    return this.active.moveOp(from, to);
+  }
+  removeOp(index) {
+    return this.active.removeOp(index);
+  }
   get canUndo() {
     return this.active?.canUndo ?? false;
   }

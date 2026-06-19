@@ -498,18 +498,25 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     git-style branching** — the audience thinks in linear syntax files, and
     divergent exploration is already served by the multi-dataset workspace (fork =
     a separate dataset). No branch tree / diff UI / prune.
-    - *Now the universal log:* imports/appends/joins are first-class steps too
-      (see "Universal log" above), with an explicit "Start (empty)" step 0 you can
-      rewind to. The panel renders the whole `#log`.
-    - *Natural next step it unlocks:* **export-to-syntax** — done (see below); a
-      follow-up could emit the load/append/join steps as real R too (today the
-      do-file uses a load stub + the data transforms).
-    - [ ] *UI polish — revisit the layout.* Functionally excellent, but the
-      timeline uses only a narrow left strip of the wide panel and looks sparse.
-      Make better use of the horizontal space (e.g. richer per-step rows: show the
-      variable / before→after, a right-aligned timestamp or row/var count column,
-      or a two-column master–detail with the selected step's full patch). Purely
-      cosmetic; the rewind mechanics are done.
+    - *Now the universal log:* imports/appends/joins are first-class steps too,
+      with an explicit "Start (empty)" step 0.
+    - **Relocated to Edit ▸ History… as an editable floating panel — DONE.**
+      History is *actions* (what you did), not an input/output, so it left the
+      Data/Variables/Output tab strip and became a non-blocking floating panel
+      opened from **Edit ▸ History…** (beside Undo/Redo). The panel docks right and
+      doesn't dim the grid, so clicking a step **rewinds live** while you watch the
+      Data grid update behind it. Each applied step (except the pinned base import)
+      has **▲▼ to reorder** and **✕ to delete** — now meaningful because replay is
+      sequential (move an append above a transform → the transform covers the
+      appended rows). Guarded by `DataStore.moveOp`/`removeOp` +
+      `validateOrder`: an order that breaks a dependency (e.g. editing `foo` before
+      the compute that creates it, or removing a step a later one needs) is
+      rejected with an inline message; the SQL re-derive is the backstop for
+      compute-expression deps. **Verified in Chrome:** reorder flips an appended
+      row's computed value null→value; the guard blocks "edit before create" and
+      "remove a depended-on step"; base import can't be moved/removed; delete works;
+      live rewind updates the grid behind the open panel.
+      *Deferred:* drag-to-reorder (▲▼ cover it for now); a per-step timestamp.
   - **Accepted boundary (not a violation):** "source" = the *as-imported* table,
     not the original file bytes. Pair with the **Dataset library** to enable full
     file→result reproduction if wanted.

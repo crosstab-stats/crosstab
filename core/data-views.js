@@ -11,6 +11,8 @@
  * This is a viewer — "see the data before deciding how to recode".
  */
 
+import { CoreEvents } from './event-bus.js';
+
 const ROW_H = 28; // px; must match the CSS cell height for scrollbar accuracy.
 const COL_W = 120; // px; fixed column width so columns can be virtualised too.
 const GUT_W = 56; // px; the sticky row-number gutter.
@@ -397,22 +399,30 @@ export class VariableView {
 }
 
 /**
- * The **History / rewind panel**: a linear list of the dataset's transform log,
- * over an "as-imported" base step, with the current position highlighted. Click
- * any step to rewind (or fast-forward) to that state — mechanically a single
- * {@link DataStore#rewindTo}. Steps *ahead* of the current position (undone but
- * still redoable) render greyed; making a fresh edit after a rewind discards them.
- *
- * Linear by design, **not** git-style branching: the audience thinks in linear
- * syntax files, and divergent exploration is already served by the multi-dataset
- * workspace (a fork is just a separate dataset). The same log is the basis for a
- * future export-to-syntax (the history *is* the do-file).
+ * The **History panel** — the dataset's universal operation log as a linear list
+ * of *actions* (loads + transforms), with the current position highlighted. It
+ * lives in a floating panel opened from **Edit ▸ History…** (not a workspace tab —
+ * Data/Variables/Output are inputs & outputs; History is what you *did*). Each
+ * step:
+ *  - **click the body** → rewind/fast-forward to that state (live — the grid
+ *    behind the panel updates immediately, since the panel doesn't block it);
+ *  - **▲ / ▼** → reorder the step (now meaningful: replay is sequential, so moving
+ *    an append above a transform makes the transform cover the appended rows);
+ *  - **−** → delete the step.
+ * Reorder/delete are guarded ({@link DataStore#moveOp}/{@link DataStore#removeOp}):
+ * the base import is pinned, and an order that would break a dependency is rejected
+ * with a message. Linear by design (not git branching).
  */
 export class HistoryView {
-  /** @param {HTMLElement} host @param {import('./data-store.js').DataStore} store */
-  constructor(host, store) {
+  /**
+   * @param {HTMLElement} host
+   * @param {import('./data-store.js').DataStore} store
+   * @param {{onError?: (msg: string) => void}} [opts]
+   */
+  constructor(host, store, opts = {}) {
     this.host = host;
     this.store = store;
+    this.onError = opts.onError ?? (() => {});
     host.classList.add('ct-historyhost');
   }
 
@@ -435,11 +445,22 @@ export class HistoryView {
     );
 
     // Applied operations 1..k (k = current position) — loads and transforms alike.
+    // Every applied op except the base import (log index 0) can be reordered/deleted.
     applied.forEach((t, i) => {
       const n = i + 1;
       const d = describeTransform(t);
       ol.append(
-        this.#step({ n, marker: n, title: d.title, detail: d.detail, state: n === applied.length ? 'current' : 'applied' }),
+        this.#step({
+          n,
+          marker: n,
+          title: d.title,
+          detail: d.detail,
+          state: n === applied.length ? 'current' : 'applied',
+          index: i,
+          canUp: i >= 2,
+          canDown: i >= 1 && i < applied.length - 1,
+          canDelete: i >= 1,
+        }),
       );
     });
 
@@ -455,18 +476,19 @@ export class HistoryView {
       this.host.append(
         el(
           'p',
-          'No data yet. Importing, then recoding/computing/editing in this dataset appears here as steps you can rewind to.',
+          'No data yet. Importing, then recoding/computing/editing in this dataset appears here as steps you can rewind to, reorder, or remove.',
           'history-hint',
         ),
       );
     }
   }
 
-  /** One timeline row: a clickable step that rewinds to having `n` transforms
-   * applied. The current step is highlighted and inert. */
-  #step({ n, marker, title, detail, state }) {
+  /** One timeline row: a clickable body that rewinds to having `n` ops applied,
+   * plus (for reorderable applied steps) move/delete controls. */
+  #step({ n, marker, title, detail, state, index, canUp, canDown, canDelete }) {
     const li = document.createElement('li');
     li.className = `history__step history__step--${state}`;
+
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'history__btn';
@@ -477,14 +499,132 @@ export class HistoryView {
     btn.append(body);
     if (state === 'current') {
       btn.append(el('span', 'current', 'history__badge'));
-      btn.disabled = true;
-      btn.title = 'Current state';
-    } else {
-      btn.title = `Rewind to: ${title}`;
-      btn.addEventListener('click', () => void this.store.rewindTo(n));
     }
+    // The body always rewinds to this step (even the current one is harmlessly
+    // re-applied); reorder/delete live in the controls so they don't trigger it.
+    btn.title = state === 'current' ? 'Current state' : `Rewind to: ${title}`;
+    btn.addEventListener('click', () => void this.store.rewindTo(n));
     li.append(btn);
+
+    if (canUp || canDown || canDelete) {
+      const ctl = el('span', null, 'history__ctl');
+      ctl.append(
+        ctlBtn('▲', 'Move up', !canUp, () => this.#move(index, index - 1)),
+        ctlBtn('▼', 'Move down', !canDown, () => this.#move(index, index + 1)),
+        ctlBtn('✕', 'Remove this step', !canDelete, () => this.#remove(index)),
+      );
+      li.append(ctl);
+    }
     return li;
+  }
+
+  async #move(from, to) {
+    try {
+      await this.store.moveOp(from, to);
+    } catch (err) {
+      this.onError(err.message);
+    }
+  }
+
+  async #remove(index) {
+    try {
+      await this.store.removeOp(index);
+    } catch (err) {
+      this.onError(err.message);
+    }
+  }
+}
+
+/** A small control button for a history step (move/delete). */
+function ctlBtn(glyph, title, disabled, onClick) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'history__ctlbtn';
+  b.textContent = glyph;
+  b.title = title;
+  b.disabled = !!disabled;
+  if (!disabled) {
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void onClick();
+    });
+  }
+  return b;
+}
+
+/**
+ * The floating **History panel** that hosts a {@link HistoryView}. Non-blocking
+ * (docked to the right, no backdrop) so the Data grid behind it stays visible and
+ * updates live as you click/reorder steps. Opened from Edit ▸ History….
+ */
+export class HistoryPanel {
+  #store;
+  #bus;
+  #panel = null;
+  #view = null;
+  #errEl = null;
+  #off = null;
+  #escHandler = null;
+
+  /** @param {import('./data-store.js').DataStore} store @param {import('./event-bus.js').EventBus} bus */
+  constructor(store, bus) {
+    this.#store = store;
+    this.#bus = bus;
+  }
+
+  #build() {
+    const panel = el('div', null, 'history-panel');
+    const head = el('div', null, 'history-panel__head');
+    head.append(el('span', 'History', 'history-panel__title'));
+    const close = ctlBtn('✕', 'Close', false, () => this.close());
+    close.className = 'history-panel__close';
+    head.append(close);
+    this.#errEl = el('div', null, 'history-panel__err');
+    this.#errEl.hidden = true;
+    const content = el('div', null, 'history-panel__content');
+    panel.append(head, this.#errEl, content);
+    document.body.append(panel);
+    this.#panel = panel;
+    this.#view = new HistoryView(content, this.#store, { onError: (m) => this.#showErr(m) });
+  }
+
+  #showErr(msg) {
+    if (!this.#errEl) return;
+    this.#errEl.textContent = msg;
+    this.#errEl.hidden = false;
+  }
+
+  #clearErr() {
+    if (this.#errEl) this.#errEl.hidden = true;
+  }
+
+  open() {
+    if (!this.#panel) this.#build();
+    this.#panel.hidden = false;
+    this.#clearErr();
+    this.#view.render();
+    // Re-render live as the dataset changes (rewind/move/delete/edit elsewhere).
+    this.#off = this.#bus.on(CoreEvents.DATA_CHANGED, () => {
+      this.#clearErr();
+      this.#view.render();
+    });
+    this.#escHandler = (e) => {
+      if (e.key === 'Escape') this.close();
+    };
+    document.addEventListener('keydown', this.#escHandler);
+  }
+
+  close() {
+    if (this.#panel) this.#panel.hidden = true;
+    this.#off?.();
+    this.#off = null;
+    if (this.#escHandler) document.removeEventListener('keydown', this.#escHandler);
+    this.#escHandler = null;
+  }
+
+  toggle() {
+    if (this.#panel && !this.#panel.hidden) this.close();
+    else this.open();
   }
 }
 

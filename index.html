@@ -214,19 +214,46 @@
       .vargrid__row:hover { background: #eef5fb; }
 
       /* history / rewind panel */
-      .ct-historyhost { padding: 12px 10px; }
-      .history { list-style: none; margin: 0; padding: 0; max-width: 560px; font: 13px/1.4 system-ui, sans-serif; }
-      .history__step { position: relative; }
+      .ct-historyhost { padding: 4px 2px; }
+      .history { list-style: none; margin: 0; padding: 0; font: 13px/1.4 system-ui, sans-serif; }
+      .history__step { position: relative; display: flex; align-items: center; }
       /* connector line behind the markers (markers sit above it, opaque) */
       .history__step:not(:last-child)::before {
         content: ''; position: absolute; left: 20px; top: 19px; bottom: -1px;
         width: 2px; background: #e0e5eb; z-index: 0;
       }
       .history__btn {
-        display: flex; align-items: flex-start; gap: 10px; width: 100%;
+        display: flex; align-items: flex-start; gap: 10px; flex: 1; min-width: 0;
         text-align: left; background: none; border: 0; cursor: pointer;
         padding: 7px 10px; border-radius: 6px; color: #1a1a1a; font: inherit;
       }
+      /* per-step controls: move up/down, delete */
+      .history__ctl { display: flex; gap: 1px; flex: none; padding-right: 4px; opacity: 0; transition: opacity .1s; }
+      .history__step:hover .history__ctl { opacity: 1; }
+      .history__ctlbtn {
+        border: 0; background: none; cursor: pointer; color: #8a94a0; font-size: 12px;
+        width: 20px; height: 22px; border-radius: 4px; line-height: 1;
+      }
+      .history__ctlbtn:hover:not(:disabled) { background: #e3e8ee; color: #1a1a1a; }
+      .history__ctlbtn:disabled { opacity: .25; cursor: default; }
+      /* floating History panel (Edit ▸ History…) — non-blocking, grid stays live */
+      .history-panel {
+        position: fixed; top: 52px; right: 12px; bottom: 12px; width: 340px; z-index: 50;
+        background: var(--panel, #fff); border: 1px solid var(--line); border-radius: 10px;
+        box-shadow: 0 12px 40px rgba(0,0,0,.22); display: flex; flex-direction: column; overflow: hidden;
+      }
+      .history-panel[hidden] { display: none; }
+      .history-panel__head {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 10px 12px; border-bottom: 1px solid var(--line);
+      }
+      .history-panel__title { font-weight: 700; font-size: 14px; }
+      .history-panel__close { font-size: 13px; width: 24px; height: 24px; }
+      .history-panel__err {
+        background: #fdf3f2; color: #7a201a; font-size: 12px; padding: 7px 12px;
+        border-bottom: 1px solid #f0d8d5;
+      }
+      .history-panel__content { flex: 1; overflow: auto; padding: 8px 6px; }
       .history__btn:hover:not(:disabled) { background: #eef5fb; }
       .history__btn:disabled { cursor: default; }
       .history__marker {
@@ -412,13 +439,11 @@
         <div class="tabs" id="tabs" role="tablist" aria-label="Workspace views">
           <button class="tab" id="tab-data" role="tab" data-view="data">Data</button>
           <button class="tab" id="tab-vars" role="tab" data-view="vars">Variables</button>
-          <button class="tab" id="tab-history" role="tab" data-view="history">History</button>
           <button class="tab" id="tab-output" role="tab" data-view="output" aria-selected="true">Output</button>
           <button class="tab-action" id="clear-output" type="button" title="Clear all output">Clear output</button>
         </div>
         <div class="view" id="view-data" role="tabpanel" aria-label="Data" hidden></div>
         <div class="view" id="view-vars" role="tabpanel" aria-label="Variables" hidden></div>
-        <div class="view" id="view-history" role="tabpanel" aria-label="History" hidden></div>
         <section class="view results" id="results" role="tabpanel" aria-label="Output" aria-live="polite"></section>
       </section>
     </main>
@@ -437,7 +462,6 @@
         tabs: document.getElementById('tabs'),
         viewData: document.getElementById('view-data'),
         viewVars: document.getElementById('view-vars'),
-        viewHistory: document.getElementById('view-history'),
       }).catch((err) => {
         console.error('CrossTab failed to start', err);
         document.getElementById('status').textContent = 'Failed to start: ' + err.message;

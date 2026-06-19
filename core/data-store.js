@@ -703,6 +703,65 @@ export class DataStore {
   }
 
   /**
+   * Reorder the **applied** log: move the op at `from` to index `to`. Because
+   * replay is sequential, this changes the result (the point — e.g. move an append
+   * above a transform so the transform then covers the appended rows). Guarded:
+   * the base `load` is pinned at 0, a dependency check rejects orders where a step
+   * would precede something it needs (e.g. editing `foo` before the compute that
+   * creates `foo`), and the re-derive is rolled back if the SQL still fails. A
+   * structural edit discards the redo branch.
+   *
+   * @param {number} from @param {number} to
+   * @returns {Promise<void>}
+   */
+  async moveOp(from, to) {
+    const n = this.#log.length;
+    from = Math.floor(from);
+    to = Math.floor(to);
+    if (from < 0 || from >= n || to < 0 || to >= n || from === to) return;
+    if (from === 0 || to === 0) throw new Error('The base import stays first.');
+    const next = [...this.#log];
+    const [op] = next.splice(from, 1);
+    next.splice(to, 0, op);
+    await this.#applyReorder(next, op);
+  }
+
+  /**
+   * Delete the op at `index` from the applied log entirely (its "−" in History).
+   * Guarded the same way: can't remove the base import, and can't remove a step a
+   * later step depends on. Discards the redo branch.
+   *
+   * @param {number} index
+   * @returns {Promise<void>}
+   */
+  async removeOp(index) {
+    index = Math.floor(index);
+    if (index < 0 || index >= this.#log.length) return;
+    if (this.#log[index]?.type === 'load') throw new Error('The base import can’t be removed — use File ▸ replace instead.');
+    const next = [...this.#log];
+    next.splice(index, 1);
+    await this.#applyReorder(next);
+  }
+
+  /** Validate, then swap in a reordered/edited log and re-derive; on any failure
+   * (dependency or SQL) restore the previous log and surface the reason. */
+  async #applyReorder(next, movedOp) {
+    const problem = validateOrder(next);
+    if (problem) throw new Error(problem);
+    const prev = this.#log;
+    this.#log = next;
+    this.#redoStack = [];
+    try {
+      await this.rederive('reorder');
+    } catch (err) {
+      this.#log = prev;
+      await this.rederive('reorder');
+      const what = movedOp ? 'move' : 'removal';
+      throw new Error(`That ${what} isn’t valid here: ${err?.message || err}`);
+    }
+  }
+
+  /**
    * Serialise the full reproducible state for the dataset library: every
    * immutable source (metadata + label, and its Parquet bytes unless
    * `includeParquet` is false) plus the transform log. With `includeParquet:false`
@@ -1145,6 +1204,51 @@ function cellLiteral(val, isNumeric) {
 /** Clamp a variable type to a known value (defaults to numeric). */
 function normType(t) {
   return t === 'string' || t === 'factor' ? t : 'numeric';
+}
+
+/**
+ * Check a proposed operation order for dependency violations — the guard for
+ * History reorder/delete. Walks the log tracking which columns are *available* at
+ * each point (sources add their columns; compute/recode add their new variable)
+ * and rejects when a step would run before something it needs: editing/recoding/
+ * cell-editing a column that doesn't exist yet, a join whose key isn't present, or
+ * a non-load op landing before the base import. Returns an error message, or null
+ * if the order is sound. (Compute *expression* reads aren't statically known —
+ * those are caught by the re-derive itself; this catches the silent ones.)
+ *
+ * @param {Array<object>} log
+ * @returns {string|null}
+ */
+function validateOrder(log) {
+  const available = new Set();
+  let haveBase = false;
+  for (const op of log) {
+    if (op.type === 'load') {
+      available.clear();
+      for (const m of op.src.meta) available.add(m.name);
+      haveBase = true;
+      continue;
+    }
+    if (!haveBase) return 'Steps must come after the base import.';
+    if (op.type === 'append') {
+      for (const m of op.src.meta) available.add(m.name);
+    } else if (op.type === 'join') {
+      if (op.joinKey?.left && !available.has(op.joinKey.left)) {
+        return `This join needs the key “${op.joinKey.left}”, which isn’t available at that point.`;
+      }
+      for (const m of op.src.meta) if (m.name !== op.joinKey?.right) available.add(m.name);
+    } else if (op.type === 'setVariable') {
+      if (!available.has(op.name)) return `“${op.name}” must be created before it’s edited.`;
+    } else if (op.type === 'recodeVar') {
+      if (!available.has(op.source)) return `“${op.source}” must exist before it’s recoded into “${op.name}”.`;
+      available.add(op.name);
+    } else if (op.type === 'computeVar') {
+      available.add(op.name); // expression reads are validated by the re-derive
+    } else if (op.type === 'setCell') {
+      if (!available.has(op.column)) return `“${op.column}” must exist before a cell of it is edited.`;
+    }
+  }
+  return null;
 }
 
 /**

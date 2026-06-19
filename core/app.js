@@ -24,7 +24,7 @@ import { DatasetStore } from './dataset-store.js';
 import { DatasetLibrary, LIBRARY_CHANGED } from './library.js';
 import { ProjectStore } from './project-store.js';
 import { ProjectSync, PROJECT_CHANGED } from './project-sync.js';
-import { DataView, VariableView, HistoryView } from './data-views.js';
+import { DataView, VariableView, HistoryPanel } from './data-views.js';
 import { PluginLoader } from './loader.js';
 import { makeDemoDataset } from './demo-data.js';
 
@@ -149,8 +149,7 @@ export async function boot(mounts) {
   if (mounts.viewData && mounts.viewVars && mounts.tabs) {
     const dataView = new DataView(mounts.viewData, datasets);
     const variableView = new VariableView(mounts.viewVars, datasets);
-    const historyView = mounts.viewHistory ? new HistoryView(mounts.viewHistory, datasets) : null;
-    wireWorkspaceTabs(bus, mounts, { dataView, variableView, historyView, results: mounts.results });
+    wireWorkspaceTabs(bus, mounts, { dataView, variableView, results: mounts.results });
     // Keep the grid's header checkboxes in step when selection changes elsewhere
     // (e.g. the sidebar) — both surfaces drive the one shared selection.
     bus.on(CoreEvents.SELECTION_CHANGED, () => dataView.syncSelection());
@@ -174,6 +173,19 @@ export async function boot(mounts) {
     label: 'Redo',
     order: 20,
     command: () => void datasets.redo(),
+  });
+
+  // Edit ▸ History… — the *actions* log (loads + transforms) in a floating panel
+  // beside Undo/Redo. Distinct from the Data/Variables/Output tabs (inputs &
+  // outputs); History is what you did. Click a step to rewind live, reorder with
+  // ▲▼, or remove with ✕.
+  const historyPanel = new HistoryPanel(datasets, bus);
+  menus.register({
+    id: 'core:history',
+    path: ['Edit'],
+    label: 'History…',
+    order: 30,
+    command: () => historyPanel.toggle(),
   });
 
   // Transform ▸ Compute variable… / Recode into new variable… — Phase-2 data
@@ -328,9 +340,8 @@ function wireBusyIndicator(bus, el) {
  *   `viewHistory` is optional.
  * @param {{dataView: DataView, variableView: VariableView, historyView: ?HistoryView, results: HTMLElement}} views
  */
-function wireWorkspaceTabs(bus, mounts, { dataView, variableView, historyView, results }) {
+function wireWorkspaceTabs(bus, mounts, { dataView, variableView, results }) {
   const panels = { data: mounts.viewData, vars: mounts.viewVars, output: results };
-  if (historyView && mounts.viewHistory) panels.history = mounts.viewHistory;
   const buttons = [...mounts.tabs.querySelectorAll('.tab')];
   let current = 'output';
 
@@ -340,14 +351,12 @@ function wireWorkspaceTabs(bus, mounts, { dataView, variableView, historyView, r
     for (const [key, panel] of Object.entries(panels)) panel.hidden = key !== name;
     if (name === 'data') dataView.refresh();
     else if (name === 'vars') variableView.render();
-    else if (name === 'history') historyView?.render();
   };
 
   for (const b of buttons) b.addEventListener('click', () => show(b.dataset.view));
   bus.on(CoreEvents.DATA_CHANGED, () => {
     if (current === 'data') dataView.refresh();
     else if (current === 'vars') variableView.render();
-    else if (current === 'history') historyView?.render();
   });
   // Focus the relevant view for the action in progress.
   bus.on('analysis:started', () => show('output'));
