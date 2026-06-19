@@ -18,7 +18,7 @@ import { MenuShell } from './menu-shell.js';
 import { UiService } from './ui-service.js';
 import { ImportService } from './import-service.js';
 import { ExportService } from './export-service.js';
-import { OutputExport } from './output-export.js';
+import { OutputExportService } from './output-export.js';
 import { DatasetStore } from './dataset-store.js';
 import { DatasetLibrary, LIBRARY_CHANGED } from './library.js';
 import { ProjectStore } from './project-store.js';
@@ -45,6 +45,8 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-fred/index.js',
   './plugins/builtin-wikipedia/index.js',
   './plugins/builtin-csv-export/index.js',
+  './plugins/builtin-html-export/index.js',
+  './plugins/builtin-docx-export/index.js',
   './plugins/builtin-correlation/index.js',
   './plugins/builtin-logistic/index.js',
   './plugins/builtin-plots/index.js',
@@ -105,6 +107,15 @@ export async function boot(mounts) {
   const ui = new UiService(datasets);
   const importers = new ImportService({ menus, data: datasets, results: results.api, bus });
   const exporters = new ExportService({ menus, data: datasets, results: results.api, bus });
+  // Output export: host owns the "Export output…" dialog + the (host-only) print
+  // path; formats (HTML, Word, …) are plugins that register via app.outputExporters
+  // and read the result model through app.results.getModel.
+  const outputExporters = new OutputExportService({
+    resultsHost: mounts.results,
+    menus,
+    results: results.api,
+    bus,
+  });
   const datasetStore = new DatasetStore();
 
   // The service bundle the plugin broker dispatches against. `data`/`results`/
@@ -121,6 +132,7 @@ export async function boot(mounts) {
     ui: ui.api,
     importers: importers.api,
     exporters: exporters.api,
+    outputExporters: outputExporters.api,
     web: webService,
   };
   const loader = new PluginLoader(services);
@@ -191,9 +203,9 @@ export async function boot(mounts) {
   });
   projects.activate();
 
-  // Output export (host-owned): File ▸ Export output… → PDF / HTML report built
-  // from the live Output pane. Distinct from app.exporters (which exports data).
-  new OutputExport({ resultsHost: mounts.results, menus, projects, results: results.api, webr }).activate();
+  // Now that projects exist, let the output-export dialog default its report
+  // title to the active project name, and register its File menu item.
+  outputExporters.activate(projects);
 
   // The sidebar project manager (active project + datasets, other projects,
   // building blocks). Created here, after the services it drives exist.

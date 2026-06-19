@@ -97,6 +97,7 @@
             transform: makeNamespace('transform', ['updateVariable']),
             results: makeNamespace('results', [
               'beginSection', 'appendTable', 'appendPlot', 'updatePlot', 'appendText', 'appendError', 'clear',
+              'getModel', 'getStyles', 'getPlotPng',
             ]),
             webr: makeNamespace('webr', ['run', 'installPackages', 'writeFile', 'readFile', 'mountFile', 'unmount']),
             menus: makeNamespace('menus', ['register']),
@@ -104,6 +105,7 @@
             web: makeNamespace('web', ['get']),
             importers: makeNamespace('importers', ['register', 'deliver']),
             exporters: makeNamespace('exporters', ['register', 'deliver']),
+            outputExporters: makeNamespace('outputExporters', ['register', 'deliver']),
             events: makeNamespace('events', ['on', 'emit']),
           });
         }

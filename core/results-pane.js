@@ -126,6 +126,18 @@ export class ResultsPane {
   #nextPlotId = 1;
 
   /**
+   * The **result model**: an ordered, structured record of everything appended to
+   * the pane, parallel to the DOM. This is the single source the export plugins
+   * read (via {@link ResultsPane#getModel}) so output export honours the
+   * "everything is a plugin" model rather than scraping the host's shadow DOM.
+   * Item kinds: `{kind:'section', title}`, `{kind:'text', html}` (rendered),
+   * `{kind:'table', html}` (sanitised), `{kind:'plot', svg, id}`,
+   * `{kind:'error', message}`.
+   * @type {Array<object>}
+   */
+  #model = [];
+
+  /**
    * @param {HTMLElement} host - The element to attach the shadow root to.
    */
   constructor(host) {
@@ -161,6 +173,7 @@ export class ResultsPane {
     section.append(heading);
     this.#content.append(section);
     this.#currentSection = section;
+    this.#model.push({ kind: 'section', title: String(title ?? '') });
   }
 
   /**
@@ -171,8 +184,10 @@ export class ResultsPane {
    */
   appendTable(htmlString) {
     const block = this.#makeBlock();
-    block.innerHTML = sanitizeHtml(htmlString);
+    const safe = sanitizeHtml(htmlString);
+    block.innerHTML = safe;
     this.#place(block);
+    this.#model.push({ kind: 'table', html: safe });
   }
 
   /**
@@ -193,6 +208,7 @@ export class ResultsPane {
 
     const handle = this.#nextPlotId++;
     this.#plots.set(handle, holder);
+    this.#model.push({ kind: 'plot', svg: sanitizeHtml(svgString), id: handle });
 
     // If the plot knows how to redraw itself (a plugin callback), offer a button
     // that re-runs it at the box's *current* dimensions — the only way to change
@@ -233,7 +249,11 @@ export class ResultsPane {
    */
   updatePlot(handle, svgString) {
     const holder = this.#plots.get(handle);
-    if (holder) holder.innerHTML = sanitizeHtml(svgString);
+    if (!holder) return;
+    const safe = sanitizeHtml(svgString);
+    holder.innerHTML = safe;
+    const item = this.#model.find((m) => m.kind === 'plot' && m.id === handle);
+    if (item) item.svg = safe;
   }
 
   /**
@@ -246,8 +266,10 @@ export class ResultsPane {
   appendText(markdown) {
     const block = this.#makeBlock();
     block.className += ' results-note';
-    block.innerHTML = renderMiniMarkdown(markdown);
+    const html = renderMiniMarkdown(markdown);
+    block.innerHTML = html;
     this.#place(block);
+    this.#model.push({ kind: 'text', html });
   }
 
   /**
@@ -261,6 +283,7 @@ export class ResultsPane {
     block.className = 'results-block results-error';
     block.textContent = message;
     this.#place(block);
+    this.#model.push({ kind: 'error', message: String(message ?? '') });
   }
 
   /** Remove all output and reset to the empty state. */
@@ -268,7 +291,38 @@ export class ResultsPane {
     this.#content.replaceChildren();
     this.#currentSection = null;
     this.#plots.clear();
+    this.#model = [];
     this.#renderEmptyState();
+  }
+
+  /**
+   * The result model — a deep copy of the structured output record, for export
+   * plugins (`app.results.getModel`). Plot items carry their SVG and an `id` that
+   * {@link ResultsPane#getPlotPng} can rasterise.
+   * @returns {Array<object>}
+   */
+  getModel() {
+    return this.#model.map((m) => ({ ...m }));
+  }
+
+  /** The canonical results stylesheet, so an HTML export can reproduce the look
+   * (`app.results.getStyles`). */
+  getStyles() {
+    return RESULTS_STYLES;
+  }
+
+  /**
+   * Rasterise a plot to PNG bytes (`app.results.getPlotPng`). Done host-side from
+   * the live SVG element (the proven path) so export plugins don't need canvas in
+   * their sandbox. Resolves null if the id is unknown.
+   * @param {number} id - A plot item's `id` from {@link ResultsPane#getModel}.
+   * @returns {Promise<Uint8Array|null>}
+   */
+  async getPlotPng(id) {
+    const holder = this.#plots.get(id);
+    const svg = holder?.querySelector('svg');
+    if (!svg) return null;
+    return svgElToPngBytes(svg);
   }
 
   /**
@@ -291,6 +345,10 @@ export class ResultsPane {
       appendText: (m) => this.appendText(m),
       appendError: (m) => this.appendError(m),
       clear: () => this.clear(),
+      // Read surface for output-export plugins (honours "everything is a plugin").
+      getModel: () => this.getModel(),
+      getStyles: () => this.getStyles(),
+      getPlotPng: (id) => this.getPlotPng(id),
     });
   }
 

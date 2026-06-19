@@ -240,12 +240,13 @@ export class PluginBroker {
  * @param {object} s.menus   - MenuShell#api
  * @param {object} s.ui      - UiService#api
  * @param {object} s.importers - ImportService#api
- * @param {object} s.exporters - ExportService#api
+ * @param {object} s.exporters - ExportService#api (data export)
+ * @param {object} s.outputExporters - OutputExportService#api (output/report export)
  * @param {object} s.web - Host network fetch (`web.get`)
  * @param {import('./event-bus.js').EventBus} s.bus
  * @returns {Object<string, Function>}
  */
-function buildDispatch({ data, transform, results, webr, menus, ui, importers, exporters, web, bus }) {
+function buildDispatch({ data, transform, results, webr, menus, ui, importers, exporters, outputExporters, web, bus }) {
   return {
     'data.getDataFrame': (opts) => data.getDataFrame(opts),
     'data.getColumns': (opts) => data.getColumns(opts),
@@ -265,6 +266,9 @@ function buildDispatch({ data, transform, results, webr, menus, ui, importers, e
     'results.appendText': (m) => results.appendText(m),
     'results.appendError': (m) => results.appendError(m),
     'results.clear': () => results.clear(),
+    'results.getModel': () => results.getModel(),
+    'results.getStyles': () => results.getStyles(),
+    'results.getPlotPng': (id) => results.getPlotPng(id),
 
     'webr.run': (code, opts) => webr.run(code, opts),
     'webr.installPackages': (pkgs) => webr.installPackages(pkgs),
@@ -284,6 +288,9 @@ function buildDispatch({ data, transform, results, webr, menus, ui, importers, e
 
     'exporters.register': (spec) => exporters.register(spec),
     'exporters.deliver': (ticket, payload) => exporters.deliver(ticket, payload),
+
+    'outputExporters.register': (spec) => outputExporters.register(spec),
+    'outputExporters.deliver': (ticket, payload) => outputExporters.deliver(ticket, payload),
 
     'web.get': (url) => web.get(url),
 
