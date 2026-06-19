@@ -331,7 +331,10 @@
       .ct-dialog__buttons .ct-dialog__primary {
         background: var(--accent); color: #fff; border-color: var(--accent);
       }
-      /* Export-output dialog: Cancel sits apart on the left, the two save actions right. */
+      /* Export-output dialog: wide enough to keep the four actions on one row;
+         Cancel sits apart on the left, the save actions on the right. */
+      .ct-export { min-width: 480px; }
+      .ct-export__buttons button { white-space: nowrap; }
       .ct-export__buttons button[value="cancel"] { margin-right: auto; }
 
       /* --- busy indicator --- */

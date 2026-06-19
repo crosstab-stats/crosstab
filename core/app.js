@@ -193,7 +193,7 @@ export async function boot(mounts) {
 
   // Output export (host-owned): File ▸ Export output… → PDF / HTML report built
   // from the live Output pane. Distinct from app.exporters (which exports data).
-  new OutputExport({ resultsHost: mounts.results, menus, projects, results: results.api }).activate();
+  new OutputExport({ resultsHost: mounts.results, menus, projects, results: results.api, webr }).activate();
 
   // The sidebar project manager (active project + datasets, other projects,
   // building blocks). Created here, after the services it drives exist.

@@ -333,51 +333,72 @@ function makeSaveBtn(label, onClick) {
   return b;
 }
 
-/** Serialise the plot's `<svg>` to a standalone SVG string (xmlns guaranteed). */
-function plotSvgString(holder) {
-  const svg = holder.querySelector('svg');
-  if (!svg) return null;
-  const clone = svg.cloneNode(true);
+/**
+ * Serialise an `<svg>` element to a standalone SVG string (xmlns guaranteed).
+ * Exported so the output-export module can reuse it for the report/docx paths.
+ * @param {SVGElement} svgEl
+ * @returns {string}
+ */
+export function serializeSvgEl(svgEl) {
+  const clone = svgEl.cloneNode(true);
   if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
   return new XMLSerializer().serializeToString(clone);
 }
 
-/** Download the plot as a vector `.svg` file. */
-function savePlotSvg(holder, handle) {
-  const svg = plotSvgString(holder);
-  if (svg) downloadFile(`plot-${handle}.svg`, 'image/svg+xml;charset=utf-8', svg);
+/**
+ * Rasterise an `<svg>` element to PNG bytes via a canvas. The SVG is
+ * self-contained (svglite output, no external refs) so the canvas isn't tainted
+ * and `toBlob` works. Drawn at ~`scale`× device pixels on a white background.
+ * Exported for reuse by the docx exporter (which needs raster, not SVG).
+ *
+ * @param {SVGElement} svgEl
+ * @param {number} [scale=2] - Extra crispness multiplier on top of devicePixelRatio.
+ * @returns {Promise<Uint8Array>}
+ */
+export function svgElToPngBytes(svgEl, scale = 2) {
+  return new Promise((resolve, reject) => {
+    const svgStr = serializeSvgEl(svgEl);
+    const rect = svgEl.getBoundingClientRect();
+    const w = Math.max(1, Math.round(rect.width));
+    const h = Math.max(1, Math.round(rect.height));
+    const s = Math.max(1, window.devicePixelRatio || 1) * scale;
+    const url = URL.createObjectURL(new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' }));
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(w * s);
+      canvas.height = Math.round(h * s);
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      canvas.toBlob(async (b) => {
+        if (!b) return reject(new Error('canvas toBlob failed'));
+        resolve(new Uint8Array(await b.arrayBuffer()));
+      }, 'image/png');
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('SVG failed to load for rasterisation'));
+    };
+    img.src = url;
+  });
 }
 
-/**
- * Rasterise the plot's SVG to a `.png` via a canvas. The SVG is self-contained
- * (svglite output, no external refs) so the canvas isn't tainted and `toBlob`
- * works. Drawn at ~2× device pixels for crispness on a white background.
- */
+/** Download the plot as a vector `.svg` file. */
+function savePlotSvg(holder, handle) {
+  const svg = holder.querySelector('svg');
+  if (svg) downloadFile(`plot-${handle}.svg`, 'image/svg+xml;charset=utf-8', serializeSvgEl(svg));
+}
+
+/** Rasterise the plot's SVG to a `.png` and download it. */
 function savePlotPng(holder, handle) {
-  const svgEl = holder.querySelector('svg');
-  const svgStr = plotSvgString(holder);
-  if (!svgEl || !svgStr) return;
-  const rect = svgEl.getBoundingClientRect();
-  const scale = Math.max(1, window.devicePixelRatio || 1) * 2;
-  const w = Math.max(1, Math.round(rect.width));
-  const h = Math.max(1, Math.round(rect.height));
-  const url = URL.createObjectURL(new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' }));
-  const img = new Image();
-  img.onload = () => {
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.round(w * scale);
-    canvas.height = Math.round(h * scale);
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    URL.revokeObjectURL(url);
-    canvas.toBlob((png) => {
-      if (png) downloadFile(`plot-${handle}.png`, 'image/png', png);
-    }, 'image/png');
-  };
-  img.onerror = () => URL.revokeObjectURL(url);
-  img.src = url;
+  const svg = holder.querySelector('svg');
+  if (!svg) return;
+  svgElToPngBytes(svg)
+    .then((bytes) => downloadFile(`plot-${handle}.png`, 'image/png', bytes))
+    .catch((err) => console.error('[results] PNG export failed', err));
 }
 
 /**

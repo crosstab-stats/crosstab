@@ -556,11 +556,28 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     interactive buttons stripped; the PDF iframe path ran with no exception and no
     leaked iframe (print() is a silent no-op under automation but opens the dialog
     interactively); per-plot SVG (valid) and PNG (~25 KB, untainted) both download.
-  - *Deferred:* **Word/.docx** (needs a vendored OOXML lib — bigger lift); a
-    combined **Output + syntax + data-summary** report (ties to export-to-syntax /
-    the transform log — and the History panel already gives us that list); richer
-    table-aware pagination via **Paged.js**; per-table CSV/HTML of an individual
-    result table (overlaps with data export below).
+  - **Word / .docx — BUILT** (officer + flextable in WebR; the "Download Word"
+    button in the same dialog). No vendored lib needed: verified WebR's repo (R
+    4.6) has the whole chain — `officer`, `flextable`, `zip`, `xml2`, `gdtools`,
+    `systemfonts`, `ragg`, `textshaping`, `uuid`, `openssl` — and that they
+    **build a valid .docx at runtime in wasm** (spiked before wiring). officer
+    builds from R objects, not HTML, so the exporter walks the live Output pane
+    into a small content model (title/headings/paragraphs/table-grids/plot-PNGs)
+    and generates R that assembles it: section titles → headings, each result
+    table → a real editable **flextable**, each plot → an embedded **PNG** (Word
+    renders SVG unreliably; reuses the per-plot canvas rasteriser), notes →
+    paragraphs. Cell text passes through a `\u`/`\U`-escaping R-string encoder so
+    no jsonlite/encoding round-trip is needed. The officer chain installs once per
+    session on first Word export (~one-time, with a status note). **Verified in
+    Chrome:** menu → dialog → Download Word produced a 26 KB .docx whose
+    `docx_summary` shows real paragraph + table-cell content (title, table data,
+    percentages, **unicode "café" intact**) and whose zip carries the plot PNG in
+    `word/media/`.
+  - *Deferred:* a combined **Output + syntax + data-summary** report (ties to
+    export-to-syntax / the transform log — and the History panel already gives us
+    that list); rich Markdown→Word (notes currently flatten to plain paragraphs);
+    table-aware pagination via **Paged.js** for the PDF path; per-table CSV/HTML of
+    an individual result table (overlaps with data export below).
 - [~] **Export data (exporter extension point).** Symmetric with import: a plugin
       registers `app.exporters.register({ label, extensions, export })`, pulls the
       current (transformed) data via `app.data`, and returns bytes; the engine owns
