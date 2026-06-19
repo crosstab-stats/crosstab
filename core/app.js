@@ -21,7 +21,7 @@ import { ExportService } from './export-service.js';
 import { DatasetStore } from './dataset-store.js';
 import { LibrarySync } from './library.js';
 import { ProjectStore } from './project-store.js';
-import { ProjectSync } from './project-sync.js';
+import { ProjectSync, PROJECT_CHANGED } from './project-sync.js';
 import { DataView, VariableView } from './data-views.js';
 import { PluginLoader } from './loader.js';
 import { makeDemoDataset } from './demo-data.js';
@@ -127,12 +127,9 @@ export async function boot(mounts) {
   // --- shell wiring ----------------------------------------------------------
   wireStatusLine(bus, mounts.status, webr);
   if (mounts.busy) wireBusyIndicator(bus, mounts.busy);
-  const sidebar = new VariablesSidebar(mounts.sidebar, datasets);
-  bus.on(CoreEvents.DATA_CHANGED, () => sidebar.render());
-  bus.on(CoreEvents.SELECTION_CHANGED, () => sidebar.renderSelection());
-
-  // Dataset switcher (which open dataset is active).
-  if (mounts.tabs) wireDatasetSwitcher(bus, datasets, mounts.tabs);
+  // The sidebar is the project navigator: the project name + its datasets (switch
+  // active / add / remove / rename). Variable selection lives in the grid headers.
+  new ProjectSidebar(mounts.sidebar, datasets, bus);
 
   // Tabbed workspace: Data View (grid) / Variable View / Output (results pane).
   if (mounts.viewData && mounts.viewVars && mounts.tabs) {
@@ -250,51 +247,6 @@ function wireStatusLine(bus, el, webr) {
 }
 
 /**
- * Dataset switcher: a `<select>` (+ close button) in the workspace tab bar that
- * picks the active dataset. Re-renders whenever the dataset set changes.
- *
- * @param {EventBus} bus
- * @param {import('./dataset-manager.js').DatasetManager} datasets
- * @param {HTMLElement} tabsEl - The workspace tab bar (`#tabs`).
- */
-function wireDatasetSwitcher(bus, datasets, tabsEl) {
-  const wrap = document.createElement('div');
-  wrap.className = 'dataset-switch';
-  const select = document.createElement('select');
-  select.className = 'dataset-switch__select';
-  select.title = 'Active dataset';
-  select.addEventListener('change', () => datasets.setActive(Number(select.value)));
-  const closeBtn = document.createElement('button');
-  closeBtn.type = 'button';
-  closeBtn.className = 'dataset-switch__close';
-  closeBtn.textContent = '✕';
-  closeBtn.title = 'Close the active dataset';
-  closeBtn.addEventListener('click', () => {
-    const id = datasets.activeId;
-    if (id != null) void datasets.remove(id);
-  });
-  wrap.append(select, closeBtn);
-  tabsEl.prepend(wrap);
-
-  const render = () => {
-    const items = datasets.list();
-    select.replaceChildren();
-    for (const it of items) {
-      const opt = document.createElement('option');
-      opt.value = String(it.id);
-      opt.textContent = `${it.name} (${it.rowCount.toLocaleString()})`;
-      if (it.active) opt.selected = true;
-      select.append(opt);
-    }
-    closeBtn.disabled = items.length <= 1; // never close the last dataset
-    wrap.hidden = items.length === 0;
-  };
-  bus.on(DATASETS_CHANGED, render);
-  bus.on(CoreEvents.DATA_CHANGED, render); // refresh row counts as data loads
-  render();
-}
-
-/**
  * Drive the non-blocking "working" indicator from WebR job activity — the slow
  * path (package installs, file reads, analyses). It deliberately does NOT track
  * plugin RPCs or dialogs: while a plugin is awaiting `app.ui` input (e.g. the
@@ -372,79 +324,121 @@ function wireWorkspaceTabs(bus, mounts, { dataView, variableView, results }) {
 }
 
 /**
- * The left-hand variable list. Clicking a variable toggles its membership in the
- * dataset's selection, which analyses read via `app.data.getSelectedVariables()`.
- * This is intentionally minimal — a stand-in for the eventual data editor — but
- * it exercises the selection half of the data API end to end.
+ * The left sidebar: the **project navigator**. Shows the project name and the
+ * datasets in the current project — click to switch active, ✕ to remove,
+ * double-click a name to rename, and ＋ to add a dataset. (Variable selection
+ * lives in the grid column headers now, not here.)
  */
-class VariablesSidebar {
-  /** @param {HTMLElement} host @param {DataStore} store */
-  constructor(host, store) {
+class ProjectSidebar {
+  /**
+   * @param {HTMLElement} host
+   * @param {import('./dataset-manager.js').DatasetManager} datasets
+   * @param {EventBus} bus
+   */
+  constructor(host, datasets, bus) {
     this.host = host;
-    this.store = store;
+    this.datasets = datasets;
+    this.projectName = null;
+    bus.on(DATASETS_CHANGED, () => this.render());
+    bus.on(CoreEvents.DATA_CHANGED, () => this.render()); // refresh row counts
+    bus.on(PROJECT_CHANGED, ({ name } = {}) => {
+      this.projectName = name;
+      this.render();
+    });
     this.render();
   }
 
   render() {
     this.host.replaceChildren();
-    const heading = document.createElement('h2');
-    heading.className = 'sidebar__title';
-    heading.textContent = 'Variables';
-    this.host.append(heading);
+
+    const title = document.createElement('div');
+    title.className = 'proj__name';
+    title.textContent = this.projectName || 'Unsaved project';
+    this.host.append(title);
+
+    const sub = document.createElement('div');
+    sub.className = 'proj__sub';
+    sub.textContent = 'Datasets';
+    this.host.append(sub);
 
     const list = document.createElement('ul');
-    list.className = 'sidebar__list';
-    const selected = new Set(this.store.getSelectedVariables());
-
-    const allMeta = this.store.getVariableMeta();
-    if (allMeta.length === 0) {
-      // Cold start: the data engine (DuckDB) is still loading; no variables yet.
-      const note = document.createElement('p');
-      note.className = 'sidebar__empty';
-      note.textContent = 'Loading data…';
-      this.host.append(note);
-      return;
-    }
-
-    for (const meta of allMeta) {
-      const li = document.createElement('li');
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'sidebar__var';
-      btn.dataset.var = meta.name;
-      btn.setAttribute('aria-pressed', String(selected.has(meta.name)));
-      btn.title = `${meta.name} · ${meta.type} · ${meta.measurementLevel ?? ''}`;
-      btn.innerHTML =
-        `<span class="sidebar__var-label">${escapeHtml(meta.label ?? meta.name)}</span>` +
-        `<span class="sidebar__var-name">${escapeHtml(meta.name)}</span>`;
-      btn.addEventListener('click', () => this.toggle(meta.name));
-      li.append(btn);
-      list.append(li);
-    }
+    list.className = 'proj__datasets';
+    const items = this.datasets.list();
+    for (const it of items) list.append(this.#row(it, items.length));
     this.host.append(list);
+
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'proj__add';
+    add.textContent = '＋ Add dataset';
+    add.title = 'Add an empty dataset (then import or derive into it)';
+    add.addEventListener('click', () =>
+      this.datasets.add(`Dataset ${this.datasets.list().length + 1}`, { activate: true }),
+    );
+    this.host.append(add);
   }
 
-  /** Re-sync only the pressed state (cheaper than a full re-render). */
-  renderSelection() {
-    const selected = new Set(this.store.getSelectedVariables());
-    for (const btn of this.host.querySelectorAll('.sidebar__var')) {
-      btn.setAttribute('aria-pressed', String(selected.has(btn.dataset.var)));
-    }
+  #row(it, count) {
+    const li = document.createElement('li');
+    li.className = 'proj__ds' + (it.active ? ' proj__ds--active' : '');
+    li.addEventListener('click', () => {
+      if (!it.active) this.datasets.setActive(it.id);
+    });
+
+    const name = document.createElement('span');
+    name.className = 'proj__ds-name';
+    name.textContent = it.name;
+    name.title = 'Double-click to rename';
+    name.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      this.#rename(li, name, it);
+    });
+
+    const rows = document.createElement('span');
+    rows.className = 'proj__ds-rows';
+    rows.textContent = it.rowCount.toLocaleString();
+
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'proj__ds-x';
+    x.textContent = '✕';
+    x.title = 'Remove this dataset from the project';
+    x.disabled = count <= 1; // never remove the last dataset
+    x.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void this.datasets.remove(it.id);
+    });
+
+    li.append(name, rows, x);
+    return li;
   }
 
-  toggle(name) {
-    const selected = new Set(this.store.getSelectedVariables());
-    if (selected.has(name)) selected.delete(name);
-    else selected.add(name);
-    this.store.setSelectedVariables([...selected]);
+  /** Inline-rename a dataset row. */
+  #rename(li, nameEl, it) {
+    const input = document.createElement('input');
+    input.className = 'proj__ds-edit';
+    input.value = it.name;
+    let done = false;
+    const commit = () => {
+      if (done) return;
+      done = true;
+      const v = input.value.trim();
+      if (v && v !== it.name) this.datasets.rename(it.id, v);
+      else this.render();
+    };
+    input.addEventListener('click', (e) => e.stopPropagation());
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        input.blur();
+      } else if (e.key === 'Escape') {
+        done = true;
+        this.render();
+      }
+    });
+    input.addEventListener('blur', commit);
+    li.replaceChild(input, nameEl);
+    input.focus();
+    input.select();
   }
-}
-
-/** Escape a string for safe interpolation into innerHTML. */
-function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }

@@ -19,6 +19,9 @@ import { DATASETS_CHANGED } from './dataset-manager.js';
 
 const DEBOUNCE_MS = 800;
 
+/** Bus event: the current project's name/binding changed (drives the sidebar header). */
+export const PROJECT_CHANGED = 'project:changed';
+
 export class ProjectSync {
   #store;
   #datasets;
@@ -71,6 +74,12 @@ export class ProjectSync {
     this.#bus.on(CoreEvents.DATA_CHANGED, (s) => this.#onChange(s));
     this.#bus.on(DATASETS_CHANGED, () => this.#onChange(null));
     this.#setStatus();
+    this.#emitProject();
+  }
+
+  /** Broadcast the current project name so the sidebar header can show it. */
+  #emitProject() {
+    this.#bus.emit(PROJECT_CHANGED, { name: this.#binding?.name ?? null });
   }
 
   // --- save -----------------------------------------------------------------
@@ -101,6 +110,7 @@ export class ProjectSync {
       this.#binding = { id: savedId, name };
       this.#sourcesDirty.clear();
       this.#setStatus('saved');
+      this.#emitProject();
     } catch (err) {
       console.error('[project] save failed', err);
       this.#results.appendError(`Save project failed: ${err.message}`);
@@ -183,6 +193,7 @@ export class ProjectSync {
     this.#binding = null;
     this.#sourcesDirty.clear();
     this.#setStatus();
+    this.#emitProject();
   }
 
   /** Show the project browser, or open one directly by id. */
@@ -206,6 +217,7 @@ export class ProjectSync {
       this.#binding = { id, name };
       this.#sourcesDirty.clear();
       this.#setStatus('saved');
+      this.#emitProject();
     } catch (err) {
       console.error('[project] load failed', err);
       this.#results.appendError(`Open project failed: ${err.message}`);
@@ -221,6 +233,7 @@ export class ProjectSync {
       if (this.#binding?.id === id) {
         this.#binding = null;
         this.#setStatus();
+        this.#emitProject();
       }
     } catch (err) {
       this.#results.appendError(`Delete failed: ${err.message}`);
