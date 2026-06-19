@@ -370,12 +370,15 @@ export class HistoryView {
     const ol = document.createElement('ol');
     ol.className = 'history';
 
-    // State 0: the as-imported sources, before any transform.
+    // State 0: the as-imported sources, before any transform. When more than one
+    // source is present (an append/join happened), say so — otherwise this single
+    // base step reads misleadingly like "just the first import". (Imports/appends
+    // aren't ordered steps yet; that's the deferred unified-history follow-up.)
     ol.append(
       this.#step({
         n: 0,
         marker: '⤓',
-        title: 'Imported data',
+        title: sources.length > 1 ? 'Imported & combined data' : 'Imported data',
         detail: describeSources(sources),
         state: applied.length === 0 ? 'current' : 'applied',
       }),
@@ -437,14 +440,19 @@ export class HistoryView {
 
 // --- helpers -----------------------------------------------------------------
 
-/** One-line description of the as-imported base step from the source list. */
+/** One-line description of the base step from the source list — names every
+ * source and annotates how each was combined (rows added / joined), so an append
+ * or join after a recode is visibly accounted for in the base. */
 function describeSources(sources) {
   if (!sources || sources.length === 0) return '';
-  const named = sources.map((s) => s.label).filter(Boolean);
-  if (named.length === 0) {
-    return sources.length === 1 ? 'the original data' : `${sources.length} pooled sources`;
-  }
-  return named.join(' + ');
+  if (sources.length === 1) return sources[0].label || 'the original data';
+  return sources
+    .map((s, i) => {
+      const name = s.label || (i === 0 ? 'original data' : `source ${i + 1}`);
+      const mode = s.combine === 'append' ? ' (rows added)' : s.combine === 'join' ? ' (joined)' : '';
+      return name + mode;
+    })
+    .join(', ');
 }
 
 /** Human-readable title + detail for a transform-log entry. The variable editor
