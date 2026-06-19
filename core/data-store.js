@@ -107,10 +107,12 @@ export class DataStore {
    * (Legacy of the pre-projects model; projects now own autosave — kept harmless.) */
   binding = null;
 
-  /** Building-block library id this dataset is the working copy of (set when
-   * added from / saved to the library), so an explicit re-save UPDATES that block
-   * rather than making a duplicate. Persisted in the project bundle. */
-  libraryOrigin = null;
+  /** Link to a building-block library entry this dataset is the working copy of:
+   * `{ id, version }` or null. Set when added from / promoted to the library, so
+   * an explicit re-save UPDATES that block (bumping its version) instead of
+   * duplicating, and the sidebar can show "linked to V<n>". Persisted in the
+   * project bundle. (Version *propagation/pull* is a later feature.) */
+  libraryLink = null;
 
   /**
    * The immutable source tables, in load order. One per imported/appended file.

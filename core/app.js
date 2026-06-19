@@ -19,7 +19,7 @@ import { UiService } from './ui-service.js';
 import { ImportService } from './import-service.js';
 import { ExportService } from './export-service.js';
 import { DatasetStore } from './dataset-store.js';
-import { DatasetLibrary } from './library.js';
+import { DatasetLibrary, LIBRARY_CHANGED } from './library.js';
 import { ProjectStore } from './project-store.js';
 import { ProjectSync, PROJECT_CHANGED } from './project-sync.js';
 import { DataView, VariableView } from './data-views.js';
@@ -127,9 +127,8 @@ export async function boot(mounts) {
   // --- shell wiring ----------------------------------------------------------
   wireStatusLine(bus, mounts.status, webr);
   if (mounts.busy) wireBusyIndicator(bus, mounts.busy);
-  // The sidebar is the project navigator: the project name + its datasets (switch
-  // active / add / remove / rename). Variable selection lives in the grid headers.
-  new ProjectSidebar(mounts.sidebar, datasets, bus);
+  // (The sidebar project manager is created below, once the library + project
+  // services it drives exist.)
 
   // Tabbed workspace: Data View (grid) / Variable View / Output (results pane).
   if (mounts.viewData && mounts.viewVars && mounts.tabs) {
@@ -170,6 +169,7 @@ export async function boot(mounts) {
     ui,
     menus,
     results: results.api,
+    bus,
   });
   library.activate();
 
@@ -188,6 +188,10 @@ export async function boot(mounts) {
     statusEl: projStatus,
   });
   projects.activate();
+
+  // The sidebar project manager (active project + datasets, other projects,
+  // building blocks). Created here, after the services it drives exist.
+  new ProjectSidebar(mounts.sidebar, { datasets, projects, library, bus });
 
   // --- seed data + warm up the runtimes, in parallel -------------------------
   // The two WASM runtimes are independent, so load them concurrently rather than
@@ -329,17 +333,26 @@ function wireWorkspaceTabs(bus, mounts, { dataView, variableView, results }) {
  * lives in the grid column headers now, not here.)
  */
 class ProjectSidebar {
+  #token = 0;
+  #drag = null; // { kind: 'dataset'|'block', id }
+
   /**
    * @param {HTMLElement} host
-   * @param {import('./dataset-manager.js').DatasetManager} datasets
-   * @param {EventBus} bus
+   * @param {Object} deps
+   * @param {import('./dataset-manager.js').DatasetManager} deps.datasets
+   * @param {import('./project-sync.js').ProjectSync} deps.projects
+   * @param {import('./library.js').DatasetLibrary} deps.library
+   * @param {EventBus} deps.bus
    */
-  constructor(host, datasets, bus) {
+  constructor(host, { datasets, projects, library, bus }) {
     this.host = host;
     this.datasets = datasets;
+    this.projects = projects;
+    this.library = library;
     this.projectName = null;
     bus.on(DATASETS_CHANGED, () => this.render());
-    bus.on(CoreEvents.DATA_CHANGED, () => this.render()); // refresh row counts
+    bus.on(CoreEvents.DATA_CHANGED, () => this.render());
+    bus.on(LIBRARY_CHANGED, () => this.render());
     bus.on(PROJECT_CHANGED, ({ name } = {}) => {
       this.projectName = name;
       this.render();
@@ -347,24 +360,56 @@ class ProjectSidebar {
     this.render();
   }
 
-  render() {
+  async render() {
+    // Reads the project + block catalogs (async); keep only the latest render.
+    const token = ++this.#token;
+    let otherProjects = [];
+    let blocks = [];
+    try {
+      otherProjects = (await this.projects.listProjects()).filter((p) => p.id !== this.projects.activeId);
+    } catch {
+      /* OPFS unavailable */
+    }
+    try {
+      blocks = await this.library.list();
+    } catch {
+      /* OPFS unavailable */
+    }
+    if (token !== this.#token) return; // superseded by a newer render
+
     this.host.replaceChildren();
+    this.host.append(this.#projectZone());
+    this.host.append(this.#projectsZone(otherProjects));
+    this.host.append(this.#blocksZone(blocks));
+  }
 
-    const title = document.createElement('div');
-    title.className = 'proj__name';
-    title.textContent = this.projectName || 'Unsaved project';
-    this.host.append(title);
+  // --- zone 1: active project + its datasets ---------------------------------
 
-    const sub = document.createElement('div');
-    sub.className = 'proj__sub';
-    sub.textContent = 'Datasets';
-    this.host.append(sub);
+  #projectZone() {
+    const frag = document.createDocumentFragment();
+    const head = document.createElement('div');
+    head.className = 'proj__head';
+    const name = el('span', this.projectName || 'Unsaved project', 'proj__name');
+    const editBtn = iconBtn('✎', 'Rename project', () => {
+      if (this.projects.activeId) this.#inlineRename(head, name, name.textContent, (v) => this.projects.renameProject(this.projects.activeId, v));
+      else void this.projects.saveInteractive();
+    });
+    const delBtn = iconBtn('✕', 'Delete project', () => {
+      if (this.projects.activeId) void this.projects.deleteProject(this.projects.activeId);
+      else void this.projects.newProject();
+    });
+    head.append(name, editBtn, delBtn);
+    frag.append(head);
+
+    frag.append(el('div', 'Datasets', 'proj__sub'));
 
     const list = document.createElement('ul');
     list.className = 'proj__datasets';
+    // The datasets list is a drop target for building blocks (add to project).
+    this.#dropTarget(list, 'block', (id) => this.library.addBlockToProject(id));
     const items = this.datasets.list();
-    for (const it of items) list.append(this.#row(it, items.length));
-    this.host.append(list);
+    for (const it of items) list.append(this.#datasetRow(it, items.length));
+    frag.append(list);
 
     const add = document.createElement('button');
     add.type = 'button';
@@ -374,55 +419,159 @@ class ProjectSidebar {
     add.addEventListener('click', () =>
       this.datasets.add(`Dataset ${this.datasets.list().length + 1}`, { activate: true }),
     );
-    this.host.append(add);
+    frag.append(add);
+    return frag;
   }
 
-  #row(it, count) {
+  #datasetRow(it, count) {
     const li = document.createElement('li');
     li.className = 'proj__ds' + (it.active ? ' proj__ds--active' : '');
+    li.draggable = true;
+    li.addEventListener('dragstart', (e) => this.#startDrag(e, 'dataset', it.id));
+    li.addEventListener('dragend', () => (this.#drag = null));
     li.addEventListener('click', () => {
       if (!it.active) this.datasets.setActive(it.id);
     });
 
-    const name = document.createElement('span');
-    name.className = 'proj__ds-name';
-    name.textContent = it.name;
-    name.title = 'Double-click to rename';
+    const name = el('span', it.name, 'proj__ds-name');
+    name.title = 'Double-click to rename · drag to Building Blocks';
     name.addEventListener('dblclick', (e) => {
       e.stopPropagation();
-      this.#rename(li, name, it);
+      this.#inlineRename(li, name, it.name, (v) => this.datasets.rename(it.id, v), 'proj__ds-rows');
     });
+    li.append(name);
 
-    const rows = document.createElement('span');
-    rows.className = 'proj__ds-rows';
-    rows.textContent = it.rowCount.toLocaleString();
+    if (it.libraryLink) {
+      const badge = el('span', `v${it.libraryLink.version}`, 'proj__ds-link');
+      badge.title = 'Linked to a building block';
+      li.append(badge);
+    }
+    li.append(el('span', it.rowCount.toLocaleString(), 'proj__ds-rows'));
 
-    const x = document.createElement('button');
-    x.type = 'button';
-    x.className = 'proj__ds-x';
-    x.textContent = '✕';
-    x.title = 'Remove this dataset from the project';
-    x.disabled = count <= 1; // never remove the last dataset
-    x.addEventListener('click', (e) => {
+    const x = iconBtn('✕', 'Remove from project', (e) => {
       e.stopPropagation();
       void this.datasets.remove(it.id);
-    });
-
-    li.append(name, rows, x);
+    }, 'proj__ds-x');
+    x.disabled = count <= 1;
+    li.append(x);
     return li;
   }
 
-  /** Inline-rename a dataset row. */
-  #rename(li, nameEl, it) {
+  // --- zone 2: other saved projects ------------------------------------------
+
+  #projectsZone(projects) {
+    const frag = document.createDocumentFragment();
+    frag.append(el('div', 'Projects', 'proj__sub proj__sub--zone'));
+    if (projects.length === 0) {
+      frag.append(el('div', 'No other saved projects.', 'proj__empty'));
+      return frag;
+    }
+    const list = document.createElement('ul');
+    list.className = 'proj__datasets';
+    for (const p of projects) {
+      const li = document.createElement('li');
+      li.className = 'proj__ds';
+      li.title = 'Open this project';
+      li.addEventListener('click', () => void this.projects.openProject(p.id));
+      const name = el('span', p.name, 'proj__ds-name');
+      name.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        this.#inlineRename(li, name, p.name, (v) => this.projects.renameProject(p.id, v));
+      });
+      const edit = iconBtn('✎', 'Rename', (e) => {
+        e.stopPropagation();
+        this.#inlineRename(li, name, p.name, (v) => this.projects.renameProject(p.id, v));
+      }, 'proj__ds-x');
+      const del = iconBtn('✕', 'Delete project', (e) => {
+        e.stopPropagation();
+        void this.projects.deleteProject(p.id);
+      }, 'proj__ds-x');
+      li.append(name, edit, del);
+      list.append(li);
+    }
+    frag.append(list);
+    return frag;
+  }
+
+  // --- zone 3: building blocks -----------------------------------------------
+
+  #blocksZone(blocks) {
+    const frag = document.createDocumentFragment();
+    const sub = el('div', 'Building blocks', 'proj__sub proj__sub--zone');
+    frag.append(sub);
+    const list = document.createElement('ul');
+    list.className = 'proj__datasets';
+    // Drop a dataset here to promote it to a building block (v1).
+    this.#dropTarget(list, 'dataset', (id) => this.library.promoteToBlock(id));
+    if (blocks.length === 0) {
+      list.append(el('li', 'Drag a dataset here to save it as a reusable block.', 'proj__empty'));
+    }
+    for (const b of blocks) {
+      const li = document.createElement('li');
+      li.className = 'proj__ds';
+      li.draggable = true;
+      li.title = 'Click to add to the current project · drag onto Datasets';
+      li.addEventListener('dragstart', (e) => this.#startDrag(e, 'block', b.id));
+      li.addEventListener('dragend', () => (this.#drag = null));
+      li.addEventListener('click', () => void this.library.addBlockToProject(b.id));
+      li.append(el('span', b.name, 'proj__ds-name'));
+      li.append(el('span', `v${b.version ?? 1}`, 'proj__ds-link'));
+      const del = iconBtn('✕', 'Delete building block', (e) => {
+        e.stopPropagation();
+        void this.library.deleteBlock(b.id);
+      }, 'proj__ds-x');
+      li.append(del);
+      list.append(li);
+    }
+    frag.append(list);
+    return frag;
+  }
+
+  // --- drag + inline-rename helpers ------------------------------------------
+
+  #startDrag(e, kind, id) {
+    this.#drag = { kind, id };
+    e.dataTransfer.effectAllowed = 'copy';
+    e.dataTransfer.setData('text/plain', JSON.stringify(this.#drag));
+  }
+
+  /** Make `el` accept a drag of `kind`, calling `onDrop(id)` when one lands. */
+  #dropTarget(elm, kind, onDrop) {
+    elm.addEventListener('dragover', (e) => {
+      if (this.#drag?.kind === kind) {
+        e.preventDefault();
+        elm.classList.add('proj__drop');
+      }
+    });
+    elm.addEventListener('dragleave', () => elm.classList.remove('proj__drop'));
+    elm.addEventListener('drop', (e) => {
+      elm.classList.remove('proj__drop');
+      let payload = this.#drag;
+      if (!payload) {
+        try {
+          payload = JSON.parse(e.dataTransfer.getData('text/plain'));
+        } catch {
+          return;
+        }
+      }
+      if (payload?.kind !== kind) return;
+      e.preventDefault();
+      void onDrop(payload.id);
+      this.#drag = null;
+    });
+  }
+
+  /** Swap a name element for an input; commit on Enter/blur, cancel on Esc. */
+  #inlineRename(parent, nameEl, current, onCommit, beforeClass) {
     const input = document.createElement('input');
     input.className = 'proj__ds-edit';
-    input.value = it.name;
+    input.value = current;
     let done = false;
     const commit = () => {
       if (done) return;
       done = true;
       const v = input.value.trim();
-      if (v && v !== it.name) this.datasets.rename(it.id, v);
+      if (v && v !== current) onCommit(v);
       else this.render();
     };
     input.addEventListener('click', (e) => e.stopPropagation());
@@ -436,8 +585,28 @@ class ProjectSidebar {
       }
     });
     input.addEventListener('blur', commit);
-    li.replaceChild(input, nameEl);
+    parent.replaceChild(input, nameEl);
     input.focus();
     input.select();
+    void beforeClass;
   }
+}
+
+/** A small text element: `el(tag, text, className)`. */
+function el(tag, text, className) {
+  const e = document.createElement(tag);
+  e.textContent = text ?? '';
+  if (className) e.className = className;
+  return e;
+}
+
+/** A small icon button. */
+function iconBtn(glyph, title, onClick, className = 'proj__ds-x') {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = className;
+  b.textContent = glyph;
+  b.title = title;
+  b.addEventListener('click', onClick);
+  return b;
 }

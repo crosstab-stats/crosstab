@@ -76,9 +76,13 @@ export class DatasetStore {
    * + the catalog are rewritten — valid only when the entry already exists with
    * its sources on disk.
    *
+   * A building block is **versioned**: a new entry starts at V1, and overwriting
+   * an existing one (same `id`) bumps the version — the basis for linked datasets
+   * tracking "linked to V<n>".
+   *
    * @param {{id?: string, name: string, savedAt: number, state: DatasetState}} entry
    * @param {{writeSources?: boolean}} [opts]
-   * @returns {Promise<string>} The entry id (newly minted if none was given).
+   * @returns {Promise<{id: string, version: number}>} The entry id + new version.
    */
   async save({ id, name, savedAt, state }, { writeSources = true } = {}) {
     // Ask the browser to keep this data (OPFS is evictable by default).
@@ -92,6 +96,10 @@ export class DatasetStore {
     const root = await this.#root(true);
     id = id || crypto.randomUUID();
     const dir = await root.getDirectoryHandle(id, { create: true });
+
+    const cat = await this.#readCatalog();
+    const existing = cat.entries.find((e) => e.id === id);
+    const version = existing ? (existing.version || 1) + 1 : 1;
 
     const sources = [];
     for (let i = 0; i < state.sources.length; i++) {
@@ -109,14 +117,14 @@ export class DatasetStore {
       sources.push(entry);
     }
 
-    const manifest = { name, savedAt, sources, transforms: state.transforms ?? [] };
+    const manifest = { name, savedAt, version, sources, transforms: state.transforms ?? [] };
     await this.#write(dir, 'manifest.json', JSON.stringify(manifest));
 
-    const cat = await this.#readCatalog();
     const summary = {
       id,
       name,
       savedAt,
+      version,
       rowCount: state.rowCount ?? 0,
       varCount: state.varCount ?? 0,
       sourceCount: state.sources.length,
@@ -124,9 +132,9 @@ export class DatasetStore {
     const idx = cat.entries.findIndex((e) => e.id === id);
     if (idx >= 0) cat.entries[idx] = summary;
     else cat.entries.push(summary);
-    await this.#write(await this.#root(true), CATALOG, JSON.stringify(cat));
+    await this.#write(root, CATALOG, JSON.stringify(cat));
 
-    return id;
+    return { id, version };
   }
 
   /**
@@ -154,6 +162,7 @@ export class DatasetStore {
       id,
       name: manifest.name,
       savedAt: manifest.savedAt,
+      version: manifest.version ?? 1,
       state: { sources, transforms: manifest.transforms ?? [] },
     };
   }

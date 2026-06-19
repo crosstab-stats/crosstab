@@ -14,12 +14,17 @@
  * moved up to the project tier.)
  */
 
+/** Bus event: the building-block library changed (block saved/deleted) — the
+ * sidebar's Building Blocks zone re-renders on this. */
+export const LIBRARY_CHANGED = 'library:changed';
+
 export class DatasetLibrary {
   #store;
   #data;
   #ui;
   #menus;
   #results;
+  #bus;
 
   /**
    * @param {Object} deps
@@ -28,13 +33,20 @@ export class DatasetLibrary {
    * @param {import('./ui-service.js').UiService} deps.ui
    * @param {import('./menu-shell.js').MenuShell} deps.menus
    * @param {{appendError: Function, appendText: Function}} deps.results
+   * @param {import('./event-bus.js').EventBus} deps.bus
    */
-  constructor({ datasetStore, data, ui, menus, results }) {
+  constructor({ datasetStore, data, ui, menus, results, bus }) {
     this.#store = datasetStore;
     this.#data = data;
     this.#ui = ui;
     this.#menus = menus;
     this.#results = results;
+    this.#bus = bus;
+  }
+
+  /** List building blocks (for the sidebar). */
+  list() {
+    return this.#store.list();
   }
 
   activate() {
@@ -67,9 +79,9 @@ export class DatasetLibrary {
     }
     // Does this dataset already correspond to a still-existing block?
     let existing = null;
-    if (ds.libraryOrigin != null) {
+    if (ds.libraryLink) {
       try {
-        existing = (await this.#store.list()).find((e) => e.id === ds.libraryOrigin) ?? null;
+        existing = (await this.#store.list()).find((e) => e.id === ds.libraryLink.id) ?? null;
       } catch {
         existing = null;
       }
@@ -77,7 +89,7 @@ export class DatasetLibrary {
     const form = await this.#ui.showForm({
       title: existing ? 'Update building block' : 'Save dataset to library',
       hint: existing
-        ? `Update the existing building block “${existing.name}” with this dataset's current state.`
+        ? `Update the existing building block “${existing.name}” (→ v${(existing.version || 1) + 1}).`
         : 'Make this dataset a reusable building block you can add to any project.',
       fields: [{ name: 'name', label: 'Name', value: existing?.name ?? ds.name }],
       okLabel: existing ? 'Update' : 'Save',
@@ -86,18 +98,56 @@ export class DatasetLibrary {
     if (!name) return;
     try {
       const state = await ds.exportState({ includeParquet: true });
-      const savedId = await this.#store.save(
+      const { id, version } = await this.#store.save(
         { id: existing?.id, name, savedAt: Date.now(), state },
         { writeSources: true },
       );
-      ds.libraryOrigin = savedId; // future saves update this same block
+      ds.libraryLink = { id, version }; // this dataset now tracks the block @ this version
+      this.#bus?.emit(LIBRARY_CHANGED);
       this.#results.appendText(
-        existing ? `Updated **${name}** in the dataset library.` : `Saved **${name}** to the dataset library.`,
+        existing ? `Updated **${name}** in the library (v${version}).` : `Saved **${name}** to the library (v${version}).`,
       );
     } catch (err) {
       console.error('[library] save failed', err);
       this.#results.appendError(`Save to library failed: ${err.message}`);
     }
+  }
+
+  /**
+   * Promote a dataset to a NEW building block (v1) and link the dataset to it —
+   * the drag-to-Building-Blocks gesture. The dataset keeps its (cached) copy and
+   * is now marked "linked to v1".
+   *
+   * @param {number} datasetId
+   */
+  async promoteToBlock(datasetId) {
+    const ds = this.#data.get(datasetId);
+    if (!ds || ds.rowCount === 0) return;
+    try {
+      const state = await ds.exportState({ includeParquet: true });
+      const { id, version } = await this.#store.save(
+        { name: ds.name, savedAt: Date.now(), state },
+        { writeSources: true },
+      );
+      ds.libraryLink = { id, version };
+      this.#bus?.emit(LIBRARY_CHANGED);
+      this.#data.touch?.(); // refresh the sidebar's "linked" badge
+      this.#results.appendText(`Promoted **${ds.name}** to a building block (v${version}).`);
+    } catch (err) {
+      console.error('[library] promote failed', err);
+      this.#results.appendError(`Promote to building block failed: ${err.message}`);
+    }
+  }
+
+  /** Add a copy of a building block into the current project, linked to its
+   * current version. Public entry point for the sidebar / drag. */
+  async addBlockToProject(id) {
+    await this.#add(id);
+  }
+
+  /** Delete a building block from the library. */
+  async deleteBlock(id) {
+    await this.#delete(id);
   }
 
   /** Browse building blocks and add a copy of one into the current project. */
@@ -116,10 +166,11 @@ export class DatasetLibrary {
    * dataset). */
   async #add(id) {
     try {
-      const { name, state } = await this.#store.load(id);
+      const { name, version, state } = await this.#store.load(id);
       const ds = this.#data.add(name, { activate: true });
       await ds.restoreState(state);
-      ds.libraryOrigin = id; // remember which block this is a copy of (for re-save)
+      ds.libraryLink = { id, version }; // linked to this block @ this version
+      this.#data.touch?.(); // refresh the "linked" badge
     } catch (err) {
       console.error('[library] add failed', err);
       this.#results.appendError(`Add from library failed: ${err.message}`);
@@ -129,6 +180,7 @@ export class DatasetLibrary {
   async #delete(id) {
     try {
       await this.#store.delete(id);
+      this.#bus?.emit(LIBRARY_CHANGED);
     } catch (err) {
       this.#results.appendError(`Delete failed: ${err.message}`);
     }

@@ -69,6 +69,17 @@ export class DatasetManager {
     return [...this.#datasets.values()];
   }
 
+  /** A specific open dataset by id, or undefined. */
+  get(id) {
+    return this.#datasets.get(id);
+  }
+
+  /** Nudge listeners to re-render the dataset list (e.g. a link badge changed)
+   * without any structural change. */
+  touch() {
+    this.#bus.emit(DATASETS_CHANGED, this.list());
+  }
+
   /** Summaries for the dataset switcher. */
   list() {
     return [...this.#datasets.values()].map((ds) => ({
@@ -76,6 +87,7 @@ export class DatasetManager {
       name: ds.name,
       rowCount: ds.rowCount,
       active: ds.id === this.#activeId,
+      libraryLink: ds.libraryLink ?? null,
     }));
   }
 
@@ -159,7 +171,7 @@ export class DatasetManager {
     // id) map back consistently across save/load.
     for (const d of datasets) {
       const ds = new DataStore(this.#bus, this.#duckdb, { id: d.id, name: d.name });
-      ds.libraryOrigin = d.libraryOrigin ?? null;
+      ds.libraryLink = d.libraryLink ?? null;
       this.#datasets.set(d.id, ds);
       await ds.restoreState(d.state);
     }

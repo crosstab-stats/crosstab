@@ -200,7 +200,7 @@ export class ProjectSync {
     const datasets = [];
     for (const ds of this.#datasets.all()) {
       const state = await ds.exportState({ includeParquet: all || dirty.has(ds.id) });
-      datasets.push({ id: ds.id, name: ds.name, libraryOrigin: ds.libraryOrigin ?? null, state });
+      datasets.push({ id: ds.id, name: ds.name, libraryLink: ds.libraryLink ?? null, state });
     }
     return { activeId: this.#datasets.activeId, datasets };
   }
@@ -266,6 +266,47 @@ export class ProjectSync {
     } catch (err) {
       this.#results.appendError(`Delete failed: ${err.message}`);
     }
+  }
+
+  // --- sidebar surface -------------------------------------------------------
+
+  /** Id of the current project, or null if unsaved. */
+  get activeId() {
+    return this.#binding?.id ?? null;
+  }
+
+  /** Summaries of all saved projects (for the sidebar's Projects zone). */
+  listProjects() {
+    return this.#store.list();
+  }
+
+  /** Rename a project. The active project renames in place (and re-saves);
+   * another project is renamed on disk. */
+  async renameProject(id, name) {
+    name = String(name).trim();
+    if (!name) return;
+    try {
+      if (id === this.#binding?.id) {
+        this.#binding.name = name;
+        await this.#store.rename(id, name);
+        this.#emitProject();
+        this.#setStatus('saved');
+      } else if (id) {
+        await this.#store.rename(id, name);
+        this.#emitProject(); // refresh the sidebar list
+      }
+    } catch (err) {
+      this.#results.appendError(`Rename project failed: ${err.message}`);
+    }
+  }
+
+  /** Delete a project. Deleting the active one drops you into a fresh Untitled
+   * project (one empty dataset, autosaves on first edit). */
+  async deleteProject(id) {
+    const wasActive = id === this.#binding?.id;
+    await this.#delete(id);
+    if (wasActive) await this.newProject();
+    else this.#emitProject(); // refresh the list
   }
 
   // --- UI helpers -----------------------------------------------------------

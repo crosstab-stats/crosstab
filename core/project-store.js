@@ -80,7 +80,7 @@ export class ProjectStore {
       datasets.push({
         id: d.id,
         name: d.name,
-        libraryOrigin: d.libraryOrigin ?? null,
+        libraryLink: d.libraryLink ?? null,
         sources,
         transforms: d.state.transforms ?? [],
       });
@@ -124,11 +124,24 @@ export class ProjectStore {
       datasets.push({
         id: d.id,
         name: d.name,
-        libraryOrigin: d.libraryOrigin ?? null,
+        libraryLink: d.libraryLink ?? null,
         state: { sources, transforms: d.transforms ?? [] },
       });
     }
     return { id, name: manifest.name, bundle: { activeId: manifest.activeId, datasets } };
+  }
+
+  /** Rename a project (updates its manifest + the catalog). */
+  async rename(id, name) {
+    const root = await this.#root(true);
+    const dir = await root.getDirectoryHandle(id);
+    const manifest = JSON.parse(await this.#read(dir, 'project.json'));
+    manifest.name = name;
+    await this.#write(dir, 'project.json', JSON.stringify(manifest));
+    const cat = await this.#readCatalog();
+    const e = cat.entries.find((x) => x.id === id);
+    if (e) e.name = name;
+    await this.#write(root, CATALOG, JSON.stringify(cat));
   }
 
   /** Delete a project bundle and drop it from the catalog. */
