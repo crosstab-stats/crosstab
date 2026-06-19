@@ -19,6 +19,7 @@ import { UiService } from './ui-service.js';
 import { ImportService } from './import-service.js';
 import { ExportService } from './export-service.js';
 import { OutputExportService } from './output-export.js';
+import { ComputeRecode } from './compute-recode.js';
 import { DatasetStore } from './dataset-store.js';
 import { DatasetLibrary, LIBRARY_CHANGED } from './library.js';
 import { ProjectStore } from './project-store.js';
@@ -174,6 +175,10 @@ export async function boot(mounts) {
     order: 20,
     command: () => void datasets.redo(),
   });
+
+  // Transform ▸ Compute variable… / Recode into new variable… — Phase-2 data
+  // transforms that create derived variables (logged, undoable, in History).
+  new ComputeRecode({ data: datasets, menus, results: results.api }).activate();
 
   // Dataset library (OPFS), tier 2: reusable building blocks — explicit
   // "Save dataset to library" / "Add dataset from library". No autosave here;

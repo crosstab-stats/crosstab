@@ -251,6 +251,12 @@ export class DatasetManager {
   setCell(rid, column, value, displayRow) {
     return this.active.setCell(rid, column, value, displayRow);
   }
+  computeVariable(name, expr, varType) {
+    return this.active.computeVariable(name, expr, varType);
+  }
+  recodeVariable(name, source, rules, varType, elseRule) {
+    return this.active.recodeVariable(name, source, rules, varType, elseRule);
+  }
   getTransforms() {
     return this.active.getTransforms();
   }

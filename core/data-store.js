@@ -376,8 +376,18 @@ export class DataStore {
       }
       return { source: s, cols };
     });
+    // Replay the log in order: metadata patches, and the new variables created by
+    // compute/recode (added after the source/join columns, in creation order).
     for (const t of this.#transforms) {
       if (t.type === 'setVariable') applyPatch(byName.get(t.name), t.patch);
+      else if (t.type === 'computeVar' || t.type === 'recodeVar') {
+        byName.set(t.name, {
+          name: t.name,
+          label: t.label,
+          type: normType(t.varType),
+          measurementLevel: normType(t.varType) === 'numeric' ? 'scale' : 'nominal',
+        });
+      }
     }
     this.#variables = [...byName.values()];
     this.#byName = byName;
@@ -422,6 +432,7 @@ export class DataStore {
         });
         sql = `SELECT ${selectCols.join(', ')} FROM ${from}`;
       }
+      sql = this.#applyComputed(sql);
       sql = this.#applyCellOverrides(sql);
       await this.#duckdb.query(`CREATE OR REPLACE VIEW ${quoteIdent(this.#view)} AS ${sql}`);
       await this.#refreshSqlTypes();
@@ -544,6 +555,91 @@ export class DataStore {
       return `CASE ${rq} ${whens} ELSE ${q} END AS ${q}`;
     });
     return `SELECT ${cols.join(', ')}, ${rq} FROM (${innerSql})`;
+  }
+
+  /**
+   * Create a **computed variable** from a SQL scalar expression over existing
+   * columns (e.g. `weight / (height^2)`). A logged, non-destructive transform: it
+   * adds a derived column to the view (sources stay immutable), is undoable, shows
+   * in History, and exports to syntax. A later compute may reference an earlier
+   * one. Invalid SQL is rejected (the transform is rolled back and the error
+   * surfaced) so a bad expression never leaves the dataset broken.
+   *
+   * @param {string} name - New variable name (must be a fresh identifier).
+   * @param {string} expr - A DuckDB scalar expression referencing variable names.
+   * @param {VariableType} [varType='numeric']
+   * @returns {Promise<void>}
+   */
+  async computeVariable(name, expr, varType = 'numeric') {
+    this.#assertNewVarName(name);
+    if (!expr || !String(expr).trim()) throw new Error('Compute: the expression is empty.');
+    await this.#addDerivedVar({ type: 'computeVar', name: name.trim(), expr: String(expr), varType: normType(varType) });
+  }
+
+  /**
+   * Create a **recoded variable** by mapping an existing variable's values via
+   * structured rules (collapse categories, reverse-code, bin a scale). A logged,
+   * non-destructive transform (new variable by default), undoable, in History, and
+   * exported to syntax. Rules are `{from:'value'|'range'|'missing', value?|lo?,hi?,
+   * to:{kind:'value'|'copy'|'sysmis', value?}}`; `elseRule` handles all other
+   * values (default: copy the source).
+   *
+   * @param {string} name
+   * @param {string} source - Existing variable to recode from.
+   * @param {Array<object>} rules
+   * @param {VariableType} [varType='numeric']
+   * @param {{kind:string, value?:any}} [elseRule]
+   * @returns {Promise<void>}
+   */
+  async recodeVariable(name, source, rules, varType = 'numeric', elseRule = { kind: 'copy' }) {
+    this.#assertNewVarName(name);
+    if (!this.#byName.has(source)) throw new Error(`Recode: source variable "${source}" not found.`);
+    await this.#addDerivedVar({
+      type: 'recodeVar',
+      name: name.trim(),
+      source,
+      rules: Array.isArray(rules) ? rules : [],
+      elseRule: elseRule ?? { kind: 'copy' },
+      varType: normType(varType),
+    });
+  }
+
+  /** Push a compute/recode transform and re-derive; roll back if the generated SQL
+   * is invalid so the dataset is never left broken. */
+  async #addDerivedVar(t) {
+    this.#transforms.push(t);
+    this.#redoStack = [];
+    try {
+      await this.rederive('transform');
+    } catch (err) {
+      this.#transforms.pop();
+      await this.rederive('transform');
+      throw new Error(err?.message || String(err));
+    }
+  }
+
+  /** Validate a new variable name: a fresh, identifier-like name. */
+  #assertNewVarName(name) {
+    const n = (name ?? '').trim();
+    if (!n) throw new Error('A variable name is required.');
+    if (!/^[A-Za-z][A-Za-z0-9_.]*$/.test(n)) {
+      throw new Error('Name must start with a letter and use only letters, digits, _ or .');
+    }
+    if (this.#byName.has(n)) throw new Error(`A variable named "${n}" already exists.`);
+  }
+
+  /** Chain compute/recode columns onto the view in log order (each wraps the prior
+   * SQL, so a later derived var can reference an earlier one). Result is cast to
+   * the declared type so `getColumns` reads it correctly. */
+  #applyComputed(innerSql) {
+    let sql = innerSql;
+    for (const t of this.#transforms) {
+      if (t.type !== 'computeVar' && t.type !== 'recodeVar') continue;
+      const cast = normType(t.varType) === 'numeric' ? 'DOUBLE' : 'VARCHAR';
+      const scalar = t.type === 'computeVar' ? `(${t.expr})` : recodeCaseSql(t);
+      sql = `SELECT *, TRY_CAST(${scalar} AS ${cast}) AS ${quoteIdent(t.name)} FROM (${sql})`;
+    }
+    return sql;
   }
 
   /**
@@ -1042,6 +1138,52 @@ function cellLiteral(val, isNumeric) {
     return Number.isFinite(n) ? String(n) : 'NULL';
   }
   return sqlString(val);
+}
+
+/** Clamp a variable type to a known value (defaults to numeric). */
+function normType(t) {
+  return t === 'string' || t === 'factor' ? t : 'numeric';
+}
+
+/**
+ * Build the `CASE … END` SQL for a recode transform. Exact-value rules compare on
+ * text (so factor codes match); range rules compare numerically; `missing` checks
+ * NULL. `to`/`elseRule` map to a typed literal, the source value (`copy`), or NULL
+ * (`sysmis`). Unmatched falls to `elseRule` (default: copy).
+ *
+ * @param {{source:string, rules:Array, elseRule:object, varType:string}} t
+ * @returns {string}
+ */
+function recodeCaseSql(t) {
+  const src = quoteIdent(t.source);
+  const isNum = normType(t.varType) === 'numeric';
+  const whens = (t.rules ?? [])
+    .map((r) => {
+      let cond;
+      if (r.from === 'range') {
+        const lo = Number(r.lo);
+        const hi = Number(r.hi);
+        cond =
+          Number.isFinite(lo) && Number.isFinite(hi)
+            ? `TRY_CAST(${src} AS DOUBLE) BETWEEN ${lo} AND ${hi}`
+            : '1 = 0';
+      } else if (r.from === 'missing') {
+        cond = `${src} IS NULL`;
+      } else {
+        cond = `CAST(${src} AS VARCHAR) = ${sqlString(String(r.value ?? ''))}`;
+      }
+      return `WHEN ${cond} THEN ${recodeTo(r.to, isNum, src)}`;
+    })
+    .join(' ');
+  const elseSql = recodeTo(t.elseRule ?? { kind: 'copy' }, isNum, src);
+  return `CASE ${whens} ELSE ${elseSql} END`;
+}
+
+/** SQL for a recode target: a typed literal, the source value (copy), or NULL. */
+function recodeTo(to, isNum, srcQ) {
+  if (!to || to.kind === 'sysmis') return 'NULL';
+  if (to.kind === 'copy') return `CAST(${srcQ} AS ${isNum ? 'DOUBLE' : 'VARCHAR'})`;
+  return cellLiteral(to.value, isNum);
 }
 
 /**

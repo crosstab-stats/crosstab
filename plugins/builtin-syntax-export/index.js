@@ -72,7 +72,8 @@ function buildRSyntax(transforms, meta) {
   L.push('');
 
   const typeOf = new Map((meta || []).map((m) => [m.name, m.type]));
-  const steps = transforms.filter((t) => t && (t.type === 'setVariable' || t.type === 'setCell'));
+  const kinds = ['setVariable', 'setCell', 'computeVar', 'recodeVar'];
+  const steps = transforms.filter((t) => t && kinds.includes(t.type));
   if (steps.length === 0) {
     L.push('# (No transforms recorded — the dataset is as imported.)');
   } else {
@@ -82,6 +83,12 @@ function buildRSyntax(transforms, meta) {
       if (t.type === 'setCell') {
         L.push(`# Step ${n}: edit cell — ${t.column}, row ${t.row + 1}`);
         L.push(cellToR(t, typeOf.get(t.column) === 'numeric'));
+      } else if (t.type === 'computeVar') {
+        L.push(`# Step ${n}: compute ${t.name}`);
+        L.push(...computeVarToR(t));
+      } else if (t.type === 'recodeVar') {
+        L.push(`# Step ${n}: recode ${t.source} → ${t.name}`);
+        L.push(...recodeVarToR(t));
       } else if (t.name) {
         L.push(`# Step ${n}: ${t.name}`);
         L.push(...transformToR(t.name, t.patch || {}));
@@ -98,6 +105,57 @@ function buildRSyntax(transforms, meta) {
   }
   L.push('');
   return L.join('\n');
+}
+
+/** R for a computed variable. The expression is a DuckDB scalar expr; double-
+ * quoted SQL identifiers become R backticks so `with(d, …)` resolves columns.
+ * Arithmetic carries over directly; uncommon SQL functions may need a tweak. */
+function computeVarToR(t) {
+  return [
+    `d[[${rChar(t.name)}]] <- with(d, ${sqlExprToR(t.expr)})`,
+    `# (from the expression: ${t.expr} — verify any SQL functions in R)`,
+  ];
+}
+
+/** R for a recoded variable: initialise from the else-rule, then apply rules in
+ * reverse so the first matching rule wins (matching DuckDB's CASE order). */
+function recodeVarToR(t) {
+  const v = `d[[${rChar(t.name)}]]`;
+  const s = `d[[${rChar(t.source)}]]`;
+  const isNum = t.varType === 'numeric';
+  const out = [];
+  out.push(`${v} <- ${recodeToR(t.elseRule || { kind: 'copy' }, s, isNum)}`);
+  const rules = t.rules || [];
+  const needsNum = rules.some((r) => r.from === 'range');
+  if (needsNum) out.push(`.x <- suppressWarnings(as.numeric(as.character(${s})))`);
+  for (const r of [...rules].reverse()) {
+    let cond;
+    if (r.from === 'range') cond = `!is.na(.x) & .x >= ${Number(r.lo)} & .x <= ${Number(r.hi)}`;
+    else if (r.from === 'missing') cond = `is.na(${s})`;
+    else cond = `!is.na(${s}) & as.character(${s}) == ${rChar(String(r.value ?? ''))}`;
+    const to = r.to && r.to.kind === 'copy' ? `${s}[${cond}]` : recodeToR(r.to, s, isNum);
+    out.push(`${v}[${cond}] <- ${to}`);
+  }
+  if (needsNum) out.push('rm(.x)');
+  return out;
+}
+
+/** R scalar for a recode target used as a whole-column initialiser. */
+function recodeToR(to, s, isNum) {
+  if (!to || to.kind === 'sysmis') return 'NA';
+  if (to.kind === 'copy') return s;
+  if (to.value === '' || to.value == null) return 'NA';
+  if (isNum) {
+    const n = Number(to.value);
+    return Number.isFinite(n) ? String(n) : 'NA';
+  }
+  return rChar(to.value);
+}
+
+/** Turn double-quoted SQL identifiers into R backtick names (so column refs in a
+ * computed expression resolve under `with(d, …)`); leaves the rest as-is. */
+function sqlExprToR(expr) {
+  return String(expr).replace(/"((?:[^"]|"")*)"/g, (_, g) => '`' + g.replace(/""/g, '"') + '`');
 }
 
 /** R line for one `setCell` override (1-based row; NA for blank). */

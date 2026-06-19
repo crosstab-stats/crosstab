@@ -498,9 +498,32 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     designate code `1` missing, relabel; a Frequencies run then showed Female 15
     valid / **15 Missing** — i.e. the recode flowed end to end into the analysis.
     This is the GSS fix path (retype `age`→numeric + designate negative codes).
-  - **Phase 2 (deferred) — value-recode / compute (data-mutating):** collapse
-    categories into a new variable, computed vars — `CREATE TABLE … AS SELECT …`,
-    default to new-variable. Needs an expression/mapping UI.
+  - **Phase 2 — compute / recode (new derived variables) — BUILT**
+    (`core/compute-recode.js` + `core/data-store.js`; **Transform** menu). Both
+    create a *new* variable as a logged, non-destructive transform (sources stay
+    immutable, undoable, shown in History, exported to syntax) — added as a derived
+    column in the view, never a `CREATE TABLE`/mutation.
+    - **Compute** (`computeVariable`): a DuckDB scalar expression over existing
+      vars (`income / 1000`, `a + b + c`, `sqrt(x)`, `CASE …`). Dialog has a
+      click-to-insert variable palette. Invalid SQL is **rolled back** (the
+      transform is popped + re-derived) so a typo never leaves the dataset broken.
+    - **Recode** (`recodeVariable`): structured rules (exact value / numeric range
+      / missing → a value, copy, or system-missing) compiled to a `CASE`; an
+      else-rule for all other values (default copy). Stored structured, so it
+      re-edits and exports cleanly.
+    - Derived vars chain (a later compute can use an earlier one), cast to the
+      declared type, and are full variables (analyse/plot/recode them further).
+      Export-to-syntax emits R: compute → `with(d, <expr>)` (SQL identifiers →
+      backticks); recode → base-R assignments applied first-match-wins.
+    - **Verified end to end in Chrome:** Transform ▸ Compute `income_k = income /
+      1000` → 52; Transform ▸ Recode `age` → `agegroup` bins (45→2, 33→1, 52→3);
+      both show in History; invalid expression rolls back; the exported `.R`
+      **parses and runs** on synthetic data with identical results
+      (`income_k=52,39.8,…`, `agegroup=2,1,1,3,NA`).
+    - *Still to do:* surface the new var with auto value-labels for a recode (e.g.
+      label the agegroup codes); a "recode into same variable" option; an `if`
+      condition (compute only where …); expose `app.transform.compute/recode` to
+      plugins (the AI auto-recode idea) — additive, host-only for now.
   - *Still to do (Phase 1 polish):* a GSS-aware "mark missing" preset (the known
     iap/dk/na/refused/… labels); **range** missing (e.g. all `< 0`), not just a
     discrete list; value-label conflict policy on multi-year append; and the

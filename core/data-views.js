@@ -517,6 +517,13 @@ function describeTransform(t) {
       detail: `row ${t.row + 1} = ${t.value == null || t.value === '' ? '(blank)' : t.value}`,
     };
   }
+  if (t && t.type === 'computeVar') {
+    return { title: `Computed ${t.name}`, detail: t.expr };
+  }
+  if (t && t.type === 'recodeVar') {
+    const n = (t.rules || []).length;
+    return { title: `Recoded ${t.source} → ${t.name}`, detail: `${n} rule${n === 1 ? '' : 's'}` };
+  }
   if (!t || t.type !== 'setVariable') return { title: t?.type || 'Change', detail: '' };
   const p = t.patch || {};
   const bits = [];
