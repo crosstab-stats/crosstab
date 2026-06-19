@@ -449,10 +449,22 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     - [x] **Cell editor uses a sparse override transform** — not a destructive
           cell write. `{type:'setCell', row, column, value}` applied as a `CASE` in
           the derived view; the source stays immutable (see the Data editor item).
-  - *Still to do (follow-ups the log unlocks):* expose the log to a **history/undo
-    UI** and to plugins; **export-to-syntax** (do-file) from the log; treat
-    append/load as logged steps too (today they manage `#sources`, edits are the
-    logged transforms) for a fully unified history; redo.
+  - [x] **Universal log (fully unified history) — BUILT.** `#sources` + a separate
+    transform log were merged into **one ordered `#log`** in `core/data-store.js`:
+    every operation — `load`/`append`/`join` (data loads) and `setVariable`/
+    `setCell`/`computeVar`/`recodeVar` (data transforms) — is a single, ordered,
+    undoable entry. `rederive` partitions the log by op kind (so the derived view
+    is byte-identical to the old split), and `getHistory()` returns the whole log,
+    so **imports/appends/joins are now first-class History steps you can undo,
+    redo, and rewind across** (e.g. undo an accidental append). The persisted shape
+    stays `{sources, transforms}` (`exportState` derives it; `restoreState` rebuilds
+    the log), so projects/library/`getTransforms` (data-only) are untouched —
+    backward-compatible. *Only cost:* a restored log groups source ops before
+    transforms (exact in-session interleaving isn't persisted) — a later polish.
+    **Verified in Chrome:** load/append/recode/cell-edit all appear as ordered
+    steps; undo of an append reverts rows (32→30) while keeping the recode; redo
+    restores; rewind across source ops; project open + library promote/add
+    round-trip; rid cell-edits stable; no rid/source leak into analyses.
   - [x] **History / rewind panel — BUILT** (`core/data-views.js` `HistoryView`, a
     4th workspace tab between Variables and Output). A **linear** transform-history
     view: an as-imported base step + a numbered step per logged transform, each
@@ -470,12 +482,12 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     git-style branching** — the audience thinks in linear syntax files, and
     divergent exploration is already served by the multi-dataset workspace (fork =
     a separate dataset). No branch tree / diff UI / prune.
-    - *Limitation (matches the log's scope):* only `setVariable` transforms are in
-      the log, so the panel covers metadata edits since the last load; imports/
-      appends/joins are the structural base, not steps. Folding load/append into
-      the log (the "unified history" follow-up below) would make those steps too.
-    - *Natural next step it unlocks:* **export-to-syntax** — the history list is
-      already the do-file; serialising it to R/SPSS syntax is mostly formatting.
+    - *Now the universal log:* imports/appends/joins are first-class steps too
+      (see "Universal log" above), with an explicit "Start (empty)" step 0 you can
+      rewind to. The panel renders the whole `#log`.
+    - *Natural next step it unlocks:* **export-to-syntax** — done (see below); a
+      follow-up could emit the load/append/join steps as real R too (today the
+      do-file uses a load stub + the data transforms).
     - [ ] *UI polish — revisit the layout.* Functionally excellent, but the
       timeline uses only a narrow left strip of the wide panel and looks sparse.
       Make better use of the horizontal space (e.g. richer per-step rows: show the

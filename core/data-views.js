@@ -416,27 +416,25 @@ export class HistoryView {
     host.classList.add('ct-historyhost');
   }
 
-  /** Rebuild the timeline from the store (call on show + on data change). */
+  /** Rebuild the timeline from the universal log (call on show + on data change). */
   render() {
-    const { applied, future, sources } = this.store.getHistory();
+    const { applied, future } = this.store.getHistory();
     const ol = document.createElement('ol');
     ol.className = 'history';
 
-    // State 0: the as-imported sources, before any transform. When more than one
-    // source is present (an append/join happened), say so — otherwise this single
-    // base step reads misleadingly like "just the first import". (Imports/appends
-    // aren't ordered steps yet; that's the deferred unified-history follow-up.)
+    // Step 0: the empty start, before any data is loaded. Rewinding here clears
+    // the dataset back to nothing (you can then import fresh).
     ol.append(
       this.#step({
         n: 0,
-        marker: '⤓',
-        title: sources.length > 1 ? 'Imported & combined data' : 'Imported data',
-        detail: describeSources(sources),
+        marker: '○',
+        title: 'Start',
+        detail: 'empty — before any data',
         state: applied.length === 0 ? 'current' : 'applied',
       }),
     );
 
-    // Applied transforms 1..k (k = current position).
+    // Applied operations 1..k (k = current position) — loads and transforms alike.
     applied.forEach((t, i) => {
       const n = i + 1;
       const d = describeTransform(t);
@@ -445,7 +443,7 @@ export class HistoryView {
       );
     });
 
-    // Future (undone) transforms — greyed, still clickable to fast-forward.
+    // Future (undone) operations — greyed, still clickable to fast-forward.
     future.forEach((t, i) => {
       const n = applied.length + i + 1;
       const d = describeTransform(t);
@@ -457,7 +455,7 @@ export class HistoryView {
       this.host.append(
         el(
           'p',
-          'No transforms yet. Edits you make in the Variables tab (relabel, retype, mark missing, set value labels) appear here as steps you can rewind to.',
+          'No data yet. Importing, then recoding/computing/editing in this dataset appears here as steps you can rewind to.',
           'history-hint',
         ),
       );
@@ -492,25 +490,19 @@ export class HistoryView {
 
 // --- helpers -----------------------------------------------------------------
 
-/** One-line description of the base step from the source list — names every
- * source and annotates how each was combined (rows added / joined), so an append
- * or join after a recode is visibly accounted for in the base. */
-function describeSources(sources) {
-  if (!sources || sources.length === 0) return '';
-  if (sources.length === 1) return sources[0].label || 'the original data';
-  return sources
-    .map((s, i) => {
-      const name = s.label || (i === 0 ? 'original data' : `source ${i + 1}`);
-      const mode = s.combine === 'append' ? ' (rows added)' : s.combine === 'join' ? ' (joined)' : '';
-      return name + mode;
-    })
-    .join(', ');
-}
-
-/** Human-readable title + detail for a transform-log entry. The variable editor
- * sends a full patch, so detail lists the values the step set; programmatic
- * (plugin) transforms may set only some keys. */
+/** Human-readable title + detail for any operation-log entry — data loads
+ * (load/append/join) and data transforms alike. */
 function describeTransform(t) {
+  if (t && t.type === 'load') {
+    return { title: 'Imported data', detail: t.src?.label || 'the original data' };
+  }
+  if (t && t.type === 'append') {
+    return { title: 'Appended rows', detail: t.src?.label || 'more data' };
+  }
+  if (t && t.type === 'join') {
+    const key = t.joinKey ? `${t.joinKey.left} ↔ ${t.joinKey.right}` : 'a key';
+    return { title: `Joined ${t.src?.label || 'data'}`, detail: `on ${key}` };
+  }
   if (t && t.type === 'setCell') {
     return {
       title: `Edited cell · ${t.column}`,

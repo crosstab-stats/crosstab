@@ -127,8 +127,10 @@ export class ProjectSync {
 
   #onChange(summary) {
     if (this.#loading) return;
-    // A source-changing edit means that dataset's Parquet must be rewritten.
-    if (summary && ['replace', 'append', 'join', 'restore'].includes(summary.reason)) {
+    // A source-changing op means that dataset's Parquet must be rewritten. With the
+    // universal log, undo/redo/rewind can also add or drop a source op, so they
+    // mark sources dirty too (keeps the saved Parquet set in step with the log).
+    if (summary && ['replace', 'append', 'join', 'restore', 'undo', 'redo', 'rewind'].includes(summary.reason)) {
       if (summary.datasetId != null) this.#sourcesDirty.add(summary.datasetId);
     }
     if (this.#binding) {

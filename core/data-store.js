@@ -9,9 +9,10 @@
  *
  *  - **Source tables** (`ct_source_1`, …) hold each imported/appended file's
  *    data in DuckDB. They are created once and never altered.
- *  - **The transform log** (`#transforms`) is an ordered list of edits the user
- *    has made (e.g. recode/retype a variable). It is data, not mutation —
- *    inspectable, undoable, and (later) exportable as a do-file.
+ *  - **The universal log** (`#log`) is one ordered list of *every* operation —
+ *    data loads (import/append/join) and data transforms (recode/retype/compute/
+ *    cell edit) alike. It is data, not mutation — inspectable, undoable, and
+ *    exportable as a do-file. {@link DataStore#rederive} partitions it by op kind.
  *  - **`dataset`** is a DuckDB **VIEW** derived from the sources + the log. Every
  *    read in the app queries it. Metadata-only transforms (relabel, designate
  *    missing, retype-to-factor) just recompute the JS-side metadata; only
@@ -65,6 +66,13 @@ const ROWID_COL = '__ct_rid';
  * ids well under 2^53 for realistic source counts, so they survive the BIGINT→JS
  * trip exactly. (Ids are also passed as digit strings, never parsed to float.) */
 const ROWID_STRIDE = 1_000_000_000;
+
+/** Log op types that are *data transforms* (vs. load/append/join source ops).
+ * `getTransforms()` and the persisted `transforms` array carry only these. */
+const DATA_OPS = new Set(['setVariable', 'setCell', 'computeVar', 'recodeVar']);
+
+/** Log op types that are *source* operations (data loads). */
+const SOURCE_OPS = new Set(['load', 'append', 'join']);
 
 /**
  * @typedef {'numeric' | 'string' | 'factor'} VariableType
@@ -131,26 +139,39 @@ export class DataStore {
   libraryLink = null;
 
   /**
-   * The immutable source tables, in load order. One per imported/appended file.
-   * @type {Array<{table: string, meta: VariableMeta[], label: string|null}>}
+   * The **universal operation log**: one ordered, replayable history of *every*
+   * operation — data loads and data transforms alike. Entry types:
+   *  - `{type:'load', src}` — the base import (a replace resets the log to this).
+   *  - `{type:'append', src}` — stack more rows (another immutable source).
+   *  - `{type:'join', src, joinKey, aliases}` — add columns by a key.
+   *  - `{type:'setVariable', name, patch}` — metadata edit.
+   *  - `{type:'setCell', rid, column, value, row}` — sparse cell override.
+   *  - `{type:'computeVar'|'recodeVar', name, …}` — derived variable.
+   * where `src = {table, meta, label}` references an immutable DuckDB source table.
+   *
+   * {@link DataStore#rederive} partitions this by op kind to build the view, so the
+   * *result* is identical to the old sources+transforms split — but now loads are
+   * first-class history: undoable, rewindable, and shown as steps. The persisted
+   * shape ({@link DataStore#exportState}) stays `{sources, transforms}` (derived
+   * from the log), so the project/library tiers are unchanged.
+   * @type {Array<object>}
    */
-  #sources = [];
+  #log = [];
 
   /**
-   * The transform log: ordered, replayable edits applied over the sources to
-   * derive the working view + metadata. v1 entry type is `setVariable`
-   * (`{type:'setVariable', name, patch}`). Inspectable via {@link DataStore#getTransforms},
-   * reversible via {@link DataStore#undo} — the reproducibility record.
-   * @type {Array<{type: string, name?: string, patch?: object}>}
-   */
-  #transforms = [];
-
-  /**
-   * Undone transforms, most-recently-undone last — the redo stack. Cleared by any
-   * new transform (the standard undo/redo branch-discard) and by a load.
-   * @type {Array<{type: string, name?: string, patch?: object}>}
+   * Undone operations, most-recently-undone last — the redo stack. Cleared by any
+   * new operation (standard undo/redo branch-discard).
+   * @type {Array<object>}
    */
   #redoStack = [];
+
+  /** Monotonic source-table counter (never reused), so an undone source op leaves
+   * no naming/row-id collision for a later one. Also the row-id namespace. */
+  #sourceSeq = 0;
+
+  /** Every source table this dataset has materialised, for reliable cleanup
+   * (undone/redo-discarded sources would otherwise leak until dispose). @type {Set<string>} */
+  #sourceTables = new Set();
 
   /**
    * DERIVED: variable metadata in display order — the synchronous cache the UI
@@ -250,37 +271,43 @@ export class DataStore {
    * @returns {Promise<void>}
    */
   async loadDataset({ variables, columns, parquet, mode = 'replace', source, joinKey, aliases }) {
-    const canCombine = this.#sources.length > 0;
-    const combine = canCombine && (mode === 'append' || mode === 'join') ? mode : 'replace';
+    const combine = this.#hasData() && (mode === 'append' || mode === 'join') ? mode : 'replace';
     if (combine === 'replace') {
+      // A replace is a hard reset: the new import becomes the base of a fresh log.
       await this.#dropAll();
-      const s = await this.#createSource(1, { variables, columns, parquet, source });
-      s.combine = 'base';
-      this.#sources = [s];
-      this.#transforms = [];
+      const src = await this.#createSource({ variables, columns, parquet, source });
+      this.#log = [{ type: 'load', src }];
     } else {
-      const idx = this.#sources.length + 1;
-      const s = await this.#createSource(idx, { variables, columns, parquet, source });
-      s.combine = combine;
-      if (combine === 'join') {
-        s.joinKey = joinKey;
-        s.aliases = aliases ?? [];
-      }
-      this.#sources.push(s);
+      const src = await this.#createSource({ variables, columns, parquet, source });
+      this.#log.push(
+        combine === 'join' ? { type: 'join', src, joinKey, aliases: aliases ?? [] } : { type: 'append', src },
+      );
     }
-    // A load is a structural change; the transform redo branch no longer applies.
+    // A new operation discards the redo branch (standard undo/redo semantics).
     this.#redoStack = [];
     await this.rederive(combine === 'replace' ? 'replace' : combine);
   }
 
+  /** Whether any data is loaded (the log has a source op). */
+  #hasData() {
+    return this.#sourceOps().length > 0;
+  }
+
+  /** The load/append/join ops in the active log, in order (the base is first). */
+  #sourceOps() {
+    return this.#log.filter((o) => o.type === 'load' || o.type === 'append' || o.type === 'join');
+  }
+
   /**
-   * Materialise one immutable source table (`ct_source_<index>`) from a loaded
-   * file and return its descriptor. Does not touch the working view.
+   * Materialise one immutable source table from a loaded file and return its
+   * descriptor `{table, meta, label}`. A fresh, never-reused sequence number names
+   * the table and namespaces its row ids. Does not touch the working view.
    *
    * @returns {Promise<{table: string, meta: VariableMeta[], label: string|null}>}
    */
-  async #createSource(index, { variables, columns, parquet, source }) {
-    const table = `${this.#sourcePrefix}${index}`;
+  async #createSource({ variables, columns, parquet, source }) {
+    const seq = ++this.#sourceSeq;
+    const table = `${this.#sourcePrefix}${seq}`;
     if (parquet) {
       await this.#duckdb.replaceTableFromParquet(table, parquet);
     } else {
@@ -294,25 +321,26 @@ export class DataStore {
       for (const meta of variables) coerced[meta.name] = coerceColumn(meta, cols[meta.name] ?? []);
       await this.#duckdb.replaceTable(table, coerced);
     }
-    await this.#ensureRowId(table, index);
+    this.#sourceTables.add(table);
+    await this.#ensureRowId(table, seq);
     return { table, meta: variables.map((m) => ({ ...m })), label: source ?? null };
   }
 
   /**
    * Bake the stable {@link ROWID_COL} into a freshly created source — unless it
    * already carries one (the restore path: the id was persisted in the source
-   * Parquet, so keep it). Ids are namespaced by source index so they're unique
-   * across a pooled/joined dataset and never collide with an appended source.
+   * Parquet, so keep it). Ids are namespaced by the source sequence number so
+   * they're unique across a pooled/joined dataset and never collide.
    *
    * @param {string} table - The source table name.
-   * @param {number} index - 1-based source index (namespaces the id range).
+   * @param {number} seq - The source's sequence number (namespaces the id range).
    */
-  async #ensureRowId(table, index) {
+  async #ensureRowId(table, seq) {
     const desc = await this.#duckdb.query(`DESCRIBE ${quoteIdent(table)}`);
     for (let i = 0; i < desc.numRows; i++) {
       if (String(desc.get(i).column_name) === ROWID_COL) return; // restored — keep it
     }
-    const base = index * ROWID_STRIDE;
+    const base = seq * ROWID_STRIDE;
     await this.#duckdb.query(
       `CREATE OR REPLACE TABLE ${quoteIdent(table)} AS SELECT *, ` +
         `CAST(${base} AS BIGINT) + CAST(row_number() OVER () AS BIGINT) AS ${quoteIdent(ROWID_COL)} ` +
@@ -320,17 +348,20 @@ export class DataStore {
     );
   }
 
-  /** Drop the working view and every source table; clear the source list. */
+  /** Drop the working view and every source table this dataset ever materialised
+   * (including ones left by undone/discarded ops); reset the log. */
   async #dropAll() {
     await this.#duckdb.query(`DROP VIEW IF EXISTS ${quoteIdent(this.#view)}`);
-    for (const s of this.#sources) {
-      await this.#duckdb.query(`DROP TABLE IF EXISTS ${quoteIdent(s.table)}`);
+    for (const table of this.#sourceTables) {
+      await this.#duckdb.query(`DROP TABLE IF EXISTS ${quoteIdent(table)}`);
     }
-    this.#sources = [];
+    this.#sourceTables.clear();
+    this.#log = [];
+    this.#redoStack = [];
   }
 
   /**
-   * Recompute everything derived from `#sources` + `#transforms`: the variable
+   * Recompute everything derived from the operation log (`#log`): the variable
    * metadata cache, the working `dataset` view, the SQL types, and the row count.
    * Then emit {@link CoreEvents.DATA_CHANGED}. This is the single place the
    * "source + log → derived" projection happens.
@@ -342,11 +373,22 @@ export class DataStore {
    * @returns {Promise<void>}
    */
   async rederive(reason = 'change') {
+    // Project the universal log onto the source descriptors the rest of this method
+    // expects (`combine` derives from the op type: load→base, append/join as named).
+    const sources = this.#sourceOps().map((op) => ({
+      table: op.src.table,
+      meta: op.src.meta,
+      label: op.src.label,
+      combine: op.type === 'load' ? 'base' : op.type,
+      joinKey: op.joinKey,
+      aliases: op.aliases,
+    }));
+
     // Sources combine two ways: `append` sources stack rows onto the base (UNION),
     // `join` sources add columns by matching a key (LEFT JOIN). Split them so the
     // view composes as: stacked rows first, then joined columns hung off them.
-    const stacked = this.#sources.filter((s, i) => i === 0 || s.combine !== 'join');
-    const joins = this.#sources.filter((s) => s.combine === 'join');
+    const stacked = sources.filter((s, i) => i === 0 || s.combine !== 'join');
+    const joins = sources.filter((s) => s.combine === 'join');
     const multiStacked = stacked.length > 1;
 
     // 1) Metadata: union the stacked sources (first wins on shared names), add
@@ -376,9 +418,9 @@ export class DataStore {
       }
       return { source: s, cols };
     });
-    // Replay the log in order: metadata patches, and the new variables created by
-    // compute/recode (added after the source/join columns, in creation order).
-    for (const t of this.#transforms) {
+    // Replay the data ops in the log in order: metadata patches, and the new
+    // variables created by compute/recode (added after source/join columns).
+    for (const t of this.#log) {
       if (t.type === 'setVariable') applyPatch(byName.get(t.name), t.patch);
       else if (t.type === 'computeVar' || t.type === 'recodeVar') {
         byName.set(t.name, {
@@ -395,7 +437,7 @@ export class DataStore {
     // 2) Working view: numeric-typed columns are CAST to DOUBLE here (the only
     //    "data" effect of a transform); a pooled dataset gets source_file +
     //    UNION ALL BY NAME; join sources are LEFT JOINed onto the stacked rows.
-    if (this.#sources.length === 0) {
+    if (sources.length === 0) {
       await this.#duckdb.query(`DROP VIEW IF EXISTS ${quoteIdent(this.#view)}`);
       this.#sqlTypes = new Map();
       this.#rowCount = 0;
@@ -482,7 +524,7 @@ export class DataStore {
     // retype-to-numeric cast is applied in the derived view (see rederive), so the
     // source column is untouched and the change is reversible via undo(). A fresh
     // edit discards any redo branch (standard undo/redo semantics).
-    this.#transforms.push({ type: 'setVariable', name, patch });
+    this.#log.push({ type: 'setVariable', name, patch });
     this.#redoStack = [];
     await this.rederive('transform');
   }
@@ -509,7 +551,7 @@ export class DataStore {
   async setCell(rid, column, value, displayRow = 0) {
     if (!this.#byName.has(column)) throw new Error(`setCell: unknown variable "${column}"`);
     if (rid == null || !/^\d+$/.test(String(rid))) throw new Error('setCell: invalid row id');
-    this.#transforms.push({
+    this.#log.push({
       type: 'setCell',
       rid: String(rid),
       column,
@@ -534,7 +576,7 @@ export class DataStore {
    */
   #applyCellOverrides(innerSql) {
     const byCol = new Map(); // column → Map<rid(string), value>
-    for (const t of this.#transforms) {
+    for (const t of this.#log) {
       if (t.type !== 'setCell' || !this.#byName.has(t.column)) continue;
       const rid = String(t.rid ?? '');
       if (!/^\d+$/.test(rid)) continue;
@@ -607,12 +649,12 @@ export class DataStore {
   /** Push a compute/recode transform and re-derive; roll back if the generated SQL
    * is invalid so the dataset is never left broken. */
   async #addDerivedVar(t) {
-    this.#transforms.push(t);
+    this.#log.push(t);
     this.#redoStack = [];
     try {
       await this.rederive('transform');
     } catch (err) {
-      this.#transforms.pop();
+      this.#log.pop();
       await this.rederive('transform');
       throw new Error(err?.message || String(err));
     }
@@ -633,7 +675,7 @@ export class DataStore {
    * the declared type so `getColumns` reads it correctly. */
   #applyComputed(innerSql) {
     let sql = innerSql;
-    for (const t of this.#transforms) {
+    for (const t of this.#log) {
       if (t.type !== 'computeVar' && t.type !== 'recodeVar') continue;
       const cast = normType(t.varType) === 'numeric' ? 'DOUBLE' : 'VARCHAR';
       const scalar = t.type === 'computeVar' ? `(${t.expr})` : recodeCaseSql(t);
@@ -643,77 +685,78 @@ export class DataStore {
   }
 
   /**
-   * The transform log (a copy) — the ordered edits applied over the immutable
-   * sources. The basis for an undo/history UI and a future do-file export.
+   * The **data** transforms (a copy), in order — the metadata/recode/compute/cell
+   * ops only, *not* the load/append/join source ops. This is the contract the
+   * library version/pull and the syntax exporter rely on (a plugin reads it via
+   * `app.data.getTransforms`), so it stays data-only even though the underlying log
+   * is now universal. For the full history (loads included) see
+   * {@link DataStore#getHistory}.
    * @returns {Array<object>}
    */
   getTransforms() {
-    return this.#transforms.map((t) => structuredClone(t));
+    return this.#log.filter((t) => DATA_OPS.has(t.type)).map((t) => structuredClone(t));
   }
 
-  /** @returns {boolean} Whether there is a transform to undo. */
+  /** @returns {boolean} Whether there is an operation to undo. */
   get canUndo() {
-    return this.#transforms.length > 0;
+    return this.#log.length > 0;
   }
 
-  /** @returns {boolean} Whether there is an undone transform to redo. */
+  /** @returns {boolean} Whether there is an undone operation to redo. */
   get canRedo() {
     return this.#redoStack.length > 0;
   }
 
-  /** Undo the most recent transform (onto the redo stack) and re-derive. No-op if
-   * the log is empty. */
+  /** Undo the most recent operation (onto the redo stack) and re-derive — now
+   * spans loads/appends/joins too. No-op if the log is empty. */
   async undo() {
-    if (this.#transforms.length === 0) return;
-    this.#redoStack.push(this.#transforms.pop());
+    if (this.#log.length === 0) return;
+    this.#redoStack.push(this.#log.pop());
     await this.rederive('undo');
   }
 
-  /** Re-apply the most recently undone transform and re-derive. No-op if there is
+  /** Re-apply the most recently undone operation and re-derive. No-op if there is
    * nothing to redo. */
   async redo() {
     if (this.#redoStack.length === 0) return;
-    this.#transforms.push(this.#redoStack.pop());
+    this.#log.push(this.#redoStack.pop());
     await this.rederive('redo');
   }
 
   /**
-   * The full linear transform timeline for a history/rewind UI: the **applied**
-   * transforms (chronological) and the undone ones still **ahead** of the current
+   * The full **universal-log** timeline for the History/rewind UI: the **applied**
+   * operations (chronological) and the undone ones still **ahead** of the current
    * position (`future`, also chronological — the redo stack un-reversed). The
-   * current position is `applied.length` steps in. Loads/appends/joins aren't in
-   * the log (they're structural source changes that clear redo), so this is the
-   * metadata-transform history since the last load, over an as-imported base
-   * described by `sources`.
+   * current position is `applied.length` steps in. Includes load/append/join, so
+   * data loads appear as their own steps. (Within a session the order is exact;
+   * across a save/restore, sources are grouped before transforms — see exportState.)
    *
-   * @returns {{applied: object[], future: object[], sources: Array<{label: string|null, combine: string}>}}
+   * @returns {{applied: object[], future: object[]}}
    */
   getHistory() {
     return {
-      applied: this.#transforms.map((t) => structuredClone(t)),
+      applied: this.#log.map((t) => structuredClone(t)),
       future: [...this.#redoStack].reverse().map((t) => structuredClone(t)),
-      sources: this.#sources.map((s) => ({ label: s.label, combine: s.combine ?? 'base' })),
     };
   }
 
   /**
-   * Rewind (or fast-forward) to a point on the transform timeline: make exactly
-   * `n` transforms applied, shifting the rest onto the redo stack (or pulling them
-   * back off). `n = 0` is the as-imported state; `n = applied + future` re-applies
-   * everything. One re-derivation regardless of distance — cheaper than walking N
-   * undo/redo calls. A subsequent fresh edit discards whatever is still ahead
-   * (standard linear undo/redo branch-discard via {@link DataStore#updateVariable}),
-   * so the timeline stays linear.
+   * Rewind (or fast-forward) to a point on the timeline: make exactly `n`
+   * operations applied, shifting the rest onto the redo stack (or pulling them
+   * back off). `n = 0` is the empty start (before any import); `n = applied +
+   * future` re-applies everything. One re-derivation regardless of distance. A
+   * subsequent fresh operation discards whatever is still ahead (standard linear
+   * branch-discard), so the timeline stays linear.
    *
-   * @param {number} n - Target number of applied transforms.
+   * @param {number} n - Target number of applied operations.
    * @returns {Promise<void>}
    */
   async rewindTo(n) {
-    const total = this.#transforms.length + this.#redoStack.length;
+    const total = this.#log.length + this.#redoStack.length;
     const target = Math.max(0, Math.min(Math.floor(n), total));
-    if (target === this.#transforms.length) return;
-    while (this.#transforms.length > target) this.#redoStack.push(this.#transforms.pop());
-    while (this.#transforms.length < target) this.#transforms.push(this.#redoStack.pop());
+    if (target === this.#log.length) return;
+    while (this.#log.length > target) this.#redoStack.push(this.#log.pop());
+    while (this.#log.length < target) this.#log.push(this.#redoStack.pop());
     await this.rederive('rewind');
   }
 
@@ -729,18 +772,18 @@ export class DataStore {
    */
   async exportState({ includeParquet = true } = {}) {
     const sources = [];
-    for (const s of this.#sources) {
+    for (const op of this.#sourceOps()) {
       const entry = {
-        meta: s.meta.map((m) => ({ ...m })),
-        label: s.label,
-        combine: s.combine ?? 'base',
+        meta: op.src.meta.map((m) => ({ ...m })),
+        label: op.src.label,
+        combine: op.type === 'load' ? 'base' : op.type,
       };
-      if (s.combine === 'join') {
-        entry.joinKey = s.joinKey;
-        entry.aliases = s.aliases ?? [];
+      if (op.type === 'join') {
+        entry.joinKey = op.joinKey;
+        entry.aliases = op.aliases ?? [];
       }
       if (includeParquet) {
-        entry.parquet = await this.#duckdb.queryToParquet(`SELECT * FROM ${quoteIdent(s.table)}`);
+        entry.parquet = await this.#duckdb.queryToParquet(`SELECT * FROM ${quoteIdent(op.src.table)}`);
       }
       sources.push(entry);
     }
@@ -753,30 +796,29 @@ export class DataStore {
   }
 
   /**
-   * Replace the live dataset with a saved state from the library: recreate each
-   * immutable source from its Parquet, restore the transform log, and re-derive.
+   * Replace the live dataset with a saved state: recreate each immutable source
+   * from its Parquet and rebuild the operation log (source ops first, then the
+   * data transforms), then re-derive. The persisted shape stays `{sources,
+   * transforms}` (so projects/library are unchanged); the only cost is that a
+   * restored log groups loads before transforms rather than preserving the exact
+   * in-session interleaving.
    *
    * @param {import('./dataset-store.js').DatasetState} state
    * @returns {Promise<void>}
    */
   async restoreState({ sources, transforms }) {
     await this.#dropAll();
-    this.#sources = [];
-    for (let i = 0; i < sources.length; i++) {
-      const src = sources[i];
-      const s = await this.#createSource(i + 1, {
-        variables: src.meta,
-        parquet: src.parquet,
-        source: src.label,
-      });
-      s.combine = src.combine ?? (i === 0 ? 'base' : 'append');
-      if (s.combine === 'join') {
-        s.joinKey = src.joinKey;
-        s.aliases = src.aliases ?? [];
-      }
-      this.#sources.push(s);
+    const log = [];
+    const srcs = Array.isArray(sources) ? sources : [];
+    for (let i = 0; i < srcs.length; i++) {
+      const src = srcs[i];
+      const created = await this.#createSource({ variables: src.meta, parquet: src.parquet, source: src.label });
+      const combine = i === 0 ? 'load' : src.combine === 'join' ? 'join' : 'append';
+      if (combine === 'join') log.push({ type: 'join', src: created, joinKey: src.joinKey, aliases: src.aliases ?? [] });
+      else log.push({ type: combine === 'load' ? 'load' : 'append', src: created });
     }
-    this.#transforms = Array.isArray(transforms) ? transforms.map((t) => ({ ...t })) : [];
+    for (const t of Array.isArray(transforms) ? transforms : []) log.push({ ...t });
+    this.#log = log;
     this.#redoStack = [];
     await this.rederive('restore');
   }
