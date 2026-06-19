@@ -840,11 +840,13 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Nice-to-have / optimisations
 
-- [x] **Order the top-level menus: File, Edit, then alphabetical — DONE**
-      (`core/menu-shell.js` `byTopLevel`). Top-level menus now sort with **File**
-      pinned first, **Edit** second, and the rest (plugin-contributed) A→Z. Verified:
-      the menubar reads File · Edit · Analyze · Graphs · Transform. Per-item order
-      *within* a menu still uses the `order` field.
+- [x] **Order the top-level menus: host menus first, then plugins A→Z — DONE**
+      (`core/menu-shell.js` `byTopLevel`). The **built-in (host) menus** are pinned
+      in a fixed order — **File, Edit, Transform** — and plugin-contributed menus
+      (Analyze, Graphs, …) sort alphabetically after. The principle: disable every
+      plugin and the base menus stay exactly where they are. Verified: the menubar
+      reads File · Edit · Transform · Analyze · Graphs. Per-item order *within* a
+      menu still uses the `order` field.
 - [ ] Batch a multi-variable Frequencies run into one R call instead of one job
       per variable (`plugins/builtin-frequencies/index.js`).
 - [~] Settings persistence (localStorage). *Started:* the plugin manager persists

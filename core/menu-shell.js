@@ -239,10 +239,11 @@ function byOrderThenLabel(a, b) {
   return a.order - b.order || a.label.localeCompare(b.label);
 }
 
-/** Top-level menubar order: the two host menus are pinned by convention — **File**
- * first, **Edit** second — and everything else (plugin-contributed, so we can't
- * predict which exist) sorts alphabetically after them. */
-const TOP_LEVEL_RANK = { File: 0, Edit: 1 };
+/** Top-level menubar order: the **host (built-in) menus** are pinned by convention
+ * in a fixed order — File, Edit, Transform — and everything else (plugin-
+ * contributed, e.g. Analyze, Graphs) sorts alphabetically after them. The guiding
+ * idea: turn off every plugin and the base menus stay exactly where they are. */
+const TOP_LEVEL_RANK = { File: 0, Edit: 1, Transform: 2 };
 function byTopLevel(a, b) {
   const ra = TOP_LEVEL_RANK[a.label] ?? 100;
   const rb = TOP_LEVEL_RANK[b.label] ?? 100;
