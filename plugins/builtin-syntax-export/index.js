@@ -38,9 +38,9 @@ export async function activate(app) {
 
 async function exportSyntax(app, ticket) {
   try {
-    const transforms = await app.data.getTransforms();
+    const { applied } = await app.data.getHistory(); // the full ordered op log
     const meta = await app.data.getVariableMeta();
-    const code = buildRSyntax(transforms, meta);
+    const code = buildRSyntax(applied, meta);
     await app.exporters.deliver(ticket, {
       filename: 'crosstab-syntax.R',
       mimeType: 'text/plain;charset=utf-8',
@@ -52,35 +52,40 @@ async function exportSyntax(app, ticket) {
   }
 }
 
-/** Render the transform log as an R script. */
-function buildRSyntax(transforms, meta) {
+/** Render the **whole ordered operation log** as an R script — data loads
+ * (import/append/join) and transforms in their true order, so the script
+ * reproduces the dataset exactly as the app built it. */
+function buildRSyntax(log, meta) {
   const L = [];
   L.push('# ---------------------------------------------------------------------------');
   L.push('# CrossTab — data-preparation syntax (R)');
   L.push(`# Generated ${new Date().toLocaleString()}`);
   L.push('#');
-  L.push('# Best-effort reproduction of the recodes in the transform log (the steps');
-  L.push('# shown in the History panel). Edit the load line to point at your data;');
-  L.push('# the recodes below then recreate the working dataset. Analyses are not');
-  L.push('# included (they are not logged yet).');
+  L.push('# Reproduces the dataset in the exact order the steps were applied (the');
+  L.push('# History panel). Edit the file paths on the load/append/join lines to point');
+  L.push('# at your data; the recodes then recreate the working dataset. Analyses are');
+  L.push('# not included (not logged yet).');
   L.push('# ---------------------------------------------------------------------------');
-  L.push('');
-  L.push('# 1. Load your data into a data frame called `d`, e.g.:');
-  L.push('#    d <- read.csv("your-data.csv", stringsAsFactors = FALSE)');
-  L.push('#    d <- haven::read_sav("your-data.sav")   # SPSS');
-  L.push('d <- read.csv("your-data.csv", stringsAsFactors = FALSE)');
   L.push('');
 
   const typeOf = new Map((meta || []).map((m) => [m.name, m.type]));
-  const kinds = ['setVariable', 'setCell', 'computeVar', 'recodeVar'];
-  const steps = transforms.filter((t) => t && kinds.includes(t.type));
+  const steps = (log || []).filter(Boolean);
   if (steps.length === 0) {
-    L.push('# (No transforms recorded — the dataset is as imported.)');
+    L.push('# (Nothing logged yet — no data loaded.)');
   } else {
     let n = 0;
     for (const t of steps) {
       n += 1;
-      if (t.type === 'setCell') {
+      if (t.type === 'load') {
+        L.push(`# Step ${n}: import the base data`);
+        L.push(...loadToR(t));
+      } else if (t.type === 'append') {
+        L.push(`# Step ${n}: append rows (${srcLabel(t)})`);
+        L.push(...appendToR(t));
+      } else if (t.type === 'join') {
+        L.push(`# Step ${n}: join (${srcLabel(t)})`);
+        L.push(...joinToR(t));
+      } else if (t.type === 'setCell') {
         L.push(`# Step ${n}: edit cell — ${t.column}, row ${t.row + 1}`);
         L.push(cellToR(t, typeOf.get(t.column) === 'numeric'));
       } else if (t.type === 'computeVar') {
@@ -89,9 +94,11 @@ function buildRSyntax(transforms, meta) {
       } else if (t.type === 'recodeVar') {
         L.push(`# Step ${n}: recode ${t.source} → ${t.name}`);
         L.push(...recodeVarToR(t));
-      } else if (t.name) {
+      } else if (t.type === 'setVariable' && t.name) {
         L.push(`# Step ${n}: ${t.name}`);
         L.push(...transformToR(t.name, t.patch || {}));
+      } else {
+        continue;
       }
       L.push('');
     }
@@ -105,6 +112,44 @@ function buildRSyntax(transforms, meta) {
   }
   L.push('');
   return L.join('\n');
+}
+
+// --- source ops -------------------------------------------------------------
+
+/** A filename hint from a source op's label (falls back to a placeholder). */
+function srcFile(op, fallback) {
+  const label = op?.src?.label;
+  const base = label ? String(label).replace(/[^\w.-]+/g, '_') : fallback;
+  return /\.[a-z0-9]+$/i.test(base) ? base : `${base}.csv`;
+}
+function srcLabel(op) {
+  return op?.src?.label || 'unnamed source';
+}
+
+/** R for the base import. The data itself isn't embedded — point this at your file. */
+function loadToR(op) {
+  return [
+    `d <- read.csv(${rChar(srcFile(op, 'your-data'))}, stringsAsFactors = FALSE)`,
+    '# (adjust the reader for your format, e.g. haven::read_sav(...) for SPSS)',
+  ];
+}
+
+/** R for an append (row-stack). bind_rows matches columns by name and NA-fills
+ * the gaps — the same as the app's UNION ALL BY NAME. */
+function appendToR(op) {
+  return [`d <- dplyr::bind_rows(d, read.csv(${rChar(srcFile(op, 'more-rows'))}, stringsAsFactors = FALSE))`];
+}
+
+/** R for a join (LEFT JOIN on a key). The app normalises keys (trim/lower); add
+ * the same normalisation to your key columns if needed for an exact reproduction. */
+function joinToR(op) {
+  const left = op.joinKey?.left;
+  const right = op.joinKey?.right;
+  const by = left && right ? `by.x = ${rChar(left)}, by.y = ${rChar(right)}` : 'by = <key>';
+  return [
+    `d <- merge(d, read.csv(${rChar(srcFile(op, 'join-source'))}, stringsAsFactors = FALSE), ${by}, all.x = TRUE)`,
+    '# (left join; the app matches keys case/space-insensitively)',
+  ];
 }
 
 /** R for a computed variable. The expression is a DuckDB scalar expr; double-

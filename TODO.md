@@ -698,10 +698,18 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       **Verified in Chrome:** real menu → export produced a script that **parses in
       R** (`parse()` OK) and whose recodes **run correctly** on synthetic data
       (−99 → NA then numeric; factor levels→labels; label attr).
+  - **Now emits the full ordered log** (not just a load stub): reads
+    `app.data.getHistory()` (the new plugin read surface for the universal log) and
+    emits **load/append/join in their true position** alongside the transforms —
+    `read.csv` for the base, `dplyr::bind_rows` for an append (NA-fills like
+    UNION ALL BY NAME), `merge(..., by.x/by.y, all.x=TRUE)` for a join — so the
+    do-file structurally matches the app's history. Verified: an interleaved
+    import→compute→append→recode→join exported all 5 steps in order, parses in R.
+    Source bytes aren't embedded — the load lines point at file paths (label hints).
   - *Deferred:* **SPSS `.sps`** syntax (a second format in the same plugin — fast
     follow); including **analyses** in the do-file (needs a run-log + plugins
-    declaring their R — bigger); source-aware load hints (emit the real importer
-    call from the source descriptors).
+    declaring their R — bigger); key-normalisation in the emitted join (the app
+    matches case/space-insensitively; the `merge` stub doesn't yet).
 - [ ] **In-app plugin creator / editor.** Let social scientists (who are *not*
       programmers) build the plugin they need without leaving the app or standing
       up a toolchain. The point isn't a full IDE — it's "more than Notepad,"

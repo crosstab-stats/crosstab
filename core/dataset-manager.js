@@ -296,8 +296,12 @@ export class DatasetManager {
       getVariableMeta: (o) => this.active?.getVariableMeta(o) ?? [],
       getSelectedVariables: () => this.active?.getSelectedVariables() ?? [],
       getRowCount: () => this.rowCount,
-      /** The active dataset's transform log — the basis for export-to-syntax. */
+      /** The active dataset's data transforms (data-only; for library/pull). */
       getTransforms: () => this.active?.getTransforms() ?? [],
+      /** The full ordered operation log ({applied, future}) — load/append/join +
+       * data transforms in true order. Lets export-to-syntax emit a faithful,
+       * ordered do-file (the loads in their right place, not just a stub). */
+      getHistory: () => this.getHistory(),
       onDataChanged: (fn) => this.#bus.on(CoreEvents.DATA_CHANGED, fn),
       onSelectionChanged: (fn) => this.#bus.on(CoreEvents.SELECTION_CHANGED, fn),
       /** Emit a derived dataset (e.g. bootstrap resamples) as a new active
