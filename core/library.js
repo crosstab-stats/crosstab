@@ -1,303 +1,141 @@
 /**
  * @file library.js
- * Ties the dataset library ({@link DatasetStore}, OPFS) to the live engine: the
- * File-menu commands, the browse modal, the session→entry binding, and autosave.
+ * The **building-block dataset library** — tier 2 of the two-tier model.
  *
- * ## The "living document" model
- * Saving a dataset **binds** the session to that library entry. From then on it
- * autosaves: any change that reaches the transform log (an edit, an undo/redo, an
- * appended file) schedules a debounced save, so there is never "unsaved work"
- * after the first save. This is cheap because sources are immutable — a metadata
- * edit rewrites only the small `manifest.json` + catalog, not the Parquet
- * sources (`writeSources:false`); only an appended source writes new bytes.
+ * A building block is a canonical, reusable dataset saved to OPFS
+ * ({@link DatasetStore}): a cleaned GSS extract, a FRED series, a derived set.
+ * Unlike a *project* (the living, autosaved working set — see
+ * {@link ProjectSync}), the library is **explicit-save only**: you choose to
+ * "Save dataset to library", and you "Add dataset from library" to pull a
+ * **copy** into the current project. Because it's a copy, editing it in a project
+ * never mutates the shared building block, and the project autosaves the copy.
  *
- * Loading entirely different data (an import `replace`) **unbinds** — that's a new
- * project, not an edit to the loaded one — until you save it. A `restore` (loading
- * from the library) is already saved, so it doesn't trigger an autosave.
- *
- * Host UI, not a plugin: OPFS is origin-scoped (a sandboxed plugin can't reach
- * the host's), and the browse modal needs host DOM — same rationale as the data
- * grid and the variable editor.
+ * (There is intentionally no per-dataset autosave/binding here anymore — that
+ * moved up to the project tier.)
  */
 
-import { CoreEvents } from './event-bus.js';
-
-const DEBOUNCE_MS = 750;
-
-export class LibrarySync {
+export class DatasetLibrary {
   #store;
   #data;
   #ui;
   #menus;
-  #bus;
   #results;
-  #statusEl;
-
-  // The library binding now lives per-dataset (`DataStore.binding`), reached via
-  // `this.#data.active.binding` — so each open dataset autosaves to its own entry.
-
-  // Autosave bookkeeping.
-  #timer = null;
-  #saving = false;
-  #dirtyAgain = false;
-  #pendingWriteSources = false;
-  /** The specific dataset a pending autosave targets (captured so a mid-debounce
-   * dataset switch can't redirect the save). @type {import('./data-store.js').DataStore|null} */
-  #pendingDs = null;
 
   /**
    * @param {Object} deps
    * @param {import('./dataset-store.js').DatasetStore} deps.datasetStore
-   * @param {import('./data-store.js').DataStore} deps.data
-   * @param {import('./ui-service.js').UiService} deps.ui - For name prompts (`showForm`).
+   * @param {import('./dataset-manager.js').DatasetManager} deps.data
+   * @param {import('./ui-service.js').UiService} deps.ui
    * @param {import('./menu-shell.js').MenuShell} deps.menus
-   * @param {import('./event-bus.js').EventBus} deps.bus
-   * @param {{appendError: Function}} deps.results - ResultsPane#api.
-   * @param {HTMLElement} deps.statusEl - Footer span for the library status.
+   * @param {{appendError: Function, appendText: Function}} deps.results
    */
-  constructor({ datasetStore, data, ui, menus, bus, results, statusEl }) {
+  constructor({ datasetStore, data, ui, menus, results }) {
     this.#store = datasetStore;
     this.#data = data;
     this.#ui = ui;
     this.#menus = menus;
-    this.#bus = bus;
     this.#results = results;
-    this.#statusEl = statusEl;
   }
 
-  /** Register the File-menu items, wire autosave, and paint the initial status. */
   activate() {
-    if (!this.#store.available) {
-      this.#setStatus('Library unavailable (no OPFS)');
-      return;
-    }
+    if (!this.#store.available) return; // no OPFS → no library
     this.#menus.register({
       id: 'core:lib-save',
       path: ['File'],
-      label: 'Save to library…',
-      order: 60,
-      command: () => void this.saveInteractive(),
+      label: 'Save dataset to library…',
+      order: 20,
+      command: () => void this.saveToLibrary(),
     });
     this.#menus.register({
-      id: 'core:lib-copy',
+      id: 'core:lib-add',
       path: ['File'],
-      label: 'Save as copy…',
-      order: 61,
-      command: () => void this.saveAsCopy(),
+      label: 'Add dataset from library…',
+      order: 21,
+      command: () => void this.addFromLibrary(),
     });
-    this.#menus.register({
-      id: 'core:lib-open',
-      path: ['File'],
-      label: 'Open library…',
-      order: 62,
-      command: () => void this.openLibrary(),
-    });
-    this.#bus.on(CoreEvents.DATA_CHANGED, (s) => this.#onDataChanged(s));
-    this.#setStatus();
   }
 
-  // --- save -----------------------------------------------------------------
-
-  /** "Save to library…": if unbound, prompt for a name and create the entry; if
-   * already bound, just force an immediate (full) save. */
-  async saveInteractive() {
-    const bound = this.#data.active?.binding;
-    if (bound) {
-      await this.#fullSave(bound.id, bound.name);
-      return;
-    }
-    const name = await this.#promptName('Save to library', await this.#suggestName());
-    if (name) await this.#fullSave(null, name);
-  }
-
-  /** "Save as copy…": always create a new named entry and bind to the copy. */
-  async saveAsCopy() {
-    const bound = this.#data.active?.binding;
-    const base = bound?.name ? `${bound.name} copy` : await this.#suggestName();
-    const name = await this.#promptName('Save as copy', base);
-    if (name) await this.#fullSave(null, name);
-  }
-
-  /** Write the whole active dataset (sources + log) and (re)bind it to the entry. */
-  async #fullSave(id, name) {
+  /** Save the active dataset as a new reusable building block (a one-shot copy —
+   * no binding; the project keeps autosaving the working copy). */
+  async saveToLibrary() {
     const ds = this.#data.active;
     if (!ds || ds.rowCount === 0) {
       this.#results.appendError('Save to library: no data is loaded.');
       return;
     }
-    this.#setStatus('saving', name);
+    const form = await this.#ui.showForm({
+      title: 'Save dataset to library',
+      hint: 'Make this dataset a reusable building block you can add to any project.',
+      fields: [{ name: 'name', label: 'Name', value: ds.name }],
+      okLabel: 'Save',
+    });
+    const name = form?.name?.trim();
+    if (!name) return;
     try {
       const state = await ds.exportState({ includeParquet: true });
-      const savedId = await this.#store.save(
-        { id, name, savedAt: Date.now(), state },
-        { writeSources: true },
-      );
-      ds.binding = { id: savedId, name };
-      this.#setStatus('saved');
+      await this.#store.save({ name, savedAt: Date.now(), state }, { writeSources: true });
+      this.#results.appendText(`Saved **${name}** to the dataset library.`);
     } catch (err) {
       console.error('[library] save failed', err);
       this.#results.appendError(`Save to library failed: ${err.message}`);
-      this.#setStatus('error');
     }
   }
 
-  // --- autosave -------------------------------------------------------------
-
-  #onDataChanged(summary) {
-    // Only the *active* dataset's changes matter — a background dataset being
-    // built (e.g. a derived dataset before it's activated) must not touch the
-    // active dataset's binding/autosave.
-    if (!summary || summary.datasetId !== this.#data.activeId) return;
-    const reason = summary.reason;
-    const ds = this.#data.active;
-    if (reason === 'switch') {
-      // Active dataset changed — just reflect the new one's binding status.
-      this.#setStatus();
-      return;
-    }
-    if (reason === 'replace') {
-      // Different data loaded into this dataset — no longer the saved project.
-      if (ds) ds.binding = null;
-      this.#setStatus();
-      return;
-    }
-    if (reason === 'restore' || !ds?.binding) return;
-    if (['transform', 'append', 'join', 'undo', 'redo'].includes(reason)) {
-      // An appended/joined file adds a new immutable source, so its bytes must be
-      // written; metadata-only edits can reuse the existing Parquet (cheap path).
-      if (reason === 'append' || reason === 'join') this.#pendingWriteSources = true;
-      this.#schedule(ds);
-    }
-  }
-
-  #schedule(ds) {
-    this.#pendingDs = ds;
-    this.#setStatus('saving');
-    if (this.#timer) clearTimeout(this.#timer);
-    this.#timer = setTimeout(() => void this.#flush(), DEBOUNCE_MS);
-  }
-
-  async #flush() {
-    this.#timer = null;
-    const ds = this.#pendingDs;
-    if (!ds?.binding) return;
-    if (this.#saving) {
-      this.#dirtyAgain = true; // coalesce: re-run after the in-flight save
-      return;
-    }
-    this.#saving = true;
-    const writeSources = this.#pendingWriteSources;
-    this.#pendingWriteSources = false;
-    try {
-      const state = await ds.exportState({ includeParquet: writeSources });
-      await this.#store.save(
-        { id: ds.binding.id, name: ds.binding.name, savedAt: Date.now(), state },
-        { writeSources },
-      );
-      if (this.#data.active === ds) this.#setStatus('saved');
-    } catch (err) {
-      console.error('[library] autosave failed', err);
-      if (this.#data.active === ds) this.#setStatus('error');
-    } finally {
-      this.#saving = false;
-    }
-    if (this.#dirtyAgain) {
-      this.#dirtyAgain = false;
-      this.#schedule(ds);
-    }
-  }
-
-  // --- open / browse --------------------------------------------------------
-
-  /** Show the library modal: a list of saved datasets to open or delete. */
-  async openLibrary() {
+  /** Browse building blocks and add a copy of one into the current project. */
+  async addFromLibrary() {
     let entries;
     try {
       entries = await this.#store.list();
     } catch (err) {
-      this.#results.appendError(`Open library failed: ${err.message}`);
+      this.#results.appendError(`Library failed: ${err.message}`);
       return;
     }
     this.#showBrowseModal(entries);
   }
 
-  /** Open an entry as a NEW dataset in the workspace (so several can be open at
-   * once), activate it, and bind it to its library entry. */
-  async #open(id) {
-    this.#setStatus('loading');
+  /** Add a copy of a building block into the current project (as a new active
+   * dataset). */
+  async #add(id) {
     try {
       const { name, state } = await this.#store.load(id);
       const ds = this.#data.add(name, { activate: true });
       await ds.restoreState(state);
-      ds.binding = { id, name };
-      this.#setStatus('saved');
     } catch (err) {
-      console.error('[library] load failed', err);
-      this.#results.appendError(`Open from library failed: ${err.message}`);
-      this.#setStatus('error');
+      console.error('[library] add failed', err);
+      this.#results.appendError(`Add from library failed: ${err.message}`);
     }
   }
 
   async #delete(id) {
     try {
       await this.#store.delete(id);
-      // If the active dataset was bound to the deleted entry, unbind it.
-      if (this.#data.active?.binding?.id === id) {
-        this.#data.active.binding = null;
-        this.#setStatus();
-      }
     } catch (err) {
       this.#results.appendError(`Delete failed: ${err.message}`);
     }
   }
 
-  // --- UI helpers -----------------------------------------------------------
+  // --- browse modal ----------------------------------------------------------
 
-  /** A best-effort default name from the first source's provenance label. */
-  async #suggestName() {
-    try {
-      const peek = await this.#data.exportState({ includeParquet: false });
-      return peek.sources[0]?.label || 'Untitled dataset';
-    } catch {
-      return 'Untitled dataset';
-    }
-  }
-
-  /** Prompt for an entry name; resolve to the trimmed name or null. */
-  async #promptName(title, suggested) {
-    const form = await this.#ui.showForm({
-      title,
-      fields: [{ name: 'name', label: 'Name', value: suggested }],
-      okLabel: 'Save',
-    });
-    const name = form?.name?.trim();
-    return name || null;
-  }
-
-  /** Build and show the browse modal (built with DOM nodes — names are user text). */
   #showBrowseModal(entries) {
     const dialog = document.createElement('dialog');
     dialog.className = 'ct-dialog';
     const form = document.createElement('form');
     form.method = 'dialog';
     form.className = 'ct-dialog__form';
-
     const h2 = document.createElement('h2');
     h2.className = 'ct-dialog__title';
-    h2.textContent = 'Library';
+    h2.textContent = 'Add dataset from library';
     form.append(h2);
 
     if (entries.length === 0) {
       const p = document.createElement('p');
       p.className = 'ct-dialog__hint';
-      p.textContent = 'No saved datasets yet. Use File ▸ Save to library.';
+      p.textContent = 'No building blocks yet. Use File ▸ Save dataset to library.';
       form.append(p);
     } else {
       const list = document.createElement('ul');
       list.className = 'ct-dialog__vars ct-lib__list';
-      for (const e of entries) {
-        list.append(this.#entryRow(e, dialog));
-      }
+      for (const e of entries) list.append(this.#entryRow(e, dialog));
       form.append(list);
     }
 
@@ -309,18 +147,15 @@ export class LibrarySync {
     close.textContent = 'Close';
     menu.append(close);
     form.append(menu);
-
     dialog.append(form);
     dialog.addEventListener('close', () => dialog.remove());
     document.body.append(dialog);
     dialog.showModal();
   }
 
-  /** One library entry row: name + summary, with Open and Delete actions. */
   #entryRow(entry, dialog) {
     const li = document.createElement('li');
     li.className = 'ct-lib__row';
-
     const info = document.createElement('div');
     info.className = 'ct-lib__info';
     const name = document.createElement('div');
@@ -336,13 +171,13 @@ export class LibrarySync {
 
     const actions = document.createElement('div');
     actions.className = 'ct-lib__actions';
-    const open = document.createElement('button');
-    open.type = 'button';
-    open.className = 'ct-dialog__primary';
-    open.textContent = 'Open';
-    open.addEventListener('click', () => {
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'ct-dialog__primary';
+    add.textContent = 'Add';
+    add.addEventListener('click', () => {
       dialog.close('cancel');
-      void this.#open(entry.id);
+      void this.#add(entry.id);
     });
     const del = document.createElement('button');
     del.type = 'button';
@@ -353,28 +188,8 @@ export class LibrarySync {
       await this.#delete(entry.id);
       li.remove();
     });
-    actions.append(open, del);
-
+    actions.append(add, del);
     li.append(info, actions);
     return li;
-  }
-
-  /**
-   * Paint the footer status. With no argument, reflects the current binding.
-   * @param {'saving'|'saved'|'loading'|'error'|string} [state]
-   * @param {string} [nameOverride]
-   */
-  #setStatus(state, nameOverride) {
-    if (!this.#statusEl) return;
-    const bound = this.#data.active?.binding;
-    const name = nameOverride ?? bound?.name;
-    let text;
-    if (state === 'saving') text = `Library: ${name ?? '…'} — saving…`;
-    else if (state === 'loading') text = 'Library: loading…';
-    else if (state === 'error') text = `Library: ${name ?? ''} — save failed`;
-    else if (bound) text = `Library: ${bound.name} — saved ✓`;
-    else if (typeof state === 'string' && !['saved'].includes(state)) text = state;
-    else text = 'Not saved to library';
-    this.#statusEl.textContent = text;
   }
 }

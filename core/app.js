@@ -19,7 +19,7 @@ import { UiService } from './ui-service.js';
 import { ImportService } from './import-service.js';
 import { ExportService } from './export-service.js';
 import { DatasetStore } from './dataset-store.js';
-import { LibrarySync } from './library.js';
+import { DatasetLibrary } from './library.js';
 import { ProjectStore } from './project-store.js';
 import { ProjectSync, PROJECT_CHANGED } from './project-sync.js';
 import { DataView, VariableView } from './data-views.js';
@@ -161,20 +161,15 @@ export async function boot(mounts) {
     command: () => void datasets.redo(),
   });
 
-  // Dataset library (OPFS): File ▸ Save/Open, with autosave once a session is
-  // bound to a saved entry. A small footer span shows the save status.
-  const libStatus = document.createElement('span');
-  libStatus.id = 'lib-status';
-  libStatus.className = 'lib-status';
-  mounts.status.parentElement?.append(libStatus);
-  const library = new LibrarySync({
+  // Dataset library (OPFS), tier 2: reusable building blocks — explicit
+  // "Save dataset to library" / "Add dataset from library". No autosave here;
+  // the project tier (below) owns autosave.
+  const library = new DatasetLibrary({
     datasetStore,
     data: datasets,
     ui,
     menus,
-    bus,
     results: results.api,
-    statusEl: libStatus,
   });
   library.activate();
 
