@@ -159,6 +159,7 @@ export class DatasetManager {
     // id) map back consistently across save/load.
     for (const d of datasets) {
       const ds = new DataStore(this.#bus, this.#duckdb, { id: d.id, name: d.name });
+      ds.libraryOrigin = d.libraryOrigin ?? null;
       this.#datasets.set(d.id, ds);
       await ds.restoreState(d.state);
     }

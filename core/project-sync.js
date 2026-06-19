@@ -37,6 +37,11 @@ export class ProjectSync {
   #sourcesDirty = new Set();
   /** True while loading a project, to suppress autosave during reconstruction. */
   #loading = false;
+  /** Once true, the first change with no project auto-starts an Untitled one. Set
+   * after boot so the seed load doesn't spawn a project. */
+  #armed = false;
+  /** Guard against re-entrant auto-create from a burst of changes. */
+  #creating = false;
 
   #timer = null;
   #saving = false;
@@ -126,7 +131,30 @@ export class ProjectSync {
     if (summary && ['replace', 'append', 'join', 'restore'].includes(summary.reason)) {
       if (summary.datasetId != null) this.#sourcesDirty.add(summary.datasetId);
     }
-    if (this.#binding) this.#schedule();
+    if (this.#binding) {
+      this.#schedule();
+      return;
+    }
+    // No project yet: the first real change auto-starts an autosaving "Untitled
+    // project" so work is never lost. (Armed after boot, so the seed doesn't.)
+    if (this.#armed && !this.#creating) {
+      this.#creating = true;
+      void this.#autoCreate();
+    }
+  }
+
+  /** Enable auto-creating an Untitled project on the next change. Called once the
+   * app has booted, so the demo-seed load doesn't spawn one. */
+  arm() {
+    this.#armed = true;
+  }
+
+  async #autoCreate() {
+    try {
+      await this.#fullSave(null, 'Untitled project');
+    } finally {
+      this.#creating = false;
+    }
   }
 
   #schedule() {
@@ -172,7 +200,7 @@ export class ProjectSync {
     const datasets = [];
     for (const ds of this.#datasets.all()) {
       const state = await ds.exportState({ includeParquet: all || dirty.has(ds.id) });
-      datasets.push({ id: ds.id, name: ds.name, state });
+      datasets.push({ id: ds.id, name: ds.name, libraryOrigin: ds.libraryOrigin ?? null, state });
     }
     return { activeId: this.#datasets.activeId, datasets };
   }

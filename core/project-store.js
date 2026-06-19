@@ -77,7 +77,13 @@ export class ProjectStore {
         }
         sources.push(entry);
       }
-      datasets.push({ id: d.id, name: d.name, sources, transforms: d.state.transforms ?? [] });
+      datasets.push({
+        id: d.id,
+        name: d.name,
+        libraryOrigin: d.libraryOrigin ?? null,
+        sources,
+        transforms: d.state.transforms ?? [],
+      });
     }
 
     const manifest = { name, savedAt, activeId: bundle.activeId, datasets };
@@ -115,7 +121,12 @@ export class ProjectStore {
           parquet: new Uint8Array(buf),
         });
       }
-      datasets.push({ id: d.id, name: d.name, state: { sources, transforms: d.transforms ?? [] } });
+      datasets.push({
+        id: d.id,
+        name: d.name,
+        libraryOrigin: d.libraryOrigin ?? null,
+        state: { sources, transforms: d.transforms ?? [] },
+      });
     }
     return { id, name: manifest.name, bundle: { activeId: manifest.activeId, datasets } };
   }

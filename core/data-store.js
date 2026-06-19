@@ -103,8 +103,14 @@ export class DataStore {
   name;
 
   /** Library binding: `{ id, name }` of the saved entry this dataset autosaves
-   * to, or `null` if unsaved. Per-dataset so each can bind independently. */
+   * to, or `null` if unsaved. Per-dataset so each can bind independently.
+   * (Legacy of the pre-projects model; projects now own autosave — kept harmless.) */
   binding = null;
+
+  /** Building-block library id this dataset is the working copy of (set when
+   * added from / saved to the library), so an explicit re-save UPDATES that block
+   * rather than making a duplicate. Persisted in the project bundle. */
+  libraryOrigin = null;
 
   /**
    * The immutable source tables, in load order. One per imported/appended file.

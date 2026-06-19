@@ -210,6 +210,10 @@ export async function boot(mounts) {
     }
   }
 
+  // Boot done: from the next change on, an unsaved session auto-starts an
+  // autosaving "Untitled project" (so the seed load above doesn't spawn one).
+  projects.arm();
+
   // `dataStore` kept as an alias to the manager (it delegates to the active
   // dataset) so console pokes / older references keep working.
   const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, projects, loader, services };

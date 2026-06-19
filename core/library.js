@@ -55,26 +55,45 @@ export class DatasetLibrary {
     });
   }
 
-  /** Save the active dataset as a new reusable building block (a one-shot copy —
-   * no binding; the project keeps autosaving the working copy). */
+  /** Save the active dataset to the building-block library. If it's the working
+   * copy of an existing block (has a `libraryOrigin`), this UPDATES that block;
+   * otherwise it creates a new one. Either way it's an explicit, intentional push
+   * — no autosave to the library (the project owns autosave). */
   async saveToLibrary() {
     const ds = this.#data.active;
     if (!ds || ds.rowCount === 0) {
       this.#results.appendError('Save to library: no data is loaded.');
       return;
     }
+    // Does this dataset already correspond to a still-existing block?
+    let existing = null;
+    if (ds.libraryOrigin != null) {
+      try {
+        existing = (await this.#store.list()).find((e) => e.id === ds.libraryOrigin) ?? null;
+      } catch {
+        existing = null;
+      }
+    }
     const form = await this.#ui.showForm({
-      title: 'Save dataset to library',
-      hint: 'Make this dataset a reusable building block you can add to any project.',
-      fields: [{ name: 'name', label: 'Name', value: ds.name }],
-      okLabel: 'Save',
+      title: existing ? 'Update building block' : 'Save dataset to library',
+      hint: existing
+        ? `Update the existing building block “${existing.name}” with this dataset's current state.`
+        : 'Make this dataset a reusable building block you can add to any project.',
+      fields: [{ name: 'name', label: 'Name', value: existing?.name ?? ds.name }],
+      okLabel: existing ? 'Update' : 'Save',
     });
     const name = form?.name?.trim();
     if (!name) return;
     try {
       const state = await ds.exportState({ includeParquet: true });
-      await this.#store.save({ name, savedAt: Date.now(), state }, { writeSources: true });
-      this.#results.appendText(`Saved **${name}** to the dataset library.`);
+      const savedId = await this.#store.save(
+        { id: existing?.id, name, savedAt: Date.now(), state },
+        { writeSources: true },
+      );
+      ds.libraryOrigin = savedId; // future saves update this same block
+      this.#results.appendText(
+        existing ? `Updated **${name}** in the dataset library.` : `Saved **${name}** to the dataset library.`,
+      );
     } catch (err) {
       console.error('[library] save failed', err);
       this.#results.appendError(`Save to library failed: ${err.message}`);
@@ -100,6 +119,7 @@ export class DatasetLibrary {
       const { name, state } = await this.#store.load(id);
       const ds = this.#data.add(name, { activate: true });
       await ds.restoreState(state);
+      ds.libraryOrigin = id; // remember which block this is a copy of (for re-save)
     } catch (err) {
       console.error('[library] add failed', err);
       this.#results.appendError(`Add from library failed: ${err.message}`);
