@@ -64,6 +64,11 @@ export class DatasetManager {
     return this.#activeId;
   }
 
+  /** All open datasets (live {@link DataStore}s), in id order. */
+  all() {
+    return [...this.#datasets.values()];
+  }
+
   /** Summaries for the dataset switcher. */
   list() {
     return [...this.#datasets.values()].map((ds) => ({
@@ -138,6 +143,31 @@ export class DatasetManager {
       this.#bus.emit(DATASETS_CHANGED, this.list());
     }
     return ds.id;
+  }
+
+  /**
+   * Replace the entire working set with a saved project bundle: dispose the open
+   * datasets, recreate each from the bundle, and restore the active one.
+   *
+   * @param {{activeId: number, datasets: Array<{id: number, name: string, state: object}>}} bundle
+   */
+  async loadBundle({ datasets, activeId }) {
+    for (const ds of this.#datasets.values()) await ds.dispose();
+    this.#datasets.clear();
+    this.#activeId = null;
+    // Recreate with the SAVED ids so a project's Parquet files (named by dataset
+    // id) map back consistently across save/load.
+    for (const d of datasets) {
+      const ds = new DataStore(this.#bus, this.#duckdb, { id: d.id, name: d.name });
+      this.#datasets.set(d.id, ds);
+      await ds.restoreState(d.state);
+    }
+    const maxId = datasets.reduce((m, d) => Math.max(m, Number(d.id) || 0), 0);
+    this.#nextId = Math.max(this.#nextId, maxId + 1);
+    this.#activeId = this.#datasets.has(activeId)
+      ? activeId
+      : (this.#datasets.keys().next().value ?? null);
+    this.#emitActive('switch');
   }
 
   /** Re-emit active-dataset events so every consumer refreshes onto it. */

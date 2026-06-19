@@ -20,6 +20,8 @@ import { ImportService } from './import-service.js';
 import { ExportService } from './export-service.js';
 import { DatasetStore } from './dataset-store.js';
 import { LibrarySync } from './library.js';
+import { ProjectStore } from './project-store.js';
+import { ProjectSync } from './project-sync.js';
 import { DataView, VariableView } from './data-views.js';
 import { PluginLoader } from './loader.js';
 import { makeDemoDataset } from './demo-data.js';
@@ -179,6 +181,22 @@ export async function boot(mounts) {
   });
   library.activate();
 
+  // Projects (OPFS): the living-document tier — autosaves the whole working set.
+  const projStatus = document.createElement('span');
+  projStatus.id = 'proj-status';
+  projStatus.className = 'lib-status';
+  mounts.status.parentElement?.append(projStatus);
+  const projects = new ProjectSync({
+    projectStore: new ProjectStore(),
+    datasets,
+    ui,
+    menus,
+    bus,
+    results: results.api,
+    statusEl: projStatus,
+  });
+  projects.activate();
+
   // --- seed data + warm up the runtimes, in parallel -------------------------
   // The two WASM runtimes are independent, so load them concurrently rather than
   // serially: `setDataset` cold-starts DuckDB; `webr.preload()` cold-starts R.
@@ -202,7 +220,7 @@ export async function boot(mounts) {
 
   // `dataStore` kept as an alias to the manager (it delegates to the active
   // dataset) so console pokes / older references keep working.
-  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, loader, services };
+  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, projects, loader, services };
   // Expose for manual poking in the console during early development.
   // eslint-disable-next-line no-undef
   globalThis.crosstab = engine;
