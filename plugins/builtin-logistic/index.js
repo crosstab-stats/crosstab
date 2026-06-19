@@ -20,7 +20,7 @@ export const manifest = {
   name: 'Binary Logistic Regression',
   version: '0.1.0',
   apiVersion: '0.1.0',
-  category: 'Analysis',
+  category: 'Regression',
   keywords: ['glm', 'logistic', 'odds', 'binary', 'regression'],
   rPackages: [], // base R `glm`
 };

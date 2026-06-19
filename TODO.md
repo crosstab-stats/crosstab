@@ -759,6 +759,18 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     Import 4 / Analysis 7 / Graphs 1 / Export 4; searching "contingency" (only in
     Crosstabs' keywords, not its name) surfaces Crosstabs — so an oddly-named
     third-party plugin stays findable by what it does.
+  - **Categorise by method family, not a generic "Analysis"** (avoids the
+    junk-drawer that would bloat as analyses grow). Analyses now use specific
+    families matching their `Analyze ▸ …` submenus: Descriptive Statistics
+    (Frequencies/Descriptives/Crosstabs), Correlation, Regression (Linear/
+    Logistic), Resampling (Bootstrap). The manager defines a **recommended ordered
+    vocabulary** (Import · Descriptive Statistics · Comparison · Correlation ·
+    Regression · Multivariate · Time Series · Resampling · Graphs · Export); a
+    plugin may use any string but unrecognised ones sort after the recommended set
+    (a gentle nudge), with "Other" last. Documented in the `manifest.category` doc
+    (loader.js) so third-party authors see the convention. Verified: sections now
+    read Import / Descriptive Statistics / Correlation / Regression / Resampling /
+    Graphs / Export.
   - *Deferred:* manage *installed third-party* plugins too (today the catalog is
     the built-in URL set); a "reload plugin" action for the plugin-creator loop.
 - [ ] **Direct R interface / console.** The power-user escape hatch: when the

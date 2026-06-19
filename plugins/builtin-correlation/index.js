@@ -19,7 +19,7 @@ export const manifest = {
   name: 'Correlation',
   version: '0.1.0',
   apiVersion: '0.1.0',
-  category: 'Analysis',
+  category: 'Correlation',
   keywords: ['pearson', 'correlation', 'bivariate', 'r'],
   rPackages: [], // base R (cor.test) is enough
 };

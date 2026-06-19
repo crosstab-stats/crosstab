@@ -214,9 +214,25 @@ function matchesQuery(p, q) {
   return hay.includes(q);
 }
 
-/** Built-in category order; unknown categories sort alphabetically after these,
- * and the catch-all "Other" goes last. */
-const CATEGORY_ORDER = ['Import', 'Analysis', 'Graphs', 'Export'];
+/** The **recommended category vocabulary**, in display order — the convention we
+ * model so the plugin list stays legible as it grows (rather than one giant
+ * "Analysis" bucket). Analyses are grouped by *method family*, mirroring the
+ * Analyze ▸ … submenus. A plugin may use any string; unrecognised categories sort
+ * alphabetically after these (a gentle nudge toward the standard vocabulary), and
+ * the catch-all "Other" goes last. Kept in sync with the manifest `category` doc
+ * in loader.js. */
+const CATEGORY_ORDER = [
+  'Import',
+  'Descriptive Statistics',
+  'Comparison',
+  'Correlation',
+  'Regression',
+  'Multivariate',
+  'Time Series',
+  'Resampling',
+  'Graphs',
+  'Export',
+];
 function categoryRank(c) {
   if (c === 'Other') return 1000;
   const i = CATEGORY_ORDER.indexOf(c);

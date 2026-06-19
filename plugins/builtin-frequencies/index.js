@@ -29,7 +29,7 @@ export const manifest = {
   name: 'Frequencies',
   version: '0.1.0',
   apiVersion: '0.1.0',
-  category: 'Analysis',
+  category: 'Descriptive Statistics',
   keywords: ['frequency', 'counts', 'distribution', 'table'],
   // No external R packages: base R `table()` is enough for frequencies.
   rPackages: [],
