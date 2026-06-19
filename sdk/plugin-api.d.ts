@@ -67,6 +67,17 @@ export interface DataApi {
   getSelectedVariables(): Promise<string[]>;
   /** Number of cases (rows). */
   getRowCount(): Promise<number>;
+  /** Emit a **derived dataset** (e.g. bootstrap resamples, simulated draws,
+   * predictions) as a new dataset in the workspace; by default it becomes active,
+   * so it can immediately be plotted/described/exported like any other. Resolves
+   * to the new dataset's id. Same shape as an importer delivers. */
+  create(dataset: {
+    name?: string;
+    variables: VariableMeta[];
+    columns?: Record<string, Array<number | string | null>>;
+    parquet?: Uint8Array;
+    activate?: boolean;
+  }): Promise<number>;
   /** Subscribe to dataset replacement/mutation. Resolves to an unsubscribe fn. */
   onDataChanged(fn: (summary: { rowCount: number; variables: string[] }) => void): Promise<Disposer>;
   /** Subscribe to selection changes. Resolves to an unsubscribe fn. */

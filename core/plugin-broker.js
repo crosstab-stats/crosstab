@@ -252,6 +252,7 @@ function buildDispatch({ data, transform, results, webr, menus, ui, importers, e
     'data.getVariableMeta': (opts) => data.getVariableMeta(opts),
     'data.getSelectedVariables': () => data.getSelectedVariables(),
     'data.getRowCount': () => data.getRowCount(),
+    'data.create': (dataset) => data.create(dataset),
     'data.onDataChanged': (fn) => data.onDataChanged(fn),
     'data.onSelectionChanged': (fn) => data.onSelectionChanged(fn),
 

@@ -549,17 +549,30 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       being a poor viz), and **bar chart with error bars** (group means by a factor,
       **±95% CI**, t-based, labelled on the plot). Honours `missingValues`,
       app-blue theme, responsive via `viewBox`.
-  - *Future — generalise plots over piped results (deferred, design note).* Tempting
-    to let a plot consume another plugin's *output* (e.g. Descriptives' group means
-    → the error-bar chart) instead of recomputing from data. The on-architecture
-    shape is **not** a bespoke plot-input channel (which needs structured result
-    objects + a plugin↔plugin mediator + agreed schemas) but "**analyses emit a
-    derived dataset; plots consume datasets** like everything else" — one currency,
-    reusing import/transform/join primitives (the tidyverse `summarize() |> plot()`
-    shape). Build plots concretely first; the canary is the error-bar plot and
-    Descriptives both computing group means — that duplication is the real signal to
-    extract a shared "summary dataset" (ties to an aggregate/summarise step, Phase 2
-    recode territory). Don't design the pipe before there's a second consumer.
+  - *Generalise plots over derived data — RESOLVED via multi-dataset.* The
+    on-architecture answer ("analyses emit a derived dataset; plots consume
+    datasets like everything else") is now real: see the **multi-dataset workspace**
+    + `app.data.create` below. A plot doesn't take another plugin's output through a
+    bespoke channel — the analysis emits a dataset and the plot just plots it.
+- [x] **Multi-dataset workspace + derived datasets** (`core/dataset-manager.js`).
+      The engine now holds a *set* of open datasets with one active, not a single
+      dataset. `DataStore` is per-instance (id-namespaced DuckDB tables, own library
+      binding/undo); `DatasetManager` owns the set + active and delegates the whole
+      DataStore interface to the active one (so import/export/grid/analyses just act
+      on whatever's active). A switcher in the tab bar picks the active dataset.
+      **`app.data.create(dataset)`** lets an analysis *emit* a derived dataset (added
+      + activated), so analyses are data sources too — one currency (datasets), no
+      bespoke plugin↔plugin pipe. Library `Open` now adds a dataset (open several
+      side by side); binding is per-dataset. Verified end to end. *Now unblocked /
+      partly done:* the library's "single vs. multi-dataset" question (answered:
+      multi), and **join across loaded datasets** (engine can hold both; the join UI
+      still goes via import — wiring it to pick a loaded dataset is a small follow-up).
+- [x] **Bootstrap the mean** (`plugins/builtin-bootstrap/`) — the first analysis
+      that emits a derived dataset: resamples a numeric variable B times, emits the
+      B resampled means as a new (active) dataset (`boot_mean`) you can plot/describe,
+      and prints observed mean, bootstrap SE, and a 95% percentile CI. Verified:
+      income, 2000 reps → derived dataset + CI table → histogram of the bootstrap
+      distribution. The showcase of "analyses emit datasets, plots consume them."
 - *Testing note (Chrome automation):* driving **two sequential modal `<dialog>`s**
   is flaky via CDP — a synthetic `button.click()` closes the dialog but does *not*
   fire the `close` event (so the app's promise never resolves), and long evals
