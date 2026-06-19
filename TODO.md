@@ -537,6 +537,47 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     Stata `.dta` write (haven write-side, heavier); Parquet export
     (`DuckDBManager.queryToParquet` exists — nearly free). CSV covers the common
     need first.
+- [ ] **In-app plugin creator / editor.** Let social scientists (who are *not*
+      programmers) build the plugin they need without leaving the app or standing
+      up a toolchain. The point isn't a full IDE — it's "more than Notepad,"
+      scaffolded enough that the author fills in the analysis, not the plumbing.
+  - **Scaffold pre-wires the boilerplate:** a starting template with the **input
+    selector** (variable picking via `app.ui.selectVariables`) and the **output
+    channels** (`results.appendText`/`appendTable`/`appendPlot`) already typed in,
+    plus a filled-in manifest (api version, menu path, declared `rPackages`). The
+    author writes the bit in the middle. Offer a few template shapes (one-variable
+    analysis, two-picker analysis, plot) since those cover most needs.
+  - **Editor surface:** syntax highlighting to catch typos — "nothing crazy."
+    Decision point: a tiny self-rolled highlighter vs. vendoring **CodeMirror**
+    (the obvious "more than Notepad," but a vendored dep — fits the existing
+    "vendor + pin" hardening posture). Lean minimal for v1.
+  - **Where the authored plugin lives + runs:** it must persist (OPFS, alongside
+    projects/blocks) and load through the existing **sandboxed-iframe loader** via
+    blob/`data:`-URL module import — so it ties directly to the open questions on
+    **blob-module import inside the opaque-origin iframe** (Milestone 3) and
+    **multi-file plugins / import-map**. The trust boundary is unchanged: authored
+    code runs in the same sandbox as any other plugin, and its output still goes
+    through the HTML sanitiser (so that hardening item covers it too).
+  - *Nice follow-on:* a "fork this analysis" button that opens an existing builtin
+    plugin's source in the editor as a starting point.
+- [ ] **Direct R interface / console.** The power-user escape hatch: when the
+      canned analyses don't cover a need, drop to R directly. Framing: a plugin
+      that does **variable selection + load**, then hands the user an **interactive
+      terminal** with their data already staged and a plain-language orientation —
+      e.g. "your data is in `df`; `df[[1]]` is *Age*, `df[[2]]` is *Income*…" so a
+      non-R-fluent user knows what they're holding.
+  - **Data staging:** reuse the existing injection path (DuckDB → Parquet/JS-array
+    → WebR `data.frame`) to load the selected variables into the R session under a
+    known name, then print the name↔variable legend (using labels) before the
+    prompt.
+  - **REPL UI:** an interactive terminal (dedicated tab, or in the Output pane) —
+    read a line, `webr` eval, print the result. WebR already runs in a worker;
+    the work is threading stdin/stdout to a terminal widget and rendering R output
+    (text + any `svgstring()` plots) through the sanitiser.
+  - **Reproducibility tie-in:** the commands a user types are themselves a do-file
+    — this overlaps with **export-to-syntax** (the transform log + a typed-command
+    log together *are* the script). Risk is low (arbitrary R is the user's own
+    sandboxed WASM session); output rendering still respects the sanitiser.
 
 ## More analyses (each is just another plugin)
 
