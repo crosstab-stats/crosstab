@@ -33,14 +33,17 @@ export class LibrarySync {
   #results;
   #statusEl;
 
-  /** Current binding: `{ id, name }` once saved/loaded, else `null`. */
-  #binding = null;
+  // The library binding now lives per-dataset (`DataStore.binding`), reached via
+  // `this.#data.active.binding` — so each open dataset autosaves to its own entry.
 
   // Autosave bookkeeping.
   #timer = null;
   #saving = false;
   #dirtyAgain = false;
   #pendingWriteSources = false;
+  /** The specific dataset a pending autosave targets (captured so a mid-debounce
+   * dataset switch can't redirect the save). @type {import('./data-store.js').DataStore|null} */
+  #pendingDs = null;
 
   /**
    * @param {Object} deps
@@ -98,8 +101,9 @@ export class LibrarySync {
   /** "Save to library…": if unbound, prompt for a name and create the entry; if
    * already bound, just force an immediate (full) save. */
   async saveInteractive() {
-    if (this.#binding) {
-      await this.#fullSave(this.#binding.id, this.#binding.name);
+    const bound = this.#data.active?.binding;
+    if (bound) {
+      await this.#fullSave(bound.id, bound.name);
       return;
     }
     const name = await this.#promptName('Save to library', await this.#suggestName());
@@ -108,25 +112,27 @@ export class LibrarySync {
 
   /** "Save as copy…": always create a new named entry and bind to the copy. */
   async saveAsCopy() {
-    const base = this.#binding?.name ? `${this.#binding.name} copy` : await this.#suggestName();
+    const bound = this.#data.active?.binding;
+    const base = bound?.name ? `${bound.name} copy` : await this.#suggestName();
     const name = await this.#promptName('Save as copy', base);
     if (name) await this.#fullSave(null, name);
   }
 
-  /** Write the whole dataset (sources + log) and (re)bind to the entry. */
+  /** Write the whole active dataset (sources + log) and (re)bind it to the entry. */
   async #fullSave(id, name) {
-    if (this.#data.rowCount === 0) {
+    const ds = this.#data.active;
+    if (!ds || ds.rowCount === 0) {
       this.#results.appendError('Save to library: no data is loaded.');
       return;
     }
     this.#setStatus('saving', name);
     try {
-      const state = await this.#data.exportState({ includeParquet: true });
+      const state = await ds.exportState({ includeParquet: true });
       const savedId = await this.#store.save(
         { id, name, savedAt: Date.now(), state },
         { writeSources: true },
       );
-      this.#binding = { id: savedId, name };
+      ds.binding = { id: savedId, name };
       this.#setStatus('saved');
     } catch (err) {
       console.error('[library] save failed', err);
@@ -138,25 +144,34 @@ export class LibrarySync {
   // --- autosave -------------------------------------------------------------
 
   #onDataChanged(summary) {
-    const reason = summary?.reason;
-    if (reason === 'replace') {
-      // Different data loaded — this is no longer the saved project.
-      if (this.#binding) {
-        this.#binding = null;
-        this.#setStatus();
-      }
+    // Only the *active* dataset's changes matter — a background dataset being
+    // built (e.g. a derived dataset before it's activated) must not touch the
+    // active dataset's binding/autosave.
+    if (!summary || summary.datasetId !== this.#data.activeId) return;
+    const reason = summary.reason;
+    const ds = this.#data.active;
+    if (reason === 'switch') {
+      // Active dataset changed — just reflect the new one's binding status.
+      this.#setStatus();
       return;
     }
-    if (reason === 'restore' || !this.#binding) return;
+    if (reason === 'replace') {
+      // Different data loaded into this dataset — no longer the saved project.
+      if (ds) ds.binding = null;
+      this.#setStatus();
+      return;
+    }
+    if (reason === 'restore' || !ds?.binding) return;
     if (['transform', 'append', 'join', 'undo', 'redo'].includes(reason)) {
       // An appended/joined file adds a new immutable source, so its bytes must be
       // written; metadata-only edits can reuse the existing Parquet (cheap path).
       if (reason === 'append' || reason === 'join') this.#pendingWriteSources = true;
-      this.#schedule();
+      this.#schedule(ds);
     }
   }
 
-  #schedule() {
+  #schedule(ds) {
+    this.#pendingDs = ds;
     this.#setStatus('saving');
     if (this.#timer) clearTimeout(this.#timer);
     this.#timer = setTimeout(() => void this.#flush(), DEBOUNCE_MS);
@@ -164,7 +179,8 @@ export class LibrarySync {
 
   async #flush() {
     this.#timer = null;
-    if (!this.#binding) return;
+    const ds = this.#pendingDs;
+    if (!ds?.binding) return;
     if (this.#saving) {
       this.#dirtyAgain = true; // coalesce: re-run after the in-flight save
       return;
@@ -173,21 +189,21 @@ export class LibrarySync {
     const writeSources = this.#pendingWriteSources;
     this.#pendingWriteSources = false;
     try {
-      const state = await this.#data.exportState({ includeParquet: writeSources });
+      const state = await ds.exportState({ includeParquet: writeSources });
       await this.#store.save(
-        { id: this.#binding.id, name: this.#binding.name, savedAt: Date.now(), state },
+        { id: ds.binding.id, name: ds.binding.name, savedAt: Date.now(), state },
         { writeSources },
       );
-      this.#setStatus('saved');
+      if (this.#data.active === ds) this.#setStatus('saved');
     } catch (err) {
       console.error('[library] autosave failed', err);
-      this.#setStatus('error');
+      if (this.#data.active === ds) this.#setStatus('error');
     } finally {
       this.#saving = false;
     }
     if (this.#dirtyAgain) {
       this.#dirtyAgain = false;
-      this.#schedule();
+      this.#schedule(ds);
     }
   }
 
@@ -205,13 +221,15 @@ export class LibrarySync {
     this.#showBrowseModal(entries);
   }
 
-  /** Load an entry into the live engine and bind to it. */
+  /** Open an entry as a NEW dataset in the workspace (so several can be open at
+   * once), activate it, and bind it to its library entry. */
   async #open(id) {
     this.#setStatus('loading');
     try {
       const { name, state } = await this.#store.load(id);
-      await this.#data.restoreState(state);
-      this.#binding = { id, name };
+      const ds = this.#data.add(name, { activate: true });
+      await ds.restoreState(state);
+      ds.binding = { id, name };
       this.#setStatus('saved');
     } catch (err) {
       console.error('[library] load failed', err);
@@ -223,8 +241,9 @@ export class LibrarySync {
   async #delete(id) {
     try {
       await this.#store.delete(id);
-      if (this.#binding?.id === id) {
-        this.#binding = null;
+      // If the active dataset was bound to the deleted entry, unbind it.
+      if (this.#data.active?.binding?.id === id) {
+        this.#data.active.binding = null;
         this.#setStatus();
       }
     } catch (err) {
@@ -347,12 +366,13 @@ export class LibrarySync {
    */
   #setStatus(state, nameOverride) {
     if (!this.#statusEl) return;
-    const name = nameOverride ?? this.#binding?.name;
+    const bound = this.#data.active?.binding;
+    const name = nameOverride ?? bound?.name;
     let text;
     if (state === 'saving') text = `Library: ${name ?? '…'} — saving…`;
     else if (state === 'loading') text = 'Library: loading…';
     else if (state === 'error') text = `Library: ${name ?? ''} — save failed`;
-    else if (this.#binding) text = `Library: ${this.#binding.name} — saved ✓`;
+    else if (bound) text = `Library: ${bound.name} — saved ✓`;
     else if (typeof state === 'string' && !['saved'].includes(state)) text = state;
     else text = 'Not saved to library';
     this.#statusEl.textContent = text;

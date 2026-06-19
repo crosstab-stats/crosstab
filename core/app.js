@@ -10,7 +10,7 @@
  */
 
 import { EventBus, CoreEvents } from './event-bus.js';
-import { DataStore } from './data-store.js';
+import { DatasetManager, DATASETS_CHANGED } from './dataset-manager.js';
 import { DuckDBManager } from './duckdb-manager.js';
 import { WebRManager } from './webr-manager.js';
 import { ResultsPane } from './results-pane.js';
@@ -81,20 +81,26 @@ export async function boot(mounts) {
   // --- core services ---------------------------------------------------------
   const bus = new EventBus();
   const duckdb = new DuckDBManager();
-  const dataStore = new DataStore(bus, duckdb);
+  // `datasets` owns the open datasets and presents the active one through the
+  // same surface a single DataStore used to (it delegates). Everything that used
+  // to hold "the dataset" now holds the manager.
+  const datasets = new DatasetManager(bus, duckdb);
+  // Create the first (empty) dataset up front so there's always an active dataset
+  // for the UI to render against; its data is loaded below.
+  datasets.add('Demo data', { activate: true });
   const webr = new WebRManager(
     {
       bus,
-      getColumns: (opts) => dataStore.getColumns(opts),
-      getInjectionParquet: (opts) => dataStore.getInjectionParquet(opts),
+      getColumns: (opts) => datasets.getColumns(opts),
+      getInjectionParquet: (opts) => datasets.getInjectionParquet(opts),
     },
     { preloadPackages: [] }, // built-in plugins declare their own R deps
   );
   const results = new ResultsPane(mounts.results);
   const menus = new MenuShell(mounts.menubar);
-  const ui = new UiService(dataStore);
-  const importers = new ImportService({ menus, data: dataStore, results: results.api, bus });
-  const exporters = new ExportService({ menus, data: dataStore, results: results.api, bus });
+  const ui = new UiService(datasets);
+  const importers = new ImportService({ menus, data: datasets, results: results.api, bus });
+  const exporters = new ExportService({ menus, data: datasets, results: results.api, bus });
   const datasetStore = new DatasetStore();
 
   // The service bundle the plugin broker dispatches against. `data`/`results`/
@@ -103,8 +109,8 @@ export async function boot(mounts) {
   // reviewed subset of each — see plugin-broker.js `buildDispatch`).
   const services = {
     bus,
-    data: dataStore.api,
-    transform: dataStore.transformApi,
+    data: datasets.api,
+    transform: datasets.transformApi,
     webr,
     results: results.api,
     menus: menus.api,
@@ -118,14 +124,17 @@ export async function boot(mounts) {
   // --- shell wiring ----------------------------------------------------------
   wireStatusLine(bus, mounts.status, webr);
   if (mounts.busy) wireBusyIndicator(bus, mounts.busy);
-  const sidebar = new VariablesSidebar(mounts.sidebar, dataStore);
+  const sidebar = new VariablesSidebar(mounts.sidebar, datasets);
   bus.on(CoreEvents.DATA_CHANGED, () => sidebar.render());
   bus.on(CoreEvents.SELECTION_CHANGED, () => sidebar.renderSelection());
 
+  // Dataset switcher (which open dataset is active).
+  if (mounts.tabs) wireDatasetSwitcher(bus, datasets, mounts.tabs);
+
   // Tabbed workspace: Data View (grid) / Variable View / Output (results pane).
   if (mounts.viewData && mounts.viewVars && mounts.tabs) {
-    const dataView = new DataView(mounts.viewData, dataStore);
-    const variableView = new VariableView(mounts.viewVars, dataStore);
+    const dataView = new DataView(mounts.viewData, datasets);
+    const variableView = new VariableView(mounts.viewVars, datasets);
     wireWorkspaceTabs(bus, mounts, { dataView, variableView, results: mounts.results });
     // Keep the grid's header checkboxes in step when selection changes elsewhere
     // (e.g. the sidebar) — both surfaces drive the one shared selection.
@@ -142,14 +151,14 @@ export async function boot(mounts) {
     path: ['Edit'],
     label: 'Undo',
     order: 10,
-    command: () => void dataStore.undo(),
+    command: () => void datasets.undo(),
   });
   menus.register({
     id: 'core:redo',
     path: ['Edit'],
     label: 'Redo',
     order: 20,
-    command: () => void dataStore.redo(),
+    command: () => void datasets.redo(),
   });
 
   // Dataset library (OPFS): File ▸ Save/Open, with autosave once a session is
@@ -160,7 +169,7 @@ export async function boot(mounts) {
   mounts.status.parentElement?.append(libStatus);
   const library = new LibrarySync({
     datasetStore,
-    data: dataStore,
+    data: datasets,
     ui,
     menus,
     bus,
@@ -175,7 +184,7 @@ export async function boot(mounts) {
   // We only need DuckDB up before continuing (plugins/UI read data), so we await
   // the data load and let WebR keep warming in the background.
   mounts.status.textContent = 'Loading data engine…';
-  const dataReady = dataStore.setDataset(makeDemoDataset());
+  const dataReady = datasets.setDataset(makeDemoDataset());
   webr.preload().catch((err) => console.warn('WebR preload failed', err));
   await dataReady;
 
@@ -190,7 +199,9 @@ export async function boot(mounts) {
     }
   }
 
-  const engine = { bus, dataStore, duckdb, webr, results, menus, importers, exporters, datasetStore, library, loader, services };
+  // `dataStore` kept as an alias to the manager (it delegates to the active
+  // dataset) so console pokes / older references keep working.
+  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, loader, services };
   // Expose for manual poking in the console during early development.
   // eslint-disable-next-line no-undef
   globalThis.crosstab = engine;
@@ -217,6 +228,51 @@ function wireStatusLine(bus, el, webr) {
     else if (status === 'failed') set(`R runtime: ${kind} failed`);
   });
   if (webr.isReady) set('R runtime: ready');
+}
+
+/**
+ * Dataset switcher: a `<select>` (+ close button) in the workspace tab bar that
+ * picks the active dataset. Re-renders whenever the dataset set changes.
+ *
+ * @param {EventBus} bus
+ * @param {import('./dataset-manager.js').DatasetManager} datasets
+ * @param {HTMLElement} tabsEl - The workspace tab bar (`#tabs`).
+ */
+function wireDatasetSwitcher(bus, datasets, tabsEl) {
+  const wrap = document.createElement('div');
+  wrap.className = 'dataset-switch';
+  const select = document.createElement('select');
+  select.className = 'dataset-switch__select';
+  select.title = 'Active dataset';
+  select.addEventListener('change', () => datasets.setActive(Number(select.value)));
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'dataset-switch__close';
+  closeBtn.textContent = '✕';
+  closeBtn.title = 'Close the active dataset';
+  closeBtn.addEventListener('click', () => {
+    const id = datasets.activeId;
+    if (id != null) void datasets.remove(id);
+  });
+  wrap.append(select, closeBtn);
+  tabsEl.prepend(wrap);
+
+  const render = () => {
+    const items = datasets.list();
+    select.replaceChildren();
+    for (const it of items) {
+      const opt = document.createElement('option');
+      opt.value = String(it.id);
+      opt.textContent = `${it.name} (${it.rowCount.toLocaleString()})`;
+      if (it.active) opt.selected = true;
+      select.append(opt);
+    }
+    closeBtn.disabled = items.length <= 1; // never close the last dataset
+    wrap.hidden = items.length === 0;
+  };
+  bus.on(DATASETS_CHANGED, render);
+  bus.on(CoreEvents.DATA_CHANGED, render); // refresh row counts as data loads
+  render();
 }
 
 /**

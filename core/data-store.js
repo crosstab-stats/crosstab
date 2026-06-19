@@ -45,13 +45,6 @@
 import { CoreEvents } from './event-bus.js';
 import { quoteIdent } from './duckdb-manager.js';
 
-/** Name of the working **view** the rest of the app reads. It is derived (never
- * written directly) from the immutable source tables + the transform log. */
-const MAIN_TABLE = 'dataset';
-
-/** Prefix for the immutable per-file source tables (`ct_source_1`, …). */
-const SOURCE_TABLE_PREFIX = 'ct_source_';
-
 /** Column auto-added when stacking files, tagging each row with its origin so a
  * pooled multi-file/multi-year dataset stays distinguishable (group/filter by
  * it). Chosen to be unlikely to collide with real variable names. */
@@ -95,6 +88,23 @@ export class DataStore {
 
   /** Storage engine: the live DuckDB-WASM runtime. @type {import('./duckdb-manager.js').DuckDBManager} */
   #duckdb;
+
+  /** Stable id of this dataset within the {@link DatasetManager}. */
+  #id;
+
+  /** Name of the **working view** this dataset's reads query. Namespaced by id so
+   * many datasets coexist in one DuckDB. Derived from sources + the log. */
+  #view;
+
+  /** Prefix for this dataset's immutable per-file source tables (namespaced). */
+  #sourcePrefix;
+
+  /** Human-readable dataset name (shown in the switcher); mutable (rename). */
+  name;
+
+  /** Library binding: `{ id, name }` of the saved entry this dataset autosaves
+   * to, or `null` if unsaved. Per-dataset so each can bind independently. */
+  binding = null;
 
   /**
    * The immutable source tables, in load order. One per imported/appended file.
@@ -150,10 +160,23 @@ export class DataStore {
   /**
    * @param {import('./event-bus.js').EventBus} bus - App event bus.
    * @param {import('./duckdb-manager.js').DuckDBManager} duckdb - Storage engine.
+   * @param {Object} [opts]
+   * @param {number|string} [opts.id=1] - Unique id; namespaces this dataset's
+   *   DuckDB tables/view so multiple datasets coexist.
+   * @param {string} [opts.name='Dataset'] - Display name.
    */
-  constructor(bus, duckdb) {
+  constructor(bus, duckdb, { id = 1, name = 'Dataset' } = {}) {
     this.#bus = bus;
     this.#duckdb = duckdb;
+    this.#id = id;
+    this.name = name;
+    this.#view = `ct_view_${id}`;
+    this.#sourcePrefix = `ct_src_${id}_`;
+  }
+
+  /** @returns {number|string} This dataset's id. */
+  get id() {
+    return this.#id;
   }
 
   // ---------------------------------------------------------------------------
@@ -233,7 +256,7 @@ export class DataStore {
    * @returns {Promise<{table: string, meta: VariableMeta[], label: string|null}>}
    */
   async #createSource(index, { variables, columns, parquet, source }) {
-    const table = `${SOURCE_TABLE_PREFIX}${index}`;
+    const table = `${this.#sourcePrefix}${index}`;
     if (parquet) {
       await this.#duckdb.replaceTableFromParquet(table, parquet);
     } else {
@@ -252,7 +275,7 @@ export class DataStore {
 
   /** Drop the working view and every source table; clear the source list. */
   async #dropAll() {
-    await this.#duckdb.query(`DROP VIEW IF EXISTS ${quoteIdent(MAIN_TABLE)}`);
+    await this.#duckdb.query(`DROP VIEW IF EXISTS ${quoteIdent(this.#view)}`);
     for (const s of this.#sources) {
       await this.#duckdb.query(`DROP TABLE IF EXISTS ${quoteIdent(s.table)}`);
     }
@@ -316,7 +339,7 @@ export class DataStore {
     //    "data" effect of a transform); a pooled dataset gets source_file +
     //    UNION ALL BY NAME; join sources are LEFT JOINed onto the stacked rows.
     if (this.#sources.length === 0) {
-      await this.#duckdb.query(`DROP VIEW IF EXISTS ${quoteIdent(MAIN_TABLE)}`);
+      await this.#duckdb.query(`DROP VIEW IF EXISTS ${quoteIdent(this.#view)}`);
       this.#sqlTypes = new Map();
       this.#rowCount = 0;
     } else {
@@ -349,9 +372,9 @@ export class DataStore {
         });
         sql = `SELECT ${selectCols.join(', ')} FROM ${from}`;
       }
-      await this.#duckdb.query(`CREATE OR REPLACE VIEW ${quoteIdent(MAIN_TABLE)} AS ${sql}`);
+      await this.#duckdb.query(`CREATE OR REPLACE VIEW ${quoteIdent(this.#view)} AS ${sql}`);
       await this.#refreshSqlTypes();
-      const c = await this.#duckdb.query(`SELECT count(*) AS n FROM ${quoteIdent(MAIN_TABLE)}`);
+      const c = await this.#duckdb.query(`SELECT count(*) AS n FROM ${quoteIdent(this.#view)}`);
       this.#rowCount = Number(c.get(0).n);
     }
 
@@ -564,7 +587,7 @@ export class DataStore {
     if (this.#rowCount === 0 || plan.length === 0) return {};
 
     const table = await this.#duckdb.query(
-      `SELECT ${plan.map((p) => p.expr).join(', ')} FROM ${quoteIdent(MAIN_TABLE)}`,
+      `SELECT ${plan.map((p) => p.expr).join(', ')} FROM ${quoteIdent(this.#view)}`,
     );
 
     const out = {};
@@ -649,7 +672,7 @@ export class DataStore {
     const lim = Math.max(0, Math.floor(limit));
     const off = Math.max(0, Math.floor(offset));
     const table = await this.#duckdb.query(
-      `SELECT ${plan.map((p) => p.expr).join(', ')} FROM ${quoteIdent(MAIN_TABLE)} ` +
+      `SELECT ${plan.map((p) => p.expr).join(', ')} FROM ${quoteIdent(this.#view)} ` +
         `LIMIT ${lim} OFFSET ${off}`,
     );
     const rows = [];
@@ -698,7 +721,7 @@ export class DataStore {
       })
       .join(', ');
     return this.#duckdb.queryToParquet(
-      `SELECT ${selectList} FROM ${quoteIdent(MAIN_TABLE)}`,
+      `SELECT ${selectList} FROM ${quoteIdent(this.#view)}`,
     );
   }
 
@@ -706,7 +729,7 @@ export class DataStore {
    * on views (unlike a table-name lookup in information_schema). */
   async #refreshSqlTypes() {
     this.#sqlTypes = new Map();
-    const rows = await this.#duckdb.query(`DESCRIBE ${quoteIdent(MAIN_TABLE)}`);
+    const rows = await this.#duckdb.query(`DESCRIBE ${quoteIdent(this.#view)}`);
     for (let i = 0; i < rows.numRows; i++) {
       const r = rows.get(i);
       this.#sqlTypes.set(String(r.column_name), String(r.column_type));
@@ -802,7 +825,18 @@ export class DataStore {
    * @returns {{rowCount: number, variables: string[], reason?: string}}
    */
   #snapshotSummary(reason) {
-    return { rowCount: this.#rowCount, variables: this.#variables.map((v) => v.name), reason };
+    return {
+      datasetId: this.#id,
+      rowCount: this.#rowCount,
+      variables: this.#variables.map((v) => v.name),
+      reason,
+    };
+  }
+
+  /** Drop this dataset's DuckDB tables/view (called when it's removed from the
+   * workspace). After this the instance must not be used. */
+  async dispose() {
+    await this.#dropAll();
   }
 }
 
