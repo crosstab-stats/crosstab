@@ -223,17 +223,65 @@ export class DataView {
       const v = row[m.name];
       let td;
       if (v === null || v === undefined) {
-        td = el('td', '·', 'na');
+        td = el('td', '·', 'na cell');
       } else if (m.type === 'factor' && m.valueLabels && m.valueLabels[v] !== undefined) {
-        td = el('td', String(m.valueLabels[v]));
+        td = el('td', String(m.valueLabels[v]), 'cell');
         td.title = String(v); // raw code on hover
       } else {
-        td = el('td', String(v), m.type === 'numeric' ? 'num' : '');
+        td = el('td', String(v), m.type === 'numeric' ? 'num cell' : 'cell');
       }
+      // Double-click to edit — the edit is stored as a sparse override transform
+      // (non-destructive, undoable, shows in History). Edits the raw value (the
+      // factor *code*, not its label).
+      td.addEventListener('dblclick', () => this.#editCell(td, num - 1, m, v));
       tr.append(td);
     }
     if (rightW > 0) tr.append(hspacer('td', rightW));
     return tr;
+  }
+
+  /**
+   * Turn a cell into an inline editor. Commit on Enter/blur (writes a sparse
+   * override via {@link DataStore#setCell}; the grid then refreshes on
+   * DATA_CHANGED), cancel on Escape.
+   */
+  #editCell(td, absRow, meta, rawValue) {
+    if (td.querySelector('input')) return; // already editing
+    const input = document.createElement('input');
+    input.className = 'cell-edit';
+    input.value = rawValue === null || rawValue === undefined ? '' : String(rawValue);
+    td.replaceChildren(input);
+    input.focus();
+    input.select();
+
+    let done = false;
+    const commit = async () => {
+      if (done) return;
+      done = true;
+      try {
+        await this.store.setCell(absRow, meta.name, input.value);
+        // The grid refreshes on the resulting DATA_CHANGED while visible; if not,
+        // refresh defensively so the new value shows.
+      } catch (err) {
+        console.error('[grid] setCell failed', err);
+      }
+      await this.refresh();
+    };
+    const cancel = async () => {
+      if (done) return;
+      done = true;
+      await this.refresh();
+    };
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        void commit();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        void cancel();
+      }
+    });
+    input.addEventListener('blur', () => void commit());
   }
 }
 
@@ -459,6 +507,12 @@ function describeSources(sources) {
  * sends a full patch, so detail lists the values the step set; programmatic
  * (plugin) transforms may set only some keys. */
 function describeTransform(t) {
+  if (t && t.type === 'setCell') {
+    return {
+      title: `Edited cell · ${t.column}`,
+      detail: `row ${t.row + 1} = ${t.value == null || t.value === '' ? '(blank)' : t.value}`,
+    };
+  }
   if (!t || t.type !== 'setVariable') return { title: t?.type || 'Change', detail: '' };
   const p = t.patch || {};
   const bits = [];

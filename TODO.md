@@ -394,12 +394,29 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     age+income → Descriptives picker pre-checked both → ran with no manual ticking;
     filter, toggle, and grid↔sidebar sync all confirmed.
   - Tabs auto-focus: analyses → Output, finished import → Data.
-  - *Still to do:* editing cells (the **Data editor**, needs the transform API);
-    a raw-codes vs value-labels toggle; column sort/resize and per-column width
-    (fixed 120px today). Possibly retire the sidebar variable list now that grid
-    headers carry selection (under consideration).
-- [ ] **Data editor.** The current `VariablesSidebar` in `core/app.js` is a
-      minimal stand-in. Becomes the editing layer over the data-grid view above.
+  - *Still to do:* a raw-codes vs value-labels toggle; column sort/resize and
+    per-column width (fixed 120px today). Possibly retire the sidebar variable list
+    now that grid headers carry selection (under consideration).
+- [x] **Data editor (editable cells) — BUILT** (`core/data-views.js` +
+      `core/data-store.js`). Double-click a cell in the Data View to edit it. The
+      edit is a **sparse override transform** (`{type:'setCell', row, column,
+      value}`): non-destructive (the immutable source table is untouched —
+      verified the raw source keeps its original value), undoable/redoable, shown
+      as a step in the **History** panel ("Edited cell · age — row 1 = 777"), and
+      emitted by **export-to-syntax** (`d[["age"]][1] <- 777`). Applied in
+      `rederive` by wrapping the derived view: `row_number()` over the view's
+      natural order (the same order the grid reads) + a `CASE` per overridden cell;
+      numeric columns parse the value, blank → NA. **Verified end to end in
+      Chrome:** UI double-click → edit → persists + shows in grid; undo reverts;
+      source immutable; History + syntax both reflect it.
+  - *v1 limitation:* row identity is **positional** (index in the derived view) —
+    stable for a single/row-stacked dataset, but a later **join** can reorder rows
+    so an override placed before a join may point at a different row. Stable
+    per-row ids (a row-id column baked into each immutable source) are the v2;
+    overlaps with the **unified-history** refactor.
+  - *Still to do:* edit a factor cell by picking a **label** (today you type the
+    raw code); range/fill edits; the old `VariablesSidebar` stand-in in `app.js`
+    can now lean on this for any remaining inline editing.
 - [~] **Source-immutability + transform log — BUILT** (`core/data-store.js`).
       Re-architected per the README principle: immutable per-file source tables
       (`ct_source_N`) + an ordered transform log → a derived DuckDB **VIEW**
@@ -419,9 +436,9 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
           source and redefines the view.
     - [x] Transform log exists — `getTransforms()` + `undo()` on `DataStore`
           (internal/engine for now; reproducible & undoable).
-    - [ ] **Cell editor must use a sparse override transform** when built — not a
-          destructive cell write. Preventive; the override-layer transform type
-          isn't implemented yet (no cell editing yet).
+    - [x] **Cell editor uses a sparse override transform** — not a destructive
+          cell write. `{type:'setCell', row, column, value}` applied as a `CASE` in
+          the derived view; the source stays immutable (see the Data editor item).
   - *Still to do (follow-ups the log unlocks):* expose the log to a **history/undo
     UI** and to plugins; **export-to-syntax** (do-file) from the log; treat
     append/load as logged steps too (today they manage `#sources`, edits are the

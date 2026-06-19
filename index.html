@@ -189,6 +189,13 @@
       /* The top-left corner must beat both the sticky header and the sticky gutter. */
       .grid thead th.corner { z-index: 3; }
       .grid td.na { color: #c0c6cc; }
+      /* editable data cells (double-click to edit → sparse override transform) */
+      .grid td.cell { cursor: cell; }
+      .grid td.cell:hover { background: #f0f6fc; }
+      .cell-edit {
+        width: 100%; box-sizing: border-box; font: inherit;
+        border: 1px solid var(--accent); border-radius: 3px; padding: 1px 4px; margin: -2px 0;
+      }
       /* virtualisation spacers: no border/padding; size set inline */
       .grid td.spacer { padding: 0; border: none; overflow: hidden; }
       .grid-empty { padding: 16px; color: #7a8590; }

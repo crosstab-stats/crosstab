@@ -248,6 +248,9 @@ export class DatasetManager {
   updateVariable(n, p) {
     return this.active.updateVariable(n, p);
   }
+  setCell(row, column, value) {
+    return this.active.setCell(row, column, value);
+  }
   getTransforms() {
     return this.active.getTransforms();
   }

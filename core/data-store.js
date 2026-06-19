@@ -380,6 +380,7 @@ export class DataStore {
         });
         sql = `SELECT ${selectCols.join(', ')} FROM ${from}`;
       }
+      sql = this.#applyCellOverrides(sql);
       await this.#duckdb.query(`CREATE OR REPLACE VIEW ${quoteIdent(this.#view)} AS ${sql}`);
       await this.#refreshSqlTypes();
       const c = await this.#duckdb.query(`SELECT count(*) AS n FROM ${quoteIdent(this.#view)}`);
@@ -431,6 +432,64 @@ export class DataStore {
     this.#transforms.push({ type: 'setVariable', name, patch });
     this.#redoStack = [];
     await this.rederive('transform');
+  }
+
+  /**
+   * Edit a single cell — a **sparse override** logged like any transform, so it's
+   * non-destructive (the source table is untouched), undoable, shows in the
+   * History panel, and exports to syntax. The override is applied in the derived
+   * view (see {@link DataStore#applyCellOverrides}); the immutable sources never
+   * change. `value` is the raw value the user typed (`''`/null clears the cell to
+   * NA); numeric columns parse it, others store it as text.
+   *
+   * Row identity is **positional** (the row's index in the current derived view).
+   * That's stable for a single or row-stacked dataset; a later *join* can reorder
+   * rows, so an override placed before a join may then point at a different row —
+   * a known v1 limitation (stable per-row ids are the follow-up).
+   *
+   * @param {number} row - 0-based row index in the derived view.
+   * @param {string} column - Variable name.
+   * @param {string|number|null} value - The new raw value (`''`/null → NA).
+   * @returns {Promise<void>}
+   */
+  async setCell(row, column, value) {
+    if (!this.#byName.has(column)) throw new Error(`setCell: unknown variable "${column}"`);
+    const r = Math.max(0, Math.floor(Number(row) || 0));
+    this.#transforms.push({ type: 'setCell', row: r, column, value: value === '' ? null : value });
+    this.#redoStack = [];
+    await this.rederive('transform');
+  }
+
+  /**
+   * Wrap the derived-view SQL to apply any `setCell` overrides: number the rows
+   * (`row_number()` over the view's natural order — the same order the grid reads
+   * by `LIMIT/OFFSET`) and `CASE` each overridden cell to its new value. Returns
+   * the SQL unchanged when there are no cell edits. Last write wins per (col,row);
+   * overrides on a now-missing column are ignored.
+   *
+   * @param {string} innerSql - The composed sources view (stacked + joins).
+   * @returns {string}
+   */
+  #applyCellOverrides(innerSql) {
+    const byCol = new Map(); // column → Map<row, value>
+    for (const t of this.#transforms) {
+      if (t.type !== 'setCell' || !this.#byName.has(t.column)) continue;
+      if (!byCol.has(t.column)) byCol.set(t.column, new Map());
+      byCol.get(t.column).set(Number(t.row), t.value);
+    }
+    if (byCol.size === 0) return innerSql;
+
+    const numeric = new Set(this.#variables.filter((m) => m.type === 'numeric').map((m) => m.name));
+    const cols = this.#variables.map((m) => {
+      const q = quoteIdent(m.name);
+      const ov = byCol.get(m.name);
+      if (!ov) return q;
+      const whens = [...ov.entries()]
+        .map(([row, val]) => `WHEN ${row + 1} THEN ${cellLiteral(val, numeric.has(m.name))}`)
+        .join(' ');
+      return `CASE ct_rn ${whens} ELSE ${q} END AS ${q}`;
+    });
+    return `SELECT ${cols.join(', ')} FROM (SELECT *, row_number() OVER () AS ct_rn FROM (${innerSql}))`;
   }
 
   /**
@@ -908,6 +967,23 @@ export class DataStore {
  */
 function sqlString(s) {
   return `'${String(s).replace(/'/g, "''")}'`;
+}
+
+/**
+ * SQL literal for a cell-override value, typed to the column. Blank/null → `NULL`;
+ * a numeric column parses the value (junk → `NULL`); other columns quote it.
+ *
+ * @param {string|number|null} val
+ * @param {boolean} isNumeric
+ * @returns {string}
+ */
+function cellLiteral(val, isNumeric) {
+  if (val === null || val === undefined || val === '') return 'NULL';
+  if (isNumeric) {
+    const n = Number(val);
+    return Number.isFinite(n) ? String(n) : 'NULL';
+  }
+  return sqlString(val);
 }
 
 /**

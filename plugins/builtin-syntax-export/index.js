@@ -71,15 +71,21 @@ function buildRSyntax(transforms, meta) {
   L.push('d <- read.csv("your-data.csv", stringsAsFactors = FALSE)');
   L.push('');
 
-  const setVars = transforms.filter((t) => t && t.type === 'setVariable' && t.name);
-  if (setVars.length === 0) {
+  const typeOf = new Map((meta || []).map((m) => [m.name, m.type]));
+  const steps = transforms.filter((t) => t && (t.type === 'setVariable' || t.type === 'setCell'));
+  if (steps.length === 0) {
     L.push('# (No transforms recorded — the dataset is as imported.)');
   } else {
     let n = 0;
-    for (const t of setVars) {
+    for (const t of steps) {
       n += 1;
-      L.push(`# Step ${n}: ${t.name}`);
-      L.push(...transformToR(t.name, t.patch || {}));
+      if (t.type === 'setCell') {
+        L.push(`# Step ${n}: edit cell — ${t.column}, row ${t.row + 1}`);
+        L.push(cellToR(t, typeOf.get(t.column) === 'numeric'));
+      } else if (t.name) {
+        L.push(`# Step ${n}: ${t.name}`);
+        L.push(...transformToR(t.name, t.patch || {}));
+      }
       L.push('');
     }
   }
@@ -92,6 +98,17 @@ function buildRSyntax(transforms, meta) {
   }
   L.push('');
   return L.join('\n');
+}
+
+/** R line for one `setCell` override (1-based row; NA for blank). */
+function cellToR(t, isNumeric) {
+  const v = `d[[${rChar(t.column)}]][${t.row + 1}]`;
+  if (t.value === null || t.value === undefined || t.value === '') return `${v} <- NA`;
+  if (isNumeric) {
+    const num = Number(t.value);
+    return `${v} <- ${Number.isFinite(num) ? num : 'NA'}`;
+  }
+  return `${v} <- ${rChar(t.value)}`;
 }
 
 /** R lines for one `setVariable` patch on `name`. */
