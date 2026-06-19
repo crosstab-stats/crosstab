@@ -331,6 +331,8 @@
       .ct-dialog__buttons .ct-dialog__primary {
         background: var(--accent); color: #fff; border-color: var(--accent);
       }
+      /* Export-output dialog: Cancel sits apart on the left, the two save actions right. */
+      .ct-export__buttons button[value="cancel"] { margin-right: auto; }
 
       /* --- busy indicator --- */
       /* A non-blocking "working" pill, shown while WebR is running a job (the

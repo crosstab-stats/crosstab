@@ -18,6 +18,7 @@ import { MenuShell } from './menu-shell.js';
 import { UiService } from './ui-service.js';
 import { ImportService } from './import-service.js';
 import { ExportService } from './export-service.js';
+import { OutputExport } from './output-export.js';
 import { DatasetStore } from './dataset-store.js';
 import { DatasetLibrary, LIBRARY_CHANGED } from './library.js';
 import { ProjectStore } from './project-store.js';
@@ -189,6 +190,10 @@ export async function boot(mounts) {
     statusEl: projStatus,
   });
   projects.activate();
+
+  // Output export (host-owned): File ▸ Export output… → PDF / HTML report built
+  // from the live Output pane. Distinct from app.exporters (which exports data).
+  new OutputExport({ resultsHost: mounts.results, menus, projects, results: results.api }).activate();
 
   // The sidebar project manager (active project + datasets, other projects,
   // building blocks). Created here, after the services it drives exist.

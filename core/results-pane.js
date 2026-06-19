@@ -26,6 +26,7 @@
  */
 
 import { sanitizeHtml } from './sanitize-html.js';
+import { downloadFile } from './export-service.js';
 
 /** Canonical stylesheet applied inside the shadow root. Kept inline so the pane
  * is self-contained and has no external CSS dependency. */
@@ -90,6 +91,17 @@ const RESULTS_STYLES = `
     opacity: 0; transition: opacity .12s;
   }
   .results-plot:hover .results-plot__redraw, .results-plot__redraw:focus { opacity: .95; }
+  /* "save this plot" controls, mirror of the redraw button on the lower-left */
+  .results-plot__save {
+    position: absolute; left: 8px; bottom: 4px; display: flex; gap: 4px;
+    opacity: 0; transition: opacity .12s;
+  }
+  .results-plot:hover .results-plot__save, .results-plot__save:focus-within { opacity: .95; }
+  .results-plot__savebtn {
+    font: inherit; font-size: 12px; padding: 3px 9px;
+    background: #fff; border: 1px solid var(--accent, #2980b9);
+    color: var(--accent, #2980b9); border-radius: 6px; cursor: pointer;
+  }
   .results-empty { color: #888; font-style: italic; }
 `;
 
@@ -196,6 +208,17 @@ export class ResultsPane {
       });
       block.append(btn);
     }
+
+    // A "save this plot" control: SVG is direct (the plot already is SVG); PNG is
+    // rasterised from it via a canvas. Hover-revealed, like the redraw button.
+    const save = document.createElement('div');
+    save.className = 'results-plot__save';
+    save.append(
+      makeSaveBtn('⬇ SVG', () => savePlotSvg(holder, handle)),
+      makeSaveBtn('⬇ PNG', () => savePlotPng(holder, handle)),
+    );
+    block.append(save);
+
     this.#place(block);
     return handle;
   }
@@ -298,6 +321,63 @@ export class ResultsPane {
     const empty = this.#content.querySelector('[data-empty-state]');
     if (empty) empty.remove();
   }
+}
+
+/** A small hover-revealed plot-save button. */
+function makeSaveBtn(label, onClick) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'results-plot__savebtn';
+  b.textContent = label;
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+/** Serialise the plot's `<svg>` to a standalone SVG string (xmlns guaranteed). */
+function plotSvgString(holder) {
+  const svg = holder.querySelector('svg');
+  if (!svg) return null;
+  const clone = svg.cloneNode(true);
+  if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  return new XMLSerializer().serializeToString(clone);
+}
+
+/** Download the plot as a vector `.svg` file. */
+function savePlotSvg(holder, handle) {
+  const svg = plotSvgString(holder);
+  if (svg) downloadFile(`plot-${handle}.svg`, 'image/svg+xml;charset=utf-8', svg);
+}
+
+/**
+ * Rasterise the plot's SVG to a `.png` via a canvas. The SVG is self-contained
+ * (svglite output, no external refs) so the canvas isn't tainted and `toBlob`
+ * works. Drawn at ~2× device pixels for crispness on a white background.
+ */
+function savePlotPng(holder, handle) {
+  const svgEl = holder.querySelector('svg');
+  const svgStr = plotSvgString(holder);
+  if (!svgEl || !svgStr) return;
+  const rect = svgEl.getBoundingClientRect();
+  const scale = Math.max(1, window.devicePixelRatio || 1) * 2;
+  const w = Math.max(1, Math.round(rect.width));
+  const h = Math.max(1, Math.round(rect.height));
+  const url = URL.createObjectURL(new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' }));
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(w * scale);
+    canvas.height = Math.round(h * scale);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    URL.revokeObjectURL(url);
+    canvas.toBlob((png) => {
+      if (png) downloadFile(`plot-${handle}.png`, 'image/png', png);
+    }, 'image/png');
+  };
+  img.onerror = () => URL.revokeObjectURL(url);
+  img.src = url;
 }
 
 /**

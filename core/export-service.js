@@ -185,7 +185,7 @@ export class ExportService {
  * @param {string} mimeType
  * @param {string|Uint8Array|ArrayBuffer} data
  */
-function downloadFile(filename, mimeType, data) {
+export function downloadFile(filename, mimeType, data) {
   const blob = new Blob([data], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

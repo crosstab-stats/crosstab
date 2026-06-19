@@ -275,6 +275,11 @@ export class ProjectSync {
     return this.#binding?.id ?? null;
   }
 
+  /** Name of the current project, or null if unsaved (e.g. for a report title). */
+  get activeName() {
+    return this.#binding?.name ?? null;
+  }
+
   /** Summaries of all saved projects (for the sidebar's Projects zone). */
   listProjects() {
     return this.#store.list();
