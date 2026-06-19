@@ -473,9 +473,23 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - Each saved dataset (in either tier) = the whole reproducible stack (immutable
     sources as Parquet + transform log + metadata), so undo/provenance survive a
     round-trip and pooled/joined datasets save naturally. `navigator.storage.persist()`
-    on first save. *Deferred:* linked (reference, not copy) datasets; pruning
-    orphaned Parquet after a dataset is removed mid-project; export to real disk
-    (File System Access); `app.datasets` plugin API. Supersedes the old IndexedDB idea.
+    on first save.
+  - **Always-saving:** the first edit in a fresh session auto-creates an autosaving
+    "Untitled project" (no more unsaved-work gap). Deleting the active project →
+    fresh Untitled.
+  - **Sidebar = project manager** (`ProjectSidebar`): three zones — active project
+    (name + ✎/✕, its datasets, ＋add), other Projects (open/rename/delete), and
+    Building blocks (add/delete/drag). Drag a dataset → Building blocks (promote to
+    v1 + link); drag a block → Datasets (linked copy).
+  - **Linking + versioning (feature-3 foundation):** blocks are versioned (v1 →
+    bump on update); a dataset carries `libraryLink {id,version}` (badge "v<n>"),
+    set on promote/add, persisted in the bundle. *Still deferred (feature 3
+    proper):* version **propagation/pull** (block hits v2 → linked projects pull,
+    re-applying their transform overlay) — the harder reconciliation half.
+  - *Deferred:* drag a dataset onto another on-disk project (workflow exists via
+    open + add); pruning orphaned Parquet after a dataset is removed mid-project;
+    export to real disk (File System Access); `app.datasets` plugin API. Supersedes
+    the old IndexedDB idea.
 - [ ] **Export results / output (PDF default).** Save the Output pane (tables,
       future plots, notes) to a shareable file — PDF as the sensible default for a
       write-up artifact. *Approach is a real decision, hence listed not assumed:*
