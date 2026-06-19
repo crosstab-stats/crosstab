@@ -647,6 +647,23 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     through the HTML sanitiser (so that hardening item covers it too).
   - *Nice follow-on:* a "fork this analysis" button that opens an existing builtin
     plugin's source in the editor as a starting point.
+- [ ] **Plugin manager (enable/disable plugins).** A UI listing the installed
+      plugins where the user can turn each on/off — declutter the menus, disable a
+      flaky/unwanted analysis, or stage a half-built one (pairs with the in-app
+      plugin creator above). Needs: a persisted **disabled-set** (localStorage —
+      ties to the "Settings persistence" nice-to-have), the **loader honouring it
+      at boot** (skip disabled ids; re-enabling loads them, disabling unloads via
+      the existing disposer the loader already returns), and a small host panel.
+  - **Open question — should the plugin manager itself be a plugin?** Almost
+    certainly **no, it's host.** It's the *meta* level: it enumerates the loader's
+    registry and loads/unloads other plugins — capabilities deliberately absent
+    from the sandbox allowlist (a plugin can register a menu item and read data,
+    but has no handle on the loader, no load/unload of peers, no settings store).
+    Exposing "disable/replace any plugin" to a sandboxed plugin is a privilege
+    escalation (a hostile plugin could switch off security-relevant ones), so the
+    manager belongs to the trusted shell — same line as the menu bar, the loader,
+    and the plugin creator. (Same host-vs-plugin reasoning as output export /
+    history: the dividing line is the sandbox capability boundary, not dogma.)
 - [ ] **Direct R interface / console.** The power-user escape hatch: when the
       canned analyses don't cover a need, drop to R directly. Framing: a plugin
       that does **variable selection + load**, then hands the user an **interactive
@@ -736,6 +753,14 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Nice-to-have / optimisations
 
+- [ ] **Order the top-level menus deterministically: File, Edit, then the rest
+      alphabetical.** Top-level menus are currently alphabetical (e.g. Analyze,
+      Edit, File, Graphs), which buries File. Since most menus are contributed by
+      plugins we can't predict *which* will exist — so pin the two host menus by
+      convention (**File** first, **Edit** second) and sort everything else
+      alphabetically. A small comparator in the menu shell (`File`→0, `Edit`→1,
+      else locale-compare); per-item order *within* a menu already works via the
+      `order` field.
 - [ ] Batch a multi-variable Frequencies run into one R call instead of one job
       per variable (`plugins/builtin-frequencies/index.js`).
 - [ ] Settings persistence (localStorage). (Dataset persistence is now its own
