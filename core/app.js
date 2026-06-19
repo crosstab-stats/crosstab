@@ -377,15 +377,18 @@ class ProjectSidebar {
     }
     if (token !== this.#token) return; // superseded by a newer render
 
+    // Block id → current version, so a linked dataset can show "update available".
+    const blockVer = new Map(blocks.map((b) => [b.id, b.version ?? 1]));
+
     this.host.replaceChildren();
-    this.host.append(this.#projectZone());
+    this.host.append(this.#projectZone(blockVer));
     this.host.append(this.#projectsZone(otherProjects));
     this.host.append(this.#blocksZone(blocks));
   }
 
   // --- zone 1: active project + its datasets ---------------------------------
 
-  #projectZone() {
+  #projectZone(blockVer) {
     const frag = document.createDocumentFragment();
     const head = document.createElement('div');
     head.className = 'proj__head';
@@ -408,7 +411,7 @@ class ProjectSidebar {
     // The datasets list is a drop target for building blocks (add to project).
     this.#dropTarget(list, 'block', (id) => this.library.addBlockToProject(id));
     const items = this.datasets.list();
-    for (const it of items) list.append(this.#datasetRow(it, items.length));
+    for (const it of items) list.append(this.#datasetRow(it, items.length, blockVer));
     frag.append(list);
 
     const add = document.createElement('button');
@@ -423,7 +426,7 @@ class ProjectSidebar {
     return frag;
   }
 
-  #datasetRow(it, count) {
+  #datasetRow(it, count, blockVer) {
     const li = document.createElement('li');
     li.className = 'proj__ds' + (it.active ? ' proj__ds--active' : '');
     li.draggable = true;
@@ -442,9 +445,20 @@ class ProjectSidebar {
     li.append(name);
 
     if (it.libraryLink) {
-      const badge = el('span', `v${it.libraryLink.version}`, 'proj__ds-link');
-      badge.title = 'Linked to a building block';
-      li.append(badge);
+      const linkedV = it.libraryLink.version;
+      const latest = blockVer?.get(it.libraryLink.id);
+      if (latest != null && latest > linkedV) {
+        // The block has a newer version — offer to pull it in.
+        const upd = iconBtn(`↑v${latest}`, `Update from v${linkedV} to v${latest}`, (e) => {
+          e.stopPropagation();
+          void this.library.pullLatest(it.id);
+        }, 'proj__ds-update');
+        li.append(upd);
+      } else {
+        const badge = el('span', `v${linkedV}`, 'proj__ds-link');
+        badge.title = 'Linked to a building block';
+        li.append(badge);
+      }
     }
     li.append(el('span', it.rowCount.toLocaleString(), 'proj__ds-rows'));
 

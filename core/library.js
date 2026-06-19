@@ -102,7 +102,9 @@ export class DatasetLibrary {
         { id: existing?.id, name, savedAt: Date.now(), state },
         { writeSources: true },
       );
-      ds.libraryLink = { id, version }; // this dataset now tracks the block @ this version
+      // The whole current state is now the block, so there's no local overlay:
+      // baseLen = all transforms.
+      ds.libraryLink = { id, version, baseLen: (state.transforms || []).length };
       this.#bus?.emit(LIBRARY_CHANGED);
       this.#results.appendText(
         existing ? `Updated **${name}** in the library (v${version}).` : `Saved **${name}** to the library (v${version}).`,
@@ -129,7 +131,7 @@ export class DatasetLibrary {
         { name: ds.name, savedAt: Date.now(), state },
         { writeSources: true },
       );
-      ds.libraryLink = { id, version };
+      ds.libraryLink = { id, version, baseLen: (state.transforms || []).length };
       this.#bus?.emit(LIBRARY_CHANGED);
       this.#data.touch?.(); // refresh the sidebar's "linked" badge
       this.#results.appendText(`Promoted **${ds.name}** to a building block (v${version}).`);
@@ -148,6 +150,41 @@ export class DatasetLibrary {
   /** Delete a building block from the library. */
   async deleteBlock(id) {
     await this.#delete(id);
+  }
+
+  /**
+   * Pull a linked dataset up to its building block's latest version: fetch the
+   * new block data and **re-apply the dataset's local transforms** (those it
+   * added after linking) on top — the feature-3 propagation. The dataset opts in
+   * (pull, not push); other linked projects update only when they choose.
+   *
+   * Best-effort reconciliation: a local transform that now references a missing
+   * variable simply no-ops (everything stays saved + undoable). Local *source*
+   * additions to a linked dataset are not preserved (the block's sources replace
+   * them) — linked datasets are expected to diverge via transforms.
+   *
+   * @param {number} datasetId
+   */
+  async pullLatest(datasetId) {
+    const ds = this.#data.get(datasetId);
+    if (!ds?.libraryLink) return;
+    const { id, baseLen = 0 } = ds.libraryLink;
+    try {
+      const loaded = await this.#store.load(id); // { name, version, state:{sources, transforms} }
+      const cur = ds.getTransforms();
+      const local = cur.slice(Math.min(baseLen, cur.length)); // edits made after linking
+      const base = loaded.state.transforms || [];
+      await ds.restoreState({ sources: loaded.state.sources, transforms: [...base, ...local] });
+      ds.libraryLink = { id, version: loaded.version, baseLen: base.length };
+      this.#data.touch?.();
+      this.#results.appendText(
+        `Pulled **${ds.name}** to v${loaded.version}` +
+          (local.length ? ` (re-applied ${local.length} local change${local.length === 1 ? '' : 's'}).` : '.'),
+      );
+    } catch (err) {
+      console.error('[library] pull failed', err);
+      this.#results.appendError(`Pull update failed: ${err.message}`);
+    }
   }
 
   /** Browse building blocks and add a copy of one into the current project. */
@@ -169,7 +206,8 @@ export class DatasetLibrary {
       const { name, version, state } = await this.#store.load(id);
       const ds = this.#data.add(name, { activate: true });
       await ds.restoreState(state);
-      ds.libraryLink = { id, version }; // linked to this block @ this version
+      // Linked @ this version; the block's transforms are the base, no overlay yet.
+      ds.libraryLink = { id, version, baseLen: (state.transforms || []).length };
       this.#data.touch?.(); // refresh the "linked" badge
     } catch (err) {
       console.error('[library] add failed', err);

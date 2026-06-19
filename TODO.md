@@ -426,6 +426,15 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     UI** and to plugins; **export-to-syntax** (do-file) from the log; treat
     append/load as logged steps too (today they manage `#sources`, edits are the
     logged transforms) for a fully unified history; redo.
+  - [ ] **History / rewind panel.** A **linear** transform-history view: list the
+    steps a dataset has been through and click any one to rewind to that state
+    (mechanically: undo/redo to that point — the log + undo/redo already exist;
+    this is the UI). Makes undo/redo legible (today they're blind menu clicks) and
+    is the natural stepping-stone to **export-to-syntax** (the history *is* the
+    do-file). Decision (settled): **linear, not git-style branching** — the
+    audience thinks in linear syntax files, and divergent exploration is already
+    served by the multi-dataset workspace (fork = a separate dataset). No branch
+    tree / diff UI / prune.
   - **Accepted boundary (not a violation):** "source" = the *as-imported* table,
     not the original file bytes. Pair with the **Dataset library** to enable full
     file→result reproduction if wanted.
@@ -481,11 +490,21 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     (name + ✎/✕, its datasets, ＋add), other Projects (open/rename/delete), and
     Building blocks (add/delete/drag). Drag a dataset → Building blocks (promote to
     v1 + link); drag a block → Datasets (linked copy).
-  - **Linking + versioning (feature-3 foundation):** blocks are versioned (v1 →
-    bump on update); a dataset carries `libraryLink {id,version}` (badge "v<n>"),
-    set on promote/add, persisted in the bundle. *Still deferred (feature 3
-    proper):* version **propagation/pull** (block hits v2 → linked projects pull,
-    re-applying their transform overlay) — the harder reconciliation half.
+  - **Linking + versioning + propagation (feature-3 — DONE):** blocks are
+    versioned (v1 → bump on update); a dataset carries `libraryLink
+    {id,version,baseLen}` (badge "v<n>"), set on promote/add, persisted in the
+    bundle. **Version propagation/pull is now built** (`DatasetLibrary.pullLatest`):
+    when a linked dataset's block has a newer version, the sidebar row shows an
+    **"↑v<n>" pull button** instead of the static badge; clicking it fetches the
+    new block version and **re-applies the dataset's local transform overlay** on
+    top (`baseLen` splits block-origin transforms from local edits). The dataset
+    opts in (pull, not push); other linked projects update only when they choose.
+    Verified end to end in Chrome: block bumped to v2, a linked dataset with a
+    local edit pulled → kept the block's v1 + v2 changes **and** its own local
+    edit, link advanced to v2. Reconciliation is best-effort (a local transform
+    referencing a now-missing variable no-ops; everything stays saved + undoable);
+    local *source* additions to a linked dataset aren't preserved (block sources
+    replace them — linked datasets diverge via transforms).
   - *Deferred:* drag a dataset onto another on-disk project (workflow exists via
     open + add); pruning orphaned Parquet after a dataset is removed mid-project;
     export to real disk (File System Access); `app.datasets` plugin API. Supersedes
