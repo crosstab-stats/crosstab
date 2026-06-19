@@ -409,11 +409,21 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       numeric columns parse the value, blank → NA. **Verified end to end in
       Chrome:** UI double-click → edit → persists + shows in grid; undo reverts;
       source immutable; History + syntax both reflect it.
-  - *v1 limitation:* row identity is **positional** (index in the derived view) —
-    stable for a single/row-stacked dataset, but a later **join** can reorder rows
-    so an override placed before a join may point at a different row. Stable
-    per-row ids (a row-id column baked into each immutable source) are the v2;
-    overlaps with the **unified-history** refactor.
+  - **Stable per-row ids — DONE (edits are reorder-proof).** Each immutable source
+    bakes a hidden `__ct_rid` column at creation (`sourceIndex × 1e9 + rownum`),
+    persisted in the source Parquet and **never regenerated on restore**. The
+    derived view carries it through (UNION aligns it; joins inherit the base row's
+    id), and cell overrides key on it (`CASE __ct_rid WHEN <id> …`) instead of a
+    positional index — so an edit follows its row through appends and
+    row-reordering joins. The id is hidden (never in `getVariableMeta`/`getColumns`/
+    `getDataFrame`, so analyses/CSV/R injection are untouched); the grid reads it
+    via `getRows({includeRowId})`; ids cross the BIGINT→JS boundary as digit
+    strings (no float precision loss). **Verified in Chrome:** the edited row keeps
+    its value after an append and a join; ordering the view by id puts the edited
+    row at scan position 31 yet it still reads the edited value (position-
+    independent); and the edit survives an export→restore round-trip with the id
+    intact. `row` is retained on the transform only as a display label for History/
+    syntax.
   - *Still to do:* edit a factor cell by picking a **label** (today you type the
     raw code); range/fill edits; the old `VariablesSidebar` stand-in in `app.js`
     can now lean on this for any remaining inline editing.

@@ -51,6 +51,22 @@ import { quoteIdent } from './duckdb-manager.js';
 const SOURCE_COL = 'source_file';
 
 /**
+ * Hidden, **stable per-row id** baked into each immutable source table. Cell
+ * edits ({@link DataStore#setCell}) key on it instead of a positional index, so
+ * an edited value follows its row through appends and row-reordering joins. It's
+ * part of the immutable source (created once, persisted in the source Parquet,
+ * never regenerated on restore), travels through the derived view, and is kept
+ * out of the user-facing variable list. Not a real variable — never in `#variables`.
+ */
+const ROWID_COL = '__ct_rid';
+
+/** Row-id namespacing: `sourceIndex * ROWID_STRIDE + rowNumber`. The stride caps
+ * a single source at 1e9 rows (far beyond what the runtimes carry) while keeping
+ * ids well under 2^53 for realistic source counts, so they survive the BIGINT→JS
+ * trip exactly. (Ids are also passed as digit strings, never parsed to float.) */
+const ROWID_STRIDE = 1_000_000_000;
+
+/**
  * @typedef {'numeric' | 'string' | 'factor'} VariableType
  * Storage/semantics of a variable. `numeric` is stored as a DuckDB DOUBLE and
  * returned as a `Float64Array`; `string` and `factor` are stored as DuckDB
@@ -278,7 +294,30 @@ export class DataStore {
       for (const meta of variables) coerced[meta.name] = coerceColumn(meta, cols[meta.name] ?? []);
       await this.#duckdb.replaceTable(table, coerced);
     }
+    await this.#ensureRowId(table, index);
     return { table, meta: variables.map((m) => ({ ...m })), label: source ?? null };
+  }
+
+  /**
+   * Bake the stable {@link ROWID_COL} into a freshly created source — unless it
+   * already carries one (the restore path: the id was persisted in the source
+   * Parquet, so keep it). Ids are namespaced by source index so they're unique
+   * across a pooled/joined dataset and never collide with an appended source.
+   *
+   * @param {string} table - The source table name.
+   * @param {number} index - 1-based source index (namespaces the id range).
+   */
+  async #ensureRowId(table, index) {
+    const desc = await this.#duckdb.query(`DESCRIBE ${quoteIdent(table)}`);
+    for (let i = 0; i < desc.numRows; i++) {
+      if (String(desc.get(i).column_name) === ROWID_COL) return; // restored — keep it
+    }
+    const base = index * ROWID_STRIDE;
+    await this.#duckdb.query(
+      `CREATE OR REPLACE TABLE ${quoteIdent(table)} AS SELECT *, ` +
+        `CAST(${base} AS BIGINT) + CAST(row_number() OVER () AS BIGINT) AS ${quoteIdent(ROWID_COL)} ` +
+        `FROM ${quoteIdent(table)}`,
+    );
   }
 
   /** Drop the working view and every source table; clear the source list. */
@@ -358,6 +397,9 @@ export class DataStore {
             const q = quoteIdent(col.name);
             return numeric.has(col.name) ? `TRY_CAST(${q} AS DOUBLE) AS ${q}` : q;
           });
+          // Carry the stable row id through (UNION ALL BY NAME aligns it across
+          // sources); joins inherit it from the stacked base via `R.*`.
+          colExprs.push(quoteIdent(ROWID_COL));
           const prov = multiStacked
             ? `, ${sqlString(s.label ?? `dataset ${i + 1}`)} AS ${quoteIdent(SOURCE_COL)}`
             : '';
@@ -442,54 +484,66 @@ export class DataStore {
    * change. `value` is the raw value the user typed (`''`/null clears the cell to
    * NA); numeric columns parse it, others store it as text.
    *
-   * Row identity is **positional** (the row's index in the current derived view).
-   * That's stable for a single or row-stacked dataset; a later *join* can reorder
-   * rows, so an override placed before a join may then point at a different row —
-   * a known v1 limitation (stable per-row ids are the follow-up).
+   * Row identity is a **stable per-row id** ({@link ROWID_COL}) carried from the
+   * immutable source, so the edit follows its row through appends and
+   * row-reordering joins — not a positional index. `row` is kept only as a
+   * human-readable label for the History panel / syntax export.
    *
-   * @param {number} row - 0-based row index in the derived view.
+   * @param {string|number} rid - The row's stable id (from `getRows({includeRowId})`).
    * @param {string} column - Variable name.
    * @param {string|number|null} value - The new raw value (`''`/null → NA).
+   * @param {number} [displayRow=0] - The row's position when edited (label only).
    * @returns {Promise<void>}
    */
-  async setCell(row, column, value) {
+  async setCell(rid, column, value, displayRow = 0) {
     if (!this.#byName.has(column)) throw new Error(`setCell: unknown variable "${column}"`);
-    const r = Math.max(0, Math.floor(Number(row) || 0));
-    this.#transforms.push({ type: 'setCell', row: r, column, value: value === '' ? null : value });
+    if (rid == null || !/^\d+$/.test(String(rid))) throw new Error('setCell: invalid row id');
+    this.#transforms.push({
+      type: 'setCell',
+      rid: String(rid),
+      column,
+      value: value === '' ? null : value,
+      row: Math.max(0, Math.floor(Number(displayRow) || 0)),
+    });
     this.#redoStack = [];
     await this.rederive('transform');
   }
 
   /**
-   * Wrap the derived-view SQL to apply any `setCell` overrides: number the rows
-   * (`row_number()` over the view's natural order — the same order the grid reads
-   * by `LIMIT/OFFSET`) and `CASE` each overridden cell to its new value. Returns
-   * the SQL unchanged when there are no cell edits. Last write wins per (col,row);
-   * overrides on a now-missing column are ignored.
+   * Wrap the derived-view SQL to apply any `setCell` overrides: `CASE` each
+   * overridden cell, matched by its stable {@link ROWID_COL}, to the new value —
+   * reorder-proof (no positional row numbering). The row id is passed through so
+   * the grid can keep editing. Returns the SQL unchanged when there are no edits.
+   * Last write wins per (column, rid); overrides on a now-missing column or
+   * without a valid id are ignored.
    *
-   * @param {string} innerSql - The composed sources view (stacked + joins).
+   * @param {string} innerSql - The composed sources view (stacked + joins), which
+   *   already carries {@link ROWID_COL}.
    * @returns {string}
    */
   #applyCellOverrides(innerSql) {
-    const byCol = new Map(); // column → Map<row, value>
+    const byCol = new Map(); // column → Map<rid(string), value>
     for (const t of this.#transforms) {
       if (t.type !== 'setCell' || !this.#byName.has(t.column)) continue;
+      const rid = String(t.rid ?? '');
+      if (!/^\d+$/.test(rid)) continue;
       if (!byCol.has(t.column)) byCol.set(t.column, new Map());
-      byCol.get(t.column).set(Number(t.row), t.value);
+      byCol.get(t.column).set(rid, t.value);
     }
     if (byCol.size === 0) return innerSql;
 
+    const rq = quoteIdent(ROWID_COL);
     const numeric = new Set(this.#variables.filter((m) => m.type === 'numeric').map((m) => m.name));
     const cols = this.#variables.map((m) => {
       const q = quoteIdent(m.name);
       const ov = byCol.get(m.name);
       if (!ov) return q;
       const whens = [...ov.entries()]
-        .map(([row, val]) => `WHEN ${row + 1} THEN ${cellLiteral(val, numeric.has(m.name))}`)
+        .map(([rid, val]) => `WHEN ${rid} THEN ${cellLiteral(val, numeric.has(m.name))}`)
         .join(' ');
-      return `CASE ct_rn ${whens} ELSE ${q} END AS ${q}`;
+      return `CASE ${rq} ${whens} ELSE ${q} END AS ${q}`;
     });
-    return `SELECT ${cols.join(', ')} FROM (SELECT *, row_number() OVER () AS ct_rn FROM (${innerSql}))`;
+    return `SELECT ${cols.join(', ')}, ${rq} FROM (${innerSql})`;
   }
 
   /**
@@ -771,16 +825,19 @@ export class DataStore {
    * @param {number} [opts.offset=0]
    * @param {number} [opts.limit=100]
    * @param {string[]} [opts.variables]
+   * @param {boolean} [opts.includeRowId=false] - Also return each row's stable id
+   *   as `__rid` (a digit string), so the grid can edit a cell by identity.
    * @returns {Promise<Array<Object<string, number|string|null>>>}
    */
-  async getRows({ offset = 0, limit = 100, variables } = {}) {
+  async getRows({ offset = 0, limit = 100, variables, includeRowId = false } = {}) {
     const plan = this.#columnPlan(variables);
     if (this.#rowCount === 0 || plan.length === 0) return [];
     const lim = Math.max(0, Math.floor(limit));
     const off = Math.max(0, Math.floor(offset));
+    const exprs = plan.map((p) => p.expr);
+    if (includeRowId) exprs.push(`CAST(${quoteIdent(ROWID_COL)} AS VARCHAR) AS __rid`);
     const table = await this.#duckdb.query(
-      `SELECT ${plan.map((p) => p.expr).join(', ')} FROM ${quoteIdent(this.#view)} ` +
-        `LIMIT ${lim} OFFSET ${off}`,
+      `SELECT ${exprs.join(', ')} FROM ${quoteIdent(this.#view)} LIMIT ${lim} OFFSET ${off}`,
     );
     const rows = [];
     const n = table.numRows;
@@ -795,6 +852,7 @@ export class DataStore {
           row[p.name] = Number.isNaN(num) ? null : num;
         } else row[p.name] = String(v);
       }
+      if (includeRowId) row.__rid = r.__rid == null ? null : String(r.__rid);
       rows.push(row);
     }
     return rows;

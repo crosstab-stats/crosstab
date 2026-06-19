@@ -144,6 +144,7 @@ export class DataView {
       offset: startRow,
       limit: endRow - startRow,
       variables: winMetas.map((m) => m.name),
+      includeRowId: true, // needed so a cell edit can target the row by stable id
     });
     if (token !== this.token) return; // a newer scroll superseded this fetch
 
@@ -230,10 +231,13 @@ export class DataView {
       } else {
         td = el('td', String(v), m.type === 'numeric' ? 'num cell' : 'cell');
       }
-      // Double-click to edit — the edit is stored as a sparse override transform
-      // (non-destructive, undoable, shows in History). Edits the raw value (the
-      // factor *code*, not its label).
-      td.addEventListener('dblclick', () => this.#editCell(td, num - 1, m, v));
+      // Double-click to edit — stored as a sparse override transform keyed by the
+      // row's stable id (`row.__rid`), so the edit survives appends/reordering.
+      // Non-destructive, undoable, shows in History. Edits the raw value (a
+      // factor's *code*, not its label).
+      if (row.__rid != null) {
+        td.addEventListener('dblclick', () => this.#editCell(td, num - 1, row.__rid, m, v));
+      }
       tr.append(td);
     }
     if (rightW > 0) tr.append(hspacer('td', rightW));
@@ -245,7 +249,7 @@ export class DataView {
    * override via {@link DataStore#setCell}; the grid then refreshes on
    * DATA_CHANGED), cancel on Escape.
    */
-  #editCell(td, absRow, meta, rawValue) {
+  #editCell(td, displayRow, rid, meta, rawValue) {
     if (td.querySelector('input')) return; // already editing
     const input = document.createElement('input');
     input.className = 'cell-edit';
@@ -259,7 +263,7 @@ export class DataView {
       if (done) return;
       done = true;
       try {
-        await this.store.setCell(absRow, meta.name, input.value);
+        await this.store.setCell(rid, meta.name, input.value, displayRow);
         // The grid refreshes on the resulting DATA_CHANGED while visible; if not,
         // refresh defensively so the new value shows.
       } catch (err) {
