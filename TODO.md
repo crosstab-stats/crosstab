@@ -126,14 +126,6 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     `LIMIT/OFFSET` SQL windows over DuckDB — a natural fit), **Data
     transform/recode API** (becomes SQL / `CREATE TABLE AS`). Settle the
     `getDataFrame`/`getColumns` contract here so those don't get reworked later.
-- [ ] **Milestone 3 — verify on iPad Safari.** The desktop-Chrome path is
-      confirmed; Safari/iPadOS is the remaining unknown. Two specific risks:
-  - [ ] Blob-module `import()` inside the sandboxed (opaque-origin) iframe
-        (`plugin-host.html`). Fallback if it fails: `data:`-URL import or a build step.
-  - [ ] Cross-origin isolation via the **`coi-serviceworker`** reload path
-        (`sw.js`) — local testing used real COOP/COEP headers, so `sw.js` itself
-        is still unexercised on a device.
-  - [ ] Also sanity-check `<dialog>` modal behaviour and touch targets on iPad.
 - [ ] **Add a committed dev server for contributors.** The README points at
       `python -m http.server`, which on Windows can serve `.js` with the wrong
       MIME type and sets no COOP/COEP. Ship a small `scripts/dev-server.mjs`
@@ -747,23 +739,18 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     through the HTML sanitiser (so that hardening item covers it too).
   - *Nice follow-on:* a "fork this analysis" button that opens an existing builtin
     plugin's source in the editor as a starting point.
-- [ ] **Plugin manager (enable/disable plugins).** A UI listing the installed
-      plugins where the user can turn each on/off — declutter the menus, disable a
-      flaky/unwanted analysis, or stage a half-built one (pairs with the in-app
-      plugin creator above). Needs: a persisted **disabled-set** (localStorage —
-      ties to the "Settings persistence" nice-to-have), the **loader honouring it
-      at boot** (skip disabled ids; re-enabling loads them, disabling unloads via
-      the existing disposer the loader already returns), and a small host panel.
-  - **Open question — should the plugin manager itself be a plugin?** Almost
-    certainly **no, it's host.** It's the *meta* level: it enumerates the loader's
-    registry and loads/unloads other plugins — capabilities deliberately absent
-    from the sandbox allowlist (a plugin can register a menu item and read data,
-    but has no handle on the loader, no load/unload of peers, no settings store).
-    Exposing "disable/replace any plugin" to a sandboxed plugin is a privilege
-    escalation (a hostile plugin could switch off security-relevant ones), so the
-    manager belongs to the trusted shell — same line as the menu bar, the loader,
-    and the plugin creator. (Same host-vs-plugin reasoning as output export /
-    history: the dividing line is the sandbox capability boundary, not dogma.)
+- [x] **Plugin manager (enable/disable plugins) — BUILT** (`core/plugin-manager.js`;
+      **Edit ▸ Plugins…**). A dialog listing every built-in plugin with a checkbox;
+      toggling is **live** — disabling unloads it (its broker disposer removes the
+      menu items/exporters immediately), enabling loads it. The disabled set + a
+      `{url:{id,name}}` catalog persist in **localStorage** (first use of it), so
+      choices survive a reload; the manager owns the boot load loop (skips disabled
+      URLs). **Verified in Chrome:** disabling Plots removed the Graphs menu live,
+      it stayed gone after a reload (and the row showed "disabled"), re-enabling
+      brought Graphs back and cleared the set. Host-owned, as designed (it drives
+      the loader — outside the sandbox allowlist; a plugin couldn't manage peers).
+  - *Deferred:* manage *installed third-party* plugins too (today the catalog is
+    the built-in URL set); a "reload plugin" action for the plugin-creator loop.
 - [ ] **Direct R interface / console.** The power-user escape hatch: when the
       canned analyses don't cover a need, drop to R directly. Framing: a plugin
       that does **variable selection + load**, then hands the user an **interactive
@@ -853,17 +840,16 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Nice-to-have / optimisations
 
-- [ ] **Order the top-level menus deterministically: File, Edit, then the rest
-      alphabetical.** Top-level menus are currently alphabetical (e.g. Analyze,
-      Edit, File, Graphs), which buries File. Since most menus are contributed by
-      plugins we can't predict *which* will exist — so pin the two host menus by
-      convention (**File** first, **Edit** second) and sort everything else
-      alphabetically. A small comparator in the menu shell (`File`→0, `Edit`→1,
-      else locale-compare); per-item order *within* a menu already works via the
-      `order` field.
+- [x] **Order the top-level menus: File, Edit, then alphabetical — DONE**
+      (`core/menu-shell.js` `byTopLevel`). Top-level menus now sort with **File**
+      pinned first, **Edit** second, and the rest (plugin-contributed) A→Z. Verified:
+      the menubar reads File · Edit · Analyze · Graphs · Transform. Per-item order
+      *within* a menu still uses the `order` field.
 - [ ] Batch a multi-variable Frequencies run into one R call instead of one job
       per variable (`plugins/builtin-frequencies/index.js`).
-- [ ] Settings persistence (localStorage). (Dataset persistence is now its own
+- [~] Settings persistence (localStorage). *Started:* the plugin manager persists
+      its disabled-set + catalog there (`core/plugin-manager.js`). A general
+      settings store can generalise that pattern. (Dataset persistence is its own
       item — see **Dataset library** under Deferred features; OPFS, not IndexedDB.)
 - [ ] **Variable-picker polish (later).** The "Selected" group is a snapshot taken
       when the dialog opens — ticking a box inside the dialog deliberately does
@@ -874,3 +860,18 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       **picker→selection write-back** so confirming a picker updates the shared
       selection (today the picker's choice returns to the plugin but doesn't
       change the grid/sidebar selection — a real design call, left as-is for now).
+
+## Blocked until public deploy (GitHub Pages)
+
+- [ ] **Milestone 3 — verify on iPad Safari.** Deferred to the bottom: it's gated
+      on switching the repo to public + standing up GitHub Pages (a real served
+      origin to test from on a device). The desktop-Chrome path is confirmed;
+      Safari/iPadOS is the remaining unknown. Risks to check once it's hosted:
+  - [ ] Blob-module `import()` inside the sandboxed (opaque-origin) iframe
+        (`plugin-host.html`). Fallback if it fails: `data:`-URL import or a build step.
+  - [ ] Cross-origin isolation via the **`coi-serviceworker`** reload path
+        (`sw.js`) — local testing used real COOP/COEP headers, so `sw.js` itself
+        is still unexercised on a device.
+  - [ ] Also sanity-check `<dialog>` modal behaviour and touch targets on iPad.
+  - *Adjacent prep that unblocks the deploy:* `LICENSE`, PWA icons, vendor+pin the
+    WebR/DuckDB assets, and PWA precaching (all already listed above).

@@ -99,7 +99,7 @@ export class MenuShell {
     this.#host.replaceChildren();
     this.#host.setAttribute('role', 'menubar');
 
-    const topLevel = [...this.#tree.children.values()].sort(byOrderThenLabel);
+    const topLevel = [...this.#tree.children.values()].sort(byTopLevel);
     for (const node of topLevel) {
       this.#host.append(this.#renderTopLevel(node));
     }
@@ -237,4 +237,14 @@ function makeNode(label, order) {
 /** Sort comparator: ascending order weight, then label A→Z. */
 function byOrderThenLabel(a, b) {
   return a.order - b.order || a.label.localeCompare(b.label);
+}
+
+/** Top-level menubar order: the two host menus are pinned by convention — **File**
+ * first, **Edit** second — and everything else (plugin-contributed, so we can't
+ * predict which exist) sorts alphabetically after them. */
+const TOP_LEVEL_RANK = { File: 0, Edit: 1 };
+function byTopLevel(a, b) {
+  const ra = TOP_LEVEL_RANK[a.label] ?? 100;
+  const rb = TOP_LEVEL_RANK[b.label] ?? 100;
+  return ra - rb || a.label.localeCompare(b.label);
 }

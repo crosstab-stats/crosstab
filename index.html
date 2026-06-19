@@ -371,6 +371,16 @@
       .ct-dialog__buttons .ct-dialog__primary {
         background: var(--accent); color: #fff; border-color: var(--accent);
       }
+      /* Plugin manager dialog */
+      .ct-plugins { list-style: none; margin: 0 0 4px; padding: 0; max-height: 340px; overflow: auto; }
+      .ct-plugin {
+        display: flex; align-items: center; justify-content: space-between; gap: 12px;
+        padding: 7px 4px; border-bottom: 1px solid var(--line);
+      }
+      .ct-plugin__main { display: flex; align-items: center; gap: 9px; cursor: pointer; font-size: 14px; }
+      .ct-plugin__name { color: #1a1a1a; }
+      .ct-plugin__meta { font: 11px ui-monospace, Menlo, monospace; color: #8a94a0; }
+
       /* Compute / Recode dialogs */
       .ct-cr__expr { font: 12px ui-monospace, Menlo, monospace; resize: vertical; }
       .ct-cr__palette { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 6px; max-height: 96px; overflow: auto; }

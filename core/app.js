@@ -20,6 +20,7 @@ import { ImportService } from './import-service.js';
 import { ExportService } from './export-service.js';
 import { OutputExportService } from './output-export.js';
 import { ComputeRecode } from './compute-recode.js';
+import { PluginManager } from './plugin-manager.js';
 import { DatasetStore } from './dataset-store.js';
 import { DatasetLibrary, LIBRARY_CHANGED } from './library.js';
 import { ProjectStore } from './project-store.js';
@@ -239,16 +240,12 @@ export async function boot(mounts) {
   webr.preload().catch((err) => console.warn('WebR preload failed', err));
   await dataReady;
 
-  // --- load built-in plugins -------------------------------------------------
-  for (const url of BUILTIN_PLUGINS) {
-    try {
-      const manifest = await loader.load(url);
-      console.info(`Loaded plugin: ${manifest.name} (${manifest.id})`);
-    } catch (err) {
-      console.error(`Failed to load plugin ${url}`, err);
-      results.appendError(`Failed to load plugin ${url}: ${err.message}`);
-    }
-  }
+  // --- load built-in plugins (those the user hasn't disabled) ----------------
+  // The plugin manager owns the catalog + the enabled/disabled set (persisted),
+  // loads the enabled ones, and exposes Edit ▸ Plugins… to toggle them live.
+  const plugins = new PluginManager({ loader, urls: BUILTIN_PLUGINS, menus, results: results.api });
+  plugins.activate();
+  await plugins.loadEnabled();
 
   // Boot done: from the next change on, an unsaved session auto-starts an
   // autosaving "Untitled project" (so the seed load above doesn't spawn one).
@@ -256,7 +253,7 @@ export async function boot(mounts) {
 
   // `dataStore` kept as an alias to the manager (it delegates to the active
   // dataset) so console pokes / older references keep working.
-  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, projects, loader, services };
+  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, projects, loader, plugins, services };
   // Expose for manual poking in the console during early development.
   // eslint-disable-next-line no-undef
   globalThis.crosstab = engine;
