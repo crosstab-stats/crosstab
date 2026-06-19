@@ -286,7 +286,7 @@ ${clone.outerHTML}
 
   #showDialog() {
     const dialog = document.createElement('dialog');
-    dialog.className = 'ct-dialog';
+    dialog.className = 'ct-dialog ct-dialog--wide';
     dialog.innerHTML = `
       <form method="dialog" class="ct-dialog__form ct-export">
         <h2 class="ct-dialog__title">Export output</h2>
