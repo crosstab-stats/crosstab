@@ -426,15 +426,29 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     UI** and to plugins; **export-to-syntax** (do-file) from the log; treat
     append/load as logged steps too (today they manage `#sources`, edits are the
     logged transforms) for a fully unified history; redo.
-  - [ ] **History / rewind panel.** A **linear** transform-history view: list the
-    steps a dataset has been through and click any one to rewind to that state
-    (mechanically: undo/redo to that point — the log + undo/redo already exist;
-    this is the UI). Makes undo/redo legible (today they're blind menu clicks) and
-    is the natural stepping-stone to **export-to-syntax** (the history *is* the
-    do-file). Decision (settled): **linear, not git-style branching** — the
-    audience thinks in linear syntax files, and divergent exploration is already
-    served by the multi-dataset workspace (fork = a separate dataset). No branch
-    tree / diff UI / prune.
+  - [x] **History / rewind panel — BUILT** (`core/data-views.js` `HistoryView`, a
+    4th workspace tab between Variables and Output). A **linear** transform-history
+    view: an as-imported base step + a numbered step per logged transform, each
+    described in plain language ("Edited age · type → numeric · missing: -99");
+    click any step to rewind (or fast-forward) to that state. The current position
+    is highlighted; steps *ahead* of it (undone but redoable) render greyed and
+    stay clickable. Engine: `DataStore.getHistory()` (applied + future + sources)
+    and `DataStore.rewindTo(n)` (moves the applied/redo boundary and re-derives
+    **once**, cheaper than walking N undo/redo calls), delegated through
+    `DatasetManager`. A fresh edit after a rewind discards the steps ahead (standard
+    linear branch-discard). The rewound state autosaves (a `'rewind'` DATA_CHANGED
+    reason — not source-dirtying, so no Parquet rewrite). Verified end to end in
+    Chrome: backward rewind reverts derived metadata, forward fast-forward restores
+    it, branch-discard works, autosave fires. Decision (settled): **linear, not
+    git-style branching** — the audience thinks in linear syntax files, and
+    divergent exploration is already served by the multi-dataset workspace (fork =
+    a separate dataset). No branch tree / diff UI / prune.
+    - *Limitation (matches the log's scope):* only `setVariable` transforms are in
+      the log, so the panel covers metadata edits since the last load; imports/
+      appends/joins are the structural base, not steps. Folding load/append into
+      the log (the "unified history" follow-up below) would make those steps too.
+    - *Natural next step it unlocks:* **export-to-syntax** — the history list is
+      already the do-file; serialising it to R/SPSS syntax is mostly formatting.
   - **Accepted boundary (not a violation):** "source" = the *as-imported* table,
     not the original file bytes. Pair with the **Dataset library** to enable full
     file→result reproduction if wanted.

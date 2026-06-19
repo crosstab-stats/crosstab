@@ -251,6 +251,12 @@ export class DatasetManager {
   getTransforms() {
     return this.active.getTransforms();
   }
+  getHistory() {
+    return this.active?.getHistory() ?? { applied: [], future: [], sources: [] };
+  }
+  rewindTo(n) {
+    return this.active.rewindTo(n);
+  }
   get canUndo() {
     return this.active?.canUndo ?? false;
   }

@@ -344,7 +344,129 @@ export class VariableView {
   }
 }
 
+/**
+ * The **History / rewind panel**: a linear list of the dataset's transform log,
+ * over an "as-imported" base step, with the current position highlighted. Click
+ * any step to rewind (or fast-forward) to that state — mechanically a single
+ * {@link DataStore#rewindTo}. Steps *ahead* of the current position (undone but
+ * still redoable) render greyed; making a fresh edit after a rewind discards them.
+ *
+ * Linear by design, **not** git-style branching: the audience thinks in linear
+ * syntax files, and divergent exploration is already served by the multi-dataset
+ * workspace (a fork is just a separate dataset). The same log is the basis for a
+ * future export-to-syntax (the history *is* the do-file).
+ */
+export class HistoryView {
+  /** @param {HTMLElement} host @param {import('./data-store.js').DataStore} store */
+  constructor(host, store) {
+    this.host = host;
+    this.store = store;
+    host.classList.add('ct-historyhost');
+  }
+
+  /** Rebuild the timeline from the store (call on show + on data change). */
+  render() {
+    const { applied, future, sources } = this.store.getHistory();
+    const ol = document.createElement('ol');
+    ol.className = 'history';
+
+    // State 0: the as-imported sources, before any transform.
+    ol.append(
+      this.#step({
+        n: 0,
+        marker: '⤓',
+        title: 'Imported data',
+        detail: describeSources(sources),
+        state: applied.length === 0 ? 'current' : 'applied',
+      }),
+    );
+
+    // Applied transforms 1..k (k = current position).
+    applied.forEach((t, i) => {
+      const n = i + 1;
+      const d = describeTransform(t);
+      ol.append(
+        this.#step({ n, marker: n, title: d.title, detail: d.detail, state: n === applied.length ? 'current' : 'applied' }),
+      );
+    });
+
+    // Future (undone) transforms — greyed, still clickable to fast-forward.
+    future.forEach((t, i) => {
+      const n = applied.length + i + 1;
+      const d = describeTransform(t);
+      ol.append(this.#step({ n, marker: n, title: d.title, detail: d.detail, state: 'future' }));
+    });
+
+    this.host.replaceChildren(ol);
+    if (applied.length === 0 && future.length === 0) {
+      this.host.append(
+        el(
+          'p',
+          'No transforms yet. Edits you make in the Variables tab (relabel, retype, mark missing, set value labels) appear here as steps you can rewind to.',
+          'history-hint',
+        ),
+      );
+    }
+  }
+
+  /** One timeline row: a clickable step that rewinds to having `n` transforms
+   * applied. The current step is highlighted and inert. */
+  #step({ n, marker, title, detail, state }) {
+    const li = document.createElement('li');
+    li.className = `history__step history__step--${state}`;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'history__btn';
+    btn.append(el('span', String(marker), 'history__marker'));
+    const body = el('span', null, 'history__body');
+    body.append(el('span', title, 'history__title'));
+    if (detail) body.append(el('span', detail, 'history__detail'));
+    btn.append(body);
+    if (state === 'current') {
+      btn.append(el('span', 'current', 'history__badge'));
+      btn.disabled = true;
+      btn.title = 'Current state';
+    } else {
+      btn.title = `Rewind to: ${title}`;
+      btn.addEventListener('click', () => void this.store.rewindTo(n));
+    }
+    li.append(btn);
+    return li;
+  }
+}
+
 // --- helpers -----------------------------------------------------------------
+
+/** One-line description of the as-imported base step from the source list. */
+function describeSources(sources) {
+  if (!sources || sources.length === 0) return '';
+  const named = sources.map((s) => s.label).filter(Boolean);
+  if (named.length === 0) {
+    return sources.length === 1 ? 'the original data' : `${sources.length} pooled sources`;
+  }
+  return named.join(' + ');
+}
+
+/** Human-readable title + detail for a transform-log entry. The variable editor
+ * sends a full patch, so detail lists the values the step set; programmatic
+ * (plugin) transforms may set only some keys. */
+function describeTransform(t) {
+  if (!t || t.type !== 'setVariable') return { title: t?.type || 'Change', detail: '' };
+  const p = t.patch || {};
+  const bits = [];
+  if ('type' in p) bits.push(`type → ${p.type}`);
+  if ('label' in p) bits.push(p.label ? `label “${p.label}”` : 'cleared label');
+  if ('measurementLevel' in p) bits.push(p.measurementLevel ? `measure → ${p.measurementLevel}` : 'cleared measure');
+  if ('missingValues' in p) {
+    const m = p.missingValues;
+    bits.push(m && m.length ? `missing: ${m.join(', ')}` : 'cleared missing');
+  }
+  if ('valueLabels' in p) {
+    const k = p.valueLabels ? Object.keys(p.valueLabels).length : 0;
+    bits.push(k ? `${k} value label${k === 1 ? '' : 's'}` : 'cleared value labels');
+  }
+  return { title: `Edited ${t.name}`, detail: bits.join(' · ') };
+}
 
 function el(tag, text, className) {
   const e = document.createElement(tag);

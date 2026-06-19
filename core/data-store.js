@@ -469,6 +469,46 @@ export class DataStore {
   }
 
   /**
+   * The full linear transform timeline for a history/rewind UI: the **applied**
+   * transforms (chronological) and the undone ones still **ahead** of the current
+   * position (`future`, also chronological — the redo stack un-reversed). The
+   * current position is `applied.length` steps in. Loads/appends/joins aren't in
+   * the log (they're structural source changes that clear redo), so this is the
+   * metadata-transform history since the last load, over an as-imported base
+   * described by `sources`.
+   *
+   * @returns {{applied: object[], future: object[], sources: Array<{label: string|null, combine: string}>}}
+   */
+  getHistory() {
+    return {
+      applied: this.#transforms.map((t) => structuredClone(t)),
+      future: [...this.#redoStack].reverse().map((t) => structuredClone(t)),
+      sources: this.#sources.map((s) => ({ label: s.label, combine: s.combine ?? 'base' })),
+    };
+  }
+
+  /**
+   * Rewind (or fast-forward) to a point on the transform timeline: make exactly
+   * `n` transforms applied, shifting the rest onto the redo stack (or pulling them
+   * back off). `n = 0` is the as-imported state; `n = applied + future` re-applies
+   * everything. One re-derivation regardless of distance — cheaper than walking N
+   * undo/redo calls. A subsequent fresh edit discards whatever is still ahead
+   * (standard linear undo/redo branch-discard via {@link DataStore#updateVariable}),
+   * so the timeline stays linear.
+   *
+   * @param {number} n - Target number of applied transforms.
+   * @returns {Promise<void>}
+   */
+  async rewindTo(n) {
+    const total = this.#transforms.length + this.#redoStack.length;
+    const target = Math.max(0, Math.min(Math.floor(n), total));
+    if (target === this.#transforms.length) return;
+    while (this.#transforms.length > target) this.#redoStack.push(this.#transforms.pop());
+    while (this.#transforms.length < target) this.#transforms.push(this.#redoStack.pop());
+    await this.rederive('rewind');
+  }
+
+  /**
    * Serialise the full reproducible state for the dataset library: every
    * immutable source (metadata + label, and its Parquet bytes unless
    * `includeParquet` is false) plus the transform log. With `includeParquet:false`

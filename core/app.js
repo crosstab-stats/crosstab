@@ -22,7 +22,7 @@ import { DatasetStore } from './dataset-store.js';
 import { DatasetLibrary, LIBRARY_CHANGED } from './library.js';
 import { ProjectStore } from './project-store.js';
 import { ProjectSync, PROJECT_CHANGED } from './project-sync.js';
-import { DataView, VariableView } from './data-views.js';
+import { DataView, VariableView, HistoryView } from './data-views.js';
 import { PluginLoader } from './loader.js';
 import { makeDemoDataset } from './demo-data.js';
 
@@ -134,7 +134,8 @@ export async function boot(mounts) {
   if (mounts.viewData && mounts.viewVars && mounts.tabs) {
     const dataView = new DataView(mounts.viewData, datasets);
     const variableView = new VariableView(mounts.viewVars, datasets);
-    wireWorkspaceTabs(bus, mounts, { dataView, variableView, results: mounts.results });
+    const historyView = mounts.viewHistory ? new HistoryView(mounts.viewHistory, datasets) : null;
+    wireWorkspaceTabs(bus, mounts, { dataView, variableView, historyView, results: mounts.results });
     // Keep the grid's header checkboxes in step when selection changes elsewhere
     // (e.g. the sidebar) — both surfaces drive the one shared selection.
     bus.on(CoreEvents.SELECTION_CHANGED, () => dataView.syncSelection());
@@ -294,17 +295,19 @@ function wireBusyIndicator(bus, el) {
 }
 
 /**
- * Wire the tabbed workspace (Data / Variables / Output). Switching to a tab
- * renders that view; the data/variable views also refresh on dataset change
- * while visible. Analyses jump focus to Output; a finished import jumps to Data
- * so you see what came in.
+ * Wire the tabbed workspace (Data / Variables / History / Output). Switching to a
+ * tab renders that view; the data/variable/history views also refresh on dataset
+ * change while visible. Analyses jump focus to Output; a finished import jumps to
+ * Data so you see what came in.
  *
  * @param {EventBus} bus
- * @param {Object} mounts - Must include `tabs`, `viewData`, `viewVars`, `results`.
- * @param {{dataView: DataView, variableView: VariableView, results: HTMLElement}} views
+ * @param {Object} mounts - Must include `tabs`, `viewData`, `viewVars`, `results`;
+ *   `viewHistory` is optional.
+ * @param {{dataView: DataView, variableView: VariableView, historyView: ?HistoryView, results: HTMLElement}} views
  */
-function wireWorkspaceTabs(bus, mounts, { dataView, variableView, results }) {
+function wireWorkspaceTabs(bus, mounts, { dataView, variableView, historyView, results }) {
   const panels = { data: mounts.viewData, vars: mounts.viewVars, output: results };
+  if (historyView && mounts.viewHistory) panels.history = mounts.viewHistory;
   const buttons = [...mounts.tabs.querySelectorAll('.tab')];
   let current = 'output';
 
@@ -314,12 +317,14 @@ function wireWorkspaceTabs(bus, mounts, { dataView, variableView, results }) {
     for (const [key, panel] of Object.entries(panels)) panel.hidden = key !== name;
     if (name === 'data') dataView.refresh();
     else if (name === 'vars') variableView.render();
+    else if (name === 'history') historyView?.render();
   };
 
   for (const b of buttons) b.addEventListener('click', () => show(b.dataset.view));
   bus.on(CoreEvents.DATA_CHANGED, () => {
     if (current === 'data') dataView.refresh();
     else if (current === 'vars') variableView.render();
+    else if (current === 'history') historyView?.render();
   });
   // Focus the relevant view for the action in progress.
   bus.on('analysis:started', () => show('output'));

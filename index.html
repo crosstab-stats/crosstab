@@ -206,6 +206,40 @@
       .vargrid__row { cursor: pointer; }
       .vargrid__row:hover { background: #eef5fb; }
 
+      /* history / rewind panel */
+      .ct-historyhost { padding: 12px 10px; }
+      .history { list-style: none; margin: 0; padding: 0; max-width: 560px; font: 13px/1.4 system-ui, sans-serif; }
+      .history__step { position: relative; }
+      /* connector line behind the markers (markers sit above it, opaque) */
+      .history__step:not(:last-child)::before {
+        content: ''; position: absolute; left: 20px; top: 19px; bottom: -1px;
+        width: 2px; background: #e0e5eb; z-index: 0;
+      }
+      .history__btn {
+        display: flex; align-items: flex-start; gap: 10px; width: 100%;
+        text-align: left; background: none; border: 0; cursor: pointer;
+        padding: 7px 10px; border-radius: 6px; color: #1a1a1a; font: inherit;
+      }
+      .history__btn:hover:not(:disabled) { background: #eef5fb; }
+      .history__btn:disabled { cursor: default; }
+      .history__marker {
+        position: relative; z-index: 1; flex: none; width: 22px; height: 22px;
+        border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+        font-size: 12px; line-height: 1; background: #e3e8ee; color: #51606e;
+      }
+      .history__step--current > .history__btn > .history__marker { background: var(--accent); color: #fff; }
+      .history__step--future > .history__btn { color: #9aa6b1; }
+      .history__step--future > .history__btn > .history__marker { background: #f0f2f5; color: #b3bcc6; }
+      .history__body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+      .history__title { font-weight: 600; }
+      .history__detail { font-size: 12px; color: #7a8590; }
+      .history__step--future .history__detail { color: #aeb7c0; }
+      .history__badge {
+        margin-left: auto; align-self: center; font-size: 11px; font-weight: 600;
+        color: var(--accent); background: #eaf2fb; padding: 1px 8px; border-radius: 10px;
+      }
+      .history-hint { color: #7a8590; font-size: 13px; line-height: 1.5; padding: 4px 12px 0; max-width: 48ch; }
+
       /* variable metadata editor (recode) */
       .ct-edit { min-width: 380px; }
       .ct-field { display: flex; flex-direction: column; gap: 4px; margin: 0 0 12px; font-size: 13px; }
@@ -337,11 +371,13 @@
         <div class="tabs" id="tabs" role="tablist" aria-label="Workspace views">
           <button class="tab" id="tab-data" role="tab" data-view="data">Data</button>
           <button class="tab" id="tab-vars" role="tab" data-view="vars">Variables</button>
+          <button class="tab" id="tab-history" role="tab" data-view="history">History</button>
           <button class="tab" id="tab-output" role="tab" data-view="output" aria-selected="true">Output</button>
           <button class="tab-action" id="clear-output" type="button" title="Clear all output">Clear output</button>
         </div>
         <div class="view" id="view-data" role="tabpanel" aria-label="Data" hidden></div>
         <div class="view" id="view-vars" role="tabpanel" aria-label="Variables" hidden></div>
+        <div class="view" id="view-history" role="tabpanel" aria-label="History" hidden></div>
         <section class="view results" id="results" role="tabpanel" aria-label="Output" aria-live="polite"></section>
       </section>
     </main>
@@ -360,6 +396,7 @@
         tabs: document.getElementById('tabs'),
         viewData: document.getElementById('view-data'),
         viewVars: document.getElementById('view-vars'),
+        viewHistory: document.getElementById('view-history'),
       }).catch((err) => {
         console.error('CrossTab failed to start', err);
         document.getElementById('status').textContent = 'Failed to start: ' + err.message;
