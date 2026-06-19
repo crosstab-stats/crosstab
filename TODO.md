@@ -605,6 +605,25 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     Stata `.dta` write (haven write-side, heavier); Parquet export
     (`DuckDBManager.queryToParquet` exists — nearly free). CSV covers the common
     need first.
+- [x] **Export-to-syntax (do-file) — BUILT** (`plugins/builtin-syntax-export/`,
+      File ▸ Export ▸ R syntax). Turns the dataset's **transform log** (the same
+      record the History panel shows) into a runnable **R script** that reproduces
+      the recodes — the do-file an academic pastes into RStudio or drops in a
+      methods appendix. Done on-architecture as a **plugin**: the transform log is
+      now exposed to plugins via `app.data.getTransforms()` (new read surface,
+      wired through broker + plugin-host), and the plugin emits R from it. Each
+      logged metadata transform becomes R, in log order: designate-missing →
+      `x[x %in% c(codes)] <- NA`; retype → `as.numeric(as.character(x))` /
+      `as.character` / `factor`; value labels → `factor(x, levels, labels)`;
+      relabel → `attr(x, "label") <- …`; measurement level → a comment (no base-R
+      equivalent). Sources are an editable load stub; text is `\u`/`\U`-escaped.
+      **Verified in Chrome:** real menu → export produced a script that **parses in
+      R** (`parse()` OK) and whose recodes **run correctly** on synthetic data
+      (−99 → NA then numeric; factor levels→labels; label attr).
+  - *Deferred:* **SPSS `.sps`** syntax (a second format in the same plugin — fast
+    follow); including **analyses** in the do-file (needs a run-log + plugins
+    declaring their R — bigger); source-aware load hints (emit the real importer
+    call from the source descriptors).
 - [ ] **In-app plugin creator / editor.** Let social scientists (who are *not*
       programmers) build the plugin they need without leaving the app or standing
       up a toolchain. The point isn't a full IDE — it's "more than Notepad,"

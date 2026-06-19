@@ -1,0 +1,165 @@
+/**
+ * @file plugins/builtin-syntax-export/index.js
+ * Built-in **export-to-syntax** plugin: File ▸ Export ▸ R syntax.
+ *
+ * Turns the dataset's **transform log** (the same record the History panel shows)
+ * into a runnable R script that reproduces the recodes — the do-file an academic
+ * pastes into RStudio or drops in a methods appendix. Reads the log through the
+ * `app.data.getTransforms()` surface (the log is exposed to plugins, so this
+ * honours "everything is a plugin"), and delivers `.R` bytes via the data-export
+ * channel.
+ *
+ * Scope (v1): the **data-preparation** do-file — sources are emitted as an
+ * editable load stub, then each logged metadata transform (retype, designate
+ * missing, value labels, relabel) becomes R. It is a best-effort, readable
+ * reproduction, not a byte-exact replay of the engine's derive order; analyses
+ * (plugin runs) aren't logged yet, so they aren't included.
+ */
+
+/** @type {import('../../core/loader.js').PluginManifest} */
+export const manifest = {
+  id: 'builtin-syntax-export',
+  name: 'R Syntax Export',
+  version: '0.1.0',
+  apiVersion: '0.1.0',
+  rPackages: [],
+};
+
+/** @param {object} app */
+export async function activate(app) {
+  await app.exporters.register({
+    id: 'r-syntax',
+    label: 'R syntax (.R)…',
+    extensions: ['.R'],
+    order: 30,
+    export: ({ ticket }) => exportSyntax(app, ticket),
+  });
+}
+
+async function exportSyntax(app, ticket) {
+  try {
+    const transforms = await app.data.getTransforms();
+    const meta = await app.data.getVariableMeta();
+    const code = buildRSyntax(transforms, meta);
+    await app.exporters.deliver(ticket, {
+      filename: 'crosstab-syntax.R',
+      mimeType: 'text/plain;charset=utf-8',
+      data: code,
+    });
+  } catch (err) {
+    await app.results.appendError(`R syntax export failed: ${err.message}`);
+    await app.exporters.deliver(ticket, null);
+  }
+}
+
+/** Render the transform log as an R script. */
+function buildRSyntax(transforms, meta) {
+  const L = [];
+  L.push('# ---------------------------------------------------------------------------');
+  L.push('# CrossTab — data-preparation syntax (R)');
+  L.push(`# Generated ${new Date().toLocaleString()}`);
+  L.push('#');
+  L.push('# Best-effort reproduction of the recodes in the transform log (the steps');
+  L.push('# shown in the History panel). Edit the load line to point at your data;');
+  L.push('# the recodes below then recreate the working dataset. Analyses are not');
+  L.push('# included (they are not logged yet).');
+  L.push('# ---------------------------------------------------------------------------');
+  L.push('');
+  L.push('# 1. Load your data into a data frame called `d`, e.g.:');
+  L.push('#    d <- read.csv("your-data.csv", stringsAsFactors = FALSE)');
+  L.push('#    d <- haven::read_sav("your-data.sav")   # SPSS');
+  L.push('d <- read.csv("your-data.csv", stringsAsFactors = FALSE)');
+  L.push('');
+
+  const setVars = transforms.filter((t) => t && t.type === 'setVariable' && t.name);
+  if (setVars.length === 0) {
+    L.push('# (No transforms recorded — the dataset is as imported.)');
+  } else {
+    let n = 0;
+    for (const t of setVars) {
+      n += 1;
+      L.push(`# Step ${n}: ${t.name}`);
+      L.push(...transformToR(t.name, t.patch || {}));
+      L.push('');
+    }
+  }
+
+  // A short metadata reference so the script is self-documenting.
+  if (meta && meta.length) {
+    L.push('# ---------------------------------------------------------------------------');
+    L.push('# Variables (final state): name — label');
+    for (const m of meta) L.push(`#   ${m.name}${m.label ? ` — ${m.label}` : ''}`);
+  }
+  L.push('');
+  return L.join('\n');
+}
+
+/** R lines for one `setVariable` patch on `name`. */
+function transformToR(name, patch) {
+  const v = `d[[${rChar(name)}]]`;
+  const out = [];
+
+  // Designate user-missing first (on the raw codes, before any type change).
+  if ('missingValues' in patch) {
+    const mv = patch.missingValues;
+    if (mv && mv.length) out.push(`${v}[${v} %in% c(${mv.map(rLit).join(', ')})] <- NA`);
+    else out.push(`# cleared user-missing codes on ${name}`);
+  }
+
+  // Value labels => a factor with explicit levels/labels (supersedes a plain
+  // factor type change). Codes are matched as character.
+  const vl = patch.valueLabels;
+  const hasLabels = vl && typeof vl === 'object' && Object.keys(vl).length > 0;
+
+  if ('type' in patch && !(hasLabels && patch.type === 'factor')) {
+    if (patch.type === 'numeric') out.push(`${v} <- suppressWarnings(as.numeric(as.character(${v})))`);
+    else if (patch.type === 'string') out.push(`${v} <- as.character(${v})`);
+    else if (patch.type === 'factor') out.push(`${v} <- factor(${v})`);
+  }
+
+  if (hasLabels) {
+    const codes = Object.keys(vl);
+    const labels = codes.map((c) => vl[c]);
+    out.push(
+      `${v} <- factor(${v}, levels = c(${codes.map(rChar).join(', ')}), labels = c(${labels
+        .map(rChar)
+        .join(', ')}))`,
+    );
+  } else if ('valueLabels' in patch) {
+    out.push(`# cleared value labels on ${name}`);
+  }
+
+  if ('label' in patch) {
+    out.push(patch.label ? `attr(${v}, "label") <- ${rChar(patch.label)}` : `attr(${v}, "label") <- NULL`);
+  }
+
+  if ('measurementLevel' in patch) {
+    out.push(`# measurement level: ${patch.measurementLevel || '(cleared)'} (no base-R equivalent)`);
+  }
+
+  if (out.length === 0) out.push(`# (no reproducible change for ${name})`);
+  return out;
+}
+
+/** An R string literal (double-quoted; non-ASCII via \\u/\\U escapes). */
+function rChar(s) {
+  let out = '"';
+  for (const ch of String(s)) {
+    const code = ch.codePointAt(0);
+    if (ch === '"') out += '\\"';
+    else if (ch === '\\') out += '\\\\';
+    else if (ch === '\n') out += '\\n';
+    else if (ch === '\r') out += '\\r';
+    else if (ch === '\t') out += '\\t';
+    else if (code < 32) out += '\\u' + code.toString(16).padStart(4, '0');
+    else if (code > 126) {
+      out += code > 0xffff ? '\\U' + code.toString(16).padStart(8, '0') : '\\u' + code.toString(16).padStart(4, '0');
+    } else out += ch;
+  }
+  return out + '"';
+}
+
+/** An R literal for a missing-code value: numbers bare, everything else quoted. */
+function rLit(v) {
+  return typeof v === 'number' && Number.isFinite(v) ? String(v) : rChar(v);
+}

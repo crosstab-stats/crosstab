@@ -287,6 +287,8 @@ export class DatasetManager {
       getVariableMeta: (o) => this.active?.getVariableMeta(o) ?? [],
       getSelectedVariables: () => this.active?.getSelectedVariables() ?? [],
       getRowCount: () => this.rowCount,
+      /** The active dataset's transform log — the basis for export-to-syntax. */
+      getTransforms: () => this.active?.getTransforms() ?? [],
       onDataChanged: (fn) => this.#bus.on(CoreEvents.DATA_CHANGED, fn),
       onSelectionChanged: (fn) => this.#bus.on(CoreEvents.SELECTION_CHANGED, fn),
       /** Emit a derived dataset (e.g. bootstrap resamples) as a new active

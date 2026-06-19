@@ -45,6 +45,7 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-fred/index.js',
   './plugins/builtin-wikipedia/index.js',
   './plugins/builtin-csv-export/index.js',
+  './plugins/builtin-syntax-export/index.js',
   './plugins/builtin-html-export/index.js',
   './plugins/builtin-docx-export/index.js',
   './plugins/builtin-correlation/index.js',
