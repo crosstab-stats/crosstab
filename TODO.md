@@ -455,35 +455,27 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 - [x] **`app.ui.showForm`** — a general declarative form dialog (text/password/
       number fields). Built (`core/ui-service.js`) for the FRED importer; also used
       by the dataset library's name prompt.
-- [x] **Dataset library (save / catalog / one-click reload).** *Built* —
-      `core/dataset-store.js` (OPFS) + `core/library.js` (binding, autosave, browse
-      modal, File-menu items) + `DataStore.exportState`/`restoreState`. Caches the
-      post-import result so reload never re-parses.
-  - **Storage: OPFS** under `datasets/` — `catalog.json` index + one folder per
-    entry (`manifest.json` + `source_N.parquet`). `navigator.storage.persist()` is
-    called on first save (avoids eviction). Export to real disk via File System
-    Access remains a possible *secondary* feature later (portability/backup).
-  - **Saved entry = the whole reproducible stack** (decision: "save everything,
-    sources immutable"): each immutable source as Parquet + the transform log +
-    metadata. Reload reconstructs sources + log → derived view, so **undo and
-    provenance survive a round-trip**, and a pooled multi-file dataset saves
-    naturally (N sources). *Not* saved: analysis output (regenerable).
-  - **Living-document autosave.** Saving **binds** the session to the entry;
-    thereafter any transform-log change (edit/undo/redo/append) schedules a
-    debounced save — never "unsaved work" after the first save. Cheap because
-    sources are immutable: a metadata edit rewrites only `manifest.json` + catalog
-    (`writeSources:false`), not the Parquet. Import-`replace` **unbinds** (new
-    project); `restore` doesn't autosave (already saved). Footer shows
-    saved✓/saving…. "Save as copy…" forks a named entry.
-  - **Single active dataset; load = replace the current one.** True multi-dataset
-    (several loaded at once) waits on the join feature.
-  - **Verified end to end in Chrome:** save→bind→edit→debounced autosave (catalog
-    timestamp advances); **survives a full page reload** — Open library → load
-    restored data *and* the transform log (an autosaved relabel persisted); browse
-    modal lists entries w/ rows·vars·date; replace→unbind; delete; Parquet data
-    integrity (age/income/gender values intact). Host UI, not a plugin (OPFS is
-    origin-scoped); `app.datasets` plugin API can come later. Supersedes the old
-    IndexedDB persistence idea.
+- [x] **Two-tier persistence: Projects + building-block library.** *Built.*
+  - **Projects (living documents)** — `core/project-store.js` + `core/project-sync.js`.
+    A project is the whole working set (every open dataset + active), saved as one
+    self-contained OPFS bundle (`projects/<id>/project.json` + `ds<id>_src<n>.parquet`)
+    and **autosaved** on any change. File ▸ New / Open / Save project(/as). Cheap:
+    autosave rewrites only the changed dataset's Parquet (`writeSourcesFor`), else
+    just `project.json`. Verified: build a 2-dataset set, save, edit → autosave;
+    reload → Open restores all datasets + active + edits.
+  - **Building-block datasets (reusable)** — `core/dataset-store.js` (OPFS
+    `datasets/`) + `core/library.js` (`DatasetLibrary`). Explicit File ▸ Save
+    dataset to library… / Add dataset from library… (copies a block into the
+    project). **No autosave/binding** here — the project tier owns persistence; a
+    building block is only updated by an explicit re-save, so in-project edits never
+    mutate the shared block (copy-in independence). Verified: save the demo as a
+    block → appears in the library → Add → a copy joins the project.
+  - Each saved dataset (in either tier) = the whole reproducible stack (immutable
+    sources as Parquet + transform log + metadata), so undo/provenance survive a
+    round-trip and pooled/joined datasets save naturally. `navigator.storage.persist()`
+    on first save. *Deferred:* linked (reference, not copy) datasets; pruning
+    orphaned Parquet after a dataset is removed mid-project; export to real disk
+    (File System Access); `app.datasets` plugin API. Supersedes the old IndexedDB idea.
 - [ ] **Export results / output (PDF default).** Save the Output pane (tables,
       future plots, notes) to a shareable file — PDF as the sensible default for a
       write-up artifact. *Approach is a real decision, hence listed not assumed:*
