@@ -27,6 +27,8 @@ export const manifest = {
   name: 'FRED Import',
   version: '0.1.0',
   apiVersion: '0.1.0',
+  category: 'Import',
+  keywords: ['economic', 'time series', 'fed', 'fred', 'macro'],
   rPackages: [],
 };
 

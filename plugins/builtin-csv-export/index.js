@@ -20,6 +20,8 @@ export const manifest = {
   name: 'CSV Export',
   version: '0.1.0',
   apiVersion: '0.1.0',
+  category: 'Export',
+  keywords: ['csv', 'data'],
   rPackages: [],
 };
 

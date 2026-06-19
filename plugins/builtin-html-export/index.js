@@ -16,6 +16,8 @@ export const manifest = {
   name: 'HTML Output Export',
   version: '0.1.0',
   apiVersion: '0.1.0',
+  category: 'Export',
+  keywords: ['html', 'report', 'output'],
   rPackages: [],
 };
 

@@ -39,6 +39,12 @@ const PLUGIN_HOST_URL = './plugin-host.html';
  * @property {string} version - The plugin's own semver version.
  * @property {string} apiVersion - Engine API version targeted, e.g. `'0.1.0'`.
  * @property {string[]} [rPackages] - R packages to pre-install on activation.
+ * @property {string} [category] - Group the plugin manager files it under (e.g.
+ *   `'Analysis'`, `'Import'`); an unknown value just makes a new section. Missing
+ *   → an "Other" section.
+ * @property {string[]} [keywords] - Extra search terms for the plugin manager, so
+ *   a plugin is findable by what it does even if its name doesn't say (e.g. a
+ *   regression plugin keyworded with `['ols', 'linear']`).
  */
 
 /**

@@ -68,7 +68,12 @@ export class PluginManager {
   async #loadOne(url) {
     try {
       const manifest = await this.#loader.load(url);
-      this.#catalog[url] = { id: manifest.id, name: manifest.name };
+      this.#catalog[url] = {
+        id: manifest.id,
+        name: manifest.name,
+        category: typeof manifest.category === 'string' ? manifest.category : '',
+        keywords: Array.isArray(manifest.keywords) ? manifest.keywords : [],
+      };
       writeJSON(LS_CATALOG, this.#catalog);
       return true;
     } catch (err) {
@@ -78,7 +83,8 @@ export class PluginManager {
     }
   }
 
-  /** Known plugins for the dialog: every URL with its enabled/loaded state. */
+  /** Known plugins for the dialog: every URL with its enabled/loaded state, plus
+   * the category/keywords cached from the manifest (for grouping + search). */
   list() {
     const loaded = new Set(this.#loader.list().map((m) => m.id));
     return this.#urls.map((url) => {
@@ -87,6 +93,8 @@ export class PluginManager {
         url,
         id: cat?.id ?? null,
         name: cat?.name ?? prettyName(url),
+        category: cat?.category || 'Other',
+        keywords: cat?.keywords ?? [],
         enabled: !this.#disabled.has(url),
         loaded: cat?.id ? loaded.has(cat.id) : false,
       };
@@ -122,22 +130,39 @@ export class PluginManager {
     form.className = 'ct-dialog__form';
     form.innerHTML = `
       <h2 class="ct-dialog__title">Plugins</h2>
-      <p class="ct-dialog__hint">Turn built-in plugins on or off. Disabling one removes
-        its menu items right away; your choices are saved across sessions.</p>
-      <ul class="ct-plugins"></ul>
+      <p class="ct-dialog__hint">Turn plugins on or off — disabling one removes its
+        menu items right away; choices are saved across sessions. Grouped by category;
+        search matches names <em>and</em> keywords.</p>
+      <input type="search" class="ct-plugins__search" placeholder="Search plugins…" autocomplete="off">
+      <div class="ct-plugins"></div>
       <menu class="ct-dialog__buttons"><button value="close" type="submit" class="ct-dialog__primary">Done</button></menu>`;
-    const ul = form.querySelector('.ct-plugins');
+    const box = form.querySelector('.ct-plugins');
+    const search = form.querySelector('.ct-plugins__search');
 
     const renderList = () => {
-      ul.replaceChildren();
-      for (const p of this.list()) ul.append(this.#row(p, renderList));
+      const q = search.value.trim().toLowerCase();
+      const items = this.list().filter((p) => matchesQuery(p, q));
+      box.replaceChildren();
+      if (items.length === 0) {
+        box.append(el('p', 'No plugins match your search.', 'ct-plugins__empty'));
+        return;
+      }
+      for (const group of groupByCategory(items)) {
+        box.append(el('div', group.category, 'ct-plugins__cat'));
+        const ul = el('ul', null, 'ct-plugins__list');
+        for (const p of group.items) ul.append(this.#row(p, renderList));
+        box.append(ul);
+      }
     };
+    // Preserve scroll/focus across re-renders triggered by toggles vs. typing:
+    search.addEventListener('input', renderList);
     renderList();
 
     dialog.append(form);
     dialog.addEventListener('close', () => dialog.remove());
     document.body.append(dialog);
     dialog.showModal();
+    search.focus();
   }
 
   #row(p, refresh) {
@@ -173,6 +198,43 @@ export class PluginManager {
 }
 
 // --- helpers ---------------------------------------------------------------
+
+function el(tag, text, className) {
+  const e = document.createElement(tag);
+  if (text != null) e.textContent = text;
+  if (className) e.className = className;
+  return e;
+}
+
+/** Does a plugin match the search query? Matches across name, id, category, and
+ * keywords — so an oddly-named plugin is still found by what it does. */
+function matchesQuery(p, q) {
+  if (!q) return true;
+  const hay = [p.name, p.id, p.category, ...(p.keywords || [])].join(' ').toLowerCase();
+  return hay.includes(q);
+}
+
+/** Built-in category order; unknown categories sort alphabetically after these,
+ * and the catch-all "Other" goes last. */
+const CATEGORY_ORDER = ['Import', 'Analysis', 'Graphs', 'Export'];
+function categoryRank(c) {
+  if (c === 'Other') return 1000;
+  const i = CATEGORY_ORDER.indexOf(c);
+  return i >= 0 ? i : 500;
+}
+
+/** Group plugins into ordered category sections. */
+function groupByCategory(items) {
+  const byCat = new Map();
+  for (const p of items) {
+    const c = p.category || 'Other';
+    if (!byCat.has(c)) byCat.set(c, []);
+    byCat.get(c).push(p);
+  }
+  return [...byCat.keys()]
+    .sort((a, b) => categoryRank(a) - categoryRank(b) || a.localeCompare(b))
+    .map((c) => ({ category: c, items: byCat.get(c) }));
+}
 
 function readJSON(key, fallback) {
   try {

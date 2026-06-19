@@ -18,6 +18,8 @@ export const manifest = {
   name: 'Descriptive Statistics',
   version: '0.1.0',
   apiVersion: '0.1.0',
+  category: 'Analysis',
+  keywords: ['mean', 'sd', 'median', 'summary', 'descriptive'],
   rPackages: [], // base R (mean/sd/quantile) is enough
 };
 

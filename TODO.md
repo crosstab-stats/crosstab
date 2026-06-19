@@ -749,6 +749,16 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       it stayed gone after a reload (and the row showed "disabled"), re-enabling
       brought Graphs back and cleared the set. Host-owned, as designed (it drives
       the loader — outside the sandbox allowlist; a plugin couldn't manage peers).
+  - **Grouped + searchable** (for when the list grows): the manifest gained
+    optional **`category`** (groups the plugin into a section — an unknown value
+    just makes a new one; missing → "Other") and **`keywords`** (extra search
+    terms). The dialog has a **search box** that matches name *and* keywords *and*
+    category *and* id, and renders plugins in ordered category sections
+    (Import · Analysis · Graphs · Export, then any custom, then Other). The 16
+    built-ins are categorised + keyworded. **Verified:** sections show
+    Import 4 / Analysis 7 / Graphs 1 / Export 4; searching "contingency" (only in
+    Crosstabs' keywords, not its name) surfaces Crosstabs — so an oddly-named
+    third-party plugin stays findable by what it does.
   - *Deferred:* manage *installed third-party* plugins too (today the catalog is
     the built-in URL set); a "reload plugin" action for the plugin-creator loop.
 - [ ] **Direct R interface / console.** The power-user escape hatch: when the

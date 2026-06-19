@@ -18,6 +18,8 @@ export const manifest = {
   name: 'Crosstabs',
   version: '0.1.0',
   apiVersion: '0.1.0',
+  category: 'Analysis',
+  keywords: ['chi-square', 'contingency', 'crosstab', 'association'],
   rPackages: [], // base R `table` + `chisq.test`
 };
 

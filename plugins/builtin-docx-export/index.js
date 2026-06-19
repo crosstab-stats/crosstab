@@ -21,6 +21,8 @@ export const manifest = {
   name: 'Word Output Export',
   version: '0.1.0',
   apiVersion: '0.1.0',
+  category: 'Export',
+  keywords: ['word', 'docx', 'report', 'output'],
   rPackages: ['officer', 'flextable'],
 };
 

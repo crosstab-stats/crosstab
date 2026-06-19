@@ -31,6 +31,8 @@ export const manifest = {
   name: 'Wikipedia Table Import',
   version: '0.1.0',
   apiVersion: '0.1.0',
+  category: 'Import',
+  keywords: ['web', 'scrape', 'table', 'wikipedia'],
   rPackages: [],
 };
 

@@ -17,6 +17,8 @@ export const manifest = {
   name: 'Linear Regression',
   version: '0.1.0',
   apiVersion: '0.1.0',
+  category: 'Analysis',
+  keywords: ['lm', 'linear', 'ols', 'regression'],
   rPackages: [], // base R `lm`
 };
 

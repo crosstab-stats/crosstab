@@ -17,6 +17,8 @@ export const manifest = {
   name: 'Plots',
   version: '0.1.0',
   apiVersion: '0.1.0',
+  category: 'Graphs',
+  keywords: ['chart', 'histogram', 'scatter', 'boxplot', 'bar', 'pie', 'plot'],
   rPackages: ['svglite'],
 };
 

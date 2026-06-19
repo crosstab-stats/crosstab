@@ -22,6 +22,8 @@ export const manifest = {
   name: 'R Syntax Export',
   version: '0.1.0',
   apiVersion: '0.1.0',
+  category: 'Export',
+  keywords: ['r', 'do-file', 'syntax', 'script', 'reproducible'],
   rPackages: [],
 };
 

@@ -21,6 +21,8 @@ export const manifest = {
   name: 'CSV Import',
   version: '0.1.0',
   apiVersion: '0.1.0',
+  category: 'Import',
+  keywords: ['csv', 'text', 'delimited', 'file'],
   rPackages: [],
 };
 

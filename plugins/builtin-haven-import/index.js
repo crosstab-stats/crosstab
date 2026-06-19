@@ -26,6 +26,8 @@ export const manifest = {
   name: 'SPSS/Stata/SAS Import',
   version: '0.1.0',
   apiVersion: '0.1.0',
+  category: 'Import',
+  keywords: ['spss', 'stata', 'sas', 'sav', 'dta', 'sas7bdat'],
   // Installed on first use rather than up front (haven is a heavy download).
   rPackages: [],
 };

@@ -20,6 +20,8 @@ export const manifest = {
   name: 'Bootstrap',
   version: '0.1.0',
   apiVersion: '0.1.0',
+  category: 'Analysis',
+  keywords: ['resample', 'bootstrap', 'ci', 'confidence'],
   rPackages: [], // base R (sample/replicate/quantile)
 };
 
