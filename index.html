@@ -99,9 +99,10 @@
       .proj__ds--active { background: #e6f0fa; border-color: var(--accent); }
       .proj__ds-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
       .proj__ds-rows { font: 12px ui-monospace, Menlo, monospace; color: #7a8590; }
-      .proj__ds-x { border: 0; background: none; color: #b0b6bc; cursor: pointer; font-size: 12px; padding: 0 2px; }
-      .proj__ds-x:hover:not(:disabled) { color: #b03030; }
-      .proj__ds-x:disabled { opacity: 0; cursor: default; }
+      /* row action icons (✎ rename, ✕ remove) — visible, darken on hover */
+      .proj__ds-x { border: 0; background: none; color: #7a8590; cursor: pointer; font-size: 12px; padding: 0 3px; border-radius: 4px; }
+      .proj__ds-x:hover:not(:disabled) { color: #1a1a1a; background: #dfe5ea; }
+      .proj__ds-x:disabled { opacity: .3; cursor: default; } /* greyed, still visible */
       .proj__ds-edit { flex: 1; min-width: 0; font: inherit; padding: 2px 4px; border: 1px solid var(--accent); border-radius: 4px; }
       .proj__add {
         width: 100%; font: inherit; font-size: 13px; padding: 6px;

@@ -448,12 +448,16 @@ class ProjectSidebar {
     }
     li.append(el('span', it.rowCount.toLocaleString(), 'proj__ds-rows'));
 
+    const edit = iconBtn('✎', 'Rename dataset', (e) => {
+      e.stopPropagation();
+      this.#inlineRename(li, name, it.name, (v) => this.datasets.rename(it.id, v));
+    }, 'proj__ds-x');
     const x = iconBtn('✕', 'Remove from project', (e) => {
       e.stopPropagation();
       void this.datasets.remove(it.id);
     }, 'proj__ds-x');
-    x.disabled = count <= 1;
-    li.append(x);
+    x.disabled = count <= 1; // can't remove the last dataset
+    li.append(edit, x);
     return li;
   }
 
