@@ -37,7 +37,7 @@
  * its releases under `-dev` tags, so a `-dev` pin is the normal current build.
  * @type {string}
  */
-const DUCKDB_URL = 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev45.0/+esm';
+const DUCKDB_URL = 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev56.0/+esm';
 
 /**
  * Apache Arrow ES-module entry. Used only to *build* tables for ingest; query
