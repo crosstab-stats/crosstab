@@ -20,38 +20,28 @@
 export const manifest = {
   id: 'builtin-syntax-export',
   name: 'R Syntax Export',
-  version: '0.1.0',
+  version: '0.2.0',
   apiVersion: '0.1.0',
   category: 'Export',
   keywords: ['r', 'do-file', 'syntax', 'script', 'reproducible'],
   rPackages: [],
+  exports: [{ label: 'R syntax (.R)…', extensions: ['.R'], order: 30, export: 'exportSyntax' }],
 };
 
-/** @param {object} app */
-export async function activate(app) {
-  await app.exporters.register({
-    id: 'r-syntax',
-    label: 'R syntax (.R)…',
-    extensions: ['.R'],
-    order: 30,
-    export: ({ ticket }) => exportSyntax(app, ticket),
-  });
-}
-
-async function exportSyntax(app, ticket) {
-  try {
-    const { applied } = await app.data.getHistory(); // the full ordered op log
-    const meta = await app.data.getVariableMeta();
-    const code = buildRSyntax(applied, meta);
-    await app.exporters.deliver(ticket, {
-      filename: 'crosstab-syntax.R',
-      mimeType: 'text/plain;charset=utf-8',
-      data: code,
-    });
-  } catch (err) {
-    await app.results.appendError(`R syntax export failed: ${err.message}`);
-    await app.exporters.deliver(ticket, null);
-  }
+/**
+ * Declarative exporter: render the dataset's operation log as an R script and
+ * return the bytes for the host to download.
+ * @param {object} app
+ * @returns {Promise<{filename: string, mimeType: string, data: string}>}
+ */
+export async function exportSyntax(app) {
+  const { applied } = await app.data.getHistory(); // the full ordered op log
+  const meta = await app.data.getVariableMeta();
+  return {
+    filename: 'crosstab-syntax.R',
+    mimeType: 'text/plain;charset=utf-8',
+    data: buildRSyntax(applied, meta),
+  };
 }
 
 /** Render the **whole ordered operation log** as an R script — data loads

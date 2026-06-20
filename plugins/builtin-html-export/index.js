@@ -14,38 +14,29 @@
 export const manifest = {
   id: 'builtin-html-export',
   name: 'HTML Output Export',
-  version: '0.1.0',
+  version: '0.2.0',
   apiVersion: '0.1.0',
   category: 'Export',
   keywords: ['html', 'report', 'output'],
   rPackages: [],
+  outputExports: [{ label: 'HTML (.html)', extensions: ['.html'], order: 10, export: 'exportHtml' }],
 };
 
-/** @param {object} app */
-export async function activate(app) {
-  await app.outputExporters.register({
-    id: 'html',
-    label: 'HTML (.html)',
-    extensions: ['.html'],
-    order: 10,
-    export: ({ ticket, title }) => exportHtml(app, ticket, title),
-  });
-}
-
-async function exportHtml(app, ticket, title) {
-  try {
-    const model = await app.results.getModel();
-    const css = await app.results.getStyles();
-    const html = buildHtml(model, css, title);
-    await app.outputExporters.deliver(ticket, {
-      filename: filenameFor(title, 'html'),
-      mimeType: 'text/html;charset=utf-8',
-      data: html,
-    });
-  } catch (err) {
-    await app.results.appendError(`HTML export failed: ${err.message}`);
-    await app.outputExporters.deliver(ticket, null);
-  }
+/**
+ * Declarative output exporter: render the result model to a standalone HTML
+ * report and return the bytes for the host to download.
+ * @param {object} app
+ * @param {{title: string}} opts
+ * @returns {Promise<{filename: string, mimeType: string, data: string}>}
+ */
+export async function exportHtml(app, { title }) {
+  const model = await app.results.getModel();
+  const css = await app.results.getStyles();
+  return {
+    filename: filenameFor(title, 'html'),
+    mimeType: 'text/html;charset=utf-8',
+    data: buildHtml(model, css, title),
+  };
 }
 
 /** Render the result model into a standalone HTML document, reusing the pane's

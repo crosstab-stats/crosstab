@@ -185,7 +185,16 @@ export async function boot(mounts) {
   // Host-side wiring for declarative plugins: reads manifest.menu, gathers each
   // action's declared inputs, opens the (host-owned) output section, and invokes
   // the plugin's named function. The PluginManager calls wire/unwire on load/unload.
-  const pluginActions = new PluginActions({ loader, menus: menus.api, results, ui: ui.api, bus });
+  const pluginActions = new PluginActions({
+    loader,
+    menus: menus.api,
+    results,
+    ui: ui.api,
+    bus,
+    importers: importers.api,
+    exporters: exporters.api,
+    outputExporters: outputExporters.api,
+  });
 
   // --- shell wiring ----------------------------------------------------------
   wireStatusLine(bus, mounts.status, webr);

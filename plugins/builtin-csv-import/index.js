@@ -19,53 +19,37 @@
 export const manifest = {
   id: 'builtin-csv-import',
   name: 'CSV Import',
-  version: '0.1.0',
+  version: '0.2.0',
   apiVersion: '0.1.0',
   category: 'Import',
   keywords: ['csv', 'text', 'delimited', 'file'],
   rPackages: [],
+  imports: [
+    {
+      label: 'CSV…',
+      extensions: ['.csv', '.tsv', '.txt'],
+      order: 10,
+      multiple: true, // batch-select several CSVs to pool them
+      parse: 'parseFile',
+    },
+  ],
 };
 
 /**
- * Register the CSV importer. The engine adds the File ▸ Import ▸ CSV menu item
- * and, on use, hands us the chosen file's bytes via the `parse` callback.
- *
- * @param {object} app - The plugin-scoped engine API (every method is async).
- */
-export async function activate(app) {
-  await app.importers.register({
-    id: 'csv',
-    label: 'CSV…',
-    extensions: ['.csv', '.tsv', '.txt'],
-    order: 10,
-    multiple: true, // batch-select several CSVs to pool them
-
-    parse: ({ ticket, name, file }) => importCsv(app, ticket, name, file),
-  });
-}
-
-/**
- * Parse the bytes and deliver the dataset back to the engine. Any failure is
- * reported in the results pane; the engine drops the ticket either way.
+ * Parse one uploaded file into a dataset (the host commits it). Declarative
+ * importer: the host opens the picker and calls this with the chosen file; we
+ * return `{variables, columns}` (or throw to abort — the host reports it).
  *
  * @param {object} app
- * @param {number} ticket - Opaque token tying this parse to the engine's request.
- * @param {string} name - Original file name (used to pick the delimiter).
- * @param {Blob} file - The uploaded file (a `File` is a `Blob`).
+ * @param {{name: string, file: Blob}} input
+ * @returns {Promise<{variables: object[], columns: object}>}
  */
-async function importCsv(app, ticket, name, file) {
-  try {
-    const text = new TextDecoder('utf-8').decode(await file.arrayBuffer());
-    const delimiter = name.toLowerCase().endsWith('.tsv') ? '\t' : ',';
-    const dataset = parseCsv(text, delimiter);
-    if (dataset.variables.length === 0) throw new Error('no columns found');
-    await app.importers.deliver(ticket, dataset);
-  } catch (err) {
-    await app.results.appendError(`CSV parse failed: ${err.message}`);
-    // Settle the ticket but abort: delivering null tells the engine not to
-    // clobber the loaded dataset with a failed/empty import.
-    await app.importers.deliver(ticket, null);
-  }
+export async function parseFile(app, { name, file }) {
+  const text = new TextDecoder('utf-8').decode(await file.arrayBuffer());
+  const delimiter = name.toLowerCase().endsWith('.tsv') ? '\t' : ',';
+  const dataset = parseCsv(text, delimiter);
+  if (dataset.variables.length === 0) throw new Error('CSV: no columns found');
+  return dataset;
 }
 
 /**

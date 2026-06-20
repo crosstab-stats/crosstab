@@ -24,6 +24,9 @@ export class PluginActions {
   #results;
   #ui;
   #bus;
+  #importers;
+  #exporters;
+  #outputExporters;
 
   /** pluginId → menu disposers, so unwiring on unload removes its menu items. */
   #disposers = new Map();
@@ -36,18 +39,26 @@ export class PluginActions {
    *   (needs the host-facing `beginAnalysis`/`endAnalysis`, not just the api).
    * @param {object} deps.ui - UiService#api.
    * @param {import('./event-bus.js').EventBus} deps.bus
+   * @param {object} deps.importers - ImportService#api (register/deliver).
+   * @param {object} deps.exporters - ExportService#api (register/deliver).
+   * @param {object} deps.outputExporters - OutputExportService#api.
    */
-  constructor({ loader, menus, results, ui, bus }) {
+  constructor({ loader, menus, results, ui, bus, importers, exporters, outputExporters }) {
     this.#loader = loader;
     this.#menus = menus;
     this.#results = results;
     this.#ui = ui;
     this.#bus = bus;
+    this.#importers = importers;
+    this.#exporters = exporters;
+    this.#outputExporters = outputExporters;
   }
 
   /** True if a manifest uses the declarative model (this module should wire it). */
   static isDeclarative(manifest) {
-    return Array.isArray(manifest?.menu) && manifest.menu.length > 0;
+    return ['menu', 'imports', 'exports', 'outputExports'].some(
+      (k) => Array.isArray(manifest?.[k]) && manifest[k].length > 0,
+    );
   }
 
   /**
@@ -61,7 +72,7 @@ export class PluginActions {
     const category =
       typeof manifest.category === 'string' && manifest.category ? manifest.category : 'Other';
     const disposers = [];
-    for (const item of manifest.menu) {
+    for (const item of manifest.menu ?? []) {
       const dispose = this.#menus.register({
         id: `${id}:${item.run}`,
         path: [category],
@@ -71,7 +82,62 @@ export class PluginActions {
       });
       if (typeof dispose === 'function') disposers.push(dispose);
     }
+
+    // Importers/exporters: bridge the declarative named function to each host
+    // service's ticket/deliver flow — invoke the function, deliver its return.
+    for (const imp of manifest.imports ?? []) {
+      const dispose = this.#importers.register({
+        id: `${id}:${imp.parse}`,
+        label: imp.label,
+        order: imp.order,
+        extensions: imp.extensions,
+        multiple: imp.multiple,
+        source: imp.source,
+        parse: (req) =>
+          this.#bridge(this.#importers, req.ticket, () =>
+            this.#loader.invoke(id, imp.parse, [{ name: req.name, file: req.file }]),
+          ),
+      });
+      if (typeof dispose === 'function') disposers.push(dispose);
+    }
+    for (const exp of manifest.exports ?? []) {
+      const dispose = this.#exporters.register({
+        id: `${id}:${exp.export}`,
+        label: exp.label,
+        order: exp.order,
+        extensions: exp.extensions,
+        export: (req) =>
+          this.#bridge(this.#exporters, req.ticket, () => this.#loader.invoke(id, exp.export, [])),
+      });
+      if (typeof dispose === 'function') disposers.push(dispose);
+    }
+    for (const exp of manifest.outputExports ?? []) {
+      const dispose = this.#outputExporters.register({
+        id: `${id}:${exp.export}`,
+        label: exp.label,
+        order: exp.order,
+        extensions: exp.extensions,
+        export: (req) =>
+          this.#bridge(this.#outputExporters, req.ticket, () =>
+            this.#loader.invoke(id, exp.export, [{ title: req.title }]),
+          ),
+      });
+      if (typeof dispose === 'function') disposers.push(dispose);
+    }
+
     this.#disposers.set(id, disposers);
+  }
+
+  /** Run a declarative parse/export function and deliver its return to the host
+   * service's ticket (delivering null on failure so the in-flight op resolves). */
+  #bridge(service, ticket, invoke) {
+    invoke()
+      .then((payload) => service.deliver(ticket, payload))
+      .catch((err) => {
+        this.#results.appendError(`Plugin failed: ${err.message}`);
+        console.error('[plugin]', err);
+        service.deliver(ticket, null);
+      });
   }
 
   /** Remove a plugin's menu items (called on unload). */

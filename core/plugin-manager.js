@@ -17,6 +17,8 @@
  * plugin disposes its broker, which removes its menu items immediately.
  */
 
+import { PluginActions } from './plugin-actions.js';
+
 const LS_DISABLED = 'crosstab.plugins.disabled';
 const LS_CATALOG = 'crosstab.plugins.catalog';
 const LS_USER = 'crosstab.plugins.user';
@@ -109,9 +111,9 @@ export class PluginManager {
       keywords: Array.isArray(manifest.keywords) ? manifest.keywords : [],
     };
     writeJSON(LS_CATALOG, this.#catalog);
-    // Declarative plugins are wired host-side (menus + invoke); legacy plugins
-    // self-register in activate(), so this is a no-op for them.
-    if (this.#actions && Array.isArray(manifest.menu) && manifest.menu.length) {
+    // Declarative plugins are wired host-side (menus/importers/exporters + invoke);
+    // legacy plugins self-register in activate(), so this is a no-op for them.
+    if (this.#actions && PluginActions.isDeclarative(manifest)) {
       this.#actions.wire(manifest, this.#originLabel(entry));
     }
     return manifest;

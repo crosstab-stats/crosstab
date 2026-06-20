@@ -29,100 +29,66 @@
 export const manifest = {
   id: 'builtin-wikipedia',
   name: 'Wikipedia Table Import',
-  version: '0.1.0',
+  version: '0.2.0',
   apiVersion: '0.1.0',
   category: 'Import',
   keywords: ['web', 'scrape', 'table', 'wikipedia'],
   rPackages: [],
+  imports: [{ label: 'Wikipedia table…', source: 'web', order: 60, parse: 'importTable' }],
 };
 
 /**
- * Register the Wikipedia importer. `source: 'web'` means no file picker — the
- * engine calls `parse({ ticket })` and we fetch the article ourselves.
- *
- * @param {object} app - The plugin-scoped engine API (every method is async).
- */
-export async function activate(app) {
-  await app.importers.register({
-    id: 'wikipedia',
-    label: 'Wikipedia table…',
-    source: 'web',
-    order: 60,
-    parse: ({ ticket }) => importWiki(app, ticket),
-  });
-}
-
-/**
- * Prompt for a page, fetch it, let the user pick a table, and deliver it as a
- * dataset. Any failure is surfaced in the results pane; the ticket is always
- * settled (with `null` on abort) so a failed scrape never clobbers the data.
+ * Declarative `web` importer: prompt for a page, fetch it, let the user pick a
+ * table, and **return** it as a dataset (or `null` if cancelled; throw on error).
  *
  * @param {object} app
- * @param {number} ticket
+ * @returns {Promise<object|null>}
  */
-async function importWiki(app, ticket) {
-  try {
-    const form = await app.ui.showForm({
-      title: 'Import a Wikipedia table',
-      hint: 'Paste an article URL or just its title.',
-      okLabel: 'Fetch',
-      fields: [
-        {
-          name: 'page',
-          label: 'Article',
-          placeholder: 'e.g. Human height by country',
-          hint: '(URL or title)',
-        },
-      ],
-    });
-    if (!form) {
-      await app.importers.deliver(ticket, null);
-      return;
-    }
-    const raw = (form.page || '').trim();
-    if (!raw) throw new Error('an article URL or title is required');
+export async function importTable(app) {
+  const form = await app.ui.showForm({
+    title: 'Import a Wikipedia table',
+    hint: 'Paste an article URL or just its title.',
+    okLabel: 'Fetch',
+    fields: [
+      { name: 'page', label: 'Article', placeholder: 'e.g. Human height by country', hint: '(URL or title)' },
+    ],
+  });
+  if (!form) return null;
+  const raw = (form.page || '').trim();
+  if (!raw) throw new Error('an article URL or title is required');
 
-    const { lang, title } = parsePage(raw);
-    const url = `https://${lang}.wikipedia.org/api/rest_v1/page/html/${encodeURIComponent(title)}`;
-    const res = await app.web.get(url);
-    if (!res.ok) {
-      throw new Error(
-        res.status === 404
-          ? `no Wikipedia article found for "${title}"`
-          : `fetch failed (HTTP ${res.status})`,
-      );
-    }
-
-    const doc = new DOMParser().parseFromString(res.text, 'text/html');
-    const tables = findDataTables(doc);
-    if (tables.length === 0) throw new Error('no data tables found on that page');
-
-    let chosen = tables[0];
-    if (tables.length > 1) {
-      const items = tables.map((t, i) => ({ value: String(i), label: describeTable(t, i) }));
-      const picked = await app.ui.selectFromList({
-        title: 'Choose a table',
-        hint: `${tables.length} tables on this page — pick one to import.`,
-        items,
-        multiple: false,
-        okLabel: 'Import',
-        searchPlaceholder: 'Filter tables…',
-      });
-      if (!picked || picked.length === 0) {
-        await app.importers.deliver(ticket, null); // cancelled
-        return;
-      }
-      chosen = tables[Number(picked[0])];
-    }
-
-    const dataset = extractTable(chosen);
-    if (dataset.variables.length === 0) throw new Error('the chosen table had no usable columns');
-    dataset.source = title.replace(/_/g, ' ');
-    await app.importers.deliver(ticket, dataset);
-  } catch (err) {
-    await app.results.appendError(`Wikipedia import failed: ${err.message}`);
-    await app.importers.deliver(ticket, null);
+  const { lang, title } = parsePage(raw);
+  const url = `https://${lang}.wikipedia.org/api/rest_v1/page/html/${encodeURIComponent(title)}`;
+  const res = await app.web.get(url);
+  if (!res.ok) {
+    throw new Error(
+      res.status === 404 ? `no Wikipedia article found for "${title}"` : `fetch failed (HTTP ${res.status})`,
+    );
   }
+
+  const doc = new DOMParser().parseFromString(res.text, 'text/html');
+  const tables = findDataTables(doc);
+  if (tables.length === 0) throw new Error('no data tables found on that page');
+
+  let chosen = tables[0];
+  if (tables.length > 1) {
+    const items = tables.map((t, i) => ({ value: String(i), label: describeTable(t, i) }));
+    const picked = await app.ui.selectFromList({
+      title: 'Choose a table',
+      hint: `${tables.length} tables on this page — pick one to import.`,
+      items,
+      multiple: false,
+      okLabel: 'Import',
+      searchPlaceholder: 'Filter tables…',
+    });
+    if (!picked || picked.length === 0) return null; // cancelled
+    chosen = tables[Number(picked[0])];
+  }
+
+  const dataset = extractTable(chosen);
+  if (dataset.variables.length === 0) throw new Error('the chosen table had no usable columns');
+  dataset.source = title.replace(/_/g, ' ');
+  return dataset;
 }
 
 /**

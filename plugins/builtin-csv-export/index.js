@@ -18,61 +18,42 @@
 export const manifest = {
   id: 'builtin-csv-export',
   name: 'CSV Export',
-  version: '0.1.0',
+  version: '0.2.0',
   apiVersion: '0.1.0',
   category: 'Export',
   keywords: ['csv', 'data'],
   rPackages: [],
+  exports: [{ label: 'CSV…', extensions: ['.csv'], order: 10, export: 'exportData' }],
 };
 
-/** @param {object} app - The plugin-scoped engine API (every method is async). */
-export async function activate(app) {
-  await app.exporters.register({
-    id: 'csv-export',
-    label: 'CSV…',
-    extensions: ['.csv'],
-    order: 10,
-    export: ({ ticket }) => exportCsv(app, ticket),
-  });
-}
-
 /**
- * Pull the columns, build a CSV string, and deliver it. Any failure is reported
- * in the results pane; the engine drops the ticket either way.
+ * Build a CSV of the current (derived) data and return the bytes for the host to
+ * download. Declarative exporter: the host runs this and downloads the result.
  *
  * @param {object} app
- * @param {number} ticket
+ * @returns {Promise<{filename: string, mimeType: string, data: string}>}
  */
-async function exportCsv(app, ticket) {
-  try {
-    const meta = await app.data.getVariableMeta();
-    if (!meta.length) throw new Error('no variables to export');
-    const names = meta.map((m) => m.name);
+export async function exportData(app) {
+  const meta = await app.data.getVariableMeta();
+  if (!meta.length) throw new Error('no variables to export');
+  const names = meta.map((m) => m.name);
 
-    const cols = await app.data.getColumns();
-    const rowCount = await app.data.getRowCount();
+  const cols = await app.data.getColumns();
+  const rowCount = await app.data.getRowCount();
 
-    const lines = [names.map(csvEscape).join(',')];
-    for (let r = 0; r < rowCount; r++) {
-      const cells = names.map((name) => {
-        const col = cols[name];
-        const v = col ? col[r] : null;
-        return csvEscape(formatCell(v));
-      });
-      lines.push(cells.join(','));
-    }
-    // CRLF line endings (RFC-4180; also the friendliest for Excel on Windows).
-    const data = lines.join('\r\n');
-
-    await app.exporters.deliver(ticket, {
-      filename: 'crosstab-export.csv',
-      mimeType: 'text/csv;charset=utf-8',
-      data,
+  const lines = [names.map(csvEscape).join(',')];
+  for (let r = 0; r < rowCount; r++) {
+    const cells = names.map((name) => {
+      const col = cols[name];
+      return csvEscape(formatCell(col ? col[r] : null));
     });
-  } catch (err) {
-    await app.results.appendError(`CSV export failed: ${err.message}`);
-    await app.exporters.deliver(ticket, null);
+    lines.push(cells.join(','));
   }
+  return {
+    filename: 'crosstab-export.csv',
+    mimeType: 'text/csv;charset=utf-8',
+    data: lines.join('\r\n'), // CRLF (RFC-4180; Excel-friendly)
+  };
 }
 
 /**

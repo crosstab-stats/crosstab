@@ -19,28 +19,25 @@
 export const manifest = {
   id: 'builtin-docx-export',
   name: 'Word Output Export',
-  version: '0.1.0',
+  version: '0.2.0',
   apiVersion: '0.1.0',
   category: 'Export',
   keywords: ['word', 'docx', 'report', 'output'],
   rPackages: ['officer', 'flextable'],
+  outputExports: [{ label: 'Word (.docx)', extensions: ['.docx'], order: 20, export: 'exportDocx' }],
 };
 
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
-/** @param {object} app */
-export async function activate(app) {
-  await app.outputExporters.register({
-    id: 'docx',
-    label: 'Word (.docx)',
-    extensions: ['.docx'],
-    order: 20,
-    export: ({ ticket, title }) => exportDocx(app, ticket, title),
-  });
-}
-
-async function exportDocx(app, ticket, title) {
-  try {
+/**
+ * Declarative output exporter: build a .docx from the result model (officer +
+ * flextable in WebR) and return the bytes for the host to download.
+ * @param {object} app
+ * @param {{title: string}} opts
+ * @returns {Promise<{filename: string, mimeType: string, data: Uint8Array}>}
+ */
+export async function exportDocx(app, { title }) {
+  {
     const model = await app.results.getModel();
 
     // Build a flat content model; stage plot PNGs (host-rasterised) into WebR FS.
@@ -74,14 +71,11 @@ async function exportDocx(app, ticket, title) {
     const bytes = await app.webr.readFile(out);
     if (!bytes || bytes.length < 4) throw new Error('the document came back empty');
 
-    await app.outputExporters.deliver(ticket, {
+    return {
       filename: filenameFor(title, 'docx'),
       mimeType: DOCX_MIME,
       data: bytes,
-    });
-  } catch (err) {
-    await app.results.appendError(`Word export failed: ${err.message}`);
-    await app.outputExporters.deliver(ticket, null);
+    };
   }
 }
 

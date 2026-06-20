@@ -25,11 +25,12 @@
 export const manifest = {
   id: 'builtin-fred',
   name: 'FRED Import',
-  version: '0.1.0',
+  version: '0.2.0',
   apiVersion: '0.1.0',
   category: 'Import',
   keywords: ['economic', 'time series', 'fed', 'fred', 'macro'],
   rPackages: [],
+  imports: [{ label: 'FRED (economic data)…', source: 'web', order: 50, parse: 'importSeries' }],
 };
 
 /** Public CORS proxy: re-serves a target URL with permissive CORS headers. */
@@ -37,69 +38,30 @@ const CORS_PROXY = 'https://corsproxy.io/?url=';
 const FRED_BASE = 'https://api.stlouisfed.org/fred';
 
 /**
- * Register the FRED importer. Because `source` is `'web'`, the engine adds the
- * menu item but opens no file picker — on use it calls our `parse` with just a
- * ticket and we fetch the series ourselves.
- *
- * @param {object} app - The plugin-scoped engine API (every method is async).
- */
-export async function activate(app) {
-  await app.importers.register({
-    id: 'fred',
-    label: 'FRED (economic data)…',
-    source: 'web',
-    order: 50,
-    parse: ({ ticket }) => importFred(app, ticket),
-  });
-}
-
-/**
- * Prompt for a series id + API key, fetch the observations through the proxy,
- * and deliver a `{ date, <series> }` dataset. Any failure is surfaced in the
- * results pane; the ticket is always settled (with `null` on abort) so a failed
- * fetch never clobbers the loaded dataset.
+ * Declarative `web` importer: no file. Prompt for a series id + API key, fetch the
+ * observations through the proxy, and **return** a `{date, <series>}` dataset (or
+ * `null` if the user cancels; throw on error — the host reports it).
  *
  * @param {object} app
- * @param {number} ticket - Opaque token tying this parse to the engine's request.
+ * @returns {Promise<object|null>}
  */
-async function importFred(app, ticket) {
-  try {
-    const form = await app.ui.showForm({
-      title: 'Import from FRED',
-      hint: 'Pull a Federal Reserve economic time series by its id.',
-      okLabel: 'Fetch',
-      fields: [
-        {
-          name: 'series',
-          label: 'Series ID',
-          placeholder: 'e.g. GDP, UNRATE, CPIAUCSL',
-          hint: '(from fred.stlouisfed.org)',
-        },
-        {
-          name: 'apiKey',
-          label: 'FRED API key',
-          type: 'password',
-          hint: '(free at fredaccount.stlouisfed.org)',
-        },
-      ],
-    });
-    if (!form) {
-      // User cancelled — settle the ticket without committing anything.
-      await app.importers.deliver(ticket, null);
-      return;
-    }
+export async function importSeries(app) {
+  const form = await app.ui.showForm({
+    title: 'Import from FRED',
+    hint: 'Pull a Federal Reserve economic time series by its id.',
+    okLabel: 'Fetch',
+    fields: [
+      { name: 'series', label: 'Series ID', placeholder: 'e.g. GDP, UNRATE, CPIAUCSL', hint: '(from fred.stlouisfed.org)' },
+      { name: 'apiKey', label: 'FRED API key', type: 'password', hint: '(free at fredaccount.stlouisfed.org)' },
+    ],
+  });
+  if (!form) return null; // cancelled
 
-    const series = (form.series || '').trim().toUpperCase();
-    const apiKey = (form.apiKey || '').trim();
-    if (!series) throw new Error('a series id is required');
-    if (!apiKey) throw new Error('a FRED API key is required');
-
-    const dataset = await fetchSeries(app, series, apiKey);
-    await app.importers.deliver(ticket, dataset);
-  } catch (err) {
-    await app.results.appendError(`FRED import failed: ${err.message}`);
-    await app.importers.deliver(ticket, null);
-  }
+  const series = (form.series || '').trim().toUpperCase();
+  const apiKey = (form.apiKey || '').trim();
+  if (!series) throw new Error('a series id is required');
+  if (!apiKey) throw new Error('a FRED API key is required');
+  return fetchSeries(app, series, apiKey);
 }
 
 /**

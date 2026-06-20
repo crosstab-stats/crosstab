@@ -21,17 +21,6 @@
  */
 
 /** @type {import('../../core/loader.js').PluginManifest} */
-export const manifest = {
-  id: 'builtin-haven-import',
-  name: 'SPSS/Stata/SAS Import',
-  version: '0.1.0',
-  apiVersion: '0.1.0',
-  category: 'Import',
-  keywords: ['spss', 'stata', 'sas', 'sav', 'dta', 'sas7bdat'],
-  // Installed on first use rather than up front (haven is a heavy download).
-  rPackages: [],
-};
-
 /** Map a file extension to the haven reader function that handles it. */
 const READERS = {
   '.sav': 'read_sav',
@@ -44,41 +33,53 @@ const READERS = {
 
 const OUT_PATH = '/tmp/ct_haven_out.parquet';
 
-/** @param {object} app */
-export async function activate(app) {
-  await app.importers.register({
-    id: 'haven',
-    label: 'SPSS / Stata / SAS…',
-    extensions: Object.keys(READERS),
-    order: 20,
-    multiple: true, // batch-select several files (e.g. GSS years) to pool them
-    parse: ({ ticket, name, file }) => importHaven(app, ticket, name, file, false),
-  });
-  // Filtered variant: read the variable catalog first and let the user pick a
-  // subset, so a file too big to load whole (the full GSS exceeds R's ~4 GB)
-  // still imports — only the chosen columns are materialised.
-  await app.importers.register({
-    id: 'haven-filtered',
-    label: 'SPSS / Stata / SAS — choose variables…',
-    extensions: Object.keys(READERS),
-    order: 21,
-    parse: ({ ticket, name, file }) => importHaven(app, ticket, name, file, true),
-  });
-}
+export const manifest = {
+  id: 'builtin-haven-import',
+  name: 'SPSS/Stata/SAS Import',
+  version: '0.2.0',
+  apiVersion: '0.1.0',
+  category: 'Import',
+  keywords: ['spss', 'stata', 'sas', 'sav', 'dta', 'sas7bdat'],
+  // Installed on first use rather than up front (haven is a heavy download).
+  rPackages: [],
+  imports: [
+    {
+      label: 'SPSS / Stata / SAS…',
+      extensions: Object.keys(READERS),
+      order: 20,
+      multiple: true, // batch-select several files (e.g. GSS years) to pool them
+      parse: 'importWhole',
+    },
+    // Filtered variant: read the variable catalog first and let the user pick a
+    // subset, so a file too big to load whole (the full GSS exceeds R's ~4 GB)
+    // still imports — only the chosen columns are materialised.
+    {
+      label: 'SPSS / Stata / SAS — choose variables…',
+      extensions: Object.keys(READERS),
+      order: 21,
+      parse: 'importChoose',
+    },
+  ],
+};
+
+/** Declarative importer entry points: parse the whole file, or pick columns. */
+export const importWhole = (app, { name, file }) => importHaven(app, name, file, false);
+export const importChoose = (app, { name, file }) => importHaven(app, name, file, true);
 
 /**
- * Parse a statistical-software file via R `haven` and deliver `{variables,
- * parquet}` to the engine. When `pickVariables` is set, first read the variable
- * catalog (cheap, zero data rows) and let the user choose a subset, then read
- * only those columns (`col_select`) — the memory-bounded path for huge files.
+ * Parse a statistical-software file via R `haven` and **return** `{variables,
+ * parquet}` (or `null` if the user cancels the variable pick; throw on error).
+ * When `pickVariables` is set, first read the variable catalog (cheap, zero data
+ * rows) and let the user choose a subset, then read only those columns
+ * (`col_select`) — the memory-bounded path for huge files.
  *
  * @param {object} app
- * @param {number} ticket
  * @param {string} name
  * @param {Blob} file - The uploaded file (a `File` is a `Blob`).
  * @param {boolean} pickVariables
+ * @returns {Promise<object|null>}
  */
-async function importHaven(app, ticket, name, file, pickVariables) {
+async function importHaven(app, name, file, pickVariables) {
   let mounted = null;
   try {
     const ext = extensionOf(name);
@@ -111,10 +112,7 @@ async function importHaven(app, ticket, name, file, pickVariables) {
         okLabel: 'Import selected',
         searchPlaceholder: 'Filter by name or label…',
       });
-      if (!chosen || chosen.length === 0) {
-        await app.importers.deliver(ticket, null); // cancelled / nothing picked → abort
-        return;
-      }
+      if (!chosen || chosen.length === 0) return null; // cancelled / nothing picked → abort
       cols = chosen;
     }
 
@@ -127,10 +125,9 @@ async function importHaven(app, ticket, name, file, pickVariables) {
     const variables = mapVariables(JSON.parse(json));
 
     const parquet = await app.webr.readFile(OUT_PATH);
-    await app.importers.deliver(ticket, { variables, parquet });
+    return { variables, parquet };
   } catch (err) {
-    await app.results.appendError(`Import of "${name}" failed: ${friendlyError(err.message)}`);
-    await app.importers.deliver(ticket, null); // settle the ticket; abort (don't clobber)
+    throw new Error(friendlyError(err.message));
   } finally {
     if (mounted) {
       try {
