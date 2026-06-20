@@ -58,6 +58,7 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-plots/index.js',
   './plugins/builtin-bootstrap/index.js',
   './plugins/builtin-compare/index.js',
+  './plugins/builtin-nonparametric/index.js',
 ];
 
 /**
