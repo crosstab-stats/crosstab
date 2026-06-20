@@ -50,6 +50,18 @@ function rLit(s) {
   return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
+/** Coerce a captured-output datum to a string without throwing. WebR usually
+ * gives string `data`, but some conditions/warnings carry a non-stringable object
+ * (coercing it throws "Cannot convert object to primitive value"). */
+function safeStr(x) {
+  if (typeof x === 'string') return x;
+  try {
+    return String(x);
+  } catch {
+    return '';
+  }
+}
+
 /**
  * The union of all columns referenced by `variables`-kind inputs, deduped — the
  * set `df` must contain so the per-input aliases can slice from it.
@@ -343,8 +355,8 @@ export class WebRManager {
         const stdout = [];
         const stderr = [];
         for (const msg of capture.output) {
-          if (msg.type === 'stderr') stderr.push(msg.data);
-          else stdout.push(msg.data);
+          if (msg.type === 'stderr') stderr.push(safeStr(msg.data));
+          else stdout.push(safeStr(msg.data));
         }
 
         return {
@@ -384,9 +396,7 @@ export class WebRManager {
           `source(${rLit(CONSOLE_PATH)}, echo = FALSE, print.eval = TRUE, max.deparse.length = Inf, local = FALSE)`,
           { env: webR.objs.globalEnv, captureGraphics: true },
         );
-        const out = capture.output
-          .map((m) => (typeof m.data === 'string' ? m.data : String(m.data)))
-          .join('\n');
+        const out = capture.output.map((m) => safeStr(m.data)).join('\n');
         const hadErr = capture.output.some((m) => m.type === 'stderr');
         return { output: out, error: hadErr, images: capture.images ?? [] };
       } catch (err) {
