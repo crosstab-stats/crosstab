@@ -21,19 +21,13 @@ export const manifest = {
   version: '0.1.0',
   apiVersion: '0.1.0',
   category: 'Resampling',
+  menu: 'Bootstrap the mean…',
   keywords: ['resample', 'bootstrap', 'ci', 'confidence'],
   rPackages: [], // base R (sample/replicate/quantile)
 };
 
-/** @param {object} app */
-export async function activate(app) {
-  await app.menus.register({
-    id: 'builtin-bootstrap:mean',
-    label: 'Bootstrap the mean…',
-    order: 10,
-    command: () => openBootstrap(app),
-  });
-}
+/** Entry point: the host adds the menu item (manifest.menu) and calls this. */
+export const run = openBootstrap;
 
 async function openBootstrap(app) {
   const chosen = await app.ui.selectVariables({

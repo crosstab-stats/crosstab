@@ -136,7 +136,19 @@
 
             case 'activate':
               try {
-                await pluginModule.activate(makeApp(msg.plugin));
+                const app = makeApp(msg.plugin);
+                if (typeof pluginModule.activate === 'function') {
+                  // Advanced: the plugin wires itself up (multiple menus, importers,
+                  // exporters, event subscriptions, …).
+                  await pluginModule.activate(app);
+                } else {
+                  // Simple: a single-item plugin just exports run(). The host wires
+                  // one menu item (filed under its category by the broker) → run().
+                  const m = pluginModule.manifest || {};
+                  const item = { label: m.menu || m.name || 'Run', command: () => pluginModule.run(app) };
+                  if (typeof m.menuOrder === 'number') item.order = m.menuOrder;
+                  await app.menus.register(item);
+                }
                 post({ t: 'activated', ok: true });
               } catch (err) {
                 post({ t: 'activated', ok: false, error: String(err && err.message || err) });
@@ -176,8 +188,11 @@
             const blob = new Blob([code], { type: 'text/javascript' });
             url = URL.createObjectURL(blob);
             pluginModule = await import(url);
-            if (!pluginModule.manifest || typeof pluginModule.activate !== 'function') {
-              throw new Error('plugin must export `manifest` and `activate`');
+            if (
+              !pluginModule.manifest ||
+              (typeof pluginModule.activate !== 'function' && typeof pluginModule.run !== 'function')
+            ) {
+              throw new Error('plugin must export `manifest` and either `activate` or `run`');
             }
             post({ t: 'manifest', ok: true, manifest: pluginModule.manifest });
           } catch (err) {

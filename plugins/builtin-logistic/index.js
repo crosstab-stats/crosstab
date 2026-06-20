@@ -21,19 +21,14 @@ export const manifest = {
   version: '0.1.0',
   apiVersion: '0.1.0',
   category: 'Regression',
+  menu: 'Binary Logistic…',
+  menuOrder: 20,
   keywords: ['glm', 'logistic', 'odds', 'binary', 'regression'],
   rPackages: [], // base R `glm`
 };
 
-/** @param {object} app */
-export async function activate(app) {
-  await app.menus.register({
-    id: 'builtin-logistic:open',
-    label: 'Binary Logistic…',
-    order: 20,
-    command: () => openLogistic(app),
-  });
-}
+/** Entry point: the host adds the menu item (manifest.menu) and calls this. */
+export const run = openLogistic;
 
 /** Pick the dependent (binary), then the predictors, then run. */
 async function openLogistic(app) {

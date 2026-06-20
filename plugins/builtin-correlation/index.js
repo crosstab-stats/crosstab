@@ -20,19 +20,13 @@ export const manifest = {
   version: '0.1.0',
   apiVersion: '0.1.0',
   category: 'Correlation',
+  menu: 'Bivariate…',
   keywords: ['pearson', 'correlation', 'bivariate', 'r'],
   rPackages: [], // base R (cor.test) is enough
 };
 
-/** @param {object} app */
-export async function activate(app) {
-  await app.menus.register({
-    id: 'builtin-correlation:open',
-    label: 'Bivariate…',
-    order: 10,
-    command: () => openCorrelation(app),
-  });
-}
+/** Entry point: the host adds the menu item (manifest.menu) and calls this. */
+export const run = openCorrelation;
 
 /** Ask for numeric variables (need at least two), then run. */
 async function openCorrelation(app) {

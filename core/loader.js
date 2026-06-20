@@ -54,6 +54,20 @@ const PLUGIN_HOST_URL = './plugin-host.html';
  * @property {string[]} [keywords] - Extra search terms for the plugin manager, so
  *   a plugin is findable by what it does even if its name doesn't say (e.g. a
  *   regression plugin keyworded with `['ols', 'linear']`).
+ * @property {string} [menu] - For a **declarative single-item plugin** (one that
+ *   exports `run` instead of `activate`): the menu item's label. Defaults to
+ *   `name`. The item is filed under `category` automatically.
+ * @property {number} [menuOrder] - Optional sort weight for that item within its
+ *   category menu (lower first; default 100).
+ *
+ * ## Entry point: `run` (simple) or `activate` (advanced)
+ * A plugin exports **either**:
+ *  - `run(app)` — the simplest form: the host adds one menu item (label from
+ *    `menu`/`name`, filed under `category`) and calls `run(app)` when clicked. No
+ *    boilerplate. This is what the in-app creator templates use.
+ *  - `activate(app)` — full control: register several menu items, an importer/
+ *    exporter, event handlers, etc. Use this when one menu item → one function is
+ *    not enough (e.g. the Plots plugin's five charts).
  */
 
 /**

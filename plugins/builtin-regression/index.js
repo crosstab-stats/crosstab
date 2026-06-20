@@ -18,19 +18,14 @@ export const manifest = {
   version: '0.1.0',
   apiVersion: '0.1.0',
   category: 'Regression',
+  menu: 'Linear…',
+  menuOrder: 10,
   keywords: ['lm', 'linear', 'ols', 'regression'],
   rPackages: [], // base R `lm`
 };
 
-/** @param {object} app */
-export async function activate(app) {
-  await app.menus.register({
-    id: 'builtin-regression:linear',
-    label: 'Linear…',
-    order: 10,
-    command: () => openRegression(app),
-  });
-}
+/** Entry point: the host adds the menu item (manifest.menu) and calls this. */
+export const run = openRegression;
 
 /** Pick the dependent variable, then the independents, then run. */
 async function openRegression(app) {

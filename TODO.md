@@ -729,6 +729,15 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       `loader.loadSource`, untrusted). Authored plugins **persist in localStorage**
       (`kind:'authored'`, source stored) so they survive a restart and re-open in
       the editor (✎ in the manager) to edit in place; removable like any user plugin.
+  - **Simplest entry point: `run`, no `activate`.** A single-item plugin just
+    exports `run(app)` and declares `manifest.menu` (label) + `menuOrder`; the host
+    adds the menu item (under its category) and calls `run` when clicked — no
+    boilerplate registration. `activate(app)` is still there for plugins that need
+    more (the Plots plugin's 5 items; importers/exporters). Enforced in
+    `plugin-host.html` (a plugin must export `run` **or** `activate`). The 7
+    single-item built-in analyses were migrated to `run`; the creator templates use
+    it. **Verified in Chrome:** a `run`-only plugin loads, files under its category,
+    and runs.
   - **Templates pre-wire the plumbing** (manifest + menu + variable picker +
     output channels), so the author writes only the analysis: **Blank**,
     **One-variable analysis** (numeric picker → R summary → table), **Two-group

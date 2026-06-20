@@ -161,27 +161,22 @@ function genId() {
 // contains no backticks or `${}` — which is what lets these be authored as plain
 // template literals here without their contents being interpolated.
 
-/** Common manifest + activate header. */
+/** Common manifest header. The plugin just exports run(app) below — the host
+ * adds the menu item (under `category`) and calls run() when it's clicked. */
 function header(id, name, category, keywords, rPackages = []) {
   return `export const manifest = {
   id: '${id}',
   name: '${name}',
   version: '0.1.0',
   apiVersion: '0.1.0',
-  category: '${category}',
+  category: '${category}',   // filed here in the menu + grouped here in the manager
+  menu: '${name}…',          // your menu item's label
   keywords: [${keywords.map((k) => `'${k}'`).join(', ')}],
   rPackages: [${rPackages.map((p) => `'${p}'`).join(', ')}], // R packages to install on load
 };
 
-// activate() runs once when the plugin loads — register your menu item(s) here.
-// You choose only the label; the host files your item under your category
-// (manifest.category above) — the same place the plugin manager lists it.
-export async function activate(app) {
-  await app.menus.register({
-    label: '${name}…',       // the menu item the user clicks
-    command: () => run(app),
-  });
-}
+// run(app) is your plugin's entry point — the host calls it when the user clicks
+// your menu item. (For multiple items, export activate(app) instead.)
 `;
 }
 
@@ -217,7 +212,7 @@ const TEMPLATES = [
     build: (id, name) =>
       header(id, name, 'Other', []) +
       `
-async function run(app) {
+export async function run(app) {
   await app.results.beginSection('${name}');
   await app.results.appendText('<p>Hello from your plugin! Edit run() to do something.</p>');
 }
@@ -229,7 +224,7 @@ async function run(app) {
     build: (id, name) =>
       header(id, name, 'Descriptive Statistics', ['summary']) +
       `
-async function run(app) {
+export async function run(app) {
   // 1) Ask the user to choose numeric variable(s).
   const vars = await app.ui.selectVariables({
     title: '${name}',
@@ -267,7 +262,7 @@ async function run(app) {
     build: (id, name) =>
       header(id, name, 'Comparison', ['compare', 'means', 'group']) +
       `
-async function run(app) {
+export async function run(app) {
   // Pick a numeric outcome, then a grouping variable.
   const ys = await app.ui.selectVariables({
     title: '${name} — outcome',
@@ -310,7 +305,7 @@ async function run(app) {
     build: (id, name) =>
       header(id, name, 'Graphs', ['plot', 'histogram'], ['svglite']) +
       `
-async function run(app) {
+export async function run(app) {
   const vars = await app.ui.selectVariables({
     title: '${name}',
     hint: 'Choose a numeric variable.',

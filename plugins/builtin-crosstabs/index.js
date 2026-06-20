@@ -19,19 +19,14 @@ export const manifest = {
   version: '0.1.0',
   apiVersion: '0.1.0',
   category: 'Descriptive Statistics',
+  menu: 'Crosstabs…',
+  menuOrder: 30,
   keywords: ['chi-square', 'contingency', 'crosstab', 'association'],
   rPackages: [], // base R `table` + `chisq.test`
 };
 
-/** @param {object} app */
-export async function activate(app) {
-  await app.menus.register({
-    id: 'builtin-crosstabs:open',
-    label: 'Crosstabs…',
-    order: 30,
-    command: () => openCrosstabs(app),
-  });
-}
+/** Entry point: the host adds the menu item (manifest.menu) and calls this. */
+export const run = openCrosstabs;
 
 /** Pick a row variable, then a column variable, then run. */
 async function openCrosstabs(app) {

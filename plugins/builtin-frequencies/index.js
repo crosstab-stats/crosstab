@@ -30,25 +30,15 @@ export const manifest = {
   version: '0.1.0',
   apiVersion: '0.1.0',
   category: 'Descriptive Statistics',
+  menu: 'Frequencies…',
+  menuOrder: 10,
   keywords: ['frequency', 'counts', 'distribution', 'table'],
   // No external R packages: base R `table()` is enough for frequencies.
   rPackages: [],
 };
 
-/**
- * Activate the plugin: register the menu item. The returned menu disposer is
- * tracked by the loader, so no explicit `deactivate` is needed.
- *
- * @param {object} app - The plugin-scoped engine API (every method is async).
- */
-export async function activate(app) {
-  await app.menus.register({
-    id: 'builtin-frequencies:open',
-    label: 'Frequencies…',
-    order: 10,
-    command: () => openFrequencies(app),
-  });
-}
+/** Entry point: the host adds the menu item (manifest.menu) and calls this. */
+export const run = openFrequencies;
 
 /**
  * Ask the engine to show the variable picker, then run the analysis on the

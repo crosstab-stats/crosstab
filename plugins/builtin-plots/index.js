@@ -28,7 +28,8 @@ const ACCENT = '#2980b9';
 export async function activate(app) {
   const reg = (id, label, order, fn) =>
     app.menus.register({
-      id: `builtin-plots:${id}`,      label,
+      id: `builtin-plots:${id}`,
+      label,
       order,
       command: () => fn(app),
     });
