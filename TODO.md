@@ -137,9 +137,14 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Hardening before any public/shared deploy
 
-- [ ] **Replace the HTML sanitiser with a vetted library (DOMPurify).**
-      `core/sanitize-html.js` is a conservative allowlist starter, not an audited
-      XSS defence. All plugin output is untrusted, so this matters.
+- [~] **Replace the HTML sanitiser with a vetted library (DOMPurify).**
+      `core/sanitize-html.js` is a conservative allowlist. *Hardened:*
+      no `on*`/URL attributes, `style` value-filtered against URL/CSS-escape/
+      expression tricks, fragment size-capped. Still not a fully audited XSS library
+      — now that external (untrusted) plugins can be loaded, **vendor + pin
+      DOMPurify** and add a **host-page CSP** (tuned around the WebR/DuckDB CDNs +
+      blob workers) as defence-in-depth, so a sanitiser miss can't execute in the
+      host. The plugin *sandbox* CSP is already in place (`plugin-host.html`).
 - [ ] **Pin the WebR version and vendor its assets.** `core/webr-manager.js`
       currently loads `…/latest/webr.mjs` for convenience. Pin a version and
       self-host for reproducibility + offline PWA use.
@@ -779,8 +784,37 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     Convention documented in the `manifest.category` doc. (Importers/exporters stay
     under the host-managed File ▸ Import / Export — File is their conventional home;
     their category still drives the manager section.)
-  - *Deferred:* manage *installed third-party* plugins too (today the catalog is
-    the built-in URL set); a "reload plugin" action for the plugin-creator loop.
+  - **Load external plugins (URL + file) — BUILT, with the sandbox hardened.** The
+    manager can now add third-party plugins from outside the built-in set, and they
+    persist across restarts (`crosstab.plugins.user` in localStorage):
+    - **Add from URL** (`addFromUrl`) — re-fetched each boot; the author must
+      CORS-enable a cross-origin URL (there's no proxy). Stored as `{kind:'url',url}`.
+    - **Add from file** (`addFromFile`, native file picker) — the **source is
+      persisted** (`{kind:'file',name,source}`) so it reloads with no file present.
+    - User plugins are listed by category alongside the built-ins (origin tag
+      `url`/`file`), each with a **✕ remove** (uninstall); built-ins stay
+      unremovable. `loader.loadSource(code,label,{trusted})` is the new no-fetch
+      entry path; the loader keys catalog/disabled/user generically (built-in key =
+      url; file key = `local:<uuid>`).
+    - **Untrusted by default + hardened boundary** (the safe-without-a-store
+      posture). Externally-loaded plugins are `trusted:false`:
+      1. **Sandbox CSP** (`plugin-host.html`): `connect-src 'none'` so a plugin
+         has **no network of its own** — it can't silently exfiltrate.
+      2. **Network consent gate** (`loader.#gatedServices`): an untrusted plugin's
+         *only* network path, `app.web.get`, prompts the user on first use
+         (`confirmPluginNetwork` in app.js); decision cached per instance. Built-ins
+         stay ungated.
+      3. **Sanitiser hardened** (`core/sanitize-html.js`): killed a CSS-escape
+         bypass (`u\72l(`→`url(`) and added a fragment size cap; full DOMPurify +
+         a host-page CSP remain the production upgrade (see Hardening).
+    - **Verified in Chrome:** file-add loads + survives reload from stored source +
+      removes cleanly; URL-add (same-origin) loads + persists as a re-fetchable URL;
+      an untrusted plugin's own `fetch` is blocked **and** its `app.web.get` fired
+      the consent dialog and honoured Block; manager dialog shows the Add buttons +
+      trust notice + per-plugin origin/remove.
+  - *Deferred:* a "reload plugin" action for the plugin-creator loop; optional
+    integrity-hash pinning for URL plugins (so a remote plugin can't silently
+    change); per-domain (not per-plugin) network consent.
 - [ ] **Direct R interface / console.** The power-user escape hatch: when the
       canned analyses don't cover a need, drop to R directly. Framing: a plugin
       that does **variable selection + load**, then hands the user an **interactive

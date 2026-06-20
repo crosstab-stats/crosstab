@@ -1,34 +1,44 @@
 /**
  * @file plugin-manager.js
- * Enable/disable the installed plugins — **host-owned** management of the plugin
- * lifecycle (it drives the loader and persists which plugins are off; a sandboxed
- * plugin has no handle on the loader or other plugins, so this can't be a plugin).
+ * Manage the installed plugins — **host-owned** control of the plugin lifecycle
+ * (it drives the loader and persists state; a sandboxed plugin has no handle on
+ * the loader or its peers, so this can't itself be a plugin).
  *
- * It owns the catalog of known plugin URLs (the built-in set), loads the enabled
- * ones at boot, and exposes **Edit ▸ Plugins…** — a dialog where each plugin can
- * be toggled. Toggling is **live**: disabling unloads the plugin (its broker
- * disposer removes its menu items/exporters immediately); enabling loads it. The
- * disabled set persists in localStorage, so choices survive a reload.
+ * Two kinds of plugin:
+ *  - **Built-in** — the URLs shipped with the app (`urls`); always trusted.
+ *  - **User** — added at runtime, either from a **URL** (re-fetched each boot; the
+ *    author must CORS-enable it) or from a **file** (the source is persisted in
+ *    localStorage so it survives a restart). User plugins are **untrusted**: the
+ *    loader gives them a network-gated `app.web` (consent on first request) and
+ *    the sandbox CSP blocks any other network.
+ *
+ * Exposes **Edit ▸ Plugins…**: a searchable, category-grouped dialog to toggle,
+ * add (URL / file), and remove plugins. Toggling/removing is live — unloading a
+ * plugin disposes its broker, which removes its menu items immediately.
  */
 
 const LS_DISABLED = 'crosstab.plugins.disabled';
 const LS_CATALOG = 'crosstab.plugins.catalog';
+const LS_USER = 'crosstab.plugins.user';
 
 export class PluginManager {
   /** @type {import('./loader.js').PluginLoader} */
   #loader;
-  /** Known plugin entry-module URLs (the built-in set). @type {string[]} */
+  /** Built-in plugin entry-module URLs. @type {string[]} */
   #urls;
   /** @type {import('./menu-shell.js').MenuShell} */
   #menus;
   /** ResultsPane#api, for load errors. @type {{appendError: Function}} */
   #results;
 
-  /** Disabled plugin URLs (persisted). @type {Set<string>} */
+  /** Disabled plugin keys (persisted). @type {Set<string>} */
   #disabled;
-  /** url → {id, name} learned when a plugin loads (persisted), so disabled
-   * (unloaded) plugins still show a friendly name in the dialog. @type {Object} */
+  /** key → {id, name, category, keywords} learned when a plugin loads (persisted),
+   * so disabled/unloaded plugins still show details in the dialog. @type {Object} */
   #catalog;
+  /** User-added plugins (persisted): `{key, kind:'url'|'file', url?, name?, source?}`.
+   * @type {Array<object>} */
+  #user;
 
   /**
    * @param {Object} deps
@@ -44,9 +54,9 @@ export class PluginManager {
     this.#results = results;
     this.#disabled = new Set(readJSON(LS_DISABLED, []));
     this.#catalog = readJSON(LS_CATALOG, {});
+    this.#user = Array.isArray(readJSON(LS_USER, [])) ? readJSON(LS_USER, []) : [];
   }
 
-  /** Register the Edit ▸ Plugins… entry. */
   activate() {
     this.#menus.register({
       id: 'core:plugins',
@@ -57,67 +67,132 @@ export class PluginManager {
     });
   }
 
-  /** Load every enabled plugin (skips the disabled set). Call once at boot. */
+  /** Every known plugin as a load descriptor (built-ins first, then user). */
+  #entries() {
+    const builtins = this.#urls.map((url) => ({ key: url, kind: 'url', url, builtin: true }));
+    return [...builtins, ...this.#user];
+  }
+
+  /** Load every enabled plugin (built-in + user). Call once at boot. */
   async loadEnabled() {
-    for (const url of this.#urls) {
-      if (this.#disabled.has(url)) continue;
-      await this.#loadOne(url);
+    for (const e of this.#entries()) {
+      if (this.#disabled.has(e.key)) continue;
+      await this.#loadEntry(e);
     }
   }
 
-  async #loadOne(url) {
+  /** Load one entry, recording its manifest in the catalog. Resolves the manifest,
+   * or throws (callers that want best-effort use {@link #loadEntry}). */
+  async #loadEntryStrict(entry) {
+    const trusted = !!entry.builtin;
+    const manifest =
+      entry.kind === 'file'
+        ? await this.#loader.loadSource(entry.source, entry.name || entry.key, { trusted })
+        : await this.#loader.load(entry.url, { trusted });
+    this.#catalog[entry.key] = {
+      id: manifest.id,
+      name: manifest.name,
+      category: typeof manifest.category === 'string' ? manifest.category : '',
+      keywords: Array.isArray(manifest.keywords) ? manifest.keywords : [],
+    };
+    writeJSON(LS_CATALOG, this.#catalog);
+    return manifest;
+  }
+
+  /** Best-effort load (boot/toggle): surfaces errors, never throws. */
+  async #loadEntry(entry) {
     try {
-      const manifest = await this.#loader.load(url);
-      this.#catalog[url] = {
-        id: manifest.id,
-        name: manifest.name,
-        category: typeof manifest.category === 'string' ? manifest.category : '',
-        keywords: Array.isArray(manifest.keywords) ? manifest.keywords : [],
-      };
-      writeJSON(LS_CATALOG, this.#catalog);
-      return true;
+      return await this.#loadEntryStrict(entry);
     } catch (err) {
-      console.error(`Failed to load plugin ${url}`, err);
-      this.#results.appendError(`Failed to load plugin ${url}: ${err.message}`);
-      return false;
+      console.error(`Failed to load plugin ${entry.key}`, err);
+      this.#results.appendError(`Failed to load plugin ${entry.name || entry.key}: ${err.message}`);
+      return null;
     }
   }
 
-  /** Known plugins for the dialog: every URL with its enabled/loaded state, plus
-   * the category/keywords cached from the manifest (for grouping + search). */
-  list() {
-    const loaded = new Set(this.#loader.list().map((m) => m.id));
-    return this.#urls.map((url) => {
-      const cat = this.#catalog[url];
-      return {
-        url,
-        id: cat?.id ?? null,
-        name: cat?.name ?? prettyName(url),
-        category: cat?.category || 'Other',
-        keywords: cat?.keywords ?? [],
-        enabled: !this.#disabled.has(url),
-        loaded: cat?.id ? loaded.has(cat.id) : false,
-      };
-    });
+  /** Add a plugin from a URL (untrusted, re-fetched each boot). Throws if it
+   * doesn't load, so nothing is persisted on failure. */
+  async addFromUrl(url) {
+    url = String(url || '').trim();
+    if (!url) throw new Error('Enter a plugin URL.');
+    if (this.#entries().some((e) => e.key === url)) throw new Error('That URL is already added.');
+    const entry = { key: url, kind: 'url', url };
+    const manifest = await this.#loadEntryStrict(entry);
+    this.#user.push(entry);
+    writeJSON(LS_USER, this.#user);
+    return manifest;
+  }
+
+  /** Add a plugin from a local file (untrusted, source persisted). */
+  async addFromFile(file) {
+    const source = await file.text();
+    const entry = { key: `local:${crypto.randomUUID()}`, kind: 'file', name: file.name, source };
+    const manifest = await this.#loadEntryStrict(entry);
+    this.#user.push(entry);
+    writeJSON(LS_USER, this.#user);
+    return manifest;
+  }
+
+  /** Remove a user plugin entirely (unload + forget). Built-ins can't be removed. */
+  async removePlugin(key) {
+    const i = this.#user.findIndex((e) => e.key === key);
+    if (i < 0) return;
+    const id = this.#catalog[key]?.id;
+    if (id) {
+      try {
+        await this.#loader.unload(id);
+      } catch {
+        /* ignore */
+      }
+    }
+    this.#user.splice(i, 1);
+    this.#disabled.delete(key);
+    delete this.#catalog[key];
+    writeJSON(LS_USER, this.#user);
+    writeJSON(LS_DISABLED, [...this.#disabled]);
+    writeJSON(LS_CATALOG, this.#catalog);
   }
 
   /** Turn a plugin on/off — persists and applies live (load / unload). */
-  async setEnabled(url, enabled) {
+  async setEnabled(key, enabled) {
     if (enabled) {
-      this.#disabled.delete(url);
+      this.#disabled.delete(key);
       writeJSON(LS_DISABLED, [...this.#disabled]);
-      if (!this.#isLoaded(url)) await this.#loadOne(url);
+      if (!this.#isLoaded(key)) {
+        const entry = this.#entries().find((e) => e.key === key);
+        if (entry) await this.#loadEntry(entry);
+      }
     } else {
-      this.#disabled.add(url);
+      this.#disabled.add(key);
       writeJSON(LS_DISABLED, [...this.#disabled]);
-      const id = this.#catalog[url]?.id;
+      const id = this.#catalog[key]?.id;
       if (id) await this.#loader.unload(id);
     }
   }
 
-  #isLoaded(url) {
-    const id = this.#catalog[url]?.id;
+  #isLoaded(key) {
+    const id = this.#catalog[key]?.id;
     return id ? this.#loader.list().some((m) => m.id === id) : false;
+  }
+
+  /** All known plugins for the dialog, with state + origin. */
+  list() {
+    const loaded = new Set(this.#loader.list().map((m) => m.id));
+    return this.#entries().map((e) => {
+      const cat = this.#catalog[e.key];
+      return {
+        key: e.key,
+        builtin: !!e.builtin,
+        id: cat?.id ?? null,
+        name: cat?.name ?? e.name ?? prettyName(e.url || e.key),
+        category: cat?.category || 'Other',
+        keywords: cat?.keywords ?? [],
+        enabled: !this.#disabled.has(e.key),
+        loaded: cat?.id ? loaded.has(cat.id) : false,
+        removable: !e.builtin,
+        origin: e.builtin ? 'built-in' : e.kind, // 'url' | 'file'
+      };
+    });
   }
 
   // --- dialog ----------------------------------------------------------------
@@ -130,14 +205,24 @@ export class PluginManager {
     form.className = 'ct-dialog__form';
     form.innerHTML = `
       <h2 class="ct-dialog__title">Plugins</h2>
-      <p class="ct-dialog__hint">Turn plugins on or off — disabling one removes its
-        menu items right away; choices are saved across sessions. Grouped by category;
-        search matches names <em>and</em> keywords.</p>
+      <p class="ct-dialog__hint">Toggle, add, or remove plugins — changes are live and
+        saved across sessions. <strong>Added plugins run sandboxed</strong> (no network
+        of their own) but can read the data you load here, so only add ones you trust.</p>
+      <div class="ct-plugins__add">
+        <button type="button" class="ct-plugins__addbtn" data-act="url">+ Add from URL…</button>
+        <button type="button" class="ct-plugins__addbtn" data-act="file">+ Add from file…</button>
+      </div>
       <input type="search" class="ct-plugins__search" placeholder="Search plugins…" autocomplete="off">
+      <div class="ct-plugins__err" hidden></div>
       <div class="ct-plugins"></div>
       <menu class="ct-dialog__buttons"><button value="close" type="submit" class="ct-dialog__primary">Done</button></menu>`;
     const box = form.querySelector('.ct-plugins');
     const search = form.querySelector('.ct-plugins__search');
+    const errEl = form.querySelector('.ct-plugins__err');
+    const setErr = (msg) => {
+      errEl.textContent = msg || '';
+      errEl.hidden = !msg;
+    };
 
     const renderList = () => {
       const q = search.value.trim().toLowerCase();
@@ -150,11 +235,33 @@ export class PluginManager {
       for (const group of groupByCategory(items)) {
         box.append(el('div', group.category, 'ct-plugins__cat'));
         const ul = el('ul', null, 'ct-plugins__list');
-        for (const p of group.items) ul.append(this.#row(p, renderList));
+        for (const p of group.items) ul.append(this.#row(p, renderList, setErr));
         box.append(ul);
       }
     };
-    // Preserve scroll/focus across re-renders triggered by toggles vs. typing:
+
+    form.querySelector('[data-act="url"]').addEventListener('click', async () => {
+      setErr('');
+      const url = await this.#promptUrl();
+      if (!url) return;
+      try {
+        await this.addFromUrl(url);
+      } catch (err) {
+        setErr(`Couldn’t add ${url}: ${err.message}`);
+      }
+      renderList();
+    });
+    form.querySelector('[data-act="file"]').addEventListener('click', async () => {
+      setErr('');
+      const file = await pickFile();
+      if (!file) return;
+      try {
+        await this.addFromFile(file);
+      } catch (err) {
+        setErr(`Couldn’t add ${file.name}: ${err.message}`);
+      }
+      renderList();
+    });
     search.addEventListener('input', renderList);
     renderList();
 
@@ -165,35 +272,76 @@ export class PluginManager {
     search.focus();
   }
 
-  #row(p, refresh) {
-    const li = document.createElement('li');
-    li.className = 'ct-plugin';
+  #row(p, refresh, setErr) {
+    const li = el('li', null, 'ct-plugin');
 
-    const label = document.createElement('label');
-    label.className = 'ct-plugin__main';
+    const label = el('label', null, 'ct-plugin__main');
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.checked = p.enabled;
     cb.addEventListener('change', async () => {
       cb.disabled = true;
+      setErr('');
       try {
-        await this.setEnabled(p.url, cb.checked);
+        await this.setEnabled(p.key, cb.checked);
       } catch (err) {
-        this.#results.appendError(`Plugin toggle failed: ${err.message}`);
+        setErr(`Toggle failed: ${err.message}`);
       }
       refresh();
     });
-    const name = document.createElement('span');
-    name.className = 'ct-plugin__name';
-    name.textContent = p.name;
-    label.append(cb, name);
+    label.append(cb, el('span', p.name, 'ct-plugin__name'));
 
-    const meta = document.createElement('span');
-    meta.className = 'ct-plugin__meta';
-    meta.textContent = p.enabled ? (p.loaded ? p.id ?? '' : 'failed to load') : 'disabled';
+    const right = el('span', null, 'ct-plugin__right');
+    const metaText = p.enabled ? (p.loaded ? p.origin : 'failed to load') : 'disabled';
+    right.append(el('span', metaText, 'ct-plugin__meta'));
+    if (p.removable) {
+      const rm = document.createElement('button');
+      rm.type = 'button';
+      rm.className = 'ct-plugin__rm';
+      rm.textContent = '✕';
+      rm.title = 'Remove this plugin';
+      rm.addEventListener('click', async () => {
+        setErr('');
+        try {
+          await this.removePlugin(p.key);
+        } catch (err) {
+          setErr(`Remove failed: ${err.message}`);
+        }
+        refresh();
+      });
+      right.append(rm);
+    }
 
-    li.append(label, meta);
+    li.append(label, right);
     return li;
+  }
+
+  /** A nested prompt for a plugin URL. Resolves the trimmed URL, or null. */
+  #promptUrl() {
+    return new Promise((resolve) => {
+      const d = document.createElement('dialog');
+      d.className = 'ct-dialog';
+      d.innerHTML = `
+        <form method="dialog" class="ct-dialog__form">
+          <h2 class="ct-dialog__title">Add plugin from URL</h2>
+          <p class="ct-dialog__hint">Paste the URL of a plugin's entry module (a <code>.js</code> file).
+            A cross-origin URL must be served with CORS enabled by its author (there's no proxy).</p>
+          <input name="url" type="url" class="ct-plugins__urlinput" placeholder="https://…/index.js" autocomplete="off">
+          <menu class="ct-dialog__buttons">
+            <button value="cancel" type="submit">Cancel</button>
+            <button value="ok" type="submit" class="ct-dialog__primary">Add</button>
+          </menu>
+        </form>`;
+      d.addEventListener('close', () => {
+        const ok = d.returnValue === 'ok';
+        const url = d.querySelector('input[name="url"]').value.trim();
+        d.remove();
+        resolve(ok ? url : null);
+      });
+      document.body.append(d);
+      d.showModal();
+      d.querySelector('input').focus();
+    });
   }
 }
 
@@ -204,6 +352,27 @@ function el(tag, text, className) {
   if (text != null) e.textContent = text;
   if (className) e.className = className;
   return e;
+}
+
+/** Open a file picker for a plugin source file. Resolves the File, or null. */
+function pickFile() {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.js,.mjs,text/javascript';
+    input.style.display = 'none';
+    let settled = false;
+    const finish = (v) => {
+      if (settled) return;
+      settled = true;
+      input.remove();
+      resolve(v);
+    };
+    input.addEventListener('change', () => finish(input.files?.[0] ?? null));
+    input.addEventListener('cancel', () => finish(null));
+    document.body.append(input);
+    input.click();
+  });
 }
 
 /** Does a plugin match the search query? Matches across name, id, category, and

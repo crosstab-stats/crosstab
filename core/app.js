@@ -73,6 +73,47 @@ const webService = Object.freeze({
 });
 
 /**
+ * Consent prompt the loader shows on an *untrusted* plugin's first `app.web.get`
+ * — the one network path it has (the sandbox CSP blocks the rest). Lets the user
+ * stop an externally-loaded plugin from sending the loaded data out. Resolves a
+ * boolean; the loader caches the decision per plugin instance.
+ *
+ * @param {string} label - The plugin's URL/filename.
+ * @param {string} url - The URL it wants to fetch.
+ * @returns {Promise<boolean>}
+ */
+function confirmPluginNetwork(label, url) {
+  return new Promise((resolve) => {
+    const d = document.createElement('dialog');
+    d.className = 'ct-dialog ct-dialog--wide';
+    d.innerHTML = `
+      <form method="dialog" class="ct-dialog__form">
+        <h2 class="ct-dialog__title">Allow network access?</h2>
+        <p class="ct-dialog__hint">The plugin <strong>${escapeText(label)}</strong> wants to
+          fetch a URL. This is the only way it can send data off your device — allow it
+          only if you trust this plugin.</p>
+        <p class="ct-dialog__hint" style="word-break:break-all"><code>${escapeText(url)}</code></p>
+        <menu class="ct-dialog__buttons">
+          <button value="block" type="submit">Block</button>
+          <button value="allow" type="submit" class="ct-dialog__primary">Allow</button>
+        </menu>
+      </form>`;
+    d.addEventListener('close', () => {
+      const allow = d.returnValue === 'allow';
+      d.remove();
+      resolve(allow);
+    });
+    document.body.append(d);
+    d.showModal();
+  });
+}
+
+/** Minimal text escape for the few interpolations above. */
+function escapeText(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
  * Boot the application into the given root element.
  *
  * @param {Object} mounts
@@ -138,7 +179,7 @@ export async function boot(mounts) {
     outputExporters: outputExporters.api,
     web: webService,
   };
-  const loader = new PluginLoader(services);
+  const loader = new PluginLoader(services, { confirmNetwork: confirmPluginNetwork });
 
   // --- shell wiring ----------------------------------------------------------
   wireStatusLine(bus, mounts.status, webr);

@@ -2,6 +2,18 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <!--
+      Lock the sandbox down further than the iframe `sandbox` attribute alone:
+      `connect-src 'none'` means a plugin cannot fetch/XHR/WebSocket/sendBeacon on
+      its own, so it can't silently phone data home. Its ONLY network path is the
+      host-mediated `app.web.get`, which the host gates behind user consent for
+      untrusted (externally-loaded) plugins. `script-src` still allows the inline
+      runtime below and the plugin's `blob:` module import; everything else is off.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'unsafe-inline' blob:; connect-src 'none'"
+    />
     <title>CrossTab plugin sandbox</title>
   </head>
   <body>

@@ -9,11 +9,15 @@
  * event handlers, or navigation into the host page.
  *
  * This is a deliberately small, allowlist-based sanitiser covering the markup
- * analyses actually produce (tables and simple inline SVG plots). It is NOT a
- * complete, audited XSS defence — before any public release, replace it with a
- * vetted library such as DOMPurify. The allowlist here is intentionally narrow:
- * unknown elements are unwrapped (their text kept), dangerous elements are
- * dropped entirely, and only known-safe attributes survive.
+ * analyses actually produce (tables and simple inline SVG plots): unknown
+ * elements are unwrapped (their text kept), dangerous elements are dropped
+ * entirely, only known-safe attributes survive (no `on*`, no URL-bearing attrs),
+ * `style` is value-filtered against URL/escape/expression tricks, and the whole
+ * fragment is size-capped against a denial-of-service blob.
+ *
+ * It is still NOT a fully audited XSS library. For a public release, vendoring
+ * **DOMPurify** (and adding a host-page CSP tuned around the WebR/DuckDB CDNs as
+ * defence-in-depth) remains the recommended upgrade — see the hardening TODO.
  */
 
 /** Elements we render and keep, lowercased. Anything else is unwrapped. */
@@ -52,8 +56,14 @@ const ALLOWED_ATTRS = new Set([
   'gradientunits', 'gradienttransform', 'offset', 'stop-color', 'stop-opacity', 'clip-path',
 ]);
 
-/** Reject `style` values that can fetch or execute. */
-const UNSAFE_STYLE = /(url\s*\(|expression\s*\(|javascript:|@import|<)/i;
+/** Reject `style` values that can fetch, execute, or smuggle via CSS escapes. The
+ * backslash catch kills escape bypasses like `u\72l(` that decode to `url(`. */
+const UNSAFE_STYLE = /(url\s*\(|image-set|expression\s*\(|javascript:|@import|behavior\s*:|binding\s*:|\\|<)/i;
+
+/** Hard cap on elements in one fragment — a defence against a plugin sending a
+ * pathologically huge/deep blob to hang the parser. Real result fragments are
+ * tiny (summarised tables, one plot); this is orders of magnitude above that. */
+const MAX_ELEMENTS = 50000;
 
 /**
  * Sanitise an HTML/SVG fragment string, returning safe HTML.
@@ -63,6 +73,9 @@ const UNSAFE_STYLE = /(url\s*\(|expression\s*\(|javascript:|@import|<)/i;
  */
 export function sanitizeHtml(html) {
   const doc = new DOMParser().parseFromString(String(html), 'text/html');
+  if (doc.body.getElementsByTagName('*').length > MAX_ELEMENTS) {
+    return '<div class="results-error">[output too large to display]</div>';
+  }
   cleanChildren(doc.body);
   return doc.body.innerHTML;
 }

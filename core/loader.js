@@ -74,6 +74,10 @@ export class PluginLoader {
   /** id → loaded plugin record. @type {Map<string, LoadedPlugin>} */
   #plugins = new Map();
 
+  /** Asks the user to allow network access for an untrusted plugin's first
+   * `app.web.get`. `(label, url) => Promise<boolean>`. Defaults to deny. */
+  #confirmNetwork;
+
   /**
    * @param {object} services - `{ data, results, webr, menus, ui, bus }`. These
    *   are the published service surfaces; the broker exposes a reviewed subset
@@ -81,10 +85,13 @@ export class PluginLoader {
    * @param {Object} [opts]
    * @param {HTMLElement} [opts.sandboxContainer] - Where plugin iframes are
    *   appended. Defaults to a hidden `<div>` added to `document.body`.
+   * @param {(label: string, url: string) => Promise<boolean>} [opts.confirmNetwork]
+   *   - Consent prompt for an untrusted plugin's first network request.
    */
   constructor(services, opts = {}) {
     this.#services = services;
     this.#sandboxContainer = opts.sandboxContainer ?? createHiddenContainer();
+    this.#confirmNetwork = opts.confirmNetwork ?? (async () => false);
   }
 
   /**
@@ -95,21 +102,51 @@ export class PluginLoader {
    *   and runs it inside a sandbox; the URL is never `import()`ed by the engine.
    * @returns {Promise<PluginManifest>} The activated plugin's manifest.
    */
-  async load(url) {
-    // Fetch the plugin source on the host (same-origin: allowed) so we can hand
-    // it to the opaque-origin sandbox, which cannot fetch it itself.
+  async load(url, opts = {}) {
+    // Fetch the plugin source on the host so we can hand it to the opaque-origin
+    // sandbox, which cannot fetch it itself. Same-origin always works; a
+    // cross-origin URL needs the author to CORS-enable it (no proxy here).
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Failed to fetch plugin ${url}: HTTP ${res.status}`);
     const code = await res.text();
+    return this.#instantiate(code, url, opts);
+  }
 
+  /**
+   * Load + activate a plugin from its **source text** directly (no fetch) — used
+   * for file-picked plugins and any case where the host already has the code.
+   *
+   * @param {string} code - The plugin's entry-module source.
+   * @param {string} [label='plugin'] - A label for errors/consent prompts.
+   * @param {{trusted?: boolean}} [opts]
+   * @returns {Promise<PluginManifest>}
+   */
+  async loadSource(code, label = 'plugin', opts = {}) {
+    return this.#instantiate(code, label, opts);
+  }
+
+  /**
+   * Sandbox, import, version-check and activate a plugin from source text. A
+   * `trusted` plugin (built-in) gets the full service surface; an untrusted one
+   * (externally loaded) gets a **network-gated** `app.web` so its first request
+   * needs user consent — the host-mediated path is the only network a plugin has
+   * (the sandbox CSP blocks its own; see plugin-host.html).
+   *
+   * @param {string} code
+   * @param {string} label - URL or filename, for errors/consent.
+   * @param {{trusted?: boolean}} [opts]
+   * @returns {Promise<PluginManifest>}
+   */
+  async #instantiate(code, label, { trusted = true } = {}) {
+    const services = trusted ? this.#services : this.#gatedServices(label);
     const iframe = this.#createIframe();
     const broker = new PluginBroker({
       iframe,
-      services: this.#services,
-      onError: (err) => console.error(`[plugin ${url}]`, err),
+      services,
+      onError: (err) => console.error(`[plugin ${label}]`, err),
     });
 
-    // Append + navigate; the runtime posts {t:'ready} once it is wired up.
+    // Append + navigate; the runtime posts {t:'ready'} once it is wired up.
     this.#sandboxContainer.append(iframe);
     iframe.src = PLUGIN_HOST_URL;
 
@@ -118,7 +155,7 @@ export class PluginLoader {
       const manifest = await broker.sendLoad(code);
 
       if (!manifest || typeof manifest.id !== 'string') {
-        throw new Error(`Plugin at ${url} exported no valid manifest`);
+        throw new Error(`Plugin at ${label} exported no valid manifest`);
       }
       if (this.#plugins.has(manifest.id)) {
         throw new Error(`Plugin "${manifest.id}" is already loaded`);
@@ -135,7 +172,7 @@ export class PluginLoader {
 
       await broker.sendActivate({ ...manifest, apiVersion: API_VERSION });
 
-      this.#plugins.set(manifest.id, { manifest, iframe, broker });
+      this.#plugins.set(manifest.id, { manifest, iframe, broker, trusted });
       return manifest;
     } catch (err) {
       // Roll back a partially-loaded plugin so a failure leaves no orphan iframe.
@@ -143,6 +180,22 @@ export class PluginLoader {
       iframe.remove();
       throw err;
     }
+  }
+
+  /** Services for an untrusted plugin: every host service as-is, but `web.get`
+   * gated behind a one-time consent prompt (cached per plugin instance). */
+  #gatedServices(label) {
+    const realWeb = this.#services.web;
+    const confirmNetwork = this.#confirmNetwork;
+    let decision = null;
+    const web = Object.freeze({
+      get: async (url) => {
+        if (decision === null) decision = await confirmNetwork(label, String(url));
+        if (!decision) throw new Error('Network access was blocked for this plugin.');
+        return realWeb.get(url);
+      },
+    });
+    return Object.freeze({ ...this.#services, web });
   }
 
   /**
