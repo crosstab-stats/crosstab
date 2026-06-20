@@ -65,6 +65,7 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-assumptions/index.js',
   './plugins/builtin-categorical/index.js',
   './plugins/builtin-anova/index.js',
+  './plugins/builtin-timeseries/index.js',
 ];
 
 /**
