@@ -353,7 +353,14 @@ export class ImportService {
       try {
         path = await this.#webr.mountFile(file, file.name);
       } catch (err) {
-        throw new Error(`could not stage "${file.name}": ${err.message}`);
+        const m = err?.message || String(err);
+        // The browser can't read a single file blob past ~2 GB (NotReadableError),
+        // which is the wall multi-GB extracts hit on the way into WebR.
+        throw new Error(
+          /could not be read|NotReadableError|permission problems that have occurred after a reference/i.test(m)
+            ? `“${file.name}” is too large for the browser to read directly (over ~2 GB). Use a smaller extract — fewer variables or years.`
+            : `could not stage “${file.name}”: ${m}`,
+        );
       }
       try {
         return await this.#awaitTicket((ticket) => spec.parse({ ticket, name: file.name, path }));
