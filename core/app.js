@@ -30,6 +30,7 @@ import { ProjectSync, PROJECT_CHANGED } from './project-sync.js';
 import { DataView, VariableView, HistoryPanel } from './data-views.js';
 import { RConsole } from './r-console.js';
 import { PluginLoader } from './loader.js';
+import { installDialogKeybindings } from './dialog-keys.js';
 import { makeDemoDataset } from './demo-data.js';
 
 /**
@@ -103,8 +104,8 @@ function promptNetworkDialog(name, url) {
           again for this plugin (revoke it any time in Edit ▸ Plugins…).</p>
         <p class="ct-dialog__hint" style="word-break:break-all"><code>${escapeText(url)}</code></p>
         <menu class="ct-dialog__buttons">
-          <button value="block" type="submit">Block</button>
-          <button value="allow" type="submit" class="ct-dialog__primary">Allow</button>
+          <button value="allow" type="submit">Allow</button>
+          <button value="block" type="submit" class="ct-dialog__primary">Block</button>
         </menu>
       </form>`;
     d.addEventListener('close', () => {
@@ -137,6 +138,9 @@ function escapeText(s) {
  * @returns {Promise<object>} The assembled engine (handy for console debugging).
  */
 export async function boot(mounts) {
+  // Enter activates each dialog's primary (blue) button, app-wide (see dialog-keys).
+  installDialogKeybindings();
+
   // --- core services ---------------------------------------------------------
   const bus = new EventBus();
   const duckdb = new DuckDBManager();

@@ -172,7 +172,9 @@ export class UiService {
       search.style.cssText =
         'width:100%; padding:8px; margin:0 0 8px; border:1px solid var(--line,#ccc);' +
         ' border-radius:6px; font:inherit;';
-      // Enter in the search box would submit the form (= Cancel); suppress it.
+      // Don't let Enter in the filter confirm (OK) a half-typed query — pick an
+      // item or click OK. (Enter maps to the primary button elsewhere; here the
+      // filter box owns it.)
       search.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') e.preventDefault();
       });
