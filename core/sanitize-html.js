@@ -34,9 +34,11 @@ const ALLOWED_TAGS = new Set([
   'title', 'desc',
 ]);
 
-/** Elements removed wholesale (including their subtree). */
+/** Elements removed wholesale (including their subtree). (`<style>` is handled
+ * specially in cleanChildren — svglite plots embed a CSS block — kept only if its
+ * content can't fetch/execute.) */
 const DANGEROUS_TAGS = new Set([
-  'script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'base',
+  'script', 'iframe', 'object', 'embed', 'link', 'meta', 'base',
   'form', 'input', 'textarea', 'button', 'select', 'option',
   'foreignobject', 'use', 'image', 'animate', 'animatetransform', 'animatemotion', 'set',
 ]);
@@ -94,6 +96,14 @@ function cleanChildren(parent) {
     }
     const tag = node.localName.toLowerCase();
 
+    if (tag === 'style') {
+      // svglite plots embed a <style> block (default fill/stroke for the panel
+      // box, axes, etc.); without it, unfilled shapes fall back to solid black.
+      // Keep it, but only if the CSS can't fetch or execute — same URL/escape/
+      // expression check used for inline styles.
+      if (UNSAFE_STYLE.test(node.textContent || '')) node.remove();
+      continue; // kept verbatim; its CSS text is not unwrapped
+    }
     if (DANGEROUS_TAGS.has(tag)) {
       node.remove();
       continue;
