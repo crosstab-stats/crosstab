@@ -53,8 +53,9 @@ export class RConsole {
       <div class="rc-info">
         <div class="rc-info__line"><span class="rc-info__k">In R you have:</span> <span class="rc-vars-info">nothing checked</span></div>
         <div class="rc-info__line">
-          <span class="rc-info__k">Libraries:</span> <span class="rc-libs-info">…</span>
-          <input class="rc-lib-add" type="text" placeholder="load library…" autocomplete="off" spellcheck="false">
+          <span class="rc-info__k">Libraries:</span>
+          <input class="rc-lib-add" type="text" placeholder="+ load library…" autocomplete="off" spellcheck="false">
+          <span class="rc-libs-info">…</span>
         </div>
       </div>
       <div class="rc-term">
