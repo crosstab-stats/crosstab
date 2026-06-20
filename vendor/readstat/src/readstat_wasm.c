@@ -90,11 +90,14 @@ static int variable_handler(int index, readstat_variable_t *v, const char *val_l
 static int value_handler(int obs, readstat_variable_t *v, readstat_value_t value, void *ctx) {
   (void)ctx;
   int vi = readstat_variable_get_index(v);
-  int missing = readstat_value_is_missing(value, v);
+  /* Only system/tagged missing becomes NA. User-defined (SPSS) missing keeps its
+   * raw sentinel value - the variable's missingValues metadata carries the recode
+   * intent, matching how the rest of the engine (and haven) treat user-missing. */
+  int sysmiss = readstat_value_is_system_missing(value) || readstat_value_is_tagged_missing(value);
   if (readstat_value_type_class(value) == READSTAT_TYPE_CLASS_STRING)
-    ct_js_value_string(obs, vi, readstat_string_value(value), missing);
+    ct_js_value_string(obs, vi, readstat_string_value(value), sysmiss);
   else
-    ct_js_value_double(obs, vi, readstat_double_value(value), missing);
+    ct_js_value_double(obs, vi, readstat_double_value(value), sysmiss);
   return READSTAT_HANDLER_OK;
 }
 
