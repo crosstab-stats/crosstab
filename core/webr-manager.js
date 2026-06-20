@@ -42,6 +42,14 @@ const DEFAULT_WEBR_URL = 'https://webr.r-wasm.org/latest/webr.mjs';
  * written before R reads it. Overwritten each injecting run. */
 const INJECT_PATH = '/tmp/ct_inject.parquet';
 
+/** WebR FS path the R console stages each evaluated line to. */
+const CONSOLE_PATH = '/tmp/ct_console.R';
+
+/** An R string literal (escapes backslash + double-quote). */
+function rLit(s) {
+  return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
 /**
  * The union of all columns referenced by `variables`-kind inputs, deduped — the
  * set `df` must contain so the per-input aliases can slice from it.
@@ -349,6 +357,95 @@ export class WebRManager {
         await shelter.purge();
       }
     }, 'run');
+  }
+
+  /**
+   * Evaluate a line of R **in the persistent global environment** — for the R
+   * console (REPL). Unlike {@link WebRManager#run}, assignments persist across
+   * calls (`x <- 5` then `mean(x)`), and visible values auto-print as at an R
+   * prompt. Captures stdout/stderr; an R error is returned as text, not thrown.
+   *
+   * @param {string} code - One or more R expressions.
+   * @returns {Promise<{output: string, error: boolean}>}
+   */
+  evalConsole(code) {
+    return this.#enqueue(async (webR) => {
+      // Run via source(print.eval=TRUE) so visible values auto-print like the R
+      // prompt (captureR alone does not echo them). The code is staged to a file
+      // to avoid escaping it into an R string; `local=FALSE` evaluates in globalenv
+      // so assignments persist across lines.
+      await webR.FS.writeFile(CONSOLE_PATH, new TextEncoder().encode(code));
+      const shelter = await new webR.Shelter();
+      try {
+        const capture = await shelter.captureR(
+          `source(${rLit(CONSOLE_PATH)}, echo = FALSE, print.eval = TRUE, max.deparse.length = Inf, local = FALSE)`,
+          { env: webR.objs.globalEnv, captureGraphics: false },
+        );
+        const out = capture.output
+          .map((m) => (typeof m.data === 'string' ? m.data : String(m.data)))
+          .join('\n');
+        const hadErr = capture.output.some((m) => m.type === 'stderr');
+        return { output: out, error: hadErr };
+      } catch (err) {
+        // A parse/eval error surfaces as a thrown condition; strip the source() wrapper.
+        const msg = String(err?.message ?? err).replace(/\bin eval\b.*$/, '').trim();
+        return { output: msg, error: true };
+      } finally {
+        await shelter.purge(); // frees capture buffers; globalenv user vars persist
+      }
+    }, 'console');
+  }
+
+  /**
+   * Bind the console's checked variables into the persistent global env as `vars`
+   * — **exactly as a plugin receives them**: a data.frame when several are
+   * checked, a plain vector when one is (a plugin's single-variable input). So R
+   * typed here copy/pastes straight into a plugin's `run`. Re-call on selection
+   * change; pass no columns to clear `vars`.
+   *
+   * @param {string[]} columns - Checked variable names.
+   * @param {boolean} multiple - Bind as a data.frame (true) or vector (false).
+   * @returns {Promise<{names: string[], multiple: boolean}>}
+   */
+  consoleBind(columns, multiple) {
+    return this.#enqueue(async (webR) => {
+      const G = webR.objs.globalEnv;
+      const shelter = await new webR.Shelter();
+      try {
+        if (!columns || !columns.length) {
+          await shelter.captureR('if (exists("vars", envir = globalenv())) rm("vars", envir = globalenv())', { env: G });
+          return { names: [], multiple: false };
+        }
+        const assign = multiple
+          ? 'assign("vars", .d, envir = globalenv())'
+          : 'assign("vars", .d[[1]], envir = globalenv())';
+
+        // Prefer the Parquet bridge (native types); fall back to JS arrays.
+        if (this.#getInjectionParquet && (await this.#ensureNanoparquet(webR))) {
+          const bytes = await this.#getInjectionParquet({ variables: columns });
+          if (bytes && bytes.byteLength) {
+            await webR.FS.writeFile(INJECT_PATH, bytes);
+            await shelter.captureR(
+              `local({ .d <- as.data.frame(nanoparquet::read_parquet(${rLit(INJECT_PATH)}), check.names = FALSE); ${assign} })`,
+              { env: G },
+            );
+            return { names: columns, multiple };
+          }
+        }
+        const rawCols = await this.#getColumns({ variables: columns });
+        const cols = {};
+        for (const [k, v] of Object.entries(rawCols)) {
+          cols[k] = Array.from(v, (x) => (typeof x === 'number' && Number.isNaN(x) ? null : x));
+        }
+        await shelter.captureR(
+          `local({ .d <- as.data.frame(.crosstab_data, stringsAsFactors = FALSE, check.names = FALSE); ${assign} })`,
+          { env: { '.crosstab_data': cols } },
+        );
+        return { names: columns, multiple };
+      } finally {
+        await shelter.purge();
+      }
+    }, 'consoleBind');
   }
 
   /**

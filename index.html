@@ -142,6 +142,35 @@
          class (not inline style) so `.view[hidden]` still wins and hides it. */
       .ct-gridhost { display: flex; flex-direction: column; overflow: hidden; }
       .view[hidden] { display: none; }
+
+      /* R Console tab */
+      .rconsole { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+      .rc-vars {
+        flex: none; display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 10px 12px;
+        border-bottom: 1px solid var(--line); max-height: 22%; overflow-y: auto; background: var(--panel);
+      }
+      .rc-var { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; white-space: nowrap; }
+      .rc-vars__empty { color: #888; font-style: italic; font-size: 13px; }
+      .rc-info { flex: none; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: #444; background: #fafbfc; }
+      .rc-info__line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 2px 0; }
+      .rc-info__k { color: #7a8590; }
+      .rc-vars-info { font-family: ui-monospace, Menlo, Consolas, monospace; color: #1d2733; }
+      .rc-libs-info { font-family: ui-monospace, Menlo, Consolas, monospace; color: #1d2733; flex: 1; min-width: 0; }
+      .rc-lib-add { font: inherit; font-size: 12px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 6px; width: 130px; }
+      .rc-term {
+        flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.45;
+      }
+      .rc-out { flex: 1; overflow-y: auto; padding: 10px 12px; white-space: pre-wrap; word-break: break-word; }
+      .rc-cmd { color: #2563a8; }
+      .rc-result { color: #1a1a1a; }
+      .rc-err { color: #b3201a; }
+      .rc-note { color: #7a8590; font-style: italic; }
+      .rc-out > div { margin: 0 0 2px; }
+      .rc-prompt { flex: none; display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-top: 1px solid var(--line); background: #fafbfc; }
+      .rc-caret { color: var(--accent); font-weight: 700; }
+      .rc-input { flex: 1; border: 0; outline: none; background: transparent; font: inherit; color: #1a1a1a; }
+      .rc-input:disabled { color: #aaa; }
       .results { background: var(--bg); }
 
       /* data grid toolbar (column filter + selection count), above the scroller */
@@ -549,11 +578,13 @@
           <button class="tab" id="tab-data" role="tab" data-view="data">Data</button>
           <button class="tab" id="tab-vars" role="tab" data-view="vars">Variables</button>
           <button class="tab" id="tab-output" role="tab" data-view="output" aria-selected="true">Output</button>
+          <button class="tab" id="tab-console" role="tab" data-view="console">R Console</button>
           <button class="tab-action" id="clear-output" type="button" title="Clear all output">Clear output</button>
         </div>
         <div class="view" id="view-data" role="tabpanel" aria-label="Data" hidden></div>
         <div class="view" id="view-vars" role="tabpanel" aria-label="Variables" hidden></div>
         <section class="view results" id="results" role="tabpanel" aria-label="Output" aria-live="polite"></section>
+        <div class="view" id="view-console" role="tabpanel" aria-label="R Console" hidden></div>
       </section>
     </main>
 
@@ -571,6 +602,7 @@
         tabs: document.getElementById('tabs'),
         viewData: document.getElementById('view-data'),
         viewVars: document.getElementById('view-vars'),
+        viewConsole: document.getElementById('view-console'),
       }).catch((err) => {
         console.error('CrossTab failed to start', err);
         document.getElementById('status').textContent = 'Failed to start: ' + err.message;

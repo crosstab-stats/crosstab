@@ -28,6 +28,7 @@ import { DatasetLibrary, LIBRARY_CHANGED } from './library.js';
 import { ProjectStore } from './project-store.js';
 import { ProjectSync, PROJECT_CHANGED } from './project-sync.js';
 import { DataView, VariableView, HistoryPanel } from './data-views.js';
+import { RConsole } from './r-console.js';
 import { PluginLoader } from './loader.js';
 import { makeDemoDataset } from './demo-data.js';
 
@@ -206,7 +207,9 @@ export async function boot(mounts) {
   if (mounts.viewData && mounts.viewVars && mounts.tabs) {
     const dataView = new DataView(mounts.viewData, datasets);
     const variableView = new VariableView(mounts.viewVars, datasets);
-    wireWorkspaceTabs(bus, mounts, { dataView, variableView, results: mounts.results });
+    // R Console tab: a live REPL on the persistent WebR session (host feature).
+    const rConsole = mounts.viewConsole ? new RConsole(mounts.viewConsole, { webr, store: datasets }) : null;
+    wireWorkspaceTabs(bus, mounts, { dataView, variableView, results: mounts.results, rConsole });
     // Keep the grid's header checkboxes in step when selection changes elsewhere
     // (e.g. the sidebar) — both surfaces drive the one shared selection.
     bus.on(CoreEvents.SELECTION_CHANGED, () => dataView.syncSelection());
@@ -404,23 +407,25 @@ function wireBusyIndicator(bus, el) {
  *   `viewHistory` is optional.
  * @param {{dataView: DataView, variableView: VariableView, historyView: ?HistoryView, results: HTMLElement}} views
  */
-function wireWorkspaceTabs(bus, mounts, { dataView, variableView, results }) {
-  const panels = { data: mounts.viewData, vars: mounts.viewVars, output: results };
+function wireWorkspaceTabs(bus, mounts, { dataView, variableView, results, rConsole }) {
+  const panels = { data: mounts.viewData, vars: mounts.viewVars, output: results, console: mounts.viewConsole };
   const buttons = [...mounts.tabs.querySelectorAll('.tab')];
   let current = 'output';
 
   const show = (name) => {
     current = name;
     for (const b of buttons) b.setAttribute('aria-selected', String(b.dataset.view === name));
-    for (const [key, panel] of Object.entries(panels)) panel.hidden = key !== name;
+    for (const [key, panel] of Object.entries(panels)) if (panel) panel.hidden = key !== name;
     if (name === 'data') dataView.refresh();
     else if (name === 'vars') variableView.render();
+    else if (name === 'console') rConsole?.onShow();
   };
 
   for (const b of buttons) b.addEventListener('click', () => show(b.dataset.view));
   bus.on(CoreEvents.DATA_CHANGED, () => {
     if (current === 'data') dataView.refresh();
     else if (current === 'vars') variableView.render();
+    else if (current === 'console') rConsole?.refresh();
   });
   // Focus the relevant view for the action in progress.
   bus.on('analysis:started', () => show('output'));
