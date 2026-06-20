@@ -288,6 +288,74 @@ export class DataStore {
     await this.rederive(combine === 'replace' ? 'replace' : combine);
   }
 
+  /**
+   * Load a dataset by **streaming** it into a source table batch-by-batch, for
+   * importers that can't materialise the whole thing in memory (a multi-GB
+   * .sav/.dta read by ReadStat). The caller drives the ingest via the `ctx` it's
+   * handed:
+   *  - `ctx.begin(variables, storageTypes)` — once, first: records the variable
+   *    metadata and creates the (empty) source table with a stable schema.
+   *  - `ctx.batch(columns)` — per chunk: appends rows (name→Float64Array|Array).
+   *
+   * After `ingest` resolves, the row-id is baked in and the source is registered
+   * as a `load` (replace) or `append` op, then the view re-derives — identical to
+   * any other import from there on.
+   *
+   * @param {Object} opts
+   * @param {'replace'|'append'} [opts.mode='replace']
+   * @param {string} [opts.source] - Provenance label.
+   * @param {(ctx: {begin: Function, batch: Function}) => Promise<void>} opts.ingest
+   * @returns {Promise<void>}
+   */
+  async loadStreaming({ mode = 'replace', source, ingest }) {
+    const combine = this.#hasData() && mode === 'append' ? 'append' : 'replace';
+    if (combine === 'replace') await this.#dropAll();
+
+    const seq = ++this.#sourceSeq;
+    const table = `${this.#sourcePrefix}${seq}`;
+    let meta = null;
+    let storage = null;
+    let created = false;
+
+    const ctx = {
+      begin: async (variables, storageTypes) => {
+        meta = variables;
+        storage = storageTypes;
+        const empty = {};
+        for (const v of variables) {
+          empty[v.name] = storageTypes[v.name] === 'numeric' ? new Float64Array(0) : [];
+        }
+        await this.#duckdb.appendColumns(table, empty, storageTypes, { create: true });
+        created = true;
+      },
+      batch: async (columns) => {
+        if (!created) throw new Error('loadStreaming: batch before begin()');
+        await this.#duckdb.appendColumns(table, columns, storage, { create: false });
+      },
+    };
+
+    try {
+      await ingest(ctx);
+    } catch (err) {
+      // Roll back a half-built source so the dataset isn't left broken.
+      try {
+        await this.#duckdb.query(`DROP TABLE IF EXISTS ${quoteIdent(table)}`);
+      } catch {
+        /* best-effort */
+      }
+      throw err;
+    }
+    if (!meta) throw new Error('streaming import delivered no variables');
+
+    this.#sourceTables.add(table);
+    await this.#ensureRowId(table, seq);
+    const src = { table, meta: meta.map((m) => ({ ...m })), label: source ?? null };
+    if (combine === 'replace') this.#log = [{ type: 'load', src }];
+    else this.#log.push({ type: 'append', src });
+    this.#redoStack = [];
+    await this.rederive(combine);
+  }
+
   /** Whether any data is loaded (the log has a source op). */
   #hasData() {
     return this.#sourceOps().length > 0;

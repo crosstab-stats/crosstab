@@ -115,6 +115,40 @@ export class DuckDBManager {
   }
 
   /**
+   * Append one batch of rows to a table, creating it on the first batch. This is
+   * the **streaming ingest** path: an importer that can't materialise a whole
+   * dataset in memory (a multi-GB .sav/.dta read by ReadStat) calls this once per
+   * chunk of rows, so the table is built incrementally and the full data never
+   * sits in the wasm heap (it pages to OPFS).
+   *
+   * The Arrow schema is built **explicitly** from `types` — not inferred from the
+   * JS arrays — so every batch has an identical schema and the append never fails
+   * on a column that happened to be all-null (→ Arrow Null) in one batch. Numeric
+   * columns must arrive as `Float64Array` (→ Float64), text/factor as
+   * `Array<string|null>` (→ Utf8); `null`/`NaN` mark missing.
+   *
+   * @param {string} name - Table name (caller-controlled, not user input).
+   * @param {Object<string, Float64Array|Array<string|null>>} columns
+   * @param {Object<string, import('./data-store.js').VariableType>} types - name → type.
+   * @param {Object} [opts]
+   * @param {boolean} [opts.create=false] - True for the first batch (creates the table).
+   * @returns {Promise<void>}
+   */
+  async appendColumns(name, columns, types, { create = false } = {}) {
+    const { conn, arrow } = await this.#ensureReady();
+    const names = Object.keys(columns);
+    if (names.length === 0) return;
+    const vectors = {};
+    for (const col of names) {
+      const t = types[col] === 'numeric' ? new arrow.Float64() : new arrow.Utf8();
+      vectors[col] = arrow.vectorFromArray(columns[col], t);
+    }
+    const table = new arrow.Table(vectors);
+    const ipc = arrow.tableToIPC(table, 'stream');
+    await conn.insertArrowFromIPCStream(ipc, { name, create });
+  }
+
+  /**
    * Run a query and return its result as Parquet bytes. This is the fast lane
    * into WebR: DuckDB writes Parquet, the bytes cross into WebR's virtual FS, and
    * R reads them with `nanoparquet` — preserving column types (dates, decimals,
