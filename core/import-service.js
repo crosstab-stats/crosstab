@@ -269,17 +269,18 @@ export class ImportService {
           this.#results.appendError(`Could not read "${file.name}": ${err.message}`);
           continue;
         }
-        // Measured boundary: a full import is robust to ~6,000 columns even across
-        // many parts; it breaks between 6,000 and ~6,942 (the full GSS). Warn above
-        // ~5,000 vars when the data also needs several parts — keeping margin for
-        // the concurrent-worker load of a real import.
+        // Guard on total data volume, not just width. DuckDB-WASM's OPFS store
+        // can't reliably accumulate much past ~1 GB (checkpoints OOM, buffer pages
+        // don't evict) — a whole-file import of a large dataset fails regardless of
+        // how wide it is. Estimate the on-disk parts (~32 MB each); above ~8
+        // (~250 MB+) steer to choose-variables, which imports a bounded subset.
         const rows = cat.rowCount >= 0 ? cat.rowCount : 100000;
         const estParts = Math.ceil((cat.varCount * rows) / 4_000_000);
-        if (cat.varCount > 5000 && estParts > 4) {
+        if (estParts > 8) {
           this.#results.appendError(
-            `“${file.name}” has ${cat.varCount.toLocaleString()} variables — importing all of them ` +
-              `isn’t supported yet for a file this wide. Use “File ▸ Import ▸ SPSS / Stata / SAS — ` +
-              `choose variables…” to import the columns you need.`,
+            `“${file.name}” is too large to import whole (${cat.varCount.toLocaleString()} variables × ` +
+              `${cat.rowCount >= 0 ? cat.rowCount.toLocaleString() + ' rows' : 'many rows'}). Use ` +
+              `“File ▸ Import ▸ SPSS / Stata / SAS — choose variables…” to import the columns you need.`,
           );
           continue;
         }
