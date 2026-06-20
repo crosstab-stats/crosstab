@@ -145,11 +145,21 @@
 
       /* R Console tab */
       .rconsole { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
-      .rc-vars {
-        flex: none; display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 10px 12px;
-        border-bottom: 1px solid var(--line); max-height: 22%; overflow-y: auto; background: var(--panel);
+      .rc-varsbar {
+        flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+        border-bottom: 1px solid var(--line); background: var(--panel);
       }
-      .rc-var { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; white-space: nowrap; }
+      .rc-filter {
+        flex: none; width: 140px; font: inherit; font-size: 13px; padding: 4px 8px;
+        border: 1px solid var(--line); border-radius: 6px;
+      }
+      /* Single-line, horizontally scrolling — matches the data grid headers so a
+         wide file (GSS) stays a tidy strip instead of a wall of wrapped rows. */
+      .rc-vars {
+        flex: 1; min-width: 0; display: flex; flex-wrap: nowrap; gap: 14px;
+        overflow-x: auto; overflow-y: hidden; white-space: nowrap; padding-bottom: 2px;
+      }
+      .rc-var { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; white-space: nowrap; flex: none; }
       .rc-vars__empty { color: #888; font-style: italic; font-size: 13px; }
       .rc-info { flex: none; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: #444; background: #fafbfc; }
       .rc-info__line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 2px 0; }

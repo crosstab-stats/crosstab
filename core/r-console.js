@@ -27,8 +27,12 @@ export class RConsole {
   #histIdx = -1;
   #booted = false;
 
+  /** Variable-list filter text (matches name or label). */
+  #filter = '';
+
   // elements
   #varsBox;
+  #filterInput;
   #varsInfo;
   #libsInfo;
   #out;
@@ -49,7 +53,10 @@ export class RConsole {
   #build() {
     this.#host.classList.add('rconsole');
     this.#host.innerHTML = `
-      <div class="rc-vars" role="group" aria-label="Variables to expose in R"></div>
+      <div class="rc-varsbar">
+        <input class="rc-filter" type="search" placeholder="Filter…" aria-label="Filter variables" autocomplete="off">
+        <div class="rc-vars" role="group" aria-label="Variables to expose in R"></div>
+      </div>
       <div class="rc-info">
         <div class="rc-info__line"><span class="rc-info__k">In R you have:</span> <span class="rc-vars-info">nothing checked</span></div>
         <div class="rc-info__line">
@@ -64,6 +71,11 @@ export class RConsole {
       </div>`;
 
     this.#varsBox = this.#host.querySelector('.rc-vars');
+    this.#filterInput = this.#host.querySelector('.rc-filter');
+    this.#filterInput.addEventListener('input', () => {
+      this.#filter = this.#filterInput.value;
+      this.#renderVars();
+    });
     this.#varsInfo = this.#host.querySelector('.rc-vars-info');
     this.#libsInfo = this.#host.querySelector('.rc-libs-info');
     this.#out = this.#host.querySelector('.rc-out');
@@ -119,10 +131,16 @@ export class RConsole {
     for (const n of [...this.#checked]) if (!names.has(n)) { this.#checked.delete(n); changed = true; }
 
     this.#varsBox.replaceChildren();
+    const q = this.#filter.trim().toLowerCase();
+    const shown = q
+      ? meta.filter((m) => m.name.toLowerCase().includes(q) || (m.label || '').toLowerCase().includes(q))
+      : meta;
     if (!meta.length) {
       this.#varsBox.append(el('span', 'No data loaded.', 'rc-vars__empty'));
+    } else if (!shown.length) {
+      this.#varsBox.append(el('span', 'No variables match the filter.', 'rc-vars__empty'));
     } else {
-      for (const m of meta) {
+      for (const m of shown) {
         const label = el('label', null, 'rc-var');
         const cb = document.createElement('input');
         cb.type = 'checkbox';
