@@ -796,14 +796,19 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     (loader.js) so third-party authors see the convention. Verified: sections now
     read Import / Descriptive Statistics / Correlation / Regression / Resampling /
     Graphs / Export.
-  - **Plugin menus now match the category** (dropped the generic "Analyze"
-    wrapper): each analysis registers its menu under its category as the top-level
-    (`path: ['Regression', …]` etc.), so a plugin appears in the menu where it's
-    filed — easy to find what you add. Menubar reads File · Edit · Transform ·
-    Correlation · Descriptive Statistics · Graphs · Regression · Resampling.
-    Convention documented in the `manifest.category` doc. (Importers/exporters stay
-    under the host-managed File ▸ Import / Export — File is their conventional home;
-    their category still drives the manager section.)
+  - **Plugin menus match the category — now ENFORCED, not a convention.** A plugin
+    declares only its menu **label** (`menus.register({ label, command })`); the
+    **broker forces the menu path to the plugin's `category`** (`plugin-broker.js`
+    overrides the `menus.register` dispatch with `path: [category]`), so any `path`
+    a plugin passes is discarded — the menu location *can't* be chosen, and the
+    menubar always agrees with how the plugin manager groups the plugin. Built-ins
+    dropped their now-redundant `path:` (8 files); the creator templates pass label
+    only. Menubar reads File · Edit · Transform · Correlation · Descriptive
+    Statistics · Graphs · Regression · Resampling. **Verified in Chrome:** a plugin
+    that tried `path: ['HACKED']` got filed under its category (Comparison) with no
+    rogue top-level. (Importers/exporters stay under the host-managed File ▸ Import /
+    Export — registered by the host, not via `menus.register`; their category still
+    drives the manager section.)
   - **Load external plugins (URL + file) — BUILT, with the sandbox hardened.** The
     manager can now add third-party plugins from outside the built-in set, and they
     persist across restarts (`crosstab.plugins.user` in localStorage):

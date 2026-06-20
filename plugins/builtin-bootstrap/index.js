@@ -29,7 +29,6 @@ export const manifest = {
 export async function activate(app) {
   await app.menus.register({
     id: 'builtin-bootstrap:mean',
-    path: ['Resampling'],
     label: 'Bootstrap the mean…',
     order: 10,
     command: () => openBootstrap(app),

@@ -27,7 +27,6 @@ export const manifest = {
 export async function activate(app) {
   await app.menus.register({
     id: 'builtin-crosstabs:open',
-    path: ['Descriptive Statistics'],
     label: 'Crosstabs…',
     order: 30,
     command: () => openCrosstabs(app),

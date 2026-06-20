@@ -26,9 +26,7 @@ export const manifest = {
 /** @param {object} app */
 export async function activate(app) {
   await app.menus.register({
-    id: 'builtin-descriptives:open',
-    path: ['Descriptive Statistics'],
-    label: 'Descriptives…',
+    id: 'builtin-descriptives:open',    label: 'Descriptives…',
     order: 20,
     command: () => openDescriptives(app),
   });

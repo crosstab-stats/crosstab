@@ -28,7 +28,6 @@ export const manifest = {
 export async function activate(app) {
   await app.menus.register({
     id: 'builtin-correlation:open',
-    path: ['Correlation'],
     label: 'Bivariate…',
     order: 10,
     command: () => openCorrelation(app),

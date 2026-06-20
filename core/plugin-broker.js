@@ -63,6 +63,13 @@ export class PluginBroker {
   /** Bound message listener, retained so it can be removed on dispose. */
   #listener;
 
+  /** Host menu service, for the category-scoped `menus.register` override. */
+  #menus;
+
+  /** The plugin's declared category — the menu it is filed under. Set on activate.
+   * A plugin cannot choose its menu location; the host derives it from here. */
+  #pluginCategory = 'Other';
+
   /**
    * @param {Object} args
    * @param {HTMLIFrameElement} args.iframe - The plugin's sandboxed iframe.
@@ -73,7 +80,13 @@ export class PluginBroker {
   constructor({ iframe, services, onError }) {
     this.#iframe = iframe;
     this.#onError = onError ?? ((e) => console.error('[plugin-broker]', e));
+    this.#menus = services.menus;
     this.#dispatch = buildDispatch(services);
+    // A plugin declares only its menu *label*; the host fixes the *location* to
+    // the plugin's category. Override the dispatch entry so any `path` a plugin
+    // passes is discarded — menu placement can't be done any other way.
+    this.#dispatch['menus.register'] = (item) =>
+      this.#menus.register({ ...item, path: [this.#pluginCategory] });
     this.#listener = (e) => this.#onMessage(e);
     window.addEventListener('message', this.#listener);
   }
@@ -103,6 +116,11 @@ export class PluginBroker {
    * @returns {Promise<void>} Resolves when `activate` returns.
    */
   sendActivate(plugin) {
+    // Capture the category before activate() runs, so the plugin's menus.register
+    // calls (which happen during activate) are filed under it.
+    if (typeof plugin?.category === 'string' && plugin.category) {
+      this.#pluginCategory = plugin.category;
+    }
     this.#post({ t: 'activate', plugin });
     return this.#activated.promise;
   }
@@ -279,6 +297,8 @@ function buildDispatch({ data, transform, results, webr, menus, ui, importers, e
     'webr.mountFile': (file, name) => webr.mountFile(file, name),
     'webr.unmount': (path) => webr.unmount(path),
 
+    // NOTE: the broker constructor overrides this to force the menu path to the
+    // plugin's category (a plugin can't choose its menu location).
     'menus.register': (item) => menus.register(item),
 
     'ui.selectVariables': (opts) => ui.selectVariables(opts),

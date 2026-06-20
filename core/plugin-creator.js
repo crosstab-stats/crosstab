@@ -174,11 +174,10 @@ function header(id, name, category, keywords, rPackages = []) {
 };
 
 // activate() runs once when the plugin loads — register your menu item(s) here.
-// Convention: file your menu under your category (above) as the top-level menu,
-// so users find it where the plugin manager groups it.
+// You choose only the label; the host files your item under your category
+// (manifest.category above) — the same place the plugin manager lists it.
 export async function activate(app) {
   await app.menus.register({
-    path: ['${category}'],   // top-level menu = your category
     label: '${name}…',       // the menu item the user clicks
     command: () => run(app),
   });
