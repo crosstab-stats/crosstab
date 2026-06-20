@@ -47,7 +47,12 @@ export class PluginCreator {
    *   refresh the plugin-manager list if it's open).
    */
   open(existing = null, onDone = null) {
-    const editing = !!existing;
+    // Three modes: create (no `existing`), edit-in-place (`existing.key` set), and
+    // fork (`existing` with source but no key → saves as a NEW plugin). Edit and
+    // fork both drop straight into the code editor (no Simple form / templates).
+    const editing = !!(existing && existing.key);
+    const forking = !!existing && !existing.key;
+    const codeMode = editing || forking;
     const id = genId();
     const pristineTexts = new Set(TEMPLATES.map((t) => t.build(id, 'My Analysis')));
     const catOptions = CATEGORY_ORDER.concat('Other')
@@ -58,9 +63,11 @@ export class PluginCreator {
     dialog.className = 'ct-dialog ct-creator';
     dialog.innerHTML = `
       <form method="dialog" class="ct-dialog__form">
-        <h2 class="ct-dialog__title">${editing ? 'Edit plugin' : 'Create a plugin'}</h2>
+        <h2 class="ct-dialog__title">${
+          forking ? `New plugin from “${existing.fromName ?? 'a copy'}”` : editing ? 'Edit plugin' : 'Create a plugin'
+        }</h2>
         ${
-          editing
+          codeMode
             ? ''
             : `<div class="ct-creator__modes">
                  <button type="button" class="ct-creator__mode is-active" data-mode="simple">Simple</button>
@@ -91,11 +98,13 @@ export class PluginCreator {
 
         <div class="ct-creator__codepanel">
           <p class="ct-dialog__hint">${
-            editing
-              ? 'Edit your plugin’s code, then Save &amp; load.'
-              : 'The full plugin source — edit directly for anything the form can’t express.'
+            forking
+              ? 'A copy of the original — read it, change what you like, then Save &amp; load. It saves as a new plugin (the id is already changed); rename the menu label too so it’s not a duplicate.'
+              : editing
+                ? 'Edit your plugin’s code, then Save &amp; load.'
+                : 'The full plugin source — edit directly for anything the form can’t express.'
           }</p>
-          ${editing ? '' : '<div class="ct-creator__templates"></div>'}
+          ${codeMode ? '' : '<div class="ct-creator__templates"></div>'}
           <div class="ct-creator__editor">
             <div class="ct-creator__gutter" aria-hidden="true"></div>
             <textarea class="ct-creator__code" spellcheck="false" wrap="off"></textarea>
@@ -129,10 +138,13 @@ export class PluginCreator {
     };
 
     code.value = existing?.source ?? TEMPLATES[1].build(id, 'My Analysis');
+    // The Name field is hidden in code mode, but it still supplies the saved
+    // entry name — seed it from the existing/forked name so it isn't "My Analysis".
+    if (existing?.name) nameEl.value = existing.name;
     syncGutter();
 
-    // --- Simple vs Code mode (new plugins only; editing is always Code) --------
-    let mode = editing ? 'code' : 'simple';
+    // --- Simple vs Code mode (new plugins only; edit/fork are always Code) ------
+    let mode = codeMode ? 'code' : 'simple';
     const simplePanel = q('.ct-creator__simple');
     const codePanel = q('.ct-creator__codepanel');
     const applyMode = () => {
@@ -204,7 +216,7 @@ export class PluginCreator {
     };
     q('.ct-creator__addinput').addEventListener('click', () => addInputRow());
     dialog.querySelectorAll('input[name="ctout"]').forEach((r) => r.addEventListener('change', updateRHint));
-    if (!editing) {
+    if (!codeMode) {
       addInputRow('numeric-multi', 'vars');
       rBox.value =
         'data.frame(\n  Variable = names(vars),\n  Mean = round(sapply(vars, function(x) mean(as.numeric(x), na.rm = TRUE)), 3)\n)';
@@ -212,7 +224,7 @@ export class PluginCreator {
     }
 
     // --- Code mode: templates + editor -----------------------------------------
-    if (!editing) {
+    if (!codeMode) {
       const box = q('.ct-creator__templates');
       for (const t of TEMPLATES) {
         const b = document.createElement('button');
@@ -277,7 +289,7 @@ export class PluginCreator {
     dialog.addEventListener('close', () => dialog.remove());
     document.body.append(dialog);
     dialog.showModal();
-    (editing ? code : nameEl).focus();
+    (codeMode ? code : nameEl).focus();
   }
 }
 

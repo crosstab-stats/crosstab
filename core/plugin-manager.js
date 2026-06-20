@@ -210,6 +210,24 @@ export class PluginManager {
     return this.#user.find((e) => e.key === key) ?? null;
   }
 
+  /** Any plugin's entry — built-in or user — keyed by its load key. */
+  #entryFor(key) {
+    return this.#entries().find((e) => e.key === key) ?? null;
+  }
+
+  /** A plugin's source text, for forking. User plugins (authored/file) carry it;
+   * built-in and URL plugins are re-fetched from their URL — built-ins are
+   * same-origin and URL plugins are CORS-enabled by definition (they loaded). */
+  async getSource(key) {
+    const e = this.#entryFor(key);
+    if (!e) throw new Error('Unknown plugin.');
+    if (e.source != null) return e.source;
+    if (!e.url) throw new Error('No source available for this plugin.');
+    const res = await fetch(e.url);
+    if (!res.ok) throw new Error(`couldn’t fetch source (HTTP ${res.status})`);
+    return res.text();
+  }
+
   /** Remove a user plugin entirely (unload + forget). Built-ins can't be removed. */
   async removePlugin(key) {
     const i = this.#user.findIndex((e) => e.key === key);
@@ -381,6 +399,27 @@ export class PluginManager {
     const right = el('span', null, 'ct-plugin__right');
     const metaText = p.enabled ? (p.loaded ? p.origin : 'failed to load') : 'disabled';
     right.append(el('span', metaText, 'ct-plugin__meta'));
+
+    // Fork: open the editor pre-filled with a copy of this plugin's source as a
+    // *new* plugin. Available on every row (built-ins are the worked examples).
+    if (this.#creator) {
+      const fork = document.createElement('button');
+      fork.type = 'button';
+      fork.className = 'ct-plugin__fork';
+      fork.textContent = '⧉';
+      fork.title = 'Make an editable copy';
+      fork.addEventListener('click', async () => {
+        setErr('');
+        try {
+          const source = await this.getSource(p.key);
+          const copyName = `${p.name} (copy)`;
+          this.#creator.open({ name: copyName, fromName: p.name, source: forkSource(source, copyName) }, refresh);
+        } catch (err) {
+          setErr(`Couldn’t copy ${p.name}: ${err.message}`);
+        }
+      });
+      right.append(fork);
+    }
     if (p.editable && this.#creator) {
       const ed = document.createElement('button');
       ed.type = 'button';
@@ -452,6 +491,29 @@ function el(tag, text, className) {
   if (text != null) e.textContent = text;
   if (className) e.className = className;
   return e;
+}
+
+/** A short, collision-resistant hex token. */
+function randHex(n) {
+  return crypto.randomUUID().replace(/-/g, '').slice(0, n);
+}
+
+/** Prepare a forked plugin's source so it loads as a *distinct* plugin: give the
+ * manifest a fresh `id` (required — the original's id is already taken) and the
+ * "(copy)" display name. Both target the first matching manifest literal; the
+ * id rewrite is the load-critical one (the only `id:` in a declarative manifest),
+ * the name is cosmetic. If the source has no manifest `id`, it wouldn't load
+ * anyway and the save-time error will say so. */
+function forkSource(source, copyName) {
+  let out = source.replace(
+    /(\bid\s*:\s*)(['"`])([^'"`]*)\2/,
+    (_m, pre, q, old) => `${pre}${q}${(old || 'plugin') + '-copy-' + randHex(6)}${q}`,
+  );
+  out = out.replace(
+    /(\bname\s*:\s*)(['"`])([^'"`]*)\2/,
+    (_m, pre, q) => `${pre}${q}${copyName.replace(new RegExp(q, 'g'), '\\' + q)}${q}`,
+  );
+  return out;
 }
 
 /** Open a file picker for a plugin source file. Resolves the File, or null. */
