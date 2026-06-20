@@ -214,7 +214,7 @@ export async function boot(mounts) {
   const results = new ResultsPane(mounts.results);
   const menus = new MenuShell(mounts.menubar);
   const ui = new UiService(datasets);
-  const importers = new ImportService({ menus, data: datasets, results: results.api, bus });
+  const importers = new ImportService({ menus, data: datasets, results: results.api, bus, webr });
   const exporters = new ExportService({ menus, data: datasets, results: results.api, bus });
   // Output export: host owns the "Export output…" dialog + the (host-only) print
   // path; formats (HTML, Word, …) are plugins that register via app.outputExporters

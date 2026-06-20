@@ -42,11 +42,15 @@
  * @property {string[]} [extensions] - File extensions handled, with the dot, e.g.
  *   `['.csv']` or `['.sav', '.dta', '.sas7bdat']`. Used for the picker filter.
  *   Required for `'file'` importers; ignored for `'web'`.
- * @property {(req: {ticket: number, name?: string, file?: Blob}) => void} parse
+ * @property {(req: {ticket: number, name?: string, file?: Blob, path?: string}) => void} parse
  *   - Plugin callback that parses the source and calls `importers.deliver`. For
  *   `'file'` importers it gets the upload as a `File` (Blob handle): JS parsers
- *   call `file.arrayBuffer()`, runtime parsers stage it via
- *   `app.webr.mountFile(file)`. For `'web'` importers it gets only the `ticket`.
+ *   call `file.arrayBuffer()`. For `'web'` importers it gets only the `ticket`.
+ *   For a `stage` importer it gets `path` (the host-mounted WebR path) instead of
+ *   `file` — read it in R directly; the host owns the mount lifecycle.
+ * @property {boolean} [stage] - Host-mount the upload into WebR and pass the
+ *   plugin its `path` (no `file`). For large, R-parsed formats: avoids cloning a
+ *   multi-GB file through the sandbox. Ignored for `'web'` importers.
  * @property {string} [id] - Stable id (defaults to `label`).
  * @property {number} [order] - Sort weight within File ▸ Import.
  * @property {boolean} [multiple=false] - Allow selecting several files at once
@@ -63,6 +67,8 @@ export class ImportService {
   #results;
   /** @type {import('./event-bus.js').EventBus} */
   #bus;
+  /** WebRManager, for host-side staging of large uploads. @type {?import('./webr-manager.js').WebRManager} */
+  #webr;
 
   /** id → spec. @type {Map<string, ImporterSpec>} */
   #importers = new Map();
@@ -79,12 +85,15 @@ export class ImportService {
    * @param {import('./data-store.js').DataStore} deps.data
    * @param {{appendError: Function}} deps.results - ResultsPane#api.
    * @param {import('./event-bus.js').EventBus} deps.bus
+   * @param {import('./webr-manager.js').WebRManager} [deps.webr] - For staging
+   *   large uploads host-side (see the `stage` importer option).
    */
-  constructor({ menus, data, results, bus }) {
+  constructor({ menus, data, results, bus, webr }) {
     this.#menus = menus;
     this.#data = data;
     this.#results = results;
     this.#bus = bus;
+    this.#webr = webr ?? null;
   }
 
   /**
@@ -330,10 +339,32 @@ export class ImportService {
     this.#emitFinished(id, 1);
   }
 
-  /** Hand one file to the plugin and resolve with the dataset it delivers. */
-  #parseOne(spec, file) {
-    // Hand the plugin the File itself (a Blob handle — cheap, by-reference, no
-    // byte copy into the sandbox).
+  /** Hand one file to the plugin and resolve with the dataset it delivers.
+   *
+   * A `stage` importer (large, R-parsed — e.g. haven) gets the file **mounted
+   * host-side** and is handed only its WebR path: the host holds the fresh `File`
+   * straight from the picker and mounts it itself, so the upload is never
+   * structured-cloned through the sandbox (truly by-reference, no double-clone,
+   * no giant copy into the plugin). The host owns the mount lifecycle. A normal
+   * importer (JS-parsed — e.g. CSV) still gets the `File` to read in JS. */
+  async #parseOne(spec, file) {
+    if (spec.stage && this.#webr) {
+      let path;
+      try {
+        path = await this.#webr.mountFile(file, file.name);
+      } catch (err) {
+        throw new Error(`could not stage "${file.name}": ${err.message}`);
+      }
+      try {
+        return await this.#awaitTicket((ticket) => spec.parse({ ticket, name: file.name, path }));
+      } finally {
+        try {
+          await this.#webr.unmount(path);
+        } catch {
+          /* best-effort unmount */
+        }
+      }
+    }
     return this.#awaitTicket((ticket) => spec.parse({ ticket, name: file.name, file }));
   }
 

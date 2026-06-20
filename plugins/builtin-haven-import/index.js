@@ -48,6 +48,7 @@ export const manifest = {
       extensions: Object.keys(READERS),
       order: 20,
       multiple: true, // batch-select several files (e.g. GSS years) to pool them
+      stage: true, // host mounts the upload and hands us its WebR path (no sandbox copy)
       parse: 'importWhole',
     },
     // Filtered variant: read the variable catalog first and let the user pick a
@@ -57,14 +58,16 @@ export const manifest = {
       label: 'SPSS / Stata / SAS — choose variables…',
       extensions: Object.keys(READERS),
       order: 21,
+      stage: true,
       parse: 'importChoose',
     },
   ],
 };
 
-/** Declarative importer entry points: parse the whole file, or pick columns. */
-export const importWhole = (app, { name, file }) => importHaven(app, name, file, false);
-export const importChoose = (app, { name, file }) => importHaven(app, name, file, true);
+/** Declarative importer entry points: parse the whole file, or pick columns. The
+ * host stages the upload (`stage: true`) and passes its mounted `path`. */
+export const importWhole = (app, { name, path }) => importHaven(app, name, path, false);
+export const importChoose = (app, { name, path }) => importHaven(app, name, path, true);
 
 /**
  * Parse a statistical-software file via R `haven` and **return** `{variables,
@@ -73,31 +76,29 @@ export const importChoose = (app, { name, file }) => importHaven(app, name, file
  * rows) and let the user choose a subset, then read only those columns
  * (`col_select`) — the memory-bounded path for huge files.
  *
+ * The file is already mounted host-side (`stage: true`); we get its WebR `path`,
+ * so there's no `File` to clone through the sandbox and the host owns unmounting.
+ *
  * @param {object} app
  * @param {string} name
- * @param {Blob} file - The uploaded file (a `File` is a `Blob`).
+ * @param {string} path - WebR path to the host-mounted upload.
  * @param {boolean} pickVariables
  * @returns {Promise<object|null>}
  */
-async function importHaven(app, name, file, pickVariables) {
-  let mounted = null;
+async function importHaven(app, name, path, pickVariables) {
   try {
     const ext = extensionOf(name);
     const reader = READERS[ext];
     if (!reader) throw new Error(`unsupported extension "${ext}"`);
+    if (!path) throw new Error('file was not staged for reading');
 
     // haven (+ helpers) installed lazily; the first import pays the download.
     await app.webr.installPackages(['haven', 'nanoparquet', 'jsonlite']);
 
-    // Stage via WORKERFS (lazy, copy-free) rather than writeFile — this avoids
-    // the ~128 MB FS.writeFile channel wall. The remaining ceiling is R's memory
-    // when haven materialises the frame (wasm32 ~4 GB), not staging.
-    mounted = await app.webr.mountFile(file, name);
-
     let cols = null;
     if (pickVariables) {
       // 1) Read the variable catalog with zero data rows (essentially free).
-      const cat = await app.webr.run(catalogR(reader, mounted));
+      const cat = await app.webr.run(catalogR(reader, path));
       const catJson = Array.isArray(cat.result?.values) ? cat.result.values[0] : cat.result;
       if (typeof catJson !== 'string') {
         throw new Error(cat.stderr ? cat.stderr.split('\n')[0] : 'could not read variable list');
@@ -117,7 +118,7 @@ async function importHaven(app, name, file, pickVariables) {
     }
 
     // 3) Read (subset or whole), extract metadata, write Parquet for DuckDB.
-    const { result, stderr } = await app.webr.run(buildR(reader, mounted, cols));
+    const { result, stderr } = await app.webr.run(buildR(reader, path, cols));
     const json = Array.isArray(result?.values) ? result.values[0] : result;
     if (typeof json !== 'string') {
       throw new Error(stderr ? stderr.split('\n')[0] : 'R returned no metadata');
@@ -128,14 +129,6 @@ async function importHaven(app, name, file, pickVariables) {
     return { variables, parquet };
   } catch (err) {
     throw new Error(friendlyError(err.message));
-  } finally {
-    if (mounted) {
-      try {
-        await app.webr.unmount(mounted);
-      } catch {
-        /* best-effort */
-      }
-    }
   }
 }
 

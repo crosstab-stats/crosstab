@@ -87,6 +87,9 @@ const PLUGIN_HOST_URL = './plugin-host.html';
  * @property {'file'|'web'} [source='file'] - `'web'` opens no picker.
  * @property {string[]} [extensions] - Picker filter (file source).
  * @property {boolean} [multiple] - Allow several files (pooled).
+ * @property {boolean} [stage] - Host-mount the upload into WebR and pass `parse`
+ *   the mounted `path` (no `file`). For large, R-parsed formats — avoids cloning
+ *   a multi-GB file through the sandbox; the host owns the mount lifecycle.
  * @property {number} [order]
  *
  * @typedef {Object} ExporterDecl

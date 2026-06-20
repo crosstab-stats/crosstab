@@ -93,9 +93,10 @@ export class PluginActions {
         extensions: imp.extensions,
         multiple: imp.multiple,
         source: imp.source,
+        stage: imp.stage,
         parse: (req) =>
           this.#bridge(this.#importers, req.ticket, () =>
-            this.#loader.invoke(id, imp.parse, [{ name: req.name, file: req.file }]),
+            this.#loader.invoke(id, imp.parse, [{ name: req.name, file: req.file, path: req.path }]),
           ),
       });
       if (typeof dispose === 'function') disposers.push(dispose);
