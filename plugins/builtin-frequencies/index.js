@@ -1,141 +1,102 @@
 /**
  * @file plugins/builtin-frequencies/index.js
- * Built-in plugin: Analyze ▸ Descriptive Statistics ▸ Frequencies.
+ * Built-in plugin: Descriptive Statistics ▸ Frequencies.
  *
- * This is the reference plugin — the smallest thing that proves the whole
- * contract: it registers a menu item, opens a dialog, reads the dataset and the
- * user's variable selection, runs R in WebR, transforms R's output into a
- * structured result, and renders an SPSS-style frequency table. It touches the
- * engine ONLY through the published `app` object passed to {@link activate}; it
- * imports nothing from `core/`.
+ * One SPSS-style frequency table per chosen variable (value, frequency, percent,
+ * valid percent, cumulative), honouring value labels and user-missing codes
+ * (recoded to NA so they count as Missing, not a category). Computed in R; the
+ * host renders the structured tables.
  *
- * Design choices worth noting for plugin authors:
- *  - The plugin runs in a sandboxed iframe, so EVERY `app` call is async (it is
- *    an RPC to the engine). Note the `await`s throughout.
- *  - It has no access to the host DOM, so it cannot draw its own dialog. It asks
- *    the engine to show the variable picker via `app.ui.selectVariables`.
- *  - We compute frequencies **in R** (the source of statistical truth) but do
- *    the *rendering* in JS, so the output looks like SPSS, not an R console
- *    dump. R returns plain vectors; this file builds the HTML table.
- *  - One R job per selected variable. The engine's job queue serialises them, so
- *    this stays simple; a future optimisation could batch them into one call.
- *  - Value labels and user-missing codes come from variable metadata, exactly as
- *    a .sav import would populate them.
+ * Declarative plugin: the manifest declares the (multi-variable) input; the host
+ * binds the chosen columns in R as the data.frame `vars`.
  */
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-frequencies',
   name: 'Frequencies',
-  version: '0.1.0',
+  version: '0.2.0',
   apiVersion: '0.1.0',
   category: 'Descriptive Statistics',
-  menu: 'Frequencies…',
-  menuOrder: 10,
   keywords: ['frequency', 'counts', 'distribution', 'table'],
-  // No external R packages: base R `table()` is enough for frequencies.
   rPackages: [],
+  menu: [
+    {
+      label: 'Frequencies…',
+      run: 'run',
+      order: 10,
+      inputs: [{ name: 'vars', kind: 'variables', multiple: true }],
+    },
+  ],
 };
 
-/** Entry point: the host adds the menu item (manifest.menu) and calls this. */
-export const run = openFrequencies;
-
 /**
- * Ask the engine to show the variable picker, then run the analysis on the
- * chosen variables. The picker pre-selects whatever the user highlighted in the
- * sidebar, so the common path is "select vars → open → OK".
- *
  * @param {object} app
+ * @param {{vars: string[]}} inputs
  */
-async function openFrequencies(app) {
-  const chosen = await app.ui.selectVariables({
-    title: 'Frequencies',
-    hint: 'Choose one or more variables to tabulate.',
-    multiple: true,
-  });
-  if (chosen && chosen.length) {
-    await runFrequencies(app, chosen);
-  }
-}
+export async function run(app, { vars }) {
+  if (!vars || !vars.length) return;
+  const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
 
-/**
- * Run a frequency analysis for each chosen variable and render the results.
- *
- * @param {object} app
- * @param {string[]} variables - Variable names to tabulate.
- */
-async function runFrequencies(app, variables) {
-  await app.events.emit('analysis:started', { plugin: manifest.id, title: 'Frequencies' });
-  await app.results.beginSection('Frequencies');
-
-  const allMeta = await app.data.getVariableMeta();
-  const metaByName = new Map(allMeta.map((m) => [m.name, m]));
-
-  for (const name of variables) {
-    const meta = metaByName.get(name);
+  for (const name of vars) {
+    const m = meta.get(name);
+    const mv = (m?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
     try {
-      const { result } = await app.webr.run(buildRForVariable(name, meta), {
-        injectData: true,
-        variables: [name],
-      });
+      // `vars` (the chosen columns) is bound in R; tabulate one at a time.
+      const rCode = `
+        x <- vars[[${rStr(name)}]]
+        ${mv.length ? `x[x %in% c(${mv.map(Number).join(', ')})] <- NA` : ''}
+        counts <- table(x, useNA = "no")
+        n_total <- length(x); n_valid <- sum(!is.na(x))
+        valid_pct <- as.numeric(counts) / n_valid * 100
+        list(
+          values = names(counts), counts = as.integer(counts),
+          percent = as.numeric(counts) / n_total * 100,
+          valid_percent = valid_pct, cumulative = cumsum(valid_pct),
+          n_total = n_total, n_valid = n_valid, n_missing = n_total - n_valid
+        )`;
+      const { result } = await app.webr.run(rCode);
       if (!result) throw new Error('R returned no result');
-      await app.results.appendTable(renderFrequencyTable(meta, normalizeResult(result)));
+      await app.results.appendTable(buildSpec(m, normalizeResult(result)), {
+        caption: m?.label ? `${m.label} (${name})` : name,
+      });
     } catch (err) {
-      await app.results.appendError(`Frequencies for "${name}" failed: ${err.message}`);
+      await app.results.appendError(`Frequencies for "${name}": ${err.message}`);
       console.error(err);
     }
   }
-
-  await app.events.emit('analysis:finished', { plugin: manifest.id, title: 'Frequencies' });
 }
 
-/**
- * Build the R source that tabulates one variable. User-defined missing codes are
- * recoded to `NA` first (so they are counted as Missing, not as a category). The
- * final expression is a named list, which WebR converts cleanly to a JS object.
- *
- * @param {string} name
- * @param {import('../../core/data-store.js').VariableMeta} [meta]
- * @returns {string} R source
- */
-function buildRForVariable(name, meta) {
-  const missing = (meta?.missingValues ?? []).map(rLiteral).join(', ');
-  // `df` is injected by the engine. Index by name to tolerate odd identifiers.
-  return `
-    x <- df[[${rLiteral(name)}]]
-    ${missing ? `x[x %in% c(${missing})] <- NA` : ''}
-    counts <- table(x, useNA = "no")
-    n_total <- length(x)
-    n_valid <- sum(!is.na(x))
-    n_missing <- n_total - n_valid
-    valid_pct <- as.numeric(counts) / n_valid * 100
-    list(
-      values        = names(counts),
-      counts        = as.integer(counts),
-      percent       = as.numeric(counts) / n_total * 100,
-      valid_percent = valid_pct,
-      cumulative    = cumsum(valid_pct),
-      n_total       = n_total,
-      n_valid       = n_valid,
-      n_missing     = n_missing
-    )
-  `;
+/** Build the structured frequency table from the R result + value labels. */
+function buildSpec(meta, data) {
+  const labels = meta?.valueLabels ?? {};
+  const fmt = (n) => (Number.isFinite(n) ? n.toFixed(1) : '');
+  const rows = [];
+  data.values.forEach((value, i) => {
+    rows.push([
+      labels[value] ?? value,
+      data.counts[i],
+      fmt(data.percent[i]),
+      fmt(data.valid_percent[i]),
+      fmt(data.cumulative[i]),
+    ]);
+  });
+  const validTotalPct = (data.n_valid / data.n_total) * 100;
+  rows.push(['Total (valid)', data.n_valid, fmt(validTotalPct), '100.0', '']);
+  if (data.n_missing) {
+    rows.push(['Missing', data.n_missing, fmt((data.n_missing / data.n_total) * 100), '', '']);
+  }
+  rows.push(['Total', data.n_total, '100.0', '', '']);
+  return {
+    columns: ['', 'Frequency', 'Percent', 'Valid Percent', 'Cumulative Percent'],
+    rows,
+    rowHeaders: true,
+  };
 }
 
-/**
- * WebR's `toJs()` returns R lists/vectors in a tagged shape (`{ type, names,
- * values }`). Flatten the parts we use into plain JS arrays/scalars so the
- * renderer does not have to know about WebR's wire format.
- *
- * @param {any} rList - Result of `RObject.toJs()` for the named list above.
- * @returns {{ values: string[], counts: number[], percent: number[],
- *   valid_percent: number[], cumulative: number[], n_total: number,
- *   n_valid: number, n_missing: number }}
- */
+// --- helpers -----------------------------------------------------------------
+
 function normalizeResult(rList) {
-  // A converted R named list looks like { type:'list', names:[...], values:[...] }
-  // where each entry is itself a converted vector { values: [...] } (or a scalar
-  // wrapped likewise). Be defensive about both shapes.
   const byName = {};
   if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
     rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
@@ -159,92 +120,6 @@ function normalizeResult(rList) {
   };
 }
 
-/**
- * Render an SPSS-style frequency table as an HTML string.
- *
- * @param {import('../../core/data-store.js').VariableMeta} [meta]
- * @param {ReturnType<typeof normalizeResult>} data
- * @returns {string} HTML
- */
-function renderFrequencyTable(meta, data) {
-  const labels = meta?.valueLabels ?? {};
-  const title = meta?.label ? `${esc(meta.label)} (${esc(meta.name)})` : esc(meta?.name ?? '');
-  const fmt = (n) => (Number.isFinite(n) ? n.toFixed(1) : '');
-
-  const validRows = data.values
-    .map((value, i) => {
-      const display = labels[value] ?? value;
-      return `
-        <tr>
-          <th scope="row">${esc(display)}</th>
-          <td>${data.counts[i]}</td>
-          <td>${fmt(data.percent[i])}</td>
-          <td>${fmt(data.valid_percent[i])}</td>
-          <td>${fmt(data.cumulative[i])}</td>
-        </tr>`;
-    })
-    .join('');
-
-  const validTotalPct = (data.n_valid / data.n_total) * 100;
-  const missingRow = data.n_missing
-    ? `<tr class="ct-freq__missing">
-         <th scope="row">Missing</th>
-         <td>${data.n_missing}</td>
-         <td>${fmt((data.n_missing / data.n_total) * 100)}</td>
-         <td></td><td></td>
-       </tr>`
-    : '';
-
-  return `
-    <table class="ct-freq">
-      <caption>${title}</caption>
-      <thead>
-        <tr>
-          <th scope="col"></th>
-          <th scope="col">Frequency</th>
-          <th scope="col">Percent</th>
-          <th scope="col">Valid Percent</th>
-          <th scope="col">Cumulative Percent</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${validRows}
-        <tr class="ct-freq__subtotal">
-          <th scope="row">Total (valid)</th>
-          <td>${data.n_valid}</td>
-          <td>${fmt(validTotalPct)}</td>
-          <td>100.0</td>
-          <td></td>
-        </tr>
-        ${missingRow}
-        <tr class="ct-freq__grand">
-          <th scope="row">Total</th>
-          <td>${data.n_total}</td>
-          <td>100.0</td>
-          <td></td><td></td>
-        </tr>
-      </tbody>
-    </table>`;
-}
-
-// --- tiny helpers ------------------------------------------------------------
-
-/** HTML-escape text content. */
-function esc(s) {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-/**
- * Render a JS value as an R literal for safe interpolation into R source.
- * Numbers pass through; everything else becomes a quoted, escaped string.
- *
- * @param {number|string} v
- * @returns {string}
- */
-function rLiteral(v) {
-  if (typeof v === 'number' && Number.isFinite(v)) return String(v);
-  return `"${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+function rStr(s) {
+  return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }

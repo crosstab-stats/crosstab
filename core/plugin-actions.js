@@ -122,12 +122,19 @@ export class PluginActions {
  */
 async function gatherInputs(ui, specs, item) {
   const out = {};
+  const takenUnique = []; // variables chosen by earlier `unique` inputs → excluded later
+
   for (const spec of specs) {
     const title = composeTitle(item.label, spec.label);
     const kind = spec.kind || 'variables';
 
     if (kind === 'variables') {
-      const res = await ui.selectVariables({ title, multiple: !!spec.multiple, types: spec.types });
+      const res = await ui.selectVariables({
+        title,
+        multiple: !!spec.multiple,
+        types: spec.types,
+        exclude: spec.unique ? takenUnique.slice() : undefined,
+      });
       if (res === null) {
         if (spec.optional) {
           out[spec.name] = spec.multiple ? [] : null;
@@ -136,6 +143,7 @@ async function gatherInputs(ui, specs, item) {
         return null;
       }
       out[spec.name] = spec.multiple ? res : res[0] ?? null;
+      if (spec.unique) takenUnique.push(...(spec.multiple ? res : res.slice(0, 1)));
     } else if (kind === 'number' || kind === 'text') {
       const r = await ui.showForm({
         title,

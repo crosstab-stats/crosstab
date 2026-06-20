@@ -1,109 +1,89 @@
 /**
  * @file plugins/builtin-bootstrap/index.js
- * Built-in plugin: Analyze ▸ Resample ▸ Bootstrap the mean.
+ * Built-in plugin: Resampling ▸ Bootstrap the mean.
  *
- * The first analysis that **emits a derived dataset** rather than only rendering
- * output. It resamples a numeric variable with replacement `B` times, takes the
- * mean of each resample, and hands the engine those `B` bootstrap means as a new
- * dataset via `app.data.create` — which becomes the active dataset, so you can
- * immediately plot its distribution (Graphs ▸ Histogram) or describe it. It also
- * prints the observed mean, bootstrap SE, and a 95% percentile CI to the Output.
+ * Resamples a numeric variable with replacement `reps` times, takes each
+ * resample's mean, and **emits those means as a new (active) dataset** via
+ * `app.data.create` — so you can immediately plot/describe the bootstrap
+ * distribution. Also reports the observed mean, bootstrap SE, and a 95%
+ * percentile CI. The "analyses are data sources too" pattern.
  *
- * This is the "analyses are data sources too" pattern: the bootstrap distribution
- * didn't exist in the source, but it's now a first-class dataset every other tool
- * (plots, descriptives, export) can consume.
+ * Declarative plugin: the manifest declares the variable + resample-count inputs;
+ * the host binds them in R as `x` (a vector) and `reps` (a number).
  */
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-bootstrap',
   name: 'Bootstrap',
-  version: '0.1.0',
+  version: '0.2.0',
   apiVersion: '0.1.0',
   category: 'Resampling',
-  menu: 'Bootstrap the mean…',
   keywords: ['resample', 'bootstrap', 'ci', 'confidence'],
-  rPackages: [], // base R (sample/replicate/quantile)
+  rPackages: [],
+  menu: [
+    {
+      label: 'Bootstrap the mean…',
+      run: 'run',
+      order: 10,
+      inputs: [
+        { name: 'x', kind: 'variables', types: ['numeric'], multiple: false },
+        { name: 'reps', kind: 'number', label: 'Number of resamples', default: 2000 },
+      ],
+    },
+  ],
 };
-
-/** Entry point: the host adds the menu item (manifest.menu) and calls this. */
-export const run = openBootstrap;
-
-async function openBootstrap(app) {
-  const chosen = await app.ui.selectVariables({
-    title: 'Bootstrap the mean',
-    hint: 'Choose a numeric variable to resample.',
-    multiple: false,
-    types: ['numeric'],
-  });
-  if (!chosen?.length) return;
-  const form = await app.ui.showForm({
-    title: 'Bootstrap the mean',
-    hint: `Resample “${chosen[0]}” with replacement and take the mean each time.`,
-    okLabel: 'Run',
-    fields: [{ name: 'reps', label: 'Number of resamples', type: 'number', value: '2000' }],
-  });
-  if (!form) return;
-  let reps = Math.round(Number(form.reps));
-  if (!Number.isFinite(reps) || reps < 100) reps = 2000;
-  reps = Math.min(reps, 100000);
-  await runBootstrap(app, chosen[0], reps);
-}
 
 /**
  * @param {object} app
- * @param {string} name
- * @param {number} reps
+ * @param {{x: string, reps: number}} inputs
  */
-async function runBootstrap(app, name, reps) {
-  await app.events.emit('analysis:started', { plugin: manifest.id, title: 'Bootstrap' });
-  await app.results.beginSection('Bootstrap the mean');
-
+export async function run(app, { x: name, reps }) {
+  if (!name) return;
   const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
   const label = meta.get(name)?.label || name;
-  const missing = (meta.get(name)?.missingValues ?? []).map(rlit).join(', ');
+  const mv = (meta.get(name)?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
 
-  try {
-    const R = `
-      ${missing ? `df[[${rlit(name)}]][df[[${rlit(name)}]] %in% c(${missing})] <- NA` : ''}
-      x <- as.numeric(df[[${rlit(name)}]]); x <- x[is.finite(x)]
-      n <- length(x)
-      if (n < 2) stop("need at least 2 non-missing values")
-      boot <- replicate(${reps}, mean(sample(x, n, replace = TRUE)))
-      list(
-        boot     = boot,
-        observed = mean(x),
-        se       = sd(boot),
-        ci_lo    = unname(quantile(boot, 0.025)),
-        ci_hi    = unname(quantile(boot, 0.975)),
-        n        = n
-      )`;
-    const { result } = await app.webr.run(R, { injectData: true, variables: [name] });
-    if (!result) throw new Error('R returned no result');
-    const r = normalizeResult(result);
+  const rCode = `
+    ${mv.length ? `x[x %in% c(${mv.map(Number).join(', ')})] <- NA` : ''}
+    x <- as.numeric(x); x <- x[is.finite(x)]
+    n <- length(x)
+    if (n < 2) stop("need at least 2 non-missing values")
+    B <- if (is.finite(reps) && reps >= 100) as.integer(min(round(reps), 100000)) else 2000L
+    boot <- replicate(B, mean(sample(x, n, replace = TRUE)))
+    list(boot = boot, observed = mean(x), se = sd(boot),
+         ci_lo = unname(quantile(boot, .025)), ci_hi = unname(quantile(boot, .975)),
+         n = n, reps = B)`;
 
-    // Emit the bootstrap distribution as a new (active) dataset.
-    await app.data.create({
-      name: `Bootstrap mean of ${name}`,
-      variables: [
-        { name: 'boot_mean', type: 'numeric', measurementLevel: 'scale', label: `Bootstrap mean of ${label}` },
-      ],
-      columns: { boot_mean: r.boot },
-    });
+  const { result } = await app.webr.run(rCode);
+  if (!result) throw new Error('R returned no result');
+  const r = normalizeResult(result);
 
-    await app.results.appendTable(renderSummary(r, label, reps));
-    await app.results.appendText(
-      `The ${reps.toLocaleString()} resampled means are now a dataset, **Bootstrap mean of ${name}** ` +
-        `(it’s the active dataset). Plot it with **Graphs ▸ Histogram** on \`boot_mean\`.`,
-    );
-  } catch (err) {
-    await app.results.appendError(`Bootstrap failed: ${err.message}`);
-    console.error(err);
-  }
-  await app.events.emit('analysis:finished', { plugin: manifest.id, title: 'Bootstrap' });
+  // Emit the bootstrap distribution as a new (active) dataset.
+  await app.data.create({
+    name: `Bootstrap mean of ${name}`,
+    variables: [
+      { name: 'boot_mean', type: 'numeric', measurementLevel: 'scale', label: `Bootstrap mean of ${label}` },
+    ],
+    columns: { boot_mean: r.boot },
+  });
+
+  const f = (v) => (Number.isFinite(v) ? v.toFixed(3) : '—');
+  await app.results.appendTable(
+    {
+      columns: ['N', 'Observed mean', 'Bootstrap SE', '95% CI (percentile)'],
+      rows: [[Number.isFinite(r.n) ? Math.round(r.n) : '—', f(r.observed), f(r.se), `[${f(r.ci_lo)}, ${f(r.ci_hi)}]`]],
+    },
+    { caption: `Bootstrap of the mean — ${label} (${(r.reps || reps).toLocaleString()} resamples)` },
+  );
+  await app.results.appendText(
+    `The ${(r.reps || reps).toLocaleString()} resampled means are now a dataset, **Bootstrap mean of ${name}** ` +
+      '(the active dataset). Plot it with **Graphs ▸ Histogram** on `boot_mean`.',
+  );
 }
 
-/** @param {any} rList */
+// --- helpers -----------------------------------------------------------------
+
 function normalizeResult(rList) {
   const byName = {};
   if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
@@ -123,44 +103,6 @@ function normalizeResult(rList) {
     ci_lo: scalar(byName.ci_lo),
     ci_hi: scalar(byName.ci_hi),
     n: scalar(byName.n),
+    reps: scalar(byName.reps),
   };
-}
-
-/**
- * @param {ReturnType<typeof normalizeResult>} r
- * @param {string} label
- * @param {number} reps
- * @returns {string} HTML
- */
-function renderSummary(r, label, reps) {
-  const f = (x) => (Number.isFinite(x) ? x.toFixed(3) : '—');
-  return `
-    <table class="ct-desc">
-      <caption>Bootstrap of the mean — ${esc(label)} (${reps.toLocaleString()} resamples)</caption>
-      <thead>
-        <tr>
-          <th scope="col">N</th><th scope="col">Observed mean</th>
-          <th scope="col">Bootstrap SE</th><th scope="col">95% CI (percentile)</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>${Number.isFinite(r.n) ? Math.round(r.n) : '—'}</td>
-          <td>${f(r.observed)}</td>
-          <td>${f(r.se)}</td>
-          <td>[${f(r.ci_lo)}, ${f(r.ci_hi)}]</td>
-        </tr>
-      </tbody>
-    </table>`;
-}
-
-/** HTML-escape text content. */
-function esc(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-/** Render a JS value as an R literal for safe interpolation into R source. */
-function rlit(v) {
-  if (typeof v === 'number' && Number.isFinite(v)) return String(v);
-  return `"${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }

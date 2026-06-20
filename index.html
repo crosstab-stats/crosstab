@@ -361,6 +361,9 @@
       }
       .ct-dialog__vars li.ct-dialog__group + li label { border-top: 0; }
       .ct-dialog__vars code { color: #7a8590; font-size: 12px; }
+      /* A variable disabled because a prior `unique` input already took it. */
+      .ct-dialog__vars li.ct-dialog__excluded label { opacity: .5; cursor: not-allowed; }
+      .ct-dialog__taken { margin-left: auto; font-size: 11px; color: #b07; font-style: italic; }
       .ct-dialog__buttons { display: flex; justify-content: flex-end; gap: 8px; margin: 0; padding: 0; }
       .ct-dialog__buttons button {
         font: inherit; padding: 8px 16px; border-radius: 6px; border: 1px solid var(--line);

@@ -207,11 +207,20 @@
             const blob = new Blob([code], { type: 'text/javascript' });
             url = URL.createObjectURL(blob);
             pluginModule = await import(url);
-            if (
-              !pluginModule.manifest ||
-              (typeof pluginModule.activate !== 'function' && typeof pluginModule.run !== 'function')
-            ) {
-              throw new Error('plugin must export `manifest` and either `activate` or `run`');
+            const m = pluginModule.manifest;
+            const hasFn =
+              typeof pluginModule.activate === 'function' || typeof pluginModule.run === 'function';
+            // A declarative plugin exports named functions referenced by its
+            // manifest sections (validated per-call at 'invoke'); accept it if it
+            // has any such section even without a bare `run`/`activate`.
+            const hasDeclarative =
+              m &&
+              (Array.isArray(m.menu) ||
+                Array.isArray(m.imports) ||
+                Array.isArray(m.exports) ||
+                Array.isArray(m.outputExports));
+            if (!m || (!hasFn && !hasDeclarative)) {
+              throw new Error('plugin must export `manifest` and either `activate`, `run`, or a declarative section');
             }
             post({ t: 'manifest', ok: true, manifest: pluginModule.manifest });
           } catch (err) {

@@ -1,125 +1,114 @@
 /**
  * @file plugins/builtin-crosstabs/index.js
- * Built-in plugin: Analyze ▸ Descriptive Statistics ▸ Crosstabs.
+ * Built-in plugin: Descriptive Statistics ▸ Crosstabs.
  *
- * The namesake analysis: a two-way contingency table (row variable × column
- * variable) with row/column/grand totals, plus a Pearson chi-square test of
- * independence. Counts and the test are computed in R (`table` + `chisq.test`);
- * the SPSS-style tables are rendered in JS.
+ * A two-way contingency table plus a Pearson chi-square test. User-missing codes
+ * on either variable are recoded to NA first. Computed in R; the host renders the
+ * structured tables (counts + value labels).
  *
- * Reaches the engine only through `app`, and honours each variable's
- * `missingValues` (recoded to NA before tabulating), like the other analyses.
- * Cell values display via value labels where present.
+ * Declarative plugin: the manifest declares two categorical inputs marked
+ * `unique` (so the column picker excludes the already-chosen row variable); the
+ * host binds them in R as the vectors `rowvar` and `colvar`.
  */
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-crosstabs',
   name: 'Crosstabs',
-  version: '0.1.0',
+  version: '0.2.0',
   apiVersion: '0.1.0',
   category: 'Descriptive Statistics',
-  menu: 'Crosstabs…',
-  menuOrder: 30,
   keywords: ['chi-square', 'contingency', 'crosstab', 'association'],
-  rPackages: [], // base R `table` + `chisq.test`
+  rPackages: [],
+  menu: [
+    {
+      label: 'Crosstabs…',
+      run: 'run',
+      order: 30,
+      inputs: [
+        { name: 'rowvar', kind: 'variables', label: 'Row variable', multiple: false, types: ['factor', 'string'], unique: true },
+        { name: 'colvar', kind: 'variables', label: 'Column variable', multiple: false, types: ['factor', 'string'], unique: true },
+      ],
+    },
+  ],
 };
-
-/** Entry point: the host adds the menu item (manifest.menu) and calls this. */
-export const run = openCrosstabs;
-
-/** Pick a row variable, then a column variable, then run. */
-async function openCrosstabs(app) {
-  const types = ['factor', 'string'];
-  const row = await app.ui.selectVariables({
-    title: 'Crosstabs — row variable',
-    hint: 'Choose the row variable.',
-    multiple: false,
-    types,
-  });
-  if (!row || !row.length) return;
-
-  const col = await app.ui.selectVariables({
-    title: 'Crosstabs — column variable',
-    hint: `Row: ${row[0]}. Now choose the column variable.`,
-    multiple: false,
-    types,
-  });
-  if (!col || !col.length) return;
-
-  await runCrosstabs(app, row[0], col[0]);
-}
 
 /**
  * @param {object} app
- * @param {string} rowName
- * @param {string} colName
+ * @param {{rowvar: string, colvar: string}} inputs
  */
-async function runCrosstabs(app, rowName, colName) {
-  await app.events.emit('analysis:started', { plugin: manifest.id, title: 'Crosstabs' });
-  await app.results.beginSection('Crosstabs');
+export async function run(app, { rowvar: rowName, colvar: colName }) {
+  if (!rowName || !colName) return;
+  const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
 
-  const allMeta = await app.data.getVariableMeta();
-  const metaByName = new Map(allMeta.map((m) => [m.name, m]));
-
-  try {
-    const { result } = await app.webr.run(buildR(rowName, colName, metaByName), {
-      injectData: true,
-      variables: [rowName, colName],
-    });
-    if (!result) throw new Error('R returned no result');
-    const x = normalizeResult(result);
-    await app.results.appendTable(renderCrosstab(x, metaByName.get(rowName), metaByName.get(colName)));
-    await app.results.appendTable(renderChiSquare(x));
-  } catch (err) {
-    await app.results.appendError(`Crosstabs failed: ${err.message}`);
-    console.error(err);
-  }
-
-  await app.events.emit('analysis:finished', { plugin: manifest.id, title: 'Crosstabs' });
-}
-
-/**
- * Build R: recode user-missing on both variables, cross-tabulate, run the
- * chi-square test, and return counts (row-major) + totals + the test stats.
- *
- * @param {string} rowName
- * @param {string} colName
- * @param {Map<string, import('../../core/data-store.js').VariableMeta>} metaByName
- * @returns {string}
- */
-function buildR(rowName, colName, metaByName) {
-  const recode = (varExpr, name) => {
-    const missing = (metaByName.get(name)?.missingValues ?? []).map(rLiteral).join(', ');
-    return missing ? `${varExpr}[${varExpr} %in% c(${missing})] <- NA` : '';
-  };
-  return `
-    rv <- df[[${rLiteral(rowName)}]]
-    cv <- df[[${rLiteral(colName)}]]
-    ${recode('rv', rowName)}
-    ${recode('cv', colName)}
-    tab <- table(rv, cv)
+  const rCode = `
+    ${recode('rowvar', meta.get(rowName))}
+    ${recode('colvar', meta.get(colName))}
+    tab <- table(rowvar, colvar)
     chi <- tryCatch(suppressWarnings(chisq.test(tab)), error = function(e) NULL)
     list(
-      rowLevels = rownames(tab),
-      colLevels = colnames(tab),
-      counts    = as.integer(t(tab)),
-      rowTotals = as.integer(rowSums(tab)),
-      colTotals = as.integer(colSums(tab)),
-      total     = sum(tab),
-      chisq     = if (is.null(chi)) NA_real_ else unname(chi$statistic),
-      dfree     = if (is.null(chi)) NA_real_ else unname(chi$parameter),
-      p         = if (is.null(chi)) NA_real_ else chi$p.value
-    )
-  `;
+      rowLevels = rownames(tab), colLevels = colnames(tab),
+      counts = as.integer(t(tab)),
+      rowTotals = as.integer(rowSums(tab)), colTotals = as.integer(colSums(tab)),
+      total = sum(tab),
+      chisq = if (is.null(chi)) NA_real_ else unname(chi$statistic),
+      dfree = if (is.null(chi)) NA_real_ else unname(chi$parameter),
+      p     = if (is.null(chi)) NA_real_ else chi$p.value
+    )`;
+
+  const { result } = await app.webr.run(rCode);
+  if (!result) throw new Error('R returned no result');
+  const x = normalizeResult(result);
+
+  const rowMeta = meta.get(rowName);
+  const colMeta = meta.get(colName);
+  const lv = (m, code) => m?.valueLabels?.[code] ?? code;
+  const ncol = x.colLevels.length;
+
+  // Contingency table.
+  const rows = x.rowLevels.map((r, i) => [
+    lv(rowMeta, r),
+    ...x.colLevels.map((_, j) => x.counts[i * ncol + j] ?? 0),
+    x.rowTotals[i],
+  ]);
+  rows.push(['Total', ...x.colTotals, x.total]);
+  await app.results.appendTable(
+    {
+      columns: ['', ...x.colLevels.map((c) => lv(colMeta, c)), 'Total'],
+      rows,
+      rowHeaders: true,
+    },
+    { caption: `${labelOf(rowMeta, rowName)} × ${labelOf(colMeta, colName)}` },
+  );
+
+  // Chi-square test.
+  const fmt = (n, d) => (Number.isFinite(n) ? n.toFixed(d) : '—');
+  const p = Number.isFinite(x.p) ? (x.p < 0.001 ? '< .001' : x.p.toFixed(3)) : '—';
+  await app.results.appendTable(
+    {
+      columns: ['', 'Value', 'df', 'Asymp. Sig. (2-sided)'],
+      rows: [
+        ['Pearson Chi-Square', fmt(x.chisq, 3), fmt(x.dfree, 0), p],
+        ['N of Valid Cases', x.total, '', ''],
+      ],
+      rowHeaders: true,
+    },
+    { caption: 'Chi-Square Tests' },
+  );
 }
 
-/**
- * @param {any} rList
- * @returns {{rowLevels: string[], colLevels: string[], counts: number[],
- *   rowTotals: number[], colTotals: number[], total: number,
- *   chisq: number, dfree: number, p: number}}
- */
+// --- helpers -----------------------------------------------------------------
+
+/** R line recoding a bound vector's user-missing codes to NA. */
+function recode(varName, meta) {
+  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
+  return mv.length ? `${varName}[${varName} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
+}
+
+function labelOf(meta, name) {
+  return meta?.label ? `${meta.label} (${name})` : name;
+}
+
 function normalizeResult(rList) {
   const byName = {};
   if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
@@ -143,81 +132,4 @@ function normalizeResult(rList) {
     dfree: scalar(byName.dfree),
     p: scalar(byName.p),
   };
-}
-
-/**
- * Render the contingency table. Counts are row-major: `counts[i*ncol + j]`.
- *
- * @param {ReturnType<typeof normalizeResult>} x
- * @param {import('../../core/data-store.js').VariableMeta} [rowMeta]
- * @param {import('../../core/data-store.js').VariableMeta} [colMeta]
- * @returns {string}
- */
-function renderCrosstab(x, rowMeta, colMeta) {
-  const ncol = x.colLevels.length;
-  const rowLabel = labelOf(rowMeta);
-  const colLabel = labelOf(colMeta);
-  const lv = (meta, code) => esc(meta?.valueLabels?.[code] ?? code);
-
-  const headCells = x.colLevels.map((c) => `<th scope="col">${lv(colMeta, c)}</th>`).join('');
-  const bodyRows = x.rowLevels
-    .map((r, i) => {
-      const cells = x.colLevels.map((_, j) => `<td>${x.counts[i * ncol + j] ?? 0}</td>`).join('');
-      return `<tr><th scope="row">${lv(rowMeta, r)}</th>${cells}<td>${x.rowTotals[i]}</td></tr>`;
-    })
-    .join('');
-  const totalCells = x.colLevels.map((_, j) => `<td>${x.colTotals[j]}</td>`).join('');
-
-  return `
-    <table class="ct-crosstab">
-      <caption>${rowLabel} &times; ${colLabel}</caption>
-      <thead>
-        <tr><th scope="col"></th>${headCells}<th scope="col">Total</th></tr>
-      </thead>
-      <tbody>
-        ${bodyRows}
-        <tr class="ct-crosstab__total"><th scope="row">Total</th>${totalCells}<td>${x.total}</td></tr>
-      </tbody>
-    </table>`;
-}
-
-/**
- * @param {ReturnType<typeof normalizeResult>} x
- * @returns {string}
- */
-function renderChiSquare(x) {
-  const fmt = (n, d) => (Number.isFinite(n) ? n.toFixed(d) : '—');
-  const p = Number.isFinite(x.p) ? (x.p < 0.001 ? '< .001' : x.p.toFixed(3)) : '—';
-  return `
-    <table class="ct-chisq">
-      <caption>Chi-Square Tests</caption>
-      <thead>
-        <tr>
-          <th scope="col"></th><th scope="col">Value</th>
-          <th scope="col">df</th><th scope="col">Asymp. Sig. (2-sided)</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><th scope="row">Pearson Chi-Square</th><td>${fmt(x.chisq, 3)}</td><td>${fmt(x.dfree, 0)}</td><td>${p}</td></tr>
-        <tr><th scope="row">N of Valid Cases</th><td>${x.total}</td><td></td><td></td></tr>
-      </tbody>
-    </table>`;
-}
-
-// --- tiny helpers ------------------------------------------------------------
-
-function labelOf(meta) {
-  if (!meta) return '';
-  return meta.label ? `${esc(meta.label)} (${esc(meta.name)})` : esc(meta.name);
-}
-
-/** HTML-escape text content. */
-function esc(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-/** Render a JS value as an R literal for safe interpolation into R source. */
-function rLiteral(v) {
-  if (typeof v === 'number' && Number.isFinite(v)) return String(v);
-  return `"${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }

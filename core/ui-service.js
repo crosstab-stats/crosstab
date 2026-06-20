@@ -54,12 +54,14 @@ export class UiService {
       multiple = true,
       preselect,
       types,
+      exclude,
       okLabel = 'OK',
     } = options;
 
     let meta = this.#store.getVariableMeta();
     if (types?.length) meta = meta.filter((m) => types.includes(m.type));
     const checked = new Set(preselect ?? this.#store.getSelectedVariables());
+    const excluded = new Set(exclude ?? []); // disabled (e.g. chosen in a prior `unique` round)
     const inputType = multiple ? 'checkbox' : 'radio';
 
     // Float the already-selected variables (e.g. ticked in the data grid or the
@@ -72,15 +74,19 @@ export class UiService {
     const rest = meta.filter((m) => !checked.has(m.name));
     const autoCheck = multiple || selected.length === 1;
 
-    const item = (m, inSelected) => `
-      <li>
+    const item = (m, inSelected) => {
+      const disabled = excluded.has(m.name);
+      return `
+      <li${disabled ? ' class="ct-dialog__excluded"' : ''}>
         <label>
           <input type="${inputType}" name="var" value="${attr(m.name)}"
-                 ${inSelected && autoCheck ? 'checked' : ''}>
+                 ${disabled ? 'disabled' : inSelected && autoCheck ? 'checked' : ''}>
           <span>${esc(m.label ?? m.name)}</span>
           <code>${esc(m.name)}</code>
+          ${disabled ? '<span class="ct-dialog__taken">already selected</span>' : ''}
         </label>
       </li>`;
+    };
     const groupLabel = (text) => `<li class="ct-dialog__group">${esc(text)}</li>`;
     const listHtml = selected.length
       ? groupLabel('Selected') +

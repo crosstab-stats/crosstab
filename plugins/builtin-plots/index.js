@@ -6,51 +6,73 @@
  * Plots are drawn in R with base graphics on an **`svglite`** device
  * (`svgstring()`), which returns the chart as an SVG *string* — exactly what
  * `app.results.appendPlot` wants, and what survives the host's SVG-aware
- * sanitiser. No cairo/file juggling. Each chart honours `missingValues` (recoded
- * to NA before plotting), themes to the app blue, and is made responsive by
- * dropping `svglite`'s fixed pt size and leaning on the `viewBox`.
+ * sanitiser. Each chart honours `missingValues`, themes to the app blue, and is
+ * responsive via `viewBox`.
+ *
+ * Declarative plugin with **multiple** menu items: the manifest declares one menu
+ * entry per chart, each with its own inputs and a named function. (Plots still
+ * inject via `df` explicitly so a chart's "Redraw at this size" callback — which
+ * fires after the action has returned — can re-run with the data re-injected.)
  */
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-plots',
   name: 'Plots',
-  version: '0.1.0',
+  version: '0.2.0',
   apiVersion: '0.1.0',
   category: 'Graphs',
   keywords: ['chart', 'histogram', 'scatter', 'boxplot', 'bar', 'pie', 'plot'],
   rPackages: ['svglite'],
+  menu: [
+    {
+      label: 'Histogram…',
+      run: 'histogram',
+      order: 10,
+      inputs: [{ name: 'v', kind: 'variables', multiple: false, types: ['numeric'] }],
+    },
+    {
+      label: 'Scatter…',
+      run: 'scatter',
+      order: 20,
+      inputs: [
+        { name: 'x', kind: 'variables', label: 'X', multiple: false, types: ['numeric'], unique: true },
+        { name: 'y', kind: 'variables', label: 'Y', multiple: false, types: ['numeric'], unique: true },
+      ],
+    },
+    {
+      label: 'Boxplot…',
+      run: 'boxplot',
+      order: 30,
+      inputs: [
+        { name: 'y', kind: 'variables', label: 'Variable', multiple: false, types: ['numeric'] },
+        { name: 'g', kind: 'variables', label: 'Split by (optional)', multiple: false, types: ['factor', 'string'], optional: true },
+      ],
+    },
+    {
+      label: 'Pie chart…',
+      run: 'pie',
+      order: 40,
+      inputs: [{ name: 'v', kind: 'variables', multiple: false, types: ['factor', 'string'] }],
+    },
+    {
+      label: 'Bar chart with error bars…',
+      run: 'errorBars',
+      order: 50,
+      inputs: [
+        { name: 'y', kind: 'variables', label: 'Measure', multiple: false, types: ['numeric'] },
+        { name: 'g', kind: 'variables', label: 'Groups', multiple: false, types: ['factor', 'string'] },
+      ],
+    },
+  ],
 };
 
 const ACCENT = '#2980b9';
 
-/** @param {object} app */
-export async function activate(app) {
-  const reg = (id, label, order, fn) =>
-    app.menus.register({
-      id: `builtin-plots:${id}`,
-      label,
-      order,
-      command: () => fn(app),
-    });
-  await reg('hist', 'Histogram…', 10, openHistogram);
-  await reg('scatter', 'Scatter…', 20, openScatter);
-  await reg('box', 'Boxplot…', 30, openBoxplot);
-  await reg('pie', 'Pie chart…', 40, openPie);
-  await reg('errbar', 'Bar chart with error bars…', 50, openErrorBars);
-}
+// --- chart functions ---------------------------------------------------------
 
-// --- chart commands ----------------------------------------------------------
-
-async function openHistogram(app) {
-  const chosen = await app.ui.selectVariables({
-    title: 'Histogram',
-    hint: 'Choose a numeric variable.',
-    multiple: false,
-    types: ['numeric'],
-  });
-  if (!chosen?.length) return;
-  const name = chosen[0];
+export async function histogram(app, { v: name }) {
+  if (!name) return;
   const meta = await metaMap(app);
   const code = `
     ${recodeR([name], meta)}
@@ -60,27 +82,8 @@ async function openHistogram(app) {
   await renderPlot(app, 'Histogram', code, [name]);
 }
 
-async function openScatter(app) {
-  const xs = await app.ui.selectVariables({
-    title: 'Scatter — X',
-    hint: 'Choose the X (horizontal) numeric variable.',
-    multiple: false,
-    types: ['numeric'],
-  });
-  if (!xs?.length) return;
-  const ys = await app.ui.selectVariables({
-    title: 'Scatter — Y',
-    hint: `X: ${xs[0]}. Now choose the Y (vertical) numeric variable.`,
-    multiple: false,
-    types: ['numeric'],
-  });
-  if (!ys?.length) return;
-  const x = xs[0];
-  const y = ys[0];
-  if (x === y) {
-    await app.results.appendError('Scatter: choose two different variables.');
-    return;
-  }
+export async function scatter(app, { x, y }) {
+  if (!x || !y) return;
   const meta = await metaMap(app);
   const code = `
     ${recodeR([x, y], meta)}
@@ -96,22 +99,8 @@ async function openScatter(app) {
   await renderPlot(app, 'Scatter plot', code, [x, y]);
 }
 
-async function openBoxplot(app) {
-  const ys = await app.ui.selectVariables({
-    title: 'Boxplot — variable',
-    hint: 'Choose a numeric variable.',
-    multiple: false,
-    types: ['numeric'],
-  });
-  if (!ys?.length) return;
-  const gs = await app.ui.selectVariables({
-    title: 'Boxplot — split by (optional)',
-    hint: 'Optionally choose a categorical variable to split by — or Cancel for none.',
-    multiple: false,
-    types: ['factor', 'string'],
-  });
-  const y = ys[0];
-  const g = gs?.length ? gs[0] : null;
+export async function boxplot(app, { y, g }) {
+  if (!y) return;
   const meta = await metaMap(app);
   const vars = g ? [y, g] : [y];
   const code = g
@@ -129,15 +118,8 @@ async function openBoxplot(app) {
   await renderPlot(app, 'Boxplot', code, vars);
 }
 
-async function openPie(app) {
-  const chosen = await app.ui.selectVariables({
-    title: 'Pie chart',
-    hint: 'Choose a categorical variable.',
-    multiple: false,
-    types: ['factor', 'string'],
-  });
-  if (!chosen?.length) return;
-  const name = chosen[0];
+export async function pie(app, { v: name }) {
+  if (!name) return;
   const meta = await metaMap(app);
   const vl = meta.get(name)?.valueLabels;
   const vmap = vl
@@ -157,23 +139,8 @@ async function openPie(app) {
   await renderPlot(app, 'Pie chart', code, [name]);
 }
 
-async function openErrorBars(app) {
-  const ys = await app.ui.selectVariables({
-    title: 'Error-bar chart — measure',
-    hint: 'Choose a numeric variable (the measure).',
-    multiple: false,
-    types: ['numeric'],
-  });
-  if (!ys?.length) return;
-  const gs = await app.ui.selectVariables({
-    title: 'Error-bar chart — groups',
-    hint: `Measure: ${ys[0]}. Choose a categorical variable to group by.`,
-    multiple: false,
-    types: ['factor', 'string'],
-  });
-  if (!gs?.length) return;
-  const y = ys[0];
-  const g = gs[0];
+export async function errorBars(app, { y, g }) {
+  if (!y || !g) return;
   const meta = await metaMap(app);
   const code = `
     ${recodeR([y, g], meta)}
@@ -193,23 +160,13 @@ async function openErrorBars(app) {
 // --- shared render harness ---------------------------------------------------
 
 /**
- * Run plotting `code` on an svglite device, capture the SVG string, and append
- * it to the results pane. `code` runs with `df` injected; it should issue base
- * graphics calls (the device + `dev.off()` are wrapped here).
- *
- * @param {object} app
- * @param {string} title
- * @param {string} code - R plotting commands.
- * @param {string[]} vars - Variables to inject.
+ * Run plotting `code` on an svglite device, capture the SVG, and append it. The
+ * plot offers a "Redraw at this size" button that re-runs the recipe at the box's
+ * pixel size (the only way to truly re-flow the aspect ratio).
  */
 async function renderPlot(app, title, code, vars) {
-  await app.events.emit('analysis:started', { plugin: manifest.id, title });
-  await app.results.beginSection(title);
   try {
-    const svg = await drawSvg(app, code, vars, 7, 4.5); // 7×4.5in default
-    // appendPlot returns a handle; the onRedraw button re-runs the recipe at the
-    // box's pixel size (the only way to truly re-flow the plot to a new ratio —
-    // dragging alone just scales the SVG).
+    const svg = await drawSvg(app, code, vars, 7, 4.5);
     let handle;
     handle = await app.results.appendPlot(svg, {
       onRedraw: (wpx, hpx) => void redrawPlot(app, handle, title, code, vars, wpx, hpx),
@@ -218,14 +175,9 @@ async function renderPlot(app, title, code, vars) {
     await app.results.appendError(`${title} failed: ${err.message}`);
     console.error(err);
   }
-  await app.events.emit('analysis:finished', { plugin: manifest.id, title });
 }
 
-/**
- * Run the plot recipe on an svglite device at the given size (inches) and return
- * the SVG, with svglite's fixed pt width/height stripped so it fills its box via
- * CSS (the `viewBox` keeps it crisp and undistorted).
- */
+/** Run the recipe on an svglite device at the given size (inches), return SVG. */
 async function drawSvg(app, code, vars, wIn, hIn) {
   const R = `
     library(svglite)
