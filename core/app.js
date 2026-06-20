@@ -130,6 +130,51 @@ function escapeText(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/** True while a crash dialog is open, so a burst of failed jobs shows just one. */
+let crashDialogOpen = false;
+
+/**
+ * Offer to restart the R subsystem after it crashed (out of memory). A restart is
+ * far less destructive than the page reload it would otherwise take: datasets,
+ * projects, and output survive — only installed R packages and R Console variables
+ * are cleared (and reinstall / can be redefined on demand).
+ *
+ * @param {import('./webr-manager.js').WebRManager} webr
+ * @param {{appendText: Function, appendError: Function}} resultsApi
+ */
+function offerRestartR(webr, resultsApi) {
+  if (crashDialogOpen) return;
+  crashDialogOpen = true;
+  const d = document.createElement('dialog');
+  d.className = 'ct-dialog';
+  d.innerHTML = `
+    <form method="dialog" class="ct-dialog__form">
+      <h2 class="ct-dialog__title">R ran out of memory</h2>
+      <p class="ct-dialog__hint">The R runtime hit the browser's memory limit and has stopped — no more
+        analyses will run until it's restarted. <strong>Restarting keeps your datasets, projects, and
+        output</strong>; it only clears installed R packages and any R Console variables (packages
+        reinstall on demand). This is much gentler than reloading the page.</p>
+      <menu class="ct-dialog__buttons">
+        <button value="later" type="submit">Not now</button>
+        <button value="restart" type="submit" class="ct-dialog__primary">Restart R</button>
+      </menu>
+    </form>`;
+  d.addEventListener('close', async () => {
+    const restart = d.returnValue === 'restart';
+    d.remove();
+    crashDialogOpen = false;
+    if (!restart) return;
+    try {
+      await webr.restart();
+      resultsApi.appendText('R restarted — installed packages and R Console variables were cleared; your data and output are intact.');
+    } catch (err) {
+      resultsApi.appendError(`Couldn’t restart R: ${err.message}`);
+    }
+  });
+  document.body.append(d);
+  d.showModal();
+}
+
 /**
  * Boot the application into the given root element.
  *
@@ -228,6 +273,9 @@ export async function boot(mounts) {
   // --- shell wiring ----------------------------------------------------------
   wireStatusLine(bus, mounts.status, webr);
   if (mounts.busy) wireBusyIndicator(bus, mounts.busy);
+  // If the R runtime crashes (out of memory), offer a restart instead of leaving
+  // the session silently broken until a page reload.
+  bus.on(CoreEvents.WEBR_CRASHED, () => offerRestartR(webr, results.api));
   // (The sidebar project manager is created below, once the library + project
   // services it drives exist.)
 

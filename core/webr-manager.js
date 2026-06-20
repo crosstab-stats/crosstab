@@ -50,6 +50,16 @@ function rLit(s) {
   return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
+/** Does this error mean the runtime is unrecoverable (out of memory / WASM
+ * abort), as opposed to an ordinary R error? A WASM heap exhaustion typically
+ * corrupts the worker, so we flag the runtime crashed and prompt a restart. A
+ * file that's merely too big to read (NotReadableError) is NOT fatal — the worker
+ * is fine — so it's deliberately excluded. */
+function isFatalRuntimeError(err) {
+  const m = String((err && (err.message ?? err)) || '');
+  return /cannot allocate|out of memory|memory exhausted|allocation failed|std::bad_alloc|abort(ed)?\b|memory access out of bounds|RuntimeError|unreachable executed/i.test(m);
+}
+
 /** Coerce a captured-output datum to a string without throwing. WebR usually
  * gives string `data`, but some conditions/warnings carry a non-stringable object
  * (coercing it throws "Cannot convert object to primitive value"). */
@@ -163,6 +173,12 @@ export class WebRManager {
 
   /** In-flight init promise, so concurrent first-callers share one init. */
   #initPromise = null;
+
+  /** Set once a job fails with a fatal runtime error (out of memory / WASM abort).
+   * A WASM OOM can leave the worker corrupted, so every later job would fail with
+   * a cryptic cascade — instead we fail fast with a clear "restart R" message
+   * until {@link WebRManager#restart}. @type {boolean} */
+  #crashed = false;
 
   /** Tail of the job queue. Each job awaits the previous one. @type {Promise<any>} */
   #queue = Promise.resolve();
@@ -475,6 +491,36 @@ export class WebRManager {
     if (webR) await webR.close();
   }
 
+  /** @returns {boolean} True if the runtime crashed and needs a restart. */
+  get isCrashed() {
+    return this.#crashed;
+  }
+
+  /**
+   * Restart the R subsystem: tear down the (possibly crashed) worker and reset so
+   * the next job cold-starts a fresh one. Everything outside WebR — datasets,
+   * projects, output — is untouched; only installed R packages and the R Console's
+   * variables are lost (they re-install / can be redefined on demand). Much less
+   * destructive than a full page reload. Tolerant of a dead worker.
+   *
+   * @returns {Promise<void>}
+   */
+  async restart() {
+    this.#crashed = false;
+    this.#nanoparquet = undefined;
+    const webR = this.#webR;
+    this.#webR = null;
+    this.#initPromise = null;
+    this.#queue = Promise.resolve();
+    if (webR) {
+      try {
+        await webR.close();
+      } catch {
+        /* a crashed worker may not close cleanly — that's fine, we're discarding it */
+      }
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Internals
   // ---------------------------------------------------------------------------
@@ -572,6 +618,13 @@ export class WebRManager {
 
   /** Execute a single job with lifecycle events around it. */
   async #execute(id, kind, task) {
+    // After a fatal error the worker is unusable; fail fast with a clear message
+    // rather than letting every call throw a different cryptic error. Re-offer the
+    // restart each attempt, so dismissing it once isn't a dead end.
+    if (this.#crashed) {
+      this.#bus.emit(CoreEvents.WEBR_CRASHED);
+      throw new Error('R stopped after running out of memory — restart R to continue (your data and output are kept).');
+    }
     const webR = await this.#ensureReady();
     this.#bus.emit(CoreEvents.WEBR_JOB, { id, kind, status: 'started' });
     try {
@@ -580,6 +633,10 @@ export class WebRManager {
       return value;
     } catch (err) {
       this.#bus.emit(CoreEvents.WEBR_JOB, { id, kind, status: 'failed', error: err });
+      if (!this.#crashed && isFatalRuntimeError(err)) {
+        this.#crashed = true;
+        this.#bus.emit(CoreEvents.WEBR_CRASHED);
+      }
       throw err;
     }
   }

@@ -270,6 +270,13 @@ function friendlyError(msg) {
       '— e.g. fewer variables or years.'
     );
   }
+  if (/could not be read|NotReadableError|permission problems that have occurred after a reference/i.test(msg)) {
+    return (
+      'the browser could not read this file — it may be too large to read directly ' +
+      'in-browser (multi-GB), or corrupt/truncated. Try a smaller extract (fewer ' +
+      'variables or years) or re-download the file.'
+    );
+  }
   return msg;
 }
 

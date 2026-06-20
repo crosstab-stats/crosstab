@@ -29,6 +29,9 @@ export const CoreEvents = Object.freeze({
   SELECTION_CHANGED: 'selection:changed',
   /** The WebR runtime finished initialising and can accept jobs. No payload. */
   WEBR_READY: 'webr:ready',
+  /** The WebR runtime crashed (e.g. out of memory) and is unusable until
+   * restarted. Further jobs fail fast until {@link WebRManager#restart}. No payload. */
+  WEBR_CRASHED: 'webr:crashed',
   /** A WebR job moved through its lifecycle. Payload: { id, status }. */
   WEBR_JOB: 'webr:job',
   /** A plugin began an analysis. Payload: { plugin, title }. */
