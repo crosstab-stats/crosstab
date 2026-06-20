@@ -67,7 +67,7 @@ export class RConsole {
         </div>
       </div>
       <div class="rc-term" aria-live="polite">
-        <div class="rc-prompt"><span class="rc-caret">&gt;</span><input class="rc-input" type="text" spellcheck="false" autocomplete="off" aria-label="R input"></div>
+        <div class="rc-prompt"><span class="rc-caret">&gt;</span><textarea class="rc-input" rows="1" spellcheck="false" autocomplete="off" aria-label="R input"></textarea></div>
       </div>`;
 
     this.#varsBox = this.#host.querySelector('.rc-vars');
@@ -83,6 +83,7 @@ export class RConsole {
     this.#input = this.#host.querySelector('.rc-input');
 
     this.#input.addEventListener('keydown', (e) => this.#onKey(e));
+    this.#input.addEventListener('input', () => this.#grow());
     // Clicking empty terminal space focuses the input (but let text be selected).
     this.#term.addEventListener('click', (e) => {
       if (e.target === this.#term || e.target === this.#prompt) this.#input.focus();
@@ -213,17 +214,36 @@ export class RConsole {
   // --- REPL ------------------------------------------------------------------
 
   #onKey(e) {
-    if (e.key === 'Enter') {
+    // Enter runs; Shift+Enter inserts a newline (multi-line input).
+    if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       const code = this.#input.value;
       if (code.trim()) void this.#submit(code);
-    } else if (e.key === 'ArrowUp') {
+      return;
+    }
+    // ↑/↓ recall history only at the first/last line, so they still move the
+    // caret within a multi-line entry.
+    if (e.key === 'ArrowUp' && this.#caretInFirstLine()) {
       e.preventDefault();
       this.#recall(-1);
-    } else if (e.key === 'ArrowDown') {
+    } else if (e.key === 'ArrowDown' && this.#caretInLastLine()) {
       e.preventDefault();
       this.#recall(1);
     }
+  }
+
+  #caretInFirstLine() {
+    return !this.#input.value.slice(0, this.#input.selectionStart).includes('\n');
+  }
+
+  #caretInLastLine() {
+    return !this.#input.value.slice(this.#input.selectionEnd).includes('\n');
+  }
+
+  /** Auto-size the input to its content (1 line up to a cap, then it scrolls). */
+  #grow() {
+    this.#input.style.height = 'auto';
+    this.#input.style.height = `${Math.min(this.#input.scrollHeight, 160)}px`;
   }
 
   #recall(dir) {
@@ -235,6 +255,7 @@ export class RConsole {
     const v = this.#input.value;
     this.#input.value = '';
     this.#input.value = v;
+    this.#grow();
   }
 
   async #submit(code) {
@@ -242,6 +263,7 @@ export class RConsole {
     this.#histIdx = -1;
     this.#append(code, 'rc-cmd');
     this.#input.value = '';
+    this.#grow();
     this.#input.disabled = true;
     try {
       const res = await this.#webr.evalConsole(code);
