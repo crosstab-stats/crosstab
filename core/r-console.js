@@ -246,6 +246,7 @@ export class RConsole {
     try {
       const res = await this.#webr.evalConsole(code);
       if (res.output) this.#append(res.output, res.error ? 'rc-err' : 'rc-result');
+      for (const img of res.images || []) this.#appendPlot(img);
     } catch (err) {
       this.#append(String(err?.message ?? err), 'rc-err');
     } finally {
@@ -260,6 +261,17 @@ export class RConsole {
     const div = el('div', text, cls);
     if (cls === 'rc-cmd') div.textContent = `> ${text}`;
     this.#term.insertBefore(div, this.#prompt);
+    this.#term.scrollTop = this.#term.scrollHeight;
+  }
+
+  /** Render a captured plot (ImageBitmap) inline, above the prompt. */
+  #appendPlot(img) {
+    const canvas = document.createElement('canvas');
+    canvas.className = 'rc-plot';
+    canvas.width = img.width;
+    canvas.height = img.height;
+    canvas.getContext('2d').drawImage(img, 0, 0);
+    this.#term.insertBefore(canvas, this.#prompt);
     this.#term.scrollTop = this.#term.scrollHeight;
   }
 }

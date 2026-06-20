@@ -365,8 +365,11 @@ export class WebRManager {
    * calls (`x <- 5` then `mean(x)`), and visible values auto-print as at an R
    * prompt. Captures stdout/stderr; an R error is returned as text, not thrown.
    *
+   * Any plots the code draws are captured (base graphics / printed ggplot) and
+   * returned as `ImageBitmap`s for the console to render inline.
+   *
    * @param {string} code - One or more R expressions.
-   * @returns {Promise<{output: string, error: boolean}>}
+   * @returns {Promise<{output: string, error: boolean, images: ImageBitmap[]}>}
    */
   evalConsole(code) {
     return this.#enqueue(async (webR) => {
@@ -379,17 +382,17 @@ export class WebRManager {
       try {
         const capture = await shelter.captureR(
           `source(${rLit(CONSOLE_PATH)}, echo = FALSE, print.eval = TRUE, max.deparse.length = Inf, local = FALSE)`,
-          { env: webR.objs.globalEnv, captureGraphics: false },
+          { env: webR.objs.globalEnv, captureGraphics: true },
         );
         const out = capture.output
           .map((m) => (typeof m.data === 'string' ? m.data : String(m.data)))
           .join('\n');
         const hadErr = capture.output.some((m) => m.type === 'stderr');
-        return { output: out, error: hadErr };
+        return { output: out, error: hadErr, images: capture.images ?? [] };
       } catch (err) {
         // A parse/eval error surfaces as a thrown condition; strip the source() wrapper.
         const msg = String(err?.message ?? err).replace(/\bin eval\b.*$/, '').trim();
-        return { output: msg, error: true };
+        return { output: msg, error: true, images: [] };
       } finally {
         await shelter.purge(); // frees capture buffers; globalenv user vars persist
       }
