@@ -27,11 +27,17 @@
  */
 
 /**
- * DuckDB-WASM ES-module entry, from jsDelivr. Pinned to a known-good version
- * (the one the spikes ran against); vendor for release. See TODO.md.
+ * DuckDB-WASM ES-module entry, from jsDelivr. Pinned for reproducibility; vendor
+ * for release (see TODO.md).
+ *
+ * NOTE: two different version numbers. This is the **npm package** version of the
+ * JS bindings; the **DuckDB engine** it bundles is separate (check `PRAGMA
+ * version`). `@1.29.0` shipped engine 1.1.1; this build (`1.33.1-dev*`) ships
+ * engine ~1.5.x — wanted for its more mature OPFS support. duckdb-wasm publishes
+ * its releases under `-dev` tags, so a `-dev` pin is the normal current build.
  * @type {string}
  */
-const DUCKDB_URL = 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm';
+const DUCKDB_URL = 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev45.0/+esm';
 
 /**
  * Apache Arrow ES-module entry. Used only to *build* tables for ingest; query
