@@ -13,3 +13,7 @@ vendor/*.wasm
 
 # Local build output (if a bundler is added later)
 dist/
+
+# Real-world sample data for local import testing (drop GSS .sav/.dta/.sas here).
+# Served at /sample-data/ so tests can fetch it; never committed.
+sample-data/
