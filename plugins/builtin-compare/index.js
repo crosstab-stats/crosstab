@@ -76,16 +76,16 @@ export async function oneSample(app, { x: name, mu }) {
     tt <- t.test(x, mu = mu)
     list(n = length(x), mean = mean(x), sd = sd(x), mu = mu,
          diff = mean(x) - mu, t = unname(tt$statistic), df = unname(tt$parameter),
-         p = tt$p.value, lo = tt$conf.int[1], hi = tt$conf.int[2])`;
+         p = tt$p.value, d = (mean(x) - mu) / sd(x), lo = tt$conf.int[1], hi = tt$conf.int[2])`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
   await app.results.appendTable(
     {
-      columns: ['Test value', 'N', 'Mean', 'SD', 'Mean diff.', 't', 'df', 'Sig. (2-tailed)', '95% CI of diff.'],
+      columns: ['Test value', 'N', 'Mean', 'SD', 'Mean diff.', 't', 'df', 'Sig. (2-tailed)', "Cohen's d", '95% CI of diff.'],
       rows: [[
         f(r.n1('mu'), 3), int(r.n1('n')), f(r.n1('mean'), 3), f(r.n1('sd'), 3), f(r.n1('diff'), 3),
-        f(r.n1('t'), 3), fmtDf(r.n1('df')), fmtP(r.n1('p')), ci(r.n1('lo'), r.n1('hi')),
+        f(r.n1('t'), 3), fmtDf(r.n1('df')), fmtP(r.n1('p')), f(r.n1('d'), 3), ci(r.n1('lo'), r.n1('hi')),
       ]],
     },
     { caption: `One-Sample t-Test — ${label(meta, name)}` },
@@ -105,10 +105,13 @@ export async function independent(app, { y: yName, g: gName }) {
     lv <- levels(g)
     if (length(lv) != 2) stop(sprintf("the grouping variable must have exactly 2 groups (found %d)", length(lv)))
     tt <- t.test(y ~ g)
-    list(levels = lv, n = as.integer(tapply(y, g, length)),
-         mean = as.numeric(tapply(y, g, mean)), sd = as.numeric(tapply(y, g, sd)),
+    .n <- as.integer(tapply(y, g, length)); .s <- as.numeric(tapply(y, g, sd))
+    .sp <- sqrt(((.n[1] - 1) * .s[1]^2 + (.n[2] - 1) * .s[2]^2) / (sum(.n) - 2))
+    list(levels = lv, n = .n, mean = as.numeric(tapply(y, g, mean)), sd = .s,
          t = unname(tt$statistic), df = unname(tt$parameter), p = tt$p.value,
-         diff = unname(tt$estimate[1] - tt$estimate[2]), lo = tt$conf.int[1], hi = tt$conf.int[2])`;
+         diff = unname(tt$estimate[1] - tt$estimate[2]),
+         d = unname((tt$estimate[1] - tt$estimate[2]) / .sp),
+         lo = tt$conf.int[1], hi = tt$conf.int[2])`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
@@ -123,8 +126,8 @@ export async function independent(app, { y: yName, g: gName }) {
   );
   await app.results.appendTable(
     {
-      columns: ['t', 'df', 'Sig. (2-tailed)', 'Mean diff.', '95% CI of diff.'],
-      rows: [[f(r.n1('t'), 3), fmtDf(r.n1('df')), fmtP(r.n1('p')), f(r.n1('diff'), 3), ci(r.n1('lo'), r.n1('hi'))]],
+      columns: ['t', 'df', 'Sig. (2-tailed)', 'Mean diff.', "Cohen's d", '95% CI of diff.'],
+      rows: [[f(r.n1('t'), 3), fmtDf(r.n1('df')), fmtP(r.n1('p')), f(r.n1('diff'), 3), f(r.n1('d'), 3), ci(r.n1('lo'), r.n1('hi'))]],
     },
     { caption: 'Independent-Samples t-Test (Welch)' },
   );
@@ -161,8 +164,11 @@ export async function paired(app, { x1: n1, x2: n2 }) {
   );
   await app.results.appendTable(
     {
-      columns: ['Mean diff.', 'SD diff.', 't', 'df', 'Sig. (2-tailed)', '95% CI of diff.'],
-      rows: [[f(r.n1('diff'), 3), f(r.n1('sddiff'), 3), f(r.n1('t'), 3), fmtDf(r.n1('df')), fmtP(r.n1('p')), ci(r.n1('lo'), r.n1('hi'))]],
+      columns: ['Mean diff.', 'SD diff.', 't', 'df', 'Sig. (2-tailed)', "Cohen's d", '95% CI of diff.'],
+      rows: [[
+        f(r.n1('diff'), 3), f(r.n1('sddiff'), 3), f(r.n1('t'), 3), fmtDf(r.n1('df')), fmtP(r.n1('p')),
+        f(r.n1('diff') / r.n1('sddiff'), 3), ci(r.n1('lo'), r.n1('hi')),
+      ]],
     },
     { caption: `Paired-Samples t-Test — ${label(meta, n1)} vs ${label(meta, n2)}` },
   );
@@ -179,11 +185,14 @@ export async function oneway(app, { y: yName, g: gName }) {
     y <- as.numeric(y); g <- as.factor(g)
     ok <- is.finite(y) & !is.na(g); y <- y[ok]; g <- droplevels(g[ok])
     if (nlevels(g) < 2) stop("need at least 2 groups")
-    a <- summary(aov(y ~ g))[[1]]
+    fit <- aov(y ~ g); a <- summary(fit)[[1]]
+    tuk <- TukeyHSD(fit)$g
     list(levels = levels(g), gn = as.integer(tapply(y, g, length)),
          gmean = as.numeric(tapply(y, g, mean)), gsd = as.numeric(tapply(y, g, sd)),
          df1 = a[["Df"]][1], df2 = a[["Df"]][2], ssb = a[["Sum Sq"]][1], ssw = a[["Sum Sq"]][2],
-         msb = a[["Mean Sq"]][1], msw = a[["Mean Sq"]][2], Fval = a[["F value"]][1], p = a[["Pr(>F)"]][1])`;
+         msb = a[["Mean Sq"]][1], msw = a[["Mean Sq"]][2], Fval = a[["F value"]][1], p = a[["Pr(>F)"]][1],
+         eta2 = a[["Sum Sq"]][1] / sum(a[["Sum Sq"]]),
+         tukComp = rownames(tuk), tukDiff = tuk[, "diff"], tukLo = tuk[, "lwr"], tukUp = tuk[, "upr"], tukP = tuk[, "p adj"])`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
@@ -212,6 +221,21 @@ export async function oneway(app, { y: yName, g: gName }) {
     },
     { caption: 'ANOVA' },
   );
+  await app.results.appendText(`Effect size: η² = ${f(r.n1('eta2'), 3)}.`);
+
+  const comp = r.str('tukComp');
+  if (comp.length) {
+    await app.results.appendTable(
+      {
+        columns: ['Comparison', 'Mean diff.', '95% CI', 'Sig. (adj.)'],
+        rows: comp.map((c, i) => [
+          c, f(r.num('tukDiff')[i], 3), ci(r.num('tukLo')[i], r.num('tukUp')[i]), fmtP(r.num('tukP')[i]),
+        ]),
+        rowHeaders: true,
+      },
+      { caption: 'Post-hoc (Tukey HSD)' },
+    );
+  }
 }
 
 // --- helpers -----------------------------------------------------------------

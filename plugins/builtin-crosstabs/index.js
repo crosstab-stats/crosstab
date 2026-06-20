@@ -53,7 +53,9 @@ export async function run(app, { rowvar: rowName, colvar: colName }) {
       total = sum(tab),
       chisq = if (is.null(chi)) NA_real_ else unname(chi$statistic),
       dfree = if (is.null(chi)) NA_real_ else unname(chi$parameter),
-      p     = if (is.null(chi)) NA_real_ else chi$p.value
+      p     = if (is.null(chi)) NA_real_ else chi$p.value,
+      cramerV = if (is.null(chi)) NA_real_ else sqrt(unname(chi$statistic) / (sum(tab) * (min(nrow(tab), ncol(tab)) - 1))),
+      phi = if (!is.null(chi) && nrow(tab) == 2 && ncol(tab) == 2) sqrt(unname(chi$statistic) / sum(tab)) else NA_real_
     )`;
 
   const { result } = await app.webr.run(rCode);
@@ -95,6 +97,17 @@ export async function run(app, { rowvar: rowName, colvar: colName }) {
     },
     { caption: 'Chi-Square Tests' },
   );
+
+  // Symmetric Measures: association strength (phi for 2×2, Cramér's V always).
+  const sym = [];
+  if (Number.isFinite(x.phi)) sym.push(['Phi', fmt(x.phi, 3), p]);
+  if (Number.isFinite(x.cramerV)) sym.push(["Cramér's V", fmt(x.cramerV, 3), p]);
+  if (sym.length) {
+    await app.results.appendTable(
+      { columns: ['', 'Value', 'Approx. Sig.'], rows: sym, rowHeaders: true },
+      { caption: 'Symmetric Measures' },
+    );
+  }
 }
 
 // --- helpers -----------------------------------------------------------------
@@ -119,7 +132,8 @@ function normalizeResult(rList) {
   const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
   const scalar = (v) => {
     const a = arr(v);
-    return a.length ? Number(a[0]) : Number(v);
+    const first = a.length ? a[0] : v;
+    return first == null ? NaN : Number(first); // R NA (a null element) → NaN, so it renders "—"/hides
   };
   return {
     rowLevels: arr(byName.rowLevels).map(String),
@@ -131,5 +145,7 @@ function normalizeResult(rList) {
     chisq: scalar(byName.chisq),
     dfree: scalar(byName.dfree),
     p: scalar(byName.p),
+    cramerV: scalar(byName.cramerV),
+    phi: scalar(byName.phi),
   };
 }

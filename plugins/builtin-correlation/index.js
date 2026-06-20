@@ -26,7 +26,20 @@ export const manifest = {
       label: 'Bivariate…',
       run: 'run',
       order: 10,
-      inputs: [{ name: 'vars', kind: 'variables', types: ['numeric'], multiple: true }],
+      inputs: [
+        { name: 'vars', kind: 'variables', types: ['numeric'], multiple: true },
+        {
+          name: 'method',
+          kind: 'choice',
+          label: 'Method',
+          options: [
+            { value: 'pearson', label: 'Pearson' },
+            { value: 'spearman', label: "Spearman's rho" },
+            { value: 'kendall', label: "Kendall's tau" },
+          ],
+          default: 'pearson',
+        },
+      ],
     },
   ],
 };
@@ -35,12 +48,14 @@ export const manifest = {
  * @param {object} app
  * @param {{vars: string[]}} inputs
  */
-export async function run(app, { vars }) {
+export async function run(app, { vars, method }) {
   if (!vars || vars.length < 2) {
     await app.results.appendError('Correlation needs at least two variables.');
     return;
   }
-  const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
+  const m = method === 'spearman' || method === 'kendall' ? method : 'pearson';
+  const methodLabel = { pearson: 'Pearson', spearman: "Spearman's rho", kendall: "Kendall's tau" }[m];
+  const meta = new Map((await app.data.getVariableMeta()).map((mm) => [mm.name, mm]));
 
   const recode = vars
     .map((name) => {
@@ -62,7 +77,7 @@ export async function run(app, { vars }) {
       ok <- is.finite(x) & is.finite(y); nn <- sum(ok); n[i, j] <- nn
       if (i == j) { r[i, j] <- 1 }
       else if (nn >= 3) {
-        ct <- tryCatch(suppressWarnings(cor.test(x[ok], y[ok])), error = function(e) NULL)
+        ct <- tryCatch(suppressWarnings(cor.test(x[ok], y[ok], method = ${rStr(m)}, exact = FALSE)), error = function(e) NULL)
         if (!is.null(ct)) { r[i, j] <- unname(ct$estimate); p[i, j] <- ct$p.value }
       }
     }
@@ -89,7 +104,7 @@ export async function run(app, { vars }) {
     return [label(rowName), ...cells];
   });
 
-  await app.results.appendTable({ columns, rows, rowHeaders: true }, { caption: 'Correlations' });
+  await app.results.appendTable({ columns, rows, rowHeaders: true }, { caption: `Correlations (${methodLabel})` });
   await app.results.appendText(
     'Significance (two-tailed): a single star = p < .05, a double star = p < .01. N is pairwise.',
   );
