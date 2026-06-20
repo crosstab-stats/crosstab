@@ -269,9 +269,13 @@ export class ImportService {
           this.#results.appendError(`Could not read "${file.name}": ${err.message}`);
           continue;
         }
+        // Measured boundary: a full import is robust to ~6,000 columns even across
+        // many parts; it breaks between 6,000 and ~6,942 (the full GSS). Warn above
+        // ~5,000 vars when the data also needs several parts — keeping margin for
+        // the concurrent-worker load of a real import.
         const rows = cat.rowCount >= 0 ? cat.rowCount : 100000;
         const estParts = Math.ceil((cat.varCount * rows) / 4_000_000);
-        if (cat.varCount > 1000 && estParts > 8) {
+        if (cat.varCount > 5000 && estParts > 4) {
           this.#results.appendError(
             `“${file.name}” has ${cat.varCount.toLocaleString()} variables — importing all of them ` +
               `isn’t supported yet for a file this wide. Use “File ▸ Import ▸ SPSS / Stata / SAS — ` +
