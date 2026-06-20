@@ -404,6 +404,25 @@
       /* Plugin creator dialog */
       .ct-creator { max-width: 760px; width: 90vw; }
       .ct-creator__row { margin: 0 0 8px; }
+      /* Simple/Code mode toggle */
+      .ct-creator__modes { display: inline-flex; gap: 0; margin: 0 0 12px; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+      .ct-creator__mode { font: inherit; font-size: 13px; padding: 5px 14px; cursor: pointer; background: #fff; border: 0; border-right: 1px solid var(--line); color: #555; }
+      .ct-creator__mode:last-child { border-right: 0; }
+      .ct-creator__mode.is-active { background: var(--accent); color: #fff; }
+      /* Simple-mode form */
+      .ct-creator__field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #333; margin: 0 0 12px; }
+      .ct-creator__cat, .ct-creator__name { font: inherit; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; max-width: 340px; }
+      .ct-creator__inputs { display: flex; flex-direction: column; gap: 6px; margin: 4px 0; }
+      .ct-creator__inputrow { display: flex; gap: 6px; align-items: center; }
+      .ct-creator__inname { font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; width: 130px; }
+      .ct-creator__inkind { font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; flex: 1; }
+      .ct-creator__inopt { font-size: 12px; color: #555; white-space: nowrap; display: inline-flex; align-items: center; gap: 3px; }
+      .ct-creator__inrm { border: 0; background: none; color: #b3424a; cursor: pointer; font-size: 13px; }
+      .ct-creator__addinput, .ct-creator__tpl { font: inherit; font-size: 12px; padding: 5px 11px; cursor: pointer; background: #f4f7fb; border: 1px solid var(--line); border-radius: 999px; align-self: flex-start; margin-top: 4px; }
+      .ct-creator__addinput:hover { background: #e8f1fb; border-color: var(--accent); }
+      .ct-creator__radio { font-size: 13px; margin-right: 14px; display: inline-flex; align-items: center; gap: 4px; }
+      .ct-creator__r { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5; min-height: 130px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; resize: vertical; white-space: pre; }
+      .ct-creator__rhint { font-size: 12px; color: #777; margin: 4px 0 0; }
       .ct-creator__namelbl {
         font-size: 13px; color: #333; display: flex; flex-direction: column; gap: 4px; max-width: 340px;
       }

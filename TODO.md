@@ -767,9 +767,21 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     each a manifest (menu + inputs) + a `run(app, inputs)` whose R references the
     host-bound input names. Generated R uses string concatenation so the scaffold
     carries no backticks/`${}`.
-  - **Editor surface:** a textarea with a **line-number gutter** + Tab-inserts-
-    spaces — "more than Notepad". Save persists *before* loading (work is never
-    lost); a load error stays in the dialog with the message so it can be fixed.
+  - **Simple mode (form → no JavaScript) — BUILT.** The creator opens in **Simple**
+    mode by default: a form (name, category dropdown, an inputs builder with
+    friendly presets — "Numeric variable(s)", "One categorical variable", "A
+    number", … — Table/Plot output, and an R-code box). On save it **generates** the
+    declarative plugin (the user's R embedded via `JSON.stringify`; for a plot it's
+    wrapped in an svglite device so the author writes only the plot call) and loads
+    it — so an R-literate, JS-shy social scientist never sees JavaScript. A live
+    hint shows which names are bound in R. A **Code** toggle reveals the full
+    generated source for power users / editing (one-way: editing leaves Simple
+    mode). **Verified in Chrome:** a form-built Table plugin (means by variable) and
+    a Plot plugin (histogram) each generate, load, file under their category, and
+    run end-to-end.
+  - **Editor surface (Code mode):** a textarea with a **line-number gutter** +
+    Tab-inserts-spaces — "more than Notepad". Save persists *before* loading (work
+    is never lost); a load error stays in the dialog with the message to fix.
   - **Verified end to end in Chrome:** all 4 templates create + load with correct
     categories; the one-variable plugin ran the full chain (menu → variable picker
     → R → table: age N=30, Mean=41, SD=10.888); authored plugins **survive a
