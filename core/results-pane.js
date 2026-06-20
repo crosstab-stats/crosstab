@@ -44,6 +44,11 @@ const RESULTS_STYLES = `
     text-transform: uppercase; color: #333;
     border-bottom: 2px solid #333; padding-bottom: 4px; margin: 0 0 12px;
   }
+  /* Always-on attribution: which plugin produced this, and its host-tracked
+     origin. The plugin can't forge the origin, so output is always traceable. */
+  .results-section__attr {
+    font-size: 11px; color: #8a8a8a; margin: -8px 0 12px; letter-spacing: .01em;
+  }
   .results-block { margin: 0 0 16px; overflow-x: auto; }
   /* SPSS-like pivot tables */
   table { border-collapse: collapse; font-size: 13px; min-width: 240px; }
@@ -119,6 +124,10 @@ export class ResultsPane {
   /** The section blocks append into, or null to append at top level. */
   #currentSection = null;
 
+  /** A host-set section to create **lazily** on the first append of an analysis
+   * run (so a cancelled run leaves no empty heading). `{title, attribution}`. */
+  #pendingSection = null;
+
   /** Plot handle → its SVG holder element, for {@link ResultsPane#updatePlot}. */
   #plots = new Map();
 
@@ -163,31 +172,88 @@ export class ResultsPane {
    */
   beginSection(title) {
     this.#clearEmptyState();
+    this.#pendingSection = null;
+    this.#currentSection = this.#createSection({ title: String(title ?? ''), attribution: null });
+  }
+
+  /**
+   * Host-facing: open an analysis's output section **lazily**. The host calls this
+   * before invoking a plugin's `run` (the plugin no longer titles its own output —
+   * see the declarative plugin API). The section's heading is the menu label the
+   * user clicked, and `attribution` (plugin name + host-tracked origin) is stamped
+   * under it so output is always traceable and a plugin can't mislabel it. Nothing
+   * is created until the first append, so a cancelled/empty run shows no heading.
+   *
+   * @param {string} title - The clicked menu item's label (host-owned).
+   * @param {string} [attribution] - e.g. "Descriptive Statistics · built-in".
+   */
+  beginAnalysis(title, attribution) {
+    this.#clearEmptyState();
+    this.#currentSection = null;
+    this.#pendingSection = { title: String(title ?? ''), attribution: attribution || null };
+  }
+
+  /** Host-facing: close the current analysis section so later output starts fresh. */
+  endAnalysis() {
+    this.#currentSection = null;
+    this.#pendingSection = null;
+  }
+
+  /** Build a section element (heading + optional attribution), record it in the
+   * model, and append it to the content. */
+  #createSection({ title, attribution }) {
     const section = document.createElement('section');
     section.className = 'results-section';
 
     const heading = document.createElement('h2');
     heading.className = 'results-section__title';
     heading.textContent = title;
-
     section.append(heading);
+
+    if (attribution) {
+      const attr = document.createElement('div');
+      attr.className = 'results-section__attr';
+      attr.textContent = attribution;
+      section.append(attr);
+    }
+
     this.#content.append(section);
-    this.#currentSection = section;
-    this.#model.push({ kind: 'section', title: String(title ?? '') });
+    this.#model.push({ kind: 'section', title, attribution: attribution || undefined });
+    return section;
   }
 
   /**
-   * Append a pre-rendered HTML table (or any HTML fragment). Wrapped in a
-   * horizontally scrollable block so wide tables behave on narrow iPad screens.
+   * Append a table from **structured data**, rendered host-side — so a plugin
+   * ships no markup (the big injection surface is gone; only plots remain SVG).
    *
-   * @param {string} htmlString - Untrusted HTML; sanitised before insertion.
+   * `data` is either a WebR data.frame result (`{names, values}` — hand the result
+   * of `app.webr.run` straight in) or an explicit spec
+   * `{caption?, columns, rows, rowHeaders?}` where a cell is a `string|number` or
+   * a `string[]` (rendered stacked, e.g. correlation's r/p/N). Cells are inserted
+   * as text nodes, never parsed as HTML.
+   *
+   * (Temporary: a `string` argument is still accepted as legacy pre-rendered HTML
+   * for not-yet-migrated plugins; that path is removed once migration completes.)
+   *
+   * @param {object|string} data
+   * @param {{caption?: string, rowHeaders?: boolean}} [opts]
    */
-  appendTable(htmlString) {
+  appendTable(data, opts = {}) {
     const block = this.#makeBlock();
-    const safe = sanitizeHtml(htmlString);
-    block.innerHTML = safe;
+    if (typeof data === 'string') {
+      const safe = sanitizeHtml(data); // legacy HTML path (pre-migration only)
+      block.innerHTML = safe;
+      this.#place(block);
+      this.#model.push({ kind: 'table', html: safe });
+      return;
+    }
+    const spec = normalizeTableData(data, opts);
+    const tableEl = renderTableEl(spec);
+    block.append(tableEl);
     this.#place(block);
-    this.#model.push({ kind: 'table', html: safe });
+    // Store the spec (for structured exporters) plus the host-rendered HTML (so
+    // current HTML/Word exporters keep working until they read the spec).
+    this.#model.push({ kind: 'table', table: spec, html: tableEl.outerHTML });
   }
 
   /**
@@ -290,6 +356,7 @@ export class ResultsPane {
   clear() {
     this.#content.replaceChildren();
     this.#currentSection = null;
+    this.#pendingSection = null;
     this.#plots.clear();
     this.#model = [];
     this.#renderEmptyState();
@@ -339,7 +406,7 @@ export class ResultsPane {
   get api() {
     return Object.freeze({
       beginSection: (t) => this.beginSection(t),
-      appendTable: (h) => this.appendTable(h),
+      appendTable: (data, opts) => this.appendTable(data, opts),
       appendPlot: (s, opts) => this.appendPlot(s, opts),
       updatePlot: (handle, s) => this.updatePlot(handle, s),
       appendText: (m) => this.appendText(m),
@@ -360,9 +427,14 @@ export class ResultsPane {
     return block;
   }
 
-  /** Place a block into the current section, or at top level if none. */
+  /** Place a block into the current section, materialising a host-set pending
+   * section on first use, or appending at top level if there is none. */
   #place(block) {
     this.#clearEmptyState();
+    if (!this.#currentSection && this.#pendingSection) {
+      this.#currentSection = this.#createSection(this.#pendingSection);
+      this.#pendingSection = null;
+    }
     (this.#currentSection ?? this.#content).append(block);
   }
 
@@ -379,6 +451,82 @@ export class ResultsPane {
     const empty = this.#content.querySelector('[data-empty-state]');
     if (empty) empty.remove();
   }
+}
+
+/**
+ * Normalise table input into `{caption, columns, rows, rowHeaders}`. Accepts a
+ * WebR data.frame result (`{names, values}`, column-oriented) or an explicit spec.
+ * @param {object} data
+ * @param {{caption?: string, rowHeaders?: boolean}} opts
+ */
+function normalizeTableData(data, opts) {
+  if (data && Array.isArray(data.names) && Array.isArray(data.values)) {
+    const columns = data.names.map(String);
+    const cols = data.values.map((c) => (Array.isArray(c?.values) ? c.values : [].concat(c)));
+    const n = cols.length ? cols[0].length : 0;
+    const rows = [];
+    for (let i = 0; i < n; i++) rows.push(cols.map((c) => c[i]));
+    return { caption: opts.caption ?? '', columns, rows, rowHeaders: !!opts.rowHeaders };
+  }
+  return {
+    caption: data.caption ?? opts.caption ?? '',
+    columns: (data.columns ?? []).map(String),
+    rows: data.rows ?? [],
+    rowHeaders: !!(data.rowHeaders ?? opts.rowHeaders),
+  };
+}
+
+/** Build a `<table>` from a normalised spec, entirely via DOM APIs so cell text
+ * is inserted as text nodes — never parsed as HTML (no injection possible). */
+function renderTableEl(spec) {
+  const table = document.createElement('table');
+  if (spec.caption) {
+    const cap = document.createElement('caption');
+    cap.textContent = spec.caption;
+    table.append(cap);
+  }
+  if (spec.columns.length) {
+    const thead = document.createElement('thead');
+    const tr = document.createElement('tr');
+    for (const c of spec.columns) {
+      const th = document.createElement('th');
+      th.scope = 'col';
+      th.textContent = c;
+      tr.append(th);
+    }
+    thead.append(tr);
+    table.append(thead);
+  }
+  const tbody = document.createElement('tbody');
+  for (const row of spec.rows) {
+    const tr = document.createElement('tr');
+    row.forEach((cell, i) => {
+      const isHeader = spec.rowHeaders && i === 0;
+      const el = document.createElement(isHeader ? 'th' : 'td');
+      if (isHeader) el.scope = 'row';
+      appendCellLines(el, cell);
+      tr.append(el);
+    });
+    tbody.append(tr);
+  }
+  table.append(tbody);
+  return table;
+}
+
+/** Append a cell's content; an array renders as stacked lines (e.g. r / p / N). */
+function appendCellLines(el, cell) {
+  const lines = Array.isArray(cell) ? cell : [cell];
+  lines.forEach((line, i) => {
+    if (i) el.append(document.createElement('br'));
+    el.append(document.createTextNode(fmtCellValue(line)));
+  });
+}
+
+/** Format a scalar cell value for display (numbers as-is, NA/NaN/null blank). */
+function fmtCellValue(v) {
+  if (v == null) return '';
+  if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '';
+  return String(v);
 }
 
 /** A small hover-revealed plot-save button. */

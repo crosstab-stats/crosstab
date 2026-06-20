@@ -21,6 +21,7 @@ import { ExportService } from './export-service.js';
 import { OutputExportService } from './output-export.js';
 import { ComputeRecode } from './compute-recode.js';
 import { PluginManager } from './plugin-manager.js';
+import { PluginActions } from './plugin-actions.js';
 import { PluginCreator } from './plugin-creator.js';
 import { DatasetStore } from './dataset-store.js';
 import { DatasetLibrary, LIBRARY_CHANGED } from './library.js';
@@ -181,6 +182,10 @@ export async function boot(mounts) {
     web: webService,
   };
   const loader = new PluginLoader(services, { confirmNetwork: confirmPluginNetwork });
+  // Host-side wiring for declarative plugins: reads manifest.menu, gathers each
+  // action's declared inputs, opens the (host-owned) output section, and invokes
+  // the plugin's named function. The PluginManager calls wire/unwire on load/unload.
+  const pluginActions = new PluginActions({ loader, menus: menus.api, results, ui: ui.api, bus });
 
   // --- shell wiring ----------------------------------------------------------
   wireStatusLine(bus, mounts.status, webr);
@@ -285,7 +290,7 @@ export async function boot(mounts) {
   // --- load built-in plugins (those the user hasn't disabled) ----------------
   // The plugin manager owns the catalog + the enabled/disabled set (persisted),
   // loads the enabled ones, and exposes Edit ▸ Plugins… to toggle them live.
-  const plugins = new PluginManager({ loader, urls: BUILTIN_PLUGINS, menus, results: results.api });
+  const plugins = new PluginManager({ loader, urls: BUILTIN_PLUGINS, menus, results: results.api, actions: pluginActions });
   plugins.activate();
   // In-app plugin creator (Edit ▸ Create plugin…, and the manager's "Create new…"):
   // authors a plugin from a template and loads it through the same sandbox.

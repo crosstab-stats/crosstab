@@ -234,6 +234,30 @@ export class PluginLoader {
     return [...this.#plugins.values()].map((p) => p.manifest);
   }
 
+  /**
+   * Invoke a named export on a loaded plugin (declarative API entry path). The
+   * host gathers inputs and calls `run`/`parse`/`export` this way.
+   * @param {string} id - Plugin id.
+   * @param {string} fn - Exported function name.
+   * @param {any[]} [args]
+   * @returns {Promise<any>}
+   */
+  invoke(id, fn, args = []) {
+    const record = this.#plugins.get(id);
+    if (!record) throw new Error(`Plugin "${id}" is not loaded`);
+    return record.broker.invoke(fn, args);
+  }
+
+  /** Bind the host-gathered inputs for a plugin's in-flight action (auto-injected
+   * into its `webr.run`). Paired with {@link PluginLoader#clearActiveInputs}. */
+  setActiveInputs(id, inputs) {
+    this.#plugins.get(id)?.broker.setActiveInputs(inputs);
+  }
+
+  clearActiveInputs(id) {
+    this.#plugins.get(id)?.broker.clearActiveInputs();
+  }
+
   /** Build a hidden, sandboxed iframe for a plugin. */
   #createIframe() {
     const iframe = document.createElement('iframe');

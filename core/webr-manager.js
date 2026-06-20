@@ -43,6 +43,48 @@ const DEFAULT_WEBR_URL = 'https://webr.r-wasm.org/latest/webr.mjs';
 const INJECT_PATH = '/tmp/ct_inject.parquet';
 
 /**
+ * The union of all columns referenced by `variables`-kind inputs, deduped — the
+ * set `df` must contain so the per-input aliases can slice from it.
+ * @param {Object<string, {kind:string, columns?:string[]}>} injectInputs
+ * @returns {string[]}
+ */
+function inputColumns(injectInputs) {
+  const set = new Set();
+  for (const d of Object.values(injectInputs)) {
+    if (d?.kind === 'variables' && Array.isArray(d.columns)) d.columns.forEach((c) => set.add(c));
+  }
+  return [...set];
+}
+
+/**
+ * R prelude that binds each declared input under its own name, sliced from `df`:
+ *  - multi variables → a `data.frame` (`name <- df[c("a","b")]`)
+ *  - single variable → a vector (`name <- df[["a"]]`)
+ *  - number/choice/text → the scalar value
+ * Skipped optional inputs bind to `NULL`/`NA` so the plugin can test for them.
+ * @param {Object<string, object>} injectInputs
+ * @returns {string}
+ */
+function buildInputAliases(injectInputs) {
+  const q = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  let out = '';
+  for (const [name, d] of Object.entries(injectInputs)) {
+    if (d?.kind === 'variables') {
+      const cols = Array.isArray(d.columns) ? d.columns : [];
+      if (!cols.length) out += `${name} <- NULL\n`;
+      else if (d.multiple) out += `${name} <- df[c(${cols.map(q).join(', ')})]\n`;
+      else out += `${name} <- df[[${q(cols[0])}]]\n`;
+    } else if (d?.kind === 'number') {
+      out += `${name} <- ${Number.isFinite(d.value) ? d.value : 'NA'}\n`;
+    } else {
+      // text / choice → an R string (or NULL when skipped)
+      out += d.value == null ? `${name} <- NULL\n` : `${name} <- ${q(d.value)}\n`;
+    }
+  }
+  return out;
+}
+
+/**
  * @typedef {Object} RunResult
  * @property {any} result - The R return value converted to JS (`toJs()`), or
  *   `null` if it could not be converted (e.g. an R closure). Analyses should
@@ -62,6 +104,11 @@ const INJECT_PATH = '/tmp/ct_inject.parquet';
  *   (defaults to all). Lets a dialog pass only the variables it needs.
  * @property {boolean} [captureGraphics=false] - Capture base-graphics plots as
  *   `ImageBitmap`s. Off by default because it requires the canvas device.
+ * @property {Object<string, object>} [injectInputs] - New plugin API: a map of
+ *   declared input name → descriptor (`{kind:'variables', columns, multiple}` or
+ *   `{kind:'number'|'choice'|'text', value}`). Each is bound into R under its name
+ *   before `code` runs (see {@link buildInputAliases}). Supersedes `injectData`/
+ *   `variables` for declarative plugins.
  */
 
 /**
@@ -253,13 +300,21 @@ export class WebRManager {
    * @returns {Promise<RunResult>}
    */
   run(code, options = {}) {
-    const { injectData = false, variables, captureGraphics = false } = options;
+    const { injectData = false, variables, captureGraphics = false, injectInputs = null } = options;
     return this.#enqueue(async (webR) => {
       const shelter = await new webR.Shelter();
       try {
         const env = {};
         let prelude = '';
-        if (injectData) {
+        if (injectInputs) {
+          // New plugin API: bind each declared input into R under its own name —
+          // a single-variable input → a vector, a multi → a data.frame, a scalar
+          // input → its value. `df` is built (union of all chosen columns) as the
+          // source the aliases slice from.
+          const cols = inputColumns(injectInputs);
+          if (cols.length) prelude = await this.#buildInjection(webR, env, cols);
+          prelude += buildInputAliases(injectInputs);
+        } else if (injectData) {
           prelude = await this.#buildInjection(webR, env, variables);
         }
 

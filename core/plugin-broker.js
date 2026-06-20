@@ -70,6 +70,16 @@ export class PluginBroker {
    * A plugin cannot choose its menu location; the host derives it from here. */
   #pluginCategory = 'Other';
 
+  /** Host service bundle, retained for the per-invocation `webr.run` override. */
+  #services;
+
+  /** Inputs gathered by the host for the in-flight action; auto-injected into the
+   * plugin's `webr.run` calls (so the plugin's R sees them bound by name). */
+  #activeInputs = null;
+
+  /** Deferred for an in-flight {@link PluginBroker#invoke}. */
+  #invokePending = null;
+
   /**
    * @param {Object} args
    * @param {HTMLIFrameElement} args.iframe - The plugin's sandboxed iframe.
@@ -80,13 +90,19 @@ export class PluginBroker {
   constructor({ iframe, services, onError }) {
     this.#iframe = iframe;
     this.#onError = onError ?? ((e) => console.error('[plugin-broker]', e));
+    this.#services = services;
     this.#menus = services.menus;
     this.#dispatch = buildDispatch(services);
     // A plugin declares only its menu *label*; the host fixes the *location* to
     // the plugin's category. Override the dispatch entry so any `path` a plugin
     // passes is discarded — menu placement can't be done any other way.
+    // (Legacy `activate`-path plugins only; declarative plugins don't register.)
     this.#dispatch['menus.register'] = (item) =>
       this.#menus.register({ ...item, path: [this.#pluginCategory] });
+    // Declarative plugins call `webr.run(code)` with no injection args; the host
+    // binds the action's gathered inputs into R for them (see #activeInputs).
+    this.#dispatch['webr.run'] = (code, opts) =>
+      this.#services.webr.run(code, this.#activeInputs ? { ...opts, injectInputs: this.#activeInputs } : opts);
     this.#listener = (e) => this.#onMessage(e);
     window.addEventListener('message', this.#listener);
   }
@@ -115,6 +131,31 @@ export class PluginBroker {
    * @param {object} plugin - Plugin identity passed through as `app.plugin`.
    * @returns {Promise<void>} Resolves when `activate` returns.
    */
+  /**
+   * Invoke a named export on the plugin (the declarative API's entry path:
+   * `run`/`parse`/`export`). Plain-data args/return only — these functions take
+   * gathered inputs and return data/bytes, never functions.
+   *
+   * @param {string} fn - Exported function name from the manifest.
+   * @param {any[]} [args]
+   * @returns {Promise<any>} The function's return value.
+   */
+  invoke(fn, args = []) {
+    this.#invokePending = deferred();
+    this.#post({ t: 'invoke', fn, args });
+    return this.#invokePending.promise;
+  }
+
+  /** Bind the host-gathered inputs for the in-flight action (auto-injected into
+   * the plugin's `webr.run`). Cleared with {@link PluginBroker#clearActiveInputs}. */
+  setActiveInputs(inputs) {
+    this.#activeInputs = inputs;
+  }
+
+  clearActiveInputs() {
+    this.#activeInputs = null;
+  }
+
   sendActivate(plugin) {
     // Capture the category before activate() runs, so the plugin's menus.register
     // calls (which happen during activate) are filed under it.
@@ -168,6 +209,14 @@ export class PluginBroker {
         if (msg.ok) this.#activated.resolve();
         else this.#activated.reject(new Error(msg.error || 'activate() failed'));
         break;
+      case 'invoked': {
+        const p = this.#invokePending;
+        this.#invokePending = null;
+        if (!p) break;
+        if (msg.ok) p.resolve(msg.value);
+        else p.reject(new Error(msg.error || 'plugin function failed'));
+        break;
+      }
       case 'call':
         this.#handleCall(msg);
         break;
@@ -280,7 +329,7 @@ function buildDispatch({ data, transform, results, webr, menus, ui, importers, e
     'transform.updateVariable': (name, patch) => transform.updateVariable(name, patch),
 
     'results.beginSection': (t) => results.beginSection(t),
-    'results.appendTable': (h) => results.appendTable(h),
+    'results.appendTable': (data, opts) => results.appendTable(data, opts),
     'results.appendPlot': (s, opts) => results.appendPlot(s, opts),
     'results.updatePlot': (handle, s) => results.updatePlot(handle, s),
     'results.appendText': (m) => results.appendText(m),

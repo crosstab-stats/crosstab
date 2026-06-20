@@ -48,6 +48,9 @@
         /** The imported plugin module, captured on 'load'. */
         let pluginModule = null;
 
+        /** The `app` proxy handed to the plugin, built once on 'activate'. */
+        let app = null;
+
         const post = (m) => parentWin.postMessage({ __crosstab: PROTOCOL, ...m }, '*');
 
         // --- RPC client --------------------------------------------------------
@@ -136,22 +139,38 @@
 
             case 'activate':
               try {
-                const app = makeApp(msg.plugin);
+                // Handshake: build + keep the app proxy.
+                app = makeApp(msg.plugin);
+                const m = pluginModule.manifest || {};
                 if (typeof pluginModule.activate === 'function') {
-                  // Advanced: the plugin wires itself up (multiple menus, importers,
-                  // exporters, event subscriptions, …).
+                  // Legacy: the plugin wires itself up (multi-item, importers, …).
                   await pluginModule.activate(app);
-                } else {
-                  // Simple: a single-item plugin just exports run(). The host wires
-                  // one menu item (filed under its category by the broker) → run().
-                  const m = pluginModule.manifest || {};
+                } else if (typeof m.menu === 'string' && typeof pluginModule.run === 'function') {
+                  // Transitional: a single-item run-style plugin self-registers one
+                  // menu item. (Removed once all built-ins use the declarative menu
+                  // array, which the host wires instead — see plugin-actions.js.)
                   const item = { label: m.menu || m.name || 'Run', command: () => pluginModule.run(app) };
                   if (typeof m.menuOrder === 'number') item.order = m.menuOrder;
                   await app.menus.register(item);
                 }
+                // else: declarative (array menu) → the host wires + invokes it.
                 post({ t: 'activated', ok: true });
               } catch (err) {
                 post({ t: 'activated', ok: false, error: String(err && err.message || err) });
+              }
+              break;
+
+            case 'invoke':
+              try {
+                if (!app) app = makeApp(msg.plugin || {});
+                const fn = pluginModule[msg.fn];
+                if (typeof fn !== 'function') throw new Error('plugin has no function "' + msg.fn + '"');
+                const value = await fn(app, ...(msg.args || []));
+                // Return value is plain data (a dataset, bytes, or nothing) — post
+                // it directly; structured clone handles it (or throws if it can't).
+                post({ t: 'invoked', ok: true, value });
+              } catch (err) {
+                post({ t: 'invoked', ok: false, error: String(err && err.message || err) });
               }
               break;
 

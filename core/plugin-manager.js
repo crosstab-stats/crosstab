@@ -43,18 +43,23 @@ export class PluginManager {
   /** In-app plugin creator, attached after construction. @type {?import('./plugin-creator.js').PluginCreator} */
   #creator = null;
 
+  /** Host-side wiring for declarative plugins (menus + invoke). @type {import('./plugin-actions.js').PluginActions} */
+  #actions;
+
   /**
    * @param {Object} deps
    * @param {import('./loader.js').PluginLoader} deps.loader
    * @param {string[]} deps.urls - Built-in plugin entry URLs.
    * @param {import('./menu-shell.js').MenuShell} deps.menus
    * @param {{appendError: Function}} deps.results - ResultsPane#api.
+   * @param {import('./plugin-actions.js').PluginActions} deps.actions
    */
-  constructor({ loader, urls, menus, results }) {
+  constructor({ loader, urls, menus, results, actions }) {
     this.#loader = loader;
     this.#urls = urls;
     this.#menus = menus;
     this.#results = results;
+    this.#actions = actions;
     this.#disabled = new Set(readJSON(LS_DISABLED, []));
     this.#catalog = readJSON(LS_CATALOG, {});
     this.#user = Array.isArray(readJSON(LS_USER, [])) ? readJSON(LS_USER, []) : [];
@@ -104,7 +109,34 @@ export class PluginManager {
       keywords: Array.isArray(manifest.keywords) ? manifest.keywords : [],
     };
     writeJSON(LS_CATALOG, this.#catalog);
+    // Declarative plugins are wired host-side (menus + invoke); legacy plugins
+    // self-register in activate(), so this is a no-op for them.
+    if (this.#actions && Array.isArray(manifest.menu) && manifest.menu.length) {
+      this.#actions.wire(manifest, this.#originLabel(entry));
+    }
     return manifest;
+  }
+
+  /** Host-tracked origin for output attribution — the part a plugin can't forge. */
+  #originLabel(entry) {
+    if (entry.builtin) return 'built-in';
+    if (entry.kind === 'authored') return 'created here';
+    if (entry.kind === 'file') return 'from file';
+    if (entry.kind === 'url') {
+      try {
+        return `from ${new URL(entry.url).host}`;
+      } catch {
+        return 'from URL';
+      }
+    }
+    return 'external';
+  }
+
+  /** Unload a plugin's host-side wiring (menus) + its sandbox. */
+  async #unload(id) {
+    if (!id) return;
+    this.#actions?.unwire(id);
+    await this.#loader.unload(id);
   }
 
   /** Best-effort load (boot/toggle): surfaces errors, never throws. */
@@ -155,7 +187,7 @@ export class PluginManager {
       const oldId = this.#catalog[key]?.id;
       if (oldId) {
         try {
-          await this.#loader.unload(oldId);
+          await this.#unload(oldId);
         } catch {
           /* ignore */
         }
@@ -183,7 +215,7 @@ export class PluginManager {
     const id = this.#catalog[key]?.id;
     if (id) {
       try {
-        await this.#loader.unload(id);
+        await this.#unload(id);
       } catch {
         /* ignore */
       }
@@ -209,7 +241,7 @@ export class PluginManager {
       this.#disabled.add(key);
       writeJSON(LS_DISABLED, [...this.#disabled]);
       const id = this.#catalog[key]?.id;
-      if (id) await this.#loader.unload(id);
+      if (id) await this.#unload(id);
     }
   }
 
