@@ -1,0 +1,281 @@
+/**
+ * @file plugins/builtin-categorical/index.js
+ * Built-in plugin: Categorical ▸ tests for counts and proportions that the
+ * crosstab (χ² of independence) doesn't cover:
+ *  - **χ² goodness-of-fit** — does one variable's distribution match expected
+ *    proportions (equal by default, or a comma-separated list)?
+ *  - **One-proportion test** — is a category's proportion equal to a value
+ *    (exact binomial)?
+ *  - **Two-proportion test** — do two groups differ in a proportion (with a CI
+ *    for the difference)?
+ *  - **McNemar's test** — paired nominal (e.g. before/after on the same people).
+ *
+ * Categorical variables are bound as their numeric codes; value labels are used
+ * for display. User-missing codes are recoded to NA.
+ */
+
+/** @type {import('../../core/loader.js').PluginManifest} */
+export const manifest = {
+  id: 'builtin-categorical',
+  name: 'Categorical Tests',
+  version: '0.1.0',
+  apiVersion: '0.1.0',
+  category: 'Categorical',
+  keywords: ['chi-square', 'goodness of fit', 'proportion', 'prop.test', 'binomial', 'mcnemar', 'categorical'],
+  rPackages: [],
+  menu: [
+    {
+      label: 'Chi-square goodness-of-fit…',
+      run: 'gof',
+      order: 10,
+      inputs: [
+        { name: 'variable', kind: 'variables', label: 'Variable', types: ['factor', 'string', 'numeric'] },
+        { name: 'expected', kind: 'text', label: 'Expected proportions (comma-separated; blank = equal)', optional: true },
+      ],
+    },
+    {
+      label: 'One-proportion test…',
+      run: 'oneProp',
+      order: 20,
+      inputs: [
+        { name: 'variable', kind: 'variables', label: 'Binary variable', types: ['factor', 'string', 'numeric'] },
+        { name: 'p0', kind: 'number', label: 'Test proportion', default: 0.5 },
+      ],
+    },
+    {
+      label: 'Two-proportion test…',
+      run: 'twoProp',
+      order: 30,
+      inputs: [
+        { name: 'outcome', kind: 'variables', label: 'Binary outcome', types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'groups', kind: 'variables', label: 'Groups (2)', types: ['factor', 'string', 'numeric'], unique: true },
+      ],
+    },
+    {
+      label: "McNemar's test (paired)…",
+      run: 'mcnemar',
+      order: 40,
+      inputs: [
+        { name: 'v1', kind: 'variables', label: 'Variable 1', types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'v2', kind: 'variables', label: 'Variable 2', types: ['factor', 'string', 'numeric'], unique: true },
+      ],
+    },
+  ],
+};
+
+export async function gof(app, { variable, expected }) {
+  if (!variable) return void app.results.appendError('Pick a variable.');
+  const meta = metaMap(await app.data.getVariableMeta());
+  const exp = parseProps(expected);
+  const rCode = `
+    ${recode('variable', missing(meta, variable))}
+    x <- variable[!is.na(variable)]
+    tab <- table(x)
+    .pin <- c(${exp.join(', ')})
+    p <- if (length(.pin) == length(tab) && all(is.finite(.pin)) && all(.pin > 0)) .pin / sum(.pin) else rep(1 / length(tab), length(tab))
+    ch <- suppressWarnings(chisq.test(tab, p = p))
+    list(levels = names(tab), observed = as.integer(tab), expected = unname(ch$expected),
+         chisq = unname(ch$statistic), df = unname(ch$parameter), p = ch$p.value)`;
+  const r = flat((await app.webr.run(rCode)).result);
+  const levels = r.str('levels');
+  const obs = r.num('observed');
+  const expd = r.num('expected');
+  const total = obs.reduce((a, b) => a + b, 0);
+  await app.results.appendTable(
+    {
+      columns: ['Category', 'Observed', 'Expected'],
+      rows: [
+        ...levels.map((lv, i) => [vlab(meta, variable, lv), int(obs[i]), f(expd[i], 2)]),
+        ['Total', int(total), f(total, 2)],
+      ],
+      rowHeaders: true,
+    },
+    { caption: `Goodness-of-Fit — ${label(meta, variable)}` },
+  );
+  await app.results.appendTable(
+    {
+      columns: ['', 'Value'],
+      rows: [
+        ['Chi-Square', f(r.n1('chisq'), 3)],
+        ['df', int(r.n1('df'))],
+        ['Asymp. Sig.', fmtP(r.n1('p'))],
+      ],
+      rowHeaders: true,
+    },
+    { caption: 'Test Statistics' },
+  );
+}
+
+export async function oneProp(app, { variable, p0 }) {
+  if (!variable) return void app.results.appendError('Pick a variable.');
+  const meta = metaMap(await app.data.getVariableMeta());
+  const test = Number.isFinite(p0) ? p0 : 0.5;
+  const rCode = `
+    ${recode('variable', missing(meta, variable))}
+    x <- as.factor(variable[!is.na(variable)])
+    if (nlevels(x) != 2) stop("need a variable with exactly 2 categories")
+    tab <- table(x); succ <- tab[2]; nn <- sum(tab)
+    bt <- binom.test(succ, nn, p = ${test})
+    list(level = names(tab)[2], succ = as.integer(succ), n = as.integer(nn), phat = succ / nn,
+         ciLo = bt$conf.int[1], ciHi = bt$conf.int[2], p = bt$p.value,
+         levels = names(tab), counts = as.integer(tab))`;
+  const r = flat((await app.webr.run(rCode)).result);
+  const levels = r.str('levels');
+  const counts = r.num('counts');
+  await app.results.appendTable(
+    {
+      columns: ['Category', 'Count'],
+      rows: levels.map((lv, i) => [vlab(meta, variable, lv), int(counts[i])]),
+      rowHeaders: true,
+    },
+    { caption: `${label(meta, variable)}` },
+  );
+  const lvl = vlab(meta, variable, r.s1('level'));
+  await app.results.appendTable(
+    {
+      columns: ['', 'Value'],
+      rows: [
+        [`Proportion "${lvl}"`, f(r.n1('phat'), 3)],
+        ['N', int(r.n1('n'))],
+        ['Test proportion', f(test, 3)],
+        ['95% CI', ci(r.n1('ciLo'), r.n1('ciHi'))],
+        ['Exact Sig. (binomial)', fmtP(r.n1('p'))],
+      ],
+      rowHeaders: true,
+    },
+    { caption: 'One-Proportion Test' },
+  );
+}
+
+export async function twoProp(app, { outcome, groups }) {
+  if (!outcome || !groups) return void app.results.appendError('Pick a binary outcome and a 2-group variable.');
+  const meta = metaMap(await app.data.getVariableMeta());
+  const rCode = `
+    ${recode('outcome', missing(meta, outcome))}
+    ${recode('groups', missing(meta, groups))}
+    y <- as.factor(outcome); g <- as.factor(groups)
+    ok <- !is.na(y) & !is.na(g); y <- droplevels(y[ok]); g <- droplevels(g[ok])
+    if (nlevels(g) != 2 || nlevels(y) != 2) stop("need a 2-category outcome and exactly 2 groups")
+    tab <- table(g, y); succ <- tab[, 2]; nn <- rowSums(tab)
+    pt <- suppressWarnings(prop.test(as.integer(succ), as.integer(nn)))
+    list(groups = rownames(tab), succLevel = colnames(tab)[2], succ = as.integer(succ), n = as.integer(nn),
+         p1 = unname(pt$estimate[1]), p2 = unname(pt$estimate[2]),
+         chisq = unname(pt$statistic), df = unname(pt$parameter), p = pt$p.value,
+         ciLo = pt$conf.int[1], ciHi = pt$conf.int[2])`;
+  const r = flat((await app.webr.run(rCode)).result);
+  const grps = r.str('groups');
+  const succ = r.num('succ');
+  const nn = r.num('n');
+  const props = [r.n1('p1'), r.n1('p2')];
+  const succLevel = vlab(meta, outcome, r.s1('succLevel'));
+  await app.results.appendTable(
+    {
+      columns: ['Group', 'N', `"${succLevel}"`, 'Proportion'],
+      rows: grps.map((gl, i) => [vlab(meta, groups, gl), int(nn[i]), int(succ[i]), f(props[i], 3)]),
+      rowHeaders: true,
+    },
+    { caption: `Proportion of "${succLevel}" by ${label(meta, groups)}` },
+  );
+  await app.results.appendTable(
+    {
+      columns: ['', 'Value'],
+      rows: [
+        ['Difference in proportions', f(props[0] - props[1], 3)],
+        ['Chi-Square (1 df, corrected)', f(r.n1('chisq'), 3)],
+        ['Asymp. Sig.', fmtP(r.n1('p'))],
+        ['95% CI of difference', ci(r.n1('ciLo'), r.n1('ciHi'))],
+      ],
+      rowHeaders: true,
+    },
+    { caption: 'Two-Proportion Test' },
+  );
+}
+
+export async function mcnemar(app, { v1, v2 }) {
+  if (!v1 || !v2) return void app.results.appendError("McNemar's test needs two variables.");
+  const meta = metaMap(await app.data.getVariableMeta());
+  const rCode = `
+    ${recode('v1', missing(meta, v1))}
+    ${recode('v2', missing(meta, v2))}
+    a <- as.factor(v1); b <- as.factor(v2)
+    ok <- !is.na(a) & !is.na(b); a <- droplevels(a[ok]); b <- droplevels(b[ok])
+    tab <- table(a, b)
+    if (nrow(tab) != 2 || ncol(tab) != 2) stop("McNemar needs two 2-category variables")
+    mc <- mcnemar.test(tab, correct = TRUE)
+    list(rl = rownames(tab), cl = colnames(tab), counts = as.integer(t(tab)),
+         chisq = unname(mc$statistic), df = unname(mc$parameter), p = mc$p.value)`;
+  const r = flat((await app.webr.run(rCode)).result);
+  const rl = r.str('rl');
+  const cl = r.str('cl');
+  const counts = r.num('counts'); // row-major: counts[i*2 + j]
+  await app.results.appendTable(
+    {
+      columns: ['', ...cl.map((c) => vlab(meta, v2, c))],
+      rows: rl.map((rv, i) => [vlab(meta, v1, rv), ...cl.map((_, j) => int(counts[i * cl.length + j]))]),
+      rowHeaders: true,
+    },
+    { caption: `${label(meta, v1)} × ${label(meta, v2)}` },
+  );
+  await app.results.appendTable(
+    {
+      columns: ['', 'Value'],
+      rows: [
+        ["McNemar's Chi-Square (corrected)", f(r.n1('chisq'), 3)],
+        ['df', int(r.n1('df'))],
+        ['Asymp. Sig.', fmtP(r.n1('p'))],
+      ],
+      rowHeaders: true,
+    },
+    { caption: 'Test Statistics' },
+  );
+}
+
+// --- helpers -----------------------------------------------------------------
+
+function metaMap(meta) {
+  return new Map((meta || []).map((m) => [m.name, m]));
+}
+function label(meta, name) {
+  return meta.get(name)?.label || name;
+}
+function vlab(meta, name, code) {
+  return meta.get(name)?.valueLabels?.[code] ?? code;
+}
+function missing(meta, name) {
+  return (meta.get(name)?.missingValues ?? []).filter((v) => Number.isFinite(Number(v))).map(Number);
+}
+/** Recode line for a bound vector `rvar` (the input's R variable). */
+function recode(rvar, mv) {
+  return mv.length ? `${rvar}[${rvar} %in% c(${mv.join(', ')})] <- NA` : '';
+}
+function parseProps(s) {
+  return String(s || '')
+    .split(',')
+    .map((x) => Number(x.trim()))
+    .filter((x) => Number.isFinite(x) && x > 0);
+}
+function flat(rList) {
+  const byName = {};
+  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
+    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
+  } else {
+    Object.assign(byName, rList || {});
+  }
+  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
+  return {
+    num: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
+    str: (k) => arr(byName[k]).map((x) => (x == null ? '' : String(x))),
+    n1: (k) => {
+      const a = arr(byName[k]);
+      return a.length ? (a[0] == null ? NaN : Number(a[0])) : NaN;
+    },
+    s1: (k) => {
+      const a = arr(byName[k]);
+      return a.length ? String(a[0] ?? '') : '';
+    },
+  };
+}
+const f = (x, d) => (Number.isFinite(x) ? x.toFixed(d) : '—');
+const int = (x) => (Number.isFinite(x) ? String(Math.round(x)) : '—');
+const fmtP = (p) => (Number.isFinite(p) ? (p < 0.001 ? '< .001' : p.toFixed(3)) : '—');
+const ci = (lo, hi) => (Number.isFinite(lo) && Number.isFinite(hi) ? `[${lo.toFixed(3)}, ${hi.toFixed(3)}]` : '—');
