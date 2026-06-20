@@ -392,6 +392,47 @@
         width: 22px; height: 22px; border-radius: 4px; line-height: 1;
       }
       .ct-plugin__rm:hover { background: #fdecec; }
+      .ct-plugin__edit {
+        border: 0; background: none; color: var(--accent); cursor: pointer; font-size: 13px;
+        width: 22px; height: 22px; border-radius: 4px; line-height: 1;
+      }
+      .ct-plugin__edit:hover { background: #eaf3fb; }
+
+      /* Plugin creator dialog */
+      .ct-creator { max-width: 760px; width: 90vw; }
+      .ct-creator__row { margin: 0 0 8px; }
+      .ct-creator__namelbl {
+        font-size: 13px; color: #333; display: flex; flex-direction: column; gap: 4px; max-width: 340px;
+      }
+      .ct-creator__name {
+        font: inherit; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px;
+      }
+      .ct-creator__templates { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+      .ct-creator__tpl {
+        font: inherit; font-size: 12px; padding: 5px 11px; cursor: pointer;
+        background: #f4f7fb; border: 1px solid var(--line); border-radius: 999px;
+      }
+      .ct-creator__tpl:hover { background: #e8f1fb; border-color: var(--accent); }
+      .ct-creator__editor {
+        display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
+        height: 360px; background: #fbfcfd;
+      }
+      .ct-creator__gutter {
+        flex: none; width: 40px; padding: 8px 6px; text-align: right; color: #9aa6b2;
+        background: #f1f4f7; border-right: 1px solid var(--line);
+        font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5;
+        white-space: pre; overflow: hidden; user-select: none;
+      }
+      .ct-creator__code {
+        flex: 1; border: 0; resize: none; padding: 8px 10px; outline: none; background: transparent;
+        color: #1d2733; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px;
+        line-height: 1.5; white-space: pre; tab-size: 2;
+      }
+      .ct-creator__status {
+        margin: 8px 0 0; font-size: 12px; padding: 7px 10px; border-radius: 6px;
+        background: #eef7ee; color: #1e5b2a; border: 1px solid #cfe6cf;
+      }
+      .ct-creator__status--err { background: #fdf3f2; color: #7a201a; border-color: #f0d8d5; }
       .ct-plugins__search {
         width: 100%; box-sizing: border-box; font: inherit; margin: 0 0 8px;
         padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px;

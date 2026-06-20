@@ -21,6 +21,7 @@ import { ExportService } from './export-service.js';
 import { OutputExportService } from './output-export.js';
 import { ComputeRecode } from './compute-recode.js';
 import { PluginManager } from './plugin-manager.js';
+import { PluginCreator } from './plugin-creator.js';
 import { DatasetStore } from './dataset-store.js';
 import { DatasetLibrary, LIBRARY_CHANGED } from './library.js';
 import { ProjectStore } from './project-store.js';
@@ -286,6 +287,17 @@ export async function boot(mounts) {
   // loads the enabled ones, and exposes Edit ▸ Plugins… to toggle them live.
   const plugins = new PluginManager({ loader, urls: BUILTIN_PLUGINS, menus, results: results.api });
   plugins.activate();
+  // In-app plugin creator (Edit ▸ Create plugin…, and the manager's "Create new…"):
+  // authors a plugin from a template and loads it through the same sandbox.
+  const pluginCreator = new PluginCreator({ manager: plugins });
+  plugins.attachCreator(pluginCreator);
+  menus.register({
+    id: 'core:create-plugin',
+    path: ['Edit'],
+    label: 'Create plugin…',
+    order: 41,
+    command: () => pluginCreator.open(null),
+  });
   await plugins.loadEnabled();
 
   // Boot done: from the next change on, an unsaved session auto-starts an
@@ -294,7 +306,7 @@ export async function boot(mounts) {
 
   // `dataStore` kept as an alias to the manager (it delegates to the active
   // dataset) so console pokes / older references keep working.
-  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, projects, loader, plugins, services };
+  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, projects, loader, plugins, pluginCreator, services };
   // Expose for manual poking in the console during early development.
   // eslint-disable-next-line no-undef
   globalThis.crosstab = engine;

@@ -36,9 +36,12 @@ export class PluginManager {
   /** key → {id, name, category, keywords} learned when a plugin loads (persisted),
    * so disabled/unloaded plugins still show details in the dialog. @type {Object} */
   #catalog;
-  /** User-added plugins (persisted): `{key, kind:'url'|'file', url?, name?, source?}`.
-   * @type {Array<object>} */
+  /** User-added plugins (persisted): `{key, kind:'url'|'file'|'authored', url?,
+   * name?, source?}`. @type {Array<object>} */
   #user;
+
+  /** In-app plugin creator, attached after construction. @type {?import('./plugin-creator.js').PluginCreator} */
+  #creator = null;
 
   /**
    * @param {Object} deps
@@ -67,6 +70,11 @@ export class PluginManager {
     });
   }
 
+  /** Give the manager a handle on the creator (for Create / Edit actions). */
+  attachCreator(creator) {
+    this.#creator = creator;
+  }
+
   /** Every known plugin as a load descriptor (built-ins first, then user). */
   #entries() {
     const builtins = this.#urls.map((url) => ({ key: url, kind: 'url', url, builtin: true }));
@@ -86,7 +94,7 @@ export class PluginManager {
   async #loadEntryStrict(entry) {
     const trusted = !!entry.builtin;
     const manifest =
-      entry.kind === 'file'
+      entry.source != null
         ? await this.#loader.loadSource(entry.source, entry.name || entry.key, { trusted })
         : await this.#loader.load(entry.url, { trusted });
     this.#catalog[entry.key] = {
@@ -131,6 +139,41 @@ export class PluginManager {
     this.#user.push(entry);
     writeJSON(LS_USER, this.#user);
     return manifest;
+  }
+
+  /** Create or update an **authored** plugin from editor source. The source is
+   * persisted first (so work is never lost), then (re)loaded — a load failure
+   * throws (for the creator to show) but leaves the source saved + editable.
+   *
+   * @param {{name:string, source:string, key?:string}} arg
+   * @returns {Promise<{key:string, manifest:object}>}
+   */
+  async saveAuthored({ name, source, key }) {
+    let entry = key ? this.#user.find((e) => e.key === key) : null;
+    if (entry) {
+      // Editing: unload the previous version so its id frees up for the reload.
+      const oldId = this.#catalog[key]?.id;
+      if (oldId) {
+        try {
+          await this.#loader.unload(oldId);
+        } catch {
+          /* ignore */
+        }
+      }
+      entry.name = name;
+      entry.source = source;
+    } else {
+      entry = { key: `authored:${crypto.randomUUID()}`, kind: 'authored', name, source };
+      this.#user.push(entry);
+    }
+    writeJSON(LS_USER, this.#user); // persist before load — never lose the work
+    const manifest = await this.#loadEntryStrict(entry);
+    return { key: entry.key, manifest };
+  }
+
+  /** The persisted authored/user entry for a key (incl. its source), for editing. */
+  getEntry(key) {
+    return this.#user.find((e) => e.key === key) ?? null;
   }
 
   /** Remove a user plugin entirely (unload + forget). Built-ins can't be removed. */
@@ -190,7 +233,8 @@ export class PluginManager {
         enabled: !this.#disabled.has(e.key),
         loaded: cat?.id ? loaded.has(cat.id) : false,
         removable: !e.builtin,
-        origin: e.builtin ? 'built-in' : e.kind, // 'url' | 'file'
+        editable: e.kind === 'authored',
+        origin: e.builtin ? 'built-in' : e.kind, // 'url' | 'file' | 'authored'
       };
     });
   }
@@ -209,6 +253,7 @@ export class PluginManager {
         saved across sessions. <strong>Added plugins run sandboxed</strong> (no network
         of their own) but can read the data you load here, so only add ones you trust.</p>
       <div class="ct-plugins__add">
+        <button type="button" class="ct-plugins__addbtn" data-act="create">+ Create new…</button>
         <button type="button" class="ct-plugins__addbtn" data-act="url">+ Add from URL…</button>
         <button type="button" class="ct-plugins__addbtn" data-act="file">+ Add from file…</button>
       </div>
@@ -240,6 +285,14 @@ export class PluginManager {
       }
     };
 
+    form.querySelector('[data-act="create"]').addEventListener('click', () => {
+      setErr('');
+      if (!this.#creator) {
+        setErr('The plugin creator is unavailable.');
+        return;
+      }
+      this.#creator.open(null, renderList);
+    });
     form.querySelector('[data-act="url"]').addEventListener('click', async () => {
       setErr('');
       const url = await this.#promptUrl();
@@ -294,6 +347,19 @@ export class PluginManager {
     const right = el('span', null, 'ct-plugin__right');
     const metaText = p.enabled ? (p.loaded ? p.origin : 'failed to load') : 'disabled';
     right.append(el('span', metaText, 'ct-plugin__meta'));
+    if (p.editable && this.#creator) {
+      const ed = document.createElement('button');
+      ed.type = 'button';
+      ed.className = 'ct-plugin__edit';
+      ed.textContent = '✎';
+      ed.title = 'Edit this plugin';
+      ed.addEventListener('click', () => {
+        setErr('');
+        const entry = this.getEntry(p.key);
+        if (entry) this.#creator.open({ key: entry.key, name: entry.name, source: entry.source }, refresh);
+      });
+      right.append(ed);
+    }
     if (p.removable) {
       const rm = document.createElement('button');
       rm.type = 'button';

@@ -721,10 +721,30 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     follow); including **analyses** in the do-file (needs a run-log + plugins
     declaring their R — bigger); key-normalisation in the emitted join (the app
     matches case/space-insensitively; the `merge` stub doesn't yet).
-- [ ] **In-app plugin creator / editor.** Let social scientists (who are *not*
-      programmers) build the plugin they need without leaving the app or standing
-      up a toolchain. The point isn't a full IDE — it's "more than Notepad,"
-      scaffolded enough that the author fills in the analysis, not the plumbing.
+- [~] **In-app plugin creator / editor — BUILT** (`core/plugin-creator.js`;
+      **Edit ▸ Create plugin…**, and **"+ Create new…"** in the plugin manager).
+      A scaffolded editor so non-programmers build the plugin they need without a
+      toolchain — pick a template, fill in the analysis, **Save & load** hands the
+      source to the same sandboxed loader (`PluginManager.saveAuthored` →
+      `loader.loadSource`, untrusted). Authored plugins **persist in localStorage**
+      (`kind:'authored'`, source stored) so they survive a restart and re-open in
+      the editor (✎ in the manager) to edit in place; removable like any user plugin.
+  - **Templates pre-wire the plumbing** (manifest + menu + variable picker +
+    output channels), so the author writes only the analysis: **Blank**,
+    **One-variable analysis** (numeric picker → R summary → table), **Two-group
+    comparison** (outcome + group → `aggregate` → table; also seeds the empty
+    *Comparison* family), **Plot (histogram)** (numeric picker → `svglite` →
+    `appendPlot`). The generated R is built by string concatenation (no template
+    literals), so the scaffold carries no backticks/`${}`.
+  - **Editor surface:** a textarea with a **line-number gutter** + Tab-inserts-
+    spaces — "more than Notepad". Save persists *before* loading (work is never
+    lost); a load error stays in the dialog with the message so it can be fixed.
+  - **Verified end to end in Chrome:** all 4 templates create + load with correct
+    categories; the one-variable plugin ran the full chain (menu → variable picker
+    → R → table: age N=30, Mean=41, SD=10.888); authored plugins **survive a
+    reload** (re-loaded from stored source), **edit-in-place** re-loads + persists,
+    and **remove** clears them from the list + storage.
+  - *Original framing + still-to-do below.*
   - **Scaffold pre-wires the boilerplate:** a starting template with the **input
     selector** (variable picking via `app.ui.selectVariables`) and the **output
     channels** (`results.appendText`/`appendTable`/`appendPlot`) already typed in,
