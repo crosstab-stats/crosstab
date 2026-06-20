@@ -257,6 +257,30 @@ export class ImportService {
         continue;
       }
 
+      // Guard the "import all" path: building one DuckDB table from a *very wide*
+      // file needs many wide on-disk parts, which currently fails (a DuckDB-WASM
+      // OPFS limitation). Catalog first (cheap) and steer to choose-variables when
+      // a full import would be too wide. Moderate files (≲1000 vars) import whole.
+      if (!spec.pick) {
+        let cat;
+        try {
+          cat = await this.#readstat.catalog(file, format);
+        } catch (err) {
+          this.#results.appendError(`Could not read "${file.name}": ${err.message}`);
+          continue;
+        }
+        const rows = cat.rowCount >= 0 ? cat.rowCount : 100000;
+        const estParts = Math.ceil((cat.varCount * rows) / 4_000_000);
+        if (cat.varCount > 1000 && estParts > 8) {
+          this.#results.appendError(
+            `“${file.name}” has ${cat.varCount.toLocaleString()} variables — importing all of them ` +
+              `isn’t supported yet for a file this wide. Use “File ▸ Import ▸ SPSS / Stata / SAS — ` +
+              `choose variables…” to import the columns you need.`,
+          );
+          continue;
+        }
+      }
+
       // A `pick` importer reads the variable catalog first (cheap, no data) and lets
       // the user choose a subset — the memory-bounded path for huge/wide files.
       let selected = null;

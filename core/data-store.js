@@ -313,19 +313,20 @@ export class DataStore {
 
     const seq = ++this.#sourceSeq;
     const table = `${this.#sourcePrefix}${seq}`;
-    // Bake the stable row id into the ingest CTAS (namespaced by seq, like
-    // #ensureRowId) so there's no separate full-table rewrite afterwards. Row
-    // order is irrelevant — the id only needs to be unique and stable per row.
+    // Bake the stable row id into the ingest (namespaced by seq, like #ensureRowId)
+    // so there's no separate full-table rewrite afterwards. Row order is irrelevant
+    // — the id only needs to be unique and stable per row.
     const base = seq * ROWID_STRIDE;
-    const rowidExpr =
-      `CAST(${base} AS BIGINT) + CAST(row_number() OVER () AS BIGINT) AS ${quoteIdent(ROWID_COL)}`;
     let meta = null;
     let ingester = null;
 
     const ctx = {
       begin: async (variables, storageTypes) => {
         meta = variables;
-        ingester = await this.#duckdb.beginStreamIngest(table, storageTypes, { rowidExpr });
+        ingester = await this.#duckdb.beginStreamIngest(table, storageTypes, {
+          rowidCol: ROWID_COL,
+          rowidBase: base,
+        });
       },
       batch: async (columns) => {
         if (!ingester) throw new Error('loadStreaming: batch before begin()');

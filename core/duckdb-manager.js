@@ -167,13 +167,17 @@ export class DuckDBManager {
    * @param {Object} [opts]
    * @param {string} [opts.rowidExpr] - Extra SELECT expression appended in the
    *   final CTAS (e.g. a baked-in row id), so no separate full-table rewrite.
-   * @param {number} [opts.targetCells=16000000] - Approx cells per part (~128 MB).
-   *   Kept small because the temp table is built via INSERTs, which can't page to
-   *   disk and must stay well under `memory_limit`. Many small parts are then
-   *   hierarchically merged (bounded fan-in) so the final read only opens a few.
+   * @param {string} [opts.rowidCol] - If set, a BIGINT row-id column with this name
+   *   is baked into each part (so the final read needs no whole-table window).
+   * @param {number} [opts.rowidBase=0] - Row-id namespace offset.
+   * @param {number} [opts.targetCells=4000000] - Approx cells per part (~32 MB).
+   *   Kept small for two reasons: the temp table is built via INSERTs (which can't
+   *   page to disk, so must stay well under `memory_limit`), and large parts of a
+   *   *wide* table flush truncated to OPFS under concurrent load — small parts
+   *   avoid both.
    * @returns {Promise<{addBatch: (columns: Object) => Promise<void>, finish: () => Promise<void>}>}
    */
-  async beginStreamIngest(table, types, { rowidExpr, targetCells = 16_000_000 } = {}) {
+  async beginStreamIngest(table, types, { rowidCol = null, rowidBase = 0, targetCells = 4_000_000 } = {}) {
     const { conn } = await this.#ensureReady();
     const ncols = Math.max(1, Object.keys(types).length);
     const rowsPerPart = Math.max(1000, Math.floor(targetCells / ncols));
@@ -182,13 +186,10 @@ export class DuckDBManager {
     let tmpRows = 0;
     let tmpCreated = false;
     let seq = 0;
+    let rowsSoFar = 0; // rows flushed before the current part (for the baked row id)
 
     const root = await navigator.storage.getDirectory();
     const PROT = this.#duckdb.DuckDBDataProtocol.BROWSER_FSACCESS;
-
-    // Reading many OPFS parquet files at once is flaky/memory-heavy, so the final
-    // read (and every merge step) opens at most this many parts.
-    const MERGE_FANIN = 12;
     const sqlList = (names) => names.map((p) => `'${p}'`).join(', ');
     const reReg = async (name) => {
       const h = await root.getFileHandle(name);
@@ -201,14 +202,19 @@ export class DuckDBManager {
 
     const flushPart = async () => {
       const name = `${table}__part${seq++}.parquet`;
-      // Write the part, then verify it reads back before dropping the temp — under
-      // concurrent worker load an OPFS part can occasionally flush truncated, so we
-      // confirm (and retry) while we still have the temp data to re-COPY.
+      const partRows = tmpRows;
+      // Bake a unique row id per part (small per-part window) so the final read is a
+      // plain streaming SELECT * — a whole-table window over wide data would OOM.
+      const src = rowidCol
+        ? `(SELECT *, CAST(${rowidBase + rowsSoFar} AS BIGINT) + CAST(row_number() OVER () AS BIGINT) AS ${quoteIdent(rowidCol)} FROM ${quoteIdent(tmp)})`
+        : quoteIdent(tmp);
+      // Write, then verify it reads back before dropping the temp (an OPFS part can
+      // occasionally flush truncated under load — retry while we still have the data).
       let ok = false;
       for (let attempt = 0; attempt < 3 && !ok; attempt++) {
         const handle = await root.getFileHandle(name, { create: true });
         await this.#db.registerFileHandle(name, handle, PROT, true);
-        await conn.query(`COPY ${quoteIdent(tmp)} TO '${name}' (FORMAT parquet)`);
+        await conn.query(`COPY ${src} TO '${name}' (FORMAT parquet)`);
         await this.#db.dropFile(name); // release write handle → flush to OPFS
         try {
           await reReg(name);
@@ -222,6 +228,7 @@ export class DuckDBManager {
       }
       if (!ok) throw new Error(`streaming ingest: part "${name}" failed to write to OPFS`);
       parts.push(name);
+      rowsSoFar += partRows;
       await conn.query(`DROP TABLE IF EXISTS ${quoteIdent(tmp)}`);
       tmpCreated = false;
       tmpRows = 0;
@@ -235,19 +242,8 @@ export class DuckDBManager {
       if (tmpRows >= rowsPerPart) await flushPart();
     };
 
-    /** Combine a group of parquet parts into one new part (read few, write one). */
-    const mergeGroup = async (group, outName) => {
-      for (const p of group) await reReg(p);
-      const oh = await root.getFileHandle(outName, { create: true });
-      await this.#db.registerFileHandle(outName, oh, PROT, true);
-      await conn.query(`COPY (SELECT * FROM read_parquet([${sqlList(group)}])) TO '${outName}' (FORMAT parquet)`);
-      await this.#db.dropFile(outName);
-      for (const p of group) await removePart(p);
-    };
-
     const finish = async () => {
-      // Ensure at least one part exists (even an empty one) so the CTAS has a
-      // schema to build from for a zero-row file.
+      // Ensure at least one part exists (even empty) so the CTAS has a schema.
       if (tmpRows > 0) {
         await flushPart();
       } else if (parts.length === 0) {
@@ -258,28 +254,19 @@ export class DuckDBManager {
         await flushPart();
       }
 
-      // Hierarchically merge down to <= MERGE_FANIN parts so the final read opens
-      // only a few files at once.
-      let level = parts.slice();
-      let mergeSeq = 0;
-      while (level.length > MERGE_FANIN) {
-        const next = [];
-        for (let i = 0; i < level.length; i += MERGE_FANIN) {
-          const group = level.slice(i, i + MERGE_FANIN);
-          const out = `${table}__merge${mergeSeq++}.parquet`;
-          await mergeGroup(group, out);
-          next.push(out);
-        }
-        level = next;
-      }
-
-      for (const p of level) await reReg(p);
-      const sel = rowidExpr ? `*, ${rowidExpr}` : '*';
+      for (const p of parts) await reReg(p);
       await conn.query(`DROP TABLE IF EXISTS ${quoteIdent(table)}`);
+      // Read the parts sequentially (threads=1): with many wide parts, parallel
+      // parquet readers blow the memory_limit. The row id is already a column, so
+      // this is a plain streaming projection straight to the (OPFS) table.
+      let prevThreads = null;
       try {
-        await conn.query(`CREATE TABLE ${quoteIdent(table)} AS SELECT ${sel} FROM read_parquet([${sqlList(level)}])`);
+        try { prevThreads = String((await conn.query(`SELECT current_setting('threads') AS t`)).get(0).t); } catch { /* ignore */ }
+        await conn.query('SET threads=1');
+        await conn.query(`CREATE TABLE ${quoteIdent(table)} AS SELECT * FROM read_parquet([${sqlList(parts)}])`);
       } finally {
-        for (const p of level) await removePart(p);
+        if (prevThreads) { try { await conn.query(`SET threads=${prevThreads}`); } catch { /* ignore */ } }
+        for (const p of parts) await removePart(p);
         try { await conn.query(`DROP TABLE IF EXISTS ${quoteIdent(tmp)}`); } catch { /* best-effort */ }
       }
     };
