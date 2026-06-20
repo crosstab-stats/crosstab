@@ -230,13 +230,11 @@ export async function boot(mounts) {
     const variableView = new VariableView(mounts.viewVars, datasets);
     // R Console tab: a live REPL on the persistent WebR session (host feature).
     const rConsole = mounts.viewConsole ? new RConsole(mounts.viewConsole, { webr, store: datasets }) : null;
-    wireWorkspaceTabs(bus, mounts, { dataView, variableView, results: mounts.results, rConsole });
+    wireWorkspaceTabs(bus, mounts, { dataView, variableView, results: mounts.results, rConsole, resultsPane: results });
     // Keep the grid's header checkboxes in step when selection changes elsewhere
     // (e.g. the sidebar) — both surfaces drive the one shared selection.
     bus.on(CoreEvents.SELECTION_CHANGED, () => dataView.syncSelection());
   }
-  const clearBtn = document.getElementById('clear-output');
-  if (clearBtn) clearBtn.addEventListener('click', () => results.clear());
 
   // Edit ▸ Undo / Redo over the transform log. Host-owned (like the data grid),
   // not a plugin — registered through the same `menus.register` everything uses.
@@ -428,20 +426,40 @@ function wireBusyIndicator(bus, el) {
  *   `viewHistory` is optional.
  * @param {{dataView: DataView, variableView: VariableView, historyView: ?HistoryView, results: HTMLElement}} views
  */
-function wireWorkspaceTabs(bus, mounts, { dataView, variableView, results, rConsole }) {
+function wireWorkspaceTabs(bus, mounts, { dataView, variableView, results, rConsole, resultsPane }) {
   const panels = { data: mounts.viewData, vars: mounts.viewVars, output: results, console: mounts.viewConsole };
   const buttons = [...mounts.tabs.querySelectorAll('.tab')];
+  const clearBtn = document.getElementById('clear-output');
   let current = 'output';
+
+  // The clear button is contextual: hidden in Data/Variables (nothing to clear),
+  // "Clear output" in Output, "Clear console" (reset the REPL) in R Console.
+  const CLEAR = {
+    output: { label: 'Clear output', title: 'Clear all output', run: () => resultsPane?.clear() },
+    console: { label: 'Clear console', title: 'Clear the console and reset the R session', run: () => rConsole?.reset() },
+  };
+  const syncClearBtn = (name) => {
+    if (!clearBtn) return;
+    const cfg = CLEAR[name];
+    clearBtn.hidden = !cfg;
+    if (cfg) {
+      clearBtn.textContent = cfg.label;
+      clearBtn.title = cfg.title;
+    }
+  };
+  if (clearBtn) clearBtn.addEventListener('click', () => CLEAR[current]?.run());
 
   const show = (name) => {
     current = name;
     for (const b of buttons) b.setAttribute('aria-selected', String(b.dataset.view === name));
     for (const [key, panel] of Object.entries(panels)) if (panel) panel.hidden = key !== name;
+    syncClearBtn(name);
     if (name === 'data') dataView.refresh();
     else if (name === 'vars') variableView.render();
     else if (name === 'console') rConsole?.onShow();
   };
 
+  syncClearBtn(current); // initial state (Output is the default view)
   for (const b of buttons) b.addEventListener('click', () => show(b.dataset.view));
   bus.on(CoreEvents.DATA_CHANGED, () => {
     if (current === 'data') dataView.refresh();

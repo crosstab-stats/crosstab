@@ -125,6 +125,30 @@ export class RConsole {
     this.#renderVars();
   }
 
+  /** Clear the console and start over: wipe the visible transcript and the R
+   * workspace (so objects you defined are gone), then re-expose the still-checked
+   * variables as `vars`. Command history is cleared too. */
+  async reset() {
+    this.#history = [];
+    this.#histIdx = -1;
+    this.#input.value = '';
+    this.#grow();
+    try {
+      await this.#webr.evalConsole('rm(list = ls())');
+    } catch {
+      /* best effort — clearing the screen still succeeds */
+    }
+    await this.#rebind(); // restore `vars` for the variables still checked
+    // Clear the transcript *last*, after the async R work: a command still
+    // running when reset was clicked resolves first (the WebR queue is serial), so
+    // wiping the screen here also removes its late output.
+    for (const node of [...this.#term.childNodes]) {
+      if (node !== this.#prompt) node.remove();
+    }
+    this.#append('Console cleared — R workspace reset.', 'rc-note');
+    this.#input.focus();
+  }
+
   // --- variables -------------------------------------------------------------
 
   #renderVars() {
