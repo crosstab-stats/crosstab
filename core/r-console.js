@@ -35,7 +35,8 @@ export class RConsole {
   #filterInput;
   #varsInfo;
   #libsInfo;
-  #out;
+  #term;
+  #prompt;
   #input;
 
   /**
@@ -65,8 +66,7 @@ export class RConsole {
           <span class="rc-libs-info">…</span>
         </div>
       </div>
-      <div class="rc-term">
-        <div class="rc-out" aria-live="polite"></div>
+      <div class="rc-term" aria-live="polite">
         <div class="rc-prompt"><span class="rc-caret">&gt;</span><input class="rc-input" type="text" spellcheck="false" autocomplete="off" aria-label="R input"></div>
       </div>`;
 
@@ -78,12 +78,15 @@ export class RConsole {
     });
     this.#varsInfo = this.#host.querySelector('.rc-vars-info');
     this.#libsInfo = this.#host.querySelector('.rc-libs-info');
-    this.#out = this.#host.querySelector('.rc-out');
+    this.#term = this.#host.querySelector('.rc-term');
+    this.#prompt = this.#host.querySelector('.rc-prompt');
     this.#input = this.#host.querySelector('.rc-input');
 
     this.#input.addEventListener('keydown', (e) => this.#onKey(e));
-    // Clicking anywhere in the terminal focuses the input.
-    this.#host.querySelector('.rc-term').addEventListener('click', () => this.#input.focus());
+    // Clicking empty terminal space focuses the input (but let text be selected).
+    this.#term.addEventListener('click', (e) => {
+      if (e.target === this.#term || e.target === this.#prompt) this.#input.focus();
+    });
 
     const libAdd = this.#host.querySelector('.rc-lib-add');
     libAdd.addEventListener('keydown', (e) => {
@@ -251,12 +254,13 @@ export class RConsole {
     }
   }
 
-  /** Append a text block to the terminal and scroll to it. */
+  /** Append a text block just above the prompt (so the prompt stays inline, right
+   * after the latest output) and scroll to it. */
   #append(text, cls) {
     const div = el('div', text, cls);
     if (cls === 'rc-cmd') div.textContent = `> ${text}`;
-    this.#out.append(div);
-    this.#out.scrollTop = this.#out.scrollHeight;
+    this.#term.insertBefore(div, this.#prompt);
+    this.#term.scrollTop = this.#term.scrollHeight;
   }
 }
 

@@ -167,17 +167,20 @@
       .rc-vars-info { font-family: ui-monospace, Menlo, Consolas, monospace; color: #1d2733; }
       .rc-libs-info { font-family: ui-monospace, Menlo, Consolas, monospace; color: #1d2733; flex: 1; min-width: 0; }
       .rc-lib-add { font: inherit; font-size: 12px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 6px; width: 130px; }
+      /* The terminal is one scroller; the prompt flows as the last line, right
+         after the latest output (like the webR/RStudio console) rather than being
+         pinned to the bottom of the pane. */
       .rc-term {
-        flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+        flex: 1; min-height: 0; overflow-y: auto; padding: 10px 12px;
+        white-space: pre-wrap; word-break: break-word; cursor: text;
         font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.45;
       }
-      .rc-out { flex: 1; overflow-y: auto; padding: 10px 12px; white-space: pre-wrap; word-break: break-word; }
+      .rc-term > div { margin: 0 0 2px; }
       .rc-cmd { color: #2563a8; }
       .rc-result { color: #1a1a1a; }
       .rc-err { color: #b3201a; }
       .rc-note { color: #7a8590; font-style: italic; }
-      .rc-out > div { margin: 0 0 2px; }
-      .rc-prompt { flex: none; display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-top: 1px solid var(--line); background: #fafbfc; }
+      .rc-prompt { display: flex; align-items: center; gap: 6px; }
       .rc-caret { color: var(--accent); font-weight: 700; }
       .rc-input { flex: 1; border: 0; outline: none; background: transparent; font: inherit; color: #1a1a1a; }
       .rc-input:disabled { color: #aaa; }
