@@ -44,15 +44,23 @@ self.onmessage = async (e) => {
 };
 
 /** Shared parse setup: wire FileReaderSync IO + collect schema. Returns a context
- * whose handlers the caller installs on Module before calling ct_parse. */
-function makeContext(Module, file) {
+ * whose handlers the caller installs on Module before calling ct_parse. `keep`, if
+ * a Set of variable names, restricts the import to those columns (skipped columns'
+ * values are never read). */
+function makeContext(Module, file, keep = null) {
   const frs = new FileReaderSync();
   const size = file.size;
 
   const meta = { rowCount: -1, varCount: 0, encoding: '' };
-  const rawVars = []; // {index,name,label,type,format,measure,labelSet}
+  const rawVars = []; // {index,name,label,type,format,measure,labelSet} (kept only)
   const labelSets = {}; // setName → { code: label }
   const missing = {}; // varIndex → [values]
+  // ReadStat reports original variable indices to the value handler even when some
+  // are skipped, so map each kept variable's original index → its column position.
+  const keptIndexMap = {};
+
+  // Reset any prior filter on the (reused) module, then install this request's.
+  Module.ctKeepVar = keep ? (_index, name) => (keep.has(name) ? 1 : 0) : null;
 
   // Read-ahead buffer: ReadStat issues thousands of tiny (4-12 byte) reads, and a
   // FileReaderSync call per tiny read is ruinously slow. Serve small reads from a
@@ -80,6 +88,7 @@ function makeContext(Module, file) {
     meta.encoding = encoding;
   };
   Module.ctVariable = (index, name, label, type, format, measure, labelSet) => {
+    keptIndexMap[index] = rawVars.length;
     rawVars.push({ index, name, label, type, format, measure, labelSet });
   };
   Module.ctMissingRange = (vi, lo, hi) => {
@@ -89,7 +98,7 @@ function makeContext(Module, file) {
     (labelSets[set] ??= {})[sval ?? dval] = label;
   };
 
-  return { meta, rawVars, labelSets, missing, size };
+  return { meta, rawVars, labelSets, missing, size, keptIndexMap };
 }
 
 /** Cap on expanding a missing *range* to discrete values (keeps metadata bounded).
@@ -164,9 +173,10 @@ async function runCatalog({ id, file, format }) {
   });
 }
 
-async function runData({ id, file, format, rowLimit = -1 }) {
+async function runData({ id, file, format, rowLimit = -1, variables = null }) {
   const Module = await getModule();
-  const ctx = makeContext(Module, file);
+  const keep = Array.isArray(variables) && variables.length ? new Set(variables) : null;
+  const ctx = makeContext(Module, file, keep);
 
   let started = false;
   let names = [];
@@ -209,9 +219,11 @@ async function runData({ id, file, format, rowLimit = -1 }) {
   };
   const onValue = (obs, vi, val) => {
     if (!started) start();
+    const pos = ctx.keptIndexMap[vi];
+    if (pos === undefined) return; // skipped column (guard; handler shouldn't fire)
     while (obs - batchStart >= batchRows) flush(batchRows);
     const row = obs - batchStart;
-    cols[vi][row] = val;
+    cols[pos][row] = val;
     if (row + 1 > filled) filled = row + 1;
     if (obs + 1 > total) total = obs + 1;
   };

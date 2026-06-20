@@ -218,15 +218,26 @@ export async function boot(mounts) {
   const menus = new MenuShell(mounts.menubar);
   const ui = new UiService(datasets);
   const readstat = new ReadStatManager();
-  const importers = new ImportService({ menus, data: datasets, results: results.api, bus, webr, readstat });
+  const importers = new ImportService({ menus, data: datasets, results: results.api, bus, webr, readstat, ui });
   // SPSS/Stata/SAS importer: host-side ReadStat-WASM, streaming into OPFS-DuckDB
-  // (handles multi-GB files that OOM under R/haven). One entry covers all formats.
+  // (handles multi-GB files that OOM under R/haven). One entry imports everything;
+  // a second reads the variable catalog first and imports only a chosen subset —
+  // the memory-bounded path for huge/very-wide files (e.g. the full GSS).
   importers.registerStreaming({
     id: 'readstat',
     label: 'SPSS / Stata / SAS…',
     extensions: READSTAT_EXTENSIONS,
     order: 20,
     multiple: true,
+    formatFor: (name) => ReadStatManager.formatForName(name),
+  });
+  importers.registerStreaming({
+    id: 'readstat-pick',
+    label: 'SPSS / Stata / SAS — choose variables…',
+    extensions: READSTAT_EXTENSIONS,
+    order: 21,
+    multiple: true,
+    pick: true,
     formatFor: (name) => ReadStatManager.formatForName(name),
   });
   const exporters = new ExportService({ menus, data: datasets, results: results.api, bus });

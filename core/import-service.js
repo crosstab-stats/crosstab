@@ -73,6 +73,9 @@ export class ImportService {
   /** ReadStatManager, for streaming SPSS/Stata/SAS imports. @type {?import('./readstat-manager.js').ReadStatManager} */
   #readstat;
 
+  /** UiService, for the pre-import variable picker. @type {?import('./ui-service.js').UiService} */
+  #ui;
+
   /** id → spec. @type {Map<string, ImporterSpec>} */
   #importers = new Map();
 
@@ -92,14 +95,17 @@ export class ImportService {
    *   large uploads host-side (see the `stage` importer option).
    * @param {import('./readstat-manager.js').ReadStatManager} [deps.readstat] - For
    *   streaming SPSS/Stata/SAS imports (see {@link ImportService#registerStreaming}).
+   * @param {import('./ui-service.js').UiService} [deps.ui] - For the pre-import
+   *   variable picker (a `pick` streaming importer).
    */
-  constructor({ menus, data, results, bus, webr, readstat }) {
+  constructor({ menus, data, results, bus, webr, readstat, ui }) {
     this.#menus = menus;
     this.#data = data;
     this.#results = results;
     this.#bus = bus;
     this.#webr = webr ?? null;
     this.#readstat = readstat ?? null;
+    this.#ui = ui ?? null;
   }
 
   /**
@@ -250,6 +256,32 @@ export class ImportService {
         this.#results.appendError(`Import: "${file.name}" isn't a supported SPSS/Stata/SAS file.`);
         continue;
       }
+
+      // A `pick` importer reads the variable catalog first (cheap, no data) and lets
+      // the user choose a subset — the memory-bounded path for huge/wide files.
+      let selected = null;
+      if (spec.pick) {
+        let cat;
+        try {
+          cat = await this.#readstat.catalog(file, format);
+        } catch (err) {
+          this.#results.appendError(`Could not read variables from "${file.name}": ${err.message}`);
+          continue;
+        }
+        selected = await this.#ui.selectFromList({
+          title: `Choose variables — ${file.name}`,
+          hint:
+            `${cat.varCount.toLocaleString()} variables` +
+            (cat.rowCount >= 0 ? ` · ${cat.rowCount.toLocaleString()} rows` : '') +
+            '. Pick the ones to import (search to filter).',
+          items: cat.variables.map((v) => ({ value: v.name, label: v.label ? `${v.label} (${v.name})` : v.name })),
+          multiple: true,
+          okLabel: 'Import selected',
+          searchPlaceholder: 'Filter by name or label…',
+        });
+        if (!selected || selected.length === 0) continue; // cancelled / nothing picked
+      }
+
       const fileMode = mode === 'replace' && committed === 0 ? 'replace' : 'append';
       const tag = mode === 'replace' && files.length === 1 ? undefined : baseName(file.name);
       try {
@@ -258,6 +290,7 @@ export class ImportService {
           source: tag,
           ingest: async (ctx) => {
             await this.#readstat.stream(file, format, {
+              variables: selected,
               onVariables: (variables, storageTypes) => ctx.begin(variables, storageTypes),
               onBatch: (columns) => ctx.batch(columns),
             });

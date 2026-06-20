@@ -117,9 +117,10 @@ export class ReadStatManager {
    * @param {(variables: object[], storageTypes: Object) => any} [cbs.onVariables]
    * @param {(columns: Object, nrows: number) => any} [cbs.onBatch]
    * @param {number} [cbs.rowLimit=-1] - Cap rows read (-1 = all).
+   * @param {string[]|null} [cbs.variables=null] - If set, import only these columns.
    * @returns {Promise<{rowCount: number}>}
    */
-  stream(file, format, { onVariables, onBatch, rowLimit = -1 } = {}) {
+  stream(file, format, { onVariables, onBatch, rowLimit = -1, variables = null } = {}) {
     this.#ensure();
     const id = this.#nextId++;
     return new Promise((resolve, reject) => {
@@ -131,7 +132,7 @@ export class ReadStatManager {
         }
       };
       this.#reqs.set(id, req);
-      this.#worker.postMessage({ type: 'data', id, file, format, rowLimit });
+      this.#worker.postMessage({ type: 'data', id, file, format, rowLimit, variables });
     });
   }
 

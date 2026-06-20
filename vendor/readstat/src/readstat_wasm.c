@@ -67,6 +67,13 @@ EM_JS(void, ct_js_value_label, (const char *label_set, double dval, const char *
   Module.ctValueLabel(UTF8ToString(label_set), dval, sval ? UTF8ToString(sval) : null, UTF8ToString(label));
 });
 
+/* Ask JS whether to keep this variable (1) or skip it (0). Lets the caller import
+ * only a chosen subset of columns — the value handler is never called for skipped
+ * ones, so the result is narrow. Defaults to keep-all when no filter is set. */
+EM_JS(int, ct_js_keep_var, (int index, const char *name), {
+  return Module.ctKeepVar ? Module.ctKeepVar(index, name ? UTF8ToString(name) : '') : 1;
+});
+
 static int meta_handler(readstat_metadata_t *m, void *ctx) {
   (void)ctx;
   ct_js_metadata(readstat_get_row_count(m), readstat_get_var_count(m), readstat_get_file_encoding(m));
@@ -75,6 +82,8 @@ static int meta_handler(readstat_metadata_t *m, void *ctx) {
 
 static int variable_handler(int index, readstat_variable_t *v, const char *val_labels, void *ctx) {
   (void)ctx;
+  if (!ct_js_keep_var(index, readstat_variable_get_name(v)))
+    return READSTAT_HANDLER_SKIP_VARIABLE;
   ct_js_variable(index, readstat_variable_get_name(v), readstat_variable_get_label(v),
     (int)readstat_variable_get_type(v), readstat_variable_get_format(v),
     (int)readstat_variable_get_measure(v), val_labels);
