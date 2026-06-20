@@ -883,27 +883,41 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - *Deferred:* a "reload plugin" action for the plugin-creator loop; optional
     integrity-hash pinning for URL plugins (so a remote plugin can't silently
     change); per-domain (not per-plugin) network consent.
-- [ ] **Direct R interface / console.** The power-user escape hatch: when the
-      canned analyses don't cover a need, drop to R directly. Framing: a plugin
-      that does **variable selection + load**, then hands the user an **interactive
-      terminal** with their data already staged and a plain-language orientation —
-      e.g. "your data is in `df`; `df[[1]]` is *Age*, `df[[2]]` is *Income*…" so a
-      non-R-fluent user knows what they're holding.
-  - **Data staging:** reuse the existing injection path (DuckDB → Parquet/JS-array
-    → WebR `data.frame`) to load the selected variables into the R session under a
-    known name, then print the name↔variable legend (using labels) before the
-    prompt.
-  - **REPL UI:** an interactive terminal (dedicated tab, or in the Output pane) —
-    read a line, `webr` eval, print the result. WebR already runs in a worker;
-    the work is threading stdin/stdout to a terminal widget and rendering R output
-    (text + any `svgstring()` plots) through the sanitiser.
-  - **Reproducibility tie-in:** the commands a user types are themselves a do-file
-    — this overlaps with **export-to-syntax** (the transform log + a typed-command
-    log together *are* the script). Risk is low (arbitrary R is the user's own
-    sandboxed WASM session); output rendering still respects the sanitiser.
+- [x] **Direct R interface / console — BUILT** (`core/r-console.js` + a new
+      **R Console** workspace tab). A live REPL on the **persistent** WebR session
+      for power users and plugin authors testing ideas before wiring them into a
+      plugin. Host feature (a sandboxed plugin can't draw a terminal).
+  - **Persistent eval** (`WebRManager.evalConsole`): runs each entry in the global
+    env via `source(print.eval=TRUE)` so visible values auto-print like the R
+    prompt and state persists across lines (`x <- 5` then `mean(x)`) — the normal
+    `run()` purges per call, so it can't. Errors captured, not thrown.
+  - **Data staging matches the plugin contract** (`WebRManager.consoleBind`): the
+    checked variables are bound as **`vars`** — a data.frame when several are
+    checked, a plain vector when one is — *exactly* what a plugin input receives,
+    so console code copy/pastes straight into a plugin's `run`. The info panel says
+    what `vars` is and lists loaded libraries (+ a "load library…" box).
+  - **UI:** variable checkboxes mirror the data-grid header (filter field +
+    single-line horizontal scroll, so a wide file like GSS stays tidy); an inline
+    prompt that flows right after the latest output (webR/RStudio feel); **inline
+    plots** (captured via `captureGraphics`, drawn to a canvas in the scrollback);
+    **multi-line input** (Shift+Enter newline, Enter run; ↑/↓ history).
+  - *Decision (settled): not an IDE.* We deliberately do **not** clone the
+    RStudio source/console/plot triptych — the plugin creator is the "write a
+    script" surface; the console is the interactive scratchpad. Our edge is
+    integration (data one checkbox away, bound as a plugin gets it), not out-IDE-ing
+    a real IDE.
+  - *Deferred:* a typed-command log feeding export-to-syntax (the reproducibility
+    tie-in); a clear/reset-session action.
 
 ## More analyses (each is just another plugin)
 
+- [x] **Comparison: t-tests + one-way ANOVA** (`plugins/builtin-compare/`) — fills
+      the *Comparison* menu with four declarative analyses: one-sample t-test,
+      independent-samples t-test (Welch), paired-samples t-test, one-way ANOVA.
+      Base R (`t.test`/`aov`), inputs bound by name, user-missing recoded, SPSS-style
+      tables (group statistics + test). Verified in Chrome on the demo data
+      (independent income~gender: Welch t=−3.01, df=25.81, p=.006). *Deferred:*
+      post-hoc (Tukey) for ANOVA; Levene + equal-variance t as an option.
 - [x] **Descriptive Statistics** (`plugins/builtin-descriptives/`) — N, missing,
       mean, SD, min, quartiles, median, max for numeric vars. Honours
       missingValues. Verified end to end in Chrome.
