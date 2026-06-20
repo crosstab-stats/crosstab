@@ -33,41 +33,68 @@ export const API_VERSION = '0.1.0';
 const PLUGIN_HOST_URL = './plugin-host.html';
 
 /**
+ * A plugin is **fully declarative**: a `manifest` (data) describing what it
+ * contributes, plus **named exported functions** the manifest references. The host
+ * does all wiring — there is no `activate`, and the `app` surface exposes no
+ * registration verbs. A plugin can only do what a manifest section exists for.
+ *
  * @typedef {Object} PluginManifest
  * @property {string} id - Globally unique, stable id, e.g. `'builtin-frequencies'`.
  * @property {string} name - Human-readable name.
  * @property {string} version - The plugin's own semver version.
  * @property {string} apiVersion - Engine API version targeted, e.g. `'0.1.0'`.
- * @property {string[]} [rPackages] - R packages to pre-install on activation.
- * @property {string} [category] - Section the plugin manager files it under. Use a
- *   **specific** category, not a generic "Analysis" bucket — categorise analyses
- *   by *method family*, matching the `Analyze ▸ …` submenus. Recommended
- *   vocabulary (extend as needed): `'Import'`, `'Descriptive Statistics'`,
- *   `'Comparison'`, `'Correlation'`, `'Regression'`, `'Multivariate'`,
- *   `'Time Series'`, `'Resampling'`, `'Graphs'`, `'Export'`. An unrecognised value
- *   just makes a new section (sorted after the recommended ones); missing → "Other".
- *   **This also fixes the plugin's menu location:** `menus.register` takes only a
- *   `label` (+ `command`/`order`); the host files the item under `category` as the
- *   top-level menu — the same place the plugin manager lists it. A plugin cannot
- *   put its menu anywhere else (any `path` it passes is ignored — see
- *   plugin-broker.js), so the menu and the manager always agree.
- * @property {string[]} [keywords] - Extra search terms for the plugin manager, so
- *   a plugin is findable by what it does even if its name doesn't say (e.g. a
- *   regression plugin keyworded with `['ols', 'linear']`).
- * @property {string} [menu] - For a **declarative single-item plugin** (one that
- *   exports `run` instead of `activate`): the menu item's label. Defaults to
- *   `name`. The item is filed under `category` automatically.
- * @property {number} [menuOrder] - Optional sort weight for that item within its
- *   category menu (lower first; default 100).
+ * @property {string[]} [rPackages] - R packages to pre-install on load.
+ * @property {string} [category] - Section the plugin manager files it under, and
+ *   the **top-level menu** its items appear under (the two always agree — the host
+ *   owns placement; a plugin can't choose). Use a **specific** category by *method
+ *   family*, not a generic "Analysis" bucket. Recommended vocabulary: `'Import'`,
+ *   `'Descriptive Statistics'`, `'Comparison'`, `'Correlation'`, `'Regression'`,
+ *   `'Multivariate'`, `'Time Series'`, `'Resampling'`, `'Graphs'`, `'Export'`. An
+ *   unrecognised value just makes a new section; missing → "Other".
+ * @property {string[]} [keywords] - Extra search terms for the plugin manager.
+ * @property {Array<MenuItem>} [menu] - Menu actions. Each item is filed under
+ *   `category`; clicking it gathers the item's `inputs`, binds them into R by name,
+ *   then calls the named `run` function.
+ * @property {Array<ImporterDecl>} [imports] - File/web importers (File ▸ Import).
+ * @property {Array<ExporterDecl>} [exports] - Data exporters (File ▸ Export).
+ * @property {Array<ExporterDecl>} [outputExports] - Report exporters (Export output…).
  *
- * ## Entry point: `run` (simple) or `activate` (advanced)
- * A plugin exports **either**:
- *  - `run(app)` — the simplest form: the host adds one menu item (label from
- *    `menu`/`name`, filed under `category`) and calls `run(app)` when clicked. No
- *    boilerplate. This is what the in-app creator templates use.
- *  - `activate(app)` — full control: register several menu items, an importer/
- *    exporter, event handlers, etc. Use this when one menu item → one function is
- *    not enough (e.g. the Plots plugin's five charts).
+ * @typedef {Object} MenuItem
+ * @property {string} label - Menu item text, e.g. `'Descriptives…'`.
+ * @property {string} run - Name of the exported function to call: `run(app, inputs)`.
+ * @property {number} [order] - Sort weight within the category menu (lower first).
+ * @property {Array<InputDecl>} [inputs] - Inputs gathered (in order) before `run`.
+ *
+ * @typedef {Object} InputDecl
+ * @property {string} name - Key under which the value is passed in `inputs` and
+ *   bound in R (single variable → vector, multi → data.frame, scalar → value).
+ * @property {'variables'|'number'|'choice'|'text'} [kind='variables']
+ * @property {string} [label] - Role label (e.g. 'Outcome'); the host composes the
+ *   dialog title/hint.
+ * @property {boolean} [multiple] - (variables) allow several.
+ * @property {string[]} [types] - (variables) restrict to types, e.g. `['numeric']`.
+ * @property {boolean} [optional] - cancel yields null/empty instead of aborting.
+ * @property {boolean} [unique] - (variables) exclude vars chosen by earlier
+ *   `unique` inputs in the same action (e.g. scatter X ≠ Y).
+ * @property {Array<{value:string,label?:string}>} [options] - (choice) the choices.
+ * @property {*} [default] - (number/choice/text) default value.
+ *
+ * @typedef {Object} ImporterDecl
+ * @property {string} label
+ * @property {string} parse - Named function `parse(app, {name, file})` →
+ *   `{variables, columns|parquet}` (or null to abort). Returns the dataset; the
+ *   host commits it.
+ * @property {'file'|'web'} [source='file'] - `'web'` opens no picker.
+ * @property {string[]} [extensions] - Picker filter (file source).
+ * @property {boolean} [multiple] - Allow several files (pooled).
+ * @property {number} [order]
+ *
+ * @typedef {Object} ExporterDecl
+ * @property {string} label
+ * @property {string} export - Named function returning
+ *   `{filename, mimeType, data}` for the host to download.
+ * @property {string[]} [extensions]
+ * @property {number} [order]
  */
 
 /**

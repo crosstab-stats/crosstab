@@ -63,13 +63,6 @@ export class PluginBroker {
   /** Bound message listener, retained so it can be removed on dispose. */
   #listener;
 
-  /** Host menu service, for the category-scoped `menus.register` override. */
-  #menus;
-
-  /** The plugin's declared category — the menu it is filed under. Set on activate.
-   * A plugin cannot choose its menu location; the host derives it from here. */
-  #pluginCategory = 'Other';
-
   /** Host service bundle, retained for the per-invocation `webr.run` override. */
   #services;
 
@@ -91,14 +84,7 @@ export class PluginBroker {
     this.#iframe = iframe;
     this.#onError = onError ?? ((e) => console.error('[plugin-broker]', e));
     this.#services = services;
-    this.#menus = services.menus;
     this.#dispatch = buildDispatch(services);
-    // A plugin declares only its menu *label*; the host fixes the *location* to
-    // the plugin's category. Override the dispatch entry so any `path` a plugin
-    // passes is discarded — menu placement can't be done any other way.
-    // (Legacy `activate`-path plugins only; declarative plugins don't register.)
-    this.#dispatch['menus.register'] = (item) =>
-      this.#menus.register({ ...item, path: [this.#pluginCategory] });
     // Declarative plugins call `webr.run(code)` with no injection args; the host
     // binds the action's gathered inputs into R for them (see #activeInputs).
     this.#dispatch['webr.run'] = (code, opts) =>
@@ -157,11 +143,6 @@ export class PluginBroker {
   }
 
   sendActivate(plugin) {
-    // Capture the category before activate() runs, so the plugin's menus.register
-    // calls (which happen during activate) are filed under it.
-    if (typeof plugin?.category === 'string' && plugin.category) {
-      this.#pluginCategory = plugin.category;
-    }
     this.#post({ t: 'activate', plugin });
     return this.#activated.promise;
   }
@@ -299,21 +280,21 @@ export class PluginBroker {
  * methods explicitly (rather than reflecting) keeps the exposed surface a
  * reviewed allowlist: a plugin can only reach what is named here.
  *
+ * Declarative plugins don't register or subscribe to anything — the host wires
+ * menus/importers/exporters from the manifest and owns the lifecycle. So the
+ * exposed surface is only *runtime* verbs (read data, run R, write results,
+ * prompt, fetch). `webr.run` is overridden in the constructor to inject the
+ * action's gathered inputs.
+ *
  * @param {Object} s
- * @param {object} s.data    - DataStore#api (read-only)
- * @param {object} s.transform - DataStore#transformApi (writes)
+ * @param {object} s.data    - DataStore#api (reads + create)
  * @param {object} s.results - ResultsPane#api
- * @param {object} s.webr    - { run, installPackages }
- * @param {object} s.menus   - MenuShell#api
+ * @param {object} s.webr    - WebRManager (run/install/files)
  * @param {object} s.ui      - UiService#api
- * @param {object} s.importers - ImportService#api
- * @param {object} s.exporters - ExportService#api (data export)
- * @param {object} s.outputExporters - OutputExportService#api (output/report export)
  * @param {object} s.web - Host network fetch (`web.get`)
- * @param {import('./event-bus.js').EventBus} s.bus
  * @returns {Object<string, Function>}
  */
-function buildDispatch({ data, transform, results, webr, menus, ui, importers, exporters, outputExporters, web, bus }) {
+function buildDispatch({ data, results, webr, ui, web }) {
   return {
     'data.getDataFrame': (opts) => data.getDataFrame(opts),
     'data.getColumns': (opts) => data.getColumns(opts),
@@ -323,50 +304,28 @@ function buildDispatch({ data, transform, results, webr, menus, ui, importers, e
     'data.getTransforms': () => data.getTransforms(),
     'data.getHistory': () => data.getHistory(),
     'data.create': (dataset) => data.create(dataset),
-    'data.onDataChanged': (fn) => data.onDataChanged(fn),
-    'data.onSelectionChanged': (fn) => data.onSelectionChanged(fn),
 
-    'transform.updateVariable': (name, patch) => transform.updateVariable(name, patch),
-
-    'results.beginSection': (t) => results.beginSection(t),
-    'results.appendTable': (data, opts) => results.appendTable(data, opts),
+    'results.appendTable': (d, opts) => results.appendTable(d, opts),
     'results.appendPlot': (s, opts) => results.appendPlot(s, opts),
     'results.updatePlot': (handle, s) => results.updatePlot(handle, s),
     'results.appendText': (m) => results.appendText(m),
     'results.appendError': (m) => results.appendError(m),
-    'results.clear': () => results.clear(),
     'results.getModel': () => results.getModel(),
     'results.getStyles': () => results.getStyles(),
     'results.getPlotPng': (id) => results.getPlotPng(id),
 
     'webr.run': (code, opts) => webr.run(code, opts),
     'webr.installPackages': (pkgs) => webr.installPackages(pkgs),
-    'webr.writeFile': (path, data) => webr.writeFile(path, data),
+    'webr.writeFile': (path, d) => webr.writeFile(path, d),
     'webr.readFile': (path) => webr.readFile(path),
     'webr.mountFile': (file, name) => webr.mountFile(file, name),
     'webr.unmount': (path) => webr.unmount(path),
-
-    // NOTE: the broker constructor overrides this to force the menu path to the
-    // plugin's category (a plugin can't choose its menu location).
-    'menus.register': (item) => menus.register(item),
 
     'ui.selectVariables': (opts) => ui.selectVariables(opts),
     'ui.selectFromList': (opts) => ui.selectFromList(opts),
     'ui.showForm': (opts) => ui.showForm(opts),
 
-    'importers.register': (spec) => importers.register(spec),
-    'importers.deliver': (ticket, dataset) => importers.deliver(ticket, dataset),
-
-    'exporters.register': (spec) => exporters.register(spec),
-    'exporters.deliver': (ticket, payload) => exporters.deliver(ticket, payload),
-
-    'outputExporters.register': (spec) => outputExporters.register(spec),
-    'outputExporters.deliver': (ticket, payload) => outputExporters.deliver(ticket, payload),
-
     'web.get': (url) => web.get(url),
-
-    'events.on': (name, fn) => bus.on(name, fn),
-    'events.emit': (name, payload) => bus.emit(name, payload),
   };
 }
 

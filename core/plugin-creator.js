@@ -156,65 +156,40 @@ function genId() {
 
 // --- templates ---------------------------------------------------------------
 //
-// Each builder returns a COMPLETE, runnable plugin module. The generated R code
-// is assembled with string concatenation (no template literals), so the source
-// contains no backticks or `${}` — which is what lets these be authored as plain
+// Each builder returns a COMPLETE, runnable **declarative** plugin: a manifest
+// with one menu item (+ its inputs) and a `run(app, inputs)` function. The host
+// gathers the declared inputs and binds them into R *by name*, so the R is static
+// (no string interpolation). Generated R is assembled by string concatenation, so
+// the source has no backticks/`${}` — which lets these be authored as plain
 // template literals here without their contents being interpolated.
 
-/** Common manifest header. The plugin just exports run(app) below — the host
- * adds the menu item (under `category`) and calls run() when it's clicked. */
-function header(id, name, category, keywords, rPackages = []) {
+/** Manifest source with one menu item. `inputs` is the inputs array as source
+ * text, e.g. "[{ name: 'vars', kind: 'variables', multiple: true }]". */
+function manifestSrc(id, name, category, keywords, rPackages, inputs) {
   return `export const manifest = {
   id: '${id}',
   name: '${name}',
   version: '0.1.0',
   apiVersion: '0.1.0',
-  category: '${category}',   // filed here in the menu + grouped here in the manager
-  menu: '${name}…',          // your menu item's label
+  category: '${category}',   // where it's filed in the menu + grouped in the manager
   keywords: [${keywords.map((k) => `'${k}'`).join(', ')}],
-  rPackages: [${rPackages.map((p) => `'${p}'`).join(', ')}], // R packages to install on load
+  rPackages: [${rPackages.map((p) => `'${p}'`).join(', ')}],
+  menu: [{ label: '${name}…', run: 'run', inputs: ${inputs} }],
 };
 
-// run(app) is your plugin's entry point — the host calls it when the user clicks
-// your menu item. (For multiple items, export activate(app) instead.)
 `;
 }
-
-/** Reusable JS helpers appended to data templates. */
-const TABLE_HELPERS = `
-// Turn a column-oriented R result ({names, values}) into an HTML table.
-function toTable(result) {
-  const names = result.names || [];
-  const cols = (result.values || []).map(function (c) {
-    return Array.isArray(c && c.values) ? c.values : [].concat(c);
-  });
-  const nrow = cols.length ? cols[0].length : 0;
-  let html = '<table><thead><tr>';
-  for (const n of names) html += '<th>' + esc(n) + '</th>';
-  html += '</tr></thead><tbody>';
-  for (let i = 0; i < nrow; i++) {
-    html += '<tr>';
-    for (const c of cols) html += '<td>' + esc(c[i]) + '</td>';
-    html += '</tr>';
-  }
-  return html + '</tbody></table>';
-}
-
-function esc(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-`;
 
 const TEMPLATES = [
   {
     key: 'blank',
     label: 'Blank',
     build: (id, name) =>
-      header(id, name, 'Other', []) +
-      `
+      manifestSrc(id, name, 'Other', [], [], '[]') +
+      `// run(app, inputs) is your plugin's entry point. The host adds your menu item
+// (under your category) and calls run when the user clicks it.
 export async function run(app) {
-  await app.results.beginSection('${name}');
-  await app.results.appendText('<p>Hello from your plugin! Edit run() to do something.</p>');
+  await app.results.appendText('Hello from your plugin! Edit run() to do something.');
 }
 `,
   },
@@ -222,115 +197,78 @@ export async function run(app) {
     key: 'one-var',
     label: 'One-variable analysis',
     build: (id, name) =>
-      header(id, name, 'Descriptive Statistics', ['summary']) +
-      `
-export async function run(app) {
-  // 1) Ask the user to choose numeric variable(s).
-  const vars = await app.ui.selectVariables({
-    title: '${name}',
-    hint: 'Choose one or more numeric variables.',
-    multiple: true,
-    types: ['numeric'],
-  });
-  if (!vars || !vars.length) return;
-
-  await app.results.beginSection('${name}');
-  try {
-    // 2) Build R code. Your chosen data is injected as a data frame named df.
-    const rCode =
-      'vars <- c(' + vars.map(function (v) { return JSON.stringify(v); }).join(', ') + ')\\n' +
-      'data.frame(\\n' +
-      '  Variable = vars,\\n' +
-      '  N    = sapply(vars, function(v) sum(!is.na(df[[v]]))),\\n' +
-      '  Mean = sapply(vars, function(v) round(mean(as.numeric(df[[v]]), na.rm = TRUE), 3)),\\n' +
-      '  SD   = sapply(vars, function(v) round(sd(as.numeric(df[[v]]), na.rm = TRUE), 3))\\n' +
-      ')';
-
-    // 3) Run it, then render the returned data frame as a table.
-    const { result } = await app.webr.run(rCode, { injectData: true, variables: vars });
-    await app.results.appendTable(toTable(result));
-  } catch (err) {
-    await app.results.appendError('Failed: ' + err.message);
-  }
+      manifestSrc(
+        id,
+        name,
+        'Descriptive Statistics',
+        ['summary'],
+        [],
+        "[{ name: 'vars', kind: 'variables', types: ['numeric'], multiple: true }]",
+      ) +
+      `// Your chosen columns are bound in R as the data.frame \`vars\`. Build a
+// data.frame of results and hand it to appendTable — the host renders the table.
+export async function run(app, { vars }) {
+  const rCode =
+    'data.frame(\\n' +
+    '  Variable = names(vars),\\n' +
+    '  N    = sapply(vars, function(x) sum(!is.na(x))),\\n' +
+    '  Mean = round(sapply(vars, function(x) mean(as.numeric(x), na.rm = TRUE)), 3),\\n' +
+    '  SD   = round(sapply(vars, function(x) sd(as.numeric(x), na.rm = TRUE)), 3),\\n' +
+    '  check.names = FALSE)';
+  const { result } = await app.webr.run(rCode);
+  await app.results.appendTable(result);
 }
-` +
-      TABLE_HELPERS,
+`,
   },
   {
     key: 'two-group',
     label: 'Two-group comparison',
     build: (id, name) =>
-      header(id, name, 'Comparison', ['compare', 'means', 'group']) +
-      `
-export async function run(app) {
-  // Pick a numeric outcome, then a grouping variable.
-  const ys = await app.ui.selectVariables({
-    title: '${name} — outcome',
-    hint: 'Choose a numeric outcome variable.',
-    multiple: false,
-    types: ['numeric'],
-  });
-  if (!ys || !ys.length) return;
-  const gs = await app.ui.selectVariables({
-    title: '${name} — group',
-    hint: 'Choose a categorical grouping variable.',
-    multiple: false,
-    types: ['factor', 'string'],
-  });
-  if (!gs || !gs.length) return;
-  const y = ys[0];
-  const g = gs[0];
-
-  await app.results.beginSection('${name}');
-  try {
-    const rCode =
-      'y <- as.numeric(df[[' + JSON.stringify(y) + ']])\\n' +
-      'g <- as.factor(df[[' + JSON.stringify(g) + ']])\\n' +
-      'agg <- aggregate(y, list(Group = g), function(x) c(\\n' +
-      '  N = sum(!is.na(x)), Mean = mean(x, na.rm = TRUE), SD = sd(x, na.rm = TRUE)))\\n' +
-      'data.frame(Group = agg$Group, N = agg$x[, "N"],\\n' +
-      '  Mean = round(agg$x[, "Mean"], 3), SD = round(agg$x[, "SD"], 3))';
-    const { result } = await app.webr.run(rCode, { injectData: true, variables: [y, g] });
-    await app.results.appendTable(toTable(result));
-  } catch (err) {
-    await app.results.appendError('Failed: ' + err.message);
-  }
+      manifestSrc(
+        id,
+        name,
+        'Comparison',
+        ['compare', 'means'],
+        [],
+        "[{ name: 'y', kind: 'variables', label: 'Outcome', multiple: false, types: ['numeric'], unique: true }, " +
+          "{ name: 'g', kind: 'variables', label: 'Group', multiple: false, types: ['factor', 'string'], unique: true }]",
+      ) +
+      `// 'y' (numeric) and 'g' (grouping) are bound in R as vectors.
+export async function run(app, { y, g }) {
+  const rCode =
+    'agg <- aggregate(as.numeric(y), list(Group = as.factor(g)), function(v) c(\\n' +
+    '  N = sum(!is.na(v)), Mean = mean(v, na.rm = TRUE), SD = sd(v, na.rm = TRUE)))\\n' +
+    'data.frame(Group = agg$Group, N = agg$x[, "N"],\\n' +
+    '  Mean = round(agg$x[, "Mean"], 3), SD = round(agg$x[, "SD"], 3))';
+  const { result } = await app.webr.run(rCode);
+  await app.results.appendTable(result);
 }
-` +
-      TABLE_HELPERS,
+`,
   },
   {
     key: 'plot',
     label: 'Plot (histogram)',
     build: (id, name) =>
-      header(id, name, 'Graphs', ['plot', 'histogram'], ['svglite']) +
-      `
-export async function run(app) {
-  const vars = await app.ui.selectVariables({
-    title: '${name}',
-    hint: 'Choose a numeric variable.',
-    multiple: false,
-    types: ['numeric'],
-  });
-  if (!vars || !vars.length) return;
-  const v = vars[0];
-
-  await app.results.beginSection('${name}');
-  try {
-    // Draw with base R on an svglite device, which returns an SVG string.
-    const rCode =
-      'library(svglite)\\n' +
-      '.dev <- svgstring(width = 7, height = 4.5, pointsize = 11)\\n' +
-      'x <- as.numeric(df[[' + JSON.stringify(v) + ']]); x <- x[is.finite(x)]\\n' +
-      'hist(x, col = "#2980b9", border = "white", main = ' + JSON.stringify(v) + ', xlab = ' + JSON.stringify(v) + ')\\n' +
-      'dev.off()\\n' +
-      '.dev()';
-    const { result } = await app.webr.run(rCode, { injectData: true, variables: [v] });
-    const svg = String(Array.isArray(result && result.values) ? result.values[0] : result);
-    await app.results.appendPlot(svg);
-  } catch (err) {
-    await app.results.appendError('Failed: ' + err.message);
-  }
+      manifestSrc(
+        id,
+        name,
+        'Graphs',
+        ['plot', 'histogram'],
+        ['svglite'],
+        "[{ name: 'v', kind: 'variables', multiple: false, types: ['numeric'] }]",
+      ) +
+      `// 'v' (numeric) is bound in R as a vector. Draw with svglite → an SVG string.
+export async function run(app, { v }) {
+  const rCode =
+    'library(svglite)\\n' +
+    '.dev <- svgstring(width = 7, height = 4.5, pointsize = 11)\\n' +
+    'x <- as.numeric(v); x <- x[is.finite(x)]\\n' +
+    'hist(x, col = "#2980b9", border = "white", main = "Histogram", xlab = "")\\n' +
+    'dev.off()\\n' +
+    '.dev()';
+  const { result } = await app.webr.run(rCode);
+  const svg = String(Array.isArray(result && result.values) ? result.values[0] : result);
+  await app.results.appendPlot(svg);
 }
 `,
   },

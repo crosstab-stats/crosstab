@@ -138,13 +138,14 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 ## Hardening before any public/shared deploy
 
 - [~] **Replace the HTML sanitiser with a vetted library (DOMPurify).**
-      `core/sanitize-html.js` is a conservative allowlist. *Hardened:*
-      no `on*`/URL attributes, `style` value-filtered against URL/CSS-escape/
-      expression tricks, fragment size-capped. Still not a fully audited XSS library
-      — now that external (untrusted) plugins can be loaded, **vendor + pin
-      DOMPurify** and add a **host-page CSP** (tuned around the WebR/DuckDB CDNs +
-      blob workers) as defence-in-depth, so a sanitiser miss can't execute in the
-      host. The plugin *sandbox* CSP is already in place (`plugin-host.html`).
+      *Surface much reduced:* with the declarative API, plugins no longer send table
+      HTML (tables are host-rendered from data) or note HTML (markdown, escaped), so
+      `core/sanitize-html.js` now only ever processes **plugin plot SVG** — a small,
+      constrained drawing subset. It's a hardened allowlist (no `on*`/URL attrs,
+      `style` value-filtered, size-capped). Still worth **vendoring + pinning
+      DOMPurify** and adding a **host-page CSP** (tuned around the WebR/DuckDB CDNs +
+      blob workers) as defence-in-depth before public release, so an SVG-sanitiser
+      miss can't execute in the host. The plugin *sandbox* CSP is already in place.
 - [ ] **Pin the WebR version and vendor its assets.** `core/webr-manager.js`
       currently loads `…/latest/webr.mjs` for convenience. Pin a version and
       self-host for reproducibility + offline PWA use.
@@ -729,22 +730,43 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       `loader.loadSource`, untrusted). Authored plugins **persist in localStorage**
       (`kind:'authored'`, source stored) so they survive a restart and re-open in
       the editor (✎ in the manager) to edit in place; removable like any user plugin.
-  - **Simplest entry point: `run`, no `activate`.** A single-item plugin just
-    exports `run(app)` and declares `manifest.menu` (label) + `menuOrder`; the host
-    adds the menu item (under its category) and calls `run` when clicked — no
-    boilerplate registration. `activate(app)` is still there for plugins that need
-    more (the Plots plugin's 5 items; importers/exporters). Enforced in
-    `plugin-host.html` (a plugin must export `run` **or** `activate`). The 7
-    single-item built-in analyses were migrated to `run`; the creator templates use
-    it. **Verified in Chrome:** a `run`-only plugin loads, files under its category,
-    and runs.
-  - **Templates pre-wire the plumbing** (manifest + menu + variable picker +
-    output channels), so the author writes only the analysis: **Blank**,
-    **One-variable analysis** (numeric picker → R summary → table), **Two-group
-    comparison** (outcome + group → `aggregate` → table; also seeds the empty
-    *Comparison* family), **Plot (histogram)** (numeric picker → `svglite` →
-    `appendPlot`). The generated R is built by string concatenation (no template
-    literals), so the scaffold carries no backticks/`${}`.
+  - **Declarative plugin API (v2) — BUILT (full rewrite; supersedes the `activate`/
+    `run`-string notes above).** A plugin is now **manifest (data) + named
+    functions**; the host does all wiring and there is **no `activate`** and **no
+    registration API** at all. This was the big redesign agreed in design review;
+    done in 4 phases (commits) with every built-in migrated. Shape:
+    - **Menus:** `manifest.menu = [{ label, run, order?, inputs? }]`; the host files
+      each under `category` (placement host-owned — a plugin can't choose), gathers
+      the item's declared `inputs` with host dialogs, **binds them into R by name**
+      (single var → vector, multi → data.frame, scalar → value), then `invoke`s the
+      named `run(app, inputs)`. So the author writes no menu/picker code and the R
+      is **static** (no JS interpolation).
+    - **Inputs** are general + declarative: `kind: 'variables'|'number'|'choice'|
+      'text'`, with `multiple`/`types`/`optional`/`unique` (unique greys out a var
+      chosen by an earlier round — scatter X≠Y). Imperative `app.ui.selectVariables`
+      survives as a hidden escape hatch for dynamic flows.
+    - **Results carry structured data:** `appendTable(data)` (a `{columns, rows,
+      caption?, rowHeaders?}` spec or a WebR data.frame result) is **rendered
+      host-side via DOM** — plugins ship **no table HTML**. `appendText` is
+      markdown (escaped); `appendPlot` is SVG (the lone sanitised surface). The big
+      injection surface is gone.
+    - **Importers/exporters declarative too:** `manifest.imports/exports/
+      outputExports` with named functions that **return** the dataset/bytes; the
+      host owns the File menus, picker, commit, download. The whole `*.register`
+      API is gone from the plugin surface.
+    - **Output attribution:** every output block carries a host-stamped
+      `name · origin` line (origin = built-in / from-URL / from-file / created-here);
+      the plugin can't forge the origin (anti-impersonation).
+    - **Plugin `app` surface shrank** to runtime verbs only (data reads + create,
+      webr, results, ui, web) — no menus/importers/exporters/events/transform.
+    - **Verified in Chrome (per phase):** all 8 analyses, all 8 importers/exporters,
+      and a template-authored plugin all run end-to-end on the new API; output shows
+      host attribution; an authored plugin reads "created here".
+  - **Templates** (now declarative): **Blank**, **One-variable analysis**,
+    **Two-group comparison** (seeds the *Comparison* family), **Plot (histogram)** —
+    each a manifest (menu + inputs) + a `run(app, inputs)` whose R references the
+    host-bound input names. Generated R uses string concatenation so the scaffold
+    carries no backticks/`${}`.
   - **Editor surface:** a textarea with a **line-number gutter** + Tab-inserts-
     spaces — "more than Notepad". Save persists *before* loading (work is never
     lost); a load error stays in the dialog with the message so it can be fixed.

@@ -102,26 +102,23 @@
 
         /** Assemble the `app` object handed to the plugin's activate(). */
         function makeApp(identity) {
+          // Declarative plugins don't register anything — the host wires menus,
+          // importers and exporters from the manifest. So the `app` surface is
+          // only *runtime* verbs: read data, run R, write results, prompt the
+          // user, fetch (gated). No menus/importers/exporters/events registration.
           return Object.freeze({
             plugin: Object.freeze(identity),
             data: makeNamespace('data', [
               'getDataFrame', 'getColumns', 'getVariableMeta',
               'getSelectedVariables', 'getRowCount', 'getTransforms', 'getHistory', 'create',
-              'onDataChanged', 'onSelectionChanged',
             ]),
-            transform: makeNamespace('transform', ['updateVariable']),
             results: makeNamespace('results', [
-              'beginSection', 'appendTable', 'appendPlot', 'updatePlot', 'appendText', 'appendError', 'clear',
+              'appendTable', 'appendPlot', 'updatePlot', 'appendText', 'appendError',
               'getModel', 'getStyles', 'getPlotPng',
             ]),
             webr: makeNamespace('webr', ['run', 'installPackages', 'writeFile', 'readFile', 'mountFile', 'unmount']),
-            menus: makeNamespace('menus', ['register']),
             ui: makeNamespace('ui', ['selectVariables', 'selectFromList', 'showForm']),
             web: makeNamespace('web', ['get']),
-            importers: makeNamespace('importers', ['register', 'deliver']),
-            exporters: makeNamespace('exporters', ['register', 'deliver']),
-            outputExporters: makeNamespace('outputExporters', ['register', 'deliver']),
-            events: makeNamespace('events', ['on', 'emit']),
           });
         }
 
@@ -139,21 +136,10 @@
 
             case 'activate':
               try {
-                // Handshake: build + keep the app proxy.
+                // Handshake only: build + keep the app proxy. Declarative plugins
+                // do nothing else here — the host reads the manifest and drives
+                // them via 'invoke' (run/parse/export named functions).
                 app = makeApp(msg.plugin);
-                const m = pluginModule.manifest || {};
-                if (typeof pluginModule.activate === 'function') {
-                  // Legacy: the plugin wires itself up (multi-item, importers, …).
-                  await pluginModule.activate(app);
-                } else if (typeof m.menu === 'string' && typeof pluginModule.run === 'function') {
-                  // Transitional: a single-item run-style plugin self-registers one
-                  // menu item. (Removed once all built-ins use the declarative menu
-                  // array, which the host wires instead — see plugin-actions.js.)
-                  const item = { label: m.menu || m.name || 'Run', command: () => pluginModule.run(app) };
-                  if (typeof m.menuOrder === 'number') item.order = m.menuOrder;
-                  await app.menus.register(item);
-                }
-                // else: declarative (array menu) → the host wires + invokes it.
                 post({ t: 'activated', ok: true });
               } catch (err) {
                 post({ t: 'activated', ok: false, error: String(err && err.message || err) });
@@ -208,19 +194,19 @@
             url = URL.createObjectURL(blob);
             pluginModule = await import(url);
             const m = pluginModule.manifest;
-            const hasFn =
-              typeof pluginModule.activate === 'function' || typeof pluginModule.run === 'function';
-            // A declarative plugin exports named functions referenced by its
-            // manifest sections (validated per-call at 'invoke'); accept it if it
-            // has any such section even without a bare `run`/`activate`.
+            // A plugin declares what it contributes (menu items, importers,
+            // exporters) as manifest sections; the named functions they reference
+            // are validated per-call at 'invoke'.
             const hasDeclarative =
               m &&
               (Array.isArray(m.menu) ||
                 Array.isArray(m.imports) ||
                 Array.isArray(m.exports) ||
                 Array.isArray(m.outputExports));
-            if (!m || (!hasFn && !hasDeclarative)) {
-              throw new Error('plugin must export `manifest` and either `activate`, `run`, or a declarative section');
+            if (!hasDeclarative) {
+              throw new Error(
+                'plugin must export `manifest` with a declarative section (menu/imports/exports/outputExports)',
+              );
             }
             post({ t: 'manifest', ok: true, manifest: pluginModule.manifest });
           } catch (err) {

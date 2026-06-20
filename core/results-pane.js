@@ -230,29 +230,19 @@ export class ResultsPane {
    * of `app.webr.run` straight in) or an explicit spec
    * `{caption?, columns, rows, rowHeaders?}` where a cell is a `string|number` or
    * a `string[]` (rendered stacked, e.g. correlation's r/p/N). Cells are inserted
-   * as text nodes, never parsed as HTML.
+   * as text nodes, never parsed as HTML — so a plugin ships no markup here.
    *
-   * (Temporary: a `string` argument is still accepted as legacy pre-rendered HTML
-   * for not-yet-migrated plugins; that path is removed once migration completes.)
-   *
-   * @param {object|string} data
+   * @param {object} data
    * @param {{caption?: string, rowHeaders?: boolean}} [opts]
    */
   appendTable(data, opts = {}) {
     const block = this.#makeBlock();
-    if (typeof data === 'string') {
-      const safe = sanitizeHtml(data); // legacy HTML path (pre-migration only)
-      block.innerHTML = safe;
-      this.#place(block);
-      this.#model.push({ kind: 'table', html: safe });
-      return;
-    }
     const spec = normalizeTableData(data, opts);
     const tableEl = renderTableEl(spec);
     block.append(tableEl);
     this.#place(block);
-    // Store the spec (for structured exporters) plus the host-rendered HTML (so
-    // current HTML/Word exporters keep working until they read the spec).
+    // Store the spec (for structured exporters) plus the host-rendered HTML (the
+    // output exporters read `.html` to reproduce the table).
     this.#model.push({ kind: 'table', table: spec, html: tableEl.outerHTML });
   }
 
