@@ -218,6 +218,27 @@ export class DuckDBManager {
     await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
     URL.revokeObjectURL(workerUrl);
 
+    // Open the database on OPFS so storage is disk-backed: DuckDB then pages to
+    // disk and can hold datasets far larger than the wasm ~4 GB heap (verified
+    // out-of-core — a 1.2 GB table queried under a 488 MB cap). Start each session
+    // from a clean DB: dataset *persistence* is owned by the project/parquet store,
+    // so a carried-over DuckDB file would only orphan tables and grow unbounded.
+    // (`ATTACH 'opfs://…'` does NOT page — it must be the opened database.)
+    try {
+      const OPFS_DB = 'crosstab-duckdb.db';
+      try {
+        const root = await navigator.storage.getDirectory();
+        await root.removeEntry(OPFS_DB).catch(() => {});
+        await root.removeEntry(`${OPFS_DB}.wal`).catch(() => {});
+      } catch {
+        /* OPFS unavailable — db.open below will fall back or throw, handled next */
+      }
+      await db.open({ path: `opfs://${OPFS_DB}`, accessMode: duckdb.DuckDBAccessMode.READ_WRITE });
+    } catch (err) {
+      // OPFS unavailable (private mode, quota, older browser): stay in-memory.
+      console.warn('[duckdb] OPFS open failed; using in-memory storage (datasets capped by the wasm heap)', err);
+    }
+
     this.#worker = worker;
     this.#db = db;
     this.#conn = await db.connect();
