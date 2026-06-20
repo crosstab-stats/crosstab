@@ -224,6 +224,9 @@ export class DatasetManager {
   loadDataset(d) {
     return this.active.loadDataset(d);
   }
+  loadStreaming(o) {
+    return this.active.loadStreaming(o);
+  }
   getDataFrame(o) {
     return this.active.getDataFrame(o);
   }

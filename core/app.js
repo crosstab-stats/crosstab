@@ -13,6 +13,7 @@ import { EventBus, CoreEvents } from './event-bus.js';
 import { DatasetManager, DATASETS_CHANGED } from './dataset-manager.js';
 import { DuckDBManager } from './duckdb-manager.js';
 import { WebRManager } from './webr-manager.js';
+import { ReadStatManager, READSTAT_EXTENSIONS } from './readstat-manager.js';
 import { ResultsPane } from './results-pane.js';
 import { MenuShell } from './menu-shell.js';
 import { UiService } from './ui-service.js';
@@ -43,7 +44,9 @@ import { makeDemoDataset } from './demo-data.js';
  */
 const BUILTIN_PLUGINS = [
   './plugins/builtin-csv-import/index.js',
-  './plugins/builtin-haven-import/index.js',
+  // SPSS/Stata/SAS import is now host-side via ReadStat-WASM (streaming, no 2 GB
+  // limit) — registered below as a streaming importer, superseding the old
+  // haven/R importer (builtin-haven-import) for .sav/.zsav/.dta/.sas7bdat/.por/.xpt.
   './plugins/builtin-frequencies/index.js',
   './plugins/builtin-descriptives/index.js',
   './plugins/builtin-crosstabs/index.js',
@@ -214,7 +217,18 @@ export async function boot(mounts) {
   const results = new ResultsPane(mounts.results);
   const menus = new MenuShell(mounts.menubar);
   const ui = new UiService(datasets);
-  const importers = new ImportService({ menus, data: datasets, results: results.api, bus, webr });
+  const readstat = new ReadStatManager();
+  const importers = new ImportService({ menus, data: datasets, results: results.api, bus, webr, readstat });
+  // SPSS/Stata/SAS importer: host-side ReadStat-WASM, streaming into OPFS-DuckDB
+  // (handles multi-GB files that OOM under R/haven). One entry covers all formats.
+  importers.registerStreaming({
+    id: 'readstat',
+    label: 'SPSS / Stata / SAS…',
+    extensions: READSTAT_EXTENSIONS,
+    order: 20,
+    multiple: true,
+    formatFor: (name) => ReadStatManager.formatForName(name),
+  });
   const exporters = new ExportService({ menus, data: datasets, results: results.api, bus });
   // Output export: host owns the "Export output…" dialog + the (host-only) print
   // path; formats (HTML, Word, …) are plugins that register via app.outputExporters

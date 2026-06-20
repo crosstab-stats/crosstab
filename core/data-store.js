@@ -313,33 +313,39 @@ export class DataStore {
 
     const seq = ++this.#sourceSeq;
     const table = `${this.#sourcePrefix}${seq}`;
+    // Bake the stable row id into the ingest CTAS (namespaced by seq, like
+    // #ensureRowId) so there's no separate full-table rewrite afterwards. Row
+    // order is irrelevant — the id only needs to be unique and stable per row.
+    const base = seq * ROWID_STRIDE;
+    const rowidExpr =
+      `CAST(${base} AS BIGINT) + CAST(row_number() OVER () AS BIGINT) AS ${quoteIdent(ROWID_COL)}`;
     let meta = null;
-    let storage = null;
-    let created = false;
+    let ingester = null;
 
     const ctx = {
       begin: async (variables, storageTypes) => {
         meta = variables;
-        storage = storageTypes;
-        const empty = {};
-        for (const v of variables) {
-          empty[v.name] = storageTypes[v.name] === 'numeric' ? new Float64Array(0) : [];
-        }
-        await this.#duckdb.appendColumns(table, empty, storageTypes, { create: true });
-        created = true;
+        ingester = await this.#duckdb.beginStreamIngest(table, storageTypes, { rowidExpr });
       },
       batch: async (columns) => {
-        if (!created) throw new Error('loadStreaming: batch before begin()');
-        await this.#duckdb.appendColumns(table, columns, storage, { create: false });
+        if (!ingester) throw new Error('loadStreaming: batch before begin()');
+        await ingester.addBatch(columns);
       },
     };
 
     try {
       await ingest(ctx);
+      if (ingester) await ingester.finish();
     } catch (err) {
-      // Roll back a half-built source so the dataset isn't left broken.
+      // Roll back a half-built source so the dataset isn't left broken, and sweep
+      // any leftover OPFS ingest parts.
       try {
         await this.#duckdb.query(`DROP TABLE IF EXISTS ${quoteIdent(table)}`);
+      } catch {
+        /* best-effort */
+      }
+      try {
+        await this.#duckdb.cleanupStreamIngest(table);
       } catch {
         /* best-effort */
       }
@@ -348,7 +354,7 @@ export class DataStore {
     if (!meta) throw new Error('streaming import delivered no variables');
 
     this.#sourceTables.add(table);
-    await this.#ensureRowId(table, seq);
+    // Row id already baked into the table by the ingest CTAS (no #ensureRowId).
     const src = { table, meta: meta.map((m) => ({ ...m })), label: source ?? null };
     if (combine === 'replace') this.#log = [{ type: 'load', src }];
     else this.#log.push({ type: 'append', src });
