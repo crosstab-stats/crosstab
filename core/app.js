@@ -80,25 +80,27 @@ const webService = Object.freeze({
 });
 
 /**
- * Consent prompt the loader shows on an *untrusted* plugin's first `app.web.get`
- * — the one network path it has (the sandbox CSP blocks the rest). Lets the user
- * stop an externally-loaded plugin from sending the loaded data out. Resolves a
- * boolean; the loader caches the decision per plugin instance.
+ * Prompt the user to allow a plugin's first `app.web.get` — the one network path
+ * a plugin has (the sandbox CSP blocks the rest). Lets the user stop a plugin from
+ * sending the loaded data out. Resolves a boolean. This is just the dialog; the
+ * remember/persist decision is layered on in {@link boot} (every plugin is gated
+ * identically — there is no trusted bypass).
  *
- * @param {string} label - The plugin's URL/filename.
+ * @param {string} name - The plugin's display name.
  * @param {string} url - The URL it wants to fetch.
  * @returns {Promise<boolean>}
  */
-function confirmPluginNetwork(label, url) {
+function promptNetworkDialog(name, url) {
   return new Promise((resolve) => {
     const d = document.createElement('dialog');
     d.className = 'ct-dialog ct-dialog--wide';
     d.innerHTML = `
       <form method="dialog" class="ct-dialog__form">
         <h2 class="ct-dialog__title">Allow network access?</h2>
-        <p class="ct-dialog__hint">The plugin <strong>${escapeText(label)}</strong> wants to
+        <p class="ct-dialog__hint">The plugin <strong>${escapeText(name)}</strong> wants to
           fetch a URL. This is the only way it can send data off your device — allow it
-          only if you trust this plugin.</p>
+          only if you trust this plugin. If you allow, CrossTab remembers and won't ask
+          again for this plugin (revoke it any time in Edit ▸ Plugins…).</p>
         <p class="ct-dialog__hint" style="word-break:break-all"><code>${escapeText(url)}</code></p>
         <menu class="ct-dialog__buttons">
           <button value="block" type="submit">Block</button>
@@ -186,7 +188,18 @@ export async function boot(mounts) {
     outputExporters: outputExporters.api,
     web: webService,
   };
-  const loader = new PluginLoader(services, { confirmNetwork: confirmPluginNetwork });
+  // `plugins` (the manager) owns the persisted web-access grants; it's created
+  // below but the loader needs the consent gate now, so the gate closes over it.
+  // The gate only ever fires on a user action long after `plugins` is assigned.
+  let plugins;
+  const loader = new PluginLoader(services, {
+    confirmNetwork: async (plugin, url) => {
+      if (plugin.id && plugins.isWebAllowed(plugin.id)) return true; // remembered allow
+      const allow = await promptNetworkDialog(plugin.name, url);
+      if (allow && plugin.id) plugins.grantWeb(plugin.id); // remember it
+      return allow;
+    },
+  });
   // Host-side wiring for declarative plugins: reads manifest.menu, gathers each
   // action's declared inputs, opens the (host-owned) output section, and invokes
   // the plugin's named function. The PluginManager calls wire/unwire on load/unload.
@@ -306,7 +319,7 @@ export async function boot(mounts) {
   // --- load built-in plugins (those the user hasn't disabled) ----------------
   // The plugin manager owns the catalog + the enabled/disabled set (persisted),
   // loads the enabled ones, and exposes Edit ▸ Plugins… to toggle them live.
-  const plugins = new PluginManager({ loader, urls: BUILTIN_PLUGINS, menus, results: results.api, actions: pluginActions });
+  plugins = new PluginManager({ loader, urls: BUILTIN_PLUGINS, menus, results: results.api, actions: pluginActions });
   plugins.activate();
   // In-app plugin creator (Edit ▸ Create plugin…, and the manager's "Create new…"):
   // authors a plugin from a template and loads it through the same sandbox.

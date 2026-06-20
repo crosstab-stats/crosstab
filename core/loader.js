@@ -117,8 +117,10 @@ export class PluginLoader {
   /** id → loaded plugin record. @type {Map<string, LoadedPlugin>} */
   #plugins = new Map();
 
-  /** Asks the user to allow network access for an untrusted plugin's first
-   * `app.web.get`. `(label, url) => Promise<boolean>`. Defaults to deny. */
+  /** Asks the user to allow a plugin's first `app.web.get`. A *remembered* grant
+   * resolves true without prompting; otherwise the user is prompted (and an allow
+   * is remembered host-side). `(plugin: {id, name}, url) => Promise<boolean>`.
+   * Defaults to deny. */
   #confirmNetwork;
 
   /**
@@ -128,8 +130,9 @@ export class PluginLoader {
    * @param {Object} [opts]
    * @param {HTMLElement} [opts.sandboxContainer] - Where plugin iframes are
    *   appended. Defaults to a hidden `<div>` added to `document.body`.
-   * @param {(label: string, url: string) => Promise<boolean>} [opts.confirmNetwork]
-   *   - Consent prompt for an untrusted plugin's first network request.
+   * @param {(plugin: {id: string, name: string}, url: string) => Promise<boolean>} [opts.confirmNetwork]
+   *   - Consent gate for a plugin's first network request (resolves a remembered
+   *     grant without prompting).
    */
   constructor(services, opts = {}) {
     this.#services = services;
@@ -145,14 +148,14 @@ export class PluginLoader {
    *   and runs it inside a sandbox; the URL is never `import()`ed by the engine.
    * @returns {Promise<PluginManifest>} The activated plugin's manifest.
    */
-  async load(url, opts = {}) {
+  async load(url) {
     // Fetch the plugin source on the host so we can hand it to the opaque-origin
     // sandbox, which cannot fetch it itself. Same-origin always works; a
     // cross-origin URL needs the author to CORS-enable it (no proxy here).
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Failed to fetch plugin ${url}: HTTP ${res.status}`);
     const code = await res.text();
-    return this.#instantiate(code, url, opts);
+    return this.#instantiate(code, url);
   }
 
   /**
@@ -161,31 +164,32 @@ export class PluginLoader {
    *
    * @param {string} code - The plugin's entry-module source.
    * @param {string} [label='plugin'] - A label for errors/consent prompts.
-   * @param {{trusted?: boolean}} [opts]
    * @returns {Promise<PluginManifest>}
    */
-  async loadSource(code, label = 'plugin', opts = {}) {
-    return this.#instantiate(code, label, opts);
+  async loadSource(code, label = 'plugin') {
+    return this.#instantiate(code, label);
   }
 
   /**
-   * Sandbox, import, version-check and activate a plugin from source text. A
-   * `trusted` plugin (built-in) gets the full service surface; an untrusted one
-   * (externally loaded) gets a **network-gated** `app.web` so its first request
-   * needs user consent — the host-mediated path is the only network a plugin has
-   * (the sandbox CSP blocks its own; see plugin-host.html).
+   * Sandbox, import, version-check and activate a plugin from source text. Every
+   * plugin is treated identically (see the file header): each gets a
+   * **network-gated** `app.web` whose first request needs user consent — the
+   * host-mediated path is the only network a plugin has (the sandbox CSP blocks
+   * its own; see plugin-host.html). An allow is remembered host-side.
    *
    * @param {string} code
    * @param {string} label - URL or filename, for errors/consent.
-   * @param {{trusted?: boolean}} [opts]
    * @returns {Promise<PluginManifest>}
    */
-  async #instantiate(code, label, { trusted = true } = {}) {
-    const services = trusted ? this.#services : this.#gatedServices(label);
+  async #instantiate(code, label) {
+    // Identity for the consent gate. The manifest id isn't known until the plugin
+    // loads, so the gate reads it from this holder — `web.get` only ever fires
+    // after load + activate, by which point it's filled in.
+    const ctx = { id: null, name: label };
     const iframe = this.#createIframe();
     const broker = new PluginBroker({
       iframe,
-      services,
+      services: this.#gatedServices(ctx),
       onError: (err) => console.error(`[plugin ${label}]`, err),
     });
 
@@ -205,6 +209,11 @@ export class PluginLoader {
       }
       assertApiCompatible(manifest);
 
+      // The gate's consent prompt / remembered-grant lookup keys off the plugin's
+      // own identity, now that it's known.
+      ctx.id = manifest.id;
+      ctx.name = manifest.name || label;
+
       // Pre-install declared R packages so the first analysis does not pay for
       // it. Queued in the WebR job queue; awaited lazily by the eventual run().
       if (manifest.rPackages?.length) {
@@ -215,7 +224,7 @@ export class PluginLoader {
 
       await broker.sendActivate({ ...manifest, apiVersion: API_VERSION });
 
-      this.#plugins.set(manifest.id, { manifest, iframe, broker, trusted });
+      this.#plugins.set(manifest.id, { manifest, iframe, broker });
       return manifest;
     } catch (err) {
       // Roll back a partially-loaded plugin so a failure leaves no orphan iframe.
@@ -225,15 +234,18 @@ export class PluginLoader {
     }
   }
 
-  /** Services for an untrusted plugin: every host service as-is, but `web.get`
-   * gated behind a one-time consent prompt (cached per plugin instance). */
-  #gatedServices(label) {
+  /** Services for a plugin: every host service as-is, but `web.get` gated behind
+   * the consent callback. The first decision is cached for this instance (so a
+   * mid-session block isn't re-prompted); a remembered allow is resolved by the
+   * callback without a prompt. `ctx` carries the plugin identity, filled in once
+   * the manifest loads (before any `web.get` can fire). */
+  #gatedServices(ctx) {
     const realWeb = this.#services.web;
     const confirmNetwork = this.#confirmNetwork;
     let decision = null;
     const web = Object.freeze({
       get: async (url) => {
-        if (decision === null) decision = await confirmNetwork(label, String(url));
+        if (decision === null) decision = await confirmNetwork({ id: ctx.id, name: ctx.name }, String(url));
         if (!decision) throw new Error('Network access was blocked for this plugin.');
         return realWeb.get(url);
       },

@@ -4,17 +4,23 @@
  * (it drives the loader and persists state; a sandboxed plugin has no handle on
  * the loader or its peers, so this can't itself be a plugin).
  *
- * Two kinds of plugin:
- *  - **Built-in** — the URLs shipped with the app (`urls`); always trusted.
+ * Two kinds of plugin — a provenance label only, **not** a privilege level:
+ *  - **Built-in** — the URLs shipped with the app (`urls`).
  *  - **User** — added at runtime, either from a **URL** (re-fetched each boot; the
  *    author must CORS-enable it) or from a **file** (the source is persisted in
- *    localStorage so it survives a restart). User plugins are **untrusted**: the
- *    loader gives them a network-gated `app.web` (consent on first request) and
- *    the sandbox CSP blocks any other network.
+ *    localStorage so it survives a restart).
+ *
+ * Every plugin is sandboxed and gated identically: the only network it has is a
+ * host-mediated `app.web`, and the first request needs user consent (the sandbox
+ * CSP blocks any other network). There is no built-in bypass — the manager
+ * persists per-plugin web grants (keyed by manifest id) so an allowed plugin
+ * isn't asked again; {@link grantWeb}/{@link revokeWeb}/{@link isWebAllowed} and
+ * the loader's consent gate (app.js) drive that.
  *
  * Exposes **Edit ▸ Plugins…**: a searchable, category-grouped dialog to toggle,
- * add (URL / file), and remove plugins. Toggling/removing is live — unloading a
- * plugin disposes its broker, which removes its menu items immediately.
+ * add (URL / file), fork, and remove plugins, and to revoke a web grant.
+ * Toggling/removing is live — unloading a plugin disposes its broker, which
+ * removes its menu items immediately.
  */
 
 import { PluginActions } from './plugin-actions.js';
@@ -22,6 +28,7 @@ import { PluginActions } from './plugin-actions.js';
 const LS_DISABLED = 'crosstab.plugins.disabled';
 const LS_CATALOG = 'crosstab.plugins.catalog';
 const LS_USER = 'crosstab.plugins.user';
+const LS_WEB = 'crosstab.plugins.web';
 
 export class PluginManager {
   /** @type {import('./loader.js').PluginLoader} */
@@ -41,6 +48,10 @@ export class PluginManager {
   /** User-added plugins (persisted): `{key, kind:'url'|'file'|'authored', url?,
    * name?, source?}`. @type {Array<object>} */
   #user;
+  /** Manifest ids the user has granted network access (persisted). Every plugin
+   * is gated identically — there is no built-in bypass; a grant just means "don't
+   * ask again for this plugin." @type {Set<string>} */
+  #webAllowed;
 
   /** In-app plugin creator, attached after construction. @type {?import('./plugin-creator.js').PluginCreator} */
   #creator = null;
@@ -65,6 +76,25 @@ export class PluginManager {
     this.#disabled = new Set(readJSON(LS_DISABLED, []));
     this.#catalog = readJSON(LS_CATALOG, {});
     this.#user = Array.isArray(readJSON(LS_USER, [])) ? readJSON(LS_USER, []) : [];
+    this.#webAllowed = new Set(readJSON(LS_WEB, []));
+  }
+
+  /** Has the user granted this plugin (by manifest id) network access? */
+  isWebAllowed(id) {
+    return !!id && this.#webAllowed.has(id);
+  }
+
+  /** Remember that the user allowed this plugin network access (so it isn't asked
+   * again). Called by the loader's consent gate after an "allow". */
+  grantWeb(id) {
+    if (!id || this.#webAllowed.has(id)) return;
+    this.#webAllowed.add(id);
+    writeJSON(LS_WEB, [...this.#webAllowed]);
+  }
+
+  /** Forget a network grant — the plugin will be asked again next time it fetches. */
+  revokeWeb(id) {
+    if (this.#webAllowed.delete(id)) writeJSON(LS_WEB, [...this.#webAllowed]);
   }
 
   activate() {
@@ -99,11 +129,10 @@ export class PluginManager {
   /** Load one entry, recording its manifest in the catalog. Resolves the manifest,
    * or throws (callers that want best-effort use {@link #loadEntry}). */
   async #loadEntryStrict(entry) {
-    const trusted = !!entry.builtin;
     const manifest =
       entry.source != null
-        ? await this.#loader.loadSource(entry.source, entry.name || entry.key, { trusted })
-        : await this.#loader.load(entry.url, { trusted });
+        ? await this.#loader.loadSource(entry.source, entry.name || entry.key)
+        : await this.#loader.load(entry.url);
     this.#catalog[entry.key] = {
       id: manifest.id,
       name: manifest.name,
@@ -242,6 +271,7 @@ export class PluginManager {
     }
     this.#user.splice(i, 1);
     this.#disabled.delete(key);
+    if (id) this.revokeWeb(id); // don't leave a dangling grant for a gone plugin
     delete this.#catalog[key];
     writeJSON(LS_USER, this.#user);
     writeJSON(LS_DISABLED, [...this.#disabled]);
@@ -284,6 +314,7 @@ export class PluginManager {
         keywords: cat?.keywords ?? [],
         enabled: !this.#disabled.has(e.key),
         loaded: cat?.id ? loaded.has(cat.id) : false,
+        webAllowed: this.isWebAllowed(cat?.id),
         removable: !e.builtin,
         editable: e.kind === 'authored',
         origin: e.builtin ? 'built-in' : e.kind, // 'url' | 'file' | 'authored'
@@ -399,6 +430,22 @@ export class PluginManager {
     const right = el('span', null, 'ct-plugin__right');
     const metaText = p.enabled ? (p.loaded ? p.origin : 'failed to load') : 'disabled';
     right.append(el('span', metaText, 'ct-plugin__meta'));
+
+    // Network grant: shown only when the user has allowed this plugin web access;
+    // click to revoke (it'll be asked again next time it fetches).
+    if (p.webAllowed && p.id) {
+      const wb = document.createElement('button');
+      wb.type = 'button';
+      wb.className = 'ct-plugin__web';
+      wb.textContent = '🌐';
+      wb.title = 'Network access allowed — click to revoke';
+      wb.addEventListener('click', () => {
+        setErr('');
+        this.revokeWeb(p.id);
+        refresh();
+      });
+      right.append(wb);
+    }
 
     // Fork: open the editor pre-filled with a copy of this plugin's source as a
     // *new* plugin. Available on every row (built-ins are the worked examples).
