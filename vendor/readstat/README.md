@@ -42,6 +42,8 @@ emcc <readstat read-side .c> src/readstat_wasm.c \
   -sUSE_ZLIB=1 \             # zsav ($FL3) support
   -sWASM_BIGINT \
   -sALLOW_MEMORY_GROWTH=1 \
+  -sSTACK_SIZE=5MB \         # sav data reader puts a 64 KB buffer on the stack;
+                            # Emscripten's default 64 KB stack overflows -> heap corruption
   -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker \
   -sEXPORTED_FUNCTIONS='["_ct_parse","_ct_error_message","_malloc","_free"]' \
   -sEXPORTED_RUNTIME_METHODS='["ccall","cwrap","UTF8ToString","HEAPU8"]' \

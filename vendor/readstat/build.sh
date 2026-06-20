@@ -19,6 +19,7 @@ emcc \
   -sUSE_ZLIB=1 \
   -sWASM_BIGINT \
   -sALLOW_MEMORY_GROWTH=1 \
+  -sSTACK_SIZE=5MB \
   -sMODULARIZE=1 \
   -sEXPORT_ES6=1 \
   -sENVIRONMENT=web,worker \
