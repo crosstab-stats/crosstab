@@ -34,7 +34,7 @@ const LS_WEB = 'crosstab.plugins.web';
 /** Bump when the catalog shape OR built-in manifests' metadata change, so a
  * stale persisted catalog (e.g. missing newly-declared `disciplines`) is dropped
  * and re-probed on next load. */
-const CATALOG_VERSION = 3;
+const CATALOG_VERSION = 4;
 
 export class PluginManager {
   /** @type {import('./loader.js').PluginLoader} */
@@ -163,6 +163,11 @@ export class PluginManager {
       category: typeof manifest.category === 'string' ? manifest.category : '',
       keywords: Array.isArray(manifest.keywords) ? manifest.keywords : [],
       disciplines: Array.isArray(manifest.disciplines) ? manifest.disciplines : [],
+      // The plugin's menu-action labels — the "what you get" list shown on hover
+      // in the picker (ellipsis trimmed). Importers/exporters/legacy may lack a menu.
+      menu: Array.isArray(manifest.menu)
+        ? manifest.menu.map((m) => String(m?.label ?? '').replace(/\s*[.…]+\s*$/, '')).filter(Boolean)
+        : [],
     };
     writeJSON(LS_CATALOG, this.#catalog);
   }
@@ -358,6 +363,7 @@ export class PluginManager {
         category: cat?.category || 'Other',
         keywords: cat?.keywords ?? [],
         disciplines: cat?.disciplines ?? [],
+        menu: cat?.menu ?? [],
         enabled: !this.#disabled.has(e.key),
         loaded: cat?.id ? loaded.has(cat.id) : false,
         webAllowed: this.isWebAllowed(cat?.id),

@@ -199,6 +199,11 @@ export class Launcher {
 
   #pluginRow(p) {
     const label = el('label', null, 'ctl__plugin');
+    // Hover tooltip: the analyses this plugin adds (so a user can see *why* it's
+    // recommended — e.g. Econometrics → robust regression, IV/2SLS, panel).
+    if (p.menu && p.menu.length) {
+      label.title = `${p.name} adds:\n• ${p.menu.join('\n• ')}`;
+    }
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.checked = this.#selected.has(p.key);
