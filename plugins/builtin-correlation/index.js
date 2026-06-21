@@ -41,6 +41,25 @@ export const manifest = {
         },
       ],
     },
+    {
+      label: 'Partial / part correlation…',
+      run: 'partial',
+      order: 20,
+      inputs: [
+        { name: 'vars', kind: 'variables', label: 'Variables', types: ['numeric'], multiple: true, unique: true },
+        { name: 'controls', kind: 'variables', label: 'Control for (partial out)', types: ['numeric'], multiple: true, unique: true },
+        {
+          name: 'type',
+          kind: 'choice',
+          label: 'Type',
+          default: 'partial',
+          options: [
+            { value: 'partial', label: 'Partial — remove controls from both variables' },
+            { value: 'semipartial', label: 'Semipartial (part) — remove controls from the row variable only' },
+          ],
+        },
+      ],
+    },
   ],
 };
 
@@ -110,6 +129,91 @@ export async function run(app, { vars, method }) {
   );
 }
 
+/**
+ * Partial / semipartial correlation, controlling for a set of covariates.
+ * @param {object} app
+ * @param {{vars: string[], controls: string[], type: string}} inputs
+ */
+export async function partial(app, { vars, controls, type }) {
+  if (!vars || vars.length < 2) {
+    await app.results.appendError('Partial correlation needs at least two variables.');
+    return;
+  }
+  if (!controls || controls.length < 1) {
+    await app.results.appendError('Choose at least one control variable to partial out (otherwise use Bivariate).');
+    return;
+  }
+  const semip = type === 'semipartial';
+  const meta = new Map((await app.data.getVariableMeta()).map((mm) => [mm.name, mm]));
+  const recodeOne = (name, holder) => {
+    const mv = (meta.get(name)?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
+    if (!mv.length) return '';
+    const col = `${holder}[[${rStr(name)}]]`;
+    return `${col}[${col} %in% c(${mv.map(Number).join(', ')})] <- NA`;
+  };
+  const recode = [...vars.map((n) => recodeOne(n, 'vars')), ...controls.map((n) => recodeOne(n, 'controls'))]
+    .filter(Boolean)
+    .join('\n');
+
+  const rCode = `
+    ${recode}
+    V <- data.frame(lapply(vars, function(c) suppressWarnings(as.numeric(c))), check.names = FALSE)
+    Z <- data.frame(lapply(controls, function(c) suppressWarnings(as.numeric(c))), check.names = FALSE)
+    ok <- stats::complete.cases(cbind(V, Z))
+    V <- V[ok, , drop = FALSE]; Z <- Z[ok, , drop = FALSE]
+    n <- nrow(V); k <- ncol(V); q <- ncol(Z)
+    if (n < q + 3) stop("too few complete cases for this many control variables")
+    Zc <- cbind(1, as.matrix(Z))
+    H <- Zc %*% solve(crossprod(Zc)) %*% t(Zc)
+    Vm <- as.matrix(V)
+    res <- Vm - H %*% Vm
+    semip <- ${semip ? 'TRUE' : 'FALSE'}
+    M <- matrix(NA_real_, k, k)
+    for (i in 1:k) for (j in 1:k) {
+      a <- res[, i]
+      b <- if (semip) Vm[, j] else res[, j]
+      M[i, j] <- suppressWarnings(stats::cor(a, b))
+    }
+    diag(M) <- 1
+    df <- n - 2 - q
+    P <- matrix(NA_real_, k, k)
+    for (i in 1:k) for (j in 1:k) if (i != j) {
+      rr <- M[i, j]
+      if (is.finite(rr) && abs(rr) < 1) { tt <- rr * sqrt(df / (1 - rr^2)); P[i, j] <- 2 * pt(-abs(tt), df) }
+    }
+    list(k = k, n = n, q = q, df = df, r = as.vector(t(M)), p = as.vector(t(P)))`;
+
+  const { result } = await app.webr.run(rCode);
+  if (!result) throw new Error('R returned no result');
+  const c = normalizeResult(result);
+  const k = c.k || vars.length;
+  const at = (m, i, j) => m[i * k + j];
+  const label = (name) => meta.get(name)?.label || name;
+
+  const columns = ['', ...vars.map(label)];
+  const rows = vars.map((rowName, i) => {
+    const cells = vars.map((_, j) => {
+      if (i === j) return ['1'];
+      const r = at(c.r, i, j);
+      const p = at(c.p, i, j);
+      if (!Number.isFinite(r)) return [''];
+      return [rFmt(r, p), pFmt(p)];
+    });
+    return [label(rowName), ...cells];
+  });
+
+  const ctrlLabel = controls.map(label).join(', ');
+  await app.results.appendTable(
+    { columns, rows, rowHeaders: true },
+    { caption: `${semip ? 'Semipartial (Part)' : 'Partial'} Correlations — controlling for ${ctrlLabel} (N = ${c.nScalar}, df = ${c.df})` },
+  );
+  await app.results.appendText(
+    semip
+      ? `Semipartial (part) correlation: the control variable(s) are removed from the **row** variable only, so the table is **not symmetric**. Each value is the unique association of the row variable (net of ${ctrlLabel}) with the raw column variable. Stars: * p < .05, ** p < .01.`
+      : `Partial correlation: the linear effect of ${ctrlLabel} is removed from **both** variables in each pair. Stars: * p < .05, ** p < .01.`,
+  );
+}
+
 // --- helpers -----------------------------------------------------------------
 
 function normalizeResult(rList) {
@@ -121,8 +225,12 @@ function normalizeResult(rList) {
   }
   const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
   const num = (v) => arr(v).map((x) => (x == null ? NaN : Number(x)));
+  const first = (v) => {
+    const a = num(v);
+    return a.length ? a[0] : NaN;
+  };
   const kArr = num(byName.k);
-  return { k: kArr.length ? kArr[0] : 0, r: num(byName.r), p: num(byName.p), n: num(byName.n) };
+  return { k: kArr.length ? kArr[0] : 0, r: num(byName.r), p: num(byName.p), n: num(byName.n), nScalar: first(byName.n), df: first(byName.df) };
 }
 
 /** Coefficient with significance stars. */

@@ -53,8 +53,15 @@ export async function run(app, { vars }) {
     ${recode}
     d <- as.data.frame(lapply(vars, function(c) suppressWarnings(as.numeric(c))), check.names = FALSE)
     a <- psych::alpha(d, warnings = FALSE, check.keys = FALSE)
+    # McDonald's omega (total) from a single-factor congeneric model. Needs >= 3
+    # items to identify the factor; suppress its plotting/printing noise.
+    om <- if (ncol(d) >= 3) tryCatch(
+      suppressWarnings(suppressMessages(psych::omega(d, nfactors = 1, plot = FALSE, flow = FALSE))),
+      error = function(e) NULL) else NULL
     list(
       alpha = a$total$raw_alpha, stdAlpha = a$total$std.alpha,
+      omegaTot = if (is.null(om)) NA_real_ else as.numeric(om$omega.tot),
+      gSix = a$total$"G6(smc)",
       nItems = ncol(d), nCases = sum(stats::complete.cases(d)),
       items = colnames(d), itemMean = a$item.stats[, "mean"], itemSD = a$item.stats[, "sd"],
       itemR = a$item.stats[, "r.drop"], alphaDrop = a$alpha.drop[, "raw_alpha"]
@@ -64,13 +71,19 @@ export async function run(app, { vars }) {
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
 
+  const omega = r.n1('omegaTot');
   await app.results.appendTable(
     {
-      columns: ["Cronbach's α", "Cronbach's α (standardized)", 'N of Items', 'N'],
-      rows: [[f(r.n1('alpha'), 3), f(r.n1('stdAlpha'), 3), int(r.n1('nItems')), int(r.n1('nCases'))]],
+      columns: ["Cronbach's α", "Cronbach's α (standardized)", "McDonald's ω", 'N of Items', 'N'],
+      rows: [[f(r.n1('alpha'), 3), f(r.n1('stdAlpha'), 3), f(omega, 3), int(r.n1('nItems')), int(r.n1('nCases'))]],
     },
     { caption: 'Reliability Statistics' },
   );
+  if (Number.isFinite(omega)) {
+    await app.results.appendText(
+      "**McDonald's ω** (total) doesn't assume every item contributes equally (tau-equivalence), so it's usually preferred over α when item loadings differ. Values are interpreted on the same scale (≥ .70 acceptable, ≥ .80 good).",
+    );
+  }
 
   const items = r.str('items');
   await app.results.appendTable(
