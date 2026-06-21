@@ -74,7 +74,7 @@ const CT_ROW = '__ct_row';
 
 /** Log op types that are *data transforms* (vs. load/append/join source ops).
  * `getTransforms()` and the persisted `transforms` array carry only these. */
-const DATA_OPS = new Set(['setVariable', 'setCell', 'computeVar', 'recodeVar']);
+const DATA_OPS = new Set(['setVariable', 'setCell', 'computeVar', 'recodeVar', 'filterCases']);
 
 /** Log op types that are *source* operations (data loads). */
 const SOURCE_OPS = new Set(['load', 'append', 'join']);
@@ -669,6 +669,10 @@ export class DataStore {
         });
         const scalar = op.type === 'computeVar' ? `(${op.expr})` : recodeCaseSql(op);
         sql = `SELECT *, TRY_CAST(${scalar} AS ${cast}) AS ${quoteIdent(op.name)} FROM (${sql})`;
+      } else if (op.type === 'filterCases') {
+        // Select cases: keep rows where the condition holds. Wrap the running query
+        // in a WHERE; rows are filtered in the view, never deleted from sources.
+        if (sql !== null) sql = `SELECT * FROM (${sql}) WHERE (${op.expr})`;
       } else if (op.type === 'setCell') {
         if (sql && byName.has(op.column) && /^\d+$/.test(String(op.rid ?? ''))) {
           const q = quoteIdent(op.column);
@@ -849,8 +853,25 @@ export class DataStore {
     });
   }
 
-  /** Push a compute/recode transform and re-derive; roll back if the generated SQL
-   * is invalid so the dataset is never left broken. */
+  /**
+   * **Select cases**: keep only rows matching a boolean condition (a DuckDB scalar
+   * expression over existing variables, e.g. `age >= 18 AND grp = 1`). A logged,
+   * non-destructive, reversible transform — sources stay intact; undo, History, and
+   * syntax export all see it. Rows are filtered in the derived view, not deleted.
+   * Invalid SQL is rejected (rolled back) so the dataset is never left broken.
+   *
+   * @param {string} expr - A DuckDB boolean expression referencing variable names.
+   * @param {string} [label] - Human label for History (defaults to the expression).
+   * @returns {Promise<void>}
+   */
+  async filterCases(expr, label) {
+    if (!expr || !String(expr).trim()) throw new Error('Select cases: the condition is empty.');
+    const cond = String(expr).trim();
+    await this.#addDerivedVar({ type: 'filterCases', expr: cond, label: label || cond });
+  }
+
+  /** Push a compute/recode/filter transform and re-derive; roll back if the
+   * generated SQL is invalid so the dataset is never left broken. */
   async #addDerivedVar(t) {
     this.#log.push(t);
     this.#redoStack = [];

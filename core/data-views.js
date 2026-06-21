@@ -729,6 +729,9 @@ function describeTransform(t) {
     const n = (t.rules || []).length;
     return { title: `Recoded ${t.source} → ${t.name}`, detail: `${n} rule${n === 1 ? '' : 's'}` };
   }
+  if (t && t.type === 'filterCases') {
+    return { title: 'Selected cases', detail: t.label || t.expr || '' };
+  }
   if (!t || t.type !== 'setVariable') return { title: t?.type || 'Change', detail: '' };
   const p = t.patch || {};
   const bits = [];

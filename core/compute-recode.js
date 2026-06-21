@@ -41,6 +41,68 @@ export class ComputeRecode {
       order: 20,
       command: () => this.#openRecode(),
     });
+    this.#menus.register({
+      id: 'core:select-cases',
+      path: ['Transform'],
+      label: 'Select cases…',
+      order: 30,
+      command: () => this.#openFilter(),
+    });
+  }
+
+  // --- Select cases (row filter) ---------------------------------------------
+
+  #openFilter() {
+    if (!this.#guardData()) return;
+    const dialog = document.createElement('dialog');
+    dialog.className = 'ct-dialog ct-dialog--wide';
+    dialog.innerHTML = `
+      <form method="dialog" class="ct-dialog__form ct-cr">
+        <h2 class="ct-dialog__title">Select cases</h2>
+        <p class="ct-dialog__hint">Keep only the rows where a condition is true (e.g.
+          <code>age &gt;= 18</code>, <code>grp = 1</code>, <code>year &gt; 2000 AND region = 'West'</code>).
+          Non-destructive — it filters the working view; undo or History restores all rows.</p>
+        <label class="ct-field">Keep cases where
+          <textarea name="cond" rows="2" class="ct-cr__expr" placeholder="age >= 18 AND grp = 1"></textarea>
+        </label>
+        <div class="ct-cr__palette"></div>
+        <p class="ct-hint">Click a variable to insert it. Comparisons: <code>= != &lt; &lt;= &gt; &gt;=</code> ·
+          combine with <code>AND OR NOT</code> · text in <code>'single quotes'</code> · <code>IN (…)</code>, <code>IS NULL</code>.</p>
+        <menu class="ct-dialog__buttons">
+          <button value="cancel" type="submit">Cancel</button>
+          <button value="ok" type="submit" class="ct-dialog__primary">Select</button>
+        </menu>
+      </form>`;
+
+    const cond = dialog.querySelector('textarea[name="cond"]');
+    const palette = dialog.querySelector('.ct-cr__palette');
+    for (const m of this.#vars()) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'ct-cr__chip';
+      chip.textContent = m.name;
+      chip.title = m.label || m.name;
+      chip.addEventListener('click', () => insertAtCursor(cond, identForExpr(m.name)));
+      palette.append(chip);
+    }
+
+    dialog.addEventListener('close', async () => {
+      const ok = dialog.returnValue === 'ok';
+      const condition = cond.value.trim();
+      dialog.remove();
+      if (!ok || !condition) return;
+      try {
+        const before = this.#data.rowCount;
+        await this.#data.filterCases(condition);
+        this.#results.appendText(
+          `Selected cases where \`${condition}\` — ${this.#data.rowCount.toLocaleString()} of ${before.toLocaleString()} rows kept.`,
+        );
+      } catch (err) {
+        this.#results.appendError(err.message);
+      }
+    });
+    document.body.append(dialog);
+    dialog.showModal();
   }
 
   #vars() {

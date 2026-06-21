@@ -263,6 +263,9 @@ export class DatasetManager {
   recodeVariable(name, source, rules, varType, elseRule) {
     return this.active.recodeVariable(name, source, rules, varType, elseRule);
   }
+  filterCases(expr, label) {
+    return this.active.filterCases(expr, label);
+  }
   getTransforms() {
     return this.active.getTransforms();
   }

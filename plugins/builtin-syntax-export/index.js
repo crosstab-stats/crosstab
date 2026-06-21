@@ -86,6 +86,9 @@ function buildRSyntax(log, meta) {
       } else if (t.type === 'recodeVar') {
         L.push(`# Step ${n}: recode ${t.source} → ${t.name}`);
         L.push(...recodeVarToR(t));
+      } else if (t.type === 'filterCases') {
+        L.push(`# Step ${n}: select cases — ${t.label || t.expr}`);
+        L.push(...filterToR(t));
       } else if (t.type === 'setVariable' && t.name) {
         L.push(`# Step ${n}: ${t.name}`);
         L.push(...transformToR(t.name, t.patch || {}));
@@ -151,6 +154,21 @@ function computeVarToR(t) {
   return [
     `d[[${rChar(t.name)}]] <- with(d, ${sqlExprToR(t.expr)})`,
     `# (from the expression: ${t.expr} — verify any SQL functions in R)`,
+  ];
+}
+
+/** R for a "select cases" filter. Best-effort translation of the DuckDB boolean
+ * condition to R: SQL AND/OR/NOT → & / | / !, and SQL '=' → R '=='. Complex
+ * conditions (IN, IS NULL) may need a manual tweak — flagged in a comment. */
+function filterToR(t) {
+  let cond = sqlExprToR(t.expr)
+    .replace(/\bAND\b/gi, '&')
+    .replace(/\bOR\b/gi, '|')
+    .replace(/\bNOT\b/gi, '!')
+    .replace(/([^<>=!])=(?!=)/g, '$1=='); // SQL '=' → R '==', leaving <= >= != ==
+  return [
+    `d <- subset(d, ${cond})`,
+    `# (filter auto-translated from: ${t.expr} — verify operators, esp. IN()/IS NULL)`,
   ];
 }
 
