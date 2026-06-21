@@ -93,6 +93,8 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-imputation/index.js',
   './plugins/builtin-epi/index.js',
   './plugins/builtin-inequality/index.js',
+  './plugins/builtin-trend/index.js',
+  './plugins/builtin-ecology/index.js',
 ];
 
 /**
