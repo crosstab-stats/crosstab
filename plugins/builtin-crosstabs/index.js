@@ -28,6 +28,16 @@ export const manifest = {
       inputs: [
         { name: 'rowvar', kind: 'variables', label: 'Row variable', multiple: false, types: ['factor', 'string'], unique: true },
         { name: 'colvar', kind: 'variables', label: 'Column variable', multiple: false, types: ['factor', 'string'], unique: true },
+        {
+          name: 'pmethod',
+          kind: 'choice',
+          label: 'P-value',
+          default: 'asymptotic',
+          options: [
+            { value: 'asymptotic', label: 'Asymptotic (default)' },
+            { value: 'montecarlo', label: 'Monte Carlo (for sparse tables)' },
+          ],
+        },
       ],
     },
   ],
@@ -37,7 +47,7 @@ export const manifest = {
  * @param {object} app
  * @param {{rowvar: string, colvar: string}} inputs
  */
-export async function run(app, { rowvar: rowName, colvar: colName }) {
+export async function run(app, { rowvar: rowName, colvar: colName, pmethod }) {
   if (!rowName || !colName) return;
   const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
 
@@ -46,6 +56,11 @@ export async function run(app, { rowvar: rowName, colvar: colName }) {
     ${recode('colvar', meta.get(colName))}
     tab <- table(rowvar, colvar)
     chi <- tryCatch(suppressWarnings(chisq.test(tab)), error = function(e) NULL)
+    minExp <- if (is.null(chi)) NA_real_ else min(chi$expected, na.rm = TRUE)
+    mc <- identical(pmethod, "montecarlo")
+    simB <- 10000L
+    pMC <- if (mc) tryCatch(suppressWarnings(chisq.test(tab, simulate.p.value = TRUE, B = simB))$p.value, error = function(e) NA_real_) else NA_real_
+    pFisher <- if (mc) tryCatch(fisher.test(tab, simulate.p.value = TRUE, B = simB)$p.value, error = function(e) NA_real_) else NA_real_
     list(
       rowLevels = rownames(tab), colLevels = colnames(tab),
       counts = as.integer(t(tab)),
@@ -54,6 +69,7 @@ export async function run(app, { rowvar: rowName, colvar: colName }) {
       chisq = if (is.null(chi)) NA_real_ else unname(chi$statistic),
       dfree = if (is.null(chi)) NA_real_ else unname(chi$parameter),
       p     = if (is.null(chi)) NA_real_ else chi$p.value,
+      minExp = minExp, pMC = pMC, pFisher = pFisher, simB = simB,
       cramerV = if (is.null(chi)) NA_real_ else sqrt(unname(chi$statistic) / (sum(tab) * (min(nrow(tab), ncol(tab)) - 1))),
       phi = if (!is.null(chi) && nrow(tab) == 2 && ncol(tab) == 2) sqrt(unname(chi$statistic) / sum(tab)) else NA_real_
     )`;
@@ -85,18 +101,33 @@ export async function run(app, { rowvar: rowName, colvar: colName }) {
 
   // Chi-square test.
   const fmt = (n, d) => (Number.isFinite(n) ? n.toFixed(d) : '—');
-  const p = Number.isFinite(x.p) ? (x.p < 0.001 ? '< .001' : x.p.toFixed(3)) : '—';
+  const fp = (v) => (Number.isFinite(v) ? (v < 0.001 ? '< .001' : v.toFixed(3)) : '—');
+  const p = fp(x.p);
+  const chiRows = [['Pearson Chi-Square', fmt(x.chisq, 3), fmt(x.dfree, 0), p]];
+  if (Number.isFinite(x.pMC)) {
+    chiRows.push(['Pearson Chi-Square — Monte Carlo', fmt(x.chisq, 3), '', fp(x.pMC)]);
+  }
+  if (Number.isFinite(x.pFisher)) {
+    chiRows.push(["Fisher's Exact — Monte Carlo", '', '', fp(x.pFisher)]);
+  }
+  chiRows.push(['N of Valid Cases', x.total, '', '']);
   await app.results.appendTable(
     {
-      columns: ['', 'Value', 'df', 'Asymp. Sig. (2-sided)'],
-      rows: [
-        ['Pearson Chi-Square', fmt(x.chisq, 3), fmt(x.dfree, 0), p],
-        ['N of Valid Cases', x.total, '', ''],
-      ],
+      columns: ['', 'Value', 'df', Number.isFinite(x.pMC) ? 'Sig. (2-sided)' : 'Asymp. Sig. (2-sided)'],
+      rows: chiRows,
       rowHeaders: true,
     },
     { caption: 'Chi-Square Tests' },
   );
+  // Sparse-table guidance: the asymptotic χ² is unreliable when expected counts
+  // are small; nudge toward the Monte Carlo option (or note it's already in use).
+  if (Number.isFinite(x.minExp) && x.minExp < 5) {
+    await app.results.appendText(
+      Number.isFinite(x.pMC)
+        ? `Smallest expected count is ${fmt(x.minExp, 2)} (< 5), so the Monte Carlo p-values above (${(x.simB || 10000).toLocaleString()} simulations) are more trustworthy than the asymptotic one here.`
+        : `⚠️ Smallest expected count is ${fmt(x.minExp, 2)} (< 5) — the asymptotic χ² may be inaccurate. Re-run with **P-value: Monte Carlo** for a simulation-based p-value.`,
+    );
+  }
 
   // Symmetric Measures: association strength (phi for 2×2, Cramér's V always).
   const sym = [];
@@ -145,6 +176,10 @@ function normalizeResult(rList) {
     chisq: scalar(byName.chisq),
     dfree: scalar(byName.dfree),
     p: scalar(byName.p),
+    minExp: scalar(byName.minExp),
+    pMC: scalar(byName.pMC),
+    pFisher: scalar(byName.pFisher),
+    simB: scalar(byName.simB),
     cramerV: scalar(byName.cramerV),
     phi: scalar(byName.phi),
   };
