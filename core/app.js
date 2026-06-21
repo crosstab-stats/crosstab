@@ -85,6 +85,7 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-multilevel/index.js',
   './plugins/builtin-mediation/index.js',
   './plugins/builtin-meta/index.js',
+  './plugins/builtin-mixedanova/index.js',
 ];
 
 /**
