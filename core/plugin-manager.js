@@ -648,32 +648,8 @@ function matchesQuery(p, q) {
   return hay.includes(q);
 }
 
-/** The **recommended category vocabulary**, in display order — the convention we
- * model so the plugin list stays legible as it grows (rather than one giant
- * "Analysis" bucket). Analyses are grouped by *method family*, mirroring the
- * Analyze ▸ … submenus. A plugin may use any string; unrecognised categories sort
- * alphabetically after these (a gentle nudge toward the standard vocabulary), and
- * the catch-all "Other" goes last. Kept in sync with the manifest `category` doc
- * in loader.js. */
-const CATEGORY_ORDER = [
-  'Import',
-  'Descriptive Statistics',
-  'Comparison',
-  'Correlation',
-  'Regression',
-  'Multivariate',
-  'Time Series',
-  'Resampling',
-  'Graphs',
-  'Export',
-];
-function categoryRank(c) {
-  if (c === 'Other') return 1000;
-  const i = CATEGORY_ORDER.indexOf(c);
-  return i >= 0 ? i : 500;
-}
-
-/** Group plugins into ordered category sections. */
+/** Group plugins into category sections, BOTH categories and the plugins within
+ * each sorted alphabetically — predictable for discovery (matches the launcher). */
 function groupByCategory(items) {
   const byCat = new Map();
   for (const p of items) {
@@ -682,8 +658,8 @@ function groupByCategory(items) {
     byCat.get(c).push(p);
   }
   return [...byCat.keys()]
-    .sort((a, b) => categoryRank(a) - categoryRank(b) || a.localeCompare(b))
-    .map((c) => ({ category: c, items: byCat.get(c) }));
+    .sort((a, b) => a.localeCompare(b))
+    .map((c) => ({ category: c, items: byCat.get(c).sort((x, y) => (x.name || '').localeCompare(y.name || '')) }));
 }
 
 function readJSON(key, fallback) {
