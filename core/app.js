@@ -89,6 +89,7 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-var/index.js',
   './plugins/builtin-cointegration/index.js',
   './plugins/builtin-limdep/index.js',
+  './plugins/builtin-clusterse/index.js',
 ];
 
 /**
