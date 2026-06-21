@@ -174,6 +174,47 @@ export class PluginLoader {
   }
 
   /**
+   * Read a plugin's manifest **without activating it** — sandbox the code, grab
+   * the exported manifest, then tear the sandbox down. Used to populate the
+   * plugin picker/launcher with full metadata (category, disciplines) for
+   * plugins the user hasn't switched on, without keeping ~N iframes alive or
+   * doing any R work. The probe is throwaway: it never enters `#plugins`.
+   *
+   * @param {string} url
+   * @returns {Promise<PluginManifest>}
+   */
+  async probeManifest(url) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Failed to fetch plugin ${url}: HTTP ${res.status}`);
+    return this.#probe(await res.text(), url);
+  }
+
+  /** Like {@link probeManifest} but from source text (file/authored plugins). */
+  async probeManifestSource(code, label = 'plugin') {
+    return this.#probe(code, label);
+  }
+
+  /** Sandbox `code`, return its manifest, and dispose the sandbox. No activation. */
+  async #probe(code, label) {
+    const ctx = { id: null, name: label };
+    const iframe = this.#createIframe();
+    const broker = new PluginBroker({ iframe, services: this.#gatedServices(ctx), onError: () => {} });
+    this.#sandboxContainer.append(iframe);
+    iframe.src = PLUGIN_HOST_URL;
+    try {
+      await broker.whenReady();
+      const manifest = await broker.sendLoad(code);
+      if (!manifest || typeof manifest.id !== 'string') {
+        throw new Error(`Plugin at ${label} exported no valid manifest`);
+      }
+      return manifest;
+    } finally {
+      broker.dispose();
+      iframe.remove();
+    }
+  }
+
+  /**
    * Sandbox, import, version-check and activate a plugin from source text. Every
    * plugin is treated identically (see the file header): each gets a
    * **network-gated** `app.web` whose first request needs user consent — the

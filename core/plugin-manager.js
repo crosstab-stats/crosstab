@@ -133,19 +133,52 @@ export class PluginManager {
       entry.source != null
         ? await this.#loader.loadSource(entry.source, entry.name || entry.key)
         : await this.#loader.load(entry.url);
-    this.#catalog[entry.key] = {
-      id: manifest.id,
-      name: manifest.name,
-      category: typeof manifest.category === 'string' ? manifest.category : '',
-      keywords: Array.isArray(manifest.keywords) ? manifest.keywords : [],
-    };
-    writeJSON(LS_CATALOG, this.#catalog);
+    this.#recordCatalog(entry.key, manifest);
     // Declarative plugins are wired host-side (menus/importers/exporters + invoke);
     // legacy plugins self-register in activate(), so this is a no-op for them.
     if (this.#actions && PluginActions.isDeclarative(manifest)) {
       this.#actions.wire(manifest, this.#originLabel(entry));
     }
     return manifest;
+  }
+
+  /** Record a plugin's manifest metadata in the (persisted) catalog, so disabled
+   * or not-yet-activated plugins still show full details in the picker. */
+  #recordCatalog(key, manifest) {
+    this.#catalog[key] = {
+      id: manifest.id,
+      name: manifest.name,
+      category: typeof manifest.category === 'string' ? manifest.category : '',
+      keywords: Array.isArray(manifest.keywords) ? manifest.keywords : [],
+      disciplines: Array.isArray(manifest.disciplines) ? manifest.disciplines : [],
+    };
+    writeJSON(LS_CATALOG, this.#catalog);
+  }
+
+  /**
+   * Populate the catalog with manifest metadata for every known plugin —
+   * including ones the user hasn't activated — by probing their manifests
+   * without activating them (no iframe kept alive, no R work). Only probes
+   * entries not already cataloged, so it's cheap after the first run. Drives the
+   * launcher/picker grouping (category + disciplines) for the full plugin set.
+   *
+   * @param {(done:number, total:number, name:string)=>void} [onProgress]
+   */
+  async primeCatalog(onProgress) {
+    const todo = this.#entries().filter((e) => !this.#catalog[e.key]?.id);
+    let done = 0;
+    for (const e of todo) {
+      try {
+        const manifest =
+          e.source != null
+            ? await this.#loader.probeManifestSource(e.source, e.name || e.key)
+            : await this.#loader.probeManifest(e.url);
+        this.#recordCatalog(e.key, manifest);
+      } catch (err) {
+        console.warn(`Manifest probe failed for ${e.key}`, err);
+      }
+      onProgress?.(++done, todo.length, this.#catalog[e.key]?.name || e.key);
+    }
   }
 
   /** Host-tracked origin for output attribution — the part a plugin can't forge. */
@@ -312,6 +345,7 @@ export class PluginManager {
         name: cat?.name ?? e.name ?? prettyName(e.url || e.key),
         category: cat?.category || 'Other',
         keywords: cat?.keywords ?? [],
+        disciplines: cat?.disciplines ?? [],
         enabled: !this.#disabled.has(e.key),
         loaded: cat?.id ? loaded.has(cat.id) : false,
         webAllowed: this.isWebAllowed(cat?.id),
