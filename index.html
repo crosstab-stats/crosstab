@@ -519,6 +519,17 @@
         width: 100%; box-sizing: border-box; font: inherit; margin: 0 0 8px;
         padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px;
       }
+      /* discipline filter row (pin plugins a field recommends to the top) */
+      .ct-plugins__filters { display: flex; gap: 8px; margin: 0 0 8px; }
+      .ct-plugins__filters .ct-plugins__search { margin: 0; flex: 1; width: auto; }
+      .ct-plugins__discipline {
+        font: inherit; padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px;
+        flex: none; max-width: 48%;
+      }
+      .ct-plugins__section {
+        font-size: 12px; font-weight: 700; color: #41505e;
+        padding: 12px 2px 4px; border-top: 1px solid var(--line); margin: 8px 0 2px;
+      }
       .ct-plugins { max-height: 320px; overflow: auto; }
       .ct-plugins__cat {
         font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #7a8590;

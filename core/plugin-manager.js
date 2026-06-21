@@ -396,33 +396,59 @@ export class PluginManager {
         <button type="button" class="ct-plugins__addbtn" data-act="url">+ Add from URL…</button>
         <button type="button" class="ct-plugins__addbtn" data-act="file">+ Add from file…</button>
       </div>
-      <input type="search" class="ct-plugins__search" placeholder="Search plugins…" autocomplete="off">
+      <div class="ct-plugins__filters">
+        <select class="ct-plugins__discipline" aria-label="Field / discipline"></select>
+        <input type="search" class="ct-plugins__search" placeholder="Search plugins…" autocomplete="off">
+      </div>
       <div class="ct-plugins__err" hidden></div>
       <div class="ct-plugins"></div>
       <menu class="ct-dialog__buttons"><button value="close" type="submit" class="ct-dialog__primary">Done</button></menu>`;
     const box = form.querySelector('.ct-plugins');
     const search = form.querySelector('.ct-plugins__search');
+    const discSel = form.querySelector('.ct-plugins__discipline');
     const errEl = form.querySelector('.ct-plugins__err');
     const setErr = (msg) => {
       errEl.textContent = msg || '';
       errEl.hidden = !msg;
     };
 
-    const renderList = () => {
-      const q = search.value.trim().toLowerCase();
-      const items = this.list().filter((p) => matchesQuery(p, q));
-      box.replaceChildren();
-      if (items.length === 0) {
-        box.append(el('p', 'No plugins match your search.', 'ct-plugins__empty'));
-        return;
-      }
-      for (const group of groupByCategory(items)) {
+    // Discipline filter: pin the plugins a field recommends to the top — the same
+    // self-declared `disciplines` the launcher's picker uses.
+    const disciplines = [...new Set(this.list().flatMap((p) => p.disciplines || []))].sort();
+    discSel.replaceChildren(new Option('All disciplines', 'All'));
+    for (const d of disciplines) discSel.append(new Option(d, d));
+
+    const renderGroups = (list) => {
+      for (const group of groupByCategory(list)) {
         box.append(el('div', group.category, 'ct-plugins__cat'));
         const ul = el('ul', null, 'ct-plugins__list');
         for (const p of group.items) ul.append(this.#row(p, renderList, setErr));
         box.append(ul);
       }
     };
+    const renderList = () => {
+      const q = search.value.trim().toLowerCase();
+      const disc = discSel.value;
+      const items = this.list().filter((p) => matchesQuery(p, q));
+      box.replaceChildren();
+      if (items.length === 0) {
+        box.append(el('p', 'No plugins match your search.', 'ct-plugins__empty'));
+        return;
+      }
+      if (disc && disc !== 'All') {
+        const pinned = items.filter((p) => (p.disciplines || []).includes(disc));
+        const rest = items.filter((p) => !(p.disciplines || []).includes(disc));
+        if (pinned.length) {
+          box.append(el('div', `Recommended for ${disc}`, 'ct-plugins__section'));
+          renderGroups(pinned);
+        }
+        box.append(el('div', pinned.length ? 'All other plugins' : 'All plugins', 'ct-plugins__section'));
+        renderGroups(rest);
+      } else {
+        renderGroups(items);
+      }
+    };
+    discSel.addEventListener('change', renderList);
 
     form.querySelector('[data-act="create"]').addEventListener('click', () => {
       setErr('');
