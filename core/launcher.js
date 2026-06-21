@@ -283,12 +283,8 @@ function markSeen() {
   try { localStorage.setItem(LS_SEEN, '1'); } catch { /* storage off */ }
 }
 
-const CATEGORY_ORDER = ['Import', 'Descriptive Statistics', 'Comparison', 'Compare Means', 'Correlation', 'Regression', 'Multivariate', 'Time Series', 'Survival', 'Categorical', 'Scale', 'Text', 'Resampling', 'Graphs', 'Export'];
-function categoryRank(c) {
-  if (c === 'Other') return 1000;
-  const i = CATEGORY_ORDER.indexOf(c);
-  return i >= 0 ? i : 500;
-}
+/** Group plugins into category sections, BOTH categories and the plugins within
+ * each sorted alphabetically — predictable for discovery. */
 function groupByCategory(items) {
   const byCat = new Map();
   for (const p of items) {
@@ -297,7 +293,7 @@ function groupByCategory(items) {
     byCat.get(c).push(p);
   }
   return [...byCat.keys()]
-    .sort((a, b) => categoryRank(a) - categoryRank(b) || a.localeCompare(b))
+    .sort((a, b) => a.localeCompare(b))
     .map((c) => ({ category: c, items: byCat.get(c).sort((x, y) => x.name.localeCompare(y.name)) }));
 }
 
