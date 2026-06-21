@@ -73,6 +73,7 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-econometrics/index.js',
   './plugins/builtin-aggregate/index.js',
   './plugins/builtin-bayesian/index.js',
+  './plugins/builtin-survey/index.js',
 ];
 
 /**
