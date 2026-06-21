@@ -24,7 +24,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Survival',
   keywords: ['survival', 'kaplan-meier', 'kaplan meier', 'log-rank', 'cox', 'proportional hazards', 'hazard ratio', 'time to event', 'censoring', 'event history'],
-  disciplines: ['Public Health', 'Gerontology', 'Sociology'],
+  disciplines: ['Public Health', 'Gerontology', 'Nutrition, Food & Dietetics', 'Sociology'],
   rPackages: ['survival', 'svglite'],
   menu: [
     {

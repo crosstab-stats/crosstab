@@ -19,6 +19,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Descriptive Statistics',
   keywords: ['chi-square', 'contingency', 'crosstab', 'association'],
+  disciplines: ['Social Science', 'Sociology', 'Liberal Studies', 'Political Science'],
   rPackages: [],
   menu: [
     {

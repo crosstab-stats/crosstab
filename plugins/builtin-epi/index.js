@@ -18,7 +18,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Categorical',
   keywords: ['epidemiology', 'risk ratio', 'relative risk', 'odds ratio', 'risk difference', 'nnt', 'number needed to treat', 'attributable', 'rr', 'or'],
-  disciplines: ['Public Health'],
+  disciplines: ['Public Health', 'Nutrition, Food & Dietetics', 'Gerontology'],
   rPackages: [],
   menu: [
     {

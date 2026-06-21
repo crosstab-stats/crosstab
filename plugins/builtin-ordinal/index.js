@@ -24,7 +24,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Regression',
   keywords: ['ordinal', 'multinomial', 'logistic', 'polr', 'proportional odds', 'multinom', 'likert', 'rrr', 'relative risk ratio', 'categorical outcome'],
-  disciplines: ['Sociology', 'Psychology', 'Political Science'],
+  disciplines: ['Social Science', 'Sociology', 'Psychology', 'Political Science'],
   rPackages: ['MASS', 'nnet'],
   menu: [
     {
