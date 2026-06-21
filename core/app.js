@@ -75,6 +75,7 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-bayesian/index.js',
   './plugins/builtin-survey/index.js',
   './plugins/builtin-sem/index.js',
+  './plugins/builtin-cluster/index.js',
 ];
 
 /**
