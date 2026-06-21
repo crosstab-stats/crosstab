@@ -217,13 +217,11 @@ export class PluginLoader {
       ctx.id = manifest.id;
       ctx.name = manifest.name || label;
 
-      // Pre-install declared R packages so the first analysis does not pay for
-      // it. Queued in the WebR job queue; awaited lazily by the eventual run().
-      if (manifest.rPackages?.length) {
-        this.#services.webr.installPackages(manifest.rPackages).catch((err) => {
-          console.warn(`Plugin "${manifest.id}": package preinstall failed`, err);
-        });
-      }
+      // NOTE: declared R packages are installed lazily on the plugin's first
+      // invoke (see #ensurePackages), NOT here. Eagerly installing every
+      // plugin's packages at load time fires dozens of concurrent WebR installs
+      // at app start once many plugins are registered, which overwhelms/wedges
+      // the runtime. Deferring to first real use keeps startup free of R work.
 
       await broker.sendActivate({ ...manifest, apiVersion: API_VERSION });
 
@@ -284,10 +282,30 @@ export class PluginLoader {
    * @param {any[]} [args]
    * @returns {Promise<any>}
    */
-  invoke(id, fn, args = []) {
+  async invoke(id, fn, args = []) {
     const record = this.#plugins.get(id);
     if (!record) throw new Error(`Plugin "${id}" is not loaded`);
+    await this.#ensurePackages(record);
     return record.broker.invoke(fn, args);
+  }
+
+  /**
+   * Install a plugin's declared R packages on first use, exactly once. The
+   * promise is cached on the plugin record so concurrent/later invokes reuse it;
+   * a failed install is not cached (so a later invoke can retry). Deferring to
+   * first invoke keeps app startup from firing every plugin's installs at once.
+   * @param {{manifest: PluginManifest, pkgs?: Promise<void>|null}} record
+   */
+  #ensurePackages(record) {
+    const pkgs = record.manifest.rPackages;
+    if (!pkgs?.length) return Promise.resolve();
+    if (!record.pkgs) {
+      record.pkgs = Promise.resolve(this.#services.webr.installPackages(pkgs)).catch((err) => {
+        record.pkgs = null; // allow retry on a later invoke
+        throw err;
+      });
+    }
+    return record.pkgs;
   }
 
   /** Bind the host-gathered inputs for a plugin's in-flight action (auto-injected
