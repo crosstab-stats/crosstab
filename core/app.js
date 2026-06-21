@@ -90,6 +90,7 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-cointegration/index.js',
   './plugins/builtin-limdep/index.js',
   './plugins/builtin-clusterse/index.js',
+  './plugins/builtin-imputation/index.js',
 ];
 
 /**
