@@ -257,10 +257,10 @@ export class ImportService {
         continue;
       }
 
-      // `selected` = a chosen subset of columns (null = all). `chunked` = import the
-      // whole wide file as joined narrow chunks. `cat` = the file's catalog.
+      // `selected` = a chosen subset of columns (null = all). `wide` = import the
+      // whole file out-of-core (one Parquet file). `cat` = the file's catalog.
       let selected = null;
-      let chunked = false;
+      let wide = false;
       let cat = null;
 
       if (spec.pick) {
@@ -270,10 +270,10 @@ export class ImportService {
         selected = await this.#pickVariables(file.name, cat);
         if (!selected || selected.length === 0) continue;
       } else {
-        // "Import all": one DuckDB table only works up to a data-volume ceiling
-        // (DuckDB-WASM's OPFS store can't accumulate much past ~1 GB). Above it,
-        // ask whether to import the whole file in chunks (joined behind the scenes)
-        // or pick a subset. Moderate files import whole with no prompt.
+        // "Import all": building one DuckDB table only works up to a data-volume
+        // ceiling (DuckDB-WASM's store can't accumulate much past ~600 MB). Above
+        // it, offer the out-of-core path (one Parquet file, read in place) or a
+        // subset. Moderate files import whole into a table with no prompt.
         cat = await this.#catalogOrError(file, format);
         if (!cat) continue;
         const rows = cat.rowCount >= 0 ? cat.rowCount : 100000;
@@ -281,8 +281,8 @@ export class ImportService {
         if (estParts > 8) {
           const choice = await askWideImport(file.name, cat.varCount, cat.rowCount);
           if (!choice) continue; // cancelled
-          if (choice === 'chunks') {
-            chunked = true;
+          if (choice === 'all') {
+            wide = true;
           } else {
             selected = await this.#pickVariables(file.name, cat);
             if (!selected || selected.length === 0) continue;
@@ -293,16 +293,16 @@ export class ImportService {
       const fileMode = mode === 'replace' && committed === 0 ? 'replace' : 'append';
       const tag = mode === 'replace' && files.length === 1 ? undefined : baseName(file.name);
       try {
-        if (chunked) {
-          // One read pass per column group, each encoded to a Parquet file (the
+        if (wide) {
+          // One streaming pass, encoded to a single out-of-core Parquet file (the
           // only path that handles the full GSS without OOMing DuckDB's write side).
-          await this.#data.loadChunked({
+          await this.#data.loadWide({
             mode: fileMode,
             source: tag,
             variables: cat.variables,
             rowCount: cat.rowCount,
-            streamGroup: (names, onBatch) =>
-              this.#readstat.stream(file, format, { variables: names, onVariables: () => {}, onBatch }),
+            stream: (onBatch) =>
+              this.#readstat.stream(file, format, { onVariables: () => {}, onBatch }),
           });
         } else {
           await this.#data.loadStreaming({
@@ -605,12 +605,12 @@ function askMode(fileCount, canJoin = false) {
 }
 
 /**
- * Ask how to handle a file too wide/large to import as one table: import the whole
- * thing **in chunks** (narrow tables joined behind the scenes) or **choose
- * variables** (a subset). Resolves to `'chunks'`, `'pick'`, or `null` (cancelled).
+ * Ask how to handle a file too wide/large for a normal table import: import **all**
+ * of it out-of-core (one Parquet file, read in place) or **choose variables** (a
+ * subset). Resolves to `'all'`, `'pick'`, or `null` (cancelled).
  *
  * @param {string} name @param {number} varCount @param {number} rowCount
- * @returns {Promise<'chunks'|'pick'|null>}
+ * @returns {Promise<'all'|'pick'|null>}
  */
 function askWideImport(name, varCount, rowCount) {
   return new Promise((resolve) => {
@@ -623,7 +623,7 @@ function askWideImport(name, varCount, rowCount) {
         <menu class="ct-dialog__buttons">
           <button value="cancel" type="submit">Cancel</button>
           <button value="pick" type="submit">Choose variables…</button>
-          <button value="chunks" type="submit" class="ct-dialog__primary">Import in chunks</button>
+          <button value="all" type="submit" class="ct-dialog__primary">Import all</button>
         </menu>
       </form>`;
     // Set dynamic text via textContent (the file name is untrusted-ish).
@@ -631,12 +631,12 @@ function askWideImport(name, varCount, rowCount) {
     dialog.querySelector('.ct-dialog__hint').textContent =
       `This file has ${varCount.toLocaleString()} variables` +
       (rowCount >= 0 ? ` × ${rowCount.toLocaleString()} rows` : '') +
-      ' — more than fit in one table. Import the whole file in chunks (all variables, ' +
-      'joined automatically), or pick just the variables you need?';
+      ' — too large for a normal import. Import all of it (kept on disk and read as ' +
+      'needed, so it stays responsive), or pick just the variables you need?';
     dialog.addEventListener('close', () => {
       const v = dialog.returnValue;
       dialog.remove();
-      resolve(['chunks', 'pick'].includes(v) ? v : null);
+      resolve(['all', 'pick'].includes(v) ? v : null);
     });
     document.body.append(dialog);
     dialog.showModal();

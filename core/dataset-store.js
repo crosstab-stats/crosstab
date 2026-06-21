@@ -156,6 +156,12 @@ export class DatasetStore {
         entry.joinKey = s.joinKey;
         entry.aliases = s.aliases ?? [];
       }
+      // Wide source: `file` is read_parquet-backed (not a table); flag it so restore
+      // re-registers it instead of loading it into a table.
+      if (s.wide) {
+        entry.wide = true;
+        entry.rowidBase = s.rowidBase;
+      }
       sources.push(entry);
     }
 
@@ -197,6 +203,8 @@ export class DatasetStore {
         combine: s.combine ?? 'base',
         joinKey: s.joinKey,
         aliases: s.aliases,
+        wide: s.wide ?? false,
+        rowidBase: s.rowidBase,
         parquet: new Uint8Array(buf),
       });
     }

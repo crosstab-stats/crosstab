@@ -112,6 +112,12 @@ export class ProjectStore {
           entry.joinKey = s.joinKey;
           entry.aliases = s.aliases ?? [];
         }
+        // A wide source's `file` is a single read_parquet-backed Parquet (not a
+        // table); the flag tells load/restore to re-register it rather than CTAS it.
+        if (s.wide) {
+          entry.wide = true;
+          entry.rowidBase = s.rowidBase;
+        }
         sources.push(entry);
       }
       datasets.push({
@@ -161,6 +167,8 @@ export class ProjectStore {
           combine: s.combine ?? 'base',
           joinKey: s.joinKey,
           aliases: s.aliases,
+          wide: s.wide ?? false,
+          rowidBase: s.rowidBase,
           parquet: new Uint8Array(buf),
         });
       }

@@ -288,8 +288,8 @@ export class DuckDBManager {
   /**
    * Stage Parquet bytes to an OPFS file and register it with DuckDB so queries can
    * `read_parquet('<name>')` it **without ever loading it into a table**. This is
-   * the foundation of the wide-dataset path: chunk data lives as OPFS Parquet files
-   * (written by a JS Parquet encoder), and the dataset view joins them via
+   * the foundation of the wide-dataset path: a very wide file is stored as one OPFS
+   * Parquet file (written by a JS encoder), and the dataset reads it with
    * `read_parquet` — DuckDB's read path is genuinely out-of-core, so it never hits
    * the buffer-pool/checkpoint OOM that ingesting into a table does.
    *
@@ -309,22 +309,39 @@ export class DuckDBManager {
   }
 
   /**
-   * Encode columnar data to Parquet (in JS) and register it as an OPFS file for
-   * `read_parquet`. The encoding happens entirely outside DuckDB, so arbitrarily
-   * wide/large chunks never enter DuckDB's buffer pool — the path that lets the
-   * full GSS (6,942 cols) be queried out-of-core.
+   * Open an **incremental** JS Parquet writer for a wide dataset: the caller feeds
+   * row groups one at a time (bounded memory — the uncompressed data never fully
+   * materialises), then finalises to a registered OPFS file. Encoding happens
+   * entirely outside DuckDB, so arbitrarily wide data (the full GSS, ~6,942 cols)
+   * never enters DuckDB's buffer pool; DuckDB only `read_parquet`s the result.
    *
-   * @param {string} name - OPFS file name to write/register.
-   * @param {Array<{name: string, data: ArrayLike<*>, type?: string}>} columnData
-   *   - hyparquet-writer column descriptors (numeric → `'DOUBLE'`, strings → auto).
-   * @returns {Promise<number>} bytes written.
+   * @param {Array<{name: string, type: 'numeric'|'string'}>} columns - Column schema
+   *   (numeric → DOUBLE, string → UTF8 BYTE_ARRAY), in order.
+   * @returns {Promise<{writeRowGroup: (columnData: Array<{name: string, data: ArrayLike<*>}>) => void, finalize: (name: string) => Promise<number>}>}
    */
-  async writeParquet(name, columnData) {
+  async openParquetWriter(columns) {
     if (!this.#parquetWriter) this.#parquetWriter = await import(/* @vite-ignore */ HYPARQUET_WRITER_URL);
-    const buffer = this.#parquetWriter.parquetWriteBuffer({ columnData });
-    const bytes = new Uint8Array(buffer);
-    await this.registerParquetFile(name, bytes);
-    return bytes.byteLength;
+    const W = this.#parquetWriter;
+    const schema = [{ name: 'root', num_children: columns.length }];
+    for (const c of columns) {
+      schema.push(
+        c.type === 'string'
+          ? { name: c.name, type: 'BYTE_ARRAY', converted_type: 'UTF8', repetition_type: 'OPTIONAL' }
+          : { name: c.name, type: 'DOUBLE', repetition_type: 'OPTIONAL' },
+      );
+    }
+    const bw = new W.ByteWriter();
+    const pw = new W.ParquetWriter({ writer: bw, schema, statistics: false });
+    return {
+      // One write() call == one row group (rowGroupSize huge so it isn't re-split).
+      writeRowGroup: (columnData) => pw.write({ columnData, rowGroupSize: 1_000_000_000 }),
+      finalize: async (name) => {
+        pw.finish();
+        const bytes = new Uint8Array(bw.getBuffer());
+        await this.registerParquetFile(name, bytes);
+        return bytes.byteLength;
+      },
+    };
   }
 
   /** Drop a file registered via {@link registerParquetFile}; optionally delete the
