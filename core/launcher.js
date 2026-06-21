@@ -185,8 +185,12 @@ export class Launcher {
 
     const grid = el('div', null, 'ctl__grid');
     for (const group of groupByCategory(items)) {
-      grid.append(el('div', group.category, 'ctl__cat'));
-      for (const p of group.items) grid.append(this.#pluginRow(p));
+      // Keep a category label with its plugins in one column block, so a
+      // single-plugin category doesn't float its lone row beside the header.
+      const g = el('div', null, 'ctl__catgroup');
+      g.append(el('div', group.category, 'ctl__cat'));
+      for (const p of group.items) g.append(this.#pluginRow(p));
+      grid.append(g);
     }
     if (!items.length) grid.append(el('div', 'None.', 'ctl__cat'));
     wrap.append(grid);
@@ -375,6 +379,7 @@ function injectStyles() {
     .ctl__linkbtn { font: inherit; font-size: 12px; background: none; border: 0; color: var(--accent, #2980b9); cursor: pointer; padding: 2px 4px; }
     .ctl__linkbtn:hover { text-decoration: underline; }
     .ctl__grid { columns: 2; column-gap: 22px; }
+    .ctl__catgroup { break-inside: avoid; -webkit-column-break-inside: avoid; display: block; }
     .ctl__cat { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: #9aa3ab;
       margin: 6px 0 2px; break-inside: avoid; }
     .ctl__plugin { display: flex; align-items: center; gap: 7px; padding: 3px 2px; font-size: 13.5px; cursor: pointer; break-inside: avoid; }
