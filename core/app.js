@@ -78,6 +78,7 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-cluster/index.js',
   './plugins/builtin-countmodels/index.js',
   './plugins/builtin-margins/index.js',
+  './plugins/builtin-ordinal/index.js',
 ];
 
 /**
