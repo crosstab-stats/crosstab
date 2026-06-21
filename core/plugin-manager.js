@@ -34,7 +34,7 @@ const LS_WEB = 'crosstab.plugins.web';
 /** Bump when the catalog shape OR built-in manifests' metadata change, so a
  * stale persisted catalog (e.g. missing newly-declared `disciplines`) is dropped
  * and re-probed on next load. */
-const CATALOG_VERSION = 4;
+const CATALOG_VERSION = 5;
 
 export class PluginManager {
   /** @type {import('./loader.js').PluginLoader} */
@@ -163,11 +163,15 @@ export class PluginManager {
       category: typeof manifest.category === 'string' ? manifest.category : '',
       keywords: Array.isArray(manifest.keywords) ? manifest.keywords : [],
       disciplines: Array.isArray(manifest.disciplines) ? manifest.disciplines : [],
-      // The plugin's menu-action labels — the "what you get" list shown on hover
-      // in the picker (ellipsis trimmed). Importers/exporters/legacy may lack a menu.
-      menu: Array.isArray(manifest.menu)
-        ? manifest.menu.map((m) => String(m?.label ?? '').replace(/\s*[.…]+\s*$/, '')).filter(Boolean)
-        : [],
+      // The plugin's action labels — the "what you get" list shown on hover in
+      // the picker (ellipsis trimmed). Aggregated across ALL the declarative
+      // action fields a plugin can expose, so importers/exporters are treated
+      // identically to analyses (none is privileged): menu (analyses), imports
+      // (file importers), exports (data exporters), outputExports (output exporters).
+      menu: ['menu', 'imports', 'exports', 'outputExports']
+        .flatMap((k) => (Array.isArray(manifest[k]) ? manifest[k] : []))
+        .map((m) => String(m?.label ?? '').replace(/\s*[.…]+\s*$/, ''))
+        .filter(Boolean),
     };
     writeJSON(LS_CATALOG, this.#catalog);
   }
