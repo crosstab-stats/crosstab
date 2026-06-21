@@ -122,7 +122,7 @@ export async function margins(app, { dv: dvName, ivs: ivNames, family, kind }) {
       labs <- c(); est <- c(); se <- c()
       for (v in vars) { x <- mf[[v]]
         if (is.numeric(x)) {
-          h <- diff(range(x, na.rm = TRUE)) * 1e-4; if (!is.finite(h) || h == 0) h <- 1e-4
+          h <- diff(range(x, na.rm = TRUE)) * 1e-5; if (!is.finite(h) || h == 0) h <- 1e-5
           dp <- base; dp[[v]] <- base[[v]] + h; dm <- base; dm[[v]] <- base[[v]] - h
           fun <- function(beta) mean((pred(beta, dp) - pred(beta, dm)) / (2 * h))
           gg <- grad(fun); labs <- c(labs, v); est <- c(est, fun(b)); se <- c(se, sqrt(as.numeric(t(gg) %*% V %*% gg)))
