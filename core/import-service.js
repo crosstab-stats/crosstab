@@ -270,28 +270,23 @@ export class ImportService {
         selected = await this.#pickVariables(file.name, cat);
         if (!selected || selected.length === 0) continue;
       } else {
-        // "Import all": building one DuckDB table only works up to a data-volume
-        // ceiling (DuckDB-WASM's store can't accumulate much past ~600 MB). Above
-        // it, offer the out-of-core path (one Parquet file, read in place) or a
-        // subset. Moderate files import whole into a table with no prompt.
+        // "Import all": small files go into a DuckDB table (snappy). Large files
+        // can't — DuckDB-WASM's store can't accumulate much past ~600 MB — so they
+        // import out-of-core to a single Parquet file read in place. This is a
+        // lossless full import either way (the storage choice is just an
+        // implementation detail), so it's automatic: no prompt. Users who want a
+        // subset use the "choose variables" importer.
         cat = await this.#catalogOrError(file, format);
         if (!cat) continue;
         const rows = cat.rowCount >= 0 ? cat.rowCount : 100000;
         const estParts = Math.ceil((cat.varCount * rows) / 4_000_000);
-        if (estParts > 8) {
-          const choice = await askWideImport(file.name, cat.varCount, cat.rowCount);
-          if (!choice) continue; // cancelled
-          if (choice === 'all') {
-            wide = true;
-          } else {
-            selected = await this.#pickVariables(file.name, cat);
-            if (!selected || selected.length === 0) continue;
-          }
-        }
+        if (estParts > 8) wide = true;
       }
 
       const fileMode = mode === 'replace' && committed === 0 ? 'replace' : 'append';
       const tag = mode === 'replace' && files.length === 1 ? undefined : baseName(file.name);
+      const progress = this.#progressEmitter(file.name, cat.rowCount);
+      this.#bus.emit('import:started', { importer: id, file: file.name });
       try {
         if (wide) {
           // One streaming pass, encoded to a single out-of-core Parquet file (the
@@ -301,10 +296,12 @@ export class ImportService {
             source: tag,
             variables: cat.variables,
             rowCount: cat.rowCount,
+            onProgress: (done) => progress(done),
             stream: (onBatch) =>
               this.#readstat.stream(file, format, { onVariables: () => {}, onBatch }),
           });
         } else {
+          let seen = 0;
           await this.#data.loadStreaming({
             mode: fileMode,
             source: tag,
@@ -312,7 +309,12 @@ export class ImportService {
               await this.#readstat.stream(file, format, {
                 variables: selected, // null = all columns (moderate whole import)
                 onVariables: (variables, storageTypes) => ctx.begin(variables, storageTypes),
-                onBatch: (columns) => ctx.batch(columns),
+                onBatch: (columns) => {
+                  const k = Object.keys(columns)[0];
+                  seen += k ? columns[k].length : 0;
+                  progress(seen);
+                  return ctx.batch(columns);
+                },
               });
             },
           });
@@ -321,6 +323,8 @@ export class ImportService {
       } catch (err) {
         this.#results.appendError(`Import of "${file.name}" failed: ${err.message}`);
         console.error('[import]', err);
+      } finally {
+        this.#bus.emit('import:ended', { importer: id, file: file.name });
       }
     }
     if (committed > 0) {
@@ -331,6 +335,19 @@ export class ImportService {
         rowCount: this.#data.rowCount,
       });
     }
+  }
+
+  /** A throttled "rows read" progress reporter for one file: emits `import:progress`
+   * at most every ~1,000 rows (and once at the end). Exact counts don't matter — it
+   * just keeps the busy indicator's "X / Y rows" climbing. */
+  #progressEmitter(fileName, total) {
+    let last = 0;
+    return (done) => {
+      if (done - last >= 1000 || (total >= 0 && done >= total)) {
+        last = done;
+        this.#bus.emit('import:progress', { file: fileName, done, total });
+      }
+    };
   }
 
   /** Read a file's variable catalog, reporting any error to the results pane. */
@@ -598,45 +615,6 @@ function askMode(fileCount, canJoin = false) {
       const v = dialog.returnValue;
       dialog.remove();
       resolve(['append', 'replace', 'join'].includes(v) ? v : null);
-    });
-    document.body.append(dialog);
-    dialog.showModal();
-  });
-}
-
-/**
- * Ask how to handle a file too wide/large for a normal table import: import **all**
- * of it out-of-core (one Parquet file, read in place) or **choose variables** (a
- * subset). Resolves to `'all'`, `'pick'`, or `null` (cancelled).
- *
- * @param {string} name @param {number} varCount @param {number} rowCount
- * @returns {Promise<'all'|'pick'|null>}
- */
-function askWideImport(name, varCount, rowCount) {
-  return new Promise((resolve) => {
-    const dialog = document.createElement('dialog');
-    dialog.className = 'ct-dialog';
-    dialog.innerHTML = `
-      <form method="dialog" class="ct-dialog__form">
-        <h2 class="ct-dialog__title"></h2>
-        <p class="ct-dialog__hint"></p>
-        <menu class="ct-dialog__buttons">
-          <button value="cancel" type="submit">Cancel</button>
-          <button value="pick" type="submit">Choose variables…</button>
-          <button value="all" type="submit" class="ct-dialog__primary">Import all</button>
-        </menu>
-      </form>`;
-    // Set dynamic text via textContent (the file name is untrusted-ish).
-    dialog.querySelector('.ct-dialog__title').textContent = `Large file: ${name}`;
-    dialog.querySelector('.ct-dialog__hint').textContent =
-      `This file has ${varCount.toLocaleString()} variables` +
-      (rowCount >= 0 ? ` × ${rowCount.toLocaleString()} rows` : '') +
-      ' — too large for a normal import. Import all of it (kept on disk and read as ' +
-      'needed, so it stays responsive), or pick just the variables you need?';
-    dialog.addEventListener('close', () => {
-      const v = dialog.returnValue;
-      dialog.remove();
-      resolve(['all', 'pick'].includes(v) ? v : null);
     });
     document.body.append(dialog);
     dialog.showModal();

@@ -466,6 +466,7 @@ function wireBusyIndicator(bus, el) {
   // mount → read sequence) would flicker the badge off/on between them. Track a
   // count and hide on a short delay so it stays up across a burst.
   let active = 0;
+  let importing = false;
   let hideTimer = null;
   const labels = {
     installPackages: 'Installing R packages (first run only)…',
@@ -474,24 +475,45 @@ function wireBusyIndicator(bus, el) {
     writeFile: 'Transferring data…',
     run: 'Running…',
   };
+  const show = (msg) => {
+    if (hideTimer) {
+      clearTimeout(hideTimer);
+      hideTimer = null;
+    }
+    if (text) text.textContent = msg;
+    el.hidden = false;
+  };
+  const scheduleHide = () => {
+    if (hideTimer) return;
+    hideTimer = setTimeout(() => {
+      hideTimer = null;
+      if (active === 0 && !importing) el.hidden = true;
+    }, 250);
+  };
   bus.on(CoreEvents.WEBR_JOB, ({ status, kind }) => {
     if (status === 'started') {
       active += 1;
-      if (hideTimer) {
-        clearTimeout(hideTimer);
-        hideTimer = null;
-      }
-      if (text) text.textContent = labels[kind] ?? 'Working…';
-      el.hidden = false;
+      show(labels[kind] ?? 'Working…');
     } else {
       active = Math.max(0, active - 1);
-      if (active === 0 && !hideTimer) {
-        hideTimer = setTimeout(() => {
-          hideTimer = null;
-          if (active === 0) el.hidden = true;
-        }, 250);
-      }
+      if (active === 0) scheduleHide();
     }
+  });
+  // Imports run on our own ReadStat worker (not WebR), so drive the badge directly
+  // and surface a live "rows read" count — the import is the slowest thing the user
+  // waits on, and we own the parser so the number is free.
+  bus.on('import:started', () => {
+    importing = true;
+    show('Reading file…');
+  });
+  bus.on('import:progress', ({ done, total }) => {
+    if (!importing) return;
+    const d = (done ?? 0).toLocaleString();
+    show(total >= 0 ? `Reading data… ${d} / ${total.toLocaleString()} rows` : `Reading data… ${d} rows`);
+  });
+  bus.on('import:ended', () => {
+    importing = false;
+    if (active === 0) scheduleHide();
   });
 }
 
