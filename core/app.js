@@ -92,6 +92,7 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-clusterse/index.js',
   './plugins/builtin-imputation/index.js',
   './plugins/builtin-epi/index.js',
+  './plugins/builtin-inequality/index.js',
 ];
 
 /**
