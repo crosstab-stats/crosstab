@@ -91,6 +91,7 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-limdep/index.js',
   './plugins/builtin-clusterse/index.js',
   './plugins/builtin-imputation/index.js',
+  './plugins/builtin-epi/index.js',
 ];
 
 /**
