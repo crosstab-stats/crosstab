@@ -68,7 +68,11 @@ export class Launcher {
   async applyPreset(name) {
     const preset = PRESETS[name];
     if (!preset) return false;
-    await this.#applySelection(new Set(preset.plugins));
+    // Presets (URL bypass) include infrastructure (importers/exporters) so the
+    // session is usable; the interactive picker, by contrast, is authoritative.
+    const want = new Set(preset.plugins);
+    for (const p of this.#plugins.list()) if (INFRA_CATEGORIES.has(p.category)) want.add(p.key);
+    await this.#applySelection(want);
     await this.#loadSource(preset.source);
     markSeen();
     return true;
@@ -204,19 +208,20 @@ export class Launcher {
   /** Diff the desired selection against current enabled state and apply live. */
   async #applySelection(desiredKeysOrIds) {
     const list = this.#plugins.list();
-    // Allow callers to pass ids (presets) or keys (UI). Build a key set.
+    // Allow callers to pass ids (presets) or keys (UI). Build a key set. The
+    // selection is authoritative — importers/exporters default ON (see
+    // #defaultSelection) but the user can deselect them and that sticks.
     const keySet = new Set();
     for (const p of list) {
       if (desiredKeysOrIds.has(p.key) || (p.id && desiredKeysOrIds.has(p.id))) keySet.add(p.key);
-      // Infrastructure is always on, regardless of the request.
-      if (INFRA_CATEGORIES.has(p.category)) keySet.add(p.key);
     }
-    // Diff against actual LOAD state (not the persisted enabled flag): boot no
-    // longer auto-loads, so a plugin can read enabled:true yet not be loaded.
+    // Diff against actual LOAD state (not the persisted enabled flag, which can
+    // drift): load what's wanted-but-not-loaded, unload what's loaded-but-not-
+    // wanted. setEnabled also persists the enabled/disabled flag either way.
     for (const p of list) {
       const want = keySet.has(p.key);
       if (want && !p.loaded) await this.#plugins.setEnabled(p.key, true);
-      else if (!want && p.enabled) await this.#plugins.setEnabled(p.key, false);
+      else if (!want && p.loaded) await this.#plugins.setEnabled(p.key, false);
     }
   }
 
