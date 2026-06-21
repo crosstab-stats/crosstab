@@ -301,14 +301,43 @@ export class VariableView {
   constructor(host, store) {
     this.host = host;
     this.store = store;
+    /** Current name/label filter text (persists across re-renders). */
+    this.filter = '';
+    /** Flex column so the filter toolbar stays put while the list scrolls (a class,
+     * not inline style, so `.view[hidden]` still wins when the tab is inactive). */
+    host.classList.add('ct-gridhost');
   }
 
   render() {
     const metas = this.store.getVariableMeta();
     if (metas.length === 0) {
+      this.tbody = null;
       this.host.innerHTML = '<p class="grid-empty">No data loaded. Use File ▸ Import.</p>';
       return;
     }
+    this.metas = metas;
+
+    // Toolbar: a filter box (matches name or label) + a live count. With thousands
+    // of variables, scanning the whole list to find one to recode is painful.
+    const toolbar = document.createElement('div');
+    toolbar.className = 'grid-toolbar';
+    const input = document.createElement('input');
+    input.type = 'search';
+    input.className = 'grid-filter';
+    input.placeholder = 'Filter variables by name or label…';
+    input.value = this.filter;
+    let debounce = null;
+    input.addEventListener('input', () => {
+      this.filter = input.value;
+      clearTimeout(debounce);
+      debounce = setTimeout(() => this.#applyFilter(), 100);
+    });
+    this.count = document.createElement('span');
+    this.count.className = 'grid-selcount';
+    toolbar.append(input, this.count);
+
+    const scroller = document.createElement('div');
+    scroller.className = 'grid-scroll';
     const table = document.createElement('table');
     table.className = 'vargrid';
     const head = document.createElement('tr');
@@ -316,9 +345,31 @@ export class VariableView {
       head.append(el('th', h));
     }
     table.append(elWrap('thead', head));
+    this.tbody = document.createElement('tbody');
+    table.append(this.tbody);
+    scroller.append(table);
 
-    const body = document.createElement('tbody');
-    for (const m of metas) {
+    this.host.replaceChildren(toolbar, scroller);
+    this.#applyFilter();
+  }
+
+  /** Rebuild the table body for the current filter (matched on name or label,
+   * case-insensitive). Cheap to call on every keystroke since it only rebuilds the
+   * — usually much smaller — matched set. */
+  #applyFilter() {
+    if (!this.tbody) return;
+    const q = this.filter.trim().toLowerCase();
+    const shown = q
+      ? this.metas.filter(
+          (m) => m.name.toLowerCase().includes(q) || (m.label || '').toLowerCase().includes(q),
+        )
+      : this.metas;
+    this.count.textContent = q
+      ? `${shown.length.toLocaleString()} of ${this.metas.length.toLocaleString()}`
+      : `${this.metas.length.toLocaleString()} variable${this.metas.length === 1 ? '' : 's'}`;
+
+    const frag = document.createDocumentFragment();
+    for (const m of shown) {
       const tr = document.createElement('tr');
       tr.className = 'vargrid__row';
       tr.title = 'Click to edit';
@@ -329,10 +380,15 @@ export class VariableView {
       tr.append(el('td', summariseLabels(m.valueLabels)));
       tr.append(el('td', (m.missingValues || []).join(', ')));
       tr.addEventListener('click', () => this.#openEditor(m));
-      body.append(tr);
+      frag.append(tr);
     }
-    table.append(body);
-    this.host.replaceChildren(table);
+    if (shown.length === 0) {
+      const td = el('td', `No variables match “${this.filter.trim()}”.`);
+      td.colSpan = 6;
+      td.style.cssText = 'color:#7a8590;';
+      frag.append(elWrap('tr', td));
+    }
+    this.tbody.replaceChildren(frag);
   }
 
   /**
