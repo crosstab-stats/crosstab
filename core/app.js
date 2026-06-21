@@ -87,6 +87,7 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-meta/index.js',
   './plugins/builtin-mixedanova/index.js',
   './plugins/builtin-var/index.js',
+  './plugins/builtin-cointegration/index.js',
 ];
 
 /**
