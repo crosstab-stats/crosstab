@@ -67,6 +67,13 @@ const ROWID_COL = '__ct_rid';
  * trip exactly. (Ids are also passed as digit strings, never parsed to float.) */
 const ROWID_STRIDE = 1_000_000_000;
 
+/** Per-row sequential index shared by the narrow tables of a **chunked source**
+ * (a very wide file split into column groups). All chunk tables of one source
+ * carry identical `__ct_row` values (assigned in import order), so the source's
+ * full row is reassembled by joining the chunks on it — without ever materialising
+ * the wide table. The row id is then derived from it. Internal; never a variable. */
+const CT_ROW = '__ct_row';
+
 /** Log op types that are *data transforms* (vs. load/append/join source ops).
  * `getTransforms()` and the persisted `transforms` array carry only these. */
 const DATA_OPS = new Set(['setVariable', 'setCell', 'computeVar', 'recodeVar']);
@@ -172,6 +179,10 @@ export class DataStore {
   /** Every source table this dataset has materialised, for reliable cleanup
    * (undone/redo-discarded sources would otherwise leak until dispose). @type {Set<string>} */
   #sourceTables = new Set();
+
+  /** Every registered OPFS Parquet chunk file (from wide chunked sources), for the
+   * same reliable cleanup — these are files, not tables. @type {Set<string>} */
+  #chunkFiles = new Set();
 
   /**
    * DERIVED: variable metadata in display order — the synchronous cache the UI
@@ -363,6 +374,106 @@ export class DataStore {
     await this.rederive(combine);
   }
 
+  /**
+   * Load a **very wide** file as a *chunked source*: the columns are split into
+   * narrow groups (≤ `chunkCols` each) and each group is encoded — in JS, outside
+   * DuckDB — to a narrow Parquet **file** on OPFS, all sharing a `__ct_row` index.
+   * The dataset's view then joins those files with `read_parquet` on that index.
+   *
+   * Why files, not tables: ingesting the full GSS (~6,942 cols) into DuckDB tables
+   * FATAL-OOMs — DuckDB-WASM's checkpoint can't accumulate past ~600 MB and can't
+   * spill (OPFS temp is unimplemented). Encoding Parquet in JS bypasses the whole
+   * write/checkpoint path; DuckDB only ever *reads* the files, which is genuinely
+   * out-of-core (the full 6,942-col join runs in ~0.8 s using ~2 MB of heap).
+   *
+   * One file read per group (the file is re-streamed for each group's columns), so
+   * this is slower than a single pass but bounded in memory (one chunk buffered at
+   * a time).
+   *
+   * @param {Object} opts
+   * @param {'replace'|'append'} [opts.mode='replace']
+   * @param {string} [opts.source]
+   * @param {number} [opts.chunkCols=300] - Max columns per chunk file.
+   * @param {import('./data-store.js').VariableMeta[]} opts.variables - The full file
+   *   catalog (drives the column split and the source metadata).
+   * @param {number} opts.rowCount - Total rows (from the catalog), to size buffers.
+   * @param {(gi: number, total: number) => void} [opts.onProgress] - Per-group tick.
+   * @param {(names: string[], onBatch: (columns: object) => Promise<void>) => Promise<void>} opts.streamGroup
+   *   - Stream just `names` from the file once, calling `onBatch` per chunk of rows.
+   * @returns {Promise<void>}
+   */
+  async loadChunked({ mode = 'replace', source, chunkCols = 300, variables, rowCount, onProgress, streamGroup }) {
+    if (!Array.isArray(variables) || variables.length === 0) {
+      throw new Error('loadChunked: variables (the file catalog) are required');
+    }
+    if (!(rowCount >= 0)) throw new Error('loadChunked: a non-negative rowCount is required');
+    const combine = this.#hasData() && mode === 'append' ? 'append' : 'replace';
+    if (combine === 'replace') await this.#dropAll();
+
+    const seq = ++this.#sourceSeq;
+    const base = seq * ROWID_STRIDE;
+    const prefix = `${this.#sourcePrefix}${seq}__c`;
+
+    const groups = [];
+    for (let i = 0; i < variables.length; i += chunkCols) groups.push(variables.slice(i, i + chunkCols));
+    const chunkFiles = [];
+
+    try {
+      for (let gi = 0; gi < groups.length; gi++) {
+        const group = groups[gi];
+        const names = group.map((v) => v.name);
+        // Buffer the whole (narrow) chunk into preallocated column arrays, then
+        // encode it to one Parquet file. Strings stay as arrays; numerics as
+        // Float64Array (NaN is our missing sentinel, preserved as a non-null NaN).
+        const acc = {};
+        for (const v of group) acc[v.name] = v.type === 'string' ? new Array(rowCount) : new Float64Array(rowCount);
+        const rowIdx = new Float64Array(rowCount);
+        let off = 0;
+        await streamGroup(names, (columns) => {
+          const first = names[0];
+          const n = first && columns[first] ? columns[first].length : 0;
+          for (const v of group) {
+            const src = columns[v.name];
+            const dst = acc[v.name];
+            if (v.type === 'string') for (let k = 0; k < n; k++) dst[off + k] = src[k];
+            else dst.set(src, off);
+          }
+          for (let k = 0; k < n; k++) rowIdx[off + k] = off + k;
+          off += n;
+        });
+        const columnData = group.map((v) => ({
+          name: v.name,
+          data: acc[v.name],
+          ...(v.type === 'string' ? {} : { type: 'DOUBLE' }),
+        }));
+        columnData.push({ name: CT_ROW, data: rowIdx, type: 'DOUBLE' });
+        const fname = `${prefix}${gi}.parquet`;
+        await this.#duckdb.writeParquet(fname, columnData);
+        chunkFiles.push(fname);
+        this.#chunkFiles.add(fname);
+        onProgress?.(gi + 1, groups.length);
+      }
+    } catch (err) {
+      for (const f of chunkFiles) {
+        this.#chunkFiles.delete(f);
+        try { await this.#duckdb.dropRegisteredFile(f, { removeFromOpfs: true }); } catch { /* best-effort */ }
+      }
+      throw err;
+    }
+
+    const src = {
+      chunked: true,
+      chunkFiles,
+      rowidBase: base,
+      meta: variables.map((m) => ({ ...m })),
+      label: source ?? null,
+    };
+    if (combine === 'replace') this.#log = [{ type: 'load', src }];
+    else this.#log.push({ type: 'append', src });
+    this.#redoStack = [];
+    await this.rederive(combine);
+  }
+
   /** Whether any data is loaded (the log has a source op). */
   #hasData() {
     return this.#sourceOps().length > 0;
@@ -401,6 +512,30 @@ export class DataStore {
     return { table, meta: variables.map((m) => ({ ...m })), label: source ?? null };
   }
 
+  /** Restore a chunked source from its persisted per-chunk Parquet bytes: write
+   * each chunk file back to OPFS and register it for `read_parquet` (the chunks
+   * carry `__ct_row`). The saved row-id base is kept so row ids are stable across
+   * save/restore. */
+  async #restoreChunkedSource(src) {
+    const seq = ++this.#sourceSeq;
+    const prefix = `${this.#sourcePrefix}${seq}__c`;
+    const chunkFiles = [];
+    const chunks = src.chunks ?? [];
+    for (let ci = 0; ci < chunks.length; ci++) {
+      const fname = `${prefix}${ci}.parquet`;
+      await this.#duckdb.registerParquetFile(fname, chunks[ci]);
+      this.#chunkFiles.add(fname);
+      chunkFiles.push(fname);
+    }
+    return {
+      chunked: true,
+      chunkFiles,
+      rowidBase: src.rowidBase ?? seq * ROWID_STRIDE,
+      meta: src.meta.map((m) => ({ ...m })),
+      label: src.label ?? null,
+    };
+  }
+
   /**
    * Bake the stable {@link ROWID_COL} into a freshly created source — unless it
    * already carries one (the restore path: the id was persisted in the source
@@ -423,14 +558,19 @@ export class DataStore {
     );
   }
 
-  /** Drop the working view and every source table this dataset ever materialised
-   * (including ones left by undone/discarded ops); reset the log. */
+  /** Drop the working view, every source table, and every registered chunk file
+   * this dataset ever materialised (including ones left by undone/discarded ops);
+   * reset the log. */
   async #dropAll() {
     await this.#duckdb.query(`DROP VIEW IF EXISTS ${quoteIdent(this.#view)}`);
     for (const table of this.#sourceTables) {
       await this.#duckdb.query(`DROP TABLE IF EXISTS ${quoteIdent(table)}`);
     }
     this.#sourceTables.clear();
+    for (const file of this.#chunkFiles) {
+      try { await this.#duckdb.dropRegisteredFile(file, { removeFromOpfs: true }); } catch { /* best-effort */ }
+    }
+    this.#chunkFiles.clear();
     this.#log = [];
     this.#redoStack = [];
   }
@@ -541,14 +681,34 @@ export class DataStore {
   }
 
   /** One immutable source's SELECT: its columns (numeric-typed → cast to DOUBLE),
-   * the stable row id, and (when pooling >1 stacked source) a `source_file` tag. */
+   * the stable row id, and (when pooling >1 stacked source) a `source_file` tag.
+   * A chunked source inlines a join across its narrow chunk tables on `__ct_row`
+   * (projection pushdown means a read only scans the chunks it needs); its row id
+   * is derived from that index. */
   #sourceSelectSql(src, multiStacked) {
     const colExprs = src.meta.map((col) => {
       const q = quoteIdent(col.name);
       return col.type === 'numeric' ? `TRY_CAST(${q} AS DOUBLE) AS ${q}` : q;
     });
-    colExprs.push(quoteIdent(ROWID_COL));
     const prov = multiStacked ? `, ${sqlString(src.label ?? 'dataset')} AS ${quoteIdent(SOURCE_COL)}` : '';
+
+    if (src.chunked) {
+      const from = src.chunkFiles
+        .map((f, i) =>
+          i === 0
+            ? `read_parquet(${sqlString(f)}) AS k0`
+            : `JOIN read_parquet(${sqlString(f)}) AS k${i} ON k${i}.${quoteIdent(CT_ROW)} = k0.${quoteIdent(CT_ROW)}`,
+        )
+        .join(' ');
+      // Data columns are disjoint across chunks, so unqualified names are
+      // unambiguous; only the shared __ct_row is qualified (to k0).
+      colExprs.push(
+        `CAST(${src.rowidBase} AS BIGINT) + CAST(k0.${quoteIdent(CT_ROW)} AS BIGINT) + 1 AS ${quoteIdent(ROWID_COL)}`,
+      );
+      return `SELECT ${colExprs.join(', ')}${prov} FROM ${from}`;
+    }
+
+    colExprs.push(quoteIdent(ROWID_COL));
     return `SELECT ${colExprs.join(', ')}${prov} FROM ${quoteIdent(src.table)}`;
   }
 
@@ -876,7 +1036,18 @@ export class DataStore {
         entry.joinKey = op.joinKey;
         entry.aliases = op.aliases ?? [];
       }
-      if (includeParquet) {
+      if (op.src.chunked) {
+        // Persist each narrow chunk file's bytes (reading them back is cheap and
+        // never materialises the wide table); keep the row-id base stable.
+        entry.chunked = true;
+        entry.rowidBase = op.src.rowidBase;
+        if (includeParquet) {
+          entry.chunks = [];
+          for (const f of op.src.chunkFiles) {
+            entry.chunks.push(await this.#duckdb.readOpfsFile(f));
+          }
+        }
+      } else if (includeParquet) {
         entry.parquet = await this.#duckdb.queryToParquet(`SELECT * FROM ${quoteIdent(op.src.table)}`);
       }
       sources.push(entry);
@@ -915,7 +1086,9 @@ export class DataStore {
     const srcOps = [];
     for (let i = 0; i < srcs.length; i++) {
       const src = srcs[i];
-      const created = await this.#createSource({ variables: src.meta, parquet: src.parquet, source: src.label });
+      const created = src.chunked
+        ? await this.#restoreChunkedSource(src)
+        : await this.#createSource({ variables: src.meta, parquet: src.parquet, source: src.label });
       const type = i === 0 ? 'load' : src.combine === 'join' ? 'join' : 'append';
       srcOps.push(type === 'join' ? { type, src: created, joinKey: src.joinKey, aliases: src.aliases ?? [] } : { type, src: created });
     }

@@ -47,6 +47,14 @@ const DUCKDB_URL = 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev5
 const ARROW_URL = 'https://cdn.jsdelivr.net/npm/apache-arrow@17.0.0/+esm';
 
 /**
+ * Pure-JS Parquet writer. Used by the wide-dataset path to encode column chunks to
+ * Parquet **outside** DuckDB, so big data never passes through DuckDB's write/
+ * checkpoint machinery (which OOMs in wasm past ~600 MB). The files are then read
+ * back via DuckDB's out-of-core `read_parquet`. @type {string}
+ */
+const HYPARQUET_WRITER_URL = 'https://cdn.jsdelivr.net/npm/hyparquet-writer@0.16.1/+esm';
+
+/**
  * Manages the lifecycle of, and access to, the single DuckDB-WASM runtime.
  */
 export class DuckDBManager {
@@ -67,6 +75,9 @@ export class DuckDBManager {
 
   /** In-flight init promise, so concurrent first-callers share one init. */
   #initPromise = null;
+
+  /** Lazily-imported JS Parquet writer module (loaded on first wide import). */
+  #parquetWriter = null;
 
   /** @returns {boolean} True once the runtime is initialised and ready. */
   get isReady() {
@@ -272,6 +283,66 @@ export class DuckDBManager {
     };
 
     return { addBatch, finish };
+  }
+
+  /**
+   * Stage Parquet bytes to an OPFS file and register it with DuckDB so queries can
+   * `read_parquet('<name>')` it **without ever loading it into a table**. This is
+   * the foundation of the wide-dataset path: chunk data lives as OPFS Parquet files
+   * (written by a JS Parquet encoder), and the dataset view joins them via
+   * `read_parquet` — DuckDB's read path is genuinely out-of-core, so it never hits
+   * the buffer-pool/checkpoint OOM that ingesting into a table does.
+   *
+   * @param {string} name - File name to register (also the OPFS file name).
+   * @param {Uint8Array} bytes - Parquet file bytes.
+   * @returns {Promise<void>}
+   */
+  async registerParquetFile(name, bytes) {
+    await this.#ensureReady();
+    const PROT = this.#duckdb.DuckDBDataProtocol.BROWSER_FSACCESS;
+    const root = await navigator.storage.getDirectory();
+    const handle = await root.getFileHandle(name, { create: true });
+    const writable = await handle.createWritable();
+    await writable.write(bytes);
+    await writable.close();
+    await this.#db.registerFileHandle(name, handle, PROT, true);
+  }
+
+  /**
+   * Encode columnar data to Parquet (in JS) and register it as an OPFS file for
+   * `read_parquet`. The encoding happens entirely outside DuckDB, so arbitrarily
+   * wide/large chunks never enter DuckDB's buffer pool — the path that lets the
+   * full GSS (6,942 cols) be queried out-of-core.
+   *
+   * @param {string} name - OPFS file name to write/register.
+   * @param {Array<{name: string, data: ArrayLike<*>, type?: string}>} columnData
+   *   - hyparquet-writer column descriptors (numeric → `'DOUBLE'`, strings → auto).
+   * @returns {Promise<number>} bytes written.
+   */
+  async writeParquet(name, columnData) {
+    if (!this.#parquetWriter) this.#parquetWriter = await import(/* @vite-ignore */ HYPARQUET_WRITER_URL);
+    const buffer = this.#parquetWriter.parquetWriteBuffer({ columnData });
+    const bytes = new Uint8Array(buffer);
+    await this.registerParquetFile(name, bytes);
+    return bytes.byteLength;
+  }
+
+  /** Drop a file registered via {@link registerParquetFile}; optionally delete the
+   * backing OPFS file too (otherwise it persists for a later session to re-register). */
+  async dropRegisteredFile(name, { removeFromOpfs = false } = {}) {
+    try { await this.#db.dropFile(name); } catch { /* best-effort */ }
+    if (removeFromOpfs) {
+      try { const root = await navigator.storage.getDirectory(); await root.removeEntry(name); } catch { /* best-effort */ }
+    }
+  }
+
+  /** Read Parquet bytes back from an OPFS file registered earlier (for persistence
+   * export). @param {string} name @returns {Promise<Uint8Array>} */
+  async readOpfsFile(name) {
+    const root = await navigator.storage.getDirectory();
+    const handle = await root.getFileHandle(name);
+    const file = await handle.getFile();
+    return new Uint8Array(await file.arrayBuffer());
   }
 
   /** Best-effort removal of any leftover streaming-ingest part files for a table

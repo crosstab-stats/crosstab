@@ -257,74 +257,66 @@ export class ImportService {
         continue;
       }
 
-      // Guard the "import all" path: building one DuckDB table from a *very wide*
-      // file needs many wide on-disk parts, which currently fails (a DuckDB-WASM
-      // OPFS limitation). Catalog first (cheap) and steer to choose-variables when
-      // a full import would be too wide. Moderate files (≲1000 vars) import whole.
-      if (!spec.pick) {
-        let cat;
-        try {
-          cat = await this.#readstat.catalog(file, format);
-        } catch (err) {
-          this.#results.appendError(`Could not read "${file.name}": ${err.message}`);
-          continue;
-        }
-        // Guard on total data volume, not just width. DuckDB-WASM's OPFS store
-        // can't reliably accumulate much past ~1 GB (checkpoints OOM, buffer pages
-        // don't evict) — a whole-file import of a large dataset fails regardless of
-        // how wide it is. Estimate the on-disk parts (~32 MB each); above ~8
-        // (~250 MB+) steer to choose-variables, which imports a bounded subset.
+      // `selected` = a chosen subset of columns (null = all). `chunked` = import the
+      // whole wide file as joined narrow chunks. `cat` = the file's catalog.
+      let selected = null;
+      let chunked = false;
+      let cat = null;
+
+      if (spec.pick) {
+        // Explicit "choose variables" importer: catalog, then pick a subset.
+        cat = await this.#catalogOrError(file, format);
+        if (!cat) continue;
+        selected = await this.#pickVariables(file.name, cat);
+        if (!selected || selected.length === 0) continue;
+      } else {
+        // "Import all": one DuckDB table only works up to a data-volume ceiling
+        // (DuckDB-WASM's OPFS store can't accumulate much past ~1 GB). Above it,
+        // ask whether to import the whole file in chunks (joined behind the scenes)
+        // or pick a subset. Moderate files import whole with no prompt.
+        cat = await this.#catalogOrError(file, format);
+        if (!cat) continue;
         const rows = cat.rowCount >= 0 ? cat.rowCount : 100000;
         const estParts = Math.ceil((cat.varCount * rows) / 4_000_000);
         if (estParts > 8) {
-          this.#results.appendError(
-            `“${file.name}” is too large to import whole (${cat.varCount.toLocaleString()} variables × ` +
-              `${cat.rowCount >= 0 ? cat.rowCount.toLocaleString() + ' rows' : 'many rows'}). Use ` +
-              `“File ▸ Import ▸ SPSS / Stata / SAS — choose variables…” to import the columns you need.`,
-          );
-          continue;
+          const choice = await askWideImport(file.name, cat.varCount, cat.rowCount);
+          if (!choice) continue; // cancelled
+          if (choice === 'chunks') {
+            chunked = true;
+          } else {
+            selected = await this.#pickVariables(file.name, cat);
+            if (!selected || selected.length === 0) continue;
+          }
         }
-      }
-
-      // A `pick` importer reads the variable catalog first (cheap, no data) and lets
-      // the user choose a subset — the memory-bounded path for huge/wide files.
-      let selected = null;
-      if (spec.pick) {
-        let cat;
-        try {
-          cat = await this.#readstat.catalog(file, format);
-        } catch (err) {
-          this.#results.appendError(`Could not read variables from "${file.name}": ${err.message}`);
-          continue;
-        }
-        selected = await this.#ui.selectFromList({
-          title: `Choose variables — ${file.name}`,
-          hint:
-            `${cat.varCount.toLocaleString()} variables` +
-            (cat.rowCount >= 0 ? ` · ${cat.rowCount.toLocaleString()} rows` : '') +
-            '. Pick the ones to import (search to filter).',
-          items: cat.variables.map((v) => ({ value: v.name, label: v.label ? `${v.label} (${v.name})` : v.name })),
-          multiple: true,
-          okLabel: 'Import selected',
-          searchPlaceholder: 'Filter by name or label…',
-        });
-        if (!selected || selected.length === 0) continue; // cancelled / nothing picked
       }
 
       const fileMode = mode === 'replace' && committed === 0 ? 'replace' : 'append';
       const tag = mode === 'replace' && files.length === 1 ? undefined : baseName(file.name);
       try {
-        await this.#data.loadStreaming({
-          mode: fileMode,
-          source: tag,
-          ingest: async (ctx) => {
-            await this.#readstat.stream(file, format, {
-              variables: selected,
-              onVariables: (variables, storageTypes) => ctx.begin(variables, storageTypes),
-              onBatch: (columns) => ctx.batch(columns),
-            });
-          },
-        });
+        if (chunked) {
+          // One read pass per column group, each encoded to a Parquet file (the
+          // only path that handles the full GSS without OOMing DuckDB's write side).
+          await this.#data.loadChunked({
+            mode: fileMode,
+            source: tag,
+            variables: cat.variables,
+            rowCount: cat.rowCount,
+            streamGroup: (names, onBatch) =>
+              this.#readstat.stream(file, format, { variables: names, onVariables: () => {}, onBatch }),
+          });
+        } else {
+          await this.#data.loadStreaming({
+            mode: fileMode,
+            source: tag,
+            ingest: async (ctx) => {
+              await this.#readstat.stream(file, format, {
+                variables: selected, // null = all columns (moderate whole import)
+                onVariables: (variables, storageTypes) => ctx.begin(variables, storageTypes),
+                onBatch: (columns) => ctx.batch(columns),
+              });
+            },
+          });
+        }
         committed += 1;
       } catch (err) {
         this.#results.appendError(`Import of "${file.name}" failed: ${err.message}`);
@@ -339,6 +331,32 @@ export class ImportService {
         rowCount: this.#data.rowCount,
       });
     }
+  }
+
+  /** Read a file's variable catalog, reporting any error to the results pane. */
+  async #catalogOrError(file, format) {
+    try {
+      return await this.#readstat.catalog(file, format);
+    } catch (err) {
+      this.#results.appendError(`Could not read "${file.name}": ${err.message}`);
+      return null;
+    }
+  }
+
+  /** Show the searchable variable picker over a catalog; resolves to chosen names
+   * (or null/empty if cancelled). */
+  #pickVariables(name, cat) {
+    return this.#ui.selectFromList({
+      title: `Choose variables — ${name}`,
+      hint:
+        `${cat.varCount.toLocaleString()} variables` +
+        (cat.rowCount >= 0 ? ` · ${cat.rowCount.toLocaleString()} rows` : '') +
+        '. Pick the ones to import (search to filter).',
+      items: cat.variables.map((v) => ({ value: v.name, label: v.label ? `${v.label} (${v.name})` : v.name })),
+      multiple: true,
+      okLabel: 'Import selected',
+      searchPlaceholder: 'Filter by name or label…',
+    });
   }
 
   /**
@@ -580,6 +598,45 @@ function askMode(fileCount, canJoin = false) {
       const v = dialog.returnValue;
       dialog.remove();
       resolve(['append', 'replace', 'join'].includes(v) ? v : null);
+    });
+    document.body.append(dialog);
+    dialog.showModal();
+  });
+}
+
+/**
+ * Ask how to handle a file too wide/large to import as one table: import the whole
+ * thing **in chunks** (narrow tables joined behind the scenes) or **choose
+ * variables** (a subset). Resolves to `'chunks'`, `'pick'`, or `null` (cancelled).
+ *
+ * @param {string} name @param {number} varCount @param {number} rowCount
+ * @returns {Promise<'chunks'|'pick'|null>}
+ */
+function askWideImport(name, varCount, rowCount) {
+  return new Promise((resolve) => {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'ct-dialog';
+    dialog.innerHTML = `
+      <form method="dialog" class="ct-dialog__form">
+        <h2 class="ct-dialog__title"></h2>
+        <p class="ct-dialog__hint"></p>
+        <menu class="ct-dialog__buttons">
+          <button value="cancel" type="submit">Cancel</button>
+          <button value="pick" type="submit">Choose variables…</button>
+          <button value="chunks" type="submit" class="ct-dialog__primary">Import in chunks</button>
+        </menu>
+      </form>`;
+    // Set dynamic text via textContent (the file name is untrusted-ish).
+    dialog.querySelector('.ct-dialog__title').textContent = `Large file: ${name}`;
+    dialog.querySelector('.ct-dialog__hint').textContent =
+      `This file has ${varCount.toLocaleString()} variables` +
+      (rowCount >= 0 ? ` × ${rowCount.toLocaleString()} rows` : '') +
+      ' — more than fit in one table. Import the whole file in chunks (all variables, ' +
+      'joined automatically), or pick just the variables you need?';
+    dialog.addEventListener('close', () => {
+      const v = dialog.returnValue;
+      dialog.remove();
+      resolve(['chunks', 'pick'].includes(v) ? v : null);
     });
     document.body.append(dialog);
     dialog.showModal();

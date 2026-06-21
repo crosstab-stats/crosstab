@@ -227,6 +227,9 @@ export class DatasetManager {
   loadStreaming(o) {
     return this.active.loadStreaming(o);
   }
+  loadChunked(o) {
+    return this.active.loadChunked(o);
+  }
   getDataFrame(o) {
     return this.active.getDataFrame(o);
   }
