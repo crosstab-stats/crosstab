@@ -77,6 +77,7 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-sem/index.js',
   './plugins/builtin-cluster/index.js',
   './plugins/builtin-countmodels/index.js',
+  './plugins/builtin-margins/index.js',
 ];
 
 /**
