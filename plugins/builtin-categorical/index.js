@@ -60,8 +60,116 @@ export const manifest = {
         { name: 'v2', kind: 'variables', label: 'Variable 2', types: ['factor', 'string', 'numeric'], unique: true },
       ],
     },
+    {
+      label: 'Log-linear model…',
+      run: 'loglinear',
+      order: 50,
+      inputs: [
+        { name: 'vars', kind: 'variables', label: 'Categorical variables (2–4)', types: ['factor', 'string', 'numeric'], multiple: true, unique: true },
+        { name: 'model', kind: 'choice', label: 'Model', default: 'homogeneous', options: [
+          { value: 'independence', label: 'Mutual independence (main effects only)' },
+          { value: 'homogeneous', label: 'Homogeneous association (all two-way)' },
+          { value: 'saturated', label: 'Saturated (all interactions)' },
+        ] },
+      ],
+    },
   ],
 };
+
+/**
+ * Log-linear analysis of a multiway contingency table via a Poisson GLM on the
+ * cell counts. Reports the model goodness-of-fit (likelihood-ratio G² and
+ * Pearson χ²) and a `drop1` likelihood-ratio test of each term, which tells you
+ * which associations the data actually require.
+ * @param {object} app
+ * @param {{vars: string[], model: string}} inputs
+ */
+export async function loglinear(app, { vars, model }) {
+  if (!vars || vars.length < 2) {
+    await app.results.appendError('Log-linear model: choose at least two categorical variables.');
+    return;
+  }
+  const meta = metaMap(await app.data.getVariableMeta());
+  const recodes = vars
+    .map((n) => {
+      const mv = missing(meta, n);
+      const col = `vars[[${rStr(n)}]]`;
+      return mv.length ? `${col}[${col} %in% c(${mv.join(', ')})] <- NA` : '';
+    })
+    .filter(Boolean)
+    .join('\n');
+  const X = vars.map((_, i) => `X${i + 1}`);
+  const terms = model === 'independence' ? X.join(' + ') : model === 'saturated' ? X.join(' * ') : `(${X.join(' + ')})^2`;
+  const modelLabel = { independence: 'Mutual independence', homogeneous: 'Homogeneous association (all two-way)', saturated: 'Saturated' }[model] || model;
+  const rCode = `
+    ${recodes}
+    vv <- as.data.frame(lapply(vars, function(c) factor(c)), check.names = FALSE)
+    names(vv) <- paste0("X", seq_len(ncol(vv)))
+    tabdf <- as.data.frame(table(vv))
+    fit <- glm(as.formula(paste("Freq ~", ${rStr(terms)})), data = tabdf, family = poisson())
+    g2 <- fit$deviance; dfres <- fit$df.residual
+    pearson <- sum(residuals(fit, type = "pearson")^2)
+    dr <- tryCatch(drop1(fit, test = "Chisq"), error = function(e) NULL)
+    drOut <- if (is.null(dr)) NULL else { keep <- rownames(dr) != "<none>"; list(
+      t = rownames(dr)[keep], df = dr[keep, "Df"], lrt = dr[keep, "LRT"], p = dr[keep, ncol(dr)]) }
+    list(g2 = g2, df = dfres, pg = pchisq(g2, dfres, lower.tail = FALSE),
+         pearson = pearson, pp = pchisq(pearson, dfres, lower.tail = FALSE),
+         nCells = nrow(tabdf), N = sum(tabdf$Freq),
+         drTerms = if (is.null(drOut)) character(0) else drOut$t,
+         drDf = if (is.null(drOut)) numeric(0) else drOut$df,
+         drLrt = if (is.null(drOut)) numeric(0) else drOut$lrt,
+         drP = if (is.null(drOut)) numeric(0) else drOut$p)`;
+  const { result } = await app.webr.run(rCode);
+  if (!result) throw new Error('R returned no result');
+  const r = flat(result);
+
+  await app.results.appendTable(
+    {
+      columns: ['', 'Value', 'df', 'Sig.'],
+      rows: [
+        ['Likelihood Ratio (G²)', f(r.n1('g2'), 3), int(r.n1('df')), fmtP(r.n1('pg'))],
+        ['Pearson χ²', f(r.n1('pearson'), 3), int(r.n1('df')), fmtP(r.n1('pp'))],
+      ],
+      rowHeaders: true,
+    },
+    { caption: `Log-Linear Goodness-of-Fit — ${modelLabel} model (N = ${int(r.n1('N'))}, ${int(r.n1('nCells'))} cells)` },
+  );
+
+  const dt = r.str('drTerms'), ddf = r.num('drDf'), dl = r.num('drLrt'), dp = r.num('drP');
+  if (dt.length) {
+    await app.results.appendTable(
+      {
+        columns: ['Term', 'LR χ²', 'df', 'Sig.'],
+        rows: dt.map((t, i) => [prettyLLTerm(t, vars, meta), f(dl[i], 3), int(ddf[i]), fmtP(dp[i])]),
+        rowHeaders: true,
+      },
+      { caption: 'Tests of Each Term (likelihood-ratio drop tests)' },
+    );
+  }
+
+  const indep = model === 'independence';
+  await app.results.appendText(
+    (indep
+      ? `The G² above tests **mutual independence**: a *small* p means the variables are **associated** (the independence model fits poorly). `
+      : `The G² above is the model's lack-of-fit vs the saturated table: a *large* p means this model **fits well** (no important associations were omitted). `) +
+      'In the term table, a significant interaction (e.g. *A × B*) means that association is needed to explain the counts; respecting marginality, only the highest-order removable terms are tested.',
+  );
+}
+
+/** Map glm term like "X1:X2" → "Region × Income" using the chosen variables. */
+function prettyLLTerm(term, vars, meta) {
+  return String(term)
+    .split(':')
+    .map((part) => {
+      const m = /^X(\d+)$/.exec(part.trim());
+      return m && vars[+m[1] - 1] != null ? label(meta, vars[+m[1] - 1]) : part;
+    })
+    .join(' × ');
+}
+
+function rStr(s) {
+  return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
 
 export async function gof(app, { variable, expected }) {
   if (!variable) return void app.results.appendError('Pick a variable.');
