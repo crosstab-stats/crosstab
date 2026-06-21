@@ -95,6 +95,9 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-inequality/index.js',
   './plugins/builtin-trend/index.js',
   './plugins/builtin-ecology/index.js',
+  './plugins/builtin-ordination/index.js',
+  './plugins/builtin-doe/index.js',
+  './plugins/builtin-sna/index.js',
 ];
 
 /**
