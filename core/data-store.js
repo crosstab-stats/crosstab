@@ -481,6 +481,29 @@ export class DataStore {
     return this.#sourceOps().length > 0;
   }
 
+  /**
+   * The read relation for the column readers. Normally the working view, but for a
+   * dataset that is exactly one wide source with no transforms (the common case
+   * right after importing a huge file), reads go **straight to `read_parquet`**.
+   * Going through the view would force DuckDB to bind all ~6,942 column expressions
+   * on every query (~0.8 s of pure overhead) even to fetch a 12-column grid window;
+   * reading the Parquet directly with just the needed columns skips that.
+   *
+   * @returns {{ from: string, rid: string }} `from` SQL relation + row-id expression.
+   */
+  #readRelation() {
+    if (this.#log.length === 1) {
+      const op = this.#log[0];
+      if (op.type === 'load' && op.src.wide) {
+        return {
+          from: `read_parquet(${sqlString(op.src.file)})`,
+          rid: `CAST(${op.src.rowidBase} AS BIGINT) + CAST(${quoteIdent(CT_ROW)} AS BIGINT) + 1`,
+        };
+      }
+    }
+    return { from: quoteIdent(this.#view), rid: quoteIdent(ROWID_COL) };
+  }
+
   /** The load/append/join ops in the active log, in order (the base is first). */
   #sourceOps() {
     return this.#log.filter((o) => o.type === 'load' || o.type === 'append' || o.type === 'join');
@@ -1155,7 +1178,7 @@ export class DataStore {
     if (this.#rowCount === 0 || plan.length === 0) return {};
 
     const table = await this.#duckdb.query(
-      `SELECT ${plan.map((p) => p.expr).join(', ')} FROM ${quoteIdent(this.#view)}`,
+      `SELECT ${plan.map((p) => p.expr).join(', ')} FROM ${this.#readRelation().from}`,
     );
 
     const out = {};
@@ -1241,10 +1264,11 @@ export class DataStore {
     if (this.#rowCount === 0 || plan.length === 0) return [];
     const lim = Math.max(0, Math.floor(limit));
     const off = Math.max(0, Math.floor(offset));
+    const rel = this.#readRelation();
     const exprs = plan.map((p) => p.expr);
-    if (includeRowId) exprs.push(`CAST(${quoteIdent(ROWID_COL)} AS VARCHAR) AS __rid`);
+    if (includeRowId) exprs.push(`CAST(${rel.rid} AS VARCHAR) AS __rid`);
     const table = await this.#duckdb.query(
-      `SELECT ${exprs.join(', ')} FROM ${quoteIdent(this.#view)} LIMIT ${lim} OFFSET ${off}`,
+      `SELECT ${exprs.join(', ')} FROM ${rel.from} LIMIT ${lim} OFFSET ${off}`,
     );
     const rows = [];
     const n = table.numRows;
@@ -1293,7 +1317,7 @@ export class DataStore {
       })
       .join(', ');
     return this.#duckdb.queryToParquet(
-      `SELECT ${selectList} FROM ${quoteIdent(this.#view)}`,
+      `SELECT ${selectList} FROM ${this.#readRelation().from}`,
     );
   }
 
