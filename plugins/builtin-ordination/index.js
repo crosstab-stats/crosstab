@@ -94,7 +94,6 @@ export async function correspondence(app, { rowvar: rowName, colvar: colName }) 
 
 export async function mds(app, { vars, label: labelName }) {
   if (!vars || vars.length < 2) { await app.results.appendError('MDS: choose at least two numeric attributes.'); return; }
-  await app.webr.installPackages([]);
   const meta = metaMap(await app.data.getVariableMeta());
   const hasLabel = !!labelName;
   const recodes = vars.map((n) => recodeLine(`vars[[${rStr(n)}]]`, meta.get(n))).filter(Boolean).join('\n');
