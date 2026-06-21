@@ -76,6 +76,7 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-survey/index.js',
   './plugins/builtin-sem/index.js',
   './plugins/builtin-cluster/index.js',
+  './plugins/builtin-countmodels/index.js',
 ];
 
 /**
