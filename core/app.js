@@ -32,7 +32,7 @@ import { DataView, VariableView, HistoryPanel } from './data-views.js';
 import { RConsole } from './r-console.js';
 import { PluginLoader } from './loader.js';
 import { installDialogKeybindings } from './dialog-keys.js';
-import { makeDemoDataset } from './demo-data.js';
+import { Launcher } from './launcher.js';
 
 /**
  * URLs of the built-in plugins to load at startup. These load through the exact
@@ -414,19 +414,15 @@ export async function boot(mounts) {
   // building blocks). Created here, after the services it drives exist.
   new ProjectSidebar(mounts.sidebar, { datasets, projects, library, bus });
 
-  // --- seed data + warm up the runtimes, in parallel -------------------------
-  // The two WASM runtimes are independent, so load them concurrently rather than
-  // serially: `setDataset` cold-starts DuckDB; `webr.preload()` cold-starts R.
-  // We only need DuckDB up before continuing (plugins/UI read data), so we await
-  // the data load and let WebR keep warming in the background.
-  mounts.status.textContent = 'Loading data engine…';
-  const dataReady = datasets.setDataset(makeDemoDataset());
+  // --- warm the runtimes ------------------------------------------------------
+  // WebR warms in the background. DuckDB cold-starts when the launcher loads the
+  // chosen data source — we no longer auto-seed a demo here; the launcher (below)
+  // gates the session, picking the data source and which plugins are active.
+  mounts.status.textContent = 'Starting…';
   webr.preload().catch((err) => console.warn('WebR preload failed', err));
-  await dataReady;
 
-  // --- load built-in plugins (those the user hasn't disabled) ----------------
-  // The plugin manager owns the catalog + the enabled/disabled set (persisted),
-  // loads the enabled ones, and exposes Edit ▸ Plugins… to toggle them live.
+  // The plugin manager owns the catalog + the enabled/disabled set (persisted)
+  // and exposes Edit ▸ Plugins…; the launcher drives activation through it.
   plugins = new PluginManager({ loader, urls: BUILTIN_PLUGINS, menus, results: results.api, actions: pluginActions });
   plugins.activate();
   // In-app plugin creator (Edit ▸ Create plugin…, and the manager's "Create new…"):
@@ -440,18 +436,42 @@ export async function boot(mounts) {
     order: 41,
     command: () => pluginCreator.open(null),
   });
-  await plugins.loadEnabled();
-
-  // Boot done: from the next change on, an unsaved session auto-starts an
-  // autosaving "Untitled project" (so the seed load above doesn't spawn one).
-  projects.arm();
 
   // `dataStore` kept as an alias to the manager (it delegates to the active
-  // dataset) so console pokes / older references keep working.
+  // dataset) so console pokes / older references keep working. Exposed before the
+  // launcher so the launcher (and dev tooling) can use the engine.
   const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, projects, loader, plugins, pluginCreator, services };
-  // Expose for manual poking in the console during early development.
   // eslint-disable-next-line no-undef
   globalThis.crosstab = engine;
+
+  // --- launcher: the front door (data source + active plugins) ----------------
+  // A `?launch=<preset>` URL flag bypasses the screen (presets: start-blank,
+  // demo-quant, demo-qual) — handy for a fast dev loop and power users.
+  const launcher = new Launcher({ plugins, datasets, bus });
+  engine.launcher = launcher;
+  const launchFlag = new URLSearchParams(location.search).get('launch');
+  let bypassed = false;
+  if (launchFlag) {
+    try {
+      bypassed = await launcher.applyPreset(launchFlag);
+    } catch (err) {
+      console.warn('Launch preset failed', err);
+    }
+  }
+  if (!bypassed) await launcher.open();
+
+  // Click the "CrossTab" brand to reopen the launcher (also the plugin picker).
+  const brand = document.querySelector('header .brand');
+  if (brand) {
+    brand.style.cursor = 'pointer';
+    brand.title = 'Open the launcher / plugin picker';
+    brand.addEventListener('click', () => void launcher.open({ reopen: true }));
+  }
+
+  // Boot done: from the next change on, an unsaved session auto-starts an
+  // autosaving "Untitled project" (so the launcher's data load doesn't spawn one).
+  projects.arm();
+
   return engine;
 }
 

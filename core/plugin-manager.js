@@ -27,8 +27,14 @@ import { PluginActions } from './plugin-actions.js';
 
 const LS_DISABLED = 'crosstab.plugins.disabled';
 const LS_CATALOG = 'crosstab.plugins.catalog';
+const LS_CATALOG_V = 'crosstab.plugins.catalogVersion';
 const LS_USER = 'crosstab.plugins.user';
 const LS_WEB = 'crosstab.plugins.web';
+
+/** Bump when the catalog shape OR built-in manifests' metadata change, so a
+ * stale persisted catalog (e.g. missing newly-declared `disciplines`) is dropped
+ * and re-probed on next load. */
+const CATALOG_VERSION = 2;
 
 export class PluginManager {
   /** @type {import('./loader.js').PluginLoader} */
@@ -74,6 +80,12 @@ export class PluginManager {
     this.#results = results;
     this.#actions = actions;
     this.#disabled = new Set(readJSON(LS_DISABLED, []));
+    // Drop a stale catalog if the catalog version changed (e.g. manifests gained
+    // `disciplines`), so it's re-probed fresh rather than serving old metadata.
+    if (readJSON(LS_CATALOG_V, 0) !== CATALOG_VERSION) {
+      writeJSON(LS_CATALOG, {});
+      writeJSON(LS_CATALOG_V, CATALOG_VERSION);
+    }
     this.#catalog = readJSON(LS_CATALOG, {});
     this.#user = Array.isArray(readJSON(LS_USER, [])) ? readJSON(LS_USER, []) : [];
     this.#webAllowed = new Set(readJSON(LS_WEB, []));

@@ -35,6 +35,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Survey',
   keywords: ['survey', 'weights', 'complex sample', 'svydesign', 'svyglm', 'strata', 'cluster', 'gss', 'nhanes', 'anes'],
+  disciplines: ['Sociology', 'Political Science', 'Public Health'],
   rPackages: ['survey'],
   menu: [
     {

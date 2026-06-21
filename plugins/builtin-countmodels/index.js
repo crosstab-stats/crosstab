@@ -17,6 +17,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Regression',
   keywords: ['poisson', 'negative binomial', 'count', 'glm', 'rate', 'incidence', 'overdispersion', 'irr'],
+  disciplines: ['Public Health', 'Criminology', 'Political Science'],
   rPackages: ['MASS'],
   menu: [
     {

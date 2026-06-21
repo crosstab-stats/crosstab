@@ -45,6 +45,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Multivariate',
   keywords: ['cfa', 'sem', 'lavaan', 'confirmatory factor analysis', 'structural equation', 'latent', 'fit indices', 'loadings'],
+  disciplines: ['Psychology', 'Sociology'],
   rPackages: ['lavaan'],
   menu: [
     {

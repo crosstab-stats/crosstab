@@ -77,3 +77,41 @@ export function makeDemoDataset() {
     columns: { gender, education, region, age, income },
   };
 }
+
+/**
+ * A tiny qualitative demo: open-ended responses + a group, so the Text analytics
+ * tools (word frequency, sentiment, TF-IDF, KWIC) have something to chew on out
+ * of the box. Fabricated.
+ * @returns {{ variables: import('./data-store.js').VariableMeta[], columns: Object<string, Array> }}
+ */
+export function makeQualDemoDataset() {
+  const response = [
+    'The staff were wonderful, kind and genuinely helpful throughout my visit.',
+    'Terrible experience — the waiting was awful and the room felt cold and unwelcoming.',
+    'A warm, friendly team made a difficult process feel easy and reassuring.',
+    'Service was slow and disappointing; I left frustrated and unheard.',
+    'Clean, well organised, and the people clearly cared about doing good work.',
+    'Rude reception and a long, confusing wait. Would not recommend to anyone.',
+    'I felt respected and listened to — a genuinely positive, supportive visit.',
+    'Disorganised and stressful. Nobody seemed to know what was going on.',
+    'Friendly, patient, and thorough. Easily the best experience I have had here.',
+    'Cold, impersonal, and far too rushed. It left a bad impression.',
+    'Helpful staff and a calm atmosphere made everything straightforward.',
+    'Frustrating from start to finish; poor communication and little empathy.',
+  ];
+  const site = [1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2];
+  const variables = [
+    { name: 'response', label: 'Open-ended feedback', type: 'string', measurementLevel: 'nominal' },
+    { name: 'site', label: 'Location', type: 'factor', valueLabels: { 1: 'Clinic', 2: 'Call centre' }, measurementLevel: 'nominal' },
+  ];
+  return { variables, columns: { response, site } };
+}
+
+/** An empty starter dataset (one placeholder column) for "Start blank" — the user
+ * imports their own data. Kept minimal so the grid renders without erroring. */
+export function makeBlankDataset() {
+  return {
+    variables: [{ name: 'v1', label: '', type: 'numeric', measurementLevel: 'scale' }],
+    columns: { v1: [] },
+  };
+}

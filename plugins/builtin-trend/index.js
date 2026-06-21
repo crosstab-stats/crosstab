@@ -15,6 +15,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Time Series',
   keywords: ['mann-kendall', 'mann kendall', 'sen slope', 'trend', 'monotonic', 'non-parametric trend', 'theil-sen'],
+  disciplines: ['Environmental Science', 'Ecology'],
   rPackages: ['trend'],
   menu: [
     {

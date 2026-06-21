@@ -19,6 +19,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Multivariate',
   keywords: ['cluster', 'k-means', 'kmeans', 'segmentation', 'classification', 'unsupervised'],
+  disciplines: ['Business', 'Sociology'],
   rPackages: [],
   menu: [
     {

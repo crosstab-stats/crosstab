@@ -34,6 +34,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Regression',
   keywords: ['mediation', 'moderation', 'indirect effect', 'simple slopes', 'interaction', 'process', 'path analysis', 'lavaan', 'sobel'],
+  disciplines: ['Psychology', 'Communication'],
   rPackages: ['lavaan'],
   menu: [
     {

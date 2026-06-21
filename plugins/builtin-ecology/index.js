@@ -15,6 +15,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Multivariate',
   keywords: ['ecology', 'diversity', 'shannon', 'simpson', 'richness', 'evenness', 'ordination', 'nmds', 'vegan', 'community'],
+  disciplines: ['Ecology', 'Environmental Science'],
   rPackages: ['vegan', 'svglite'],
   menu: [
     {

@@ -26,6 +26,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Text',
   keywords: ['text', 'qualitative', 'tidytext', 'word frequency', 'sentiment', 'tf-idf', 'kwic', 'concordance', 'content analysis', 'nlp'],
+  disciplines: ['Communication', 'Anthropology', 'Sociology'],
   rPackages: ['tidytext', 'dplyr', 'tibble', 'svglite'],
   menu: [
     {

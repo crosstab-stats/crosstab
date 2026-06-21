@@ -24,6 +24,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Regression',
   keywords: ['multilevel', 'mixed effects', 'hierarchical', 'lmer', 'glmer', 'random effects', 'random intercept', 'random slope', 'icc', 'nested', 'clustered', 'hlm'],
+  disciplines: ['Education', 'Sociology', 'Public Health'],
   rPackages: ['lme4', 'lmerTest'],
   menu: [
     {

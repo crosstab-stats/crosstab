@@ -22,6 +22,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Econometrics',
   keywords: ['econometrics', 'robust', 'heteroskedasticity', 'hc', 'instrumental variables', '2sls', 'ivreg', 'panel', 'fixed effects', 'random effects', 'plm', 'breusch-pagan'],
+  disciplines: ['Economics', 'Political Science'],
   rPackages: ['sandwich', 'lmtest', 'AER', 'plm'],
   menu: [
     {

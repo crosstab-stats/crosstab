@@ -25,6 +25,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Regression',
   keywords: ['causal', 'difference-in-differences', 'did', 'regression discontinuity', 'rdd', 'matching', 'propensity score', 'matchit', 'rdrobust', 'att', 'treatment effect', 'quasi-experimental'],
+  disciplines: ['Economics', 'Public Policy', 'Public Health'],
   rPackages: ['sandwich', 'lmtest', 'MatchIt', 'rdrobust'],
   menu: [
     {
