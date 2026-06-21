@@ -81,6 +81,7 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-ordinal/index.js',
   './plugins/builtin-textanalytics/index.js',
   './plugins/builtin-causal/index.js',
+  './plugins/builtin-survival/index.js',
 ];
 
 /**
