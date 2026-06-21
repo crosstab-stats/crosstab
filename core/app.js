@@ -79,6 +79,7 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-countmodels/index.js',
   './plugins/builtin-margins/index.js',
   './plugins/builtin-ordinal/index.js',
+  './plugins/builtin-textanalytics/index.js',
 ];
 
 /**
