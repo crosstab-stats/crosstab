@@ -373,6 +373,16 @@ export class ProjectSync {
     return this.#store.list();
   }
 
+  /** Rename the *active* project. If it has never been saved (no binding), this
+   * names and saves it for the first time — so the sidebar's ✎ is always an inline
+   * rename, never the Save modal, matching every other pencil in the sidebar. */
+  async renameActive(name) {
+    name = String(name).trim();
+    if (!name) return;
+    if (this.#binding) await this.renameProject(this.#binding.id, name);
+    else await this.#fullSave(null, name);
+  }
+
   /** Rename a project. The active project renames in place (and re-saves);
    * another project is renamed on disk. */
   async renameProject(id, name) {

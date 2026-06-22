@@ -842,14 +842,13 @@ class ProjectSidebar {
     const head = document.createElement('div');
     head.className = 'proj__head';
     const name = el('span', this.projectName || 'Unsaved project', 'proj__name');
-    // Rename inline (like a dataset): double-click the name or click ✎. A
-    // never-saved project has no name to edit yet, so it falls back to Save.
-    const renameInline = () => {
-      if (this.projects.activeId) this.#inlineRename(head, name, name.textContent, (v) => this.projects.renameProject(this.projects.activeId, v));
-      else void this.projects.saveInteractive();
-    };
+    // Rename inline (like a dataset), always — double-click the name or click ✎.
+    // A never-saved project names+saves itself on commit (renameActive), so this
+    // is never the Save modal; it matches every other ✎ in the sidebar.
+    const renameInline = () =>
+      this.#inlineRename(head, name, this.projectName ?? '', (v) => this.projects.renameActive(v));
     name.title = 'Double-click to rename';
-    if (this.projects.activeId) name.style.cursor = 'text';
+    name.style.cursor = 'text';
     name.addEventListener('dblclick', renameInline);
     const editBtn = iconBtn('✎', 'Rename project', renameInline);
     const delBtn = iconBtn('✕', 'Delete project', () => {
