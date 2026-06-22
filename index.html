@@ -35,6 +35,9 @@
         background: var(--bg);
         display: flex;
         flex-direction: column;
+        /* Never let content (e.g. a full menubar) scroll the whole page sideways;
+           inner panes keep their own scrollbars. */
+        overflow-x: hidden;
         /* Respect iPad safe areas in standalone PWA mode. */
         padding: env(safe-area-inset-top) env(safe-area-inset-right)
                  env(safe-area-inset-bottom) env(safe-area-inset-left);
@@ -51,7 +54,10 @@
         min-height: 44px; /* comfortable touch target on iPad */
       }
       .brand { font-weight: 700; letter-spacing: .04em; }
-      nav.menubar { display: flex; gap: 2px; position: relative; }
+      /* Wrap to additional rows when there are many menus, rather than overflowing
+         the header (which used to scroll the whole window sideways). min-width:0
+         lets it shrink within the header flex row. */
+      nav.menubar { display: flex; flex-wrap: wrap; gap: 2px; position: relative; flex: 1 1 auto; min-width: 0; }
       .menu { position: relative; }
       .menu__button {
         background: transparent; color: var(--bar-fg); border: 0;

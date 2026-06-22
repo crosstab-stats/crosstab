@@ -402,8 +402,12 @@ export class PluginManager {
     for (const p of list) if (want.has(p.key) || (p.id && want.has(p.id))) keySet.add(p.key);
     for (const p of list) {
       const w = keySet.has(p.key);
+      // Disable every non-wanted plugin (not just ones currently loaded), so the
+      // disabled set is the exact complement of the active set. Otherwise a
+      // never-loaded-but-not-disabled plugin reads as "enabled but not loaded" —
+      // which the manager (correctly) labels "failed to load", a false alarm.
       if (w && !p.loaded) await this.setEnabled(p.key, true);
-      else if (!w && p.loaded) await this.setEnabled(p.key, false);
+      else if (!w && p.enabled) await this.setEnabled(p.key, false);
     }
   }
 

@@ -232,7 +232,9 @@ export async function boot(mounts) {
   const datasets = new DatasetManager(bus, duckdb);
   // Create the first (empty) dataset up front so there's always an active dataset
   // for the UI to render against; its data is loaded below.
-  datasets.add('Demo data', { activate: true });
+  // Neutral seed name; the launcher renames the active dataset to match the chosen
+  // source ('Demo data', 'Qualitative demo', or 'Dataset 1' for blank).
+  datasets.add('Dataset 1', { activate: true });
   const webr = new WebRManager(
     {
       bus,
@@ -760,10 +762,16 @@ class ProjectSidebar {
     const head = document.createElement('div');
     head.className = 'proj__head';
     const name = el('span', this.projectName || 'Unsaved project', 'proj__name');
-    const editBtn = iconBtn('✎', 'Rename project', () => {
+    // Rename inline (like a dataset): double-click the name or click ✎. A
+    // never-saved project has no name to edit yet, so it falls back to Save.
+    const renameInline = () => {
       if (this.projects.activeId) this.#inlineRename(head, name, name.textContent, (v) => this.projects.renameProject(this.projects.activeId, v));
       else void this.projects.saveInteractive();
-    });
+    };
+    name.title = 'Double-click to rename';
+    if (this.projects.activeId) name.style.cursor = 'text';
+    name.addEventListener('dblclick', renameInline);
+    const editBtn = iconBtn('✎', 'Rename project', renameInline);
     const delBtn = iconBtn('✕', 'Delete project', () => {
       if (this.projects.activeId) void this.projects.deleteProject(this.projects.activeId);
       else void this.projects.newProject();

@@ -161,6 +161,16 @@ export class PluginActions {
 
     this.#bus.emit(CoreEvents.ANALYSIS_STARTED, { plugin: manifest.id, title: item.label });
     this.#results.beginAnalysis(stripEllipsis(item.label), `${manifest.name} · ${originLabel}`);
+    // Watchdog: if a run goes quiet for a long time it may be a legitimately slow
+    // analysis (resampling/MCMC/first-run installs) OR a stuck R job. Either way,
+    // don't leave the user staring at a silent spinner — post a non-destructive
+    // notice so they know it's still going and what to do if it's wedged.
+    const watchdog = setTimeout(() => {
+      this.#results.appendText(
+        '_Still working… resampling, MCMC, and first-run package installs can take a while. ' +
+          'If it seems stuck, reloading the page is safe — your saved project is kept._',
+      );
+    }, 45000);
     try {
       this.#loader.setActiveInputs(manifest.id, toInjectInputs(specs, gathered));
       await this.#loader.invoke(manifest.id, item.run, [gathered]);
@@ -168,6 +178,7 @@ export class PluginActions {
       this.#results.appendError(`${item.label}: ${err.message}`);
       console.error(`[plugin ${manifest.id}]`, err);
     } finally {
+      clearTimeout(watchdog);
       this.#loader.clearActiveInputs(manifest.id);
       this.#results.endAnalysis();
       this.#bus.emit(CoreEvents.ANALYSIS_FINISHED, { plugin: manifest.id });

@@ -62,11 +62,20 @@ export class Launcher {
     this.#offline = offline ?? null;
   }
 
-  /** Load a data source by key (also used by the URL bypass). */
+  /** Load a data source by key (also used by the URL bypass) and name the active
+   * dataset to match — setDataset swaps the data but not the name, so without this
+   * a "Start blank" session inherits the boot seed's name. */
   async #loadSource(key) {
-    if (key === 'demo-quant') return this.#datasets.setDataset(makeDemoDataset());
-    if (key === 'demo-qual') return this.#datasets.setDataset(makeQualDemoDataset());
-    return this.#datasets.setDataset(makeBlankDataset()); // 'blank' / default
+    let dataset, name;
+    if (key === 'demo-quant') { dataset = makeDemoDataset(); name = 'Demo data'; }
+    else if (key === 'demo-qual') { dataset = makeQualDemoDataset(); name = 'Qualitative demo'; }
+    else { dataset = makeBlankDataset(); name = 'Dataset 1'; } // 'blank' / default
+    await this.#datasets.setDataset(dataset);
+    try {
+      if (this.#datasets.activeId != null) this.#datasets.rename(this.#datasets.activeId, name);
+    } catch {
+      /* naming is best-effort */
+    }
   }
 
   /** Apply a preset directly (data + plugins), no UI — the `?launch=` path.
