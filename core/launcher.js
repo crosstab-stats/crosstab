@@ -383,10 +383,12 @@ export class Launcher {
     }
   }
 
-  /** On a touch-first device that isn't already a Home Screen app, recommend
-   * installing it — on iOS that also rescues stored data from the ~7-day Safari
-   * tab-eviction (projects live in OPFS, which the eviction wipes too). Hidden on
-   * desktop and when already running standalone. */
+  /** Recommend installing on the platforms where "Add to Home Screen" is the idiom
+   * AND it materially helps — iOS/iPadOS (Safari's ~7-day tab-eviction of stored
+   * data, incl. OPFS projects) and Android/ChromeOS. Deliberately keyed off the
+   * platform (UA), NOT a generic touch heuristic: a desktop with a touchscreen has
+   * a mouse as its primary pointer and shouldn't be nagged. Hidden when already
+   * running standalone. */
   #renderInstallHint(overlay) {
     const box = overlay.querySelector('.ctl__install');
     if (!box) return;
@@ -395,20 +397,24 @@ export class Launcher {
       (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
     const ua = navigator.userAgent || '';
     const isIOS = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
-    const touchFirst =
-      isIOS ||
-      /Android|CrOS/.test(ua) ||
-      (window.matchMedia && window.matchMedia('(pointer: coarse)').matches && navigator.maxTouchPoints > 0);
-    if (standalone || !touchFirst) return; // already installed, or not a touch device
+    const isAndroid = /Android/.test(ua);
+    const isCrOS = /CrOS/.test(ua);
+    if (standalone || !(isIOS || isAndroid || isCrOS)) return;
 
+    const head = isCrOS ? 'install CrossTab as an app' : 'add CrossTab to your Home Screen';
+    // The ~7-day eviction is iOS/Safari-specific; elsewhere it's about convenience
+    // + more durable storage, so the reason is platform-accurate.
+    const why = isIOS
+      ? 'In a browser tab, mobile Safari can erase a site’s stored data — your <strong>saved projects and datasets</strong>, plus any offline cache — after about a week without opening it. Installed, your work stays put, it launches full-screen, and it’s ready offline in the field.'
+      : 'Installing keeps CrossTab one tap away, launches it full-screen, and makes its offline storage more durable — so your <strong>saved projects</strong> and cache stick around.';
     const how = isIOS
       ? 'Tap the Share button, then “Add to Home Screen.”'
       : 'Open your browser’s menu, then “Install app” / “Add to Home screen.”';
     box.innerHTML = `
-      <div class="ctl__installhead">📲 For best results, add CrossTab to your Home Screen.</div>
+      <div class="ctl__installhead">📲 For best results, ${head}.</div>
       <details class="ctl__installwhy">
         <summary>Why?</summary>
-        <p>In a browser tab, mobile Safari can erase a site’s stored data — your <strong>saved projects and datasets</strong>, plus any offline cache — after about a week without opening it. As a Home Screen app your work stays put, it launches full-screen, and it’s ready to use offline in the field.</p>
+        <p>${why}</p>
         <p class="ctl__installhow">${how}</p>
       </details>`;
     box.hidden = false;
