@@ -66,8 +66,11 @@ export class ComputeRecode {
           <textarea name="cond" rows="2" class="ct-cr__expr" placeholder="age >= 18 AND grp = 1"></textarea>
         </label>
         <div class="ct-cr__palette"></div>
-        <p class="ct-hint">Click a variable to insert it. Comparisons: <code>= != &lt; &lt;= &gt; &gt;=</code> ·
-          combine with <code>AND OR NOT</code> · text in <code>'single quotes'</code> · <code>IN (…)</code>, <code>IS NULL</code>.</p>
+        <p class="ct-hint">Click a variable to insert it — variables appear in <code>"double quotes"</code>
+          (how column names are written); put text <em>values</em> in <code>'single quotes'</code>.
+          Comparisons: <code>= != &lt; &lt;= &gt; &gt;=</code> · combine with <code>AND OR NOT</code> ·
+          <code>IN (…)</code>, <code>IS NULL</code>. Categorical variables are stored as <em>codes</em>
+          (the grid shows their labels) — match the code, e.g. <code>"gender" = '1'</code>.</p>
         <menu class="ct-dialog__buttons">
           <button value="cancel" type="submit">Cancel</button>
           <button value="ok" type="submit" class="ct-dialog__primary">Select</button>
@@ -81,7 +84,7 @@ export class ComputeRecode {
       chip.type = 'button';
       chip.className = 'ct-cr__chip';
       chip.textContent = m.name;
-      chip.title = m.label || m.name;
+      chip.title = codeHint(m) || m.label || m.name;
       chip.addEventListener('click', () => insertAtCursor(cond, identForExpr(m.name)));
       palette.append(chip);
     }
@@ -89,13 +92,18 @@ export class ComputeRecode {
     dialog.addEventListener('close', async () => {
       const ok = dialog.returnValue === 'ok';
       const condition = cond.value.trim();
+      const vars = this.#vars();
       dialog.remove();
       if (!ok || !condition) return;
       try {
         const before = this.#data.rowCount;
         await this.#data.filterCases(condition);
+        const after = this.#data.rowCount;
+        // 0 rows is the classic "filtered a label, but the column stores codes"
+        // trap — diagnose it and tell the user the exact code to match.
+        const note = after === 0 && before > 0 ? diagnoseZeroRows(condition, vars) : '';
         this.#results.appendText(
-          `Selected cases where \`${condition}\` — ${this.#data.rowCount.toLocaleString()} of ${before.toLocaleString()} rows kept.`,
+          `Selected cases where \`${condition}\` — ${after.toLocaleString()} of ${before.toLocaleString()} rows kept.${note}`,
         );
       } catch (err) {
         this.#results.appendError(err.message);
@@ -357,6 +365,47 @@ function insertAtCursor(ta, text) {
 /** Reference a variable in a DuckDB expression: double-quote it (handles spaces). */
 function identForExpr(name) {
   return `"${String(name).replace(/"/g, '""')}"`;
+}
+
+/** A SQL literal for a value-label code: bare for numeric-coded, else quoted. */
+function valueLiteral(m, code) {
+  if (m?.type === 'numeric' && /^-?\d+(\.\d+)?$/.test(String(code))) return String(code);
+  return `'${String(code).replace(/'/g, "''")}'`;
+}
+
+/** Tooltip for a labelled categorical: its code→label map, so the user matches
+ * the stored code (the grid shows the label). Empty for unlabelled variables. */
+function codeHint(m) {
+  const labels = m?.valueLabels && Object.keys(m.valueLabels).length ? m.valueLabels : null;
+  if (!labels) return '';
+  const pairs = Object.entries(labels)
+    .slice(0, 12)
+    .map(([c, l]) => `  ${c} = ${l}`)
+    .join('\n');
+  return `${m.label ? m.label + '\n' : ''}Stored as codes — match the code, not the label:\n${pairs}`;
+}
+
+/** Explain a 0-row filter. If a quoted text value in the condition is actually a
+ * value *label* of some categorical, point to the code to use instead — the most
+ * common cause (the grid shows labels; the column stores codes). */
+function diagnoseZeroRows(condition, vars) {
+  const literals = [...String(condition).matchAll(/'([^']*)'/g)].map((m) => m[1]);
+  for (const lit of literals) {
+    for (const v of vars || []) {
+      const labels = v.valueLabels || {};
+      const hit = Object.entries(labels).find(([, lab]) => String(lab).toLowerCase() === lit.toLowerCase());
+      if (hit) {
+        return (
+          `\n\n⚠ 0 rows matched. **'${lit}'** is a value *label* for **${v.name}**, but the column stores ` +
+          `codes (the grid shows labels). Match the code instead, e.g. \`${identForExpr(v.name)} = ${valueLiteral(v, hit[0])}\`.`
+        );
+      }
+    }
+  }
+  return (
+    '\n\n⚠ 0 rows matched. If you filtered a categorical by the label shown in the grid, those variables are ' +
+    'stored as codes — open Variables to see the code↔label map and match the code, or double-check the value’s type.'
+  );
 }
 
 function esc(s) {
