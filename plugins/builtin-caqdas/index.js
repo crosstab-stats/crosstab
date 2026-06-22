@@ -237,28 +237,37 @@ export const workspace = {
     let menu = null;
     const closeMenu = () => { menu?.remove(); menu = null; };
     document.addEventListener('click', closeMenu);
-    // The coding tab is a focused app surface: suppress the browser's native
-    // context menu so a right-click doesn't compete with (or double up on) the
-    // code-assign menu. Coding is left-select → menu (see the button guard below).
-    document.addEventListener('contextmenu', (e) => e.preventDefault());
 
-    textPane.addEventListener('mouseup', (e) => {
-      if (e.button !== 0) return; // left-button selections only
+    // Open the code-assign menu from the current selection (shared by both
+    // triggers). `evt` (optional) positions the menu at the cursor.
+    const openFromSelection = (evt) => {
       const sel = document.getSelection();
-      if (!sel || sel.isCollapsed || !sel.rangeCount) return;
+      if (!sel || sel.isCollapsed || !sel.rangeCount) return false;
       const range = sel.getRangeAt(0);
-      if (!textPane.contains(range.commonAncestorContainer)) return;
+      if (!textPane.contains(range.commonAncestorContainer)) return false;
       const start = offsetWithin(textPane, range.startContainer, range.startOffset);
       const end = offsetWithin(textPane, range.endContainer, range.endOffset);
       const lo = Math.min(start, end), hi = Math.max(start, end);
-      if (hi <= lo) return;
+      if (hi <= lo) return false;
       const doc = docs.find((d) => d.rid === activeRid);
-      if (!doc) return;
-      const text = doc.text.slice(lo, hi);
-      openAssignMenu(lo, hi, text, range);
-    });
+      if (!doc) return false;
+      openAssignMenu(lo, hi, doc.text.slice(lo, hi), range, evt);
+      return true;
+    };
 
-    function openAssignMenu(lo, hi, text, range) {
+    // Two ways to assign, both opening the SAME menu: finish a left-drag selection,
+    // or right-click a selection. Right-click also suppresses the browser's native
+    // context menu (the earlier fix) — but now it shows the coding menu instead of
+    // nothing. A right-click with no selection just suppresses the native menu.
+    textPane.addEventListener('mouseup', (e) => { if (e.button === 0) openFromSelection(e); });
+    textPane.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      openFromSelection(e);
+    });
+    // Keep the native menu off the rest of the coding tab too (codebook, menu).
+    document.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    function openAssignMenu(lo, hi, text, range, evt) {
       closeMenu();
       menu = el('div', 'caqdas__menu');
       const assign = (codeId) => {
@@ -287,10 +296,11 @@ export const workspace = {
       inp.addEventListener('click', (e) => e.stopPropagation());
       inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.stopPropagation(); mk(); } });
       menu.append(row);
-      // position near the selection
-      const rect = range.getBoundingClientRect();
-      menu.style.left = Math.round(rect.left) + 'px';
-      menu.style.top = Math.round(rect.bottom + 4) + 'px';
+      // Position at the cursor for a right-click, else just under the selection.
+      const x = evt && typeof evt.clientX === 'number' ? evt.clientX : range.getBoundingClientRect().left;
+      const y = evt && typeof evt.clientY === 'number' ? evt.clientY + 4 : range.getBoundingClientRect().bottom + 4;
+      menu.style.left = Math.round(x) + 'px';
+      menu.style.top = Math.round(y) + 'px';
       document.body.append(menu);
       setTimeout(() => inp.focus(), 0);
     }
