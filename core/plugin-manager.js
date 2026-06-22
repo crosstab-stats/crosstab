@@ -35,7 +35,7 @@ const LS_WEB = 'crosstab.plugins.web';
 /** Bump when the catalog shape OR built-in manifests' metadata change, so a
  * stale persisted catalog (e.g. missing newly-declared `disciplines`) is dropped
  * and re-probed on next load. */
-const CATALOG_VERSION = 8;
+const CATALOG_VERSION = 9; // 9: catalog records `workspaces` (#93)
 
 export class PluginManager {
   /** @type {import('./loader.js').PluginLoader} */
@@ -173,6 +173,11 @@ export class PluginManager {
       // R packages the plugin declares — used by the offline cache to pre-fetch the
       // dependency closure of the *enabled* plugins.
       rPackages: Array.isArray(manifest.rPackages) ? manifest.rPackages : [],
+      // Workspace tabs the plugin declares (#93): [{id, title}]. Recorded so the
+      // workspace manager can mount tabs for active workspace plugins.
+      workspaces: Array.isArray(manifest.workspaces)
+        ? manifest.workspaces.filter((w) => w && typeof w.id === 'string').map((w) => ({ id: w.id, title: String(w.title || w.id) }))
+        : [],
       // The plugin's action labels — the "what you get" list shown on hover in
       // the picker (ellipsis trimmed). Aggregated across ALL the declarative
       // action fields a plugin can expose, so importers/exporters are treated
@@ -445,6 +450,8 @@ export class PluginManager {
         disciplines: cat?.disciplines ?? [],
         rPackages: cat?.rPackages ?? [],
         menu: cat?.menu ?? [],
+        workspaces: cat?.workspaces ?? [],
+        url: e.url ?? null, // entry source URL (for the workspace manager to fetch)
         enabled: !this.#disabled.has(e.key),
         loaded: cat?.id ? loaded.has(cat.id) : false,
         webAllowed: this.isWebAllowed(cat?.id),

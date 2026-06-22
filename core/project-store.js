@@ -134,7 +134,10 @@ export class ProjectStore {
     // project restore its analysis set. Null/absent ⇒ pre-feature save ⇒ leave the
     // current plugin set alone on open (back-compatible).
     const activePlugins = Array.isArray(bundle.activePlugins) ? bundle.activePlugins : null;
-    const manifest = { name, savedAt, activeId: bundle.activeId, activePlugins, datasets };
+    // Plugin workspace blobs (#93), keyed by workspace id — opaque to the host,
+    // preserved verbatim (incl. ids whose plugin isn't installed here).
+    const workspaces = bundle.workspaces && typeof bundle.workspaces === 'object' ? bundle.workspaces : null;
+    const manifest = { name, savedAt, activeId: bundle.activeId, activePlugins, workspaces, datasets };
     await this.#write(dir, 'project.json', JSON.stringify(manifest));
 
     const release = await this.#acquire();
@@ -191,6 +194,7 @@ export class ProjectStore {
       bundle: {
         activeId: manifest.activeId,
         activePlugins: Array.isArray(manifest.activePlugins) ? manifest.activePlugins : null,
+        workspaces: manifest.workspaces && typeof manifest.workspaces === 'object' ? manifest.workspaces : null,
         datasets,
       },
     };

@@ -73,6 +73,9 @@ export class PluginBroker {
   /** Deferred for an in-flight {@link PluginBroker#invoke}. */
   #invokePending = null;
 
+  /** Deferred for the workspace mount handshake (#93). */
+  #workspaceMounted = deferred();
+
   /**
    * @param {Object} args
    * @param {HTMLIFrameElement} args.iframe - The plugin's sandboxed iframe.
@@ -89,6 +92,12 @@ export class PluginBroker {
     // binds the action's gathered inputs into R for them (see #activeInputs).
     this.#dispatch['webr.run'] = (code, opts) =>
       this.#services.webr.run(code, this.#activeInputs ? { ...opts, injectInputs: this.#activeInputs } : opts);
+    // Workspace plugins (#93): a `workspace` service scopes state.get/set to this
+    // iframe's workspace id (the host store is the single source of truth).
+    if (services.workspace) {
+      this.#dispatch['state.get'] = () => services.workspace.getState();
+      this.#dispatch['state.set'] = (value) => services.workspace.setState(value);
+    }
     this.#listener = (e) => this.#onMessage(e);
     window.addEventListener('message', this.#listener);
   }
@@ -159,6 +168,17 @@ export class PluginBroker {
   }
 
   /**
+   * Tell the (visible) workspace iframe to render its UI (#93). Resolves when the
+   * plugin's `workspace.mount(app, root)` returns.
+   * @param {object} plugin - Identity passed as `app.plugin`.
+   * @param {{id: string, title?: string}} workspace - The workspace being mounted.
+   */
+  sendMountWorkspace(plugin, workspace) {
+    this.#post({ t: 'mountWorkspace', plugin, workspace });
+    return this.#workspaceMounted.promise;
+  }
+
+  /**
    * Tear down: run every outstanding disposer (menu items, subscriptions) and
    * stop listening. The caller is responsible for removing the iframe element,
    * which destroys the plugin's heap.
@@ -200,6 +220,10 @@ export class PluginBroker {
       case 'activated':
         if (msg.ok) this.#activated.resolve();
         else this.#activated.reject(new Error(msg.error || 'activate() failed'));
+        break;
+      case 'workspaceMounted':
+        if (msg.ok) this.#workspaceMounted.resolve();
+        else this.#workspaceMounted.reject(new Error(msg.error || 'workspace mount failed'));
         break;
       case 'invoked': {
         const p = this.#invokePending;

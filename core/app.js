@@ -36,6 +36,7 @@ import { Launcher } from './launcher.js';
 import { OfflineManager } from './offline.js';
 import { exportProjectBundle, importProjectBundle, pickBundleFile, downloadBlob, slug } from './project-bundle.js';
 import { WorkspaceStore } from './workspace-store.js';
+import { WorkspaceManager } from './workspace-manager.js';
 
 /**
  * URLs of the built-in plugins to load at startup. These load through the exact
@@ -102,6 +103,9 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-doe/index.js',
   './plugins/builtin-sna/index.js',
   './plugins/builtin-spatial/index.js',
+  // Reference workspace plugin (#93): proves the manifest→tab→sandboxed UI→state
+  // loop. Off by default; enable in Edit ▸ Plugins to see the workspace tab.
+  './plugins/builtin-hello-workspace/index.js',
 ];
 
 /**
@@ -337,12 +341,14 @@ export async function boot(mounts) {
   // services it drives exist.)
 
   // Tabbed workspace: Data View (grid) / Variable View / Output (results pane).
+  // `workspaceTabs` is the runtime add/remove-tab surface plugin workspaces use.
+  let workspaceTabs = null;
   if (mounts.viewData && mounts.viewVars && mounts.tabs) {
     const dataView = new DataView(mounts.viewData, datasets);
     const variableView = new VariableView(mounts.viewVars, datasets);
     // R Console tab: a live REPL on the persistent WebR session (host feature).
     const rConsole = mounts.viewConsole ? new RConsole(mounts.viewConsole, { webr, store: datasets }) : null;
-    wireWorkspaceTabs(bus, mounts, { dataView, variableView, results: mounts.results, rConsole, resultsPane: results });
+    workspaceTabs = wireWorkspaceTabs(bus, mounts, { dataView, variableView, results: mounts.results, rConsole, resultsPane: results });
     // Keep the grid's header checkboxes in step when selection changes elsewhere
     // (e.g. the sidebar) — both surfaces drive the one shared selection.
     bus.on(CoreEvents.SELECTION_CHANGED, () => dataView.syncSelection());
@@ -518,6 +524,18 @@ export async function boot(mounts) {
   // and exposes Edit ▸ Plugins…; the launcher drives activation through it.
   plugins = new PluginManager({ loader, urls: BUILTIN_PLUGINS, menus, results: results.api, actions: pluginActions, bus });
   plugins.activate();
+
+  // Plugin workspaces (#93): mount/unmount workspace TABS to match the active
+  // plugin set. Rides PLUGINS_CHANGED (same signal as menu wiring) + one initial
+  // pass for any workspace plugin already active at boot. Only when the tabbed
+  // workspace exists (it won't in a headless/embedded mount).
+  let workspaceManager = null;
+  if (workspaceTabs) {
+    workspaceManager = new WorkspaceManager({ tabs: workspaceTabs, store: workspaceStore, services });
+    const reconcileWorkspaces = () => void workspaceManager.reconcile(plugins.list());
+    bus.on(CoreEvents.PLUGINS_CHANGED, reconcileWorkspaces);
+    reconcileWorkspaces();
+  }
   // In-app plugin creator (Edit ▸ Create plugin…, and the manager's "Create new…"):
   // authors a plugin from a template and loads it through the same sandbox.
   const pluginCreator = new PluginCreator({ manager: plugins });
@@ -533,7 +551,7 @@ export async function boot(mounts) {
   // `dataStore` kept as an alias to the manager (it delegates to the active
   // dataset) so console pokes / older references keep working. Exposed before the
   // launcher so the launcher (and dev tooling) can use the engine.
-  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, projects, loader, plugins, pluginCreator, services };
+  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, projects, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager };
   // eslint-disable-next-line no-undef
   globalThis.crosstab = engine;
 
@@ -736,8 +754,20 @@ function wireBusyIndicator(bus, el) {
  * @param {{dataView: DataView, variableView: VariableView, historyView: ?HistoryView, results: HTMLElement}} views
  */
 function wireWorkspaceTabs(bus, mounts, { dataView, variableView, results, rConsole, resultsPane }) {
-  const panels = { data: mounts.viewData, vars: mounts.viewVars, output: results, console: mounts.viewConsole };
-  const buttons = [...mounts.tabs.querySelectorAll('.tab')];
+  // Built-in panes by view name; workspace plugins add/remove entries at runtime.
+  const panels = new Map([
+    ['data', mounts.viewData],
+    ['vars', mounts.viewVars],
+    ['output', results],
+    ['console', mounts.viewConsole],
+  ]);
+  // Per-view "on show" hook (built-ins refresh their content; workspaces register
+  // their own when they add a tab).
+  const onShow = {
+    data: () => dataView.refresh(),
+    vars: () => variableView.render(),
+    console: () => rConsole?.onShow(),
+  };
   const clearBtn = document.getElementById('clear-output');
   let current = 'output';
 
@@ -759,17 +789,22 @@ function wireWorkspaceTabs(bus, mounts, { dataView, variableView, results, rCons
   if (clearBtn) clearBtn.addEventListener('click', () => CLEAR[current]?.run());
 
   const show = (name) => {
+    if (!panels.has(name)) return;
     current = name;
-    for (const b of buttons) b.setAttribute('aria-selected', String(b.dataset.view === name));
-    for (const [key, panel] of Object.entries(panels)) if (panel) panel.hidden = key !== name;
+    for (const b of mounts.tabs.querySelectorAll('.tab')) {
+      b.setAttribute('aria-selected', String(b.dataset.view === name));
+    }
+    for (const [key, panel] of panels) if (panel) panel.hidden = key !== name;
     syncClearBtn(name);
-    if (name === 'data') dataView.refresh();
-    else if (name === 'vars') variableView.render();
-    else if (name === 'console') rConsole?.onShow();
+    onShow[name]?.();
   };
 
   syncClearBtn(current); // initial state (Output is the default view)
-  for (const b of buttons) b.addEventListener('click', () => show(b.dataset.view));
+  // Event delegation so tabs added at runtime (plugin workspaces) work too.
+  mounts.tabs.addEventListener('click', (e) => {
+    const b = e.target.closest?.('.tab');
+    if (b && b.dataset.view) show(b.dataset.view);
+  });
   bus.on(CoreEvents.DATA_CHANGED, () => {
     if (current === 'data') dataView.refresh();
     else if (current === 'vars') variableView.render();
@@ -780,6 +815,37 @@ function wireWorkspaceTabs(bus, mounts, { dataView, variableView, results, rCons
   bus.on('import:finished', () => show('data'));
   // An error (incl. ones outside an analysis) should pull the user to Output.
   bus.on('output:error', () => show('output'));
+
+  // Registry surface for plugin workspaces (#93): add/remove a runtime tab.
+  const workspaceSection = results.parentElement; // the .workspace <section>
+  return {
+    show,
+    /** Add a runtime tab. `view` = unique data-view key; `pane` = the view element
+     * (the workspace manager mounts the plugin iframe into it). */
+    addTab({ view, title, pane, onShow: hook }) {
+      if (panels.has(view)) return;
+      pane.classList.add('view');
+      pane.hidden = true;
+      workspaceSection.append(pane);
+      panels.set(view, pane);
+      if (hook) onShow[view] = hook;
+      const btn = document.createElement('button');
+      btn.className = 'tab';
+      btn.type = 'button';
+      btn.setAttribute('role', 'tab');
+      btn.dataset.view = view;
+      btn.textContent = title;
+      mounts.tabs.insertBefore(btn, clearBtn || null);
+    },
+    removeTab(view) {
+      mounts.tabs.querySelector(`.tab[data-view="${CSS.escape(view)}"]`)?.remove();
+      const pane = panels.get(view);
+      panels.delete(view);
+      delete onShow[view];
+      pane?.remove();
+      if (current === view) show('output');
+    },
+  };
 }
 
 /**

@@ -119,6 +119,9 @@
             webr: makeNamespace('webr', ['run', 'installPackages', 'writeFile', 'readFile', 'mountFile', 'unmount']),
             ui: makeNamespace('ui', ['selectVariables', 'selectFromList', 'showForm']),
             web: makeNamespace('web', ['get']),
+            // Workspace plugins (#93) persist an opaque state blob, scoped by the
+            // host to this workspace's id. No-op host-side for non-workspace plugins.
+            state: makeNamespace('state', ['get', 'set']),
           });
         }
 
@@ -143,6 +146,22 @@
                 post({ t: 'activated', ok: true });
               } catch (err) {
                 post({ t: 'activated', ok: false, error: String(err && err.message || err) });
+              }
+              break;
+
+            case 'mountWorkspace':
+              // Render the plugin's workspace UI into this (now visible) frame's
+              // body. The plugin rehydrates from app.state.get() itself.
+              try {
+                if (!app) app = makeApp(msg.plugin || {});
+                const ws = pluginModule && pluginModule.workspace;
+                if (!ws || typeof ws.mount !== 'function') {
+                  throw new Error('plugin declares a workspace but exports no `workspace.mount(app, root)`');
+                }
+                await ws.mount(app, document.body, msg.workspace || {});
+                post({ t: 'workspaceMounted', ok: true });
+              } catch (err) {
+                post({ t: 'workspaceMounted', ok: false, error: String(err && err.message || err) });
               }
               break;
 
@@ -202,10 +221,11 @@
               (Array.isArray(m.menu) ||
                 Array.isArray(m.imports) ||
                 Array.isArray(m.exports) ||
-                Array.isArray(m.outputExports));
+                Array.isArray(m.outputExports) ||
+                Array.isArray(m.workspaces));
             if (!hasDeclarative) {
               throw new Error(
-                'plugin must export `manifest` with a declarative section (menu/imports/exports/outputExports)',
+                'plugin must export `manifest` with a declarative section (menu/imports/exports/outputExports/workspaces)',
               );
             }
             post({ t: 'manifest', ok: true, manifest: pluginModule.manifest });
