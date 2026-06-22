@@ -196,6 +196,7 @@ export class Launcher {
 
     overlay.querySelector('.ctl__howto').addEventListener('click', () => this.#showHowTo());
     this.#renderOffline(overlay);
+    this.#renderInstallHint(overlay);
     overlay.querySelector('.ctl__start').addEventListener('click', () => this.#start(reopen));
 
     return new Promise((resolve) => { this.#resolve = resolve; });
@@ -366,6 +367,37 @@ export class Launcher {
     }
   }
 
+  /** On a touch-first device that isn't already a Home Screen app, recommend
+   * installing it — on iOS that also rescues stored data from the ~7-day Safari
+   * tab-eviction (projects live in OPFS, which the eviction wipes too). Hidden on
+   * desktop and when already running standalone. */
+  #renderInstallHint(overlay) {
+    const box = overlay.querySelector('.ctl__install');
+    if (!box) return;
+    const standalone =
+      window.navigator.standalone === true ||
+      (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+    const ua = navigator.userAgent || '';
+    const isIOS = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+    const touchFirst =
+      isIOS ||
+      /Android|CrOS/.test(ua) ||
+      (window.matchMedia && window.matchMedia('(pointer: coarse)').matches && navigator.maxTouchPoints > 0);
+    if (standalone || !touchFirst) return; // already installed, or not a touch device
+
+    const how = isIOS
+      ? 'Tap the Share button, then “Add to Home Screen.”'
+      : 'Open your browser’s menu, then “Install app” / “Add to Home screen.”';
+    box.innerHTML = `
+      <div class="ctl__installhead">📲 For best results, add CrossTab to your Home Screen.</div>
+      <details class="ctl__installwhy">
+        <summary>Why?</summary>
+        <p>In a browser tab, mobile Safari can erase a site’s stored data — your <strong>saved projects and datasets</strong>, plus any offline cache — after about a week without opening it. As a Home Screen app your work stays put, it launches full-screen, and it’s ready to use offline in the field.</p>
+        <p class="ctl__installhow">${how}</p>
+      </details>`;
+    box.hidden = false;
+  }
+
   #showHowTo() {
     const d = document.createElement('dialog');
     d.className = 'ct-dialog ct-dialog--wide';
@@ -447,6 +479,7 @@ function SHELL_HTML(reopen) {
           <p>All plugin code is inspectable, and <strong>all plugins are equal</strong> — you're encouraged to write your own.</p>
           <button type="button" class="ctl__howto">How to use →</button>
           <div class="ctl__offline" hidden></div>
+          <div class="ctl__install" hidden></div>
         </aside>
       </div>
       <div class="ctl__footer">
@@ -511,6 +544,13 @@ function injectStyles() {
     .ctl__offlinebtn:disabled { opacity: .6; cursor: default; }
     .ctl__offlineprog { font-size: 12px; color: #7a8590; margin-top: 6px; min-height: 1em; }
     .ctl__offlineok { font-size: 13px; color: #2e7d32; margin: 0 0 6px; font-weight: 600; }
+    .ctl__install { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--accent, #2980b9);
+      border-radius: 8px; background: #eef5fb; }
+    .ctl__installhead { font-size: 12.5px; color: #1f4e6b; line-height: 1.4; }
+    .ctl__installwhy { margin-top: 4px; font-size: 12px; color: #41505e; }
+    .ctl__installwhy summary { cursor: pointer; color: var(--accent, #2980b9); width: max-content; }
+    .ctl__installwhy p { margin: 6px 0 0; line-height: 1.45; }
+    .ctl__installhow { color: #5a6570; }
     .ctl__footer { padding: 12px 24px; border-top: 1px solid var(--line, #d8dde2); display: flex; justify-content: flex-end; background: #fff; }
     .ctl__start { font: inherit; font-size: 15px; font-weight: 600; padding: 10px 28px; border: 0;
       border-radius: 8px; background: var(--accent, #2980b9); color: #fff; cursor: pointer; }
