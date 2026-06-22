@@ -30,19 +30,26 @@ const CACHE = 'crosstab-offline-v1';
 const MARKER = 'https://crosstab.local/__offline_enabled__';
 // Survives the one control-gaining reload, so we resume the warm afterwards.
 const RESUME_KEY = 'crosstab.offline.resume';
+// The WebR binary package repo (CDN mode). The R-minor dir must match the WebR
+// build — keep in sync with scripts/vendor-assets.mjs R_VERSION_DIR.
+const PKG_REPO = 'https://repo.r-wasm.org/bin/emscripten/contrib/4.6';
 
 export class OfflineManager {
   #webr;
   #duckdb;
+  #plugins;
 
   /**
    * @param {object} deps
    * @param {import('./webr-manager.js').WebRManager} deps.webr
    * @param {import('./duckdb-manager.js').DuckDBManager} deps.duckdb
+   * @param {import('./plugin-manager.js').PluginManager} [deps.plugins] - To learn
+   *   which R packages the enabled plugins need (for the offline closure prefetch).
    */
-  constructor({ webr, duckdb }) {
+  constructor({ webr, duckdb, plugins }) {
     this.#webr = webr;
     this.#duckdb = duckdb;
+    this.#plugins = plugins ?? null;
   }
 
   /** Whether the browser can do this at all (SW + Cache API). */
@@ -182,17 +189,73 @@ export class OfflineManager {
       /* not started yet — fine */
     }
     await this.#webr.preload();
-    onProgress('Caching the data bridge…');
-    try {
-      await this.#webr.installPackages(['nanoparquet']); // the host's data→R bridge
-    } catch {
-      /* non-fatal — caches on first real use */
-    }
 
     // 3) Data engine.
     onProgress('Caching the data engine…');
     await this.#duckdb.preload();
+
+    // 4) R packages: pre-fetch the dependency closure of the *enabled* plugins'
+    // declared packages (+ the host's nanoparquet bridge) so those analyses run
+    // offline without having to have been run online first. We cache the package
+    // .tgz files directly (not install them) — so caching many plugins' packages
+    // can't OOM the single WebR session.
+    const wanted = new Set(['nanoparquet']);
+    try {
+      for (const pkg of this.#plugins?.requiredRPackages?.() || []) wanted.add(pkg);
+    } catch {
+      /* no plugin manager — just the bridge */
+    }
+    await this.#cachePackages([...wanted], onProgress);
+
     onProgress('Offline ready.');
+  }
+
+  /** Cache the dependency closure of `wanted` R packages from the WebR binary repo,
+   * so an offline `installPackages` is served from cache. Downloads the .tgz files
+   * (and the PACKAGES index WebR resolves against) — never installs them. */
+  async #cachePackages(wanted, onProgress) {
+    if (!wanted.length) return;
+    onProgress('Resolving R packages…');
+    let index;
+    try {
+      const txt = await (await fetch(`${PKG_REPO}/PACKAGES`, { cache: 'reload' })).text();
+      index = parsePackages(txt);
+    } catch {
+      onProgress('Couldn’t reach the R package repo — packages will cache on first use.');
+      return;
+    }
+    // Cache the index variants WebR reads at install time (it resolves against the
+    // binary .rds; the others are harmless to have).
+    await Promise.all(
+      ['PACKAGES', 'PACKAGES.gz', 'PACKAGES.rds'].map((f) => fetch(`${PKG_REPO}/${f}`, { cache: 'reload' }).catch(() => {})),
+    );
+
+    // Dependency closure over what the repo actually offers (base R packages like
+    // 'stats'/'methods' aren't in the repo and are skipped — they ship with WebR).
+    const closure = new Set();
+    const visit = (name) => {
+      if (closure.has(name) || !index[name]) return;
+      closure.add(name);
+      for (const dep of index[name].deps) visit(dep);
+    };
+    for (const w of wanted) visit(w);
+    const list = [...closure];
+    if (!list.length) return;
+
+    // Fetch the .tgz files with a small concurrency pool (gentle on the repo, but
+    // faster than one-at-a-time for a big closure).
+    let done = 0;
+    const POOL = 6;
+    const queue = list.slice();
+    const worker = async () => {
+      while (queue.length) {
+        const name = queue.shift();
+        const { Version } = index[name];
+        await fetch(`${PKG_REPO}/${name}_${Version}.tgz`, { cache: 'reload' }).catch(() => {});
+        onProgress(`Caching R packages… ${++done}/${list.length}`);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(POOL, list.length) }, worker));
   }
 
   /** Re-fetch the same-origin app shell so the SW caches it. The set is read from
@@ -240,4 +303,35 @@ export class OfflineManager {
       ctrl.postMessage({ type, ...data }, [ch.port2]);
     });
   }
+}
+
+/** Parse a CRAN-style PACKAGES file into `{ name: { Version, deps:Set } }`. Mirrors
+ * the resolver in scripts/vendor-assets.mjs (kept in step), so the offline cache
+ * and the air-gap vendor script compute the same dependency closure. */
+function parsePackages(text) {
+  const out = {};
+  for (const block of text.split(/\n\s*\n/)) {
+    const fields = {};
+    let key = null;
+    for (const line of block.split('\n')) {
+      const m = line.match(/^(\S[^:]*):\s?(.*)$/);
+      if (m) {
+        key = m[1];
+        fields[key] = m[2];
+      } else if (key && /^\s/.test(line)) {
+        fields[key] += ' ' + line.trim();
+      }
+    }
+    if (!fields.Package) continue;
+    const deps = new Set();
+    for (const f of ['Depends', 'Imports', 'LinkingTo']) {
+      if (!fields[f]) continue;
+      for (const d of fields[f].split(',')) {
+        const name = d.trim().replace(/\s*\(.*\)\s*$/, '');
+        if (name && name !== 'R') deps.add(name);
+      }
+    }
+    out[fields.Package] = { Version: fields.Version, deps };
+  }
+  return out;
 }

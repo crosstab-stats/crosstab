@@ -340,7 +340,7 @@ export class Launcher {
         });
         box.append(rm);
       } else {
-        const hint = el('p', 'Cache CrossTab and the R engine so it works with no internet — e.g. on a flight. One-time download (~100 MB).', 'ctl__offlinehint');
+        const hint = el('p', 'Cache CrossTab, the R engine, and the R packages your selected plugins need, so everything works with no internet — on a flight, or to set up an air-gapped machine. One-time download.', 'ctl__offlinehint');
         const btn = el('button', '⬇ Make available offline', 'ctl__offlinebtn');
         btn.type = 'button';
         const prog = el('div', '', 'ctl__offlineprog');

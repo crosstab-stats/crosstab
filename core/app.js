@@ -455,7 +455,7 @@ export async function boot(mounts) {
   // demo-quant, demo-qual) — handy for a fast dev loop and power users.
   // "Make available offline" (installed-PWA offline caching) — drives the service
   // worker to cache the app shell + runtimes; surfaced in the launcher About panel.
-  const offline = new OfflineManager({ webr, duckdb });
+  const offline = new OfflineManager({ webr, duckdb, plugins });
   engine.offline = offline;
   const launcher = new Launcher({ plugins, datasets, bus, projects, offline });
   engine.launcher = launcher;

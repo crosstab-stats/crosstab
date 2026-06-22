@@ -34,7 +34,7 @@ const LS_WEB = 'crosstab.plugins.web';
 /** Bump when the catalog shape OR built-in manifests' metadata change, so a
  * stale persisted catalog (e.g. missing newly-declared `disciplines`) is dropped
  * and re-probed on next load. */
-const CATALOG_VERSION = 6;
+const CATALOG_VERSION = 7;
 
 export class PluginManager {
   /** @type {import('./loader.js').PluginLoader} */
@@ -163,6 +163,9 @@ export class PluginManager {
       category: typeof manifest.category === 'string' ? manifest.category : '',
       keywords: Array.isArray(manifest.keywords) ? manifest.keywords : [],
       disciplines: Array.isArray(manifest.disciplines) ? manifest.disciplines : [],
+      // R packages the plugin declares — used by the offline cache to pre-fetch the
+      // dependency closure of the *enabled* plugins.
+      rPackages: Array.isArray(manifest.rPackages) ? manifest.rPackages : [],
       // The plugin's action labels — the "what you get" list shown on hover in
       // the picker (ellipsis trimmed). Aggregated across ALL the declarative
       // action fields a plugin can expose, so importers/exporters are treated
@@ -354,6 +357,15 @@ export class PluginManager {
     return id ? this.#loader.list().some((m) => m.id === id) : false;
   }
 
+  /** The union of R packages declared by the currently-active (loaded) plugins —
+   * what the offline cache must pre-fetch (with their dependency closure) so those
+   * analyses work with no network. */
+  requiredRPackages() {
+    const set = new Set();
+    for (const p of this.list()) if (p.loaded) for (const pkg of p.rPackages || []) set.add(pkg);
+    return [...set];
+  }
+
   /** The keys of every currently-active (loaded) plugin — the set a project
    * persists so reopening it restores the same analyses/importers. Uses *loaded*,
    * not merely `enabled`: a plugin can be un-disabled yet never activated (the
@@ -391,6 +403,7 @@ export class PluginManager {
         category: cat?.category || 'Other',
         keywords: cat?.keywords ?? [],
         disciplines: cat?.disciplines ?? [],
+        rPackages: cat?.rPackages ?? [],
         menu: cat?.menu ?? [],
         enabled: !this.#disabled.has(e.key),
         loaded: cat?.id ? loaded.has(cat.id) : false,
