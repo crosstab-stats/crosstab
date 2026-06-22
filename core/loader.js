@@ -68,9 +68,12 @@ const PLUGIN_HOST_URL = './plugin-host.html';
  * @typedef {Object} InputDecl
  * @property {string} name - Key under which the value is passed in `inputs` and
  *   bound in R (single variable → vector, multi → data.frame, scalar → value).
- * @property {'variables'|'number'|'choice'|'text'} [kind='variables']
+ * @property {'variables'|'number'|'choice'|'text'|'file'} [kind='variables']
  * @property {string} [label] - Role label (e.g. 'Outcome'); the host composes the
  *   dialog title/hint.
+ * @property {string[]} [extensions] - (file) picker filter, e.g. `['.geojson']`.
+ *   A `file` input opens a picker and passes the plugin `{ name, bytes:Uint8Array }`
+ *   (a supplementary file — distinct from an importer, which makes a dataset).
  * @property {boolean} [multiple] - (variables) allow several.
  * @property {string[]} [types] - (variables) restrict to types, e.g. `['numeric']`.
  * @property {boolean} [optional] - cancel yields null/empty instead of aborting.

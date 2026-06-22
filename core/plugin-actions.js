@@ -258,6 +258,20 @@ async function gatherInputs(ui, specs, item) {
         return null;
       }
       out[spec.name] = r[0] ?? null;
+    } else if (kind === 'file') {
+      // A supplementary file the analysis needs (boundary map, dictionary, weights
+      // matrix…) — distinct from the importer flow, which produces a dataset. The
+      // plugin receives { name, bytes } and does what it likes (e.g. writes the
+      // bytes to WebR's FS and reads them in R).
+      const file = await pickFile(spec.extensions);
+      if (!file) {
+        if (spec.optional) {
+          out[spec.name] = null;
+          continue;
+        }
+        return null;
+      }
+      out[spec.name] = { name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) };
     } else {
       out[spec.name] = null;
     }
@@ -276,6 +290,7 @@ function hintFor(spec) {
   if (kind === 'number') return 'Enter a number for this setting.';
   if (kind === 'text') return 'Enter a value for this setting.';
   if (kind === 'choice') return 'Choose one of the options.';
+  if (kind === 'file') return 'Choose a file to use for this analysis.';
   const types = Array.isArray(spec?.types) ? spec.types : [];
   const numeric = types.length === 1 && types[0] === 'numeric';
   const categorical = types.length > 0 && types.every((t) => t === 'factor' || t === 'string');
@@ -293,6 +308,7 @@ function toInjectInputs(specs, gathered) {
   for (const spec of specs) {
     const v = gathered[spec.name];
     const kind = spec.kind || 'variables';
+    if (kind === 'file') continue; // not an R binding — the plugin handles the bytes
     if (kind === 'variables') {
       const columns = v == null ? [] : Array.isArray(v) ? v : [v];
       inj[spec.name] = { kind: 'variables', columns, multiple: !!spec.multiple };
@@ -303,6 +319,28 @@ function toInjectInputs(specs, gathered) {
     }
   }
   return inj;
+}
+
+/** Open a native file picker and resolve the chosen File, or null if cancelled.
+ * `extensions` (e.g. ['.geojson','.json']) filters the picker. */
+function pickFile(extensions) {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    if (Array.isArray(extensions) && extensions.length) input.accept = extensions.join(',');
+    input.style.display = 'none';
+    let settled = false;
+    const finish = (v) => {
+      if (settled) return;
+      settled = true;
+      input.remove();
+      resolve(v);
+    };
+    input.addEventListener('change', () => finish(input.files?.[0] ?? null));
+    input.addEventListener('cancel', () => finish(null));
+    document.body.append(input);
+    input.click();
+  });
 }
 
 /** Dialog title from the menu label (minus its trailing "…") and an input role. */
