@@ -25,18 +25,7 @@
  */
 
 import { CoreEvents } from './event-bus.js';
-
-/**
- * Default ES-module entry point for WebR, served from the official CDN.
- *
- * NOTE: `latest` favours "it just works" over reproducibility. For a release
- * build, pin a specific version (e.g. `.../v0.4.2/webr.mjs`) and vendor the
- * assets locally so the PWA works offline. Tracked as an open question:
- * package/runtime pre-loading strategy.
- *
- * @type {string}
- */
-const DEFAULT_WEBR_URL = 'https://webr.r-wasm.org/latest/webr.mjs';
+import { getAssets } from './assets.js';
 
 /** Path in WebR's virtual filesystem where the Parquet injection snapshot is
  * written before R reads it. Overwritten each injecting run. */
@@ -165,6 +154,9 @@ export class WebRManager {
   /** WebR module URL. */
   #url;
 
+  /** WebR constructor options (baseUrl/repoUrl in self-hosted mode). @type {object} */
+  #webrOptions;
+
   /** Packages to install immediately after init (the default plugin set's deps). */
   #preload;
 
@@ -199,14 +191,19 @@ export class WebRManager {
    *   - Optional. Supplies the dataset as Parquet bytes for the fast injection
    *   path (typically `dataStore.getInjectionParquet`).
    * @param {Object} [opts]
-   * @param {string} [opts.url] - Override the WebR module URL.
+   * @param {string} [opts.url] - Override the WebR module URL (else from assets.js).
+   * @param {object} [opts.webrOptions] - Override WebR constructor options.
    * @param {string[]} [opts.preloadPackages] - Install on init.
    */
   constructor({ bus, getColumns, getInjectionParquet }, opts = {}) {
     this.#bus = bus;
     this.#getColumns = getColumns;
     this.#getInjectionParquet = getInjectionParquet ?? null;
-    this.#url = opts.url ?? DEFAULT_WEBR_URL;
+    // The module URL and WebR options (baseUrl/repoUrl for the self-hosted,
+    // air-gapped build) come from the central asset registry; opts can override.
+    const assets = getAssets();
+    this.#url = opts.url ?? assets.webrUrl;
+    this.#webrOptions = opts.webrOptions ?? assets.webrOptions ?? {};
     this.#preload = opts.preloadPackages ?? [];
   }
 
@@ -653,7 +650,10 @@ export class WebRManager {
     // Dynamic import so the WASM payload is only fetched when first needed and
     // so the URL can be configured at runtime.
     const { WebR } = await import(/* @vite-ignore */ this.#url);
-    const webR = new WebR();
+    // In self-hosted mode #webrOptions carries baseUrl (runtime payload) + repoUrl
+    // (the vendored package mirror), so installs resolve from ./vendor/ too. Empty
+    // in cdn mode — WebR then uses its own CDN defaults.
+    const webR = new WebR(this.#webrOptions);
     await webR.init();
     if (this.#preload.length) {
       await webR.installPackages(this.#preload, { quiet: true });

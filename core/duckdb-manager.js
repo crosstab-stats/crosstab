@@ -22,37 +22,12 @@
  * Like {@link WebRManager}, the runtime is lazy: the (tens of MB) WASM payload is
  * only fetched on first use, so opening the app stays cheap.
  *
- * TODO(hardening): pin + vendor the DuckDB-WASM and Arrow assets (currently CDN,
- * mirroring the WebR `latest` convenience) for reproducibility + offline PWA use.
+ * The asset URLs (DuckDB-WASM, Apache Arrow, hyparquet-writer) and the DuckDB
+ * bundle live in {@link ./assets.js} — which serves them from a CDN by default or
+ * from same-origin `./vendor/` in the air-gapped, self-hosted mode.
  */
 
-/**
- * DuckDB-WASM ES-module entry, from jsDelivr. Pinned for reproducibility; vendor
- * for release (see TODO.md).
- *
- * NOTE: two different version numbers. This is the **npm package** version of the
- * JS bindings; the **DuckDB engine** it bundles is separate (check `PRAGMA
- * version`). `@1.29.0` shipped engine 1.1.1; this build (`1.33.1-dev*`) ships
- * engine ~1.5.x — wanted for its more mature OPFS support. duckdb-wasm publishes
- * its releases under `-dev` tags, so a `-dev` pin is the normal current build.
- * @type {string}
- */
-const DUCKDB_URL = 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev56.0/+esm';
-
-/**
- * Apache Arrow ES-module entry. Used only to *build* tables for ingest; query
- * results come back as Arrow objects from DuckDB itself.
- * @type {string}
- */
-const ARROW_URL = 'https://cdn.jsdelivr.net/npm/apache-arrow@17.0.0/+esm';
-
-/**
- * Pure-JS Parquet writer. Used by the wide-dataset path to encode column chunks to
- * Parquet **outside** DuckDB, so big data never passes through DuckDB's write/
- * checkpoint machinery (which OOMs in wasm past ~600 MB). The files are then read
- * back via DuckDB's out-of-core `read_parquet`. @type {string}
- */
-const HYPARQUET_WRITER_URL = 'https://cdn.jsdelivr.net/npm/hyparquet-writer@0.16.1/+esm';
+import { getAssets } from './assets.js';
 
 /**
  * Manages the lifecycle of, and access to, the single DuckDB-WASM runtime.
@@ -320,7 +295,7 @@ export class DuckDBManager {
    * @returns {Promise<{writeRowGroup: (columnData: Array<{name: string, data: ArrayLike<*>}>) => void, finalize: (name: string) => Promise<number>}>}
    */
   async openParquetWriter(columns) {
-    if (!this.#parquetWriter) this.#parquetWriter = await import(/* @vite-ignore */ HYPARQUET_WRITER_URL);
+    if (!this.#parquetWriter) this.#parquetWriter = await import(/* @vite-ignore */ getAssets().hyparquetWriterUrl);
     const W = this.#parquetWriter;
     const schema = [{ name: 'root', num_children: columns.length }];
     for (const c of columns) {
@@ -459,15 +434,20 @@ export class DuckDBManager {
 
   /** One-time runtime construction. */
   async #init() {
-    // Dynamic import so the WASM payload is only fetched when first needed.
+    // Dynamic import so the WASM payload is only fetched when first needed. URLs
+    // come from the asset registry (CDN by default, ./vendor/ when self-hosted).
+    const assets = getAssets();
     const [duckdb, arrow] = await Promise.all([
-      import(/* @vite-ignore */ DUCKDB_URL),
-      import(/* @vite-ignore */ ARROW_URL),
+      import(/* @vite-ignore */ assets.duckdbUrl),
+      import(/* @vite-ignore */ assets.arrowUrl),
     ]);
     this.#duckdb = duckdb;
     this.#arrow = arrow;
 
-    const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
+    // In self-hosted mode use our vendored bundle (same-origin worker + wasm);
+    // otherwise the jsDelivr URLs. selectBundle picks mvp/eh per browser features.
+    const bundles = assets.duckdbBundles ? assets.duckdbBundles() : duckdb.getJsDelivrBundles();
+    const bundle = await duckdb.selectBundle(bundles);
 
     // The bundle's worker lives on the CDN (cross-origin). Under COEP we can't
     // construct a Worker directly from a cross-origin URL, so wrap it in a
