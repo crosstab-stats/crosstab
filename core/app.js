@@ -818,6 +818,9 @@ function wireWorkspaceTabs(bus, mounts, { dataView, variableView, results, rCons
   bus.on('import:finished', () => show('data'));
   // An error (incl. ones outside an analysis) should pull the user to Output.
   bus.on('output:error', () => show('output'));
+  // Output appended outside the menu-analysis path (e.g. a workspace plugin's
+  // own buttons) should also surface Output — otherwise the action looks dead.
+  bus.on('output:written', () => show('output'));
 
   // Registry surface for plugin workspaces (#93): add/remove a runtime tab.
   const workspaceSection = results.parentElement; // the .workspace <section>

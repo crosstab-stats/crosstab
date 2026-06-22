@@ -249,6 +249,7 @@ export class ResultsPane {
     // Store the spec (for structured exporters) plus the host-rendered HTML (the
     // output exporters read `.html` to reproduce the table).
     this.#model.push({ kind: 'table', table: spec, html: tableEl.outerHTML });
+    this.#bus?.emit?.('output:written');
   }
 
   /**
@@ -297,6 +298,7 @@ export class ResultsPane {
     block.append(save);
 
     this.#place(block);
+    this.#bus?.emit?.('output:written');
     return handle;
   }
 
@@ -331,6 +333,7 @@ export class ResultsPane {
     block.innerHTML = html;
     this.#place(block);
     this.#model.push({ kind: 'text', html });
+    this.#bus?.emit?.('output:written');
   }
 
   /**
