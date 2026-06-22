@@ -316,6 +316,33 @@ export class ProjectSync {
     }
   }
 
+  /**
+   * Open an external `.crosstab` bundle as a NEW project — never overwrites the
+   * currently-open one (cancels its pending save, loads the bundle's datasets,
+   * then saves a fresh project named per the bundle). Same clobber-safety as
+   * {@link ProjectSync#openProject}.
+   * @param {{name: string, bundle: object}} arg
+   */
+  async openBundle({ name, bundle }) {
+    this.#cancelPendingSave();
+    this.#setStatus('loading');
+    this.#loading = true;
+    try {
+      await this.#datasets.loadBundle(bundle);
+    } catch (err) {
+      this.#loading = false;
+      this.#results.appendError(`Open bundle failed: ${err.message}`);
+      this.#setStatus('error');
+      throw err;
+    }
+    this.#loading = false;
+    // It's a brand-new project; never bound to (and so never overwriting) the one
+    // that was open. Persist + name it from the bundle.
+    this.#binding = null;
+    this.#sourcesDirty.clear();
+    await this.#fullSave(null, name || 'Imported project');
+  }
+
   async #delete(id) {
     try {
       await this.#store.delete(id);

@@ -21,6 +21,7 @@ import { makeZip, readZip } from './zip.js';
 
 const FORMAT = 'crosstab-project';
 const FORMAT_VERSION = 1;
+const dec = new TextDecoder();
 
 /**
  * Build a `.crosstab` bundle Blob from the open datasets.
@@ -80,6 +81,64 @@ export function inspectProjectBundle(buf) {
   const manifest = mf ? JSON.parse(new TextDecoder().decode(mf.data)) : null;
   if (!manifest || manifest.format !== FORMAT) throw new Error('Not a CrossTab project bundle.');
   return { manifest, files: files.map((f) => ({ name: f.name, bytes: f.data.length })) };
+}
+
+/**
+ * Read a `.crosstab` bundle into a dataset bundle ready for
+ * {@link DatasetManager#loadBundle}. The Parquet is the working (derived) data, so
+ * it loads as a single base source carrying the schema meta; the transform log is
+ * preserved in the file as a record but NOT replayed (the data is already derived).
+ * @param {Uint8Array} buf
+ * @returns {{name: string, bundle: {activeId: any, datasets: Array<object>}}}
+ */
+export function importProjectBundle(buf) {
+  const files = readZip(buf);
+  const byName = new Map(files.map((f) => [f.name, f.data]));
+  const mf = byName.get('manifest.json');
+  if (!mf) throw new Error('Not a CrossTab bundle (no manifest.json).');
+  const manifest = JSON.parse(dec.decode(mf));
+  if (manifest.format !== FORMAT) throw new Error('Unrecognised bundle format.');
+
+  const datasets = [];
+  let activeId = null;
+  for (const d of manifest.datasets || []) {
+    const schemaRaw = d.schema ? byName.get(d.schema) : null;
+    const meta = schemaRaw ? JSON.parse(dec.decode(schemaRaw)) : [];
+    const parquet = d.file ? byName.get(d.file) : null;
+    const sources = parquet && parquet.byteLength
+      ? [{ meta, label: d.name, combine: 'base', parquet }]
+      : [];
+    datasets.push({
+      id: d.id,
+      name: d.name,
+      libraryLink: null,
+      state: { sources, transforms: [], order: sources.length ? ['s'] : [] },
+    });
+    if (activeId === null) activeId = d.id;
+  }
+  if (!datasets.length) throw new Error('Bundle has no datasets.');
+  return { name: manifest.name || 'Imported project', bundle: { activeId, datasets } };
+}
+
+/** Open a native picker for a `.crosstab` bundle; resolves the File or null. */
+export function pickBundleFile() {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.crosstab,.zip';
+    input.style.display = 'none';
+    let settled = false;
+    const finish = (v) => {
+      if (settled) return;
+      settled = true;
+      input.remove();
+      resolve(v);
+    };
+    input.addEventListener('change', () => finish(input.files?.[0] ?? null));
+    input.addEventListener('cancel', () => finish(null));
+    document.body.append(input);
+    input.click();
+  });
 }
 
 /** Trigger a browser download of a Blob. */

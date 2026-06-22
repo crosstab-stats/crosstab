@@ -34,7 +34,7 @@ import { PluginLoader } from './loader.js';
 import { installDialogKeybindings } from './dialog-keys.js';
 import { Launcher } from './launcher.js';
 import { OfflineManager } from './offline.js';
-import { exportProjectBundle, downloadBlob, slug } from './project-bundle.js';
+import { exportProjectBundle, importProjectBundle, pickBundleFile, downloadBlob, slug } from './project-bundle.js';
 
 /**
  * URLs of the built-in plugins to load at startup. These load through the exact
@@ -431,6 +431,23 @@ export async function boot(mounts) {
         results.api.appendText(`Exported **${name}** as a .crosstab bundle (${(blob.size / 1048576).toFixed(1)} MB).`);
       } catch (err) {
         results.api.appendError(`Export project bundle failed: ${err.message}`);
+      }
+    },
+  });
+  menus.register({
+    id: 'core:import-bundle',
+    path: ['File'],
+    label: 'Open project bundle (.crosstab)…',
+    order: 7,
+    command: async () => {
+      const file = await pickBundleFile();
+      if (!file) return;
+      try {
+        const { name, bundle } = importProjectBundle(new Uint8Array(await file.arrayBuffer()));
+        await projects.openBundle({ name, bundle });
+        results.api.appendText(`Opened project bundle **${name}** — ${bundle.datasets.length} dataset(s).`);
+      } catch (err) {
+        results.api.appendError(`Open project bundle failed: ${err.message}`);
       }
     },
   });
