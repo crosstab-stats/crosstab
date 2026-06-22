@@ -57,8 +57,9 @@ const STYLES = `
 .caqdas__text mark { border-radius: 2px; padding: 0 1px; cursor: pointer; }
 .caqdas__empty { color: #99a1ab; font-style: italic; padding: 24px; }
 .caqdas__codes { width: 240px; border-left: 1px solid #e2e6ea; overflow: auto; flex: none; padding: 8px; }
-.caqdas__codes h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: #7a8590; margin: 6px 6px 8px; }
-.caqdas__code { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; }
+.caqdas__codes h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: #7a8590; margin: 6px 6px 4px; }
+.caqdas__hint { font-size: 12px; color: #8a93a0; margin: 0 6px 10px; line-height: 1.4; transition: color .15s; }
+.caqdas__code { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; cursor: pointer; }
 .caqdas__code:hover { background: #f5f8fb; }
 .caqdas__sw { width: 14px; height: 14px; border-radius: 3px; flex: none; }
 .caqdas__code .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -199,18 +200,33 @@ export const workspace = {
     function renderCodes() {
       codePane.textContent = '';
       const h = el('h3'); h.textContent = 'Codebook'; codePane.append(h);
+      const hint = el('div', 'caqdas__hint');
+      hint.textContent = 'Select a passage, then click a code to apply it (or right-click the passage).';
+      codePane.append(hint);
       const counts = {};
       for (const s of state.segments) counts[s.codeId] = (counts[s.codeId] || 0) + 1;
       for (const code of state.codes) {
         const r = el('div', 'caqdas__code');
+        r.title = 'Click to code the selected passage';
         const sw = el('span', 'caqdas__sw'); sw.style.backgroundColor = code.color;
         const nm = el('span', 'nm'); nm.textContent = code.name;
         const ct = el('span', 'ct'); ct.textContent = counts[code.id] || 0;
         const x = el('button', 'x'); x.textContent = '✕'; x.title = 'Delete code + its segments';
-        x.addEventListener('click', () => {
+        x.addEventListener('click', (e) => {
+          e.stopPropagation();
           state.codes = state.codes.filter((c) => c.id !== code.id);
           state.segments = state.segments.filter((s) => s.codeId !== code.id);
           save(); renderAll();
+        });
+        // The workhorse gesture: apply this code to the current selection. mousedown
+        // + preventDefault keeps the text selection alive through the click (the
+        // selection would otherwise collapse when focus leaves the transcript).
+        r.addEventListener('mousedown', (e) => {
+          if (e.button !== 0 || e.target === x) return;
+          e.preventDefault();
+          const span = currentSpan();
+          if (span) addSegment(code.id, span);
+          else flashHint(hint);
         });
         r.append(sw, nm, ct, x);
         codePane.append(r);
@@ -233,55 +249,61 @@ export const workspace = {
 
     function renderAll() { renderDocList(); renderText(); renderCodes(); }
 
-    // --- coding: select text → assign a code --------------------------------
+    // --- coding: assign codes to selections ---------------------------------
     let menu = null;
     const closeMenu = () => { menu?.remove(); menu = null; };
     document.addEventListener('click', closeMenu);
 
-    // Open the code-assign menu from the current selection (shared by both
-    // triggers). `evt` (optional) positions the menu at the cursor.
-    const openFromSelection = (evt) => {
+    // The current text selection within the active document, as {lo,hi,text,range}
+    // (or null). Shared by the right-click menu and the click-a-code gesture.
+    const currentSpan = () => {
       const sel = document.getSelection();
-      if (!sel || sel.isCollapsed || !sel.rangeCount) return false;
+      if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
       const range = sel.getRangeAt(0);
-      if (!textPane.contains(range.commonAncestorContainer)) return false;
-      const start = offsetWithin(textPane, range.startContainer, range.startOffset);
-      const end = offsetWithin(textPane, range.endContainer, range.endOffset);
-      const lo = Math.min(start, end), hi = Math.max(start, end);
-      if (hi <= lo) return false;
+      if (!textPane.contains(range.commonAncestorContainer)) return null;
+      const a = offsetWithin(textPane, range.startContainer, range.startOffset);
+      const b = offsetWithin(textPane, range.endContainer, range.endOffset);
+      const lo = Math.min(a, b), hi = Math.max(a, b);
+      if (hi <= lo) return null;
       const doc = docs.find((d) => d.rid === activeRid);
-      if (!doc) return false;
-      openAssignMenu(lo, hi, doc.text.slice(lo, hi), range, evt);
-      return true;
+      if (!doc) return null;
+      return { lo, hi, text: doc.text.slice(lo, hi), range };
     };
 
-    // Two ways to assign, both opening the SAME menu: finish a left-drag selection,
-    // or right-click a selection. Right-click also suppresses the browser's native
-    // context menu (the earlier fix) — but now it shows the coding menu instead of
-    // nothing. A right-click with no selection just suppresses the native menu.
-    textPane.addEventListener('mouseup', (e) => { if (e.button === 0) openFromSelection(e); });
+    // Record a segment for a span, clear the selection, and re-render.
+    const addSegment = (codeId, span) => {
+      state.segments.push({ doc: activeRid, codeId, start: span.lo, end: span.hi, text: span.text });
+      save();
+      document.getSelection()?.removeAllRanges();
+      renderText(); renderDocList(); renderCodes();
+    };
+
+    const flashHint = (elm) => { elm.style.color = '#b04a4a'; setTimeout(() => { elm.style.color = ''; }, 900); };
+
+    // Coding is deliberately NOT auto-pop-on-selection (the Dedoose/Taguette way) —
+    // coders select text to read, compare, and copy, so a menu on every selection
+    // gets in the way of reading. Two intentional gestures instead, matching the
+    // desktop CAQDAS tools (NVivo/ATLAS.ti/MAXQDA):
+    //   • select a passage, then CLICK a code in the codebook (the workhorse), or
+    //   • RIGHT-CLICK a passage → the code menu (also suppresses the native menu).
     textPane.addEventListener('contextmenu', (e) => {
       e.preventDefault();
-      openFromSelection(e);
+      const span = currentSpan();
+      if (span) openAssignMenu(span, e);
     });
     // Keep the native menu off the rest of the coding tab too (codebook, menu).
     document.addEventListener('contextmenu', (e) => e.preventDefault());
 
-    function openAssignMenu(lo, hi, text, range, evt) {
+    function openAssignMenu(span, evt) {
       closeMenu();
       menu = el('div', 'caqdas__menu');
-      const assign = (codeId) => {
-        state.segments.push({ doc: activeRid, codeId, start: lo, end: hi, text });
-        save(); closeMenu();
-        document.getSelection()?.removeAllRanges();
-        renderText(); renderDocList(); renderCodes();
-      };
+      const choose = (codeId) => { closeMenu(); addSegment(codeId, span); };
       for (const code of state.codes) {
         const b = el('button');
         const sw = el('span', 'caqdas__sw'); sw.style.backgroundColor = code.color;
         const nm = document.createTextNode(code.name);
         b.append(sw, nm);
-        b.addEventListener('click', (e) => { e.stopPropagation(); assign(code.id); });
+        b.addEventListener('click', (e) => { e.stopPropagation(); choose(code.id); });
         menu.append(b);
       }
       const row = el('div', 'row');
@@ -291,14 +313,14 @@ export const workspace = {
         const name = inp.value.trim();
         if (!name) return;
         const code = { id: uid(), name, color: PALETTE[state.codes.length % PALETTE.length] };
-        state.codes.push(code); assign(code.id);
+        state.codes.push(code); choose(code.id);
       };
       inp.addEventListener('click', (e) => e.stopPropagation());
       inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.stopPropagation(); mk(); } });
       menu.append(row);
       // Position at the cursor for a right-click, else just under the selection.
-      const x = evt && typeof evt.clientX === 'number' ? evt.clientX : range.getBoundingClientRect().left;
-      const y = evt && typeof evt.clientY === 'number' ? evt.clientY + 4 : range.getBoundingClientRect().bottom + 4;
+      const x = typeof evt?.clientX === 'number' ? evt.clientX : span.range.getBoundingClientRect().left;
+      const y = typeof evt?.clientY === 'number' ? evt.clientY + 4 : span.range.getBoundingClientRect().bottom + 4;
       menu.style.left = Math.round(x) + 'px';
       menu.style.top = Math.round(y) + 'px';
       document.body.append(menu);
