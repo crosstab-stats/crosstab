@@ -149,6 +149,11 @@ export class ResultsPane {
    */
   #model = [];
 
+  /** A transient "restored from last save" note (DOM-only, not in #model); removed
+   * the moment fresh output is appended, so stale output is flagged but new runs
+   * read clean. */
+  #restoredNote = null;
+
   /**
    * @param {HTMLElement} host - The element to attach the shadow root to.
    * @param {{bus?: import('./event-bus.js').EventBus}} [opts]
@@ -374,6 +379,78 @@ export class ResultsPane {
     return this.#model.map((m) => ({ ...m }));
   }
 
+  /**
+   * Rebuild the pane from a saved model (the inverse of {@link ResultsPane#getModel})
+   * — so reopening a project shows its output without re-running. Also CLEARS first,
+   * so switching to a project with no/old output never leaves stale results on
+   * screen. Does not emit 'output:written' (a restore isn't a new result).
+   *
+   * @param {Array<object>} model - A model array from a prior getModel().
+   */
+  restoreModel(model) {
+    this.clear(); // wipes DOM + model; shows empty state if nothing to restore
+    if (!Array.isArray(model) || model.length === 0) return;
+    this.#clearEmptyState();
+    this.#currentSection = null;
+    this.#pendingSection = null;
+    for (const item of model) {
+      if (!item || !item.kind) continue;
+      if (item.kind === 'section') {
+        this.#currentSection = this.#createSection({ title: item.title || '', attribution: item.attribution || null });
+      } else if (item.kind === 'table') {
+        const block = this.#makeBlock();
+        let html = item.html || '';
+        if (item.table) {
+          const tableEl = renderTableEl(item.table); // re-render from spec (host DOM, no injection)
+          block.append(tableEl);
+          html = tableEl.outerHTML;
+        } else {
+          block.innerHTML = html;
+        }
+        this.#place(block);
+        this.#model.push({ kind: 'table', table: item.table, html });
+      } else if (item.kind === 'text') {
+        const block = this.#makeBlock();
+        block.className += ' results-note';
+        block.innerHTML = item.html || '';
+        this.#place(block);
+        this.#model.push({ kind: 'text', html: item.html || '' });
+      } else if (item.kind === 'plot') {
+        const block = this.#makeBlock();
+        block.classList.add('results-plot');
+        const holder = document.createElement('div');
+        holder.className = 'results-plot__svg';
+        const safe = sanitizeHtml(item.svg || '');
+        holder.innerHTML = safe;
+        block.append(holder);
+        const handle = this.#nextPlotId++;
+        this.#plots.set(handle, holder);
+        const save = document.createElement('div');
+        save.className = 'results-plot__save';
+        save.append(
+          makeSaveBtn('⬇ SVG', () => savePlotSvg(holder, handle)),
+          makeSaveBtn('⬇ PNG', () => savePlotPng(holder, handle)),
+        );
+        block.append(save);
+        this.#place(block);
+        this.#model.push({ kind: 'plot', svg: safe, id: handle });
+      } else if (item.kind === 'error') {
+        const block = this.#makeBlock();
+        block.className = 'results-block results-error';
+        block.textContent = item.message || '';
+        this.#place(block);
+        this.#model.push({ kind: 'error', message: item.message || '' });
+      }
+    }
+    // A subtle, transient marker so restored output isn't mistaken for fresh
+    // (it's a snapshot — if the data changed since, re-run to refresh).
+    const note = document.createElement('div');
+    note.textContent = '↻ Restored from your last save — re-run analyses to refresh.';
+    note.style.cssText = 'font-size:12px;color:#7a8590;font-style:italic;padding:6px 12px;border-bottom:1px solid #eef0f2;';
+    this.#content.prepend(note);
+    this.#restoredNote = note;
+  }
+
   /** The canonical results stylesheet, so an HTML export can reproduce the look
    * (`app.results.getStyles`). */
   getStyles() {
@@ -433,6 +510,8 @@ export class ResultsPane {
    * section on first use, or appending at top level if there is none. */
   #place(block) {
     this.#clearEmptyState();
+    // Fresh output supersedes a restored snapshot — drop the "restored" note.
+    if (this.#restoredNote) { this.#restoredNote.remove(); this.#restoredNote = null; }
     if (!this.#currentSection && this.#pendingSection) {
       this.#currentSection = this.#createSection(this.#pendingSection);
       this.#pendingSection = null;

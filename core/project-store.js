@@ -137,7 +137,9 @@ export class ProjectStore {
     // Plugin workspace blobs (#93), keyed by workspace id — opaque to the host,
     // preserved verbatim (incl. ids whose plugin isn't installed here).
     const workspaces = bundle.workspaces && typeof bundle.workspaces === 'object' ? bundle.workspaces : null;
-    const manifest = { name, savedAt, activeId: bundle.activeId, activePlugins, workspaces, datasets };
+    // The Output tab's result model (#103) — sections/tables/plots/text/errors.
+    const output = Array.isArray(bundle.output) ? bundle.output : null;
+    const manifest = { name, savedAt, activeId: bundle.activeId, activePlugins, workspaces, output, datasets };
     await this.#write(dir, 'project.json', JSON.stringify(manifest));
 
     const release = await this.#acquire();
@@ -195,6 +197,7 @@ export class ProjectStore {
         activeId: manifest.activeId,
         activePlugins: Array.isArray(manifest.activePlugins) ? manifest.activePlugins : null,
         workspaces: manifest.workspaces && typeof manifest.workspaces === 'object' ? manifest.workspaces : null,
+        output: Array.isArray(manifest.output) ? manifest.output : null,
         datasets,
       },
     };

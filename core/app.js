@@ -429,6 +429,10 @@ export async function boot(mounts) {
     // A project also remembers each plugin workspace's state blob.
     getWorkspaces: () => workspaceStore.export(),
     applyWorkspaces: (obj) => workspaceStore.import(obj),
+    // …and the Output tab's results, so reopening shows them (and switching
+    // projects clears/reloads output instead of leaving the previous one's).
+    getOutput: () => results.getModel(),
+    applyOutput: (model) => results.restoreModel(model),
   });
   projects.activate();
 
