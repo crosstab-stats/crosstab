@@ -17,7 +17,9 @@ const VENDOR = join(dirname(fileURLToPath(import.meta.url)), '..', 'vendor');
 
 const BG = [44, 62, 80]; // #2c3e50 brand bar
 const LINE = [236, 240, 241]; // #ecf0f1
-const ACCENT = [41, 128, 185]; // #2980b9
+const HEADER = [41, 128, 185]; // #2980b9 — column headers (top row)
+const HEADER2 = [52, 152, 219]; // #3498db — row headers (left column)
+const CORNER = [31, 99, 145]; // #1f6391 — the header corner cell
 
 // --- CRC32 (PNG chunk checksums) ------------------------------------------
 const CRC_TABLE = (() => {
@@ -77,24 +79,26 @@ function makeIcon(size) {
 
   rect(0, 0, size, size, BG); // full-bleed background (maskable-safe)
 
-  // 2×2 grid centred in the maskable safe zone (~60% of the canvas).
-  const g0 = Math.round(size * 0.2);
-  const g1 = Math.round(size * 0.8);
+  // A 3×3 cross-tabulation centred in the maskable safe zone (~64%): coloured
+  // header row + header column (the margins that define a crosstab), plain body.
+  const g0 = Math.round(size * 0.18);
+  const g1 = Math.round(size * 0.82);
   const side = g1 - g0;
-  const mid = g0 + Math.round(side / 2);
-  const t = Math.max(2, Math.round(size * 0.045)); // line thickness
-  const ht = Math.round(t / 2);
+  const cw = side / 3; // cell size
+  const c = (i) => Math.round(g0 + i * cw);
+  const t = Math.max(2, Math.round(size * 0.03)); // grid line thickness
 
-  // Top-left cell filled with the accent (reads as "a highlighted cell").
-  rect(g0, g0, mid - g0, mid - g0, ACCENT);
+  // Header margins: top row, left column, and the darker corner where they meet.
+  rect(g0, g0, side, c(1) - g0, HEADER); // top row (column headers)
+  rect(g0, g0, c(1) - g0, side, HEADER2); // left column (row headers)
+  rect(g0, g0, c(1) - g0, c(1) - g0, CORNER); // corner cell
 
-  // Grid lines (outer border + the cross divider).
-  rect(g0, g0, side, t, LINE); // top
-  rect(g0, g1 - t, side, t, LINE); // bottom
-  rect(g0, g0, t, side, LINE); // left
-  rect(g1 - t, g0, t, side, LINE); // right
-  rect(mid - ht, g0, t, side, LINE); // middle vertical
-  rect(g0, mid - ht, side, t, LINE); // middle horizontal
+  // Grid lines (4 verticals + 4 horizontals → a 3×3 table), clamped to the box.
+  for (let i = 0; i <= 3; i++) {
+    const p = c(i);
+    rect(Math.min(p, g1 - t), g0, t, side, LINE); // vertical
+    rect(g0, Math.min(p, g1 - t), side, t, LINE); // horizontal
+  }
 
   return encodePNG(rgba, size, size);
 }
