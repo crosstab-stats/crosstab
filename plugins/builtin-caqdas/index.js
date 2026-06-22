@@ -104,9 +104,12 @@ export const workspace = {
     const bar = el('div', 'caqdas__bar');
     const colLabel = el('label'); colLabel.textContent = 'Transcript column:';
     const colSel = el('select');
+    const labelLabel = el('label'); labelLabel.textContent = 'Label by:';
+    const labelSel = el('select');
+    labelSel.title = 'Column that identifies each document (e.g. a filename or participant id) — used in the document list and the segments export.';
     const freqBtn = el('button', 'caqdas__btn'); freqBtn.textContent = 'Code frequency';
     const expBtn = el('button', 'caqdas__btn'); expBtn.textContent = 'Segments → Output';
-    bar.append(colLabel, colSel, freqBtn, expBtn);
+    bar.append(colLabel, colSel, labelLabel, labelSel, freqBtn, expBtn);
 
     const body = el('div', 'caqdas__body');
     const docList = el('div', 'caqdas__docs');
@@ -132,12 +135,40 @@ export const workspace = {
       renderAll();
     });
 
+    // "Label by" — which column identifies each document (filename, participant id,
+    // …) for the doc list + the segments export. Any column qualifies; default to
+    // "Row number". Auto-pick a source-attribution-looking column when present
+    // (e.g. the text importer's `document`), so it Just Works for that workflow.
+    const lopt0 = el('option'); lopt0.value = ''; lopt0.textContent = 'Row number';
+    labelSel.append(lopt0);
+    for (const m of meta) { const o = el('option'); o.value = m.name; o.textContent = m.name; labelSel.append(o); }
+    if (!state.labelColumn) {
+      const guess = meta
+        .map((m) => m.name)
+        .find((n) => n !== state.textColumn && /^(document|source|file|filename|doc|id|name|participant|case|respondent|speaker)$/i.test(n));
+      if (guess) { state.labelColumn = guess; save(); }
+    }
+    if (state.labelColumn && meta.some((m) => m.name === state.labelColumn)) labelSel.value = state.labelColumn;
+
+    labelSel.addEventListener('change', async () => {
+      state.labelColumn = labelSel.value || null;
+      save();
+      await loadDocs();
+      renderAll();
+    });
+
     async function loadDocs() {
       docs = [];
       activeRid = null;
       if (!state.textColumn) return;
-      const rows = await app.data.getRows({ variables: [state.textColumn], includeRowId: true, limit: MAX_DOCS });
-      docs = rows.map((r) => ({ rid: String(r.__rid), text: String(r[state.textColumn] ?? '') }));
+      const vars = [state.textColumn];
+      if (state.labelColumn && state.labelColumn !== state.textColumn) vars.push(state.labelColumn);
+      const rows = await app.data.getRows({ variables: vars, includeRowId: true, limit: MAX_DOCS });
+      docs = rows.map((r) => ({
+        rid: String(r.__rid),
+        text: String(r[state.textColumn] ?? ''),
+        label: state.labelColumn && r[state.labelColumn] != null ? String(r[state.labelColumn]) : '',
+      }));
       activeRid = docs.length ? docs[0].rid : null;
     }
 
@@ -155,7 +186,7 @@ export const workspace = {
       }
       docs.forEach((d, i) => {
         const row = el('div', 'caqdas__doc' + (d.rid === activeRid ? ' is-active' : ''));
-        const n = el('span', 'n'); n.textContent = '#' + (i + 1);
+        const n = el('span', 'n'); n.textContent = d.label || '#' + (i + 1);
         const cnt = segsFor(d.rid).length;
         const c = el('span', 'c'); if (cnt) c.textContent = cnt + '▮';
         const t = document.createTextNode(' ' + (d.text.slice(0, 40) || '(empty)'));
@@ -339,10 +370,14 @@ export const workspace = {
 
     expBtn.addEventListener('click', () => {
       if (!state.segments.length) { app.results.appendError('No coded segments yet.'); return; }
-      const byRid = Object.fromEntries(docs.map((d, i) => [d.rid, i + 1]));
-      const rows = state.segments.map((s) => [byRid[s.doc] ?? '?', codeById(s.codeId)?.name ?? '?', s.text]);
+      // Identify each document by the chosen label column (e.g. filename), else by
+      // row number. Header takes the column's name when one is chosen.
+      const labelFor = {};
+      docs.forEach((d, i) => { labelFor[d.rid] = d.label || `Doc ${i + 1}`; });
+      const header = state.labelColumn || 'Document';
+      const rows = state.segments.map((s) => [labelFor[s.doc] ?? '?', codeById(s.codeId)?.name ?? '?', s.text]);
       app.results.appendText('### Coded segments');
-      app.results.appendTable({ columns: ['Doc #', 'Code', 'Text'], rows });
+      app.results.appendTable({ columns: [header, 'Code', 'Text'], rows });
     });
 
     // --- go ------------------------------------------------------------------
@@ -357,6 +392,7 @@ function normalize(raw) {
   return {
     version: 1,
     textColumn: typeof s.textColumn === 'string' ? s.textColumn : null,
+    labelColumn: typeof s.labelColumn === 'string' ? s.labelColumn : null,
     codes: Array.isArray(s.codes) ? s.codes.filter((c) => c && c.id) : [],
     segments: Array.isArray(s.segments) ? s.segments.filter((x) => x && x.doc && x.codeId) : [],
   };
