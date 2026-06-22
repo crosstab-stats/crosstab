@@ -34,6 +34,7 @@ import { PluginLoader } from './loader.js';
 import { installDialogKeybindings } from './dialog-keys.js';
 import { Launcher } from './launcher.js';
 import { OfflineManager } from './offline.js';
+import { exportProjectBundle, downloadBlob, slug } from './project-bundle.js';
 
 /**
  * URLs of the built-in plugins to load at startup. These load through the exact
@@ -413,6 +414,26 @@ export async function boot(mounts) {
     applyActivePlugins: (keys) => (plugins ? plugins.applyActiveSet(keys) : Promise.resolve()),
   });
   projects.activate();
+
+  // File ▸ Export project bundle — the open, self-describing .crosstab archive
+  // (Parquet data + JSON schema + transform log). Host-owned (reads all datasets),
+  // not a plugin. Import is a follow-up.
+  menus.register({
+    id: 'core:export-bundle',
+    path: ['File'],
+    label: 'Export project bundle (.crosstab)…',
+    order: 6,
+    command: async () => {
+      try {
+        const name = projects.activeName || 'crosstab-project';
+        const blob = await exportProjectBundle({ datasets, projectName: name });
+        downloadBlob(blob, `${slug(name) || 'crosstab-project'}.crosstab`);
+        results.api.appendText(`Exported **${name}** as a .crosstab bundle (${(blob.size / 1048576).toFixed(1)} MB).`);
+      } catch (err) {
+        results.api.appendError(`Export project bundle failed: ${err.message}`);
+      }
+    },
+  });
 
   // Now that projects exist, let the output-export dialog default its report
   // title to the active project name, and register its File menu item.
