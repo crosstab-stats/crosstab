@@ -224,6 +224,16 @@ export class ProjectSync {
     }
   }
 
+  /** Drop any pending/debounced autosave so a stale save can't fire mid-switch
+   * (project open/new) and overwrite the old binding or race the dataset reload. */
+  #cancelPendingSave() {
+    if (this.#timer) {
+      clearTimeout(this.#timer);
+      this.#timer = null;
+    }
+    this.#dirtyAgain = false;
+  }
+
   /** Snapshot all open datasets. With `all`, every dataset's Parquet is included;
    * otherwise only those in `dirty` (the rest save metadata-only). */
   async #snapshot(all, dirty = new Set()) {
@@ -242,6 +252,7 @@ export class ProjectSync {
 
   /** Start a fresh project: one empty dataset, unbound. */
   async newProject() {
+    this.#cancelPendingSave();
     this.#loading = true;
     try {
       await this.#datasets.loadBundle({
@@ -276,6 +287,7 @@ export class ProjectSync {
       this.#showBrowseModal(entries);
       return;
     }
+    this.#cancelPendingSave();
     this.#setStatus('loading');
     this.#loading = true;
     try {

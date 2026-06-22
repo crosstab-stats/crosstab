@@ -227,14 +227,22 @@ export class PluginManager {
     await this.#loader.unload(id);
   }
 
-  /** Best-effort load (boot/toggle): surfaces errors, never throws. */
+  /** Best-effort load (boot/toggle): surfaces errors, never throws. Retries once
+   * on failure — bulk loads at launcher start can drop a plugin's sandbox
+   * handshake, and a retry is exactly what the user's manual uncheck/re-check did.
+   * #instantiate rolls back fully on a throw, so the retry starts clean. */
   async #loadEntry(entry) {
     try {
       return await this.#loadEntryStrict(entry);
-    } catch (err) {
-      console.error(`Failed to load plugin ${entry.key}`, err);
-      this.#results.appendError(`Failed to load plugin ${entry.name || entry.key}: ${err.message}`);
-      return null;
+    } catch (err1) {
+      await new Promise((r) => setTimeout(r, 150));
+      try {
+        return await this.#loadEntryStrict(entry);
+      } catch (err2) {
+        console.error(`Failed to load plugin ${entry.key}`, err2);
+        this.#results.appendError(`Failed to load plugin ${entry.name || entry.key}: ${err2.message}`);
+        return null;
+      }
     }
   }
 

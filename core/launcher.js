@@ -309,7 +309,11 @@ export class Launcher {
         // picker (authoritative), so skip the project's own plugin restore.
         await this.#projects.openProject(this.#pendingProject.id, { applyPlugins: false });
       } else if (this.#pendingSource || !reopen) {
-        // Load data only if a source was chosen (on reopen, keep current data unless picked).
+        // Loading a fresh data source (Demo/Blank). On reopen, FIRST detach into a
+        // new project — otherwise setDataset mutates the currently-open project's
+        // active dataset and autosave overwrites it (clobbering a saved project).
+        // The chosen data then becomes a new autosaving "Untitled project".
+        if (reopen) await this.#projects?.newProject?.();
         await this.#loadSource(this.#pendingSource || 'blank');
       }
       markSeen();

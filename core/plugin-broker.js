@@ -93,9 +93,20 @@ export class PluginBroker {
     window.addEventListener('message', this.#listener);
   }
 
-  /** @returns {Promise<void>} Resolves when the iframe runtime is ready. */
+  /** @returns {Promise<void>} Resolves when the iframe runtime is ready, or
+   * rejects if it doesn't signal ready in time — so a stuck/dropped sandbox
+   * handshake fails fast (and the loader can retry) instead of hanging forever. */
   whenReady() {
-    return this.#ready.promise;
+    return Promise.race([
+      this.#ready.promise,
+      new Promise((_resolve, reject) => {
+        const t = setTimeout(
+          () => reject(new Error('plugin sandbox did not become ready in time')),
+          20000,
+        );
+        this.#ready.promise.then(() => clearTimeout(t), () => clearTimeout(t));
+      }),
+    ]);
   }
 
   /**

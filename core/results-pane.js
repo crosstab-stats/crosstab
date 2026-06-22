@@ -134,6 +134,9 @@ export class ResultsPane {
   /** Next plot handle id. */
   #nextPlotId = 1;
 
+  /** Optional event bus, so appendError can ask the workspace to surface Output. */
+  #bus = null;
+
   /**
    * The **result model**: an ordered, structured record of everything appended to
    * the pane, parallel to the DOM. This is the single source the export plugins
@@ -148,8 +151,10 @@ export class ResultsPane {
 
   /**
    * @param {HTMLElement} host - The element to attach the shadow root to.
+   * @param {{bus?: import('./event-bus.js').EventBus}} [opts]
    */
-  constructor(host) {
+  constructor(host, { bus } = {}) {
+    this.#bus = bus ?? null;
     this.#root = host.attachShadow({ mode: 'open' });
 
     const style = document.createElement('style');
@@ -340,6 +345,10 @@ export class ResultsPane {
     block.textContent = message;
     this.#place(block);
     this.#model.push({ kind: 'error', message: String(message ?? '') });
+    // Surface the error: ask the workspace to switch to Output (errors fired
+    // outside an analysis — imports, transforms, plugin loads — otherwise land on
+    // a tab the user isn't looking at).
+    this.#bus?.emit?.('output:error');
   }
 
   /** Remove all output and reset to the empty state. */

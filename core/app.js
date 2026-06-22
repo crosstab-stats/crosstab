@@ -243,7 +243,7 @@ export async function boot(mounts) {
     },
     { preloadPackages: [] }, // built-in plugins declare their own R deps
   );
-  const results = new ResultsPane(mounts.results);
+  const results = new ResultsPane(mounts.results, { bus });
   const menus = new MenuShell(mounts.menubar);
   const ui = new UiService(datasets);
   const readstat = new ReadStatManager();
@@ -693,6 +693,8 @@ function wireWorkspaceTabs(bus, mounts, { dataView, variableView, results, rCons
   // Focus the relevant view for the action in progress.
   bus.on('analysis:started', () => show('output'));
   bus.on('import:finished', () => show('data'));
+  // An error (incl. ones outside an analysis) should pull the user to Output.
+  bus.on('output:error', () => show('output'));
 }
 
 /**
