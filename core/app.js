@@ -48,6 +48,7 @@ import { WorkspaceManager } from './workspace-manager.js';
  */
 const BUILTIN_PLUGINS = [
   './plugins/builtin-csv-import/index.js',
+  './plugins/builtin-text-import/index.js', // .txt corpus → one row per file (for CAQDAS #67)
   // SPSS/Stata/SAS import is now host-side via ReadStat-WASM (streaming, no 2 GB
   // limit) — registered below as a streaming importer, superseding the old
   // haven/R importer (builtin-haven-import) for .sav/.zsav/.dta/.sas7bdat/.por/.xpt.
