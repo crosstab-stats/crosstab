@@ -22,6 +22,8 @@
  * is stored: factor codes are numeric, string vars are text).
  */
 const FORMATS = { sav: 0, dta: 1, sas7bdat: 2, por: 3, xpt: 4 };
+/** Writable formats (sas7bdat is read-only in ReadStat). */
+const FORMATS_W = { sav: 0, dta: 1, por: 3, xpt: 4 };
 const TYPE_STRING = 0;
 const TYPE_STRING_REF = 6;
 const MEASURE = { 1: 'nominal', 2: 'ordinal', 3: 'scale' };
@@ -38,10 +40,126 @@ self.onmessage = async (e) => {
   try {
     if (msg.type === 'catalog') await runCatalog(msg);
     else if (msg.type === 'data') await runData(msg);
+    else if (msg.type === 'writeBegin') await runWriteBegin(msg);
+    else if (msg.type === 'writeBatch') await runWriteBatch(msg);
+    else if (msg.type === 'writeEnd') await runWriteEnd(msg);
   } catch (err) {
     self.postMessage({ type: 'error', id: msg.id, message: String(err?.message || err) });
   }
 };
+
+// --- write path (streaming export) ------------------------------------------
+// State for the in-flight export. The writer lives in WASM across the synchronous
+// batch calls; we feed it one DuckDB batch at a time and stream its output bytes
+// straight to an OPFS sync-access handle, so memory stays bounded at any size.
+let wVars = null; // schema for the export (var order)
+let wCols = null; // current batch: array of column arrays in var order
+let wSync = null; // OPFS FileSystemSyncAccessHandle
+let wFh = null; // OPFS file handle
+let wOffset = 0;
+
+async function runWriteBegin({ id, format, rowCount, variables }) {
+  const Module = await getModule();
+  wVars = variables;
+  // Schema callbacks — served from the host-supplied schema (var order).
+  Module.ctwNVars = () => wVars.length;
+  Module.ctwVarType = (i) => (wVars[i].type === 'double' ? 1 : 0);
+  Module.ctwVarWidth = (i) => wVars[i].width || 1;
+  Module.ctwVarName = (i) => wVars[i].name;
+  Module.ctwVarLabel = (i) => wVars[i].label || '';
+  Module.ctwVarMeasure = (i) => wVars[i].measure || 0;
+  Module.ctwVarNLabels = (i) => (wVars[i].labels ? wVars[i].labels.length : 0);
+  Module.ctwLabelIsString = (i) => (wVars[i].labelsAreString ? 1 : 0);
+  Module.ctwLabelDval = (i, j) => Number(wVars[i].labels[j].value);
+  Module.ctwLabelSval = (i, j) => String(wVars[i].labels[j].sval ?? '');
+  Module.ctwLabelText = (i, j) => String(wVars[i].labels[j].text ?? '');
+  Module.ctwVarNMissing = (i) => (wVars[i].missing ? wVars[i].missing.length : 0);
+  Module.ctwMissingLo = (i, j) => Number(wVars[i].missing[j].lo);
+  Module.ctwMissingHi = (i, j) => Number(wVars[i].missing[j].hi);
+  // Cell callbacks — served from the current batch (NaN/null → missing).
+  Module.ctwCellDouble = (c, r) => {
+    const v = wCols[c][r];
+    return v == null || v !== v ? NaN : +v;
+  };
+  Module.ctwCellString = (c, r) => {
+    const v = wCols[c][r];
+    return v == null ? null : String(v);
+  };
+  // Output sink: stream bytes synchronously to an OPFS file (bounded memory).
+  const root = await navigator.storage.getDirectory();
+  wFh = await root.getFileHandle('ct_export.bin', { create: true });
+  wSync = await wFh.createSyncAccessHandle();
+  wSync.truncate(0);
+  wOffset = 0;
+  Module.ctwSink = (u8) => {
+    wOffset += wSync.write(u8, { at: wOffset });
+  };
+  const fmt = FORMATS_W[format];
+  if (fmt === undefined) throw new Error(`Cannot write format "${format}".`);
+  const err = Module.ccall('ct_write_begin', 'number', ['number', 'number'], [fmt, rowCount]);
+  if (err !== 0) {
+    const m = Module.ccall('ct_error_message', 'string', ['number'], [err]);
+    await closeWrite();
+    self.postMessage({ type: 'error', id, message: `ReadStat write: ${m}` });
+    return;
+  }
+  self.postMessage({ type: 'writeReady', id });
+}
+
+async function runWriteBatch({ id, columns, nrows }) {
+  const Module = await getModule();
+  wCols = columns; // array of column arrays, var order
+  const err = Module.ccall('ct_write_batch', 'number', ['number'], [nrows]);
+  if (err !== 0) {
+    const m = Module.ccall('ct_error_message', 'string', ['number'], [err]);
+    await closeWrite();
+    self.postMessage({ type: 'error', id, message: `ReadStat write: ${m}` });
+    return;
+  }
+  self.postMessage({ type: 'batchDone', id });
+}
+
+async function runWriteEnd({ id }) {
+  const Module = await getModule();
+  const err = Module.ccall('ct_write_end', 'number', [], []);
+  const file = await finishWrite();
+  if (err !== 0) {
+    const m = Module.ccall('ct_error_message', 'string', ['number'], [err]);
+    self.postMessage({ type: 'error', id, message: `ReadStat write: ${m}` });
+    return;
+  }
+  // Blobs/Files clone by reference across postMessage (no multi-GB copy).
+  self.postMessage({ type: 'writeDone', id, blob: file });
+}
+
+/** Flush + close the sync handle and return the OPFS-backed File. */
+async function finishWrite() {
+  let file = null;
+  try {
+    if (wSync) {
+      wSync.flush();
+      wSync.close();
+    }
+    if (wFh) file = await wFh.getFile();
+  } finally {
+    wSync = null;
+    wCols = null;
+    wVars = null;
+  }
+  return file;
+}
+
+/** Close the sync handle on an error path (no file returned). */
+async function closeWrite() {
+  try {
+    if (wSync) wSync.close();
+  } catch {
+    /* already closed */
+  }
+  wSync = null;
+  wCols = null;
+  wVars = null;
+}
 
 /** Shared parse setup: wire FileReaderSync IO + collect schema. Returns a context
  * whose handlers the caller installs on Module before calling ct_parse. `keep`, if

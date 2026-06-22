@@ -12,6 +12,7 @@
  */
 #include <stdlib.h>
 #include <stdint.h>
+#include <math.h>
 #include <sys/types.h>
 #include <emscripten.h>
 #include "readstat.h"
@@ -157,3 +158,148 @@ int ct_parse(int format, double file_size, int row_limit) {
 
 EMSCRIPTEN_KEEPALIVE
 const char *ct_error_message(int code) { return readstat_error_message((readstat_error_t)code); }
+
+/* =========================================================================
+ * Write path — symmetric to read. The worker drives it in three phases so the
+ * data can STREAM (one DuckDB batch at a time, bounded memory):
+ *   ct_write_begin(format, rows)  → init writer, pull the schema from JS, header
+ *   ct_write_batch(nrows)         → write one in-memory batch (called repeatedly)
+ *   ct_write_end()                → finalise
+ * ReadStat's data-writer callback hands us output bytes, which we push to JS
+ * (ctwSink) where a synchronous OPFS access handle streams them to disk — so a
+ * multi-GB output never sits in the heap. The writer state lives in statics across
+ * the synchronous batch calls; JS fetches the next batch (async) between them.
+ * ========================================================================= */
+static readstat_writer_t *g_writer = NULL;
+static readstat_variable_t **g_wvars = NULL;
+static int g_wnvars = 0;
+
+/* Schema pulled from JS (the worker serves these from the dataset metadata). */
+EM_JS(int, ctw_nvars, (void), { return Module.ctwNVars(); });
+EM_JS(int, ctw_var_type, (int i), { return Module.ctwVarType(i); });   /* 1=double, 0=string */
+EM_JS(int, ctw_var_width, (int i), { return Module.ctwVarWidth(i); }); /* string storage width */
+EM_JS(char *, ctw_var_name, (int i), { return stringToNewUTF8(Module.ctwVarName(i)); });
+EM_JS(char *, ctw_var_label, (int i), { return stringToNewUTF8(Module.ctwVarLabel(i)); });
+EM_JS(int, ctw_var_measure, (int i), { return Module.ctwVarMeasure(i); }); /* 0 none,1,2,3 */
+EM_JS(int, ctw_var_nlabels, (int i), { return Module.ctwVarNLabels(i); });
+EM_JS(int, ctw_label_is_string, (int i), { return Module.ctwLabelIsString(i); });
+EM_JS(double, ctw_label_dval, (int i, int j), { return Module.ctwLabelDval(i, j); });
+EM_JS(char *, ctw_label_sval, (int i, int j), { return stringToNewUTF8(Module.ctwLabelSval(i, j)); });
+EM_JS(char *, ctw_label_text, (int i, int j), { return stringToNewUTF8(Module.ctwLabelText(i, j)); });
+EM_JS(int, ctw_var_nmissing, (int i), { return Module.ctwVarNMissing(i); });
+EM_JS(double, ctw_missing_lo, (int i, int j), { return Module.ctwMissingLo(i, j); });
+EM_JS(double, ctw_missing_hi, (int i, int j), { return Module.ctwMissingHi(i, j); });
+
+/* Per-cell data for the current batch (NaN double / null string → missing). */
+EM_JS(double, ctw_cell_double, (int c, int r), { return Module.ctwCellDouble(c, r); });
+EM_JS(char *, ctw_cell_string, (int c, int r), {
+  var s = Module.ctwCellString(c, r);
+  return s == null ? 0 : stringToNewUTF8(s);
+});
+
+/* Output sink: hand `len` bytes at heap `ptr` to JS (synchronous OPFS write). */
+EM_JS(void, ctw_sink, (const char *ptr, int len), { Module.ctwSink(HEAPU8.subarray(ptr, ptr + len)); });
+
+static ssize_t ct_data_writer(const void *data, size_t len, void *ctx) {
+  (void)ctx;
+  ctw_sink((const char *)data, (int)len);
+  return (ssize_t)len;
+}
+
+/* format: 0=sav 1=dta 3=por 4=xport. row_count is the total (header needs it). */
+EMSCRIPTEN_KEEPALIVE
+int ct_write_begin(int format, double row_count) {
+  g_writer = readstat_writer_init();
+  readstat_set_data_writer(g_writer, ct_data_writer);
+  int n = ctw_nvars();
+  g_wnvars = n;
+  g_wvars = (readstat_variable_t **)malloc(sizeof(readstat_variable_t *) * (n > 0 ? n : 1));
+  for (int i = 0; i < n; i++) {
+    int isDouble = ctw_var_type(i);
+    char *name = ctw_var_name(i);
+    size_t width = isDouble ? 0 : (size_t)(ctw_var_width(i) > 0 ? ctw_var_width(i) : 1);
+    readstat_variable_t *v =
+        readstat_add_variable(g_writer, name, isDouble ? READSTAT_TYPE_DOUBLE : READSTAT_TYPE_STRING, width);
+    char *label = ctw_var_label(i);
+    if (label && label[0]) readstat_variable_set_label(v, label);
+    int meas = ctw_var_measure(i);
+    if (meas >= 1 && meas <= 3) readstat_variable_set_measure(v, (readstat_measure_t)meas);
+    int nl = ctw_var_nlabels(i);
+    if (nl > 0) {
+      int isStr = ctw_label_is_string(i);
+      readstat_label_set_t *ls =
+          readstat_add_label_set(g_writer, isStr ? READSTAT_TYPE_STRING : READSTAT_TYPE_DOUBLE, name);
+      for (int j = 0; j < nl; j++) {
+        char *tx = ctw_label_text(i, j);
+        if (isStr) {
+          char *sv = ctw_label_sval(i, j);
+          readstat_label_string_value(ls, sv, tx);
+          free(sv);
+        } else {
+          readstat_label_double_value(ls, ctw_label_dval(i, j), tx);
+        }
+        free(tx);
+      }
+      readstat_variable_set_label_set(v, ls);
+    }
+    int nm = ctw_var_nmissing(i);
+    for (int j = 0; j < nm; j++) {
+      double lo = ctw_missing_lo(i, j), hi = ctw_missing_hi(i, j);
+      if (lo == hi) readstat_variable_add_missing_double_value(v, lo);
+      else readstat_variable_add_missing_double_range(v, lo, hi);
+    }
+    g_wvars[i] = v;
+    free(name);
+    free(label);
+  }
+  readstat_error_t err;
+  long rc = (long)row_count;
+  switch (format) {
+    case 0: err = readstat_begin_writing_sav(g_writer, NULL, rc); break;
+    case 1: err = readstat_begin_writing_dta(g_writer, NULL, rc); break;
+    case 3: err = readstat_begin_writing_por(g_writer, NULL, rc); break;
+    case 4: err = readstat_begin_writing_xport(g_writer, NULL, rc); break;
+    default: err = READSTAT_ERROR_WRITE; break;
+  }
+  return (int)err;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int ct_write_batch(int nrows) {
+  for (int r = 0; r < nrows; r++) {
+    readstat_error_t e = readstat_begin_row(g_writer);
+    if (e != READSTAT_OK) return (int)e;
+    for (int c = 0; c < g_wnvars; c++) {
+      readstat_variable_t *v = g_wvars[c];
+      if (readstat_variable_get_type(v) == READSTAT_TYPE_STRING) {
+        char *s = ctw_cell_string(c, r);
+        if (s == 0) {
+          readstat_insert_missing_value(g_writer, v);
+        } else {
+          readstat_insert_string_value(g_writer, v, s);
+          free(s);
+        }
+      } else {
+        double d = ctw_cell_double(c, r);
+        if (isnan(d)) readstat_insert_missing_value(g_writer, v);
+        else readstat_insert_double_value(g_writer, v, d);
+      }
+    }
+    e = readstat_end_row(g_writer);
+    if (e != READSTAT_OK) return (int)e;
+  }
+  return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int ct_write_end(void) {
+  readstat_error_t err = g_writer ? readstat_end_writing(g_writer) : READSTAT_ERROR_WRITER_NOT_INITIALIZED;
+  if (g_writer) readstat_writer_free(g_writer);
+  g_writer = NULL;
+  if (g_wvars) {
+    free(g_wvars);
+    g_wvars = NULL;
+  }
+  g_wnvars = 0;
+  return (int)err;
+}

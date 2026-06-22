@@ -453,6 +453,45 @@ export async function boot(mounts) {
     },
   });
 
+  // File ▸ Export to a native stats format (.sav/.dta). Mirrors the import path:
+  // ReadStat-WASM streams the active dataset out one DuckDB batch at a time into
+  // an OPFS file, so multi-GB exports stay memory-bounded — full parity with the
+  // big-name formats, no privileging of our own .crosstab bundle.
+  const NATIVE_EXPORTS = [
+    { id: 'core:export-sav', label: 'Export to SPSS (.sav)…', format: 'sav', ext: 'sav' },
+    { id: 'core:export-dta', label: 'Export to Stata (.dta)…', format: 'dta', ext: 'dta' },
+  ];
+  NATIVE_EXPORTS.forEach((spec, i) => {
+    menus.register({
+      id: spec.id,
+      path: ['File'],
+      label: spec.label,
+      order: 8 + i,
+      command: async () => {
+        const ds = datasets.active;
+        if (!ds || !ds.rowCount) {
+          results.api.appendError('Export: no data to export. Load or create a dataset first.');
+          return;
+        }
+        const base = slug(projects.activeName || 'dataset') || 'dataset';
+        try {
+          mounts.status.textContent = `Exporting ${spec.ext.toUpperCase()}…`;
+          const blob = await readstat.writeDataset(ds, spec.format, (done, total) => {
+            mounts.status.textContent = `Exporting ${spec.ext.toUpperCase()}… ${done.toLocaleString()}/${total.toLocaleString()} rows`;
+          });
+          downloadBlob(blob, `${base}.${spec.ext}`);
+          results.api.appendText(
+            `Exported **${ds.rowCount.toLocaleString()}** rows to \`${base}.${spec.ext}\` (${(blob.size / 1048576).toFixed(1)} MB).`,
+          );
+        } catch (err) {
+          results.api.appendError(`Export to .${spec.ext} failed: ${err.message}`);
+        } finally {
+          mounts.status.textContent = '';
+        }
+      },
+    });
+  });
+
   // Now that projects exist, let the output-export dialog default its report
   // title to the active project name, and register its File menu item.
   outputExporters.activate(projects);

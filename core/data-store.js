@@ -1342,6 +1342,28 @@ export class DataStore {
     );
   }
 
+  /**
+   * Max byte length of each named column's string form — the fixed storage width
+   * a .sav/.dta export must declare up front for its string variables. One
+   * aggregate query over the working view; bounded memory regardless of size.
+   *
+   * @param {string[]} names
+   * @returns {Promise<Object<string, number>>} name → max octet length (≥0).
+   */
+  async maxOctetLengths(names) {
+    const cols = (names ?? []).filter((n) => this.#byName.has(n));
+    if (!cols.length || this.#rowCount === 0) return {};
+    const rel = this.#readRelation();
+    const sel = cols
+      .map((n, i) => `max(octet_length(CAST(${quoteIdent(n)} AS VARCHAR))) AS m${i}`)
+      .join(', ');
+    const t = await this.#duckdb.query(`SELECT ${sel} FROM ${rel.from}`);
+    const r = t.get(0);
+    const out = {};
+    cols.forEach((n, i) => (out[n] = Number(r?.[`m${i}`] ?? 0) || 0));
+    return out;
+  }
+
   /** Refresh the cached SQL column types from the working view. `DESCRIBE` works
    * on views (unlike a table-name lookup in information_schema). */
   async #refreshSqlTypes() {
