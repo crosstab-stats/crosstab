@@ -34,7 +34,7 @@ const LS_WEB = 'crosstab.plugins.web';
 /** Bump when the catalog shape OR built-in manifests' metadata change, so a
  * stale persisted catalog (e.g. missing newly-declared `disciplines`) is dropped
  * and re-probed on next load. */
-const CATALOG_VERSION = 7;
+const CATALOG_VERSION = 8;
 
 export class PluginManager {
   /** @type {import('./loader.js').PluginLoader} */
