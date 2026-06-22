@@ -457,6 +457,9 @@ export async function boot(mounts) {
   // worker to cache the app shell + runtimes; surfaced in the launcher About panel.
   const offline = new OfflineManager({ webr, duckdb, plugins });
   engine.offline = offline;
+  // Connectivity indicator in the status bar — most useful on a field device, where
+  // it tells the user why an online importer is quiet and confirms "you're cached."
+  if (mounts.status) wireConnectivityIndicator(mounts.status, offline);
   const launcher = new Launcher({ plugins, datasets, bus, projects, offline });
   engine.launcher = launcher;
   const launchFlag = new URLSearchParams(location.search).get('launch');
@@ -500,6 +503,13 @@ export async function boot(mounts) {
     navigator.serviceWorker?.addEventListener?.('controllerchange', () => offline.setStandalone(true));
   }
 
+  // Opportunistic update check when online: refresh the SW registration so a newer
+  // version is fetched. Combined with the standalone stale-while-revalidate serving,
+  // the app self-updates on the next launch (the SW skipWaiting()s + claims).
+  if (navigator.onLine) {
+    navigator.serviceWorker?.getRegistration?.().then((reg) => reg?.update?.()).catch(() => {});
+  }
+
   return engine;
 }
 
@@ -523,6 +533,42 @@ function wireStatusLine(bus, el, webr) {
     else if (status === 'failed') set(`R runtime: ${kind} failed`);
   });
   if (webr.isReady) set('R runtime: ready');
+}
+
+/**
+ * A small status-bar connectivity indicator. Quiet when online and not cached;
+ * confirms "offline-ready" when online + cached; and clearly flags offline use —
+ * calmly if cached ("working offline"), as a warning if not. Most valuable on a
+ * sketchy-connectivity field device.
+ *
+ * @param {HTMLElement} statusEl - The status line (we append a sibling span).
+ * @param {import('./offline.js').OfflineManager} offline
+ */
+function wireConnectivityIndicator(statusEl, offline) {
+  const el = document.createElement('span');
+  el.id = 'net-status';
+  el.className = 'lib-status';
+  (statusEl.parentElement || statusEl).append(el);
+  const paint = async () => {
+    let enabled = false;
+    try {
+      enabled = (await offline.status()).enabled;
+    } catch {
+      /* ignore */
+    }
+    if (navigator.onLine) {
+      el.hidden = !enabled;
+      el.textContent = enabled ? '✓ Offline-ready' : '';
+      el.style.color = '#7a8590';
+    } else {
+      el.hidden = false;
+      el.textContent = enabled ? '✈ Working offline' : '⚠ Offline — not cached';
+      el.style.color = enabled ? '#7a8590' : '#b26a00';
+    }
+  };
+  window.addEventListener('online', paint);
+  window.addEventListener('offline', paint);
+  void paint();
 }
 
 /**
