@@ -106,6 +106,8 @@ const BUILTIN_PLUGINS = [
   // Reference workspace plugin (#93): proves the manifest→tab→sandboxed UI→state
   // loop. Off by default; enable in Edit ▸ Plugins to see the workspace tab.
   './plugins/builtin-hello-workspace/index.js',
+  // Qualitative coding workspace (#67) — the first real workspace plugin.
+  './plugins/builtin-caqdas/index.js',
 ];
 
 /**

@@ -109,7 +109,7 @@
           return Object.freeze({
             plugin: Object.freeze(identity),
             data: makeNamespace('data', [
-              'getDataFrame', 'getColumns', 'getVariableMeta',
+              'getDataFrame', 'getColumns', 'getRows', 'getVariableMeta',
               'getSelectedVariables', 'getRowCount', 'getTransforms', 'getHistory', 'create',
             ]),
             results: makeNamespace('results', [

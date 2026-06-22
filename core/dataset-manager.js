@@ -311,6 +311,10 @@ export class DatasetManager {
     return Object.freeze({
       getDataFrame: (o) => this.active.getDataFrame(o),
       getColumns: (o) => this.active.getColumns(o),
+      /** A window of rows as objects (LIMIT/OFFSET), optionally with each row's
+       * stable id as `__rid` — for workspaces that reference rows (e.g. CAQDAS
+       * coding attaches to row + span). */
+      getRows: (o) => (this.active ? this.active.getRows(o) : Promise.resolve([])),
       getVariableMeta: (o) => this.active?.getVariableMeta(o) ?? [],
       getSelectedVariables: () => this.active?.getSelectedVariables() ?? [],
       getRowCount: () => this.rowCount,

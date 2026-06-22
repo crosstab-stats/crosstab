@@ -333,6 +333,7 @@ function buildDispatch({ data, results, webr, ui, web }) {
   return {
     'data.getDataFrame': (opts) => data.getDataFrame(opts),
     'data.getColumns': (opts) => data.getColumns(opts),
+    'data.getRows': (opts) => data.getRows(opts),
     'data.getVariableMeta': (opts) => data.getVariableMeta(opts),
     'data.getSelectedVariables': () => data.getSelectedVariables(),
     'data.getRowCount': () => data.getRowCount(),
