@@ -25,7 +25,7 @@ export const manifest = {
   category: 'Spatial',
   keywords: ['spatial', 'gis', 'moran', 'geary', 'autocorrelation', 'choropleth', 'map', 'sf', 'spdep', 'geojson', 'lisa'],
   disciplines: ['Environmental Studies', 'Public Policy & Administration', 'Sociology', 'Economics', 'Public Health', 'Ethnic Studies'],
-  rPackages: ['sf', 'spdep', 'svglite'],
+  rPackages: ['sf', 'spdep', 'spatialreg', 'svglite'],
   menu: [
     {
       label: 'Spatial autocorrelation (Moran’s I)…',
@@ -36,6 +36,18 @@ export const manifest = {
         { name: 'xcoord', kind: 'variables', label: 'X / longitude', hint: 'The east–west coordinate of each case.', multiple: false, types: ['numeric'], unique: true },
         { name: 'ycoord', kind: 'variables', label: 'Y / latitude', hint: 'The north–south coordinate of each case.', multiple: false, types: ['numeric'], unique: true },
         { name: 'k', kind: 'number', label: 'Neighbours (k)', hint: 'How many nearest neighbours define each point’s local area.', default: 4 },
+      ],
+    },
+    {
+      label: 'Spatial lag regression…',
+      run: 'lagregression',
+      order: 15,
+      inputs: [
+        { name: 'outcome', kind: 'variables', label: 'Outcome', hint: 'The numeric outcome to model.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'preds', kind: 'variables', label: 'Predictors', hint: 'The numeric predictors of the outcome.', multiple: true, types: ['numeric'], unique: true },
+        { name: 'xcoord', kind: 'variables', label: 'X / longitude', hint: 'The east–west coordinate of each case.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'ycoord', kind: 'variables', label: 'Y / latitude', hint: 'The north–south coordinate of each case.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'k', kind: 'number', label: 'Neighbours (k)', hint: 'How many nearest neighbours define the spatial weights.', default: 5 },
       ],
     },
     {
@@ -107,6 +119,61 @@ export async function autocorrelation(app, { value, xcoord, ycoord, k }) {
   const sig = mp < 0.05 ? `statistically significant (p = ${fmtP(mp)})` : `not statistically significant (p = ${fmtP(mp)})`;
   await app.results.appendText(
     `**Moran’s I = ${I.toFixed(3)}** indicates ${dir}, ${sig}. Moran’s I runs from −1 to +1 (0 ≈ random); Geary’s C is an inverse complement (≈1 random, <1 positive autocorrelation). Both here use a k-nearest-neighbour spatial weights matrix.`,
+  );
+}
+
+// --- Spatial lag regression (SAR) -------------------------------------------
+
+export async function lagregression(app, { outcome, preds, xcoord, ycoord, k }) {
+  const nPreds = Array.isArray(preds) ? preds.length : preds ? 1 : 0;
+  if (!outcome || !nPreds || !xcoord || !ycoord) {
+    await app.results.appendError('Spatial lag regression: choose an outcome, predictor(s), and X/Y coordinates.');
+    return;
+  }
+  const K = Number.isFinite(k) ? Math.max(1, Math.floor(k)) : 5;
+  const rCode = `
+    suppressMessages({library(sf); library(spdep); library(spatialreg)})
+    y <- as.numeric(outcome); P <- as.data.frame(preds); x <- as.numeric(xcoord); yy <- as.numeric(ycoord)
+    df <- data.frame(.y = y); for (nm in names(P)) df[[nm]] <- P[[nm]]; df$.x <- x; df$.yy <- yy
+    df <- df[stats::complete.cases(df), , drop = FALSE]
+    n <- nrow(df)
+    if (n < 10) {
+      list(err = sprintf("Need at least 10 complete located cases (have %d).", n))
+    } else {
+      nb <- knn2nb(knearneigh(cbind(df$.x, df$.yy), k = min(${K}, n - 1L)))
+      lw <- nb2listw(nb, style = "W", zero.policy = TRUE)
+      pn <- setdiff(names(df), c(".y", ".x", ".yy"))
+      form <- as.formula(paste(".y ~", paste(sprintf("\`%s\`", pn), collapse = " + ")))
+      m <- lagsarlm(form, data = df, listw = lw, zero.policy = TRUE)
+      s <- summary(m); co <- s$Coef
+      list(terms = rownames(co), est = as.numeric(co[, 1]), se = as.numeric(co[, 2]), p = as.numeric(co[, 4]),
+           rho = m$rho, rhoP = s$LR1$p.value, n = n, err = "")
+    }`;
+  let result;
+  try {
+    ({ result } = await app.webr.run(rCode));
+  } catch (e) {
+    await app.results.appendError(`Spatial lag regression failed: ${e.message}`);
+    return;
+  }
+  const r = flat(result);
+  const err = r.str1('err');
+  if (err) {
+    await app.results.appendText(err);
+    return;
+  }
+  const terms = r.strs('terms'), est = r.nums('est'), se = r.nums('se'), p = r.nums('p');
+  await app.results.appendTable(
+    {
+      columns: ['Term', 'Estimate', 'Std. error', 'p-value'],
+      rows: terms.map((t, i) => [t.replace(/^`|`$/g, ''), est[i].toFixed(4), se[i].toFixed(4), fmtP(p[i])]),
+      rowHeaders: false,
+    },
+    { caption: `Spatial Lag Regression (SAR) — ${r.num('n')} cases` },
+  );
+  const rho = r.num('rho'), rhoP = r.num('rhoP');
+  await app.results.appendText(
+    `**Spatial lag ρ = ${rho.toFixed(3)}** (likelihood-ratio test p = ${fmtP(rhoP)}) — ${rhoP < 0.05 ? 'significant' : 'no significant'} spatial dependence: a case’s outcome ${rho >= 0 ? 'moves with' : 'moves opposite to'} its neighbours’. The coefficients are direct effects; when ρ is significant, total effects also include spillover through the neighbour network.`,
   );
 }
 
