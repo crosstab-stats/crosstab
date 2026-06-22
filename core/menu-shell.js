@@ -167,6 +167,12 @@ export class MenuShell {
         panel.hidden = false;
         button.setAttribute('aria-expanded', 'true');
         this.#openMenu = wrapper;
+        // Clamp the panel so a long menu (e.g. Regression) scrolls *within itself*
+        // and never spills past the window bottom. Its top depends on which wrapped
+        // menubar row the button sits on, so measure it live rather than assuming a
+        // fixed offset (the CSS max-height is only a fallback).
+        const top = panel.getBoundingClientRect().top;
+        panel.style.maxHeight = `${Math.max(120, window.innerHeight - top - 8)}px`;
       }
     });
 
