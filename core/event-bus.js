@@ -40,6 +40,10 @@ export const CoreEvents = Object.freeze({
   ANALYSIS_FINISHED: 'analysis:finished',
   /** A recoverable error surfaced that the UI may want to show. Payload: Error. */
   ERROR: 'app:error',
+  /** The active (loaded) plugin set changed — a plugin was enabled/disabled or a
+   * set was applied. Lets the project autosave re-record its `activePlugins`. No
+   * payload. */
+  PLUGINS_CHANGED: 'plugins:changed',
 });
 
 /**

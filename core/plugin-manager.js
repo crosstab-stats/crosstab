@@ -24,6 +24,7 @@
  */
 
 import { PluginActions } from './plugin-actions.js';
+import { CoreEvents } from './event-bus.js';
 
 const LS_DISABLED = 'crosstab.plugins.disabled';
 const LS_CATALOG = 'crosstab.plugins.catalog';
@@ -65,6 +66,9 @@ export class PluginManager {
   /** Host-side wiring for declarative plugins (menus + invoke). @type {import('./plugin-actions.js').PluginActions} */
   #actions;
 
+  /** Event bus, to announce active-set changes. @type {?import('./event-bus.js').EventBus} */
+  #bus = null;
+
   /**
    * @param {Object} deps
    * @param {import('./loader.js').PluginLoader} deps.loader
@@ -72,13 +76,16 @@ export class PluginManager {
    * @param {import('./menu-shell.js').MenuShell} deps.menus
    * @param {{appendError: Function}} deps.results - ResultsPane#api.
    * @param {import('./plugin-actions.js').PluginActions} deps.actions
+   * @param {import('./event-bus.js').EventBus} [deps.bus] - To announce active-set
+   *   changes (so the project autosave re-records its plugin set).
    */
-  constructor({ loader, urls, menus, results, actions }) {
+  constructor({ loader, urls, menus, results, actions, bus }) {
     this.#loader = loader;
     this.#urls = urls;
     this.#menus = menus;
     this.#results = results;
     this.#actions = actions;
+    this.#bus = bus ?? null;
     this.#disabled = new Set(readJSON(LS_DISABLED, []));
     // Drop a stale catalog if the catalog version changed (e.g. manifests gained
     // `disciplines`), so it's re-probed fresh rather than serving old metadata.
@@ -358,6 +365,10 @@ export class PluginManager {
       const id = this.#catalog[key]?.id;
       if (id) await this.#unload(id);
     }
+    // The active set changed — let the project autosave re-record its plugin set.
+    // (applyActiveSet drives this in a loop, so a set-apply emits once per change;
+    // all coalesce into a single debounced save.)
+    this.#bus?.emit(CoreEvents.PLUGINS_CHANGED);
   }
 
   #isLoaded(key) {

@@ -56,6 +56,10 @@ export class ProjectSync {
   #timer = null;
   #saving = false;
   #dirtyAgain = false;
+  /** Unsaved changes exist since the last successful save. Drives #settle so a
+   * change made just before switching projects (e.g. toggling a plugin) is
+   * flushed to the current binding rather than dropped. */
+  #dirty = false;
 
   /**
    * @param {Object} deps
@@ -94,6 +98,7 @@ export class ProjectSync {
     this.#menus.register({ id: 'core:proj-saveas', path: ['File'], label: 'Save project as…', order: 4, command: () => void this.saveAs() });
     this.#bus.on(CoreEvents.DATA_CHANGED, (s) => this.#onChange(s));
     this.#bus.on(DATASETS_CHANGED, () => this.#onChange(null));
+    this.#bus.on(CoreEvents.PLUGINS_CHANGED, () => this.#onPluginsChanged());
     this.#setStatus();
     this.#emitProject();
   }
@@ -130,6 +135,7 @@ export class ProjectSync {
       const savedId = await this.#store.save({ id, name, savedAt: Date.now(), bundle });
       this.#binding = { id: savedId, name };
       this.#sourcesDirty.clear();
+      this.#dirty = false;
       this.#setStatus('saved');
       this.#emitProject();
     } catch (err) {
@@ -141,8 +147,19 @@ export class ProjectSync {
 
   // --- autosave -------------------------------------------------------------
 
+  /** A plugin was enabled/disabled (or a set applied). Persist it — but only into
+   * an *existing* project. A plugin toggle alone must not birth an Untitled project
+   * (and the launcher applies sets before any binding exists), so unbound = ignore;
+   * the set is captured by activeKeys() at the next real save / on open anyway. */
+  #onPluginsChanged() {
+    if (this.#loading || !this.#binding) return;
+    this.#dirty = true;
+    this.#schedule();
+  }
+
   #onChange(summary) {
     if (this.#loading) return;
+    this.#dirty = true;
     // A source-changing op means that dataset's Parquet must be rewritten. With the
     // universal log, undo/redo/rewind can also add or drop a source op, so they
     // mark sources dirty too (keeps the saved Parquet set in step with the log).
@@ -209,6 +226,7 @@ export class ProjectSync {
         { id: this.#binding.id, name: this.#binding.name, savedAt: Date.now(), bundle },
         { writeSourcesFor: dirty },
       );
+      this.#dirty = false;
       this.#setStatus('saved');
     } catch (err) {
       console.error('[project] autosave failed', err);
@@ -224,9 +242,36 @@ export class ProjectSync {
     }
   }
 
-  /** Drop any pending/debounced autosave so a stale save can't fire mid-switch
-   * (project open/new) and overwrite the old binding or race the dataset reload. */
-  #cancelPendingSave() {
+  /** Before switching projects: flush any unsaved change to the CURRENT binding,
+   * then quiesce. Replaces a plain "cancel" — cancelling dropped a change made
+   * just before the switch (e.g. a plugin toggle whose debounced save hadn't
+   * fired). Safe against the mid-switch clobber a cancel guarded: it always writes
+   * to the current binding's own id and awaits in-flight saves first, so by the
+   * time the caller loads the next project nothing is pending or racing. */
+  async #settle() {
+    if (this.#timer) {
+      clearTimeout(this.#timer);
+      this.#timer = null;
+    }
+    this.#dirtyAgain = false;
+    // Let any in-flight autosave finish (it targets the current binding).
+    while (this.#saving) await new Promise((r) => setTimeout(r, 20));
+    if (this.#dirty && this.#binding) {
+      const dirty = this.#sourcesDirty;
+      this.#sourcesDirty = new Set();
+      try {
+        const bundle = await this.#snapshot(false, dirty);
+        await this.#store.save(
+          { id: this.#binding.id, name: this.#binding.name, savedAt: Date.now(), bundle },
+          { writeSourcesFor: dirty },
+        );
+        this.#dirty = false;
+      } catch (err) {
+        console.error('[project] settle save failed', err);
+      }
+    }
+    // A change could have landed during the awaits above — drop its timer so it
+    // can't fire against the next project after the switch.
     if (this.#timer) {
       clearTimeout(this.#timer);
       this.#timer = null;
@@ -252,7 +297,7 @@ export class ProjectSync {
 
   /** Start a fresh project: one empty dataset, unbound. */
   async newProject() {
-    this.#cancelPendingSave();
+    await this.#settle();
     this.#loading = true;
     try {
       await this.#datasets.loadBundle({
@@ -264,6 +309,7 @@ export class ProjectSync {
     }
     this.#binding = null;
     this.#sourcesDirty.clear();
+    this.#dirty = false;
     this.#setStatus();
     this.#emitProject();
   }
@@ -287,7 +333,7 @@ export class ProjectSync {
       this.#showBrowseModal(entries);
       return;
     }
-    this.#cancelPendingSave();
+    await this.#settle();
     this.#setStatus('loading');
     this.#loading = true;
     try {
@@ -305,6 +351,7 @@ export class ProjectSync {
       }
       this.#binding = { id, name };
       this.#sourcesDirty.clear();
+      this.#dirty = false;
       this.#setStatus('saved');
       this.#emitProject();
     } catch (err) {
@@ -324,7 +371,7 @@ export class ProjectSync {
    * @param {{name: string, bundle: object}} arg
    */
   async openBundle({ name, bundle }) {
-    this.#cancelPendingSave();
+    await this.#settle();
     this.#setStatus('loading');
     this.#loading = true;
     try {

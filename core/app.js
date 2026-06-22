@@ -509,7 +509,7 @@ export async function boot(mounts) {
 
   // The plugin manager owns the catalog + the enabled/disabled set (persisted)
   // and exposes Edit ▸ Plugins…; the launcher drives activation through it.
-  plugins = new PluginManager({ loader, urls: BUILTIN_PLUGINS, menus, results: results.api, actions: pluginActions });
+  plugins = new PluginManager({ loader, urls: BUILTIN_PLUGINS, menus, results: results.api, actions: pluginActions, bus });
   plugins.activate();
   // In-app plugin creator (Edit ▸ Create plugin…, and the manager's "Create new…"):
   // authors a plugin from a template and loads it through the same sandbox.
