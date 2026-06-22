@@ -24,7 +24,7 @@ export const manifest = {
       label: 'Reliability analysis…',
       run: 'run',
       order: 10,
-      inputs: [{ name: 'vars', kind: 'variables', label: 'Scale items', multiple: true, types: ['numeric'] }],
+      inputs: [{ name: 'vars', kind: 'variables', label: 'Scale items', hint: 'The survey items expected to measure one construct.', multiple: true, types: ['numeric'] }],
     },
   ],
 };

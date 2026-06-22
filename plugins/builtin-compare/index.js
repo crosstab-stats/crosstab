@@ -30,8 +30,8 @@ export const manifest = {
       run: 'oneSample',
       order: 10,
       inputs: [
-        { name: 'x', kind: 'variables', label: 'Test variable', multiple: false, types: ['numeric'] },
-        { name: 'mu', kind: 'number', label: 'Test value', default: 0 },
+        { name: 'x', kind: 'variables', label: 'Test variable', hint: 'The numeric measure whose mean you want to test.', multiple: false, types: ['numeric'] },
+        { name: 'mu', kind: 'number', label: 'Test value', hint: 'The reference value to compare the mean against.', default: 0 },
       ],
     },
     {
@@ -39,8 +39,8 @@ export const manifest = {
       run: 'independent',
       order: 20,
       inputs: [
-        { name: 'y', kind: 'variables', label: 'Outcome', multiple: false, types: ['numeric'], unique: true },
-        { name: 'g', kind: 'variables', label: 'Groups (2)', multiple: false, types: ['factor', 'string'], unique: true },
+        { name: 'y', kind: 'variables', label: 'Outcome', hint: 'The numeric measure whose mean you want to compare.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'g', kind: 'variables', label: 'Groups (2)', hint: 'The variable that splits cases into the two groups to compare.', multiple: false, types: ['factor', 'string'], unique: true },
       ],
     },
     {
@@ -48,8 +48,8 @@ export const manifest = {
       run: 'paired',
       order: 30,
       inputs: [
-        { name: 'x1', kind: 'variables', label: 'Variable 1', multiple: false, types: ['numeric'], unique: true },
-        { name: 'x2', kind: 'variables', label: 'Variable 2', multiple: false, types: ['numeric'], unique: true },
+        { name: 'x1', kind: 'variables', label: 'Variable 1', hint: 'The first of two measures on the same cases.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'x2', kind: 'variables', label: 'Variable 2', hint: 'The second measure, compared against the first.', multiple: false, types: ['numeric'], unique: true },
       ],
     },
     {
@@ -57,8 +57,8 @@ export const manifest = {
       run: 'oneway',
       order: 40,
       inputs: [
-        { name: 'y', kind: 'variables', label: 'Outcome', multiple: false, types: ['numeric'], unique: true },
-        { name: 'g', kind: 'variables', label: 'Factor', multiple: false, types: ['factor', 'string'], unique: true },
+        { name: 'y', kind: 'variables', label: 'Outcome', hint: 'The numeric measure whose mean you want to compare.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'g', kind: 'variables', label: 'Factor', hint: 'The variable that splits cases into three or more groups.', multiple: false, types: ['factor', 'string'], unique: true },
       ],
     },
   ],

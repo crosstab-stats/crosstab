@@ -24,8 +24,8 @@ export const manifest = {
       run: 'run',
       order: 20,
       inputs: [
-        { name: 'dvs', kind: 'variables', label: 'Outcomes (2+ numeric)', multiple: true, types: ['numeric'], unique: true },
-        { name: 'group', kind: 'variables', label: 'Factor', types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'dvs', kind: 'variables', label: 'Outcomes (2+ numeric)', hint: 'The numeric measures to compare across groups all at once.', multiple: true, types: ['numeric'], unique: true },
+        { name: 'group', kind: 'variables', label: 'Factor', hint: 'The variable that sorts cases into the groups being compared.', types: ['factor', 'string', 'numeric'], unique: true },
       ],
     },
   ],

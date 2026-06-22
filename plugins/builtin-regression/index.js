@@ -26,8 +26,8 @@ export const manifest = {
       run: 'run',
       order: 10,
       inputs: [
-        { name: 'dv', kind: 'variables', label: 'Outcome', multiple: false, types: ['numeric'], unique: true },
-        { name: 'ivs', kind: 'variables', label: 'Predictors', multiple: true, unique: true },
+        { name: 'dv', kind: 'variables', label: 'Outcome', hint: 'The numeric measure you want to explain or predict.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think predict the outcome.', multiple: true, unique: true },
       ],
     },
   ],

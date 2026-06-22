@@ -32,9 +32,9 @@ export const manifest = {
       run: 'kaplanMeier',
       order: 10,
       inputs: [
-        { name: 'time', kind: 'variables', label: 'Time to event', multiple: false, types: ['numeric'], unique: true },
-        { name: 'status', kind: 'variables', label: 'Event (1 = event, 0 = censored)', multiple: false, unique: true },
-        { name: 'group', kind: 'variables', label: 'Compare groups (optional)', multiple: false, types: ['factor', 'string'], optional: true, unique: true },
+        { name: 'time', kind: 'variables', label: 'Time to event', hint: 'Follow-up time until the event or censoring.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'status', kind: 'variables', label: 'Event (1 = event, 0 = censored)', hint: 'Marks whether the event happened or the case was censored.', multiple: false, unique: true },
+        { name: 'group', kind: 'variables', label: 'Compare groups (optional)', hint: 'Splits cases into groups whose survival curves are compared.', multiple: false, types: ['factor', 'string'], optional: true, unique: true },
       ],
     },
     {
@@ -42,9 +42,9 @@ export const manifest = {
       run: 'cox',
       order: 20,
       inputs: [
-        { name: 'time', kind: 'variables', label: 'Time to event', multiple: false, types: ['numeric'], unique: true },
-        { name: 'status', kind: 'variables', label: 'Event (1 = event, 0 = censored)', multiple: false, unique: true },
-        { name: 'preds', kind: 'variables', label: 'Predictors', multiple: true, unique: true },
+        { name: 'time', kind: 'variables', label: 'Time to event', hint: 'Follow-up time until the event or censoring.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'status', kind: 'variables', label: 'Event (1 = event, 0 = censored)', hint: 'Marks whether the event happened or the case was censored.', multiple: false, unique: true },
+        { name: 'preds', kind: 'variables', label: 'Predictors', hint: 'The variables you think speed up or slow down the event.', multiple: true, unique: true },
       ],
     },
   ],

@@ -23,9 +23,9 @@ export const manifest = {
       run: 'run',
       order: 48,
       inputs: [
-        { name: 'from', kind: 'variables', label: 'From (source node)', multiple: false, types: ['string', 'factor', 'numeric'], unique: true },
-        { name: 'to', kind: 'variables', label: 'To (target node)', multiple: false, types: ['string', 'factor', 'numeric'], unique: true },
-        { name: 'directed', kind: 'choice', label: 'Edges are', default: 'undirected', options: [
+        { name: 'from', kind: 'variables', label: 'From (source node)', hint: 'The actor at one end of each tie.', multiple: false, types: ['string', 'factor', 'numeric'], unique: true },
+        { name: 'to', kind: 'variables', label: 'To (target node)', hint: 'The actor at the other end of each tie.', multiple: false, types: ['string', 'factor', 'numeric'], unique: true },
+        { name: 'directed', kind: 'choice', label: 'Edges are', hint: 'Choose directed if ties have a sender and receiver.', default: 'undirected', options: [
           { value: 'undirected', label: 'Undirected' },
           { value: 'directed', label: 'Directed' },
         ] },

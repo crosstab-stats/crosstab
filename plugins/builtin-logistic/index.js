@@ -27,8 +27,8 @@ export const manifest = {
       run: 'run',
       order: 20,
       inputs: [
-        { name: 'dv', kind: 'variables', label: 'Outcome (binary)', multiple: false, unique: true },
-        { name: 'ivs', kind: 'variables', label: 'Predictors', multiple: true, unique: true },
+        { name: 'dv', kind: 'variables', label: 'Outcome (binary)', hint: 'The yes/no outcome to model; must have exactly two categories.', multiple: false, unique: true },
+        { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think predict the outcome.', multiple: true, unique: true },
       ],
     },
   ],

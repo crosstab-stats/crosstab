@@ -27,12 +27,13 @@ export const manifest = {
       run: 'run',
       order: 30,
       inputs: [
-        { name: 'rowvar', kind: 'variables', label: 'Row variable', multiple: false, types: ['factor', 'string'], unique: true },
-        { name: 'colvar', kind: 'variables', label: 'Column variable', multiple: false, types: ['factor', 'string'], unique: true },
+        { name: 'rowvar', kind: 'variables', label: 'Row variable', hint: 'The category variable shown down the rows of the table.', multiple: false, types: ['factor', 'string'], unique: true },
+        { name: 'colvar', kind: 'variables', label: 'Column variable', hint: 'The category variable shown across the columns of the table.', multiple: false, types: ['factor', 'string'], unique: true },
         {
           name: 'pmethod',
           kind: 'choice',
           label: 'P-value',
+          hint: 'Use Monte Carlo when some cells have few cases.',
           default: 'asymptotic',
           options: [
             { value: 'asymptotic', label: 'Asymptotic (default)' },
@@ -43,6 +44,7 @@ export const manifest = {
           name: 'measures',
           kind: 'choice',
           label: 'Association measures',
+          hint: 'Pick ordinal only when both variables are ranked.',
           default: 'auto',
           options: [
             { value: 'auto', label: 'Auto — add ordinal measures if both variables are ordinal' },

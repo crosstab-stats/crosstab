@@ -27,12 +27,13 @@ export const manifest = {
       run: 'kmeans',
       order: 40,
       inputs: [
-        { name: 'vars', kind: 'variables', label: 'Variables (numeric)', multiple: true, types: ['numeric'] },
-        { name: 'k', kind: 'number', label: 'Number of clusters (k)', default: 3 },
+        { name: 'vars', kind: 'variables', label: 'Variables (numeric)', hint: 'The numeric traits used to judge how similar cases are.', multiple: true, types: ['numeric'] },
+        { name: 'k', kind: 'number', label: 'Number of clusters (k)', hint: 'How many groups to split the cases into.', default: 3 },
         {
           name: 'standardize',
           kind: 'choice',
           label: 'Standardize',
+          hint: 'Put variables on a common scale so none dominates by size.',
           default: 'z',
           options: [
             { value: 'z', label: 'Yes — z-scores (recommended)' },

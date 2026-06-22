@@ -26,8 +26,8 @@ export const manifest = {
       run: 'run',
       order: 60,
       inputs: [
-        { name: 'exposure', kind: 'variables', label: 'Exposure / treatment (1 = exposed)', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
-        { name: 'outcome', kind: 'variables', label: 'Outcome (1 = case/event)', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'exposure', kind: 'variables', label: 'Exposure / treatment (1 = exposed)', hint: 'The yes/no exposure or treatment whose effect you want.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'outcome', kind: 'variables', label: 'Outcome (1 = case/event)', hint: 'The yes/no outcome marking who became a case.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
       ],
     },
   ],

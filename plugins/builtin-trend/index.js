@@ -23,7 +23,7 @@ export const manifest = {
       run: 'run',
       order: 90,
       inputs: [
-        { name: 'series', kind: 'variables', label: 'Series (in time order)', multiple: false, types: ['numeric'], unique: true },
+        { name: 'series', kind: 'variables', label: 'Series (in time order)', hint: 'The numeric measure to check for a trend, rows in time order.', multiple: false, types: ['numeric'], unique: true },
       ],
     },
   ],

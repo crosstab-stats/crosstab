@@ -22,9 +22,9 @@
 /** Shared design inputs appended to every action: weight (required) + optional
  * strata and cluster/PSU. `unique` so they don't clash with the analysis vars. */
 const DESIGN_INPUTS = [
-  { name: 'weight', kind: 'variables', label: 'Weight variable', multiple: false, types: ['numeric'], unique: true },
-  { name: 'strata', kind: 'variables', label: 'Strata (optional)', multiple: false, optional: true, unique: true },
-  { name: 'cluster', kind: 'variables', label: 'Cluster / PSU id (optional)', multiple: false, optional: true, unique: true },
+  { name: 'weight', kind: 'variables', label: 'Weight variable', hint: 'The survey weight, so estimates represent the population.', multiple: false, types: ['numeric'], unique: true },
+  { name: 'strata', kind: 'variables', label: 'Strata (optional)', hint: 'The variable marking sampling strata, if the design used them.', multiple: false, optional: true, unique: true },
+  { name: 'cluster', kind: 'variables', label: 'Cluster / PSU id (optional)', hint: 'The id for the primary sampling unit, if cases were clustered.', multiple: false, optional: true, unique: true },
 ];
 
 /** @type {import('../../core/loader.js').PluginManifest} */
@@ -43,7 +43,7 @@ export const manifest = {
       run: 'means',
       order: 10,
       inputs: [
-        { name: 'vars', kind: 'variables', label: 'Variables (numeric)', multiple: true, types: ['numeric'], unique: true },
+        { name: 'vars', kind: 'variables', label: 'Variables (numeric)', hint: 'The numeric measures whose weighted averages you want.', multiple: true, types: ['numeric'], unique: true },
         ...DESIGN_INPUTS,
       ],
     },
@@ -52,8 +52,8 @@ export const manifest = {
       run: 'crosstab',
       order: 20,
       inputs: [
-        { name: 'rowvar', kind: 'variables', label: 'Row variable', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
-        { name: 'colvar', kind: 'variables', label: 'Column variable', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'rowvar', kind: 'variables', label: 'Row variable', hint: 'The category variable shown down the rows of the table.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'colvar', kind: 'variables', label: 'Column variable', hint: 'The category variable shown across the columns of the table.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
         ...DESIGN_INPUTS,
       ],
     },
@@ -62,12 +62,13 @@ export const manifest = {
       run: 'regression',
       order: 30,
       inputs: [
-        { name: 'dv', kind: 'variables', label: 'Outcome', multiple: false, types: ['numeric'], unique: true },
-        { name: 'ivs', kind: 'variables', label: 'Predictors', multiple: true, unique: true },
+        { name: 'dv', kind: 'variables', label: 'Outcome', hint: 'The measure you want to explain; binary for logistic.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think predict the outcome.', multiple: true, unique: true },
         {
           name: 'family',
           kind: 'choice',
           label: 'Model',
+          hint: 'Linear for a continuous outcome; logistic for a yes/no outcome.',
           default: 'linear',
           options: [
             { value: 'linear', label: 'Linear' },

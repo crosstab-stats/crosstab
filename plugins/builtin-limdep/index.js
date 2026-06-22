@@ -29,9 +29,9 @@ export const manifest = {
       run: 'quantile',
       order: 150,
       inputs: [
-        { name: 'y', kind: 'variables', label: 'Outcome', multiple: false, types: ['numeric'], unique: true },
-        { name: 'ivs', kind: 'variables', label: 'Predictors', multiple: true, unique: true },
-        { name: 'taus', kind: 'text', label: 'Quantiles (comma-separated)', default: '0.25, 0.5, 0.75' },
+        { name: 'y', kind: 'variables', label: 'Outcome', hint: 'The numeric outcome whose distribution you want to model.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think shape the outcome.', multiple: true, unique: true },
+        { name: 'taus', kind: 'text', label: 'Quantiles (comma-separated)', hint: 'Which points of the outcome to model, like .25, .5, .75.', default: '0.25, 0.5, 0.75' },
       ],
     },
     {
@@ -39,10 +39,10 @@ export const manifest = {
       run: 'tobit',
       order: 160,
       inputs: [
-        { name: 'y', kind: 'variables', label: 'Outcome', multiple: false, types: ['numeric'], unique: true },
-        { name: 'ivs', kind: 'variables', label: 'Predictors', multiple: true, unique: true },
-        { name: 'left', kind: 'number', label: 'Lower censoring limit (blank = none)', default: 0, optional: true },
-        { name: 'right', kind: 'number', label: 'Upper censoring limit (blank = none)', default: 0, optional: true },
+        { name: 'y', kind: 'variables', label: 'Outcome', hint: 'The outcome that piles up at a floor or ceiling.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think predict the outcome.', multiple: true, unique: true },
+        { name: 'left', kind: 'number', label: 'Lower censoring limit (blank = none)', hint: 'The floor value many cases are stuck at, if any.', default: 0, optional: true },
+        { name: 'right', kind: 'number', label: 'Upper censoring limit (blank = none)', hint: 'The ceiling value many cases are stuck at, if any.', default: 0, optional: true },
       ],
     },
     {
@@ -50,10 +50,10 @@ export const manifest = {
       run: 'heckman',
       order: 170,
       inputs: [
-        { name: 'y', kind: 'variables', label: 'Outcome (observed only when selected)', multiple: false, types: ['numeric'], unique: true },
-        { name: 'outIv', kind: 'variables', label: 'Outcome predictors', multiple: true, unique: true },
-        { name: 'sel', kind: 'variables', label: 'Selection indicator (1 = observed)', multiple: false, unique: true },
-        { name: 'selIv', kind: 'variables', label: 'Selection predictors', multiple: true, unique: true },
+        { name: 'y', kind: 'variables', label: 'Outcome (observed only when selected)', hint: 'The outcome you only see for selected cases.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'outIv', kind: 'variables', label: 'Outcome predictors', hint: 'The variables you think predict the outcome itself.', multiple: true, unique: true },
+        { name: 'sel', kind: 'variables', label: 'Selection indicator (1 = observed)', hint: 'Marks who is observed: 1 if selected, 0 if not.', multiple: false, unique: true },
+        { name: 'selIv', kind: 'variables', label: 'Selection predictors', hint: 'The variables you think drive whether a case is observed.', multiple: true, unique: true },
       ],
     },
   ],

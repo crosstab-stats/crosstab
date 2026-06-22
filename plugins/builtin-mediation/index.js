@@ -42,11 +42,11 @@ export const manifest = {
       run: 'mediation',
       order: 120,
       inputs: [
-        { name: 'x', kind: 'variables', label: 'Predictor (X)', multiple: false, types: ['numeric'], unique: true },
-        { name: 'm', kind: 'variables', label: 'Mediator (M)', multiple: false, types: ['numeric'], unique: true },
-        { name: 'y', kind: 'variables', label: 'Outcome (Y)', multiple: false, types: ['numeric'], unique: true },
-        { name: 'covs', kind: 'variables', label: 'Covariates (numeric, optional)', multiple: true, types: ['numeric'], optional: true, unique: true },
-        { name: 'se', kind: 'choice', label: 'Indirect-effect inference', default: 'delta', options: [
+        { name: 'x', kind: 'variables', label: 'Predictor (X)', hint: 'The cause whose effect you want to trace through the mediator.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'm', kind: 'variables', label: 'Mediator (M)', hint: 'The in-between variable you think carries the effect of X.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'y', kind: 'variables', label: 'Outcome (Y)', hint: 'The final result that X is thought to influence.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'covs', kind: 'variables', label: 'Covariates (numeric, optional)', hint: 'Extra controls to adjust the paths for, if any.', multiple: true, types: ['numeric'], optional: true, unique: true },
+        { name: 'se', kind: 'choice', label: 'Indirect-effect inference', hint: 'How to test the indirect effect; bootstrap is more accurate but slower.', default: 'delta', options: [
           { value: 'delta', label: 'Delta method (fast)' },
           { value: 'bootstrap', label: 'Bootstrap (1000 resamples, slower)' },
         ] },
@@ -57,10 +57,10 @@ export const manifest = {
       run: 'moderation',
       order: 130,
       inputs: [
-        { name: 'y', kind: 'variables', label: 'Outcome (Y)', multiple: false, types: ['numeric'], unique: true },
-        { name: 'x', kind: 'variables', label: 'Focal predictor (X)', multiple: false, types: ['numeric'], unique: true },
-        { name: 'w', kind: 'variables', label: 'Moderator (W)', multiple: false, types: ['numeric'], unique: true },
-        { name: 'covs', kind: 'variables', label: 'Covariates (optional)', multiple: true, optional: true, unique: true },
+        { name: 'y', kind: 'variables', label: 'Outcome (Y)', hint: 'The numeric result you want to explain.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'x', kind: 'variables', label: 'Focal predictor (X)', hint: 'The predictor whose effect you think depends on the moderator.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'w', kind: 'variables', label: 'Moderator (W)', hint: 'The variable that may strengthen or weaken X\'s effect.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'covs', kind: 'variables', label: 'Covariates (optional)', hint: 'Extra controls to adjust for, if any.', multiple: true, optional: true, unique: true },
       ],
     },
   ],

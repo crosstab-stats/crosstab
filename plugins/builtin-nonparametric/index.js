@@ -29,8 +29,8 @@ export const manifest = {
       run: 'mannWhitney',
       order: 10,
       inputs: [
-        { name: 'y', kind: 'variables', label: 'Test variable', multiple: false, types: ['numeric'], unique: true },
-        { name: 'g', kind: 'variables', label: 'Groups (2)', multiple: false, types: ['factor', 'string'], unique: true },
+        { name: 'y', kind: 'variables', label: 'Test variable', hint: 'The numeric or ordinal measure whose ranks you compare.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'g', kind: 'variables', label: 'Groups (2)', hint: 'The variable that splits cases into the two groups to compare.', multiple: false, types: ['factor', 'string'], unique: true },
       ],
     },
     {
@@ -38,8 +38,8 @@ export const manifest = {
       run: 'wilcoxon',
       order: 20,
       inputs: [
-        { name: 'x1', kind: 'variables', label: 'Variable 1', multiple: false, types: ['numeric'], unique: true },
-        { name: 'x2', kind: 'variables', label: 'Variable 2', multiple: false, types: ['numeric'], unique: true },
+        { name: 'x1', kind: 'variables', label: 'Variable 1', hint: 'The first of two repeated measures on the same cases.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'x2', kind: 'variables', label: 'Variable 2', hint: 'The second measure, compared against the first.', multiple: false, types: ['numeric'], unique: true },
       ],
     },
     {
@@ -47,8 +47,8 @@ export const manifest = {
       run: 'kruskal',
       order: 30,
       inputs: [
-        { name: 'y', kind: 'variables', label: 'Test variable', multiple: false, types: ['numeric'], unique: true },
-        { name: 'g', kind: 'variables', label: 'Groups', multiple: false, types: ['factor', 'string'], unique: true },
+        { name: 'y', kind: 'variables', label: 'Test variable', hint: 'The numeric or ordinal measure whose ranks you compare.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'g', kind: 'variables', label: 'Groups', hint: 'The variable that splits cases into three or more groups.', multiple: false, types: ['factor', 'string'], unique: true },
       ],
     },
   ],

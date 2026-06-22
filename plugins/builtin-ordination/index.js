@@ -31,8 +31,8 @@ export const manifest = {
       run: 'correspondence',
       order: 46,
       inputs: [
-        { name: 'rowvar', kind: 'variables', label: 'Row variable', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
-        { name: 'colvar', kind: 'variables', label: 'Column variable', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'rowvar', kind: 'variables', label: 'Row variable', hint: 'The category that forms the rows of the table.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'colvar', kind: 'variables', label: 'Column variable', hint: 'The category that forms the columns of the table.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
       ],
     },
     {
@@ -40,8 +40,8 @@ export const manifest = {
       run: 'mds',
       order: 47,
       inputs: [
-        { name: 'vars', kind: 'variables', label: 'Attributes (numeric)', multiple: true, types: ['numeric'], unique: true },
-        { name: 'label', kind: 'variables', label: 'Object label (optional)', multiple: false, types: ['string', 'factor', 'numeric'], optional: true, unique: true },
+        { name: 'vars', kind: 'variables', label: 'Attributes (numeric)', hint: 'The measures used to judge how similar objects are.', multiple: true, types: ['numeric'], unique: true },
+        { name: 'label', kind: 'variables', label: 'Object label (optional)', hint: 'A name for each object to show on the map.', multiple: false, types: ['string', 'factor', 'numeric'], optional: true, unique: true },
       ],
     },
   ],

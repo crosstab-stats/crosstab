@@ -37,8 +37,8 @@ export const manifest = {
 
 function COUNT_INPUTS(dvLabel) {
   return [
-    { name: 'dv', kind: 'variables', label: dvLabel, multiple: false, types: ['numeric'], unique: true },
-    { name: 'ivs', kind: 'variables', label: 'Predictors', multiple: true, unique: true },
+    { name: 'dv', kind: 'variables', label: dvLabel, hint: 'A count of events per case; whole numbers, never negative.', multiple: false, types: ['numeric'], unique: true },
+    { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think drive the event count up or down.', multiple: true, unique: true },
   ];
 }
 

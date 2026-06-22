@@ -53,8 +53,8 @@ export const manifest = {
       run: 'cfa',
       order: 30,
       inputs: [
-        { name: 'items', kind: 'variables', label: 'Items (one factor)', multiple: true, types: ['numeric'] },
-        { name: 'factorName', kind: 'text', label: 'Factor name', default: 'Factor', optional: true },
+        { name: 'items', kind: 'variables', label: 'Items (one factor)', hint: 'The scale items expected to measure one underlying factor.', multiple: true, types: ['numeric'] },
+        { name: 'factorName', kind: 'text', label: 'Factor name', hint: 'A short name for the factor these items measure.', default: 'Factor', optional: true },
       ],
     },
     {
@@ -62,11 +62,12 @@ export const manifest = {
       run: 'sem',
       order: 40,
       inputs: [
-        { name: 'vars', kind: 'variables', label: 'Variables used in the model', multiple: true },
+        { name: 'vars', kind: 'variables', label: 'Variables used in the model', hint: 'Every variable named in your model syntax below.', multiple: true },
         {
           name: 'model',
           kind: 'text',
           label: "lavaan model syntax — separate equations with ';' (e.g. f1 =~ x1+x2+x3 ; f2 =~ x4+x5+x6 ; f1 ~~ f2)",
+          hint: 'The equations defining your factors and relationships among them.',
         },
       ],
     },

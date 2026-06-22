@@ -54,12 +54,13 @@ export const manifest = {
       run: 'run',
       order: 30,
       inputs: [
-        { name: 'groupby', kind: 'variables', label: 'Group by', multiple: true, unique: true },
-        { name: 'measures', kind: 'variables', label: 'Summarise (numeric)', multiple: true, types: ['numeric'], unique: true },
+        { name: 'groupby', kind: 'variables', label: 'Group by', hint: 'The variable(s) that define the groups; one output row per group.', multiple: true, unique: true },
+        { name: 'measures', kind: 'variables', label: 'Summarise (numeric)', hint: 'The numeric variable(s) to summarise within each group.', multiple: true, types: ['numeric'], unique: true },
         {
           name: 'func',
           kind: 'choice',
           label: 'Function',
+          hint: 'How to summarise each variable, such as mean or count.',
           options: Object.entries(FUNCS).map(([value, { label }]) => ({ value, label })),
           default: 'mean',
         },

@@ -29,13 +29,13 @@ export const manifest = {
       run: 'cointegration',
       order: 70,
       inputs: [
-        { name: 'series', kind: 'variables', label: 'Series (2+ non-stationary, in time order)', multiple: true, types: ['numeric'], unique: true },
-        { name: 'ecdet', kind: 'choice', label: 'Deterministic term', default: 'const', options: [
+        { name: 'series', kind: 'variables', label: 'Series (2+ non-stationary, in time order)', hint: 'Two or more trending series, rows sorted by time.', multiple: true, types: ['numeric'], unique: true },
+        { name: 'ecdet', kind: 'choice', label: 'Deterministic term', hint: 'Whether to allow a constant or trend in the long-run relationship.', default: 'const', options: [
           { value: 'const', label: 'Constant (restricted)' },
           { value: 'trend', label: 'Linear trend' },
           { value: 'none', label: 'None' },
         ] },
-        { name: 'K', kind: 'number', label: 'Lags (K, in levels; ≥ 2)', default: 2 },
+        { name: 'K', kind: 'number', label: 'Lags (K, in levels; ≥ 2)', hint: 'How many past periods to include; at least two.', default: 2 },
       ],
     },
     {
@@ -43,10 +43,10 @@ export const manifest = {
       run: 'garch',
       order: 80,
       inputs: [
-        { name: 'series', kind: 'variables', label: 'Return / series (time order)', multiple: false, types: ['numeric'], unique: true },
-        { name: 'q', kind: 'number', label: 'ARCH order (q)', default: 1 },
-        { name: 'p', kind: 'number', label: 'GARCH order (p)', default: 1 },
-        { name: 'dist', kind: 'choice', label: 'Conditional distribution', default: 'norm', options: [
+        { name: 'series', kind: 'variables', label: 'Return / series (time order)', hint: 'The return or series whose changing volatility you want to model.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'q', kind: 'number', label: 'ARCH order (q)', hint: 'How many recent shocks feed into current volatility.', default: 1 },
+        { name: 'p', kind: 'number', label: 'GARCH order (p)', hint: 'How much past volatility carries over; 1 is the usual choice.', default: 1 },
+        { name: 'dist', kind: 'choice', label: 'Conditional distribution', hint: 'The error distribution; heavier tails handle extreme moves better.', default: 'norm', options: [
           { value: 'norm', label: 'Normal' },
           { value: 'std', label: "Student's t" },
           { value: 'ged', label: 'GED' },

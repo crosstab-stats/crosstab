@@ -29,15 +29,15 @@ export const manifest = {
       label: 'Histogram…',
       run: 'histogram',
       order: 10,
-      inputs: [{ name: 'v', kind: 'variables', multiple: false, types: ['numeric'] }],
+      inputs: [{ name: 'v', kind: 'variables', hint: 'The numeric variable whose distribution you want to see.', multiple: false, types: ['numeric'] }],
     },
     {
       label: 'Scatter…',
       run: 'scatter',
       order: 20,
       inputs: [
-        { name: 'x', kind: 'variables', label: 'X', multiple: false, types: ['numeric'], unique: true },
-        { name: 'y', kind: 'variables', label: 'Y', multiple: false, types: ['numeric'], unique: true },
+        { name: 'x', kind: 'variables', label: 'X', hint: 'The variable on the horizontal axis.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'y', kind: 'variables', label: 'Y', hint: 'The variable on the vertical axis.', multiple: false, types: ['numeric'], unique: true },
       ],
     },
     {
@@ -45,23 +45,23 @@ export const manifest = {
       run: 'boxplot',
       order: 30,
       inputs: [
-        { name: 'y', kind: 'variables', label: 'Variable', multiple: false, types: ['numeric'] },
-        { name: 'g', kind: 'variables', label: 'Split by (optional)', multiple: false, types: ['factor', 'string'], optional: true },
+        { name: 'y', kind: 'variables', label: 'Variable', hint: 'The numeric measure to summarize with the box.', multiple: false, types: ['numeric'] },
+        { name: 'g', kind: 'variables', label: 'Split by (optional)', hint: 'A grouping variable to draw one box per group.', multiple: false, types: ['factor', 'string'], optional: true },
       ],
     },
     {
       label: 'Pie chart…',
       run: 'pie',
       order: 40,
-      inputs: [{ name: 'v', kind: 'variables', multiple: false, types: ['factor', 'string'] }],
+      inputs: [{ name: 'v', kind: 'variables', hint: 'The category variable whose shares form the slices.', multiple: false, types: ['factor', 'string'] }],
     },
     {
       label: 'Bar chart with error bars…',
       run: 'errorBars',
       order: 50,
       inputs: [
-        { name: 'y', kind: 'variables', label: 'Measure', multiple: false, types: ['numeric'] },
-        { name: 'g', kind: 'variables', label: 'Groups', multiple: false, types: ['factor', 'string'] },
+        { name: 'y', kind: 'variables', label: 'Measure', hint: 'The numeric measure whose group means are plotted.', multiple: false, types: ['numeric'] },
+        { name: 'g', kind: 'variables', label: 'Groups', hint: 'The variable defining the bars to compare.', multiple: false, types: ['factor', 'string'] },
       ],
     },
   ],

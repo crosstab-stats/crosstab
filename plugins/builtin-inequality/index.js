@@ -28,7 +28,7 @@ export const manifest = {
       run: 'inequality',
       order: 50,
       inputs: [
-        { name: 'x', kind: 'variables', label: 'Quantity (e.g. income; non-negative)', multiple: false, types: ['numeric'], unique: true },
+        { name: 'x', kind: 'variables', label: 'Quantity (e.g. income; non-negative)', hint: 'The amount per case whose spread you want to measure.', multiple: false, types: ['numeric'], unique: true },
       ],
     },
     {
@@ -36,8 +36,8 @@ export const manifest = {
       run: 'segregation',
       order: 55,
       inputs: [
-        { name: 'groupA', kind: 'variables', label: 'Group A count per unit', multiple: false, types: ['numeric'], unique: true },
-        { name: 'groupB', kind: 'variables', label: 'Group B count per unit', multiple: false, types: ['numeric'], unique: true },
+        { name: 'groupA', kind: 'variables', label: 'Group A count per unit', hint: 'Headcount of the first group in each area or unit.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'groupB', kind: 'variables', label: 'Group B count per unit', hint: 'Headcount of the second group in each area or unit.', multiple: false, types: ['numeric'], unique: true },
       ],
     },
   ],

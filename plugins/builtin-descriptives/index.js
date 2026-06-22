@@ -26,7 +26,7 @@ export const manifest = {
       label: 'Descriptives…',
       run: 'run',
       order: 20,
-      inputs: [{ name: 'vars', kind: 'variables', types: ['numeric'], multiple: true }],
+      inputs: [{ name: 'vars', kind: 'variables', hint: 'The numeric measures to summarize with mean, SD, and quartiles.', types: ['numeric'], multiple: true }],
     },
   ],
 };

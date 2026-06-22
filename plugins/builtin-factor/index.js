@@ -25,12 +25,13 @@ export const manifest = {
       run: 'run',
       order: 10,
       inputs: [
-        { name: 'vars', kind: 'variables', label: 'Items', multiple: true, types: ['numeric'] },
-        { name: 'nfactors', kind: 'number', label: 'Number of factors (0 = auto, eigenvalue > 1)', default: 0 },
+        { name: 'vars', kind: 'variables', label: 'Items', hint: 'The survey or scale items you expect to group into factors.', multiple: true, types: ['numeric'] },
+        { name: 'nfactors', kind: 'number', label: 'Number of factors (0 = auto, eigenvalue > 1)', hint: 'How many factors to extract; 0 lets the data decide.', default: 0 },
         {
           name: 'method',
           kind: 'choice',
           label: 'Extraction',
+          hint: 'How factors are pulled out; principal components is the common default.',
           options: [
             { value: 'principal', label: 'Principal components' },
             { value: 'pa', label: 'Principal axis' },
@@ -42,6 +43,7 @@ export const manifest = {
           name: 'rotation',
           kind: 'choice',
           label: 'Rotation',
+          hint: 'How factors are turned to make loadings easier to interpret.',
           options: [
             { value: 'varimax', label: 'Varimax' },
             { value: 'none', label: 'None' },

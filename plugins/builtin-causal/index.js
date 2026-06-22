@@ -33,10 +33,10 @@ export const manifest = {
       run: 'did',
       order: 70,
       inputs: [
-        { name: 'y', kind: 'variables', label: 'Outcome', multiple: false, types: ['numeric'], unique: true },
-        { name: 'treat', kind: 'variables', label: 'Treatment group (1 = treated)', multiple: false, unique: true },
-        { name: 'post', kind: 'variables', label: 'Post period (1 = after)', multiple: false, unique: true },
-        { name: 'covs', kind: 'variables', label: 'Covariates (optional)', multiple: true, optional: true, unique: true },
+        { name: 'y', kind: 'variables', label: 'Outcome', hint: 'The numeric result you expect the treatment to change.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'treat', kind: 'variables', label: 'Treatment group (1 = treated)', hint: 'Marks who got the treatment versus the comparison group.', multiple: false, unique: true },
+        { name: 'post', kind: 'variables', label: 'Post period (1 = after)', hint: 'Marks observations measured after treatment began.', multiple: false, unique: true },
+        { name: 'covs', kind: 'variables', label: 'Covariates (optional)', hint: 'Extra controls to adjust for, if you have any.', multiple: true, optional: true, unique: true },
       ],
     },
     {
@@ -44,10 +44,10 @@ export const manifest = {
       run: 'rdd',
       order: 80,
       inputs: [
-        { name: 'y', kind: 'variables', label: 'Outcome', multiple: false, types: ['numeric'], unique: true },
-        { name: 'run', kind: 'variables', label: 'Running / forcing variable', multiple: false, types: ['numeric'], unique: true },
-        { name: 'cutoff', kind: 'number', label: 'Cutoff', default: 0 },
-        { name: 'bw', kind: 'number', label: 'Bandwidth (blank/0 = automatic)', default: 0, optional: true },
+        { name: 'y', kind: 'variables', label: 'Outcome', hint: 'The numeric result that may jump at the cutoff.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'run', kind: 'variables', label: 'Running / forcing variable', hint: 'The score that decides treatment once it crosses the cutoff.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'cutoff', kind: 'number', label: 'Cutoff', hint: 'The threshold value on the running variable that assigns treatment.', default: 0 },
+        { name: 'bw', kind: 'number', label: 'Bandwidth (blank/0 = automatic)', hint: 'How far from the cutoff to look; leave 0 to choose it for you.', default: 0, optional: true },
       ],
     },
     {
@@ -55,10 +55,10 @@ export const manifest = {
       run: 'matching',
       order: 90,
       inputs: [
-        { name: 'y', kind: 'variables', label: 'Outcome', multiple: false, types: ['numeric'], unique: true },
-        { name: 'treat', kind: 'variables', label: 'Treatment (1 = treated)', multiple: false, unique: true },
-        { name: 'covs', kind: 'variables', label: 'Covariates to balance on', multiple: true, unique: true },
-        { name: 'distance', kind: 'choice', label: 'Distance', default: 'glm', options: [
+        { name: 'y', kind: 'variables', label: 'Outcome', hint: 'The numeric result compared between treated and matched controls.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'treat', kind: 'variables', label: 'Treatment (1 = treated)', hint: 'Marks who got the treatment versus the comparison group.', multiple: false, unique: true },
+        { name: 'covs', kind: 'variables', label: 'Covariates to balance on', hint: 'Background traits to make the two groups comparable on.', multiple: true, unique: true },
+        { name: 'distance', kind: 'choice', label: 'Distance', hint: 'How closeness between cases is measured when matching.', default: 'glm', options: [
           { value: 'glm', label: 'Propensity score (logistic)' },
           { value: 'mahalanobis', label: 'Mahalanobis distance' },
         ] },

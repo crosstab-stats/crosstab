@@ -34,13 +34,13 @@ export const manifest = {
       run: 'wordFrequency',
       order: 10,
       inputs: [
-        { name: 'text', kind: 'variables', label: 'Text column', multiple: false, types: ['string'] },
-        { name: 'stopwords', kind: 'choice', label: 'Stop words', default: 'remove', options: [
+        { name: 'text', kind: 'variables', label: 'Text column', hint: 'The free-text responses you want to count words in.', multiple: false, types: ['string'] },
+        { name: 'stopwords', kind: 'choice', label: 'Stop words', hint: 'Whether to drop common filler words like the and and.', default: 'remove', options: [
           { value: 'remove', label: 'Remove common stop words (the, and, of…)' },
           { value: 'keep', label: 'Keep all words' },
         ] },
-        { name: 'topn', kind: 'number', label: 'How many top words', default: 25 },
-        { name: 'minlen', kind: 'number', label: 'Minimum word length', default: 3 },
+        { name: 'topn', kind: 'number', label: 'How many top words', hint: 'How many of the most frequent words to show.', default: 25 },
+        { name: 'minlen', kind: 'number', label: 'Minimum word length', hint: 'Ignore words shorter than this many letters.', default: 3 },
       ],
     },
     {
@@ -48,8 +48,8 @@ export const manifest = {
       run: 'sentiment',
       order: 20,
       inputs: [
-        { name: 'text', kind: 'variables', label: 'Text column', multiple: false, types: ['string'], unique: true },
-        { name: 'doc', kind: 'variables', label: 'Group / document (optional)', multiple: false, types: ['factor', 'string'], optional: true, unique: true },
+        { name: 'text', kind: 'variables', label: 'Text column', hint: 'The free-text responses to score for positive and negative tone.', multiple: false, types: ['string'], unique: true },
+        { name: 'doc', kind: 'variables', label: 'Group / document (optional)', hint: 'Splits responses into groups to compare sentiment across.', multiple: false, types: ['factor', 'string'], optional: true, unique: true },
       ],
     },
     {
@@ -57,9 +57,9 @@ export const manifest = {
       run: 'tfidf',
       order: 30,
       inputs: [
-        { name: 'text', kind: 'variables', label: 'Text column', multiple: false, types: ['string'], unique: true },
-        { name: 'doc', kind: 'variables', label: 'Group / document', multiple: false, types: ['factor', 'string'], unique: true },
-        { name: 'topn', kind: 'number', label: 'Top terms per group', default: 5 },
+        { name: 'text', kind: 'variables', label: 'Text column', hint: 'The free-text responses to mine for distinctive terms.', multiple: false, types: ['string'], unique: true },
+        { name: 'doc', kind: 'variables', label: 'Group / document', hint: 'Splits responses into groups whose distinctive terms are compared.', multiple: false, types: ['factor', 'string'], unique: true },
+        { name: 'topn', kind: 'number', label: 'Top terms per group', hint: 'How many distinctive terms to list for each group.', default: 5 },
       ],
     },
     {
@@ -67,9 +67,9 @@ export const manifest = {
       run: 'kwic',
       order: 40,
       inputs: [
-        { name: 'text', kind: 'variables', label: 'Text column', multiple: false, types: ['string'] },
-        { name: 'term', kind: 'text', label: 'Search term (single word)' },
-        { name: 'window', kind: 'number', label: 'Context words each side', default: 6 },
+        { name: 'text', kind: 'variables', label: 'Text column', hint: 'The free-text responses to search for your keyword.', multiple: false, types: ['string'] },
+        { name: 'term', kind: 'text', label: 'Search term (single word)', hint: 'The word to find, shown with the words around it.' },
+        { name: 'window', kind: 'number', label: 'Context words each side', hint: 'How many surrounding words to show on each side.', default: 6 },
       ],
     },
   ],

@@ -32,10 +32,10 @@ export const manifest = {
       run: 'linear',
       order: 100,
       inputs: [
-        { name: 'y', kind: 'variables', label: 'Outcome', multiple: false, types: ['numeric'], unique: true },
-        { name: 'fixed', kind: 'variables', label: 'Fixed-effect predictors', multiple: true, unique: true },
-        { name: 'group', kind: 'variables', label: 'Grouping variable (random intercept)', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
-        { name: 'slope', kind: 'variables', label: 'Random slope for (optional)', multiple: false, types: ['numeric'], optional: true, unique: true },
+        { name: 'y', kind: 'variables', label: 'Outcome', hint: 'The numeric measure you want to explain.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'fixed', kind: 'variables', label: 'Fixed-effect predictors', hint: 'Predictors whose average effect you want to estimate.', multiple: true, unique: true },
+        { name: 'group', kind: 'variables', label: 'Grouping variable (random intercept)', hint: 'The cluster each case belongs to, such as school or clinic.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'slope', kind: 'variables', label: 'Random slope for (optional)', hint: 'A predictor whose effect is allowed to vary across groups.', multiple: false, types: ['numeric'], optional: true, unique: true },
       ],
     },
     {
@@ -43,9 +43,9 @@ export const manifest = {
       run: 'logistic',
       order: 110,
       inputs: [
-        { name: 'y', kind: 'variables', label: 'Binary outcome', multiple: false, unique: true },
-        { name: 'fixed', kind: 'variables', label: 'Fixed-effect predictors', multiple: true, unique: true },
-        { name: 'group', kind: 'variables', label: 'Grouping variable (random intercept)', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'y', kind: 'variables', label: 'Binary outcome', hint: 'The yes/no outcome to model; must have exactly two categories.', multiple: false, unique: true },
+        { name: 'fixed', kind: 'variables', label: 'Fixed-effect predictors', hint: 'Predictors whose average effect you want to estimate.', multiple: true, unique: true },
+        { name: 'group', kind: 'variables', label: 'Grouping variable (random intercept)', hint: 'The cluster each case belongs to, such as school or clinic.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
       ],
     },
   ],

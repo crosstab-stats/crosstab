@@ -23,10 +23,10 @@ export const manifest = {
       run: 'run',
       order: 180,
       inputs: [
-        { name: 'y', kind: 'variables', label: 'Outcome', multiple: false, types: ['numeric'], unique: true },
-        { name: 'ivs', kind: 'variables', label: 'Predictors', multiple: true, unique: true },
-        { name: 'm', kind: 'number', label: 'Number of imputations (m)', default: 5 },
-        { name: 'model', kind: 'choice', label: 'Model', default: 'linear', options: [
+        { name: 'y', kind: 'variables', label: 'Outcome', hint: 'The outcome to model, even where it has missing values.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think predict the outcome.', multiple: true, unique: true },
+        { name: 'm', kind: 'number', label: 'Number of imputations (m)', hint: 'How many filled-in datasets to make; 5 is a common start.', default: 5 },
+        { name: 'model', kind: 'choice', label: 'Model', hint: 'Pick linear for a numeric outcome, logistic for yes/no.', default: 'linear', options: [
           { value: 'linear', label: 'Linear (OLS)' },
           { value: 'logistic', label: 'Logistic (binary outcome)' },
         ] },

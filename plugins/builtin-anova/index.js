@@ -29,15 +29,15 @@ export const manifest = {
       run: 'factorial',
       order: 50,
       inputs: [
-        { name: 'dv', kind: 'variables', label: 'Outcome', types: ['numeric'], unique: true },
-        { name: 'facs', kind: 'variables', label: 'Factors (2+)', multiple: true, unique: true },
+        { name: 'dv', kind: 'variables', label: 'Outcome', hint: 'The numeric measure whose averages you want to compare.', types: ['numeric'], unique: true },
+        { name: 'facs', kind: 'variables', label: 'Factors (2+)', hint: 'Two or more grouping variables whose effects you want to test.', multiple: true, unique: true },
       ],
     },
     {
       label: 'Repeated-measures ANOVA…',
       run: 'repeated',
       order: 60,
-      inputs: [{ name: 'vars', kind: 'variables', label: 'Repeated measures (2+ columns)', multiple: true, types: ['numeric'] }],
+      inputs: [{ name: 'vars', kind: 'variables', label: 'Repeated measures (2+ columns)', hint: 'The columns measuring the same people at each time or condition.', multiple: true, types: ['numeric'] }],
     },
   ],
 };

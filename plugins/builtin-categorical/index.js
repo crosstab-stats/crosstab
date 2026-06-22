@@ -30,8 +30,8 @@ export const manifest = {
       run: 'gof',
       order: 10,
       inputs: [
-        { name: 'variable', kind: 'variables', label: 'Variable', types: ['factor', 'string', 'numeric'] },
-        { name: 'expected', kind: 'text', label: 'Expected proportions (comma-separated; blank = equal)', optional: true },
+        { name: 'variable', kind: 'variables', label: 'Variable', hint: 'The categorical variable whose distribution you want to test.', types: ['factor', 'string', 'numeric'] },
+        { name: 'expected', kind: 'text', label: 'Expected proportions (comma-separated; blank = equal)', hint: 'The proportions you expect per category; blank assumes equal.', optional: true },
       ],
     },
     {
@@ -39,8 +39,8 @@ export const manifest = {
       run: 'oneProp',
       order: 20,
       inputs: [
-        { name: 'variable', kind: 'variables', label: 'Binary variable', types: ['factor', 'string', 'numeric'] },
-        { name: 'p0', kind: 'number', label: 'Test proportion', default: 0.5 },
+        { name: 'variable', kind: 'variables', label: 'Binary variable', hint: 'The yes/no variable whose proportion you want to test.', types: ['factor', 'string', 'numeric'] },
+        { name: 'p0', kind: 'number', label: 'Test proportion', hint: 'The proportion to compare against, such as 0.5.', default: 0.5 },
       ],
     },
     {
@@ -48,8 +48,8 @@ export const manifest = {
       run: 'twoProp',
       order: 30,
       inputs: [
-        { name: 'outcome', kind: 'variables', label: 'Binary outcome', types: ['factor', 'string', 'numeric'], unique: true },
-        { name: 'groups', kind: 'variables', label: 'Groups (2)', types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'outcome', kind: 'variables', label: 'Binary outcome', hint: 'The yes/no outcome whose rate you compare across groups.', types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'groups', kind: 'variables', label: 'Groups (2)', hint: 'The variable that splits cases into the two groups to compare.', types: ['factor', 'string', 'numeric'], unique: true },
       ],
     },
     {
@@ -57,8 +57,8 @@ export const manifest = {
       run: 'mcnemar',
       order: 40,
       inputs: [
-        { name: 'v1', kind: 'variables', label: 'Variable 1', types: ['factor', 'string', 'numeric'], unique: true },
-        { name: 'v2', kind: 'variables', label: 'Variable 2', types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'v1', kind: 'variables', label: 'Variable 1', hint: 'The first paired measure, such as the before response.', types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'v2', kind: 'variables', label: 'Variable 2', hint: 'The second paired measure on the same people, such as after.', types: ['factor', 'string', 'numeric'], unique: true },
       ],
     },
     {
@@ -66,8 +66,8 @@ export const manifest = {
       run: 'loglinear',
       order: 50,
       inputs: [
-        { name: 'vars', kind: 'variables', label: 'Categorical variables (2–4)', types: ['factor', 'string', 'numeric'], multiple: true, unique: true },
-        { name: 'model', kind: 'choice', label: 'Model', default: 'homogeneous', options: [
+        { name: 'vars', kind: 'variables', label: 'Categorical variables (2–4)', hint: 'The categorical variables whose associations you want to test.', types: ['factor', 'string', 'numeric'], multiple: true, unique: true },
+        { name: 'model', kind: 'choice', label: 'Model', hint: 'How many associations the model is allowed to include.', default: 'homogeneous', options: [
           { value: 'independence', label: 'Mutual independence (main effects only)' },
           { value: 'homogeneous', label: 'Homogeneous association (all two-way)' },
           { value: 'saturated', label: 'Saturated (all interactions)' },

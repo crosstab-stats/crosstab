@@ -23,7 +23,7 @@ export const manifest = {
       run: 'run',
       order: 45,
       inputs: [
-        { name: 'species', kind: 'variables', label: 'Species/category counts (one column each)', multiple: true, types: ['numeric'], unique: true },
+        { name: 'species', kind: 'variables', label: 'Species/category counts (one column each)', hint: 'One count column per species, each row a site or sample.', multiple: true, types: ['numeric'], unique: true },
       ],
     },
   ],

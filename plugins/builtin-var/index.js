@@ -27,15 +27,15 @@ export const manifest = {
       run: 'varModel',
       order: 60,
       inputs: [
-        { name: 'series', kind: 'variables', label: 'Time series (2 or more, in time order)', multiple: true, types: ['numeric'], unique: true },
-        { name: 'lag', kind: 'number', label: 'Lag order (0 = choose by AIC)', default: 0 },
-        { name: 'type', kind: 'choice', label: 'Deterministic terms', default: 'const', options: [
+        { name: 'series', kind: 'variables', label: 'Time series (2 or more, in time order)', hint: 'Two or more numeric series, rows already sorted by time.', multiple: true, types: ['numeric'], unique: true },
+        { name: 'lag', kind: 'number', label: 'Lag order (0 = choose by AIC)', hint: 'How many past periods to include; 0 lets the data decide.', default: 0 },
+        { name: 'type', kind: 'choice', label: 'Deterministic terms', hint: 'Whether to allow a constant and trend in each equation.', default: 'const', options: [
           { value: 'const', label: 'Constant' },
           { value: 'trend', label: 'Trend' },
           { value: 'both', label: 'Constant + trend' },
           { value: 'none', label: 'None' },
         ] },
-        { name: 'horizon', kind: 'number', label: 'Impulse-response horizon (steps)', default: 10 },
+        { name: 'horizon', kind: 'number', label: 'Impulse-response horizon (steps)', hint: 'How many periods ahead to trace a shock\'s effect.', default: 10 },
       ],
     },
   ],

@@ -25,7 +25,7 @@ export const manifest = {
       label: 'Frequencies…',
       run: 'run',
       order: 10,
-      inputs: [{ name: 'vars', kind: 'variables', multiple: true }],
+      inputs: [{ name: 'vars', kind: 'variables', hint: 'The variables to tabulate into counts and percentages.', multiple: true }],
     },
   ],
 };

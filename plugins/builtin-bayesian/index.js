@@ -34,8 +34,8 @@ export const manifest = {
       run: 'regression',
       order: 10,
       inputs: [
-        { name: 'dv', kind: 'variables', label: 'Outcome', multiple: false, types: ['numeric'], unique: true },
-        { name: 'ivs', kind: 'variables', label: 'Predictors', multiple: true, unique: true },
+        { name: 'dv', kind: 'variables', label: 'Outcome', hint: 'The numeric outcome you want to model and explain.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think predict the outcome.', multiple: true, unique: true },
       ],
     },
     {
@@ -43,8 +43,8 @@ export const manifest = {
       run: 'bfTTest',
       order: 20,
       inputs: [
-        { name: 'y', kind: 'variables', label: 'Outcome (numeric)', multiple: false, types: ['numeric'], unique: true },
-        { name: 'group', kind: 'variables', label: 'Group (2 levels)', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'y', kind: 'variables', label: 'Outcome (numeric)', hint: 'The numeric measure whose means you want to compare.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'group', kind: 'variables', label: 'Group (2 levels)', hint: 'The variable that splits cases into the two groups to compare.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
       ],
     },
     {
@@ -52,8 +52,8 @@ export const manifest = {
       run: 'bfCorr',
       order: 30,
       inputs: [
-        { name: 'x', kind: 'variables', label: 'Variable X', multiple: false, types: ['numeric'], unique: true },
-        { name: 'y', kind: 'variables', label: 'Variable Y', multiple: false, types: ['numeric'], unique: true },
+        { name: 'x', kind: 'variables', label: 'Variable X', hint: 'One of the two numeric variables to test for a relationship.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'y', kind: 'variables', label: 'Variable Y', hint: 'The other numeric variable to test against the first.', multiple: false, types: ['numeric'], unique: true },
       ],
     },
     {
@@ -61,9 +61,9 @@ export const manifest = {
       run: 'bvar',
       order: 40,
       inputs: [
-        { name: 'series', kind: 'variables', label: 'Time series (2+ numeric, in order)', multiple: true, types: ['numeric'] },
-        { name: 'lags', kind: 'number', label: 'Lags', default: 2 },
-        { name: 'horizon', kind: 'number', label: 'Forecast horizon', default: 8 },
+        { name: 'series', kind: 'variables', label: 'Time series (2+ numeric, in order)', hint: 'Two or more numeric columns that move together over time.', multiple: true, types: ['numeric'] },
+        { name: 'lags', kind: 'number', label: 'Lags', hint: 'How many past time steps feed into each prediction.', default: 2 },
+        { name: 'horizon', kind: 'number', label: 'Forecast horizon', hint: 'How many future time steps to predict.', default: 8 },
       ],
     },
   ],

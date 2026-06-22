@@ -27,18 +27,18 @@ export const manifest = {
       run: 'metaAnalysis',
       order: 140,
       inputs: [
-        { name: 'yi', kind: 'variables', label: 'Effect size (one row per study)', multiple: false, types: ['numeric'], unique: true },
-        { name: 'prec', kind: 'variables', label: 'Precision (SE or variance)', multiple: false, types: ['numeric'], unique: true },
-        { name: 'precType', kind: 'choice', label: 'Precision is', default: 'se', options: [
+        { name: 'yi', kind: 'variables', label: 'Effect size (one row per study)', hint: 'Each study\'s reported effect size, one row per study.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'prec', kind: 'variables', label: 'Precision (SE or variance)', hint: 'Each effect size\'s standard error or sampling variance.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'precType', kind: 'choice', label: 'Precision is', hint: 'Whether the precision column holds a standard error or a variance.', default: 'se', options: [
           { value: 'se', label: 'Standard error' },
           { value: 'var', label: 'Sampling variance' },
         ] },
-        { name: 'model', kind: 'choice', label: 'Model', default: 'REML', options: [
+        { name: 'model', kind: 'choice', label: 'Model', hint: 'Random effects allows studies to differ; fixed assumes one true effect.', default: 'REML', options: [
           { value: 'REML', label: 'Random effects (REML)' },
           { value: 'FE', label: 'Fixed / common effect' },
         ] },
-        { name: 'mods', kind: 'variables', label: 'Moderators (meta-regression, optional)', multiple: true, optional: true, unique: true },
-        { name: 'label', kind: 'variables', label: 'Study label (optional)', multiple: false, types: ['string', 'factor', 'numeric'], optional: true, unique: true },
+        { name: 'mods', kind: 'variables', label: 'Moderators (meta-regression, optional)', hint: 'Study-level variables that may explain differing effects.', multiple: true, optional: true, unique: true },
+        { name: 'label', kind: 'variables', label: 'Study label (optional)', hint: 'A name for each study, used to label the forest plot.', multiple: false, types: ['string', 'factor', 'numeric'], optional: true, unique: true },
       ],
     },
   ],

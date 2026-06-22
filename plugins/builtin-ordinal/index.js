@@ -32,8 +32,8 @@ export const manifest = {
       run: 'ordinal',
       order: 30,
       inputs: [
-        { name: 'dv', kind: 'variables', label: 'Ordered outcome', multiple: false, unique: true },
-        { name: 'ivs', kind: 'variables', label: 'Predictors', multiple: true, unique: true },
+        { name: 'dv', kind: 'variables', label: 'Ordered outcome', hint: 'The ranked outcome to model, such as a Likert agreement scale.', multiple: false, unique: true },
+        { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think shift the outcome up or down.', multiple: true, unique: true },
       ],
     },
     {
@@ -41,8 +41,8 @@ export const manifest = {
       run: 'multinomial',
       order: 35,
       inputs: [
-        { name: 'dv', kind: 'variables', label: 'Unordered outcome', multiple: false, unique: true },
-        { name: 'ivs', kind: 'variables', label: 'Predictors', multiple: true, unique: true },
+        { name: 'dv', kind: 'variables', label: 'Unordered outcome', hint: 'The category outcome with no natural order, like party chosen.', multiple: false, unique: true },
+        { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think predict which category cases fall into.', multiple: true, unique: true },
       ],
     },
   ],

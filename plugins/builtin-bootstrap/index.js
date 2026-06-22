@@ -28,8 +28,8 @@ export const manifest = {
       run: 'run',
       order: 10,
       inputs: [
-        { name: 'x', kind: 'variables', types: ['numeric'], multiple: false },
-        { name: 'reps', kind: 'number', label: 'Number of resamples', default: 2000 },
+        { name: 'x', kind: 'variables', hint: 'The numeric variable whose mean you want a robust interval for.', types: ['numeric'], multiple: false },
+        { name: 'reps', kind: 'number', label: 'Number of resamples', hint: 'How many bootstrap samples to draw; more gives a smoother estimate.', default: 2000 },
       ],
     },
     {
@@ -37,11 +37,12 @@ export const manifest = {
       run: 'bootStatistic',
       order: 20,
       inputs: [
-        { name: 'x', kind: 'variables', label: 'Variable', multiple: false, types: ['numeric'] },
+        { name: 'x', kind: 'variables', label: 'Variable', hint: 'The numeric variable to summarize and get an interval for.', multiple: false, types: ['numeric'] },
         {
           name: 'stat',
           kind: 'choice',
           label: 'Statistic',
+          hint: 'Which summary number to bootstrap an interval around.',
           default: 'mean',
           options: [
             { value: 'mean', label: 'Mean' },
@@ -52,7 +53,7 @@ export const manifest = {
             { value: 'trim', label: 'Trimmed mean (10%)' },
           ],
         },
-        { name: 'reps', kind: 'number', label: 'Number of resamples', default: 2000 },
+        { name: 'reps', kind: 'number', label: 'Number of resamples', hint: 'How many bootstrap samples to draw; more gives a smoother estimate.', default: 2000 },
       ],
     },
     {
@@ -60,9 +61,9 @@ export const manifest = {
       run: 'bootCorr',
       order: 30,
       inputs: [
-        { name: 'x', kind: 'variables', label: 'Variable X', multiple: false, types: ['numeric'], unique: true },
-        { name: 'y', kind: 'variables', label: 'Variable Y', multiple: false, types: ['numeric'], unique: true },
-        { name: 'reps', kind: 'number', label: 'Number of resamples', default: 2000 },
+        { name: 'x', kind: 'variables', label: 'Variable X', hint: 'One of the two numeric variables to correlate.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'y', kind: 'variables', label: 'Variable Y', hint: 'The other numeric variable to correlate with the first.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'reps', kind: 'number', label: 'Number of resamples', hint: 'How many bootstrap samples to draw; more gives a smoother estimate.', default: 2000 },
       ],
     },
     {
@@ -70,19 +71,20 @@ export const manifest = {
       run: 'permutation',
       order: 40,
       inputs: [
-        { name: 'y', kind: 'variables', label: 'Outcome (numeric)', multiple: false, types: ['numeric'], unique: true },
-        { name: 'group', kind: 'variables', label: 'Group (2 levels)', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'y', kind: 'variables', label: 'Outcome (numeric)', hint: 'The numeric measure whose group difference you want to test.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'group', kind: 'variables', label: 'Group (2 levels)', hint: 'The variable that splits cases into the two groups to compare.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
         {
           name: 'stat',
           kind: 'choice',
           label: 'Compare',
+          hint: 'Whether to compare the groups by their means or medians.',
           default: 'mean',
           options: [
             { value: 'mean', label: 'Difference in means' },
             { value: 'median', label: 'Difference in medians' },
           ],
         },
-        { name: 'reps', kind: 'number', label: 'Number of permutations', default: 5000 },
+        { name: 'reps', kind: 'number', label: 'Number of permutations', hint: 'How many random label-shuffles to run; more sharpens the p-value.', default: 5000 },
       ],
     },
     {
@@ -90,10 +92,10 @@ export const manifest = {
       run: 'power',
       order: 50,
       inputs: [
-        { name: 'n', kind: 'number', label: 'N per group', default: 30 },
-        { name: 'd', kind: 'number', label: "Effect size (Cohen's d)", default: 0.5 },
-        { name: 'alpha', kind: 'number', label: 'Alpha', default: 0.05 },
-        { name: 'reps', kind: 'number', label: 'Simulations', default: 2000 },
+        { name: 'n', kind: 'number', label: 'N per group', hint: 'How many cases you plan to have in each group.', default: 30 },
+        { name: 'd', kind: 'number', label: "Effect size (Cohen's d)", hint: 'The size of the difference you expect to detect.', default: 0.5 },
+        { name: 'alpha', kind: 'number', label: 'Alpha', hint: 'The significance cutoff, usually 0.05.', default: 0.05 },
+        { name: 'reps', kind: 'number', label: 'Simulations', hint: 'How many studies to simulate; more steadies the power estimate.', default: 2000 },
       ],
     },
   ],

@@ -27,11 +27,12 @@ export const manifest = {
       run: 'run',
       order: 10,
       inputs: [
-        { name: 'vars', kind: 'variables', types: ['numeric'], multiple: true },
+        { name: 'vars', kind: 'variables', hint: 'Two or more numeric measures to correlate with each other.', types: ['numeric'], multiple: true },
         {
           name: 'method',
           kind: 'choice',
           label: 'Method',
+          hint: 'Pearson for straight-line links; rank methods for ordinal or skewed data.',
           options: [
             { value: 'pearson', label: 'Pearson' },
             { value: 'spearman', label: "Spearman's rho" },
@@ -46,12 +47,13 @@ export const manifest = {
       run: 'partial',
       order: 20,
       inputs: [
-        { name: 'vars', kind: 'variables', label: 'Variables', types: ['numeric'], multiple: true, unique: true },
-        { name: 'controls', kind: 'variables', label: 'Control for (partial out)', types: ['numeric'], multiple: true, unique: true },
+        { name: 'vars', kind: 'variables', label: 'Variables', hint: 'The numeric measures whose correlations you want, net of the controls.', types: ['numeric'], multiple: true, unique: true },
+        { name: 'controls', kind: 'variables', label: 'Control for (partial out)', hint: 'The variables whose influence you want removed from each pair.', types: ['numeric'], multiple: true, unique: true },
         {
           name: 'type',
           kind: 'choice',
           label: 'Type',
+          hint: 'Partial removes controls from both variables; semipartial from the row only.',
           default: 'partial',
           options: [
             { value: 'partial', label: 'Partial — remove controls from both variables' },

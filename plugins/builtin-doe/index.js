@@ -24,8 +24,8 @@ export const manifest = {
       run: 'run',
       order: 190,
       inputs: [
-        { name: 'y', kind: 'variables', label: 'Response', multiple: false, types: ['numeric'], unique: true },
-        { name: 'factors', kind: 'variables', label: 'Factors (2+ continuous)', multiple: true, types: ['numeric'], unique: true },
+        { name: 'y', kind: 'variables', label: 'Response', hint: 'The measured result you want to optimize.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'factors', kind: 'variables', label: 'Factors (2+ continuous)', hint: 'The dials you varied in the experiment, two or more.', multiple: true, types: ['numeric'], unique: true },
       ],
     },
   ],

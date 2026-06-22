@@ -29,23 +29,23 @@ export const manifest = {
       run: 'correlogram',
       order: 10,
       inputs: [
-        { name: 'series', kind: 'variables', label: 'Series', types: ['numeric'] },
-        { name: 'maxlag', kind: 'number', label: 'Max lag (0 = auto)', default: 0 },
+        { name: 'series', kind: 'variables', label: 'Series', hint: 'The numeric column to analyze, taken in row order over time.', types: ['numeric'] },
+        { name: 'maxlag', kind: 'number', label: 'Max lag (0 = auto)', hint: 'How many past time steps to check; 0 picks a sensible default.', default: 0 },
       ],
     },
     {
       label: 'Stationarity tests (ADF, KPSS)…',
       run: 'stationarity',
       order: 20,
-      inputs: [{ name: 'series', kind: 'variables', label: 'Series', types: ['numeric'] }],
+      inputs: [{ name: 'series', kind: 'variables', label: 'Series', hint: 'The numeric column to test for a stable mean over time.', types: ['numeric'] }],
     },
     {
       label: 'Decomposition (STL)…',
       run: 'decompose',
       order: 30,
       inputs: [
-        { name: 'series', kind: 'variables', label: 'Series', types: ['numeric'] },
-        { name: 'frequency', kind: 'number', label: 'Seasonal frequency (e.g. 12 monthly, 4 quarterly)', default: 12 },
+        { name: 'series', kind: 'variables', label: 'Series', hint: 'The numeric column to split into trend, season, and remainder.', types: ['numeric'] },
+        { name: 'frequency', kind: 'number', label: 'Seasonal frequency (e.g. 12 monthly, 4 quarterly)', hint: 'How many time steps make one full cycle, like 12 for monthly.', default: 12 },
       ],
     },
     {
@@ -53,9 +53,9 @@ export const manifest = {
       run: 'arima',
       order: 40,
       inputs: [
-        { name: 'series', kind: 'variables', label: 'Series', types: ['numeric'] },
-        { name: 'h', kind: 'number', label: 'Forecast horizon (steps)', default: 10 },
-        { name: 'frequency', kind: 'number', label: 'Seasonal frequency (1 = non-seasonal)', default: 1 },
+        { name: 'series', kind: 'variables', label: 'Series', hint: 'The numeric column to fit a model to and project forward.', types: ['numeric'] },
+        { name: 'h', kind: 'number', label: 'Forecast horizon (steps)', hint: 'How many future time steps to predict.', default: 10 },
+        { name: 'frequency', kind: 'number', label: 'Seasonal frequency (1 = non-seasonal)', hint: 'How many steps make one cycle; use 1 if there is no season.', default: 1 },
       ],
     },
   ],

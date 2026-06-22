@@ -32,9 +32,9 @@ export const manifest = {
       run: 'ancova',
       order: 60,
       inputs: [
-        { name: 'y', kind: 'variables', label: 'Outcome', multiple: false, types: ['numeric'], unique: true },
-        { name: 'factors', kind: 'variables', label: 'Factor(s)', multiple: true, types: ['factor', 'string', 'numeric'], unique: true },
-        { name: 'covs', kind: 'variables', label: 'Covariate(s)', multiple: true, types: ['numeric'], unique: true },
+        { name: 'y', kind: 'variables', label: 'Outcome', hint: 'The numeric measure whose group means you want to compare.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'factors', kind: 'variables', label: 'Factor(s)', hint: 'The grouping variables whose effect on the outcome you test.', multiple: true, types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'covs', kind: 'variables', label: 'Covariate(s)', hint: 'Continuous variables to adjust for before testing the factors.', multiple: true, types: ['numeric'], unique: true },
       ],
     },
     {
@@ -42,8 +42,8 @@ export const manifest = {
       run: 'mixedAnova',
       order: 65,
       inputs: [
-        { name: 'within', kind: 'variables', label: 'Repeated measures (one column per condition/time)', multiple: true, types: ['numeric'], unique: true },
-        { name: 'between', kind: 'variables', label: 'Between-subjects factor (optional)', multiple: false, types: ['factor', 'string', 'numeric'], optional: true, unique: true },
+        { name: 'within', kind: 'variables', label: 'Repeated measures (one column per condition/time)', hint: 'One column per condition or time point, measured on the same people.', multiple: true, types: ['numeric'], unique: true },
+        { name: 'between', kind: 'variables', label: 'Between-subjects factor (optional)', hint: 'A grouping variable to compare across, such as treatment group.', multiple: false, types: ['factor', 'string', 'numeric'], optional: true, unique: true },
       ],
     },
   ],

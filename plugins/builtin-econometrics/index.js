@@ -30,8 +30,8 @@ export const manifest = {
       run: 'robust',
       order: 10,
       inputs: [
-        { name: 'dv', kind: 'variables', label: 'Outcome', types: ['numeric'], unique: true },
-        { name: 'ivs', kind: 'variables', label: 'Predictors', multiple: true, unique: true },
+        { name: 'dv', kind: 'variables', label: 'Outcome', hint: 'The numeric outcome you want to explain.', types: ['numeric'], unique: true },
+        { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think drive the outcome.', multiple: true, unique: true },
       ],
     },
     {
@@ -39,10 +39,10 @@ export const manifest = {
       run: 'iv',
       order: 20,
       inputs: [
-        { name: 'dv', kind: 'variables', label: 'Outcome', types: ['numeric'], unique: true },
-        { name: 'endog', kind: 'variables', label: 'Endogenous regressor(s)', multiple: true, unique: true },
-        { name: 'instruments', kind: 'variables', label: 'Instrument(s)', multiple: true, unique: true },
-        { name: 'controls', kind: 'variables', label: 'Exogenous controls (optional)', multiple: true, optional: true, unique: true },
+        { name: 'dv', kind: 'variables', label: 'Outcome', hint: 'The numeric outcome you want to explain.', types: ['numeric'], unique: true },
+        { name: 'endog', kind: 'variables', label: 'Endogenous regressor(s)', hint: 'The predictor suspected of being tangled up with the error.', multiple: true, unique: true },
+        { name: 'instruments', kind: 'variables', label: 'Instrument(s)', hint: 'Variables that affect the regressor but not the outcome directly.', multiple: true, unique: true },
+        { name: 'controls', kind: 'variables', label: 'Exogenous controls (optional)', hint: 'Other clean predictors to hold constant.', multiple: true, optional: true, unique: true },
       ],
     },
     {
@@ -50,14 +50,15 @@ export const manifest = {
       run: 'panel',
       order: 30,
       inputs: [
-        { name: 'dv', kind: 'variables', label: 'Outcome', types: ['numeric'], unique: true },
-        { name: 'ivs', kind: 'variables', label: 'Predictors', multiple: true, unique: true },
-        { name: 'id', kind: 'variables', label: 'Unit id', unique: true },
-        { name: 'time', kind: 'variables', label: 'Time index', unique: true },
+        { name: 'dv', kind: 'variables', label: 'Outcome', hint: 'The numeric outcome you want to explain.', types: ['numeric'], unique: true },
+        { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think drive the outcome.', multiple: true, unique: true },
+        { name: 'id', kind: 'variables', label: 'Unit id', hint: 'Identifies each unit followed over time, like person or country.', unique: true },
+        { name: 'time', kind: 'variables', label: 'Time index', hint: 'The period each observation belongs to, like year.', unique: true },
         {
           name: 'model',
           kind: 'choice',
           label: 'Model',
+          hint: 'How to handle each unit; fixed effects is the common default.',
           options: [
             { value: 'within', label: 'Fixed effects (within)' },
             { value: 'random', label: 'Random effects' },

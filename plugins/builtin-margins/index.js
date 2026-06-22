@@ -39,12 +39,13 @@ export const manifest = {
       run: 'margins',
       order: 60,
       inputs: [
-        { name: 'dv', kind: 'variables', label: 'Outcome', multiple: false, types: ['numeric'], unique: true },
-        { name: 'ivs', kind: 'variables', label: 'Predictors', multiple: true, unique: true },
+        { name: 'dv', kind: 'variables', label: 'Outcome', hint: 'The outcome to model; match its type to the model below.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think predict the outcome.', multiple: true, unique: true },
         {
           name: 'family',
           kind: 'choice',
           label: 'Model',
+          hint: 'The model that fits your outcome type, such as binary or count.',
           default: 'logistic',
           options: [
             { value: 'logistic', label: 'Logistic — binary outcome (probability)' },
@@ -57,6 +58,7 @@ export const manifest = {
           name: 'kind',
           kind: 'choice',
           label: 'Effect type',
+          hint: 'Average the effect over all cases, or for one typical case.',
           default: 'ame',
           options: [
             { value: 'ame', label: 'Average marginal effect (AME) — recommended' },

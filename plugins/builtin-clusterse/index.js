@@ -24,9 +24,9 @@ export const manifest = {
       run: 'run',
       order: 65,
       inputs: [
-        { name: 'y', kind: 'variables', label: 'Outcome', multiple: false, types: ['numeric'], unique: true },
-        { name: 'ivs', kind: 'variables', label: 'Predictors', multiple: true, unique: true },
-        { name: 'cluster', kind: 'variables', label: 'Cluster variable', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'y', kind: 'variables', label: 'Outcome', hint: 'The numeric outcome you want to explain.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think predict the outcome.', multiple: true, unique: true },
+        { name: 'cluster', kind: 'variables', label: 'Cluster variable', hint: 'The group cases fall into, like school or person.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
       ],
     },
   ],

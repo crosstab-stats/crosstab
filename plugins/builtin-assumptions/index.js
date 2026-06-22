@@ -27,15 +27,15 @@ export const manifest = {
       label: 'Normality (Shapiro–Wilk)…',
       run: 'normality',
       order: 10,
-      inputs: [{ name: 'vars', kind: 'variables', label: 'Variables', multiple: true, types: ['numeric'] }],
+      inputs: [{ name: 'vars', kind: 'variables', label: 'Variables', hint: 'The numeric variables to check for a normal distribution.', multiple: true, types: ['numeric'] }],
     },
     {
       label: "Homogeneity of variance (Levene's)…",
       run: 'levene',
       order: 20,
       inputs: [
-        { name: 'outcome', kind: 'variables', label: 'Outcome', types: ['numeric'] },
-        { name: 'groups', kind: 'variables', label: 'Groups', types: ['factor', 'string', 'numeric'] },
+        { name: 'outcome', kind: 'variables', label: 'Outcome', hint: 'The numeric measure whose spread you want to compare across groups.', types: ['numeric'] },
+        { name: 'groups', kind: 'variables', label: 'Groups', hint: 'The variable that sorts cases into the groups being compared.', types: ['factor', 'string', 'numeric'] },
       ],
     },
   ],
