@@ -319,6 +319,14 @@ export class Launcher {
       markSeen();
     } catch (err) {
       console.error('Launcher start failed', err);
+      // Never close into a broken/half-loaded state: drop to a clean project so
+      // the app is usable. (openProject already self-recovers on a damaged
+      // project; this is the backstop for any other start failure.)
+      try {
+        await this.#projects?.newProject?.();
+      } catch {
+        /* best-effort */
+      }
     }
     this.#close();
   }

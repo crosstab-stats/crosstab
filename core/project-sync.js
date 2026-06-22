@@ -346,8 +346,10 @@ export class ProjectSync {
     await this.#settle();
     this.#setStatus('loading');
     this.#loading = true;
+    let projName = null;
     try {
       const { name, bundle } = await this.#store.load(id);
+      projName = name;
       await this.#datasets.loadBundle(bundle);
       // Restore plugin workspace blobs BEFORE plugins load, so a workspace's
       // mount() sees its saved state via state.get(). Absent ⇒ empty.
@@ -369,8 +371,32 @@ export class ProjectSync {
       this.#emitProject();
     } catch (err) {
       console.error('[project] load failed', err);
-      this.#results.appendError(`Open project failed: ${err.message}`);
-      this.#setStatus('error');
+      this.#results.appendError(
+        `Couldn't open ${projName ? `"${projName}"` : 'the project'} — its data may be damaged (${err.message}). ` +
+          `Starting a fresh project instead; the damaged one is left untouched so you can delete or re-import it.`,
+      );
+      // The failed load left the dataset half-torn-down and the binding still
+      // pointing at whatever was open before. Detach the binding and clear dirty
+      // FIRST so the recovery can't autosave this broken state over any project,
+      // then load a clean blank. (#loading is still true → no autosave fires.)
+      this.#binding = null;
+      this.#dirty = false;
+      this.#sourcesDirty.clear();
+      if (this.#timer) {
+        clearTimeout(this.#timer);
+        this.#timer = null;
+      }
+      try {
+        await this.#datasets.loadBundle({
+          activeId: 1,
+          datasets: [{ id: 1, name: 'Dataset 1', state: { sources: [], transforms: [] } }],
+        });
+        this.#applyWorkspaces?.({});
+      } catch (e2) {
+        console.error('[project] recovery load failed', e2);
+      }
+      this.#setStatus();
+      this.#emitProject();
     } finally {
       this.#loading = false;
     }

@@ -373,7 +373,15 @@ export class DuckDBManager {
     const name = `ct_export_${this.#scratchSeq++}.parquet`;
     await conn.query(`COPY (${sql}) TO '${name}' (FORMAT parquet)`);
     try {
-      return await this.#db.copyFileToBuffer(name);
+      const buf = await this.#db.copyFileToBuffer(name);
+      // Defence in depth (#105): never hand back — and so never persist — bytes
+      // that aren't a valid Parquet file. Better to fail the save loudly than
+      // write a project that won't reload. (Valid files, incl. empty results,
+      // carry the 'PAR1' magic at both ends.)
+      if (!isValidParquet(buf)) {
+        throw new Error('Parquet export produced invalid bytes; aborting to avoid writing a corrupt project.');
+      }
+      return buf;
     } finally {
       try {
         await this.#db.dropFile(name);
@@ -506,4 +514,18 @@ export class DuckDBManager {
  */
 export function quoteIdent(name) {
   return `"${String(name).replace(/"/g, '""')}"`;
+}
+
+/** True if `bytes` look like a real Parquet file: the 'PAR1' magic appears at both
+ * the start and the end (the footer). Catches truncated/garbled exports before
+ * they're persisted. Empty result sets still produce a valid (PAR1-bracketed)
+ * file, so this doesn't reject legitimately-empty data. */
+export function isValidParquet(bytes) {
+  if (!bytes || bytes.length < 8) return false;
+  const MAGIC = [0x50, 0x41, 0x52, 0x31]; // 'PAR1'
+  for (let i = 0; i < 4; i++) {
+    if (bytes[i] !== MAGIC[i]) return false;
+    if (bytes[bytes.length - 4 + i] !== MAGIC[i]) return false;
+  }
+  return true;
 }
