@@ -27,7 +27,7 @@ export const manifest = {
   category: 'Text',
   keywords: ['text', 'qualitative', 'tidytext', 'word frequency', 'sentiment', 'tf-idf', 'kwic', 'concordance', 'content analysis', 'nlp'],
   disciplines: ['Sociology', 'Anthropology', 'Ethnic Studies', "Women's & Gender Studies", 'Asian Studies', 'Communication'],
-  rPackages: ['tidytext', 'dplyr', 'tibble', 'svglite'],
+  rPackages: ['tidytext', 'dplyr', 'tibble', 'svglite', 'topicmodels', 'reshape2'],
   menu: [
     {
       label: 'Word frequency…',
@@ -70,6 +70,26 @@ export const manifest = {
         { name: 'text', kind: 'variables', label: 'Text column', hint: 'The free-text responses to search for your keyword.', multiple: false, types: ['string'] },
         { name: 'term', kind: 'text', label: 'Search term (single word)', hint: 'The word to find, shown with the words around it.' },
         { name: 'window', kind: 'number', label: 'Context words each side', hint: 'How many surrounding words to show on each side.', default: 6 },
+      ],
+    },
+    {
+      label: 'Topic modeling (LDA)…',
+      run: 'topicModel',
+      order: 50,
+      inputs: [
+        { name: 'text', kind: 'variables', label: 'Text column', hint: 'The free-text responses to discover recurring themes across.', multiple: false, types: ['string'] },
+        { name: 'k', kind: 'number', label: 'Number of topics', hint: 'How many themes to extract; try a few values and compare.', default: 4 },
+        { name: 'topn', kind: 'number', label: 'Top terms per topic', hint: 'How many defining words to show for each topic.', default: 8 },
+      ],
+    },
+    {
+      label: 'Content-analysis dictionary…',
+      run: 'dictionary',
+      order: 60,
+      inputs: [
+        { name: 'text', kind: 'variables', label: 'Text column', hint: 'The free-text responses to score against your categories.', multiple: false, types: ['string'], unique: true },
+        { name: 'dict', kind: 'file', label: 'Dictionary (CSV: category,term)', extensions: ['.csv', '.txt'], hint: 'A CSV with category,term rows — each term counts toward its category.' },
+        { name: 'doc', kind: 'variables', label: 'Group / document (optional)', hint: 'Splits responses into groups to compare category counts.', multiple: false, types: ['factor', 'string'], optional: true, unique: true },
       ],
     },
   ],
@@ -282,6 +302,149 @@ export async function kwic(app, { text, term, window }) {
     },
     { caption: `Keyword in Context — "${term}" (${r.num('nHits')} occurrences in ${r.num('nDocs')} rows)` },
   );
+}
+
+// --- Topic modeling (LDA) ----------------------------------------------------
+
+export async function topicModel(app, { text, k, topn }) {
+  if (!text) {
+    await app.results.appendError('Topic modeling: choose a text column.');
+    return;
+  }
+  const K = Number.isFinite(k) ? Math.max(2, Math.floor(k)) : 4;
+  const N = Number.isFinite(topn) ? Math.max(3, Math.floor(topn)) : 8;
+  const rCode = `
+    ${PRELUDE}
+    suppressMessages(library(topicmodels))
+    txt <- as.character(text)
+    d <- tibble(doc = seq_along(txt), text = txt)
+    data("stop_words")
+    toks <- d %>% unnest_tokens(word, text) %>% anti_join(stop_words, by = "word") %>%
+      filter(nchar(word) >= 3 & !grepl("^[0-9]+$", word))
+    counts <- toks %>% count(doc, word)
+    nDocs <- length(unique(counts$doc)); nTerms <- length(unique(counts$word))
+    if (nDocs < ${K} || nTerms < ${K}) {
+      list(err = sprintf("Need at least %d documents and %d distinct terms for %d topics (have %d docs, %d terms).", ${K}, ${K}, ${K}, nDocs, nTerms))
+    } else {
+      dtm <- counts %>% cast_dtm(doc, word, n)
+      lda <- LDA(dtm, k = ${K}, control = list(seed = 1234))
+      beta <- tidy(lda, matrix = "beta")
+      top <- beta %>% group_by(topic) %>% slice_max(beta, n = ${N}, with_ties = FALSE) %>% ungroup() %>% arrange(topic, desc(beta))
+      gamma <- tidy(lda, matrix = "gamma")
+      dom <- gamma %>% group_by(document) %>% slice_max(gamma, n = 1, with_ties = FALSE) %>% ungroup()
+      domCount <- dom %>% count(topic) %>% arrange(topic)
+      list(topic = top$topic, term = top$term, beta = top$beta,
+           domTopic = domCount$topic, domN = domCount$n, nDocs = nDocs, nTerms = nTerms, err = "")
+    }`;
+  let result;
+  try {
+    ({ result } = await app.webr.run(rCode));
+  } catch (e) {
+    if (/tidyr/.test(String(e))) {
+      await app.webr.installPackages(['tidyr']);
+      ({ result } = await app.webr.run(rCode));
+    } else throw e;
+  }
+  const r = flat(result);
+  const err = r.str1('err');
+  if (err) {
+    await app.results.appendText(err);
+    return;
+  }
+  const topic = r.nums('topic'), term = r.strs('term');
+  const byTopic = new Map();
+  topic.forEach((t, i) => {
+    if (!byTopic.has(t)) byTopic.set(t, []);
+    byTopic.get(t).push(term[i]);
+  });
+  const rows = [...byTopic.entries()].sort((a, b) => a[0] - b[0]).map(([t, terms]) => [`Topic ${t}`, terms.join(', ')]);
+  await app.results.appendTable(
+    { columns: ['Topic', `Top ${N} terms`], rows, rowHeaders: true },
+    { caption: `Topic Modeling (LDA, k=${K}) — ${r.num('nDocs')} documents, ${r.num('nTerms')} terms` },
+  );
+  const dt = r.nums('domTopic'), dn = r.nums('domN');
+  if (dt.length) {
+    await app.results.appendTable(
+      { columns: ['Topic', 'Documents where dominant'], rows: dt.map((t, i) => [`Topic ${t}`, String(dn[i])]), rowHeaders: true },
+      { caption: 'Dominant Topic per Document' },
+    );
+  }
+  await app.results.appendText(
+    '**Topic modeling (LDA)** groups co-occurring words into latent themes — each topic is a weighted word list you read and name. There is no single "right" number of topics; try a few values of *k* and compare which gives the most interpretable themes.',
+  );
+}
+
+// --- Content-analysis dictionary --------------------------------------------
+
+export async function dictionary(app, { text, dict, doc }) {
+  if (!text) {
+    await app.results.appendError('Content analysis: choose a text column.');
+    return;
+  }
+  if (!dict || !dict.bytes) {
+    await app.results.appendError('Content analysis: choose a dictionary CSV (category,term rows).');
+    return;
+  }
+  const pairs = parseDict(new TextDecoder().decode(dict.bytes));
+  if (!pairs.length) {
+    await app.results.appendError('That dictionary file had no usable "category,term" rows.');
+    return;
+  }
+  const cats = pairs.map((p) => p[0]);
+  const terms = pairs.map((p) => p[1]);
+  const hasDoc = !!doc;
+  const rCode = `
+    ${PRELUDE}
+    txt <- as.character(text)
+    ${hasDoc ? 'grp <- as.character(doc)' : 'grp <- rep("All", length(txt))'}
+    dict <- tibble(category = c(${cats.map(rStr).join(', ')}), word = tolower(c(${terms.map(rStr).join(', ')})))
+    d <- tibble(.row = seq_along(txt), grp = grp, text = txt)
+    toks <- d %>% unnest_tokens(word, text)
+    nWords <- nrow(toks)
+    hits <- toks %>% inner_join(dict, by = "word")
+    byCat <- hits %>% count(category) %>% arrange(desc(n))
+    byGrpCat <- hits %>% count(grp, category) %>% arrange(grp, desc(n))
+    list(cat = byCat$category, n = byCat$n, nWords = nWords, nCats = length(unique(dict$category)),
+         g = as.character(byGrpCat$grp), gc = byGrpCat$category, gn = byGrpCat$n)`;
+  const { result } = await app.webr.run(rCode);
+  const r = flat(result);
+  const cat = r.strs('cat'), n = r.nums('n'), nWords = r.num('nWords');
+  if (!cat.length) {
+    await app.results.appendText('No dictionary terms matched the text. Check that the dictionary words match the language/spelling in the responses.');
+    return;
+  }
+  await app.results.appendTable(
+    { columns: ['Category', 'Matches', '% of words'], rows: cat.map((c, i) => [c, String(n[i]), `${((100 * n[i]) / nWords).toFixed(2)}%`]), rowHeaders: true },
+    { caption: `Content Analysis — ${nWords.toLocaleString()} words scored against ${r.num('nCats')} categories` },
+  );
+  if (hasDoc) {
+    const g = r.strs('g'), gc = r.strs('gc'), gn = r.nums('gn');
+    if (g.length) {
+      await app.results.appendTable(
+        { columns: ['Group', 'Category', 'Matches'], rows: g.map((gg, i) => [gg, gc[i], String(gn[i])]), rowHeaders: false },
+        { caption: 'Category Counts by Group' },
+      );
+    }
+  }
+  await app.results.appendText(
+    '**Dictionary content analysis** counts how often words from each of your categories appear — the classic mixed-methods bridge from qualitative codes to quantitative counts. Build the categories around your codebook; only exact word matches are counted (no stemming).',
+  );
+}
+
+/** Parse a dictionary CSV into [category, term] pairs (term lower-cased). Accepts
+ * an optional `category,term`/`category,word` header; tolerates quotes. */
+function parseDict(text) {
+  const out = [];
+  const lines = String(text).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  for (let i = 0; i < lines.length; i++) {
+    const cells = lines[i].split(',').map((c) => c.trim().replace(/^["']|["']$/g, ''));
+    if (cells.length < 2) continue;
+    const [a, b] = cells;
+    if (i === 0 && /^categ/i.test(a) && /^(term|word)/i.test(b)) continue; // header row
+    if (!a || !b) continue;
+    out.push([a, b.toLowerCase()]);
+  }
+  return out;
 }
 
 // --- helpers -----------------------------------------------------------------
