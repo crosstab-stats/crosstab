@@ -205,10 +205,12 @@ async function gatherInputs(ui, specs, item) {
   for (const spec of specs) {
     const title = composeTitle(item.label, spec.label);
     const kind = spec.kind || 'variables';
+    const hint = hintFor(spec); // explicit manifest hint, else a sensible default
 
     if (kind === 'variables') {
       const res = await ui.selectVariables({
         title,
+        hint,
         multiple: !!spec.multiple,
         types: spec.types,
         exclude: spec.unique ? takenUnique.slice() : undefined,
@@ -231,6 +233,7 @@ async function gatherInputs(ui, specs, item) {
             label: spec.label || spec.name,
             type: kind === 'number' ? 'number' : 'text',
             value: spec.default != null ? String(spec.default) : '',
+            hint,
           },
         ],
       });
@@ -246,7 +249,7 @@ async function gatherInputs(ui, specs, item) {
       const items = (spec.options || []).map((o) =>
         typeof o === 'object' ? { value: String(o.value), label: o.label } : { value: String(o) },
       );
-      const r = await ui.selectFromList({ title, items, multiple: false });
+      const r = await ui.selectFromList({ title, hint, items, multiple: false });
       if (r === null) {
         if (spec.optional) {
           out[spec.name] = spec.default ?? null;
@@ -260,6 +263,28 @@ async function gatherInputs(ui, specs, item) {
     }
   }
   return out;
+}
+
+/** The sub-heading shown under a picker explaining the choice. Uses the input's
+ * explicit `hint` when the plugin author provided one; otherwise synthesises a
+ * sensible default from the input's kind/types so *no* picker is ever a bare
+ * "pick variable". Plugins should still add a `hint` to say *why* a variable is
+ * needed for that specific analysis. */
+function hintFor(spec) {
+  if (spec && typeof spec.hint === 'string' && spec.hint.trim()) return spec.hint;
+  const kind = spec?.kind || 'variables';
+  if (kind === 'number') return 'Enter a number for this setting.';
+  if (kind === 'text') return 'Enter a value for this setting.';
+  if (kind === 'choice') return 'Choose one of the options.';
+  const types = Array.isArray(spec?.types) ? spec.types : [];
+  const numeric = types.length === 1 && types[0] === 'numeric';
+  const categorical = types.length > 0 && types.every((t) => t === 'factor' || t === 'string');
+  const adj = numeric ? 'numeric ' : categorical ? 'categorical ' : '';
+  let s = spec?.multiple
+    ? `Choose one or more ${adj}variables to include.`
+    : `Choose the ${adj}variable for this role.`;
+  if (spec?.unique) s += ' Each variable can be used in only one role.';
+  return s;
 }
 
 /** Build the R-binding descriptor (for {@link webr.run}'s `injectInputs`). */
