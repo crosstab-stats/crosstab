@@ -301,12 +301,21 @@ export const workspace = {
       return { lo, hi, text: doc.text.slice(lo, hi), range };
     };
 
-    // Record a segment for a span, clear the selection, and re-render.
+    // Record a segment for a span, re-render, and KEEP the passage selected so more
+    // codes can be layered onto it (multi-coding — the NVivo/MAXQDA rhythm). The
+    // re-render rebuilds the transcript DOM, so the live selection is restored over
+    // the same characters afterwards. Exact duplicates (same code on the same span)
+    // are a no-op; remove a code by clicking its highlight.
     const addSegment = (codeId, span) => {
-      state.segments.push({ doc: activeRid, codeId, start: span.lo, end: span.hi, text: span.text });
-      save();
-      document.getSelection()?.removeAllRanges();
+      const dup = state.segments.some(
+        (s) => s.doc === activeRid && s.codeId === codeId && s.start === span.lo && s.end === span.hi,
+      );
+      if (!dup) {
+        state.segments.push({ doc: activeRid, codeId, start: span.lo, end: span.hi, text: span.text });
+        save();
+      }
       renderText(); renderDocList(); renderCodes();
+      setSelectionRange(textPane, span.lo, span.hi);
     };
 
     const flashHint = (elm) => { elm.style.color = '#b04a4a'; setTimeout(() => { elm.style.color = ''; }, 900); };
@@ -410,4 +419,31 @@ function offsetWithin(container, node, offset) {
     total += n.nodeValue.length;
   }
   return total + offset;
+}
+
+/** Re-establish a text selection over [lo, hi) character offsets within
+ * `container` — the inverse of {@link offsetWithin}. Lets a passage stay selected
+ * after the transcript re-renders (so codes can be layered on it). No-op if the
+ * range can't be mapped. */
+function setSelectionRange(container, lo, hi) {
+  const range = document.createRange();
+  let acc = 0;
+  let startDone = false;
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+  let n;
+  while ((n = walker.nextNode())) {
+    const len = n.nodeValue.length;
+    if (!startDone && lo <= acc + len) {
+      range.setStart(n, lo - acc);
+      startDone = true;
+    }
+    if (startDone && hi <= acc + len) {
+      range.setEnd(n, hi - acc);
+      const sel = document.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return;
+    }
+    acc += len;
+  }
 }
