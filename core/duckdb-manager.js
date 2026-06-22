@@ -54,6 +54,13 @@ export class DuckDBManager {
   /** Lazily-imported JS Parquet writer module (loaded on first wide import). */
   #parquetWriter = null;
 
+  /** Monotonic counter for unique scratch filenames. A FIXED scratch name
+   * ('ct_export.parquet'/'ct_import.parquet') corrupts data when two Parquet
+   * export/restore ops interleave (e.g. an autosave during a multi-file import):
+   * they clobber each other's scratch file, and a truncated/garbled Parquet gets
+   * written to disk. Unique names per op make concurrent ops independent. */
+  #scratchSeq = 0;
+
   /** @returns {boolean} True once the runtime is initialised and ready. */
   get isReady() {
     return this.#conn !== null;
@@ -363,7 +370,7 @@ export class DuckDBManager {
    */
   async queryToParquet(sql) {
     const { conn } = await this.#ensureReady();
-    const name = 'ct_export.parquet';
+    const name = `ct_export_${this.#scratchSeq++}.parquet`;
     await conn.query(`COPY (${sql}) TO '${name}' (FORMAT parquet)`);
     try {
       return await this.#db.copyFileToBuffer(name);
@@ -387,7 +394,7 @@ export class DuckDBManager {
    */
   async replaceTableFromParquet(name, bytes) {
     const { conn } = await this.#ensureReady();
-    const file = 'ct_import.parquet';
+    const file = `ct_import_${this.#scratchSeq++}.parquet`;
     await this.#db.registerFileBuffer(file, bytes);
     try {
       await conn.query(`DROP TABLE IF EXISTS ${quoteIdent(name)}`);
