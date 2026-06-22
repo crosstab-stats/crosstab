@@ -237,8 +237,13 @@ export const workspace = {
     let menu = null;
     const closeMenu = () => { menu?.remove(); menu = null; };
     document.addEventListener('click', closeMenu);
+    // The coding tab is a focused app surface: suppress the browser's native
+    // context menu so a right-click doesn't compete with (or double up on) the
+    // code-assign menu. Coding is left-select → menu (see the button guard below).
+    document.addEventListener('contextmenu', (e) => e.preventDefault());
 
-    textPane.addEventListener('mouseup', () => {
+    textPane.addEventListener('mouseup', (e) => {
+      if (e.button !== 0) return; // left-button selections only
       const sel = document.getSelection();
       if (!sel || sel.isCollapsed || !sel.rangeCount) return;
       const range = sel.getRangeAt(0);
