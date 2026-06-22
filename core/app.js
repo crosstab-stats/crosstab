@@ -489,6 +489,17 @@ export async function boot(mounts) {
   // control, finish caching the app + runtimes now (no-op otherwise).
   void offline.resumeIfPending((t) => console.info('[offline]', t));
 
+  // Running as an installed (Home Screen) app? Tell the worker, so it serves the
+  // shell cache-first — a field iPad on a dead connection still launches instantly.
+  const standalone =
+    window.navigator.standalone === true ||
+    (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+  if (standalone) {
+    offline.setStandalone(true);
+    // Re-announce if SW control arrives slightly after boot.
+    navigator.serviceWorker?.addEventListener?.('controllerchange', () => offline.setStandalone(true));
+  }
+
   return engine;
 }
 

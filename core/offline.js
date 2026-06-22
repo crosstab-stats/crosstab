@@ -87,24 +87,40 @@ export class OfflineManager {
    * resumeIfPending() to finish the warm. */
   get hasPendingResume() {
     try {
-      return sessionStorage.getItem(RESUME_KEY) === '1';
+      return !!sessionStorage.getItem(RESUME_KEY);
     } catch {
       return false;
     }
   }
 
+  /** Tell the service worker whether we're running as a standalone (Home Screen)
+   * app, so it serves the app shell cache-first / stale-while-revalidate (instant,
+   * flaky-network-proof) instead of network-first. */
+  setStandalone(value) {
+    if (!navigator.serviceWorker?.controller) return;
+    this.#message('set-standalone', { value: !!value }).catch(() => {
+      /* not critical */
+    });
+  }
+
   /**
-   * Turn on offline caching and cache the app + runtimes. May reload once the very
-   * first time (to put the page under SW control); the warm then resumes on boot.
+   * Turn on offline caching and cache the app + runtimes + the chosen R packages.
+   * May reload once the very first time (to put the page under SW control); the
+   * warm then resumes on boot with the same package list.
    * @param {(text: string) => void} [onProgress]
+   * @param {object} [opts]
+   * @param {boolean} [opts.allPlugins] cache every plugin's packages (plan-ahead).
+   * @param {string[]} [opts.packages] explicit R-package list (e.g. the launcher's
+   *   *selected* plugins, which aren't loaded yet). Takes precedence over allPlugins.
    */
-  async enable(onProgress = () => {}) {
+  async enable(onProgress = () => {}, { allPlugins = false, packages = null } = {}) {
     if (!this.supported) throw new Error('This browser can’t cache for offline use.');
     try {
       await navigator.storage?.persist?.();
     } catch {
       /* best effort */
     }
+    const wanted = this.#resolveWanted({ allPlugins, packages });
     // Persist "on" now, so it survives a control-gaining reload and the SW hydrates
     // on at its next activation.
     await this.#setMarker();
@@ -112,7 +128,9 @@ export class OfflineManager {
     if (!navigator.serviceWorker.controller) {
       onProgress('Activating offline support — reloading once…');
       try {
-        sessionStorage.setItem(RESUME_KEY, '1');
+        // Carry the exact package list across the reload (a launcher selection
+        // would otherwise be gone after the page reboots).
+        sessionStorage.setItem(RESUME_KEY, JSON.stringify({ packages: wanted }));
       } catch {
         /* no sessionStorage — the post-reload resume just won't auto-fire */
       }
@@ -126,19 +144,41 @@ export class OfflineManager {
       return; // page navigates away
     }
 
-    await this.#runWarm(onProgress);
+    await this.#runWarm(onProgress, wanted);
+  }
+
+  /** Resolve the R-package set to cache: an explicit list wins, else every plugin
+   * (allPlugins) or the loaded set; nanoparquet (the host bridge) is always added. */
+  #resolveWanted({ allPlugins = false, packages = null } = {}) {
+    const set = new Set(['nanoparquet']);
+    let pkgs = packages;
+    if (!pkgs) {
+      try {
+        pkgs = allPlugins ? this.#plugins?.allRPackages?.() : this.#plugins?.requiredRPackages?.();
+      } catch {
+        pkgs = [];
+      }
+    }
+    for (const p of pkgs || []) set.add(p);
+    return [...set];
   }
 
   /** If a prior enable() reloaded to gain control, finish caching now (boot calls
    * this). No-op otherwise. */
   async resumeIfPending(onProgress = () => {}) {
-    if (!this.hasPendingResume) return;
+    let payload = null;
+    try {
+      payload = JSON.parse(sessionStorage.getItem(RESUME_KEY) || 'null');
+    } catch {
+      /* ignore */
+    }
+    if (!payload || !Array.isArray(payload.packages)) return;
     // Keep the flag until we actually have control + finish, so a reload that
     // didn't immediately yield control retries on the next load rather than
     // silently dropping the request.
     if (!navigator.serviceWorker.controller) return;
     try {
-      await this.#runWarm(onProgress);
+      await this.#runWarm(onProgress, payload.packages);
       sessionStorage.removeItem(RESUME_KEY);
     } catch (err) {
       console.warn('[offline] resume warm failed', err);
@@ -163,8 +203,10 @@ export class OfflineManager {
 
   // --- internals -------------------------------------------------------------
 
-  /** Cache + warm everything once the page is under SW control. */
-  async #runWarm(onProgress) {
+  /** Cache + warm everything once the page is under SW control.
+   * @param {string[]} wantedPackages the resolved R-package set to pre-fetch
+   *   (already includes nanoparquet; see #resolveWanted). */
+  async #runWarm(onProgress, wantedPackages = []) {
     // Flip the live SW flag (the marker handles persistence across reloads, but the
     // already-running worker needs to be told to start caching this session).
     try {
@@ -194,18 +236,12 @@ export class OfflineManager {
     onProgress('Caching the data engine…');
     await this.#duckdb.preload();
 
-    // 4) R packages: pre-fetch the dependency closure of the *enabled* plugins'
-    // declared packages (+ the host's nanoparquet bridge) so those analyses run
-    // offline without having to have been run online first. We cache the package
-    // .tgz files directly (not install them) — so caching many plugins' packages
-    // can't OOM the single WebR session.
-    const wanted = new Set(['nanoparquet']);
-    try {
-      for (const pkg of this.#plugins?.requiredRPackages?.() || []) wanted.add(pkg);
-    } catch {
-      /* no plugin manager — just the bridge */
-    }
-    await this.#cachePackages([...wanted], onProgress);
+    // 4) R packages: pre-fetch the dependency closure of the chosen packages (the
+    // selected/enabled plugins, or every plugin) so those analyses run offline
+    // without having to have been run online first. We cache the package .tgz files
+    // directly (not install them) — so caching many plugins' packages can't OOM the
+    // single WebR session.
+    await this.#cachePackages(wantedPackages, onProgress);
 
     onProgress('Offline ready.');
   }

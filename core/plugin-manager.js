@@ -366,6 +366,23 @@ export class PluginManager {
     return [...set];
   }
 
+  /** Union of R packages across ALL known plugins (loaded or not) — for the
+   * "cache every plugin for offline" option (plan-ahead, larger download). */
+  allRPackages() {
+    const set = new Set();
+    for (const p of this.list()) for (const pkg of p.rPackages || []) set.add(pkg);
+    return [...set];
+  }
+
+  /** Union of R packages for a given set of plugin load keys — lets the launcher
+   * pre-cache for the *selected* (ticked) plugins, which aren't loaded until Start. */
+  rPackagesForKeys(keys) {
+    const want = new Set(keys || []);
+    const set = new Set();
+    for (const p of this.list()) if (want.has(p.key)) for (const pkg of p.rPackages || []) set.add(pkg);
+    return [...set];
+  }
+
   /** The keys of every currently-active (loaded) plugin — the set a project
    * persists so reopening it restores the same analyses/importers. Uses *loaded*,
    * not merely `enabled`: a plugin can be un-disabled yet never activated (the

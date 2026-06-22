@@ -328,34 +328,50 @@ export class Launcher {
     const draw = (status) => {
       box.replaceChildren();
       box.append(el('div', 'Offline', 'ctl__railhead'));
+      const prog = el('div', '', 'ctl__offlineprog');
+
+      // Run enable() for the chosen scope; disable the buttons + stream progress.
+      const run = async (opts, btns) => {
+        btns.forEach((b) => (b.disabled = true));
+        try {
+          await this.#offline.enable((t) => { prog.textContent = t; }, opts);
+          draw(await this.#offline.status());
+        } catch (err) {
+          prog.textContent = `Couldn’t enable: ${err.message}`;
+          btns.forEach((b) => (b.disabled = false));
+        }
+      };
+      // Packages for the *selected* (ticked) plugins — they aren't loaded until
+      // Start, so we resolve them by key here.
+      const selectedPackages = () => this.#plugins.rPackagesForKeys([...this.#selected]);
+
       if (status.enabled) {
         const size = status.bytes ? ` · ~${(status.bytes / 1048576).toFixed(0)} MB` : '';
         const files = status.count ? ` (${status.count} files${size})` : '';
         box.append(el('div', `✓ Available offline${files}`, 'ctl__offlineok'));
+        // Smart caching: the worker keeps caching new packages/assets as you use
+        // features. Offer the plan-ahead "cache the whole toolkit" top-up too.
+        box.append(el('p', 'More gets cached automatically as you use features. Or cache the full toolkit now:', 'ctl__offlinehint'));
+        const allBtn = el('button', '⬇ Cache all plugins', 'ctl__offlinebtn');
+        allBtn.type = 'button';
         const rm = el('button', 'Remove offline data', 'ctl__howto');
         rm.type = 'button';
+        allBtn.addEventListener('click', () => run({ allPlugins: true }, [allBtn, rm]));
         rm.addEventListener('click', async () => {
           rm.disabled = true;
           try { await this.#offline.disable(); } catch { /* ignore */ }
           draw(await this.#offline.status());
         });
-        box.append(rm);
+        box.append(allBtn, prog, rm);
       } else {
-        const hint = el('p', 'Cache CrossTab, the R engine, and the R packages your selected plugins need, so everything works with no internet — on a flight, or to set up an air-gapped machine. One-time download.', 'ctl__offlinehint');
+        box.append(el('p', 'Cache CrossTab, the R engine, and the R packages your selected plugins need, so everything works with no internet — on a flight, or to set up an air-gapped machine.', 'ctl__offlinehint'));
         const btn = el('button', '⬇ Make available offline', 'ctl__offlinebtn');
         btn.type = 'button';
-        const prog = el('div', '', 'ctl__offlineprog');
-        btn.addEventListener('click', async () => {
-          btn.disabled = true;
-          try {
-            await this.#offline.enable((t) => { prog.textContent = t; });
-            draw(await this.#offline.status());
-          } catch (err) {
-            prog.textContent = `Couldn’t enable: ${err.message}`;
-            btn.disabled = false;
-          }
-        });
-        box.append(hint, btn, prog);
+        const allBtn = el('button', '…or cache every plugin (larger)', 'ctl__howto');
+        allBtn.type = 'button';
+        btn.addEventListener('click', () => run({ packages: selectedPackages() }, [btn, allBtn]));
+        allBtn.addEventListener('click', () => run({ allPlugins: true }, [btn, allBtn]));
+        box.append(btn, allBtn, prog);
       }
     };
 

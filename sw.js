@@ -36,6 +36,11 @@ const CACHE = 'crosstab-offline-v1';
 // A synthetic key (never a real request) that marks "offline caching is on".
 const OFFLINE_MARKER = 'https://crosstab.local/__offline_enabled__';
 let offlineEnabled = false;
+// Set by the page when running as a Home Screen (standalone) app — then the
+// same-origin shell is served cache-first/stale-while-revalidate so a flaky or
+// absent connection (a field iPad) never blocks launch. In-memory; the page
+// re-announces it each load.
+let standalone = false;
 
 if (typeof window === 'undefined') {
   // ---- Running as the service worker ----------------------------------------
@@ -66,6 +71,8 @@ if (typeof window === 'undefined') {
         .then((clients) => clients.forEach((client) => client.navigate(client.url)));
     } else if (d.type === 'coepCredentialless') {
       coepCredentialless = d.value;
+    } else if (d.type === 'set-standalone') {
+      standalone = !!d.value;
     } else if (d.type === 'offline-enable') {
       offlineEnabled = true;
       ev.waitUntil(
@@ -171,19 +178,35 @@ async function handleFetch(r) {
     if (hit) return hit;
   }
 
-  const request =
-    coepCredentialless && r.mode === 'no-cors' ? new Request(r, { credentials: 'omit' }) : r;
+  // Standalone (Home Screen) app: serve the same-origin app shell
+  // cache-first/stale-while-revalidate, so a flaky or absent connection (a field
+  // iPad) never blocks launch — boot instantly from cache, refresh in the
+  // background. (In a tab we stay network-first below, so the shell stays fresh.)
+  if (offlineEnabled && isGet && sameOrigin && standalone) {
+    const hit = await caches.match(r);
+    if (hit) {
+      networkAndCache(r, isGet).catch(() => {}); // background revalidate
+      return hit;
+    }
+  }
 
-  let response;
+  // Network (with COEP rewrite + cache-on-use); fall back to cache when offline.
   try {
-    response = await fetch(request);
+    return await networkAndCache(r, isGet);
   } catch (err) {
-    // Network gone — fall back to whatever we cached (covers the app shell too).
     const hit = await caches.match(r);
     if (hit) return hit;
     throw err;
   }
+}
 
+/** Fetch with the COEP header rewrite, caching the result (cache-on-use) when
+ * offline mode is on. Returns the rewritten response; throws if the network fails
+ * (so the caller can fall back to cache). */
+async function networkAndCache(r, isGet) {
+  const request =
+    coepCredentialless && r.mode === 'no-cors' ? new Request(r, { credentials: 'omit' }) : r;
+  const response = await fetch(request);
   if (response.status === 0) return response; // opaque; leave as-is (can't rewrite)
 
   const headers = new Headers(response.headers);
@@ -192,9 +215,8 @@ async function handleFetch(r) {
   headers.set('Cross-Origin-Opener-Policy', 'same-origin');
   const init = { status: response.status, statusText: response.statusText, headers };
 
-  // Cache successful GETs (cache-on-use) so this session's assets are available
-  // offline. We cache the *rewritten* response (with CORP), so a later offline
-  // serve still satisfies cross-origin isolation.
+  // Cache the *rewritten* response (with CORP), so a later offline serve still
+  // satisfies cross-origin isolation.
   if (offlineEnabled && isGet && response.ok && response.type !== 'opaque') {
     const forCache = new Response(response.clone().body, init);
     caches.open(CACHE).then((c) => c.put(r, forCache)).catch(() => {});
