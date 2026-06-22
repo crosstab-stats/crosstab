@@ -100,6 +100,7 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-ordination/index.js',
   './plugins/builtin-doe/index.js',
   './plugins/builtin-sna/index.js',
+  './plugins/builtin-spatial/index.js',
 ];
 
 /**
