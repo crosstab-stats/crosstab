@@ -46,6 +46,9 @@ const STYLES = `
 .caqdas__btn { cursor: pointer; background: #f3f6fa; }
 .caqdas__btn:hover { background: #e9eff6; }
 .caqdas__btn--primary { background: #2f6fb0; color: #fff; border-color: #2f6fb0; }
+.caqdas__paint { display: none; align-items: center; gap: 10px; padding: 6px 12px; background: #2f6fb0; color: #fff; font-size: 13px; }
+.caqdas__paint.is-on { display: flex; }
+.caqdas__paint .stop { margin-left: auto; cursor: pointer; border: 1px solid rgba(255,255,255,.6); background: transparent; color: #fff; font: inherit; border-radius: 6px; padding: 2px 8px; }
 .caqdas__body { display: flex; flex: 1; min-height: 0; }
 .caqdas__docs { width: 230px; border-right: 1px solid #e2e6ea; overflow: auto; flex: none; }
 .caqdas__doc { padding: 8px 12px; border-bottom: 1px solid #f0f2f4; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -61,6 +64,10 @@ const STYLES = `
 .caqdas__hint { font-size: 12px; color: #8a93a0; margin: 0 6px 10px; line-height: 1.4; transition: color .15s; }
 .caqdas__code { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; cursor: pointer; }
 .caqdas__code:hover { background: #f5f8fb; }
+.caqdas__code.is-armed { outline: 2px solid #2f6fb0; outline-offset: -2px; background: #eef5fb; }
+.caqdas__code .pb { cursor: pointer; border: 0; background: none; font: inherit; padding: 0 4px; opacity: .45; }
+.caqdas__code:hover .pb { opacity: .8; }
+.caqdas__code .pb.is-on { opacity: 1; }
 .caqdas__sw { width: 14px; height: 14px; border-radius: 3px; flex: none; }
 .caqdas__code .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .caqdas__code .ct { color: #8a93a0; font-size: 12px; }
@@ -81,6 +88,7 @@ export const workspace = {
     const state = normalize(raw);
     let docs = []; // [{ rid, text }]
     let activeRid = null;
+    let activeCodeId = null; // armed code for "paint mode" (session-only, not saved)
     let saveTimer = null;
     const save = () => {
       if (saveTimer) clearTimeout(saveTimer);
@@ -111,14 +119,36 @@ export const workspace = {
     const expBtn = el('button', 'caqdas__btn'); expBtn.textContent = 'Segments → Output';
     bar.append(colLabel, colSel, labelLabel, labelSel, freqBtn, expBtn);
 
+    // Paint-mode banner (shown while a code is armed).
+    const paintBanner = el('div', 'caqdas__paint');
+    const paintMsg = el('span');
+    const stopBtn = el('button', 'stop'); stopBtn.textContent = 'Stop (Esc)';
+    paintBanner.append(paintMsg, stopBtn);
+
     const body = el('div', 'caqdas__body');
     const docList = el('div', 'caqdas__docs');
     const textPane = el('div', 'caqdas__text');
     const codePane = el('div', 'caqdas__codes');
     body.append(docList, textPane, codePane);
 
-    wrap.append(bar, body);
+    wrap.append(bar, paintBanner, body);
     root.append(wrap);
+
+    // --- paint mode: arm a code, then selections auto-apply it ---------------
+    function updatePaintUI() {
+      const c = activeCodeId ? codeById(activeCodeId) : null;
+      paintBanner.classList.toggle('is-on', !!c);
+      if (c) paintMsg.textContent = `🖌 Painting with "${c.name}" — select passages to apply it.`;
+      textPane.style.cursor = c ? 'crosshair' : '';
+    }
+    function setArmed(codeId) {
+      activeCodeId = activeCodeId === codeId ? null : codeId; // toggle
+      updatePaintUI();
+      renderCodes();
+    }
+    const disarm = () => { if (activeCodeId) { activeCodeId = null; updatePaintUI(); renderCodes(); } };
+    stopBtn.addEventListener('click', disarm);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') disarm(); });
 
     // --- column picker -------------------------------------------------------
     const meta = await app.data.getVariableMeta();
@@ -236,30 +266,36 @@ export const workspace = {
       codePane.append(hint);
       const counts = {};
       for (const s of state.segments) counts[s.codeId] = (counts[s.codeId] || 0) + 1;
+      const armed = activeCodeId;
       for (const code of state.codes) {
-        const r = el('div', 'caqdas__code');
+        const r = el('div', 'caqdas__code' + (armed === code.id ? ' is-armed' : ''));
         r.title = 'Click to code the selected passage';
         const sw = el('span', 'caqdas__sw'); sw.style.backgroundColor = code.color;
         const nm = el('span', 'nm'); nm.textContent = code.name;
         const ct = el('span', 'ct'); ct.textContent = counts[code.id] || 0;
+        const pb = el('button', 'pb' + (armed === code.id ? ' is-on' : ''));
+        pb.textContent = '🖌';
+        pb.title = 'Paint mode: arm this code so selecting passages auto-applies it';
+        pb.addEventListener('click', (e) => { e.stopPropagation(); setArmed(code.id); });
         const x = el('button', 'x'); x.textContent = '✕'; x.title = 'Delete code + its segments';
         x.addEventListener('click', (e) => {
           e.stopPropagation();
+          if (activeCodeId === code.id) activeCodeId = null;
           state.codes = state.codes.filter((c) => c.id !== code.id);
           state.segments = state.segments.filter((s) => s.codeId !== code.id);
-          save(); renderAll();
+          save(); updatePaintUI(); renderAll();
         });
         // The workhorse gesture: apply this code to the current selection. mousedown
         // + preventDefault keeps the text selection alive through the click (the
         // selection would otherwise collapse when focus leaves the transcript).
         r.addEventListener('mousedown', (e) => {
-          if (e.button !== 0 || e.target === x) return;
+          if (e.button !== 0 || e.target === x || e.target === pb) return;
           e.preventDefault();
           const span = currentSpan();
           if (span) addSegment(code.id, span);
           else flashHint(hint);
         });
-        r.append(sw, nm, ct, x);
+        r.append(sw, nm, ct, pb, x);
         codePane.append(r);
       }
       // inline "new code"
@@ -306,7 +342,7 @@ export const workspace = {
     // re-render rebuilds the transcript DOM, so the live selection is restored over
     // the same characters afterwards. Exact duplicates (same code on the same span)
     // are a no-op; remove a code by clicking its highlight.
-    const addSegment = (codeId, span) => {
+    const addSegment = (codeId, span, restore = true) => {
       const dup = state.segments.some(
         (s) => s.doc === activeRid && s.codeId === codeId && s.start === span.lo && s.end === span.hi,
       );
@@ -315,7 +351,10 @@ export const workspace = {
         save();
       }
       renderText(); renderDocList(); renderCodes();
-      setSelectionRange(textPane, span.lo, span.hi);
+      // Pick mode keeps the passage selected (layer more codes); paint mode clears
+      // it so the user moves straight on to the next passage.
+      if (restore) setSelectionRange(textPane, span.lo, span.hi);
+      else document.getSelection()?.removeAllRanges();
     };
 
     const flashHint = (elm) => { elm.style.color = '#b04a4a'; setTimeout(() => { elm.style.color = ''; }, 900); };
@@ -333,6 +372,15 @@ export const workspace = {
     });
     // Keep the native menu off the rest of the coding tab too (codebook, menu).
     document.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    // Paint mode (opt-in): when a code is armed, finishing a selection auto-applies
+    // it — the highlighter-pen rhythm for fast first-pass coding. Inert otherwise,
+    // so reading-by-selecting stays friction-free in the default mode.
+    textPane.addEventListener('mouseup', (e) => {
+      if (e.button !== 0 || !activeCodeId) return;
+      const span = currentSpan();
+      if (span) addSegment(activeCodeId, span, false); // paint: clear selection, move on
+    });
 
     function openAssignMenu(span, evt) {
       closeMenu();
