@@ -33,6 +33,7 @@ import { RConsole } from './r-console.js';
 import { PluginLoader } from './loader.js';
 import { installDialogKeybindings } from './dialog-keys.js';
 import { Launcher } from './launcher.js';
+import { OfflineManager } from './offline.js';
 
 /**
  * URLs of the built-in plugins to load at startup. These load through the exact
@@ -452,7 +453,11 @@ export async function boot(mounts) {
   // --- launcher: the front door (data source + active plugins) ----------------
   // A `?launch=<preset>` URL flag bypasses the screen (presets: start-blank,
   // demo-quant, demo-qual) — handy for a fast dev loop and power users.
-  const launcher = new Launcher({ plugins, datasets, bus, projects });
+  // "Make available offline" (installed-PWA offline caching) — drives the service
+  // worker to cache the app shell + runtimes; surfaced in the launcher About panel.
+  const offline = new OfflineManager({ webr, duckdb });
+  engine.offline = offline;
+  const launcher = new Launcher({ plugins, datasets, bus, projects, offline });
   engine.launcher = launcher;
   const launchFlag = new URLSearchParams(location.search).get('launch');
   let bypassed = false;
@@ -479,6 +484,10 @@ export async function boot(mounts) {
   // Boot done: from the next change on, an unsaved session auto-starts an
   // autosaving "Untitled project" (so the launcher's data load doesn't spawn one).
   projects.arm();
+
+  // If a prior "Make available offline" reloaded once to gain service-worker
+  // control, finish caching the app + runtimes now (no-op otherwise).
+  void offline.resumeIfPending((t) => console.info('[offline]', t));
 
   return engine;
 }

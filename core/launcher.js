@@ -35,7 +35,7 @@ const PRESETS = {
 const LS_SEEN = 'crosstab.launcher.seen';
 
 export class Launcher {
-  #plugins; #datasets; #bus; #projects;
+  #plugins; #datasets; #bus; #projects; #offline;
   #root = null;
   /** Selected plugin keys (the checked set). @type {Set<string>} */
   #selected = new Set();
@@ -51,12 +51,15 @@ export class Launcher {
    * @param {import('./event-bus.js').EventBus} [deps.bus]
    * @param {import('./project-sync.js').ProjectSync} [deps.projects] - Enables the
    *   saved-projects rail + the `?launch=<projectName>` bypass.
+   * @param {import('./offline.js').OfflineManager} [deps.offline] - Enables the
+   *   "Make available offline" control in the About panel.
    */
-  constructor({ plugins, datasets, bus, projects }) {
+  constructor({ plugins, datasets, bus, projects, offline }) {
     this.#plugins = plugins;
     this.#datasets = datasets;
     this.#bus = bus;
     this.#projects = projects ?? null;
+    this.#offline = offline ?? null;
   }
 
   /** Load a data source by key (also used by the URL bypass). */
@@ -192,6 +195,7 @@ export class Launcher {
     }
 
     overlay.querySelector('.ctl__howto').addEventListener('click', () => this.#showHowTo());
+    this.#renderOffline(overlay);
     overlay.querySelector('.ctl__start').addEventListener('click', () => this.#start(reopen));
 
     return new Promise((resolve) => { this.#resolve = resolve; });
@@ -314,6 +318,54 @@ export class Launcher {
     r?.();
   }
 
+  /** Render the "Make available offline" control (installed-PWA offline caching).
+   * Stays hidden when unsupported (no service worker / Cache API). */
+  async #renderOffline(overlay) {
+    const box = overlay.querySelector('.ctl__offline');
+    if (!box || !this.#offline?.supported) return;
+
+    const draw = (status) => {
+      box.replaceChildren();
+      box.append(el('div', 'Offline', 'ctl__railhead'));
+      if (status.enabled) {
+        const size = status.bytes ? ` · ~${(status.bytes / 1048576).toFixed(0)} MB` : '';
+        const files = status.count ? ` (${status.count} files${size})` : '';
+        box.append(el('div', `✓ Available offline${files}`, 'ctl__offlineok'));
+        const rm = el('button', 'Remove offline data', 'ctl__howto');
+        rm.type = 'button';
+        rm.addEventListener('click', async () => {
+          rm.disabled = true;
+          try { await this.#offline.disable(); } catch { /* ignore */ }
+          draw(await this.#offline.status());
+        });
+        box.append(rm);
+      } else {
+        const hint = el('p', 'Cache CrossTab and the R engine so it works with no internet — e.g. on a flight. One-time download (~100 MB).', 'ctl__offlinehint');
+        const btn = el('button', '⬇ Make available offline', 'ctl__offlinebtn');
+        btn.type = 'button';
+        const prog = el('div', '', 'ctl__offlineprog');
+        btn.addEventListener('click', async () => {
+          btn.disabled = true;
+          try {
+            await this.#offline.enable((t) => { prog.textContent = t; });
+            draw(await this.#offline.status());
+          } catch (err) {
+            prog.textContent = `Couldn’t enable: ${err.message}`;
+            btn.disabled = false;
+          }
+        });
+        box.append(hint, btn, prog);
+      }
+    };
+
+    try {
+      draw(await this.#offline.status());
+      box.hidden = false;
+    } catch {
+      box.hidden = true;
+    }
+  }
+
   #showHowTo() {
     const d = document.createElement('dialog');
     d.className = 'ct-dialog ct-dialog--wide';
@@ -394,6 +446,7 @@ function SHELL_HTML(reopen) {
           <p>CrossTab is free, open-source software. Your <strong>data never leaves your device</strong> — every analysis runs locally in your browser.</p>
           <p>All plugin code is inspectable, and <strong>all plugins are equal</strong> — you're encouraged to write your own.</p>
           <button type="button" class="ctl__howto">How to use →</button>
+          <div class="ctl__offline" hidden></div>
         </aside>
       </div>
       <div class="ctl__footer">
@@ -450,6 +503,14 @@ function injectStyles() {
     .ctl__pluginname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ctl__about .ctl__howto { font: inherit; font-size: 13px; color: var(--accent, #2980b9); background: none; border: 0; cursor: pointer; padding: 0; }
     .ctl__about .ctl__howto:hover { text-decoration: underline; }
+    .ctl__offline { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line, #d8dde2); }
+    .ctl__offlinehint { font-size: 12px; color: #8a94a0; margin: 0 0 8px; }
+    .ctl__offlinebtn { font: inherit; font-size: 13px; padding: 7px 10px; width: 100%; cursor: pointer;
+      border: 1px solid var(--accent, #2980b9); border-radius: 8px; background: #fff; color: var(--accent, #2980b9); }
+    .ctl__offlinebtn:hover { background: #eef5fb; }
+    .ctl__offlinebtn:disabled { opacity: .6; cursor: default; }
+    .ctl__offlineprog { font-size: 12px; color: #7a8590; margin-top: 6px; min-height: 1em; }
+    .ctl__offlineok { font-size: 13px; color: #2e7d32; margin: 0 0 6px; font-weight: 600; }
     .ctl__footer { padding: 12px 24px; border-top: 1px solid var(--line, #d8dde2); display: flex; justify-content: flex-end; background: #fff; }
     .ctl__start { font: inherit; font-size: 15px; font-weight: 600; padding: 10px 28px; border: 0;
       border-radius: 8px; background: var(--accent, #2980b9); color: #fff; cursor: pointer; }
