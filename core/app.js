@@ -35,6 +35,7 @@ import { installDialogKeybindings } from './dialog-keys.js';
 import { Launcher } from './launcher.js';
 import { OfflineManager } from './offline.js';
 import { exportProjectBundle, importProjectBundle, pickBundleFile, downloadBlob, slug } from './project-bundle.js';
+import { WorkspaceStore } from './workspace-store.js';
 
 /**
  * URLs of the built-in plugins to load at startup. These load through the exact
@@ -400,6 +401,9 @@ export async function boot(mounts) {
   projStatus.id = 'proj-status';
   projStatus.className = 'lib-status';
   mounts.status.parentElement?.append(projStatus);
+  // Host store for plugin workspace state (#93). Persists per-project, keyed by
+  // workspace id; opaque to the host. Empty until a workspace plugin writes.
+  const workspaceStore = new WorkspaceStore({ bus });
   const projects = new ProjectSync({
     projectStore: new ProjectStore(),
     datasets,
@@ -413,6 +417,9 @@ export async function boot(mounts) {
     // is fine — and they no-op gracefully until then.
     getActivePlugins: () => (plugins ? plugins.activeKeys() : null),
     applyActivePlugins: (keys) => (plugins ? plugins.applyActiveSet(keys) : Promise.resolve()),
+    // A project also remembers each plugin workspace's state blob.
+    getWorkspaces: () => workspaceStore.export(),
+    applyWorkspaces: (obj) => workspaceStore.import(obj),
   });
   projects.activate();
 

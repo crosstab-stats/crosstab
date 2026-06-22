@@ -44,6 +44,9 @@ export const CoreEvents = Object.freeze({
    * set was applied. Lets the project autosave re-record its `activePlugins`. No
    * payload. */
   PLUGINS_CHANGED: 'plugins:changed',
+  /** A plugin workspace wrote its state blob. Lets the project autosave persist
+   * the workspace sidecar. Payload: { id } (the workspace id). */
+  WORKSPACE_CHANGED: 'workspace:changed',
 });
 
 /**

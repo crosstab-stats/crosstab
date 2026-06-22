@@ -36,6 +36,11 @@ export class ProjectSync {
   /** (keys: string[]) => Promise : drive the active plugin set to a project's
    * saved list when opening it. */
   #applyActivePlugins;
+  /** () => object : snapshot all plugin workspace blobs to persist with the
+   * project (#93). Null ⇒ feature unavailable. */
+  #getWorkspaces;
+  /** (obj) => void : restore a project's workspace blobs on open. */
+  #applyWorkspaces;
 
   /** Current project: `{ id, name }` once saved/opened, else `null`. */
   #binding = null;
@@ -75,7 +80,7 @@ export class ProjectSync {
    * @param {(keys: string[]) => Promise<void>} [deps.applyActivePlugins] - Restore
    *   a project's saved plugin set on open.
    */
-  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins }) {
+  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaces, applyWorkspaces }) {
     this.#store = projectStore;
     this.#datasets = datasets;
     this.#ui = ui;
@@ -85,6 +90,8 @@ export class ProjectSync {
     this.#statusEl = statusEl;
     this.#getActivePlugins = getActivePlugins ?? null;
     this.#applyActivePlugins = applyActivePlugins ?? null;
+    this.#getWorkspaces = getWorkspaces ?? null;
+    this.#applyWorkspaces = applyWorkspaces ?? null;
   }
 
   activate() {
@@ -99,6 +106,7 @@ export class ProjectSync {
     this.#bus.on(CoreEvents.DATA_CHANGED, (s) => this.#onChange(s));
     this.#bus.on(DATASETS_CHANGED, () => this.#onChange(null));
     this.#bus.on(CoreEvents.PLUGINS_CHANGED, () => this.#onPluginsChanged());
+    this.#bus.on(CoreEvents.WORKSPACE_CHANGED, () => this.#onChange(null));
     this.#setStatus();
     this.#emitProject();
   }
@@ -290,7 +298,8 @@ export class ProjectSync {
     // Record the active plugin set alongside the data, so reopening restores the
     // analyses too. Null when the feature isn't wired (keeps old saves untouched).
     const activePlugins = this.#getActivePlugins ? this.#getActivePlugins() : null;
-    return { activeId: this.#datasets.activeId, activePlugins, datasets };
+    const workspaces = this.#getWorkspaces ? this.#getWorkspaces() : undefined;
+    return { activeId: this.#datasets.activeId, activePlugins, workspaces, datasets };
   }
 
   // --- new / open -----------------------------------------------------------
@@ -304,6 +313,7 @@ export class ProjectSync {
         activeId: 1,
         datasets: [{ id: 1, name: 'Dataset 1', state: { sources: [], transforms: [] } }],
       });
+      this.#applyWorkspaces?.({}); // a fresh project has no workspace state
     } finally {
       this.#loading = false;
     }
@@ -339,6 +349,9 @@ export class ProjectSync {
     try {
       const { name, bundle } = await this.#store.load(id);
       await this.#datasets.loadBundle(bundle);
+      // Restore plugin workspace blobs BEFORE plugins load, so a workspace's
+      // mount() sees its saved state via state.get(). Absent ⇒ empty.
+      this.#applyWorkspaces?.(bundle.workspaces || {});
       // Restore the project's analysis set (unless the caller already applied one,
       // e.g. the launcher). Only when the save recorded it — old saves leave the
       // current plugins as-is.
@@ -382,6 +395,7 @@ export class ProjectSync {
       this.#setStatus('error');
       throw err;
     }
+    this.#applyWorkspaces?.(bundle.workspaces || {});
     this.#loading = false;
     // It's a brand-new project; never bound to (and so never overwriting) the one
     // that was open. Persist + name it from the bundle.
