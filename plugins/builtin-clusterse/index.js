@@ -16,6 +16,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Regression',
   keywords: ['cluster', 'cluster-robust', 'clustered standard errors', 'crve', 'sandwich', 'vcovcl', 'panel', 'robust'],
+  disciplines: ['Economics', 'Political Science', 'Public Policy & Administration'],
   rPackages: ['sandwich', 'lmtest'],
   menu: [
     {

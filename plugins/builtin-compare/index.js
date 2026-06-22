@@ -22,6 +22,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Comparison',
   keywords: ['t-test', 't test', 'anova', 'means', 'compare', 'group', 'welch'],
+  disciplines: ['Psychology', 'Public Health', 'Nutrition Food & Dietetics', 'Education', 'Gerontology'],
   rPackages: [],
   menu: [
     {

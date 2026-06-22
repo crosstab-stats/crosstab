@@ -16,6 +16,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Multivariate',
   keywords: ['manova', 'multivariate', 'pillai', 'wilks', 'hotelling', 'roy'],
+  disciplines: ['Psychology', 'Education'],
   rPackages: [],
   menu: [
     {

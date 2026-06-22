@@ -17,6 +17,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Scale',
   keywords: ['cronbach', 'alpha', 'reliability', 'scale', 'internal consistency', 'items'],
+  disciplines: ['Psychology', 'Education', 'Communication', 'Sociology', "Women's & Gender Studies", 'Liberal Studies'],
   rPackages: ['psych'],
   menu: [
     {

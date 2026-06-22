@@ -22,6 +22,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Categorical',
   keywords: ['chi-square', 'goodness of fit', 'proportion', 'prop.test', 'binomial', 'mcnemar', 'categorical'],
+  disciplines: ['Sociology', 'Political Science', 'Public Health', 'Criminology', 'Social Science'],
   rPackages: [],
   menu: [
     {

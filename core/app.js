@@ -403,6 +403,11 @@ export async function boot(mounts) {
     bus,
     results: results.api,
     statusEl: projStatus,
+    // A project remembers which analyses were active. `plugins` is assigned later
+    // in boot; these closures run on save/open (long after), so the late binding
+    // is fine — and they no-op gracefully until then.
+    getActivePlugins: () => (plugins ? plugins.activeKeys() : null),
+    applyActivePlugins: (keys) => (plugins ? plugins.applyActiveSet(keys) : Promise.resolve()),
   });
   projects.activate();
 
@@ -447,13 +452,16 @@ export async function boot(mounts) {
   // --- launcher: the front door (data source + active plugins) ----------------
   // A `?launch=<preset>` URL flag bypasses the screen (presets: start-blank,
   // demo-quant, demo-qual) — handy for a fast dev loop and power users.
-  const launcher = new Launcher({ plugins, datasets, bus });
+  const launcher = new Launcher({ plugins, datasets, bus, projects });
   engine.launcher = launcher;
   const launchFlag = new URLSearchParams(location.search).get('launch');
   let bypassed = false;
   if (launchFlag) {
     try {
+      // `?launch=` accepts a preset (start-blank/demo-quant/demo-qual) or, failing
+      // that, a saved project name — opening it (data + its plugins) headless.
       bypassed = await launcher.applyPreset(launchFlag);
+      if (!bypassed) bypassed = await launcher.openProjectByName(launchFlag);
     } catch (err) {
       console.warn('Launch preset failed', err);
     }

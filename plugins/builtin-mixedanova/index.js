@@ -24,6 +24,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Compare Means',
   keywords: ['ancova', 'ancova', 'repeated measures', 'mixed anova', 'within subjects', 'sphericity', 'covariate', 'aov', 'afex', 'emmeans', 'type iii'],
+  disciplines: ['Psychology', 'Education', 'Gerontology'],
   rPackages: ['car', 'emmeans', 'afex'],
   menu: [
     {

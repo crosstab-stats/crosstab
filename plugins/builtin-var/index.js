@@ -19,6 +19,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Time Series',
   keywords: ['var', 'vector autoregression', 'granger', 'causality', 'impulse response', 'irf', 'macroeconometrics', 'multivariate time series'],
+  disciplines: ['Economics', 'Public Policy & Administration'],
   rPackages: ['vars', 'svglite'],
   menu: [
     {

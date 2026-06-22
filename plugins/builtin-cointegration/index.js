@@ -21,6 +21,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Time Series',
   keywords: ['cointegration', 'johansen', 'vecm', 'error correction', 'garch', 'arch', 'volatility', 'conditional variance', 'urca', 'fgarch'],
+  disciplines: ['Economics', 'Business'],
   rPackages: ['urca', 'fGarch', 'svglite'],
   menu: [
     {

@@ -21,6 +21,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Nonparametric',
   keywords: ['mann-whitney', 'wilcoxon', 'kruskal-wallis', 'rank', 'ordinal', 'nonparametric'],
+  disciplines: ['Psychology', 'Public Health', 'Nutrition Food & Dietetics', 'Gerontology', 'Sociology'],
   rPackages: [],
   menu: [
     {

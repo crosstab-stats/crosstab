@@ -23,6 +23,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Multivariate',
   keywords: ['correspondence analysis', 'ca', 'biplot', 'mds', 'multidimensional scaling', 'perceptual map', 'cmdscale', 'inertia', 'ordination'],
+  disciplines: ['Business', 'Communication', 'Anthropology', 'Ecology', 'Environmental Studies', 'Asian Studies'],
   rPackages: ['ca', 'svglite'],
   menu: [
     {

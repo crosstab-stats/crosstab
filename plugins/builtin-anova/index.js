@@ -21,6 +21,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Comparison',
   keywords: ['anova', 'factorial', 'two-way', 'interaction', 'repeated measures', 'within-subjects', 'eta squared'],
+  disciplines: ['Psychology', 'Nutrition Food & Dietetics', 'Education', 'Family & Consumer Sciences', 'Gerontology', 'Public Health'],
   rPackages: [],
   menu: [
     {

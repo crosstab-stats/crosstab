@@ -21,6 +21,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Regression',
   keywords: ['quantile regression', 'tobit', 'censored', 'heckman', 'selection', 'rq', 'limited dependent', 'quantreg', 'inverse mills'],
+  disciplines: ['Economics', 'Public Policy & Administration'],
   rPackages: ['quantreg', 'AER', 'sampleSelection'],
   menu: [
     {

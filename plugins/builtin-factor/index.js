@@ -17,6 +17,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Multivariate',
   keywords: ['factor', 'efa', 'pca', 'principal components', 'dimension reduction', 'loadings'],
+  disciplines: ['Psychology', 'Sociology', 'Political Science', 'Communication', "Women's & Gender Studies", 'Education', 'Liberal Studies'],
   rPackages: ['psych', 'GPArotation', 'svglite'],
   menu: [
     {

@@ -35,12 +35,13 @@ const PRESETS = {
 const LS_SEEN = 'crosstab.launcher.seen';
 
 export class Launcher {
-  #plugins; #datasets; #bus;
+  #plugins; #datasets; #bus; #projects;
   #root = null;
   /** Selected plugin keys (the checked set). @type {Set<string>} */
   #selected = new Set();
   #discipline = 'All';
   #pendingSource = null; // source key chosen this session, applied on Start
+  #pendingProject = null; // { id } when a saved project is chosen instead of a source
   #resolve = null;
 
   /**
@@ -48,11 +49,14 @@ export class Launcher {
    * @param {import('./plugin-manager.js').PluginManager} deps.plugins
    * @param {import('./dataset-manager.js').DatasetManager} deps.datasets
    * @param {import('./event-bus.js').EventBus} [deps.bus]
+   * @param {import('./project-sync.js').ProjectSync} [deps.projects] - Enables the
+   *   saved-projects rail + the `?launch=<projectName>` bypass.
    */
-  constructor({ plugins, datasets, bus }) {
+  constructor({ plugins, datasets, bus, projects }) {
     this.#plugins = plugins;
     this.#datasets = datasets;
     this.#bus = bus;
+    this.#projects = projects ?? null;
   }
 
   /** Load a data source by key (also used by the URL bypass). */
@@ -68,6 +72,12 @@ export class Launcher {
   async applyPreset(name) {
     const preset = PRESETS[name];
     if (!preset) return false;
+    // Resolving a preset (ids) and the infra categories needs the catalog
+    // (id/category per plugin). The UI path primes it; this bypass must too, or a
+    // freshly-cleared catalog (first run / CATALOG_VERSION bump) resolves to
+    // nothing. primeCatalog only probes uncataloged entries, so it's ~instant once
+    // cached.
+    await this.#plugins.primeCatalog();
     // Presets (URL bypass) include infrastructure (importers/exporters) so the
     // session is usable; the interactive picker, by contrast, is authoritative.
     const want = new Set(preset.plugins);
@@ -149,6 +159,38 @@ export class Launcher {
     // On first open, default the source to Blank so Start always works.
     if (!reopen) overlay.querySelector('[data-source="blank"]')?.classList.add('is-active');
 
+    // Saved projects in the rail: open one (its data + plugin set). Picking a
+    // project seeds the picker from what it had active, so the user still sees and
+    // can tweak the selection before Start.
+    if (this.#projects) {
+      let saved = [];
+      try { saved = await this.#projects.listProjects(); } catch { saved = []; }
+      const projBox = overlay.querySelector('.ctl__projects');
+      if (saved.length && projBox) {
+        overlay.querySelector('.ctl__railhead--projects')?.removeAttribute('hidden');
+        for (const p of saved) {
+          const btn = el('button', p.name, 'ctl__source ctl__source--project');
+          btn.type = 'button';
+          btn.dataset.project = p.id;
+          btn.title = `Open project: ${p.name}`;
+          btn.addEventListener('click', () => {
+            this.#pendingProject = { id: p.id };
+            this.#pendingSource = null;
+            overlay.querySelectorAll('.ctl__source').forEach((b) => b.classList.toggle('is-active', b === btn));
+            if (Array.isArray(p.activePlugins)) {
+              const want = new Set(p.activePlugins.filter((k) => list.some((x) => x.key === k)));
+              // Keep infra (importers/exporters) on so the opened project is usable
+              // even if an older save predates a given importer.
+              for (const x of list) if (INFRA_CATEGORIES.has(x.category)) want.add(x.key);
+              this.#selected = want;
+              rerender();
+            }
+          });
+          projBox.append(btn);
+        }
+      }
+    }
+
     overlay.querySelector('.ctl__howto').addEventListener('click', () => this.#showHowTo());
     overlay.querySelector('.ctl__start').addEventListener('click', () => this.#start(reopen));
 
@@ -214,24 +256,32 @@ export class Launcher {
     return label;
   }
 
-  /** Diff the desired selection against current enabled state and apply live. */
+  /** Diff the desired selection against current load state and apply live — the
+   * picker is authoritative (importers/exporters default ON via #defaultSelection,
+   * but a deselect sticks). Delegates to the shared PluginManager primitive that
+   * per-project plugin restore also uses; accepts keys (UI) or ids (presets). */
   async #applySelection(desiredKeysOrIds) {
-    const list = this.#plugins.list();
-    // Allow callers to pass ids (presets) or keys (UI). Build a key set. The
-    // selection is authoritative — importers/exporters default ON (see
-    // #defaultSelection) but the user can deselect them and that sticks.
-    const keySet = new Set();
-    for (const p of list) {
-      if (desiredKeysOrIds.has(p.key) || (p.id && desiredKeysOrIds.has(p.id))) keySet.add(p.key);
+    await this.#plugins.applyActiveSet(desiredKeysOrIds);
+  }
+
+  /** Open a saved project by name (case-insensitive) — the `?launch=<name>` bypass.
+   * Restores the project's data *and* its saved plugin set.
+   * @param {string} name
+   * @returns {Promise<boolean>} whether a matching project was found & opened. */
+  async openProjectByName(name) {
+    if (!this.#projects) return false;
+    let saved = [];
+    try {
+      saved = await this.#projects.listProjects();
+    } catch {
+      return false;
     }
-    // Diff against actual LOAD state (not the persisted enabled flag, which can
-    // drift): load what's wanted-but-not-loaded, unload what's loaded-but-not-
-    // wanted. setEnabled also persists the enabled/disabled flag either way.
-    for (const p of list) {
-      const want = keySet.has(p.key);
-      if (want && !p.loaded) await this.#plugins.setEnabled(p.key, true);
-      else if (!want && p.loaded) await this.#plugins.setEnabled(p.key, false);
-    }
+    const want = String(name).trim().toLowerCase();
+    const match = saved.find((p) => String(p.name).trim().toLowerCase() === want);
+    if (!match) return false;
+    await this.#projects.openProject(match.id); // full restore (data + its plugins)
+    markSeen();
+    return true;
   }
 
   async #start(reopen) {
@@ -240,8 +290,14 @@ export class Launcher {
     startBtn.textContent = 'Starting…';
     try {
       await this.#applySelection(this.#selected);
-      // Load data only if a source was chosen (on reopen, keep current data unless picked).
-      if (this.#pendingSource || !reopen) await this.#loadSource(this.#pendingSource || 'blank');
+      if (this.#pendingProject && this.#projects) {
+        // Open the chosen project's data. Its plugins are already applied from the
+        // picker (authoritative), so skip the project's own plugin restore.
+        await this.#projects.openProject(this.#pendingProject.id, { applyPlugins: false });
+      } else if (this.#pendingSource || !reopen) {
+        // Load data only if a source was chosen (on reopen, keep current data unless picked).
+        await this.#loadSource(this.#pendingSource || 'blank');
+      }
       markSeen();
     } catch (err) {
       console.error('Launcher start failed', err);
@@ -253,6 +309,7 @@ export class Launcher {
     this.#root?.remove();
     this.#root = null;
     this.#pendingSource = null;
+    this.#pendingProject = null;
     const r = this.#resolve; this.#resolve = null;
     r?.();
   }
@@ -321,6 +378,8 @@ function SHELL_HTML(reopen) {
           <button type="button" class="ctl__source" data-source="demo-quant">Demo · quantitative</button>
           <button type="button" class="ctl__source" data-source="demo-qual">Demo · qualitative</button>
           <div class="ctl__railnote">Or import your own data once you're in.</div>
+          <div class="ctl__railhead ctl__railhead--projects" hidden>Projects</div>
+          <div class="ctl__projects"></div>
         </aside>
         <section class="ctl__center">
           <div class="ctl__centerhead">
@@ -363,6 +422,9 @@ function injectStyles() {
     .ctl__library { border-right: 1px solid var(--line, #d8dde2); }
     .ctl__railhead { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #7a8590; margin: 0 0 8px; }
     .ctl__railnote { font-size: 12px; color: #8a94a0; margin-top: 12px; }
+    .ctl__railhead--projects { margin-top: 16px; }
+    .ctl__source--project { font-size: 13px; }
+    .ctl__projects:empty { display: none; }
     .ctl__source { display: block; width: 100%; text-align: left; font: inherit; font-size: 14px;
       padding: 10px 12px; margin: 0 0 6px; border: 1px solid var(--line, #d8dde2); border-radius: 8px; background: #fff; cursor: pointer; }
     .ctl__source:hover { background: #eef5fb; }

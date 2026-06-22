@@ -30,6 +30,12 @@ export class ProjectSync {
   #bus;
   #results;
   #statusEl;
+  /** () => string[]|null : load keys of the plugins active right now (persisted
+   * with the project). Null ⇒ feature unavailable ⇒ don't record. */
+  #getActivePlugins;
+  /** (keys: string[]) => Promise : drive the active plugin set to a project's
+   * saved list when opening it. */
+  #applyActivePlugins;
 
   /** Current project: `{ id, name }` once saved/opened, else `null`. */
   #binding = null;
@@ -60,8 +66,12 @@ export class ProjectSync {
    * @param {import('./event-bus.js').EventBus} deps.bus
    * @param {{appendError: Function}} deps.results
    * @param {HTMLElement} deps.statusEl
+   * @param {() => (string[]|null)} [deps.getActivePlugins] - Snapshot the active
+   *   plugin keys to persist with the project (null ⇒ don't record).
+   * @param {(keys: string[]) => Promise<void>} [deps.applyActivePlugins] - Restore
+   *   a project's saved plugin set on open.
    */
-  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl }) {
+  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins }) {
     this.#store = projectStore;
     this.#datasets = datasets;
     this.#ui = ui;
@@ -69,6 +79,8 @@ export class ProjectSync {
     this.#bus = bus;
     this.#results = results;
     this.#statusEl = statusEl;
+    this.#getActivePlugins = getActivePlugins ?? null;
+    this.#applyActivePlugins = applyActivePlugins ?? null;
   }
 
   activate() {
@@ -220,7 +232,10 @@ export class ProjectSync {
       const state = await ds.exportState({ includeParquet: all || dirty.has(ds.id) });
       datasets.push({ id: ds.id, name: ds.name, libraryLink: ds.libraryLink ?? null, state });
     }
-    return { activeId: this.#datasets.activeId, datasets };
+    // Record the active plugin set alongside the data, so reopening restores the
+    // analyses too. Null when the feature isn't wired (keeps old saves untouched).
+    const activePlugins = this.#getActivePlugins ? this.#getActivePlugins() : null;
+    return { activeId: this.#datasets.activeId, activePlugins, datasets };
   }
 
   // --- new / open -----------------------------------------------------------
@@ -242,8 +257,14 @@ export class ProjectSync {
     this.#emitProject();
   }
 
-  /** Show the project browser, or open one directly by id. */
-  async openProject(id) {
+  /**
+   * Show the project browser, or open one directly by id.
+   * @param {string} [id]
+   * @param {{applyPlugins?: boolean}} [opts] - When opening by id, also restore the
+   *   project's saved plugin set (default true). The launcher passes false: its
+   *   picker has already applied the (possibly tweaked) selection.
+   */
+  async openProject(id, { applyPlugins = true } = {}) {
     if (id == null) {
       let entries;
       try {
@@ -260,6 +281,16 @@ export class ProjectSync {
     try {
       const { name, bundle } = await this.#store.load(id);
       await this.#datasets.loadBundle(bundle);
+      // Restore the project's analysis set (unless the caller already applied one,
+      // e.g. the launcher). Only when the save recorded it — old saves leave the
+      // current plugins as-is.
+      if (applyPlugins && Array.isArray(bundle.activePlugins) && this.#applyActivePlugins) {
+        try {
+          await this.#applyActivePlugins(bundle.activePlugins);
+        } catch (err) {
+          console.warn('[project] restoring plugin set failed', err);
+        }
+      }
       this.#binding = { id, name };
       this.#sourcesDirty.clear();
       this.#setStatus('saved');

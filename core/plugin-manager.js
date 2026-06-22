@@ -34,7 +34,7 @@ const LS_WEB = 'crosstab.plugins.web';
 /** Bump when the catalog shape OR built-in manifests' metadata change, so a
  * stale persisted catalog (e.g. missing newly-declared `disciplines`) is dropped
  * and re-probed on next load. */
-const CATALOG_VERSION = 5;
+const CATALOG_VERSION = 6;
 
 export class PluginManager {
   /** @type {import('./loader.js').PluginLoader} */
@@ -352,6 +352,30 @@ export class PluginManager {
   #isLoaded(key) {
     const id = this.#catalog[key]?.id;
     return id ? this.#loader.list().some((m) => m.id === id) : false;
+  }
+
+  /** The keys of every currently-active (loaded) plugin — the set a project
+   * persists so reopening it restores the same analyses/importers. Uses *loaded*,
+   * not merely `enabled`: a plugin can be un-disabled yet never activated (the
+   * launcher only loads what was selected), and we want what's actually wired. */
+  activeKeys() {
+    return this.list().filter((p) => p.loaded).map((p) => p.key);
+  }
+
+  /** Drive the active plugin set to exactly `keys` (accepts load keys or manifest
+   * ids): load what's wanted-but-inactive, unload what's active-but-unwanted. The
+   * shared primitive behind the launcher's picker *and* per-project plugin restore;
+   * unknown keys (e.g. a user plugin absent on this machine) are simply skipped. */
+  async applyActiveSet(keys) {
+    const want = new Set(keys || []);
+    const list = this.list();
+    const keySet = new Set();
+    for (const p of list) if (want.has(p.key) || (p.id && want.has(p.id))) keySet.add(p.key);
+    for (const p of list) {
+      const w = keySet.has(p.key);
+      if (w && !p.loaded) await this.setEnabled(p.key, true);
+      else if (!w && p.loaded) await this.setEnabled(p.key, false);
+    }
   }
 
   /** All known plugins for the dialog, with state + origin. */

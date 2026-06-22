@@ -20,6 +20,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Assumptions',
   keywords: ['normality', 'shapiro', 'levene', 'homogeneity', 'variance', 'q-q', 'qq plot', 'assumptions', 'skewness', 'kurtosis'],
+  disciplines: ['Economics', 'Political Science', 'Psychology', 'Social Science'],
   rPackages: ['svglite'],
   menu: [
     {

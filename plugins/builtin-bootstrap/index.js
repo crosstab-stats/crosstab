@@ -20,6 +20,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Resampling',
   keywords: ['resample', 'bootstrap', 'ci', 'confidence'],
+  disciplines: ['Psychology', 'Social Science', 'Public Health'],
   rPackages: ['boot'],
   menu: [
     {

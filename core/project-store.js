@@ -130,13 +130,19 @@ export class ProjectStore {
       });
     }
 
-    const manifest = { name, savedAt, activeId: bundle.activeId, datasets };
+    // `activePlugins` (load keys of the plugins active when saved) lets opening a
+    // project restore its analysis set. Null/absent ⇒ pre-feature save ⇒ leave the
+    // current plugin set alone on open (back-compatible).
+    const activePlugins = Array.isArray(bundle.activePlugins) ? bundle.activePlugins : null;
+    const manifest = { name, savedAt, activeId: bundle.activeId, activePlugins, datasets };
     await this.#write(dir, 'project.json', JSON.stringify(manifest));
 
     const release = await this.#acquire();
     try {
       const cat = await this.#readCatalog();
-      const summary = { id, name, savedAt, datasetCount: datasets.length };
+      // The summary carries activePlugins too, so the launcher's rail can seed its
+      // picker from a project without loading the whole bundle.
+      const summary = { id, name, savedAt, datasetCount: datasets.length, activePlugins };
       const idx = cat.entries.findIndex((e) => e.id === id);
       if (idx >= 0) cat.entries[idx] = summary;
       else cat.entries.push(summary);
@@ -179,7 +185,15 @@ export class ProjectStore {
         state: { sources, transforms: d.transforms ?? [], order: d.order ?? null },
       });
     }
-    return { id, name: manifest.name, bundle: { activeId: manifest.activeId, datasets } };
+    return {
+      id,
+      name: manifest.name,
+      bundle: {
+        activeId: manifest.activeId,
+        activePlugins: Array.isArray(manifest.activePlugins) ? manifest.activePlugins : null,
+        datasets,
+      },
+    };
   }
 
   /** Rename a project (updates its manifest + the catalog). */

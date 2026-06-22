@@ -21,6 +21,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Time Series',
   keywords: ['time series', 'acf', 'pacf', 'arima', 'forecast', 'stationarity', 'adf', 'kpss', 'stl', 'decomposition', 'autocorrelation'],
+  disciplines: ['Economics', 'Public Policy & Administration', 'Environmental Studies'],
   rPackages: ['tseries', 'forecast', 'svglite'],
   menu: [
     {

@@ -26,6 +26,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Bayesian',
   keywords: ['bayesian', 'bayes factor', 'posterior', 'credible interval', 'mcmc', 'bvar', 'prior'],
+  disciplines: ['Psychology', 'Political Science', 'Public Health', 'Social Science'],
   rPackages: [],
   menu: [
     {

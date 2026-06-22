@@ -31,6 +31,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Regression',
   keywords: ['marginal effects', 'ame', 'mem', 'average marginal effect', 'dydx', 'probability', 'logit', 'probit', 'poisson', 'glm'],
+  disciplines: ['Economics', 'Political Science', 'Public Policy & Administration'],
   rPackages: [],
   menu: [
     {

@@ -19,6 +19,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Regression',
   keywords: ['meta-analysis', 'meta analysis', 'effect size', 'forest plot', 'heterogeneity', 'random effects', 'metafor', 'evidence synthesis', 'systematic review', 'meta-regression'],
+  disciplines: ['Public Health', 'Psychology', 'Nutrition Food & Dietetics', 'Education'],
   rPackages: ['metafor', 'svglite'],
   menu: [
     {

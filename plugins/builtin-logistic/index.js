@@ -19,6 +19,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Regression',
   keywords: ['glm', 'logistic', 'odds', 'binary', 'regression'],
+  disciplines: ['Political Science', 'Sociology', 'Psychology', 'Public Health', 'Economics', 'Criminology', 'Social Science'],
   rPackages: [],
   menu: [
     {

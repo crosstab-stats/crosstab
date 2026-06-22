@@ -20,6 +20,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Descriptive Statistics',
   keywords: ['inequality', 'gini', 'theil', 'atkinson', 'lorenz', 'segregation', 'dissimilarity', 'isolation', 'disparity', 'concentration'],
+  disciplines: ['Economics', 'Sociology', 'Ethnic Studies', 'Public Policy & Administration', 'Social Science'],
   rPackages: ['ineq', 'svglite'],
   menu: [
     {

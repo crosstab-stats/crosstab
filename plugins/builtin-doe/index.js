@@ -16,6 +16,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Regression',
   keywords: ['doe', 'design of experiments', 'response surface', 'rsm', 'optimization', 'quadratic', 'stationary point', 'canonical'],
+  disciplines: ['Nutrition Food & Dietetics', 'Family & Consumer Sciences', 'Business', 'Environmental Studies'],
   rPackages: ['rsm'],
   menu: [
     {

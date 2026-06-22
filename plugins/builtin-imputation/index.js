@@ -15,6 +15,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Regression',
   keywords: ['multiple imputation', 'mice', 'missing data', 'attrition', 'rubin', 'fmi', 'pooled', 'pmm'],
+  disciplines: ['Public Health', 'Sociology', 'Psychology', 'Gerontology'],
   rPackages: ['mice'],
   menu: [
     {

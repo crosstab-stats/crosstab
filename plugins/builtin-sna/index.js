@@ -15,6 +15,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Multivariate',
   keywords: ['social network', 'sna', 'network', 'graph', 'centrality', 'betweenness', 'degree', 'density', 'igraph', 'edge list'],
+  disciplines: ['Sociology', 'Anthropology', 'Communication', 'Political Science'],
   rPackages: ['igraph', 'svglite'],
   menu: [
     {
