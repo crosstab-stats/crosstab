@@ -79,6 +79,18 @@ const STYLES = `
 .caqdas__menu button:hover { background: #eef5fb; }
 .caqdas__menu .row { display: flex; gap: 6px; padding: 6px 4px 2px; border-top: 1px solid #eef0f2; margin-top: 4px; }
 .caqdas__menu .row input { flex: 1; min-width: 0; font: inherit; padding: 5px 8px; border: 1px solid #ccd2d8; border-radius: 6px; }
+.caqdas__group { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #9aa3ab; font-weight: 600; margin: 12px 6px 2px; }
+.caqdas__code .caqdas__iconbtn { cursor: pointer; border: 0; background: none; font: inherit; padding: 0 3px; opacity: .4; }
+.caqdas__code:hover .caqdas__iconbtn { opacity: .8; }
+.caqdas__code .caqdas__iconbtn.has { opacity: .95; }
+.caqdas__details { display: flex; flex-direction: column; gap: 6px; margin: 0 6px 8px; }
+.caqdas__details .caqdas__grpinp { font: inherit; font-size: 12px; padding: 5px 8px; border: 1px solid #ccd2d8; border-radius: 6px; }
+.caqdas__details .caqdas__memo { font: inherit; font-size: 12px; padding: 6px 8px; border: 1px solid #ccd2d8; border-radius: 6px; resize: vertical; }
+.caqdas__retrhead { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.caqdas__retrhead h3 { margin: 0; }
+.caqdas__retr { border: 1px solid #e2e6ea; border-radius: 6px; padding: 8px 10px; margin: 8px 0; cursor: pointer; }
+.caqdas__retr:hover { background: #f5f8fb; }
+.caqdas__retr .rl { font-size: 11px; color: #7a8590; margin-bottom: 3px; }
 `;
 
 export const workspace = {
@@ -89,6 +101,12 @@ export const workspace = {
     let docs = []; // [{ rid, text }]
     let activeRid = null;
     let activeCodeId = null; // armed code for "paint mode" (session-only, not saved)
+    let retrieveCodeId = null; // when set, the transcript pane shows this code's segments
+    const memoOpen = new Set(); // code ids whose memo editor is expanded (session-only)
+    const docLabel = (rid) => {
+      const i = docs.findIndex((d) => d.rid === rid);
+      return (i >= 0 && docs[i].label) || `#${i + 1}`;
+    };
     let saveTimer = null;
     const save = () => {
       if (saveTimer) clearTimeout(saveTimer);
@@ -228,6 +246,7 @@ export const workspace = {
 
     function renderText() {
       textPane.textContent = '';
+      if (retrieveCodeId) { renderRetrieve(); return; }
       const doc = docs.find((d) => d.rid === activeRid);
       if (!doc) { const e = el('div', 'caqdas__empty'); e.textContent = 'Select a document.'; textPane.append(e); return; }
       const segs = segsFor(doc.rid).slice().sort((a, b) => a.start - b.start || a.end - b.end);
@@ -258,45 +277,89 @@ export const workspace = {
       }
     }
 
+    // Retrieve-by-code: the transcript pane lists every segment carrying one code,
+    // across all documents — the core "show me everything I called X" move. Click an
+    // item to jump to its document.
+    function renderRetrieve() {
+      const code = codeById(retrieveCodeId);
+      const head = el('div', 'caqdas__retrhead');
+      const back = el('button', 'caqdas__btn'); back.textContent = '← Back';
+      back.addEventListener('click', () => { retrieveCodeId = null; renderText(); });
+      const h = el('h3'); h.textContent = code ? `Coded “${code.name}”` : 'Coded segments';
+      head.append(back, h); textPane.append(head);
+      const segs = state.segments.filter((s) => s.codeId === retrieveCodeId);
+      if (!segs.length) { const e = el('div', 'caqdas__empty'); e.textContent = 'No passages carry this code yet.'; textPane.append(e); return; }
+      for (const s of segs) {
+        const item = el('div', 'caqdas__retr');
+        const rl = el('div', 'rl'); rl.textContent = docLabel(s.doc); item.append(rl);
+        const tx = el('div'); tx.textContent = s.text; item.append(tx);
+        item.addEventListener('click', () => { activeRid = s.doc; retrieveCodeId = null; renderDocList(); renderText(); });
+        textPane.append(item);
+      }
+    }
+
     function renderCodes() {
       codePane.textContent = '';
       const h = el('h3'); h.textContent = 'Codebook'; codePane.append(h);
       const hint = el('div', 'caqdas__hint');
-      hint.textContent = 'Select a passage, then click a code to apply it (or right-click the passage).';
+      hint.textContent = 'Select a passage, then click a code to apply it (right-click, or 🖌 to paint). 🔍 lists a code’s segments; ✎ opens its memo + theme group.';
       codePane.append(hint);
       const counts = {};
       for (const s of state.segments) counts[s.codeId] = (counts[s.codeId] || 0) + 1;
       const armed = activeCodeId;
-      for (const code of state.codes) {
-        const r = el('div', 'caqdas__code' + (armed === code.id ? ' is-armed' : ''));
-        r.title = 'Click to code the selected passage';
-        const sw = el('span', 'caqdas__sw'); sw.style.backgroundColor = code.color;
-        const nm = el('span', 'nm'); nm.textContent = code.name;
-        const ct = el('span', 'ct'); ct.textContent = counts[code.id] || 0;
-        const pb = el('button', 'pb' + (armed === code.id ? ' is-on' : ''));
-        pb.textContent = '🖌';
-        pb.title = 'Paint mode: arm this code so selecting passages auto-applies it';
-        pb.addEventListener('click', (e) => { e.stopPropagation(); setArmed(code.id); });
-        const x = el('button', 'x'); x.textContent = '✕'; x.title = 'Delete code + its segments';
-        x.addEventListener('click', (e) => {
-          e.stopPropagation();
-          if (activeCodeId === code.id) activeCodeId = null;
-          state.codes = state.codes.filter((c) => c.id !== code.id);
-          state.segments = state.segments.filter((s) => s.codeId !== code.id);
-          save(); updatePaintUI(); renderAll();
-        });
-        // The workhorse gesture: apply this code to the current selection. mousedown
-        // + preventDefault keeps the text selection alive through the click (the
-        // selection would otherwise collapse when focus leaves the transcript).
-        r.addEventListener('mousedown', (e) => {
-          if (e.button !== 0 || e.target === x || e.target === pb) return;
-          e.preventDefault();
-          const span = currentSpan();
-          if (span) addSegment(code.id, span);
-          else flashHint(hint);
-        });
-        r.append(sw, nm, ct, pb, x);
-        codePane.append(r);
+      // Group codes into themes by their `group`; ungrouped fall to the bottom.
+      const groups = new Map();
+      for (const code of state.codes) { const g = code.group || ''; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(code); }
+      const groupNames = [...groups.keys()].sort((a, b) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)));
+      for (const g of groupNames) {
+        if (g) { const gh = el('div', 'caqdas__group'); gh.textContent = g; codePane.append(gh); }
+        for (const code of groups.get(g)) {
+          const r = el('div', 'caqdas__code' + (armed === code.id ? ' is-armed' : ''));
+          r.title = 'Click to code the selected passage';
+          const sw = el('span', 'caqdas__sw'); sw.style.backgroundColor = code.color;
+          const nm = el('span', 'nm'); nm.textContent = code.name;
+          if (code.memo) nm.title = code.memo;
+          const ct = el('span', 'ct'); ct.textContent = counts[code.id] || 0;
+          const rb = el('button', 'caqdas__iconbtn'); rb.textContent = '🔍'; rb.title = 'Show every passage coded with this';
+          rb.addEventListener('click', (e) => { e.stopPropagation(); retrieveCodeId = code.id; renderText(); });
+          const mb = el('button', 'caqdas__iconbtn' + (code.memo ? ' has' : '')); mb.textContent = '✎'; mb.title = 'Memo + theme group (code details)';
+          mb.addEventListener('click', (e) => { e.stopPropagation(); memoOpen.has(code.id) ? memoOpen.delete(code.id) : memoOpen.add(code.id); renderCodes(); });
+          const pb = el('button', 'pb' + (armed === code.id ? ' is-on' : ''));
+          pb.textContent = '🖌';
+          pb.title = 'Paint mode: arm this code so selecting passages auto-applies it';
+          pb.addEventListener('click', (e) => { e.stopPropagation(); setArmed(code.id); });
+          const x = el('button', 'x'); x.textContent = '✕'; x.title = 'Delete code + its segments';
+          x.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (activeCodeId === code.id) activeCodeId = null;
+            state.codes = state.codes.filter((c) => c.id !== code.id);
+            state.segments = state.segments.filter((s) => s.codeId !== code.id);
+            save(); updatePaintUI(); renderAll();
+          });
+          // The workhorse gesture: apply this code to the current selection. mousedown
+          // + preventDefault keeps the text selection alive through the click (the
+          // selection would otherwise collapse when focus leaves the transcript).
+          // Skip when the press lands on a control inside the row.
+          r.addEventListener('mousedown', (e) => {
+            if (e.button !== 0 || e.target.closest('button, input, textarea')) return;
+            e.preventDefault();
+            const span = currentSpan();
+            if (span) addSegment(code.id, span);
+            else flashHint(hint);
+          });
+          r.append(sw, nm, ct, rb, mb, pb, x);
+          codePane.append(r);
+          // ✎ details: theme group + analytic memo, both persisted on the code.
+          if (memoOpen.has(code.id)) {
+            const panel = el('div', 'caqdas__details');
+            const gi = el('input', 'caqdas__grpinp'); gi.placeholder = 'theme / group'; gi.value = code.group || '';
+            gi.addEventListener('input', () => { code.group = gi.value; save(); });
+            gi.addEventListener('blur', renderCodes);
+            const ta = el('textarea', 'caqdas__memo'); ta.rows = 3; ta.placeholder = 'Memo — analytic note on this code…'; ta.value = code.memo || '';
+            ta.addEventListener('input', () => { code.memo = ta.value; save(); });
+            panel.append(gi, ta); codePane.append(panel);
+          }
+        }
       }
       // inline "new code"
       const nc = el('div', 'caqdas__newcode');
@@ -305,7 +368,7 @@ export const workspace = {
       const commit = () => {
         const name = inp.value.trim();
         if (!name) return;
-        state.codes.push({ id: uid(), name, color: PALETTE[state.codes.length % PALETTE.length] });
+        state.codes.push({ id: uid(), name, color: PALETTE[state.codes.length % PALETTE.length], group: '', memo: '' });
         inp.value = ''; save(); renderCodes();
       };
       add.addEventListener('click', commit);
@@ -453,7 +516,9 @@ function normalize(raw) {
     version: 1,
     textColumn: typeof s.textColumn === 'string' ? s.textColumn : null,
     labelColumn: typeof s.labelColumn === 'string' ? s.labelColumn : null,
-    codes: Array.isArray(s.codes) ? s.codes.filter((c) => c && c.id) : [],
+    codes: Array.isArray(s.codes)
+      ? s.codes.filter((c) => c && c.id).map((c) => ({ ...c, group: typeof c.group === 'string' ? c.group : '', memo: typeof c.memo === 'string' ? c.memo : '' }))
+      : [],
     segments: Array.isArray(s.segments) ? s.segments.filter((x) => x && x.doc && x.codeId) : [],
   };
 }
