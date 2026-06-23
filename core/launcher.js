@@ -31,7 +31,7 @@ const INFRA_CATEGORIES = new Set(['Import', 'Export', 'Data']);
 const PRESETS = {
   'start-blank': { source: 'blank', label: 'Blank', plugins: [...CORE_IDS] },
   'demo-quant': { source: 'demo-quant', label: 'Demo (quantitative)', plugins: [...CORE_IDS] },
-  'demo-qual': { source: 'demo-qual', label: 'Demo (qualitative)', plugins: [...CORE_IDS, 'builtin-textanalytics'] },
+  'demo-qual': { source: 'demo-qual', label: 'Demo (qualitative)', plugins: [...CORE_IDS, 'builtin-textanalytics', 'builtin-caqdas'] },
 };
 
 const LS_SEEN = 'crosstab.launcher.seen';
