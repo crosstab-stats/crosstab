@@ -1,6 +1,6 @@
 /**
  * @file plugins/builtin-wikipedia/index.js
- * Built-in importer plugin: File ▸ Import ▸ Wikipedia table.
+ * Built-in importer plugin: File ▸ Import data… ▸ Wikipedia table.
  *
  * Point it at any Wikipedia article (URL or title) and it pulls a table off the
  * page into a dataset — country statistics, sports records, historical series,

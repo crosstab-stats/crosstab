@@ -1,6 +1,6 @@
 /**
  * @file plugins/builtin-syntax-export/index.js
- * Built-in **export-to-syntax** plugin: File ▸ Export ▸ R syntax.
+ * Built-in **export-to-syntax** plugin: File ▸ Export data… ▸ R syntax.
  *
  * Turns the dataset's **transform log** (the same record the History panel shows)
  * into a runnable R script that reproduces the recodes — the do-file an academic

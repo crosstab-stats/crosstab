@@ -436,6 +436,25 @@
       .ct-dialog__buttons .ct-dialog__primary {
         background: var(--accent); color: #fff; border-color: var(--accent);
       }
+      /* Unified Import data… / Export data… format picker */
+      .ct-fmt__search {
+        width: 100%; box-sizing: border-box; font: inherit; padding: 8px 10px;
+        border: 1px solid var(--line); border-radius: 6px; margin: 0 0 10px;
+      }
+      .ct-fmt__list { max-height: 50vh; overflow-y: auto; margin: 0 0 16px; }
+      .ct-fmt__group {
+        font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+        color: #7a8590; padding: 10px 4px 4px;
+      }
+      .ct-fmt__row {
+        display: flex; align-items: baseline; gap: 10px; width: 100%; text-align: left;
+        font: inherit; padding: 9px 10px; border: 0; border-radius: 6px;
+        background: transparent; cursor: pointer;
+      }
+      .ct-fmt__row:hover, .ct-fmt__row:focus-visible { background: #eef5fb; outline: none; }
+      .ct-fmt__name { flex: 0 1 auto; }
+      .ct-fmt__ext { margin-left: auto; color: #7a8590; font-size: 12px; white-space: nowrap; }
+      .ct-fmt__empty { color: #7a8590; padding: 16px 4px; }
       /* Plugin manager dialog */
       .ct-plugins__add { display: flex; gap: 8px; margin: 0 0 8px; }
       .ct-plugins__addbtn {

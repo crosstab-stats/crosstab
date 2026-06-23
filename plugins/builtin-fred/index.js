@@ -1,6 +1,6 @@
 /**
  * @file plugins/builtin-fred/index.js
- * Built-in importer plugin: File ▸ Import ▸ FRED (economic time series).
+ * Built-in importer plugin: File ▸ Import data… ▸ FRED (economic time series).
  *
  * Economics is a social science too — FRED (Federal Reserve Economic Data, from
  * the St. Louis Fed) is the standard public source for macroeconomic series

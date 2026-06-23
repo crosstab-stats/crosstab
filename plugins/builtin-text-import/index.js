@@ -1,6 +1,6 @@
 /**
  * @file plugins/builtin-text-import/index.js
- * Built-in importer plugin: File ▸ Import ▸ Text files (one row per file).
+ * Built-in importer plugin: File ▸ Import data… ▸ Text files (one row per file).
  *
  * Turns a collection of plain-text files into a codeable corpus for the CAQDAS
  * coding workspace (#67): batch-select your `.txt` files and each becomes one row

@@ -478,7 +478,7 @@ export async function boot(mounts) {
   });
 
   // SPSS (.sav) / Stata (.dta) export is now provided by the ReadStat codec plugin
-  // (File ▸ Export ▸ SPSS/Stata), streamed through the codec interface (#98 Phase 2).
+  // (File ▸ Export data… ▸ SPSS/Stata), streamed through the codec interface (#98 Phase 2).
 
   // Now that projects exist, let the output-export dialog default its report
   // title to the active project name, and register its File menu item.

@@ -148,10 +148,10 @@ tables, basic formatting, and simple inline SVG.
 
 ### Importing files
 
-File import is just a plugin. Register an importer and the engine adds a
-**File ▸ Import ▸ _your label_** item, owns the file picker, and commits whatever
-you deliver — so a new file format is a first-class citizen, exactly like the
-built-in CSV importer.
+File import is just a plugin. Register an importer and it joins the unified
+**File ▸ Import data…** picker (a searchable, grouped list of every enabled
+format); the engine owns the file picker and commits whatever you deliver — so a
+new file format is a first-class citizen, exactly like the built-in CSV importer.
 
 ```js
 export async function activate(app) {

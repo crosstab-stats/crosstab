@@ -18,7 +18,8 @@
  * ## Flow
  * 1. A plugin calls `app.importers.register({ label, extensions, parse })`.
  *    `parse` is a plugin-side callback (marshalled by the broker).
- * 2. The engine adds a `File ▸ Import ▸ <label>…` menu item.
+ * 2. The importer joins the unified `File ▸ Import data…` picker (one host item;
+ *    see "One menu item, not one per format" below).
  * 3. On click (user activation live) the engine opens the picker, mints a
  *    `ticket`, and invokes `parse({ ticket, name, file })` (a one-way callback
  *    into the iframe). The `file` is a `File`/`Blob` handle — passed by
@@ -30,7 +31,17 @@
  *
  * This rides entirely on the existing protocol (one-way callbacks + plugin→host
  * RPC); no wire-protocol change was needed.
+ *
+ * ## One menu item, not one per format
+ * The host exposes a single **File ▸ Import data…** entry (not one item per
+ * importer). It opens the {@link showFormatPicker} dialog, built fresh from the
+ * importers registered right now — so the File menu stays short no matter how many
+ * codecs are activated, and the picker doubles as the cross-platform labelled
+ * format chooser. Each importer still describes itself (label, extensions, group);
+ * the picker just gathers them.
  */
+
+import { showFormatPicker, groupFor, byGroupThenOrder } from './format-picker.js';
 
 /**
  * @typedef {Object} ImporterSpec
@@ -85,6 +96,10 @@ export class ImportService {
   /** Monotonic ticket id. */
   #nextTicket = 1;
 
+  /** Disposer for the single "Import data…" menu item, or null when no importers
+   * are registered (the item is created lazily and removed when the last one goes). */
+  #menuDispose = null;
+
   /**
    * @param {Object} deps
    * @param {import('./menu-shell.js').MenuShell} deps.menus
@@ -109,8 +124,8 @@ export class ImportService {
   }
 
   /**
-   * Register a file importer. Adds a `File ▸ Import ▸ <label>` menu item and
-   * returns a disposer that removes it (the loader runs it on plugin unload).
+   * Register a file importer. Adds it to the unified **File ▸ Import data…** picker
+   * and returns a disposer that removes it (the loader runs it on plugin unload).
    *
    * @param {ImporterSpec} spec
    * @returns {() => void}
@@ -127,20 +142,10 @@ export class ImportService {
     }
     const id = spec.id ?? spec.label;
     this.#importers.set(id, spec);
-    const disposeMenu = this.#menus.register({
-      id: `importer:${id}`,
-      path: ['File', 'Import'],
-      label: spec.label,
-      order: spec.order ?? 100,
-      command: () => {
-        // Fire-and-forget: the menu shell doesn't await commands. Errors are
-        // reported to the results pane inside #runImport.
-        void this.#runImport(id);
-      },
-    });
+    this.#ensureMenu();
     return () => {
       this.#importers.delete(id);
-      disposeMenu();
+      this.#refreshMenu();
     };
   }
 
@@ -168,16 +173,10 @@ export class ImportService {
     }
     const id = spec.id ?? spec.label;
     this.#importers.set(id, { ...spec, streaming: true });
-    const disposeMenu = this.#menus.register({
-      id: `importer:${id}`,
-      path: ['File', 'Import'],
-      label: spec.label,
-      order: spec.order ?? 100,
-      command: () => void this.#runImport(id),
-    });
+    this.#ensureMenu();
     return () => {
       this.#importers.delete(id);
-      disposeMenu();
+      this.#refreshMenu();
     };
   }
 
@@ -205,17 +204,54 @@ export class ImportService {
     }
     const id = spec.id ?? spec.label;
     this.#importers.set(id, { ...spec, codec: true });
-    const disposeMenu = this.#menus.register({
-      id: `importer:${id}`,
-      path: ['File', 'Import'],
-      label: spec.label,
-      order: spec.order ?? 100,
-      command: () => void this.#runImport(id),
-    });
+    this.#ensureMenu();
     return () => {
       this.#importers.delete(id);
-      disposeMenu();
+      this.#refreshMenu();
     };
+  }
+
+  /** Create the single "Import data…" File-menu item once (idempotent). It opens
+   * the unified format picker, built from whatever importers are registered then. */
+  #ensureMenu() {
+    if (this.#menuDispose) return;
+    this.#menuDispose = this.#menus.register({
+      id: 'core:import-data',
+      path: ['File'],
+      label: 'Import data…',
+      order: 30,
+      command: () => this.#openPicker(),
+    });
+  }
+
+  /** Drop the menu item when the last importer unregisters (re-created on the next
+   * registration). Keeps the menu honest if every importer is deactivated. */
+  #refreshMenu() {
+    if (this.#importers.size === 0 && this.#menuDispose) {
+      this.#menuDispose();
+      this.#menuDispose = null;
+    }
+  }
+
+  /** Open the unified Import-data picker. The chosen row runs `#runImport(id)`
+   * synchronously (preserving the click's user activation for the file picker). */
+  #openPicker() {
+    const entries = [...this.#importers.entries()]
+      .map(([id, spec]) => ({
+        id,
+        label: spec.label,
+        extensions: spec.source === 'web' ? [] : spec.extensions,
+        group: groupFor(spec),
+        order: spec.order ?? 100,
+        command: () => void this.#runImport(id),
+      }))
+      .sort(byGroupThenOrder);
+    showFormatPicker({
+      title: 'Import data',
+      hint: 'Choose a format to import. Type to filter.',
+      emptyText: 'No import formats are enabled. Turn some on in the plugin manager.',
+      entries,
+    });
   }
 
   /**

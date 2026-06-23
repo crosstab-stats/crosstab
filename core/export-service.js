@@ -14,8 +14,8 @@
  *
  * ## Flow
  * 1. A plugin calls `app.exporters.register({ label, extensions, export })`.
- * 2. The engine adds a `File ▸ Export ▸ <label>…` menu item.
- * 3. On click the engine mints a `ticket` and invokes `export({ ticket })` (a
+ * 2. The exporter joins the unified `File ▸ Export data…` picker (one host item).
+ * 3. On choosing it the engine mints a `ticket` and invokes `export({ ticket })` (a
  *    one-way callback into the iframe). The plugin reads the current data through
  *    `app.data` (which returns the derived, transformed view — so recodes are
  *    baked in and sources stay immutable), formats it, and calls
@@ -24,7 +24,13 @@
  *
  * Like import, this rides entirely on the existing protocol (one-way callbacks +
  * plugin→host RPC); no wire-protocol change was needed.
+ *
+ * Like import, the host exposes a single **File ▸ Export data…** entry (not one
+ * per format); it opens the {@link showFormatPicker} dialog built from the
+ * exporters registered right now. See {@link import-service.js}.
  */
+
+import { showFormatPicker, groupFor, byGroupThenOrder } from './format-picker.js';
 
 /**
  * @typedef {Object} ExporterSpec
@@ -64,6 +70,10 @@ export class ExportService {
   /** Monotonic ticket id. */
   #nextTicket = 1;
 
+  /** Disposer for the single "Export data…" menu item, or null when no exporters
+   * are registered (created lazily, removed when the last one unregisters). */
+  #menuDispose = null;
+
   /**
    * @param {Object} deps
    * @param {import('./menu-shell.js').MenuShell} deps.menus
@@ -79,8 +89,8 @@ export class ExportService {
   }
 
   /**
-   * Register an exporter. Adds a `File ▸ Export ▸ <label>` menu item and returns
-   * a disposer that removes it (the loader runs it on plugin unload).
+   * Register an exporter. Adds it to the unified **File ▸ Export data…** picker and
+   * returns a disposer that removes it (the loader runs it on plugin unload).
    *
    * @param {ExporterSpec} spec
    * @returns {() => void}
@@ -91,19 +101,51 @@ export class ExportService {
     }
     const id = spec.id ?? spec.label;
     this.#exporters.set(id, spec);
-    const disposeMenu = this.#menus.register({
-      id: `exporter:${id}`,
-      path: ['File', 'Export'],
-      label: spec.label,
-      order: spec.order ?? 100,
-      command: () => {
-        void this.#runExport(id);
-      },
-    });
+    this.#ensureMenu();
     return () => {
       this.#exporters.delete(id);
-      disposeMenu();
+      this.#refreshMenu();
     };
+  }
+
+  /** Create the single "Export data…" File-menu item once (idempotent). */
+  #ensureMenu() {
+    if (this.#menuDispose) return;
+    this.#menuDispose = this.#menus.register({
+      id: 'core:export-data',
+      path: ['File'],
+      label: 'Export data…',
+      order: 31,
+      command: () => this.#openPicker(),
+    });
+  }
+
+  /** Drop the menu item when the last exporter unregisters. */
+  #refreshMenu() {
+    if (this.#exporters.size === 0 && this.#menuDispose) {
+      this.#menuDispose();
+      this.#menuDispose = null;
+    }
+  }
+
+  /** Open the unified Export-data picker. The chosen row runs `#runExport(id)`. */
+  #openPicker() {
+    const entries = [...this.#exporters.entries()]
+      .map(([id, spec]) => ({
+        id,
+        label: spec.label,
+        extensions: spec.extensions ?? [],
+        group: groupFor(spec),
+        order: spec.order ?? 100,
+        command: () => void this.#runExport(id),
+      }))
+      .sort(byGroupThenOrder);
+    showFormatPicker({
+      title: 'Export data',
+      hint: 'Choose a format to export the current dataset. Type to filter.',
+      emptyText: 'No export formats are enabled. Turn some on in the plugin manager.',
+      entries,
+    });
   }
 
   /**
