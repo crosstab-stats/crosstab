@@ -91,6 +91,12 @@ const STYLES = `
 .caqdas__retr { border: 1px solid #e2e6ea; border-radius: 6px; padding: 8px 10px; margin: 8px 0; cursor: pointer; }
 .caqdas__retr:hover { background: #f5f8fb; }
 .caqdas__retr .rl { font-size: 11px; color: #7a8590; margin-bottom: 3px; }
+mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
+.caqdas__seghead { display: flex; align-items: center; gap: 8px; padding: 4px 4px 2px; }
+.caqdas__seghead .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.caqdas__segrm { border: 0; background: none; font: inherit; color: #b04a4a; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
+.caqdas__segrm:hover { background: #fbeaea; }
+.caqdas__segmemo { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; padding: 6px 8px; border: 1px solid #ccd2d8; border-radius: 6px; resize: vertical; margin: 0 0 6px; }
 `;
 
 export const workspace = {
@@ -264,15 +270,12 @@ export const workspace = {
         const m = el('mark');
         const code = codeById(covering[0].codeId);
         m.style.backgroundColor = code ? code.color : '#eee';
-        m.title = covering.map((s) => codeById(s.codeId)?.name).filter(Boolean).join(', ');
+        const memoed = covering.some((s) => s.memo);
+        m.title = covering.map((s) => codeById(s.codeId)?.name + (s.memo ? ` — ${s.memo}` : '')).filter(Boolean).join(', ');
+        if (memoed) m.classList.add('has-memo');
         m.textContent = slice;
-        // Click a highlight to remove the topmost covering segment.
-        m.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const top = covering[0];
-          state.segments = state.segments.filter((s) => s !== top);
-          save(); renderText(); renderDocList(); renderCodes();
-        });
+        // Click a highlight to open its segment popup (memo + remove per covering code).
+        m.addEventListener('click', (e) => { e.stopPropagation(); openSegmentMenu(covering, e); });
         textPane.append(m);
       }
     }
@@ -463,7 +466,7 @@ export const workspace = {
       const mk = () => {
         const name = inp.value.trim();
         if (!name) return;
-        const code = { id: uid(), name, color: PALETTE[state.codes.length % PALETTE.length] };
+        const code = { id: uid(), name, color: PALETTE[state.codes.length % PALETTE.length], group: '', memo: '' };
         state.codes.push(code); choose(code.id);
       };
       inp.addEventListener('click', (e) => e.stopPropagation());
@@ -478,15 +481,47 @@ export const workspace = {
       setTimeout(() => inp.focus(), 0);
     }
 
+    // Click a highlight → a popup listing each code covering that span, with a memo
+    // field and a Remove button per coding. Replaces the old click-to-delete (too
+    // easy to lose a coding by accident) and gives segment-level analytic notes.
+    function openSegmentMenu(covering, evt) {
+      closeMenu();
+      menu = el('div', 'caqdas__menu');
+      for (const seg of covering) {
+        const code = codeById(seg.codeId);
+        const head = el('div', 'caqdas__seghead');
+        const sw = el('span', 'caqdas__sw'); sw.style.backgroundColor = code ? code.color : '#ccc';
+        const nm = el('span', 'nm'); nm.textContent = code ? code.name : '(code)';
+        const rm = el('button', 'caqdas__segrm'); rm.textContent = 'Remove'; rm.title = 'Remove this coding';
+        rm.addEventListener('click', (e) => {
+          e.stopPropagation();
+          state.segments = state.segments.filter((s) => s !== seg);
+          save(); closeMenu(); renderText(); renderDocList(); renderCodes();
+        });
+        head.append(sw, nm, rm); menu.append(head);
+        const ta = el('textarea', 'caqdas__segmemo'); ta.rows = 2; ta.placeholder = 'Memo on this coding…'; ta.value = seg.memo || '';
+        ta.addEventListener('click', (e) => e.stopPropagation());
+        ta.addEventListener('input', () => { seg.memo = ta.value; save(); });
+        menu.append(ta);
+      }
+      menu.style.left = Math.round(evt.clientX) + 'px';
+      menu.style.top = Math.round(evt.clientY + 4) + 'px';
+      document.body.append(menu);
+      setTimeout(() => menu.querySelector('textarea')?.focus(), 0);
+    }
+
     // --- analyses (in-workspace → Output) ------------------------------------
     freqBtn.addEventListener('click', async () => {
       const counts = {};
       for (const s of state.segments) counts[s.codeId] = (counts[s.codeId] || 0) + 1;
-      const rows = state.codes.map((c) => [c.name, counts[c.id] || 0]);
-      if (!rows.length) { app.results.appendError('No codes yet — create some in the Coding tab.'); return; }
+      if (!state.codes.length) { app.results.appendError('No codes yet — create some in the Coding tab.'); return; }
+      // Order by theme group (matching the codebook), so the table reads as a
+      // themed code summary; show each code's memo when present.
+      const ordered = state.codes.slice().sort((a, b) => (a.group || '~').localeCompare(b.group || '~') || a.name.localeCompare(b.name));
+      const rows = ordered.map((c) => [c.group || '—', c.name, counts[c.id] || 0, c.memo || '']);
       // Bracket the output so the host stamps attribution (like a menu analysis).
       await app.results.beginAnalysis('Code frequency');
-      await app.results.appendTable({ columns: ['Code', 'Segments'], rows });
+      await app.results.appendTable({ columns: ['Theme', 'Code', 'Segments', 'Memo'], rows });
       await app.results.endAnalysis();
     });
 
@@ -497,9 +532,12 @@ export const workspace = {
       const labelFor = {};
       docs.forEach((d, i) => { labelFor[d.rid] = d.label || `Doc ${i + 1}`; });
       const header = state.labelColumn || 'Document';
-      const rows = state.segments.map((s) => [labelFor[s.doc] ?? '?', codeById(s.codeId)?.name ?? '?', s.text]);
+      const rows = state.segments.map((s) => {
+        const c = codeById(s.codeId);
+        return [labelFor[s.doc] ?? '?', c?.group || '—', c?.name ?? '?', s.text, s.memo || ''];
+      });
       await app.results.beginAnalysis('Coded segments');
-      await app.results.appendTable({ columns: [header, 'Code', 'Text'], rows });
+      await app.results.appendTable({ columns: [header, 'Theme', 'Code', 'Text', 'Memo'], rows });
       await app.results.endAnalysis();
     });
 
@@ -519,7 +557,9 @@ function normalize(raw) {
     codes: Array.isArray(s.codes)
       ? s.codes.filter((c) => c && c.id).map((c) => ({ ...c, group: typeof c.group === 'string' ? c.group : '', memo: typeof c.memo === 'string' ? c.memo : '' }))
       : [],
-    segments: Array.isArray(s.segments) ? s.segments.filter((x) => x && x.doc && x.codeId) : [],
+    segments: Array.isArray(s.segments)
+      ? s.segments.filter((x) => x && x.doc && x.codeId).map((x) => ({ ...x, memo: typeof x.memo === 'string' ? x.memo : '' }))
+      : [],
   };
 }
 
