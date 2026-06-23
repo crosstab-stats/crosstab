@@ -34,6 +34,7 @@ const TOOLS = [
   ['npv', 'Cost-benefit (NPV)'],
   ['ev', 'Expected value (payoff table)'],
   ['tree', 'Decision tree'],
+  ['sens', 'Sensitivity & threshold'],
 ];
 
 const STYLES = `
@@ -96,7 +97,7 @@ export const workspace = {
     wrap.append(bar, body);
     root.append(wrap);
 
-    const RENDERERS = { icer: renderICER, matrix: renderMatrix, npv: renderNPV, ev: renderEV, tree: renderTree };
+    const RENDERERS = { icer: renderICER, matrix: renderMatrix, npv: renderNPV, ev: renderEV, tree: renderTree, sens: renderSens };
     const render = () => { body.textContent = ''; (RENDERERS[state.tool] || renderICER)(); };
 
     // --- Tool: Cost-effectiveness (ICER) -------------------------------------
@@ -368,6 +369,116 @@ export const workspace = {
       await app.results.endAnalysis();
     }
 
+    // --- Tool: Sensitivity & threshold (live in-workspace chart) --------------
+    // Reads another tool's model (NPV/EV/tree) and probes how its outcome responds
+    // to one input. The chart redraws live as you drag — the exploration happens
+    // here, in the workspace; "Send to Output" snapshots the current view.
+    function renderSens() {
+      const cfg = state.sens;
+      const hint = el('p', 'ds__hint');
+      hint.textContent = 'Vary one input and watch the result move — this is where a decision earns trust. One-way traces the outcome across a range and marks the break-even threshold + where the recommendation flips; Tornado ranks every input by how much it swings the result. Drag the slider for a live read; “Send to Output” snapshots the chart.';
+      body.append(hint);
+
+      if (!SENS_MODELS[cfg.model]) cfg.model = 'npv';
+      const model = SENS_MODELS[cfg.model];
+      const params = model.params(state);
+      if (!params.some((p) => p.key === cfg.param)) cfg.param = params[0]?.key || '';
+      const param = params.find((p) => p.key === cfg.param) || params[0];
+
+      const row1 = el('div', 'ds__row');
+      const ml = el('label'); ml.textContent = 'Model:';
+      const modelSel = el('select');
+      for (const k of Object.keys(SENS_MODELS)) { const o = el('option'); o.value = k; o.textContent = SENS_MODELS[k].label; modelSel.append(o); }
+      modelSel.value = cfg.model;
+      modelSel.addEventListener('change', () => { cfg.model = modelSel.value; cfg.param = ''; cfg.lo = null; cfg.hi = null; save(); renderSens(); });
+      const tl = el('label'); tl.textContent = 'Mode:';
+      const modeSel = el('select');
+      for (const [v, l] of [['oneway', 'One-way (line)'], ['tornado', 'Tornado']]) { const o = el('option'); o.value = v; o.textContent = l; modeSel.append(o); }
+      modeSel.value = cfg.mode === 'tornado' ? 'tornado' : 'oneway';
+      modeSel.addEventListener('change', () => { cfg.mode = modeSel.value; save(); renderSens(); });
+      row1.append(ml, modelSel, tl, modeSel);
+      body.append(row1);
+
+      if (!param) { const e = el('p', 'ds__hint'); e.textContent = `Add inputs in the ${model.label} tool first.`; body.append(e); return; }
+
+      const chart = el('div'); chart.style.cssText = 'margin: 10px 0; overflow: auto;';
+      const summary = el('div', 'ds__hint'); summary.style.marginTop = '0';
+      let currentSvg = '';
+
+      if (cfg.mode === 'tornado') {
+        const sp = el('div', 'ds__row');
+        const spl = el('label'); spl.textContent = 'Vary each input by ±%:';
+        const spi = el('input'); spi.type = 'number'; spi.value = Math.round((cfg.spread ?? 0.5) * 100); spi.style.width = '80px';
+        const baseline = model.evalAt(state, param.key, param.base).y;
+        const redrawT = () => {
+          const pct = num(spi.value) ?? 50;
+          const bars = sensTornado(model, state, params, pct / 100);
+          currentSvg = sensTornadoSvg(bars, { title: `${model.label}: tornado (±${Math.round(pct)}%)`, outLabel: model.outLabel, baseline });
+          chart.innerHTML = currentSvg;
+          summary.textContent = bars.length ? `Most influential: ${bars[0].label} (swings ${model.outLabel} by ${fmt(bars[0].swing)}).` : 'No parameter has a non-zero base to vary.';
+        };
+        spi.addEventListener('input', () => { cfg.spread = (num(spi.value) ?? 50) / 100; save(); redrawT(); });
+        sp.append(spl, spi); body.append(sp, chart, summary);
+        redrawT();
+      } else {
+        const r2 = el('div', 'ds__row');
+        const pl = el('label'); pl.textContent = 'Parameter:';
+        const paramSel = el('select');
+        for (const p of params) { const o = el('option'); o.value = p.key; o.textContent = p.label; paramSel.append(o); }
+        paramSel.value = param.key;
+        paramSel.addEventListener('change', () => { cfg.param = paramSel.value; cfg.lo = null; cfg.hi = null; save(); renderSens(); });
+        r2.append(pl, paramSel); body.append(r2);
+
+        const base = param.base;
+        if (cfg.lo == null || cfg.hi == null) { const span = base === 0 ? 1 : Math.abs(base) * 0.5; cfg.lo = base - span; cfg.hi = base + span; }
+        const r3 = el('div', 'ds__row');
+        const lol = el('label'); lol.textContent = 'From:';
+        const loi = el('input'); loi.type = 'number'; loi.value = cfg.lo; loi.style.width = '90px';
+        const hil = el('label'); hil.textContent = 'To:';
+        const hii = el('input'); hii.type = 'number'; hii.value = cfg.hi; hii.style.width = '90px';
+        r3.append(lol, loi, hil, hii); body.append(r3);
+
+        const r4 = el('div', 'ds__row');
+        const slider = el('input'); slider.type = 'range'; slider.style.flex = '1';
+        const readout = el('span'); readout.style.minWidth = '210px';
+        r4.append(slider, readout); body.append(r4, chart, summary);
+
+        const setBounds = () => {
+          slider.min = String(cfg.lo); slider.max = String(cfg.hi);
+          slider.step = String((cfg.hi - cfg.lo) / 100 || 1);
+          if (+slider.value < cfg.lo || +slider.value > cfg.hi) slider.value = String(base);
+        };
+        const redraw = () => {
+          const pts = sensSweep(model, state, param.key, cfg.lo, cfg.hi, 61);
+          const thr = sensThreshold(pts, model.reference);
+          const flips = sensFlips(pts);
+          const at = +slider.value;
+          const cur = model.evalAt(state, param.key, at);
+          currentSvg = sensLineSvg(pts, { title: `${model.label}: ${param.label}`, xLabel: param.label, yLabel: model.outLabel, reference: model.reference, base, threshold: thr, flips, marker: { x: at, y: cur.y } });
+          chart.innerHTML = currentSvg;
+          readout.textContent = `${param.label} = ${fmt(at)} → ${model.outLabel} ${fmt(cur.y)}${cur.choice ? ` · ${cur.choice}` : ''}`;
+          const bits = [];
+          if (thr != null) bits.push(`Break-even (${model.outLabel} = ${fmt(model.reference)}) at ${param.label} = ${fmt(thr)}.`);
+          if (flips.length) bits.push(`Recommendation changes at ${flips.map((f) => `${fmt(f.x)} (→ ${f.to})`).join(', ')}.`);
+          summary.textContent = bits.join(' ') || 'No threshold crossing within this range — the result is robust here.';
+        };
+        loi.addEventListener('input', () => { cfg.lo = num(loi.value) ?? cfg.lo; save(); setBounds(); redraw(); });
+        hii.addEventListener('input', () => { cfg.hi = num(hii.value) ?? cfg.hi; save(); setBounds(); redraw(); });
+        slider.addEventListener('input', redraw);
+        setBounds(); slider.value = String(base); redraw();
+      }
+
+      const go = el('button', 'ds__btn ds__btn--go'); go.textContent = 'Send to Output'; go.style.marginTop = '10px';
+      go.addEventListener('click', async () => {
+        if (!currentSvg) return;
+        await app.results.beginAnalysis(`Sensitivity — ${model.label}`);
+        await app.results.appendText(summary.textContent || `${cfg.mode === 'tornado' ? 'Tornado' : 'One-way'} sensitivity of ${model.outLabel}.`);
+        await app.results.appendPlot(currentSvg);
+        await app.results.endAnalysis();
+      });
+      body.append(go);
+    }
+
     render();
   },
 };
@@ -517,6 +628,167 @@ function treeSvg(root) {
   return s + '</svg>';
 }
 
+// ---- Sensitivity engine -----------------------------------------------------
+// Model adapters expose a tool's inputs as a flat parameter list and a pure
+// "evaluate with one input overridden → {outcome, recommended choice}". That
+// makes one-way sweeps, thresholds, and tornado diagrams tool-agnostic.
+
+const sclone = (o) => JSON.parse(JSON.stringify(o));
+const esc2 = (x) => String(x).replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
+
+export const SENS_MODELS = {
+  npv: {
+    label: 'Cost-benefit (NPV)', outLabel: 'NPV', reference: 0,
+    params(s) {
+      const out = [{ key: 'rate', label: 'Discount rate (%)', base: num(s.npv.rate) ?? 0 }];
+      (s.npv.rows || []).forEach((r, i) => {
+        out.push({ key: `c${i}`, label: `Period ${i} cost`, base: num(r.cost) ?? 0 });
+        out.push({ key: `b${i}`, label: `Period ${i} benefit`, base: num(r.benefit) ?? 0 });
+      });
+      return out;
+    },
+    evalAt(s, key, val) {
+      const rows = (s.npv.rows || []).map((r) => ({ cost: num(r.cost) ?? 0, benefit: num(r.benefit) ?? 0 }));
+      let rate = num(s.npv.rate) ?? 0;
+      if (key === 'rate') rate = val; else { const m = /^([cb])(\d+)$/.exec(key); if (m && rows[+m[2]]) { if (m[1] === 'c') rows[+m[2]].cost = val; else rows[+m[2]].benefit = val; } }
+      const r = computeNPV(rows, rate);
+      return { y: r ? r.npv : 0, choice: (r && r.npv >= 0) ? 'Accept' : 'Reject' };
+    },
+  },
+  ev: {
+    label: 'Expected value (payoff)', outLabel: 'EV of best option', reference: null,
+    params(s) {
+      const out = [];
+      (s.ev.scenarios || []).forEach((sc, i) => out.push({ key: `prob:${i}`, label: `p(${sc.name || 'scenario ' + (i + 1)})`, base: num(sc.prob) ?? 0 }));
+      (s.ev.options || []).forEach((o, oi) => (s.ev.scenarios || []).forEach((sc, si) => out.push({ key: `pay:${oi}:${si}`, label: `${o.name || 'opt ' + (oi + 1)} × ${sc.name || 'sc ' + (si + 1)}`, base: num(o.payoffs?.[si]) ?? 0 })));
+      return out;
+    },
+    evalAt(s, key, val) {
+      const scen = (s.ev.scenarios || []).map((x) => ({ name: x.name, prob: num(x.prob) ?? 0 }));
+      const opts = (s.ev.options || []).map((o) => ({ name: o.name, payoffs: (s.ev.scenarios || []).map((_, si) => num(o.payoffs?.[si]) ?? 0) }));
+      const p = key.split(':');
+      if (p[0] === 'prob') { if (scen[+p[1]]) scen[+p[1]].prob = val; }
+      else if (opts[+p[1]]) opts[+p[1]].payoffs[+p[2]] = val;
+      const res = computeEV(scen, opts);
+      if (!res.length) return { y: 0, choice: '—' };
+      const best = res.slice().sort((a, b) => b.ev - a.ev)[0];
+      return { y: best.ev, choice: best.name };
+    },
+  },
+  tree: {
+    label: 'Decision tree', outLabel: 'Expected value', reference: null,
+    params(s) {
+      const out = [];
+      const walk = (node) => {
+        if (!node) return;
+        if (node.kind === 'terminal') out.push({ key: `pay:${node.id}`, label: `payoff: ${node.label || node.id}`, base: num(node.payoff) ?? 0 });
+        (node.children || []).forEach((c) => { if (node.kind === 'chance') out.push({ key: `prob:${c.id}`, label: `p: ${c.label || c.id}`, base: num(c.prob) ?? 0 }); walk(c); });
+      };
+      walk(s.tree.root);
+      return out;
+    },
+    evalAt(s, key, val) {
+      const root = sclone(s.tree.root);
+      const [kind, id] = key.split(':');
+      const apply = (node) => { if (!node) return; if (node.id === id) { if (kind === 'pay') node.payoff = val; else if (kind === 'prob') node.prob = val; } (node.children || []).forEach(apply); };
+      apply(root);
+      const r = computeTree(root);
+      const choice = r.choice != null && root.children?.[r.choice] ? (root.children[r.choice].label || `branch ${r.choice + 1}`) : '—';
+      return { y: r.value, choice };
+    },
+  },
+};
+
+/** Sweep one parameter across [lo,hi], returning [{x, y, choice}]. Exported for tests. */
+export function sensSweep(model, state, key, lo, hi, n = 41) {
+  n = Math.max(2, n | 0);
+  const pts = [];
+  for (let i = 0; i < n; i++) { const x = lo + (hi - lo) * (i / (n - 1)); const r = model.evalAt(state, key, x); pts.push({ x, y: r.y, choice: r.choice }); }
+  return pts;
+}
+
+/** First x where the swept outcome crosses `reference` (linear interp), or null. */
+function sensThreshold(pts, reference) {
+  if (reference == null) return null;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i].y - reference, b = pts[i + 1].y - reference;
+    if (a === 0) return pts[i].x;
+    if ((a < 0) !== (b < 0)) { const t = a / (a - b); return pts[i].x + t * (pts[i + 1].x - pts[i].x); }
+  }
+  return null;
+}
+
+/** x-values where the recommended choice changes across the sweep. */
+function sensFlips(pts) {
+  const out = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    if (pts[i].choice !== pts[i + 1].choice) out.push({ x: (pts[i].x + pts[i + 1].x) / 2, from: pts[i].choice, to: pts[i + 1].choice });
+  }
+  return out;
+}
+
+/** Tornado: each parameter's outcome at base·(1∓spread), sorted by |swing|. Exported for tests. */
+export function sensTornado(model, state, params, spread = 0.5) {
+  return params
+    .map((p) => { const lo = model.evalAt(state, p.key, p.base * (1 - spread)).y, hi = model.evalAt(state, p.key, p.base * (1 + spread)).y; return { label: p.label, lo, hi, swing: Math.abs(hi - lo) }; })
+    .filter((b) => b.swing > 0)
+    .sort((a, b) => b.swing - a.swing);
+}
+
+function sensLineSvg(pts, o) {
+  const W = 560, H = 300, mL = 64, mR = 18, mT = 32, mB = 48;
+  const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+  let ymin = Math.min(...ys), ymax = Math.max(...ys);
+  if (o.reference != null) { ymin = Math.min(ymin, o.reference); ymax = Math.max(ymax, o.reference); }
+  if (ymin === ymax) { ymin -= 1; ymax += 1; }
+  const xmin = Math.min(...xs), xmax = Math.max(...xs);
+  const px = (x) => mL + (xmax === xmin ? 0 : (x - xmin) / (xmax - xmin)) * (W - mL - mR);
+  const py = (y) => H - mB - (y - ymin) / (ymax - ymin) * (H - mT - mB);
+  let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" font-family="system-ui,sans-serif" font-size="11">`;
+  s += `<rect width="${W}" height="${H}" fill="#fff"/>`;
+  s += `<text x="${mL}" y="18" font-size="12" font-weight="600" fill="#1a1a1a">${esc2(o.title || '')}</text>`;
+  // axes
+  s += `<line x1="${mL}" y1="${H - mB}" x2="${W - mR}" y2="${H - mB}" stroke="#333"/><line x1="${mL}" y1="${mT}" x2="${mL}" y2="${H - mB}" stroke="#333"/>`;
+  // reference line
+  if (o.reference != null) s += `<line x1="${mL}" y1="${py(o.reference).toFixed(1)}" x2="${W - mR}" y2="${py(o.reference).toFixed(1)}" stroke="#bbb" stroke-dasharray="3 3"/>`;
+  // flips
+  for (const f of o.flips || []) s += `<line x1="${px(f.x).toFixed(1)}" y1="${mT}" x2="${px(f.x).toFixed(1)}" y2="${H - mB}" stroke="#e0a52e" stroke-dasharray="4 3"/><text x="${(px(f.x) + 3).toFixed(1)}" y="${mT + 10}" fill="#b07d12">→ ${esc2(f.to)}</text>`;
+  // threshold
+  if (o.threshold != null) s += `<line x1="${px(o.threshold).toFixed(1)}" y1="${mT}" x2="${px(o.threshold).toFixed(1)}" y2="${H - mB}" stroke="#2e7d32" stroke-width="1.5"/><text x="${(px(o.threshold) + 3).toFixed(1)}" y="${H - mB - 4}" fill="#2e7d32">break-even</text>`;
+  // curve
+  s += `<polyline fill="none" stroke="#2f6fb0" stroke-width="2" points="${pts.map((p) => `${px(p.x).toFixed(1)},${py(p.y).toFixed(1)}`).join(' ')}"/>`;
+  // base + marker
+  if (o.base != null) { const r = pts.find((p) => p.x >= o.base) || pts[0]; if (r) s += `<circle cx="${px(o.base).toFixed(1)}" cy="${py(r.y).toFixed(1)}" r="3" fill="#888"/>`; }
+  if (o.marker) s += `<circle cx="${px(o.marker.x).toFixed(1)}" cy="${py(o.marker.y).toFixed(1)}" r="4" fill="#d24"/>`;
+  // tick labels
+  s += `<text x="${mL}" y="${H - mB + 14}" fill="#555">${fmt(xmin)}</text><text x="${W - mR}" y="${H - mB + 14}" text-anchor="end" fill="#555">${fmt(xmax)}</text>`;
+  s += `<text x="${mL - 6}" y="${py(ymax).toFixed(1)}" text-anchor="end" fill="#555">${fmt(ymax)}</text><text x="${mL - 6}" y="${py(ymin).toFixed(1)}" text-anchor="end" fill="#555">${fmt(ymin)}</text>`;
+  s += `<text x="${(W / 2).toFixed(0)}" y="${H - 6}" text-anchor="middle" fill="#444">${esc2(o.xLabel || '')}</text>`;
+  s += `<text x="14" y="${(H / 2).toFixed(0)}" transform="rotate(-90 14 ${(H / 2).toFixed(0)})" text-anchor="middle" fill="#444">${esc2(o.yLabel || '')}</text>`;
+  return s + '</svg>';
+}
+
+function sensTornadoSvg(bars, o) {
+  if (!bars.length) { return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 60" width="400" height="60"><rect width="400" height="60" fill="#fff"/><text x="12" y="34" font-family="system-ui" font-size="12" fill="#777">No parameter has a non-zero base to vary.</text></svg>`; }
+  const rowH = 26, mL = 180, mR = 24, mT = 36, mB = 30, W = 600;
+  const H = mT + mB + bars.length * rowH;
+  const lo = Math.min(...bars.map((b) => Math.min(b.lo, b.hi)), o.baseline ?? Infinity);
+  const hi = Math.max(...bars.map((b) => Math.max(b.lo, b.hi)), o.baseline ?? -Infinity);
+  const span = hi === lo ? 1 : hi - lo;
+  const px = (v) => mL + (v - lo) / span * (W - mL - mR);
+  let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" font-family="system-ui,sans-serif" font-size="11">`;
+  s += `<rect width="${W}" height="${H}" fill="#fff"/>`;
+  s += `<text x="12" y="18" font-size="12" font-weight="600" fill="#1a1a1a">${esc2(o.title || '')}</text>`;
+  if (o.baseline != null) s += `<line x1="${px(o.baseline).toFixed(1)}" y1="${mT - 6}" x2="${px(o.baseline).toFixed(1)}" y2="${H - mB + 4}" stroke="#888" stroke-dasharray="3 3"/><text x="${px(o.baseline).toFixed(1)}" y="${mT - 10}" text-anchor="middle" fill="#777">base ${fmt(o.baseline)}</text>`;
+  bars.forEach((b, i) => {
+    const y = mT + i * rowH, x0 = px(Math.min(b.lo, b.hi)), x1 = px(Math.max(b.lo, b.hi));
+    s += `<rect x="${x0.toFixed(1)}" y="${(y + 3).toFixed(1)}" width="${Math.max(1, x1 - x0).toFixed(1)}" height="${rowH - 8}" fill="#2f6fb0" opacity="0.85"/>`;
+    s += `<text x="${mL - 8}" y="${(y + rowH / 2 + 1).toFixed(1)}" text-anchor="end" fill="#333">${esc2(b.label)}</text>`;
+    s += `<text x="${(x1 + 4).toFixed(1)}" y="${(y + rowH / 2 + 1).toFixed(1)}" fill="#555">${fmt(b.swing)}</text>`;
+  });
+  return s + '</svg>';
+}
+
 /** A tiny cost-effectiveness plane (cost vs effect scatter), as an SVG string. */
 function cePlaneSvg(res) {
   const pts = res.filter((r) => r.cost != null && r.effect != null);
@@ -550,9 +822,10 @@ function normalizeState(raw) {
   const npv = s.npv && typeof s.npv === 'object' ? s.npv : {};
   const ev = s.ev && typeof s.ev === 'object' ? s.ev : {};
   const tree = s.tree && typeof s.tree === 'object' ? s.tree : {};
+  const sens = s.sens && typeof s.sens === 'object' ? s.sens : {};
   return {
     version: 1,
-    tool: ['icer', 'matrix', 'npv', 'ev', 'tree'].includes(s.tool) ? s.tool : 'icer',
+    tool: ['icer', 'matrix', 'npv', 'ev', 'tree', 'sens'].includes(s.tool) ? s.tool : 'icer',
     icer: {
       wtp: num(icer.wtp) ?? 50000,
       rows: Array.isArray(icer.rows) && icer.rows.length
@@ -590,6 +863,14 @@ function normalizeState(raw) {
               { id: uid(), kind: 'terminal', label: 'Option B', payoff: 80, prob: '', children: [] },
             ],
           },
+    },
+    sens: {
+      model: ['npv', 'ev', 'tree'].includes(sens.model) ? sens.model : 'npv',
+      param: typeof sens.param === 'string' ? sens.param : '',
+      mode: sens.mode === 'tornado' ? 'tornado' : 'oneway',
+      lo: typeof sens.lo === 'number' ? sens.lo : null,
+      hi: typeof sens.hi === 'number' ? sens.hi : null,
+      spread: typeof sens.spread === 'number' ? sens.spread : 0.5,
     },
   };
 }
