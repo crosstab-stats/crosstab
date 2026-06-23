@@ -113,6 +113,7 @@ export class PluginBroker {
     // host-allowlisted dependency loading. Live only during a codec invocation.
     if (services.codec) {
       this.#dispatch['codec.size'] = () => services.codec.size();
+      this.#dispatch['codec.sourceFile'] = () => services.codec.sourceFile();
       this.#dispatch['codec.read'] = (offset, length) => services.codec.read(offset, length);
       this.#dispatch['codec.begin'] = (variables, storageTypes) => services.codec.begin(variables, storageTypes);
       this.#dispatch['codec.batch'] = (columns) => services.codec.batch(columns);
@@ -356,6 +357,7 @@ function buildDispatch({ data, results, webr, ui, web }) {
     'data.getColumns': (opts) => data.getColumns(opts),
     'data.getRows': (opts) => data.getRows(opts),
     'data.getVariableMeta': (opts) => data.getVariableMeta(opts),
+    'data.maxOctetLengths': (names) => data.maxOctetLengths(names),
     'data.getSelectedVariables': () => data.getSelectedVariables(),
     'data.getRowCount': () => data.getRowCount(),
     'data.getTransforms': () => data.getTransforms(),

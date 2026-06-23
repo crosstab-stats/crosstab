@@ -318,6 +318,9 @@ export class DatasetManager {
       getVariableMeta: (o) => this.active?.getVariableMeta(o) ?? [],
       getSelectedVariables: () => this.active?.getSelectedVariables() ?? [],
       getRowCount: () => this.rowCount,
+      /** Max UTF-8 byte length per (string) column — for a codec sizing fixed-width
+       * string fields (e.g. ReadStat .sav/.dta export). */
+      maxOctetLengths: (names) => (this.active ? this.active.maxOctetLengths(names) : Promise.resolve({})),
       /** The active dataset's data transforms (data-only; for library/pull). */
       getTransforms: () => this.active?.getTransforms() ?? [],
       /** The full ordered operation log ({applied, future}) — load/append/join +

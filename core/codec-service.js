@@ -47,6 +47,11 @@ const ASSETS = {
   // `blob:` URL and can't fetch anything itself. Same pattern the vendor script uses.
   hyparquet: { url: 'https://esm.sh/hyparquet@1?bundle&target=es2022', kind: 'text' },
   'hyparquet-writer': { url: 'https://esm.sh/hyparquet-writer@0.16.1?bundle&target=es2022', kind: 'text' },
+  // ReadStat (SPSS/Stata/SAS) — local, self-contained host files served to the codec
+  // sandbox (which can't fetch them itself). `raw` = serve as-is, no shim-following.
+  'readstat-wasm': { url: new URL('../vendor/readstat/readstat.wasm', import.meta.url).href, kind: 'bytes' },
+  'readstat-glue': { url: new URL('../vendor/readstat/readstat.mjs', import.meta.url).href, kind: 'text', raw: true },
+  'readstat-worker': { url: new URL('../plugins/builtin-readstat-codec/codec-worker.js', import.meta.url).href, kind: 'text', raw: true },
 };
 
 export class CodecService {
@@ -149,6 +154,9 @@ export class CodecService {
     return Object.freeze({
       // --- read: source access + streaming ingest ---
       size: () => need('read').file.size,
+      // The whole source File (cloned by reference) — for codecs that must read it
+      // synchronously in their own worker (e.g. ReadStat via FileReaderSync).
+      sourceFile: () => need('read').file,
       read: async (offset, length) => {
         const s = need('read');
         const start = Math.max(0, offset | 0);
@@ -218,6 +226,8 @@ export class CodecService {
       const res = await fetch(entry.url);
       if (!res.ok) throw new Error(`codec asset "${name}" failed to load (${res.status})`);
       value = new Uint8Array(await res.arrayBuffer());
+    } else if (entry.raw) {
+      value = await this.#fetchText(entry.url); // local, already self-contained
     } else {
       value = await this.#fetchSelfContainedModule(entry.url);
     }

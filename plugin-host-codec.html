@@ -120,6 +120,7 @@
             data: makeNamespace('data', [
               'getDataFrame', 'getColumns', 'getRows', 'getVariableMeta',
               'getSelectedVariables', 'getRowCount', 'getTransforms', 'getHistory', 'create',
+              'maxOctetLengths',
             ]),
             results: makeNamespace('results', [
               'beginAnalysis', 'endAnalysis',
@@ -134,7 +135,7 @@
             state: makeNamespace('state', ['get', 'set']),
             // Codec plugins (#98): streaming format read/write. Live only during a
             // codec invocation; no-op host-side otherwise.
-            codec: makeNamespace('codec', ['size', 'read', 'begin', 'batch', 'writeChunk', 'loadAsset']),
+            codec: makeNamespace('codec', ['size', 'sourceFile', 'read', 'begin', 'batch', 'writeChunk', 'loadAsset']),
           });
         }
 

@@ -13,7 +13,8 @@ import { EventBus, CoreEvents } from './event-bus.js';
 import { DatasetManager, DATASETS_CHANGED } from './dataset-manager.js';
 import { DuckDBManager } from './duckdb-manager.js';
 import { WebRManager } from './webr-manager.js';
-import { ReadStatManager, READSTAT_EXTENSIONS } from './readstat-manager.js';
+// ReadStat (SPSS/Stata/SAS) is now a codec plugin (plugins/builtin-readstat-codec,
+// #98 Phase 2); the host no longer drives readstat-manager directly.
 import { ResultsPane } from './results-pane.js';
 import { MenuShell } from './menu-shell.js';
 import { UiService } from './ui-service.js';
@@ -115,6 +116,9 @@ const BUILTIN_PLUGINS = [
   // Streaming format codecs (#98) — reference plugins for the codec interface.
   './plugins/builtin-ndjson-codec/index.js',
   './plugins/builtin-parquet-codec/index.js',
+  // ReadStat (SPSS/Stata/SAS) as a codec plugin (#98 Phase 2) — replaces the host
+  // import/export registrations below.
+  './plugins/builtin-readstat-codec/index.js',
 ];
 
 /**
@@ -262,29 +266,11 @@ export async function boot(mounts) {
   const results = new ResultsPane(mounts.results, { bus });
   const menus = new MenuShell(mounts.menubar);
   const ui = new UiService(datasets);
-  const readstat = new ReadStatManager();
-  const importers = new ImportService({ menus, data: datasets, results: results.api, bus, webr, readstat, ui });
-  // SPSS/Stata/SAS importer: host-side ReadStat-WASM, streaming into OPFS-DuckDB
-  // (handles multi-GB files that OOM under R/haven). One entry imports everything;
-  // a second reads the variable catalog first and imports only a chosen subset —
-  // the memory-bounded path for huge/very-wide files (e.g. the full GSS).
-  importers.registerStreaming({
-    id: 'readstat',
-    label: 'SPSS / Stata / SAS…',
-    extensions: READSTAT_EXTENSIONS,
-    order: 20,
-    multiple: true,
-    formatFor: (name) => ReadStatManager.formatForName(name),
-  });
-  importers.registerStreaming({
-    id: 'readstat-pick',
-    label: 'SPSS / Stata / SAS — choose variables…',
-    extensions: READSTAT_EXTENSIONS,
-    order: 21,
-    multiple: true,
-    pick: true,
-    formatFor: (name) => ReadStatManager.formatForName(name),
-  });
+  const importers = new ImportService({ menus, data: datasets, results: results.api, bus, webr, ui });
+  // SPSS / Stata / SAS import + export are now a sandboxed codec plugin
+  // (plugins/builtin-readstat-codec, #98 Phase 2): same ReadStat-WASM, streaming,
+  // but format logic runs in the codec sandbox while the host keeps the picker,
+  // DuckDB/OPFS ingest, and download. (Was: host registerStreaming + native exports.)
   const exporters = new ExportService({ menus, data: datasets, results: results.api, bus });
   // Output export: host owns the "Export output…" dialog + the (host-only) print
   // path; formats (HTML, Word, …) are plugins that register via app.outputExporters
@@ -493,44 +479,8 @@ export async function boot(mounts) {
     },
   });
 
-  // File ▸ Export to a native stats format (.sav/.dta). Mirrors the import path:
-  // ReadStat-WASM streams the active dataset out one DuckDB batch at a time into
-  // an OPFS file, so multi-GB exports stay memory-bounded — full parity with the
-  // big-name formats, no privileging of our own .crosstab bundle.
-  const NATIVE_EXPORTS = [
-    { id: 'core:export-sav', label: 'Export to SPSS (.sav)…', format: 'sav', ext: 'sav' },
-    { id: 'core:export-dta', label: 'Export to Stata (.dta)…', format: 'dta', ext: 'dta' },
-  ];
-  NATIVE_EXPORTS.forEach((spec, i) => {
-    menus.register({
-      id: spec.id,
-      path: ['File'],
-      label: spec.label,
-      order: 8 + i,
-      command: async () => {
-        const ds = datasets.active;
-        if (!ds || !ds.rowCount) {
-          results.api.appendError('Export: no data to export. Load or create a dataset first.');
-          return;
-        }
-        const base = slug(projects.activeName || 'dataset') || 'dataset';
-        try {
-          mounts.status.textContent = `Exporting ${spec.ext.toUpperCase()}…`;
-          const blob = await readstat.writeDataset(ds, spec.format, (done, total) => {
-            mounts.status.textContent = `Exporting ${spec.ext.toUpperCase()}… ${done.toLocaleString()}/${total.toLocaleString()} rows`;
-          });
-          downloadBlob(blob, `${base}.${spec.ext}`);
-          results.api.appendText(
-            `Exported **${ds.rowCount.toLocaleString()}** rows to \`${base}.${spec.ext}\` (${(blob.size / 1048576).toFixed(1)} MB).`,
-          );
-        } catch (err) {
-          results.api.appendError(`Export to .${spec.ext} failed: ${err.message}`);
-        } finally {
-          mounts.status.textContent = '';
-        }
-      },
-    });
-  });
+  // SPSS (.sav) / Stata (.dta) export is now provided by the ReadStat codec plugin
+  // (File ▸ Export ▸ SPSS/Stata), streamed through the codec interface (#98 Phase 2).
 
   // Now that projects exist, let the output-export dialog default its report
   // title to the active project name, and register its File menu item.
