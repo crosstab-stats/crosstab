@@ -206,6 +206,7 @@ export class Launcher {
     }
 
     overlay.querySelector('.ctl__howto').addEventListener('click', () => this.#showHowTo());
+    overlay.querySelector('.ctl__caveats').addEventListener('click', () => this.#showCaveats());
     this.#renderOffline(overlay);
     this.#renderInstallHint(overlay);
     overlay.querySelector('.ctl__start').addEventListener('click', () => this.#start(reopen));
@@ -461,6 +462,48 @@ export class Launcher {
     document.body.append(d);
     d.showModal();
   }
+
+  /** "Caveats & limits": an honest list of the structural limitations of running a
+   * whole stats stack in the browser — the trade-offs we haven't engineered away,
+   * and what each means in practice. Keeps the "everyone, every device" tagline
+   * truthful. */
+  #showCaveats() {
+    const d = document.createElement('dialog');
+    d.className = 'ct-dialog ct-dialog--wide';
+    d.innerHTML = `
+      <form method="dialog" class="ct-dialog__form">
+        <h2 class="ct-dialog__title">Caveats &amp; limits — the honest version</h2>
+        <div class="ctl__howto-body">
+          <p>CrossTab runs entirely in your browser, on your device. That's what keeps
+            your data private and lets it work offline — but it also means a few real
+            limits we haven't been able to engineer away. Here's what to expect.</p>
+          <p><strong>Scrolling a large dataset can lag.</strong> The data grid streams
+            rows from an on-disk store instead of holding the whole table in memory, so
+            scrolling through a big dataset may take a second to catch up.
+            <em>Your data is complete and correct — the view just paints a beat behind.</em></p>
+          <p><strong>R analyses are capped at a few GB.</strong> The in-browser R engine
+            is 32-bit, so any single R-based analysis can address only a few gigabytes at
+            once. <em>Basic data handling scales further (the out-of-core store does that),
+            but a heavy model on a very large dataset can run out of memory — work on a
+            subset or a sample if you hit it.</em></p>
+          <p><strong>Single files over ~2 GB can't be opened.</strong> A browser can't
+            read one file larger than about 2 GB into memory.
+            <em>Split a very large file into smaller pieces, or import fewer variables/years.</em></p>
+          <p><strong>First use needs the internet — once.</strong> The R engine and each
+            stats package download the first time they're used (tens of MB).
+            <em>After that they're cached; you can also pre-cache everything for offline or
+            air-gapped use from this screen.</em></p>
+          <p><strong>Speed depends on your device.</strong> Every computation runs locally,
+            so a phone or tablet is slower than a desktop and a heavy model can take a while.
+            <em>Nothing is sent to a server to speed it up — that's the trade-off for full
+            privacy.</em></p>
+        </div>
+        <menu class="ct-dialog__buttons"><button value="ok" type="submit" class="ct-dialog__primary">Got it</button></menu>
+      </form>`;
+    d.addEventListener('close', () => d.remove());
+    document.body.append(d);
+    d.showModal();
+  }
 }
 
 // --- helpers ----------------------------------------------------------------
@@ -523,6 +566,7 @@ function SHELL_HTML(reopen) {
           <p>CrossTab is free, open-source software. Your <strong>data never leaves your device</strong> — every analysis runs locally in your browser.</p>
           <p>All plugin code is inspectable, and <strong>all plugins are equal</strong> — you're encouraged to write your own.</p>
           <button type="button" class="ctl__howto">How to use →</button>
+          <button type="button" class="ctl__howto ctl__caveats">Caveats &amp; limits →</button>
           <div class="ctl__offline" hidden></div>
           <div class="ctl__install" hidden></div>
         </aside>
@@ -579,8 +623,9 @@ function injectStyles() {
     .ctl__plugin { display: flex; align-items: center; gap: 7px; padding: 3px 2px; font-size: 13.5px; cursor: pointer; break-inside: avoid; }
     .ctl__plugin:hover { background: #f4f8fc; }
     .ctl__pluginname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .ctl__about .ctl__howto { font: inherit; font-size: 13px; color: var(--accent, #2980b9); background: none; border: 0; cursor: pointer; padding: 0; }
+    .ctl__about .ctl__howto { display: block; font: inherit; font-size: 13px; color: var(--accent, #2980b9); background: none; border: 0; cursor: pointer; padding: 0; }
     .ctl__about .ctl__howto:hover { text-decoration: underline; }
+    .ctl__about .ctl__caveats { margin-top: 6px; }
     .ctl__offline { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line, #d8dde2); }
     .ctl__offlinehint { font-size: 12px; color: #8a94a0; margin: 0 0 8px; }
     .ctl__offlinebtn { font: inherit; font-size: 13px; padding: 7px 10px; width: 100%; cursor: pointer;
