@@ -10,6 +10,18 @@
  * CAQDAS (#67) can be built on a proven primitive. Off by default; enable it in
  * Edit ▸ Plugins to see the "Hello WS" tab.
  *
+ * ── State persistence: DON'T write during mount ──────────────────────────────
+ * Read your saved blob with `app.state.get()` on mount; only call `app.state.set()`
+ * in response to a *real user change* (see the textarea handler below — it persists
+ * on input, never on mount). A mount-time write is dangerous: if the workspace ever
+ * mounts before its saved state has been restored, that write persists an
+ * empty/default blob OVER the user's real data. (This caused a CAQDAS codebook-loss
+ * bug: an auto-guessed default column was save()d during mount and clobbered the
+ * saved coding.) Deriving a default on mount is fine — just set it in memory and let
+ * it persist on the first genuine edit. The host does hydrate state before mounting
+ * and blocks interaction until the workspace is ready, but treat "no writes during
+ * mount" as the contract so your plugin stays safe regardless of load ordering.
+ *
  * Styles are applied via the CSSOM (element.style.*), not <style>/style attributes,
  * because the sandbox CSP is `default-src 'none'` (inline style attributes are
  * blocked, but the CSSOM is not).
