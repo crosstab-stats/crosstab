@@ -44,6 +44,14 @@ function formatForName(name) {
   return FORMAT_BY_EXT[i >= 0 ? String(name).slice(i).toLowerCase() : ''] ?? null;
 }
 
+/** Ultra-wide heuristic (mirrors the old host path): if the estimated OPFS-part
+ * count exceeds 8, route to the out-of-core loadWide path instead of building a
+ * DuckDB table (which fatal-OOMs on ~7k-column files like the cumulative GSS). */
+function isWide(varCount, rowCount) {
+  const rows = rowCount >= 0 ? rowCount : 100000;
+  return Math.ceil((varCount * rows) / 4_000_000) > 8;
+}
+
 // --- worker control ----------------------------------------------------------
 // One worker for the plugin's lifetime, built on first use from host-provided
 // assets. Mirrors core/readstat-manager.js's request routing, but the worker is
@@ -141,14 +149,17 @@ async function buildCtl(app) {
 
 // --- read --------------------------------------------------------------------
 
-/** Import every variable, streaming into the host ingest. */
+/** Import every variable, streaming into the host ingest. Catalogs first (cheap
+ * dictionary read) to flag ultra-wide files for the out-of-core loadWide path. */
 export async function readImport(app, _info) {
   const file = await app.codec.sourceFile();
   const format = formatForName(file.name);
   if (!format) throw new Error(`Unsupported file: ${file.name}`);
   const ctl = await getCtl(app);
+  const cat = await ctl.catalog(file, format);
+  const wide = isWide(cat.varCount, cat.rowCount);
   await ctl.stream(file, format, {
-    onVariables: (variables, storageTypes) => app.codec.begin(variables, storageTypes),
+    onVariables: (variables, storageTypes) => app.codec.begin(variables, storageTypes, { rowCount: cat.rowCount, wide }),
     onBatch: (columns) => app.codec.batch(columns),
   });
 }
@@ -169,9 +180,10 @@ export async function readImportPick(app, _info) {
     searchPlaceholder: 'Filter by name or label…',
   });
   if (!chosen || !chosen.length) throw new Error('Import cancelled.');
+  const wide = isWide(chosen.length, cat.rowCount);
   await ctl.stream(file, format, {
     variables: chosen,
-    onVariables: (variables, storageTypes) => app.codec.begin(variables, storageTypes),
+    onVariables: (variables, storageTypes) => app.codec.begin(variables, storageTypes, { rowCount: cat.rowCount, wide }),
     onBatch: (columns) => app.codec.batch(columns),
   });
 }

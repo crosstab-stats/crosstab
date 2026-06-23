@@ -191,15 +191,17 @@ export class ImportService {
    * @param {Object} spec
    * @param {string} spec.label
    * @param {string[]} spec.extensions
-   * @param {(file: Blob, ctx: {begin: Function, batch: Function}) => Promise<void>} spec.ingest
+   * @param {(file: Blob) => {begin: () => Promise<{variables, storageTypes, rowCount, wide}>, drain: (cb: Function) => Promise<void>}} spec.startRead
+   *   - Start a read; returns a reader. `begin()` resolves with the catalog head
+   *   (incl. a `wide` hint); `drain(cb)` pumps each column batch through `cb`.
    * @param {string} [spec.id]
    * @param {number} [spec.order]
    * @param {boolean} [spec.multiple]
    * @returns {() => void}
    */
   registerCodec(spec) {
-    if (!spec || typeof spec.ingest !== 'function' || !Array.isArray(spec.extensions)) {
-      throw new TypeError('registerCodec: `extensions` and `ingest` are required');
+    if (!spec || typeof spec.startRead !== 'function' || !Array.isArray(spec.extensions)) {
+      throw new TypeError('registerCodec: `extensions` and `startRead` are required');
     }
     const id = spec.id ?? spec.label;
     this.#importers.set(id, { ...spec, codec: true });
@@ -374,35 +376,47 @@ export class ImportService {
 
   /**
    * Stream each file into the active dataset through a plugin **codec** (#98). The
-   * codec's `ingest(file, ctx)` drives `ctx.begin`/`ctx.batch`; the host wraps the
-   * context to emit progress. First file of a Replace creates the table; the rest
-   * append. Mirrors {@link ImportService#importStreamingFiles}'s provenance rules.
+   * codec's reader yields a catalog head (with a `wide` hint) then a stream of
+   * column batches; the host commits via {@link DataStore#loadStreaming} normally, or
+   * {@link DataStore#loadWide} (out-of-core single-Parquet, no DuckDB table) when the
+   * codec flags an ultra-wide file — the GSS path. First file of a Replace creates
+   * the source; the rest append. Mirrors importStreamingFiles' provenance rules.
    */
   async #importCodecFiles(spec, files, mode, id) {
     let committed = 0;
     for (const file of files) {
       const fileMode = mode === 'replace' && committed === 0 ? 'replace' : 'append';
       const tag = mode === 'replace' && files.length === 1 ? undefined : baseName(file.name);
-      const progress = this.#progressEmitter(file.name, -1);
       this.#bus.emit('import:started', { importer: id, file: file.name });
       try {
+        const reader = spec.startRead(file);
+        const head = await reader.begin();
+        const progress = this.#progressEmitter(file.name, head.rowCount);
         let seen = 0;
-        await this.#data.loadStreaming({
-          mode: fileMode,
-          source: tag,
-          ingest: async (ctx) => {
-            const wrapped = {
-              begin: (variables, storageTypes) => ctx.begin(variables, storageTypes),
-              batch: (columns) => {
-                const k = Object.keys(columns)[0];
-                seen += k ? columns[k].length : 0;
-                progress(seen);
-                return ctx.batch(columns);
-              },
-            };
-            await spec.ingest(file, wrapped);
-          },
-        });
+        const tick = (columns) => {
+          const k = Object.keys(columns)[0];
+          seen += k ? columns[k].length : 0;
+          progress(seen);
+        };
+        if (head.wide) {
+          await this.#data.loadWide({
+            mode: fileMode,
+            source: tag,
+            variables: head.variables,
+            rowCount: head.rowCount,
+            onProgress: (done) => progress(done),
+            stream: (onBatch) => reader.drain((columns) => { tick(columns); onBatch(columns); }),
+          });
+        } else {
+          await this.#data.loadStreaming({
+            mode: fileMode,
+            source: tag,
+            ingest: async (ctx) => {
+              ctx.begin(head.variables, head.storageTypes);
+              await reader.drain((columns) => { tick(columns); return ctx.batch(columns); });
+            },
+          });
+        }
         committed += 1;
       } catch (err) {
         this.#results.appendError(`Import of "${file.name}" failed: ${err.message}`);

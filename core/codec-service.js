@@ -115,7 +115,7 @@ export class CodecService {
           extensions: spec.extensions,
           order: spec.order,
           multiple: spec.multiple,
-          ingest: (file, ctx) => this.#runRead(spec, file, ctx),
+          startRead: (file) => this.#startRead(spec, file),
         }),
       );
     }
@@ -164,8 +164,8 @@ export class CodecService {
         const buf = await s.file.slice(start, end).arrayBuffer();
         return new Uint8Array(buf);
       },
-      begin: (variables, storageTypes) => need('read').ctx.begin(variables, storageTypes),
-      batch: (columns) => need('read').ctx.batch(columns),
+      begin: (variables, storageTypes, opts) => need('read').sink.begin(variables, storageTypes, opts),
+      batch: (columns) => need('read').sink.batch(columns),
       // --- write: emit output bytes ---
       writeChunk: (bytes) => {
         const s = need('write');
@@ -178,15 +178,55 @@ export class CodecService {
 
   // --- internals -------------------------------------------------------------
 
-  /** Drive one streaming read: bind the session, invoke the plugin's read fn (which
-   * calls back through `app.codec`), then unbind. */
-  async #runRead(spec, file, ctx) {
-    this.#session = { kind: 'read', file, ctx };
-    try {
-      await this.#loader.invoke(spec.pluginId, spec.read, [{ name: file.name }]);
-    } finally {
-      this.#session = null;
-    }
+  /**
+   * Start a streaming read and return a reader the host (import-service) consumes.
+   * The plugin read fn runs as a producer: its `app.codec.begin(variables,
+   * storageTypes, {rowCount, wide})` resolves `reader.begin()`, and each
+   * `app.codec.batch(columns)` is handed to `reader.drain(cb)` with backpressure
+   * (the plugin's batch() doesn't resolve until the consumer has taken it, so peak
+   * memory is one batch). Decoupling producer from consumer is what lets the host
+   * pick `loadStreaming` vs `loadWide` *after* seeing the catalog's `wide` hint.
+   */
+  #startRead(spec, file) {
+    const queue = [];
+    let notify = null;
+    let ended = false;
+    let error = null;
+    let head = null;
+    let headResolve, headReject;
+    const headPromise = new Promise((res, rej) => { headResolve = res; headReject = rej; });
+    const wake = () => { if (notify) { const n = notify; notify = null; n(); } };
+
+    this.#session = {
+      kind: 'read',
+      file,
+      sink: {
+        begin: (variables, storageTypes, opts = {}) => {
+          head = { variables, storageTypes, rowCount: opts.rowCount ?? -1, wide: !!opts.wide };
+          headResolve(head);
+        },
+        batch: (columns) => new Promise((ack) => { queue.push({ columns, ack }); wake(); }),
+      },
+    };
+
+    this.#loader
+      .invoke(spec.pluginId, spec.read, [{ name: file.name }])
+      .then(() => { ended = true; if (!head) headReject(new Error('codec read produced no variables')); })
+      .catch((e) => { error = e; ended = true; if (!head) headReject(e); })
+      .finally(() => { this.#session = null; wake(); });
+
+    return {
+      begin: () => headPromise,
+      drain: async (cb) => {
+        for (;;) {
+          if (queue.length) { const it = queue.shift(); try { await cb(it.columns); } finally { it.ack(); } continue; }
+          if (error) throw error;
+          if (ended) return;
+          // eslint-disable-next-line no-await-in-loop -- block until the next batch
+          await new Promise((r) => { notify = r; });
+        }
+      },
+    };
   }
 
   /** Drive one streaming write: collect the plugin's emitted chunks, then deliver
