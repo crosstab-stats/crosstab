@@ -102,6 +102,7 @@ export const workspace = {
 
     // --- Tool: Cost-effectiveness (ICER) -------------------------------------
     function renderICER() {
+      body.textContent = '';
       const t = state.icer;
       const hint = el('p', 'ds__hint');
       hint.textContent = 'Enter each option’s total cost and effect (e.g. QALYs). Computes the cost-effectiveness frontier and the incremental cost-effectiveness ratio (ICER) of each non-dominated option vs the next-cheaper one, judged against your willingness-to-pay.';
@@ -156,6 +157,7 @@ export const workspace = {
 
     // --- Tool: Decision matrix (weighted MCDA) -------------------------------
     function renderMatrix() {
+      body.textContent = '';
       const m = state.matrix;
       const hint = el('p', 'ds__hint');
       hint.textContent = 'Score each option against weighted criteria. The recommendation is the weighted average score (weights are normalised), ranked high-to-low.';
@@ -219,6 +221,7 @@ export const workspace = {
 
     // --- Tool: Cost-benefit (NPV) --------------------------------------------
     function renderNPV() {
+      body.textContent = '';
       const t = state.npv;
       const hint = el('p', 'ds__hint');
       hint.textContent = 'Enter cost and benefit per period (period 0 = today). Future flows are discounted at your rate; reports NPV, benefit-cost ratio, and the discounted payback period.';
@@ -259,6 +262,7 @@ export const workspace = {
 
     // --- Tool: Expected value (payoff table) ---------------------------------
     function renderEV() {
+      body.textContent = '';
       const m = state.ev;
       const hint = el('p', 'ds__hint');
       hint.textContent = 'List scenarios with probabilities, then each option’s payoff under each. Computes expected value (probabilities normalised), worst case (maximin), and maximum regret (minimax-regret).';
@@ -314,6 +318,7 @@ export const workspace = {
 
     // --- Tool: Decision tree (outline editor + fold-back) --------------------
     function renderTree() {
+      body.textContent = '';
       const t = state.tree;
       const hint = el('p', 'ds__hint');
       hint.textContent = 'Build the tree as an outline: ▢ decision (pick the best branch), ○ chance (probability-weighted), △ terminal (a payoff). Put a probability on each child of a chance node. “Compute” folds back the expected value, the optimal choice, and a tree diagram.';
@@ -374,6 +379,7 @@ export const workspace = {
     // to one input. The chart redraws live as you drag — the exploration happens
     // here, in the workspace; "Send to Output" snapshots the current view.
     function renderSens() {
+      body.textContent = '';
       const cfg = state.sens;
       const hint = el('p', 'ds__hint');
       hint.textContent = 'Vary one input and watch the result move — this is where a decision earns trust. One-way traces the outcome across a range and marks the break-even threshold + where the recommendation flips; Tornado ranks every input by how much it swings the result. Drag the slider for a live read; “Send to Output” snapshots the chart.';
