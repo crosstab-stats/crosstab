@@ -91,7 +91,9 @@ const STYLES = `
 .caqdas__retrhead h3 { margin: 0; }
 .caqdas__retr { border: 1px solid #e2e6ea; border-radius: 6px; padding: 8px 10px; margin: 8px 0; cursor: pointer; }
 .caqdas__retr:hover { background: #f5f8fb; }
-.caqdas__retr .rl { font-size: 11px; color: #7a8590; margin-bottom: 3px; }
+.caqdas__retr .rl { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #7a8590; margin-bottom: 3px; }
+.caqdas__retr .rl > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.caqdas__retr .rl .caqdas__segrm { flex: 0 0 auto; font-size: 13px; line-height: 1; }
 mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 .caqdas__seghead { display: flex; align-items: center; gap: 8px; padding: 4px 4px 2px; }
 .caqdas__seghead .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -300,7 +302,19 @@ export const workspace = {
       if (!segs.length) { const e = el('div', 'caqdas__empty'); e.textContent = 'No passages carry this code yet.'; textPane.append(e); return; }
       for (const s of segs) {
         const item = el('div', 'caqdas__retr');
-        const rl = el('div', 'rl'); rl.textContent = docLabel(s.doc); item.append(rl);
+        const rl = el('div', 'rl');
+        const lab = el('span'); lab.textContent = docLabel(s.doc); rl.append(lab);
+        // Delete this coding straight from the list — faster than finding the
+        // highlight in the transcript and removing it there. Removes only THIS
+        // segment (the code itself stays in the codebook).
+        const rm = el('button', 'caqdas__segrm'); rm.textContent = '✕'; rm.title = 'Remove this coding';
+        rm.addEventListener('click', (e) => {
+          e.stopPropagation();
+          state.segments = state.segments.filter((x) => x !== s);
+          save(); renderText(); renderDocList(); renderCodes(); // renderText re-runs the retrieve list
+        });
+        rl.append(rm);
+        item.append(rl);
         const tx = el('div'); tx.textContent = s.text; item.append(tx);
         item.addEventListener('click', () => { activeRid = s.doc; retrieveCodeId = null; renderDocList(); renderText(); });
         textPane.append(item);
@@ -417,20 +431,36 @@ export const workspace = {
     // Record a segment for a span, re-render, and KEEP the passage selected so more
     // codes can be layered onto it (multi-coding — the NVivo/MAXQDA rhythm). The
     // re-render rebuilds the transcript DOM, so the live selection is restored over
-    // the same characters afterwards. Exact duplicates (same code on the same span)
-    // are a no-op; remove a code by clicking its highlight.
+    // the same characters afterwards.
+    //
+    // Merge-on-overlap: if the new span OVERLAPS an existing segment of the SAME code
+    // in this document, the two (or more) are fused into ONE segment spanning their
+    // union — so re-coding or extending a passage (e.g. 10–15, then 9–15) yields a
+    // single coding rather than stacked duplicates. An exact re-code is just the
+    // degenerate overlap (a no-op union). Adjacent-but-separate codings (no overlap)
+    // are left alone — they may be deliberate, distinct references. Layering a
+    // DIFFERENT code over the same text is unaffected (overlap is per-code).
     const addSegment = (codeId, span, restore = true) => {
-      const dup = state.segments.some(
-        (s) => s.doc === activeRid && s.codeId === codeId && s.start === span.lo && s.end === span.hi,
-      );
-      if (!dup) {
-        state.segments.push({ doc: activeRid, codeId, start: span.lo, end: span.hi, text: span.text });
+      let { lo, hi } = span;
+      const overlaps = (s) => s.doc === activeRid && s.codeId === codeId && s.start < hi && lo < s.end;
+      const hits = state.segments.filter(overlaps);
+      if (hits.length) {
+        const memos = [];
+        for (const s of hits) { lo = Math.min(lo, s.start); hi = Math.max(hi, s.end); if (s.memo) memos.push(s.memo); }
+        const doc = docs.find((d) => d.rid === activeRid);
+        const merged = { doc: activeRid, codeId, start: lo, end: hi, text: doc ? doc.text.slice(lo, hi) : span.text };
+        if (memos.length) merged.memo = memos.join('\n'); // keep any per-coding notes
+        state.segments = state.segments.filter((s) => !hits.includes(s));
+        state.segments.push(merged);
+        save();
+      } else {
+        state.segments.push({ doc: activeRid, codeId, start: lo, end: hi, text: span.text });
         save();
       }
       renderText(); renderDocList(); renderCodes();
-      // Pick mode keeps the passage selected (layer more codes); paint mode clears
-      // it so the user moves straight on to the next passage.
-      if (restore) setSelectionRange(textPane, span.lo, span.hi);
+      // Pick mode keeps the (possibly grown) passage selected (layer more codes);
+      // paint mode clears it so the user moves straight on to the next passage.
+      if (restore) setSelectionRange(textPane, lo, hi);
       else document.getSelection()?.removeAllRanges();
     };
 
