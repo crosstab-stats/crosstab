@@ -433,6 +433,7 @@ export class ImportService {
         source: dataset.source ?? fallbackTag,
         joinKey: review.joinKey,
         aliases: review.aliases,
+        joinType: review.joinType,
       });
       return true;
     } catch (err) {
@@ -686,7 +687,7 @@ function guessKey(metas) {
 /**
  * Interactive join review: pick the key on each side, see the live match preview,
  * and manually pair leftover values (the visible-not-fuzzy step). Resolves to
- * `{ joinKey:{left,right}, aliases:[{base,incoming}] }` or `null` if cancelled.
+ * `{ joinKey:{left,right}, aliases:[{base,incoming}], joinType }` or `null` if cancelled.
  *
  * @param {Object} opts
  * @param {import('./data-store.js').VariableMeta[]} opts.baseMeta
@@ -709,9 +710,9 @@ function showJoinReview({ baseMeta, getBaseColumn, incoming }) {
     dialog.innerHTML = `
       <form method="dialog" class="ct-dialog__form ct-join">
         <h2 class="ct-dialog__title">Join — match on a key</h2>
-        <p class="ct-dialog__hint">Match your rows to the incoming rows by a key.
-          Unmatched rows keep your data with the new columns left blank; pair up any
-          that should match below.</p>
+        <p class="ct-dialog__hint">Match your rows to the incoming rows by a key, and
+          choose which unmatched rows to keep (the join type). Pair up any values that
+          should match below.</p>
         <div class="ct-join__keys"></div>
         <p class="ct-join__summary"></p>
         <div class="ct-join__cols">
@@ -752,11 +753,31 @@ function showJoinReview({ baseMeta, getBaseColumn, incoming }) {
     };
     const baseSel = makeSelect(baseMeta, baseKey);
     const incSel = makeSelect(incMetas, incKey);
+    // Join type: which side's unmatched rows to keep. Left preserves the current
+    // behaviour (keep all current rows, blank new columns where no match).
+    let joinType = 'left';
+    const typeSel = document.createElement('select');
+    typeSel.className = 'ct-join__type';
+    for (const [v, label] of [
+      ['left', 'Left — keep all current rows'],
+      ['inner', 'Inner — keep only matched rows'],
+      ['right', 'Right — keep all incoming rows'],
+      ['full', 'Full — keep all rows from both'],
+    ]) {
+      const o = document.createElement('option');
+      o.value = v;
+      o.textContent = label;
+      typeSel.append(o);
+    }
+    typeSel.value = joinType;
+    typeSel.addEventListener('change', () => { joinType = typeSel.value; });
     keysEl.append(
       document.createTextNode('Current '),
       baseSel,
       document.createTextNode(' ↔ incoming '),
       incSel,
+      document.createTextNode('  ·  Join type: '),
+      typeSel,
     );
 
     const render = (match) => {
@@ -836,7 +857,7 @@ function showJoinReview({ baseMeta, getBaseColumn, incoming }) {
     dialog.addEventListener('close', () => {
       const ok = dialog.returnValue === 'ok';
       dialog.remove();
-      resolve(ok ? { joinKey: { left: baseKey, right: incKey }, aliases } : null);
+      resolve(ok ? { joinKey: { left: baseKey, right: incKey }, aliases, joinType } : null);
     });
     document.body.append(dialog);
     dialog.showModal();

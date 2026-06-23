@@ -279,7 +279,7 @@ export class DataStore {
    *   applied on top of normalized-exact matching.
    * @returns {Promise<void>}
    */
-  async loadDataset({ variables, columns, parquet, mode = 'replace', source, joinKey, aliases }) {
+  async loadDataset({ variables, columns, parquet, mode = 'replace', source, joinKey, aliases, joinType }) {
     const combine = this.#hasData() && (mode === 'append' || mode === 'join') ? mode : 'replace';
     if (combine === 'replace') {
       // A replace is a hard reset: the new import becomes the base of a fresh log.
@@ -289,7 +289,9 @@ export class DataStore {
     } else {
       const src = await this.#createSource({ variables, columns, parquet, source });
       this.#log.push(
-        combine === 'join' ? { type: 'join', src, joinKey, aliases: aliases ?? [] } : { type: 'append', src },
+        combine === 'join'
+          ? { type: 'join', src, joinKey, aliases: aliases ?? [], joinType: joinType ?? 'left' }
+          : { type: 'append', src },
       );
     }
     // A new operation discards the redo branch (standard undo/redo semantics).
@@ -636,22 +638,46 @@ export class DataStore {
         addSourceFile();
         sql = `(${sql}) UNION ALL BY NAME (${this.#sourceSelectSql(op.src, multiStacked)})`;
       } else if (op.type === 'join') {
+        const jt = ({ left: 'LEFT', inner: 'INNER', right: 'RIGHT', full: 'FULL' })[
+          (op.joinType || 'left').toLowerCase()
+        ] || 'LEFT';
+        const addsRightRows = jt === 'RIGHT' || jt === 'FULL';
+        const keyNumeric = byName.get(op.joinKey?.left)?.type === 'numeric';
         const cols = [];
         for (const m of op.src.meta) {
-          if (m.name === op.joinKey?.right) continue; // drop the redundant right key
+          if (m.name === op.joinKey?.right) continue; // drop the redundant right key (kept via the base key below)
           let out = m.name;
           if (byName.has(out)) out = uniqueName(`${m.name}${op.src.label ? ` (${op.src.label})` : ' (joined)'}`, byName);
           byName.set(out, { ...m, name: out });
           cols.push({ orig: m.name, out });
         }
-        const sel = ['C.*'];
-        for (const c of cols) {
+        const joinedSel = cols.map((c) => {
           const ref = `J.${quoteIdent(c.orig)}`;
-          sel.push(`${byName.get(c.out)?.type === 'numeric' ? `TRY_CAST(${ref} AS DOUBLE)` : ref} AS ${quoteIdent(c.out)}`);
+          return `${byName.get(c.out)?.type === 'numeric' ? `TRY_CAST(${ref} AS DOUBLE)` : ref} AS ${quoteIdent(c.out)}`;
+        });
+        const cond = joinConditionSql('C', 'J', { joinKey: op.joinKey, aliases: op.aliases });
+        if (addsRightRows) {
+          // RIGHT/FULL introduce rows with no left match → for those, C.* is all NULL.
+          // Coalesce the row id (J's ids are stride-namespaced per source, so they
+          // stay unique) and the key column from the join source, so the right-only
+          // rows keep a stable id and a populated key instead of NULLs.
+          const rid = quoteIdent(ROWID_COL);
+          const lk = quoteIdent(op.joinKey.left);
+          const rk = quoteIdent(op.joinKey.right);
+          const keyCoalesce = keyNumeric
+            ? `COALESCE(C.${lk}, TRY_CAST(J.${rk} AS DOUBLE))`
+            : `COALESCE(CAST(C.${lk} AS VARCHAR), CAST(J.${rk} AS VARCHAR))`;
+          const base =
+            `C.* EXCLUDE (${rid}, ${lk}), ` +
+            `COALESCE(C.${rid}, J.${rid}) AS ${rid}, ${keyCoalesce} AS ${lk}`;
+          sql =
+            `SELECT ${base}${joinedSel.length ? ', ' + joinedSel.join(', ') : ''} ` +
+            `FROM (${sql}) AS C ${jt} JOIN ${quoteIdent(op.src.table)} AS J ON ${cond}`;
+        } else {
+          sql =
+            `SELECT ${['C.*', ...joinedSel].join(', ')} FROM (${sql}) AS C ` +
+            `${jt} JOIN ${quoteIdent(op.src.table)} AS J ON ${cond}`;
         }
-        sql =
-          `SELECT ${sel.join(', ')} FROM (${sql}) AS C ` +
-          `LEFT JOIN ${quoteIdent(op.src.table)} AS J ON ${joinConditionSql('C', 'J', { joinKey: op.joinKey, aliases: op.aliases })}`;
       } else if (op.type === 'setVariable') {
         applyPatch(byName.get(op.name), op.patch);
         // The only op with a *data* effect: retype-to-numeric casts the column now.
@@ -1068,6 +1094,7 @@ export class DataStore {
       if (op.type === 'join') {
         entry.joinKey = op.joinKey;
         entry.aliases = op.aliases ?? [];
+        entry.joinType = op.joinType ?? 'left';
       }
       if (op.src.wide) {
         // Persist the wide source's single Parquet file bytes (read back straight
@@ -1118,7 +1145,7 @@ export class DataStore {
         ? await this.#restoreWideSource(src)
         : await this.#createSource({ variables: src.meta, parquet: src.parquet, source: src.label });
       const type = i === 0 ? 'load' : src.combine === 'join' ? 'join' : 'append';
-      srcOps.push(type === 'join' ? { type, src: created, joinKey: src.joinKey, aliases: src.aliases ?? [] } : { type, src: created });
+      srcOps.push(type === 'join' ? { type, src: created, joinKey: src.joinKey, aliases: src.aliases ?? [], joinType: src.joinType ?? 'left' } : { type, src: created });
     }
 
     const log = [];
