@@ -108,6 +108,17 @@ export class PluginBroker {
       this.#dispatch['state.get'] = () => services.workspace.getState();
       this.#dispatch['state.set'] = (value) => services.workspace.setState(value);
     }
+    // Codec plugins (#98): the streaming format-codec surface — random source-byte
+    // access + streaming ingest on read, output-byte emit on write, and
+    // host-allowlisted dependency loading. Live only during a codec invocation.
+    if (services.codec) {
+      this.#dispatch['codec.size'] = () => services.codec.size();
+      this.#dispatch['codec.read'] = (offset, length) => services.codec.read(offset, length);
+      this.#dispatch['codec.begin'] = (variables, storageTypes) => services.codec.begin(variables, storageTypes);
+      this.#dispatch['codec.batch'] = (columns) => services.codec.batch(columns);
+      this.#dispatch['codec.writeChunk'] = (bytes) => services.codec.writeChunk(bytes);
+      this.#dispatch['codec.loadAsset'] = (name) => services.codec.loadAsset(name);
+    }
     this.#listener = (e) => this.#onMessage(e);
     window.addEventListener('message', this.#listener);
   }

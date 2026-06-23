@@ -27,6 +27,7 @@ export class PluginActions {
   #importers;
   #exporters;
   #outputExporters;
+  #codecs;
 
   /** pluginId → menu disposers, so unwiring on unload removes its menu items. */
   #disposers = new Map();
@@ -43,7 +44,7 @@ export class PluginActions {
    * @param {object} deps.exporters - ExportService#api (register/deliver).
    * @param {object} deps.outputExporters - OutputExportService#api.
    */
-  constructor({ loader, menus, results, ui, bus, importers, exporters, outputExporters }) {
+  constructor({ loader, menus, results, ui, bus, importers, exporters, outputExporters, codecs }) {
     this.#loader = loader;
     this.#menus = menus;
     this.#results = results;
@@ -52,11 +53,12 @@ export class PluginActions {
     this.#importers = importers;
     this.#exporters = exporters;
     this.#outputExporters = outputExporters;
+    this.#codecs = codecs ?? null;
   }
 
   /** True if a manifest uses the declarative model (this module should wire it). */
   static isDeclarative(manifest) {
-    return ['menu', 'imports', 'exports', 'outputExports'].some(
+    return ['menu', 'imports', 'exports', 'outputExports', 'codecs'].some(
       (k) => Array.isArray(manifest?.[k]) && manifest[k].length > 0,
     );
   }
@@ -122,6 +124,23 @@ export class PluginActions {
           this.#bridge(this.#outputExporters, req.ticket, () =>
             this.#loader.invoke(id, exp.export, [{ title: req.title }]),
           ),
+      });
+      if (typeof dispose === 'function') disposers.push(dispose);
+    }
+
+    // Streaming format codecs (#98): a unified read/write per format, routed through
+    // the codec service's streaming invocation (not the one-shot deliver flow).
+    for (const codec of manifest.codecs ?? []) {
+      if (!this.#codecs) break;
+      const dispose = this.#codecs.register({
+        id: `${id}:${codec.id ?? codec.label}`,
+        label: codec.label,
+        extensions: codec.extensions,
+        order: codec.order,
+        multiple: codec.multiple,
+        pluginId: id,
+        read: codec.read,
+        write: codec.write,
       });
       if (typeof dispose === 'function') disposers.push(dispose);
     }

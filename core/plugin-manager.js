@@ -35,7 +35,7 @@ const LS_WEB = 'crosstab.plugins.web';
 /** Bump when the catalog shape OR built-in manifests' metadata change, so a
  * stale persisted catalog (e.g. missing newly-declared `disciplines`) is dropped
  * and re-probed on next load. */
-const CATALOG_VERSION = 9; // 9: catalog records `workspaces` (#93)
+const CATALOG_VERSION = 10; // 10: catalog records `codecs` (#98)
 
 export class PluginManager {
   /** @type {import('./loader.js').PluginLoader} */
@@ -178,12 +178,18 @@ export class PluginManager {
       workspaces: Array.isArray(manifest.workspaces)
         ? manifest.workspaces.filter((w) => w && typeof w.id === 'string').map((w) => ({ id: w.id, title: String(w.title || w.id) }))
         : [],
+      // Streaming format codecs the plugin declares (#98): [{id, label, extensions}].
+      codecs: Array.isArray(manifest.codecs)
+        ? manifest.codecs
+            .filter((c) => c && (c.read || c.write))
+            .map((c) => ({ id: c.id || c.label, label: String(c.label || c.id), extensions: Array.isArray(c.extensions) ? c.extensions : [] }))
+        : [],
       // The plugin's action labels — the "what you get" list shown on hover in
       // the picker (ellipsis trimmed). Aggregated across ALL the declarative
       // action fields a plugin can expose, so importers/exporters are treated
       // identically to analyses (none is privileged): menu (analyses), imports
       // (file importers), exports (data exporters), outputExports (output exporters).
-      menu: ['menu', 'imports', 'exports', 'outputExports']
+      menu: ['menu', 'imports', 'exports', 'outputExports', 'codecs']
         .flatMap((k) => (Array.isArray(manifest[k]) ? manifest[k] : []))
         .map((m) => String(m?.label ?? '').replace(/\s*[.…]+\s*$/, ''))
         .filter(Boolean),
@@ -451,6 +457,7 @@ export class PluginManager {
         rPackages: cat?.rPackages ?? [],
         menu: cat?.menu ?? [],
         workspaces: cat?.workspaces ?? [],
+        codecs: cat?.codecs ?? [],
         url: e.url ?? null, // entry source URL (for the workspace manager to fetch)
         enabled: !this.#disabled.has(e.key),
         loaded: cat?.id ? loaded.has(cat.id) : false,

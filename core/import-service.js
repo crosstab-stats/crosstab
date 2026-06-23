@@ -182,6 +182,41 @@ export class ImportService {
   }
 
   /**
+   * Register a **streaming codec** importer (#98). Like {@link registerStreaming},
+   * it streams batches straight into the dataset — but the source is a generic
+   * `ingest(file, ctx)` callback (a sandboxed plugin codec driving the pump),
+   * rather than the host ReadStat worker. The engine still owns the menu, picker,
+   * and commit.
+   *
+   * @param {Object} spec
+   * @param {string} spec.label
+   * @param {string[]} spec.extensions
+   * @param {(file: Blob, ctx: {begin: Function, batch: Function}) => Promise<void>} spec.ingest
+   * @param {string} [spec.id]
+   * @param {number} [spec.order]
+   * @param {boolean} [spec.multiple]
+   * @returns {() => void}
+   */
+  registerCodec(spec) {
+    if (!spec || typeof spec.ingest !== 'function' || !Array.isArray(spec.extensions)) {
+      throw new TypeError('registerCodec: `extensions` and `ingest` are required');
+    }
+    const id = spec.id ?? spec.label;
+    this.#importers.set(id, { ...spec, codec: true });
+    const disposeMenu = this.#menus.register({
+      id: `importer:${id}`,
+      path: ['File', 'Import'],
+      label: spec.label,
+      order: spec.order ?? 100,
+      command: () => void this.#runImport(id),
+    });
+    return () => {
+      this.#importers.delete(id);
+      disposeMenu();
+    };
+  }
+
+  /**
    * Receive parsed data from a plugin for a previously issued ticket. Resolves
    * the matching in-flight import.
    *
@@ -234,7 +269,7 @@ export class ImportService {
     }
     // Join needs inline columns to preview matches; a streaming importer delivers
     // none, so it offers only replace/append.
-    const mode = await askMode(files.length, files.length === 1 && !spec.streaming);
+    const mode = await askMode(files.length, files.length === 1 && !spec.streaming && !spec.codec);
     if (!mode) return; // cancelled
     if (mode === 'join') {
       await this.#importJoin(spec, files[0], id);
@@ -337,6 +372,55 @@ export class ImportService {
     }
   }
 
+  /**
+   * Stream each file into the active dataset through a plugin **codec** (#98). The
+   * codec's `ingest(file, ctx)` drives `ctx.begin`/`ctx.batch`; the host wraps the
+   * context to emit progress. First file of a Replace creates the table; the rest
+   * append. Mirrors {@link ImportService#importStreamingFiles}'s provenance rules.
+   */
+  async #importCodecFiles(spec, files, mode, id) {
+    let committed = 0;
+    for (const file of files) {
+      const fileMode = mode === 'replace' && committed === 0 ? 'replace' : 'append';
+      const tag = mode === 'replace' && files.length === 1 ? undefined : baseName(file.name);
+      const progress = this.#progressEmitter(file.name, -1);
+      this.#bus.emit('import:started', { importer: id, file: file.name });
+      try {
+        let seen = 0;
+        await this.#data.loadStreaming({
+          mode: fileMode,
+          source: tag,
+          ingest: async (ctx) => {
+            const wrapped = {
+              begin: (variables, storageTypes) => ctx.begin(variables, storageTypes),
+              batch: (columns) => {
+                const k = Object.keys(columns)[0];
+                seen += k ? columns[k].length : 0;
+                progress(seen);
+                return ctx.batch(columns);
+              },
+            };
+            await spec.ingest(file, wrapped);
+          },
+        });
+        committed += 1;
+      } catch (err) {
+        this.#results.appendError(`Import of "${file.name}" failed: ${err.message}`);
+        console.error('[import]', err);
+      } finally {
+        this.#bus.emit('import:ended', { importer: id, file: file.name });
+      }
+    }
+    if (committed > 0) {
+      this.#bus.emit('import:finished', {
+        importer: id,
+        files: files.length,
+        committed,
+        rowCount: this.#data.rowCount,
+      });
+    }
+  }
+
   /** A throttled "rows read" progress reporter for one file: emits `import:progress`
    * at most every ~1,000 rows (and once at the end). Exact counts don't matter — it
    * just keeps the busy indicator's "X / Y rows" climbing. */
@@ -381,6 +465,7 @@ export class ImportService {
    * everything else stacks (append). Used for replace/append (not join).
    */
   async #importFiles(spec, files, mode, id) {
+    if (spec.codec) return this.#importCodecFiles(spec, files, mode, id);
     if (spec.streaming) return this.#importStreamingFiles(spec, files, mode, id);
     let committed = 0;
     for (const file of files) {

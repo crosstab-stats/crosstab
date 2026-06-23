@@ -123,6 +123,9 @@
             // Workspace plugins (#93) persist an opaque state blob, scoped by the
             // host to this workspace's id. No-op host-side for non-workspace plugins.
             state: makeNamespace('state', ['get', 'set']),
+            // Codec plugins (#98): streaming format read/write. Live only during a
+            // codec invocation; no-op host-side otherwise.
+            codec: makeNamespace('codec', ['size', 'read', 'begin', 'batch', 'writeChunk', 'loadAsset']),
           });
         }
 
@@ -223,7 +226,8 @@
                 Array.isArray(m.imports) ||
                 Array.isArray(m.exports) ||
                 Array.isArray(m.outputExports) ||
-                Array.isArray(m.workspaces));
+                Array.isArray(m.workspaces) ||
+                Array.isArray(m.codecs));
             if (!hasDeclarative) {
               throw new Error(
                 'plugin must export `manifest` with a declarative section (menu/imports/exports/outputExports/workspaces)',

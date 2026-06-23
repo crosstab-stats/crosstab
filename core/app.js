@@ -23,6 +23,7 @@ import { OutputExportService } from './output-export.js';
 import { ComputeRecode } from './compute-recode.js';
 import { PluginManager } from './plugin-manager.js';
 import { PluginActions } from './plugin-actions.js';
+import { CodecService } from './codec-service.js';
 import { PluginCreator } from './plugin-creator.js';
 import { DatasetStore } from './dataset-store.js';
 import { DatasetLibrary, LIBRARY_CHANGED } from './library.js';
@@ -111,6 +112,9 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-caqdas/index.js',
   // Decision-support workspace (#53/#54) — ICER + decision matrix, extensible.
   './plugins/builtin-decisions/index.js',
+  // Streaming format codecs (#98) — reference plugins for the codec interface.
+  './plugins/builtin-ndjson-codec/index.js',
+  './plugins/builtin-parquet-codec/index.js',
 ];
 
 /**
@@ -322,6 +326,13 @@ export async function boot(mounts) {
       return allow;
     },
   });
+  // Streaming format codecs (#98): a unified read/write per format, sandboxed like
+  // any plugin but driving the host's streaming ingest/download. `services.codec`
+  // is added to the (already-passed-to-loader) bundle now; plugins load post-boot,
+  // so the broker sees it. Codecs are registered from manifests via pluginActions.
+  const codecs = new CodecService({ importers, exporters, loader, results: results.api });
+  services.codec = codecs.serviceApi;
+
   // Host-side wiring for declarative plugins: reads manifest.menu, gathers each
   // action's declared inputs, opens the (host-owned) output section, and invokes
   // the plugin's named function. The PluginManager calls wire/unwire on load/unload.
@@ -334,6 +345,7 @@ export async function boot(mounts) {
     importers: importers.api,
     exporters: exporters.api,
     outputExporters: outputExporters.api,
+    codecs,
   });
 
   // --- shell wiring ----------------------------------------------------------
@@ -566,7 +578,7 @@ export async function boot(mounts) {
   // `dataStore` kept as an alias to the manager (it delegates to the active
   // dataset) so console pokes / older references keep working. Exposed before the
   // launcher so the launcher (and dev tooling) can use the engine.
-  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, projects, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager };
+  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, projects, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager, codecs };
   // eslint-disable-next-line no-undef
   globalThis.crosstab = engine;
 
