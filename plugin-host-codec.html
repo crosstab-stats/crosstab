@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!--
+      CODEC sandbox (#98). Identical to plugin-host.html EXCEPT the CSP is widened
+      for streaming format codecs that need WebAssembly (e.g. ReadStat for
+      SPSS/Stata/SAS):
+        - `'wasm-unsafe-eval'` permits compiling/instantiating WASM (and ONLY that —
+          not `eval`). The codec already runs arbitrary JS here; this just lets it
+          run arbitrary *fast* code in the same cage.
+        - `worker-src blob:` lets a codec spawn an in-sandbox Worker (ReadStat reads
+          the input File synchronously via FileReaderSync in a worker — the only way
+          to keep multi-GB parsing memory-bounded without an Asyncify rebuild).
+      Everything that bounds *reach* is unchanged: `connect-src 'none'` (no network),
+      opaque origin (no storage/OPFS/cookies), and the broker allowlist. So a codec
+      gains compute, not reach. This page is used ONLY for plugins that declare
+      `manifest.codecs`; analysis/workspace plugins keep the strict no-WASM CSP.
+
+      KEEP IN SYNC with plugin-host.html — only the CSP above should differ.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'unsafe-inline' blob: 'wasm-unsafe-eval'; worker-src blob:; connect-src 'none'"
+    />
+    <title>CrossTab codec sandbox</title>
+  </head>
+  <body>
+    <!--
+      This page is the sandbox a plugin runs in. The engine loads it into an
+      <iframe sandbox="allow-scripts">, which forces an opaque origin and a
+      separate JS heap — the plugin cannot reach the engine's objects or the
+      host DOM. All engine access goes through the `app` proxy below, which turns
+      every call into a postMessage to the host broker (see core/plugin-broker.js
+      for the matching server side and the full wire protocol).
+
+      The runtime is INLINE on purpose: a sandboxed opaque-origin document cannot
+      fetch other same-origin files (they become cross-origin), so it must be
+      self-contained. The plugin's own source arrives later via postMessage and
+      is imported from a blob: URL (same opaque origin), which is the one way to
+      load an ES module into this isolated realm without CORS.
+    -->
+    <script>
+      'use strict';
+      (() => {
+        const PROTOCOL = 1;
+        const parentWin = window.parent;
+
+        /** Pending RPC calls awaiting a result, by id. */
+        const pending = new Map();
+        let nextCallId = 1;
+
+        /** Plugin-side callbacks the host may invoke, by id. */
+        const callbacks = new Map();
+        let nextCbId = 1;
+
+        /** The imported plugin module, captured on 'load'. */
+        let pluginModule = null;
+
+        /** The `app` proxy handed to the plugin, built once on 'activate'. */
+        let app = null;
+
+        const post = (m) => parentWin.postMessage({ __crosstab: PROTOCOL, ...m }, '*');
+
+        // --- RPC client --------------------------------------------------------
+
+        /** Issue a method call to the host and await its result. */
+        function call(method, args) {
+          const id = nextCallId++;
+          return new Promise((resolve, reject) => {
+            pending.set(id, { resolve, reject });
+            post({ t: 'call', id, method, args: marshalArgs(args) });
+          });
+        }
+
+        /** Replace functions in args with {__cb:id} markers the host can call. */
+        function marshalArgs(value) {
+          if (Array.isArray(value)) return value.map(marshalArgs);
+          if (typeof value === 'function') {
+            const cbId = nextCbId++;
+            callbacks.set(cbId, value);
+            return { __cb: cbId };
+          }
+          // Binary payloads (Parquet `Uint8Array`) and File/Blob handles (an
+          // upload an importer mounts) are structured-cloneable as-is; don't walk.
+          if (value instanceof ArrayBuffer || ArrayBuffer.isView(value) || value instanceof Blob) return value;
+          if (value && typeof value === 'object') {
+            const out = {};
+            for (const k of Object.keys(value)) out[k] = marshalArgs(value[k]);
+            return out;
+          }
+          return value;
+        }
+
+        /** Turn a returned {__handle} into a disposer function. */
+        function reviveValue(value) {
+          if (value && typeof value === 'object' && typeof value.__handle === 'number') {
+            return () => call('__dispose', [value.__handle]);
+          }
+          return value;
+        }
+
+        /** Build a namespace whose methods proxy to host RPC calls. */
+        function makeNamespace(ns, methods) {
+          const obj = {};
+          for (const name of methods) {
+            obj[name] = (...args) => call(`${ns}.${name}`, args).then(reviveValue);
+          }
+          return Object.freeze(obj);
+        }
+
+        /** Assemble the `app` object handed to the plugin's activate(). */
+        function makeApp(identity) {
+          // Declarative plugins don't register anything — the host wires menus,
+          // importers and exporters from the manifest. So the `app` surface is
+          // only *runtime* verbs: read data, run R, write results, prompt the
+          // user, fetch (gated). No menus/importers/exporters/events registration.
+          return Object.freeze({
+            plugin: Object.freeze(identity),
+            data: makeNamespace('data', [
+              'getDataFrame', 'getColumns', 'getRows', 'getVariableMeta',
+              'getSelectedVariables', 'getRowCount', 'getTransforms', 'getHistory', 'create',
+            ]),
+            results: makeNamespace('results', [
+              'beginAnalysis', 'endAnalysis',
+              'appendTable', 'appendPlot', 'updatePlot', 'appendText', 'appendError',
+              'getModel', 'getStyles', 'getPlotPng',
+            ]),
+            webr: makeNamespace('webr', ['run', 'installPackages', 'writeFile', 'readFile', 'mountFile', 'unmount']),
+            ui: makeNamespace('ui', ['selectVariables', 'selectFromList', 'showForm']),
+            web: makeNamespace('web', ['get']),
+            // Workspace plugins (#93) persist an opaque state blob, scoped by the
+            // host to this workspace's id. No-op host-side for non-workspace plugins.
+            state: makeNamespace('state', ['get', 'set']),
+            // Codec plugins (#98): streaming format read/write. Live only during a
+            // codec invocation; no-op host-side otherwise.
+            codec: makeNamespace('codec', ['size', 'read', 'begin', 'batch', 'writeChunk', 'loadAsset']),
+          });
+        }
+
+        // --- message handling --------------------------------------------------
+
+        window.addEventListener('message', async (event) => {
+          if (event.source !== parentWin) return; // only trust the host
+          const msg = event.data;
+          if (!msg || msg.__crosstab !== PROTOCOL) return;
+
+          switch (msg.t) {
+            case 'load':
+              await importPlugin(msg.code);
+              break;
+
+            case 'activate':
+              try {
+                // Handshake only: build + keep the app proxy. Declarative plugins
+                // do nothing else here — the host reads the manifest and drives
+                // them via 'invoke' (run/parse/export named functions).
+                app = makeApp(msg.plugin);
+                post({ t: 'activated', ok: true });
+              } catch (err) {
+                post({ t: 'activated', ok: false, error: String(err && err.message || err) });
+              }
+              break;
+
+            case 'mountWorkspace':
+              // Render the plugin's workspace UI into this (now visible) frame's
+              // body. The plugin rehydrates from app.state.get() itself.
+              try {
+                if (!app) app = makeApp(msg.plugin || {});
+                const ws = pluginModule && pluginModule.workspace;
+                if (!ws || typeof ws.mount !== 'function') {
+                  throw new Error('plugin declares a workspace but exports no `workspace.mount(app, root)`');
+                }
+                await ws.mount(app, document.body, msg.workspace || {});
+                post({ t: 'workspaceMounted', ok: true });
+              } catch (err) {
+                post({ t: 'workspaceMounted', ok: false, error: String(err && err.message || err) });
+              }
+              break;
+
+            case 'invoke':
+              try {
+                if (!app) app = makeApp(msg.plugin || {});
+                const fn = pluginModule[msg.fn];
+                if (typeof fn !== 'function') throw new Error('plugin has no function "' + msg.fn + '"');
+                const value = await fn(app, ...(msg.args || []));
+                // Return value is plain data (a dataset, bytes, or nothing) — post
+                // it directly; structured clone handles it (or throws if it can't).
+                post({ t: 'invoked', ok: true, value });
+              } catch (err) {
+                post({ t: 'invoked', ok: false, error: String(err && err.message || err) });
+              }
+              break;
+
+            case 'result': {
+              const p = pending.get(msg.id);
+              if (!p) break;
+              pending.delete(msg.id);
+              if (msg.ok) p.resolve(msg.value);
+              else p.reject(new Error(msg.error));
+              break;
+            }
+
+            case 'cb': {
+              const fn = callbacks.get(msg.cbId);
+              if (fn) {
+                try {
+                  fn(...(msg.args || []));
+                } catch (err) {
+                  console.error('[plugin] callback threw', err);
+                }
+              }
+              break;
+            }
+
+            default:
+              break;
+          }
+        });
+
+        /** Import the plugin source from a blob URL and report its manifest. */
+        async function importPlugin(code) {
+          let url;
+          try {
+            const blob = new Blob([code], { type: 'text/javascript' });
+            url = URL.createObjectURL(blob);
+            pluginModule = await import(url);
+            const m = pluginModule.manifest;
+            // A plugin declares what it contributes (menu items, importers,
+            // exporters) as manifest sections; the named functions they reference
+            // are validated per-call at 'invoke'.
+            const hasDeclarative =
+              m &&
+              (Array.isArray(m.menu) ||
+                Array.isArray(m.imports) ||
+                Array.isArray(m.exports) ||
+                Array.isArray(m.outputExports) ||
+                Array.isArray(m.workspaces) ||
+                Array.isArray(m.codecs));
+            if (!hasDeclarative) {
+              throw new Error(
+                'plugin must export `manifest` with a declarative section (menu/imports/exports/outputExports/workspaces)',
+              );
+            }
+            post({ t: 'manifest', ok: true, manifest: pluginModule.manifest });
+          } catch (err) {
+            post({ t: 'manifest', ok: false, error: String(err && err.message || err) });
+          } finally {
+            if (url) URL.revokeObjectURL(url);
+          }
+        }
+
+        // Announce readiness once the runtime is wired up.
+        post({ t: 'ready' });
+      })();
+    </script>
+  </body>
+</html>

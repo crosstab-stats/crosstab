@@ -31,6 +31,9 @@ export const API_VERSION = '0.1.0';
 
 /** URL of the sandbox document every plugin iframe loads. */
 const PLUGIN_HOST_URL = './plugin-host.html';
+/** Sandbox document for codec plugins (#98): same runtime, CSP widened for WASM +
+ * an in-sandbox worker. Used only for plugins that declare `manifest.codecs`. */
+const CODEC_HOST_URL = './plugin-host-codec.html';
 
 /**
  * A plugin is **fully declarative**: a `manifest` (data) describing what it
@@ -228,7 +231,7 @@ export class PluginLoader {
    * @param {string} label - URL or filename, for errors/consent.
    * @returns {Promise<PluginManifest>}
    */
-  async #instantiate(code, label) {
+  async #instantiate(code, label, hostUrl = PLUGIN_HOST_URL) {
     // Identity for the consent gate. The manifest id isn't known until the plugin
     // loads, so the gate reads it from this holder — `web.get` only ever fires
     // after load + activate, by which point it's filled in.
@@ -242,7 +245,7 @@ export class PluginLoader {
 
     // Append + navigate; the runtime posts {t:'ready'} once it is wired up.
     this.#sandboxContainer.append(iframe);
-    iframe.src = PLUGIN_HOST_URL;
+    iframe.src = hostUrl;
 
     try {
       await broker.whenReady();
@@ -250,6 +253,14 @@ export class PluginLoader {
 
       if (!manifest || typeof manifest.id !== 'string') {
         throw new Error(`Plugin at ${label} exported no valid manifest`);
+      }
+      // A codec plugin needs the WASM/worker-enabled sandbox. We load into the
+      // default (strict) host just to read the manifest; if it declares codecs,
+      // re-instantiate it in the codec host (cheap — the source is already fetched).
+      if (Array.isArray(manifest.codecs) && manifest.codecs.length && hostUrl !== CODEC_HOST_URL) {
+        broker.dispose();
+        iframe.remove();
+        return this.#instantiate(code, label, CODEC_HOST_URL);
       }
       if (this.#plugins.has(manifest.id)) {
         throw new Error(`Plugin "${manifest.id}" is already loaded`);
