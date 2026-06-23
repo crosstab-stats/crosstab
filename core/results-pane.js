@@ -484,6 +484,10 @@ export class ResultsPane {
   get api() {
     return Object.freeze({
       beginSection: (t) => this.beginSection(t),
+      // A workspace brackets its own output with these; the broker stamps the
+      // (unspoofable) attribution, so plugin-driven output is traceable too.
+      beginAnalysis: (t, a) => this.beginAnalysis(t, a),
+      endAnalysis: () => this.endAnalysis(),
       appendTable: (data, opts) => this.appendTable(data, opts),
       appendPlot: (s, opts) => this.appendPlot(s, opts),
       updatePlot: (handle, s) => this.updatePlot(handle, s),

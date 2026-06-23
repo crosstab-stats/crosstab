@@ -98,7 +98,10 @@ export class WorkspaceManager {
         setState: (value) => this.#store.set(ws.id, value),
       },
     };
-    const broker = new PluginBroker({ iframe, services, onError: this.#onError });
+    // Host-stamped attribution for this plugin's workspace output (matches the
+    // menu-analysis format "Name · origin", e.g. "Qualitative Coding · built-in").
+    const attribution = `${plugin.name || plugin.id} · ${plugin.origin || 'plugin'}`;
+    const broker = new PluginBroker({ iframe, services, onError: this.#onError, attribution });
     entry.broker = broker;
 
     iframe.src = HOST_URL;

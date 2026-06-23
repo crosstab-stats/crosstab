@@ -76,6 +76,10 @@ export class PluginBroker {
   /** Deferred for the workspace mount handshake (#93). */
   #workspaceMounted = deferred();
 
+  /** Host-stamped output attribution ("Name · origin") for this plugin, applied to
+   * its workspace-driven results so they're traceable like menu analyses. */
+  #attribution = null;
+
   /**
    * @param {Object} args
    * @param {HTMLIFrameElement} args.iframe - The plugin's sandboxed iframe.
@@ -83,11 +87,17 @@ export class PluginBroker {
    *   menus/ui) plus the event bus, used to build the dispatch table.
    * @param {(err: Error) => void} [args.onError]
    */
-  constructor({ iframe, services, onError }) {
+  constructor({ iframe, services, onError, attribution }) {
     this.#iframe = iframe;
     this.#onError = onError ?? ((e) => console.error('[plugin-broker]', e));
     this.#services = services;
+    this.#attribution = attribution ?? null;
     this.#dispatch = buildDispatch(services);
+    // Output bracketing for plugin-driven output (e.g. a workspace's own buttons):
+    // the plugin supplies only the title; the host stamps the trustworthy
+    // attribution, so a plugin can't mislabel its output.
+    this.#dispatch['results.beginAnalysis'] = (title) => services.results.beginAnalysis(title, this.#attribution);
+    this.#dispatch['results.endAnalysis'] = () => services.results.endAnalysis();
     // Declarative plugins call `webr.run(code)` with no injection args; the host
     // binds the action's gathered inputs into R for them (see #activeInputs).
     this.#dispatch['webr.run'] = (code, opts) =>

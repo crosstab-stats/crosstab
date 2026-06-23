@@ -416,16 +416,18 @@ export const workspace = {
     }
 
     // --- analyses (in-workspace → Output) ------------------------------------
-    freqBtn.addEventListener('click', () => {
+    freqBtn.addEventListener('click', async () => {
       const counts = {};
       for (const s of state.segments) counts[s.codeId] = (counts[s.codeId] || 0) + 1;
       const rows = state.codes.map((c) => [c.name, counts[c.id] || 0]);
       if (!rows.length) { app.results.appendError('No codes yet — create some in the Coding tab.'); return; }
-      app.results.appendText('### Code frequency');
-      app.results.appendTable({ columns: ['Code', 'Segments'], rows });
+      // Bracket the output so the host stamps attribution (like a menu analysis).
+      await app.results.beginAnalysis('Code frequency');
+      await app.results.appendTable({ columns: ['Code', 'Segments'], rows });
+      await app.results.endAnalysis();
     });
 
-    expBtn.addEventListener('click', () => {
+    expBtn.addEventListener('click', async () => {
       if (!state.segments.length) { app.results.appendError('No coded segments yet.'); return; }
       // Identify each document by the chosen label column (e.g. filename), else by
       // row number. Header takes the column's name when one is chosen.
@@ -433,8 +435,9 @@ export const workspace = {
       docs.forEach((d, i) => { labelFor[d.rid] = d.label || `Doc ${i + 1}`; });
       const header = state.labelColumn || 'Document';
       const rows = state.segments.map((s) => [labelFor[s.doc] ?? '?', codeById(s.codeId)?.name ?? '?', s.text]);
-      app.results.appendText('### Coded segments');
-      app.results.appendTable({ columns: [header, 'Code', 'Text'], rows });
+      await app.results.beginAnalysis('Coded segments');
+      await app.results.appendTable({ columns: [header, 'Code', 'Text'], rows });
+      await app.results.endAnalysis();
     });
 
     // --- go ------------------------------------------------------------------
