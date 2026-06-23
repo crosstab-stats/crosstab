@@ -486,13 +486,10 @@ export class Launcher {
             once. <em>Basic data handling scales further (the out-of-core store does that),
             but a heavy model on a very large dataset can run out of memory — work on a
             subset or a sample if you hit it.</em></p>
-          <p><strong>Single files over ~2 GB can't be opened.</strong> A browser can't
-            read one file larger than about 2 GB into memory.
-            <em>Split a very large file into smaller pieces, or import fewer variables/years.</em></p>
           <p><strong>First use needs the internet — once.</strong> The R engine and each
             stats package download the first time they're used (tens of MB).
             <em>After that they're cached; you can also pre-cache everything for offline or
-            air-gapped use from this screen.</em></p>
+            air-gapped use from the loading screen.</em></p>
           <p><strong>Speed depends on your device.</strong> Every computation runs locally,
             so a phone or tablet is slower than a desktop and a heavy model can take a while.
             <em>Nothing is sent to a server to speed it up — that's the trade-off for full
