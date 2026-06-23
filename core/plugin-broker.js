@@ -115,7 +115,7 @@ export class PluginBroker {
       this.#dispatch['codec.size'] = () => services.codec.size();
       this.#dispatch['codec.sourceFile'] = () => services.codec.sourceFile();
       this.#dispatch['codec.read'] = (offset, length) => services.codec.read(offset, length);
-      this.#dispatch['codec.begin'] = (variables, storageTypes) => services.codec.begin(variables, storageTypes);
+      this.#dispatch['codec.begin'] = (variables, storageTypes, opts) => services.codec.begin(variables, storageTypes, opts);
       this.#dispatch['codec.batch'] = (columns) => services.codec.batch(columns);
       this.#dispatch['codec.writeChunk'] = (bytes) => services.codec.writeChunk(bytes);
       this.#dispatch['codec.loadAsset'] = (name) => services.codec.loadAsset(name);
