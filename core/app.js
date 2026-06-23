@@ -109,6 +109,8 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-hello-workspace/index.js',
   // Qualitative coding workspace (#67) — the first real workspace plugin.
   './plugins/builtin-caqdas/index.js',
+  // Decision-support workspace (#53/#54) — ICER + decision matrix, extensible.
+  './plugins/builtin-decisions/index.js',
 ];
 
 /**
