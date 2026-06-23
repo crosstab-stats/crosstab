@@ -34,7 +34,6 @@ const TOOLS = [
   ['npv', 'Cost-benefit (NPV)'],
   ['ev', 'Expected value (payoff table)'],
   ['tree', 'Decision tree'],
-  ['sens', 'Sensitivity & threshold'],
 ];
 
 const STYLES = `
@@ -49,6 +48,11 @@ const STYLES = `
 .ds__btn:hover { background: #e9eff6; }
 .ds__btn--go { background: #2f6fb0; color: #fff; border-color: #2f6fb0; }
 .ds__btn--go:hover { background: #285f8f; border-color: #285f8f; }
+.ds__seg { display: inline-flex; border: 1px solid #ccd2d8; border-radius: 6px; overflow: hidden; margin: 0 0 12px; }
+.ds__segbtn { padding: 5px 14px; border: 0; background: #f3f6fa; cursor: pointer; font: inherit; color: #333; }
+.ds__segbtn + .ds__segbtn { border-left: 1px solid #ccd2d8; }
+.ds__segbtn:hover { background: #e9eff6; }
+.ds__segbtn.is-on { background: #2f6fb0; color: #fff; }
 .ds h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: #7a8590; margin: 16px 0 6px; }
 .ds table { border-collapse: collapse; width: 100%; margin: 4px 0; }
 .ds th, .ds td { border: 1px solid #e2e6ea; padding: 4px 6px; text-align: left; }
@@ -97,7 +101,7 @@ export const workspace = {
     wrap.append(bar, body);
     root.append(wrap);
 
-    const RENDERERS = { icer: renderICER, matrix: renderMatrix, npv: renderNPV, ev: renderEV, tree: renderTree, sens: renderSens };
+    const RENDERERS = { icer: renderICER, matrix: renderMatrix, npv: renderNPV, ev: renderEV, tree: renderTree };
     const render = () => { body.textContent = ''; (RENDERERS[state.tool] || renderICER)(); };
 
     // --- Tool: Cost-effectiveness (ICER) -------------------------------------
@@ -222,6 +226,8 @@ export const workspace = {
     // --- Tool: Cost-benefit (NPV) --------------------------------------------
     function renderNPV() {
       body.textContent = '';
+      body.append(viewToggle('npv', renderNPV));
+      if (state.sens.npv.view === 'sens') { renderSensFor('npv', renderNPV); return; }
       const t = state.npv;
       const hint = el('p', 'ds__hint');
       hint.textContent = 'Enter cost and benefit per period (period 0 = today). Future flows are discounted at your rate; reports NPV, benefit-cost ratio, and the discounted payback period.';
@@ -263,6 +269,8 @@ export const workspace = {
     // --- Tool: Expected value (payoff table) ---------------------------------
     function renderEV() {
       body.textContent = '';
+      body.append(viewToggle('ev', renderEV));
+      if (state.sens.ev.view === 'sens') { renderSensFor('ev', renderEV); return; }
       const m = state.ev;
       const hint = el('p', 'ds__hint');
       hint.textContent = 'List scenarios with probabilities, then each option’s payoff under each. Computes expected value (probabilities normalised), worst case (maximin), and maximum regret (minimax-regret).';
@@ -319,6 +327,8 @@ export const workspace = {
     // --- Tool: Decision tree (outline editor + fold-back) --------------------
     function renderTree() {
       body.textContent = '';
+      body.append(viewToggle('tree', renderTree));
+      if (state.sens.tree.view === 'sens') { renderSensFor('tree', renderTree); return; }
       const t = state.tree;
       const hint = el('p', 'ds__hint');
       hint.textContent = 'Build the tree as an outline: ▢ decision (pick the best branch), ○ chance (probability-weighted), △ terminal (a payoff). Put a probability on each child of a chance node. “Compute” folds back the expected value, the optimal choice, and a tree diagram.';
@@ -378,34 +388,43 @@ export const workspace = {
     // Reads another tool's model (NPV/EV/tree) and probes how its outcome responds
     // to one input. The chart redraws live as you drag — the exploration happens
     // here, in the workspace; "Send to Output" snapshots the current view.
-    function renderSens() {
-      body.textContent = '';
-      const cfg = state.sens;
+    // A segmented Build | Sensitivity switch for the model tools that support it.
+    function viewToggle(modelKey, rerender) {
+      const cfg = state.sens[modelKey];
+      const seg = el('div', 'ds__seg');
+      for (const [v, l] of [['build', 'Build'], ['sens', 'Sensitivity']]) {
+        const b = el('button', 'ds__segbtn' + (cfg.view === v ? ' is-on' : ''));
+        b.textContent = l;
+        b.addEventListener('click', () => { if (cfg.view !== v) { cfg.view = v; save(); rerender(); } });
+        seg.append(b);
+      }
+      return seg;
+    }
+
+    // Sensitivity sub-view for ONE model, rendered inside that model's own tool — so
+    // it probes the very data you built, with no separate model picker. `rerender`
+    // re-runs the host tool whenever a control needs a full redraw.
+    function renderSensFor(modelKey, rerender) {
+      const cfg = state.sens[modelKey];
+      const model = SENS_MODELS[modelKey];
       const hint = el('p', 'ds__hint');
       hint.textContent = 'Vary one input and watch the result move — this is where a decision earns trust. One-way traces the outcome across a range and marks the break-even threshold + where the recommendation flips; Tornado ranks every input by how much it swings the result. Drag the slider for a live read; “Send to Output” snapshots the chart.';
       body.append(hint);
 
-      if (!SENS_MODELS[cfg.model]) cfg.model = 'npv';
-      const model = SENS_MODELS[cfg.model];
       const params = model.params(state);
       if (!params.some((p) => p.key === cfg.param)) cfg.param = params[0]?.key || '';
       const param = params.find((p) => p.key === cfg.param) || params[0];
 
       const row1 = el('div', 'ds__row');
-      const ml = el('label'); ml.textContent = 'Model:';
-      const modelSel = el('select');
-      for (const k of Object.keys(SENS_MODELS)) { const o = el('option'); o.value = k; o.textContent = SENS_MODELS[k].label; modelSel.append(o); }
-      modelSel.value = cfg.model;
-      modelSel.addEventListener('change', () => { cfg.model = modelSel.value; cfg.param = ''; cfg.lo = null; cfg.hi = null; save(); renderSens(); });
       const tl = el('label'); tl.textContent = 'Mode:';
       const modeSel = el('select');
       for (const [v, l] of [['oneway', 'One-way (line)'], ['tornado', 'Tornado']]) { const o = el('option'); o.value = v; o.textContent = l; modeSel.append(o); }
       modeSel.value = cfg.mode === 'tornado' ? 'tornado' : 'oneway';
-      modeSel.addEventListener('change', () => { cfg.mode = modeSel.value; save(); renderSens(); });
-      row1.append(ml, modelSel, tl, modeSel);
+      modeSel.addEventListener('change', () => { cfg.mode = modeSel.value; save(); rerender(); });
+      row1.append(tl, modeSel);
       body.append(row1);
 
-      if (!param) { const e = el('p', 'ds__hint'); e.textContent = `Add inputs in the ${model.label} tool first.`; body.append(e); return; }
+      if (!param) { const e = el('p', 'ds__hint'); e.textContent = 'Add inputs in the Build view first.'; body.append(e); return; }
 
       const chart = el('div'); chart.style.cssText = 'margin: 10px 0; overflow: auto;';
       const summary = el('div', 'ds__hint'); summary.style.marginTop = '0';
@@ -432,7 +451,7 @@ export const workspace = {
         const paramSel = el('select');
         for (const p of params) { const o = el('option'); o.value = p.key; o.textContent = p.label; paramSel.append(o); }
         paramSel.value = param.key;
-        paramSel.addEventListener('change', () => { cfg.param = paramSel.value; cfg.lo = null; cfg.hi = null; save(); renderSens(); });
+        paramSel.addEventListener('change', () => { cfg.param = paramSel.value; cfg.lo = null; cfg.hi = null; save(); rerender(); });
         r2.append(pl, paramSel); body.append(r2);
 
         const base = param.base;
@@ -831,7 +850,7 @@ function normalizeState(raw) {
   const sens = s.sens && typeof s.sens === 'object' ? s.sens : {};
   return {
     version: 1,
-    tool: ['icer', 'matrix', 'npv', 'ev', 'tree', 'sens'].includes(s.tool) ? s.tool : 'icer',
+    tool: ['icer', 'matrix', 'npv', 'ev', 'tree'].includes(s.tool) ? s.tool : 'icer',
     icer: {
       wtp: num(icer.wtp) ?? 50000,
       rows: Array.isArray(icer.rows) && icer.rows.length
@@ -870,13 +889,21 @@ function normalizeState(raw) {
             ],
           },
     },
-    sens: {
-      model: ['npv', 'ev', 'tree'].includes(sens.model) ? sens.model : 'npv',
-      param: typeof sens.param === 'string' ? sens.param : '',
-      mode: sens.mode === 'tornado' ? 'tornado' : 'oneway',
-      lo: typeof sens.lo === 'number' ? sens.lo : null,
-      hi: typeof sens.hi === 'number' ? sens.hi : null,
-      spread: typeof sens.spread === 'number' ? sens.spread : 0.5,
-    },
+    // Sensitivity settings per model tool (npv/ev/tree each own their Build|Sensitivity
+    // sub-view + last-used parameter/range).
+    sens: { npv: sensSlot(sens.npv), ev: sensSlot(sens.ev), tree: sensSlot(sens.tree) },
+  };
+}
+
+/** Normalise one model's sensitivity sub-view settings. */
+function sensSlot(x) {
+  const s = x && typeof x === 'object' ? x : {};
+  return {
+    view: s.view === 'sens' ? 'sens' : 'build',
+    param: typeof s.param === 'string' ? s.param : '',
+    mode: s.mode === 'tornado' ? 'tornado' : 'oneway',
+    lo: typeof s.lo === 'number' ? s.lo : null,
+    hi: typeof s.hi === 'number' ? s.hi : null,
+    spread: typeof s.spread === 'number' ? s.spread : 0.5,
   };
 }
