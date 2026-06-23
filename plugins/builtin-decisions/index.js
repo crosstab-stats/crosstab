@@ -44,6 +44,7 @@ const STYLES = `
 .ds__btn { padding: 6px 10px; border: 1px solid #ccd2d8; border-radius: 6px; background: #f3f6fa; cursor: pointer; }
 .ds__btn:hover { background: #e9eff6; }
 .ds__btn--go { background: #2f6fb0; color: #fff; border-color: #2f6fb0; }
+.ds__btn--go:hover { background: #285f8f; border-color: #285f8f; }
 .ds h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: #7a8590; margin: 16px 0 6px; }
 .ds table { border-collapse: collapse; width: 100%; margin: 4px 0; }
 .ds th, .ds td { border: 1px solid #e2e6ea; padding: 4px 6px; text-align: left; }
