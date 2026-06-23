@@ -21,8 +21,10 @@ const CORE_IDS = new Set([
   'builtin-frequencies', 'builtin-descriptives', 'builtin-crosstabs',
   'builtin-correlation', 'builtin-regression', 'builtin-plots',
 ]);
-/** Categories whose plugins are infrastructure — always active (import/export). */
-const INFRA_CATEGORIES = new Set(['Import', 'Export']);
+/** Categories whose plugins are infrastructure — always active. 'Import'/'Export'
+ * are the legacy one-shot importers/exporters; 'Data' is the streaming format codecs
+ * (#98: CSV, Parquet, NDJSON, SPSS/Stata/SAS) — all file I/O, on by default. */
+const INFRA_CATEGORIES = new Set(['Import', 'Export', 'Data']);
 
 /** Launch presets: data source + the extra (non-infra) plugin ids to activate.
  * Used by both the Library buttons and the `?launch=` URL bypass. */

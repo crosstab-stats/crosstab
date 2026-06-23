@@ -49,18 +49,15 @@ import { WorkspaceManager } from './workspace-manager.js';
  * @type {string[]}
  */
 const BUILTIN_PLUGINS = [
-  './plugins/builtin-csv-import/index.js',
   './plugins/builtin-text-import/index.js', // .txt corpus → one row per file (for CAQDAS #67)
-  // SPSS/Stata/SAS import is now host-side via ReadStat-WASM (streaming, no 2 GB
-  // limit) — registered below as a streaming importer, superseding the old
-  // haven/R importer (builtin-haven-import) for .sav/.zsav/.dta/.sas7bdat/.por/.xpt.
+  // File formats (CSV, Parquet, NDJSON, SPSS/Stata/SAS) are streaming codec plugins
+  // (#98), grouped near the bottom of this list.
   './plugins/builtin-frequencies/index.js',
   './plugins/builtin-descriptives/index.js',
   './plugins/builtin-crosstabs/index.js',
   './plugins/builtin-regression/index.js',
   './plugins/builtin-fred/index.js',
   './plugins/builtin-wikipedia/index.js',
-  './plugins/builtin-csv-export/index.js',
   './plugins/builtin-syntax-export/index.js',
   './plugins/builtin-html-export/index.js',
   './plugins/builtin-docx-export/index.js',
@@ -113,7 +110,8 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-caqdas/index.js',
   // Decision-support workspace (#53/#54) — ICER + decision matrix, extensible.
   './plugins/builtin-decisions/index.js',
-  // Streaming format codecs (#98) — reference plugins for the codec interface.
+  // Streaming format codecs (#98) — all file import/export rides this interface.
+  './plugins/builtin-csv-codec/index.js',
   './plugins/builtin-ndjson-codec/index.js',
   './plugins/builtin-parquet-codec/index.js',
   // ReadStat (SPSS/Stata/SAS) as a codec plugin (#98 Phase 2) — replaces the host
