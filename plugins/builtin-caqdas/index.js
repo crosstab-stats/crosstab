@@ -79,7 +79,8 @@ const STYLES = `
 .caqdas__menu button:hover { background: #eef5fb; }
 .caqdas__menu .row { display: flex; gap: 6px; padding: 6px 4px 2px; border-top: 1px solid #eef0f2; margin-top: 4px; }
 .caqdas__menu .row input { flex: 1; min-width: 0; font: inherit; padding: 5px 8px; border: 1px solid #ccd2d8; border-radius: 6px; }
-.caqdas__group { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #9aa3ab; font-weight: 600; margin: 12px 6px 2px; }
+.caqdas__group { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #9aa3ab; font-weight: 600; margin: 16px 6px 2px; }
+.caqdas__group--none { font-weight: 500; font-style: italic; text-transform: none; letter-spacing: 0; color: #b3bac1; }
 .caqdas__code .caqdas__iconbtn { cursor: pointer; border: 0; background: none; font: inherit; padding: 0 3px; opacity: .4; }
 .caqdas__code:hover .caqdas__iconbtn { opacity: .8; }
 .caqdas__code .caqdas__iconbtn.has { opacity: .95; }
@@ -314,8 +315,13 @@ export const workspace = {
       const groups = new Map();
       for (const code of state.codes) { const g = code.group || ''; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(code); }
       const groupNames = [...groups.keys()].sort((a, b) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)));
+      const hasThemes = groupNames.some((g) => g !== '');
       for (const g of groupNames) {
+        // Every section gets a header so its boundary is unambiguous — including a
+        // muted "No theme" header for ungrouped codes when themes are in play (else
+        // an ungrouped code reads as part of the theme above it).
         if (g) { const gh = el('div', 'caqdas__group'); gh.textContent = g; codePane.append(gh); }
+        else if (hasThemes) { const gh = el('div', 'caqdas__group caqdas__group--none'); gh.textContent = 'No theme'; codePane.append(gh); }
         for (const code of groups.get(g)) {
           const r = el('div', 'caqdas__code' + (armed === code.id ? ' is-armed' : ''));
           r.title = 'Click to code the selected passage';
