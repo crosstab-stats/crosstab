@@ -268,6 +268,12 @@ export class ImportService {
     if (!mode) return; // cancelled
     if (mode === 'join') {
       await this.#importJoin(spec, files[0], id);
+    } else if (mode === 'new') {
+      // Import into a brand-new dataset in this project — the current one is left
+      // untouched. Create + activate an empty dataset, then load as a replace into it.
+      const name = files.length === 1 ? baseName(files[0].name) : 'Imported data';
+      this.#data.add(name, { activate: true });
+      await this.#importFiles(spec, files, 'replace', id);
     } else {
       await this.#importFiles(spec, files, mode, id);
     }
@@ -483,6 +489,11 @@ export class ImportService {
       if (ok) this.#emitFinished(id, 1);
       return;
     }
+    if (mode === 'new') {
+      // New dataset in this project; load as a replace into the fresh active one.
+      this.#data.add(dataset.source || id || 'Imported data', { activate: true });
+      mode = 'replace';
+    }
     // A clean single-source replace stays untagged; an append carries provenance
     // (the plugin's own label, falling back to the id).
     const tag = mode === 'replace' ? undefined : dataset.source ?? id;
@@ -561,7 +572,7 @@ function baseName(name) {
  *
  * @param {number} fileCount
  * @param {boolean} [canJoin=false]
- * @returns {Promise<'replace'|'append'|'join'|null>}
+ * @returns {Promise<'replace'|'append'|'join'|'new'|null>}
  */
 function askMode(fileCount, canJoin = false) {
   const noun = fileCount > 1 ? `${fileCount} files` : 'this file';
@@ -574,19 +585,21 @@ function askMode(fileCount, canJoin = false) {
     dialog.innerHTML = `
       <form method="dialog" class="ct-dialog__form">
         <h2 class="ct-dialog__title">Import ${fileCount > 1 ? `${fileCount} files` : 'data'}</h2>
-        <p class="ct-dialog__hint">A dataset is already loaded. Add ${noun} to it
-          (stack rows), join it on a key (add columns), or replace what's loaded?</p>
+        <p class="ct-dialog__hint">A dataset is already loaded. Open ${noun} as a new
+          dataset in this project, add it to the current one (stack rows), join it on a
+          key (add columns), or replace what's loaded?</p>
         <menu class="ct-dialog__buttons">
           <button value="cancel" type="submit">Cancel</button>
           <button value="replace" type="submit">Replace</button>
           ${joinBtn}
+          <button value="new" type="submit">New dataset</button>
           <button value="append" type="submit" class="ct-dialog__primary">Add rows</button>
         </menu>
       </form>`;
     dialog.addEventListener('close', () => {
       const v = dialog.returnValue;
       dialog.remove();
-      resolve(['append', 'replace', 'join'].includes(v) ? v : null);
+      resolve(['append', 'replace', 'join', 'new'].includes(v) ? v : null);
     });
     document.body.append(dialog);
     dialog.showModal();
