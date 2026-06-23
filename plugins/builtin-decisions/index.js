@@ -31,6 +31,9 @@ export const manifest = {
 const TOOLS = [
   ['icer', 'Cost-effectiveness (ICER)'],
   ['matrix', 'Decision matrix (weighted)'],
+  ['npv', 'Cost-benefit (NPV)'],
+  ['ev', 'Expected value (payoff table)'],
+  ['tree', 'Decision tree'],
 ];
 
 const STYLES = `
@@ -55,6 +58,7 @@ const STYLES = `
 .ds .del { border: 0; background: none; color: #b04a4a; cursor: pointer; font: inherit; }
 `;
 
+const uid = () => 'n_' + Math.random().toString(36).slice(2, 9);
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
 const fmt = (n) => (n == null || !Number.isFinite(n) ? '—' : Math.abs(n) >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : Number(n.toFixed(4)).toString());
 
@@ -92,7 +96,8 @@ export const workspace = {
     wrap.append(bar, body);
     root.append(wrap);
 
-    const render = () => { body.textContent = ''; if (state.tool === 'matrix') renderMatrix(); else renderICER(); };
+    const RENDERERS = { icer: renderICER, matrix: renderMatrix, npv: renderNPV, ev: renderEV, tree: renderTree };
+    const render = () => { body.textContent = ''; (RENDERERS[state.tool] || renderICER)(); };
 
     // --- Tool: Cost-effectiveness (ICER) -------------------------------------
     function renderICER() {
@@ -211,6 +216,158 @@ export const workspace = {
       await app.results.endAnalysis();
     }
 
+    // --- Tool: Cost-benefit (NPV) --------------------------------------------
+    function renderNPV() {
+      const t = state.npv;
+      const hint = el('p', 'ds__hint');
+      hint.textContent = 'Enter cost and benefit per period (period 0 = today). Future flows are discounted at your rate; reports NPV, benefit-cost ratio, and the discounted payback period.';
+      body.append(hint);
+      const rRow = el('div', 'ds__row');
+      const rl = el('label'); rl.textContent = 'Discount rate (%):';
+      const ri = el('input'); ri.type = 'number'; ri.value = t.rate; ri.style.width = '100px';
+      ri.addEventListener('input', () => { t.rate = num(ri.value) ?? 0; save(); });
+      rRow.append(rl, ri); body.append(rRow);
+      const table = el('table'); const thead = el('thead'); const htr = el('tr');
+      for (const h of ['Period', 'Cost', 'Benefit', '']) { const th = el('th'); th.textContent = h; htr.append(th); }
+      thead.append(htr); table.append(thead);
+      const tb = el('tbody');
+      t.rows.forEach((r, i) => {
+        const tr = el('tr');
+        const ptd = el('td'); ptd.textContent = String(i); tr.append(ptd);
+        tr.append(inputCell(r.cost, 'number', (v) => { r.cost = v; save(); }, 'num'));
+        tr.append(inputCell(r.benefit, 'number', (v) => { r.benefit = v; save(); }, 'num'));
+        const dtd = el('td'); const del = el('button', 'del'); del.textContent = '✕';
+        del.addEventListener('click', () => { t.rows.splice(i, 1); save(); renderNPV(); });
+        dtd.append(del); tr.append(dtd); tb.append(tr);
+      });
+      table.append(tb); body.append(table);
+      const add = el('button', 'ds__btn'); add.textContent = '＋ Add period';
+      add.addEventListener('click', () => { t.rows.push({ cost: '', benefit: '' }); save(); renderNPV(); });
+      const go = el('button', 'ds__btn ds__btn--go'); go.textContent = 'Compute → Output';
+      go.addEventListener('click', () => runNPV());
+      const a = el('div', 'ds__row'); a.append(add, go); body.append(a);
+    }
+    async function runNPV() {
+      const t = state.npv; const res = computeNPV(t.rows, t.rate);
+      if (!res) { app.results.appendError('Decisions: add at least one period.'); return; }
+      await app.results.beginAnalysis('Cost-benefit (NPV)');
+      await app.results.appendText(`Discount rate **${fmt(num(t.rate))}%**. NPV = **${fmt(res.npv)}**; benefit-cost ratio = **${res.bcr == null ? '—' : fmt(res.bcr)}**; discounted payback = **${res.payback == null ? 'never' : 'period ' + res.payback}**.`);
+      await app.results.appendTable({ columns: ['Period', 'Cost', 'Benefit', 'Disc. net', 'Cumulative net'], rows: res.detail.map((d) => [String(d.year), fmt(d.cost), fmt(d.benefit), fmt(d.discNet), fmt(d.cumNet)]) });
+      await app.results.endAnalysis();
+    }
+
+    // --- Tool: Expected value (payoff table) ---------------------------------
+    function renderEV() {
+      const m = state.ev;
+      const hint = el('p', 'ds__hint');
+      hint.textContent = 'List scenarios with probabilities, then each option’s payoff under each. Computes expected value (probabilities normalised), worst case (maximin), and maximum regret (minimax-regret).';
+      body.append(hint);
+      body.append(Object.assign(el('h3'), { textContent: 'Scenarios' }));
+      const st = el('table'); const sth = el('thead'); const str = el('tr');
+      for (const h of ['Scenario', 'Probability', '']) { const th = el('th'); th.textContent = h; str.append(th); }
+      sth.append(str); st.append(sth); const stb = el('tbody');
+      m.scenarios.forEach((s, i) => {
+        const tr = el('tr');
+        const nameTd = inputCell(s.name, 'text', (v) => { s.name = v; save(); });
+        nameTd.querySelector('input').addEventListener('blur', renderEV);
+        tr.append(nameTd);
+        tr.append(inputCell(s.prob, 'number', (v) => { s.prob = v; save(); }, 'num'));
+        const dtd = el('td'); const del = el('button', 'del'); del.textContent = '✕';
+        del.addEventListener('click', () => { m.scenarios.splice(i, 1); for (const o of m.options) o.payoffs.splice(i, 1); save(); renderEV(); });
+        dtd.append(del); tr.append(dtd); stb.append(tr);
+      });
+      st.append(stb); body.append(st);
+      const addS = el('button', 'ds__btn'); addS.textContent = '＋ Add scenario';
+      addS.addEventListener('click', () => { m.scenarios.push({ name: '', prob: '' }); save(); renderEV(); });
+      body.append(addS);
+      body.append(Object.assign(el('h3'), { textContent: 'Options & payoffs' }));
+      const ot = el('table'); const oth = el('thead'); const otr = el('tr');
+      const oh = el('th'); oh.textContent = 'Option'; otr.append(oh);
+      m.scenarios.forEach((s) => { const th = el('th'); th.textContent = s.name || '(scenario)'; otr.append(th); });
+      otr.append(el('th')); oth.append(otr); ot.append(oth); const otb = el('tbody');
+      m.options.forEach((o, oi) => {
+        const tr = el('tr'); tr.append(inputCell(o.name, 'text', (v) => { o.name = v; save(); }));
+        m.scenarios.forEach((s, si) => { tr.append(inputCell(o.payoffs[si], 'number', (v) => { o.payoffs[si] = v; save(); }, 'num')); });
+        const dtd = el('td'); const del = el('button', 'del'); del.textContent = '✕';
+        del.addEventListener('click', () => { m.options.splice(oi, 1); save(); renderEV(); });
+        dtd.append(del); tr.append(dtd); otb.append(tr);
+      });
+      ot.append(otb); body.append(ot);
+      const addO = el('button', 'ds__btn'); addO.textContent = '＋ Add option';
+      addO.addEventListener('click', () => { m.options.push({ name: '', payoffs: [] }); save(); renderEV(); });
+      const go = el('button', 'ds__btn ds__btn--go'); go.textContent = 'Compute → Output';
+      go.addEventListener('click', () => runEV());
+      const a = el('div', 'ds__row'); a.append(addO, go); body.append(a);
+    }
+    async function runEV() {
+      const m = state.ev; const res = computeEV(m.scenarios, m.options);
+      if (!res.length) { app.results.appendError('Decisions: add at least one option and scenario.'); return; }
+      const byEV = res.slice().sort((a, b) => b.ev - a.ev)[0];
+      const byMaximin = res.slice().sort((a, b) => b.min - a.min)[0];
+      const byRegret = res.slice().sort((a, b) => a.maxRegret - b.maxRegret)[0];
+      await app.results.beginAnalysis('Expected value (payoff table)');
+      await app.results.appendText(`Best by expected value: **${byEV.name}**. Best worst-case (maximin): **${byMaximin.name}**. Best by minimax-regret: **${byRegret.name}**.`);
+      await app.results.appendTable({ columns: ['Option', 'Expected value', 'Worst case', 'Max regret'], rows: res.map((r) => [r.name, fmt(r.ev), fmt(r.min), fmt(r.maxRegret)]) });
+      await app.results.endAnalysis();
+    }
+
+    // --- Tool: Decision tree (outline editor + fold-back) --------------------
+    function renderTree() {
+      const t = state.tree;
+      const hint = el('p', 'ds__hint');
+      hint.textContent = 'Build the tree as an outline: ▢ decision (pick the best branch), ○ chance (probability-weighted), △ terminal (a payoff). Put a probability on each child of a chance node. “Compute” folds back the expected value, the optimal choice, and a tree diagram.';
+      body.append(hint);
+      const treeBox = el('div'); body.append(treeBox);
+      const drawNode = (node, parent, idx, parentKind, depth) => {
+        const row = el('div', 'ds__row'); row.style.marginLeft = depth * 22 + 'px';
+        const kindSel = el('select');
+        for (const [v, l] of [['decision', '▢ decision'], ['chance', '○ chance'], ['terminal', '△ terminal']]) { const o = el('option'); o.value = v; o.textContent = l; kindSel.append(o); }
+        kindSel.value = node.kind;
+        kindSel.addEventListener('change', () => { node.kind = kindSel.value; save(); renderTree(); });
+        row.append(kindSel);
+        if (parentKind === 'chance') {
+          const pl = el('span'); pl.textContent = 'p='; pl.style.color = '#7a8590';
+          const pi = el('input'); pi.type = 'number'; pi.step = '0.01'; pi.value = node.prob ?? ''; pi.style.width = '64px';
+          pi.addEventListener('input', () => { node.prob = pi.value; save(); });
+          row.append(pl, pi);
+        }
+        const li = el('input'); li.type = 'text'; li.value = node.label ?? ''; li.placeholder = 'label'; li.style.minWidth = '130px';
+        li.addEventListener('input', () => { node.label = li.value; save(); });
+        row.append(li);
+        if (node.kind === 'terminal') {
+          const vl = el('span'); vl.textContent = 'payoff='; vl.style.color = '#7a8590';
+          const vi = el('input'); vi.type = 'number'; vi.value = node.payoff ?? ''; vi.style.width = '90px';
+          vi.addEventListener('input', () => { node.payoff = vi.value; save(); });
+          row.append(vl, vi);
+        } else {
+          const addb = el('button', 'ds__btn'); addb.textContent = '＋ child'; addb.style.padding = '2px 7px';
+          addb.addEventListener('click', () => { (node.children ||= []).push({ id: uid(), kind: 'terminal', label: '', payoff: 0, prob: '', children: [] }); save(); renderTree(); });
+          row.append(addb);
+        }
+        if (parent) {
+          const del = el('button', 'del'); del.textContent = '✕';
+          del.addEventListener('click', () => { parent.children.splice(idx, 1); save(); renderTree(); });
+          row.append(del);
+        }
+        treeBox.append(row);
+        if (node.kind !== 'terminal') (node.children || []).forEach((c, i) => drawNode(c, node, i, node.kind, depth + 1));
+      };
+      drawNode(t.root, null, 0, null, 0);
+      const go = el('button', 'ds__btn ds__btn--go'); go.textContent = 'Compute → Output'; go.style.marginTop = '10px';
+      go.addEventListener('click', () => runTree());
+      body.append(go);
+    }
+    async function runTree() {
+      const root = state.tree.root;
+      const res = computeTree(root);
+      await app.results.beginAnalysis('Decision tree');
+      const rootChoice = res.choice != null && root.children?.[res.choice] ? (root.children[res.choice].label || `branch ${res.choice + 1}`) : null;
+      await app.results.appendText(`Expected value (fold-back): **${fmt(res.value)}**.${rootChoice ? ` Optimal first decision: **${rootChoice}**.` : ''}`);
+      const svg = treeSvg(root);
+      if (svg) await app.results.appendPlot(svg);
+      await app.results.endAnalysis();
+    }
+
     render();
   },
 };
@@ -255,6 +412,111 @@ export function computeMatrix(criteria, options) {
   return scored.map((s, i) => ({ ...s, rank: i + 1 }));
 }
 
+/** Cost-benefit: discount each period's cost/benefit at `ratePct`, then NPV, PVs,
+ * benefit-cost ratio, and discounted payback period. Period = row index (0 = now).
+ * Exported for unit testing. */
+export function computeNPV(rows, ratePct) {
+  const r = (num(ratePct) ?? 0) / 100;
+  const valid = (rows || []).map((x) => ({ cost: num(x.cost) ?? 0, benefit: num(x.benefit) ?? 0 }));
+  if (!valid.length) return null;
+  let pvC = 0, pvB = 0, cum = 0, payback = null;
+  const detail = valid.map((x, t) => {
+    const d = Math.pow(1 + r, t);
+    const dc = x.cost / d, db = x.benefit / d;
+    cum += db - dc; pvC += dc; pvB += db;
+    if (payback === null && cum >= 0) payback = t;
+    return { year: t, cost: x.cost, benefit: x.benefit, discNet: db - dc, cumNet: cum };
+  });
+  return { npv: pvB - pvC, pvCost: pvC, pvBenefit: pvB, bcr: pvC > 0 ? pvB / pvC : null, payback, detail };
+}
+
+/** Expected value under uncertainty: per option, EV (probabilities normalised),
+ * worst-case payoff (maximin), and max regret (minimax-regret). Exported for tests. */
+export function computeEV(scenarios, options) {
+  const sc = (scenarios || []).map((s) => ({ prob: num(s.prob) ?? 0 }));
+  const opts = options || [];
+  if (!opts.length || !sc.length) return [];
+  const psum = sc.reduce((a, s) => a + s.prob, 0) || 1;
+  const probs = sc.map((s) => s.prob / psum);
+  const rows = opts.map((o) => {
+    const pays = sc.map((s, i) => num(o.payoffs?.[i]) ?? 0);
+    return { name: o.name || '(option)', pays, ev: pays.reduce((a, p, i) => a + probs[i] * p, 0), min: Math.min(...pays) };
+  });
+  const colMax = sc.map((s, j) => Math.max(...rows.map((o) => o.pays[j])));
+  rows.forEach((o) => { o.maxRegret = Math.max(...o.pays.map((p, j) => colMax[j] - p)); });
+  return rows.map((o) => ({ name: o.name, ev: o.ev, min: o.min, maxRegret: o.maxRegret }));
+}
+
+/** Fold-back (rollback) one decision-tree node: terminal → payoff; chance →
+ * probability-weighted average of children (probs normalised); decision → max
+ * child, recording which (`choice`). */
+function rollTree(node) {
+  if (!node) return { value: 0, choice: null };
+  if (node.kind === 'terminal') return { value: num(node.payoff) ?? 0, choice: null };
+  const kids = node.children || [];
+  if (!kids.length) return { value: num(node.payoff) ?? 0, choice: null };
+  if (node.kind === 'chance') {
+    const psum = kids.reduce((a, k) => a + (num(k.prob) ?? 0), 0) || 1;
+    const value = kids.reduce((a, k) => a + ((num(k.prob) ?? 0) / psum) * rollTree(k).value, 0);
+    return { value, choice: null };
+  }
+  let choice = -1, best = -Infinity;
+  kids.forEach((k, i) => { const v = rollTree(k).value; if (v > best) { best = v; choice = i; } });
+  return { value: best, choice };
+}
+
+/** Decision-tree expected value + the optimal choice at the root. Exported for tests. */
+export function computeTree(root) {
+  return rollTree(root);
+}
+
+/** Render a decision tree as an SVG (left→right): ▢ decision, ○ chance, △ terminal;
+ * each node labelled with its folded-back value, chance edges with probabilities,
+ * the optimal decision branch bolded green. */
+function treeSvg(root) {
+  if (!root) return null;
+  const dx = 150, dy = 44, padX = 24, padY = 18;
+  const pos = new Map();
+  let leaf = 0;
+  const layout = (node, depth) => {
+    const kids = node.kind !== 'terminal' ? (node.children || []) : [];
+    let y;
+    if (!kids.length) { y = padY + leaf * dy + dy / 2; leaf++; }
+    else { const ys = kids.map((k) => layout(k, depth + 1)); y = (ys[0] + ys[ys.length - 1]) / 2; }
+    pos.set(node, { x: padX + depth * dx, y, depth });
+    return y;
+  };
+  layout(root, 0);
+  const depths = [...pos.values()].map((p) => p.depth);
+  const W = padX * 2 + Math.max(0, ...depths) * dx + 140;
+  const H = padY * 2 + (leaf || 1) * dy;
+  const esc = (s) => String(s).replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
+  let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" font-family="system-ui,sans-serif" font-size="11">`;
+  s += `<rect width="${W}" height="${H}" fill="#fff"/>`;
+  const edges = (node) => {
+    if (node.kind === 'terminal') return;
+    const pp = pos.get(node); const r = rollTree(node);
+    (node.children || []).forEach((k, i) => {
+      const cp = pos.get(k); if (!cp) return;
+      const chosen = node.kind === 'decision' && i === r.choice;
+      s += `<line x1="${(pp.x + 9).toFixed(1)}" y1="${pp.y.toFixed(1)}" x2="${cp.x.toFixed(1)}" y2="${cp.y.toFixed(1)}" stroke="${chosen ? '#2e7d32' : '#a8b0ba'}" stroke-width="${chosen ? 2.5 : 1}"/>`;
+      if (node.kind === 'chance' && k.prob != null && k.prob !== '') s += `<text x="${((pp.x + cp.x) / 2).toFixed(1)}" y="${((pp.y + cp.y) / 2 - 3).toFixed(1)}" fill="#7a8590">p=${esc(k.prob)}</text>`;
+      edges(k);
+    });
+  };
+  edges(root);
+  for (const [node, p] of pos) {
+    const r = rollTree(node);
+    if (node.kind === 'decision') s += `<rect x="${(p.x - 8).toFixed(1)}" y="${(p.y - 8).toFixed(1)}" width="16" height="16" fill="#2f6fb0"/>`;
+    else if (node.kind === 'chance') s += `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="8" fill="#e0a52e"/>`;
+    else s += `<path d="M${(p.x - 8).toFixed(1)} ${(p.y - 8).toFixed(1)} L${(p.x - 8).toFixed(1)} ${(p.y + 8).toFixed(1)} L${(p.x + 8).toFixed(1)} ${p.y.toFixed(1)} Z" fill="#555"/>`;
+    const label = node.label ? esc(node.label) + ' ' : '';
+    const val = node.kind === 'terminal' ? fmt(num(node.payoff) ?? 0) : fmt(r.value);
+    s += `<text x="${(p.x + 12).toFixed(1)}" y="${(p.y + 4).toFixed(1)}" fill="#1a1a1a">${label}<tspan fill="#2f6fb0">${val}</tspan></text>`;
+  }
+  return s + '</svg>';
+}
+
 /** A tiny cost-effectiveness plane (cost vs effect scatter), as an SVG string. */
 function cePlaneSvg(res) {
   const pts = res.filter((r) => r.cost != null && r.effect != null);
@@ -285,9 +547,12 @@ function normalizeState(raw) {
   const s = raw && typeof raw === 'object' ? raw : {};
   const icer = s.icer && typeof s.icer === 'object' ? s.icer : {};
   const matrix = s.matrix && typeof s.matrix === 'object' ? s.matrix : {};
+  const npv = s.npv && typeof s.npv === 'object' ? s.npv : {};
+  const ev = s.ev && typeof s.ev === 'object' ? s.ev : {};
+  const tree = s.tree && typeof s.tree === 'object' ? s.tree : {};
   return {
     version: 1,
-    tool: s.tool === 'matrix' ? 'matrix' : 'icer',
+    tool: ['icer', 'matrix', 'npv', 'ev', 'tree'].includes(s.tool) ? s.tool : 'icer',
     icer: {
       wtp: num(icer.wtp) ?? 50000,
       rows: Array.isArray(icer.rows) && icer.rows.length
@@ -301,6 +566,30 @@ function normalizeState(raw) {
       options: Array.isArray(matrix.options) && matrix.options.length
         ? matrix.options.map((o) => ({ name: String(o.name ?? ''), scores: Array.isArray(o.scores) ? o.scores.slice() : [] }))
         : [{ name: 'Option A', scores: [] }, { name: 'Option B', scores: [] }],
+    },
+    npv: {
+      rate: num(npv.rate) ?? 5,
+      rows: Array.isArray(npv.rows) && npv.rows.length
+        ? npv.rows.map((r) => ({ cost: r.cost ?? '', benefit: r.benefit ?? '' }))
+        : [{ cost: 1000, benefit: 0 }, { cost: 0, benefit: 400 }, { cost: 0, benefit: 400 }, { cost: 0, benefit: 400 }],
+    },
+    ev: {
+      scenarios: Array.isArray(ev.scenarios) && ev.scenarios.length
+        ? ev.scenarios.map((x) => ({ name: String(x.name ?? ''), prob: x.prob ?? '' }))
+        : [{ name: 'Good', prob: 0.5 }, { name: 'Bad', prob: 0.5 }],
+      options: Array.isArray(ev.options) && ev.options.length
+        ? ev.options.map((o) => ({ name: String(o.name ?? ''), payoffs: Array.isArray(o.payoffs) ? o.payoffs.slice() : [] }))
+        : [{ name: 'Invest', payoffs: [] }, { name: 'Hold', payoffs: [] }],
+    },
+    tree: {
+      root: tree.root && typeof tree.root === 'object'
+        ? tree.root
+        : {
+            id: uid(), kind: 'decision', label: 'Decision', payoff: 0, prob: '', children: [
+              { id: uid(), kind: 'terminal', label: 'Option A', payoff: 100, prob: '', children: [] },
+              { id: uid(), kind: 'terminal', label: 'Option B', payoff: 80, prob: '', children: [] },
+            ],
+          },
     },
   };
 }
