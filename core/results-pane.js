@@ -149,11 +149,6 @@ export class ResultsPane {
    */
   #model = [];
 
-  /** A transient "restored from last save" note (DOM-only, not in #model); removed
-   * the moment fresh output is appended, so stale output is flagged but new runs
-   * read clean. */
-  #restoredNote = null;
-
   /**
    * @param {HTMLElement} host - The element to attach the shadow root to.
    * @param {{bus?: import('./event-bus.js').EventBus}} [opts]
@@ -442,13 +437,17 @@ export class ResultsPane {
         this.#model.push({ kind: 'error', message: item.message || '' });
       }
     }
-    // A subtle, transient marker so restored output isn't mistaken for fresh
-    // (it's a snapshot — if the data changed since, re-run to refresh).
-    const note = document.createElement('div');
-    note.textContent = '↻ Restored from your last save — re-run analyses to refresh.';
-    note.style.cssText = 'font-size:12px;color:#7a8590;font-style:italic;padding:6px 12px;border-bottom:1px solid #eef0f2;';
-    this.#content.prepend(note);
-    this.#restoredNote = note;
+    // A divider at the BOTTOM of the restored output: everything above it is from
+    // the last save; results you run this session append below it, so live work is
+    // always distinguishable from the restored snapshot. It persists until the next
+    // save+reload — which restores everything above a fresh divider (the line moves
+    // down past it).
+    const divider = document.createElement('div');
+    divider.dataset.restoreDivider = 'true';
+    divider.textContent = '↑ above: restored from your last save · new results appear below';
+    divider.style.cssText =
+      'text-align:center;font-size:12px;color:#7a8590;font-style:italic;margin:16px 12px 4px;padding-top:10px;border-top:1px dashed #c8d0d8;';
+    this.#content.append(divider);
   }
 
   /** The canonical results stylesheet, so an HTML export can reproduce the look
@@ -510,8 +509,6 @@ export class ResultsPane {
    * section on first use, or appending at top level if there is none. */
   #place(block) {
     this.#clearEmptyState();
-    // Fresh output supersedes a restored snapshot — drop the "restored" note.
-    if (this.#restoredNote) { this.#restoredNote.remove(); this.#restoredNote = null; }
     if (!this.#currentSection && this.#pendingSection) {
       this.#currentSection = this.#createSection(this.#pendingSection);
       this.#pendingSection = null;
