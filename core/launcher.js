@@ -306,18 +306,26 @@ export class Launcher {
     startBtn.disabled = true;
     startBtn.textContent = 'Starting…';
     try {
-      await this.#applySelection(this.#selected);
       if (this.#pendingProject && this.#projects) {
-        // Open the chosen project's data. Its plugins are already applied from the
-        // picker (authoritative), so skip the project's own plugin restore.
+        // Open the chosen project's data + workspace state FIRST, *then* apply the
+        // picker's selection. Order matters: applying the selection mounts workspace
+        // tabs, and a workspace plugin reads its state on mount — so the workspace
+        // store must already be hydrated, or it mounts empty and its first autosave
+        // clobbers the restored blob (the CAQDAS codebook-loss bug). The picker's
+        // plugin set is still authoritative (applied last); the project's own plugin
+        // restore is skipped.
         await this.#projects.openProject(this.#pendingProject.id, { applyPlugins: false });
-      } else if (this.#pendingSource || !reopen) {
-        // Loading a fresh data source (Demo/Blank). On reopen, FIRST detach into a
-        // new project — otherwise setDataset mutates the currently-open project's
-        // active dataset and autosave overwrites it (clobbering a saved project).
-        // The chosen data then becomes a new autosaving "Untitled project".
-        if (reopen) await this.#projects?.newProject?.();
-        await this.#loadSource(this.#pendingSource || 'blank');
+        await this.#applySelection(this.#selected);
+      } else {
+        await this.#applySelection(this.#selected);
+        if (this.#pendingSource || !reopen) {
+          // Loading a fresh data source (Demo/Blank). On reopen, FIRST detach into a
+          // new project — otherwise setDataset mutates the currently-open project's
+          // active dataset and autosave overwrites it (clobbering a saved project).
+          // The chosen data then becomes a new autosaving "Untitled project".
+          if (reopen) await this.#projects?.newProject?.();
+          await this.#loadSource(this.#pendingSource || 'blank');
+        }
       }
       markSeen();
     } catch (err) {

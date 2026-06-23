@@ -62,10 +62,7 @@ export class WorkspaceManager {
     for (const [id, { plugin, ws }] of wanted) {
       if (!this.#mounted.has(id)) {
         // eslint-disable-next-line no-await-in-loop -- mounts are rare + serial.
-        await this.#mount(plugin, ws).catch((e) => {
-          this.#teardown(id); // leave no half-mounted tab on failure
-          this.#onError(new Error(`workspace "${ws.id}" failed to mount: ${e.message}`));
-        });
+        await this.#mount(plugin, ws); // never throws: shows its own retry overlay on failure
       }
     }
   }
@@ -89,21 +86,39 @@ export class WorkspaceManager {
     const title = ws.title || ws.id;
 
     const pane = document.createElement('div');
-    pane.style.cssText = 'height:100%;min-height:420px;';
-    const iframe = document.createElement('iframe');
-    // allow-scripts ONLY — same opaque-origin sandbox as a compute plugin, just
-    // visible. No allow-same-origin (heap isolation), no forms/popups.
-    iframe.setAttribute('sandbox', 'allow-scripts');
-    iframe.setAttribute('title', `workspace: ${title}`);
-    iframe.style.cssText = 'width:100%;height:100%;min-height:420px;border:0;display:block;';
+    pane.style.cssText = 'position:relative;height:100%;min-height:420px;';
+    const iframe = makeIframe(title);
     pane.append(iframe);
+    // A loading overlay covers the iframe during the handshake. It both signals
+    // "not ready yet" and BLOCKS interaction — the 20s sandbox-ready window is long
+    // enough for a user to click into a half-mounted workspace, which is what made
+    // it feel like a crash. Removed on success; swapped for a retry prompt on failure.
+    const overlay = makeOverlay();
+    pane.append(overlay);
     this.#tabs.addTab({ view, title, pane });
 
     // Reserve the slot before the async handshake so a concurrent reconcile can't
-    // double-mount; fill in the broker once built.
-    const entry = { view, iframe, broker: null, pluginId: plugin.id };
+    // double-mount; KEEP it even if the handshake fails (the tab stays, showing a
+    // retry overlay) so a transient sandbox timeout never silently deletes a
+    // workspace and its unsaved-looking state.
+    const entry = { view, iframe, broker: null, pluginId: plugin.id, pane, ws, plugin };
     this.#mounted.set(ws.id, entry);
 
+    await this.#handshake(entry).then(
+      () => overlay.remove(),
+      (e) => {
+        showRetryOverlay(overlay, () => void this.#retry(ws.id));
+        this.#onError(new Error(`workspace "${ws.id}" failed to mount: ${e.message}`));
+      },
+    );
+  }
+
+  /** Build the broker and run the load → activate → mount handshake into
+   * `entry.iframe`. Rejects if the sandbox doesn't become ready in time (caught by
+   * the caller, which shows a retry overlay rather than tearing the tab down). */
+  async #handshake(entry) {
+    const { plugin, ws, iframe } = entry;
+    const title = ws.title || ws.id;
     const services = {
       ...this.#services,
       // state.get/set scoped to THIS workspace id (the host is the source of truth).
@@ -132,6 +147,30 @@ export class WorkspaceManager {
     await broker.sendMountWorkspace(identity, { id: ws.id, title });
   }
 
+  /** Re-run a failed/timed-out mount in place: dispose the dead broker + iframe,
+   * build a fresh iframe in the SAME pane, and redo the handshake behind a loading
+   * overlay. The tab and the workspace's stored state are untouched, so this is a
+   * safe "try again" (the data was never lost — the sandbox just didn't come up). */
+  async #retry(id) {
+    const entry = this.#mounted.get(id);
+    if (!entry) return;
+    try { entry.broker?.dispose(); } catch { /* ignore */ }
+    try { entry.iframe?.remove(); } catch { /* ignore */ }
+    entry.pane.querySelectorAll('.ws-overlay').forEach((o) => o.remove());
+    const iframe = makeIframe(entry.ws.title || entry.ws.id);
+    entry.iframe = iframe;
+    entry.broker = null;
+    const overlay = makeOverlay();
+    entry.pane.append(iframe, overlay);
+    await this.#handshake(entry).then(
+      () => overlay.remove(),
+      (e) => {
+        showRetryOverlay(overlay, () => void this.#retry(id));
+        this.#onError(new Error(`workspace "${entry.ws.id}" failed to mount: ${e.message}`));
+      },
+    );
+  }
+
   #teardown(id) {
     const entry = this.#mounted.get(id);
     if (!entry) return;
@@ -156,4 +195,62 @@ async function fetchSource(url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`source fetch failed (${res.status})`);
   return res.text();
+}
+
+/** A visible, sandboxed (allow-scripts only — opaque origin, heap-isolated, no
+ * forms/popups) iframe for a workspace pane. */
+function makeIframe(title) {
+  const iframe = document.createElement('iframe');
+  iframe.setAttribute('sandbox', 'allow-scripts');
+  iframe.setAttribute('title', `workspace: ${title}`);
+  iframe.style.cssText = 'width:100%;height:100%;min-height:420px;border:0;display:block;';
+  return iframe;
+}
+
+/** A full-pane overlay (spinner + "Loading…") shown during the mount handshake. It
+ * sits above the iframe and intercepts clicks, so the workspace can't be used until
+ * it's actually ready. */
+function makeOverlay() {
+  ensureSpinKeyframes();
+  const o = document.createElement('div');
+  o.className = 'ws-overlay';
+  o.style.cssText =
+    'position:absolute;inset:0;z-index:5;display:flex;flex-direction:column;gap:12px;' +
+    'align-items:center;justify-content:center;background:var(--bg,#f7f8fa);color:#5a6470;font:inherit;';
+  const spin = document.createElement('div');
+  spin.style.cssText =
+    'width:28px;height:28px;border:3px solid #c8d0d8;border-top-color:var(--accent,#2980b9);' +
+    'border-radius:50%;animation:ws-spin .8s linear infinite;';
+  const msg = document.createElement('div');
+  msg.textContent = 'Loading workspace…';
+  o.append(spin, msg);
+  return o;
+}
+
+/** Convert a loading overlay into a failure prompt with a "Reload" button. Keeps
+ * the tab and the stored state intact — the user can retry without losing data. */
+function showRetryOverlay(overlay, onRetry) {
+  overlay.replaceChildren();
+  const msg = document.createElement('div');
+  msg.style.cssText = 'max-width:440px;text-align:center;line-height:1.5;padding:0 16px;';
+  msg.textContent =
+    'This workspace didn’t finish loading (the sandbox timed out). Your saved data is safe — reload to try again.';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.textContent = 'Reload workspace';
+  btn.style.cssText =
+    'font:inherit;padding:8px 16px;border-radius:6px;border:1px solid var(--accent,#2980b9);' +
+    'background:var(--accent,#2980b9);color:#fff;cursor:pointer;';
+  btn.addEventListener('click', () => onRetry());
+  overlay.append(msg, btn);
+}
+
+let spinInjected = false;
+/** Inject the @keyframes the loading spinner uses, once. */
+function ensureSpinKeyframes() {
+  if (spinInjected) return;
+  spinInjected = true;
+  const s = document.createElement('style');
+  s.textContent = '@keyframes ws-spin { to { transform: rotate(360deg); } }';
+  document.head.append(s);
 }

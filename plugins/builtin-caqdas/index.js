@@ -201,7 +201,12 @@ export const workspace = {
       const guess = meta
         .map((m) => m.name)
         .find((n) => n !== state.textColumn && /^(document|source|file|filename|doc|id|name|participant|case|respondent|speaker)$/i.test(n));
-      if (guess) { state.labelColumn = guess; save(); }
+      // Set the guess in memory only — DON'T save() during mount. A mount-time write
+      // is what let a workspace that mounted before its state was hydrated persist an
+      // empty default over the real codebook. The guess is deterministic, so it's
+      // re-derived on the next mount; it gets persisted the moment the user actually
+      // changes anything (paints a code, edits the column, …).
+      if (guess) state.labelColumn = guess;
     }
     if (state.labelColumn && meta.some((m) => m.name === state.labelColumn)) labelSel.value = state.labelColumn;
 
