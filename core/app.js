@@ -428,9 +428,15 @@ export async function boot(mounts) {
     // is fine — and they no-op gracefully until then.
     getActivePlugins: () => (plugins ? plugins.activeKeys() : null),
     applyActivePlugins: (keys) => (plugins ? plugins.applyActiveSet(keys) : Promise.resolve()),
-    // A project also remembers each plugin workspace's state blob.
+    // A project also remembers each plugin workspace's state blob. After swapping in
+    // the new project's blobs, force-remount any live workspace tabs so they re-read
+    // their state — a plugin active in both the old and new project stays mounted, so
+    // reconcile() alone wouldn't refresh it and it would keep showing stale data.
     getWorkspaces: () => workspaceStore.export(),
-    applyWorkspaces: (obj) => workspaceStore.import(obj),
+    applyWorkspaces: (obj) => {
+      workspaceStore.import(obj);
+      if (workspaceManager && plugins) void workspaceManager.remountActive(plugins.list());
+    },
     // …and the Output tab's results, so reopening shows them (and switching
     // projects clears/reloads output instead of leaving the previous one's).
     getOutput: () => results.getModel(),

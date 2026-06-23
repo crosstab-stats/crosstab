@@ -70,6 +70,20 @@ export class WorkspaceManager {
     }
   }
 
+  /**
+   * Tear down every mounted workspace and mount the wanted set fresh. Use this when
+   * the underlying state was replaced wholesale — e.g. switching projects, where a
+   * workspace plugin stays active (so {@link reconcile} sees no change) but its blob
+   * is now a different project's. A plain re-render in place would leak the old
+   * iframe's document-level listeners, so we recreate the iframe outright.
+   *
+   * @param {Array<{id, loaded, url, workspaces?}>} pluginList - From PluginManager#list().
+   */
+  async remountActive(pluginList) {
+    for (const id of [...this.#mounted.keys()]) this.#teardown(id);
+    await this.reconcile(pluginList);
+  }
+
   async #mount(plugin, ws) {
     const view = `ws:${ws.id}`;
     const title = ws.title || ws.id;
