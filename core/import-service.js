@@ -81,12 +81,6 @@ export class ImportService {
   /** WebRManager, for host-side staging of large uploads. @type {?import('./webr-manager.js').WebRManager} */
   #webr;
 
-  /** ReadStatManager, for streaming SPSS/Stata/SAS imports. @type {?import('./readstat-manager.js').ReadStatManager} */
-  #readstat;
-
-  /** UiService, for the pre-import variable picker. @type {?import('./ui-service.js').UiService} */
-  #ui;
-
   /** id → spec. @type {Map<string, ImporterSpec>} */
   #importers = new Map();
 
@@ -108,19 +102,13 @@ export class ImportService {
    * @param {import('./event-bus.js').EventBus} deps.bus
    * @param {import('./webr-manager.js').WebRManager} [deps.webr] - For staging
    *   large uploads host-side (see the `stage` importer option).
-   * @param {import('./readstat-manager.js').ReadStatManager} [deps.readstat] - For
-   *   streaming SPSS/Stata/SAS imports (see {@link ImportService#registerStreaming}).
-   * @param {import('./ui-service.js').UiService} [deps.ui] - For the pre-import
-   *   variable picker (a `pick` streaming importer).
    */
-  constructor({ menus, data, results, bus, webr, readstat, ui }) {
+  constructor({ menus, data, results, bus, webr }) {
     this.#menus = menus;
     this.#data = data;
     this.#results = results;
     this.#bus = bus;
     this.#webr = webr ?? null;
-    this.#readstat = readstat ?? null;
-    this.#ui = ui ?? null;
   }
 
   /**
@@ -150,39 +138,8 @@ export class ImportService {
   }
 
   /**
-   * Register a **streaming** importer (host-side, e.g. ReadStat for SPSS/Stata/SAS).
-   * Unlike {@link ImportService#register}, this doesn't go through the plugin
-   * deliver/`{variables,columns}` contract — it can't, because the whole point is
-   * to never hold the dataset in memory. Instead it streams the file's rows
-   * straight into the active dataset via {@link DataStore#loadStreaming}, in
-   * batches. The engine still owns the menu entry, the file picker, and the commit.
-   *
-   * @param {Object} spec
-   * @param {string} spec.label - Menu label.
-   * @param {string[]} spec.extensions - Accepted extensions (picker filter).
-   * @param {(name: string) => (string|null)} spec.formatFor - Map a file name to a
-   *   format key the ReadStat manager understands (or null if unsupported).
-   * @param {string} [spec.id]
-   * @param {number} [spec.order]
-   * @param {boolean} [spec.multiple]
-   * @returns {() => void} disposer
-   */
-  registerStreaming(spec) {
-    if (!spec || typeof spec.formatFor !== 'function' || !Array.isArray(spec.extensions)) {
-      throw new TypeError('registerStreaming: `extensions` and `formatFor` are required');
-    }
-    const id = spec.id ?? spec.label;
-    this.#importers.set(id, { ...spec, streaming: true });
-    this.#ensureMenu();
-    return () => {
-      this.#importers.delete(id);
-      this.#refreshMenu();
-    };
-  }
-
-  /**
-   * Register a **streaming codec** importer (#98). Like {@link registerStreaming},
-   * it streams batches straight into the dataset — but the source is a generic
+   * Register a **streaming codec** importer (#98). It streams batches straight into
+   * the dataset — the source is a generic
    * `ingest(file, ctx)` callback (a sandboxed plugin codec driving the pump),
    * rather than the host ReadStat worker. The engine still owns the menu, picker,
    * and commit.
@@ -305,108 +262,14 @@ export class ImportService {
       await this.#importFiles(spec, files, 'replace', id);
       return;
     }
-    // Join needs inline columns to preview matches; a streaming importer delivers
+    // Join needs inline columns to preview matches; a streaming codec delivers
     // none, so it offers only replace/append.
-    const mode = await askMode(files.length, files.length === 1 && !spec.streaming && !spec.codec);
+    const mode = await askMode(files.length, files.length === 1 && !spec.codec);
     if (!mode) return; // cancelled
     if (mode === 'join') {
       await this.#importJoin(spec, files[0], id);
     } else {
       await this.#importFiles(spec, files, mode, id);
-    }
-  }
-
-  /**
-   * Stream each file straight into the active dataset (no in-memory dataset). The
-   * first file of a Replace creates the table; the rest append. Mirrors the
-   * provenance-tagging rules of {@link ImportService#importFiles}.
-   */
-  async #importStreamingFiles(spec, files, mode, id) {
-    let committed = 0;
-    for (const file of files) {
-      const format = spec.formatFor(file.name);
-      if (!format) {
-        this.#results.appendError(`Import: "${file.name}" isn't a supported SPSS/Stata/SAS file.`);
-        continue;
-      }
-
-      // `selected` = a chosen subset of columns (null = all). `wide` = import the
-      // whole file out-of-core (one Parquet file). `cat` = the file's catalog.
-      let selected = null;
-      let wide = false;
-      let cat = null;
-
-      if (spec.pick) {
-        // Explicit "choose variables" importer: catalog, then pick a subset.
-        cat = await this.#catalogOrError(file, format);
-        if (!cat) continue;
-        selected = await this.#pickVariables(file.name, cat);
-        if (!selected || selected.length === 0) continue;
-      } else {
-        // "Import all": small files go into a DuckDB table (snappy). Large files
-        // can't — DuckDB-WASM's store can't accumulate much past ~600 MB — so they
-        // import out-of-core to a single Parquet file read in place. This is a
-        // lossless full import either way (the storage choice is just an
-        // implementation detail), so it's automatic: no prompt. Users who want a
-        // subset use the "choose variables" importer.
-        cat = await this.#catalogOrError(file, format);
-        if (!cat) continue;
-        const rows = cat.rowCount >= 0 ? cat.rowCount : 100000;
-        const estParts = Math.ceil((cat.varCount * rows) / 4_000_000);
-        if (estParts > 8) wide = true;
-      }
-
-      const fileMode = mode === 'replace' && committed === 0 ? 'replace' : 'append';
-      const tag = mode === 'replace' && files.length === 1 ? undefined : baseName(file.name);
-      const progress = this.#progressEmitter(file.name, cat.rowCount);
-      this.#bus.emit('import:started', { importer: id, file: file.name });
-      try {
-        if (wide) {
-          // One streaming pass, encoded to a single out-of-core Parquet file (the
-          // only path that handles the full GSS without OOMing DuckDB's write side).
-          await this.#data.loadWide({
-            mode: fileMode,
-            source: tag,
-            variables: cat.variables,
-            rowCount: cat.rowCount,
-            onProgress: (done) => progress(done),
-            stream: (onBatch) =>
-              this.#readstat.stream(file, format, { onVariables: () => {}, onBatch }),
-          });
-        } else {
-          let seen = 0;
-          await this.#data.loadStreaming({
-            mode: fileMode,
-            source: tag,
-            ingest: async (ctx) => {
-              await this.#readstat.stream(file, format, {
-                variables: selected, // null = all columns (moderate whole import)
-                onVariables: (variables, storageTypes) => ctx.begin(variables, storageTypes),
-                onBatch: (columns) => {
-                  const k = Object.keys(columns)[0];
-                  seen += k ? columns[k].length : 0;
-                  progress(seen);
-                  return ctx.batch(columns);
-                },
-              });
-            },
-          });
-        }
-        committed += 1;
-      } catch (err) {
-        this.#results.appendError(`Import of "${file.name}" failed: ${err.message}`);
-        console.error('[import]', err);
-      } finally {
-        this.#bus.emit('import:ended', { importer: id, file: file.name });
-      }
-    }
-    if (committed > 0) {
-      this.#bus.emit('import:finished', {
-        importer: id,
-        files: files.length,
-        committed,
-        rowCount: this.#data.rowCount,
-      });
     }
   }
 
@@ -484,39 +347,12 @@ export class ImportService {
     };
   }
 
-  /** Read a file's variable catalog, reporting any error to the results pane. */
-  async #catalogOrError(file, format) {
-    try {
-      return await this.#readstat.catalog(file, format);
-    } catch (err) {
-      this.#results.appendError(`Could not read "${file.name}": ${err.message}`);
-      return null;
-    }
-  }
-
-  /** Show the searchable variable picker over a catalog; resolves to chosen names
-   * (or null/empty if cancelled). */
-  #pickVariables(name, cat) {
-    return this.#ui.selectFromList({
-      title: `Choose variables — ${name}`,
-      hint:
-        `${cat.varCount.toLocaleString()} variables` +
-        (cat.rowCount >= 0 ? ` · ${cat.rowCount.toLocaleString()} rows` : '') +
-        '. Pick the ones to import (search to filter).',
-      items: cat.variables.map((v) => ({ value: v.name, label: v.label ? `${v.label} (${v.name})` : v.name })),
-      multiple: true,
-      okLabel: 'Import selected',
-      searchPlaceholder: 'Filter by name or label…',
-    });
-  }
-
   /**
    * Parse each file and commit it — the first of a Replace creates the table,
    * everything else stacks (append). Used for replace/append (not join).
    */
   async #importFiles(spec, files, mode, id) {
     if (spec.codec) return this.#importCodecFiles(spec, files, mode, id);
-    if (spec.streaming) return this.#importStreamingFiles(spec, files, mode, id);
     let committed = 0;
     for (const file of files) {
       try {

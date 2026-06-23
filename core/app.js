@@ -264,7 +264,7 @@ export async function boot(mounts) {
   const results = new ResultsPane(mounts.results, { bus });
   const menus = new MenuShell(mounts.menubar);
   const ui = new UiService(datasets);
-  const importers = new ImportService({ menus, data: datasets, results: results.api, bus, webr, ui });
+  const importers = new ImportService({ menus, data: datasets, results: results.api, bus, webr });
   // SPSS / Stata / SAS import + export are now a sandboxed codec plugin
   // (plugins/builtin-readstat-codec, #98 Phase 2): same ReadStat-WASM, streaming,
   // but format logic runs in the codec sandbox while the host keeps the picker,
