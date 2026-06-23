@@ -60,7 +60,29 @@
         /** The `app` proxy handed to the plugin, built once on 'activate'. */
         let app = null;
 
-        const post = (m) => parentWin.postMessage({ __crosstab: PROTOCOL, ...m }, '*');
+        // Post a message to the host, TRANSFERRING any ArrayBuffers in it (zero-copy)
+        // rather than structured-cloning. This matters for bulk plugin→host data — a
+        // codec's row batches carry large numeric column buffers, and cloning each
+        // batch churns memory hard on wide files (e.g. the ~7k-column GSS). Transfer
+        // neuters the buffer on this side, which is safe because everything posted out
+        // is handed off, never reused. (Blobs/Files aren't transferable; they already
+        // clone by reference cheaply.)
+        const post = (m) => {
+          const msg = { __crosstab: PROTOCOL, ...m };
+          parentWin.postMessage(msg, '*', collectTransferables(msg));
+        };
+
+        /** The distinct ArrayBuffers reachable in `value`, for postMessage's transfer
+         * list (deduped — two views can share one buffer). */
+        function collectTransferables(value, out = [], seen = new Set()) {
+          if (!value || typeof value !== 'object') return out;
+          if (value instanceof ArrayBuffer) { if (!seen.has(value)) { seen.add(value); out.push(value); } return out; }
+          if (ArrayBuffer.isView(value)) { const b = value.buffer; if (!seen.has(b)) { seen.add(b); out.push(b); } return out; }
+          if (value instanceof Blob) return out; // not transferable
+          if (Array.isArray(value)) { for (const v of value) collectTransferables(v, out, seen); return out; }
+          for (const k of Object.keys(value)) collectTransferables(value[k], out, seen);
+          return out;
+        }
 
         // --- RPC client --------------------------------------------------------
 
