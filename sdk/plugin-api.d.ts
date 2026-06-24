@@ -99,28 +99,6 @@ export interface DataApi {
     parquet?: Uint8Array;
     activate?: boolean;
   }): Promise<number>;
-  /** Subscribe to dataset replacement/mutation. Resolves to an unsubscribe fn. */
-  onDataChanged(fn: (summary: { rowCount: number; variables: string[] }) => void): Promise<Disposer>;
-  /** Subscribe to selection changes. Resolves to an unsubscribe fn. */
-  onSelectionChanged(fn: (names: string[]) => void): Promise<Disposer>;
-}
-
-/**
- * The dataset **write** surface (`app.transform`) — kept separate from the
- * read-only {@link DataApi}. Lets a plugin apply transforms programmatically;
- * e.g. an auto-recode plugin reads `data.getVariableMeta()`, decides, then calls
- * `transform.updateVariable` per variable. Mutations are mediated by the engine
- * and broadcast a data-changed event, so the grid/analyses update.
- */
-export interface TransformApi {
-  /**
-   * Change one variable's metadata: `label`, `type`, `measurementLevel`,
-   * `valueLabels`, and/or `missingValues`. Non-destructive (the data is not
-   * rewritten) — except re-typing **to `'numeric'`**, which casts the column so
-   * numeric analyses receive numbers. Designating missing follows the SPSS model:
-   * the codes stay in the data and analyses honour `missingValues`.
-   */
-  updateVariable(name: string, patch: Partial<VariableMeta>): Promise<void>;
 }
 
 /** Options for {@link ResultsApi.appendPlot}. */
@@ -135,8 +113,13 @@ export interface AppendPlotOptions {
 /** Append-style output into the results pane. Fragments should be pre-rendered
  * and SPSS-like; the pane sanitises and styles them. */
 export interface ResultsApi {
-  /** Start a titled section; later appends nest under it. */
-  beginSection(title: string): Promise<void>;
+  /** Open a titled, **host-attributed** output section for plugin-driven output
+   * (e.g. a workspace's own buttons); the host stamps attribution so a plugin can't
+   * mislabel its output. Pair with {@link ResultsApi.endAnalysis}. Declarative
+   * `menu` actions get their section opened automatically, so they don't call this. */
+  beginAnalysis(title: string): Promise<void>;
+  /** Close the section opened by {@link ResultsApi.beginAnalysis}. */
+  endAnalysis(): Promise<void>;
   /** Append a pre-rendered HTML table (or fragment). Sanitised by the host. */
   appendTable(htmlString: string): Promise<void>;
   /** Append a plot as an SVG string. Sanitised by the host. Resolves to a *handle*
@@ -152,8 +135,6 @@ export interface ResultsApi {
   appendText(markdown: string): Promise<void>;
   /** Append an error block. */
   appendError(message: string): Promise<void>;
-  /** Clear all output. */
-  clear(): Promise<void>;
   /** The current Output result model (the ordered blocks: sections/tables/plots/
    * text/errors) — e.g. for an output exporter to render to HTML/Word. */
   getModel(): Promise<object[]>;
@@ -207,25 +188,6 @@ export interface WebrApi {
   mountFile(file: Blob, name?: string): Promise<string>;
   /** Unmount a path previously returned by {@link WebrApi.mountFile}. */
   unmount(path: string): Promise<void>;
-}
-
-/** A menu entry contributed by a plugin. */
-export interface MenuItem {
-  /** Menu hierarchy, top-level first, e.g. `["Analyze", "Regression"]`. */
-  path: string[];
-  /** Visible item text, e.g. `"Linear…"`. */
-  label: string;
-  /** Invoked when chosen (runs in the plugin sandbox). */
-  command: () => void;
-  /** Stable id; re-registering the same id replaces the item. */
-  id?: string;
-  /** Sort weight within its submenu (lower first). Default 100. */
-  order?: number;
-}
-
-/** Register menu entries. Resolves to a disposer (also auto-run on unload). */
-export interface MenusApi {
-  register(item: MenuItem): Promise<Disposer>;
 }
 
 /** Options for {@link UiApi.selectVariables}. */
@@ -312,62 +274,25 @@ export interface ImportedDataset {
   parquet?: Uint8Array;
 }
 
-/** The request the engine passes to an importer's {@link Importer.parse}. For a
- * `"web"` importer only `ticket` is present (there is no file). */
+/** The argument the engine passes to a declarative importer's `parse(app, req)`
+ * function (`manifest.imports[].parse`). The function returns an
+ * {@link ImportedDataset}; the host commits it. */
 export interface ImportRequest {
-  /** Opaque token identifying this import; pass it back to `deliver`. */
-  ticket: number;
   /** The chosen file's name (use it to pick a delimiter, etc.). Absent for a
    * `"web"` importer. */
   name?: string;
   /** The uploaded file as a `File`/`Blob` handle — passed by reference, so even a
    * large upload isn't copied into your sandbox. JS parsers call
-   * `await file.arrayBuffer()`; runtime parsers stage it with
-   * `app.webr.mountFile(file)`. Absent for a `"web"` importer. */
+   * `await file.arrayBuffer()`. Absent for a `"web"` importer. */
   file?: Blob;
+  /** For a `stage` importer: the host-mounted WebR path to the upload (read it in R
+   * directly; the upload is never cloned into the sandbox). In place of `file`. */
+  path?: string;
 }
 
 /** Where an importer's data comes from. `"file"` (default) opens a picker;
  * `"web"` fetches its own bytes (via {@link WebApi}) and gets no file. */
 export type ImporterSource = "file" | "web";
-
-/** An importer registration. */
-export interface Importer {
-  /** Menu label under File ▸ Import, e.g. `"CSV…"`. */
-  label: string;
-  /** Data origin. Default `"file"`. A `"web"` importer opens no file picker;
-   * the engine calls `parse({ ticket })` and the plugin fetches its own data. */
-  source?: ImporterSource;
-  /** File extensions handled, with the dot, e.g. `[".csv"]` or
-   * `[".sav", ".dta", ".sas7bdat"]`. Used for the picker's accept filter.
-   * Required for `"file"` importers; ignored for `"web"`. */
-  extensions?: string[];
-  /** Called by the engine (in your sandbox). For a `"file"` importer you get the
-   * chosen file's bytes; for a `"web"` importer just the `ticket`. Parse/fetch
-   * and call {@link ImportersApi.deliver} with the result. Return value is
-   * ignored — delivery is via `deliver`, so async work is fine. */
-  parse: (request: ImportRequest) => void;
-  /** Stable id (defaults to `label`). */
-  id?: string;
-  /** Sort weight within File ▸ Import (lower first). Default 100. */
-  order?: number;
-  /** (File importers only.) Allow selecting several files at once; they stack
-   * (append) into one pooled dataset, tagged by a `source_file` column. `parse`
-   * is still called once per file. Default false. */
-  multiple?: boolean;
-}
-
-/**
- * File import as an extension point. Register an importer and the engine adds a
- * File ▸ Import menu item, shows the picker, and commits what you deliver — so a
- * third-party format is a first-class citizen, same as the built-in CSV importer.
- */
-export interface ImportersApi {
-  /** Register an importer; resolves to a disposer (also auto-run on unload). */
-  register(importer: Importer): Promise<Disposer>;
-  /** Deliver a parsed dataset for the given request `ticket`. */
-  deliver(ticket: number, dataset: ImportedDataset): Promise<void>;
-}
 
 /** Response from {@link WebApi.get}. */
 export interface WebResponse {
@@ -401,49 +326,6 @@ export interface ExportPayload {
   data: string | Uint8Array | ArrayBuffer;
 }
 
-/** The request the engine passes to an exporter's {@link Exporter.export}. */
-export interface ExportRequest {
-  /** Opaque token identifying this export; pass it back to `deliver`. */
-  ticket: number;
-}
-
-/** An exporter registration — the mirror of {@link Importer}. */
-export interface Exporter {
-  /** Menu label under File ▸ Export, e.g. `"CSV…"`. */
-  label: string;
-  /** Called by the engine (in your sandbox). Read the current data via `app.data`
-   * (it returns the derived, transformed view), format it, and call
-   * {@link ExportersApi.deliver} with the bytes (or `null` to abort). Return value
-   * is ignored — delivery is via `deliver`, so async work is fine. */
-  export: (request: ExportRequest) => void;
-  /** File extensions produced, with the dot, e.g. `[".csv"]`. Informational. */
-  extensions?: string[];
-  /** Stable id (defaults to `label`). */
-  id?: string;
-  /** Sort weight within File ▸ Export (lower first). Default 100. */
-  order?: number;
-}
-
-/**
- * Data export as an extension point — the mirror of {@link ImportersApi}.
- * Register an exporter and the engine adds a File ▸ Export menu item and handles
- * the download of whatever bytes you deliver.
- */
-export interface ExportersApi {
-  /** Register an exporter; resolves to a disposer (also auto-run on unload). */
-  register(exporter: Exporter): Promise<Disposer>;
-  /** Deliver formatted bytes for the given request `ticket` (or `null` to abort). */
-  deliver(ticket: number, payload: ExportPayload | null): Promise<void>;
-}
-
-/** App-wide publish/subscribe. Payloads must be structured-cloneable. */
-export interface EventsApi {
-  /** Subscribe; resolves to an unsubscribe fn (also auto-run on unload). */
-  on(eventName: string, fn: (payload: unknown) => void): Promise<Disposer>;
-  /** Emit an event to the host bus. */
-  emit(eventName: string, payload?: unknown): Promise<void>;
-}
-
 /** Identity of the running plugin, surfaced back to it. */
 export interface PluginIdentity extends PluginManifest {
   /** The engine API version actually in effect. */
@@ -456,16 +338,16 @@ export interface PluginIdentity extends PluginManifest {
  */
 export interface App {
   readonly plugin: PluginIdentity;
+  /** Read the dataset. */
   readonly data: DataApi;
-  readonly transform: TransformApi;
+  /** Write to the Output pane. */
   readonly results: ResultsApi;
+  /** Run R. */
   readonly webr: WebrApi;
-  readonly menus: MenusApi;
+  /** Host-rendered dialogs. */
   readonly ui: UiApi;
-  readonly importers: ImportersApi;
-  readonly exporters: ExportersApi;
+  /** Host-side network fetch. */
   readonly web: WebApi;
-  readonly events: EventsApi;
   /** Workspace state (#93) — **present only for a workspace plugin's `mount`**.
    * The host persists this opaque blob with the project. See {@link WorkspaceStateApi}. */
   readonly state?: WorkspaceStateApi;
@@ -474,17 +356,23 @@ export interface App {
   readonly codec?: CodecApi;
 }
 
+// NOTE: extension points (menus/imports/exports/outputExports/codecs/workspaces)
+// are NOT methods on `app` — you declare them in the manifest and the host wires
+// them. The runtime `app` surface above is the *only* thing a plugin can call.
+
 /**
  * A plugin's manifest, exported from its entry module.
  *
- * There are two ways to build a plugin and they can be mixed:
- *  - **Imperative** — export `activate(app)` and call `app.menus.register` /
- *    `app.importers.register` / `app.exporters.register` yourself.
- *  - **Declarative** (what every builtin uses) — declare `menu`/`imports`/
- *    `exports`/`outputExports`/`codecs`/`workspaces` here as data and export the
- *    named functions they reference. The host does the wiring, gathers an action's
- *    `inputs` with its own dialogs, binds them into R, and opens the Output
- *    section + attribution for you. **Codecs and workspaces are declarative-only.**
+ * Plugins are **declarative**: you declare your extension points in the manifest
+ * (`menu`/`imports`/`exports`/`outputExports`/`codecs`/`workspaces`) and export the
+ * named functions they reference. The host does all the wiring — it builds the menu
+ * items, gathers an action's `inputs` with its own dialogs, binds them into R, and
+ * opens the Output section + attribution for you. There is **no** imperative
+ * registration surface (`app` has no `menus.register`/`importers.register`/…); the
+ * runtime `app` object is read-data / run-R / write-output / prompt / fetch only.
+ * There is no `activate` entry point either — a plugin is purely its `manifest`
+ * plus the named functions it references (R deps go in `manifest.rPackages`, which
+ * the host pre-installs).
  */
 export interface PluginManifest {
   /** Globally unique, stable id, e.g. `"builtin-frequencies"`. */
@@ -575,10 +463,10 @@ export interface MenuAction {
 
 // --- Declarative import / export / output-export specs -----------------------
 
-/** A declarative importer (manifest.imports). The named `parse` function gets the
- * {@link ImportRequest} and returns an {@link ImportedDataset} (or calls
- * `app.importers.deliver`). For a `stage` importer it receives a host-mounted WebR
- * `path` instead of `file` (the upload is never cloned into the sandbox). */
+/** A declarative importer (manifest.imports). The named `parse(app, req)` function
+ * gets an {@link ImportRequest} and **returns** an {@link ImportedDataset}; the host
+ * commits it. For a `stage` importer it receives a host-mounted WebR `path` instead
+ * of `file` (the upload is never cloned into the sandbox). */
 export interface ImportSpec {
   label: string;
   /** Exported function name: `export async function parse(app, { name, file, path })`. */
@@ -726,14 +614,22 @@ export interface WorkspaceStateApi {
   set(value: unknown): Promise<void>;
 }
 
-/** The shape of a plugin entry module. */
+/**
+ * The shape of a plugin entry module: a `manifest` plus the named functions it
+ * references. There is no `activate` — the host wires everything from the manifest.
+ *
+ * The referenced exports are each `export async function name(app, …)`:
+ *  - `menu[].run` → `run(app, inputs)`
+ *  - `imports[].parse` → `parse(app, { name, file, path })` → {@link ImportedDataset}
+ *  - `exports[].export` → `export(app)` → {@link ExportPayload}
+ *  - `outputExports[].export` → `export(app, { title })` → {@link ExportPayload}
+ *  - `codecs[].read`/`write` → `read(app, { name })` / `write(app, info)` (use `app.codec`)
+ * and, for a workspace plugin, a `workspace` module (see {@link WorkspaceModule}).
+ */
 export interface PluginModule {
   manifest: PluginManifest;
-  /** Imperative entry point. **Optional** for a purely declarative plugin, which
-   * instead exports the named functions its manifest references
-   * (`menu[].run`, `imports[].parse`, `exports[].export`, `outputExports[].export`,
-   * `codecs[].read`/`write`) — each `export async function name(app, …)`. */
-  activate?(app: App): void | Promise<void>;
   /** A workspace plugin's render module (when `manifest.workspaces` is set). */
   workspace?: WorkspaceModule;
+  /** Plus the named functions the manifest references (see above). */
+  [namedExport: string]: unknown;
 }

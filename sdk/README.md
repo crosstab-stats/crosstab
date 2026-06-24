@@ -8,7 +8,8 @@ formal contract is [`plugin-api.d.ts`](./plugin-api.d.ts).
 
 ## A plugin in 30 seconds
 
-A plugin is an ES module that exports a `manifest` and an `activate` function:
+A plugin is an ES module that exports a `manifest` **declaring** its extension
+points, plus the named functions they reference. The host does the wiring:
 
 ```js
 /** @type {import('../../sdk/plugin-api.d.ts').PluginManifest} */
@@ -16,22 +17,35 @@ export const manifest = {
   id: 'acme-means',
   name: 'Group Means',
   version: '0.1.0',
-  apiVersion: '0.1.0',   // must match the engine's MAJOR version
-  rPackages: [],         // R deps, pre-installed on activation
+  apiVersion: '0.1.0',          // must match the engine's MAJOR version
+  category: 'Compare Means',    // where it lands in the menu / plugin picker
+  rPackages: [],                // R deps, pre-installed + offline-cached
+  menu: [
+    {
+      label: 'Means…',
+      run: 'runMeans',          // the exported function the host calls
+      inputs: [
+        { name: 'dv',    kind: 'variables', hint: 'Outcome(s) to average.' },
+        { name: 'group', kind: 'variables', multiple: false, hint: 'Grouping variable.' },
+      ],
+    },
+  ],
 };
 
-/** @param {import('../../sdk/plugin-api.d.ts').App} app */
-export async function activate(app) {
-  await app.menus.register({
-    path: ['Analyze', 'Compare Means'],
-    label: 'Means…',
-    command: () => runMeans(app),
-  });
+/** The host gathers the declared `inputs` with its own dialogs, binds them into R,
+ *  opens the (attributed) Output section, then calls this.
+ *  @param {import('../../sdk/plugin-api.d.ts').App} app */
+export async function runMeans(app, { dv, group }) {
+  const { result } = await app.webr.run(`aggregate(...)`); // dv/group are bound in R
+  await app.results.appendTable(renderTable(result));
 }
 ```
 
-`activate` receives the `app` object — the **only** way to talk to the engine.
-If a capability is not on `app`, your plugin cannot reach it.
+You declare *what* (a menu item and its inputs); the host handles the picker
+dialogs, the R binding, and the Output section. The `app` object passed to your
+function is the **only** way to talk to the engine — if a capability isn't on
+`app`, you can't reach it. (Extension points like menus/imports/exports are
+declared in the manifest, **not** registered through `app`.)
 
 ## Everything is async
 
@@ -49,15 +63,17 @@ but event payloads, callback arguments, etc.) must be structured-cloneable.
 
 | Surface        | What it's for                                                        |
 | -------------- | -------------------------------------------------------------------- |
-| `app.data`     | Read the dataset, variable metadata, and the user's selection.       |
-| `app.transform`| Apply transforms (the write surface) — e.g. `updateVariable` to recode. |
+| `app.data`     | Read the dataset, variable metadata, the selection; emit a derived dataset (`create`). |
 | `app.webr`     | Run R (queued, serial), install packages, read/write its filesystem. |
-| `app.results`  | Append SPSS-style tables, plots, and notes to the results pane.      |
+| `app.results`  | Append SPSS-style tables, plots, and notes to the Output pane.       |
 | `app.ui`       | Ask the engine to show dialogs (you can't draw your own).            |
-| `app.menus`    | Register menu items.                                                 |
-| `app.importers`| Register a file importer (teach CrossTab a new file format).         |
-| `app.events`   | Publish/subscribe on the app-wide event bus.                         |
+| `app.web`      | GET a URL host-side (for `"web"` importers).                          |
 | `app.plugin`   | Your manifest, plus the effective `apiVersion`.                      |
+| `app.state`    | *(workspace plugins)* read/write the project-persisted state blob.   |
+| `app.codec`    | *(codecs, during a read/write)* stream source bytes / row batches / output chunks. |
+
+Menus, imports, exports, codecs, and workspaces are **declared in the manifest** —
+there's no `app.menus.register`/`app.importers.register`; the host wires them.
 
 ### Reading data
 
@@ -65,7 +81,6 @@ but event payloads, callback arguments, etc.) must be structured-cloneable.
 const meta   = await app.data.getVariableMeta();        // labels, types, valueLabels…
 const cols   = await app.data.getColumns(['income']);   // { income: Float64Array }
 const chosen = await app.data.getSelectedVariables();   // what the user highlighted
-const off    = await app.data.onDataChanged(() => {});  // subscribe; await off() to stop
 ```
 
 ### Asking for input
@@ -133,13 +148,17 @@ ordered. Install R packages you depend on first: `await app.webr.installPackages
 ### Producing output
 
 Compute in R, then render clean tables yourself (the pane is for SPSS-style
-output, not console text):
+output, not console text). For a declarative `menu` action the host has already
+opened a titled, attributed section for you — just append:
 
 ```js
-await app.results.beginSection('Linear Regression');
 await app.results.appendTable(`<table><caption>Coefficients</caption>…</table>`);
 await app.results.appendText('*Dependent variable:* income');
 ```
+
+(Pushing output from *outside* an action — e.g. a workspace's own button — bracket
+it yourself with `app.results.beginAnalysis('Coding summary')` … `endAnalysis()`;
+the host stamps the attribution either way.)
 
 The pane lives in a shadow root with a built-in stylesheet, so a plain `<table>`
 already looks the part. **Your HTML is sanitised** (allowlist) before insertion,
@@ -148,44 +167,40 @@ tables, basic formatting, and simple inline SVG.
 
 ### Importing files
 
-File import is just a plugin. Register an importer and it joins the unified
-**File ▸ Import data…** picker (a searchable, grouped list of every enabled
-format); the engine owns the file picker and commits whatever you deliver — so a
-new file format is a first-class citizen, exactly like the built-in CSV importer.
+File import is just a plugin. **Declare** an importer in the manifest and export the
+named `parse` function; it joins the unified **File ▸ Import data…** picker (a
+searchable, grouped list of every enabled format). The engine owns the file picker
+and commits whatever your `parse` **returns** — so a new file format is a
+first-class citizen, exactly like the built-in CSV codec.
 
 ```js
-export async function activate(app) {
-  await app.importers.register({
-    label: 'Acme Survey…',
-    extensions: ['.acme'],          // picker filter; route by extension
-    parse: ({ ticket, name, file }) => parseAcme(app, ticket, file),
-  });
-}
-```
+export const manifest = {
+  id: 'acme-import', name: 'Acme import', version: '1.0.0', apiVersion: '0.1.0',
+  category: 'Import',
+  imports: [{ label: 'Acme Survey…', extensions: ['.acme'], parse: 'parseAcme' }],
+};
 
-The engine calls your `parse` with the chosen `file` (a `File`/`Blob` handle —
-by reference, *not* copied into your sandbox) and a `ticket`. Parse however you
-like — read bytes in JS, or stage the file into R with `app.webr.mountFile(file)`
-— then **deliver** the result for that ticket:
-
-```js
-async function parseAcme(app, ticket, file) {
-  const buf = await file.arrayBuffer();           // JS parser path
+// The engine calls this in your sandbox with the chosen file (a File/Blob by
+// reference — not copied in). Parse in JS, or stage into R with
+// app.webr.mountFile(file). Return the dataset; the host commits it.
+export async function parseAcme(app, { name, file }) {
+  const buf = await file.arrayBuffer();
   const { variables, columns } = decode(buf);
-  await app.importers.deliver(ticket, { variables, columns });
+  return { variables, columns };
 }
 ```
 
-`deliver` accepts **either** shape (the dual contract):
+`parse` **returns** one of two shapes (the dual contract):
 
 - `{ variables, columns }` — columnar JS arrays (`{ name: [...] }`). Best for
   formats you parse in JS. Numeric columns: numbers with `null` for missing;
   text/factor: strings with `null`. Use plain arrays.
 - `{ variables, parquet }` — a Parquet `Uint8Array` (e.g. one R wrote via
-  `nanoparquet`). DuckDB reads it directly; best for runtime-parsed or large data.
+  `nanoparquet`). DuckDB reads it directly; best for runtime-parsed data.
 
 `variables` is always `VariableMeta[]` — it carries the labels, value labels, and
-missing codes that neither columns nor Parquet convey.
+missing codes that neither columns nor Parquet convey. (A `"web"` importer sets
+`source: 'web'`, gets no file, and fetches its own bytes via `app.web.get`.)
 
 One-shot `imports`/`exports` hold the whole dataset in memory, so they're best for
 small-to-medium files. For large files (or any format you want to stream), use a
