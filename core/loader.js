@@ -36,6 +36,41 @@ const PLUGIN_HOST_URL = './plugin-host.html';
 const CODEC_HOST_URL = './plugin-host-codec.html';
 
 /**
+ * Compute a plugin's **qualified id** — its globally-unique identity — by
+ * namespacing the author-declared `manifest.id` (a short *local* name) with its
+ * **origin**, so two unrelated plugins can never collide (#102). Built-ins are the
+ * reserved `builtin-…` namespace and pass through unchanged (zero churn; they're
+ * already unique and app-controlled). A third-party plugin loaded from a URL is
+ * namespaced by its **host** (verifiable — the author had to serve it from there);
+ * a file/authored plugin by its self-declared `manifest.author` (unverifiable, so
+ * it only guards against *accidental* clashes), falling back to `local`.
+ *
+ * Because the namespace is prepended by the host (never by the author's id text),
+ * a third-party plugin can't forge a `builtin-…` identity or squat another's.
+ *
+ * @param {{kind:'builtin'|'url'|'file'|'authored', url?:string}} origin
+ * @param {{id:string, author?:string}} manifest
+ * @returns {string} the qualified id, e.g. `builtin-regression` or `alice.dev:regression`.
+ */
+export function qualifyId(origin, manifest) {
+  const local = String(manifest?.id ?? '').trim();
+  if (!local) throw new Error('Plugin manifest is missing an id.');
+  if (!origin || origin.kind === 'builtin') return local; // reserved builtin namespace
+  if (origin.kind === 'url') {
+    let host = '';
+    try {
+      host = new URL(origin.url).host;
+    } catch {
+      /* relative/garbage URL → fall back below */
+    }
+    return `${host || 'url'}:${local}`;
+  }
+  // file / authored: the author tag is the namespace (self-declared); else 'local'.
+  const author = String(manifest?.author ?? '').trim().replace(/\s+/g, '-').toLowerCase();
+  return `${author || 'local'}:${local}`;
+}
+
+/**
  * A plugin is **fully declarative**: a `manifest` (data) describing what it
  * contributes, plus **named exported functions** the manifest references. The host
  * does all wiring — there is no `activate`, and the `app` surface exposes no
@@ -157,14 +192,14 @@ export class PluginLoader {
    *   and runs it inside a sandbox; the URL is never `import()`ed by the engine.
    * @returns {Promise<PluginManifest>} The activated plugin's manifest.
    */
-  async activate(url) {
+  async activate(url, origin = { kind: 'url', url }) {
     // Fetch the plugin source on the host so we can hand it to the opaque-origin
     // sandbox, which cannot fetch it itself. Same-origin always works; a
     // cross-origin URL needs the author to CORS-enable it (no proxy here).
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Failed to fetch plugin ${url}: HTTP ${res.status}`);
     const code = await res.text();
-    return this.#instantiate(code, url);
+    return this.#instantiate(code, url, origin);
   }
 
   /**
@@ -175,8 +210,8 @@ export class PluginLoader {
    * @param {string} [label='plugin'] - A label for errors/consent prompts.
    * @returns {Promise<PluginManifest>}
    */
-  async activateSource(code, label = 'plugin') {
-    return this.#instantiate(code, label);
+  async activateSource(code, label = 'plugin', origin = { kind: 'authored' }) {
+    return this.#instantiate(code, label, origin);
   }
 
   /**
@@ -189,19 +224,20 @@ export class PluginLoader {
    * @param {string} url
    * @returns {Promise<PluginManifest>}
    */
-  async probeManifest(url) {
+  async probeManifest(url, origin = { kind: 'url', url }) {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Failed to fetch plugin ${url}: HTTP ${res.status}`);
-    return this.#probe(await res.text(), url);
+    return this.#probe(await res.text(), url, origin);
   }
 
   /** Like {@link probeManifest} but from source text (file/authored plugins). */
-  async probeManifestSource(code, label = 'plugin') {
-    return this.#probe(code, label);
+  async probeManifestSource(code, label = 'plugin', origin = { kind: 'authored' }) {
+    return this.#probe(code, label, origin);
   }
 
-  /** Sandbox `code`, return its manifest, and dispose the sandbox. No activation. */
-  async #probe(code, label) {
+  /** Sandbox `code`, return its manifest (id qualified by origin), and dispose the
+   * sandbox. No activation. */
+  async #probe(code, label, origin) {
     const ctx = { id: null, name: label };
     const iframe = this.#createIframe();
     const broker = new PluginBroker({ iframe, services: this.#gatedServices(ctx), onError: () => {} });
@@ -213,6 +249,7 @@ export class PluginLoader {
       if (!manifest || typeof manifest.id !== 'string') {
         throw new Error(`Plugin at ${label} exported no valid manifest`);
       }
+      manifest.id = qualifyId(origin, manifest); // origin-namespaced identity (#102)
       return manifest;
     } finally {
       broker.dispose();
@@ -231,7 +268,7 @@ export class PluginLoader {
    * @param {string} label - URL or filename, for errors/consent.
    * @returns {Promise<PluginManifest>}
    */
-  async #instantiate(code, label, hostUrl = PLUGIN_HOST_URL) {
+  async #instantiate(code, label, origin, hostUrl = PLUGIN_HOST_URL) {
     // Identity for the consent gate. The manifest id isn't known until the plugin
     // loads, so the gate reads it from this holder — `web.get` only ever fires
     // after load + activate, by which point it's filled in.
@@ -254,13 +291,14 @@ export class PluginLoader {
       if (!manifest || typeof manifest.id !== 'string') {
         throw new Error(`Plugin at ${label} exported no valid manifest`);
       }
+      manifest.id = qualifyId(origin, manifest); // origin-namespaced identity (#102)
       // A codec plugin needs the WASM/worker-enabled sandbox. We load into the
       // default (strict) host just to read the manifest; if it declares codecs,
       // re-instantiate it in the codec host (cheap — the source is already fetched).
       if (Array.isArray(manifest.codecs) && manifest.codecs.length && hostUrl !== CODEC_HOST_URL) {
         broker.dispose();
         iframe.remove();
-        return this.#instantiate(code, label, CODEC_HOST_URL);
+        return this.#instantiate(code, label, origin, CODEC_HOST_URL);
       }
       if (this.#plugins.has(manifest.id)) {
         throw new Error(`Plugin "${manifest.id}" is already activated`);

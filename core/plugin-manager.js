@@ -148,10 +148,11 @@ export class PluginManager {
   /** Load one entry, recording its manifest in the catalog. Resolves the manifest,
    * or throws (callers that want best-effort use {@link #activateEntry}). */
   async #activateEntryStrict(entry) {
+    const originDesc = this.#originDescriptor(entry);
     const manifest =
       entry.source != null
-        ? await this.#loader.activateSource(entry.source, entry.name || entry.key)
-        : await this.#loader.activate(entry.url);
+        ? await this.#loader.activateSource(entry.source, entry.name || entry.key, originDesc)
+        : await this.#loader.activate(entry.url, originDesc);
     this.#recordCatalog(entry.key, manifest);
     // Stamp the broker with this plugin's host-tracked attribution so any output it
     // appends outside an analysis bracket is still traceable, not unattributed (#106).
@@ -215,16 +216,26 @@ export class PluginManager {
     let done = 0;
     for (const e of todo) {
       try {
+        const originDesc = this.#originDescriptor(e);
         const manifest =
           e.source != null
-            ? await this.#loader.probeManifestSource(e.source, e.name || e.key)
-            : await this.#loader.probeManifest(e.url);
+            ? await this.#loader.probeManifestSource(e.source, e.name || e.key, originDesc)
+            : await this.#loader.probeManifest(e.url, originDesc);
         this.#recordCatalog(e.key, manifest);
       } catch (err) {
         console.warn(`Manifest probe failed for ${e.key}`, err);
       }
       onProgress?.(++done, todo.length, this.#catalog[e.key]?.name || e.key);
     }
+  }
+
+  /** Origin descriptor for {@link qualifyId} — how the loader namespaces a plugin's
+   * id (#102). Built-ins are the reserved namespace; everything else is namespaced
+   * by its verifiable host (URL) or self-declared author (file/authored). */
+  #originDescriptor(entry) {
+    if (entry.builtin) return { kind: 'builtin' };
+    if (entry.kind === 'url') return { kind: 'url', url: entry.url };
+    return { kind: entry.kind === 'file' ? 'file' : 'authored' };
   }
 
   /** Host-tracked origin for output attribution — the part a plugin can't forge. */
@@ -268,6 +279,35 @@ export class PluginManager {
     }
   }
 
+  /**
+   * Guard a not-yet-registered entry against a **qualified-id collision** with a
+   * plugin already catalogued here (#102). The id is globally unique by
+   * construction (origin-namespaced — see {@link qualifyId}), so a clash means the
+   * *same* plugin (same host/author + local id) — i.e. you're re-adding or updating
+   * it. We confirm a replace rather than silently creating a second registered entry
+   * with the same id (which would make project restore ambiguous). Returns the
+   * qualified id; throws if the user cancels or the clash is an un-replaceable built-in.
+   */
+  async #ensureIdAvailable(entry) {
+    const originDesc = this.#originDescriptor(entry);
+    const probed = entry.source != null
+      ? await this.#loader.probeManifestSource(entry.source, entry.name || entry.key, originDesc)
+      : await this.#loader.probeManifest(entry.url, originDesc);
+    const qid = probed.id;
+    const clash = Object.entries(this.#catalog).find(([k, c]) => c?.id === qid && k !== entry.key);
+    if (clash) {
+      const [clashKey, clashCat] = clash;
+      const clashEntry = this.#entries().find((e) => e.key === clashKey);
+      if (clashEntry?.builtin) {
+        throw new Error(`Plugin id "${qid}" is reserved by a built-in ("${clashCat.name}").`);
+      }
+      const ok = confirm(`A plugin with id "${qid}" is already installed: "${clashCat.name}".\n\nReplace it with this one?`);
+      if (!ok) throw new Error(`Plugin id "${qid}" is already in use by "${clashCat.name}".`);
+      await this.removePlugin(clashKey);
+    }
+    return qid;
+  }
+
   /** Add a plugin from a URL (untrusted, re-fetched each boot). Throws if it
    * doesn't load, so nothing is persisted on failure. */
   async addFromUrl(url) {
@@ -275,6 +315,7 @@ export class PluginManager {
     if (!url) throw new Error('Enter a plugin URL.');
     if (this.#entries().some((e) => e.key === url)) throw new Error('That URL is already added.');
     const entry = { key: url, kind: 'url', url };
+    await this.#ensureIdAvailable(entry); // qualified-id uniqueness (#102)
     const manifest = await this.#activateEntryStrict(entry);
     this.#user.push(entry);
     writeJSON(LS_USER, this.#user);
@@ -285,6 +326,7 @@ export class PluginManager {
   async addFromFile(file) {
     const source = await file.text();
     const entry = { key: `local:${crypto.randomUUID()}`, kind: 'file', name: file.name, source };
+    await this.#ensureIdAvailable(entry); // qualified-id uniqueness (#102)
     const manifest = await this.#activateEntryStrict(entry);
     this.#user.push(entry);
     writeJSON(LS_USER, this.#user);
