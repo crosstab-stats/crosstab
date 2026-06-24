@@ -128,6 +128,12 @@ export class ResultsPane {
    * run (so a cancelled run leaves no empty heading). `{title, attribution}`. */
   #pendingSection = null;
 
+  /** The element to scroll into view when Output is (re)focused after new output —
+   * the section heading of the latest analysis, or the latest top-level block. So a
+   * newly run analysis snaps the user to the *start* of its output. Cleared on
+   * {@link ResultsPane#clear}; not set by a restore (no auto-scroll on rehydrate). */
+  #lastAnchor = null;
+
   /** Plot handle → its SVG holder element, for {@link ResultsPane#updatePlot}. */
   #plots = new Map();
 
@@ -248,6 +254,7 @@ export class ResultsPane {
 
     this.#content.append(section);
     this.#model.push({ kind: 'section', title, attribution: attribution || undefined });
+    this.#lastAnchor = section; // scroll target: the start of this analysis's output
     return section;
   }
 
@@ -383,6 +390,7 @@ export class ResultsPane {
     this.#content.replaceChildren();
     this.#currentSection = null;
     this.#pendingSection = null;
+    this.#lastAnchor = null;
     this.#plots.clear();
     this.#model = [];
     this.#renderEmptyState();
@@ -552,7 +560,26 @@ export class ResultsPane {
       this.#currentSection = this.#createSection(this.#pendingSection);
       this.#pendingSection = null;
     }
-    (this.#currentSection ?? this.#content).append(block);
+    const target = this.#currentSection ?? this.#content;
+    target.append(block);
+    // A bare top-level block (host output with no section) is its own scroll anchor;
+    // for sectioned output the anchor is the section heading (set in #createSection).
+    if (target === this.#content) this.#lastAnchor = block;
+  }
+
+  /**
+   * Scroll the start of the most recent output into view. Called by the host when
+   * it (re)focuses the Output tab after new output, so a freshly run analysis snaps
+   * the user to the top of its results rather than leaving them wherever they were.
+   * Deferred a frame so it runs after the just-revealed panel has laid out. No-op if
+   * nothing new has been appended since the last {@link ResultsPane#clear}.
+   */
+  scrollToLatest() {
+    const anchor = this.#lastAnchor;
+    if (!anchor) return;
+    requestAnimationFrame(() => {
+      if (anchor.isConnected) anchor.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    });
   }
 
   #renderEmptyState() {

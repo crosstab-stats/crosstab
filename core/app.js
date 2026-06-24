@@ -789,11 +789,14 @@ function wireWorkspaceTabs(bus, mounts, { dataView, variableView, results, rCons
   // Focus the relevant view for the action in progress.
   bus.on('analysis:started', () => show('output'));
   bus.on('import:finished', () => show('data'));
-  // An error (incl. ones outside an analysis) should pull the user to Output.
-  bus.on('output:error', () => show('output'));
+  // An error (incl. ones outside an analysis) should pull the user to Output, and
+  // scroll to it so the message isn't missed below the fold.
+  bus.on('output:error', () => { show('output'); resultsPane?.scrollToLatest(); });
   // Output appended outside the menu-analysis path (e.g. a workspace plugin's
-  // own buttons) should also surface Output — otherwise the action looks dead.
-  bus.on('output:written', () => show('output'));
+  // own buttons) should also surface Output — otherwise the action looks dead —
+  // and snap to the start of the new output (not on 'analysis:started', which
+  // fires before anything is appended).
+  bus.on('output:written', () => { show('output'); resultsPane?.scrollToLatest(); });
 
   // Registry surface for plugin workspaces (#93): add/remove a runtime tab.
   const workspaceSection = results.parentElement; // the .workspace <section>
