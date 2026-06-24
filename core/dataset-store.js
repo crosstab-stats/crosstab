@@ -63,6 +63,15 @@ export class DatasetStore {
    * interleave and orphan/resurrect entries. */
   #tail = Promise.resolve();
 
+  /** OPFS subdirectory this store occupies. Defaults to the dataset library; a
+   * second instance can pass a different name to scope a separate area on the same
+   * proven machinery (e.g. the per-project recycle bin — see #115). */
+  #rootName;
+
+  constructor(root = ROOT) {
+    this.#rootName = root;
+  }
+
   /** @returns {Promise<boolean>} Whether OPFS is available in this browser. */
   get available() {
     return typeof navigator !== 'undefined' && !!navigator.storage?.getDirectory;
@@ -117,16 +126,16 @@ export class DatasetStore {
    * @param {{writeSources?: boolean}} [opts]
    * @returns {Promise<{id: string, version: number}>} The entry id + new version.
    */
-  async save({ id, name, savedAt, state }, { writeSources = true } = {}) {
+  async save({ id, name, savedAt, state, extra }, { writeSources = true } = {}) {
     const release = await this.#acquire();
     try {
-      return await this.#saveImpl({ id, name, savedAt, state }, { writeSources });
+      return await this.#saveImpl({ id, name, savedAt, state, extra }, { writeSources });
     } finally {
       release();
     }
   }
 
-  async #saveImpl({ id, name, savedAt, state }, { writeSources = true } = {}) {
+  async #saveImpl({ id, name, savedAt, state, extra }, { writeSources = true } = {}) {
     // Ask the browser to keep this data (OPFS is evictable by default).
     if (navigator.storage?.persist) {
       try {
@@ -176,6 +185,9 @@ export class DatasetStore {
       rowCount: state.rowCount ?? 0,
       varCount: state.varCount ?? 0,
       sourceCount: state.sources.length,
+      // Caller-supplied catalog fields (e.g. the recycle bin's projectId + deletedAt),
+      // carried verbatim into the browse index so list() can filter on them.
+      ...(extra && typeof extra === 'object' ? extra : {}),
     };
     const idx = cat.entries.findIndex((e) => e.id === id);
     if (idx >= 0) cat.entries[idx] = summary;
@@ -238,12 +250,35 @@ export class DatasetStore {
     }
   }
 
+  /**
+   * Merge `extra` into an entry's catalog summary in place (no folder/Parquet I/O).
+   * Used by the recycle bin to re-scope an "unsaved"-project deletion onto the
+   * project once it's saved and gets a real id (#115), so the entry follows the
+   * project instead of leaking across projects. No-op if the id is unknown.
+   * @param {string} id
+   * @param {Record<string, any>} extra
+   */
+  async retag(id, extra) {
+    const release = await this.#acquire();
+    try {
+      const root = await this.#root(true);
+      const cat = await this.#readCatalog();
+      const e = cat.entries.find((x) => x.id === id);
+      if (e) {
+        Object.assign(e, extra);
+        await this.#write(root, CATALOG, JSON.stringify(cat));
+      }
+    } finally {
+      release();
+    }
+  }
+
   // --- internals -------------------------------------------------------------
 
   /** @returns {Promise<FileSystemDirectoryHandle>} the library root dir. */
   async #root(create = false) {
     const opfs = await navigator.storage.getDirectory();
-    return opfs.getDirectoryHandle(ROOT, { create });
+    return opfs.getDirectoryHandle(this.#rootName, { create });
   }
 
   /** @returns {Promise<{entries: CatalogEntry[]}>} the catalog, or an empty one. */

@@ -281,6 +281,10 @@ export async function boot(mounts) {
     bus,
   });
   const datasetStore = new DatasetStore();
+  // Per-project recycle bin (#115): a deleted dataset is snapshotted here before
+  // its tables are dropped, so it can be restored. Same proven OPFS machinery as
+  // the library, rooted in a separate directory.
+  const recycle = new DatasetStore('recycle');
 
   // The service bundle the plugin broker dispatches against. `data`/`results`/
   // `menus`/`ui` expose only their published `api` slices, never the full class
@@ -487,7 +491,7 @@ export async function boot(mounts) {
 
   // The sidebar project manager (active project + datasets, other projects,
   // building blocks). Created here, after the services it drives exist.
-  new ProjectSidebar(mounts.sidebar, { datasets, projects, library, bus });
+  new ProjectSidebar(mounts.sidebar, { datasets, projects, library, bus, recycle });
 
   // --- warm the runtimes ------------------------------------------------------
   // WebR warms in the background. DuckDB cold-starts when the launcher loads the
@@ -527,7 +531,7 @@ export async function boot(mounts) {
   // `dataStore` kept as an alias to the manager (it delegates to the active
   // dataset) so console pokes / older references keep working. Exposed before the
   // launcher so the launcher (and dev tooling) can use the engine.
-  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, projects, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager, codecs };
+  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, recycle, library, projects, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager, codecs };
   // eslint-disable-next-line no-undef
   globalThis.crosstab = engine;
 
@@ -848,11 +852,12 @@ class ProjectSidebar {
    * @param {import('./library.js').DatasetLibrary} deps.library
    * @param {EventBus} deps.bus
    */
-  constructor(host, { datasets, projects, library, bus }) {
+  constructor(host, { datasets, projects, library, bus, recycle }) {
     this.host = host;
     this.datasets = datasets;
     this.projects = projects;
     this.library = library;
+    this.recycle = recycle ?? null;
     this.projectName = null;
     bus.on(DATASETS_CHANGED, () => this.render());
     bus.on(CoreEvents.DATA_CHANGED, () => this.render());
@@ -879,6 +884,31 @@ class ProjectSidebar {
     } catch {
       /* OPFS unavailable */
     }
+    let binned = [];
+    try {
+      if (this.recycle) {
+        const scope = this.#projectScope();
+        const all = await this.recycle.list();
+        // A dataset deleted before the project was saved is scoped 'unsaved'. Once
+        // the project has an id (autosave creates one), claim those entries onto it
+        // so the bin follows the project rather than leaking into others.
+        if (scope !== 'unsaved') {
+          for (const e of all) {
+            if (e.projectScope === 'unsaved') {
+              try {
+                await this.recycle.retag(e.id, { projectScope: scope });
+                e.projectScope = scope;
+              } catch {
+                /* best effort */
+              }
+            }
+          }
+        }
+        binned = all.filter((e) => e.projectScope === scope);
+      }
+    } catch {
+      /* OPFS unavailable */
+    }
     if (token !== this.#token) return; // superseded by a newer render
 
     // Block id → current version, so a linked dataset can show "update available".
@@ -886,6 +916,7 @@ class ProjectSidebar {
 
     this.host.replaceChildren();
     this.host.append(this.#projectZone(blockVer));
+    if (binned.length) this.host.append(this.#recycleZone(binned));
     this.host.append(this.#projectsZone(otherProjects));
     this.host.append(this.#blocksZone(blocks));
   }
@@ -980,12 +1011,111 @@ class ProjectSidebar {
       count <= 1 ? 'Remove — resets to a fresh empty dataset' : 'Remove from project',
       (e) => {
         e.stopPropagation();
-        void this.datasets.remove(it.id);
+        void this.#deleteDataset(it);
       },
       'proj__ds-x',
     );
     li.append(edit, x);
     return li;
+  }
+
+  // --- recycle bin (#115) ----------------------------------------------------
+
+  /** The recycle scope key for the active project (a stable string; 'unsaved' for
+   * a project that has never been saved, so its deletions are still recoverable). */
+  #projectScope() {
+    return String(this.projects.activeId ?? 'unsaved');
+  }
+
+  /** Snapshot a dataset into the recycle bin, then remove it. The snapshot never
+   * blocks the delete: a snapshot failure is logged and the delete proceeds (we
+   * don't trap the user with an undeletable dataset). Empty datasets (no sources)
+   * aren't binned — there's nothing to recover. */
+  async #deleteDataset(it) {
+    if (this.recycle) {
+      try {
+        const ds = this.datasets.get(it.id);
+        const state = ds ? await ds.exportState({ includeParquet: true }) : null;
+        if (state && state.sources && state.sources.length) {
+          await this.recycle.save({
+            name: it.name,
+            savedAt: Date.now(),
+            state,
+            extra: { projectScope: this.#projectScope() },
+          });
+          await this.#capRecycle();
+        }
+      } catch (err) {
+        console.error('[recycle] snapshot failed; deleting anyway', err);
+      }
+    }
+    await this.datasets.remove(it.id);
+  }
+
+  /** Keep at most `cap` binned datasets per project; evict the oldest beyond it so
+   * the bin can't grow without bound. */
+  async #capRecycle(cap = 20) {
+    try {
+      const scope = this.#projectScope();
+      const mine = (await this.recycle.list())
+        .filter((e) => e.projectScope === scope)
+        .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+      for (const e of mine.slice(cap)) await this.recycle.delete(e.id);
+    } catch {
+      /* best effort */
+    }
+  }
+
+  /** Restore a binned dataset back into the project, then drop it from the bin. */
+  async #restoreDataset(e) {
+    try {
+      const snap = await this.recycle.load(e.id);
+      await this.datasets.addFromState({ name: snap.name, state: snap.state, activate: true });
+      await this.recycle.delete(e.id);
+      this.render();
+    } catch (err) {
+      console.error('[recycle] restore failed', err);
+      alert('Could not restore that dataset — its saved copy may be corrupt.');
+    }
+  }
+
+  /** Permanently remove a binned dataset (after confirmation). */
+  async #purgeRecycle(e) {
+    if (!confirm(`Permanently delete "${e.name}"? This can't be undone.`)) return;
+    try {
+      await this.recycle.delete(e.id);
+    } catch (err) {
+      console.error('[recycle] purge failed', err);
+    }
+    this.render();
+  }
+
+  #recycleZone(binned) {
+    const frag = document.createDocumentFragment();
+    frag.append(el('div', 'Recently deleted', 'proj__sub proj__sub--zone'));
+    const list = document.createElement('ul');
+    list.className = 'proj__datasets';
+    for (const e of binned) {
+      const li = document.createElement('li');
+      li.className = 'proj__ds proj__ds--trash';
+      const name = el('span', e.name, 'proj__ds-name');
+      name.title = `Deleted ${new Date(e.savedAt).toLocaleString()} · ${(e.rowCount || 0).toLocaleString()} rows`;
+      name.style.color = '#8a94a0';
+      li.append(name);
+      li.append(el('span', (e.rowCount || 0).toLocaleString(), 'proj__ds-rows'));
+      const restore = iconBtn('↩', 'Restore this dataset', (ev) => {
+        ev.stopPropagation();
+        void this.#restoreDataset(e);
+      }, 'proj__ds-x');
+      const purge = iconBtn('✕', 'Delete permanently', (ev) => {
+        ev.stopPropagation();
+        void this.#purgeRecycle(e);
+      }, 'proj__ds-x');
+      li.append(restore, purge);
+      list.append(li);
+    }
+    frag.append(list);
+    return frag;
   }
 
   // --- zone 2: other saved projects ------------------------------------------

@@ -167,6 +167,29 @@ export class DatasetManager {
   }
 
   /**
+   * Add a single dataset reconstructed from a saved {@link DataStore} state (the
+   * inverse of {@link DataStore#exportState}). Used to **restore a dataset from the
+   * recycle bin** (#115) without disturbing the other open datasets. Gets a fresh
+   * id (so its DuckDB tables don't collide with the live set) and becomes active.
+   *
+   * @param {{name: string, state: object, activate?: boolean}} entry
+   * @returns {Promise<number>} the new dataset id.
+   */
+  async addFromState({ name = 'Restored dataset', state, activate = true }) {
+    const id = this.#nextId++;
+    const ds = new DataStore(this.#bus, this.#duckdb, { id, name });
+    this.#datasets.set(id, ds);
+    await ds.restoreState(state);
+    if (activate || this.#activeId === null) {
+      this.#activeId = id;
+      this.#emitActive('switch');
+    } else {
+      this.#bus.emit(DATASETS_CHANGED, this.list());
+    }
+    return id;
+  }
+
+  /**
    * Replace the entire working set with a saved project bundle: dispose the open
    * datasets, recreate each from the bundle, and restore the active one.
    *
