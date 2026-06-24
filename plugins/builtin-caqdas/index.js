@@ -144,7 +144,9 @@ export const workspace = {
     labelSel.title = 'Column that identifies each document (e.g. a filename or participant id) — used in the document list and the segments export.';
     const freqBtn = el('button', 'caqdas__btn'); freqBtn.textContent = 'Code frequency';
     const expBtn = el('button', 'caqdas__btn'); expBtn.textContent = 'Segments → Output';
-    bar.append(colLabel, colSel, labelLabel, labelSel, freqBtn, expBtn);
+    const cloudBtn = el('button', 'caqdas__btn'); cloudBtn.textContent = 'Word cloud';
+    cloudBtn.title = 'Word cloud of the coded passages — grouped and coloured by your codebook themes.';
+    bar.append(colLabel, colSel, labelLabel, labelSel, freqBtn, expBtn, cloudBtn);
 
     // Paint-mode banner (shown while a code is armed).
     const paintBanner = el('div', 'caqdas__paint');
@@ -582,11 +584,179 @@ export const workspace = {
       await app.results.endAnalysis();
     });
 
+    // A word cloud built FROM the coding: words inside coded passages, grouped and
+    // coloured by the codebook's own themes/colours (not auto-detected). This lives
+    // here, not in the standalone Text-analytics cloud, because the codebook is this
+    // workspace's private state — another plugin can't see it.
+    cloudBtn.addEventListener('click', async () => {
+      if (!state.segments.length) { app.results.appendError('No coded segments yet — code some passages first.'); return; }
+      const model = buildThemedCloud(state, codeById);
+      if (!model.themes.length) { app.results.appendError('No words found in the coded passages (after dropping very short/common words).'); return; }
+      await app.results.beginAnalysis('Themed word cloud');
+      const render = (w, h) => themedCloudSvg(model.themes, w, h);
+      let handle;
+      handle = await app.results.appendPlot(render(720, 480), { onRedraw: (w, h) => app.results.updatePlot(handle, render(w, h)) });
+      await app.results.appendTable(
+        { columns: ['Theme', 'Code', 'Word', 'Count'], rows: model.tableRows, rowHeaders: false },
+        { caption: `Themed Word Cloud — top ${model.tableRows.length} words across ${model.themes.length} theme(s)` },
+      );
+      await app.results.appendText(
+        '**Size** = how often the word appears in that theme’s coded passages; **colour** = your codebook colours; **position** groups each theme together. A word coded under more than one theme appears in each, sized by its use there. Drag the lower-right grip to resize, then click **⟳ Redraw at this size** to re-pack.',
+      );
+      await app.results.endAnalysis();
+    });
+
     // --- go ------------------------------------------------------------------
     await loadDocs();
     renderAll();
   },
 };
+
+/** A compact English stop-word list for the word cloud. Deliberately small — the
+ * cloud is over short coded passages, not a full corpus, so this just removes the
+ * obvious filler. (The standalone Text-analytics cloud uses tidytext's fuller list.) */
+const STOPWORDS = new Set(
+  ('a about above after again against all am an and any are aren as at be because been before being below ' +
+    'between both but by can cannot could did do does doing don down during each few for from further had has ' +
+    'have having he her here hers herself him himself his how i if in into is it its itself just me more most ' +
+    'my myself no nor not of off on once only or other our ours ourselves out over own re s same she should so ' +
+    'some such t than that the their theirs them themselves then there these they this those through to too under ' +
+    'until up very was we were what when where which while who whom why will with would you your yours yourself ' +
+    'yourselves').split(' '),
+);
+
+/** Tokenise text into lower-cased word tokens, dropping stop-words and tokens
+ * shorter than `minlen`. Splits on any non-letter (so punctuation/digits vanish). */
+function tokenize(text, minlen) {
+  const out = [];
+  for (const raw of String(text).toLowerCase().split(/[^\p{L}']+/u)) {
+    const w = raw.replace(/^'+|'+$/g, '');
+    if (w.length >= minlen && !STOPWORDS.has(w)) out.push(w);
+  }
+  return out;
+}
+
+/** XML-escape text for safe inclusion in the SVG (re-sanitised host-side too). */
+function escapeXml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/**
+ * Build the themed-cloud model from the codebook + coded segments. Words come from
+ * the text inside each coded segment, attributed to that segment's code → its theme
+ * (`code.group`, or the code's own name when it isn't grouped). A word is counted
+ * per theme, so one coded under several themes yields a token in each (sized by its
+ * use there); its colour is the codebook colour of the code it most came from in
+ * that theme.
+ *
+ * @returns {{themes: Array<{name:string, words:Array<{word,count,color,codeName}>}>, tableRows: string[][]}}
+ */
+function buildThemedCloud(state, codeById) {
+  const themeMap = new Map(); // theme name -> Map(word -> {count, byCode:{id:count}})
+  const order = [];
+  for (const s of state.segments) {
+    const code = codeById(s.codeId);
+    if (!code) continue;
+    const theme = (code.group && code.group.trim()) || code.name;
+    if (!themeMap.has(theme)) { themeMap.set(theme, new Map()); order.push(theme); }
+    const wmap = themeMap.get(theme);
+    for (const w of tokenize(s.text || '', 3)) {
+      let rec = wmap.get(w);
+      if (!rec) { rec = { count: 0, byCode: {} }; wmap.set(w, rec); }
+      rec.count++;
+      rec.byCode[code.id] = (rec.byCode[code.id] || 0) + 1;
+    }
+  }
+  const themes = [];
+  for (const name of order) {
+    const words = [...themeMap.get(name).entries()]
+      .map(([word, rec]) => {
+        let bestId = null, best = -1;
+        for (const [cid, c] of Object.entries(rec.byCode)) { if (c > best) { best = c; bestId = cid; } }
+        const code = codeById(bestId);
+        return { word, count: rec.count, color: code?.color || '#666666', codeName: code?.name || '?' };
+      })
+      .sort((a, b) => b.count - a.count);
+    if (words.length) themes.push({ name, words });
+  }
+  const all = [];
+  for (const t of themes) for (const w of t.words) all.push([t.name, w.codeName, w.word, String(w.count)]);
+  all.sort((a, b) => Number(b[3]) - Number(a[3]));
+  return { themes, tableRows: all.slice(0, 40) };
+}
+
+/**
+ * Render the themed cloud as SVG. Each theme gets a labelled cell on a grid; its
+ * words spiral out from the cell centre with collision avoidance (so they group
+ * spatially by theme and never overlap), sized by a global sqrt scale of their
+ * per-theme counts and coloured with the codebook colour. Deterministic, so a
+ * redraw at the same size is stable.
+ */
+function themedCloudSvg(themes, W, H) {
+  const W2 = Math.max(360, Math.round(W));
+  const H2 = Math.max(240, Math.round(H));
+  let fmin = Infinity, fmax = 0;
+  for (const t of themes) for (const w of t.words) { if (w.count < fmin) fmin = w.count; if (w.count > fmax) fmax = w.count; }
+  if (!Number.isFinite(fmin)) fmin = 1;
+  const MINPX = Math.max(10, Math.round(H2 * 0.026));
+  const MAXPX = Math.max(MINPX + 8, Math.round(H2 * 0.12));
+  const sq = (v) => Math.sqrt(Math.max(0, v));
+  const sizeOf = (f) => {
+    const t = fmax > fmin ? (sq(f) - sq(fmin)) / (sq(fmax) - sq(fmin)) : 0.5;
+    return Math.round(MINPX + t * (MAXPX - MINPX));
+  };
+  const T = themes.length;
+  const cols = Math.ceil(Math.sqrt(T));
+  const cellW = W2 / cols;
+  const cellH = H2 / Math.ceil(T / cols);
+  const placed = [];
+  const overlaps = (b) => placed.some((p) => !(b.x1 < p.x0 || b.x0 > p.x1 || b.y1 < p.y0 || b.y0 > p.y1));
+  const parts = [];
+  themes.forEach((theme, ti) => {
+    const col = ti % cols, rowi = Math.floor(ti / cols);
+    const cxc = (col + 0.5) * cellW;
+    const cyc = (rowi + 0.5) * cellH;
+    const labelY = rowi * cellH + 14;
+    parts.push(
+      `<text x="${cxc.toFixed(1)}" y="${labelY.toFixed(1)}" font-size="12" fill="#8a93a0" text-anchor="middle" ` +
+        `font-family="system-ui, sans-serif" style="font-weight:600; text-transform:uppercase; letter-spacing:.05em">` +
+        `${escapeXml(theme.name)}</text>`,
+    );
+    placed.push({ x0: cxc - 64, x1: cxc + 64, y0: labelY - 11, y1: labelY + 4 }); // keep words clear of the label
+    for (const w of theme.words) {
+      const fs = sizeOf(w.count);
+      const halfW = w.word.length * fs * 0.30 + 3;
+      const halfH = fs * 0.62;
+      const step = Math.max(2, fs * 0.22);
+      let fx = cxc, fy = cyc, found = false;
+      for (let sI = 0; sI < 1200; sI++) {
+        const ang = 0.5 * sI;
+        const rad = step * 0.18 * ang;
+        const px = cxc + rad * Math.cos(ang);
+        const py = cyc + rad * Math.sin(ang);
+        const box = { x0: px - halfW, x1: px + halfW, y0: py - halfH, y1: py + halfH };
+        if (box.x0 < 3 || box.x1 > W2 - 3 || box.y0 < 18 || box.y1 > H2 - 3) continue;
+        if (!overlaps(box)) { fx = px; fy = py; placed.push(box); found = true; break; }
+      }
+      if (!found) {
+        fx = Math.min(W2 - halfW - 3, Math.max(halfW + 3, cxc));
+        fy = Math.min(H2 - halfH - 3, Math.max(halfH + 3, cyc));
+        placed.push({ x0: fx - halfW, x1: fx + halfW, y0: fy - halfH, y1: fy + halfH });
+      }
+      const weight = fs >= (MINPX + MAXPX) / 2 ? 600 : 400;
+      parts.push(
+        `<text x="${fx.toFixed(1)}" y="${fy.toFixed(1)}" font-size="${fs}" fill="${w.color}" ` +
+          `text-anchor="middle" dominant-baseline="central" ` +
+          `font-family="system-ui, -apple-system, Segoe UI, sans-serif" style="font-weight:${weight}">` +
+          `<title>${escapeXml(w.word)} — ${escapeXml(theme.name)} (${w.count})</title>${escapeXml(w.word)}</text>`,
+      );
+    }
+  });
+  return (
+    `<svg viewBox="0 0 ${W2} ${H2}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Themed word cloud">` +
+    `<rect x="0" y="0" width="${W2}" height="${H2}" fill="#ffffff"/>${parts.join('')}</svg>`
+  );
+}
 
 /** Coerce a loaded/empty blob into the working shape. */
 function normalize(raw) {
