@@ -157,7 +157,7 @@ export class PluginLoader {
    *   and runs it inside a sandbox; the URL is never `import()`ed by the engine.
    * @returns {Promise<PluginManifest>} The activated plugin's manifest.
    */
-  async load(url) {
+  async activate(url) {
     // Fetch the plugin source on the host so we can hand it to the opaque-origin
     // sandbox, which cannot fetch it itself. Same-origin always works; a
     // cross-origin URL needs the author to CORS-enable it (no proxy here).
@@ -168,14 +168,14 @@ export class PluginLoader {
   }
 
   /**
-   * Load + activate a plugin from its **source text** directly (no fetch) — used
-   * for file-picked plugins and any case where the host already has the code.
+   * Activate a plugin from its **source text** directly (no fetch) — used for
+   * file-picked plugins and any case where the host already has the code.
    *
    * @param {string} code - The plugin's entry-module source.
    * @param {string} [label='plugin'] - A label for errors/consent prompts.
    * @returns {Promise<PluginManifest>}
    */
-  async loadSource(code, label = 'plugin') {
+  async activateSource(code, label = 'plugin') {
     return this.#instantiate(code, label);
   }
 
@@ -263,7 +263,7 @@ export class PluginLoader {
         return this.#instantiate(code, label, CODEC_HOST_URL);
       }
       if (this.#plugins.has(manifest.id)) {
-        throw new Error(`Plugin "${manifest.id}" is already loaded`);
+        throw new Error(`Plugin "${manifest.id}" is already activated`);
       }
       assertApiCompatible(manifest);
 

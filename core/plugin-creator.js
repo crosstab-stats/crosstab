@@ -6,7 +6,7 @@
  * It's deliberately *not* an IDE: a template pre-wires the plumbing (manifest,
  * the variable picker, the output channels) so the author only fills in the
  * analysis. "Save & load" hands the source straight to the same sandboxed loader
- * any plugin uses (`PluginManager.saveAuthored` → `loader.loadSource`), and the
+ * any plugin uses (`PluginManager.saveAuthored` → `loader.activateSource`), and the
  * source persists like a file-loaded plugin so it survives a restart and can be
  * re-opened here to edit.
  *

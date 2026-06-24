@@ -138,20 +138,20 @@ export class PluginManager {
   }
 
   /** Load every enabled plugin (built-in + user). Call once at boot. */
-  async loadEnabled() {
+  async activateEnabled() {
     for (const e of this.#entries()) {
       if (this.#disabled.has(e.key)) continue;
-      await this.#loadEntry(e);
+      await this.#activateEntry(e);
     }
   }
 
   /** Load one entry, recording its manifest in the catalog. Resolves the manifest,
-   * or throws (callers that want best-effort use {@link #loadEntry}). */
-  async #loadEntryStrict(entry) {
+   * or throws (callers that want best-effort use {@link #activateEntry}). */
+  async #activateEntryStrict(entry) {
     const manifest =
       entry.source != null
-        ? await this.#loader.loadSource(entry.source, entry.name || entry.key)
-        : await this.#loader.load(entry.url);
+        ? await this.#loader.activateSource(entry.source, entry.name || entry.key)
+        : await this.#loader.activate(entry.url);
     this.#recordCatalog(entry.key, manifest);
     // Stamp the broker with this plugin's host-tracked attribution so any output it
     // appends outside an analysis bracket is still traceable, not unattributed (#106).
@@ -253,13 +253,13 @@ export class PluginManager {
    * on failure — bulk loads at launcher start can drop a plugin's sandbox
    * handshake, and a retry is exactly what the user's manual uncheck/re-check did.
    * #instantiate rolls back fully on a throw, so the retry starts clean. */
-  async #loadEntry(entry) {
+  async #activateEntry(entry) {
     try {
-      return await this.#loadEntryStrict(entry);
+      return await this.#activateEntryStrict(entry);
     } catch (err1) {
       await new Promise((r) => setTimeout(r, 150));
       try {
-        return await this.#loadEntryStrict(entry);
+        return await this.#activateEntryStrict(entry);
       } catch (err2) {
         console.error(`Failed to load plugin ${entry.key}`, err2);
         this.#results.appendError(`Failed to load plugin ${entry.name || entry.key}: ${err2.message}`);
@@ -275,7 +275,7 @@ export class PluginManager {
     if (!url) throw new Error('Enter a plugin URL.');
     if (this.#entries().some((e) => e.key === url)) throw new Error('That URL is already added.');
     const entry = { key: url, kind: 'url', url };
-    const manifest = await this.#loadEntryStrict(entry);
+    const manifest = await this.#activateEntryStrict(entry);
     this.#user.push(entry);
     writeJSON(LS_USER, this.#user);
     return manifest;
@@ -285,7 +285,7 @@ export class PluginManager {
   async addFromFile(file) {
     const source = await file.text();
     const entry = { key: `local:${crypto.randomUUID()}`, kind: 'file', name: file.name, source };
-    const manifest = await this.#loadEntryStrict(entry);
+    const manifest = await this.#activateEntryStrict(entry);
     this.#user.push(entry);
     writeJSON(LS_USER, this.#user);
     return manifest;
@@ -317,7 +317,7 @@ export class PluginManager {
       this.#user.push(entry);
     }
     writeJSON(LS_USER, this.#user); // persist before load — never lose the work
-    const manifest = await this.#loadEntryStrict(entry);
+    const manifest = await this.#activateEntryStrict(entry);
     return { key: entry.key, manifest };
   }
 
@@ -370,9 +370,9 @@ export class PluginManager {
     if (enabled) {
       this.#disabled.delete(key);
       writeJSON(LS_DISABLED, [...this.#disabled]);
-      if (!this.#isLoaded(key)) {
+      if (!this.#isActivated(key)) {
         const entry = this.#entries().find((e) => e.key === key);
-        if (entry) await this.#loadEntry(entry);
+        if (entry) await this.#activateEntry(entry);
       }
     } else {
       this.#disabled.add(key);
@@ -381,12 +381,12 @@ export class PluginManager {
       if (id) await this.#unload(id);
     }
     // The active set changed — let the project autosave re-record its plugin set.
-    // (applyActiveSet drives this in a loop, so a set-apply emits once per change;
+    // (applyActivatedSet drives this in a loop, so a set-apply emits once per change;
     // all coalesce into a single debounced save.)
     this.#bus?.emit(CoreEvents.PLUGINS_CHANGED);
   }
 
-  #isLoaded(key) {
+  #isActivated(key) {
     const id = this.#catalog[key]?.id;
     return id ? this.#loader.list().some((m) => m.id === id) : false;
   }
@@ -396,7 +396,7 @@ export class PluginManager {
    * analyses work with no network. */
   requiredRPackages() {
     const set = new Set();
-    for (const p of this.list()) if (p.loaded) for (const pkg of p.rPackages || []) set.add(pkg);
+    for (const p of this.list()) if (p.activated) for (const pkg of p.rPackages || []) set.add(pkg);
     return [...set];
   }
 
@@ -421,15 +421,15 @@ export class PluginManager {
    * persists so reopening it restores the same analyses/importers. Uses *loaded*,
    * not merely `enabled`: a plugin can be un-disabled yet never activated (the
    * launcher only loads what was selected), and we want what's actually wired. */
-  activeKeys() {
-    return this.list().filter((p) => p.loaded).map((p) => p.key);
+  activatedKeys() {
+    return this.list().filter((p) => p.activated).map((p) => p.key);
   }
 
   /** Drive the active plugin set to exactly `keys` (accepts load keys or manifest
    * ids): load what's wanted-but-inactive, unload what's active-but-unwanted. The
    * shared primitive behind the launcher's picker *and* per-project plugin restore;
    * unknown keys (e.g. a user plugin absent on this machine) are simply skipped. */
-  async applyActiveSet(keys) {
+  async applyActivatedSet(keys) {
     const want = new Set(keys || []);
     const list = this.list();
     const keySet = new Set();
@@ -440,14 +440,14 @@ export class PluginManager {
       // disabled set is the exact complement of the active set. Otherwise a
       // never-loaded-but-not-disabled plugin reads as "enabled but not loaded" —
       // which the manager (correctly) labels "failed to load", a false alarm.
-      if (w && !p.loaded) await this.setEnabled(p.key, true);
+      if (w && !p.activated) await this.setEnabled(p.key, true);
       else if (!w && p.enabled) await this.setEnabled(p.key, false);
     }
   }
 
   /** All known plugins for the dialog, with state + origin. */
   list() {
-    const loaded = new Set(this.#loader.list().map((m) => m.id));
+    const activated = new Set(this.#loader.list().map((m) => m.id));
     return this.#entries().map((e) => {
       const cat = this.#catalog[e.key];
       return {
@@ -464,7 +464,7 @@ export class PluginManager {
         codecs: cat?.codecs ?? [],
         url: e.url ?? null, // entry source URL (for the workspace manager to fetch)
         enabled: !this.#disabled.has(e.key),
-        loaded: cat?.id ? loaded.has(cat.id) : false,
+        activated: cat?.id ? activated.has(cat.id) : false,
         webAllowed: this.isWebAllowed(cat?.id),
         removable: !e.builtin,
         editable: e.kind === 'authored',
@@ -605,7 +605,7 @@ export class PluginManager {
     label.append(cb, el('span', p.name, 'ct-plugin__name'));
 
     const right = el('span', null, 'ct-plugin__right');
-    const metaText = p.enabled ? (p.loaded ? p.origin : 'failed to load') : 'disabled';
+    const metaText = p.enabled ? (p.activated ? p.origin : 'failed') : 'disabled';
     right.append(el('span', metaText, 'ct-plugin__meta'));
 
     // Network grant: shown only when the user has allowed this plugin web access;

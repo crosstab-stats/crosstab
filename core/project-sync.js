@@ -182,7 +182,7 @@ export class ProjectSync {
   /** A plugin was enabled/disabled (or a set applied). Persist it — but only into
    * an *existing* project. A plugin toggle alone must not birth an Untitled project
    * (and the launcher applies sets before any binding exists), so unbound = ignore;
-   * the set is captured by activeKeys() at the next real save / on open anyway. */
+   * the set is captured by activatedKeys() at the next real save / on open anyway. */
   #onPluginsChanged() {
     if (this.#loading || !this.#binding) return;
     this.#dirty = true;
@@ -483,7 +483,7 @@ export class ProjectSync {
     this.#applyWorkspaces?.(bundle.workspaces || {});
     this.#applyOutput?.(bundle.output || []);
     // Restore the bundle's recorded analysis set (#102), so opening a shared bundle
-    // brings back the same analyses. applyActiveSet skips any the recipient doesn't
+    // brings back the same analyses. applyActivatedSet skips any the recipient doesn't
     // have (those are surfaced to the user by the import handler's warning dialog).
     if (Array.isArray(bundle.activePlugins) && this.#applyActivePlugins) {
       try {

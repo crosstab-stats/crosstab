@@ -472,8 +472,8 @@ export async function boot(mounts) {
     // A project remembers which analyses were active. `plugins` is assigned later
     // in boot; these closures run on save/open (long after), so the late binding
     // is fine — and they no-op gracefully until then.
-    getActivePlugins: () => (plugins ? plugins.activeKeys() : null),
-    applyActivePlugins: (keys) => (plugins ? plugins.applyActiveSet(keys) : Promise.resolve()),
+    getActivePlugins: () => (plugins ? plugins.activatedKeys() : null),
+    applyActivePlugins: (keys) => (plugins ? plugins.applyActivatedSet(keys) : Promise.resolve()),
     // Every installed plugin's identifiers (load key + manifest id), so the project
     // can tell a recorded-but-uninstalled plugin apart from one it simply has, and
     // carry the former forward across saves (#102).
@@ -507,7 +507,7 @@ export async function boot(mounts) {
         const name = projects.activeName || 'crosstab-project';
         // Record the active analysis/plugin set so a recipient restores the same
         // analyses (and is warned about any they don't have — #102).
-        const activePlugins = plugins.list().filter((p) => p.loaded);
+        const activePlugins = plugins.list().filter((p) => p.activated);
         const blob = await exportProjectBundle({ datasets, projectName: name, plugins: activePlugins });
         downloadBlob(blob, `${slug(name) || 'crosstab-project'}.crosstab`);
         results.api.appendText(`Exported **${name}** as a .crosstab bundle (${(blob.size / 1048576).toFixed(1)} MB).`);

@@ -132,9 +132,9 @@ export class Launcher {
 
     // Prime the catalog (probe any uncataloged manifests), showing progress —
     // this is the "loading screen builds the plugin list as they load" bit.
-    indicator.textContent = 'Loading plugins…';
+    indicator.textContent = 'Cataloguing plugins…';
     await this.#plugins.primeCatalog((done, total) => {
-      indicator.textContent = `Loading plugins… ${done}/${total}`;
+      indicator.textContent = `Cataloguing plugins… ${done}/${total}`;
     });
     indicator.textContent = 'Ready';
 
@@ -278,7 +278,7 @@ export class Launcher {
    * but a deselect sticks). Delegates to the shared PluginManager primitive that
    * per-project plugin restore also uses; accepts keys (UI) or ids (presets). */
   async #applySelection(desiredKeysOrIds) {
-    await this.#plugins.applyActiveSet(desiredKeysOrIds);
+    await this.#plugins.applyActivatedSet(desiredKeysOrIds);
   }
 
   /** Open a saved project by name (case-insensitive) — the `?launch=<name>` bypass.

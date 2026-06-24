@@ -53,7 +53,7 @@ export class WorkspaceManager {
   async reconcile(pluginList) {
     const wanted = new Map(); // workspaceId → { plugin, ws }
     for (const p of pluginList || []) {
-      if (!p.loaded || !Array.isArray(p.workspaces)) continue;
+      if (!p.activated || !Array.isArray(p.workspaces)) continue;
       for (const ws of p.workspaces) if (ws && ws.id) wanted.set(ws.id, { plugin: p, ws });
     }
     for (const id of [...this.#mounted.keys()]) {
