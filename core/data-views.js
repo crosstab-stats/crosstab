@@ -106,6 +106,30 @@ export class DataView {
     });
   }
 
+  /**
+   * Read a window of rows, riding out a *transient* "table/view does not exist"
+   * that can occur for a beat while a project open/restore rebuilds the active
+   * dataset's DuckDB view (a stale view briefly referencing a source being
+   * recreated — #114). Retries a few times with a short backoff; returns `null`
+   * if it never settles (the caller keeps the current grid and re-renders on the
+   * rebuild's DATA_CHANGED). A non-transient error (a real bug) is rethrown.
+   * @returns {Promise<Array<object>|null>}
+   */
+  async #getRowsResilient(opts) {
+    for (let i = 0; ; i++) {
+      try {
+        return await this.store.getRows(opts);
+      } catch (err) {
+        const transient = /does not exist|not found|Catalog Error/i.test(String(err?.message || err));
+        if (!transient || i >= 4) {
+          if (transient) return null; // gave up gracefully — no raw error to the user
+          throw err;
+        }
+        await new Promise((r) => setTimeout(r, 80 + i * 80));
+      }
+    }
+  }
+
   async #render(force) {
     const total = this.store.rowCount;
     const cols = this.#visibleMetas();
@@ -142,13 +166,18 @@ export class DataView {
 
     const winMetas = cols.slice(startCol, endCol);
     const token = ++this.token;
-    const rows = await this.store.getRows({
+    const rows = await this.#getRowsResilient({
       offset: startRow,
       limit: endRow - startRow,
       variables: winMetas.map((m) => m.name),
       includeRowId: true, // needed so a cell edit can target the row by stable id
     });
     if (token !== this.token) return; // a newer scroll superseded this fetch
+    // A transient read failure mid-rebuild (a view briefly referencing a source
+    // being recreated during a project open/restore — #114). Bail quietly and keep
+    // the current grid: the rebuild emits DATA_CHANGED on completion, which fires a
+    // fresh refresh that renders correctly. Never surface a raw DuckDB error here.
+    if (rows == null) return;
 
     const leftW = startCol * COL_W;
     const rightW = (nCols - endCol) * COL_W;
