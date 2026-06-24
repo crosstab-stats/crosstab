@@ -69,6 +69,10 @@ export class PluginManager {
   /** Event bus, to announce active-set changes. @type {?import('./event-bus.js').EventBus} */
   #bus = null;
 
+  /** () => string[] : plugin ids the OPEN project references but doesn't have
+   * installed — so adding a local plugin that matches one can confirm intent (#102). */
+  #projectReferences = null;
+
   /**
    * @param {Object} deps
    * @param {import('./loader.js').PluginLoader} deps.loader
@@ -78,14 +82,17 @@ export class PluginManager {
    * @param {import('./plugin-actions.js').PluginActions} deps.actions
    * @param {import('./event-bus.js').EventBus} [deps.bus] - To announce active-set
    *   changes (so the project autosave re-records its plugin set).
+   * @param {() => string[]} [deps.projectReferences] - The open project's
+   *   referenced-but-uninstalled plugin ids (for the add-time conflict prompt).
    */
-  constructor({ loader, urls, menus, results, actions, bus }) {
+  constructor({ loader, urls, menus, results, actions, bus, projectReferences }) {
     this.#loader = loader;
     this.#urls = urls;
     this.#menus = menus;
     this.#results = results;
     this.#actions = actions;
     this.#bus = bus ?? null;
+    this.#projectReferences = projectReferences ?? null;
     this.#disabled = new Set(readJSON(LS_DISABLED, []));
     // Drop a stale catalog if the catalog version changed (e.g. manifests gained
     // `disciplines`), so it's re-probed fresh rather than serving old metadata.
@@ -304,6 +311,23 @@ export class PluginManager {
       const ok = confirm(`A plugin with id "${qid}" is already installed: "${clashCat.name}".\n\nReplace it with this one?`);
       if (!ok) throw new Error(`Plugin id "${qid}" is already in use by "${clashCat.name}".`);
       await this.removePlugin(clashKey);
+      return qid;
+    }
+    // Adding a LOCAL plugin (file/authored) whose id matches one the OPEN project
+    // references but doesn't have installed (#102). Its namespace (author) is
+    // self-declared/unverifiable, so the match could be the genuinely-missing plugin
+    // (or a compatible upgrade) — or an honest mistake. Ask. (URL plugins skip this:
+    // a host-namespaced match is verifiably the same plugin, so it just resolves.)
+    if (!entry.builtin && entry.kind !== 'url') {
+      const referenced = (this.#projectReferences ? this.#projectReferences() : []) || [];
+      if (referenced.includes(qid)) {
+        const ok = confirm(
+          `Your open project refers to a plugin "${qid}" that isn't installed here.\n\n` +
+            `This plugin has the same id. Add it as the one your project is missing ` +
+            `(or a compatible upgrade)?\n\nOK = use it for the project · Cancel = stop.`,
+        );
+        if (!ok) throw new Error(`Cancelled: "${qid}" matches a plugin your open project refers to.`);
+      }
     }
     return qid;
   }

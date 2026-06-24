@@ -108,6 +108,13 @@ export class ProjectSync {
     this.#pluginIdentities = pluginIdentities ?? null;
   }
 
+  /** Plugin identifiers the OPEN project references but this install can't resolve
+   * (not registered here) — used to warn when a user adds a local plugin whose id
+   * matches one the project expects (#102). */
+  referencedPlugins() {
+    return [...this.#unresolvedPlugins];
+  }
+
   /** The recorded plugin identifiers this install can't resolve to an installed
    * plugin (matched by key OR manifest id) — the ones to carry forward on save so
    * the association isn't lost (#102). */
