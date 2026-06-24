@@ -204,6 +204,28 @@ export class ProjectSync {
     this.#armed = true;
   }
 
+  /**
+   * Run a launcher data-seed load (Demo / Blank) without it counting as a user
+   * change that auto-creates a project — the same exemption the boot seed gets by
+   * load order. Without this, *re-opening* the launcher and picking a demo (which
+   * happens after boot has armed auto-create) would spawn an "Untitled project"
+   * from merely loading regenerable demo data, with no work done. The session is
+   * left armed afterwards, so the user's first real change still autosaves — the
+   * "everything you do is saved" promise is untouched; only loading throwaway demo
+   * data is exempt.
+   *
+   * @param {() => Promise<void>} fn - performs the data load (newProject + load).
+   */
+  async loadingSeed(fn) {
+    const prevArmed = this.#armed;
+    this.#armed = false;
+    try {
+      return await fn();
+    } finally {
+      this.#armed = prevArmed;
+    }
+  }
+
   async #autoCreate() {
     try {
       await this.#fullSave(null, 'Untitled project');

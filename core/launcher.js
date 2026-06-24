@@ -322,9 +322,15 @@ export class Launcher {
           // Loading a fresh data source (Demo/Blank). On reopen, FIRST detach into a
           // new project — otherwise setDataset mutates the currently-open project's
           // active dataset and autosave overwrites it (clobbering a saved project).
-          // The chosen data then becomes a new autosaving "Untitled project".
-          if (reopen) await this.#projects?.newProject?.();
-          await this.#loadSource(this.#pendingSource || 'blank');
+          // Run it as a *seed load* so merely loading regenerable demo/blank data
+          // doesn't auto-create an "Untitled project" (the boot seed's exemption,
+          // extended to the reopen path). The user's first real action still saves.
+          const doLoad = async () => {
+            if (reopen) await this.#projects?.newProject?.();
+            await this.#loadSource(this.#pendingSource || 'blank');
+          };
+          if (this.#projects?.loadingSeed) await this.#projects.loadingSeed(doLoad);
+          else await doLoad();
         }
       }
       markSeen();
