@@ -45,6 +45,13 @@ export class ProjectSync {
   #getOutput;
   /** (model) => void : restore (or clear) the Output tab on open/switch. */
   #applyOutput;
+  /** () => string[] : every installed plugin's identifiers (key + manifest id), so
+   * a recorded plugin can be told apart from one this install simply doesn't have. */
+  #pluginIdentities;
+  /** Plugin identifiers recorded in the open project that AREN'T installed here —
+   * carried forward verbatim on every save so the association survives until the
+   * plugin is added and resolves (#102). Empty for a fully-resolved project. */
+  #unresolvedPlugins = [];
 
   /** Current project: `{ id, name }` once saved/opened, else `null`. */
   #binding = null;
@@ -84,7 +91,7 @@ export class ProjectSync {
    * @param {(keys: string[]) => Promise<void>} [deps.applyActivePlugins] - Restore
    *   a project's saved plugin set on open.
    */
-  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaces, applyWorkspaces, getOutput, applyOutput }) {
+  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaces, applyWorkspaces, getOutput, applyOutput, pluginIdentities }) {
     this.#store = projectStore;
     this.#datasets = datasets;
     this.#ui = ui;
@@ -98,6 +105,16 @@ export class ProjectSync {
     this.#applyWorkspaces = applyWorkspaces ?? null;
     this.#getOutput = getOutput ?? null;
     this.#applyOutput = applyOutput ?? null;
+    this.#pluginIdentities = pluginIdentities ?? null;
+  }
+
+  /** The recorded plugin identifiers this install can't resolve to an installed
+   * plugin (matched by key OR manifest id) — the ones to carry forward on save so
+   * the association isn't lost (#102). */
+  #computeUnresolved(recorded) {
+    if (!Array.isArray(recorded) || !recorded.length) return [];
+    const have = new Set(this.#pluginIdentities ? this.#pluginIdentities() : []);
+    return recorded.filter((x) => x && !have.has(x));
   }
 
   activate() {
@@ -326,7 +343,12 @@ export class ProjectSync {
     }
     // Record the active plugin set alongside the data, so reopening restores the
     // analyses too. Null when the feature isn't wired (keeps old saves untouched).
-    const activePlugins = this.#getActivePlugins ? this.#getActivePlugins() : null;
+    // Carry forward any recorded plugins this install can't resolve (not installed
+    // here) so the association survives until the plugin is added (#102).
+    let activePlugins = this.#getActivePlugins ? this.#getActivePlugins() : null;
+    if (activePlugins && this.#unresolvedPlugins.length) {
+      activePlugins = [...new Set([...activePlugins, ...this.#unresolvedPlugins])];
+    }
     const workspaces = this.#getWorkspaces ? this.#getWorkspaces() : undefined;
     const output = this.#getOutput ? this.#getOutput() : undefined;
     return { activeId: this.#datasets.activeId, activePlugins, workspaces, output, datasets };
@@ -351,6 +373,7 @@ export class ProjectSync {
     this.#binding = null;
     this.#sourcesDirty.clear();
     this.#dirty = false;
+    this.#unresolvedPlugins = []; // a fresh project carries no unresolved plugins
     this.#setStatus();
     this.#emitProject();
   }
@@ -396,6 +419,9 @@ export class ProjectSync {
           console.warn('[project] restoring plugin set failed', err);
         }
       }
+      // Remember any recorded plugins not installed here, so a later save doesn't
+      // forget them (they reactivate once the plugin is added — #102).
+      this.#unresolvedPlugins = this.#computeUnresolved(bundle.activePlugins);
       this.#binding = { id, name };
       this.#sourcesDirty.clear();
       this.#dirty = false;
@@ -466,6 +492,9 @@ export class ProjectSync {
         console.warn('[project] restoring bundle plugin set failed', err);
       }
     }
+    // Carry forward bundle plugins not installed here (the import handler also warns
+    // about them) so they're remembered, not dropped, on the project's first save.
+    this.#unresolvedPlugins = this.#computeUnresolved(bundle.activePlugins);
     this.#loading = false;
     // It's a brand-new project; never bound to (and so never overwriting) the one
     // that was open. Persist + name it from the bundle.

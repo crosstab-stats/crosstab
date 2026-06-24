@@ -474,6 +474,10 @@ export async function boot(mounts) {
     // is fine — and they no-op gracefully until then.
     getActivePlugins: () => (plugins ? plugins.activeKeys() : null),
     applyActivePlugins: (keys) => (plugins ? plugins.applyActiveSet(keys) : Promise.resolve()),
+    // Every installed plugin's identifiers (load key + manifest id), so the project
+    // can tell a recorded-but-uninstalled plugin apart from one it simply has, and
+    // carry the former forward across saves (#102).
+    pluginIdentities: () => (plugins ? plugins.list().flatMap((p) => [p.key, p.id]).filter(Boolean) : []),
     // A project also remembers each plugin workspace's state blob. After swapping in
     // the new project's blobs, force-remount any live workspace tabs so they re-read
     // their state — a plugin active in both the old and new project stays mounted, so
