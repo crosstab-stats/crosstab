@@ -44,6 +44,25 @@ export const manifest = {
       ],
     },
     {
+      label: 'Word cloud…',
+      run: 'wordCloud',
+      order: 15,
+      inputs: [
+        { name: 'text', kind: 'variables', label: 'Text column', hint: 'The free-text responses to visualise as a word cloud.', multiple: false, types: ['string'], unique: true },
+        { name: 'topn', kind: 'number', label: 'How many words', hint: 'How many of the most frequent words to show.', default: 60 },
+        { name: 'minlen', kind: 'number', label: 'Minimum word length', hint: 'Ignore words shorter than this many letters.', default: 3 },
+        { name: 'stopwords', kind: 'choice', label: 'Stop words', hint: 'Whether to drop common filler words like the and and.', default: 'remove', options: [
+          { value: 'remove', label: 'Remove common stop words (the, and, of…)' },
+          { value: 'keep', label: 'Keep all words' },
+        ] },
+        { name: 'layout', kind: 'choice', label: 'Placement', hint: 'How words are positioned.', default: 'context', options: [
+          { value: 'context', label: 'Group related words together (by co-occurrence)' },
+          { value: 'spiral', label: 'Pack by frequency (classic spiral)' },
+        ] },
+        { name: 'themes', kind: 'number', label: 'Colour groups (themes)', hint: 'How many co-occurrence clusters to colour the words by.', default: 5 },
+      ],
+    },
+    {
       label: 'Sentiment analysis…',
       run: 'sentiment',
       order: 20,
@@ -146,6 +165,99 @@ export async function wordFrequency(app, { text, stopwords, topn, minlen }) {
   );
   const svg = r.str1('svg');
   if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg));
+}
+
+// --- Word cloud --------------------------------------------------------------
+
+/**
+ * A word cloud where **size = frequency** and, by default, **placement reflects
+ * co-occurrence**: words that tend to appear in the same response are drawn near
+ * each other. R does the modelling — tokenize, count, build a word×word cosine
+ * similarity from co-occurrence, then `cmdscale` (classical MDS) to lay the words
+ * out in 2D and `hclust`/`cutree` to colour them by emergent co-occurrence cluster
+ * ("theme"). This plugin's own JS then does the visual layout: it anchors each
+ * word at its MDS position and spirals it just far enough to remove overlaps, so
+ * the cloud is *readable* (no half-overlapping words) while still spatially
+ * meaningful. "Classic spiral" packs purely by frequency from the centre instead;
+ * it's also the automatic fallback when there are too few words to position.
+ */
+export async function wordCloud(app, { text, topn, minlen, stopwords, layout, themes }) {
+  if (!text) {
+    await app.results.appendError('Word cloud: choose a text column.');
+    return;
+  }
+  const N = clampInt(topn, 60, 5, 200);
+  const ML = clampInt(minlen, 3, 1, 20);
+  const K = clampInt(themes, 5, 2, 8);
+  const rCode = `
+    ${PRELUDE}
+    suppressMessages(library(reshape2))
+    txt <- as.character(text)
+    d <- tibble(.row = seq_along(txt), text = txt)
+    toks <- d %>% unnest_tokens(word, text)
+    ${stopwords === 'keep' ? '' : 'data("stop_words"); toks <- toks %>% anti_join(stop_words, by = "word")'}
+    toks <- toks %>% filter(nchar(word) >= ${ML} & !grepl("^[0-9]+$", word))
+    total <- nrow(toks)
+    freq <- toks %>% count(word, sort = TRUE)
+    nDistinct <- nrow(freq)
+    topw <- head(freq$word, ${N})
+    ok <- 0L; xs <- numeric(0); ys <- numeric(0); cl <- integer(0)
+    words <- head(freq$word, ${N}); fn <- as.integer(head(freq$n, ${N}))
+    if (length(topw) >= 3) {
+      cc <- toks %>% filter(word %in% topw) %>% count(.row, word)
+      M <- reshape2::acast(cc, .row ~ word, value.var = "n", fill = 0)
+      if (is.null(dim(M))) M <- matrix(M, nrow = 1, dimnames = list(NULL, names(M)))
+      nrm <- sqrt(colSums(M^2))
+      S <- t(M) %*% M
+      S <- S / outer(nrm, nrm); S[!is.finite(S)] <- 0
+      Dd <- 1 - S; diag(Dd) <- 0; Dd[Dd < 0] <- 0
+      co <- tryCatch(cmdscale(as.dist(Dd), k = 2), error = function(e) NULL)
+      if (!is.null(co) && is.matrix(co) && ncol(co) >= 2 && nrow(co) == ncol(M)) {
+        kk <- max(2L, min(${K}L, nrow(co) - 1L))
+        cl0 <- tryCatch(cutree(hclust(dist(co), method = "ward.D2"), k = kk),
+                        error = function(e) rep(1L, nrow(co)))
+        ord <- match(colnames(M), freq$word)
+        words <- colnames(M); fn <- as.integer(freq$n[ord])
+        xs <- as.numeric(co[, 1]); ys <- as.numeric(co[, 2]); cl <- as.integer(cl0); ok <- 1L
+      }
+    }
+    list(words = words, freq = fn, x = xs, y = ys, cl = cl,
+         total = total, nDistinct = nDistinct, ok = ok)`;
+  const { result } = await app.webr.run(rCode);
+  const r = flat(result);
+  const words = r.strs('words');
+  const freq = r.nums('freq');
+  if (!words.length) {
+    await app.results.appendText('No words found after filtering. Try keeping stop words or lowering the minimum word length.');
+    return;
+  }
+  const contextual = layout !== 'spiral' && r.num('ok') === 1;
+  const data = { words, freq, x: r.nums('x'), y: r.nums('y'), cl: r.nums('cl').map((v) => Math.round(v)) };
+  const render = (w, h) => buildCloudSvg(data, w, h, contextual);
+
+  let handle;
+  handle = await app.results.appendPlot(render(680, 440), {
+    onRedraw: (w, h) => app.results.updatePlot(handle, render(w, h)),
+  });
+
+  // An accessible companion table: the cloud can't be read by a screen reader and
+  // exact counts are hard to judge from type size, so list the top words too.
+  const themed = contextual && data.cl.length === words.length;
+  const tableTop = Math.min(words.length, 30);
+  await app.results.appendTable(
+    {
+      columns: themed ? ['Rank', 'Word', 'Count', 'Theme'] : ['Rank', 'Word', 'Count'],
+      rows: Array.from({ length: tableTop }, (_, i) =>
+        themed ? [String(i + 1), words[i], String(freq[i]), `Theme ${data.cl[i]}`] : [String(i + 1), words[i], String(freq[i])]),
+      rowHeaders: false,
+    },
+    { caption: `Word Cloud — top ${tableTop} of ${r.num('nDistinct').toLocaleString()} distinct words (${r.num('total').toLocaleString()} tokens)` },
+  );
+  await app.results.appendText(
+    contextual
+      ? '**Word size = frequency.** Placement comes from multidimensional scaling of word **co-occurrence**, so words that tend to appear in the same responses sit near each other; **colour** marks emergent co-occurrence clusters (themes). Drag the lower-right grip to resize, then click **⟳ Redraw at this size** to re-pack.'
+      : '**Word size = frequency**, packed in a spiral from the centre. (Choose *Group related words together* for a co-occurrence layout — used automatically when there are enough words.) Drag the lower-right grip to resize, then click **⟳ Redraw at this size** to re-pack.',
+  );
 }
 
 // --- Sentiment ---------------------------------------------------------------
@@ -448,6 +560,121 @@ function parseDict(text) {
 }
 
 // --- helpers -----------------------------------------------------------------
+
+/** Categorical palette for theme (co-occurrence cluster) colouring. Picked for
+ * reasonable contrast on white and distinguishability. */
+const CLOUD_PALETTE = ['#2980b9', '#27ae60', '#c0392b', '#8e44ad', '#d35400', '#16a085', '#2c3e50', '#c2185b'];
+
+/** Clamp an optional numeric input to an integer in [lo, hi], defaulting if unset. */
+function clampInt(v, dflt, lo, hi) {
+  const x = Number.isFinite(v) ? Math.floor(v) : dflt;
+  return Math.max(lo, Math.min(hi, x));
+}
+
+/** XML-escape text for safe inclusion in the SVG (also re-sanitised host-side). */
+function escapeXml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** Single-hue colour for the no-theme (spiral / too-few-words) case: darker = more
+ * frequent, so the visual still encodes frequency beyond size alone. */
+function freqColour(f, fmin, fmax) {
+  const t = fmax > fmin ? (f - fmin) / (fmax - fmin) : 0.5;
+  return `hsl(207, 60%, ${Math.round(62 - t * 42)}%)`;
+}
+
+/**
+ * Build the word-cloud SVG. Words are sized by frequency and placed by spiralling
+ * out from a target until they no longer overlap any already-placed word — so the
+ * cloud is always readable. The target is the word's MDS position (contextual
+ * layout) or the canvas centre (spiral layout). Layout is deterministic (no RNG),
+ * so a redraw at the same size is stable.
+ *
+ * @param {{words:string[], freq:number[], x:number[], y:number[], cl:number[]}} data
+ * @param {number} W - target canvas width (px)
+ * @param {number} H - target canvas height (px)
+ * @param {boolean} contextual - true → anchor at MDS coords; false → spiral from centre
+ * @returns {string} an `<svg>` fragment
+ */
+function buildCloudSvg(data, W, H, contextual) {
+  const { words, freq, x, y, cl } = data;
+  const n = words.length;
+  if (!n) return '';
+  const W2 = Math.max(320, Math.round(W));
+  const H2 = Math.max(220, Math.round(H));
+  const MINPX = Math.max(10, Math.round(H2 * 0.028));
+  const MAXPX = Math.max(MINPX + 8, Math.round(H2 * 0.13));
+  const fmin = Math.min(...freq);
+  const fmax = Math.max(...freq);
+  const sq = (v) => Math.sqrt(Math.max(0, v));
+  const sizeOf = (f) => {
+    const t = fmax > fmin ? (sq(f) - sq(fmin)) / (sq(fmax) - sq(fmin)) : 0.5;
+    return Math.round(MINPX + t * (MAXPX - MINPX));
+  };
+
+  // Biggest words first, so the prominent terms claim their target spot.
+  const order = [...Array(n).keys()].sort((a, b) => freq[b] - freq[a]);
+
+  const margin = Math.round(MAXPX * 0.6);
+  const cx0 = W2 / 2;
+  const cy0 = H2 / 2;
+  const tx = new Array(n);
+  const ty = new Array(n);
+  const useCoords = contextual && x.length === n && y.length === n;
+  if (useCoords) {
+    const xmin = Math.min(...x), xmax = Math.max(...x), ymin = Math.min(...y), ymax = Math.max(...y);
+    const sx = xmax > xmin ? (W2 - 2 * margin) / (xmax - xmin) : 0;
+    const sy = ymax > ymin ? (H2 - 2 * margin) / (ymax - ymin) : 0;
+    for (let i = 0; i < n; i++) {
+      tx[i] = xmax > xmin ? margin + (x[i] - xmin) * sx : cx0;
+      ty[i] = ymax > ymin ? margin + (y[i] - ymin) * sy : cy0;
+    }
+  } else {
+    for (let i = 0; i < n; i++) { tx[i] = cx0; ty[i] = cy0; }
+  }
+
+  const placed = []; // axis-aligned bounding boxes already taken
+  const overlaps = (b) => placed.some((p) => !(b.x1 < p.x0 || b.x0 > p.x1 || b.y1 < p.y0 || b.y0 > p.y1));
+  const themed = cl && cl.length === n;
+  const out = [];
+  for (const i of order) {
+    const fs = sizeOf(freq[i]);
+    const halfW = words[i].length * fs * 0.30 + 3; // ~0.6·fs per char (system-ui)
+    const halfH = fs * 0.62;
+    const step = Math.max(2, fs * 0.22);
+    let fx = tx[i], fy = ty[i], found = false;
+    for (let s = 0; s < 1600; s++) {
+      const ang = 0.5 * s;
+      const rad = step * 0.2 * ang;
+      const px = tx[i] + rad * Math.cos(ang);
+      const py = ty[i] + rad * Math.sin(ang);
+      const box = { x0: px - halfW, x1: px + halfW, y0: py - halfH, y1: py + halfH };
+      if (box.x0 < 4 || box.x1 > W2 - 4 || box.y0 < 4 || box.y1 > H2 - 4) continue;
+      if (!overlaps(box)) { fx = px; fy = py; placed.push(box); found = true; break; }
+    }
+    if (!found) {
+      fx = Math.min(W2 - halfW - 4, Math.max(halfW + 4, tx[i]));
+      fy = Math.min(H2 - halfH - 4, Math.max(halfH + 4, ty[i]));
+      placed.push({ x0: fx - halfW, x1: fx + halfW, y0: fy - halfH, y1: fy + halfH });
+    }
+    const colour = themed
+      ? CLOUD_PALETTE[(((cl[i] - 1) % CLOUD_PALETTE.length) + CLOUD_PALETTE.length) % CLOUD_PALETTE.length]
+      : freqColour(freq[i], fmin, fmax);
+    const weight = fs >= (MINPX + MAXPX) / 2 ? 600 : 400;
+    out.push(
+      `<text x="${fx.toFixed(1)}" y="${fy.toFixed(1)}" font-size="${fs}" fill="${colour}" ` +
+        `text-anchor="middle" dominant-baseline="central" ` +
+        `font-family="system-ui, -apple-system, Segoe UI, sans-serif" style="font-weight:${weight}">` +
+        `<title>${escapeXml(words[i])} (${freq[i]})</title>${escapeXml(words[i])}</text>`,
+    );
+  }
+  return (
+    `<svg viewBox="0 0 ${W2} ${H2}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Word cloud">` +
+    `<rect x="0" y="0" width="${W2}" height="${H2}" fill="#ffffff"/>` +
+    out.join('') +
+    `</svg>`
+  );
+}
 
 function cleanSvg(svg) {
   return String(svg)
