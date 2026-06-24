@@ -1,10 +1,20 @@
 /**
  * CrossTab Plugin API — type definitions.
  *
- * This file is the formal contract between the engine and a plugin. A plugin is
- * an ES module that exports a {@link PluginManifest} and an {@link activate}
- * function; `activate` receives an {@link App} object, which is the ONLY way a
- * plugin may talk to the engine.
+ * This file is the formal contract between the engine and a plugin. A plugin is an
+ * ES module that exports a {@link PluginManifest}. It then either exports an
+ * `activate(app)` function (imperative) and/or — the common path — declares its
+ * extension points in the manifest (`menu`/`imports`/`exports`/`outputExports`/
+ * `codecs`/`workspaces`) and exports the named functions they reference. Either
+ * way the {@link App} object is the ONLY way a plugin talks to the engine.
+ *
+ * Extension points, all in {@link PluginManifest}:
+ *  - **Analyses** — `menu` actions that gather `inputs` and run R / write Output.
+ *  - **File import/export** — one-shot `imports`/`exports`, or streaming `codecs`
+ *    (the large-file path; see {@link CodecSpec}/{@link CodecApi}).
+ *  - **Output export** — `outputExports` (turn the Output pane into a report).
+ *  - **Workspaces** — `workspaces` + a `workspace` module (a full sandboxed tab;
+ *    see {@link WorkspaceModule}/{@link WorkspaceStateApi}).
  *
  * ## Everything is async
  * Every plugin runs in a sandboxed iframe and reaches the engine over
@@ -67,6 +77,17 @@ export interface DataApi {
   getSelectedVariables(): Promise<string[]>;
   /** Number of cases (rows). */
   getRowCount(): Promise<number>;
+  /** Largest UTF-8 byte length per column among `names` — for sizing fixed-width
+   * exports (e.g. SPSS `.sav` / Stata `.dta` string fields). Resolves to
+   * `{ name: maxBytes }`. */
+  maxOctetLengths(names: string[]): Promise<Record<string, number>>;
+  /** The dataset's **data transform log** — data-only ops (recodes, computes,
+   * case filters), not the source load/append/join — the record a reproducible
+   * script reads. */
+  getTransforms(): Promise<object[]>;
+  /** The full ordered operation history (`{ applied }`): sources *and* transforms
+   * in applied order — what the History panel shows and the R-syntax export walks. */
+  getHistory(): Promise<{ applied: object[] }>;
   /** Emit a **derived dataset** (e.g. bootstrap resamples, simulated draws,
    * predictions) as a new dataset in the workspace; by default it becomes active,
    * so it can immediately be plotted/described/exported like any other. Resolves
@@ -133,6 +154,14 @@ export interface ResultsApi {
   appendError(message: string): Promise<void>;
   /** Clear all output. */
   clear(): Promise<void>;
+  /** The current Output result model (the ordered blocks: sections/tables/plots/
+   * text/errors) — e.g. for an output exporter to render to HTML/Word. */
+  getModel(): Promise<object[]>;
+  /** The Output pane's CSS, so an exported report matches the on-screen styling. */
+  getStyles(): Promise<string>;
+  /** A previously appended plot rendered to PNG bytes, by its plot id — for report
+   * formats that can't embed SVG. Resolves `null` for an unknown id. */
+  getPlotPng(id: number | string): Promise<Uint8Array | null>;
 }
 
 /** Result of a {@link WebrApi.run} call. */
@@ -437,9 +466,26 @@ export interface App {
   readonly exporters: ExportersApi;
   readonly web: WebApi;
   readonly events: EventsApi;
+  /** Workspace state (#93) — **present only for a workspace plugin's `mount`**.
+   * The host persists this opaque blob with the project. See {@link WorkspaceStateApi}. */
+  readonly state?: WorkspaceStateApi;
+  /** Streaming codec surface (#98) — **present only during a codec read/write
+   * invocation**. See {@link CodecApi}. */
+  readonly codec?: CodecApi;
 }
 
-/** A plugin's manifest, exported from its entry module. */
+/**
+ * A plugin's manifest, exported from its entry module.
+ *
+ * There are two ways to build a plugin and they can be mixed:
+ *  - **Imperative** — export `activate(app)` and call `app.menus.register` /
+ *    `app.importers.register` / `app.exporters.register` yourself.
+ *  - **Declarative** (what every builtin uses) — declare `menu`/`imports`/
+ *    `exports`/`outputExports`/`codecs`/`workspaces` here as data and export the
+ *    named functions they reference. The host does the wiring, gathers an action's
+ *    `inputs` with its own dialogs, binds them into R, and opens the Output
+ *    section + attribution for you. **Codecs and workspaces are declarative-only.**
+ */
 export interface PluginManifest {
   /** Globally unique, stable id, e.g. `"builtin-frequencies"`. */
   id: string;
@@ -449,12 +495,245 @@ export interface PluginManifest {
   version: string;
   /** Engine API version targeted, e.g. `"0.1.0"`. Major must match the engine. */
   apiVersion: string;
-  /** R packages the plugin needs; pre-installed on activation. */
+  /** R packages the plugin needs; pre-installed on activation **and** picked up by
+   * the offline "Make available offline" closure. Declare every package you use. */
   rPackages?: string[];
+  /** Grouping shown in the launcher's plugin picker, e.g. `"Regression"`. The
+   * categories `"Import"`/`"Export"`/`"Data"` are treated as infrastructure and
+   * default-on. */
+  category?: string;
+  /** Search keywords for the picker. */
+  keywords?: string[];
+  /** Disciplines this plugin is pinned under in the launcher (e.g. `["Sociology"]`). */
+  disciplines?: string[];
+  /** Declarative analysis actions → menu items (the general analysis API). */
+  menu?: MenuAction[];
+  /** Declarative file importers (one-shot; for the streaming large-file path use
+   * `codecs`). */
+  imports?: ImportSpec[];
+  /** Declarative data exporters (one-shot; for streaming use `codecs`). */
+  exports?: ExportSpec[];
+  /** Declarative **output** exporters — turn the Output pane (results, not data)
+   * into a report format (HTML, Word). */
+  outputExports?: OutputExportSpec[];
+  /** Declarative streaming **format codecs** (#98) — a unified read/write per file
+   * format that streams, so it survives multi-GB files. See {@link CodecSpec}. */
+  codecs?: CodecSpec[];
+  /** Declarative **workspace** tabs (#93) — a full sandboxed UI pane. See
+   * {@link WorkspaceSpec} and the `workspace` module export. */
+  workspaces?: WorkspaceSpec[];
+}
+
+// --- Declarative analysis model (manifest.menu) ------------------------------
+
+/** The kind of an analysis input the host gathers before invoking the action. */
+export type InputKind = "variables" | "number" | "text" | "choice" | "file";
+
+/** One declared input on a {@link MenuAction}. The host renders the right dialog,
+ * then passes the gathered value to the action function under `name`, and (except
+ * `file`) binds it into R for `webr.run`. */
+export interface InputSpec {
+  /** Key the gathered value is delivered/bound under. */
+  name: string;
+  /** What to gather. Default `"variables"`. */
+  kind?: InputKind;
+  /** Visible label (defaults to `name`). */
+  label?: string;
+  /** Why this input is needed — shown in the picker. */
+  hint?: string;
+  /** Treat as optional (don't abort the action if skipped). */
+  optional?: boolean;
+  /** (`variables`) allow several; delivered as `string[]` vs a single `string`. */
+  multiple?: boolean;
+  /** (`variables`) restrict the picker to these variable types. */
+  types?: VariableType[];
+  /** (`variables`) exclude variables already chosen by an earlier `unique` input. */
+  unique?: boolean;
+  /** (`number`/`text`/`choice`) initial value. */
+  default?: string | number;
+  /** (`choice`) the options to choose from. */
+  options?: Array<{ value: string; label?: string } | string>;
+  /** (`file`) accepted extensions for the picker, with the dot, e.g. `[".geojson"]`. */
+  extensions?: string[];
+}
+
+/** A declarative analysis action: a menu item that gathers `inputs` then calls the
+ * exported `run` function. */
+export interface MenuAction {
+  /** Menu item label, e.g. `"Frequencies…"`. (Placement under a category comes
+   * from `manifest.category`; the host owns top-level menu structure.) */
+  label: string;
+  /** Name of the exported function to invoke: `export async function run(app, inputs)`
+   * where `inputs` is `{ [inputName]: value }`. Inputs of kind `variables`/`number`/
+   * `text` are also bound into R as `df`/named vars for `app.webr.run`. */
+  run: string;
+  /** Inputs to gather (with host dialogs) before invoking `run`. */
+  inputs?: InputSpec[];
+  /** Sort weight within the category (lower first). */
+  order?: number;
+}
+
+// --- Declarative import / export / output-export specs -----------------------
+
+/** A declarative importer (manifest.imports). The named `parse` function gets the
+ * {@link ImportRequest} and returns an {@link ImportedDataset} (or calls
+ * `app.importers.deliver`). For a `stage` importer it receives a host-mounted WebR
+ * `path` instead of `file` (the upload is never cloned into the sandbox). */
+export interface ImportSpec {
+  label: string;
+  /** Exported function name: `export async function parse(app, { name, file, path })`. */
+  parse: string;
+  source?: ImporterSource;
+  extensions?: string[];
+  /** Host-mount a large upload into WebR and pass its `path` (no `file`). */
+  stage?: boolean;
+  multiple?: boolean;
+  order?: number;
+  id?: string;
+}
+
+/** A declarative data exporter (manifest.exports). The named `export` function
+ * returns an {@link ExportPayload} (`{ filename, mimeType, data }`). Read the
+ * dataset via `app.data`. */
+export interface ExportSpec {
+  label: string;
+  /** Exported function name: `export async function exportFn(app)`. */
+  export: string;
+  extensions?: string[];
+  order?: number;
+  id?: string;
+}
+
+/** A declarative **output** exporter (manifest.outputExports) — renders the Output
+ * pane to a document. The named function gets `{ title }` and returns an
+ * {@link ExportPayload}; read the results with `app.results.getModel()` /
+ * `getStyles()` / `getPlotPng()`. */
+export interface OutputExportSpec {
+  label: string;
+  /** Exported function name: `export async function exportFn(app, { title })`. */
+  export: string;
+  extensions?: string[];
+  order?: number;
+  id?: string;
+}
+
+// --- Streaming format codecs (#98) -------------------------------------------
+
+/**
+ * A streaming format codec (manifest.codecs): teaches CrossTab one file format end
+ * to end. A `read` decodes a file into the dataset; a `write` encodes the dataset
+ * to bytes. Unlike one-shot `imports`/`exports`, a codec **streams** (row batches
+ * in, byte chunks out), so it handles multi-GB files the one-shot path can't. Both
+ * appear in the unified File ▸ Import data… / Export data… picker.
+ *
+ * The named functions run in a WASM/worker-capable sandbox and use {@link CodecApi}
+ * (`app.codec`):
+ *  - `export async function read(app, { name })` — `app.codec.read()`/`size()` to
+ *    pull source bytes (host does `Blob.slice`, so a >2 GB file is never cloned),
+ *    then `app.codec.begin(variables, storageTypes, opts)` and `app.codec.batch(columns)`
+ *    to stream rows into the active dataset. Set `opts.wide` for an ultra-wide file
+ *    (out-of-core single-Parquet ingest, no DuckDB table).
+ *  - `export async function write(app, info)` — pull rows via the normal `app.data`
+ *    and emit bytes with `app.codec.writeChunk(bytes)`; return `{ filename, mimeType }`.
+ */
+export interface CodecSpec {
+  /** Stable id for this codec. */
+  id?: string;
+  /** Menu/picker label, e.g. `"Parquet (.parquet)…"`. */
+  label: string;
+  /** Extensions handled, with the dot, e.g. `[".parquet"]`. */
+  extensions: string[];
+  /** Exported read-function name (omit for a write-only codec). */
+  read?: string;
+  /** Exported write-function name (omit for a read-only codec). */
+  write?: string;
+  order?: number;
+  /** (read) allow selecting several files at once. */
+  multiple?: boolean;
+}
+
+/**
+ * The streaming surface available **only during a codec read/write** as
+ * `app.codec`. Read verbs random-access the source file and push row batches into
+ * the host's streaming ingest; write verbs emit output bytes; `loadAsset` fetches a
+ * host-allowlisted dependency the sandbox can't reach (`connect-src 'none'`).
+ */
+export interface CodecApi {
+  // read: source access
+  /** Total size of the source file, in bytes. */
+  size(): Promise<number>;
+  /** The source `File`/`Blob` by reference — for codecs that must read it
+   * synchronously in their own worker (e.g. ReadStat via `FileReaderSync`). */
+  sourceFile(): Promise<Blob>;
+  /** Read `length` bytes at `offset` (host does `Blob.slice`, so a huge file is
+   * never cloned whole). */
+  read(offset: number, length?: number): Promise<Uint8Array>;
+  // read: streaming ingest
+  /** Declare the schema, then push batches. `opts.rowCount` (if known) drives the
+   * progress indicator; `opts.wide` routes to the out-of-core wide ingest. */
+  begin(
+    variables: VariableMeta[],
+    storageTypes: Record<string, "numeric" | "string">,
+    opts?: { rowCount?: number; wide?: boolean },
+  ): Promise<void>;
+  /** Push one column batch `{ name: array }`. Resolves when the host has taken it
+   * (backpressure — peak memory stays at one batch). */
+  batch(columns: Record<string, Array<number | string | null>>): Promise<void>;
+  // write: emit output bytes
+  /** Append output bytes the host streams to the download. */
+  writeChunk(bytes: Uint8Array | ArrayBuffer): Promise<void>;
+  // both: host-provided dependency
+  /** Fetch a host-allowlisted dependency by name (a JS lib's source, or WASM
+   * bytes) — only host-known names resolve, so a codec can't pull arbitrary code. */
+  loadAsset(name: string): Promise<string | Uint8Array>;
+}
+
+// --- Workspaces (#93) --------------------------------------------------------
+
+/** A workspace tab (manifest.workspaces): a full, sandboxed UI pane that lives as a
+ * workspace tab (e.g. the CAQDAS coding workspace). The plugin also exports a
+ * `workspace` module (see {@link WorkspaceModule}). */
+export interface WorkspaceSpec {
+  /** Stable id; also the key its persisted state is stored under. */
+  id: string;
+  /** Tab title. */
+  title: string;
+}
+
+/**
+ * The `workspace` module a workspace plugin exports alongside `manifest`:
+ * `export const workspace = { mount }`.
+ */
+export interface WorkspaceModule {
+  /**
+   * Render the workspace into its tab. `root` is a real element in the plugin's own
+   * **visible** sandboxed iframe — build your UI with normal DOM. `app` carries the
+   * usual surfaces plus `app.state` (persisted blob) and, for pushing results,
+   * `app.results`. **Do not write state during mount** — read `app.state.get()` and
+   * only `set()` on a real user change, or a mount-before-hydrate can clobber the
+   * saved blob. CSP is `default-src 'none'`: style via the CSSOM, not inline style
+   * attributes.
+   */
+  mount(app: App, root: HTMLElement): void | Promise<void>;
+}
+
+/** Workspace state (`app.state`) — an opaque, project-persisted blob the host
+ * stores per workspace id but never interprets. Carry your own version stamp. */
+export interface WorkspaceStateApi {
+  /** The saved blob, or `null` if none yet. */
+  get(): Promise<unknown>;
+  /** Persist the blob (debounce in the plugin; this marks the project dirty). */
+  set(value: unknown): Promise<void>;
 }
 
 /** The shape of a plugin entry module. */
 export interface PluginModule {
   manifest: PluginManifest;
-  activate(app: App): void | Promise<void>;
+  /** Imperative entry point. **Optional** for a purely declarative plugin, which
+   * instead exports the named functions its manifest references
+   * (`menu[].run`, `imports[].parse`, `exports[].export`, `outputExports[].export`,
+   * `codecs[].read`/`write`) — each `export async function name(app, …)`. */
+  activate?(app: App): void | Promise<void>;
+  /** A workspace plugin's render module (when `manifest.workspaces` is set). */
+  workspace?: WorkspaceModule;
 }

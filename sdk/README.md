@@ -187,18 +187,116 @@ async function parseAcme(app, ticket, file) {
 `variables` is always `VariableMeta[]` — it carries the labels, value labels, and
 missing codes that neither columns nor Parquet convey.
 
-> The reference importers show both paths end to end:
-> [`plugins/builtin-csv-import`](../plugins/builtin-csv-import/index.js) (JS →
-> `columns`) and [`plugins/builtin-haven-import`](../plugins/builtin-haven-import/index.js)
-> (R `haven` → `parquet`, using `app.webr.writeFile`/`readFile`).
+One-shot `imports`/`exports` hold the whole dataset in memory, so they're best for
+small-to-medium files. For large files (or any format you want to stream), use a
+**codec** instead — see "Large files & new formats" below.
 
-Current limits (additions planned — see the engine `TODO.md`): the picker takes a
-**single file** (no companion files yet, e.g. a SAS `.sas7bcat` label catalog),
-and there's **no progress or structured-warning channel** — report issues via
-`app.results.appendError`. For runtime-parsed formats, very large files are bounded
-by WebR's wasm32 ~4 GB memory (and `readFile` on the way back has a ~128 MB cap —
-prefer keeping returned Parquet modest, or chunk it). If you need any of these,
-say so; the API grows from real importer needs.
+### Exporting files
+
+The mirror of importing, and it joins the same unified **File ▸ Export data…**
+picker. Read the current (derived, transformed) dataset via `app.data` and return
+the bytes:
+
+```js
+export const manifest = {
+  id: 'acme-export', name: 'Acme export', version: '1.0.0', apiVersion: '0.1.0',
+  category: 'Export',
+  exports: [{ label: 'Acme (.acme)…', extensions: ['.acme'], export: 'exportAcme' }],
+};
+
+export async function exportAcme(app) {
+  const meta = await app.data.getVariableMeta();
+  const cols = await app.data.getColumns({ variables: meta.map((m) => m.name) });
+  return { filename: 'data.acme', mimeType: 'application/octet-stream', data: encode(meta, cols) };
+}
+```
+
+`data` may be a string or a `Uint8Array`. Need R to produce the bytes (e.g. a
+native `.rds`)? Build it in R from `app.data` and read it back with
+`app.webr.readFile` — see [`plugins/builtin-rdata-export`](../plugins/builtin-rdata-export/index.js).
+To export the **Output pane** (results, not data) as a report, use `outputExports`
+instead and read `app.results.getModel()`/`getStyles()`/`getPlotPng()`.
+
+### Large files & new formats: streaming codecs
+
+A **codec** teaches CrossTab one file format end to end — a `read`, a `write`, or
+both — and **streams** (row batches in, byte chunks out) instead of holding the
+whole dataset in memory. That's the path for multi-GB files (the cumulative GSS
+imports this way). Declare it in the manifest; the codec runs in a
+WASM/worker-capable sandbox and uses `app.codec`:
+
+```js
+export const manifest = {
+  id: 'acme-codec', name: 'Acme codec', version: '1.0.0', apiVersion: '0.1.0',
+  category: 'Data',
+  codecs: [{ id: 'acme', label: 'Acme (.acme)…', extensions: ['.acme'], read: 'readAcme', write: 'writeAcme' }],
+};
+
+export async function readAcme(app, { name }) {
+  const size = await app.codec.size();
+  const head = await app.codec.read(0, 4096);            // random-access source bytes
+  await app.codec.begin(variables, storageTypes, { rowCount, wide: false });
+  for (const batch of decodeInBatches(app)) await app.codec.batch(batch); // backpressured
+}
+
+export async function writeAcme(app) {
+  const total = await app.data.getRowCount();
+  for (let off = 0; off < total; off += 50000) {
+    const rows = await app.data.getRows({ offset: off, limit: 50000 });
+    await app.codec.writeChunk(encode(rows));
+  }
+  return { filename: 'data.acme', mimeType: 'application/octet-stream' };
+}
+```
+
+`app.codec.read`/`size` random-access the source (the host does `Blob.slice`, so a
+>2 GB file is never copied whole); `begin`+`batch` stream rows into the active
+dataset (`batch` resolves only once the host has taken it, so peak memory is one
+batch); set `begin(..., { wide: true })` for an ultra-wide file (out-of-core
+single-Parquet ingest). `loadAsset(name)` fetches a host-allowlisted dependency
+(JS lib source or WASM bytes) the sandbox can't reach itself. Reference codecs:
+[`builtin-csv-codec`](../plugins/builtin-csv-codec/index.js) (pure JS),
+[`builtin-parquet-codec`](../plugins/builtin-parquet-codec/index.js), and
+[`builtin-readstat-codec`](../plugins/builtin-readstat-codec/index.js)
+(SPSS/Stata/SAS via WASM + an in-sandbox worker).
+
+## Workspaces
+
+A **workspace** is a full, sandboxed UI pane that lives as its own tab (the CAQDAS
+coding workspace is the flagship example). Declare it and export a `workspace`
+module:
+
+```js
+export const manifest = {
+  id: 'acme-ws', name: 'Acme workspace', version: '1.0.0', apiVersion: '0.1.0',
+  category: 'Workspaces',
+  workspaces: [{ id: 'acme-coding', title: 'Coding' }],
+};
+
+export const workspace = {
+  async mount(app, root) {
+    const state = (await app.state.get()) ?? { items: [] }; // rehydrate
+    // …build your UI in `root` (a real element in your visible sandboxed iframe)…
+    // persist on a real user change (debounced), never during mount:
+    saveButton.onclick = () => app.state.set(state);
+  },
+};
+```
+
+`app.state` is an **opaque, project-persisted blob** the host stores per workspace
+id but never interprets — carry your own version stamp. The pane can read host data
+(`app.data`), run R (`app.webr`), and push results to Output (`app.results`).
+
+> **Don't write state during `mount`.** Read `app.state.get()` and only `set()` in
+> response to a genuine user change. A mount-time write can persist an empty default
+> over real saved data if the workspace ever mounts before its state is hydrated
+> (this caused a real codebook-loss bug). Deriving a default on mount is fine — set
+> it in memory and let it persist on the first real edit. CSP is `default-src
+> 'none'`: style via the CSSOM (`el.style.*`), not inline `style` attributes.
+
+Reference: [`plugins/builtin-hello-workspace`](../plugins/builtin-hello-workspace/index.js)
+(the minimal seam) and [`plugins/builtin-caqdas`](../plugins/builtin-caqdas/index.js)
+(the real one).
 
 ## Isolation model
 
