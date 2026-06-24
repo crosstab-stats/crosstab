@@ -60,6 +60,10 @@ export const manifest = {
           { value: 'spiral', label: 'Pack by frequency (classic spiral)' },
         ] },
         { name: 'themes', kind: 'number', label: 'Colour groups (themes)', hint: 'How many co-occurrence clusters to colour the words by.', default: 5 },
+        { name: 'palette', kind: 'choice', label: 'Colours', hint: 'Which palette to colour the themes with.', default: 'cbsafe', options: [
+          { value: 'cbsafe', label: 'Colourblind-safe (Okabe–Ito)' },
+          { value: 'vivid', label: 'Vivid' },
+        ] },
       ],
     },
     {
@@ -181,7 +185,7 @@ export async function wordFrequency(app, { text, stopwords, topn, minlen }) {
  * meaningful. "Classic spiral" packs purely by frequency from the centre instead;
  * it's also the automatic fallback when there are too few words to position.
  */
-export async function wordCloud(app, { text, topn, minlen, stopwords, layout, themes }) {
+export async function wordCloud(app, { text, topn, minlen, stopwords, layout, themes, palette }) {
   if (!text) {
     await app.results.appendError('Word cloud: choose a text column.');
     return;
@@ -232,8 +236,9 @@ export async function wordCloud(app, { text, topn, minlen, stopwords, layout, th
     return;
   }
   const contextual = layout !== 'spiral' && r.num('ok') === 1;
+  const colours = palette === 'vivid' ? PALETTE_VIVID : PALETTE_CBSAFE;
   const data = { words, freq, x: r.nums('x'), y: r.nums('y'), cl: r.nums('cl').map((v) => Math.round(v)) };
-  const render = (w, h) => buildCloudSvg(data, w, h, contextual);
+  const render = (w, h) => buildCloudSvg(data, w, h, contextual, colours);
 
   let handle;
   handle = await app.results.appendPlot(render(680, 440), {
@@ -561,9 +566,15 @@ function parseDict(text) {
 
 // --- helpers -----------------------------------------------------------------
 
-/** Categorical palette for theme (co-occurrence cluster) colouring. Picked for
- * reasonable contrast on white and distinguishability. */
-const CLOUD_PALETTE = ['#2980b9', '#27ae60', '#c0392b', '#8e44ad', '#d35400', '#16a085', '#2c3e50', '#c2185b'];
+/** Default theme palette: the **Okabe–Ito** qualitative set — designed to stay
+ * distinguishable under the common forms of colour-vision deficiency (no relying
+ * on a red/green contrast). Okabe–Ito's pale yellow is dropped (too low-contrast
+ * as text on white) and a neutral grey added, keeping eight legible hues. */
+const PALETTE_CBSAFE = ['#0072B2', '#D55E00', '#009E73', '#CC79A7', '#E69F00', '#000000', '#666666', '#56B4E9'];
+
+/** Alternative brighter palette (the user can opt into it); NOT colourblind-safe
+ * — it pairs a red and a green that some viewers can't tell apart. */
+const PALETTE_VIVID = ['#2980b9', '#27ae60', '#c0392b', '#8e44ad', '#d35400', '#16a085', '#2c3e50', '#c2185b'];
 
 /** Clamp an optional numeric input to an integer in [lo, hi], defaulting if unset. */
 function clampInt(v, dflt, lo, hi) {
@@ -594,9 +605,10 @@ function freqColour(f, fmin, fmax) {
  * @param {number} W - target canvas width (px)
  * @param {number} H - target canvas height (px)
  * @param {boolean} contextual - true → anchor at MDS coords; false → spiral from centre
+ * @param {string[]} palette - theme colours (cycled if there are more themes)
  * @returns {string} an `<svg>` fragment
  */
-function buildCloudSvg(data, W, H, contextual) {
+function buildCloudSvg(data, W, H, contextual, palette = PALETTE_CBSAFE) {
   const { words, freq, x, y, cl } = data;
   const n = words.length;
   if (!n) return '';
@@ -658,7 +670,7 @@ function buildCloudSvg(data, W, H, contextual) {
       placed.push({ x0: fx - halfW, x1: fx + halfW, y0: fy - halfH, y1: fy + halfH });
     }
     const colour = themed
-      ? CLOUD_PALETTE[(((cl[i] - 1) % CLOUD_PALETTE.length) + CLOUD_PALETTE.length) % CLOUD_PALETTE.length]
+      ? palette[(((cl[i] - 1) % palette.length) + palette.length) % palette.length]
       : freqColour(freq[i], fmin, fmax);
     const weight = fs >= (MINPX + MAXPX) / 2 ? 600 : 400;
     out.push(
