@@ -184,6 +184,14 @@ export class PluginBroker {
     this.#activeInputs = null;
   }
 
+  /** Host-facing: set this plugin's output attribution ("Name · origin"). The
+   * loader only knows the manifest name + host-tracked origin after load, so it
+   * sets this post-activation. Used to stamp a fallback attributed section for any
+   * output the plugin appends outside an explicit analysis bracket (#106). */
+  setAttribution(attribution) {
+    this.#attribution = attribution || null;
+  }
+
   sendActivate(plugin) {
     this.#post({ t: 'activate', plugin });
     return this.#activated.promise;
@@ -266,14 +274,25 @@ export class PluginBroker {
   /** Dispatch one RPC call and post the result (or error) back. */
   async #handleCall(msg) {
     const { id, method, args } = msg;
+    // For output calls, tell the pane which plugin is appending so it can stamp a
+    // fallback attributed section if the plugin appends outside an analysis bracket
+    // (#106). The set→append is synchronous (handlers don't yield before mutating),
+    // so this can't be clobbered by an interleaved call; cleared in `finally`.
+    const stampAttr =
+      method.startsWith('results.') &&
+      this.#attribution &&
+      typeof this.#services.results?.setActiveAttribution === 'function';
     try {
       const handler = this.#dispatch[method] ?? this.#builtinMethod(method);
       if (!handler) throw new Error(`unknown method "${method}"`);
       const revived = this.#reviveArgs(args ?? []);
+      if (stampAttr) this.#services.results.setActiveAttribution(this.#attribution);
       const result = await handler(...revived);
       this.#post({ t: 'result', id, ok: true, value: this.#marshalReturn(result) });
     } catch (err) {
       this.#post({ t: 'result', id, ok: false, error: String(err?.message ?? err) });
+    } finally {
+      if (stampAttr) this.#services.results.setActiveAttribution(null);
     }
   }
 

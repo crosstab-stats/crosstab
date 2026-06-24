@@ -149,6 +149,15 @@ export class ResultsPane {
    */
   #model = [];
 
+  /** Host-tracked attribution of the plugin whose `results.*` call is currently
+   * being dispatched (set by the broker around each call; see {@link ResultsPane#setActiveAttribution}).
+   * While set, an append made with no open section is placed in a fallback
+   * attributed section rather than landing unattributed — so a plugin can never
+   * produce an unattributed block, even if it skips `beginAnalysis` or escapes its
+   * host-opened bracket with `endAnalysis` (#106). Null for host-originated output
+   * (imports, transforms, R notices), which legitimately stays top-level. */
+  #activeAttribution = null;
+
   /**
    * @param {HTMLElement} host - The element to attach the shadow root to.
    * @param {{bus?: import('./event-bus.js').EventBus}} [opts]
@@ -202,6 +211,21 @@ export class ResultsPane {
   endAnalysis() {
     this.#currentSection = null;
     this.#pendingSection = null;
+  }
+
+  /**
+   * Broker-facing (NOT plugin-reachable — it is deliberately absent from the
+   * broker's RPC allowlist): set the host-tracked attribution of the plugin whose
+   * `results.*` call is being dispatched, then clear it (null) afterwards. This is
+   * what lets {@link ResultsPane#place} stamp a fallback attributed section for any
+   * append a plugin makes outside an explicit analysis bracket — closing the
+   * unattributed/forgeable output path (#106). Host output (no broker in the call
+   * path) never sets this, so it stays top-level.
+   *
+   * @param {string|null} attribution - e.g. "Word Cloud · from example.com".
+   */
+  setActiveAttribution(attribution) {
+    this.#activeAttribution = attribution || null;
   }
 
   /** Build a section element (heading + optional attribution), record it in the
@@ -498,6 +522,10 @@ export class ResultsPane {
       getModel: () => this.getModel(),
       getStyles: () => this.getStyles(),
       getPlotPng: (id) => this.getPlotPng(id),
+      // Host/broker-only: NOT in the broker's RPC allowlist, so a sandboxed plugin
+      // cannot call it — only host code with a direct reference can (the broker, to
+      // stamp the calling plugin's attribution for fallback sections; see #106).
+      setActiveAttribution: (a) => this.setActiveAttribution(a),
     });
   }
 
@@ -513,6 +541,13 @@ export class ResultsPane {
    * section on first use, or appending at top level if there is none. */
   #place(block) {
     this.#clearEmptyState();
+    if (!this.#currentSection && !this.#pendingSection && this.#activeAttribution) {
+      // A plugin appended with no open analysis section — it skipped beginAnalysis,
+      // or escaped its host-opened bracket via endAnalysis. Don't let the block
+      // land unattributed at top level: open a fallback section stamped with the
+      // host-tracked attribution of the calling plugin (which it cannot forge).
+      this.#pendingSection = { title: 'Plugin output', attribution: this.#activeAttribution };
+    }
     if (!this.#currentSection && this.#pendingSection) {
       this.#currentSection = this.#createSection(this.#pendingSection);
       this.#pendingSection = null;

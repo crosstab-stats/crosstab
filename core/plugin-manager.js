@@ -153,10 +153,14 @@ export class PluginManager {
         ? await this.#loader.loadSource(entry.source, entry.name || entry.key)
         : await this.#loader.load(entry.url);
     this.#recordCatalog(entry.key, manifest);
+    // Stamp the broker with this plugin's host-tracked attribution so any output it
+    // appends outside an analysis bracket is still traceable, not unattributed (#106).
+    const origin = this.#originLabel(entry);
+    this.#loader.setAttribution?.(manifest.id, `${manifest.name} · ${origin}`);
     // Declarative plugins are wired host-side (menus/importers/exporters + invoke);
     // legacy plugins self-register in activate(), so this is a no-op for them.
     if (this.#actions && PluginActions.isDeclarative(manifest)) {
-      this.#actions.wire(manifest, this.#originLabel(entry));
+      this.#actions.wire(manifest, origin);
     }
     return manifest;
   }

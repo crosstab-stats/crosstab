@@ -373,6 +373,13 @@ export class PluginLoader {
     this.#plugins.get(id)?.broker.clearActiveInputs();
   }
 
+  /** Set a loaded plugin's host-tracked output attribution ("Name · origin"), so
+   * any output it appends outside an analysis bracket is still traceable (#106).
+   * The origin is owned by the plugin manager, hence set here post-load. */
+  setAttribution(id, attribution) {
+    this.#plugins.get(id)?.broker.setAttribution(attribution);
+  }
+
   /** Build a hidden, sandboxed iframe for a plugin. */
   #createIframe() {
     const iframe = document.createElement('iframe');
