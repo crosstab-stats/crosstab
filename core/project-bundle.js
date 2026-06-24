@@ -28,9 +28,12 @@ const dec = new TextDecoder();
  * @param {object} deps
  * @param {import('./dataset-manager.js').DatasetManager} deps.datasets
  * @param {string} [deps.projectName]
+ * @param {Array<{id:string,name:string,builtin?:boolean,origin?:string,url?:string}>} [deps.plugins]
+ *   The active analysis/plugin set, recorded so a recipient can restore the same
+ *   analyses (and be warned about any they don't have — #102).
  * @returns {Promise<Blob>}
  */
-export async function exportProjectBundle({ datasets, projectName }) {
+export async function exportProjectBundle({ datasets, projectName, plugins = [] }) {
   const entries = [];
   const index = [];
   const used = new Set();
@@ -64,6 +67,17 @@ export async function exportProjectBundle({ datasets, projectName }) {
     exportedAt: new Date().toISOString(),
     generator: 'CrossTab',
     datasets: index,
+    // The active analysis/plugin set, so opening the bundle restores the same
+    // analyses — and warns about any the recipient doesn't have (#102). Built-ins
+    // are always present on open; non-built-ins (a URL/file/authored plugin) may
+    // not be, hence the recorded origin/url.
+    plugins: (plugins || []).map((p) => ({
+      id: p.id,
+      name: p.name,
+      builtin: !!p.builtin,
+      origin: p.origin,
+      ...(p.url ? { url: p.url } : {}),
+    })),
   };
   entries.unshift({ name: 'manifest.json', data: pretty(manifest) });
   entries.push({ name: 'README.md', data: README });
@@ -117,7 +131,15 @@ export function importProjectBundle(buf) {
     if (activeId === null) activeId = d.id;
   }
   if (!datasets.length) throw new Error('Bundle has no datasets.');
-  return { name: manifest.name || 'Imported project', bundle: { activeId, datasets } };
+  // The recorded plugin set (#102): `activePlugins` (ids) restores the analyses on
+  // open like a saved project; `plugins` (full descriptors) lets the caller warn
+  // about any that aren't installed here.
+  const plugins = Array.isArray(manifest.plugins) ? manifest.plugins : [];
+  return {
+    name: manifest.name || 'Imported project',
+    bundle: { activeId, datasets, activePlugins: plugins.map((p) => p.id).filter(Boolean) },
+    plugins,
+  };
 }
 
 /** Open a native picker for a `.crosstab` bundle; resolves the File or null. */
@@ -177,7 +199,9 @@ in a standard format you can open without CrossTab.
   category), measurement level, and missing-value descriptors.
 - **analysis/*.transforms.json** — the transform steps applied (recode, compute,
   filter, …), in order.
-- **manifest.json** — project name, export date, and the dataset index.
+- **manifest.json** — project name, export date, the dataset index, and the list
+  of analyses/plugins that were active (so re-opening in CrossTab restores them, and
+  warns about any you don't have installed).
 
 Re-open the whole thing in CrossTab, or use any single part on its own. Your work
 is yours — no lock-in.

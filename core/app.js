@@ -179,6 +179,51 @@ function escapeText(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/**
+ * After opening a shared `.crosstab` bundle, warn about analyses/plugins it used
+ * that aren't installed here (#102). Built-ins are always present, so these are
+ * always third-party (a URL/file/authored plugin); we show each with its origin
+ * (and URL, when known, so the user can re-add it via Edit ▸ Plugins…). Informational
+ * only — the project still opens; those analyses just won't be in the menu.
+ *
+ * @param {Array<{name:string, origin?:string, url?:string}>} missing
+ */
+function showMissingPluginsDialog(missing) {
+  const d = document.createElement('dialog');
+  d.className = 'ct-dialog ct-dialog--wide';
+  const items = missing
+    .map((p) => {
+      const where = p.url
+        ? `<code style="word-break:break-all">${escapeText(p.url)}</code>`
+        : `<span class="ct-dialog__hint">${escapeText(originText(p.origin))}</span>`;
+      return `<li><strong>${escapeText(p.name || 'Unnamed plugin')}</strong> — ${where}</li>`;
+    })
+    .join('');
+  d.innerHTML = `
+    <form method="dialog" class="ct-dialog__form">
+      <h2 class="ct-dialog__title">Some analyses aren't installed</h2>
+      <p class="ct-dialog__hint">This shared project used ${missing.length} plugin${missing.length === 1 ? '' : 's'}
+        that ${missing.length === 1 ? "isn't" : "aren't"} installed on this device. Your data and
+        saved output opened fine — these analyses just won't appear in the menus until you add them
+        (Edit ▸ Plugins…). Add a plugin by its URL when one is shown below.</p>
+      <ul class="ct-dialog__list">${items}</ul>
+      <menu class="ct-dialog__buttons">
+        <button value="ok" type="submit" class="ct-dialog__primary">Got it</button>
+      </menu>
+    </form>`;
+  d.addEventListener('close', () => d.remove());
+  document.body.append(d);
+  d.showModal();
+}
+
+/** Human-readable origin label for a recorded plugin descriptor. */
+function originText(origin) {
+  if (origin === 'url') return 'from a URL (not recorded)';
+  if (origin === 'file') return 'added from a file on the sharer’s device';
+  if (origin === 'authored') return 'authored in CrossTab on the sharer’s device';
+  return 'not a built-in plugin';
+}
+
 /** True while a crash dialog is open, so a burst of failed jobs shows just one. */
 let crashDialogOpen = false;
 
@@ -456,7 +501,10 @@ export async function boot(mounts) {
     command: async () => {
       try {
         const name = projects.activeName || 'crosstab-project';
-        const blob = await exportProjectBundle({ datasets, projectName: name });
+        // Record the active analysis/plugin set so a recipient restores the same
+        // analyses (and is warned about any they don't have — #102).
+        const activePlugins = plugins.list().filter((p) => p.loaded);
+        const blob = await exportProjectBundle({ datasets, projectName: name, plugins: activePlugins });
         downloadBlob(blob, `${slug(name) || 'crosstab-project'}.crosstab`);
         results.api.appendText(`Exported **${name}** as a .crosstab bundle (${(blob.size / 1048576).toFixed(1)} MB).`);
       } catch (err) {
@@ -473,9 +521,15 @@ export async function boot(mounts) {
       const file = await pickBundleFile();
       if (!file) return;
       try {
-        const { name, bundle } = importProjectBundle(new Uint8Array(await file.arrayBuffer()));
+        const { name, bundle, plugins: recorded } = importProjectBundle(new Uint8Array(await file.arrayBuffer()));
         await projects.openBundle({ name, bundle });
+        // Warn about analyses/plugins the bundle used but this install doesn't have
+        // (#102). Built-ins always present; only non-built-ins (URL/file/authored)
+        // can be missing — match by manifest id against what's installed here.
+        const have = new Set(plugins.list().map((p) => p.id).filter(Boolean));
+        const missing = (recorded || []).filter((p) => !p.builtin && p.id && !have.has(p.id));
         results.api.appendText(`Opened project bundle **${name}** — ${bundle.datasets.length} dataset(s).`);
+        if (missing.length) showMissingPluginsDialog(missing);
       } catch (err) {
         results.api.appendError(`Open project bundle failed: ${err.message}`);
       }

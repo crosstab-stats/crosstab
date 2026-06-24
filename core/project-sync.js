@@ -456,6 +456,16 @@ export class ProjectSync {
     }
     this.#applyWorkspaces?.(bundle.workspaces || {});
     this.#applyOutput?.(bundle.output || []);
+    // Restore the bundle's recorded analysis set (#102), so opening a shared bundle
+    // brings back the same analyses. applyActiveSet skips any the recipient doesn't
+    // have (those are surfaced to the user by the import handler's warning dialog).
+    if (Array.isArray(bundle.activePlugins) && this.#applyActivePlugins) {
+      try {
+        await this.#applyActivePlugins(bundle.activePlugins);
+      } catch (err) {
+        console.warn('[project] restoring bundle plugin set failed', err);
+      }
+    }
     this.#loading = false;
     // It's a brand-new project; never bound to (and so never overwriting) the one
     // that was open. Persist + name it from the bundle.
