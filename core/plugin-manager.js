@@ -710,6 +710,25 @@ export class PluginManager {
       });
       right.append(fork);
     }
+    // Export the plugin's source to a .js file — the same format "From file" loads,
+    // so a creator can share a plugin a project expects (the missing-plugin case, #102).
+    {
+      const exp = document.createElement('button');
+      exp.type = 'button';
+      exp.className = 'ct-plugin__export';
+      exp.textContent = '⬇';
+      exp.title = 'Export this plugin to a .js file (shareable; re-add with “From file”)';
+      exp.addEventListener('click', async () => {
+        setErr('');
+        try {
+          const source = await this.getSource(p.key);
+          downloadText(`${pluginSlug(p.name)}.js`, source);
+        } catch (err) {
+          setErr(`Couldn’t export ${p.name}: ${err.message}`);
+        }
+      });
+      right.append(exp);
+    }
     if (p.editable && this.#creator) {
       const ed = document.createElement('button');
       ed.type = 'button';
@@ -804,6 +823,29 @@ function forkSource(source, copyName) {
     (_m, pre, q) => `${pre}${q}${copyName.replace(new RegExp(q, 'g'), '\\' + q)}${q}`,
   );
   return out;
+}
+
+/** Download `text` as a file (used to export a plugin's source). */
+function downloadText(filename, text) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/javascript;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+/** Filesystem-safe slug for a plugin export filename. */
+function pluginSlug(name) {
+  return (
+    String(name || 'plugin')
+      .trim()
+      .replace(/[^\w.-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60) || 'plugin'
+  );
 }
 
 /** Open a file picker for a plugin source file. Resolves the File, or null. */
