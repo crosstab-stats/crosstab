@@ -398,7 +398,7 @@ export class Launcher {
         box.append(el('p', 'More gets cached automatically as you use features. Or top up the full toolkit now:', 'ctl__offlinehint'));
         const allBtn = el('button', '⬇ Cache all plugins', 'ctl__offlinebtn');
         allBtn.type = 'button';
-        const rm = el('button', 'Remove offline data', 'ctl__howto');
+        const rm = el('button', 'Remove offline data', 'ctl__offlinealt');
         rm.type = 'button';
         allBtn.addEventListener('click', () => run({ allPlugins: true }, [allBtn, rm]));
         rm.addEventListener('click', async () => {
@@ -408,10 +408,14 @@ export class Launcher {
         });
         box.append(allBtn, prog, rm);
       } else {
-        const btn = el('button', '⬇ Pre-cache the full toolkit', 'ctl__offlinebtn');
+        // Primary action caches the plugins you've selected (the set you'll actually
+        // load); the subordinate link extends that to every plugin in the catalogue.
+        const btn = el('button', '⬇ Pre-cache selected plugins', 'ctl__offlinebtn');
         btn.type = 'button';
-        const allBtn = el('button', '…or cache every plugin (larger)', 'ctl__howto');
+        btn.title = 'Download the selected plugins and their R packages now, so they work with no connection.';
+        const allBtn = el('button', 'Or pre-cache all plugins (larger download)', 'ctl__offlinealt');
         allBtn.type = 'button';
+        allBtn.title = 'Also cache plugins you haven’t selected — a bigger download.';
         btn.addEventListener('click', () => run({ packages: selectedPackages() }, [btn, allBtn]));
         allBtn.addEventListener('click', () => run({ allPlugins: true }, [btn, allBtn]));
         box.append(btn, allBtn, prog);
@@ -648,6 +652,10 @@ function injectStyles() {
       border: 1px solid var(--accent, #2980b9); border-radius: 8px; background: #fff; color: var(--accent, #2980b9); }
     .ctl__offlinebtn:hover { background: #eef5fb; }
     .ctl__offlinebtn:disabled { opacity: .6; cursor: default; }
+    .ctl__offlinealt { display: block; width: 100%; margin-top: 6px; font: inherit; font-size: 12px;
+      color: var(--accent, #2980b9); background: none; border: 0; cursor: pointer; padding: 2px 0; text-align: center; }
+    .ctl__offlinealt:hover { text-decoration: underline; }
+    .ctl__offlinealt:disabled { opacity: .6; cursor: default; text-decoration: none; }
     .ctl__offlineprog { font-size: 12px; color: #7a8590; margin-top: 6px; min-height: 1em; }
     .ctl__offlineok { font-size: 13px; color: #2e7d32; margin: 0 0 6px; font-weight: 600; }
     .ctl__install { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--accent, #2980b9);
