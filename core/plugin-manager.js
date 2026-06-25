@@ -25,6 +25,7 @@
 
 import { PluginActions } from './plugin-actions.js';
 import { CoreEvents } from './event-bus.js';
+import { packPlugin, unpackPlugin, looksLikeZip } from './plugin-package.js';
 
 const LS_DISABLED = 'crosstab.plugins.disabled';
 const LS_CATALOG = 'crosstab.plugins.catalog';
@@ -81,6 +82,15 @@ export class PluginManager {
    * plugin with the project, or drop it. @type {?{keepPlugin:Function, dropPlugin:Function}} */
   #project = null;
 
+  /** Durable store (OPFS) for added `.ctplugin` package bytes (#119). A packaged
+   * plugin's binary assets are too big/binary for localStorage, so the package is
+   * kept here and its assets loaded from it on activation. @type {?import('./plugin-package-store.js').PluginPackageStore} */
+  #packageStore = null;
+
+  /** key → { assets: Map<string,Uint8Array> } : decoded package assets, cached so a
+   * just-added package activates without a second OPFS round-trip. @type {Map<string, {assets: Map}>} */
+  #packageCache = new Map();
+
   /**
    * @param {Object} deps
    * @param {import('./loader.js').PluginLoader} deps.loader
@@ -96,8 +106,10 @@ export class PluginManager {
    *   To detect/purge a deactivated plugin's saved project data (#118).
    * @param {{keepPlugin:Function, dropPlugin:Function}} [deps.project] - The open
    *   project's plugin-association controls, to keep or drop a plugin on deactivation (#118).
+   * @param {import('./plugin-package-store.js').PluginPackageStore} [deps.packageStore]
+   *   - Durable OPFS store for added `.ctplugin` package bytes (#119).
    */
-  constructor({ loader, urls, menus, results, actions, bus, projectReferences, workspaceStore, project }) {
+  constructor({ loader, urls, menus, results, actions, bus, projectReferences, workspaceStore, project, packageStore }) {
     this.#loader = loader;
     this.#urls = urls;
     this.#menus = menus;
@@ -107,6 +119,7 @@ export class PluginManager {
     this.#projectReferences = projectReferences ?? null;
     this.#workspaceStore = workspaceStore ?? null;
     this.#project = project ?? null;
+    this.#packageStore = packageStore ?? null;
     this.#disabled = new Set(readJSON(LS_DISABLED, []));
     // Drop a stale catalog if the catalog version changed (e.g. manifests gained
     // `disciplines`), so it's re-probed fresh rather than serving old metadata.
@@ -170,9 +183,13 @@ export class PluginManager {
    * or throws (callers that want best-effort use {@link #activateEntry}). */
   async #activateEntryStrict(entry) {
     const originDesc = this.#originDescriptor(entry);
+    // A packaged plugin brings its own bundled assets (its WASM/worker/glue) — load
+    // them from the stored `.ctplugin` so its declared assets resolve from the bundle
+    // (#119). Single-file plugins pass none (null).
+    const assets = entry.kind === 'package' ? await this.#loadPackageAssets(entry.key) : null;
     const manifest =
       entry.source != null
-        ? await this.#loader.activateSource(entry.source, entry.name || entry.key, originDesc)
+        ? await this.#loader.activateSource(entry.source, entry.name || entry.key, originDesc, assets)
         : await this.#loader.activate(entry.url, originDesc);
     this.#recordCatalog(entry.key, manifest);
     // Stamp the broker with this plugin's host-tracked attribution so any output it
@@ -256,6 +273,8 @@ export class PluginManager {
   #originDescriptor(entry) {
     if (entry.builtin) return { kind: 'builtin' };
     if (entry.kind === 'url') return { kind: 'url', url: entry.url };
+    // A package is a file you added — namespaced like a file/authored plugin.
+    if (entry.kind === 'package') return { kind: 'file' };
     return { kind: entry.kind === 'file' ? 'file' : 'authored' };
   }
 
@@ -263,6 +282,7 @@ export class PluginManager {
   #originLabel(entry) {
     if (entry.builtin) return 'built-in';
     if (entry.kind === 'authored') return 'created here';
+    if (entry.kind === 'package') return 'from package';
     if (entry.kind === 'file') return 'from file';
     if (entry.kind === 'url') {
       try {
@@ -272,6 +292,19 @@ export class PluginManager {
       }
     }
     return 'external';
+  }
+
+  /** Decoded bundled assets for a packaged plugin — from the just-added in-memory
+   * cache, else unpacked from its stored `.ctplugin` bytes in OPFS (#119). */
+  async #loadPackageAssets(key) {
+    const cached = this.#packageCache.get(key);
+    if (cached) return cached.assets;
+    if (!this.#packageStore) throw new Error('Plugin packages require OPFS, which is unavailable here.');
+    const bytes = await this.#packageStore.load(key);
+    if (!bytes) throw new Error('Plugin package data is missing (browser storage may have been cleared).');
+    const { assets } = unpackPlugin(bytes);
+    this.#packageCache.set(key, { assets });
+    return assets;
   }
 
   /** Unload a plugin's host-side wiring (menus) + its sandbox. */
@@ -360,15 +393,45 @@ export class PluginManager {
     return manifest;
   }
 
-  /** Add a plugin from a local file (untrusted, source persisted). */
+  /** Add a plugin from a local file (untrusted, source persisted). Accepts either a
+   * single `.js` entry module or a multi-file `.ctplugin` package (a ZIP carrying
+   * index.js + bundled assets — #119). A package's source is persisted in
+   * localStorage like a file plugin; its (possibly large, binary) assets live in the
+   * OPFS package store and load on activation. */
   async addFromFile(file) {
-    const source = await file.text();
+    const buf = new Uint8Array(await file.arrayBuffer());
+    if (looksLikeZip(buf)) return this.#addPackage(buf);
+    const source = new TextDecoder().decode(buf);
     const entry = { key: `local:${crypto.randomUUID()}`, kind: 'file', name: file.name, source };
     await this.#ensureIdAvailable(entry); // qualified-id uniqueness (#102)
     const manifest = await this.#activateEntryStrict(entry);
     this.#user.push(entry);
     writeJSON(LS_USER, this.#user);
     return manifest;
+  }
+
+  /** Add a `.ctplugin` package: unpack it, cache its assets for the immediate
+   * activation, then (only once it loads) persist the entry + the raw package bytes
+   * to OPFS so it survives reload. Nothing is persisted on failure. */
+  async #addPackage(buf) {
+    if (!this.#packageStore?.available) {
+      throw new Error('Plugin packages need storage (OPFS), which is unavailable in this browser.');
+    }
+    const { name, indexSource, assets } = unpackPlugin(buf);
+    const key = `package:${crypto.randomUUID()}`;
+    const entry = { key, kind: 'package', name, source: indexSource };
+    this.#packageCache.set(key, { assets }); // so #activateEntryStrict needn't re-read OPFS
+    try {
+      await this.#ensureIdAvailable(entry); // qualified-id uniqueness (#102)
+      const manifest = await this.#activateEntryStrict(entry);
+      await this.#packageStore.save(key, buf); // durable: assets survive reload
+      this.#user.push(entry);
+      writeJSON(LS_USER, this.#user);
+      return manifest;
+    } catch (err) {
+      this.#packageCache.delete(key); // rolled back — leave nothing behind
+      throw err;
+    }
   }
 
   /** Create or update an **authored** plugin from editor source. The source is
@@ -424,6 +487,60 @@ export class PluginManager {
     return res.text();
   }
 
+  /**
+   * Produce a shareable artifact for a plugin (#119): a multi-file plugin (one that
+   * declares assets) exports as a `.ctplugin` package bundling its entry + every
+   * declared asset; a single-file plugin exports as plain `.js` (the format
+   * {@link addFromFile} also accepts). Either re-imports here or on another machine.
+   *
+   * @param {string} key
+   * @returns {Promise<{blob: Blob, filename: string} | {text: string, filename: string}>}
+   */
+  async exportPlugin(key) {
+    const entry = this.#entryFor(key);
+    if (!entry) throw new Error('Unknown plugin.');
+    const source = await this.getSource(key);
+    const manifest = await this.#manifestFor(entry, source);
+    const decls = declaredAssets(manifest);
+    const slug = pluginSlug(manifest.name || entry.name || 'plugin');
+    if (!decls.length) return { text: source, filename: `${slug}.js` }; // single-file
+    // Multi-file → bundle each declared asset's bytes alongside the entry.
+    const assets = [];
+    for (const d of decls) {
+      const bytes = await this.#assetBytes(entry, d);
+      assets.push({ key: d.path || d.name, bytes });
+    }
+    const blob = packPlugin({ name: manifest.name, indexSource: source, assets });
+    return { blob, filename: `${slug}.ctplugin` };
+  }
+
+  /** This plugin's manifest, for export — from its already-decoded package assets if
+   * any, else probed from source (cheap; the sandbox just returns the manifest). */
+  async #manifestFor(entry, source) {
+    const originDesc = this.#originDescriptor(entry);
+    return entry.source != null || entry.kind === 'package'
+      ? this.#loader.probeManifestSource(source, entry.name || entry.key, originDesc)
+      : this.#loader.probeManifest(entry.url, originDesc);
+  }
+
+  /** Bytes for one declared asset when packaging a plugin: from the package bundle
+   * if it's already a package, else fetched from a same-origin sibling of its entry
+   * URL (built-in / URL plugins) — the same resolution the loader uses (#119). */
+  async #assetBytes(entry, decl) {
+    const want = decl.path || decl.name;
+    if (entry.kind === 'package') {
+      const assets = await this.#loadPackageAssets(entry.key);
+      const b = assets.get(want);
+      if (!b) throw new Error(`Package is missing declared asset "${want}".`);
+      return b;
+    }
+    const baseUrl = entry.url || entry.key; // built-in/URL entry module URL
+    const target = new URL(want, new URL(baseUrl, location.href));
+    const res = await fetch(target.href);
+    if (!res.ok) throw new Error(`couldn’t fetch asset "${want}" (HTTP ${res.status})`);
+    return new Uint8Array(await res.arrayBuffer());
+  }
+
   /** Remove a user plugin entirely (unload + forget). Built-ins can't be removed. */
   async removePlugin(key) {
     const i = this.#user.findIndex((e) => e.key === key);
@@ -440,6 +557,9 @@ export class PluginManager {
     this.#disabled.delete(key);
     if (id) this.revokeWeb(id); // don't leave a dangling grant for a gone plugin
     delete this.#catalog[key];
+    // A package also has bytes in OPFS + a decoded cache — drop both (#119).
+    this.#packageCache.delete(key);
+    if (this.#packageStore) await this.#packageStore.delete(key).catch(() => {});
     writeJSON(LS_USER, this.#user);
     writeJSON(LS_DISABLED, [...this.#disabled]);
     writeJSON(LS_CATALOG, this.#catalog);
@@ -810,12 +930,13 @@ export class PluginManager {
       exp.type = 'button';
       exp.className = 'ct-plugin__export';
       exp.textContent = '⬇';
-      exp.title = 'Export this plugin to a .js file (shareable; re-add with “From file”)';
+      exp.title = 'Export this plugin to a file (shareable; re-add with “From file”). Multi-file plugins export as a .ctplugin package.';
       exp.addEventListener('click', async () => {
         setErr('');
         try {
-          const source = await this.getSource(p.key);
-          downloadText(`${pluginSlug(p.name)}.js`, source);
+          const out = await this.exportPlugin(p.key);
+          if (out.blob) downloadBlob(out.blob, out.filename);
+          else downloadText(out.filename, out.text);
         } catch (err) {
           setErr(`Couldn’t export ${p.name}: ${err.message}`);
         }
@@ -926,7 +1047,12 @@ function forkSource(source, copyName) {
 
 /** Download `text` as a file (used to export a plugin's source). */
 function downloadText(filename, text) {
-  const url = URL.createObjectURL(new Blob([text], { type: 'text/javascript;charset=utf-8' }));
+  downloadBlob(new Blob([text], { type: 'text/javascript;charset=utf-8' }), filename);
+}
+
+/** Download a Blob as a file (used to export a `.ctplugin` package). */
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
@@ -934,6 +1060,18 @@ function downloadText(filename, text) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+/** Every asset a manifest declares (top-level `assets` + each codec's `assets`) —
+ * the plugin's own dependency list, used to decide single-file vs package export. */
+function declaredAssets(manifest) {
+  const out = [];
+  const push = (list) => {
+    if (Array.isArray(list)) for (const a of list) if (a && a.name) out.push(a);
+  };
+  push(manifest?.assets);
+  for (const c of manifest?.codecs || []) push(c?.assets);
+  return out;
 }
 
 /** Filesystem-safe slug for a plugin export filename. */
@@ -952,7 +1090,7 @@ function pickFile() {
   return new Promise((resolve) => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.js,.mjs,text/javascript';
+    input.accept = '.js,.mjs,.ctplugin,.zip,text/javascript,application/zip';
     input.style.display = 'none';
     let settled = false;
     const finish = (v) => {

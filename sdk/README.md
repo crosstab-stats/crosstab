@@ -268,12 +268,40 @@ export async function writeAcme(app) {
 >2 GB file is never copied whole); `begin`+`batch` stream rows into the active
 dataset (`batch` resolves only once the host has taken it, so peak memory is one
 batch); set `begin(..., { wide: true })` for an ultra-wide file (out-of-core
-single-Parquet ingest). `loadAsset(name)` fetches a host-allowlisted dependency
-(JS lib source or WASM bytes) the sandbox can't reach itself. Reference codecs:
+single-Parquet ingest). `loadAsset(name)` fetches a dependency (JS lib source or
+WASM bytes) the sandbox can't reach itself. Reference codecs:
 [`builtin-csv-codec`](../plugins/builtin-csv-codec/index.js) (pure JS),
 [`builtin-parquet-codec`](../plugins/builtin-parquet-codec/index.js), and
 [`builtin-readstat-codec`](../plugins/builtin-readstat-codec/index.js)
 (SPSS/Stata/SAS via WASM + an in-sandbox worker).
+
+### Shipping your own assets (multi-file plugins)
+
+A plugin can bring its own dependencies instead of relying on the host — declare
+them and `loadAsset(name)` resolves them from *your* plugin, not a host allowlist:
+
+```js
+export const manifest = {
+  id: 'acme-codec', name: 'Acme', version: '1.0.0', apiVersion: '0.1.0',
+  category: 'Data',
+  // Each asset: `name` is what loadAsset() asks for; `path` is where it lives
+  // (a sibling of your entry URL, or a bundle entry); `kind` is 'text'|'bytes'.
+  assets: [
+    { name: 'worker', path: 'codec-worker.js', kind: 'text' },
+    { name: 'engine', path: 'engine.wasm', kind: 'bytes' },
+  ],
+  codecs: [{ id: 'acme', label: 'Acme…', extensions: ['.acme'], read: 'readImport' }],
+};
+```
+
+Declared assets resolve two ways, with the same trust basis: (1) a **same-origin
+sibling** of your entry module's URL — so a URL-served plugin just puts its files
+next to `index.js`; (2) a **bundled** file when the plugin is shipped as a
+`.ctplugin` **package** (a ZIP of `index.js` + `assets/…`). Export any multi-file
+plugin to a `.ctplugin` from **Edit ▸ Plugins ▸ ⬇**, and add one back via **Add
+from file** — the same one-file-share story as a single `.js`, now for plugins
+with WASM/workers. Off-origin asset fetches are refused; the host allowlist is
+reserved for CrossTab's own shared runtimes.
 
 ## Workspaces
 

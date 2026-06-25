@@ -39,6 +39,7 @@ import { OfflineManager } from './offline.js';
 import { exportProjectBundle, importProjectBundle, pickBundleFile, downloadBlob, slug } from './project-bundle.js';
 import { WorkspaceStore } from './workspace-store.js';
 import { WorkspaceManager } from './workspace-manager.js';
+import { PluginPackageStore } from './plugin-package-store.js';
 
 /**
  * URLs of the built-in plugins to load at startup. These load through the exact
@@ -572,6 +573,9 @@ export async function boot(mounts) {
     // from the open project's plugin set on deactivation (#118).
     workspaceStore,
     project: projects,
+    // Durable store for added multi-file `.ctplugin` packages — their bundled assets
+    // are too big/binary for localStorage (#119).
+    packageStore: new PluginPackageStore(),
   });
   plugins.activate();
 
