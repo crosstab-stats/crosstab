@@ -167,6 +167,51 @@ export class DatasetManager {
   }
 
   /**
+   * Extract a subset of columns from an open dataset into a NEW dataset — entirely
+   * in DuckDB (no JS materialisation), so it scales to large/ultra-wide sources
+   * (#121). Preserves the chosen variables' metadata (labels, value labels, …).
+   *
+   * @param {{srcId: number, varNames: string[], name?: string, activate?: boolean}} arg
+   * @returns {Promise<number>} the new dataset id.
+   */
+  async extractColumns({ srcId, varNames, name = 'Extract', activate = true }) {
+    const src = this.#datasets.get(srcId);
+    if (!src) throw new Error('Extract: source dataset not found.');
+    const metaByName = new Map(src.getVariableMeta().map((m) => [m.name, m]));
+    const variables = (varNames || []).map((n) => metaByName.get(n)).filter(Boolean);
+    if (!variables.length) throw new Error('Extract: no valid columns selected.');
+    const selectSql = src.relationSql(variables.map((v) => v.name));
+    const ds = this.add(name, { activate: false });
+    await ds.loadFromSql({ selectSql, variables, source: name });
+    if (activate) {
+      this.#activeId = ds.id;
+      this.#emitActive('switch');
+    } else {
+      this.#bus.emit(DATASETS_CHANGED, this.list());
+    }
+    return ds.id;
+  }
+
+  /**
+   * Join another open dataset into a target dataset by key — entirely in DuckDB (the
+   * incoming columns are copied from the other dataset's relation via SQL, never
+   * pulled through JS), so even a multi-GB join source stays out-of-core (#121). The
+   * engine's join op handles all four types and renames any non-key name clash.
+   *
+   * @param {{targetId: number, otherId: number, joinKey: {left: string, right: string}, joinType?: string}} arg
+   */
+  async joinDatasets({ targetId, otherId, joinKey, joinType }) {
+    const target = this.#datasets.get(targetId);
+    const other = this.#datasets.get(otherId);
+    if (!target) throw new Error('Join: target dataset not found.');
+    if (!other) throw new Error('Join: dataset to join not found.');
+    const variables = other.getVariableMeta();
+    const selectSql = other.relationSql();
+    await target.joinFromSql({ selectSql, variables, source: other.name, joinKey, joinType });
+    this.touch(); // refresh the sidebar (the target's row count changed)
+  }
+
+  /**
    * Add a single dataset reconstructed from a saved {@link DataStore} state (the
    * inverse of {@link DataStore#exportState}). Used to **restore a dataset from the
    * recycle bin** (#115) without disturbing the other open datasets. Gets a fresh

@@ -300,6 +300,58 @@ export class DataStore {
   }
 
   /**
+   * Replace this dataset's data from an **in-DuckDB SELECT** — no round-trip through
+   * JS. The SELECT runs against the shared DuckDB instance (typically another
+   * dataset's view, via {@link DataStore#relationSql}), so an extract of a few
+   * columns from a multi-GB / ultra-wide source stays out-of-core in the engine
+   * (#121). `variables` supplies the metadata (labels, value labels, measurement)
+   * that SQL alone can't carry; column SQL types are taken from the SELECT result.
+   *
+   * @param {{selectSql: string, variables: VariableMeta[], source?: string}} arg
+   */
+  async loadFromSql({ selectSql, variables, source }) {
+    await this.#dropAll();
+    const src = await this.#createSourceFromSql(selectSql, variables, source);
+    this.#log = [{ type: 'load', src }];
+    this.#redoStack = [];
+    await this.rederive('replace');
+  }
+
+  /**
+   * Join another relation into this dataset by key, built from an **in-DuckDB
+   * SELECT** (no JS materialisation) — the dataset⋈dataset path (#121). Mirrors the
+   * `join` branch of {@link DataStore#loadDataset} but sources the incoming columns
+   * via SQL (e.g. another dataset's view) rather than JS-delivered arrays. The
+   * rederive step does the actual join in DuckDB and renames any non-key name clash.
+   *
+   * @param {{selectSql: string, variables: VariableMeta[], source?: string,
+   *   joinKey: {left: string, right: string}, joinType?: string}} arg
+   */
+  async joinFromSql({ selectSql, variables, source, joinKey, joinType }) {
+    if (!this.#hasData()) throw new Error('Join needs a base dataset with data.');
+    const src = await this.#createSourceFromSql(selectSql, variables, source);
+    this.#log.push({ type: 'join', src, joinKey, aliases: [], joinType: joinType ?? 'left' });
+    this.#redoStack = [];
+    await this.rederive('join');
+  }
+
+  /**
+   * A SQL `SELECT` reading the given user columns (default: all) from this dataset's
+   * current derived relation — its view, or its backing `read_parquet` for a wide
+   * dataset. The internal row id is excluded (the consuming source bakes a fresh
+   * one). Lets another dataset extract/join *from* this one entirely in DuckDB (#121).
+   *
+   * @param {string[]} [varNames]
+   * @returns {string}
+   */
+  relationSql(varNames) {
+    const rel = this.#readRelation();
+    const names = (varNames ?? this.#variables.map((v) => v.name)).filter((n) => this.#byName.has(n));
+    const cols = names.map((n) => quoteIdent(n)).join(', ');
+    return `SELECT ${cols} FROM ${rel.from}`;
+  }
+
+  /**
    * Load a dataset by **streaming** it into a source table batch-by-batch, for
    * importers that can't materialise the whole thing in memory (a multi-GB
    * .sav/.dta read by ReadStat). The caller drives the ingest via the `ctx` it's
@@ -534,6 +586,24 @@ export class DataStore {
       for (const meta of variables) coerced[meta.name] = coerceColumn(meta, cols[meta.name] ?? []);
       await this.#duckdb.replaceTable(table, coerced);
     }
+    this.#sourceTables.add(table);
+    await this.#ensureRowId(table, seq);
+    return { table, meta: variables.map((m) => ({ ...m })), label: source ?? null };
+  }
+
+  /**
+   * Materialise an immutable source table directly from a SQL `SELECT` evaluated in
+   * the shared DuckDB instance — no JS round-trip (#121). Used by
+   * {@link DataStore#loadFromSql}/{@link DataStore#joinFromSql} to copy columns from
+   * another dataset's relation entirely in-engine. The SELECT must NOT include the
+   * internal row id (`relationSql` excludes it); a fresh, sequence-namespaced one is
+   * baked in. Column SQL types are inherited from the SELECT; `variables` carries the
+   * metadata. Returns the same `{table, meta, label}` descriptor as {@link #createSource}.
+   */
+  async #createSourceFromSql(selectSql, variables, source) {
+    const seq = ++this.#sourceSeq;
+    const table = `${this.#sourcePrefix}${seq}`;
+    await this.#duckdb.query(`CREATE OR REPLACE TABLE ${quoteIdent(table)} AS ${selectSql}`);
     this.#sourceTables.add(table);
     await this.#ensureRowId(table, seq);
     return { table, meta: variables.map((m) => ({ ...m })), label: source ?? null };

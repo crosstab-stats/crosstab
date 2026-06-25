@@ -78,13 +78,11 @@ export class DatasetOps {
     if (!names || !names.length) return; // cancelled / nothing chosen
 
     try {
-      // Preserve full metadata (labels, value labels, measurement, missing) by
-      // carrying the chosen variables' meta objects through, in the chosen order.
-      const metaByName = new Map(src.getVariableMeta().map((m) => [m.name, m]));
-      const variables = names.map((n) => metaByName.get(n)).filter(Boolean);
-      const columns = await src.getColumns({ variables: names });
+      // Native: the manager builds the new dataset with an in-DuckDB SELECT — no
+      // pulling the columns through JS (so it scales to large/wide sources). Metadata
+      // (labels, value labels, …) is carried by the manager from the source meta.
       const name = `${src.name} (extract)`;
-      await this.#datasets.createWithData({ name, variables, columns, activate: true });
+      await this.#datasets.extractColumns({ srcId: src.id, varNames: names, name, activate: true });
       this.#results.appendText(
         `Extracted ${names.length} column${names.length === 1 ? '' : 's'} into a new dataset **${name}**.`,
       );
@@ -125,19 +123,15 @@ export class DatasetOps {
     const review = await this.#askJoin(active, other);
     if (!review) return;
 
-    // 3) Apply: feed the other dataset's columns into the active one as a join
-    //    source. The engine's join op renames any non-key name clash with an
-    //    " (<other name>)" suffix, so columns never collide silently.
+    // 3) Apply: join the other dataset in natively — the manager copies its columns
+    //    via an in-DuckDB SELECT (never through JS), so even a multi-GB join source
+    //    stays out-of-core. The engine's join op renames any non-key name clash with
+    //    an " (<other name>)" suffix, so columns never collide silently.
     try {
-      const variables = other.getVariableMeta();
-      const columns = await other.getColumns();
-      await active.loadDataset({
-        variables,
-        columns,
-        mode: 'join',
-        source: other.name,
+      await this.#datasets.joinDatasets({
+        targetId: active.id,
+        otherId: other.id,
         joinKey: review.joinKey,
-        aliases: [],
         joinType: review.joinType,
       });
       const label = JOIN_TYPES.find((t) => t.value === review.joinType)?.label.split(' —')[0] || review.joinType;
