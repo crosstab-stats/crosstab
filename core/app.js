@@ -715,13 +715,17 @@ function wireConnectivityIndicator(statusEl, offline) {
     } catch {
       /* ignore */
     }
+    // The app shell is cached automatically (#92), so the app itself runs offline
+    // regardless of `enabled` — which now reflects only the opt-in runtime/package
+    // tier. Offline + not-opted-in is therefore "app works, R engine may not be
+    // cached", a mild caution rather than a failure.
     if (navigator.onLine) {
       el.hidden = !enabled;
       el.textContent = enabled ? '✓ Offline-ready' : '';
       el.style.color = '#7a8590';
     } else {
       el.hidden = false;
-      el.textContent = enabled ? '✈ Working offline' : '⚠ Offline — not cached';
+      el.textContent = enabled ? '✈ Working offline' : '✈ Offline — app only (R engine not cached)';
       el.style.color = enabled ? '#7a8590' : '#b26a00';
     }
   };

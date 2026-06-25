@@ -366,6 +366,11 @@ export class Launcher {
     const draw = (status) => {
       box.replaceChildren();
       box.append(el('div', 'Offline', 'ctl__railhead'));
+      // Tier 1 — the app shell caches automatically (#92): the app itself opens and
+      // runs offline after one load, in a tab or installed, no opt-in. State this so
+      // the opt-in below is clearly only about the heavy R engine + packages.
+      box.append(el('div', '✓ The app works offline automatically', 'ctl__offlineok'));
+      box.append(el('p', 'CrossTab itself is cached as you use it — it’ll open with no connection. To also run analyses offline, cache the R engine and packages:', 'ctl__offlinehint'));
       const prog = el('div', '', 'ctl__offlineprog');
 
       // Run enable() for the chosen scope; disable the buttons + stream progress.
@@ -386,7 +391,7 @@ export class Launcher {
       if (status.enabled) {
         const size = status.bytes ? ` · ~${(status.bytes / 1048576).toFixed(0)} MB` : '';
         const files = status.count ? ` (${status.count} files${size})` : '';
-        box.append(el('div', `✓ Available offline${files}`, 'ctl__offlineok'));
+        box.append(el('div', `✓ R engine cached — full offline ready${files}`, 'ctl__offlineok'));
         // Smart caching: the worker keeps caching new packages/assets as you use
         // features. Offer the plan-ahead "cache the whole toolkit" top-up too.
         box.append(el('p', 'More gets cached automatically as you use features. Or cache the full toolkit now:', 'ctl__offlinehint'));
@@ -402,7 +407,6 @@ export class Launcher {
         });
         box.append(allBtn, prog, rm);
       } else {
-        box.append(el('p', 'Cache CrossTab, the R engine, and the R packages your selected plugins need, so everything works with no internet — on a flight, or to set up an air-gapped machine.', 'ctl__offlinehint'));
         const btn = el('button', '⬇ Make available offline', 'ctl__offlinebtn');
         btn.type = 'button';
         const allBtn = el('button', '…or cache every plugin (larger)', 'ctl__howto');
