@@ -465,11 +465,22 @@ export class DuckDBManager {
     const bundle = await duckdb.selectBundle(bundles);
 
     // The bundle's worker lives on the CDN (cross-origin). Under COEP we can't
-    // construct a Worker directly from a cross-origin URL, so wrap it in a
-    // same-origin blob that `importScripts` it. (Proven in the spikes.)
-    const workerUrl = URL.createObjectURL(
-      new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' }),
-    );
+    // construct a Worker directly from a cross-origin URL. We fetch its source on
+    // the MAIN thread and inline it into a same-origin blob worker — two reasons:
+    // (1) a main-thread fetch flows through the service worker, so the worker script
+    // is cached for offline use; an in-worker `importScripts(crossOriginUrl)` would
+    // bypass the SW and never cache, breaking DuckDB with no network (#92); (2) it
+    // satisfies COEP without a cross-origin Worker URL. Falls back to the
+    // importScripts wrapper if the source can't be fetched as text.
+    let workerUrl;
+    try {
+      const src = await (await fetch(bundle.mainWorker)).text();
+      workerUrl = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+    } catch {
+      workerUrl = URL.createObjectURL(
+        new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' }),
+      );
+    }
     const worker = new Worker(workerUrl);
     const logger = new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING);
     const db = new duckdb.AsyncDuckDB(logger, worker);

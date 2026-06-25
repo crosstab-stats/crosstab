@@ -58,10 +58,14 @@ export class OfflineManager {
   }
 
   /** Read state straight from the Cache API (no SW round-trip needed):
-   * `{ supported, controlled, enabled, count, bytes }`. */
+   * `{ supported, controlled, enabled, runtimeCached, count, bytes }`. `enabled` is
+   * the opt-in marker (the full-toolkit pre-cache was run); `runtimeCached` means the
+   * R engine is in the cache (possibly just from normal use — #92 cache-as-used), so
+   * analyses can run offline even without opting in. */
   async status() {
-    if (!this.supported) return { supported: false, controlled: false, enabled: false, count: 0, bytes: 0 };
+    if (!this.supported) return { supported: false, controlled: false, enabled: false, runtimeCached: false, count: 0, bytes: 0 };
     let enabled = false;
+    let runtimeCached = false;
     let count = 0;
     let bytes = 0;
     try {
@@ -72,6 +76,9 @@ export class OfflineManager {
           continue;
         }
         count++;
+        // The WebR engine being cached (CDN host or vendored same-origin) is what
+        // lets analyses run offline.
+        if (/webr\.r-wasm\.org|\/vendor\/webr\//.test(req.url)) runtimeCached = true;
         // Headers only (no body reads) so status stays fast with ~100 MB cached.
         const r = await c.match(req);
         const len = Number(r?.headers.get('content-length') || 0);
@@ -80,7 +87,7 @@ export class OfflineManager {
     } catch {
       /* Cache API unavailable */
     }
-    return { supported: true, controlled: !!navigator.serviceWorker.controller, enabled, count, bytes };
+    return { supported: true, controlled: !!navigator.serviceWorker.controller, enabled, runtimeCached, count, bytes };
   }
 
   /** True once a previous enable() reloaded to gain control — boot calls

@@ -161,6 +161,17 @@ export class PluginLoader {
   /** id → loaded plugin record. @type {Map<string, LoadedPlugin>} */
   #plugins = new Map();
 
+  /** hostUrl → fetched sandbox-document HTML (memoised). The sandbox iframes load
+   * from a **blob: URL** of this HTML rather than the host URL directly: a sandboxed
+   * opaque-origin iframe's navigation to a same-origin URL is NOT controlled by the
+   * service worker, so `src=./plugin-host.html` can't be served from cache and would
+   * fail offline once the SW controls the page (installed PWAs). Fetching the host
+   * HTML on the (SW-controlled) main thread caches it; loading the iframe from a
+   * blob: URL then needs no network or SW — same isolation (opaque origin), but works
+   * offline (#92). Same mechanism the loader already uses for plugin code + the DuckDB
+   * worker. @type {Map<string, Promise<string>>} */
+  #hostHtml = new Map();
+
   /** Asks the user to allow a plugin's first `app.web.get`. A *remembered* grant
    * resolves true without prompting; otherwise the user is prompted (and an allow
    * is remembered host-side). `(plugin: {id, name}, url) => Promise<boolean>`.
@@ -248,7 +259,7 @@ export class PluginLoader {
     const iframe = this.#createIframe();
     const broker = new PluginBroker({ iframe, services: this.#gatedServices(ctx), onError: () => {} });
     this.#sandboxContainer.append(iframe);
-    iframe.src = PLUGIN_HOST_URL;
+    iframe.src = await this.#sandboxSrc(PLUGIN_HOST_URL);
     try {
       await broker.whenReady();
       const manifest = await broker.sendLoad(code);
@@ -286,9 +297,11 @@ export class PluginLoader {
       onError: (err) => console.error(`[plugin ${label}]`, err),
     });
 
-    // Append + navigate; the runtime posts {t:'ready'} once it is wired up.
+    // Append + point the iframe at a blob: URL of the sandbox document; the runtime
+    // posts {t:'ready'} once wired up. blob: (not the host URL) so it works offline —
+    // see #hostHtml.
     this.#sandboxContainer.append(iframe);
-    iframe.src = hostUrl;
+    iframe.src = await this.#sandboxSrc(hostUrl);
 
     try {
       await broker.whenReady();
@@ -469,6 +482,31 @@ export class PluginLoader {
    * The origin is owned by the plugin manager, hence set here post-load. */
   setAttribution(id, attribution) {
     this.#plugins.get(id)?.broker.setAttribution(attribution);
+  }
+
+  /** A fresh blob: URL of the sandbox document for an iframe's `src` (#92). The host
+   * HTML is fetched once per host URL and cached (the fetch goes through the service
+   * worker, so it's available offline); each iframe gets its own blob: URL built from
+   * that text. Loading from blob: needs no network or SW — yet `sandbox="allow-scripts"`
+   * still forces an opaque origin + isolated heap, so isolation is unchanged. The URL
+   * is revoked shortly after (the iframe loads it in milliseconds). */
+  async #sandboxSrc(hostUrl) {
+    let p = this.#hostHtml.get(hostUrl);
+    if (!p) {
+      p = (async () => {
+        const res = await fetch(hostUrl);
+        if (!res.ok) throw new Error(`Failed to load plugin sandbox ${hostUrl}: HTTP ${res.status}`);
+        return res.text();
+      })().catch((err) => {
+        this.#hostHtml.delete(hostUrl); // don't cache a failure — allow retry
+        throw err;
+      });
+      this.#hostHtml.set(hostUrl, p);
+    }
+    const html = await p;
+    const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+    setTimeout(() => URL.revokeObjectURL(url), 15000); // iframe loads it in ms
+    return url;
   }
 
   /** Build a hidden, sandboxed iframe for a plugin. */

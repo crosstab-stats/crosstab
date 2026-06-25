@@ -710,23 +710,27 @@ function wireConnectivityIndicator(statusEl, offline) {
   (statusEl.parentElement || statusEl).append(el);
   const paint = async () => {
     let enabled = false;
+    let runtimeCached = false;
     try {
-      enabled = (await offline.status()).enabled;
+      const st = await offline.status();
+      enabled = st.enabled;
+      runtimeCached = st.runtimeCached;
     } catch {
       /* ignore */
     }
-    // The app shell is cached automatically (#92), so the app itself runs offline
-    // regardless of `enabled` — which now reflects only the opt-in runtime/package
-    // tier. Offline + not-opted-in is therefore "app works, R engine may not be
-    // cached", a mild caution rather than a failure.
+    // The app shell is cached automatically (#92), and the R engine + packages cache
+    // as they're used — so "offline-capable" means the engine is cached (whether via
+    // the opt-in pre-cache or just from normal use). Offline without it = the app
+    // still runs, but R analyses needing uncached packages won't.
+    const offlineCapable = enabled || runtimeCached;
     if (navigator.onLine) {
-      el.hidden = !enabled;
-      el.textContent = enabled ? '✓ Offline-ready' : '';
+      el.hidden = !offlineCapable;
+      el.textContent = offlineCapable ? '✓ Offline-ready' : '';
       el.style.color = '#7a8590';
     } else {
       el.hidden = false;
-      el.textContent = enabled ? '✈ Working offline' : '✈ Offline — app only (R engine not cached)';
-      el.style.color = enabled ? '#7a8590' : '#b26a00';
+      el.textContent = offlineCapable ? '✈ Working offline' : '✈ Offline — app only (R engine not cached yet)';
+      el.style.color = offlineCapable ? '#7a8590' : '#b26a00';
     }
   };
   window.addEventListener('online', paint);

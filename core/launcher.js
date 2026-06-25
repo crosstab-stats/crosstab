@@ -366,11 +366,12 @@ export class Launcher {
     const draw = (status) => {
       box.replaceChildren();
       box.append(el('div', 'Offline', 'ctl__railhead'));
-      // Tier 1 — the app shell caches automatically (#92): the app itself opens and
-      // runs offline after one load, in a tab or installed, no opt-in. State this so
-      // the opt-in below is clearly only about the heavy R engine + packages.
-      box.append(el('div', '✓ The app works offline automatically', 'ctl__offlineok'));
-      box.append(el('p', 'CrossTab itself is cached as you use it — it’ll open with no connection. To also run analyses offline, cache the R engine and packages:', 'ctl__offlinehint'));
+      // Everything caches as you use it (#92): the app shell and each analysis's R
+      // engine/packages are kept the first time they're fetched — no opt-in. So the
+      // control below is only about PRE-caching the toolkit ahead of time (for stuff
+      // you haven't run yet — a flight, an air-gapped machine).
+      box.append(el('div', '✓ Works offline automatically', 'ctl__offlineok'));
+      box.append(el('p', 'CrossTab and every analysis you run are cached as you use them — so whatever you’ve used already works with no connection. Pre-cache the rest (analyses you haven’t opened yet) for a flight or an air-gapped machine:', 'ctl__offlinehint'));
       const prog = el('div', '', 'ctl__offlineprog');
 
       // Run enable() for the chosen scope; disable the buttons + stream progress.
@@ -391,10 +392,10 @@ export class Launcher {
       if (status.enabled) {
         const size = status.bytes ? ` · ~${(status.bytes / 1048576).toFixed(0)} MB` : '';
         const files = status.count ? ` (${status.count} files${size})` : '';
-        box.append(el('div', `✓ R engine cached — full offline ready${files}`, 'ctl__offlineok'));
+        box.append(el('div', `✓ Full toolkit pre-cached for offline${files}`, 'ctl__offlineok'));
         // Smart caching: the worker keeps caching new packages/assets as you use
         // features. Offer the plan-ahead "cache the whole toolkit" top-up too.
-        box.append(el('p', 'More gets cached automatically as you use features. Or cache the full toolkit now:', 'ctl__offlinehint'));
+        box.append(el('p', 'More gets cached automatically as you use features. Or top up the full toolkit now:', 'ctl__offlinehint'));
         const allBtn = el('button', '⬇ Cache all plugins', 'ctl__offlinebtn');
         allBtn.type = 'button';
         const rm = el('button', 'Remove offline data', 'ctl__howto');
@@ -407,7 +408,7 @@ export class Launcher {
         });
         box.append(allBtn, prog, rm);
       } else {
-        const btn = el('button', '⬇ Make available offline', 'ctl__offlinebtn');
+        const btn = el('button', '⬇ Pre-cache the full toolkit', 'ctl__offlinebtn');
         btn.type = 'button';
         const allBtn = el('button', '…or cache every plugin (larger)', 'ctl__howto');
         allBtn.type = 'button';

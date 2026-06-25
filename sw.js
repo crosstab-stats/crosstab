@@ -19,11 +19,16 @@
  *         served. So the app itself opens offline after one load — no opt-in. An
  *         installed (standalone) app serves the shell cache-first (instant, flaky-
  *         network-proof); a tab stays network-first (fresh) with a cache fallback.
- *       - **Runtimes + R packages (cross-origin on CDN): OPT-IN.** The big WebR /
- *         DuckDB / Arrow / hyparquet downloads + the R-package closure cache only
- *         when the user turns on "Make available offline" (see core/offline.js) —
- *         too large to force. In the air-gapped build these runtimes are *same-origin*
- *         (`./vendor/`), so the shell rule caches them automatically there too.
+ *       - **Runtimes + R packages (cross-origin on CDN): cached AS USED.** The WebR /
+ *         DuckDB / Arrow / hyparquet runtimes + each R package come down during
+ *         normal use anyway (WebR warms at boot, a package downloads when its
+ *         analysis first runs); we now keep them (cache-on-use, cache-first) instead
+ *         of re-downloading — from the known runtime hosts only ({@link RUNTIME_HOSTS}),
+ *         never arbitrary cross-origin data. So what you've used online works offline,
+ *         with no opt-in and no extra download, and boots faster. The "Make available
+ *         offline" toggle (core/offline.js) now only PRE-fetches the closure of
+ *         packages you *haven't* run yet. In the air-gapped build the runtimes are
+ *         *same-origin* (`./vendor/`), so the shell rule already covers them.
  *     The spike confirmed the CDN runtimes return CORS (non-opaque) responses, so
  *     they cache and re-serve cleanly even under cross-origin isolation.
  *
@@ -54,9 +59,34 @@ const SHELL_PRECACHE = [
   'index.html',
   'manifest.json',
   'core/app.js',
+  // The plugin sandbox documents — every plugin loads in one of these iframes, so
+  // they must be cached for plugins (hence analyses, importers, the demo data) to
+  // work offline.
+  'plugin-host.html',
+  'plugin-host-codec.html',
   'vendor/icon-192.png',
   'vendor/icon-180.png',
 ];
+
+// Cross-origin hosts CrossTab loads its RUNTIMES + R packages from (CDN mode). These
+// are cached automatically as they're used (they download anyway) and served
+// cache-first — so "used online once → works offline" + faster boot, with no opt-in.
+// Restricted to these known hosts so we never auto-cache arbitrary fetched *data*
+// (e.g. a plugin's app.web request, the FRED/Wikipedia importers).
+const RUNTIME_HOSTS = [
+  'webr.r-wasm.org', // WebR runtime
+  'repo.r-wasm.org', // WebR R-package binaries
+  'cdn.jsdelivr.net', // DuckDB-WASM, Arrow, hyparquet-writer
+  'esm.sh', // codec libs (hyparquet) + esm.sh bundles
+];
+
+function isRuntimeAsset(url) {
+  try {
+    return RUNTIME_HOSTS.includes(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
 // Set by the page when running as a Home Screen (standalone) app — then the
 // same-origin shell is served cache-first/stale-while-revalidate so a flaky or
 // absent connection (a field iPad) never blocks launch. In-memory; the page
@@ -203,7 +233,11 @@ if (typeof window === 'undefined') {
  */
 async function handleFetch(r) {
   const isGet = r.method === 'GET';
-  const isNav = r.mode === 'navigate';
+  // Only a TOP-LEVEL document navigation should fall back to the index shell. A
+  // nested navigation (a plugin sandbox <iframe> loading plugin-host.html) must
+  // resolve to its own cached document, never index.html — else the sandbox boots
+  // the whole app and never signals ready.
+  const isTopNav = r.mode === 'navigate' && r.destination === 'document';
   let sameOrigin = true;
   try {
     sameOrigin = new URL(r.url).origin === self.location.origin;
@@ -211,9 +245,11 @@ async function handleFetch(r) {
     /* opaque URL — treat as same-origin (won't be cached anyway) */
   }
 
-  // Tier 2 — opted-in cross-origin runtimes + R packages: cache-first. They're
-  // versioned by URL, so a hit is always valid and avoids a multi-MB re-download.
-  if (offlineEnabled && isGet && !sameOrigin) {
+  // Tier 2 — cross-origin runtimes + R packages: cache-first whenever cached. The
+  // known runtime hosts cache automatically (cached as used); opting in additionally
+  // pre-fetches unused packages. Either way a cache hit avoids a multi-MB
+  // re-download and lets the app run offline.
+  if (isGet && !sameOrigin && (offlineEnabled || isRuntimeAsset(r.url))) {
     const hit = await caches.match(r);
     if (hit) return hit;
   }
@@ -225,7 +261,7 @@ async function handleFetch(r) {
   // A *navigation* (e.g. `/?launch=…`) maps to the cached index document — its query
   // would otherwise miss the cache key.
   if (isGet && sameOrigin && standalone) {
-    const hit = isNav ? await matchShell() : await caches.match(r);
+    const hit = isTopNav ? await matchShell() : await caches.match(r);
     if (hit) {
       networkAndCache(r, isGet, sameOrigin).catch(() => {}); // background revalidate
       return hit;
@@ -238,9 +274,9 @@ async function handleFetch(r) {
   } catch (err) {
     const hit = await caches.match(r);
     if (hit) return hit;
-    // Offline navigation fallback: any in-app URL boots from the cached shell
-    // document, so the app opens with no connection regardless of the path/query.
-    if (isNav) {
+    // Offline navigation fallback: any in-app top-level URL boots from the cached
+    // shell document, so the app opens with no connection regardless of path/query.
+    if (isTopNav) {
       const shell = await matchShell();
       if (shell) return shell;
     }
@@ -263,14 +299,33 @@ async function matchShell() {
  * only when "Make available offline" is on (tier 2). Returns the rewritten response;
  * throws if the network fails (so the caller can fall back to cache). */
 async function networkAndCache(r, isGet, sameOrigin) {
-  const request =
-    coepCredentialless && r.mode === 'no-cors' ? new Request(r, { credentials: 'omit' }) : r;
+  let request = r;
+  if (coepCredentialless && r.mode === 'no-cors') {
+    request = new Request(r, { credentials: 'omit' });
+  } else if (sameOrigin && isGet) {
+    // Revalidate same-origin app files against the server so a deploy propagates —
+    // otherwise the HTTP cache could hand the network-first path a stale module and
+    // we'd cache + serve old app code. `no-cache` = conditional GET (304 when
+    // unchanged, fresh body when changed); offline it just throws → cache fallback.
+    try {
+      request = new Request(r, { cache: 'no-cache' });
+    } catch {
+      /* some requests can't be reconstructed (rare) — use the original */
+    }
+  }
   const response = await fetch(request);
   if (response.status === 0) return response; // opaque; leave as-is (can't rewrite)
 
   // Cache the *rewritten* response (with CORP), so a later offline serve still
-  // satisfies cross-origin isolation.
-  if (isGet && response.ok && response.type !== 'opaque' && (sameOrigin || offlineEnabled)) {
+  // satisfies cross-origin isolation. Same-origin shell + known runtime hosts cache
+  // AUTOMATICALLY (as used); opting in additionally caches any other cross-origin
+  // (the pre-fetched package closure).
+  if (
+    isGet &&
+    response.ok &&
+    response.type !== 'opaque' &&
+    (sameOrigin || isRuntimeAsset(r.url) || offlineEnabled)
+  ) {
     const forCache = withIsolation(response.clone());
     caches.open(CACHE).then((c) => c.put(r, forCache)).catch(() => {});
   }
