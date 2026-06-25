@@ -30,6 +30,16 @@ const CATEGORY_ORDER = [
   'Export',
 ];
 
+/** Escape text for safe interpolation into an innerHTML template. Plugin display
+ * names are author-controlled (URL/file plugins), so any name rendered as markup
+ * must be escaped or a name like `<img src=x onerror=…>` runs in the host (#89). */
+function esc(s) {
+  return String(s ?? '').replace(
+    /[&<>"']/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
+  );
+}
+
 export class PluginCreator {
   /** @type {import('./plugin-manager.js').PluginManager} */
   #manager;
@@ -64,7 +74,7 @@ export class PluginCreator {
     dialog.innerHTML = `
       <form method="dialog" class="ct-dialog__form">
         <h2 class="ct-dialog__title">${
-          forking ? `New plugin from “${existing.fromName ?? 'a copy'}”` : editing ? 'Edit plugin' : 'Create a plugin'
+          forking ? `New plugin from “${esc(existing.fromName ?? 'a copy')}”` : editing ? 'Edit plugin' : 'Create a plugin'
         }</h2>
         ${
           codeMode
