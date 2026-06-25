@@ -79,20 +79,28 @@ no foreign code. This is the shortcut/bookmark feature working as intended. Acce
   to read or overwrite its blob. (`core/workspace-store.js`,
   `core/workspace-manager.js`)
 
-## Deferred (tracked, not theatre)
+## Accepted residual risks (won't fix)
 
-- **#4 — WebR network egress.** Plugin-supplied R can still reach the network
+These are real gaps we have consciously chosen **not** to close, because the
+available fixes cost more (in ongoing maintenance or fragility) than the risk
+warrants for a local single-user tool. Recorded so the trade-off is deliberate.
+
+- **#4 — WebR network egress.** Plugin-supplied R can reach the network
   (`download.file`, `url()`, `install.packages`) from the host origin, bypassing the
-  `web.get` consent gate. **Sanitising R *source* is not a fix** — R is dynamic
-  (`get("url")()`, `do.call`, `eval(parse())`), so any text blocklist is trivially
-  bypassed. The real fix is a **transport-level allowlist** inside the WebR worker
-  (block XHR/`fetch` except the package repo), mirroring the iframe's
-  `connect-src`. Sizable and WebR-version-fragile; partly redundant given activated
-  plugins are already trusted with the data (above). Tracked for its own task.
+  `web.get` consent gate. Note the *non-fixes*: sanitising R **source** is theatre —
+  R is dynamic (`get("url")()`, `do.call`, `eval(parse())`), so any text blocklist is
+  trivially bypassed. The only robust fix is a transport-level XHR/`fetch` allowlist
+  *inside* the WebR worker, which is sizable and fragile across WebR versions.
+  **Accepted, not pursued:** it's partly redundant anyway — activated plugins are
+  already trusted with the active dataset (above), so R egress is not a new exposure
+  beyond the consented `web.get`. Revisit only if WebR exposes a supported network
+  hook that makes the allowlist cheap and stable.
 - **#9 — runtime asset integrity.** Cached runtime code (WebR/DuckDB/R packages) has
-  no integrity check. Hashing *what we download* is theatre (it can't tell a legit
-  upgrade from an injection). The non-theatre options are (a) **pinned SRI** baked
-  into the app at vendor time (trust root = our own origin, not the CDN), or better
-  (b) **serve the vendored runtime from our own origin** for the public build so the
-  CDN leaves the trusted path entirely — which the air-gap vendoring path (#71)
-  already produces. Decide at deploy time (#90); no TOFU hashing.
+  no integrity check. TOFU hashing (hash what we download) is theatre — it can't tell
+  a legit upgrade from an injection. Pinned SRI would be real defence but requires
+  re-vetting and updating hashes on **every** legitimate upstream bump — a
+  maintenance burden we're not taking on. **Accepted.** If we ever want the
+  protection for free, the clean route is to serve the *vendored* runtime from our
+  own origin (the air-gap path, #71, already produces it), which removes the CDN from
+  the trusted path with zero ongoing hashing — a deploy-time choice (#90), not a code
+  obligation here.
