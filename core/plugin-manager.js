@@ -129,25 +129,43 @@ export class PluginManager {
     }
     this.#catalog = readJSON(LS_CATALOG, {});
     this.#user = Array.isArray(readJSON(LS_USER, [])) ? readJSON(LS_USER, []) : [];
-    this.#webAllowed = new Set(readJSON(LS_WEB, []));
+    this.#webAllowed = readWebGrants(readJSON(LS_WEB, {}));
   }
 
-  /** Has the user granted this plugin (by manifest id) network access? */
-  isWebAllowed(id) {
-    return !!id && this.#webAllowed.has(id);
+  /** Has the user granted this plugin (by qualified id) network access? A grant is
+   * scoped to specific **origins** the user approved — passing `origin` checks that
+   * exact origin; omitting it answers "does this plugin have any grant" (for the
+   * manager badge). One "allow" no longer authorises every host (#89). */
+  isWebAllowed(id, origin) {
+    if (!id) return false;
+    const set = this.#webAllowed.get(id);
+    if (!set || !set.size) return false;
+    return origin == null ? true : set.has(origin);
   }
 
-  /** Remember that the user allowed this plugin network access (so it isn't asked
-   * again). Called by the loader's consent gate after an "allow". */
-  grantWeb(id) {
-    if (!id || this.#webAllowed.has(id)) return;
-    this.#webAllowed.add(id);
-    writeJSON(LS_WEB, [...this.#webAllowed]);
+  /** Remember that the user allowed this plugin to fetch from `origin` (so the same
+   * origin isn't asked again). Called by the loader's consent gate after an "allow".
+   * A new origin re-prompts — the grant never widens to other hosts on its own. */
+  grantWeb(id, origin) {
+    if (!id || !origin) return;
+    let set = this.#webAllowed.get(id);
+    if (!set) this.#webAllowed.set(id, (set = new Set()));
+    if (set.has(origin)) return;
+    set.add(origin);
+    this.#persistWeb();
   }
 
-  /** Forget a network grant — the plugin will be asked again next time it fetches. */
+  /** Forget all of a plugin's network grants — it'll be asked again next time it
+   * fetches from any host. */
   revokeWeb(id) {
-    if (this.#webAllowed.delete(id)) writeJSON(LS_WEB, [...this.#webAllowed]);
+    if (this.#webAllowed.delete(id)) this.#persistWeb();
+  }
+
+  /** Persist the per-plugin origin grants as `{ qualifiedId: [origin, …] }`. */
+  #persistWeb() {
+    const obj = {};
+    for (const [id, set] of this.#webAllowed) if (set.size) obj[id] = [...set];
+    writeJSON(LS_WEB, obj);
   }
 
   activate() {
@@ -1170,6 +1188,24 @@ function writeJSON(key, value) {
   } catch {
     /* storage unavailable / full — choices just won't persist */
   }
+}
+
+/** Parse persisted web grants into `Map<qualifiedId, Set<origin>>`. The current
+ * format is `{ id: [origin, …] }`. The legacy v1 format was a flat `[id, …]` array
+ * (a per-plugin *boolean* "any URL" grant); that is intentionally dropped on read
+ * so an over-broad old grant becomes a one-time re-prompt rather than silently
+ * carrying forward unbounded host access (#89). */
+function readWebGrants(raw) {
+  const m = new Map();
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    for (const [id, origins] of Object.entries(raw)) {
+      if (Array.isArray(origins)) {
+        const set = new Set(origins.filter((o) => typeof o === 'string' && o));
+        if (set.size) m.set(id, set);
+      }
+    }
+  }
+  return m;
 }
 
 /** A readable fallback name from a plugin URL (used only if it never loaded). */

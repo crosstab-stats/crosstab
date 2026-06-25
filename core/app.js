@@ -157,9 +157,10 @@ function promptNetworkDialog(name, url) {
       <form method="dialog" class="ct-dialog__form">
         <h2 class="ct-dialog__title">Allow network access?</h2>
         <p class="ct-dialog__hint">The plugin <strong>${escapeText(name)}</strong> wants to
-          fetch a URL. This is the only way it can send data off your device — allow it
-          only if you trust this plugin. If you allow, CrossTab remembers and won't ask
-          again for this plugin (revoke it any time in Edit ▸ Plugins…).</p>
+          fetch from the site below. This is the only way it can send data off your device —
+          allow it only if you trust this plugin. If you allow, CrossTab remembers your choice
+          <strong>for this site only</strong>; a different host will ask again. Revoke any time
+          in Edit ▸ Plugins….</p>
         <p class="ct-dialog__hint" style="word-break:break-all"><code>${escapeText(url)}</code></p>
         <menu class="ct-dialog__buttons">
           <button value="allow" type="submit">Allow</button>
@@ -356,9 +357,11 @@ export async function boot(mounts) {
   let plugins;
   const loader = new PluginLoader(services, {
     confirmNetwork: async (plugin, url) => {
-      if (plugin.id && plugins.isWebAllowed(plugin.id)) return true; // remembered allow
+      let origin = '';
+      try { origin = new URL(url).origin; } catch { /* invalid URL → no remembered grant */ }
+      if (plugin.id && origin && plugins.isWebAllowed(plugin.id, origin)) return true; // remembered for this origin
       const allow = await promptNetworkDialog(plugin.name, url);
-      if (allow && plugin.id) plugins.grantWeb(plugin.id); // remember it
+      if (allow && plugin.id && origin) plugins.grantWeb(plugin.id, origin); // remember it, scoped to this origin
       return allow;
     },
   });

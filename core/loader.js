@@ -358,11 +358,22 @@ export class PluginLoader {
   #gatedServices(ctx) {
     const realWeb = this.#services.web;
     const confirmNetwork = this.#confirmNetwork;
-    let decision = null;
+    // Per-origin decision cache: consent is asked once per *host*, not once per
+    // plugin. A new origin re-prompts, so an allow for one host never silently
+    // authorises fetching (and exfiltrating to) another (#89).
+    const decided = new Map(); // origin → boolean
     const web = Object.freeze({
       get: async (url) => {
-        if (decision === null) decision = await confirmNetwork({ id: ctx.id, name: ctx.name }, String(url));
-        if (!decision) throw new Error('Network access was blocked for this plugin.');
+        let origin;
+        try {
+          origin = new URL(String(url)).origin;
+        } catch {
+          throw new Error('web.get: invalid URL');
+        }
+        if (!decided.has(origin)) {
+          decided.set(origin, await confirmNetwork({ id: ctx.id, name: ctx.name }, String(url)));
+        }
+        if (!decided.get(origin)) throw new Error('Network access was blocked for this plugin.');
         return realWeb.get(url);
       },
     });
