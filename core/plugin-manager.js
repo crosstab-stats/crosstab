@@ -171,12 +171,31 @@ export class PluginManager {
     return [...builtins, ...this.#user];
   }
 
-  /** Load every enabled plugin (built-in + user). Call once at boot. */
+  /** Load every enabled plugin (built-in + user). Call once at boot. Activations run
+   * with a small concurrency cap (not one-at-a-time) so a many-plugin launch is fast,
+   * especially offline where each cached fetch + sandbox handshake otherwise serialises
+   * into tens of seconds (#120). */
   async activateEnabled() {
-    for (const e of this.#entries()) {
-      if (this.#disabled.has(e.key)) continue;
-      await this.#activateEntry(e);
-    }
+    const todo = this.#entries().filter((e) => !this.#disabled.has(e.key));
+    await this.#runPool(todo, (e) => this.#activateEntry(e));
+  }
+
+  /** Run `fn` over `items` with a small concurrency cap — fast but bounded, so a
+   * burst of sandbox handshakes at launch isn't dropped (and {@link #activateEntry}
+   * already retries once if one is). Never rejects: `fn` is best-effort. */
+  async #runPool(items, fn, limit = 6) {
+    const queue = [...items];
+    const worker = async () => {
+      while (queue.length) {
+        const item = queue.shift();
+        try {
+          await fn(item);
+        } catch {
+          /* best-effort — #activateEntry/setEnabled already surface their own errors */
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(limit, queue.length) }, worker));
   }
 
   /** Load one entry, recording its manifest in the catalog. Resolves the manifest,
@@ -702,15 +721,23 @@ export class PluginManager {
     const list = this.list();
     const keySet = new Set();
     for (const p of list) if (want.has(p.key) || (p.id && want.has(p.id))) keySet.add(p.key);
+    const toActivate = [];
+    const toDeactivate = [];
     for (const p of list) {
       const w = keySet.has(p.key);
+      if (w && !p.activated) toActivate.push(p.key);
       // Disable every non-wanted plugin (not just ones currently loaded), so the
       // disabled set is the exact complement of the active set. Otherwise a
       // never-loaded-but-not-disabled plugin reads as "enabled but not loaded" —
       // which the manager (correctly) labels "failed to load", a false alarm.
-      if (w && !p.activated) await this.setEnabled(p.key, true);
-      else if (!w && p.enabled) await this.setEnabled(p.key, false);
+      else if (!w && p.enabled) toDeactivate.push(p.key);
     }
+    // Deactivations are cheap (dispose) and rare at launch — do them first, in order.
+    for (const key of toDeactivate) await this.setEnabled(key, false);
+    // Activations are the slow part (cached fetch + sandbox handshake + module import
+    // + activate). Run them with a concurrency cap instead of one-at-a-time, which cut
+    // launch from ~N sequential handshakes to ~N/cap waves — a big win offline (#120).
+    await this.#runPool(toActivate, (key) => this.setEnabled(key, true));
   }
 
   /** All known plugins for the dialog, with state + origin. */
