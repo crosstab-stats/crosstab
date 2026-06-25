@@ -23,23 +23,31 @@
  *           row batches into the active streaming ingest.
  *  - write: pull data via the normal `app.data.*`; `writeChunk(bytes)` — append
  *           output bytes the host streams to the download.
- *  - both:  `loadAsset(name)` — fetch a host-allowlisted dependency (a JS lib's
- *           source, or WASM bytes) the sandbox can't fetch itself (`connect-src
- *           'none'`). Only host-known names resolve — a codec can't pull arbitrary
- *           code; it bundles anything else itself.
+ *  - both:  `loadAsset(name)` — fetch a dependency (a JS lib's source, or WASM
+ *           bytes) the sandbox can't fetch itself (`connect-src 'none'`). Resolves
+ *           in two tiers: first the calling plugin's own **declared** assets (from
+ *           its `.ctplugin` bundle or a same-origin sibling of its entry URL — the
+ *           no-lock-in path, #119), then the host's narrow shared-library allowlist
+ *           ({@link ASSETS}). A codec can't pull arbitrary code or reach off-origin.
  *
  * The session is a single mutable slot: codec import/export are user-initiated and
  * strictly serial, so there's never more than one in flight.
  */
 
 /**
- * Host-allowlisted codec dependencies. A codec declares the names it needs in its
- * manifest (`codecs[].assets`); only names listed here resolve, and the host
- * decides the URL — so a codec can't request arbitrary code. esm.sh `?bundle`
- * gives a single self-contained module (no external imports), which is required
- * because the sandbox imports it from a `blob:` URL.
+ * Host-vetted **shared-library** assets — the narrow allowlist of dependencies the
+ * *host* provides to any codec, kept ONLY for CrossTab's own shared runtimes/libs
+ * (e.g. the hyparquet Parquet engine). A plugin that needs its *own* dependencies
+ * bundles them and declares them in its manifest — those resolve per-plugin via
+ * {@link PluginLoader#resolveAsset} (its bundle or a same-origin sibling of its
+ * entry URL), NOT here (#119). So a codec can neither request arbitrary code from
+ * the host nor reach off-origin: the host only knows these few vetted URLs, and
+ * per-plugin assets only resolve from the plugin's own author-controlled origin.
  *
- * @type {Object<string, {url: string, kind: 'text'|'bytes'}>}
+ * esm.sh `?bundle` gives a single self-contained module (no external imports),
+ * required because the sandbox imports it from a `blob:` URL.
+ *
+ * @type {Object<string, {url: string, kind: 'text'|'bytes', raw?: boolean}>}
  */
 const ASSETS = {
   // `?bundle&target=es2022` inlines all deps into one self-contained module (no
@@ -47,11 +55,6 @@ const ASSETS = {
   // `blob:` URL and can't fetch anything itself. Same pattern the vendor script uses.
   hyparquet: { url: 'https://esm.sh/hyparquet@1?bundle&target=es2022', kind: 'text' },
   'hyparquet-writer': { url: 'https://esm.sh/hyparquet-writer@0.16.1?bundle&target=es2022', kind: 'text' },
-  // ReadStat (SPSS/Stata/SAS) — local, self-contained host files served to the codec
-  // sandbox (which can't fetch them itself). `raw` = serve as-is, no shim-following.
-  'readstat-wasm': { url: new URL('../vendor/readstat/readstat.wasm', import.meta.url).href, kind: 'bytes' },
-  'readstat-glue': { url: new URL('../vendor/readstat/readstat.mjs', import.meta.url).href, kind: 'text', raw: true },
-  'readstat-worker': { url: new URL('../plugins/builtin-readstat-codec/codec-worker.js', import.meta.url).href, kind: 'text', raw: true },
 };
 
 export class CodecService {
@@ -200,6 +203,7 @@ export class CodecService {
     this.#session = {
       kind: 'read',
       file,
+      pluginId: spec.pluginId, // whose declared assets loadAsset() may resolve (#119)
       sink: {
         begin: (variables, storageTypes, opts = {}) => {
           head = { variables, storageTypes, rowCount: opts.rowCount ?? -1, wide: !!opts.wide };
@@ -233,7 +237,7 @@ export class CodecService {
    * the assembled bytes to the export ticket. The plugin's return value carries the
    * filename/mimeType. */
   async #runWrite(spec, ticket) {
-    this.#session = { kind: 'write', chunks: [] };
+    this.#session = { kind: 'write', chunks: [], pluginId: spec.pluginId };
     try {
       const meta = await this.#loader.invoke(spec.pluginId, spec.write, [{}]);
       const chunks = this.#session.chunks;
@@ -254,13 +258,33 @@ export class CodecService {
     }
   }
 
-  /** Fetch a host-allowlisted dependency once and cache it. Text assets (JS module
-   * source) come back as a single self-contained module the plugin blob-imports;
-   * binary assets (WASM) as a Uint8Array. */
+  /** Resolve a codec dependency once and cache it. Two tiers (#119): first the
+   * calling plugin's own **declared** asset (its `.ctplugin` bundle, or a same-origin
+   * sibling of its entry URL) via the loader; then the host's narrow shared-library
+   * allowlist. Text assets come back as a self-contained module string the plugin
+   * blob-imports; binary assets (WASM) as a Uint8Array. Cache is keyed per plugin so
+   * two plugins declaring the same asset name don't collide. */
   async #loadAsset(name) {
-    if (this.#assetCache.has(name)) return this.#assetCache.get(name);
+    const pluginId = this.#session?.pluginId || null;
+    const cacheKey = `${pluginId || '*'} ${name}`;
+    if (this.#assetCache.has(cacheKey)) return this.#assetCache.get(cacheKey);
+
+    // Tier 1 — the plugin brought it: its own bundle or a same-origin sibling.
+    if (pluginId) {
+      const resolved = await this.#loader.resolveAsset(pluginId, name);
+      if (resolved) {
+        this.#assetCache.set(cacheKey, resolved.value);
+        return resolved.value;
+      }
+    }
+
+    // Tier 2 — a host-vetted shared library (CrossTab's own runtimes).
     const entry = ASSETS[name];
-    if (!entry) throw new Error(`app.codec.loadAsset: unknown asset "${name}" (not host-allowlisted)`);
+    if (!entry) {
+      throw new Error(
+        `app.codec.loadAsset: "${name}" is neither declared by the plugin nor a host-vetted shared library`,
+      );
+    }
     let value;
     if (entry.kind === 'bytes') {
       const res = await fetch(entry.url);
@@ -271,7 +295,7 @@ export class CodecService {
     } else {
       value = await this.#fetchSelfContainedModule(entry.url);
     }
-    this.#assetCache.set(name, value);
+    this.#assetCache.set(cacheKey, value);
     return value;
   }
 

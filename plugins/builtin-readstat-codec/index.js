@@ -28,6 +28,17 @@ export const manifest = {
   name: 'SPSS / Stata / SAS codec',
   apiVersion: '0.1.0',
   category: 'Data',
+  // This plugin brings its own dependencies rather than relying on the host's
+  // shared-library allowlist (#119) — proving a third-party codec can ship the same
+  // way. Each asset resolves from a same-origin sibling of this entry module's URL
+  // (`app.codec.loadAsset(name)` → loader.resolveAsset). The worker is a true
+  // sibling; the ReadStat glue + WASM live in the shared vendor dir (a packaged
+  // `.ctplugin` would instead bundle them — same names, resolved from the bundle).
+  assets: [
+    { name: 'readstat-worker', path: 'codec-worker.js', kind: 'text' },
+    { name: 'readstat-glue', path: '../../vendor/readstat/readstat.mjs', kind: 'text' },
+    { name: 'readstat-wasm', path: '../../vendor/readstat/readstat.wasm', kind: 'bytes' },
+  ],
   codecs: [
     { id: 'readstat', label: 'SPSS / Stata / SAS…', extensions: ['.sav', '.zsav', '.dta', '.por', '.xpt', '.sas7bdat'], read: 'readImport', order: 20, multiple: true },
     { id: 'readstat-pick', label: 'SPSS / Stata / SAS — choose variables…', extensions: ['.sav', '.zsav', '.dta', '.por', '.xpt', '.sas7bdat'], read: 'readImportPick', order: 21, multiple: true },

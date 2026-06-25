@@ -199,7 +199,9 @@ export class PluginLoader {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Failed to fetch plugin ${url}: HTTP ${res.status}`);
     const code = await res.text();
-    return this.#instantiate(code, url, origin);
+    // Record the entry URL so the plugin's declared assets can resolve from
+    // *siblings* of it — same author-controlled origin, verifiable (#119).
+    return this.#instantiate(code, url, origin, { entryUrl: url });
   }
 
   /**
@@ -208,10 +210,14 @@ export class PluginLoader {
    *
    * @param {string} code - The plugin's entry-module source.
    * @param {string} [label='plugin'] - A label for errors/consent prompts.
+   * @param {object} [origin] - Origin descriptor (for id namespacing).
+   * @param {Map<string,Uint8Array>} [assets] - Bundled package assets by entry name,
+   *   for a multi-file plugin loaded from a `.ctplugin` zip — its declared assets
+   *   resolve from this bundle rather than a URL sibling (#119).
    * @returns {Promise<PluginManifest>}
    */
-  async activateSource(code, label = 'plugin', origin = { kind: 'authored' }) {
-    return this.#instantiate(code, label, origin);
+  async activateSource(code, label = 'plugin', origin = { kind: 'authored' }, assets = null) {
+    return this.#instantiate(code, label, origin, { assets });
   }
 
   /**
@@ -268,7 +274,7 @@ export class PluginLoader {
    * @param {string} label - URL or filename, for errors/consent.
    * @returns {Promise<PluginManifest>}
    */
-  async #instantiate(code, label, origin, hostUrl = PLUGIN_HOST_URL) {
+  async #instantiate(code, label, origin, { hostUrl = PLUGIN_HOST_URL, entryUrl = null, assets = null } = {}) {
     // Identity for the consent gate. The manifest id isn't known until the plugin
     // loads, so the gate reads it from this holder — `web.get` only ever fires
     // after load + activate, by which point it's filled in.
@@ -298,7 +304,7 @@ export class PluginLoader {
       if (Array.isArray(manifest.codecs) && manifest.codecs.length && hostUrl !== CODEC_HOST_URL) {
         broker.dispose();
         iframe.remove();
-        return this.#instantiate(code, label, origin, CODEC_HOST_URL);
+        return this.#instantiate(code, label, origin, { hostUrl: CODEC_HOST_URL, entryUrl, assets });
       }
       if (this.#plugins.has(manifest.id)) {
         throw new Error(`Plugin "${manifest.id}" is already activated`);
@@ -318,7 +324,10 @@ export class PluginLoader {
 
       await broker.sendActivate({ ...manifest, apiVersion: API_VERSION });
 
-      this.#plugins.set(manifest.id, { manifest, iframe, broker });
+      // Retain origin/entryUrl + any bundled package assets so the plugin's
+      // declared assets can be resolved on demand (#119) — from its own bundle, or
+      // from a same-origin sibling of its entry URL.
+      this.#plugins.set(manifest.id, { manifest, iframe, broker, origin, entryUrl, assets });
       return manifest;
     } catch (err) {
       // Roll back a partially-loaded plugin so a failure leaves no orphan iframe.
@@ -401,6 +410,50 @@ export class PluginLoader {
     return record.pkgs;
   }
 
+  /**
+   * Resolve a **plugin-declared asset** to its bytes/text — the no-lock-in path
+   * that lets a multi-file plugin bring its own dependencies instead of relying on
+   * the host's shared-runtime allowlist (#119). A plugin declares its assets in the
+   * manifest (`manifest.assets` and/or `codecs[].assets`: `{name, path?, kind?}`);
+   * only *declared* names resolve here (the per-plugin allowlist), and only from:
+   *  1. its own **bundle** (a `.ctplugin` package's entries), or
+   *  2. a **same-origin sibling** of its entry URL (author-controlled + verifiable —
+   *     the same trust basis as the host namespace in {@link qualifyId}).
+   *
+   * Off-origin targets are refused, preserving the sandbox boundary (no arbitrary
+   * host fetches). Returns `null` when the plugin didn't declare `name`, so the
+   * caller can fall back to the host's shared-library allowlist.
+   *
+   * @param {string} pluginId
+   * @param {string} name
+   * @returns {Promise<{kind:'text'|'bytes', value:string|Uint8Array}|null>}
+   */
+  async resolveAsset(pluginId, name) {
+    const rec = this.#plugins.get(pluginId);
+    if (!rec) return null;
+    const decl = assetDecl(rec.manifest, name);
+    if (!decl) return null; // not declared by this plugin → caller may use the host allowlist
+    const kind = decl.kind === 'bytes' ? 'bytes' : 'text';
+    const path = decl.path || name;
+    // 1. The plugin's own bundle (a packaged .ctplugin) — bytes keyed by entry name.
+    if (rec.assets && rec.assets.has(path)) {
+      const raw = rec.assets.get(path);
+      return { kind, value: kind === 'bytes' ? raw : new TextDecoder().decode(raw) };
+    }
+    // 2. A same-origin sibling of the entry URL (URL/built-in plugins).
+    if (rec.entryUrl) {
+      const base = new URL(rec.entryUrl, location.href);
+      const target = new URL(path, base);
+      if (target.origin !== base.origin) {
+        throw new Error(`Plugin asset "${name}" resolves off-origin (${target.origin}) — blocked.`);
+      }
+      const res = await fetch(target.href);
+      if (!res.ok) throw new Error(`Plugin asset "${name}" failed to load (HTTP ${res.status}).`);
+      return { kind, value: kind === 'bytes' ? new Uint8Array(await res.arrayBuffer()) : await res.text() };
+    }
+    throw new Error(`Plugin asset "${name}" is declared but neither bundled nor reachable from an entry URL.`);
+  }
+
   /** Bind the host-gathered inputs for a plugin's in-flight action (auto-injected
    * into its `webr.run`). Paired with {@link PluginLoader#clearActiveInputs}. */
   setActiveInputs(id, inputs) {
@@ -458,6 +511,23 @@ function assertApiCompatible(manifest) {
       `Plugin "${manifest.id}" targets API ${declared}, newer than engine ${API_VERSION}.`,
     );
   }
+}
+
+/**
+ * Find a plugin's declaration for an asset `name`, searching both `manifest.assets`
+ * and each `manifest.codecs[].assets` (a codec may declare its own deps). Returns
+ * `{name, path?, kind?}` or null. This declared set is the plugin's *own* allowlist
+ * — the host resolves only what the plugin asked for (#119).
+ */
+function assetDecl(manifest, name) {
+  const lists = [manifest?.assets, ...((manifest?.codecs || []).map((c) => c?.assets))];
+  for (const list of lists) {
+    if (Array.isArray(list)) {
+      const found = list.find((a) => a && a.name === name);
+      if (found) return found;
+    }
+  }
+  return null;
 }
 
 /** Create the hidden container that holds plugin iframes. */
