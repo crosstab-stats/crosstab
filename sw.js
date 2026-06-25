@@ -254,13 +254,14 @@ async function handleFetch(r) {
     if (hit) return hit;
   }
 
-  // Tier 1 — an installed (standalone) app serves the same-origin app shell
-  // cache-first + background revalidate, so a flaky or absent connection (a field
-  // iPad, a desktop PWA offline) never blocks launch. Ungated: the shell is cached
-  // automatically (#92). A tab falls through to network-first below, staying fresh.
-  // A *navigation* (e.g. `/?launch=…`) maps to the cached index document — its query
-  // would otherwise miss the cache key.
-  if (isGet && sameOrigin && standalone) {
+  // Tier 1 — serve the same-origin app shell cache-first + background revalidate
+  // when the app is **installed (standalone)** OR the device is **offline**. This
+  // makes a cold offline boot fast: otherwise every same-origin file (the module
+  // graph + ~17 plugin sources) would each wait on a failed network request first,
+  // turning a launch into tens of seconds. An online tab falls through to
+  // network-first below, staying fresh. A *navigation* (e.g. `/?launch=…`) maps to
+  // the cached index document — its query would otherwise miss the cache key.
+  if (isGet && sameOrigin && (standalone || !self.navigator.onLine)) {
     const hit = isTopNav ? await matchShell() : await caches.match(r);
     if (hit) {
       networkAndCache(r, isGet, sameOrigin).catch(() => {}); // background revalidate

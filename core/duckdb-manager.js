@@ -443,7 +443,15 @@ export class DuckDBManager {
   /** Lazily load + init DuckDB, sharing one init across concurrent callers. */
   async #ensureReady() {
     if (this.#conn) return { conn: this.#conn, arrow: this.#arrow };
-    if (!this.#initPromise) this.#initPromise = this.#init();
+    // Don't cache a *failed* init: a transient first-attempt failure (e.g. a runtime
+    // fetch that lost a race with service-worker control on a cold offline boot)
+    // must not poison DuckDB for the whole session — a later call can retry (#120).
+    if (!this.#initPromise) {
+      this.#initPromise = this.#init().catch((err) => {
+        this.#initPromise = null;
+        throw err;
+      });
+    }
     return this.#initPromise;
   }
 
