@@ -47,7 +47,7 @@
  * esm.sh `?bundle` gives a single self-contained module (no external imports),
  * required because the sandbox imports it from a `blob:` URL.
  *
- * @type {Object<string, {url: string, kind: 'text'|'bytes', raw?: boolean}>}
+ * @type {Object<string, {url: string, kind: 'text'|'bytes'}>}
  */
 const ASSETS = {
   // `?bundle&target=es2022` inlines all deps into one self-contained module (no
@@ -290,8 +290,6 @@ export class CodecService {
       const res = await fetch(entry.url);
       if (!res.ok) throw new Error(`codec asset "${name}" failed to load (${res.status})`);
       value = new Uint8Array(await res.arrayBuffer());
-    } else if (entry.raw) {
-      value = await this.#fetchText(entry.url); // local, already self-contained
     } else {
       value = await this.#fetchSelfContainedModule(entry.url);
     }

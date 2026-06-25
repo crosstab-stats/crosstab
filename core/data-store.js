@@ -1577,17 +1577,6 @@ export class DataStore {
 }
 
 /**
- * Coerce a raw value array into the storage representation for a variable's
- * type. Numeric columns become `Float64Array` with empty/`null` cells as `NaN`;
- * other columns become `Array<string|null>` with `null` for empties. These are
- * exactly the shapes {@link DuckDBManager#replaceTable} turns into Arrow
- * Float64 / Utf8 columns.
- *
- * @param {VariableMeta} meta
- * @param {Array} raw
- * @returns {Float64Array | Array<string|null>}
- */
-/**
  * Render a JS string as a single-quoted SQL string literal (internal quotes
  * doubled). Used for the provenance tag injected into the append query.
  *
@@ -1770,6 +1759,17 @@ function applyPatch(meta, patch) {
   }
 }
 
+/**
+ * Coerce a raw value array into the storage representation for a variable's
+ * type. Numeric columns become `Float64Array` with empty/`null` cells as `NaN`;
+ * other columns become `Array<string|null>` with `null` for empties. These are
+ * exactly the shapes {@link DuckDBManager#replaceTable} turns into Arrow
+ * Float64 / Utf8 columns.
+ *
+ * @param {VariableMeta} meta
+ * @param {Array} raw
+ * @returns {Float64Array | Array<string|null>}
+ */
 function coerceColumn(meta, raw) {
   if (meta.type === 'numeric') {
     const out = new Float64Array(raw.length);

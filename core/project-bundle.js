@@ -85,19 +85,6 @@ export async function exportProjectBundle({ datasets, projectName, plugins = [] 
 }
 
 /**
- * Read a `.crosstab` bundle's manifest + entry list without importing (for a
- * preview / validation). Full import (rebuild datasets) is a follow-up.
- * @param {Uint8Array} buf
- */
-export function inspectProjectBundle(buf) {
-  const files = readZip(buf);
-  const mf = files.find((f) => f.name === 'manifest.json');
-  const manifest = mf ? JSON.parse(new TextDecoder().decode(mf.data)) : null;
-  if (!manifest || manifest.format !== FORMAT) throw new Error('Not a CrossTab project bundle.');
-  return { manifest, files: files.map((f) => ({ name: f.name, bytes: f.data.length })) };
-}
-
-/**
  * Read a `.crosstab` bundle into a dataset bundle ready for
  * {@link DatasetManager#loadBundle}. The Parquet is the working (derived) data, so
  * it loads as a single base source carrying the schema meta; the transform log is

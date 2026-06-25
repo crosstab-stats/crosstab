@@ -1,10 +1,10 @@
 /**
- * @file readstat-worker.js
+ * @file codec-worker.js
  * Web Worker that runs the ReadStat WASM to read SPSS/Stata/SAS files, streaming.
  *
  * Why a worker: ReadStat's IO is synchronous, and the only way to read arbitrary
  * byte ranges of a multi-GB File synchronously in a browser is `FileReaderSync`,
- * which exists only in workers. So the WASM lives here; the host (readstat-manager)
+ * which exists only in workers. So the WASM lives here; the codec plugin (index.js)
  * posts a File in and gets back a catalog or a stream of column batches.
  *
  * Messages IN:

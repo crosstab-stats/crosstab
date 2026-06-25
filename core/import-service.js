@@ -285,7 +285,7 @@ export class ImportService {
    * column batches; the host commits via {@link DataStore#loadStreaming} normally, or
    * {@link DataStore#loadWide} (out-of-core single-Parquet, no DuckDB table) when the
    * codec flags an ultra-wide file — the GSS path. First file of a Replace creates
-   * the source; the rest append. Mirrors importStreamingFiles' provenance rules.
+   * the source; the rest append.
    */
   async #importCodecFiles(spec, files, mode, id) {
     let committed = 0;

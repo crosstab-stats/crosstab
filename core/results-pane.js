@@ -691,11 +691,10 @@ function makeSaveBtn(label, onClick) {
 
 /**
  * Serialise an `<svg>` element to a standalone SVG string (xmlns guaranteed).
- * Exported so the output-export module can reuse it for the report/docx paths.
  * @param {SVGElement} svgEl
  * @returns {string}
  */
-export function serializeSvgEl(svgEl) {
+function serializeSvgEl(svgEl) {
   const clone = svgEl.cloneNode(true);
   if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
   return new XMLSerializer().serializeToString(clone);
@@ -705,13 +704,12 @@ export function serializeSvgEl(svgEl) {
  * Rasterise an `<svg>` element to PNG bytes via a canvas. The SVG is
  * self-contained (svglite output, no external refs) so the canvas isn't tainted
  * and `toBlob` works. Drawn at ~`scale`× device pixels on a white background.
- * Exported for reuse by the docx exporter (which needs raster, not SVG).
  *
  * @param {SVGElement} svgEl
  * @param {number} [scale=2] - Extra crispness multiplier on top of devicePixelRatio.
  * @returns {Promise<Uint8Array>}
  */
-export function svgElToPngBytes(svgEl, scale = 2) {
+function svgElToPngBytes(svgEl, scale = 2) {
   return new Promise((resolve, reject) => {
     const svgStr = serializeSvgEl(svgEl);
     const rect = svgEl.getBoundingClientRect();

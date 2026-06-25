@@ -154,12 +154,6 @@ export class PluginBroker {
   }
 
   /**
-   * Tell the iframe to call the plugin's `activate(app)`.
-   *
-   * @param {object} plugin - Plugin identity passed through as `app.plugin`.
-   * @returns {Promise<void>} Resolves when `activate` returns.
-   */
-  /**
    * Invoke a named export on the plugin (the declarative API's entry path:
    * `run`/`parse`/`export`). Plain-data args/return only — these functions take
    * gathered inputs and return data/bytes, never functions.
@@ -192,6 +186,12 @@ export class PluginBroker {
     this.#attribution = attribution || null;
   }
 
+  /**
+   * Tell the iframe to call the plugin's `activate(app)`.
+   *
+   * @param {object} plugin - Plugin identity passed through as `app.plugin`.
+   * @returns {Promise<void>} Resolves when `activate` returns.
+   */
   sendActivate(plugin) {
     this.#post({ t: 'activate', plugin });
     return this.#activated.promise;
