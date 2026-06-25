@@ -137,6 +137,16 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Hardening before any public/shared deploy
 
+> **#89 hardening pass — DONE (see [docs/SECURITY.md](docs/SECURITY.md)).** Full
+> exploit audit + 4 fixes shipped (stored-XSS on project open, plugin-name XSS on
+> fork, per-origin `web.get` consent, workspace-state ownership) and a dead-code/
+> stale-comment cleanup. Threat model + by-design decisions (#5/#6/#7) + accepted
+> residual risks recorded there. The items below are remaining *defence-in-depth*
+> upgrades, not blockers: the sanitiser audit found **no confirmed bypass** (DOMPurify
+> stays a nice-to-have), the WebR-pin/vendor item is the accepted runtime-integrity
+> decision (#9 — vendor-from-own-origin at deploy, no hash babysitting), and shell
+> PWA precache already shipped (#92).
+
 - [~] **Replace the HTML sanitiser with a vetted library (DOMPurify).**
       *Surface much reduced:* with the declarative API, plugins no longer send table
       HTML (tables are host-rendered from data) or note HTML (markdown, escaped), so
