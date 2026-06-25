@@ -560,7 +560,19 @@ export async function boot(mounts) {
 
   // The plugin manager owns the catalog + the enabled/disabled set (persisted)
   // and exposes Edit ▸ Plugins…; the launcher drives activation through it.
-  plugins = new PluginManager({ loader, urls: BUILTIN_PLUGINS, menus, results: results.api, actions: pluginActions, bus, projectReferences: () => projects.referencedPlugins() });
+  plugins = new PluginManager({
+    loader,
+    urls: BUILTIN_PLUGINS,
+    menus,
+    results: results.api,
+    actions: pluginActions,
+    bus,
+    projectReferences: () => projects.referencedPlugins(),
+    // Detect/purge a deactivated plugin's saved project data, and keep or drop it
+    // from the open project's plugin set on deactivation (#118).
+    workspaceStore,
+    project: projects,
+  });
   plugins.activate();
 
   // Plugin workspaces (#93): mount/unmount workspace TABS to match the active

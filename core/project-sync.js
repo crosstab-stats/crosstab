@@ -52,6 +52,12 @@ export class ProjectSync {
    * carried forward verbatim on every save so the association survives until the
    * plugin is added and resolves (#102). Empty for a fully-resolved project. */
   #unresolvedPlugins = [];
+  /** Load keys of plugins the user **deactivated but chose to keep with the open
+   * project** (#118) — installed here yet not currently active, so they're neither
+   * in activatedKeys() nor in #unresolvedPlugins. Merged into the saved plugin set
+   * so a save doesn't silently drop a plugin whose project data we're preserving.
+   * Session-scoped: cleared on open/new (a reopened project reactivates them). */
+  #keptPlugins = new Set();
 
   /** Current project: `{ id, name }` once saved/opened, else `null`. */
   #binding = null;
@@ -113,6 +119,38 @@ export class ProjectSync {
    * matches one the project expects (#102). */
   referencedPlugins() {
     return [...this.#unresolvedPlugins];
+  }
+
+  /** Keep an installed-but-now-deactivated plugin associated with the open project,
+   * so a save doesn't drop it from the plugin set (#118). Keyed like activatedKeys()
+   * — by load key. Used when the user deactivates a plugin that has project data and
+   * picks "keep, just deactivate". */
+  keepPlugin(key) {
+    if (!key || this.#keptPlugins.has(key)) return;
+    this.#keptPlugins.add(key);
+    this.#noteAssociationChange();
+  }
+
+  /** Drop a plugin from the open project's association entirely (#118): forget it
+   * from the kept set and from any unresolved record (matched by load key OR manifest
+   * id — bundles record ids, in-app saves record keys). Deactivation already removes
+   * it from activatedKeys(); this clears the carried-forward buckets so it's truly
+   * gone from the saved plugin set. */
+  dropPlugin({ key, id } = {}) {
+    let changed = this.#keptPlugins.delete(key);
+    const before = this.#unresolvedPlugins.length;
+    this.#unresolvedPlugins = this.#unresolvedPlugins.filter((x) => x !== key && x !== id);
+    changed = changed || this.#unresolvedPlugins.length !== before;
+    if (changed) this.#noteAssociationChange();
+  }
+
+  /** A project↔plugin association changed (kept/dropped) — persist it into an
+   * existing project. Like {@link #onPluginsChanged}, an unbound session ignores it
+   * (the next real save captures the set anyway). */
+  #noteAssociationChange() {
+    if (this.#loading || !this.#binding) return;
+    this.#dirty = true;
+    this.#schedule();
   }
 
   /** The recorded plugin identifiers this install can't resolve to an installed
@@ -353,8 +391,12 @@ export class ProjectSync {
     // Carry forward any recorded plugins this install can't resolve (not installed
     // here) so the association survives until the plugin is added (#102).
     let activePlugins = this.#getActivePlugins ? this.#getActivePlugins() : null;
-    if (activePlugins && this.#unresolvedPlugins.length) {
-      activePlugins = [...new Set([...activePlugins, ...this.#unresolvedPlugins])];
+    if (activePlugins) {
+      // Carry forward plugins not in the live active set but still associated with
+      // the project: unresolved (not installed here — #102) and kept (installed but
+      // deactivated with data preserved — #118). Without this a save would drop them.
+      const extra = [...this.#unresolvedPlugins, ...this.#keptPlugins];
+      if (extra.length) activePlugins = [...new Set([...activePlugins, ...extra])];
     }
     const workspaces = this.#getWorkspaces ? this.#getWorkspaces() : undefined;
     const output = this.#getOutput ? this.#getOutput() : undefined;
@@ -381,6 +423,7 @@ export class ProjectSync {
     this.#sourcesDirty.clear();
     this.#dirty = false;
     this.#unresolvedPlugins = []; // a fresh project carries no unresolved plugins
+    this.#keptPlugins.clear(); // …nor any kept-deactivated ones (#118)
     this.#setStatus();
     this.#emitProject();
   }
@@ -429,6 +472,7 @@ export class ProjectSync {
       // Remember any recorded plugins not installed here, so a later save doesn't
       // forget them (they reactivate once the plugin is added — #102).
       this.#unresolvedPlugins = this.#computeUnresolved(bundle.activePlugins);
+      this.#keptPlugins.clear(); // reopened project reactivates its set fresh (#118)
       this.#binding = { id, name };
       this.#sourcesDirty.clear();
       this.#dirty = false;
@@ -502,6 +546,7 @@ export class ProjectSync {
     // Carry forward bundle plugins not installed here (the import handler also warns
     // about them) so they're remembered, not dropped, on the project's first save.
     this.#unresolvedPlugins = this.#computeUnresolved(bundle.activePlugins);
+    this.#keptPlugins.clear(); // a freshly-opened bundle carries no kept-deactivated set (#118)
     this.#loading = false;
     // It's a brand-new project; never bound to (and so never overwriting) the one
     // that was open. Persist + name it from the bundle.

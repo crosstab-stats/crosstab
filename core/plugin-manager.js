@@ -73,6 +73,14 @@ export class PluginManager {
    * installed — so adding a local plugin that matches one can confirm intent (#102). */
   #projectReferences = null;
 
+  /** Host store for plugin workspace blobs (#93) — to detect/purge a plugin's saved
+   * project data when it's deactivated (#118). @type {?import('./workspace-store.js').WorkspaceStore} */
+  #workspaceStore = null;
+
+  /** The open project's plugin-association controls (#118): keep a deactivated
+   * plugin with the project, or drop it. @type {?{keepPlugin:Function, dropPlugin:Function}} */
+  #project = null;
+
   /**
    * @param {Object} deps
    * @param {import('./loader.js').PluginLoader} deps.loader
@@ -84,8 +92,12 @@ export class PluginManager {
    *   changes (so the project autosave re-records its plugin set).
    * @param {() => string[]} [deps.projectReferences] - The open project's
    *   referenced-but-uninstalled plugin ids (for the add-time conflict prompt).
+   * @param {import('./workspace-store.js').WorkspaceStore} [deps.workspaceStore] -
+   *   To detect/purge a deactivated plugin's saved project data (#118).
+   * @param {{keepPlugin:Function, dropPlugin:Function}} [deps.project] - The open
+   *   project's plugin-association controls, to keep or drop a plugin on deactivation (#118).
    */
-  constructor({ loader, urls, menus, results, actions, bus, projectReferences }) {
+  constructor({ loader, urls, menus, results, actions, bus, projectReferences, workspaceStore, project }) {
     this.#loader = loader;
     this.#urls = urls;
     this.#menus = menus;
@@ -93,6 +105,8 @@ export class PluginManager {
     this.#actions = actions;
     this.#bus = bus ?? null;
     this.#projectReferences = projectReferences ?? null;
+    this.#workspaceStore = workspaceStore ?? null;
+    this.#project = project ?? null;
     this.#disabled = new Set(readJSON(LS_DISABLED, []));
     // Drop a stale catalog if the catalog version changed (e.g. manifests gained
     // `disciplines`), so it's re-probed fresh rather than serving old metadata.
@@ -457,6 +471,74 @@ export class PluginManager {
     return id ? this.#loader.list().some((m) => m.id === id) : false;
   }
 
+  /** The plugin's workspace ids that currently hold saved data in the open project
+   * (#118). A plugin's data lives in workspace-store blobs keyed by the workspace ids
+   * it declares (its `manifest.workspaces`), preserved opaquely by the host. */
+  #projectDataIds(key) {
+    if (!this.#workspaceStore) return [];
+    const wsIds = (this.#catalog[key]?.workspaces || []).map((w) => w.id).filter(Boolean);
+    return wsIds.filter((id) => this.#workspaceStore.has(id));
+  }
+
+  /**
+   * Handle a user un-ticking a plugin in the picker (#118). If it has saved data in
+   * the open project, ask what to do with that data before deactivating; otherwise
+   * deactivate and forget it from the project's plugin set. The plugin stays
+   * **installed** either way — this is project-scoped, not an uninstall (use the ✕
+   * button for that). Returns false only when the user cancels.
+   *
+   * @returns {Promise<boolean>} whether deactivation proceeded.
+   */
+  async #deactivateFromPicker(p) {
+    const dataIds = this.#projectDataIds(p.key);
+    if (!dataIds.length) {
+      // No project data — deactivate and drop it from the project's plugin set (b).
+      await this.setEnabled(p.key, false);
+      this.#project?.dropPlugin?.({ key: p.key, id: p.id });
+      return true;
+    }
+    const choice = await this.#promptDeactivateData(p);
+    if (choice === 'cancel') return false;
+    if (choice === 'delete') {
+      // Purge the plugin's project data, then drop it from the plugin set.
+      for (const id of dataIds) this.#workspaceStore.set(id, null);
+      this.#project?.dropPlugin?.({ key: p.key, id: p.id });
+    } else {
+      // Keep the data + the project association; just deactivate for this session.
+      this.#project?.keepPlugin?.(p.key);
+    }
+    await this.setEnabled(p.key, false);
+    return true;
+  }
+
+  /** Three-way prompt shown when deactivating a plugin that has saved data in the
+   * open project (#118). Resolves 'delete' | 'keep' | 'cancel'. */
+  #promptDeactivateData(p) {
+    return new Promise((resolve) => {
+      const d = document.createElement('dialog');
+      d.className = 'ct-dialog';
+      d.innerHTML = `
+        <form method="dialog" class="ct-dialog__form">
+          <h2 class="ct-dialog__title">Deactivate “${escapeHtml(p.name)}”?</h2>
+          <p class="ct-dialog__hint">This plugin has saved data in the current project
+            (for example a coding workspace). Deactivating it won't uninstall the plugin —
+            it stays available in this list. What should happen to its project data?</p>
+          <menu class="ct-dialog__buttons ct-dialog__buttons--stack">
+            <button value="keep" type="submit" class="ct-dialog__primary">Keep data, just deactivate for now</button>
+            <button value="delete" type="submit" class="ct-dialog__danger">Delete data and remove from project</button>
+            <button value="cancel" type="submit">Cancel</button>
+          </menu>
+        </form>`;
+      d.addEventListener('close', () => {
+        const v = d.returnValue;
+        d.remove();
+        resolve(v === 'delete' || v === 'keep' ? v : 'cancel');
+      });
+      document.body.append(d);
+      d.showModal();
+    });
+  }
+
   /** The union of R packages declared by the currently-active (loaded) plugins —
    * what the offline cache must pre-fetch (with their dependency closure) so those
    * analyses work with no network. */
@@ -662,7 +744,18 @@ export class PluginManager {
       cb.disabled = true;
       setErr('');
       try {
-        await this.setEnabled(p.key, cb.checked);
+        if (cb.checked) {
+          await this.setEnabled(p.key, true);
+        } else {
+          // Deactivating via the picker: if the plugin has saved project data, ask
+          // before discarding it (#118). A cancel restores the checkbox unchanged.
+          const proceeded = await this.#deactivateFromPicker(p);
+          if (!proceeded) {
+            cb.checked = true;
+            cb.disabled = false;
+            return;
+          }
+        }
       } catch (err) {
         setErr(`Toggle failed: ${err.message}`);
       }
@@ -805,6 +898,12 @@ function el(tag, text, className) {
 /** A short, collision-resistant hex token. */
 function randHex(n) {
   return crypto.randomUUID().replace(/-/g, '').slice(0, n);
+}
+
+/** Escape text for safe interpolation into a dialog's innerHTML (plugin names are
+ * user/author-supplied). */
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
 /** Prepare a forked plugin's source so it loads as a *distinct* plugin: give the

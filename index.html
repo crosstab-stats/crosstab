@@ -439,6 +439,14 @@
       .ct-dialog__buttons .ct-dialog__primary {
         background: var(--accent); color: #fff; border-color: var(--accent);
       }
+      /* Destructive choice (e.g. "Delete data and remove from project", #118). */
+      .ct-dialog__buttons .ct-dialog__danger {
+        background: #fff; color: #c0392b; border-color: #e3b4ad;
+      }
+      /* Stacked, full-width choices for a multi-option prompt (most-recommended
+         first, top-to-bottom) rather than a right-aligned row. */
+      .ct-dialog__buttons--stack { flex-direction: column; align-items: stretch; gap: 8px; }
+      .ct-dialog__buttons--stack button { text-align: center; }
       /* Unified Import data… / Export data… format picker */
       .ct-fmt__search {
         width: 100%; box-sizing: border-box; font: inherit; padding: 8px 10px;
