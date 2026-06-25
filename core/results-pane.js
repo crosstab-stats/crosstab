@@ -432,6 +432,10 @@ export class ResultsPane {
           block.append(tableEl);
           html = tableEl.outerHTML;
         } else {
+          // No spec to re-render from — the saved html comes from a project file that
+          // may be untrusted (shared .crosstab), so sanitise before it hits the host
+          // DOM. The live append path produces escaped DOM; this guards restore (#89).
+          html = sanitizeHtml(html);
           block.innerHTML = html;
         }
         this.#place(block);
@@ -439,9 +443,11 @@ export class ResultsPane {
       } else if (item.kind === 'text') {
         const block = this.#makeBlock();
         block.className += ' results-note';
-        block.innerHTML = item.html || '';
+        // Saved html can come from an untrusted project file — sanitise on restore (#89).
+        const safe = sanitizeHtml(item.html || '');
+        block.innerHTML = safe;
         this.#place(block);
-        this.#model.push({ kind: 'text', html: item.html || '' });
+        this.#model.push({ kind: 'text', html: safe });
       } else if (item.kind === 'plot') {
         const block = this.#makeBlock();
         block.classList.add('results-plot');
