@@ -447,6 +447,12 @@
          first, top-to-bottom) rather than a right-aligned row. */
       .ct-dialog__buttons--stack { flex-direction: column; align-items: stretch; gap: 8px; }
       .ct-dialog__buttons--stack button { text-align: center; }
+      /* Labelled select rows (e.g. the dataset-join key/type chooser, #121). */
+      .ct-dialog__row { display: flex; flex-direction: column; gap: 4px; margin: 0 0 12px; font-size: 13px; }
+      .ct-dialog__row > span { color: #555; }
+      .ct-dialog__row select {
+        font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff;
+      }
       /* Unified Import data… / Export data… format picker */
       .ct-fmt__search {
         width: 100%; box-sizing: border-box; font: inherit; padding: 8px 10px;

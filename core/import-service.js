@@ -772,10 +772,10 @@ function showJoinReview({ baseMeta, getBaseColumn, incoming }) {
     const typeSel = document.createElement('select');
     typeSel.className = 'ct-join__type';
     for (const [v, label] of [
-      ['left', 'Left — keep all current rows'],
+      ['left', 'Left outer — keep all current rows'],
       ['inner', 'Inner — keep only matched rows'],
-      ['right', 'Right — keep all incoming rows'],
-      ['full', 'Full — keep all rows from both'],
+      ['right', 'Right outer — keep all incoming rows'],
+      ['full', 'Full outer — keep all rows from both'],
     ]) {
       const o = document.createElement('option');
       o.value = v;

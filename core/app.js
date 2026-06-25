@@ -22,6 +22,7 @@ import { ImportService } from './import-service.js';
 import { ExportService } from './export-service.js';
 import { OutputExportService } from './output-export.js';
 import { ComputeRecode } from './compute-recode.js';
+import { DatasetOps } from './dataset-ops.js';
 import { PluginManager } from './plugin-manager.js';
 import { PluginActions } from './plugin-actions.js';
 import { CodecService } from './codec-service.js';
@@ -440,6 +441,10 @@ export async function boot(mounts) {
   // Transform ▸ Compute variable… / Recode into new variable… — Phase-2 data
   // transforms that create derived variables (logged, undoable, in History).
   new ComputeRecode({ data: datasets, menus, results: results.api }).activate();
+  // Transform ▸ Extract columns to a new dataset… / Join with another dataset… —
+  // dataset-level manipulation: subset columns into a fresh dataset, and join two
+  // open project datasets by key (all four join types) (#121).
+  new DatasetOps({ datasets, menus, results: results.api, ui }).activate();
 
   // Dataset library (OPFS), tier 2: reusable building blocks — explicit
   // "Save dataset to library" / "Add dataset from library". No autosave here;
