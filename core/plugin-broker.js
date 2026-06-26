@@ -230,7 +230,22 @@ export class PluginBroker {
   #post(message) {
     // Opaque-origin iframe: target origin must be "*"; authentication is by the
     // source check on the receiving side, not by origin string.
-    this.#iframe.contentWindow?.postMessage({ __crosstab: PROTOCOL_VERSION, ...message }, '*');
+    const payload = { __crosstab: PROTOCOL_VERSION, ...message };
+    try {
+      this.#iframe.contentWindow?.postMessage(payload, '*');
+    } catch (e) {
+      // #91 debugging: a host→sandbox post that can't be cloned. Localise it so the
+      // failure names the offending value rather than a bare "object can not be cloned".
+      let detail = '';
+      try {
+        structuredClone(payload);
+        detail = ' — structuredClone(whole) OK → boundary rejected the message, not its content';
+      } catch {
+        detail = ` — non-cloneable at ${findBadClone(payload, 'msg')}`;
+      }
+      console.error('[plugin-broker] host→sandbox post failed:', e?.message, detail, message?.t);
+      throw new Error(`host→sandbox post failed [${message?.t}]: ${e?.message || e}${detail}`);
+    }
   }
 
   #onMessage(event) {
@@ -415,4 +430,27 @@ function deferred() {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+/** #91 debugging: localise the first non-structured-cloneable value in `value`,
+ * returning a `msg.foo.bar <Type>` path so a clone failure names the offender. */
+function findBadClone(value, path) {
+  try {
+    structuredClone(value);
+    return path;
+  } catch {
+    /* this node fails — drill into its children */
+  }
+  if (value && typeof value === 'object' && !ArrayBuffer.isView(value) && !(value instanceof ArrayBuffer)) {
+    const keys = Array.isArray(value) ? value.map((_, i) => i) : Object.keys(value);
+    for (const k of keys) {
+      try {
+        structuredClone(value[k]);
+      } catch {
+        return findBadClone(value[k], `${path}.${k}`);
+      }
+    }
+  }
+  const ctor = (value && value.constructor && value.constructor.name) || typeof value;
+  return `${path} <${ctor}>`;
 }

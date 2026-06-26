@@ -79,12 +79,36 @@
             try {
               parentWin.postMessage(msg, '*', collectTransferables(msg));
               return;
-            } catch {
+            } catch (e) {
               canTransfer = false;
+              try { console.warn('[codec-host] transfer refused, cloning instead:', e && e.message); } catch {}
             }
           }
-          parentWin.postMessage(msg, '*');
+          try {
+            parentWin.postMessage(msg, '*');
+          } catch (e) {
+            const detail = diagnoseClone(msg);
+            try { console.error('[codec-host] clone post failed:', e && e.message, detail); } catch {}
+            throw new Error(`codec→host post failed [${m.method || m.t}]: ${(e && e.message) || e} — ${detail}`);
+          }
         };
+
+        /** On a clone failure, localise it: does the WHOLE payload structured-clone
+         * (→ the postMessage boundary rejected the message, not its content), and if
+         * not, what's the first non-cloneable path + type? (#91 debugging) */
+        function diagnoseClone(value) {
+          try { structuredClone(value); return 'structuredClone(whole) OK → boundary rejected the message, not its content'; }
+          catch { return `non-cloneable at ${findBad(value, 'msg')}`; }
+        }
+        function findBad(value, path) {
+          try { structuredClone(value); return path; } catch { /* this node fails — drill in */ }
+          if (value && typeof value === 'object' && !ArrayBuffer.isView(value) && !(value instanceof ArrayBuffer)) {
+            const keys = Array.isArray(value) ? value.map((_, i) => i) : Object.keys(value);
+            for (const k of keys) { try { structuredClone(value[k]); } catch { return findBad(value[k], `${path}.${k}`); } }
+          }
+          const ctor = (value && value.constructor && value.constructor.name) || typeof value;
+          return `${path} <${ctor}>`;
+        }
 
         /** The distinct ArrayBuffers reachable in `value`, for postMessage's transfer
          * list (deduped — two views can share one buffer). */
