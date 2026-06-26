@@ -26,12 +26,13 @@ Designed to run across multiple sittings — tick as you go. Log anything odd in
 - [x] Run a **plot** analysis → SVG chart renders.
 - 🚩 Red flags: "SharedArrayBuffer is not defined", forever-spinner, silent no-output.
 
-## 2. Core data flow
-- [ ] Data grid scrolls smoothly; value labels show.
-- [ ] Variable View: edit a label → it sticks.
-- [ ] **Import a file** (File ▸ Import, pick CSV/.sav from Files/iCloud). A *folder*
+## 2. Core data flow — PASS
+- [x] Data grid scrolls smoothly; value labels show.
+- [x] Variable View: edit a label → it sticks.
+- [x] **Import a file** (File ▸ Import, pick CSV/.sav from Files/iCloud). A *folder*
       import (CAQDAS .txt) may not be offered on iOS — fine, just note it.
-- [ ] Extract columns → new dataset; dataset⋈dataset **join** → new dataset.
+- [x] Extract columns → new dataset; dataset⋈dataset **join** → new dataset. Join is
+      captured in History as an undoable step.
 
 ## 3. Persistence (Safari evicts tab storage ~weekly — the real risk)
 - [ ] Make a change, **close the tab, reopen the URL** → project/data still there (OPFS).
@@ -81,5 +82,18 @@ Designed to run across multiple sittings — tick as you go. Log anything odd in
   across the sandboxed opaque-origin iframe boundary (Chrome allows it — verified).
   Fixed in plugin-host.html + plugin-host-codec.html: try transfer once, fall back to
   a plain clone for the session (Chrome keeps zero-copy; Safari clones). Re-test CSV
-  import after deploy.
+  import after deploy. *(NB: this WebKit transfer-refusal is real, but it turned out
+  not to be the cause of this import failure — see BUG #3. The fallback is kept as
+  correct hardening.)*
+- **Stage 2 — BUG #3 (the actual cause) FOUND & FIXED:** the bare "object can not be
+  cloned" was NOT the sandbox boundary. The on-device stack trace pointed at DuckDB
+  `registerFileHandle` (duckdb-manager.js): the out-of-core streaming ingest hands an
+  OPFS `FileSystemFileHandle` to the worker, which WebKit can't structured-clone.
+  Fixed with an in-memory ingest fallback when OPFS handles aren't postable (Chrome
+  keeps the OPFS parts path). Large-Safari out-of-core parity tracked as task #122.
+  Also fixed the "had to kill the tab to get new code" issue: the SW now calls
+  `registration.update()` on focus/visibility so deploys propagate without a tab close.
+  Added plugin version badges + a build-time stamp as permanent freshness tools.
+- **Stage 2 — PASS (verified on iPad):** CSV imports clean (30×10), extract columns
+  works, join two datasets works, join captured in History as an undoable step.
 - _(add findings here as you go: step #, what you saw, dataset/analysis, screenshot)_
