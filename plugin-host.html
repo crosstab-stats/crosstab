@@ -51,16 +51,30 @@
         /** The `app` proxy handed to the plugin, built once on 'activate'. */
         let app = null;
 
-        // Post a message to the host, TRANSFERRING any ArrayBuffers in it (zero-copy)
-        // rather than structured-cloning. This matters for bulk plugin→host data — a
-        // codec's row batches carry large numeric column buffers, and cloning each
-        // batch churns memory hard on wide files (e.g. the ~7k-column GSS). Transfer
-        // neuters the buffer on this side, which is safe because everything posted out
-        // is handed off, never reused. (Blobs/Files aren't transferable; they already
-        // clone by reference cheaply.)
+        // Post a message to the host. Prefer TRANSFERRING any ArrayBuffers (zero-copy):
+        // a codec's row batches carry large numeric column buffers, and cloning each
+        // churns memory on wide files (the ~7k-column GSS). Transfer neuters the buffer
+        // here, safe because everything posted out is handed off, never reused.
+        // (Blobs/Files aren't transferable; they clone by reference cheaply.)
+        //
+        // BUT iOS/Safari WebKit refuses a transfer list across this sandboxed,
+        // opaque-origin iframe boundary, throwing "The object can not be cloned." — even
+        // though the payload itself IS structured-cloneable; only the transfer is
+        // rejected. So try transfer once; on failure, drop to a plain clone for the rest
+        // of the session. A serialization throw doesn't detach the buffers, so the retry
+        // sends intact data. Chrome keeps zero-copy; Safari falls back to clone (#91).
+        let canTransfer = true;
         const post = (m) => {
           const msg = { __crosstab: PROTOCOL, ...m };
-          parentWin.postMessage(msg, '*', collectTransferables(msg));
+          if (canTransfer) {
+            try {
+              parentWin.postMessage(msg, '*', collectTransferables(msg));
+              return;
+            } catch {
+              canTransfer = false;
+            }
+          }
+          parentWin.postMessage(msg, '*');
         };
 
         /** The distinct ArrayBuffers reachable in `value`, for postMessage's transfer

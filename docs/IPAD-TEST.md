@@ -75,4 +75,11 @@ Designed to run across multiple sittings — tick as you go. Log anything odd in
   awaited in import-service.js before draining batches; slower iPad Safari lost the
   race so the first batch arrived before the ingester existed. Fixed by awaiting
   begin(). Re-test the CSV import after the deploy lands.
+- **Stage 2 — BUG #2 FOUND & FIXED:** After the begin() fix, CSV import failed with
+  "The object can not be cloned." Cause: the sandbox→host `postMessage` transfers
+  column ArrayBuffers (zero-copy), but iOS/Safari WebKit refuses a transfer list
+  across the sandboxed opaque-origin iframe boundary (Chrome allows it — verified).
+  Fixed in plugin-host.html + plugin-host-codec.html: try transfer once, fall back to
+  a plain clone for the session (Chrome keeps zero-copy; Safari clones). Re-test CSV
+  import after deploy.
 - _(add findings here as you go: step #, what you saw, dataset/analysis, screenshot)_
