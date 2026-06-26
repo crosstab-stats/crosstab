@@ -36,7 +36,7 @@ const LS_WEB = 'crosstab.plugins.web';
 /** Bump when the catalog shape OR built-in manifests' metadata change, so a
  * stale persisted catalog (e.g. missing newly-declared `disciplines`) is dropped
  * and re-probed on next load. */
-const CATALOG_VERSION = 10; // 10: catalog records `codecs` (#98)
+const CATALOG_VERSION = 11; // 11: catalog records `version` (#91); 10: `codecs` (#98)
 
 export class PluginManager {
   /** @type {import('./loader.js').PluginLoader} */
@@ -247,6 +247,10 @@ export class PluginManager {
     this.#catalog[key] = {
       id: manifest.id,
       name: manifest.name,
+      // Author-declared version (any style). Recorded so the plugin manager can show
+      // it — a visible way to confirm a freshly-deployed plugin file actually loaded
+      // (#91). Re-read whenever the catalog re-probes (CATALOG_VERSION bump / new id).
+      version: manifest.version != null ? String(manifest.version) : null,
       category: typeof manifest.category === 'string' ? manifest.category : '',
       keywords: Array.isArray(manifest.keywords) ? manifest.keywords : [],
       disciplines: Array.isArray(manifest.disciplines) ? manifest.disciplines : [],
@@ -769,6 +773,7 @@ export class PluginManager {
         id: cat?.id ?? null,
         name: cat?.name ?? e.name ?? prettyName(e.url || e.key),
         category: cat?.category || 'Other',
+        version: cat?.version ?? null,
         keywords: cat?.keywords ?? [],
         disciplines: cat?.disciplines ?? [],
         rPackages: cat?.rPackages ?? [],
@@ -927,6 +932,10 @@ export class PluginManager {
       refresh();
     });
     label.append(cb, el('span', p.name, 'ct-plugin__name'));
+    // Version badge next to the name — defaults to "1" when the manifest declares
+    // none (all built-ins). A visible confirmation that a freshly-deployed plugin
+    // file actually loaded: bump the manifest's `version` and watch this change (#91).
+    label.append(el('span', `v${p.version ?? '1'}`, 'ct-plugin__ver'));
 
     const right = el('span', null, 'ct-plugin__right');
     const metaText = p.enabled ? (p.activated ? p.origin : 'failed') : 'disabled';

@@ -18,6 +18,7 @@
 export const manifest = {
   id: 'builtin-csv-codec',
   name: 'CSV codec',
+  version: '2', // #91: bumped as a freshness marker (watch the plugin-manager badge)
   apiVersion: '0.1.0',
   category: 'Data',
   keywords: ['csv', 'tsv', 'text', 'delimited', 'file'],
