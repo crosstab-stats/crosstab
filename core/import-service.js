@@ -328,7 +328,14 @@ export class ImportService {
         }
         committed += 1;
       } catch (err) {
-        this.#results.appendError(`Import of "${file.name}" failed: ${err.message}`);
+        // #91 TEMP DEBUG: surface name + top stack frames so an on-device (iPad,
+        // no console) failure points to the exact throw site. Revert once traced.
+        const frames = err && err.stack
+          ? String(err.stack).split('\n').slice(0, 8).map((s) => s.trim()).filter(Boolean).join('  ◂  ')
+          : '(no stack)';
+        this.#results.appendError(
+          `Import of "${file.name}" failed: [${(err && err.name) || 'Error'}] ${err && err.message} — ${frames}`,
+        );
         console.error('[import]', err);
       } finally {
         this.#bus.emit('import:ended', { importer: id, file: file.name });
