@@ -44,7 +44,7 @@
 /* global self, caches */
 let coepCredentialless = false;
 
-const CACHE = 'crosstab-offline-v1';
+const CACHE = 'crosstab-offline-v2';
 // A synthetic key (never a real request) that marks "offline caching is on".
 const OFFLINE_MARKER = 'https://crosstab.local/__offline_enabled__';
 // Tier-1 caching (the app shell) is automatic — the OPT-IN marker now only gates
@@ -120,6 +120,13 @@ if (typeof window === 'undefined') {
       (async () => {
         await self.clients.claim(); // control existing tabs without a reload
         try {
+          // Drop superseded cache versions so a shell bump (new CACHE name) fully
+          // re-precaches the app shell — incl. the plugin sandbox host docs — instead
+          // of serving a stale precached copy. Costs a one-time re-download of cached
+          // runtimes, which is the correct trade for guaranteed-fresh shell code.
+          for (const k of await caches.keys()) {
+            if (k !== CACHE && k.startsWith('crosstab-offline-')) await caches.delete(k);
+          }
           const c = await caches.open(CACHE);
           offlineEnabled = !!(await c.match(OFFLINE_MARKER));
         } catch {
