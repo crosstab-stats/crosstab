@@ -214,10 +214,34 @@ if (typeof window === 'undefined') {
 
     n.serviceWorker.register(window.document.currentScript.src).then(
       (registration) => {
-        registration.addEventListener('updatefound', () => window.location.reload());
-        // Reload once only to GAIN isolation we don't yet have (header injection).
-        if (!alreadyIsolated && registration.active && !n.serviceWorker.controller) {
+        // A genuine UPDATE to an already-running app → reload to pick up fresh code.
+        // Guard on an existing controller so this does NOT fire on the very first
+        // install (that case is the isolate-reload below, not an app update).
+        registration.addEventListener('updatefound', () => {
+          if (n.serviceWorker.controller) window.location.reload();
+        });
+
+        if (alreadyIsolated) return; // host sent real COI headers — no dance needed
+
+        // GAIN isolation we don't yet have. The header-injecting worker only affects
+        // navigations it controls, so the first visit (document loaded before the
+        // worker took control) must reload once the worker is in control. The worker
+        // is either already active (reload now) or, on a true first visit, still
+        // installing — in which case we reload when it claims the page
+        // (`controllerchange`, fired by clients.claim() after activation). Earlier
+        // this only checked `registration.active`, which is null on a first visit, so
+        // the reload never happened and the first page-view stayed non-isolated.
+        // The sessionStorage guard fires this at most once per session, so a context
+        // that genuinely can't isolate (no SharedArrayBuffer) can't reload-loop.
+        if (reloadedBySelf === 'isolate' || n.serviceWorker.controller) return;
+        const reloadToIsolate = () => {
+          window.sessionStorage.setItem('coiReloadedBySelf', 'isolate');
           window.location.reload();
+        };
+        if (registration.active) {
+          reloadToIsolate();
+        } else {
+          n.serviceWorker.addEventListener('controllerchange', reloadToIsolate, { once: true });
         }
       },
       (err) => console.error('COI service worker registration failed:', err),
