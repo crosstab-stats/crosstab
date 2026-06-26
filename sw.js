@@ -223,24 +223,27 @@ if (typeof window === 'undefined') {
 
         if (alreadyIsolated) return; // host sent real COI headers — no dance needed
 
-        // GAIN isolation we don't yet have. The header-injecting worker only affects
-        // navigations it controls, so the first visit (document loaded before the
-        // worker took control) must reload once the worker is in control. The worker
-        // is either already active (reload now) or, on a true first visit, still
-        // installing — in which case we reload when it claims the page
-        // (`controllerchange`, fired by clients.claim() after activation). Earlier
-        // this only checked `registration.active`, which is null on a first visit, so
-        // the reload never happened and the first page-view stayed non-isolated.
-        // The sessionStorage guard fires this at most once per session, so a context
-        // that genuinely can't isolate (no SharedArrayBuffer) can't reload-loop.
-        if (reloadedBySelf === 'isolate' || n.serviceWorker.controller) return;
+        // We're not isolated yet. The header-injecting worker only affects the
+        // navigations it CONTROLS, so the first visit (document fetched before the
+        // worker took control) must reload once the worker is controlling — the
+        // reloaded navigation then gets the injected COOP/COEP. The session flag
+        // makes this fire at most once per load-cycle, so a context that genuinely
+        // can't isolate (no SharedArrayBuffer) reloads once and then stops — no loop.
+        if (reloadedBySelf === 'isolate') return; // already tried this cycle — don't loop
         const reloadToIsolate = () => {
           window.sessionStorage.setItem('coiReloadedBySelf', 'isolate');
           window.location.reload();
         };
-        if (registration.active) {
+        if (n.serviceWorker.controller) {
+          // The worker already controls this page but it loaded un-isolated (it
+          // claimed us via clients.claim() AFTER the document was fetched) — reload
+          // now to pick up the headers. (The previous check required
+          // registration.active && !controller, which a fast first-visit claim never
+          // satisfied, so the first page-view stayed non-isolated.)
           reloadToIsolate();
         } else {
+          // True first visit, worker still installing: reload the moment it takes
+          // control (`controllerchange`, fired by clients.claim() after activation).
           n.serviceWorker.addEventListener('controllerchange', reloadToIsolate, { once: true });
         }
       },
