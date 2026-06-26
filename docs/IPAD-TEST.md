@@ -42,11 +42,11 @@ Designed to run across multiple sittings — tick as you go. Log anything odd in
 - [x] Delete something → lands in **recycle bin** → restores.
 - [x] Full project auto-save (incl. Output) round-trips across loads.
 
-## 4. PWA install + offline
-- [ ] Launcher nudges **"Add to Home Screen"** → do it (Share ▸ Add to Home Screen).
-- [ ] Launch from the **Home Screen icon** → full-screen, no Safari chrome.
-- [ ] Launcher ▸ **Pre-cache selected plugins** → reads clearly, progresses to done.
-- [ ] **Airplane Mode**, relaunch from icon → app loads, a cached analysis still runs.
+## 4. PWA install + offline — PASS (one transient, see findings)
+- [x] Launcher nudges **"Add to Home Screen"** → do it (Share ▸ Add to Home Screen).
+- [x] Launch from the **Home Screen icon** → full-screen, no Safari chrome.
+- [x] Launcher ▸ **Pre-cache selected plugins** → reads clearly, progresses to done.
+- [x] **Airplane Mode**, relaunch from icon → app loads, a cached analysis still runs.
 
 ## 5. Plugins & the CAQDAS flagship
 - [ ] Edit ▸ Plugins → toggle one off/on; no "failed to load."
@@ -103,4 +103,14 @@ Designed to run across multiple sittings — tick as you go. Log anything odd in
   Safari** (renamed project + renamed dataset intact) — strongest form of the
   eviction test. Recycle bin works; full project auto-save incl. Output round-trips
   across loads. No bugs.
+- **Stage 4 — PASS, with one transient (hardened):** install + full-screen + offline
+  pre-cache + offline analysis all work. On the **first action after going offline**,
+  one save failed with `Out of bounds call_indirect` — a transient DuckDB-WASM trap
+  during the Parquet export; every subsequent save worked (the engine recovered).
+  Not reproducible. Hardened by adding a one-shot retry to all three save paths
+  (#fullSave/#flush/#settle) in project-sync.js: a transient engine trap now self-
+  heals instead of surfacing a failed-save error (protects the "everything is saved"
+  guarantee). The export/OPFS write is idempotent, so the retry is safe. If it ever
+  recurs persistently, escalate to resetting the engine (DuckDBManager.close) before
+  the retry.
 - _(add findings here as you go: step #, what you saw, dataset/analysis, screenshot)_

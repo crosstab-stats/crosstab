@@ -204,12 +204,30 @@ export class ProjectSync {
     if (name) await this.#fullSave(null, name);
   }
 
+  /** Run a save attempt, retrying once after a short pause on a transient engine
+   * failure before letting it surface. The WASM runtimes can throw a one-off trap
+   * (observed on iPad: a DuckDB "out of bounds call_indirect" during the Parquet
+   * export, which then succeeded on the next try) — and a dropped save would break the
+   * "everything you do is saved" guarantee. The snapshot/export + OPFS write are
+   * idempotent, so a retry is safe (#91). A second failure propagates to the caller. */
+  async #attemptSave(fn) {
+    try {
+      return await fn();
+    } catch (err) {
+      console.warn('[project] save attempt failed — retrying once:', err?.message || err);
+      await new Promise((r) => setTimeout(r, 250));
+      return fn();
+    }
+  }
+
   /** Write the whole project (all datasets' sources + logs) and (re)bind. */
   async #fullSave(id, name) {
     this.#setStatus('saving', name);
     try {
-      const bundle = await this.#snapshot(true); // all sources
-      const savedId = await this.#store.save({ id, name, savedAt: Date.now(), bundle });
+      const savedId = await this.#attemptSave(async () => {
+        const bundle = await this.#snapshot(true); // all sources
+        return this.#store.save({ id, name, savedAt: Date.now(), bundle });
+      });
       this.#binding = { id: savedId, name };
       this.#sourcesDirty.clear();
       this.#dirty = false;
@@ -320,11 +338,13 @@ export class ProjectSync {
     const dirty = this.#sourcesDirty;
     this.#sourcesDirty = new Set();
     try {
-      const bundle = await this.#snapshot(false, dirty);
-      await this.#store.save(
-        { id: this.#binding.id, name: this.#binding.name, savedAt: Date.now(), bundle },
-        { writeSourcesFor: dirty },
-      );
+      await this.#attemptSave(async () => {
+        const bundle = await this.#snapshot(false, dirty);
+        return this.#store.save(
+          { id: this.#binding.id, name: this.#binding.name, savedAt: Date.now(), bundle },
+          { writeSourcesFor: dirty },
+        );
+      });
       this.#dirty = false;
       this.#setStatus('saved');
     } catch (err) {
@@ -359,11 +379,13 @@ export class ProjectSync {
       const dirty = this.#sourcesDirty;
       this.#sourcesDirty = new Set();
       try {
-        const bundle = await this.#snapshot(false, dirty);
-        await this.#store.save(
-          { id: this.#binding.id, name: this.#binding.name, savedAt: Date.now(), bundle },
-          { writeSourcesFor: dirty },
-        );
+        await this.#attemptSave(async () => {
+          const bundle = await this.#snapshot(false, dirty);
+          return this.#store.save(
+            { id: this.#binding.id, name: this.#binding.name, savedAt: Date.now(), bundle },
+            { writeSourcesFor: dirty },
+          );
+        });
         this.#dirty = false;
       } catch (err) {
         console.error('[project] settle save failed', err);
