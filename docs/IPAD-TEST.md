@@ -34,10 +34,13 @@ Designed to run across multiple sittings — tick as you go. Log anything odd in
 - [x] Extract columns → new dataset; dataset⋈dataset **join** → new dataset. Join is
       captured in History as an undoable step.
 
-## 3. Persistence (Safari evicts tab storage ~weekly — the real risk)
-- [ ] Make a change, **close the tab, reopen the URL** → project/data still there (OPFS).
-- [ ] Inline-rename a project → sticks after reload.
-- [ ] Delete something → lands in **recycle bin** → restores.
+## 3. Persistence (Safari evicts tab storage ~weekly — the real risk) — PASS
+- [x] Make a change, **close the tab, reopen the URL** → project/data still there (OPFS).
+      Verified stronger: survived a **force-quit of Safari** (swipe-up) — renamed
+      project + renamed dataset both intact.
+- [x] Inline-rename a project → sticks after reload.
+- [x] Delete something → lands in **recycle bin** → restores.
+- [x] Full project auto-save (incl. Output) round-trips across loads.
 
 ## 4. PWA install + offline
 - [ ] Launcher nudges **"Add to Home Screen"** → do it (Share ▸ Add to Home Screen).
@@ -96,4 +99,8 @@ Designed to run across multiple sittings — tick as you go. Log anything odd in
   Added plugin version badges + a build-time stamp as permanent freshness tools.
 - **Stage 2 — PASS (verified on iPad):** CSV imports clean (30×10), extract columns
   works, join two datasets works, join captured in History as an undoable step.
+- **Stage 3 — PASS (verified on iPad):** persistence survived a **force-quit of
+  Safari** (renamed project + renamed dataset intact) — strongest form of the
+  eviction test. Recycle bin works; full project auto-save incl. Output round-trips
+  across loads. No bugs.
 - _(add findings here as you go: step #, what you saw, dataset/analysis, screenshot)_
