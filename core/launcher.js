@@ -124,6 +124,7 @@ export class Launcher {
     injectStyles();
     overlay.innerHTML = SHELL_HTML(reopen);
     document.body.append(overlay);
+    void stampBuild(overlay.querySelector('.ctl__build'));
 
     const indicator = overlay.querySelector('.ctl__indicator');
     const listBox = overlay.querySelector('.ctl__plugins');
@@ -556,12 +557,35 @@ function esc(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
+/** Fill the launcher's build stamp with the deployed build's publish time. GitHub
+ * Pages re-stamps every file's Last-Modified to the deploy time on each rebuild, so
+ * a core file's Last-Modified ≈ "when this build went live." Fetched through the SW
+ * (which revalidates same-origin), so the shown time reflects what this device
+ * actually has — a stale cache shows an old time, confirming the device is behind.
+ * Best-effort: leaves a fallback label if the header is unavailable. */
+async function stampBuild(elBuild) {
+  if (!elBuild) return;
+  try {
+    const res = await fetch('./sw.js', { cache: 'no-store' });
+    const lm = res.headers.get('last-modified');
+    if (!lm) { elBuild.textContent = 'build: (unknown)'; return; }
+    const d = new Date(lm);
+    // Local, minute precision — enough to confirm "matches the deploy I just did."
+    elBuild.textContent = `build: ${d.toLocaleString(undefined, {
+      year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+    })}`;
+  } catch {
+    elBuild.textContent = 'build: (offline)';
+  }
+}
+
 function SHELL_HTML(reopen) {
   return `
     <div class="ctl__card">
       <div class="ctl__header">
         <div class="ctl__brand">CrossTab</div>
         <div class="ctl__tagline">Statistics for everyone, every device, everywhere</div>
+        <div class="ctl__build" title="When this deployed build was published (the served files' last-modified time). Useful for confirming a device picked up the latest version.">build: …</div>
       </div>
       <div class="ctl__body">
         <aside class="ctl__library">
@@ -610,6 +634,7 @@ function injectStyles() {
     .ctl__header { background: var(--bar, #2c3e50); color: var(--bar-fg, #ecf0f1); padding: 18px 24px; text-align: center; }
     .ctl__brand { font-size: 26px; font-weight: 800; letter-spacing: .04em; }
     .ctl__tagline { font-size: 13px; opacity: .85; margin-top: 2px; }
+    .ctl__build { font-size: 11px; opacity: .55; margin-top: 4px; font-variant-numeric: tabular-nums; }
     .ctl__body { display: flex; min-height: 0; flex: 1; }
     .ctl__library, .ctl__about { flex: 0 0 200px; padding: 16px; overflow-y: auto; }
     .ctl__about { border-left: 1px solid var(--line, #d8dde2); font-size: 13px; color: #41505e; }
