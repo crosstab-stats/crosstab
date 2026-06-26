@@ -54,6 +54,13 @@ export class DuckDBManager {
   /** Lazily-imported JS Parquet writer module (loaded on first wide import). */
   #parquetWriter = null;
 
+  /** Whether this browser can hand an OPFS `FileSystemFileHandle` to the DuckDB
+   * worker via postMessage. Chrome: yes. WebKit/iOS Safari: NO — it throws
+   * `DataCloneError` (handles aren't structured-cloneable to a worker there), which
+   * breaks the out-of-core (OPFS parts) streaming ingest. Probed once, then the
+   * ingest falls back to an in-memory path on Safari. @type {boolean|null} */
+  #opfsHandleOk = null;
+
   /** Monotonic counter for unique scratch filenames. A FIXED scratch name
    * ('ct_export.parquet'/'ct_import.parquet') corrupts data when two Parquet
    * export/restore ops interleave (e.g. an autosave during a multi-file import):
@@ -172,6 +179,12 @@ export class DuckDBManager {
    */
   async beginStreamIngest(table, types, { rowidCol = null, rowidBase = 0, targetCells = 4_000_000 } = {}) {
     const { conn } = await this.#ensureReady();
+    // Out-of-core ingest spills to OPFS Parquet parts, which means handing OPFS file
+    // handles to the worker — impossible on WebKit/iOS Safari (DataCloneError). There,
+    // fall back to an in-memory ingest (the path the demo uses, which works on Safari).
+    if (!(await this.#canUseOpfsHandles())) {
+      return this.#beginMemoryIngest(table, types, { rowidCol, rowidBase });
+    }
     const ncols = Math.max(1, Object.keys(types).length);
     const rowsPerPart = Math.max(1000, Math.floor(targetCells / ncols));
     const tmp = `${table}__ingest_tmp`;
@@ -264,6 +277,66 @@ export class DuckDBManager {
       }
     };
 
+    return { addBatch, finish };
+  }
+
+  /** Probe once whether this browser can hand an OPFS `FileSystemFileHandle` to the
+   * DuckDB worker (see {@link DuckDBManager##opfsHandleOk}). WebKit/iOS Safari can't,
+   * so the out-of-core streaming ingest must fall back to an in-memory path there. */
+  async #canUseOpfsHandles() {
+    if (this.#opfsHandleOk != null) return this.#opfsHandleOk;
+    const name = '__ct_fsaccess_probe';
+    try {
+      const root = await navigator.storage.getDirectory();
+      const h = await root.getFileHandle(name, { create: true });
+      await this.#db.registerFileHandle(name, h, this.#duckdb.DuckDBDataProtocol.BROWSER_FSACCESS, true);
+      this.#opfsHandleOk = true;
+    } catch {
+      this.#opfsHandleOk = false; // Safari/WebKit: handles aren't postable to a worker
+    }
+    try { await this.#db.dropFile(name); } catch { /* best-effort */ }
+    try {
+      const root = await navigator.storage.getDirectory();
+      await root.removeEntry(name);
+    } catch { /* best-effort */ }
+    return this.#opfsHandleOk;
+  }
+
+  /**
+   * In-memory streaming ingest for browsers without OPFS-handle→worker support
+   * (Safari). Appends each batch straight into the target table via Arrow IPC — the
+   * same path the demo/`replaceTable` uses, which works on WebKit — then bakes the
+   * row id with one SQL pass. Memory-bounded by the dataset size: fine for a device
+   * that can't do out-of-core anyway; a multi-GB file would exceed memory here, an
+   * accepted iOS limitation. Same `{addBatch, finish}` contract as the OPFS path.
+   */
+  async #beginMemoryIngest(table, types, { rowidCol = null, rowidBase = 0 } = {}) {
+    const { conn } = await this.#ensureReady();
+    const tmp = `${table}__mem_tmp`;
+    let created = false;
+    const addBatch = async (columns) => {
+      await this.appendColumns(tmp, columns, types, { create: !created });
+      created = true;
+    };
+    const finish = async () => {
+      if (!created) {
+        // No rows arrived — still create an empty temp with the right schema.
+        const empty = {};
+        for (const c of Object.keys(types)) empty[c] = types[c] === 'numeric' ? new Float64Array(0) : [];
+        await this.appendColumns(tmp, empty, types, { create: true });
+      }
+      // Build the final table from the accumulator (not self-referencing), baking the
+      // stable row id in one pass — small in-memory data, so no OOM risk.
+      const sel = rowidCol
+        ? `SELECT *, CAST(${rowidBase} AS BIGINT) + CAST(row_number() OVER () AS BIGINT) AS ${quoteIdent(rowidCol)} FROM ${quoteIdent(tmp)}`
+        : `SELECT * FROM ${quoteIdent(tmp)}`;
+      try {
+        await conn.query(`DROP TABLE IF EXISTS ${quoteIdent(table)}`);
+        await conn.query(`CREATE TABLE ${quoteIdent(table)} AS ${sel}`);
+      } finally {
+        try { await conn.query(`DROP TABLE IF EXISTS ${quoteIdent(tmp)}`); } catch { /* best-effort */ }
+      }
+    };
     return { addBatch, finish };
   }
 

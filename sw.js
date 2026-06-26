@@ -228,6 +228,15 @@ if (typeof window === 'undefined') {
           if (n.serviceWorker.controller) window.location.reload();
         });
 
+        // Proactively check for a new worker whenever the tab regains focus (and once
+        // now). iOS Safari won't re-check a controlled tab on its own, so without this
+        // a deploy isn't picked up until the tab is fully closed — the "had to kill the
+        // tab" bug. `updatefound` above then reloads into the new version automatically.
+        const checkForUpdate = () => { registration.update().catch(() => {}); };
+        window.addEventListener('focus', checkForUpdate);
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) checkForUpdate(); });
+        checkForUpdate();
+
         if (alreadyIsolated) return; // host sent real COI headers — no dance needed
 
         // We're not isolated yet. The header-injecting worker only affects the
