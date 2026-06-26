@@ -317,7 +317,11 @@ export class ImportService {
             mode: fileMode,
             source: tag,
             ingest: async (ctx) => {
-              ctx.begin(head.variables, head.storageTypes);
+              // MUST await: begin() is async (it creates the DuckDB ingester); without
+              // the await, reader.drain() could deliver the first batch before the
+              // ingester exists → "batch before begin()". Desktop usually won the race;
+              // slower iPad Safari lost it (#91).
+              await ctx.begin(head.variables, head.storageTypes);
               await reader.drain((columns) => { tick(columns); return ctx.batch(columns); });
             },
           });

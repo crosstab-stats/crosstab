@@ -70,4 +70,9 @@ Designed to run across multiple sittings — tick as you go. Log anything odd in
 - *Not a bug (resolved):* Frequencies on **gender** = 50/50 while a Pie on
   **education** ≈ thirds — two different variables; gender is binary, education is
   3-level. Both correct.
+- **Stage 2 — BUG FOUND & FIXED:** CSV import failed with "loadStreaming: batch
+  before begin()". Cause: `ctx.begin()` (async — creates the DuckDB ingester) wasn't
+  awaited in import-service.js before draining batches; slower iPad Safari lost the
+  race so the first batch arrived before the ingester existed. Fixed by awaiting
+  begin(). Re-test the CSV import after the deploy lands.
 - _(add findings here as you go: step #, what you saw, dataset/analysis, screenshot)_
