@@ -148,7 +148,8 @@ export class ResultsPane {
    * the pane, parallel to the DOM. This is the single source the export plugins
    * read (via {@link ResultsPane#getModel}) so output export honours the
    * "everything is a plugin" model rather than scraping the host's shadow DOM.
-   * Item kinds: `{kind:'section', title}`, `{kind:'text', html}` (rendered),
+   * Item kinds: `{kind:'section', title, attribution?, ts?}` (ts = epoch ms run time),
+   * `{kind:'text', html}` (rendered),
    * `{kind:'table', html}` (sanitised), `{kind:'plot', svg, id}`,
    * `{kind:'error', message}`.
    * @type {Array<object>}
@@ -234,9 +235,14 @@ export class ResultsPane {
     this.#activeAttribution = attribution || null;
   }
 
-  /** Build a section element (heading + optional attribution), record it in the
-   * model, and append it to the content. */
-  #createSection({ title, attribution }) {
+  /** Build a section element (heading + optional attribution + run timestamp), record
+   * it in the model, and append it to the content. `ts` (epoch ms) is when this
+   * section was produced; defaults to now for a live run, or carries the saved value
+   * on restore so reopened output shows when each result was *originally* run (#124,
+   * fresh-vs-stale). The attribution and timestamp share one meta line under the
+   * heading; the model keeps them as separate fields. */
+  #createSection({ title, attribution, ts }) {
+    const stamp = Number.isFinite(ts) ? ts : Date.now();
     const section = document.createElement('section');
     section.className = 'results-section';
 
@@ -245,15 +251,17 @@ export class ResultsPane {
     heading.textContent = title;
     section.append(heading);
 
-    if (attribution) {
-      const attr = document.createElement('div');
-      attr.className = 'results-section__attr';
-      attr.textContent = attribution;
-      section.append(attr);
+    const meta = [attribution, formatRunTime(stamp)].filter(Boolean).join('  ·  ');
+    if (meta) {
+      const el = document.createElement('div');
+      el.className = 'results-section__attr';
+      el.textContent = meta;
+      el.title = new Date(stamp).toString(); // full date/time on hover
+      section.append(el);
     }
 
     this.#content.append(section);
-    this.#model.push({ kind: 'section', title, attribution: attribution || undefined });
+    this.#model.push({ kind: 'section', title, attribution: attribution || undefined, ts: stamp });
     this.#lastAnchor = section; // scroll target: the start of this analysis's output
     return section;
   }
@@ -423,7 +431,7 @@ export class ResultsPane {
     for (const item of model) {
       if (!item || !item.kind) continue;
       if (item.kind === 'section') {
-        this.#currentSection = this.#createSection({ title: item.title || '', attribution: item.attribution || null });
+        this.#currentSection = this.#createSection({ title: item.title || '', attribution: item.attribution || null, ts: item.ts });
       } else if (item.kind === 'table') {
         const block = this.#makeBlock();
         let html = item.html || '';
@@ -661,6 +669,19 @@ function renderTableEl(spec) {
   }
   table.append(tbody);
   return table;
+}
+
+/** Format a section's run time (epoch ms) for the meta line: compact month/day +
+ * time (full date/time is on the element's hover title). Falls back to '' if invalid. */
+function formatRunTime(ts) {
+  if (!Number.isFinite(ts)) return '';
+  try {
+    return new Date(ts).toLocaleString(undefined, {
+      month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+    });
+  } catch {
+    return '';
+  }
 }
 
 /** Append a cell's content; an array renders as stacked lines (e.g. r / p / N). */
