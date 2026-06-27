@@ -398,7 +398,10 @@ export class DuckDBManager {
       );
     }
     const bw = new W.ByteWriter();
-    const pw = new W.ParquetWriter({ writer: bw, schema, statistics: false });
+    // statistics: true writes per-row-group min/max so reads can prune by a __ct_row
+    // range (the wide grid's windowed scroll, #128). The footer grows modestly, but
+    // pruning is the larger win on ultra-wide files.
+    const pw = new W.ParquetWriter({ writer: bw, schema, statistics: true });
     return {
       // One write() call == one row group (rowGroupSize huge so it isn't re-split).
       writeRowGroup: (columnData) => pw.write({ columnData, rowGroupSize: 1_000_000_000 }),

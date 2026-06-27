@@ -552,10 +552,14 @@ export class DataStore {
         return {
           from: `read_parquet(${sqlString(op.src.file)})`,
           rid: `CAST(${op.src.rowidBase} AS BIGINT) + CAST(${quoteIdent(CT_ROW)} AS BIGINT) + 1`,
+          // __ct_row is a contiguous 0-based index here (one wide load, no transforms),
+          // so it equals the display row offset — usable as a range key for windowed
+          // reads that prune Parquet row groups instead of LIMIT/OFFSET (#128).
+          rowKey: quoteIdent(CT_ROW),
         };
       }
     }
-    return { from: quoteIdent(this.#view), rid: quoteIdent(ROWID_COL) };
+    return { from: quoteIdent(this.#view), rid: quoteIdent(ROWID_COL), rowKey: null };
   }
 
   /** The load/append/join ops in the active log, in order (the base is first). */
@@ -1385,9 +1389,15 @@ export class DataStore {
     const rel = this.#readRelation();
     const exprs = plan.map((p) => p.expr);
     if (includeRowId) exprs.push(`CAST(${rel.rid} AS VARCHAR) AS __rid`);
-    const table = await this.#duckdb.query(
-      `SELECT ${exprs.join(', ')} FROM ${rel.from} LIMIT ${lim} OFFSET ${off}`,
-    );
+    // Windowing. For the wide direct-Parquet path, range-filter on the contiguous
+    // __ct_row index (= display offset) so DuckDB prunes to the row group(s) holding
+    // the window via Parquet statistics — far cheaper than LIMIT/OFFSET on a ~6,700-
+    // column file, where each scroll otherwise re-pays the metadata cost (#128). The
+    // view path (any transform) keeps LIMIT/OFFSET. ORDER BY keeps grid order stable.
+    const windowed = rel.rowKey
+      ? `SELECT ${exprs.join(', ')} FROM ${rel.from} WHERE ${rel.rowKey} >= ${off} AND ${rel.rowKey} < ${off + lim} ORDER BY ${rel.rowKey}`
+      : `SELECT ${exprs.join(', ')} FROM ${rel.from} LIMIT ${lim} OFFSET ${off}`;
+    const table = await this.#duckdb.query(windowed);
     const rows = [];
     const n = table.numRows;
     for (let i = 0; i < n; i++) {
