@@ -26,7 +26,7 @@
 export const manifest = {
   id: 'builtin-readstat-codec',
   name: 'SPSS / Stata / SAS codec',
-  version: '2', // #91: diagnostic build (real worker-crash detail). Confirm via badge.
+  version: '3', // #123: capability-probe build (pinpoints the failing worker layer).
   apiVersion: '0.1.0',
   category: 'Data',
   // This plugin brings its own dependencies rather than relying on the host's
@@ -78,12 +78,63 @@ async function getCtl(app) {
   return ctl;
 }
 
+// #123 capability probe: pinpoint which worker capability WebKit refuses inside the
+// opaque-origin codec sandbox, since the real worker dies with no catchable detail on
+// iOS. Tests, in order: (1) a bare nested blob Worker runs, (2) dynamic import() of a
+// blob ES-module works inside it, (3) WebAssembly.instantiate works inside it. Stops
+// at the first failure. Result is surfaced in the worker-crash message so it's
+// readable on-device (no console). This decides whether the fix is in-sandbox (e.g.
+// glue-loading) or requires moving the engine host-side.
+let probeResult = '(probe not run)';
+async function probeWorkerCapabilities() {
+  const src = [
+    'self.onmessage = async (e) => {',
+    '  const cmd = e.data;',
+    '  try {',
+    '    if (cmd === "worker") return self.postMessage({ stage: "worker", ok: true });',
+    '    if (cmd === "import") {',
+    '      const u = URL.createObjectURL(new Blob(["export default 1"], { type: "text/javascript" }));',
+    '      await import(u); return self.postMessage({ stage: "import", ok: true });',
+    '    }',
+    '    if (cmd === "wasm") {',
+    '      await WebAssembly.instantiate(new Uint8Array([0,97,115,109,1,0,0,0]));',
+    '      return self.postMessage({ stage: "wasm", ok: true });',
+    '    }',
+    '  } catch (err) { self.postMessage({ stage: cmd, ok: false, msg: String(err && err.message || err) }); }',
+    '};',
+  ].join('\n');
+  let w;
+  try {
+    w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+  } catch (e) {
+    return `worker-create threw: ${(e && e.message) || e}`;
+  }
+  const ask = (cmd) =>
+    new Promise((res) => {
+      const t = setTimeout(() => res(`${cmd}=CRASH/timeout`), 4000);
+      const onMsg = (ev) => { clearTimeout(t); w.removeEventListener('message', onMsg); res(`${ev.data.stage}=${ev.data.ok ? 'ok' : `FAIL(${ev.data.msg})`}`); };
+      w.addEventListener('message', onMsg);
+      w.addEventListener('error', () => { clearTimeout(t); res(`${cmd}=worker-onerror`); }, { once: true });
+      w.postMessage(cmd);
+    });
+  const out = [];
+  for (const cmd of ['worker', 'import', 'wasm']) {
+    // eslint-disable-next-line no-await-in-loop -- sequential by design (stop at first fail)
+    const r = await ask(cmd);
+    out.push(r);
+    if (!r.endsWith('=ok')) break;
+  }
+  try { w.terminate(); } catch { /* ignore */ }
+  return out.join(', ');
+}
+
 async function buildCtl(app) {
   const [workerSrc, glueSource, wasmBinary] = await Promise.all([
     app.codec.loadAsset('readstat-worker'),
     app.codec.loadAsset('readstat-glue'),
     app.codec.loadAsset('readstat-wasm'),
   ]);
+  probeResult = await probeWorkerCapabilities(); // #123: capture before the real worker
   // Classic (not module) worker: module workers from a blob: URL fail to load in the
   // opaque-origin codec sandbox. The worker has no static imports — it dynamic-
   // imports the glue (supported in classic workers) — so classic is fine.
@@ -139,10 +190,10 @@ async function buildCtl(app) {
     // variables). Give actionable guidance rather than a cryptic abort (#91).
     const detail = e.message
       ? `${e.message}${where}`
-      : 'the SPSS/Stata/SAS engine couldn’t run in this browser. This is a known limitation ' +
-        'on mobile Safari (iPhone/iPad); use a desktop browser for SPSS/Stata/SAS files, or ' +
-        'use CSV import/export, which works everywhere.';
-    const err = new Error(`SPSS/Stata/SAS engine error: ${detail}`);
+      : 'the SPSS/Stata/SAS engine couldn’t run in this browser';
+    // #123: append the capability-probe result so an on-device crash names the exact
+    // failing layer (bare worker / dynamic import / WASM instantiate).
+    const err = new Error(`SPSS/Stata/SAS engine error: ${detail} [worker probe: ${probeResult}]`);
     for (const r of reqs.values()) r.reject?.(err);
     reqs.clear();
   };
