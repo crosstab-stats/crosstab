@@ -113,4 +113,13 @@ Designed to run across multiple sittings — tick as you go. Log anything odd in
   guarantee). The export/OPFS write is idempotent, so the retry is safe. If it ever
   recurs persistently, escalate to resetting the engine (DuckDBManager.close) before
   the retry.
+- **ReadStat/SPSS import — iOS memory limit (tracked #123):** importing a single-year
+  `GSS2024.sav` fails on **both** iPhone and iPad with a hard ReadStat worker crash
+  ("crashed with no message"). Identical across devices despite very different RAM →
+  it's WebKit's per-worker memory cap, not device RAM; GSS `.sav` is very wide
+  (thousands of vars + big value-label dictionaries) so the parse exceeds it. The
+  crash is below JS (uncatchable — diagnostics confirm). CSV import works fine on iOS.
+  Interim: the in-app error now points to "choose variables…" / desktop. Real fix
+  (WASM mem flags / var-subset / streaming) tracked as #123. The full cumulative GSS
+  `.dta` (~1.4 GB) is desktop-scale regardless.
 - _(add findings here as you go: step #, what you saw, dataset/analysis, screenshot)_

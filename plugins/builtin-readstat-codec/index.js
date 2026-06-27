@@ -133,8 +133,16 @@ async function buildCtl(app) {
   };
   worker.onerror = (e) => {
     const where = e.filename ? ` @ ${e.filename}:${e.lineno || 0}:${e.colno || 0}` : '';
-    const detail = e.message || 'crashed with no message (usually a WASM out-of-memory abort)';
-    const err = new Error(`ReadStat worker error: ${detail}${where}`);
+    // An empty-message worker onerror is a hard crash below JS — on iOS Safari this is
+    // almost always the per-worker memory ceiling (a fixed WebKit cap, not device RAM)
+    // hit while parsing a large/very-wide file (e.g. a full-GSS .sav with thousands of
+    // variables). Give actionable guidance rather than a cryptic abort (#91).
+    const detail = e.message
+      ? `${e.message}${where}`
+      : 'the file was too large for this device to read. Wide files (e.g. full GSS) can ' +
+        'exceed a mobile browser’s memory — try “SPSS / Stata / SAS — choose ' +
+        'variables…” to import only the columns you need, or open the file on a desktop browser.';
+    const err = new Error(`ReadStat import failed: ${detail}`);
     for (const r of reqs.values()) r.reject?.(err);
     reqs.clear();
   };
