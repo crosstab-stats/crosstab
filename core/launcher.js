@@ -570,34 +570,63 @@ function esc(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
-/** Fill the launcher's build stamp with the deployed build's publish time. GitHub
- * Pages re-stamps every file's Last-Modified to the deploy time on each rebuild, so
- * a core file's Last-Modified ≈ "when this build went live." Fetched through the SW
- * (which revalidates same-origin), so the shown time reflects what this device
- * actually has — a stale cache shows an old time, confirming the device is behind.
- * Best-effort: leaves a fallback label if the header is unavailable. */
-async function stampBuild(elBuild) {
-  if (!elBuild) return;
+/** The Last-Modified of the app code this device is actually RUNNING. Fetched through
+ * the service worker, so on an installed PWA (where the shell is served cache-first)
+ * this is the CACHED/loaded build — NOT whatever the server now has. GitHub Pages
+ * re-stamps every file's Last-Modified to the deploy time on each rebuild, so this is
+ * effectively "which deploy is loaded." Best-effort: null if unavailable. */
+async function loadedBuildTime() {
   try {
-    const res = await fetch('./sw.js', { cache: 'no-store' });
-    const lm = res.headers.get('last-modified');
-    if (!lm) { elBuild.textContent = 'build: (unknown)'; return; }
-    const d = new Date(lm);
-    // Local, minute precision — enough to confirm "matches the deploy I just did."
-    elBuild.textContent = `build: ${d.toLocaleString(undefined, {
-      year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
-    })}`;
+    const res = await fetch('core/app.js', { cache: 'no-store' });
+    return res.headers.get('last-modified') || null;
   } catch {
-    elBuild.textContent = 'build: (offline)';
+    return null;
   }
 }
 
-/** Manually re-check the service worker for a newer deploy and reload into it.
- * The SW already auto-checks on focus, but an installed (Home Screen) PWA has no
- * refresh button, so this gives the user an explicit control. `registration.update()`
- * fetches a fresh sw.js; if it differs a new worker installs (surfaced as
- * `installing`/`waiting`), and the page-side `updatefound` handler reloads us into
- * it. If nothing changed, we re-stamp the build time and confirm we're current. */
+function formatBuildTime(lm) {
+  if (!lm) return null;
+  const d = new Date(lm);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  });
+}
+
+/** Fill the launcher's build stamp with the LOADED build's publish time (see
+ * {@link loadedBuildTime}) — so a stale installed PWA shows the OLD time, truthfully
+ * reflecting the code that's running rather than the server's latest deploy. */
+async function stampBuild(elBuild) {
+  if (!elBuild) return;
+  const f = formatBuildTime(await loadedBuildTime());
+  elBuild.textContent = f ? `build: ${f}` : 'build: (unknown)';
+}
+
+/** Post a one-shot message to the active service worker and await its reply (or null
+ * on no controller / timeout). Drives the SW's `refresh-shell`. */
+function swMessage(type, timeoutMs = 20000) {
+  return new Promise((resolve) => {
+    const ctrl = navigator.serviceWorker?.controller;
+    if (!ctrl) { resolve(null); return; }
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    const ch = new MessageChannel();
+    ch.port1.onmessage = (e) => finish(e.data);
+    setTimeout(() => finish(null), timeoutMs);
+    try { ctrl.postMessage({ type }, [ch.port2]); } catch { finish(null); }
+  });
+}
+
+/** Manual "Check for updates" for installed (Home Screen) PWAs, which have no browser
+ * refresh button. Two failure modes this handles:
+ *  1. A new service worker (changed sw.js) — `reg.update()` installs it and the page's
+ *     `updatefound` listener reloads into it.
+ *  2. The common case: an APP-CODE deploy that doesn't touch sw.js. No new worker
+ *     installs, and an installed PWA serves the app shell cache-first — so the new code
+ *     never arrives just from update(). We force the SW to re-fetch the cached shell
+ *     from the network (`refresh-shell`), then reload IF the loaded build advanced.
+ * The build stamp reflects the loaded build, so it only moves when the code actually
+ * does — no more "up to date" while features are missing. */
 async function checkForUpdates(btn, elBuild) {
   const original = btn.textContent;
   btn.disabled = true;
@@ -610,15 +639,25 @@ async function checkForUpdates(btn, elBuild) {
   try {
     const reg = await navigator.serviceWorker?.getRegistration?.();
     if (!reg) { restore('Updates unavailable here'); return; }
-    await reg.update();
+    await reg.update().catch(() => {});
     if (reg.installing || reg.waiting) {
-      // A newer version is downloading. The SW's page-side `updatefound` listener
-      // reloads on its own once it's found; force a fallback reload in case not.
+      // A changed sw.js → a new worker is installing; its updatefound listener reloads.
       btn.textContent = 'Update found — reloading…';
       setTimeout(() => window.location.reload(), 1500);
       return;
     }
+    // No new worker. Force-refresh the cached app shell, then reload only if the
+    // loaded build actually changed (Pages re-stamps Last-Modified every deploy).
+    btn.textContent = 'Refreshing…';
+    const before = await loadedBuildTime();
+    await swMessage('refresh-shell');
+    const after = await loadedBuildTime();
     await stampBuild(elBuild);
+    if (after && after !== before) {
+      btn.textContent = 'Updated — reloading…';
+      setTimeout(() => window.location.reload(), 900);
+      return;
+    }
     restore('✓ Up to date');
   } catch {
     restore('Check failed — try again');

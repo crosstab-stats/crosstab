@@ -44,7 +44,7 @@
 /* global self, caches */
 let coepCredentialless = false;
 
-const CACHE = 'crosstab-offline-v2';
+const CACHE = 'crosstab-offline-v3';
 // A synthetic key (never a real request) that marks "offline caching is on".
 const OFFLINE_MARKER = 'https://crosstab.local/__offline_enabled__';
 // Tier-1 caching (the app shell) is automatic — the OPT-IN marker now only gates
@@ -166,6 +166,37 @@ if (typeof window === 'undefined') {
     } else if (d.type === 'offline-disable') {
       offlineEnabled = false;
       ev.waitUntil(caches.delete(CACHE).then(() => reply({ ok: true })));
+    } else if (d.type === 'refresh-shell') {
+      // Force-refresh the cached same-origin app shell from the network (#: "Check
+      // for updates"). An installed PWA serves the shell cache-first, so an app-code
+      // deploy (which doesn't change sw.js → no new worker) would otherwise never
+      // reach the device. Re-fetch every cached same-origin entry with cache:'reload'
+      // and replace it; leave the big cross-origin runtime entries alone. Reply with
+      // how many entries were refreshed so the page can decide whether to reload.
+      ev.waitUntil(
+        (async () => {
+          let updated = 0;
+          try {
+            const c = await caches.open(CACHE);
+            const keys = await c.keys();
+            await Promise.allSettled(
+              keys.map(async (req) => {
+                if (req.url === OFFLINE_MARKER) return;
+                let same = false;
+                try { same = new URL(req.url).origin === self.location.origin; } catch { /* opaque */ }
+                if (!same) return; // app shell only
+                try {
+                  const res = await fetch(new Request(req.url, { cache: 'reload' }));
+                  if (res.ok && res.type !== 'opaque') { await c.put(req, withIsolation(res)); updated++; }
+                } catch { /* offline / transient — keep the existing entry */ }
+              }),
+            );
+            reply({ ok: true, updated });
+          } catch (e) {
+            reply({ ok: false, error: String(e) });
+          }
+        })(),
+      );
     } else if (d.type === 'offline-status') {
       ev.waitUntil(
         (async () => {
