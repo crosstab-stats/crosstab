@@ -55,7 +55,10 @@ Designed to run across multiple sittings — tick as you go. Log anything odd in
       via a raw src under cross-origin isolation; fixed to load from a blob: URL like
       the loader. Verified on live Pages desktop: Coding tab mounts, blob src, no
       overlay. Re-test on iPad to confirm.)*
-- [ ] Apply a code to a text selection → persists after reload.
+- [~] Apply a code to a text selection → persists after reload. **Blocked on iPad by
+      #126:** coding interactions are mouse-only (contextmenu menu, mouseup paint) so
+      tags can't be added/removed and paint mode is dead on touch. Workspace itself
+      mounts + renders fine now.
 
 ## 6. Touch & layout (narrow screen)
 - [ ] Menubar: long menus scroll *within the menu*, not the whole page.
@@ -140,4 +143,10 @@ Designed to run across multiple sittings — tick as you go. Log anything odd in
   under an artificial SW-clear-then-immediately-relaunch (forced the COI self-reload
   mid-launch). Not reproducible on clean loads. Possibly a first-visit `?launch=` +
   isolation-reload race; tracked.
+- **Stage 5 — CAQDAS touch interactions broken on iPad (tracked #126):** workspace
+  mounts + renders, but coding is mouse-only — the selection menu is a `contextmenu`
+  handler (no right-click on touch), paint mode commits on `mouseup` (doesn't fire for
+  iOS touch selections), code chips apply on `mousedown`. Result: can't add or remove
+  tags, paint does nothing. Fix = touch-native gestures incl. tap-applied-code-to-
+  remove (user's toggle idea). Not a launch blocker for desktop; needed for iPad CAQDAS.
 - _(add findings here as you go: step #, what you saw, dataset/analysis, screenshot)_
