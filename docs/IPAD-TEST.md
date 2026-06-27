@@ -48,9 +48,13 @@ Designed to run across multiple sittings — tick as you go. Log anything odd in
 - [x] Launcher ▸ **Pre-cache selected plugins** → reads clearly, progresses to done.
 - [x] **Airplane Mode**, relaunch from icon → app loads, a cached analysis still runs.
 
-## 5. Plugins & the CAQDAS flagship
+## 5. Plugins & the CAQDAS flagship — workspace-mount bug FIXED
 - [ ] Edit ▸ Plugins → toggle one off/on; no "failed to load."
-- [ ] Launch **demo (qual)** → the **Coding** workspace tab mounts (sandboxed iframe).
+- [x] Launch **demo (qual)** → the **Coding** workspace tab mounts (sandboxed iframe).
+      *(Bug found + fixed: timed out on iOS/Pages — workspace iframe loaded the sandbox
+      via a raw src under cross-origin isolation; fixed to load from a blob: URL like
+      the loader. Verified on live Pages desktop: Coding tab mounts, blob src, no
+      overlay. Re-test on iPad to confirm.)*
 - [ ] Apply a code to a text selection → persists after reload.
 
 ## 6. Touch & layout (narrow screen)
@@ -124,4 +128,16 @@ Designed to run across multiple sittings — tick as you go. Log anything odd in
   Real fix = drop the nested worker, run ReadStat in the iframe over an in-memory
   buffer (#123). In-app message now tells iOS users to use CSV or desktop. Cumulative
   GSS `.dta` (~1.4 GB) is desktop-scale regardless. NOT a launch blocker.
+- **Stage 5 — CAQDAS workspace mount FIXED:** "demo (qual)" Coding tab failed with
+  "sandbox timed out" on iOS. Cause: the workspace iframe loaded plugin-host.html via
+  a raw `iframe.src` — under cross-origin isolation the parent requires COEP/CORP on
+  frames, which that doc lacks on Pages (and the SW can't header an opaque-origin
+  iframe nav), so the frame is blocked → timeout. Fixed to load from a `blob:` URL
+  like the compute sandbox (#92). Verified on live Pages (desktop, COI): Coding tab
+  mounts, blob src, no overlay, demo-qual data (12 rows) loads clean. Worked locally
+  only because the dev server sends COEP on everything.
+- **Incidental (tracked #125):** saw the #114 `ct_src_1_1 does not exist` error ONCE
+  under an artificial SW-clear-then-immediately-relaunch (forced the COI self-reload
+  mid-launch). Not reproducible on clean loads. Possibly a first-visit `?launch=` +
+  isolation-reload race; tracked.
 - _(add findings here as you go: step #, what you saw, dataset/analysis, screenshot)_
