@@ -134,7 +134,9 @@ Designed to run across multiple sittings — tick as you go. Log anything odd in
   worker verbatim (streams ~1MB FileReaderSync chunks → out-of-core DuckDB ingest, so large
   files are first-class), registered into the unified Import/Export picker. **Desktop verified:**
   write→read round-trip exact incl. value labels; SPSS/Stata in pickers; clean boot, no errors.
-  **PENDING iPad confirmation.** Cumulative GSS `.dta` (~1.4 GB) is desktop-scale regardless.
+  **CONFIRMED on iPad: `GSS2024.sav` imports** → #123 closed; SPSS/Stata/SAS work on iOS. The
+  cumulative `.dta` (~1.4 GB) streams (no longer crashes); whether it *completes* on an iPad is a
+  device-memory question (#122 out-of-core), not the worker bug. Dead-code cleanup tracked #127.
 - **Stage 5 — CAQDAS workspace mount FIXED:** "demo (qual)" Coding tab failed with
   "sandbox timed out" on iOS. Cause: the workspace iframe loaded plugin-host.html via
   a raw `iframe.src` — under cross-origin isolation the parent requires COEP/CORP on
