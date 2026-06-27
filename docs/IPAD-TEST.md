@@ -128,9 +128,13 @@ Designed to run across multiple sittings — tick as you go. Log anything odd in
   disproved it.) Likely cause: the codec spawns a **nested blob Worker inside the
   sandboxed opaque-origin codec iframe**, which iOS WebKit refuses to start (dies below
   JS → uncatchable). CSV works on iOS (runs in the iframe directly, no nested worker).
-  Real fix = drop the nested worker, run ReadStat in the iframe over an in-memory
-  buffer (#123). In-app message now tells iOS users to use CSV or desktop. Cumulative
-  GSS `.dta` (~1.4 GB) is desktop-scale regardless. NOT a launch blocker.
+  **Confirmed root cause (probe): `worker=onerror`** — iOS WebKit won't start ANY worker
+  inside the opaque-origin codec sandbox (even a trivial one). **FIXED:** ReadStat now runs
+  host-side in a host-owned same-origin Worker (core/readstat-host.js), reusing the codec
+  worker verbatim (streams ~1MB FileReaderSync chunks → out-of-core DuckDB ingest, so large
+  files are first-class), registered into the unified Import/Export picker. **Desktop verified:**
+  write→read round-trip exact incl. value labels; SPSS/Stata in pickers; clean boot, no errors.
+  **PENDING iPad confirmation.** Cumulative GSS `.dta` (~1.4 GB) is desktop-scale regardless.
 - **Stage 5 — CAQDAS workspace mount FIXED:** "demo (qual)" Coding tab failed with
   "sandbox timed out" on iOS. Cause: the workspace iframe loaded plugin-host.html via
   a raw `iframe.src` — under cross-origin isolation the parent requires COEP/CORP on
