@@ -13,8 +13,10 @@ import { EventBus, CoreEvents } from './event-bus.js';
 import { DatasetManager, DATASETS_CHANGED } from './dataset-manager.js';
 import { DuckDBManager } from './duckdb-manager.js';
 import { WebRManager } from './webr-manager.js';
-// ReadStat (SPSS/Stata/SAS) is now a codec plugin (plugins/builtin-readstat-codec,
-// #98 Phase 2); the host no longer drives readstat-manager directly.
+// ReadStat (SPSS/Stata/SAS) runs host-side in a same-origin Worker (readstat-host.js,
+// #123), reusing the codec worker (plugins/builtin-readstat-codec/codec-worker.js) but
+// NOT inside the codec sandbox — iOS WebKit refuses to start a Worker there. The dead
+// codec-plugin entrypoint (index.js) was pruned (#127).
 import { ResultsPane } from './results-pane.js';
 import { MenuShell } from './menu-shell.js';
 import { UiService } from './ui-service.js';
@@ -315,10 +317,11 @@ export async function boot(mounts) {
   const menus = new MenuShell(mounts.menubar);
   const ui = new UiService(datasets);
   const importers = new ImportService({ menus, data: datasets, results: results.api, bus, webr });
-  // SPSS / Stata / SAS import + export are now a sandboxed codec plugin
-  // (plugins/builtin-readstat-codec, #98 Phase 2): same ReadStat-WASM, streaming,
-  // but format logic runs in the codec sandbox while the host keeps the picker,
-  // DuckDB/OPFS ingest, and download. (Was: host registerStreaming + native exports.)
+  // SPSS / Stata / SAS import + export run host-side via ReadStatHost (readstat-host.js,
+  // #123): the same ReadStat-WASM streaming worker, but host-owned in a same-origin
+  // Worker because iOS WebKit won't start a Worker inside the codec sandbox. The host
+  // keeps the picker, DuckDB/OPFS ingest, and download; only the format logic is in the
+  // worker. (Earlier: a sandboxed codec plugin, #98 Phase 2 — reverted on iOS.)
   const exporters = new ExportService({ menus, data: datasets, results: results.api, bus });
   // Output export: host owns the "Export output…" dialog + the (host-only) print
   // path; formats (HTML, Word, …) are plugins that register via app.outputExporters
