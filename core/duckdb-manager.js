@@ -354,13 +354,25 @@ export class DuckDBManager {
    */
   async registerParquetFile(name, bytes) {
     await this.#ensureReady();
-    const PROT = this.#duckdb.DuckDBDataProtocol.BROWSER_FSACCESS;
+    // Write the OPFS file regardless (main-thread createWritable works on iOS, and it
+    // keeps the file available for readOpfsFile/persistence).
     const root = await navigator.storage.getDirectory();
     const handle = await root.getFileHandle(name, { create: true });
     const writable = await handle.createWritable();
     await writable.write(bytes);
     await writable.close();
-    await this.#db.registerFileHandle(name, handle, PROT, true);
+    if (await this.#canUseOpfsHandles()) {
+      // Out-of-core: DuckDB reads the OPFS file directly via its handle (Chrome).
+      await this.#db.registerFileHandle(name, handle, this.#duckdb.DuckDBDataProtocol.BROWSER_FSACCESS, true);
+    } else {
+      // Safari/WebKit can't accept an OPFS FileSystemFileHandle in the worker
+      // (DataCloneError — the same wall as #123). Register the bytes as an in-memory
+      // buffer instead so read_parquet still works; the OPFS file written above keeps
+      // persistence intact. Bounded by memory (a multi-GB cumulative GSS may still
+      // exceed it — a device limit, not the clone bug), but wide files that fit now
+      // import on iOS. True out-of-core on Safari (opfs:// paths) is #122.
+      await this.#db.registerFileBuffer(name, bytes);
+    }
   }
 
   /**
