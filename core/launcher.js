@@ -45,6 +45,7 @@ export class Launcher {
   #pendingSource = null; // source key chosen this session, applied on Start
   #pendingProject = null; // { id } when a saved project is chosen instead of a source
   #resolve = null;
+  #onKey = null; // Escape-to-dismiss handler, active only while reopened over a session
 
   /**
    * @param {object} deps
@@ -214,6 +215,15 @@ export class Launcher {
     this.#renderInstallHint(overlay);
     overlay.querySelector('.ctl__start').addEventListener('click', () => this.#start(reopen));
 
+    // Reopened over a live session: allow dismissing without choosing/reloading a
+    // source — Cancel button + Escape just close the overlay and return to the current
+    // project unchanged. (On first load there's nothing to go back to, so no Cancel.)
+    if (reopen) {
+      overlay.querySelector('.ctl__cancel')?.addEventListener('click', () => this.#close());
+      this.#onKey = (e) => { if (e.key === 'Escape') this.#close(); };
+      document.addEventListener('keydown', this.#onKey);
+    }
+
     return new Promise((resolve) => { this.#resolve = resolve; });
   }
 
@@ -352,6 +362,7 @@ export class Launcher {
   }
 
   #close() {
+    if (this.#onKey) { document.removeEventListener('keydown', this.#onKey); this.#onKey = null; }
     this.#root?.remove();
     this.#root = null;
     this.#pendingSource = null;
@@ -652,6 +663,7 @@ function SHELL_HTML(reopen) {
         </aside>
       </div>
       <div class="ctl__footer">
+        ${reopen ? '<button type="button" class="ctl__cancel">← Back to project</button>' : ''}
         <button type="button" class="ctl__start">${reopen ? 'Apply changes' : 'Start CrossTab'}</button>
       </div>
     </div>`;
@@ -731,7 +743,10 @@ function injectStyles() {
     .ctl__installwhy summary { cursor: pointer; color: var(--accent, #2980b9); width: max-content; }
     .ctl__installwhy p { margin: 6px 0 0; line-height: 1.45; }
     .ctl__installhow { color: #5a6570; }
-    .ctl__footer { padding: 12px 24px; border-top: 1px solid var(--line, #d8dde2); display: flex; justify-content: flex-end; background: #fff; }
+    .ctl__footer { padding: 12px 24px; border-top: 1px solid var(--line, #d8dde2); display: flex; justify-content: flex-end; gap: 10px; background: #fff; }
+    .ctl__cancel { margin-right: auto; font: inherit; font-size: 14px; padding: 10px 18px; cursor: pointer;
+      background: #fff; border: 1px solid var(--line, #d8dde2); border-radius: 8px; color: #41505e; }
+    .ctl__cancel:hover { background: #eef2f6; }
     .ctl__start { font: inherit; font-size: 15px; font-weight: 600; padding: 10px 28px; border: 0;
       border-radius: 8px; background: var(--accent, #2980b9); color: #fff; cursor: pointer; }
     .ctl__start:hover { background: #1f6391; }
