@@ -15,7 +15,7 @@
 export const manifest = {
   id: 'builtin-crosstabs',
   name: 'Crosstabs',
-  version: '0.2.0',
+  version: '0.3.0',
   apiVersion: '0.1.0',
   category: 'Descriptive Statistics',
   keywords: ['chi-square', 'contingency', 'crosstab', 'association'],
@@ -41,6 +41,19 @@ export const manifest = {
           ],
         },
         {
+          name: 'percent',
+          kind: 'choice',
+          label: 'Percentages',
+          hint: 'Add a percentage table. Column % shows each column’s composition (e.g. the income mix within each year).',
+          default: 'none',
+          options: [
+            { value: 'none', label: 'Counts only' },
+            { value: 'row', label: 'Row % (each row sums to 100)' },
+            { value: 'column', label: 'Column % (each column sums to 100)' },
+            { value: 'total', label: 'Total % (of all cases)' },
+          ],
+        },
+        {
           name: 'measures',
           kind: 'choice',
           label: 'Association measures',
@@ -61,7 +74,7 @@ export const manifest = {
  * @param {object} app
  * @param {{rowvar: string, colvar: string}} inputs
  */
-export async function run(app, { rowvar: rowName, colvar: colName, pmethod, measures }) {
+export async function run(app, { rowvar: rowName, colvar: colName, pmethod, measures, percent }) {
   if (!rowName || !colName) return;
   const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
 
@@ -118,6 +131,27 @@ export async function run(app, { rowvar: rowName, colvar: colName, pmethod, meas
     },
     { caption: `${labelOf(rowMeta, rowName)} × ${labelOf(colMeta, colName)}` },
   );
+
+  // Percentages (#129): row / column / total, SPSS-style. Column % is the one that
+  // answers "what's the composition within each column" (e.g. the income mix per year).
+  if (percent && percent !== 'none') {
+    const grand = x.total;
+    // count over its basis → "12.3"; basis 0 / non-finite → "—".
+    const pf = (count, basis) => (Number.isFinite(count) && basis > 0 ? ((count / basis) * 100).toFixed(1) : '—');
+    const basisFor = (i, j) => (percent === 'row' ? x.rowTotals[i] : percent === 'column' ? x.colTotals[j] : grand);
+    const pctRows = x.rowLevels.map((r, i) => {
+      const cells = x.colLevels.map((_, j) => pf(x.counts[i * ncol + j] ?? 0, basisFor(i, j)));
+      const rightTotal = percent === 'row' ? '100.0' : pf(x.rowTotals[i], grand);
+      return [lv(rowMeta, r), ...cells, rightTotal];
+    });
+    const bottom = x.colLevels.map((_, j) => (percent === 'column' ? '100.0' : pf(x.colTotals[j], grand)));
+    pctRows.push(['Total', ...bottom, '100.0']);
+    const basisLabel = { row: 'Row %', column: 'Column %', total: '% of total' }[percent];
+    await app.results.appendTable(
+      { columns: ['', ...x.colLevels.map((c) => lv(colMeta, c)), 'Total'], rows: pctRows, rowHeaders: true },
+      { caption: `${labelOf(rowMeta, rowName)} × ${labelOf(colMeta, colName)} — ${basisLabel}` },
+    );
+  }
 
   // Chi-square test.
   const fmt = (n, d) => (Number.isFinite(n) ? n.toFixed(d) : '—');

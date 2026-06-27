@@ -19,7 +19,7 @@
 export const manifest = {
   id: 'builtin-plots',
   name: 'Plots',
-  version: '0.2.0',
+  version: '0.3.0',
   apiVersion: '0.1.0',
   category: 'Graphs',
   keywords: ['chart', 'histogram', 'scatter', 'boxplot', 'bar', 'pie', 'plot'],
@@ -38,6 +38,28 @@ export const manifest = {
       inputs: [
         { name: 'x', kind: 'variables', label: 'X', hint: 'The variable on the horizontal axis.', multiple: false, types: ['numeric'], unique: true },
         { name: 'y', kind: 'variables', label: 'Y', hint: 'The variable on the vertical axis.', multiple: false, types: ['numeric'], unique: true },
+      ],
+    },
+    {
+      label: 'Line chart (trends over time)…',
+      run: 'lineChart',
+      order: 25,
+      inputs: [
+        { name: 'x', kind: 'variables', label: 'X axis', hint: 'The axis to plot across — often a time variable like year.', multiple: false, types: ['numeric', 'factor', 'string'], unique: true },
+        { name: 'g', kind: 'variables', label: 'Lines (group, optional)', hint: 'A category to draw one line per group (e.g. income bracket). Omit for a single line.', multiple: false, types: ['factor', 'string'], optional: true, unique: true },
+        { name: 'y', kind: 'variables', label: 'Measure (optional)', hint: 'A numeric measure — used only when “Line shows” is Mean.', multiple: false, types: ['numeric'], optional: true, unique: true },
+        {
+          name: 'summary',
+          kind: 'choice',
+          label: 'Line shows',
+          hint: 'Percent within each X (composition), a case count, or the mean of a measure.',
+          default: 'percent',
+          options: [
+            { value: 'percent', label: '% within each X (e.g. income mix per year)' },
+            { value: 'count', label: 'Count of cases' },
+            { value: 'mean', label: 'Mean of the measure' },
+          ],
+        },
       ],
     },
     {
@@ -97,6 +119,60 @@ export async function scatter(app, { x, y }) {
              legend = sprintf("R² = %.3f", summary(fit)$r.squared))
     }`;
   await renderPlot(app, 'Scatter plot', code, [x, y]);
+}
+
+/**
+ * Line/trend chart: plot a summary across X (often a time variable), optionally one
+ * line per group. `summary`:
+ *  - `percent` — within each X value, the % in each group (composition); without a
+ *    group, each X's share of the whole. The income-mix-over-years chart.
+ *  - `count`   — number of cases per X (per group).
+ *  - `mean`    — mean of a numeric measure per X (per group).
+ * Categories/levels honour value labels (legend + a categorical X axis); a numeric X
+ * (like year) plots on a real numeric axis.
+ */
+export async function lineChart(app, { x, g, y, summary }) {
+  if (!x) return;
+  if (summary === 'mean' && !y) {
+    await app.results.appendError('Line chart: pick a Measure variable for the Mean summary (or choose Count / Percent).');
+    return;
+  }
+  const meta = await metaMap(app);
+  const hasG = !!g;
+  const isMean = summary === 'mean';
+  const vars = [x, g, y].filter(Boolean);
+  const yLab = y ? label(meta, y) : '';
+  const ylab = summary === 'percent' ? 'Percent' : summary === 'count' ? 'Count' : `Mean ${yLab}`;
+  const titleBase = summary === 'percent' ? '%' : summary === 'count' ? 'Count' : `Mean ${yLab}`;
+  const code = `
+    ${recodeR(vars, meta)}
+    xx <- as.character(df[[${rlit(x)}]])
+    gg <- ${hasG ? `as.character(df[[${rlit(g)}]])` : `rep("All", length(xx))`}
+    yy <- ${isMean ? `as.numeric(df[[${rlit(y)}]])` : `rep(1, length(xx))`}
+    ok <- !is.na(xx) & !is.na(gg)${isMean ? ' & is.finite(yy)' : ''}
+    xx <- xx[ok]; gg <- gg[ok]; yy <- yy[ok]
+    if (!length(xx)) stop("no data after removing missing values")
+    ux <- sort(unique(xx)); ug <- sort(unique(gg))
+    fx <- factor(xx, levels = ux); fg <- factor(gg, levels = ug)
+    ${isMean
+      ? 'M <- tapply(yy, list(fx, fg), function(z) mean(z, na.rm = TRUE))'
+      : `M <- tapply(yy, list(fx, fg), sum); M[is.na(M)] <- 0${summary === 'percent' ? (hasG ? '\n    M <- M / rowSums(M) * 100' : '\n    M <- M / sum(M) * 100') : ''}`}
+    M <- as.matrix(M)
+    xnum <- suppressWarnings(as.numeric(rownames(M))); numericX <- length(xnum) > 0 && !any(is.na(xnum))
+    xpos <- if (numericX) xnum else seq_len(nrow(M))
+    o <- order(xpos); xpos <- xpos[o]; M <- M[o, , drop = FALSE]
+    cols <- hcl.colors(max(ncol(M), 2), "Dark 3")[seq_len(ncol(M))]
+    matplot(xpos, M, type = "b", pch = 19, lty = 1, lwd = 2, col = cols,
+            xaxt = if (numericX) "s" else "n",
+            xlab = ${rlit(label(meta, x))}, ylab = ${rlit(ylab)},
+            main = ${rlit(`${titleBase} by ${label(meta, x)}`)})
+    xlabs <- rownames(M)
+    ${labelMapR(meta, x, 'xlabs')}
+    if (!numericX) axis(1, at = xpos, labels = xlabs, las = 2, cex.axis = 0.8)
+    ${hasG
+      ? `glabels <- colnames(M)\n    ${labelMapR(meta, g, 'glabels')}\n    legend("topright", legend = glabels, col = cols, lty = 1, lwd = 2, pch = 19, bty = "n", cex = 0.85)`
+      : ''}`;
+  await renderPlot(app, 'Line chart', code, vars);
 }
 
 export async function boxplot(app, { y, g }) {
@@ -228,6 +304,18 @@ function recodeR(vars, meta) {
     })
     .filter(Boolean)
     .join('\n    ');
+}
+
+/** An R snippet that maps a character vector `targetVar` through a variable's value
+ * labels in place (codes → labels), or '' if the variable has no labels. Used to put
+ * readable names on the line-chart legend and a categorical X axis. */
+function labelMapR(meta, name, targetVar) {
+  const vl = meta.get(name)?.valueLabels;
+  if (!vl || !Object.keys(vl).length) return '';
+  const entries = Object.entries(vl)
+    .map(([k, l]) => `${rlit(String(k))} = ${rlit(String(l))}`)
+    .join(', ');
+  return `{ .vm <- c(${entries}); ${targetVar} <- ifelse(${targetVar} %in% names(.vm), .vm[${targetVar}], ${targetVar}) }`;
 }
 
 /** Render a JS value as an R literal for safe interpolation into R source. */

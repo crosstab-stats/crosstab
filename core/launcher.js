@@ -125,6 +125,8 @@ export class Launcher {
     overlay.innerHTML = SHELL_HTML(reopen);
     document.body.append(overlay);
     void stampBuild(overlay.querySelector('.ctl__build'));
+    const updateBtn = overlay.querySelector('.ctl__update');
+    updateBtn?.addEventListener('click', () => void checkForUpdates(updateBtn, overlay.querySelector('.ctl__build')));
 
     const indicator = overlay.querySelector('.ctl__indicator');
     const listBox = overlay.querySelector('.ctl__plugins');
@@ -579,6 +581,39 @@ async function stampBuild(elBuild) {
   }
 }
 
+/** Manually re-check the service worker for a newer deploy and reload into it.
+ * The SW already auto-checks on focus, but an installed (Home Screen) PWA has no
+ * refresh button, so this gives the user an explicit control. `registration.update()`
+ * fetches a fresh sw.js; if it differs a new worker installs (surfaced as
+ * `installing`/`waiting`), and the page-side `updatefound` handler reloads us into
+ * it. If nothing changed, we re-stamp the build time and confirm we're current. */
+async function checkForUpdates(btn, elBuild) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Checking…';
+  const restore = (msg) => {
+    btn.textContent = msg;
+    setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 2600);
+  };
+  if (!navigator.onLine) { restore('Offline — connect to check'); return; }
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration?.();
+    if (!reg) { restore('Updates unavailable here'); return; }
+    await reg.update();
+    if (reg.installing || reg.waiting) {
+      // A newer version is downloading. The SW's page-side `updatefound` listener
+      // reloads on its own once it's found; force a fallback reload in case not.
+      btn.textContent = 'Update found — reloading…';
+      setTimeout(() => window.location.reload(), 1500);
+      return;
+    }
+    await stampBuild(elBuild);
+    restore('✓ Up to date');
+  } catch {
+    restore('Check failed — try again');
+  }
+}
+
 function SHELL_HTML(reopen) {
   return `
     <div class="ctl__card">
@@ -586,6 +621,7 @@ function SHELL_HTML(reopen) {
         <div class="ctl__brand">CrossTab</div>
         <div class="ctl__tagline">Statistics for everyone, every device, everywhere</div>
         <div class="ctl__build" title="When this deployed build was published (the served files' last-modified time). Useful for confirming a device picked up the latest version.">build: …</div>
+        <button type="button" class="ctl__update" title="Re-check the server for a newer version and reload into it. Useful as an installed app (Home Screen), where there's no browser refresh button.">Check for updates</button>
       </div>
       <div class="ctl__body">
         <aside class="ctl__library">
@@ -635,6 +671,11 @@ function injectStyles() {
     .ctl__brand { font-size: 26px; font-weight: 800; letter-spacing: .04em; }
     .ctl__tagline { font-size: 13px; opacity: .85; margin-top: 2px; }
     .ctl__build { font-size: 11px; opacity: .55; margin-top: 4px; font-variant-numeric: tabular-nums; }
+    .ctl__update { font: inherit; font-size: 11px; margin-top: 6px; padding: 4px 10px; cursor: pointer;
+      color: var(--accent, #2980b9); background: transparent; border: 1px solid var(--line, #d8dde2);
+      border-radius: 6px; min-height: 30px; }
+    .ctl__update:hover { background: #eef5fb; }
+    .ctl__update:disabled { opacity: .6; cursor: default; }
     .ctl__body { display: flex; min-height: 0; flex: 1; }
     .ctl__library, .ctl__about { flex: 0 0 200px; padding: 16px; overflow-y: auto; }
     .ctl__about { border-left: 1px solid var(--line, #d8dde2); font-size: 13px; color: #41505e; }
