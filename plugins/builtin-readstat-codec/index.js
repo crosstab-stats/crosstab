@@ -139,11 +139,10 @@ async function buildCtl(app) {
     // variables). Give actionable guidance rather than a cryptic abort (#91).
     const detail = e.message
       ? `${e.message}${where}`
-      : 'the file was too large or wide for this device to read. A very wide file (e.g. a ' +
-        'full GSS release with thousands of variables) can exceed a mobile browser’s memory ' +
-        'while reading the variable catalog. Open it on a desktop browser, or first reduce it ' +
-        '(fewer variables) elsewhere.';
-    const err = new Error(`ReadStat import failed: ${detail}`);
+      : 'the SPSS/Stata/SAS engine couldn’t run in this browser. This is a known limitation ' +
+        'on mobile Safari (iPhone/iPad); use a desktop browser for SPSS/Stata/SAS files, or ' +
+        'use CSV import/export, which works everywhere.';
+    const err = new Error(`SPSS/Stata/SAS engine error: ${detail}`);
     for (const r of reqs.values()) r.reject?.(err);
     reqs.clear();
   };

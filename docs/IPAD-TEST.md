@@ -113,13 +113,15 @@ Designed to run across multiple sittings — tick as you go. Log anything odd in
   guarantee). The export/OPFS write is idempotent, so the retry is safe. If it ever
   recurs persistently, escalate to resetting the engine (DuckDBManager.close) before
   the retry.
-- **ReadStat/SPSS import — iOS memory limit (tracked #123):** importing a single-year
-  `GSS2024.sav` fails on **both** iPhone and iPad with a hard ReadStat worker crash
-  ("crashed with no message"). Identical across devices despite very different RAM →
-  it's WebKit's per-worker memory cap, not device RAM; GSS `.sav` is very wide
-  (thousands of vars + big value-label dictionaries) so the parse exceeds it. The
-  crash is below JS (uncatchable — diagnostics confirm). CSV import works fine on iOS.
-  Interim: the in-app error now points to "choose variables…" / desktop. Real fix
-  (WASM mem flags / var-subset / streaming) tracked as #123. The full cumulative GSS
-  `.dta` (~1.4 GB) is desktop-scale regardless.
+- **ReadStat (SPSS/Stata/SAS) broken on iOS Safari — import + export (tracked #123):**
+  GSS `.sav` import fails on iPhone + iPad ("crashed with no message"). **Decisive
+  test: exporting the 30×5 Demo data to `.sav` ALSO crashes identically** → NOT memory
+  (30 rows can't OOM), NOT data-specific — ReadStat is broken on iOS for read AND
+  write, any size. (My earlier "too wide / OOM" theory was wrong; the tiny-export test
+  disproved it.) Likely cause: the codec spawns a **nested blob Worker inside the
+  sandboxed opaque-origin codec iframe**, which iOS WebKit refuses to start (dies below
+  JS → uncatchable). CSV works on iOS (runs in the iframe directly, no nested worker).
+  Real fix = drop the nested worker, run ReadStat in the iframe over an in-memory
+  buffer (#123). In-app message now tells iOS users to use CSV or desktop. Cumulative
+  GSS `.dta` (~1.4 GB) is desktop-scale regardless. NOT a launch blocker.
 - _(add findings here as you go: step #, what you saw, dataset/analysis, screenshot)_
