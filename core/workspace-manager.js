@@ -156,7 +156,7 @@ export class WorkspaceManager {
     const broker = new PluginBroker({ iframe, services, onError: this.#onError, attribution });
     entry.broker = broker;
 
-    iframe.src = HOST_URL;
+    iframe.src = await sandboxSrc();
     await broker.whenReady();
     const source = await fetchSource(plugin.url);
     const manifest = await broker.sendLoad(source);
@@ -223,6 +223,34 @@ function ownerToken(plugin) {
   const i = qid.indexOf(':');
   if (i > 0) return `ns:${qid.slice(0, i)}`;
   return plugin.origin ? `origin:${plugin.origin}` : `plugin:${qid}`;
+}
+
+let hostHtmlPromise = null;
+/** A fresh blob: URL of the sandbox document for the workspace iframe's `src`.
+ * Under cross-origin isolation a direct `iframe.src = plugin-host.html` is blocked:
+ * the isolated parent requires COEP/CORP on embedded frames, but that document is
+ * served without those headers (GitHub Pages can't send them, and the SW can't
+ * inject headers into an opaque-origin iframe navigation) — so the frame never loads
+ * and the mount times out (this broke the CAQDAS workspace on iOS / Pages). Loading
+ * the same HTML from a blob: URL is COEP-compatible in the isolated context, while
+ * `sandbox="allow-scripts"` still forces an opaque origin + isolated heap. Mirrors
+ * the loader's #sandboxSrc (#92/#91). Fetched once (through the SW, so offline-safe). */
+async function sandboxSrc() {
+  if (!hostHtmlPromise) {
+    hostHtmlPromise = fetch(HOST_URL)
+      .then((res) => {
+        if (!res.ok) throw new Error(`workspace sandbox ${HOST_URL}: HTTP ${res.status}`);
+        return res.text();
+      })
+      .catch((err) => {
+        hostHtmlPromise = null; // don't cache a failure — allow retry
+        throw err;
+      });
+  }
+  const html = await hostHtmlPromise;
+  const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+  setTimeout(() => URL.revokeObjectURL(url), 15000); // iframe loads it in ms
+  return url;
 }
 
 /** Fetch a plugin's entry-module source text (builtin/URL plugins). */
