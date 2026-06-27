@@ -37,7 +37,33 @@ const BATCH_BYTES = 16 * 1024 * 1024;
 let modPromise = null;
 let glueUrl = null; // blob: URL of readstat.mjs, set on init
 let wasmBinary = null; // readstat.wasm bytes, set on init
-const getModule = () => (modPromise ??= import(glueUrl).then((m) => m.default({ wasmBinary, locateFile: (p) => p })));
+const wasmLog = []; // captured Emscripten stdout/stderr + abort reason, surfaced on a crash
+const getModule = () =>
+  (modPromise ??= import(glueUrl).then((m) =>
+    m.default({
+      wasmBinary,
+      locateFile: (p) => p,
+      print: (s) => { wasmLog.push(String(s)); },
+      printErr: (s) => { wasmLog.push(String(s)); },
+      onAbort: (reason) => { wasmLog.push(`abort: ${reason}`); },
+    }),
+  ));
+
+/** Tail of the captured WASM log — appended to error messages so an on-device crash
+ * (no console) is diagnosable. */
+const wasmTail = () => (wasmLog.length ? ` — wasm: ${wasmLog.slice(-6).join(' | ')}` : '');
+
+// A hard crash inside the worker (a WASM out-of-memory abort, or the nested
+// blob-module import failing) bypasses the per-message try/catch below and would
+// otherwise surface in the host as a bare "worker error: unknown". Forward whatever
+// detail the worker-global handlers can see — message + location + the WASM log
+// tail — so the real cause is visible on-device (#91).
+self.addEventListener('error', (e) => {
+  self.postMessage({ type: 'fatal', message: `${e.message || 'worker crash (no message)'} @ ${e.filename || '?'}:${e.lineno || 0}${wasmTail()}` });
+});
+self.addEventListener('unhandledrejection', (e) => {
+  self.postMessage({ type: 'fatal', message: `unhandled rejection: ${(e.reason && e.reason.message) || e.reason}${wasmTail()}` });
+});
 
 self.onmessage = async (e) => {
   const msg = e.data;
@@ -59,7 +85,7 @@ self.onmessage = async (e) => {
     else if (msg.type === 'writeBatch') await runWriteBatch(msg);
     else if (msg.type === 'writeEnd') await runWriteEnd(msg);
   } catch (err) {
-    self.postMessage({ type: 'error', id: msg.id, message: String(err?.message || err) });
+    self.postMessage({ type: 'error', id: msg.id, message: `${String(err?.message || err)}${wasmTail()}` });
   }
 };
 

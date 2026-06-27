@@ -26,6 +26,7 @@
 export const manifest = {
   id: 'builtin-readstat-codec',
   name: 'SPSS / Stata / SAS codec',
+  version: '2', // #91: diagnostic build (real worker-crash detail). Confirm via badge.
   apiVersion: '0.1.0',
   category: 'Data',
   // This plugin brings its own dependencies rather than relying on the host's
@@ -120,10 +121,20 @@ async function buildCtl(app) {
         reqs.delete(m.id); req.resolve?.(m); break;
       case 'error':
         reqs.delete(m.id); req.reject?.(new Error(m.message)); break;
+      case 'fatal': {
+        // Worker-global crash (WASM abort/OOM, etc.) — not tied to one request; fail
+        // everything in flight with the detail the worker managed to capture (#91).
+        const err = new Error(`ReadStat worker crashed: ${m.message}`);
+        for (const r of reqs.values()) r.reject?.(err);
+        reqs.clear();
+        break;
+      }
     }
   };
   worker.onerror = (e) => {
-    const err = new Error(`ReadStat worker error: ${e.message || 'unknown'}`);
+    const where = e.filename ? ` @ ${e.filename}:${e.lineno || 0}:${e.colno || 0}` : '';
+    const detail = e.message || 'crashed with no message (usually a WASM out-of-memory abort)';
+    const err = new Error(`ReadStat worker error: ${detail}${where}`);
     for (const r of reqs.values()) r.reject?.(err);
     reqs.clear();
   };
