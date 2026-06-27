@@ -26,6 +26,7 @@ import { DatasetOps } from './dataset-ops.js';
 import { PluginManager } from './plugin-manager.js';
 import { PluginActions } from './plugin-actions.js';
 import { CodecService } from './codec-service.js';
+import { ReadStatHost } from './readstat-host.js';
 import { PluginCreator } from './plugin-creator.js';
 import { DatasetStore } from './dataset-store.js';
 import { DatasetLibrary, LIBRARY_CHANGED } from './library.js';
@@ -117,9 +118,9 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-csv-codec/index.js',
   './plugins/builtin-ndjson-codec/index.js',
   './plugins/builtin-parquet-codec/index.js',
-  // ReadStat (SPSS/Stata/SAS) as a codec plugin (#98 Phase 2) — replaces the host
-  // import/export registrations below.
-  './plugins/builtin-readstat-codec/index.js',
+  // ReadStat (SPSS/Stata/SAS) is NOT a sandboxed codec: iOS Safari won't run a worker
+  // inside the codec sandbox (#123), so it runs host-side via ReadStatHost (wired in
+  // boot()), reusing the same worker + streaming ingest.
 ];
 
 /**
@@ -371,6 +372,12 @@ export async function boot(mounts) {
   // so the broker sees it. Codecs are registered from manifests via pluginActions.
   const codecs = new CodecService({ importers, exporters, loader, results: results.api });
   services.codec = codecs.serviceApi;
+
+  // SPSS/Stata/SAS (ReadStat) runs host-side rather than as a sandboxed codec: iOS
+  // Safari refuses to start a Worker inside the opaque-origin codec sandbox (#123), so
+  // the engine lives in a host-owned worker, registered into the same Import/Export
+  // picker. Reuses the codec's streaming worker + the out-of-core DuckDB ingest.
+  new ReadStatHost({ importers, exporters, data: datasets.api, ui: ui.api, results: results.api }).activate();
 
   // Host-side wiring for declarative plugins: reads manifest.menu, gathers each
   // action's declared inputs, opens the (host-owned) output section, and invokes
