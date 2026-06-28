@@ -620,15 +620,17 @@ function swMessage(type, timeoutMs = 20000) {
 }
 
 /** Manual "Check for updates" for installed (Home Screen) PWAs, which have no browser
- * refresh button. Two failure modes this handles:
- *  1. A new service worker (changed sw.js) — `reg.update()` installs it and the page's
- *     `updatefound` listener reloads into it.
- *  2. The common case: an APP-CODE deploy that doesn't touch sw.js. No new worker
- *     installs, and an installed PWA serves the app shell cache-first — so the new code
- *     never arrives just from update(). We force the SW to re-fetch the cached shell
- *     from the network (`refresh-shell`), then reload IF the loaded build advanced.
- * The build stamp reflects the loaded build, so it only moves when the code actually
- * does — no more "up to date" while features are missing. */
+ * refresh button. No cleverness, no build-number comparison: when the user asks to
+ * check, we actually go fetch the files and reload into them. Specifically:
+ *  1. `reg.update()` — pick up a changed service worker if there is one.
+ *  2. `refresh-shell` — tell the SW to RE-FETCH every cached same-origin app file from
+ *     the network (cache:'reload'), replacing the cached copies. This is what makes an
+ *     app-code deploy (which doesn't touch sw.js, so no new worker) actually arrive.
+ *  3. Drop the persisted plugin catalog so the next boot RE-PROBES every plugin from
+ *     its (now-refreshed) file — not from the cached index. So new/changed plugins
+ *     show up without needing a catalog-version bump.
+ *  4. Always reload. The user asked to check; they get fresh code, every time.
+ * Only network state gates it (offline → can't fetch). */
 async function checkForUpdates(btn, elBuild) {
   const original = btn.textContent;
   btn.disabled = true;
@@ -640,27 +642,14 @@ async function checkForUpdates(btn, elBuild) {
   if (!navigator.onLine) { restore('Offline — connect to check'); return; }
   try {
     const reg = await navigator.serviceWorker?.getRegistration?.();
-    if (!reg) { restore('Updates unavailable here'); return; }
-    await reg.update().catch(() => {});
-    if (reg.installing || reg.waiting) {
-      // A changed sw.js → a new worker is installing; its updatefound listener reloads.
-      btn.textContent = 'Update found — reloading…';
-      setTimeout(() => window.location.reload(), 1500);
-      return;
-    }
-    // No new worker. Force-refresh the cached app shell, then reload only if the
-    // loaded build actually changed (Pages re-stamps Last-Modified every deploy).
-    btn.textContent = 'Refreshing…';
-    const before = await loadedBuildTime();
-    await swMessage('refresh-shell');
-    const after = await loadedBuildTime();
-    await stampBuild(elBuild);
-    if (after && after !== before) {
-      btn.textContent = 'Updated — reloading…';
-      setTimeout(() => window.location.reload(), 900);
-      return;
-    }
-    restore('✓ Up to date');
+    await reg?.update?.().catch(() => {});
+    btn.textContent = 'Fetching latest…';
+    await swMessage('refresh-shell'); // re-fetch all cached same-origin files from network
+    // Force a full plugin re-probe on the next boot (read the files, not the cached
+    // catalog index) — keep in sync with plugin-manager.js LS_CATALOG.
+    try { localStorage.removeItem('crosstab.plugins.catalog'); } catch { /* ignore */ }
+    btn.textContent = 'Reloading…';
+    setTimeout(() => window.location.reload(), 350);
   } catch {
     restore('Check failed — try again');
   }
