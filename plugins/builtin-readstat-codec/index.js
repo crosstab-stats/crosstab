@@ -19,7 +19,7 @@
 export const manifest = {
   id: 'builtin-readstat-codec',
   name: 'SPSS / Stata / SAS codec',
-  version: '4', // #130: ASYNCIFY main-thread build (no worker).
+  version: '5', // #130: ASYNCIFY main-thread build (no worker) + step instrumentation.
   apiVersion: '0.1.0',
   category: 'Data',
   // The plugin ships its own engine (a third-party codec would do the same): the glue
@@ -67,24 +67,35 @@ function isWide(varCount, rowCount) {
 
 let modulePromise = null;
 
+// #130 debug instrumentation: every step writes a line to the Output pane (visible on
+// iPad, where there's no console). Fire-and-forget so it never adds latency or throws
+// in the hot path. Remove once the iOS sandbox path is confirmed.
+function dbg(app, msg) {
+  try { const p = app?.results?.appendText?.(`\`[readstat]\` ${msg}`); if (p && p.catch) p.catch(() => {}); } catch { /* never let logging break import */ }
+}
+
 async function getModule(app) {
   if (!modulePromise) modulePromise = build(app);
   return modulePromise;
 }
 
 async function build(app) {
+  dbg(app, 'build: loading assets (glue + wasm)…');
   const [glueSource, wasmBytes] = await Promise.all([
     app.codec.loadAsset('readstat-glue'),
     app.codec.loadAsset('readstat-wasm'),
   ]);
   const wasmBinary = wasmBytes instanceof Uint8Array ? wasmBytes : new Uint8Array(wasmBytes);
+  dbg(app, `build: glue ${String(glueSource).length} chars, wasm ${wasmBinary.byteLength} bytes`);
   // The glue does `new URL('readstat.wasm', import.meta.url)`; as a blob-imported
   // module import.meta.url is a blob: URL (invalid base). Repoint at a dummy absolute
   // base — we pass wasmBinary, so the resolved URL is never fetched.
   const patched = String(glueSource).split('import.meta.url').join('"https://readstat.invalid/readstat.mjs"');
   const url = URL.createObjectURL(new Blob([patched], { type: 'text/javascript' }));
   const log = [];
+  dbg(app, 'build: importing glue module…');
   const factory = (await import(url)).default;
+  dbg(app, 'build: instantiating WASM (ASYNCIFY)…');
   const Module = await factory({
     wasmBinary,
     locateFile: (p) => p,
@@ -93,6 +104,7 @@ async function build(app) {
     onAbort: (r) => log.push(`abort: ${r}`),
   });
   Module.__log = log;
+  dbg(app, 'build: WASM ready ✓');
   return Module;
 }
 
@@ -101,19 +113,35 @@ function logTail(Module) {
   return l && l.length ? ` — wasm: ${l.slice(-6).join(' | ')}` : '';
 }
 
-/** Install an ASYNC read callback over `file` on Module (bounded ~1 MB read-ahead). */
-function installRead(Module, file) {
+/** Install an ASYNC read callback over `file` on Module (bounded ~1 MB read-ahead).
+ * Instrumented (#130 debug): logs the first read, every refill, and ANY read error
+ * (a rejected/short Blob.arrayBuffer is a prime iOS-sandbox suspect) — returning -1 so
+ * ReadStat surfaces it as a clean error instead of an opaque trap. */
+function installRead(app, Module, file) {
   const size = file.size;
   let bufStart = 0;
   let buf = new Uint8Array(0);
+  let nReads = 0;
+  let nRefills = 0;
   Module.ctReadAt = async (pos, bufPtr, nbyte) => {
     if (pos < 0 || pos >= size) return 0;
     const need = Math.min(nbyte, size - pos);
     if (need <= 0) return 0;
+    nReads++;
+    if (nReads === 1) dbg(app, `read: first call pos=${pos} nbyte=${nbyte}`);
     if (pos < bufStart || pos + need > bufStart + buf.length) {
       const end = Math.min(pos + Math.max(need, CHUNK), size);
-      buf = new Uint8Array(await file.slice(pos, end).arrayBuffer());
-      bufStart = pos;
+      nRefills++;
+      if (nRefills <= 3 || nRefills % 25 === 0) dbg(app, `read: refill #${nRefills} pos=${pos} len=${end - pos} (reads=${nReads})`);
+      try {
+        const ab = await file.slice(pos, end).arrayBuffer();
+        buf = new Uint8Array(ab);
+        bufStart = pos;
+        if (buf.length < end - pos) { dbg(app, `read: SHORT slice — asked ${end - pos}, got ${buf.length} @${pos}`); return -1; }
+      } catch (e) {
+        dbg(app, `read: ERROR file.slice(${pos},${end}).arrayBuffer() → ${e && e.message || e}`);
+        return -1;
+      }
     }
     Module.HEAPU8.set(buf.subarray(pos - bufStart, pos - bufStart + need), bufPtr);
     return need;
@@ -174,13 +202,16 @@ function finalizeVariables({ rawVars, labelSets, missing }) {
 /** Catalog (dictionary only) — for the wide check + the variable picker. */
 async function catalog(app, file, format) {
   const Module = await getModule(app);
-  installRead(Module, file);
+  installRead(app, Module, file);
   const ctx = makeContext(Module);
   Module.ctValueDouble = () => {};
   Module.ctValueString = () => {};
+  dbg(app, `catalog: ct_parse(format=${format}, rowLimit=0)…`);
   const err = await Module.ccall('ct_parse', 'number', ['number', 'number', 'number'], [FORMATS[format] ?? 0, file.size, 0], { async: true });
+  dbg(app, `catalog: ct_parse returned ${err}`);
   if (err !== 0) throw new Error(`ReadStat: ${Module.ccall('ct_error_message', 'string', ['number'], [err])}${logTail(Module)}`);
   const { variables } = finalizeVariables(ctx);
+  dbg(app, `catalog: ✓ ${ctx.meta.varCount} vars, ${ctx.meta.rowCount} rows`);
   return { rowCount: ctx.meta.rowCount, varCount: ctx.meta.varCount, encoding: ctx.meta.encoding, variables };
 }
 
@@ -188,7 +219,7 @@ async function catalog(app, file, format) {
  * restricts to chosen columns. Returns total row count. */
 async function stream(app, file, format, { onVariables, onBatch, variables = null }) {
   const Module = await getModule(app);
-  installRead(Module, file);
+  installRead(app, Module, file);
   const keep = Array.isArray(variables) && variables.length ? new Set(variables) : null;
   const ctx = makeContext(Module, keep);
 
@@ -199,6 +230,7 @@ async function stream(app, file, format, { onVariables, onBatch, variables = nul
   let cols = [];
   let batchStart = 0;
   let total = 0;
+  let nBatches = 0;
   let pending = Promise.resolve(); // serialises begin + batches so they arrive in order
   let failed = null;
 
@@ -207,6 +239,8 @@ async function stream(app, file, format, { onVariables, onBatch, variables = nul
     if (n <= 0) return;
     const columns = {};
     for (let i = 0; i < names.length; i++) columns[names[i]] = n === batchRows ? cols[i] : cols[i].slice(0, n);
+    nBatches++;
+    if (nBatches <= 3 || nBatches % 25 === 0) dbg(app, `stream: batch #${nBatches} (${n} rows, total≈${batchStart + n})`);
     pending = pending.then(() => onBatch(columns)).catch((e) => { failed = failed || e; });
     batchStart += n;
     alloc();
@@ -217,6 +251,7 @@ async function stream(app, file, format, { onVariables, onBatch, variables = nul
     types = names.map((nm) => fin.storageTypes[nm]);
     batchRows = Math.max(100, Math.floor(BATCH_BYTES / Math.max(1, names.length * 8)));
     alloc();
+    dbg(app, `stream: variables ready — ${names.length} cols, ${batchRows} rows/batch`);
     pending = pending.then(() => onVariables(fin.variables, fin.storageTypes)).catch((e) => { failed = failed || e; });
     started = true;
   };
@@ -231,27 +266,40 @@ async function stream(app, file, format, { onVariables, onBatch, variables = nul
   Module.ctValueDouble = (obs, vi, v, sysmiss) => onValue(obs, vi, sysmiss ? NaN : v);
   Module.ctValueString = (obs, vi, v, sysmiss) => onValue(obs, vi, sysmiss ? null : v);
 
+  dbg(app, 'stream: ct_parse(rowLimit=-1)…');
   const err = await Module.ccall('ct_parse', 'number', ['number', 'number', 'number'], [FORMATS[format] ?? 0, file.size, -1], { async: true });
+  dbg(app, `stream: ct_parse returned ${err}`);
   if (err !== 0) throw new Error(`ReadStat: ${Module.ccall('ct_error_message', 'string', ['number'], [err])}${logTail(Module)}`);
   if (!started) start(); // zero-row file: still deliver the schema
   flush(total - batchStart);
   await pending; // all batches reached the host (in order)
   if (failed) throw failed;
+  dbg(app, `stream: ✓ done — ${total} rows in ${nBatches} batches`);
   return total;
 }
 
 // --- read --------------------------------------------------------------------
 
 export async function readImport(app) {
-  const file = await app.codec.sourceFile();
-  const format = formatForName(file.name);
-  if (!format) throw new Error(`Unsupported file: ${file.name}`);
-  const cat = await catalog(app, file, format);
-  const wide = isWide(cat.varCount, cat.rowCount);
-  await stream(app, file, format, {
-    onVariables: (variables, storageTypes) => app.codec.begin(variables, storageTypes, { rowCount: cat.rowCount, wide }),
-    onBatch: (columns) => app.codec.batch(columns),
-  });
+  try {
+    dbg(app, '=== import start ===');
+    const file = await app.codec.sourceFile();
+    dbg(app, `sourceFile: "${file && file.name}" (${file && file.size} bytes, type=${file && file.type || '?'})`);
+    const format = formatForName(file.name);
+    if (!format) throw new Error(`Unsupported file: ${file.name}`);
+    dbg(app, `format: ${format}`);
+    const cat = await catalog(app, file, format);
+    const wide = isWide(cat.varCount, cat.rowCount);
+    dbg(app, `routing: ${wide ? 'WIDE (out-of-core)' : 'streaming'} ingest`);
+    await stream(app, file, format, {
+      onVariables: (variables, storageTypes) => app.codec.begin(variables, storageTypes, { rowCount: cat.rowCount, wide }),
+      onBatch: (columns) => app.codec.batch(columns),
+    });
+    dbg(app, '=== import done ✓ ===');
+  } catch (err) {
+    dbg(app, `✗ FAILED: ${err && err.message || err}`);
+    throw err;
+  }
 }
 
 export async function readImportPick(app) {
