@@ -21,10 +21,12 @@ const CORE_IDS = new Set([
   'builtin-frequencies', 'builtin-descriptives', 'builtin-crosstabs',
   'builtin-correlation', 'builtin-regression', 'builtin-plots',
 ]);
-/** Categories whose plugins are infrastructure — always active. 'Import'/'Export'
- * are the legacy one-shot importers/exporters; 'Data' is the streaming format codecs
- * (#98: CSV, Parquet, NDJSON, SPSS/Stata/SAS) — all file I/O, on by default. */
-const INFRA_CATEGORIES = new Set(['Import', 'Export', 'Data']);
+/** File-I/O categories that are **default-on in a fresh launch** (so import/export
+ * works out of the box) — but NOT forced: nothing re-enables them behind the user's
+ * back, so disabling a codec (or opening a project that doesn't include one) sticks.
+ * 'Import'/'Export' = legacy one-shot importers/exporters; 'Data' = streaming format
+ * codecs (#98: CSV, Parquet, NDJSON, SPSS/Stata/SAS). */
+const DEFAULT_ON_CATEGORIES = new Set(['Import', 'Export', 'Data']);
 
 /** Launch presets: data source + the extra (non-infra) plugin ids to activate.
  * Used by both the Library buttons and the `?launch=` URL bypass. */
@@ -93,10 +95,11 @@ export class Launcher {
     // nothing. primeCatalog only probes uncataloged entries, so it's ~instant once
     // cached.
     await this.#plugins.primeCatalog();
-    // Presets (URL bypass) include infrastructure (importers/exporters) so the
-    // session is usable; the interactive picker, by contrast, is authoritative.
-    const want = new Set(preset.plugins);
-    for (const p of this.#plugins.list()) if (INFRA_CATEGORIES.has(p.category)) want.add(p.key);
+    // A fresh launch gets the default-on set (core stats + file codecs) plus the
+    // preset's extras. Codecs are a DEFAULT here, not forced — the user can disable
+    // any of them afterwards and it sticks (nothing re-adds them).
+    const want = this.#defaultSelection(this.#plugins.list());
+    for (const id of preset.plugins) want.add(id);
     await this.#applySelection(want);
     await this.#loadSource(preset.source);
     markSeen();
@@ -108,7 +111,7 @@ export class Launcher {
   #defaultSelection(list) {
     const keys = new Set();
     for (const p of list) {
-      if (CORE_IDS.has(p.id) || INFRA_CATEGORIES.has(p.category)) keys.add(p.key);
+      if (CORE_IDS.has(p.id) || DEFAULT_ON_CATEGORIES.has(p.category)) keys.add(p.key);
     }
     return keys;
   }
@@ -196,11 +199,10 @@ export class Launcher {
             this.#pendingSource = null;
             overlay.querySelectorAll('.ctl__source').forEach((b) => b.classList.toggle('is-active', b === btn));
             if (Array.isArray(p.activePlugins)) {
-              const want = new Set(p.activePlugins.filter((k) => list.some((x) => x.key === k)));
-              // Keep infra (importers/exporters) on so the opened project is usable
-              // even if an older save predates a given importer.
-              for (const x of list) if (INFRA_CATEGORIES.has(x.category)) want.add(x.key);
-              this.#selected = want;
+              // The project's saved plugin set is authoritative — including the user
+              // having turned a codec OFF. No infra force-add: a plugin is on only if
+              // the project had it on (or the user ticks it here before applying).
+              this.#selected = new Set(p.activePlugins.filter((k) => list.some((x) => x.key === k)));
               rerender();
             }
           });
