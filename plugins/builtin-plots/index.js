@@ -19,7 +19,7 @@
 export const manifest = {
   id: 'builtin-plots',
   name: 'Plots',
-  version: '0.4.0',
+  version: '0.4.1',
   apiVersion: '0.1.0',
   category: 'Graphs',
   keywords: ['chart', 'histogram', 'scatter', 'boxplot', 'bar', 'pie', 'plot'],
@@ -127,8 +127,9 @@ export async function scatter(app, { x, y }) {
          xlab = ${rlit(label(meta, x))}, ylab = ${rlit(label(meta, y))})
     if (length(xx) > 2) {
       fit <- lm(yy ~ xx); abline(fit, col = "#e74c3c", lwd = 2)
-      legend("topleft", bty = "n", text.col = "#e74c3c",
-             legend = sprintf("R² = %.3f", summary(fit)$r.squared))
+      # R² in the top margin (outside the plot) so it can't sit on top of the points.
+      mtext(sprintf("R² = %.3f", summary(fit)$r.squared), side = 3, line = 0.2, adj = 1,
+            col = "#e74c3c", cex = 0.85)
     }`;
   await renderPlot(app, 'Scatter plot', code, [x, y]);
 }
@@ -180,6 +181,16 @@ export async function trends(app, { x, g, y, summary, display }) {
       : `M <- tapply(yy, list(fx, fg), sum); M[is.na(M)] <- 0${summary === 'percent' ? (hasG ? '\n    M <- M / rowSums(M) * 100' : '\n    M <- M / sum(M) * 100') : ''}`}
     M <- as.matrix(M)`;
 
+  // Legend is drawn OUTSIDE the plot box (in a reserved right margin) so bars/lines
+  // never paint over it — a 100% stacked bar fills the whole plot, so an in-box
+  // "topright" legend was getting overwritten. Reserve right margin sized to the
+  // longest label, then anchor the legend just past the plot's right edge (xpd = NA
+  // lets it draw in the margin).
+  const reserveMargin = `par(mar = c(4.2, 4.2, 2.2, min(18, max(6, ceiling(max(nchar(glabels)) * 0.62) + 4))))`;
+  const legendAt = `par('usr')[2] + (par('usr')[2] - par('usr')[1]) * 0.03, par('usr')[4]`;
+  const legendFill = `legend(${legendAt}, legend = glabels, fill = cols, border = NA, bty = "n", xpd = NA, cex = 0.8)`;
+  const legendLine = `legend(${legendAt}, legend = glabels, col = cols, lty = 1, lwd = 2, pch = 19, bty = "n", xpd = NA, cex = 0.8)`;
+
   const draw = isBars
     ? `
     xn <- suppressWarnings(as.numeric(rownames(M)))
@@ -190,25 +201,23 @@ export async function trends(app, { x, g, y, summary, display }) {
     cols <- hcl.colors(max(nrow(bm), 2), "Dark 3")[seq_len(nrow(bm))]
     xlabs <- colnames(bm)
     ${labelMapR(meta, x, 'xlabs')}
+    ${hasG ? `glabels <- rownames(bm)\n    ${labelMapR(meta, g, 'glabels')}\n    ${reserveMargin}` : ''}
     barplot(bm, col = cols, names.arg = xlabs, las = 2, cex.names = 0.8, border = "white",
             xlab = ${rlit(label(meta, x))}, ylab = ${rlit(ylab)}, main = ${rlit(main)})
-    ${hasG
-      ? `glabels <- rownames(bm)\n    ${labelMapR(meta, g, 'glabels')}\n    legend("topright", legend = glabels, fill = cols, border = NA, bty = "n", cex = 0.85)`
-      : ''}`
+    ${hasG ? legendFill : ''}`
     : `
     xnum <- suppressWarnings(as.numeric(rownames(M))); numericX <- length(xnum) > 0 && !any(is.na(xnum))
     xpos <- if (numericX) xnum else seq_len(nrow(M))
     o <- order(xpos); xpos <- xpos[o]; M <- M[o, , drop = FALSE]
     cols <- hcl.colors(max(ncol(M), 2), "Dark 3")[seq_len(ncol(M))]
+    ${hasG ? `glabels <- colnames(M)\n    ${labelMapR(meta, g, 'glabels')}\n    ${reserveMargin}` : ''}
     matplot(xpos, M, type = "b", pch = 19, lty = 1, lwd = 2, col = cols,
             xaxt = if (numericX) "s" else "n",
             xlab = ${rlit(label(meta, x))}, ylab = ${rlit(ylab)}, main = ${rlit(main)})
     xlabs <- rownames(M)
     ${labelMapR(meta, x, 'xlabs')}
     if (!numericX) axis(1, at = xpos, labels = xlabs, las = 2, cex.axis = 0.8)
-    ${hasG
-      ? `glabels <- colnames(M)\n    ${labelMapR(meta, g, 'glabels')}\n    legend("topright", legend = glabels, col = cols, lty = 1, lwd = 2, pch = 19, bty = "n", cex = 0.85)`
-      : ''}`;
+    ${hasG ? legendLine : ''}`;
 
   await renderPlot(app, 'Trends over time', aggregate + draw, vars);
 }
