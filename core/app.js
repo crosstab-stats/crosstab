@@ -13,10 +13,6 @@ import { EventBus, CoreEvents } from './event-bus.js';
 import { DatasetManager, DATASETS_CHANGED } from './dataset-manager.js';
 import { DuckDBManager } from './duckdb-manager.js';
 import { WebRManager } from './webr-manager.js';
-// ReadStat (SPSS/Stata/SAS) runs host-side in a same-origin Worker (readstat-host.js,
-// #123), reusing the codec worker (plugins/builtin-readstat-codec/codec-worker.js) but
-// NOT inside the codec sandbox — iOS WebKit refuses to start a Worker there. The dead
-// codec-plugin entrypoint (index.js) was pruned (#127).
 import { ResultsPane } from './results-pane.js';
 import { MenuShell } from './menu-shell.js';
 import { UiService } from './ui-service.js';
@@ -28,7 +24,6 @@ import { DatasetOps } from './dataset-ops.js';
 import { PluginManager } from './plugin-manager.js';
 import { PluginActions } from './plugin-actions.js';
 import { CodecService } from './codec-service.js';
-import { ReadStatHost } from './readstat-host.js';
 import { PluginCreator } from './plugin-creator.js';
 import { DatasetStore } from './dataset-store.js';
 import { DatasetLibrary, LIBRARY_CHANGED } from './library.js';
@@ -120,9 +115,10 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-csv-codec/index.js',
   './plugins/builtin-ndjson-codec/index.js',
   './plugins/builtin-parquet-codec/index.js',
-  // ReadStat (SPSS/Stata/SAS) is NOT a sandboxed codec: iOS Safari won't run a worker
-  // inside the codec sandbox (#123), so it runs host-side via ReadStatHost (wired in
-  // boot()), reusing the same worker + streaming ingest.
+  // ReadStat (SPSS/Stata/SAS) — a sandboxed codec again (#130). It runs on the codec
+  // sandbox's MAIN thread (no worker — iOS won't start one there, #123) because the
+  // WASM is built with ASYNCIFY, so its sync read/write IO can suspend for async JS.
+  './plugins/builtin-readstat-codec/index.js',
 ];
 
 /**
@@ -317,11 +313,8 @@ export async function boot(mounts) {
   const menus = new MenuShell(mounts.menubar);
   const ui = new UiService(datasets);
   const importers = new ImportService({ menus, data: datasets, results: results.api, bus, webr });
-  // SPSS / Stata / SAS import + export run host-side via ReadStatHost (readstat-host.js,
-  // #123): the same ReadStat-WASM streaming worker, but host-owned in a same-origin
-  // Worker because iOS WebKit won't start a Worker inside the codec sandbox. The host
-  // keeps the picker, DuckDB/OPFS ingest, and download; only the format logic is in the
-  // worker. (Earlier: a sandboxed codec plugin, #98 Phase 2 — reverted on iOS.)
+  // SPSS/Stata/SAS (ReadStat) is a sandboxed codec plugin (builtin-readstat-codec, #130),
+  // joining this same Import/Export picker via the codec interface like CSV/Parquet.
   const exporters = new ExportService({ menus, data: datasets, results: results.api, bus });
   // Output export: host owns the "Export output…" dialog + the (host-only) print
   // path; formats (HTML, Word, …) are plugins that register via app.outputExporters
@@ -375,12 +368,8 @@ export async function boot(mounts) {
   // so the broker sees it. Codecs are registered from manifests via pluginActions.
   const codecs = new CodecService({ importers, exporters, loader, results: results.api });
   services.codec = codecs.serviceApi;
-
-  // SPSS/Stata/SAS (ReadStat) runs host-side rather than as a sandboxed codec: iOS
-  // Safari refuses to start a Worker inside the opaque-origin codec sandbox (#123), so
-  // the engine lives in a host-owned worker, registered into the same Import/Export
-  // picker. Reuses the codec's streaming worker + the out-of-core DuckDB ingest.
-  new ReadStatHost({ importers, exporters, data: datasets.api, ui: ui.api, results: results.api }).activate();
+  // SPSS/Stata/SAS (ReadStat) is a sandboxed codec plugin again (#130) — see the codec
+  // plugin list above; it runs on the codec sandbox's main thread (ASYNCIFY, no worker).
 
   // Host-side wiring for declarative plugins: reads manifest.menu, gathers each
   // action's declared inputs, opens the (host-owned) output section, and invokes
