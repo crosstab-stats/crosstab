@@ -21,7 +21,6 @@ emcc \
   -sWASM_BIGINT \
   -sALLOW_MEMORY_GROWTH=1 \
   -sSTACK_SIZE=5MB \
-  -sASYNCIFY=1 \
   -sMODULARIZE=1 \
   -sEXPORT_ES6=1 \
   -sENVIRONMENT=web,worker \
