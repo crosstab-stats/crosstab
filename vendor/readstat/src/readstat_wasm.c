@@ -21,9 +21,13 @@
 static int64_t g_pos = 0;
 static int64_t g_size = 0;
 
-/* JS reads `nbyte` at absolute `pos` into HEAPU8[buf..]; returns bytes read (<0 = error). */
-EM_JS(int, ct_js_read, (double pos, char *buf, int nbyte), {
-  return Module.ctReadAt(pos, buf, nbyte);
+/* JS reads `nbyte` at absolute `pos` into HEAPU8[buf..]; returns bytes read (<0 = error).
+ * EM_ASYNC_JS (with -sASYNCIFY) so the read can be ASYNC: the wasm suspends mid-parse
+ * while JS fetches the next Blob slice — letting ReadStat run on the sandbox MAIN
+ * thread (no Worker / FileReaderSync), restoring it as a sandboxed codec plugin on iOS
+ * (#130). `await` is a no-op if Module.ctReadAt stays synchronous. */
+EM_ASYNC_JS(int, ct_js_read, (double pos, char *buf, int nbyte), {
+  return await Module.ctReadAt(pos, buf, nbyte);
 });
 
 static int io_open(const char *path, void *io_ctx) { (void)path; (void)io_ctx; g_pos = 0; return 0; }
@@ -197,8 +201,11 @@ EM_JS(char *, ctw_cell_string, (int c, int r), {
   return s == null ? 0 : stringToNewUTF8(s);
 });
 
-/* Output sink: hand `len` bytes at heap `ptr` to JS (synchronous OPFS write). */
-EM_JS(void, ctw_sink, (const char *ptr, int len), { Module.ctwSink(HEAPU8.subarray(ptr, ptr + len)); });
+/* Output sink: hand `len` bytes at heap `ptr` to JS. EM_ASYNC_JS (with -sASYNCIFY) so
+ * the write can be ASYNC — the wasm suspends while JS streams bytes to disk (async OPFS
+ * or a host bridge) on the sandbox MAIN thread, no Worker-only sync OPFS handle (#130).
+ * `await` is a no-op if Module.ctwSink stays synchronous. */
+EM_ASYNC_JS(void, ctw_sink, (const char *ptr, int len), { await Module.ctwSink(HEAPU8.subarray(ptr, ptr + len)); });
 
 static ssize_t ct_data_writer(const void *data, size_t len, void *ctx) {
   (void)ctx;
