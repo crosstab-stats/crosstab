@@ -18,6 +18,11 @@ const COL_W = 120; // px; fixed column width so columns can be virtualised too.
 const GUT_W = 56; // px; the sticky row-number gutter.
 const ROW_BUF = 8; // rows rendered above/below the viewport.
 const COL_BUF = 3; // columns rendered left/right of the viewport.
+// Rows fetched above/below the visible block and cached, so vertical scrolling
+// within the cache needs NO new DuckDB read. Each windowed read of a wide dataset
+// pays a large fixed cost (parsing the Parquet metadata), so the win is issuing far
+// fewer of them — not making each faster (#128).
+const FETCH_BUF = 120;
 
 /**
  * Virtualised cell grid (rows = cases, columns = variables), windowed in **both**
@@ -37,6 +42,7 @@ export class DataView {
     this.token = 0; // guards against stale async windows
     this.raf = null;
     this.lastKey = null; // `${startRow}:${startCol}:${filter}` of the rendered block
+    this.rowCache = null; // { start, end, startCol, endCol, filter, rows } — see FETCH_BUF
 
     // The panel becomes a flex column: a fixed toolbar (column filter + selection
     // count) above a scrolling grid area. The scroll/virtualisation math reads
@@ -78,6 +84,7 @@ export class DataView {
     this.scroller.scrollTop = 0;
     this.scroller.scrollLeft = 0;
     this.lastKey = null;
+    this.rowCache = null; // data changed → the cached block is stale
     await this.#render(true);
     this.#updateSelCount();
   }
@@ -95,6 +102,7 @@ export class DataView {
   async #applyFilter() {
     this.scroller.scrollLeft = 0;
     this.lastKey = null;
+    this.rowCache = null; // column set changed → re-fetch
     await this.#render(true);
   }
 
@@ -165,19 +173,42 @@ export class DataView {
     this.lastKey = key;
 
     const winMetas = cols.slice(startCol, endCol);
-    const token = ++this.token;
-    const rows = await this.#getRowsResilient({
-      offset: startRow,
-      limit: endRow - startRow,
-      variables: winMetas.map((m) => m.name),
-      includeRowId: true, // needed so a cell edit can target the row by stable id
-    });
-    if (token !== this.token) return; // a newer scroll superseded this fetch
-    // A transient read failure mid-rebuild (a view briefly referencing a source
-    // being recreated during a project open/restore — #114). Bail quietly and keep
-    // the current grid: the rebuild emits DATA_CHANGED on completion, which fires a
-    // fresh refresh that renders correctly. Never surface a raw DuckDB error here.
-    if (rows == null) return;
+
+    // Serve the visible rows from the cached block when possible; only hit DuckDB
+    // when the viewport leaves the cache, the columns move, or the filter changes
+    // (#128 — each wide-file read pays a big fixed metadata cost, so issue far fewer).
+    // The cache holds one column window, so a horizontal move re-fetches; vertical
+    // scrolls within ±FETCH_BUF rows of the fetched block do not.
+    const c = this.rowCache;
+    const cacheHit = c && !force && c.filter === this.filter
+      && c.startCol === startCol && c.endCol === endCol
+      && startRow >= c.start && endRow <= c.end;
+
+    let blockRows, blockStart;
+    if (cacheHit) {
+      blockRows = c.rows;
+      blockStart = c.start;
+    } else {
+      const fetchStart = Math.max(0, startRow - FETCH_BUF);
+      const fetchEnd = Math.min(total, endRow + FETCH_BUF);
+      const token = ++this.token;
+      const fetched = await this.#getRowsResilient({
+        offset: fetchStart,
+        limit: fetchEnd - fetchStart,
+        variables: winMetas.map((m) => m.name),
+        includeRowId: true, // needed so a cell edit can target the row by stable id
+      });
+      if (token !== this.token) return; // a newer scroll superseded this fetch
+      // A transient read failure mid-rebuild (a view briefly referencing a source
+      // being recreated during a project open/restore — #114). Bail quietly and keep
+      // the current grid: the rebuild emits DATA_CHANGED on completion, which fires a
+      // fresh refresh that renders correctly. Never surface a raw DuckDB error here.
+      if (fetched == null) return;
+      this.rowCache = { start: fetchStart, end: fetchEnd, startCol, endCol, filter: this.filter, rows: fetched };
+      blockRows = fetched;
+      blockStart = fetchStart;
+    }
+    const rows = blockRows.slice(startRow - blockStart, endRow - blockStart);
 
     const leftW = startCol * COL_W;
     const rightW = (nCols - endCol) * COL_W;
