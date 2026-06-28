@@ -24,7 +24,7 @@
 export const manifest = {
   id: 'builtin-caqdas',
   name: 'Qualitative Coding (CAQDAS)',
-  version: '0.1.0',
+  version: '0.2.0',
   apiVersion: '0.1.0',
   category: 'Qualitative',
   keywords: ['qualitative', 'coding', 'caqdas', 'transcript', 'codebook', 'content analysis'],
@@ -370,12 +370,25 @@ export const workspace = {
           // + preventDefault keeps the text selection alive through the click (the
           // selection would otherwise collapse when focus leaves the transcript).
           // Skip when the press lands on a control inside the row.
-          r.addEventListener('mousedown', (e) => {
+          // pointerdown (not mousedown) so the gesture also fires on iPad touch (#126).
+          r.addEventListener('pointerdown', (e) => {
             if (e.button !== 0 || e.target.closest('button, input, textarea')) return;
             e.preventDefault();
             const span = currentSpan();
-            if (span) addSegment(code.id, span);
-            else flashHint(hint);
+            if (!span) { flashHint(hint); return; }
+            // Tap-to-toggle: if the selection sits inside an existing coding of THIS
+            // code, the tap REMOVES it (untag); otherwise it applies/extends. Gives
+            // touch a remove gesture without a right-click, and a natural on/off rhythm.
+            const enclosing = state.segments.filter(
+              (s) => s.doc === activeRid && s.codeId === code.id && s.start <= span.lo && span.hi <= s.end,
+            );
+            if (enclosing.length) {
+              state.segments = state.segments.filter((s) => !enclosing.includes(s));
+              save(); renderText(); renderDocList(); renderCodes();
+              setSelectionRange(textPane, span.lo, span.hi); // keep selection for re-toggling
+            } else {
+              addSegment(code.id, span);
+            }
           });
           r.append(sw, nm, ct, rb, mb, pb, x);
           codePane.append(r);
@@ -485,7 +498,8 @@ export const workspace = {
     // Paint mode (opt-in): when a code is armed, finishing a selection auto-applies
     // it — the highlighter-pen rhythm for fast first-pass coding. Inert otherwise,
     // so reading-by-selecting stays friction-free in the default mode.
-    textPane.addEventListener('mouseup', (e) => {
+    // pointerup (not mouseup) so paint mode also fires on iPad touch (#126).
+    textPane.addEventListener('pointerup', (e) => {
       if (e.button !== 0 || !activeCodeId) return;
       const span = currentSpan();
       if (span) addSegment(activeCodeId, span, false); // paint: clear selection, move on
