@@ -19,7 +19,7 @@
 export const manifest = {
   id: 'builtin-plots',
   name: 'Plots',
-  version: '0.4.1',
+  version: '0.5.0',
   apiVersion: '0.1.0',
   category: 'Graphs',
   keywords: ['chart', 'histogram', 'scatter', 'boxplot', 'bar', 'pie', 'plot'],
@@ -156,70 +156,91 @@ export async function trends(app, { x, g, y, summary, display }) {
   const meta = await metaMap(app);
   const hasG = !!g;
   const isMean = summary === 'mean';
-  const isBars = display === 'stacked' || display === 'stacked100';
   const vars = [x, g, y].filter(Boolean);
+
+  // Aggregate in JS (no WebR round-trip): sum/mean per (X value × group). The chart
+  // is now data-driven, so the host renders it and the user can re-order/recolour/
+  // re-stack it live — none of which a baked R image allowed.
+  const cols = await app.data.getColumns({ variables: vars });
+  const xs = cols[x] || [];
+  const gs = hasG ? cols[g] || [] : null;
+  const ys = isMean ? cols[y] || [] : null;
+  const xMiss = missingSet(meta, x);
+  const gMiss = hasG ? missingSet(meta, g) : null;
+
+  const cells = new Map(); // xKey → Map(gKey → {sum, n})
+  const groupKeys = new Set();
+  for (let i = 0; i < xs.length; i++) {
+    const xv = xs[i];
+    if (isBlank(xv)) continue;
+    const xk = String(xv);
+    if (xMiss.has(xk)) continue;
+    let gk = 'All';
+    if (hasG) {
+      const gv = gs[i];
+      if (isBlank(gv)) continue;
+      gk = String(gv);
+      if (gMiss.has(gk)) continue;
+    }
+    let yv = 1;
+    if (isMean) { yv = Number(ys[i]); if (!Number.isFinite(yv)) continue; }
+    if (!cells.has(xk)) cells.set(xk, new Map());
+    const gm = cells.get(xk);
+    const cell = gm.get(gk) || { sum: 0, n: 0 };
+    cell.sum += yv; cell.n += 1;
+    gm.set(gk, cell);
+    groupKeys.add(gk);
+  }
+  if (!cells.size) {
+    await app.results.appendError('Trends over time: no data after removing missing values.');
+    return;
+  }
+
+  const catKeys = [...cells.keys()].sort(numAwareCmp);
+  const grpKeys = hasG ? [...groupKeys].sort(numAwareCmp) : ['All'];
+  const raw = (xk, gk) => {
+    const c = cells.get(xk)?.get(gk);
+    if (!c) return 0;
+    return isMean ? (c.n ? c.sum / c.n : 0) : c.sum; // sum == count when isMean is false
+  };
+  // summary='percent' bakes the share into the value (so a lines view shows %).
+  let valueAt = raw;
+  if (summary === 'percent') {
+    if (hasG) {
+      valueAt = (xk, gk) => {
+        const tot = grpKeys.reduce((a, k) => a + raw(xk, k), 0) || 1;
+        return (raw(xk, gk) / tot) * 100;
+      };
+    } else {
+      const grand = catKeys.reduce((a, xk) => a + raw(xk, 'All'), 0) || 1;
+      valueAt = (xk) => (raw(xk, 'All') / grand) * 100;
+    }
+  }
+
+  const xLabel = labelMapper(meta, x);
+  const gLabel = labelMapper(meta, g);
+  const categories = catKeys.map((k) => ({ key: k, label: xLabel(k) }));
+  const series = grpKeys.map((k) => ({
+    key: k,
+    label: hasG ? gLabel(k) : 'All',
+    values: catKeys.map((xk) => round2(valueAt(xk, k))),
+  }));
+
   const yLab = y ? label(meta, y) : '';
   const valLab = summary === 'percent' ? 'Percent' : summary === 'count' ? 'Count' : `Mean ${yLab}`;
-  const ylab = display === 'stacked100' ? 'Percent' : valLab;
-  const main = display === 'stacked100'
-    ? `Composition by ${label(meta, x)}`
-    : `${summary === 'percent' ? '%' : summary === 'count' ? 'Count' : `Mean ${yLab}`} by ${label(meta, x)}`;
-
-  // Shared aggregation: M is an X (rows) × group (cols) matrix of the chosen value.
-  const aggregate = `
-    ${recodeR(vars, meta)}
-    xx <- as.character(df[[${rlit(x)}]])
-    gg <- ${hasG ? `as.character(df[[${rlit(g)}]])` : `rep("All", length(xx))`}
-    yy <- ${isMean ? `as.numeric(df[[${rlit(y)}]])` : `rep(1, length(xx))`}
-    ok <- !is.na(xx) & !is.na(gg)${isMean ? ' & is.finite(yy)' : ''}
-    xx <- xx[ok]; gg <- gg[ok]; yy <- yy[ok]
-    if (!length(xx)) stop("no data after removing missing values")
-    ux <- sort(unique(xx)); ug <- sort(unique(gg))
-    fx <- factor(xx, levels = ux); fg <- factor(gg, levels = ug)
-    ${isMean
-      ? 'M <- tapply(yy, list(fx, fg), function(z) mean(z, na.rm = TRUE))'
-      : `M <- tapply(yy, list(fx, fg), sum); M[is.na(M)] <- 0${summary === 'percent' ? (hasG ? '\n    M <- M / rowSums(M) * 100' : '\n    M <- M / sum(M) * 100') : ''}`}
-    M <- as.matrix(M)`;
-
-  // Legend is drawn OUTSIDE the plot box (in a reserved right margin) so bars/lines
-  // never paint over it — a 100% stacked bar fills the whole plot, so an in-box
-  // "topright" legend was getting overwritten. Reserve right margin sized to the
-  // longest label, then anchor the legend just past the plot's right edge (xpd = NA
-  // lets it draw in the margin).
-  const reserveMargin = `par(mar = c(4.2, 4.2, 2.2, min(18, max(6, ceiling(max(nchar(glabels)) * 0.62) + 4))))`;
-  const legendAt = `par('usr')[2] + (par('usr')[2] - par('usr')[1]) * 0.03, par('usr')[4]`;
-  const legendFill = `legend(${legendAt}, legend = glabels, fill = cols, border = NA, bty = "n", xpd = NA, cex = 0.8)`;
-  const legendLine = `legend(${legendAt}, legend = glabels, col = cols, lty = 1, lwd = 2, pch = 19, bty = "n", xpd = NA, cex = 0.8)`;
-
-  const draw = isBars
-    ? `
-    xn <- suppressWarnings(as.numeric(rownames(M)))
-    M <- M[if (any(is.na(xn))) order(rownames(M)) else order(xn), , drop = FALSE]
-    Mb <- M; Mb[is.na(Mb)] <- 0
-    ${display === 'stacked100' ? 'rs <- rowSums(Mb); rs[rs == 0] <- 1; Mb <- Mb / rs * 100' : ''}
-    bm <- t(Mb)
-    cols <- hcl.colors(max(nrow(bm), 2), "Dark 3")[seq_len(nrow(bm))]
-    xlabs <- colnames(bm)
-    ${labelMapR(meta, x, 'xlabs')}
-    ${hasG ? `glabels <- rownames(bm)\n    ${labelMapR(meta, g, 'glabels')}\n    ${reserveMargin}` : ''}
-    barplot(bm, col = cols, names.arg = xlabs, las = 2, cex.names = 0.8, border = "white",
-            xlab = ${rlit(label(meta, x))}, ylab = ${rlit(ylab)}, main = ${rlit(main)})
-    ${hasG ? legendFill : ''}`
-    : `
-    xnum <- suppressWarnings(as.numeric(rownames(M))); numericX <- length(xnum) > 0 && !any(is.na(xnum))
-    xpos <- if (numericX) xnum else seq_len(nrow(M))
-    o <- order(xpos); xpos <- xpos[o]; M <- M[o, , drop = FALSE]
-    cols <- hcl.colors(max(ncol(M), 2), "Dark 3")[seq_len(ncol(M))]
-    ${hasG ? `glabels <- colnames(M)\n    ${labelMapR(meta, g, 'glabels')}\n    ${reserveMargin}` : ''}
-    matplot(xpos, M, type = "b", pch = 19, lty = 1, lwd = 2, col = cols,
-            xaxt = if (numericX) "s" else "n",
-            xlab = ${rlit(label(meta, x))}, ylab = ${rlit(ylab)}, main = ${rlit(main)})
-    xlabs <- rownames(M)
-    ${labelMapR(meta, x, 'xlabs')}
-    if (!numericX) axis(1, at = xpos, labels = xlabs, las = 2, cex.axis = 0.8)
-    ${hasG ? legendLine : ''}`;
-
-  await renderPlot(app, 'Trends over time', aggregate + draw, vars);
+  await app.results.appendChart({
+    kind: 'categorical',
+    title: `${valLab} by ${label(meta, x)}`,
+    categories,
+    series,
+    axes: { x: { title: label(meta, x) }, y: { title: valLab } },
+    // Plugin-suggested defaults; the user can change all of these in the chart.
+    view: {
+      mark: display === 'lines' ? 'line' : 'bar',
+      stack: display === 'stacked' ? 'stacked' : display === 'stacked100' ? 'percent' : 'none',
+      legend: hasG ? 'right' : 'none',
+    },
+  });
 }
 
 export async function boxplot(app, { y, g }) {
@@ -353,16 +374,37 @@ function recodeR(vars, meta) {
     .join('\n    ');
 }
 
-/** An R snippet that maps a character vector `targetVar` through a variable's value
- * labels in place (codes → labels), or '' if the variable has no labels. Used to put
- * readable names on the line-chart legend and a categorical X axis. */
-function labelMapR(meta, name, targetVar) {
-  const vl = meta.get(name)?.valueLabels;
-  if (!vl || !Object.keys(vl).length) return '';
-  const entries = Object.entries(vl)
-    .map(([k, l]) => `${rlit(String(k))} = ${rlit(String(l))}`)
-    .join(', ');
-  return `{ .vm <- c(${entries}); ${targetVar} <- ifelse(${targetVar} %in% names(.vm), .vm[${targetVar}], ${targetVar}) }`;
+/** Set of a variable's user-missing codes (as strings), for filtering in JS. */
+function missingSet(meta, name) {
+  return new Set((meta.get(name)?.missingValues ?? []).map(String));
+}
+
+/** A null / NaN / empty cell from getColumns (numeric missing comes back as NaN). */
+function isBlank(v) {
+  return v == null || (typeof v === 'number' && Number.isNaN(v)) || v === '';
+}
+
+/** Map a category code to its value label (codes → labels), identity if none. */
+function labelMapper(meta, name) {
+  const vl = name ? meta.get(name)?.valueLabels : null;
+  if (!vl || !Object.keys(vl).length) return (k) => String(k);
+  return (k) => (k in vl ? vl[k] : String(k));
+}
+
+/** Compare two category keys numerically when both look numeric, else as text —
+ * so years sort 2019,2020,… not lexically, but string categories still sort sanely. */
+function numAwareCmp(a, b) {
+  const na = Number(a);
+  const nb = Number(b);
+  const aNum = a !== '' && Number.isFinite(na);
+  const bNum = b !== '' && Number.isFinite(nb);
+  if (aNum && bNum) return na - nb;
+  return String(a).localeCompare(String(b));
+}
+
+/** Round to 2 dp (compact, avoids float noise in the persisted model). */
+function round2(v) {
+  return Math.round(v * 100) / 100;
 }
 
 /** Render a JS value as an R literal for safe interpolation into R source. */

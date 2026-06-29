@@ -400,6 +400,7 @@ function buildDispatch({ data, results, webr, ui, web }) {
 
     'results.appendTable': (d, opts) => results.appendTable(d, opts),
     'results.appendPlot': (s, opts) => results.appendPlot(s, opts),
+    'results.appendChart': (model) => results.appendChart(model),
     'results.updatePlot': (handle, s) => results.updatePlot(handle, s),
     'results.appendText': (m) => results.appendText(m),
     'results.appendError': (m) => results.appendError(m),

@@ -54,7 +54,7 @@ const ALLOWED_ATTRS = new Set([
   'cx', 'cy', 'r', 'rx', 'ry', 'd', 'points', 'transform', 'preserveaspectratio',
   'fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin',
   'opacity', 'fill-opacity', 'stroke-opacity',
-  'text-anchor', 'dominant-baseline', 'alignment-baseline', 'font-size', 'font-family',
+  'text-anchor', 'dominant-baseline', 'alignment-baseline', 'font-size', 'font-family', 'font-weight',
   'gradientunits', 'gradienttransform', 'offset', 'stop-color', 'stop-opacity', 'clip-path',
 ]);
 

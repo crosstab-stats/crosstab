@@ -51,7 +51,7 @@ export async function exportDocx(app, { title }) {
       else if (it.kind === 'text') items.push({ t: 'text', text: htmlToText(it.html) });
       else if (it.kind === 'error') items.push({ t: 'text', text: it.message });
       else if (it.kind === 'table') items.push({ t: 'table', ...extractTable(it.html) });
-      else if (it.kind === 'plot') {
+      else if (it.kind === 'plot' || it.kind === 'chart') {
         const png = await app.results.getPlotPng(it.id);
         if (png && png.length) {
           const path = `/tmp/ct_out_img_${imgN}.png`;

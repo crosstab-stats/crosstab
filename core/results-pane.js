@@ -27,6 +27,8 @@
 
 import { sanitizeHtml } from './sanitize-html.js';
 import { downloadFile } from './export-service.js';
+import { renderChart, defaultView } from './chart-renderer.js';
+import { buildChartControls } from './chart-controls.js';
 
 /** Canonical stylesheet applied inside the shadow root. Kept inline so the pane
  * is self-contained and has no external CSS dependency. */
@@ -108,6 +110,44 @@ const RESULTS_STYLES = `
     color: var(--accent, #2980b9); border-radius: 6px; cursor: pointer;
   }
   .results-empty { color: #888; font-style: italic; }
+  /* Data-driven charts (appendChart): a responsive SVG with an options panel and
+     save buttons below it (auto height, so the controls aren't clipped like the
+     fixed-box .results-plot). */
+  .results-chart {
+    position: relative; box-sizing: border-box;
+    width: min(100%, 672px);
+    border: 1px solid #e3e7eb; border-radius: 6px; padding: 6px 8px 8px;
+  }
+  .results-chart .results-plot__svg { width: 100%; height: auto; }
+  .results-chart .results-plot__svg svg { width: 100%; height: auto; display: block; max-width: none; }
+  .results-chart .results-plot__save { position: static; opacity: 1; margin-top: 6px; }
+  .results-chart__opts-toggle {
+    font: inherit; font-size: 12px; padding: 3px 9px; margin-top: 6px;
+    background: #f5f7f9; border: 1px solid #d8dee4; color: #333; border-radius: 6px; cursor: pointer;
+  }
+  .results-chart__opts-toggle.is-open { background: #eef5fb; border-color: var(--accent,#2980b9); color: var(--accent,#2980b9); }
+  .results-chart__opts {
+    margin-top: 8px; padding: 10px; border: 1px solid #e3e7eb; border-radius: 6px;
+    background: #fafbfc; display: flex; flex-direction: column; gap: 8px; max-width: 380px;
+  }
+  .results-chart__row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .results-chart__row--check { gap: 6px; cursor: pointer; }
+  .results-chart__rowlabel { color: #555; min-width: 72px; }
+  .results-chart__select { font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid #d8dee4; border-radius: 5px; background: #fff; flex: 1; }
+  .results-chart__seriesheader { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #7a8590; margin-top: 4px; }
+  .results-chart__series { display: flex; flex-direction: column; gap: 4px; }
+  .results-chart__srow { display: flex; align-items: center; gap: 6px; }
+  .results-chart__swatch { width: 28px; height: 22px; padding: 0; border: 1px solid #d8dee4; border-radius: 4px; background: none; cursor: pointer; flex: 0 0 auto; }
+  .results-chart__sname { flex: 1; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .results-chart__ord {
+    font: inherit; font-size: 12px; width: 24px; height: 22px; line-height: 1; flex: 0 0 auto;
+    background: #fff; border: 1px solid #d8dee4; border-radius: 4px; cursor: pointer; color: #555;
+  }
+  .results-chart__ord:disabled { opacity: .35; cursor: default; }
+  .results-chart__reset {
+    align-self: flex-start; font: inherit; font-size: 12px; padding: 3px 8px;
+    background: #fff; border: 1px solid #d8dee4; border-radius: 5px; cursor: pointer; color: #555;
+  }
 `;
 
 /**
@@ -359,6 +399,63 @@ export class ResultsPane {
   }
 
   /**
+   * Append a **data-driven chart** (`app.results.appendChart`). Unlike
+   * {@link ResultsPane#appendPlot} — which takes a finished SVG baked in R — the
+   * plugin hands a structured {@link ChartModel} (categories + series + values), and
+   * the host renders it to SVG in JS via {@link renderChart}. That's what lets the
+   * chart's interactive controls (order, colour, stacking, legend) re-render it
+   * instantly with no WebR round-trip. The model + view are persisted, so a reopened
+   * chart stays editable.
+   *
+   * @param {import('./chart-renderer.js').ChartModel} model
+   * @returns {number} a plot handle (usable with {@link ResultsPane#getPlotPng}).
+   */
+  appendChart(model) {
+    const safeModel = JSON.parse(JSON.stringify(model)); // detach from the plugin's object
+    const item = { kind: 'chart', model: safeModel, view: defaultView(safeModel), id: 0, svg: '' };
+    this.#model.push(item);
+    const block = this.#buildChartBlock(item);
+    this.#place(block);
+    this.#bus?.emit?.('output:written');
+    return item.id;
+  }
+
+  /** Build the DOM block for a chart item: the SVG holder (re-rendered live from the
+   * model+view), the interactive controls, and the SVG/PNG save buttons. Registers
+   * the holder for PNG export and stamps `item.id`/`item.svg`. Shared by
+   * {@link ResultsPane#appendChart} and {@link ResultsPane#restoreModel}. */
+  #buildChartBlock(item) {
+    const block = this.#makeBlock();
+    block.classList.add('results-chart');
+    const holder = document.createElement('div');
+    holder.className = 'results-plot__svg';
+    block.append(holder);
+
+    const handle = this.#nextPlotId++;
+    item.id = handle;
+    this.#plots.set(handle, holder);
+
+    const rerender = () => {
+      // renderChart output is host-generated, but model text can come from an
+      // untrusted project on restore — sanitise like every other fragment.
+      item.svg = sanitizeHtml(renderChart(item.model, item.view));
+      holder.innerHTML = item.svg;
+    };
+    rerender();
+
+    block.append(buildChartControls(item, rerender));
+
+    const save = document.createElement('div');
+    save.className = 'results-plot__save';
+    save.append(
+      makeSaveBtn('⬇ SVG', () => savePlotSvg(holder, handle)),
+      makeSaveBtn('⬇ PNG', () => savePlotPng(holder, handle)),
+    );
+    block.append(save);
+    return block;
+  }
+
+  /**
    * Append explanatory text written in a small subset of Markdown (headings,
    * **bold**, *italic*, `code`, and paragraphs). For anything richer, render to
    * HTML upstream and use {@link ResultsPane#appendTable}.
@@ -475,6 +572,19 @@ export class ResultsPane {
         block.append(save);
         this.#place(block);
         this.#model.push({ kind: 'plot', svg: safe, id: handle });
+      } else if (item.kind === 'chart' && item.model && item.model.kind) {
+        // Re-render from the saved model+view so the chart stays fully editable
+        // (not a frozen image). Fill any view fields a stale save might lack.
+        const restored = {
+          kind: 'chart',
+          model: item.model,
+          view: { ...defaultView(item.model), ...(item.view || {}) },
+          id: 0,
+          svg: '',
+        };
+        const block = this.#buildChartBlock(restored);
+        this.#place(block);
+        this.#model.push(restored);
       } else if (item.kind === 'error') {
         const block = this.#makeBlock();
         block.className = 'results-block results-error';
@@ -522,6 +632,7 @@ export class ResultsPane {
    *   beginSection: (title: string) => void,
    *   appendTable: (html: string) => void,
    *   appendPlot: (svg: string) => void,
+   *   appendChart: (model: object) => number,
    *   appendText: (md: string) => void,
    *   appendError: (msg: string) => void,
    *   clear: () => void,
@@ -536,6 +647,7 @@ export class ResultsPane {
       endAnalysis: () => this.endAnalysis(),
       appendTable: (data, opts) => this.appendTable(data, opts),
       appendPlot: (s, opts) => this.appendPlot(s, opts),
+      appendChart: (model) => this.appendChart(model),
       updatePlot: (handle, s) => this.updatePlot(handle, s),
       appendText: (m) => this.appendText(m),
       appendError: (m) => this.appendError(m),

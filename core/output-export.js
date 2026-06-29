@@ -167,7 +167,9 @@ export class OutputExportService {
   #buildPrintReport(title) {
     const root = this.#host?.shadowRoot?.querySelector('.results-root');
     const clone = root.cloneNode(true);
-    for (const b of clone.querySelectorAll('.results-plot__redraw, .results-plot__save, button')) b.remove();
+    // Strip interactive chrome — buttons, the plot save/redraw bars, and the
+    // data-driven chart's options panel — so the report shows just the results.
+    for (const b of clone.querySelectorAll('.results-plot__redraw, .results-plot__save, .results-chart__controls, button')) b.remove();
     for (const p of clone.querySelectorAll('.results-plot')) p.style.resize = 'none';
     const paneStyles = this.#host?.shadowRoot?.querySelector('style')?.textContent ?? '';
     const safeTitle = escapeHtml(title || 'CrossTab Output');

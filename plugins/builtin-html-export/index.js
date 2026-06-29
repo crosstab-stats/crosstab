@@ -56,9 +56,10 @@ function buildHtml(model, css, title) {
       body += `<div class="results-block results-note">${it.html ?? ''}</div>`;
     } else if (it.kind === 'table') {
       body += `<div class="results-block">${it.html ?? ''}</div>`;
-    } else if (it.kind === 'plot') {
+    } else if (it.kind === 'plot' || it.kind === 'chart') {
       // Plain block (no resize box) so the report is static; the SVG keeps its
-      // aspect via the pane's base `svg` rule.
+      // aspect via the pane's base `svg` rule. Data-driven charts carry their
+      // last-rendered SVG in `it.svg`, same as baked plots.
       body += `<div class="results-block">${it.svg ?? ''}</div>`;
     } else if (it.kind === 'error') {
       body += `<div class="results-block results-error">${esc(it.message ?? '')}</div>`;
