@@ -85,6 +85,46 @@ export function serialize(applied, analyses = []) {
   return lines.join('\n') + '\n';
 }
 
+/**
+ * The ordered, interleaved timeline used by the aligned Syntax grid (#134): one row
+ * per data op (in log order) with analyses spliced in at their `at` position — the
+ * same ordering {@link serialize} produces, but as structured rows so the UI can put
+ * each step's text on the same line as its GUI step.
+ *
+ * @param {object[]} applied - the data-store log (history.applied).
+ * @param {import('./analysis-log.js').AnalysisEntry[]} [analyses]
+ * @returns {Array<{kind:'transform'|'source'|'analysis', op?:object, entry?:object, text:string, editable:boolean}>}
+ */
+export function timeline(applied, analyses = []) {
+  const byAt = new Map();
+  for (const a of analyses || []) {
+    const k = Number.isFinite(a.at) ? a.at : Infinity;
+    if (!byAt.has(k)) byAt.set(k, []);
+    byAt.get(k).push(a);
+  }
+  const rows = [];
+  const pushAnalyses = (k) => {
+    for (const a of byAt.get(k) || []) rows.push({ kind: 'analysis', entry: a, text: analysisToLine(a), editable: true });
+    byAt.delete(k);
+  };
+  let tcount = 0;
+  let flushedZero = false;
+  const flushZero = () => { if (!flushedZero) { pushAnalyses(0); flushedZero = true; } };
+  for (const op of applied || []) {
+    const isT = TRANSFORM_TYPES.has(op.type);
+    if (isT) flushZero();
+    const lines = opToLines(op) || [];
+    // Sources (load/append/join) and manual cell edits are comments — read-only in
+    // the grid (data isn't editable as text); real transforms + analyses are editable.
+    const editable = isT && op.type !== 'setCell';
+    rows.push({ kind: editable ? 'transform' : 'source', op, text: lines.join('\n'), editable });
+    if (isT) { tcount += 1; pushAnalyses(tcount); }
+  }
+  flushZero();
+  for (const k of [...byAt.keys()].sort((a, b) => a - b)) pushAnalyses(k);
+  return rows;
+}
+
 function opToLines(op) {
   switch (op.type) {
     case 'load':

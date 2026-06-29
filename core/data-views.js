@@ -12,7 +12,7 @@
  */
 
 import { CoreEvents } from './event-bus.js';
-import { serialize, parse } from './crosstab-syntax.js';
+import { timeline, parse } from './crosstab-syntax.js';
 
 const ROW_H = 28; // px; must match the CSS cell height for scrollbar accuracy.
 const COL_W = 120; // px; fixed column width so columns can be virtualised too.
@@ -688,7 +688,8 @@ export class HistoryPanel {
   #syntax = false;
   #contentEl = null;
   #editorEl = null;
-  #textarea = null;
+  #gridEl = null;
+  #cells = []; // ordered { text():string } per grid row — concatenated to form the script
   #syntaxBtn = null;
 
   /**
@@ -751,8 +752,9 @@ export class HistoryPanel {
     this.#view = new HistoryView(content, this.#store, { onError: (m) => this.#showErr(m) });
   }
 
-  /** The Syntax editor: a monospace textarea of the serialized timeline
-   * plus Run / Refresh. Hidden until the Syntax toggle is on. */
+  /** The Syntax editor: an ALIGNED grid — each GUI step on the left, its editable
+   * syntax on the same row to the right (analyses interleaved as their own rows).
+   * Hidden until the Syntax toggle is on. */
   #buildEditor() {
     const wrap = el('div', null, 'history-panel__syntax');
     wrap.hidden = true;
@@ -760,22 +762,11 @@ export class HistoryPanel {
 
     const hint = el(
       'p',
-      'Edit this script and Run to rebuild the dataset and re-run the analyses. ' +
-        'Lines starting with # are comments (data sources can’t be edited as text). Expressions are SQL.',
+      'Each step is shown beside its CrossTab syntax — edit the right-hand cells and Run to ' +
+        'rebuild the dataset and re-run the analyses. Greyed rows are data sources (not editable as text). Expressions are SQL.',
       'history-panel__synhint',
     );
     hint.style.cssText = 'margin:0; font-size:12px; color:#6a7480; line-height:1.4;';
-
-    const ta = document.createElement('textarea');
-    ta.className = 'history-panel__synta';
-    ta.spellcheck = false;
-    ta.setAttribute('autocomplete', 'off');
-    ta.setAttribute('autocapitalize', 'off');
-    ta.style.cssText =
-      'width:100%; box-sizing:border-box; min-height:48vh; resize:vertical; ' +
-      'font:13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; ' +
-      'padding:8px 10px; border:1px solid var(--line,#d8dee4); border-radius:6px; white-space:pre;';
-    this.#textarea = ta;
 
     const row = el('div', null, 'history-panel__synrow');
     row.style.cssText = 'display:flex; gap:8px;';
@@ -786,16 +777,20 @@ export class HistoryPanel {
     run.addEventListener('click', () => void this.#runScript());
     const refresh = el('button', '↻ Refresh', 'history-panel__action');
     refresh.type = 'button';
-    refresh.title = 'Discard edits and reload the script from the current steps';
+    refresh.title = 'Discard edits and reload from the current steps';
     refresh.addEventListener('click', () => this.#fillEditor());
     row.append(run, refresh);
 
-    wrap.append(hint, ta, row);
+    const grid = el('div', null, 'history-panel__grid');
+    grid.style.cssText = 'display:flex; flex-direction:column; gap:2px; overflow:auto;';
+    this.#gridEl = grid;
+
+    wrap.append(hint, row, grid);
     this.#editorEl = wrap;
     return wrap;
   }
 
-  /** Switch between the step timeline and the script editor. */
+  /** Switch between the step timeline and the aligned syntax grid. */
   #toggleSyntax() {
     this.#syntax = !this.#syntax;
     this.#clearErr();
@@ -808,19 +803,101 @@ export class HistoryPanel {
     }
   }
 
-  /** (Re)load the editor text from the current timeline + analysis log. */
+  /** (Re)build the aligned grid from the current timeline + analysis log: one row
+   * per step, GUI on the left, editable syntax on the right (read-only for sources).
+   * The ordered cell list is what Run concatenates back into the script. */
   #fillEditor() {
-    if (!this.#textarea) return;
+    if (!this.#gridEl) return;
     const { applied } = this.#store.getHistory();
     const analyses = this.#analysisLog ? this.#analysisLog.entries() : [];
-    this.#textarea.value = serialize(applied, analyses);
+    const rows = timeline(applied, analyses);
+    this.#gridEl.replaceChildren();
+    this.#cells = [];
+    let stepNo = 0;
+    for (const r of rows) {
+      const isAnalysis = r.kind === 'analysis';
+      const d = isAnalysis
+        ? { title: String(r.entry.label || 'Analysis').replace(/…\s*$/, ''), detail: r.entry.pluginName || '' }
+        : describeTransform(r.op);
+      const marker = isAnalysis ? '∑' : String(++stepNo);
+
+      const rowEl = el('div', null, `history-panel__grow${r.editable ? '' : ' is-source'}`);
+      rowEl.style.cssText = 'display:flex; gap:8px; align-items:flex-start;';
+
+      const left = el('div', null, 'history-panel__gleft');
+      left.style.cssText = 'flex:0 0 180px; display:flex; gap:6px; padding:4px 0; min-width:0;';
+      const mk = el('span', marker, 'history__marker');
+      mk.style.cssText = 'flex:0 0 auto; opacity:.7;' + (isAnalysis ? 'color:var(--accent,#2980b9);' : '');
+      const body = el('span', null, 'history__body');
+      body.style.cssText = 'display:flex; flex-direction:column; min-width:0;';
+      const title = el('span', d.title, 'history__title');
+      title.style.cssText = 'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
+      body.append(title);
+      if (d.detail) {
+        const det = el('span', d.detail, 'history__detail');
+        det.style.cssText = 'white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:11px; color:#7a8590;';
+        body.append(det);
+      }
+      left.append(mk, body);
+
+      const right = el('div', null, 'history-panel__gright');
+      right.style.cssText = 'flex:1 1 auto; min-width:0;';
+      if (r.editable) {
+        const ta = document.createElement('textarea');
+        ta.spellcheck = false;
+        ta.setAttribute('autocomplete', 'off');
+        ta.setAttribute('autocapitalize', 'off');
+        ta.value = r.text;
+        ta.rows = Math.max(1, r.text.split('\n').length);
+        ta.style.cssText =
+          'width:100%; box-sizing:border-box; resize:vertical; ' +
+          'font:13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; ' +
+          'padding:4px 6px; border:1px solid var(--line,#d8dee4); border-radius:5px; white-space:pre;';
+        const autosize = () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; };
+        ta.addEventListener('input', autosize);
+        this.#cells.push({ text: () => ta.value });
+        right.append(ta);
+      } else {
+        const pre = el('div', r.text, 'history-panel__gcomment');
+        pre.style.cssText =
+          'font:12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; ' +
+          'color:#9aa4ae; padding:5px 6px; white-space:pre-wrap; word-break:break-word;';
+        this.#cells.push({ text: () => r.text });
+        right.append(pre);
+      }
+      rowEl.append(left, right);
+      this.#gridEl.append(rowEl);
+    }
+
+    // A trailing empty cell to append new steps at the bottom.
+    const addRow = el('div', null, 'history-panel__grow');
+    addRow.style.cssText = 'display:flex; gap:8px; align-items:flex-start;';
+    const addLeft = el('div', '+', 'history-panel__gleft');
+    addLeft.style.cssText = 'flex:0 0 180px; padding:4px 0; color:#9aa4ae;';
+    const addTa = document.createElement('textarea');
+    addTa.spellcheck = false;
+    addTa.placeholder = 'add a step… (e.g. compute z = x + y)';
+    addTa.rows = 1;
+    addTa.style.cssText =
+      'width:100%; box-sizing:border-box; resize:vertical; ' +
+      'font:13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; ' +
+      'padding:4px 6px; border:1px dashed var(--line,#d8dee4); border-radius:5px; white-space:pre;';
+    addTa.addEventListener('input', () => { addTa.style.height = 'auto'; addTa.style.height = addTa.scrollHeight + 'px'; });
+    this.#cells.push({ text: () => addTa.value });
+    const addRight = el('div', null, 'history-panel__gright');
+    addRight.style.cssText = 'flex:1 1 auto; min-width:0;';
+    addRight.append(addTa);
+    addRow.append(addLeft, addRight);
+    this.#gridEl.append(addRow);
   }
 
-  /** Parse the edited script, rebuild the data pipeline (atomically — a bad script
-   * is rejected, not applied), then re-run the analyses. */
+  /** Parse the edited grid (cells concatenated top-to-bottom), rebuild the data
+   * pipeline (atomically — a bad script is rejected, not applied), then re-run the
+   * analyses position-faithfully. */
   async #runScript() {
     this.#clearErr();
-    const { steps, errors } = parse(this.#textarea.value);
+    const script = this.#cells.map((c) => c.text()).join('\n');
+    const { steps, errors } = parse(script);
     if (errors.length) {
       const first = errors[0];
       this.#showErr(`Line ${first.line}: ${first.message}${errors.length > 1 ? ` (and ${errors.length - 1} more)` : ''}`);
