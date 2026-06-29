@@ -51,7 +51,7 @@ const TRANSFORM_TYPES = new Set(['setVariable', 'setCell', 'computeVar', 'recode
  * @returns {string}
  */
 export function serialize(applied, analyses = []) {
-  const lines = ['# CrossTab do-file — edit and Run to rebuild. Lines starting with # are comments.', ''];
+  const lines = ['# CrossTab syntax — edit and Run to rebuild. Lines starting with # are comments.', ''];
 
   // Place each analysis at the data position it was run at (`at` = number of data
   // transforms applied then), so the script shows — and Run reproduces — its output

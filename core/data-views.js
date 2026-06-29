@@ -732,7 +732,7 @@ export class HistoryPanel {
     if (this.#analysisLog && this.#pluginActions) {
       const synBtn = el('button', '✎ Syntax', 'history-panel__action');
       synBtn.type = 'button';
-      synBtn.title = 'View and edit the whole analysis as an editable script (a do-file), then Run to rebuild';
+      synBtn.title = 'View and edit the whole analysis as an editable script (CrossTab syntax), then Run to rebuild';
       synBtn.addEventListener('click', () => this.#toggleSyntax());
       toolbar.append(synBtn);
       this.#syntaxBtn = synBtn;
@@ -760,7 +760,7 @@ export class HistoryPanel {
 
     const hint = el(
       'p',
-      'Edit this do-file and Run to rebuild the dataset and re-run the analyses. ' +
+      'Edit this script and Run to rebuild the dataset and re-run the analyses. ' +
         'Lines starting with # are comments (data sources can’t be edited as text). Expressions are SQL.',
       'history-panel__synhint',
     );
