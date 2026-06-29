@@ -25,6 +25,10 @@ const COL_BUF = 3; // columns rendered left/right of the viewport.
 // fewer of them — not making each faster (#128).
 const FETCH_BUF = 120;
 
+/** Op types counted as data transforms (mirrors getTransforms) — used to position
+ * analyses in the History timeline by how many transforms preceded them. */
+const TRANSFORM_TYPES = new Set(['setVariable', 'setCell', 'computeVar', 'recodeVar', 'filterCases']);
+
 /**
  * Virtualised cell grid (rows = cases, columns = variables), windowed in **both**
  * dimensions: only the rows *and* columns near the viewport are in the DOM, and
@@ -534,20 +538,38 @@ export class HistoryView {
   /**
    * @param {HTMLElement} host
    * @param {import('./data-store.js').DataStore} store
-   * @param {{onError?: (msg: string) => void}} [opts]
+   * @param {{onError?: (msg: string) => void, analysisLog?: object}} [opts]
    */
   constructor(host, store, opts = {}) {
     this.host = host;
     this.store = store;
     this.onError = opts.onError ?? (() => {});
+    this.analysisLog = opts.analysisLog ?? null;
     host.classList.add('ct-historyhost');
   }
 
-  /** Rebuild the timeline from the universal log (call on show + on data change). */
+  /** Rebuild the timeline from the universal log (call on show + on data change).
+   * Analyses (which aren't in the data-store log) are interleaved at the data
+   * position they were run at, so History shows the whole story — data steps AND
+   * the analyses run against them. */
   render() {
     const { applied, future } = this.store.getHistory();
     const ol = document.createElement('ol');
     ol.className = 'history';
+
+    // Analyses grouped by `at` (number of data transforms applied when each ran),
+    // so they slot in right after the transform they followed.
+    const analyses = this.analysisLog ? this.analysisLog.entries() : [];
+    const byAt = new Map();
+    analyses.forEach((e, idx) => {
+      const k = Number.isFinite(e.at) ? e.at : Infinity;
+      if (!byAt.has(k)) byAt.set(k, []);
+      byAt.get(k).push({ e, idx });
+    });
+    const emitAnalyses = (k) => {
+      for (const { e, idx } of byAt.get(k) || []) ol.append(this.#analysisStep(e, idx));
+      byAt.delete(k);
+    };
 
     // Step 0: the empty start, before any data is loaded. Rewinding here clears
     // the dataset back to nothing (you can then import fresh).
@@ -563,9 +585,14 @@ export class HistoryView {
 
     // Applied operations 1..k (k = current position) — loads and transforms alike.
     // Every applied op except the base import (log index 0) can be reordered/deleted.
+    let tcount = 0;
+    let flushedZero = false;
+    const flushZero = () => { if (!flushedZero) { emitAnalyses(0); flushedZero = true; } };
     applied.forEach((t, i) => {
       const n = i + 1;
       const d = describeTransform(t);
+      const isTransform = TRANSFORM_TYPES.has(t.type);
+      if (isTransform) flushZero(); // analyses run before any transform sit after the sources
       ol.append(
         this.#step({
           n,
@@ -579,7 +606,10 @@ export class HistoryView {
           canDelete: i >= 1,
         }),
       );
+      if (isTransform) { tcount += 1; emitAnalyses(tcount); }
     });
+    flushZero();
+    for (const k of [...byAt.keys()].sort((a, b) => a - b)) emitAnalyses(k);
 
     // Future (undone) operations — greyed, still clickable to fast-forward.
     future.forEach((t, i) => {
@@ -646,6 +676,39 @@ export class HistoryView {
   async #remove(index) {
     try {
       await this.store.removeOp(index);
+    } catch (err) {
+      this.onError(err.message);
+    }
+  }
+
+  /** A timeline row for a logged analysis (crosstab / regression / plot). Shown at
+   * its data position, with the data steps. Display-only (not a data state to rewind
+   * to) plus a ✕ to drop it from the recorded analyses. */
+  #analysisStep(entry, idx) {
+    const li = document.createElement('li');
+    li.className = 'history__step history__step--analysis';
+    const row = el('span', null, 'history__btn');
+    row.style.cursor = 'default';
+    const mk = el('span', '∑', 'history__marker');
+    mk.style.color = 'var(--accent, #2980b9)';
+    const body = el('span', null, 'history__body');
+    body.append(el('span', String(entry.label || 'Analysis').replace(/…\s*$/, ''), 'history__title'));
+    const detail = entry.pluginName || '';
+    if (detail) body.append(el('span', detail, 'history__detail'));
+    row.append(mk, body);
+    li.append(row);
+    if (this.analysisLog) {
+      const ctl = el('span', null, 'history__ctl');
+      ctl.append(ctlBtn('✕', 'Remove this analysis from the history', false, () => this.#removeAnalysis(idx)));
+      li.append(ctl);
+    }
+    return li;
+  }
+
+  #removeAnalysis(idx) {
+    try {
+      this.analysisLog?.remove(idx);
+      this.render();
     } catch (err) {
       this.onError(err.message);
     }
@@ -749,7 +812,7 @@ export class HistoryPanel {
     }
     document.body.append(panel);
     this.#panel = panel;
-    this.#view = new HistoryView(content, this.#store, { onError: (m) => this.#showErr(m) });
+    this.#view = new HistoryView(content, this.#store, { onError: (m) => this.#showErr(m), analysisLog: this.#analysisLog });
   }
 
   /** The Syntax editor: an ALIGNED grid — each GUI step on the left, its editable
@@ -936,10 +999,17 @@ export class HistoryPanel {
     // Re-render live as the dataset changes (rewind/move/delete/edit elsewhere).
     // In syntax mode, leave the textarea alone so a data change elsewhere can't
     // clobber the user's in-progress edits.
-    this.#off = this.#bus.on(CoreEvents.DATA_CHANGED, () => {
+    const offData = this.#bus.on(CoreEvents.DATA_CHANGED, () => {
       this.#clearErr();
       if (!this.#syntax) this.#view.render();
     });
+    // Also refresh when an analysis is logged/cleared, so a run shows up in the
+    // timeline immediately (analyses aren't data changes). Skip in syntax mode so a
+    // re-render can't clobber in-progress cell edits.
+    const offLog = this.#bus.on('analysislog:changed', () => {
+      if (!this.#syntax) this.#view.render();
+    });
+    this.#off = () => { offData?.(); offLog?.(); };
     this.#escHandler = (e) => {
       if (e.key === 'Escape') this.close();
     };
