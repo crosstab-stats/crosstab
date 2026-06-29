@@ -28,6 +28,7 @@ export class PluginActions {
   #exporters;
   #outputExporters;
   #codecs;
+  #analysisLog;
 
   /** pluginId → menu disposers, so unwiring on unload removes its menu items. */
   #disposers = new Map();
@@ -44,7 +45,7 @@ export class PluginActions {
    * @param {object} deps.exporters - ExportService#api (register/deliver).
    * @param {object} deps.outputExporters - OutputExportService#api.
    */
-  constructor({ loader, menus, results, ui, bus, importers, exporters, outputExporters, codecs }) {
+  constructor({ loader, menus, results, ui, bus, importers, exporters, outputExporters, codecs, analysisLog }) {
     this.#loader = loader;
     this.#menus = menus;
     this.#results = results;
@@ -54,6 +55,7 @@ export class PluginActions {
     this.#exporters = exporters;
     this.#outputExporters = outputExporters;
     this.#codecs = codecs ?? null;
+    this.#analysisLog = analysisLog ?? null;
   }
 
   /** True if a manifest uses the declarative model (this module should wire it). */
@@ -172,14 +174,38 @@ export class PluginActions {
     this.#disposers.delete(id);
   }
 
-  /** Run one menu action: gather inputs → open section → invoke the function. */
+  /** Run one menu action: gather inputs → execute → record it for replay (the
+   * do-file). A cancelled input or a failed run is NOT recorded. */
   async #run(manifest, originLabel, item) {
     const specs = Array.isArray(item.inputs) ? item.inputs : [];
     const gathered = await gatherInputs(this.#ui, specs, item);
     if (gathered === null) return; // a required input was cancelled
 
-    this.#bus.emit(CoreEvents.ANALYSIS_STARTED, { plugin: manifest.id, title: item.label });
-    this.#results.beginAnalysis(stripEllipsis(item.label), `${manifest.name} · ${originLabel}`);
+    const entry = {
+      pluginId: manifest.id,
+      pluginName: manifest.name,
+      origin: originLabel,
+      label: item.label,
+      run: item.run,
+      specs,
+      inputs: gathered,
+    };
+    const ok = await this.#execute(entry);
+    if (ok) this.#analysisLog?.record(entry);
+  }
+
+  /**
+   * Execute one analysis (live or replayed): emit lifecycle events, open the
+   * host-owned output section, bind R inputs, and invoke the plugin function.
+   * Returns true on success (so the caller can decide whether to log it). Shared by
+   * {@link PluginActions#run} and {@link PluginActions#replay} so a replayed analysis
+   * is framed identically to a live one.
+   * @param {import('./analysis-log.js').AnalysisEntry} e
+   * @returns {Promise<boolean>}
+   */
+  async #execute(e) {
+    this.#bus.emit(CoreEvents.ANALYSIS_STARTED, { plugin: e.pluginId, title: e.label });
+    this.#results.beginAnalysis(stripEllipsis(e.label), `${e.pluginName} · ${e.origin}`);
     // Watchdog: if a run goes quiet for a long time it may be a legitimately slow
     // analysis (resampling/MCMC/first-run installs) OR a stuck R job. Either way,
     // don't leave the user staring at a silent spinner — post a non-destructive
@@ -190,17 +216,44 @@ export class PluginActions {
           'If it seems stuck, reloading the page is safe — your saved project is kept._',
       );
     }, 45000);
+    let ok = false;
     try {
-      this.#loader.setActiveInputs(manifest.id, toInjectInputs(specs, gathered));
-      await this.#loader.invoke(manifest.id, item.run, [gathered]);
+      this.#loader.setActiveInputs(e.pluginId, toInjectInputs(e.specs || [], e.inputs));
+      await this.#loader.invoke(e.pluginId, e.run, [e.inputs]);
+      ok = true;
     } catch (err) {
-      this.#results.appendError(`${item.label}: ${err.message}`);
-      console.error(`[plugin ${manifest.id}]`, err);
+      this.#results.appendError(`${e.label}: ${err.message}`);
+      console.error(`[plugin ${e.pluginId}]`, err);
     } finally {
       clearTimeout(watchdog);
-      this.#loader.clearActiveInputs(manifest.id);
+      this.#loader.clearActiveInputs(e.pluginId);
       this.#results.endAnalysis();
-      this.#bus.emit(CoreEvents.ANALYSIS_FINISHED, { plugin: manifest.id });
+      this.#bus.emit(CoreEvents.ANALYSIS_FINISHED, { plugin: e.pluginId });
+    }
+    return ok;
+  }
+
+  /**
+   * Re-execute one recorded analysis entry (does NOT re-record it — replay must be
+   * idempotent). Used by {@link PluginActions#replayAnalyses} and the do-file editor.
+   * @param {import('./analysis-log.js').AnalysisEntry} entry
+   */
+  async replay(entry) {
+    return this.#execute(entry);
+  }
+
+  /**
+   * Replay every logged analysis in order, against the CURRENT dataset, reproducing
+   * the Output pane. Optionally clears Output first. The plugin functions run via
+   * the same path as a live run, so output framing/attribution match.
+   * @param {{clear?: boolean}} [opts]
+   */
+  async replayAnalyses({ clear = false } = {}) {
+    if (!this.#analysisLog) return;
+    if (clear) this.#results.clear?.();
+    for (const entry of this.#analysisLog.entries()) {
+      // eslint-disable-next-line no-await-in-loop -- analyses must run in order
+      await this.#execute(entry);
     }
   }
 }

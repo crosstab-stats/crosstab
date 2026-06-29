@@ -23,6 +23,7 @@ import { ComputeRecode } from './compute-recode.js';
 import { DatasetOps } from './dataset-ops.js';
 import { PluginManager } from './plugin-manager.js';
 import { PluginActions } from './plugin-actions.js';
+import { AnalysisLog } from './analysis-log.js';
 import { CodecService } from './codec-service.js';
 import { PluginCreator } from './plugin-creator.js';
 import { DatasetStore } from './dataset-store.js';
@@ -374,6 +375,9 @@ export async function boot(mounts) {
   // Host-side wiring for declarative plugins: reads manifest.menu, gathers each
   // action's declared inputs, opens the (host-owned) output section, and invokes
   // the plugin's named function. The PluginManager calls wire/unwire on load/unload.
+  // Ordered, replayable record of analyses run (the analysis half of the do-file,
+  // #132). Data ops already replay via the data-store log; this covers analyses.
+  const analysisLog = new AnalysisLog(bus);
   const pluginActions = new PluginActions({
     loader,
     menus: menus.api,
@@ -384,6 +388,7 @@ export async function boot(mounts) {
     exporters: exporters.api,
     outputExporters: outputExporters.api,
     codecs,
+    analysisLog,
   });
 
   // --- shell wiring ----------------------------------------------------------
@@ -612,7 +617,7 @@ export async function boot(mounts) {
   // `dataStore` kept as an alias to the manager (it delegates to the active
   // dataset) so console pokes / older references keep working. Exposed before the
   // launcher so the launcher (and dev tooling) can use the engine.
-  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, recycle, library, projects, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager, codecs };
+  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, recycle, library, projects, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager, codecs, analysisLog, pluginActions };
   // eslint-disable-next-line no-undef
   globalThis.crosstab = engine;
 
