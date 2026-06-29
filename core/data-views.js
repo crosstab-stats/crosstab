@@ -860,6 +860,7 @@ export class HistoryPanel {
     if (this.#syntax) this.#fillEditor();
     this.#contentEl.hidden = this.#syntax;
     this.#editorEl.hidden = !this.#syntax;
+    this.#panel?.classList.toggle('history-panel--wide', this.#syntax); // room for two columns
     if (this.#syntaxBtn) {
       this.#syntaxBtn.textContent = this.#syntax ? '↩ Steps' : '✎ Syntax';
       this.#syntaxBtn.classList.toggle('is-on', this.#syntax);
@@ -915,7 +916,7 @@ export class HistoryPanel {
         ta.style.cssText =
           'width:100%; box-sizing:border-box; resize:vertical; ' +
           'font:13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; ' +
-          'padding:4px 6px; border:1px solid var(--line,#d8dee4); border-radius:5px; white-space:pre;';
+          'padding:4px 6px; border:1px solid var(--line,#d8dee4); border-radius:5px; min-height:30px; white-space:pre-wrap; word-break:break-word;';
         const autosize = () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; };
         ta.addEventListener('input', autosize);
         this.#cells.push({ text: () => ta.value });
@@ -944,7 +945,7 @@ export class HistoryPanel {
     addTa.style.cssText =
       'width:100%; box-sizing:border-box; resize:vertical; ' +
       'font:13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; ' +
-      'padding:4px 6px; border:1px dashed var(--line,#d8dee4); border-radius:5px; white-space:pre;';
+      'padding:4px 6px; border:1px dashed var(--line,#d8dee4); border-radius:5px; min-height:30px; white-space:pre-wrap; word-break:break-word;';
     addTa.addEventListener('input', () => { addTa.style.height = 'auto'; addTa.style.height = addTa.scrollHeight + 'px'; });
     this.#cells.push({ text: () => addTa.value });
     const addRight = el('div', null, 'history-panel__gright');
