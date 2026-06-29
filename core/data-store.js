@@ -1129,6 +1129,24 @@ export class DataStore {
     await this.#applyReorder([...sources, ...transforms], true);
   }
 
+  /**
+   * Replace ALL data transforms with a new ordered list (the do-file editor's
+   * "Run", #134), keeping the immutable sources and any manual cell edits in place.
+   * The new transforms are appended after the sources (+ setCell overrides); the
+   * usual validate → re-derive → rollback guard makes it atomic, so a bad script
+   * can't corrupt the pipeline — it's rejected with a reason and the prior state
+   * stands. `transforms` are computeVar/recodeVar/filterCases/setVariable ops.
+   *
+   * @param {object[]} transforms
+   * @returns {Promise<void>}
+   */
+  async replaceTransforms(transforms) {
+    const sources = this.#log.filter((o) => SOURCE_OPS.has(o.type));
+    const cells = this.#log.filter((o) => o.type === 'setCell'); // preserve manual cell edits
+    const next = [...sources, ...cells, ...transforms.map((t) => structuredClone(t))];
+    await this.#applyReorder(next, 'script change');
+  }
+
   /** Validate, then swap in a reordered/edited log and re-derive; on any failure
    * (dependency or SQL) restore the previous log and surface the reason. */
   async #applyReorder(next, movedOp) {
@@ -1142,7 +1160,7 @@ export class DataStore {
     } catch (err) {
       this.#log = prev;
       await this.rederive('reorder');
-      const what = movedOp ? 'move' : 'removal';
+      const what = typeof movedOp === 'string' ? movedOp : movedOp ? 'move' : 'removal';
       throw new Error(`That ${what} isn’t valid here: ${err?.message || err}`);
     }
   }

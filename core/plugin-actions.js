@@ -33,6 +33,10 @@ export class PluginActions {
   /** pluginId → menu disposers, so unwiring on unload removes its menu items. */
   #disposers = new Map();
 
+  /** `pluginId\0run` → { manifest, item, origin } for every wired menu action, so a
+   * do-file `run id.fn` line can be enriched back into a replayable entry (#134). */
+  #runnable = new Map();
+
   /**
    * @param {Object} deps
    * @param {import('./loader.js').PluginLoader} deps.loader
@@ -85,6 +89,9 @@ export class PluginActions {
         command: () => this.#run(manifest, originLabel, item),
       });
       if (typeof dispose === 'function') disposers.push(dispose);
+      // Index it so the do-file editor can rebuild a replayable entry from a
+      // `run <id>.<fn>` line (it needs the item's label/inputs + plugin name).
+      this.#runnable.set(`${id}::${item.run}`, { manifest, item, origin: originLabel });
     }
 
     // Importers/exporters: bridge the declarative named function to each host
@@ -172,6 +179,31 @@ export class PluginActions {
       }
     }
     this.#disposers.delete(id);
+    for (const key of this.#runnable.keys()) {
+      if (key.startsWith(`${id}::`)) this.#runnable.delete(key);
+    }
+  }
+
+  /**
+   * Rebuild a replayable analysis entry from a do-file `run <pluginId>.<fn>` line
+   * (#134): the line carries only the plugin id, function and inputs, so we enrich
+   * it with the live menu item's label, declared inputs and plugin name. Returns
+   * null if no active plugin provides that action (caller skips it with a warning).
+   * @param {{pluginId:string, run:string, inputs?:object}} a
+   * @returns {import('./analysis-log.js').AnalysisEntry|null}
+   */
+  analysisEntryFor(a) {
+    const t = this.#runnable.get(`${a.pluginId}::${a.run}`);
+    if (!t) return null;
+    return {
+      pluginId: a.pluginId,
+      pluginName: t.manifest.name,
+      origin: t.origin,
+      label: t.item.label,
+      run: a.run,
+      specs: Array.isArray(t.item.inputs) ? t.item.inputs : [],
+      inputs: a.inputs || {},
+    };
   }
 
   /** Run one menu action: gather inputs → execute → record it for replay (the

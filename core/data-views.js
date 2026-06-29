@@ -12,6 +12,7 @@
  */
 
 import { CoreEvents } from './event-bus.js';
+import { serialize, parse } from './crosstab-syntax.js';
 
 const ROW_H = 28; // px; must match the CSS cell height for scrollbar accuracy.
 const COL_W = 120; // px; fixed column width so columns can be virtualised too.
@@ -681,11 +682,26 @@ export class HistoryPanel {
   #errEl = null;
   #off = null;
   #escHandler = null;
+  // Syntax (do-file) mode (#134).
+  #analysisLog = null;
+  #pluginActions = null;
+  #syntax = false;
+  #contentEl = null;
+  #editorEl = null;
+  #textarea = null;
+  #syntaxBtn = null;
 
-  /** @param {import('./data-store.js').DataStore} store @param {import('./event-bus.js').EventBus} bus */
-  constructor(store, bus) {
+  /**
+   * @param {import('./data-store.js').DataStore} store
+   * @param {import('./event-bus.js').EventBus} bus
+   * @param {{analysisLog?: object, pluginActions?: object}} [opts] - enable the
+   *   Syntax (do-file) editor: read/replay the analysis log + rebuild via Run.
+   */
+  constructor(store, bus, { analysisLog = null, pluginActions = null } = {}) {
     this.#store = store;
     this.#bus = bus;
+    this.#analysisLog = analysisLog;
+    this.#pluginActions = pluginActions;
   }
 
   #build() {
@@ -712,13 +728,124 @@ export class HistoryPanel {
     });
     toolbar.append(collect);
 
+    // Syntax (do-file) mode toggle — only when the editor deps are wired (#134).
+    if (this.#analysisLog && this.#pluginActions) {
+      const synBtn = el('button', '✎ Syntax', 'history-panel__action');
+      synBtn.type = 'button';
+      synBtn.title = 'View and edit the whole analysis as an editable script (a do-file), then Run to rebuild';
+      synBtn.addEventListener('click', () => this.#toggleSyntax());
+      toolbar.append(synBtn);
+      this.#syntaxBtn = synBtn;
+    }
+
     this.#errEl = el('div', null, 'history-panel__err');
     this.#errEl.hidden = true;
     const content = el('div', null, 'history-panel__content');
+    this.#contentEl = content;
     panel.append(head, toolbar, this.#errEl, content);
+    if (this.#analysisLog && this.#pluginActions) {
+      panel.append(this.#buildEditor());
+    }
     document.body.append(panel);
     this.#panel = panel;
     this.#view = new HistoryView(content, this.#store, { onError: (m) => this.#showErr(m) });
+  }
+
+  /** The Syntax (do-file) editor: a monospace textarea of the serialized timeline
+   * plus Run / Refresh. Hidden until the Syntax toggle is on. */
+  #buildEditor() {
+    const wrap = el('div', null, 'history-panel__syntax');
+    wrap.hidden = true;
+    wrap.style.cssText = 'display:flex; flex-direction:column; gap:8px; padding:8px 10px;';
+
+    const hint = el(
+      'p',
+      'Edit this do-file and Run to rebuild the dataset and re-run the analyses. ' +
+        'Lines starting with # are comments (data sources can’t be edited as text). Expressions are SQL.',
+      'history-panel__synhint',
+    );
+    hint.style.cssText = 'margin:0; font-size:12px; color:#6a7480; line-height:1.4;';
+
+    const ta = document.createElement('textarea');
+    ta.className = 'history-panel__synta';
+    ta.spellcheck = false;
+    ta.setAttribute('autocomplete', 'off');
+    ta.setAttribute('autocapitalize', 'off');
+    ta.style.cssText =
+      'width:100%; box-sizing:border-box; min-height:48vh; resize:vertical; ' +
+      'font:13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; ' +
+      'padding:8px 10px; border:1px solid var(--line,#d8dee4); border-radius:6px; white-space:pre;';
+    this.#textarea = ta;
+
+    const row = el('div', null, 'history-panel__synrow');
+    row.style.cssText = 'display:flex; gap:8px;';
+    const run = el('button', '▶ Run', 'history-panel__action');
+    run.type = 'button';
+    run.title = 'Rebuild the dataset from these steps and re-run the analyses';
+    run.style.cssText = 'background:var(--accent,#2980b9); color:#fff; border-color:var(--accent,#2980b9);';
+    run.addEventListener('click', () => void this.#runScript());
+    const refresh = el('button', '↻ Refresh', 'history-panel__action');
+    refresh.type = 'button';
+    refresh.title = 'Discard edits and reload the script from the current steps';
+    refresh.addEventListener('click', () => this.#fillEditor());
+    row.append(run, refresh);
+
+    wrap.append(hint, ta, row);
+    this.#editorEl = wrap;
+    return wrap;
+  }
+
+  /** Switch between the step timeline and the do-file editor. */
+  #toggleSyntax() {
+    this.#syntax = !this.#syntax;
+    this.#clearErr();
+    if (this.#syntax) this.#fillEditor();
+    this.#contentEl.hidden = this.#syntax;
+    this.#editorEl.hidden = !this.#syntax;
+    if (this.#syntaxBtn) {
+      this.#syntaxBtn.textContent = this.#syntax ? '↩ Steps' : '✎ Syntax';
+      this.#syntaxBtn.classList.toggle('is-on', this.#syntax);
+    }
+  }
+
+  /** (Re)load the editor text from the current timeline + analysis log. */
+  #fillEditor() {
+    if (!this.#textarea) return;
+    const { applied } = this.#store.getHistory();
+    const analyses = this.#analysisLog ? this.#analysisLog.entries() : [];
+    this.#textarea.value = serialize(applied, analyses);
+  }
+
+  /** Parse the edited do-file, rebuild the data pipeline (atomically — a bad script
+   * is rejected, not applied), then re-run the analyses. */
+  async #runScript() {
+    this.#clearErr();
+    const { transforms, analyses, errors } = parse(this.#textarea.value);
+    if (errors.length) {
+      const first = errors[0];
+      this.#showErr(`Line ${first.line}: ${first.message}${errors.length > 1 ? ` (and ${errors.length - 1} more)` : ''}`);
+      return;
+    }
+    try {
+      await this.#store.replaceTransforms(transforms);
+    } catch (err) {
+      this.#showErr(err.message);
+      return;
+    }
+    // Rebuild the analysis log from the script (enrich each line from the live
+    // plugin registry so replay has the inputs/specs), then re-run them.
+    const entries = analyses
+      .map((a) => this.#pluginActions.analysisEntryFor(a))
+      .filter(Boolean);
+    const unknown = analyses.length - entries.length;
+    this.#analysisLog.load(entries);
+    try {
+      await this.#pluginActions.replayAnalyses({ clear: true });
+    } catch (err) {
+      this.#showErr(`Analyses: ${err.message}`);
+    }
+    this.#fillEditor(); // reflect the rebuilt state (and drop any unknown lines)
+    if (unknown > 0) this.#showErr(`${unknown} analysis line(s) referenced a plugin that isn’t active — skipped.`);
   }
 
   #showErr(msg) {
@@ -735,11 +862,14 @@ export class HistoryPanel {
     if (!this.#panel) this.#build();
     this.#panel.hidden = false;
     this.#clearErr();
-    this.#view.render();
+    if (this.#syntax) this.#fillEditor();
+    else this.#view.render();
     // Re-render live as the dataset changes (rewind/move/delete/edit elsewhere).
+    // In syntax mode, leave the textarea alone so a data change elsewhere can't
+    // clobber the user's in-progress edits.
     this.#off = this.#bus.on(CoreEvents.DATA_CHANGED, () => {
       this.#clearErr();
-      this.#view.render();
+      if (!this.#syntax) this.#view.render();
     });
     this.#escHandler = (e) => {
       if (e.key === 'Escape') this.close();

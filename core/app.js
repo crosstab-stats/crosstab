@@ -436,7 +436,7 @@ export async function boot(mounts) {
   // beside Undo/Redo. Distinct from the Data/Variables/Output tabs (inputs &
   // outputs); History is what you did. Click a step to rewind live, reorder with
   // ▲▼, or remove with ✕.
-  const historyPanel = new HistoryPanel(datasets, bus);
+  const historyPanel = new HistoryPanel(datasets, bus, { analysisLog, pluginActions });
   menus.register({
     id: 'core:history',
     path: ['Edit'],

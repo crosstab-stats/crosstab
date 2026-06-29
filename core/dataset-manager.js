@@ -352,6 +352,9 @@ export class DatasetManager {
   collectImports() {
     return this.active.collectImports();
   }
+  replaceTransforms(transforms) {
+    return this.active.replaceTransforms(transforms);
+  }
   get canUndo() {
     return this.active?.canUndo ?? false;
   }
