@@ -45,6 +45,10 @@ export class ProjectSync {
   #getOutput;
   /** (model) => void : restore (or clear) the Output tab on open/switch. */
   #applyOutput;
+  /** () => object[] : snapshot the analysis log (the do-file's analysis steps, #132). */
+  #getAnalysisLog;
+  /** (entries) => void : restore (or clear) the analysis log on open/switch. */
+  #applyAnalysisLog;
   /** () => string[] : every installed plugin's identifiers (key + manifest id), so
    * a recorded plugin can be told apart from one this install simply doesn't have. */
   #pluginIdentities;
@@ -97,7 +101,7 @@ export class ProjectSync {
    * @param {(keys: string[]) => Promise<void>} [deps.applyActivePlugins] - Restore
    *   a project's saved plugin set on open.
    */
-  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaces, applyWorkspaces, getOutput, applyOutput, pluginIdentities }) {
+  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaces, applyWorkspaces, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, pluginIdentities }) {
     this.#store = projectStore;
     this.#datasets = datasets;
     this.#ui = ui;
@@ -111,6 +115,8 @@ export class ProjectSync {
     this.#applyWorkspaces = applyWorkspaces ?? null;
     this.#getOutput = getOutput ?? null;
     this.#applyOutput = applyOutput ?? null;
+    this.#getAnalysisLog = getAnalysisLog ?? null;
+    this.#applyAnalysisLog = applyAnalysisLog ?? null;
     this.#pluginIdentities = pluginIdentities ?? null;
   }
 
@@ -422,7 +428,8 @@ export class ProjectSync {
     }
     const workspaces = this.#getWorkspaces ? this.#getWorkspaces() : undefined;
     const output = this.#getOutput ? this.#getOutput() : undefined;
-    return { activeId: this.#datasets.activeId, activePlugins, workspaces, output, datasets };
+    const analysisLog = this.#getAnalysisLog ? this.#getAnalysisLog() : undefined;
+    return { activeId: this.#datasets.activeId, activePlugins, workspaces, output, analysisLog, datasets };
   }
 
   // --- new / open -----------------------------------------------------------
@@ -438,6 +445,7 @@ export class ProjectSync {
       });
       this.#applyWorkspaces?.({}); // a fresh project has no workspace state
       this.#applyOutput?.([]); // …and no output (clears stale output on switch)
+      this.#applyAnalysisLog?.([]); // …and no recorded analyses (do-file)
     } finally {
       this.#loading = false;
     }
@@ -481,6 +489,7 @@ export class ProjectSync {
       // mount() sees its saved state via state.get(). Absent ⇒ empty.
       this.#applyWorkspaces?.(bundle.workspaces || {});
       this.#applyOutput?.(bundle.output || []); // restore the Output tab (or clear)
+      this.#applyAnalysisLog?.(bundle.analysisLog || []); // restore the do-file's analysis steps
       // Restore the project's analysis set (unless the caller already applied one,
       // e.g. the launcher). Only when the save recorded it — old saves leave the
       // current plugins as-is.
@@ -524,6 +533,7 @@ export class ProjectSync {
         });
         this.#applyWorkspaces?.({});
         this.#applyOutput?.([]);
+        this.#applyAnalysisLog?.([]);
       } catch (e2) {
         console.error('[project] recovery load failed', e2);
       }
@@ -555,6 +565,7 @@ export class ProjectSync {
     }
     this.#applyWorkspaces?.(bundle.workspaces || {});
     this.#applyOutput?.(bundle.output || []);
+    this.#applyAnalysisLog?.(bundle.analysisLog || []);
     // Restore the bundle's recorded analysis set (#102), so opening a shared bundle
     // brings back the same analyses. applyActivatedSet skips any the recipient doesn't
     // have (those are surfaced to the user by the import handler's warning dialog).

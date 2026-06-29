@@ -504,6 +504,8 @@ export async function boot(mounts) {
     // projects clears/reloads output instead of leaving the previous one's).
     getOutput: () => results.getModel(),
     applyOutput: (model) => results.restoreModel(model),
+    getAnalysisLog: () => analysisLog.toJSON(),
+    applyAnalysisLog: (entries) => analysisLog.load(entries),
   });
   projects.activate();
 
