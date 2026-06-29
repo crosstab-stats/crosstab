@@ -378,6 +378,14 @@ export async function boot(mounts) {
   // Ordered, replayable record of analyses run (the analysis half of the script,
   // #132). Data ops already replay via the data-store log; this covers analyses.
   const analysisLog = new AnalysisLog(bus);
+  // Replacing the base dataset (a fresh demo/blank load, an import-replace, a new
+  // project) starts a new analysis context — the prior analyses ran against data
+  // that's now gone, so clear them. (Transforms/reorders/appends keep their
+  // analyses; only a `replace` swaps the base out from under them. Project open
+  // fires `restore`, then sets the saved log, so it's unaffected.)
+  bus.on(CoreEvents.DATA_CHANGED, (summary) => {
+    if (summary && summary.reason === 'replace') analysisLog.clear();
+  });
   const pluginActions = new PluginActions({
     loader,
     menus: menus.api,
