@@ -113,16 +113,18 @@ const RESULTS_STYLES = `
   /* Data-driven charts (appendChart): a responsive SVG with an options panel and
      save buttons below it (auto height, so the controls aren't clipped like the
      fixed-box .results-plot). */
-  .results-chart {
-    position: relative; box-sizing: border-box;
-    width: min(100%, 672px);
-    border: 1px solid #e3e7eb; border-radius: 6px; padding: 6px 8px 8px;
+  /* The chart's bordered box IS the resizable element (drag the lower-right grip),
+     so resizing grows the box itself instead of overflowing a fixed outer frame.
+     The wrapper is borderless and just stacks the box + controls + save beneath it.
+     A fixed default height (not aspect-ratio, which older iPad Safari lacks) keeps
+     the chart visible everywhere; the viewBox keeps it undistorted as it scales;
+     max-width:100% stops a drag from spilling past the pane (no scrollbar). */
+  .results-chart { position: relative; box-sizing: border-box; max-width: 100%; }
+  .results-chart .results-plot__svg {
+    width: min(100%, 672px); height: 420px; max-width: 100%; max-height: 78vh;
+    resize: both; overflow: hidden; box-sizing: border-box;
+    border: 1px solid #e3e7eb; border-radius: 6px; background: #fff;
   }
-  /* The SVG sits in its OWN resizable box (drag the lower-right grip) — like the
-     legacy plots — while the controls + save bar stay below it, un-clipped. A
-     fixed default height (not aspect-ratio, which older iPad Safari lacks) keeps
-     the chart visible everywhere; the viewBox keeps it undistorted as it scales. */
-  .results-chart .results-plot__svg { width: 100%; height: 420px; max-height: 78vh; resize: both; overflow: hidden; box-sizing: border-box; }
   .results-chart .results-plot__svg svg { width: 100%; height: 100%; display: block; max-width: none; }
   .results-chart .results-plot__save { position: static; opacity: 1; margin-top: 6px; }
   .results-chart__opts-toggle {
