@@ -3,11 +3,15 @@
  * Built-in plugin: the **Graphs** menu — histogram, scatter (+ trend line),
  * boxplot, pie chart, and a bar chart with error bars.
  *
- * Plots are drawn in R with base graphics on an **`svglite`** device
- * (`svgstring()`), which returns the chart as an SVG *string* — exactly what
- * `app.results.appendPlot` wants, and what survives the host's SVG-aware
- * sanitiser. Each chart honours `missingValues`, themes to the app blue, and is
- * responsive via `viewBox`.
+ * Two rendering paths (#131):
+ *  - **Data-driven** (trends, scatter, pie): aggregate in JS, then emit a structured
+ *    chart MODEL to `app.results.appendChart`. The host renders the SVG and the user
+ *    can re-order / recolour / re-stack / rotate it live (see core/chart-renderer.js).
+ *    No WebR — these read columns via `app.data.getColumns` and compute in JS.
+ *  - **R-baked** (histogram, boxplot, bar+error-bars): still drawn in R on an
+ *    `svglite` device and handed to `app.results.appendPlot` as a finished SVG —
+ *    they need binning / box stats / CI primitives the chart kinds don't model yet.
+ *    Each honours `missingValues`, themes to the app blue, and is responsive.
  *
  * Declarative plugin with **multiple** menu items: the manifest declares one menu
  * entry per chart, each with its own inputs and a named function. (Plots still
@@ -19,7 +23,7 @@
 export const manifest = {
   id: 'builtin-plots',
   name: 'Plots',
-  version: '0.5.0',
+  version: '0.6.0',
   apiVersion: '0.1.0',
   category: 'Graphs',
   keywords: ['chart', 'histogram', 'scatter', 'boxplot', 'bar', 'pie', 'plot'],
@@ -119,19 +123,30 @@ export async function histogram(app, { v: name }) {
 export async function scatter(app, { x, y }) {
   if (!x || !y) return;
   const meta = await metaMap(app);
-  const code = `
-    ${recodeR([x, y], meta)}
-    xx <- as.numeric(df[[${rlit(x)}]]); yy <- as.numeric(df[[${rlit(y)}]])
-    ok <- is.finite(xx) & is.finite(yy); xx <- xx[ok]; yy <- yy[ok]
-    plot(xx, yy, pch = 19, col = "${ACCENT}88",
-         xlab = ${rlit(label(meta, x))}, ylab = ${rlit(label(meta, y))})
-    if (length(xx) > 2) {
-      fit <- lm(yy ~ xx); abline(fit, col = "#e74c3c", lwd = 2)
-      # R² in the top margin (outside the plot) so it can't sit on top of the points.
-      mtext(sprintf("R² = %.3f", summary(fit)$r.squared), side = 3, line = 0.2, adj = 1,
-            col = "#e74c3c", cex = 0.85)
-    }`;
-  await renderPlot(app, 'Scatter plot', code, [x, y]);
+  const cols = await app.data.getColumns({ variables: [x, y] });
+  const xCol = cols[x] || [];
+  const yCol = cols[y] || [];
+  const xMiss = missingSet(meta, x);
+  const yMiss = missingSet(meta, y);
+  const points = [];
+  for (let i = 0; i < xCol.length; i++) {
+    const xv = Number(xCol[i]);
+    const yv = Number(yCol[i]);
+    if (!Number.isFinite(xv) || !Number.isFinite(yv)) continue;
+    if (xMiss.has(String(xCol[i])) || yMiss.has(String(yCol[i]))) continue;
+    points.push({ x: xv, y: yv });
+  }
+  if (!points.length) {
+    await app.results.appendError('Scatter plot: no finite data after removing missing values.');
+    return;
+  }
+  await app.results.appendChart({
+    kind: 'scatter',
+    title: `${label(meta, y)} vs ${label(meta, x)}`,
+    points,
+    trend: leastSquares(points),
+    axes: { x: { title: label(meta, x) }, y: { title: label(meta, y) } },
+  });
 }
 
 /**
@@ -265,22 +280,30 @@ export async function boxplot(app, { y, g }) {
 export async function pie(app, { v: name }) {
   if (!name) return;
   const meta = await metaMap(app);
-  const vl = meta.get(name)?.valueLabels;
-  const vmap = vl
-    ? `vmap <- c(${Object.entries(vl)
-        .map(([k, l]) => `${rlit(String(k))} = ${rlit(String(l))}`)
-        .join(', ')}); labs <- ifelse(labs %in% names(vmap), vmap[labs], labs)`
-    : '';
-  const code = `
-    ${recodeR([name], meta)}
-    x <- df[[${rlit(name)}]]; x <- x[!is.na(x)]
-    tb <- sort(table(as.character(x)), decreasing = TRUE)
-    labs <- names(tb)
-    ${vmap}
-    pct <- round(100 * as.numeric(tb) / sum(tb))
-    pie(as.numeric(tb), labels = paste0(labs, " (", pct, "%)"),
-        col = hcl.colors(length(tb), "Blues"), main = ${rlit(label(meta, name))})`;
-  await renderPlot(app, 'Pie chart', code, [name]);
+  const cols = await app.data.getColumns({ variables: [name] });
+  const col = cols[name] || [];
+  const miss = missingSet(meta, name);
+  const labelOf = labelMapper(meta, name);
+  const counts = new Map();
+  for (const raw of col) {
+    if (isBlank(raw)) continue;
+    const k = String(raw);
+    if (miss.has(k)) continue;
+    counts.set(k, (counts.get(k) || 0) + 1);
+  }
+  if (!counts.size) {
+    await app.results.appendError('Pie chart: no data after removing missing values.');
+    return;
+  }
+  // Largest slice first (the conventional pie ordering); the user can re-order.
+  const slices = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, n]) => ({ key: k, label: labelOf(k), value: n }));
+  await app.results.appendChart({
+    kind: 'pie',
+    title: label(meta, name),
+    slices,
+  });
 }
 
 export async function errorBars(app, { y, g }) {
@@ -405,6 +428,23 @@ function numAwareCmp(a, b) {
 /** Round to 2 dp (compact, avoids float noise in the persisted model). */
 function round2(v) {
   return Math.round(v * 100) / 100;
+}
+
+/** Ordinary least-squares fit of y on x → {slope, intercept, r2}, or null if the
+ * points are degenerate (n<3 or zero x-variance). Matches lm(y ~ x) + R². */
+function leastSquares(points) {
+  const n = points.length;
+  if (n < 3) return null;
+  let sx = 0, sy = 0, sxx = 0, sxy = 0, syy = 0;
+  for (const p of points) { sx += p.x; sy += p.y; sxx += p.x * p.x; sxy += p.x * p.y; syy += p.y * p.y; }
+  const dx = n * sxx - sx * sx;
+  if (dx === 0) return null;
+  const slope = (n * sxy - sx * sy) / dx;
+  const intercept = (sy - slope * sx) / n;
+  const dy = n * syy - sy * sy;
+  const rNum = n * sxy - sx * sy;
+  const r2 = dy === 0 ? 0 : (rNum * rNum) / (dx * dy);
+  return { slope, intercept, r2 };
 }
 
 /** Render a JS value as an R literal for safe interpolation into R source. */

@@ -134,6 +134,7 @@ const RESULTS_STYLES = `
   .results-chart__row--check { gap: 6px; cursor: pointer; }
   .results-chart__rowlabel { color: #555; min-width: 72px; }
   .results-chart__select { font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid #d8dee4; border-radius: 5px; background: #fff; flex: 1; }
+  .results-chart__num { font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid #d8dee4; border-radius: 5px; background: #fff; width: 90px; }
   .results-chart__seriesheader { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #7a8590; margin-top: 4px; }
   .results-chart__series { display: flex; flex-direction: column; gap: 4px; }
   .results-chart__srow { display: flex; align-items: center; gap: 6px; }
