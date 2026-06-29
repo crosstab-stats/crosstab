@@ -7,6 +7,8 @@ Thumbs.db
 *.log
 .vscode/
 .idea/
+# Claude Code local config (preview dev-server launch.json, local settings) — machine-specific
+.claude/
 
 # Vendored binaries / icons placeholder (add real assets, ignore scratch)
 vendor/*.wasm
