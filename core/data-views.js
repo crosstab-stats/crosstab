@@ -820,29 +820,21 @@ export class HistoryPanel {
    * is rejected, not applied), then re-run the analyses. */
   async #runScript() {
     this.#clearErr();
-    const { transforms, analyses, errors } = parse(this.#textarea.value);
+    const { steps, errors } = parse(this.#textarea.value);
     if (errors.length) {
       const first = errors[0];
       this.#showErr(`Line ${first.line}: ${first.message}${errors.length > 1 ? ` (and ${errors.length - 1} more)` : ''}`);
       return;
     }
+    let unknown = 0;
     try {
-      await this.#store.replaceTransforms(transforms);
+      // Position-faithful replay: data is rebuilt to each analysis's place in the
+      // script before that analysis runs, so output matches the order shown. The
+      // full transform set is validated first, so a bad data step aborts cleanly.
+      ({ unknown } = await this.#pluginActions.replayScript(steps));
     } catch (err) {
       this.#showErr(err.message);
       return;
-    }
-    // Rebuild the analysis log from the script (enrich each line from the live
-    // plugin registry so replay has the inputs/specs), then re-run them.
-    const entries = analyses
-      .map((a) => this.#pluginActions.analysisEntryFor(a))
-      .filter(Boolean);
-    const unknown = analyses.length - entries.length;
-    this.#analysisLog.load(entries);
-    try {
-      await this.#pluginActions.replayAnalyses({ clear: true });
-    } catch (err) {
-      this.#showErr(`Analyses: ${err.message}`);
     }
     this.#fillEditor(); // reflect the rebuilt state (and drop any unknown lines)
     if (unknown > 0) this.#showErr(`${unknown} analysis line(s) referenced a plugin that isn’t active — skipped.`);

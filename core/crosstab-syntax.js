@@ -37,6 +37,9 @@
 
 const TYPES = new Set(['numeric', 'string', 'factor']);
 const MEASURES = new Set(['nominal', 'ordinal', 'scale']);
+/** Op types that count as a "data transform" (what getTransforms returns) — used to
+ * position analyses in the timeline by how many transforms preceded them. */
+const TRANSFORM_TYPES = new Set(['setVariable', 'setCell', 'computeVar', 'recodeVar', 'filterCases']);
 
 // =============================================================================
 // SERIALIZE  (timeline → text)
@@ -49,19 +52,36 @@ const MEASURES = new Set(['nominal', 'ordinal', 'scale']);
  */
 export function serialize(applied, analyses = []) {
   const lines = ['# CrossTab do-file — edit and Run to rebuild. Lines starting with # are comments.', ''];
-  let wroteData = false;
+
+  // Place each analysis at the data position it was run at (`at` = number of data
+  // transforms applied then), so the script shows — and Run reproduces — its output
+  // against the data AS OF that point, not the final dataset.
+  const byAt = new Map();
+  for (const a of analyses || []) {
+    const k = Number.isFinite(a.at) ? a.at : Infinity;
+    if (!byAt.has(k)) byAt.set(k, []);
+    byAt.get(k).push(a);
+  }
+  const flush = (k) => {
+    for (const a of byAt.get(k) || []) lines.push(analysisToLine(a));
+    byAt.delete(k);
+  };
+
+  let tcount = 0;
+  let flushedZero = false;
+  const flushZeroOnce = () => { if (!flushedZero) { flush(0); flushedZero = true; } };
   for (const op of applied || []) {
+    const isT = TRANSFORM_TYPES.has(op.type);
+    if (isT) flushZeroOnce(); // analyses run before any transform sit after the sources
     const out = opToLines(op);
-    if (out) {
-      for (const l of out) lines.push(l);
-      wroteData = true;
-    }
+    if (out) for (const l of out) lines.push(l);
+    if (isT) { tcount++; flush(tcount); }
   }
-  if (analyses && analyses.length) {
-    if (wroteData) lines.push('');
-    lines.push('# Analyses');
-    for (const a of analyses) lines.push(analysisToLine(a));
-  }
+  flushZeroOnce(); // (no transforms at all)
+  // Any analyses whose recorded position is past the last transform (or unpositioned)
+  // go at the end, in ascending order.
+  for (const k of [...byAt.keys()].sort((a, b) => a - b)) flush(k);
+
   return lines.join('\n') + '\n';
 }
 
@@ -177,6 +197,7 @@ function stripEllipsis(s) {
 export function parse(text) {
   const transforms = [];
   const analyses = [];
+  const steps = []; // ordered, interleaved: { kind:'transform', op } | { kind:'analysis', ref }
   const errors = [];
   const raw = String(text ?? '').split(/\r?\n/);
   for (let i = 0; i < raw.length; i++) {
@@ -185,13 +206,18 @@ export function parse(text) {
     try {
       const op = parseLine(line);
       if (!op) continue;
-      if (op.__analysis) analyses.push(op.__analysis);
-      else transforms.push(op);
+      if (op.__analysis) {
+        analyses.push(op.__analysis);
+        steps.push({ kind: 'analysis', ref: op.__analysis });
+      } else {
+        transforms.push(op);
+        steps.push({ kind: 'transform', op });
+      }
     } catch (err) {
       errors.push({ line: i + 1, message: err.message });
     }
   }
-  return { transforms, analyses, errors };
+  return { transforms, analyses, steps, errors };
 }
 
 /** Strip a trailing ` # comment` (a `#` not inside quotes/backticks). Keeps `#`

@@ -29,6 +29,7 @@ export class PluginActions {
   #outputExporters;
   #codecs;
   #analysisLog;
+  #dataStore;
 
   /** pluginId → menu disposers, so unwiring on unload removes its menu items. */
   #disposers = new Map();
@@ -49,7 +50,7 @@ export class PluginActions {
    * @param {object} deps.exporters - ExportService#api (register/deliver).
    * @param {object} deps.outputExporters - OutputExportService#api.
    */
-  constructor({ loader, menus, results, ui, bus, importers, exporters, outputExporters, codecs, analysisLog }) {
+  constructor({ loader, menus, results, ui, bus, importers, exporters, outputExporters, codecs, analysisLog, dataStore }) {
     this.#loader = loader;
     this.#menus = menus;
     this.#results = results;
@@ -60,6 +61,7 @@ export class PluginActions {
     this.#outputExporters = outputExporters;
     this.#codecs = codecs ?? null;
     this.#analysisLog = analysisLog ?? null;
+    this.#dataStore = dataStore ?? null;
   }
 
   /** True if a manifest uses the declarative model (this module should wire it). */
@@ -221,6 +223,11 @@ export class PluginActions {
       run: item.run,
       specs,
       inputs: gathered,
+      // The data position this analysis was run at: how many data transforms were
+      // applied at the time. The do-file places/replays it here so its output
+      // reflects the data AS OF this point (e.g. before a later filter), not the
+      // final dataset — the order shown is the order computed.
+      at: this.#dataStore?.getTransforms?.().length ?? 0,
     };
     const ok = await this.#execute(entry);
     if (ok) this.#analysisLog?.record(entry);
@@ -287,6 +294,49 @@ export class PluginActions {
       // eslint-disable-next-line no-await-in-loop -- analyses must run in order
       await this.#execute(entry);
     }
+  }
+
+  /**
+   * Run a parsed do-file (#134), **position-faithfully**: each analysis is executed
+   * against the dataset AS OF its place in the script, so the output matches the
+   * order shown (an analysis above a `keep if` reflects the pre-filter data, not the
+   * final dataset). Walks the interleaved steps, growing the transform set and
+   * rebuilding the data to that prefix before each analysis, then leaves the dataset
+   * at its final state. Atomic: the full transform set is validated first, so a bad
+   * data step aborts the whole Run before any output is cleared.
+   *
+   * @param {Array<{kind:'transform',op:object}|{kind:'analysis',ref:object}>} steps
+   * @returns {Promise<{unknown:number}>} count of analysis lines whose plugin wasn't active.
+   */
+  async replayScript(steps) {
+    const allTransforms = steps.filter((s) => s.kind === 'transform').map((s) => s.op);
+    // Validate + apply the whole transform set first — throws (and changes nothing)
+    // if a data step is invalid, BEFORE we clear the output pane.
+    await this.#dataStore.replaceTransforms(allTransforms);
+
+    this.#results.clear?.();
+    const acc = [];
+    const entries = [];
+    let unknown = 0;
+    let appliedLen = allTransforms.length; // data currently reflects all transforms
+    for (const step of steps) {
+      if (step.kind === 'transform') { acc.push(step.op); continue; }
+      const entry = this.analysisEntryFor(step.ref);
+      if (!entry) { unknown += 1; continue; }
+      entry.at = acc.length;
+      if (appliedLen !== acc.length) {
+        // eslint-disable-next-line no-await-in-loop -- rebuild to this analysis's data state
+        await this.#dataStore.replaceTransforms(acc.slice());
+        appliedLen = acc.length;
+      }
+      // eslint-disable-next-line no-await-in-loop -- analyses run in script order
+      await this.#execute(entry);
+      entries.push(entry);
+    }
+    // Leave the dataset at its final state.
+    if (appliedLen !== allTransforms.length) await this.#dataStore.replaceTransforms(allTransforms);
+    this.#analysisLog?.load(entries);
+    return { unknown };
   }
 }
 

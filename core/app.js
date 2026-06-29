@@ -389,6 +389,7 @@ export async function boot(mounts) {
     outputExporters: outputExporters.api,
     codecs,
     analysisLog,
+    dataStore: datasets,
   });
 
   // --- shell wiring ----------------------------------------------------------
