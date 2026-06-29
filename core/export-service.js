@@ -30,7 +30,7 @@
  * exporters registered right now. See {@link import-service.js}.
  */
 
-import { showFormatPicker, groupFor, byGroupThenOrder } from './format-picker.js';
+import { showFormatPicker, showSaveAsDialog, groupFor, byGroupThenOrder } from './format-picker.js';
 
 /**
  * @typedef {Object} ExporterSpec
@@ -173,7 +173,8 @@ export class ExportService {
 
   // --- internals -------------------------------------------------------------
 
-  /** Run an export: hand the plugin a ticket, await its bytes, download them. */
+  /** Run an export: ask the user for a filename, hand the plugin a ticket, await
+   * its bytes, download them under the chosen name. */
   async #runExport(id) {
     const spec = this.#exporters.get(id);
     if (!spec) return;
@@ -181,6 +182,18 @@ export class ExportService {
       this.#results.appendError('Export: no data is loaded.');
       return;
     }
+
+    // Ask the user what to name the file *before* formatting — the user names every
+    // export (so nothing leaks a dataset name and repeat exports don't collide), and
+    // a long format job doesn't make them wait before the prompt. The extension is
+    // fixed by the chosen format.
+    const ext = (spec.extensions && spec.extensions[0]) || '';
+    const filename = await showSaveAsDialog({
+      title: `Export ${spec.label.replace(/…\s*$/, '')}`,
+      defaultName: 'export',
+      extension: ext,
+    });
+    if (!filename) return; // cancelled
 
     let payload;
     try {
@@ -194,13 +207,15 @@ export class ExportService {
     if (!payload || payload.data == null) return;
 
     try {
-      downloadFile(payload.filename || 'export', payload.mimeType || 'application/octet-stream', payload.data);
+      // The user's chosen name wins over whatever the plugin suggested (codecs hand
+      // back a generic 'data.<ext>'); the plugin still supplies the MIME type.
+      downloadFile(filename, payload.mimeType || 'application/octet-stream', payload.data);
     } catch (err) {
       this.#results.appendError(`Export failed: ${err.message}`);
       console.error('[export]', err);
       return;
     }
-    this.#bus.emit('export:finished', { exporter: id, filename: payload.filename });
+    this.#bus.emit('export:finished', { exporter: id, filename });
   }
 
   /**

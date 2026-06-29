@@ -472,6 +472,21 @@
       .ct-fmt__name { flex: 0 1 auto; }
       .ct-fmt__ext { margin-left: auto; color: #7a8590; font-size: 12px; white-space: nowrap; }
       .ct-fmt__empty { color: #7a8590; padding: 16px 4px; }
+      /* "Export as" filename dialog */
+      .ct-saveas { max-width: 420px; }
+      .ct-saveas__field {
+        display: flex; align-items: stretch; border: 1px solid var(--line);
+        border-radius: 6px; overflow: hidden; background: #fff;
+      }
+      .ct-saveas__field:focus-within { border-color: var(--accent); }
+      .ct-saveas__name {
+        flex: 1 1 auto; min-width: 0; font: inherit; padding: 8px 10px;
+        border: 0; outline: none; background: transparent;
+      }
+      .ct-saveas__ext {
+        flex: 0 0 auto; align-self: center; padding: 0 10px 0 4px;
+        color: #7a8590; font-size: 13px; white-space: nowrap;
+      }
       /* Plugin manager dialog */
       .ct-plugins__add { display: flex; gap: 8px; margin: 0 0 8px; }
       .ct-plugins__addbtn {

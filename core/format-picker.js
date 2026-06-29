@@ -142,6 +142,94 @@ export function showFormatPicker({ title, hint, emptyText, entries }) {
 }
 
 /**
+ * Ask the user what to name an export. A small in-app dialog — used in preference
+ * to the File System Access "save" picker for the same reason {@link showFormatPicker}
+ * draws its own list: `showSaveFilePicker` is Chromium-only, so a custom dialog is
+ * the only thing that behaves identically on iPad Safari. The default name is kept
+ * deliberately neutral (NOT the dataset name) so an export filename can't leak a
+ * project/variable name, and so repeat exports don't silently overwrite each other —
+ * the user names each one.
+ *
+ * The extension is fixed by the chosen format: it's shown as a non-editable suffix
+ * and force-appended to the result, so the user can't accidentally produce a file
+ * whose name disagrees with its bytes.
+ *
+ * @param {Object} opts
+ * @param {string} [opts.title] - Dialog title, e.g. `'Export SPSS'`.
+ * @param {string} [opts.defaultName] - Pre-filled base name (without extension).
+ * @param {string} [opts.extension] - Fixed extension with the dot, e.g. `'.sav'`.
+ * @returns {Promise<string|null>} The chosen filename (extension ensured), or null if cancelled.
+ */
+export function showSaveAsDialog({ title = 'Export as', defaultName = 'export', extension = '' } = {}) {
+  return new Promise((resolve) => {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'ct-dialog ct-saveas';
+    dialog.innerHTML = `
+      <form method="dialog" class="ct-dialog__form">
+        <h2 class="ct-dialog__title"></h2>
+        <label class="ct-dialog__row">
+          <span>File name</span>
+          <span class="ct-saveas__field">
+            <input type="text" class="ct-saveas__name" autocomplete="off" spellcheck="false" />
+            <span class="ct-saveas__ext"></span>
+          </span>
+        </label>
+        <menu class="ct-dialog__buttons">
+          <button value="cancel" type="button" class="ct-saveas__cancel">Cancel</button>
+          <button value="save" type="submit" class="ct-dialog__primary">Export</button>
+        </menu>
+      </form>`;
+
+    dialog.querySelector('.ct-dialog__title').textContent = title;
+    dialog.querySelector('.ct-saveas__ext').textContent = extension || '';
+    const input = dialog.querySelector('.ct-saveas__name');
+    input.value = defaultName;
+
+    let settled = false;
+    const finish = (val) => {
+      if (settled) return;
+      settled = true;
+      resolve(val);
+      dialog.close();
+    };
+
+    dialog.querySelector('.ct-saveas__cancel').addEventListener('click', () => finish(null));
+    dialog.querySelector('.ct-dialog__form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      finish(ensureExtension(input.value, extension));
+    });
+    // Escape fires the dialog's native `cancel`; treat it (and any close we didn't
+    // initiate) as a cancel so the promise always settles.
+    dialog.addEventListener('cancel', () => finish(null));
+    dialog.addEventListener('close', () => {
+      dialog.remove();
+      finish(null);
+    });
+
+    document.body.append(dialog);
+    dialog.showModal();
+    input.focus();
+    input.select();
+  });
+}
+
+/**
+ * Sanitise a user-typed export name into a safe single-segment filename and ensure
+ * it carries the format's extension exactly once.
+ * @param {string} name
+ * @param {string} ext - Extension with the dot, e.g. `'.sav'` (may be empty).
+ * @returns {string}
+ */
+export function ensureExtension(name, ext) {
+  // Drop any directory parts a user might paste; keep the last segment.
+  let base = String(name || '').trim().replace(/[\\/]+/g, '/');
+  base = base.slice(base.lastIndexOf('/') + 1).trim();
+  if (!base) base = 'export';
+  if (ext && !base.toLowerCase().endsWith(ext.toLowerCase())) base += ext;
+  return base;
+}
+
+/**
  * Classify a format into a group heading from its source/extensions. Keeps the
  * picker tidy without every plugin having to declare a group: web importers go
  * under "Online sources", statistical-software formats under "Statistical
