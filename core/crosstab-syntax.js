@@ -1,6 +1,6 @@
 /**
  * @file crosstab-syntax.js
- * CrossTab's native command syntax — the textual form of the do-file (#133/#134).
+ * CrossTab's native command syntax — the textual form of the script (#133/#134).
  *
  * This is the canonical, **lossless, bidirectional** serialization of the operation
  * timeline: the data-store's log (loads/transforms) plus the analysis log. Unlike

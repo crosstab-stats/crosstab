@@ -396,7 +396,7 @@ export class DatasetManager {
       getTransforms: () => this.active?.getTransforms() ?? [],
       /** The full ordered operation log ({applied, future}) — load/append/join +
        * data transforms in true order. Lets export-to-syntax emit a faithful,
-       * ordered do-file (the loads in their right place, not just a stub). */
+       * ordered script (the loads in their right place, not just a stub). */
       getHistory: () => this.getHistory(),
       onDataChanged: (fn) => this.#bus.on(CoreEvents.DATA_CHANGED, fn),
       onSelectionChanged: (fn) => this.#bus.on(CoreEvents.SELECTION_CHANGED, fn),

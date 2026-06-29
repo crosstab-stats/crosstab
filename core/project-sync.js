@@ -45,7 +45,7 @@ export class ProjectSync {
   #getOutput;
   /** (model) => void : restore (or clear) the Output tab on open/switch. */
   #applyOutput;
-  /** () => object[] : snapshot the analysis log (the do-file's analysis steps, #132). */
+  /** () => object[] : snapshot the analysis log (the script's analysis steps, #132). */
   #getAnalysisLog;
   /** (entries) => void : restore (or clear) the analysis log on open/switch. */
   #applyAnalysisLog;
@@ -445,7 +445,7 @@ export class ProjectSync {
       });
       this.#applyWorkspaces?.({}); // a fresh project has no workspace state
       this.#applyOutput?.([]); // …and no output (clears stale output on switch)
-      this.#applyAnalysisLog?.([]); // …and no recorded analyses (do-file)
+      this.#applyAnalysisLog?.([]); // …and no recorded analyses (script)
     } finally {
       this.#loading = false;
     }
@@ -489,7 +489,7 @@ export class ProjectSync {
       // mount() sees its saved state via state.get(). Absent ⇒ empty.
       this.#applyWorkspaces?.(bundle.workspaces || {});
       this.#applyOutput?.(bundle.output || []); // restore the Output tab (or clear)
-      this.#applyAnalysisLog?.(bundle.analysisLog || []); // restore the do-file's analysis steps
+      this.#applyAnalysisLog?.(bundle.analysisLog || []); // restore the script's analysis steps
       // Restore the project's analysis set (unless the caller already applied one,
       // e.g. the launcher). Only when the save recorded it — old saves leave the
       // current plugins as-is.

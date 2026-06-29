@@ -35,7 +35,7 @@ export class PluginActions {
   #disposers = new Map();
 
   /** `pluginId\0run` → { manifest, item, origin } for every wired menu action, so a
-   * do-file `run id.fn` line can be enriched back into a replayable entry (#134). */
+   * script `run id.fn` line can be enriched back into a replayable entry (#134). */
   #runnable = new Map();
 
   /**
@@ -91,7 +91,7 @@ export class PluginActions {
         command: () => this.#run(manifest, originLabel, item),
       });
       if (typeof dispose === 'function') disposers.push(dispose);
-      // Index it so the do-file editor can rebuild a replayable entry from a
+      // Index it so the script editor can rebuild a replayable entry from a
       // `run <id>.<fn>` line (it needs the item's label/inputs + plugin name).
       this.#runnable.set(`${id}::${item.run}`, { manifest, item, origin: originLabel });
     }
@@ -187,7 +187,7 @@ export class PluginActions {
   }
 
   /**
-   * Rebuild a replayable analysis entry from a do-file `run <pluginId>.<fn>` line
+   * Rebuild a replayable analysis entry from a script `run <pluginId>.<fn>` line
    * (#134): the line carries only the plugin id, function and inputs, so we enrich
    * it with the live menu item's label, declared inputs and plugin name. Returns
    * null if no active plugin provides that action (caller skips it with a warning).
@@ -209,7 +209,7 @@ export class PluginActions {
   }
 
   /** Run one menu action: gather inputs → execute → record it for replay (the
-   * do-file). A cancelled input or a failed run is NOT recorded. */
+   * script). A cancelled input or a failed run is NOT recorded. */
   async #run(manifest, originLabel, item) {
     const specs = Array.isArray(item.inputs) ? item.inputs : [];
     const gathered = await gatherInputs(this.#ui, specs, item);
@@ -224,7 +224,7 @@ export class PluginActions {
       specs,
       inputs: gathered,
       // The data position this analysis was run at: how many data transforms were
-      // applied at the time. The do-file places/replays it here so its output
+      // applied at the time. The script places/replays it here so its output
       // reflects the data AS OF this point (e.g. before a later filter), not the
       // final dataset — the order shown is the order computed.
       at: this.#dataStore?.getTransforms?.().length ?? 0,
@@ -274,7 +274,7 @@ export class PluginActions {
 
   /**
    * Re-execute one recorded analysis entry (does NOT re-record it — replay must be
-   * idempotent). Used by {@link PluginActions#replayAnalyses} and the do-file editor.
+   * idempotent). Used by {@link PluginActions#replayAnalyses} and the script editor.
    * @param {import('./analysis-log.js').AnalysisEntry} entry
    */
   async replay(entry) {
@@ -297,7 +297,7 @@ export class PluginActions {
   }
 
   /**
-   * Run a parsed do-file (#134), **position-faithfully**: each analysis is executed
+   * Run a parsed script (#134), **position-faithfully**: each analysis is executed
    * against the dataset AS OF its place in the script, so the output matches the
    * order shown (an analysis above a `keep if` reflects the pre-filter data, not the
    * final dataset). Walks the interleaved steps, growing the transform set and

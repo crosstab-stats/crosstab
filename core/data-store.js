@@ -12,7 +12,7 @@
  *  - **The universal log** (`#log`) is one ordered list of *every* operation —
  *    data loads (import/append/join) and data transforms (recode/retype/compute/
  *    cell edit) alike. It is data, not mutation — inspectable, undoable, and
- *    exportable as a do-file. {@link DataStore#rederive} partitions it by op kind.
+ *    exportable as a script. {@link DataStore#rederive} partitions it by op kind.
  *  - **`dataset`** is a DuckDB **VIEW** derived from the sources + the log. Every
  *    read in the app queries it. Metadata-only transforms (relabel, designate
  *    missing, retype-to-factor) just recompute the JS-side metadata; only
@@ -683,7 +683,7 @@ export class DataStore {
    */
   async rederive(reason = 'change') {
     // STRICT SEQUENTIAL REPLAY: fold the log in order, so each op sees exactly the
-    // dataset state the ops before it produced — true do-file semantics. A compute
+    // dataset state the ops before it produced — true script semantics. A compute
     // logged before a join is evaluated over the pre-join data (and appended rows
     // added after it get NULL for it, via UNION ALL BY NAME). This guarantees the
     // engine's result matches running the log as a script.
@@ -1130,7 +1130,7 @@ export class DataStore {
   }
 
   /**
-   * Replace ALL data transforms with a new ordered list (the do-file editor's
+   * Replace ALL data transforms with a new ordered list (the script editor's
    * "Run", #134), keeping the immutable sources and any manual cell edits in place.
    * The new transforms are appended after the sources (+ setCell overrides); the
    * usual validate → re-derive → rollback guard makes it atomic, so a bad script

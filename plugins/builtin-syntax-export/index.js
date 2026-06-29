@@ -3,13 +3,13 @@
  * Built-in **export-to-syntax** plugin: File ▸ Export data… ▸ R syntax.
  *
  * Turns the dataset's **transform log** (the same record the History panel shows)
- * into a runnable R script that reproduces the recodes — the do-file an academic
+ * into a runnable R script that reproduces the recodes — the script an academic
  * pastes into RStudio or drops in a methods appendix. Reads the log through the
  * `app.data.getTransforms()` surface (the log is exposed to plugins, so this
  * honours "everything is a plugin"), and delivers `.R` bytes via the data-export
  * channel.
  *
- * Scope (v1): the **data-preparation** do-file — sources are emitted as an
+ * Scope (v1): the **data-preparation** script — sources are emitted as an
  * editable load stub, then each logged metadata transform (retype, designate
  * missing, value labels, relabel) becomes R. It is a best-effort, readable
  * reproduction, not a byte-exact replay of the engine's derive order; analyses
@@ -23,7 +23,7 @@ export const manifest = {
   version: '0.2.0',
   apiVersion: '0.1.0',
   category: 'Export',
-  keywords: ['r', 'do-file', 'syntax', 'script', 'reproducible'],
+  keywords: ['r', 'script', 'syntax', 'reproducible'],
   rPackages: [],
   exports: [{ label: 'R syntax (.R)…', extensions: ['.R'], order: 30, export: 'exportSyntax' }],
 };

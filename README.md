@@ -42,7 +42,7 @@ This is the reproducibility doctrine of serious analysis tools (R/tidyverse neve
 overwrite raw; Stata `gen`/do-files; SPSS `COMPUTE`/syntax). For the research
 audience it is the load-bearing trust property: *"here is the raw data and the
 exact transforms"* is what makes a result defensible — and the transform log is,
-in effect, an exportable do-file. `app.data` is therefore read-only; mutations go
+in effect, an exportable, re-runnable script. `app.data` is therefore read-only; mutations go
 through `app.transform`, which appends to the log.
 
 The transform layer is **not fully built yet** — today some operations still

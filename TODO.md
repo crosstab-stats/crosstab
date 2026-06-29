@@ -463,7 +463,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     `setVariable`/`setCell`/`computeVar`/`recodeVar` (data transforms) — is a
     single, ordered, undoable entry. `rederive` **folds the log strictly in order**
     (sequential replay), so each op sees exactly the state the prior ops produced —
-    true do-file semantics. So **imports/appends/joins are first-class History
+    true script semantics. So **imports/appends/joins are first-class History
     steps you can undo, redo, and rewind across**, AND order is honoured: a compute
     logged before an append is evaluated over the pre-append data, and the appended
     rows get NULL for it (via `UNION ALL BY NAME`). The engine result therefore
@@ -476,7 +476,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       `order` threaded through `project-store` + `dataset-store`.
     - *Tradeoff (faithful, less forgiving):* a retype/recode *before* an append no
       longer auto-covers the appended rows — sequence the cleaning *after* loading,
-      exactly like a real do-file.
+      exactly like a real script.
     - **Verified in Chrome:** compute-before-append → appended rows NULL for it;
       compute-after-append → all rows; the `order` hint survives `exportState`/
       `restoreState` *and* a full project JSON round-trip (appended row stays NULL
@@ -705,10 +705,10 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     Stata `.dta` write (haven write-side, heavier); Parquet export
     (`DuckDBManager.queryToParquet` exists — nearly free). CSV covers the common
     need first.
-- [x] **Export-to-syntax (do-file) — BUILT** (`plugins/builtin-syntax-export/`,
+- [x] **Export-to-syntax (script) — BUILT** (`plugins/builtin-syntax-export/`,
       File ▸ Export ▸ R syntax). Turns the dataset's **transform log** (the same
       record the History panel shows) into a runnable **R script** that reproduces
-      the recodes — the do-file an academic pastes into RStudio or drops in a
+      the recodes — the script an academic pastes into RStudio or drops in a
       methods appendix. Done on-architecture as a **plugin**: the transform log is
       now exposed to plugins via `app.data.getTransforms()` (new read surface,
       wired through broker + plugin-host), and the plugin emits R from it. Each
@@ -725,11 +725,11 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     emits **load/append/join in their true position** alongside the transforms —
     `read.csv` for the base, `dplyr::bind_rows` for an append (NA-fills like
     UNION ALL BY NAME), `merge(..., by.x/by.y, all.x=TRUE)` for a join — so the
-    do-file structurally matches the app's history. Verified: an interleaved
+    script structurally matches the app's history. Verified: an interleaved
     import→compute→append→recode→join exported all 5 steps in order, parses in R.
     Source bytes aren't embedded — the load lines point at file paths (label hints).
   - *Deferred:* **SPSS `.sps`** syntax (a second format in the same plugin — fast
-    follow); including **analyses** in the do-file (needs a run-log + plugins
+    follow); including **analyses** in the script (needs a run-log + plugins
     declaring their R — bigger); key-normalisation in the emitted join (the app
     matches case/space-insensitively; the `merge` stub doesn't yet).
 - [~] **In-app plugin creator / editor — BUILT** (`core/plugin-creator.js`;

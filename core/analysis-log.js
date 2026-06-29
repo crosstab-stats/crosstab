@@ -1,7 +1,7 @@
 /**
  * @file analysis-log.js
  * An ordered, replayable record of the **analyses** the user has run — the missing
- * half of CrossTab's "do-file". The data-store already keeps a universal log of
+ * half of CrossTab's "script". The data-store already keeps a universal log of
  * data operations (load/recode/compute/filter…) that it can replay to rebuild the
  * dataset; this is the analogous log for analysis *runs* (crosstabs, regression,
  * plots) so they can be re-executed to reproduce the Output pane.
@@ -9,7 +9,7 @@
  * It is pure data — record/list/edit/serialise. The actual re-execution lives in
  * {@link PluginActions} (it owns the loader + results framing); this class just
  * holds the ordered entries and notifies listeners when they change. Together with
- * the data-store log it forms the timeline the do-file editor (#132–#134) reads and
+ * the data-store log it forms the timeline the script editor (#132–#134) reads and
  * writes.
  *
  * @typedef {Object} AnalysisEntry

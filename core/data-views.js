@@ -682,7 +682,7 @@ export class HistoryPanel {
   #errEl = null;
   #off = null;
   #escHandler = null;
-  // Syntax (do-file) mode (#134).
+  // Syntax mode (#134).
   #analysisLog = null;
   #pluginActions = null;
   #syntax = false;
@@ -695,7 +695,7 @@ export class HistoryPanel {
    * @param {import('./data-store.js').DataStore} store
    * @param {import('./event-bus.js').EventBus} bus
    * @param {{analysisLog?: object, pluginActions?: object}} [opts] - enable the
-   *   Syntax (do-file) editor: read/replay the analysis log + rebuild via Run.
+   *   Syntax editor: read/replay the analysis log + rebuild via Run.
    */
   constructor(store, bus, { analysisLog = null, pluginActions = null } = {}) {
     this.#store = store;
@@ -728,7 +728,7 @@ export class HistoryPanel {
     });
     toolbar.append(collect);
 
-    // Syntax (do-file) mode toggle — only when the editor deps are wired (#134).
+    // Syntax mode toggle — only when the editor deps are wired (#134).
     if (this.#analysisLog && this.#pluginActions) {
       const synBtn = el('button', '✎ Syntax', 'history-panel__action');
       synBtn.type = 'button';
@@ -751,7 +751,7 @@ export class HistoryPanel {
     this.#view = new HistoryView(content, this.#store, { onError: (m) => this.#showErr(m) });
   }
 
-  /** The Syntax (do-file) editor: a monospace textarea of the serialized timeline
+  /** The Syntax editor: a monospace textarea of the serialized timeline
    * plus Run / Refresh. Hidden until the Syntax toggle is on. */
   #buildEditor() {
     const wrap = el('div', null, 'history-panel__syntax');
@@ -795,7 +795,7 @@ export class HistoryPanel {
     return wrap;
   }
 
-  /** Switch between the step timeline and the do-file editor. */
+  /** Switch between the step timeline and the script editor. */
   #toggleSyntax() {
     this.#syntax = !this.#syntax;
     this.#clearErr();
@@ -816,7 +816,7 @@ export class HistoryPanel {
     this.#textarea.value = serialize(applied, analyses);
   }
 
-  /** Parse the edited do-file, rebuild the data pipeline (atomically — a bad script
+  /** Parse the edited script, rebuild the data pipeline (atomically — a bad script
    * is rejected, not applied), then re-run the analyses. */
   async #runScript() {
     this.#clearErr();
