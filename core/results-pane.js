@@ -118,8 +118,12 @@ const RESULTS_STYLES = `
     width: min(100%, 672px);
     border: 1px solid #e3e7eb; border-radius: 6px; padding: 6px 8px 8px;
   }
-  .results-chart .results-plot__svg { width: 100%; height: auto; }
-  .results-chart .results-plot__svg svg { width: 100%; height: auto; display: block; max-width: none; }
+  /* The SVG sits in its OWN resizable box (drag the lower-right grip) — like the
+     legacy plots — while the controls + save bar stay below it, un-clipped. A
+     fixed default height (not aspect-ratio, which older iPad Safari lacks) keeps
+     the chart visible everywhere; the viewBox keeps it undistorted as it scales. */
+  .results-chart .results-plot__svg { width: 100%; height: 420px; max-height: 78vh; resize: both; overflow: hidden; box-sizing: border-box; }
+  .results-chart .results-plot__svg svg { width: 100%; height: 100%; display: block; max-width: none; }
   .results-chart .results-plot__save { position: static; opacity: 1; margin-top: 6px; }
   .results-chart__opts-toggle {
     font: inherit; font-size: 12px; padding: 3px 9px; margin-top: 6px;
@@ -130,6 +134,9 @@ const RESULTS_STYLES = `
     margin-top: 8px; padding: 10px; border: 1px solid #e3e7eb; border-radius: 6px;
     background: #fafbfc; display: flex; flex-direction: column; gap: 8px; max-width: 380px;
   }
+  /* An author display rule beats the UA [hidden]{display:none}; restore it so the
+     toggle actually shows/hides the panel (it defaults hidden). */
+  .results-chart__opts[hidden] { display: none; }
   .results-chart__row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
   .results-chart__row--check { gap: 6px; cursor: pointer; }
   .results-chart__rowlabel { color: #555; min-width: 72px; }
