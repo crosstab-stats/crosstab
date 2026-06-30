@@ -820,8 +820,11 @@ export class HistoryPanel {
    * Hidden until the Syntax toggle is on. */
   #buildEditor() {
     const wrap = el('div', null, 'history-panel__syntax');
-    wrap.hidden = true;
-    wrap.style.cssText = 'display:flex; flex-direction:column; gap:8px; padding:8px 10px;';
+    // Visibility is controlled via style.display (NOT the `hidden` attribute) because
+    // the inline `display:flex` below would override `[hidden]`'s display:none and
+    // leak the editor into the Steps view. Starts hidden; #toggleSyntax flips it.
+    wrap.style.cssText = 'flex-direction:column; gap:8px; padding:8px 10px;';
+    wrap.style.display = 'none';
 
     const hint = el(
       'p',
@@ -860,7 +863,7 @@ export class HistoryPanel {
     this.#clearErr();
     if (this.#syntax) this.#fillEditor();
     this.#contentEl.hidden = this.#syntax;
-    this.#editorEl.hidden = !this.#syntax;
+    this.#editorEl.style.display = this.#syntax ? 'flex' : 'none';
     this.#panel?.classList.toggle('history-panel--wide', this.#syntax); // room for two columns
     if (this.#syntaxBtn) {
       this.#syntaxBtn.textContent = this.#syntax ? '↩ Steps' : '✎ Syntax';
@@ -1003,6 +1006,11 @@ export class HistoryPanel {
     if (!this.#panel) this.#build();
     this.#panel.hidden = false;
     this.#clearErr();
+    // Sync which view is visible to the persisted mode (the editor uses style.display,
+    // not [hidden], so it can't be shown by a stale inline display — see #buildEditor).
+    if (this.#editorEl) this.#editorEl.style.display = this.#syntax ? 'flex' : 'none';
+    if (this.#contentEl) this.#contentEl.hidden = this.#syntax;
+    this.#panel.classList.toggle('history-panel--wide', this.#syntax);
     if (this.#syntax) this.#fillEditor();
     else this.#view.render();
     // Re-render live as the dataset changes (rewind/move/delete/edit elsewhere).
