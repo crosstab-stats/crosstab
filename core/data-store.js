@@ -1131,20 +1131,47 @@ export class DataStore {
 
   /**
    * Replace ALL data transforms with a new ordered list (the script editor's
-   * "Run", #134), keeping the immutable sources and any manual cell edits in place.
-   * The new transforms are appended after the sources (+ setCell overrides); the
-   * usual validate → re-derive → rollback guard makes it atomic, so a bad script
-   * can't corrupt the pipeline — it's rejected with a reason and the prior state
-   * stands. `transforms` are computeVar/recodeVar/filterCases/setVariable ops.
+   * "Run", #134), keeping the immutable sources in place. Cell edits ARE editable
+   * as text now, so they arrive within `transforms` (a `set cell row N …` line) —
+   * the text only carries the display row, so we resolve each one's stable row id
+   * here: reuse the id of an existing edit at the same row+column (a value edit), or
+   * look up the id at that display row (a fresh edit). The usual validate →
+   * re-derive → rollback guard makes it atomic, so a bad script can't corrupt the
+   * pipeline. `transforms` are computeVar/recodeVar/filterCases/setVariable/setCell.
    *
    * @param {object[]} transforms
    * @returns {Promise<void>}
    */
   async replaceTransforms(transforms) {
     const sources = this.#log.filter((o) => SOURCE_OPS.has(o.type));
-    const cells = this.#log.filter((o) => o.type === 'setCell'); // preserve manual cell edits
-    const next = [...sources, ...cells, ...transforms.map((t) => structuredClone(t))];
+    const liveCells = this.#log.filter((o) => o.type === 'setCell');
+    const resolved = [];
+    for (const t of transforms) {
+      if (t.type !== 'setCell') { resolved.push(structuredClone(t)); continue; }
+      if (!this.#byName.has(t.column)) throw new Error(`cell edit: unknown variable "${t.column}"`);
+      let rid = t.rid;
+      if (rid == null) {
+        // value edit of an existing cell override → reuse its stable id…
+        const match = liveCells.find((c) => c.row === t.row && c.column === t.column);
+        // …otherwise resolve the id at that display row in the current data.
+        rid = match ? match.rid : await this.#ridAtRow(t.row); // eslint-disable-line no-await-in-loop
+      }
+      if (rid == null) throw new Error(`cell edit: row ${(t.row ?? 0) + 1} doesn’t exist`);
+      resolved.push({ type: 'setCell', rid: String(rid), column: t.column, value: t.value === '' ? null : t.value, row: t.row ?? 0 });
+    }
+    const next = [...sources, ...resolved];
     await this.#applyReorder(next, 'script change');
+  }
+
+  /** The stable row id ({@link ROWID_COL}) at a 0-based display offset in the current
+   * derived view, or null if out of range — used to resolve a `set cell row N` line. */
+  async #ridAtRow(displayRow) {
+    const rel = this.#readRelation();
+    const off = Math.max(0, Math.floor(Number(displayRow) || 0));
+    const t = await this.#duckdb.query(`SELECT ${rel.rid} AS rid FROM ${rel.from} LIMIT 1 OFFSET ${off}`);
+    if (!t.numRows) return null;
+    const v = t.getChild('rid').get(0);
+    return v == null ? null : String(v);
   }
 
   /** Validate, then swap in a reordered/edited log and re-derive; on any failure

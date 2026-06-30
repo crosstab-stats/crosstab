@@ -825,9 +825,9 @@ export class HistoryPanel {
 
     const hint = el(
       'p',
-      'Each step is shown beside its CrossTab syntax — edit the right-hand cells (transforms and ' +
-        'analyses) and Run to rebuild the dataset and re-run the analyses. 🔒 rows (data sources, cell ' +
-        'edits) are read-only here — manage those in the Data grid or the Steps view. Expressions are SQL.',
+      'Each step is shown beside its CrossTab syntax — edit the right-hand cells and Run to rebuild ' +
+        'the dataset and re-run the analyses. 🔒 rows are data sources (re-import to change them); ' +
+        'everything else, including cell edits, is editable. Expressions are SQL.',
       'history-panel__synhint',
     );
     hint.style.cssText = 'margin:0; font-size:12px; color:#6a7480; line-height:1.4;';

@@ -114,9 +114,9 @@ export function timeline(applied, analyses = []) {
     const isT = TRANSFORM_TYPES.has(op.type);
     if (isT) flushZero();
     const lines = opToLines(op) || [];
-    // Sources (load/append/join) and manual cell edits are comments — read-only in
-    // the grid (data isn't editable as text); real transforms + analyses are editable.
-    const editable = isT && op.type !== 'setCell';
+    // Every data transform — including a cell edit — is editable as text; only the
+    // data sources (load/append/join) are read-only (you can't re-type the data).
+    const editable = isT;
     rows.push({ kind: editable ? 'transform' : 'source', op, text: lines.join('\n'), editable });
     if (isT) { tcount += 1; pushAnalyses(tcount); }
   }
@@ -134,7 +134,7 @@ function opToLines(op) {
     case 'join':
       return [`# join ${str(srcLabel(op))}${op.joinKey ? ` on ${ident(String(op.joinKey))}` : ''}`];
     case 'setCell':
-      return [`# edit row ${op.row != null ? op.row + 1 : '?'}: ${ident(op.column)} = ${val(op.value)}`];
+      return [`set cell row ${op.row != null ? op.row + 1 : 1} ${ident(op.column)} = ${val(op.value)}`];
     case 'computeVar':
       return [`compute ${ident(op.name)}${typeSuffix(op.varType)} = ${op.expr}`];
     case 'filterCases':
@@ -309,6 +309,9 @@ function parseLine(line) {
   // label values NAME code "Label", …
   if (/^label\s+values\b/i.test(line)) return parseLabelValues(line);
 
+  // set cell row N COL = VALUE
+  if (/^set\s+cell\b/i.test(line)) return parseSetCell(line);
+
   // set type|measure|missing NAME = …
   if (/^set\s+(type|measure|missing)\b/i.test(line)) return parseSet(line);
 
@@ -359,6 +362,18 @@ function parseLabelValues(line) {
     labels[String(readVal(pm[1].trim()))] = readStr(pm[2]);
   }
   return setVar(name, { valueLabels: labels });
+}
+
+function parseSetCell(line) {
+  const m = line.match(/^set\s+cell\s+row\s+(\d+)\s+([\s\S]+)$/i);
+  if (!m) throw new Error('set cell: expected `set cell row N COLUMN = VALUE`');
+  const row = parseInt(m[1], 10) - 1; // shown 1-based; stored 0-based
+  const { value: column, rest } = takeIdent(m[2]);
+  const em = rest.match(/^\s*=\s*([\s\S]+)$/);
+  if (!em) throw new Error('set cell: expected `= VALUE` after the column');
+  // rid is resolved at apply time (reuse the existing edit's id, or look it up by
+  // row) — the text only carries the display row.
+  return { type: 'setCell', row: row < 0 ? 0 : row, column, value: readVal(em[1].trim()) };
 }
 
 function parseSet(line) {
