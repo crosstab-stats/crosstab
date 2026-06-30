@@ -942,7 +942,11 @@ export class HistoryPanel {
     this.#clearErr();
     // Entering Syntax: reload from committed state ONLY if there's no unsaved draft —
     // navigating between Steps and Syntax must never silently discard typed edits.
+    // Entering Steps: re-render it — DATA_CHANGED/analysislog events are ignored while
+    // in Syntax mode (so they can't clobber the textarea), so the timeline can be
+    // stale after a Run; refresh it now to reflect the rebuilt data + analyses.
     if (this.#syntax) { if (this.#dirty) this.#renderGutter(); else this.#fillEditor(); }
+    else this.#view.render();
     this.#contentEl.hidden = this.#syntax;
     this.#editorEl.style.display = this.#syntax ? 'flex' : 'none';
     this.#panel?.classList.toggle('history-panel--wide', this.#syntax); // room for two columns
