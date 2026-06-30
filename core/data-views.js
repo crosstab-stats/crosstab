@@ -769,6 +769,8 @@ export class HistoryPanel {
   #ta = null; // the free-form script textarea (the whole script as one editable text)
   #gutter = null; // left margin host (clips); #gutterInner is translated to track scroll
   #gutterInner = null;
+  #dirty = false; // true once the user types — guards navigation from discarding the draft
+  #dirtyHint = null;
   #syntaxBtn = null;
 
   /**
@@ -864,8 +866,19 @@ export class HistoryPanel {
     const refresh = el('button', '↻ Refresh', 'history-panel__action');
     refresh.type = 'button';
     refresh.title = 'Discard edits and reload the script from the current state';
-    refresh.addEventListener('click', () => this.#fillEditor());
-    row.append(run, refresh);
+    refresh.addEventListener('click', () => {
+      // Refresh is the ONE explicit "throw away my draft" action — confirm if there's
+      // unsaved work, so it's never a silent loss.
+      if (this.#dirty && !confirm('Discard your unsaved script edits and reload from the current state?')) return;
+      this.#fillEditor();
+    });
+    // "Unsaved edits" indicator — the textarea is a draft until you Run; this makes
+    // that visible so a draft never feels silently lost.
+    const dirtyHint = el('span', '', 'history-panel__dirty');
+    dirtyHint.style.cssText = 'margin-left:auto; align-self:center; font-size:12px; color:#b06a00;';
+    dirtyHint.hidden = true;
+    this.#dirtyHint = dirtyHint;
+    row.append(run, refresh, dirtyHint);
 
     // body: gutter (clips) | textarea (the editable script)
     const body = el('div', null, 'history-panel__synbody');
@@ -892,7 +905,7 @@ export class HistoryPanel {
       `white-space:pre; overflow:auto; tab-size:2; ` +
       `font:13px/${SYN_LINE_H}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; ` +
       `padding:${SYN_PAD}px 8px;`;
-    ta.addEventListener('input', () => this.#renderGutter());
+    ta.addEventListener('input', () => { this.#dirty = true; this.#updateDirtyHint(); this.#renderGutter(); });
     ta.addEventListener('scroll', () => this.#syncGutterScroll());
     this.#ta = ta;
 
@@ -906,7 +919,9 @@ export class HistoryPanel {
   #toggleSyntax() {
     this.#syntax = !this.#syntax;
     this.#clearErr();
-    if (this.#syntax) this.#fillEditor();
+    // Entering Syntax: reload from committed state ONLY if there's no unsaved draft —
+    // navigating between Steps and Syntax must never silently discard typed edits.
+    if (this.#syntax) { if (this.#dirty) this.#renderGutter(); else this.#fillEditor(); }
     this.#contentEl.hidden = this.#syntax;
     this.#editorEl.style.display = this.#syntax ? 'flex' : 'none';
     this.#panel?.classList.toggle('history-panel--wide', this.#syntax); // room for two columns
@@ -923,7 +938,16 @@ export class HistoryPanel {
     const { applied } = this.#store.getHistory();
     const analyses = this.#analysisLog ? this.#analysisLog.entries() : [];
     this.#ta.value = serialize(applied, analyses);
+    this.#dirty = false; // the textarea now matches committed state
+    this.#updateDirtyHint();
     this.#renderGutter();
+  }
+
+  /** Show/hide the "unsaved edits" indicator (the draft isn't committed until Run). */
+  #updateDirtyHint() {
+    if (!this.#dirtyHint) return;
+    this.#dirtyHint.textContent = this.#dirty ? '● edited — Run to apply' : '';
+    this.#dirtyHint.hidden = !this.#dirty;
   }
 
   /** Keep the gutter scrolled in lockstep with the textarea (vertical only — the
@@ -1011,7 +1035,8 @@ export class HistoryPanel {
     if (this.#editorEl) this.#editorEl.style.display = this.#syntax ? 'flex' : 'none';
     if (this.#contentEl) this.#contentEl.hidden = this.#syntax;
     this.#panel.classList.toggle('history-panel--wide', this.#syntax);
-    if (this.#syntax) this.#fillEditor();
+    // Reopen: keep an unsaved draft rather than reload over it (see #toggleSyntax).
+    if (this.#syntax) { if (this.#dirty) this.#renderGutter(); else this.#fillEditor(); }
     else this.#view.render();
     // Re-render live as the dataset changes (rewind/move/delete/edit elsewhere).
     // In syntax mode, leave the textarea alone so a data change elsewhere can't
