@@ -90,6 +90,10 @@ export function qualifyId(origin, manifest) {
  *   `'Multivariate'`, `'Time Series'`, `'Resampling'`, `'Graphs'`, `'Export'`. An
  *   unrecognised value just makes a new section; missing → "Other".
  * @property {string[]} [keywords] - Extra search terms for the plugin manager.
+ * @property {string} [howto] - Optional usage note shown behind the 🔍 in the plugin
+ *   manager and in the Syntax guide. Write a line or two on using it from the GUI,
+ *   then the syntax call form, e.g. `Pick variables in Descriptive Statistics ▸
+ *   Frequencies. Syntax: run builtin-frequencies.run {"vars": ["gender","region"]}`.
  * @property {Array<MenuItem>} [menu] - Menu actions. Each item is filed under
  *   `category`; clicking it gathers the item's `inputs`, binds them into R by name,
  *   then calls the named `run` function.

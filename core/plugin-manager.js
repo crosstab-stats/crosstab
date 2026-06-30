@@ -36,7 +36,7 @@ const LS_WEB = 'crosstab.plugins.web';
 /** Bump when the catalog shape OR built-in manifests' metadata change, so a
  * stale persisted catalog (e.g. missing newly-declared `disciplines`) is dropped
  * and re-probed on next load. */
-const CATALOG_VERSION = 14; // 14: builtin-plots scatter+pie → data-driven charts (#131); 13: trends → chart; 12: re-added ReadStat codec (#130); 11: `version` (#91); 10: `codecs` (#98)
+const CATALOG_VERSION = 15; // 15: `howto` field (#135); 14: builtin-plots scatter+pie → data-driven charts (#131); 13: trends → chart; 12: re-added ReadStat codec (#130); 11: `version` (#91); 10: `codecs` (#98)
 
 export class PluginManager {
   /** @type {import('./loader.js').PluginLoader} */
@@ -251,6 +251,9 @@ export class PluginManager {
       // it — a visible way to confirm a freshly-deployed plugin file actually loaded
       // (#91). Re-read whenever the catalog re-probes (CATALOG_VERSION bump / new id).
       version: manifest.version != null ? String(manifest.version) : null,
+      // Optional author-written usage note (GUI how-to + the syntax call form). Shown
+      // behind the 🔍 in the plugin manager and surfaced in the Syntax guide.
+      howto: typeof manifest.howto === 'string' ? manifest.howto : null,
       category: typeof manifest.category === 'string' ? manifest.category : '',
       keywords: Array.isArray(manifest.keywords) ? manifest.keywords : [],
       disciplines: Array.isArray(manifest.disciplines) ? manifest.disciplines : [],
@@ -774,6 +777,7 @@ export class PluginManager {
         name: cat?.name ?? e.name ?? prettyName(e.url || e.key),
         category: cat?.category || 'Other',
         version: cat?.version ?? null,
+        howto: cat?.howto ?? null,
         keywords: cat?.keywords ?? [],
         disciplines: cat?.disciplines ?? [],
         rPackages: cat?.rPackages ?? [],
@@ -941,6 +945,21 @@ export class PluginManager {
     const metaText = p.enabled ? (p.activated ? p.origin : 'failed') : 'disabled';
     right.append(el('span', metaText, 'ct-plugin__meta'));
 
+    // 🔍 How-to: show the plugin's author-written usage note (GUI + syntax). Only when
+    // the manifest declares `howto` — no icon means the author didn't include one.
+    if (p.howto) {
+      const how = document.createElement('button');
+      how.type = 'button';
+      how.className = 'ct-plugin__howto';
+      how.textContent = '🔍';
+      how.title = 'How to use this plugin';
+      how.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.#showHowto(p);
+      });
+      right.append(how);
+    }
+
     // Network grant: shown only when the user has allowed this plugin web access;
     // click to revoke (it'll be asked again next time it fetches).
     if (p.webAllowed && p.id) {
@@ -1030,6 +1049,32 @@ export class PluginManager {
 
     li.append(label, right);
     return li;
+  }
+
+  /** Modal showing a plugin's author-written how-to (the 🔍 on its row). Plain text
+   * (rendered via textContent — never HTML — so an authored note can't inject markup),
+   * line breaks preserved. */
+  #showHowto(p) {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'ct-dialog ct-dialog--wide';
+    const form = el('form', null, 'ct-dialog__form');
+    form.method = 'dialog';
+    form.append(el('h2', `How to use ${p.name}`, 'ct-dialog__title'));
+    const body = el('div', null, 'ct-howto');
+    body.style.cssText =
+      'white-space:pre-wrap; line-height:1.5; font-size:14px; color:#2a323a; max-height:60vh; overflow:auto; margin:0 0 16px;';
+    body.textContent = p.howto;
+    form.append(body);
+    const menu = el('menu', null, 'ct-dialog__buttons');
+    const close = el('button', 'Close', 'ct-dialog__primary');
+    close.value = 'cancel';
+    close.type = 'submit';
+    menu.append(close);
+    form.append(menu);
+    dialog.append(form);
+    dialog.addEventListener('close', () => dialog.remove());
+    document.body.append(dialog);
+    dialog.showModal();
   }
 
   /** A nested prompt for a plugin URL. Resolves the trimmed URL, or null. */

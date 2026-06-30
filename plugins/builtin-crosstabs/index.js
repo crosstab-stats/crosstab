@@ -20,6 +20,14 @@ export const manifest = {
   category: 'Descriptive Statistics',
   keywords: ['chi-square', 'contingency', 'crosstab', 'association'],
   disciplines: ['Social Science', 'Sociology', 'Liberal Studies', 'Political Science'],
+  howto:
+    'GUI: Descriptive Statistics ▸ Crosstabs…, then pick a row and column variable; optionally add ' +
+    'percentages and an association measure. You get a two-way table plus a chi-square test.\n' +
+    'Syntax: run builtin-crosstabs.run {"rowvar": "region", "colvar": "gender", "percent": "column"}\n' +
+    '  • rowvar / colvar — the two category variables.\n' +
+    '  • pmethod — "asymptotic" (default) or "montecarlo" (sparse tables).\n' +
+    '  • percent — "none" | "row" | "column" | "total".\n' +
+    '  • measures — association measures (see the dialog for options).',
   rPackages: [],
   menu: [
     {

@@ -13,6 +13,7 @@
 
 import { CoreEvents } from './event-bus.js';
 import { serialize, parse } from './crosstab-syntax.js';
+import { openSyntaxGuide } from './syntax-guide.js';
 
 /** Syntax editor metrics: the textarea uses a FIXED line-height so the step gutter
  * can place each marker at `PAD + lineIndex * LINE_H` (and the textarea is no-wrap,
@@ -872,13 +873,17 @@ export class HistoryPanel {
       if (this.#dirty && !confirm('Discard your unsaved script edits and reload from the current state?')) return;
       this.#fillEditor();
     });
+    const guide = el('button', '❓ Syntax guide', 'history-panel__action');
+    guide.type = 'button';
+    guide.title = 'Open the CrossTab syntax reference and the list of plugin calls';
+    guide.addEventListener('click', () => openSyntaxGuide({ pluginActions: this.#pluginActions }));
     // "Unsaved edits" indicator — the textarea is a draft until you Run; this makes
     // that visible so a draft never feels silently lost.
     const dirtyHint = el('span', '', 'history-panel__dirty');
     dirtyHint.style.cssText = 'margin-left:auto; align-self:center; font-size:12px; color:#b06a00;';
     dirtyHint.hidden = true;
     this.#dirtyHint = dirtyHint;
-    row.append(run, refresh, dirtyHint);
+    row.append(run, refresh, guide, dirtyHint);
 
     // body: gutter (clips) | textarea (the editable script)
     const body = el('div', null, 'history-panel__synbody');

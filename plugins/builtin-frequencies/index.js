@@ -19,6 +19,11 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Descriptive Statistics',
   keywords: ['frequency', 'counts', 'distribution', 'table'],
+  howto:
+    'GUI: Descriptive Statistics ▸ Frequencies…, then pick one or more variables. ' +
+    'You get a value/frequency/percent table per variable (value labels and user-missing codes honoured).\n' +
+    'Syntax: run builtin-frequencies.run {"vars": ["gender", "region"]}\n' +
+    '  • vars — one or more variables to tabulate.',
   rPackages: [],
   menu: [
     {

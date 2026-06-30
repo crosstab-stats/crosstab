@@ -159,6 +159,35 @@ export class PluginActions {
     this.#disposers.set(id, disposers);
   }
 
+  /** Every wired analysis action as a callable `run id.fn {…}` descriptor — the data
+   * behind the Syntax guide's "running analyses" section. Reads the live #runnable
+   * registry, so it lists exactly what a script can actually invoke (active plugins
+   * only), with each item's inputs and the plugin's optional `howto`. */
+  listRunnable() {
+    return [...this.#runnable.values()]
+      .map(({ manifest, item, origin }) => ({
+        pluginId: manifest.id,
+        pluginName: manifest.name || manifest.id,
+        category: (typeof manifest.category === 'string' && manifest.category) || 'Other',
+        origin: origin || null,
+        run: item.run,
+        label: String(item.label ?? '').replace(/\s*[.…]+\s*$/, ''),
+        howto: typeof manifest.howto === 'string' ? manifest.howto : null,
+        inputs: Array.isArray(item.inputs)
+          ? item.inputs.map((i) => ({
+              name: i.name,
+              kind: i.kind || 'variables',
+              label: i.label || null,
+              multiple: !!i.multiple,
+              optional: !!i.optional,
+              options: Array.isArray(i.options) ? i.options : null,
+              default: i.default,
+            }))
+          : [],
+      }))
+      .sort((a, b) => a.pluginName.localeCompare(b.pluginName) || a.label.localeCompare(b.label));
+  }
+
   /** Run a declarative parse/export function and deliver its return to the host
    * service's ticket (delivering null on failure so the in-flight op resolves). */
   #bridge(service, ticket, invoke) {
