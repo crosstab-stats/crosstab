@@ -877,13 +877,28 @@ export class HistoryPanel {
     guide.type = 'button';
     guide.title = 'Open the CrossTab syntax reference and the list of plugin calls';
     guide.addEventListener('click', () => openSyntaxGuide({ pluginActions: this.#pluginActions }));
+    // Export / Import the script as a portable .ctscript text file (lossless — it's
+    // serialize() output). Import loads into the editor as a draft for review + Run.
+    const exportBtn = el('button', '⬇ Export', 'history-panel__action');
+    exportBtn.type = 'button';
+    exportBtn.title = 'Save this script to a .ctscript file';
+    exportBtn.addEventListener('click', () => this.#exportScript());
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = '.ctscript,.txt,text/plain';
+    fileInput.style.display = 'none';
+    fileInput.addEventListener('change', () => this.#importScript(fileInput));
+    const importBtn = el('button', '⬆ Import', 'history-panel__action');
+    importBtn.type = 'button';
+    importBtn.title = 'Load a .ctscript file into the editor (review, then Run)';
+    importBtn.addEventListener('click', () => fileInput.click());
     // "Unsaved edits" indicator — the textarea is a draft until you Run; this makes
     // that visible so a draft never feels silently lost.
     const dirtyHint = el('span', '', 'history-panel__dirty');
     dirtyHint.style.cssText = 'margin-left:auto; align-self:center; font-size:12px; color:#b06a00;';
     dirtyHint.hidden = true;
     this.#dirtyHint = dirtyHint;
-    row.append(run, refresh, guide, dirtyHint);
+    row.append(run, refresh, guide, exportBtn, importBtn, fileInput, dirtyHint);
 
     // body: gutter (clips) | textarea (the editable script)
     const body = el('div', null, 'history-panel__synbody');
@@ -1019,6 +1034,33 @@ export class HistoryPanel {
     }
     this.#fillEditor(); // reflect the rebuilt state (and drop any unknown lines)
     if (unknown > 0) this.#showErr(`${unknown} analysis line(s) referenced a plugin that isn’t active — skipped.`);
+  }
+
+  /** Save the current script (the textarea text — lossless serialize() output) to a
+   * portable .ctscript file. */
+  #exportScript() {
+    const text = this.#ta ? this.#ta.value : '';
+    downloadTextFile('analysis.ctscript', text);
+  }
+
+  /** Load a .ctscript (or .txt) file into the editor as a DRAFT — never auto-applied.
+   * Respects the dirty-guard (confirm before replacing unsaved edits); the user
+   * reviews then clicks Run. */
+  async #importScript(input) {
+    const file = input.files && input.files[0];
+    input.value = ''; // reset so picking the same file again re-fires change
+    if (!file || !this.#ta) return;
+    if (this.#dirty && !confirm('Replace the current script with the imported file? Your unsaved edits will be discarded.')) return;
+    try {
+      const text = await file.text();
+      this.#ta.value = text;
+      this.#dirty = true; // an imported script is a draft until you Run it
+      this.#updateDirtyHint();
+      this.#renderGutter();
+      this.#clearErr();
+    } catch (err) {
+      this.#showErr(`Could not read file: ${err.message}`);
+    }
   }
 
   #showErr(msg) {
@@ -1160,6 +1202,18 @@ function el(tag, text, className) {
   if (text != null) e.textContent = text;
   if (className) e.className = className;
   return e;
+}
+
+/** Download a string as a text file (script export). */
+function downloadTextFile(filename, text) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
 function elWrap(tag, child) {
