@@ -12,7 +12,13 @@
  */
 
 import { CoreEvents } from './event-bus.js';
-import { timeline, parse } from './crosstab-syntax.js';
+import { serialize, parse } from './crosstab-syntax.js';
+
+/** Syntax editor metrics: the textarea uses a FIXED line-height so the step gutter
+ * can place each marker at `PAD + lineIndex * LINE_H` (and the textarea is no-wrap,
+ * so one logical line is always exactly one visual row — the alignment math holds). */
+const SYN_LINE_H = 26;
+const SYN_PAD = 8;
 
 const ROW_H = 28; // px; must match the CSS cell height for scrollbar accuracy.
 const COL_W = 120; // px; fixed column width so columns can be virtualised too.
@@ -760,8 +766,9 @@ export class HistoryPanel {
   #syntax = false;
   #contentEl = null;
   #editorEl = null;
-  #gridEl = null;
-  #cells = []; // ordered { text():string } per grid row — concatenated to form the script
+  #ta = null; // the free-form script textarea (the whole script as one editable text)
+  #gutter = null; // left margin host (clips); #gutterInner is translated to track scroll
+  #gutterInner = null;
   #syntaxBtn = null;
 
   /**
@@ -826,22 +833,23 @@ export class HistoryPanel {
     this.#view = new HistoryView(content, this.#store, { onError: (m) => this.#showErr(m), analysisLog: this.#analysisLog, undo: this.#undo });
   }
 
-  /** The Syntax editor: an ALIGNED grid — each GUI step on the left, its editable
-   * syntax on the same row to the right (analyses interleaved as their own rows).
+  /** The Syntax editor: ONE free-form textarea holding the whole script (edit like a
+   * notepad — insert/reorder/paste freely), with a left gutter that labels each line
+   * with the step it maps to, kept aligned by a fixed line-height + no-wrap textarea.
    * Hidden until the Syntax toggle is on. */
   #buildEditor() {
     const wrap = el('div', null, 'history-panel__syntax');
     // Visibility is controlled via style.display (NOT the `hidden` attribute) because
     // the inline `display:flex` below would override `[hidden]`'s display:none and
     // leak the editor into the Steps view. Starts hidden; #toggleSyntax flips it.
-    wrap.style.cssText = 'flex-direction:column; gap:8px; padding:8px 10px;';
+    wrap.style.cssText = 'flex:1 1 auto; min-height:0; flex-direction:column; gap:8px; padding:8px 10px;';
     wrap.style.display = 'none';
 
     const hint = el(
       'p',
-      'Each step is shown beside its CrossTab syntax — edit the right-hand cells and Run to rebuild ' +
-        'the dataset and re-run the analyses. 🔒 rows are data sources (re-import to change them); ' +
-        'everything else, including cell edits, is editable. Expressions are SQL.',
+      'Edit the script freely like a text file, then Run to rebuild the dataset and re-run the ' +
+        'analyses. The left margin labels each line with the step it maps to. Lines starting with # ' +
+        'are comments; 🔒 marks a data source (re-import to change it). Expressions are SQL.',
       'history-panel__synhint',
     );
     hint.style.cssText = 'margin:0; font-size:12px; color:#6a7480; line-height:1.4;';
@@ -850,20 +858,46 @@ export class HistoryPanel {
     row.style.cssText = 'display:flex; gap:8px;';
     const run = el('button', '▶ Run', 'history-panel__action');
     run.type = 'button';
-    run.title = 'Rebuild the dataset from these steps and re-run the analyses';
+    run.title = 'Rebuild the dataset from this script and re-run the analyses';
     run.style.cssText = 'background:var(--accent,#2980b9); color:#fff; border-color:var(--accent,#2980b9);';
     run.addEventListener('click', () => void this.#runScript());
     const refresh = el('button', '↻ Refresh', 'history-panel__action');
     refresh.type = 'button';
-    refresh.title = 'Discard edits and reload from the current steps';
+    refresh.title = 'Discard edits and reload the script from the current state';
     refresh.addEventListener('click', () => this.#fillEditor());
     row.append(run, refresh);
 
-    const grid = el('div', null, 'history-panel__grid');
-    grid.style.cssText = 'display:flex; flex-direction:column; gap:2px; overflow:auto;';
-    this.#gridEl = grid;
+    // body: gutter (clips) | textarea (the editable script)
+    const body = el('div', null, 'history-panel__synbody');
+    body.style.cssText = 'flex:1 1 auto; min-height:0; display:flex; border:1px solid var(--line,#d8dee4); border-radius:6px; overflow:hidden;';
 
-    wrap.append(hint, row, grid);
+    const gutter = el('div', null, 'history-panel__gutter');
+    gutter.style.cssText =
+      'flex:0 0 172px; position:relative; overflow:hidden; background:#fafbfc; border-right:1px solid var(--line,#d8dee4);';
+    const gutterInner = el('div', null, 'history-panel__gutterinner');
+    gutterInner.style.cssText = 'position:absolute; top:0; left:0; right:0; will-change:transform;';
+    gutter.append(gutterInner);
+    this.#gutter = gutter;
+    this.#gutterInner = gutterInner;
+
+    const ta = document.createElement('textarea');
+    ta.className = 'history-panel__ta';
+    ta.spellcheck = false;
+    ta.setAttribute('autocomplete', 'off');
+    ta.setAttribute('autocapitalize', 'off');
+    ta.setAttribute('autocorrect', 'off');
+    ta.setAttribute('wrap', 'off'); // 1 logical line = 1 visual row → gutter math stays exact
+    ta.style.cssText =
+      `flex:1 1 auto; min-width:0; resize:none; border:0; outline:none; box-sizing:border-box; ` +
+      `white-space:pre; overflow:auto; tab-size:2; ` +
+      `font:13px/${SYN_LINE_H}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; ` +
+      `padding:${SYN_PAD}px 8px;`;
+    ta.addEventListener('input', () => this.#renderGutter());
+    ta.addEventListener('scroll', () => this.#syncGutterScroll());
+    this.#ta = ta;
+
+    body.append(gutter, ta);
+    wrap.append(hint, row, body);
     this.#editorEl = wrap;
     return wrap;
   }
@@ -882,107 +916,62 @@ export class HistoryPanel {
     }
   }
 
-  /** (Re)build the aligned grid from the current timeline + analysis log: one row
-   * per step, GUI on the left, editable syntax on the right (read-only for sources).
-   * The ordered cell list is what Run concatenates back into the script. */
+  /** Load the whole script into the textarea (serialized from the current data log +
+   * analysis log) and (re)draw the step gutter. */
   #fillEditor() {
-    if (!this.#gridEl) return;
+    if (!this.#ta) return;
     const { applied } = this.#store.getHistory();
     const analyses = this.#analysisLog ? this.#analysisLog.entries() : [];
-    const rows = timeline(applied, analyses);
-    this.#gridEl.replaceChildren();
-    this.#cells = [];
-    let stepNo = 0;
-    for (const r of rows) {
-      const isAnalysis = r.kind === 'analysis';
-      const d = isAnalysis
-        ? { title: String(r.entry.label || 'Analysis').replace(/…\s*$/, ''), detail: r.entry.pluginName || '' }
-        : describeTransform(r.op);
-      const marker = isAnalysis ? '∑' : String(++stepNo);
-
-      const rowEl = el('div', null, `history-panel__grow${r.editable ? '' : ' is-source'}`);
-      rowEl.style.cssText = 'display:flex; gap:8px; align-items:flex-start;';
-
-      const left = el('div', null, 'history-panel__gleft');
-      left.style.cssText = 'flex:0 0 180px; display:flex; gap:6px; padding:4px 0; min-width:0;';
-      const mk = el('span', marker, 'history__marker');
-      mk.style.cssText = 'flex:0 0 auto; opacity:.7;' + (isAnalysis ? 'color:var(--accent,#2980b9);' : '');
-      const body = el('span', null, 'history__body');
-      body.style.cssText = 'display:flex; flex-direction:column; min-width:0;';
-      const title = el('span', d.title, 'history__title');
-      title.style.cssText = 'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
-      body.append(title);
-      if (d.detail) {
-        const det = el('span', d.detail, 'history__detail');
-        det.style.cssText = 'white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:11px; color:#7a8590;';
-        body.append(det);
-      }
-      left.append(mk, body);
-
-      const right = el('div', null, 'history-panel__gright');
-      right.style.cssText = 'flex:1 1 auto; min-width:0;';
-      if (r.editable) {
-        const ta = document.createElement('textarea');
-        ta.spellcheck = false;
-        ta.setAttribute('autocomplete', 'off');
-        ta.setAttribute('autocapitalize', 'off');
-        ta.value = r.text;
-        ta.rows = Math.max(1, r.text.split('\n').length);
-        ta.style.cssText =
-          'width:100%; box-sizing:border-box; resize:vertical; ' +
-          'font:13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; ' +
-          'padding:4px 6px; border:1px solid var(--line,#d8dee4); border-radius:5px; min-height:30px; white-space:pre-wrap; word-break:break-word;';
-        const autosize = () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; };
-        ta.addEventListener('input', autosize);
-        this.#cells.push({ text: () => ta.value });
-        right.append(ta);
-      } else {
-        // Read-only rows (data sources, cell edits): show the syntax WITHOUT the
-        // leading "# " — it's a real step, not a comment — with a lock to mark it
-        // non-editable. (It still contributes its comment line to the Run script so
-        // the engine's source/cell-edit handling is unchanged.)
-        const shown = String(r.text || '').split('\n').map((l) => l.replace(/^#\s?/, '')).join('\n');
-        const pre = el('div', null, 'history-panel__gcomment');
-        pre.textContent = `🔒 ${shown}`;
-        pre.title = 'Read-only — a data source; re-import to change it.';
-        pre.style.cssText =
-          'font:12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; ' +
-          'color:#9aa4ae; padding:5px 6px; white-space:pre-wrap; word-break:break-word;';
-        this.#cells.push({ text: () => r.text });
-        right.append(pre);
-      }
-      rowEl.append(left, right);
-      this.#gridEl.append(rowEl);
-    }
-
-    // A trailing empty cell to append new steps at the bottom.
-    const addRow = el('div', null, 'history-panel__grow');
-    addRow.style.cssText = 'display:flex; gap:8px; align-items:flex-start;';
-    const addLeft = el('div', '+', 'history-panel__gleft');
-    addLeft.style.cssText = 'flex:0 0 180px; padding:4px 0; color:#9aa4ae;';
-    const addTa = document.createElement('textarea');
-    addTa.spellcheck = false;
-    addTa.placeholder = 'add a step… (e.g. compute z = x + y)';
-    addTa.rows = 1;
-    addTa.style.cssText =
-      'width:100%; box-sizing:border-box; resize:vertical; ' +
-      'font:13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; ' +
-      'padding:4px 6px; border:1px dashed var(--line,#d8dee4); border-radius:5px; min-height:30px; white-space:pre-wrap; word-break:break-word;';
-    addTa.addEventListener('input', () => { addTa.style.height = 'auto'; addTa.style.height = addTa.scrollHeight + 'px'; });
-    this.#cells.push({ text: () => addTa.value });
-    const addRight = el('div', null, 'history-panel__gright');
-    addRight.style.cssText = 'flex:1 1 auto; min-width:0;';
-    addRight.append(addTa);
-    addRow.append(addLeft, addRight);
-    this.#gridEl.append(addRow);
+    this.#ta.value = serialize(applied, analyses);
+    this.#renderGutter();
   }
 
-  /** Parse the edited grid (cells concatenated top-to-bottom), rebuild the data
-   * pipeline (atomically — a bad script is rejected, not applied), then re-run the
-   * analyses position-faithfully. */
+  /** Keep the gutter scrolled in lockstep with the textarea (vertical only — the
+   * markers are positioned absolutely, so we just translate the layer). */
+  #syncGutterScroll() {
+    if (this.#gutterInner && this.#ta) this.#gutterInner.style.transform = `translateY(${-this.#ta.scrollTop}px)`;
+  }
+
+  /** Redraw the left margin: one label per script line, positioned at the line's
+   * pixel offset (`PAD + lineIndex * LINE_H`). Re-derives the step kind/label from the
+   * line text each time, so it tracks edits live. Blank and plain `#` comment lines
+   * get no marker. Runs on every keystroke — cheap for the small line counts here. */
+  #renderGutter() {
+    if (!this.#gutterInner || !this.#ta) return;
+    const lines = this.#ta.value.split('\n');
+    const frag = document.createDocumentFragment();
+    let stepNo = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const info = classifyScriptLine(lines[i], (line) => {
+        try {
+          const { transforms } = parse(line);
+          return transforms[0] ? describeTransform(transforms[0]) : null;
+        } catch { return null; }
+      });
+      if (!info) continue; // blank or plain comment
+      if (info.kind !== 'analysis') stepNo += 1;
+      const marker = el('div', null, `history-panel__gmark is-${info.kind}`);
+      marker.style.cssText =
+        `position:absolute; left:0; right:0; height:${SYN_LINE_H}px; top:${SYN_PAD + i * SYN_LINE_H}px; ` +
+        'display:flex; gap:5px; align-items:center; padding:0 6px 0 8px; overflow:hidden; white-space:nowrap;';
+      const mk = el('span', info.kind === 'analysis' ? '∑' : info.kind === 'source' ? '🔒' : String(stepNo), 'history__marker');
+      mk.style.cssText = 'flex:0 0 auto; opacity:.7; font-size:11px;' + (info.kind === 'analysis' ? 'color:var(--accent,#2980b9);' : '');
+      const title = el('span', info.title, 'history__title');
+      title.style.cssText = 'overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px;' + (info.kind === 'source' ? 'color:#9aa4ae;' : '');
+      marker.append(mk, title);
+      marker.title = info.detail ? `${info.title} — ${info.detail}` : info.title;
+      frag.append(marker);
+    }
+    this.#gutterInner.replaceChildren(frag);
+    this.#syncGutterScroll();
+  }
+
+  /** Parse the edited script (the whole textarea), rebuild the data pipeline
+   * (atomically — a bad script is rejected, not applied), then re-run the analyses
+   * position-faithfully. */
   async #runScript() {
     this.#clearErr();
-    const script = this.#cells.map((c) => c.text()).join('\n');
+    const script = this.#ta ? this.#ta.value : '';
     const { steps, errors } = parse(script);
     if (errors.length) {
       const first = errors[0];
@@ -1104,6 +1093,36 @@ function describeTransform(t) {
     bits.push(k ? `${k} value label${k === 1 ? '' : 's'}` : 'cleared value labels');
   }
   return { title: `Edited ${t.name}`, detail: bits.join(' · ') };
+}
+
+/** Classify one script line for the Syntax-mode gutter. Returns null for blank lines
+ * and plain comments (no marker), else `{ kind, title, detail }` where kind is
+ * 'source' (🔒 data anchor), 'analysis' (∑ run line), or 'transform'. `describe` maps
+ * a transform line to a friendly {title,detail} via a single-line parse. */
+function classifyScriptLine(rawLine, describe) {
+  const trimmed = String(rawLine ?? '').trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('#')) {
+    const sm = trimmed.match(/^#\s*(use|append|join)\b\s*(.*)$/i);
+    if (sm) {
+      const verb = sm[1].toLowerCase();
+      const lblM = sm[2].match(/"((?:[^"\\]|\\.)*)"/);
+      const label = (lblM ? lblM[1] : sm[2].trim()) || 'data';
+      const titleVerb = verb === 'use' ? 'Imported' : verb === 'append' ? 'Appended' : 'Joined';
+      return { kind: 'source', title: `${titleVerb} ${label}`.trim(), detail: 'data source' };
+    }
+    const em = trimmed.match(/^#\s*edit\b\s*(.*)$/i);
+    if (em) return { kind: 'source', title: 'Cell edit', detail: em[1].trim() };
+    return null; // plain comment
+  }
+  if (/^run\s/i.test(trimmed)) {
+    const lbl = (rawLine.match(/#\s*(.+?)\s*$/) || [])[1]; // trailing "# Label" from serialize
+    const idm = trimmed.match(/^run\s+([A-Za-z0-9_-]+)\.([A-Za-z0-9_]+)/i);
+    return { kind: 'analysis', title: lbl || (idm ? `${idm[1]}.${idm[2]}` : 'analysis'), detail: 'analysis' };
+  }
+  const d = describe ? describe(trimmed) : null;
+  if (d) return { kind: 'transform', title: d.title, detail: d.detail };
+  return { kind: 'transform', title: trimmed.split(/\s+/)[0] || 'step', detail: '' };
 }
 
 function el(tag, text, className) {
