@@ -21,6 +21,7 @@ const COMMANDS = [
   { syntax: 'keep if EXPR', desc: 'Filter rows — keep only those where the boolean expression holds.', eg: 'keep if region = 1 and age >= 18' },
   { syntax: 'drop VAR1, VAR2 …', desc: 'Remove columns from the dataset view (sources stay intact; reversible).', eg: 'drop id notes rawscore' },
   { syntax: 'keep VAR1, VAR2 …', desc: 'Keep only these columns (drops the rest). Note: `keep if` filters rows, `keep VARS` keeps columns.', eg: 'keep age income region' },
+  { syntax: 'rename OLD to NEW', desc: 'Rename a variable (keeps its position, type, and labels).', eg: 'rename q1 to satisfaction' },
   { syntax: 'set cell row N COLUMN = VALUE', desc: 'Edit one cell. Row is 1-based; an empty string ("") sets it blank (NA).', eg: 'set cell row 8 income = 52000' },
   { syntax: 'label variable NAME "Text"', desc: 'Set a variable’s descriptive label.', eg: 'label variable agegrp "Age group"' },
   { syntax: 'label values NAME code "Label", …', desc: 'Attach value labels to codes.', eg: 'label values agegrp 1 "Minor", 2 "Adult", 3 "Senior"' },

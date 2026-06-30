@@ -25,6 +25,7 @@
  *     keep if EXPR                             (row filter; EXPR is DuckDB boolean)
  *     drop VAR1, VAR2 …                        (remove columns from the view)
  *     keep VAR1, VAR2 …                        (keep only these columns)
+ *     rename OLD to NEW                        (rename a column)
  *     label variable NAME "Text"
  *     label values NAME code "Label", code "Label", …
  *     set type NAME = numeric|string|factor
@@ -41,7 +42,7 @@ const TYPES = new Set(['numeric', 'string', 'factor']);
 const MEASURES = new Set(['nominal', 'ordinal', 'scale']);
 /** Op types that count as a "data transform" (what getTransforms returns) — used to
  * position analyses in the timeline by how many transforms preceded them. */
-const TRANSFORM_TYPES = new Set(['setVariable', 'setCell', 'computeVar', 'recodeVar', 'filterCases', 'dropVars', 'keepVars']);
+const TRANSFORM_TYPES = new Set(['setVariable', 'setCell', 'computeVar', 'recodeVar', 'filterCases', 'dropVars', 'keepVars', 'renameVar']);
 
 // =============================================================================
 // SERIALIZE  (timeline → text)
@@ -145,6 +146,8 @@ function opToLines(op) {
       return [`drop ${(op.names || []).map(ident).join(', ')}`];
     case 'keepVars':
       return [`keep ${(op.names || []).map(ident).join(', ')}`];
+    case 'renameVar':
+      return [`rename ${ident(op.from)} to ${ident(op.to)}`];
     case 'recodeVar':
       return [recodeToLine(op)];
     case 'setVariable':
@@ -318,6 +321,13 @@ function parseLine(line) {
     const names = parseIdentList(line.replace(/^drop\b/i, ''));
     if (!names.length) throw new Error('drop: expected `drop VAR1, VAR2 …`');
     return { type: 'dropVars', names };
+  }
+
+  // rename OLD to NEW
+  if (/^rename\b/i.test(line)) {
+    const m = line.match(/^rename\s+(.+?)\s+to\s+(.+)$/i);
+    if (!m) throw new Error('rename: expected `rename OLD to NEW`');
+    return { type: 'renameVar', from: readIdent(m[1].trim()), to: readIdent(m[2].trim()) };
   }
 
   // recode SRC into NAME [as TYPE]: RULES

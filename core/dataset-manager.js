@@ -340,6 +340,9 @@ export class DatasetManager {
   keepVariables(names) {
     return this.active.keepVariables(names);
   }
+  renameVariable(oldName, newName) {
+    return this.active.renameVariable(oldName, newName);
+  }
   getTransforms() {
     return this.active.getTransforms();
   }

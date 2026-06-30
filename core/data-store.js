@@ -74,7 +74,7 @@ const CT_ROW = '__ct_row';
 
 /** Log op types that are *data transforms* (vs. load/append/join source ops).
  * `getTransforms()` and the persisted `transforms` array carry only these. */
-const DATA_OPS = new Set(['setVariable', 'setCell', 'computeVar', 'recodeVar', 'filterCases', 'dropVars', 'keepVars']);
+const DATA_OPS = new Set(['setVariable', 'setCell', 'computeVar', 'recodeVar', 'filterCases', 'dropVars', 'keepVars', 'renameVar']);
 
 /** Log op types that are *source* operations (data loads). */
 const SOURCE_OPS = new Set(['load', 'append', 'join']);
@@ -798,6 +798,16 @@ export class DataStore {
           const cols = [quoteIdent(ROWID_COL), ...keep.map(quoteIdent)];
           sql = `SELECT ${cols.join(', ')} FROM (${sql})`;
         }
+      } else if (op.type === 'renameVar') {
+        // Rename a column in place (DuckDB `* RENAME` keeps column position). The row
+        // id isn't renamable; a no-op if the source is gone or the target collides.
+        if (sql !== null && op.from !== ROWID_COL && byName.has(op.from) && !byName.has(op.to)) {
+          sql = `SELECT * RENAME (${quoteIdent(op.from)} AS ${quoteIdent(op.to)}) FROM (${sql})`;
+          const next = new Map();
+          for (const [k, v] of byName) next.set(k === op.from ? op.to : k, k === op.from ? { ...v, name: op.to } : v);
+          byName.clear();
+          for (const [k, v] of next) byName.set(k, v);
+        }
       }
     }
 
@@ -1011,6 +1021,26 @@ export class DataStore {
     const keep = list.filter((n) => this.#byName.has(n));
     if (!keep.length) throw new Error('Keep variables: none of those variables exist.');
     await this.#addDerivedVar({ type: 'keepVars', names: keep });
+  }
+
+  /**
+   * **Rename a variable** in the derived view (sources stay intact; reversible,
+   * logged, in History/syntax). Later steps must reference the new name.
+   * @param {string} oldName
+   * @param {string} newName
+   * @returns {Promise<void>}
+   */
+  async renameVariable(oldName, newName) {
+    const from = String(oldName ?? '').trim();
+    const to = String(newName ?? '').trim();
+    if (!from || !to) throw new Error('Rename: both the old and new names are required.');
+    if (!this.#byName.has(from)) throw new Error(`Rename: variable "${from}" not found.`);
+    if (from === to) return;
+    if (this.#byName.has(to)) throw new Error(`Rename: a variable named "${to}" already exists.`);
+    if (!/^[A-Za-z][A-Za-z0-9_.]*$/.test(to)) {
+      throw new Error('Rename: new name must start with a letter and use only letters, digits, _ or .');
+    }
+    await this.#addDerivedVar({ type: 'renameVar', from, to });
   }
 
   /** Push a compute/recode/filter transform and re-derive; roll back if the
@@ -1752,6 +1782,11 @@ function validateOrder(log) {
     } else if (op.type === 'keepVars') {
       const keep = new Set((op.names || []).filter((n) => available.has(n)));
       for (const n of [...available]) if (!keep.has(n)) available.delete(n);
+    } else if (op.type === 'renameVar') {
+      if (!available.has(op.from)) return `“${op.from}” must exist before it’s renamed.`;
+      if (available.has(op.to)) return `Cannot rename to “${op.to}” — a variable with that name already exists.`;
+      available.delete(op.from);
+      available.add(op.to);
     }
   }
   return null;

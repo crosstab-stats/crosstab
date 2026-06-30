@@ -11,11 +11,11 @@
  *
  * Pure module — no DOM, no app deps. `stataToScript(text)` → `{ script, stats }`.
  *
- * Deliberately NOT covered (emitted as comments): `rename`, `encode`, by-group
- * prefixes, `#delimit ;`, macros, loops, `egen` beyond a couple of row functions, and
- * analysis commands carrying an `if`/`in` (we comment those out rather than run them
- * on the wrong rows). Column `keep`/`drop` (no `if`) ARE supported (→ drop/keep
- * commands in the native grammar).
+ * Deliberately NOT covered (emitted as comments): `encode`, by-group prefixes,
+ * `#delimit ;`, macros, loops, `egen` beyond a couple of row functions, rename
+ * wildcard/stub forms, and analysis commands carrying an `if`/`in` (we comment those
+ * out rather than run them on the wrong rows). Column `keep`/`drop` (no `if`) and
+ * `rename old new` ARE supported (→ drop/keep/rename commands in the native grammar).
  */
 
 /**
@@ -162,7 +162,7 @@ function translateCommand(raw, labelSets) {
   if (/^(destring)$/.test(word)) return transTypeChange(text, raw, 'numeric');
   if (/^(tostring)$/.test(word)) return transTypeChange(text, raw, 'string');
   if (/^(label|la|lab)$/.test(word)) return transLabel(text, raw, labelSets);
-  if (/^(rename|ren|rena)$/.test(word)) return skip(raw, 'rename (column rename not yet in CrossTab syntax)');
+  if (/^(rename|ren|rena)$/.test(word)) return transRename(text, raw);
   if (/^(encode|decode)$/.test(word)) return skip(raw, 'encode/decode');
 
   // --- analyses ------------------------------------------------------------
@@ -270,6 +270,27 @@ function transTypeChange(text, raw, type) {
   const vars = head.split(/\s+/).filter(Boolean);
   if (!vars.length) return skip(raw, 'destring/tostring (no vars)');
   return ok(vars.map((v) => `set type ${ident(v)} = ${type}`));
+}
+
+/** `rename old new` → `rename old to new`; `rename (a b) (x y)` → one per pair.
+ * Wildcard/stub forms (* ? # = ~) aren't representable → comment. */
+function transRename(text, raw) {
+  const body = text.replace(/^\w+\s+/, '').trim();
+  const wild = /[*?#=~]/;
+  const gm = body.match(/^\(([^)]*)\)\s*\(([^)]*)\)$/);
+  if (gm) {
+    const olds = gm[1].trim().split(/\s+/).filter(Boolean);
+    const news = gm[2].trim().split(/\s+/).filter(Boolean);
+    if (olds.length && olds.length === news.length && !olds.concat(news).some((t) => wild.test(t))) {
+      return ok(olds.map((o, i) => `rename ${ident(o)} to ${ident(news[i])}`));
+    }
+    return skip(raw, 'rename (group/wildcard form)');
+  }
+  const parts = body.split(/\s+/).filter(Boolean);
+  if (parts.length === 2 && !parts.some((t) => wild.test(t))) {
+    return ok([`rename ${ident(parts[0])} to ${ident(parts[1])}`]);
+  }
+  return skip(raw, 'rename (unsupported form)');
 }
 
 /** label variable / label values (label define is consumed in the pre-scan). */

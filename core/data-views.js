@@ -1164,6 +1164,9 @@ function describeTransform(t) {
     const n = (t.names || []).length;
     return { title: `Kept ${n} variable${n === 1 ? '' : 's'}`, detail: (t.names || []).join(', ') };
   }
+  if (t && t.type === 'renameVar') {
+    return { title: `Renamed ${t.from} → ${t.to}`, detail: '' };
+  }
   if (!t || t.type !== 'setVariable') return { title: t?.type || 'Change', detail: '' };
   const p = t.patch || {};
   const bits = [];
