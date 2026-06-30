@@ -182,6 +182,7 @@ export class ProjectSync {
     this.#bus.on(CoreEvents.PLUGINS_CHANGED, () => this.#onPluginsChanged());
     this.#bus.on(CoreEvents.WORKSPACE_CHANGED, () => this.#onChange(null));
     this.#bus.on('output:written', () => this.#onChange(null));
+    this.#bus.on('output:cleared', () => this.#onChange(null)); // persist a user "Clear output"
     this.#setStatus();
     this.#emitProject();
   }

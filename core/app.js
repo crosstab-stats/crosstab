@@ -871,7 +871,11 @@ function wireWorkspaceTabs(bus, mounts, { dataView, variableView, results, rCons
   // The clear button is contextual: hidden in Data/Variables (nothing to clear),
   // "Clear output" in Output, "Clear console" (reset the REPL) in R Console.
   const CLEAR = {
-    output: { label: 'Clear output', title: 'Clear all output', run: () => resultsPane?.clear() },
+    // Emit 'output:cleared' so the project persists the now-empty output (a user
+    // clear is real work — without this, reopening the project brings the old output
+    // back). Distinct from the clear() that runs inside restoreModel on project LOAD,
+    // which must NOT trigger a save mid-load.
+    output: { label: 'Clear output', title: 'Clear all output', run: () => { resultsPane?.clear(); bus.emit('output:cleared'); } },
     console: { label: 'Clear console', title: 'Clear the console and reset the R session', run: () => rConsole?.reset() },
   };
   const syncClearBtn = (name) => {
