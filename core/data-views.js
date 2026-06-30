@@ -825,8 +825,9 @@ export class HistoryPanel {
 
     const hint = el(
       'p',
-      'Each step is shown beside its CrossTab syntax — edit the right-hand cells and Run to ' +
-        'rebuild the dataset and re-run the analyses. Greyed rows are data sources (not editable as text). Expressions are SQL.',
+      'Each step is shown beside its CrossTab syntax — edit the right-hand cells (transforms and ' +
+        'analyses) and Run to rebuild the dataset and re-run the analyses. 🔒 rows (data sources, cell ' +
+        'edits) are read-only here — manage those in the Data grid or the Steps view. Expressions are SQL.',
       'history-panel__synhint',
     );
     hint.style.cssText = 'margin:0; font-size:12px; color:#6a7480; line-height:1.4;';
@@ -922,7 +923,14 @@ export class HistoryPanel {
         this.#cells.push({ text: () => ta.value });
         right.append(ta);
       } else {
-        const pre = el('div', r.text, 'history-panel__gcomment');
+        // Read-only rows (data sources, cell edits): show the syntax WITHOUT the
+        // leading "# " — it's a real step, not a comment — with a lock to mark it
+        // non-editable. (It still contributes its comment line to the Run script so
+        // the engine's source/cell-edit handling is unchanged.)
+        const shown = String(r.text || '').split('\n').map((l) => l.replace(/^#\s?/, '')).join('\n');
+        const pre = el('div', null, 'history-panel__gcomment');
+        pre.textContent = `🔒 ${shown}`;
+        pre.title = 'Read-only — data sources and cell edits aren’t edited as text; change them in the Data grid or the Steps view.';
         pre.style.cssText =
           'font:12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; ' +
           'color:#9aa4ae; padding:5px 6px; white-space:pre-wrap; word-break:break-word;';
