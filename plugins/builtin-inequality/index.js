@@ -21,6 +21,12 @@ export const manifest = {
   category: 'Descriptive Statistics',
   keywords: ['inequality', 'gini', 'theil', 'atkinson', 'lorenz', 'segregation', 'dissimilarity', 'isolation', 'disparity', 'concentration'],
   disciplines: ['Economics', 'Sociology', 'Ethnic Studies', 'Public Policy & Administration', 'Social Science'],
+  howto:
+    'GUI: Descriptive Statistics ▸ Inequality (Gini / Theil / Lorenz)… or Segregation indices…, then pick the variable(s). You get the indices plus a Lorenz curve.\n' +
+    'Syntax: run builtin-inequality.inequality {"x": "income"}\n' +
+    '  • inequality: x — non-negative quantity (Gini, Theil, Atkinson, CV + Lorenz curve).\n' +
+    'Syntax: run builtin-inequality.segregation {"groupA": "minority", "groupB": "majority"}\n' +
+    '  • segregation: groupA / groupB — per-unit group counts (dissimilarity, isolation, interaction).',
   rPackages: ['ineq', 'svglite'],
   menu: [
     {

@@ -20,6 +20,10 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Descriptive Statistics',
   keywords: ['mean', 'sd', 'median', 'summary', 'descriptive'],
+  howto:
+    'GUI: Descriptive Statistics ▸ Descriptives…, then pick one or more numeric variables. You get an SPSS-style table of N, missing, mean, SD, min/max and quartiles.\n' +
+    'Syntax: run builtin-descriptives.run {"vars": ["age", "income"]}\n' +
+    '  • vars — one or more numeric measures to summarize.',
   rPackages: [],
   menu: [
     {

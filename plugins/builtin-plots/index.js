@@ -27,6 +27,15 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Graphs',
   keywords: ['chart', 'histogram', 'scatter', 'boxplot', 'bar', 'pie', 'plot'],
+  howto:
+    'GUI: Graphs ▸ Histogram, Scatter, Trends over time, Boxplot, Pie chart, or Bar chart with error bars — pick the variables. ' +
+    'Data-driven charts (scatter, trends, pie) render as live, re-editable chart models; others are baked SVG plots.\n' +
+    'Syntax: run builtin-plots.histogram {"v": "age"}\n' +
+    'Syntax: run builtin-plots.scatter {"x": "age", "y": "income"}\n' +
+    'Syntax: run builtin-plots.trends {"x": "year", "g": "bracket", "y": "income", "summary": "percent", "display": "lines"}\n' +
+    '  • trends summary — "percent" (default) | "count" | "mean" (needs y); display — "lines" (default) | "stacked" | "stacked100".\n' +
+    '  • other charts: Boxplot — run builtin-plots.boxplot {"y": "income", "g": "region"}; ' +
+    'Pie — run builtin-plots.pie {"v": "region"}; Bar+error bars — run builtin-plots.errorBars {"y": "income", "g": "region"}.',
   rPackages: ['svglite'],
   menu: [
     {

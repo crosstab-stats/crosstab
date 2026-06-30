@@ -16,6 +16,9 @@ export const manifest = {
   name: 'Parquet codec',
   apiVersion: '0.1.0',
   category: 'Data',
+  howto:
+    'GUI: File ▸ Import data… (or Export data…), choose Parquet (.parquet). Reads/writes Apache Parquet, streaming row-group by row-group.\n' +
+    'Used through the File menu, not a run command.',
   codecs: [
     {
       id: 'parquet',

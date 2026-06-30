@@ -27,6 +27,14 @@ export const manifest = {
   category: 'Bayesian',
   keywords: ['bayesian', 'bayes factor', 'posterior', 'credible interval', 'mcmc', 'bvar', 'prior'],
   disciplines: ['Psychology', 'Political Science', 'Public Health', 'Social Science'],
+  howto:
+    'GUI: Bayesian ▸ pick an analysis (Linear regression, Bayes factor: t-test / correlation, or Vector autoregression). You get posterior means/SD with credible intervals (or a Bayes factor / forecast band).\n' +
+    'Syntax: run builtin-bayesian.regression {"dv": "income", "ivs": ["age", "education"]}\n' +
+    'Syntax: run builtin-bayesian.bfTTest {"y": "score", "group": "condition"}\n' +
+    'Syntax: run builtin-bayesian.bfCorr {"x": "x", "y": "y"}\n' +
+    'Syntax: run builtin-bayesian.bvar {"series": ["gdp", "cpi"], "lags": 2, "horizon": 8}\n' +
+    '  • dv/ivs — outcome and predictors; y/group — numeric outcome and 2-level group.\n' +
+    '  • series — 2+ numeric columns in time order; lags / horizon — past steps in, future steps out.',
   rPackages: [],
   menu: [
     {

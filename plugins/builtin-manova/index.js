@@ -17,6 +17,12 @@ export const manifest = {
   category: 'Multivariate',
   keywords: ['manova', 'multivariate', 'pillai', 'wilks', 'hotelling', 'roy'],
   disciplines: ['Psychology', 'Education'],
+  howto:
+    'GUI: Multivariate ▸ MANOVA…, then pick two or more numeric outcomes and a grouping factor. ' +
+    'You get the four multivariate tests (Pillai, Wilks, Hotelling–Lawley, Roy) plus per-outcome ANOVAs.\n' +
+    'Syntax: run builtin-manova.run {"dvs": ["score1", "score2"], "group": "treatment"}\n' +
+    '  • dvs — two or more numeric outcomes compared at once.\n' +
+    '  • group — the factor that sorts cases into groups.',
   rPackages: [],
   menu: [
     {

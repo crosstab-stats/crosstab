@@ -26,6 +26,13 @@ export const manifest = {
   category: 'Regression',
   keywords: ['causal', 'difference-in-differences', 'did', 'regression discontinuity', 'rdd', 'matching', 'propensity score', 'matchit', 'rdrobust', 'att', 'treatment effect', 'quasi-experimental'],
   disciplines: ['Economics', 'Public Policy & Administration', 'Public Health'],
+  howto:
+    'GUI: Regression ▸ pick a design (Difference-in-differences, Regression discontinuity, or Matching). You get the estimated treatment effect with robust inference (and a balance table for matching).\n' +
+    'Syntax: run builtin-causal.did {"y": "outcome", "treat": "treated", "post": "after", "covs": ["age"]}\n' +
+    'Syntax: run builtin-causal.rdd {"y": "outcome", "run": "score", "cutoff": 0, "bw": 0}\n' +
+    'Syntax: run builtin-causal.matching {"y": "outcome", "treat": "treated", "covs": ["age", "sex"], "distance": "glm"}\n' +
+    '  • y — the numeric outcome; treat / post — 1 = treated / 1 = after indicators; covs — covariates.\n' +
+    '  • run / cutoff / bw — running variable, threshold, and bandwidth (0 = automatic); distance — "glm" (propensity) or "mahalanobis".',
   rPackages: ['sandwich', 'lmtest', 'MatchIt', 'rdrobust'],
   menu: [
     {

@@ -32,6 +32,14 @@ export const manifest = {
   category: 'Regression',
   keywords: ['marginal effects', 'ame', 'mem', 'average marginal effect', 'dydx', 'probability', 'logit', 'probit', 'poisson', 'glm'],
   disciplines: ['Economics', 'Political Science', 'Public Policy & Administration'],
+  howto:
+    'GUI: Regression ▸ Marginal effects (AME / MEM)…, then pick an outcome and predictors, the model family, and the effect type. ' +
+    'You get marginal effects on the natural metric (probability / expected count) with delta-method SEs.\n' +
+    'Syntax: run builtin-margins.margins {"dv": "voted", "ivs": ["age", "income"], "family": "logistic", "kind": "ame"}\n' +
+    '  • dv — the outcome to model.\n' +
+    '  • ivs — one or more predictors.\n' +
+    '  • family — "logistic" (default) | "probit" | "poisson" | "linear".\n' +
+    '  • kind — "ame" (default) | "mem".',
   rPackages: [],
   menu: [
     {

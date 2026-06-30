@@ -20,6 +20,13 @@ export const manifest = {
   category: 'Time Series',
   keywords: ['var', 'vector autoregression', 'granger', 'causality', 'impulse response', 'irf', 'macroeconometrics', 'multivariate time series'],
   disciplines: ['Economics', 'Public Policy & Administration'],
+  howto:
+    'GUI: Time Series ▸ Vector autoregression (VAR)…, then pick two or more numeric series in time order. You get lag selection, per-equation coefficients, Granger causality, and an impulse-response grid.\n' +
+    'Syntax: run builtin-var.varModel {"series": ["gdp", "inflation"], "lag": 0, "type": "const", "horizon": 10}\n' +
+    '  • series — two or more numeric series, rows in time order.\n' +
+    '  • lag — number of past periods (0 = choose by AIC).\n' +
+    '  • type — "const" | "trend" | "both" | "none".\n' +
+    '  • horizon — impulse-response horizon in steps.',
   rPackages: ['vars', 'svglite'],
   menu: [
     {

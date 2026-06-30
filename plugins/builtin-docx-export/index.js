@@ -23,6 +23,9 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Export',
   keywords: ['word', 'docx', 'report', 'output'],
+  howto:
+    'GUI: File ▸ Export output…, choose Word (.docx). Builds an editable Word report from the Output pane (tables → flextables, plots → embedded PNGs).\n' +
+    'Used through the File menu, not a run command.',
   rPackages: ['officer', 'flextable'],
   outputExports: [{ label: 'Word (.docx)', extensions: ['.docx'], order: 20, export: 'exportDocx' }],
 };

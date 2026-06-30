@@ -25,6 +25,13 @@ export const manifest = {
   category: 'Regression',
   keywords: ['ordinal', 'multinomial', 'logistic', 'polr', 'proportional odds', 'multinom', 'likert', 'rrr', 'relative risk ratio', 'categorical outcome'],
   disciplines: ['Social Science', 'Sociology', 'Psychology', 'Political Science'],
+  howto:
+    'GUI: Regression ▸ Ordinal logistic regression… or Multinomial logistic regression…, then pick the outcome and predictors. ' +
+    'Ordinal reports odds ratios (proportional odds) plus thresholds; multinomial reports relative-risk ratios per category.\n' +
+    'Syntax: run builtin-ordinal.ordinal {"dv": "satisfaction", "ivs": ["age", "income"]}\n' +
+    'Syntax: run builtin-ordinal.multinomial {"dv": "party", "ivs": ["age", "income"]}\n' +
+    '  • dv — the categorical outcome (ordered for ordinal, unordered for multinomial).\n' +
+    '  • ivs — one or more predictors.',
   rPackages: ['MASS', 'nnet'],
   menu: [
     {

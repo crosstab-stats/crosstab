@@ -22,6 +22,14 @@ export const manifest = {
   category: 'Nonparametric',
   keywords: ['mann-whitney', 'wilcoxon', 'kruskal-wallis', 'rank', 'ordinal', 'nonparametric'],
   disciplines: ['Psychology', 'Public Health', 'Nutrition Food & Dietetics', 'Gerontology', 'Sociology'],
+  howto:
+    'GUI: Nonparametric ▸ Mann-Whitney U / Wilcoxon signed-rank / Kruskal-Wallis…, then pick the variables. ' +
+    'You get a ranks table, the test statistic, normal-approx Z, asymptotic p, and an effect size.\n' +
+    'Syntax: run builtin-nonparametric.mannWhitney {"y": "score", "g": "group"}\n' +
+    'Syntax: run builtin-nonparametric.wilcoxon {"x1": "before", "x2": "after"}\n' +
+    'Syntax: run builtin-nonparametric.kruskal {"y": "score", "g": "group"}\n' +
+    '  • mannWhitney / kruskal: y — test variable; g — grouping variable (2 groups vs 3+).\n' +
+    '  • wilcoxon: x1 / x2 — two paired measures on the same cases.',
   rPackages: [],
   menu: [
     {

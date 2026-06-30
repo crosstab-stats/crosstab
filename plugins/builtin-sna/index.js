@@ -15,6 +15,12 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Multivariate',
   keywords: ['social network', 'sna', 'network', 'graph', 'centrality', 'betweenness', 'degree', 'density', 'igraph', 'edge list'],
+  howto:
+    'GUI: Multivariate ▸ Network analysis (edge list), then pick a From and To column (an edge list) and whether edges are directed. ' +
+    'You get network structure (density, components, path length, clustering), top central actors, and a network plot.\n' +
+    'Syntax: run builtin-sna.run {"from": "source", "to": "target", "directed": "undirected"}\n' +
+    '  • from / to — the two columns naming each tie\'s endpoints.\n' +
+    '  • directed — "undirected" (default) or "directed".',
   disciplines: ['Sociology', 'Anthropology', 'Communication', 'Political Science'],
   rPackages: ['igraph', 'svglite'],
   menu: [

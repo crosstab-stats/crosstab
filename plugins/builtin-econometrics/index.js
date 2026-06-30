@@ -23,6 +23,14 @@ export const manifest = {
   category: 'Econometrics',
   keywords: ['econometrics', 'robust', 'heteroskedasticity', 'hc', 'instrumental variables', '2sls', 'ivreg', 'panel', 'fixed effects', 'random effects', 'plm', 'breusch-pagan'],
   disciplines: ['Economics', 'Political Science', 'Public Policy & Administration'],
+  howto:
+    'GUI: Econometrics ▸ pick Robust (HC) regression…, Instrumental variables (2SLS)…, or Panel regression (FE / RE)…, then choose the variables. You get coefficient tables with the relevant diagnostics.\n' +
+    'Syntax: run builtin-econometrics.robust {"dv": "wage", "ivs": ["educ", "exper"]}\n' +
+    '  • robust: dv — numeric outcome; ivs — one or more predictors (HC1 SEs + Breusch–Pagan).\n' +
+    'Syntax: run builtin-econometrics.iv {"dv": "wage", "endog": ["educ"], "instruments": ["nearc"], "controls": ["exper"]}\n' +
+    '  • iv: endog — endogenous regressor(s); instruments — instrument(s); controls — optional exogenous controls.\n' +
+    'Syntax: run builtin-econometrics.panel {"dv": "wage", "ivs": ["educ"], "id": "person", "time": "year", "model": "within"}\n' +
+    '  • panel: id — unit id; time — time index; model — "within" (default) | "random" | "pooling".',
   rPackages: ['sandwich', 'lmtest', 'AER', 'plm'],
   menu: [
     {

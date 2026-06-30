@@ -19,6 +19,11 @@ export const manifest = {
   category: 'Categorical',
   keywords: ['epidemiology', 'risk ratio', 'relative risk', 'odds ratio', 'risk difference', 'nnt', 'number needed to treat', 'attributable', 'rr', 'or'],
   disciplines: ['Public Health', 'Nutrition, Food & Dietetics', 'Gerontology'],
+  howto:
+    'GUI: Categorical ▸ Risk / odds ratios (2×2)…, then pick a binary exposure and a binary outcome. You get the 2×2 table plus RR, OR, risk difference, NNT/NNH and attributable fraction with 95% CIs.\n' +
+    'Syntax: run builtin-epi.run {"exposure": "treated", "outcome": "relapse"}\n' +
+    '  • exposure — binary exposure/treatment (1 = exposed).\n' +
+    '  • outcome — binary outcome (1 = case/event).',
   rPackages: [],
   menu: [
     {

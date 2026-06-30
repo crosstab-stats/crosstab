@@ -18,6 +18,11 @@ export const manifest = {
   category: 'Scale',
   keywords: ['cronbach', 'alpha', 'reliability', 'scale', 'internal consistency', 'items'],
   disciplines: ['Psychology', 'Education', 'Communication', 'Sociology', "Women's & Gender Studies", 'Liberal Studies'],
+  howto:
+    'GUI: Scale ▸ Reliability analysis, then pick the scale items (2+). ' +
+    "You get Cronbach's α (raw + standardized), McDonald's ω, and per-item statistics (item-total r, α if deleted).\n" +
+    'Syntax: run builtin-reliability.run {"vars": ["q1", "q2", "q3"]}\n' +
+    '  • vars — the numeric scale items expected to measure one construct.',
   rPackages: ['psych'],
   menu: [
     {

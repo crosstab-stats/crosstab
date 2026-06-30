@@ -24,6 +24,10 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Export',
   keywords: ['r', 'rds', 'rdata', 'dataframe', 'export', 'reproducible'],
+  howto:
+    'GUI: File ▸ Export data…, choose R data frame (.rds) or R workspace (.RData). ' +
+    'Writes a real R object (typed columns, value-labelled vars as factors) that reopens with readRDS()/load().\n' +
+    'Used through the File menu, not a run command.',
   rPackages: [],
   exports: [
     { label: 'R data frame (.rds)…', extensions: ['.rds'], order: 31, export: 'exportRds' },

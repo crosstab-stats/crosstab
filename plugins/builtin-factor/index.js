@@ -18,6 +18,13 @@ export const manifest = {
   category: 'Multivariate',
   keywords: ['factor', 'efa', 'pca', 'principal components', 'dimension reduction', 'loadings'],
   disciplines: ['Psychology', 'Sociology', 'Political Science', 'Communication', "Women's & Gender Studies", 'Education', 'Liberal Studies'],
+  howto:
+    'GUI: Multivariate ▸ Factor analysis…, then pick the scale items and (optionally) the number of factors, extraction and rotation. You get KMO/Bartlett, variance explained, a scree plot and the rotated loadings.\n' +
+    'Syntax: run builtin-factor.run {"vars": ["q1", "q2", "q3"], "nfactors": 0, "method": "principal", "rotation": "varimax"}\n' +
+    '  • vars — the items (2 or more).\n' +
+    '  • nfactors — number of factors (0 = auto, eigenvalue > 1).\n' +
+    '  • method — "principal" (default) | "pa" | "ml".\n' +
+    '  • rotation — "varimax" (default) | "none" | "oblimin" | "promax".',
   rPackages: ['psych', 'GPArotation', 'svglite'],
   menu: [
     {

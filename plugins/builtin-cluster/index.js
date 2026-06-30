@@ -20,6 +20,12 @@ export const manifest = {
   category: 'Multivariate',
   keywords: ['cluster', 'k-means', 'kmeans', 'segmentation', 'classification', 'unsupervised'],
   disciplines: ['Business', 'Sociology'],
+  howto:
+    'GUI: Multivariate ▸ k-means cluster analysis, then pick numeric variables and the number of clusters. You get cluster sizes, cluster centres, and the variance explained.\n' +
+    'Syntax: run builtin-cluster.kmeans {"vars": ["x", "y"], "k": 3, "standardize": "z"}\n' +
+    '  • vars — the numeric variables used to judge similarity between cases.\n' +
+    '  • k — number of clusters to split cases into (default 3).\n' +
+    '  • standardize — "z" (z-scores, default) or "raw".',
   rPackages: [],
   menu: [
     {

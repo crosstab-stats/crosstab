@@ -20,6 +20,11 @@ export const manifest = {
   category: 'Regression',
   keywords: ['glm', 'logistic', 'odds', 'binary', 'regression'],
   disciplines: ['Political Science', 'Sociology', 'Psychology', 'Public Health', 'Economics', 'Criminology', 'Social Science'],
+  howto:
+    'GUI: Regression ▸ Binary Logistic…, then pick a binary outcome and one or more predictors. You get a Model Summary (−2LL, Cox & Snell / Nagelkerke R²) and Variables in the Equation (B, Wald, Sig., Exp(B)).\n' +
+    'Syntax: run builtin-logistic.run {"dv": "passed", "ivs": ["studyhrs", "attendance"]}\n' +
+    '  • dv — binary outcome (exactly two categories).\n' +
+    '  • ivs — one or more predictors.',
   rPackages: [],
   menu: [
     {

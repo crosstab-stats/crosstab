@@ -15,6 +15,9 @@ export const manifest = {
   name: 'JSON Lines codec',
   apiVersion: '0.1.0',
   category: 'Data',
+  howto:
+    'GUI: File ▸ Import data… (or Export data…), choose JSON Lines (.ndjson / .jsonl). Streams newline-delimited JSON, one object per row.\n' +
+    'Used through the File menu, not a run command.',
   codecs: [
     {
       id: 'ndjson',

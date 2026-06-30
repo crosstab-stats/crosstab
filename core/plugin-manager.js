@@ -36,7 +36,7 @@ const LS_WEB = 'crosstab.plugins.web';
 /** Bump when the catalog shape OR built-in manifests' metadata change, so a
  * stale persisted catalog (e.g. missing newly-declared `disciplines`) is dropped
  * and re-probed on next load. */
-const CATALOG_VERSION = 15; // 15: `howto` field (#135); 14: builtin-plots scatter+pie → data-driven charts (#131); 13: trends → chart; 12: re-added ReadStat codec (#130); 11: `version` (#91); 10: `codecs` (#98)
+const CATALOG_VERSION = 16; // 16: `howto` authored for all 60 built-ins (#135); 15: `howto` field (#135); 14: builtin-plots scatter+pie → data-driven charts (#131); 13: trends → chart; 12: re-added ReadStat codec (#130); 11: `version` (#91); 10: `codecs` (#98)
 
 export class PluginManager {
   /** @type {import('./loader.js').PluginLoader} */

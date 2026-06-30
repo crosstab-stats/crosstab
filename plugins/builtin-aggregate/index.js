@@ -47,6 +47,12 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Transform',
   keywords: ['aggregate', 'collapse', 'group by', 'summarise', 'group means', 'counts', 'pivot'],
+  howto:
+    'GUI: Transform ▸ Aggregate / collapse, then pick grouping variable(s), the numeric variable(s) to summarise, and a function. You get a new dataset with one row per group plus an N column.\n' +
+    'Syntax: run builtin-aggregate.run {"groupby": ["year"], "measures": ["income"], "func": "mean"}\n' +
+    '  • groupby — the variable(s) that define the groups (one output row per group).\n' +
+    '  • measures — the numeric variable(s) to summarise within each group.\n' +
+    '  • func — "mean" (default), "sum", "median", "min", "max", "sd", or "count".',
   rPackages: [],
   menu: [
     {

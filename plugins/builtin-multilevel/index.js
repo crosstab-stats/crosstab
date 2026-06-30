@@ -25,6 +25,13 @@ export const manifest = {
   category: 'Regression',
   keywords: ['multilevel', 'mixed effects', 'hierarchical', 'lmer', 'glmer', 'random effects', 'random intercept', 'random slope', 'icc', 'nested', 'clustered', 'hlm'],
   disciplines: ['Education', 'Sociology', 'Public Health', 'Family & Consumer Sciences'],
+  howto:
+    'GUI: Regression ▸ Linear mixed model… or Logistic mixed model…, then pick an outcome, fixed predictors, and a grouping variable. ' +
+    'You get fixed effects (Satterthwaite df), random-effect variances, and the ICC (odds ratios for logistic).\n' +
+    'Syntax: run builtin-multilevel.linear {"y": "achievement", "fixed": ["ses"], "group": "school"}\n' +
+    'Syntax: run builtin-multilevel.logistic {"y": "passed", "fixed": ["ses"], "group": "school"}\n' +
+    '  • y — outcome (binary for logistic); fixed — one or more fixed-effect predictors; group — the cluster variable (random intercept).\n' +
+    '  • slope — (linear only) optional predictor given a random slope across groups.',
   rPackages: ['lme4', 'lmerTest'],
   menu: [
     {

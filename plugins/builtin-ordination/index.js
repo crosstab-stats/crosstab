@@ -24,6 +24,13 @@ export const manifest = {
   category: 'Multivariate',
   keywords: ['correspondence analysis', 'ca', 'biplot', 'mds', 'multidimensional scaling', 'perceptual map', 'cmdscale', 'inertia', 'ordination'],
   disciplines: ['Business', 'Communication', 'Anthropology', 'Ecology', 'Environmental Studies', 'Asian Studies'],
+  howto:
+    'GUI: Multivariate ▸ Correspondence analysis… or Multidimensional scaling (MDS)…, then pick the variables. ' +
+    'Correspondence gives a row/column biplot with the inertia decomposition; MDS maps objects so distances reflect dissimilarity.\n' +
+    'Syntax: run builtin-ordination.correspondence {"rowvar": "brand", "colvar": "attribute"}\n' +
+    'Syntax: run builtin-ordination.mds {"vars": ["price", "quality", "service"], "label": "brand"}\n' +
+    '  • correspondence: rowvar / colvar — the two category variables.\n' +
+    '  • mds: vars — numeric attributes; label — optional object label for the map.',
   rPackages: ['ca', 'svglite'],
   menu: [
     {

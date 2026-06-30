@@ -22,6 +22,14 @@ export const manifest = {
   category: 'Time Series',
   keywords: ['time series', 'acf', 'pacf', 'arima', 'forecast', 'stationarity', 'adf', 'kpss', 'stl', 'decomposition', 'autocorrelation'],
   disciplines: ['Economics', 'Public Policy & Administration', 'Environmental Studies'],
+  howto:
+    'GUI: Time Series ▸ Correlogram… / Stationarity tests… / Decomposition… / ARIMA forecast…, then pick a numeric series (taken in row order). You get ACF/PACF, ADF & KPSS tests, an STL split, or a forecast.\n' +
+    'Syntax: run builtin-timeseries.correlogram {"series": "value", "maxlag": 0}\n' +
+    'Syntax: run builtin-timeseries.stationarity {"series": "value"}\n' +
+    'Syntax: run builtin-timeseries.decompose {"series": "value", "frequency": 12}\n' +
+    'Syntax: run builtin-timeseries.arima {"series": "value", "h": 10, "frequency": 1}\n' +
+    '  • series — the numeric column, in time order.\n' +
+    '  • frequency — steps per seasonal cycle (12 monthly, 4 quarterly); h — forecast horizon.',
   rPackages: ['tseries', 'forecast', 'svglite'],
   menu: [
     {

@@ -18,6 +18,9 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Export',
   keywords: ['html', 'report', 'output'],
+  howto:
+    'GUI: File ▸ Export output… ▸ HTML (.html). You get a self-contained HTML report of the Output pane (tables, plots, notes).\n' +
+    'Used through the File menu, not a run command.',
   rPackages: [],
   outputExports: [{ label: 'HTML (.html)', extensions: ['.html'], order: 10, export: 'exportHtml' }],
 };

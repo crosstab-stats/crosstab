@@ -20,6 +20,14 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Correlation',
   keywords: ['pearson', 'correlation', 'bivariate', 'r'],
+  howto:
+    'GUI: Correlation ▸ Bivariate…, pick 2+ numeric variables and a method; or Correlation ▸ Partial / part correlation… to control for covariates. You get an SPSS-style correlation matrix.\n' +
+    'Syntax: run builtin-correlation.run {"vars": ["age", "income"], "method": "pearson"}\n' +
+    '  • vars — 2+ numeric measures to correlate.\n' +
+    '  • method — "pearson" (default) | "spearman" | "kendall".\n' +
+    'Syntax: run builtin-correlation.partial {"vars": ["age", "income"], "controls": ["education"], "type": "partial"}\n' +
+    '  • controls — variables to partial out.\n' +
+    '  • type — "partial" (default) | "semipartial".',
   rPackages: [],
   menu: [
     {

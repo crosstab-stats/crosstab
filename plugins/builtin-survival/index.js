@@ -25,6 +25,13 @@ export const manifest = {
   category: 'Survival',
   keywords: ['survival', 'kaplan-meier', 'kaplan meier', 'log-rank', 'cox', 'proportional hazards', 'hazard ratio', 'time to event', 'censoring', 'event history'],
   disciplines: ['Public Health', 'Gerontology', 'Nutrition, Food & Dietetics', 'Sociology'],
+  howto:
+    'GUI: Survival ▸ Kaplan–Meier & log-rank… or Cox proportional hazards…, then pick a time variable and an event indicator (1 = event, 0 = censored). You get survival curves with median survival, or hazard ratios.\n' +
+    'Syntax: run builtin-survival.kaplanMeier {"time": "months", "status": "died", "group": "treatment"}\n' +
+    'Syntax: run builtin-survival.cox {"time": "months", "status": "died", "preds": ["age", "treatment"]}\n' +
+    '  • time — follow-up time until the event or censoring.\n' +
+    '  • status — event indicator (1 = event, 0 = censored).\n' +
+    '  • group — optional grouping variable (Kaplan–Meier); preds — covariates (Cox).',
   rPackages: ['survival', 'svglite'],
   menu: [
     {

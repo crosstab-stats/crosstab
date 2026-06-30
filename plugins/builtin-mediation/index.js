@@ -35,6 +35,13 @@ export const manifest = {
   category: 'Regression',
   keywords: ['mediation', 'moderation', 'indirect effect', 'simple slopes', 'interaction', 'process', 'path analysis', 'lavaan', 'sobel'],
   disciplines: ['Psychology', 'Family & Consumer Sciences', 'Communication'],
+  howto:
+    'GUI: Regression ▸ Mediation (X → M → Y)… or Moderation (X × W)…, then pick the roles. ' +
+    'Mediation decomposes the total effect into direct/indirect; moderation gives the X×W interaction with simple slopes.\n' +
+    'Syntax: run builtin-mediation.mediation {"x": "stress", "m": "coping", "y": "wellbeing", "se": "delta"}\n' +
+    'Syntax: run builtin-mediation.moderation {"y": "wellbeing", "x": "stress", "w": "support"}\n' +
+    '  • mediation: x / m / y — predictor, mediator, outcome; covs — optional controls; se — "delta" (default) | "bootstrap".\n' +
+    '  • moderation: y / x / w — outcome, focal predictor, moderator; covs — optional controls.',
   rPackages: ['lavaan'],
   menu: [
     {

@@ -17,6 +17,12 @@ export const manifest = {
   category: 'Regression',
   keywords: ['cluster', 'cluster-robust', 'clustered standard errors', 'crve', 'sandwich', 'vcovcl', 'panel', 'robust'],
   disciplines: ['Economics', 'Political Science', 'Public Policy & Administration'],
+  howto:
+    'GUI: Regression ▸ Cluster-robust regression, then pick an outcome, predictors, and a cluster variable. You get OLS coefficients with cluster-robust (CR/HC1) standard errors alongside classical SEs.\n' +
+    'Syntax: run builtin-clusterse.run {"y": "score", "ivs": ["x", "z"], "cluster": "school"}\n' +
+    '  • y — the numeric outcome to explain.\n' +
+    '  • ivs — one or more predictors.\n' +
+    '  • cluster — the grouping variable (e.g. school or person) SEs allow correlation within.',
   rPackages: ['sandwich', 'lmtest'],
   menu: [
     {

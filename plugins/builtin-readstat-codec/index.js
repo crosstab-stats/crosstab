@@ -22,6 +22,10 @@ export const manifest = {
   version: '6', // #130: ASYNCIFY main-thread build (no worker); periodic read-loop yield for iOS.
   apiVersion: '0.1.0',
   category: 'Data',
+  howto:
+    'GUI: File ▸ Import data… (or Export data…), choose SPSS / Stata / SAS (.sav, .zsav, .dta, .por, .xpt, .sas7bdat). ' +
+    'Streams large files; import can optionally choose which variables to read; export writes .sav or .dta.\n' +
+    'Used through the File menu, not a run command.',
   // The plugin ships its own engine (a third-party codec would do the same): the glue
   // + WASM resolve from same-origin siblings via app.codec.loadAsset → loader.resolveAsset.
   // No worker asset any more — the engine runs on the sandbox main thread.

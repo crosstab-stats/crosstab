@@ -23,6 +23,13 @@ export const manifest = {
   category: 'Categorical',
   keywords: ['chi-square', 'goodness of fit', 'proportion', 'prop.test', 'binomial', 'mcnemar', 'categorical'],
   disciplines: ['Sociology', 'Political Science', 'Public Health', 'Criminology', 'Social Science'],
+  howto:
+    'GUI: Categorical ▸ pick a test (Chi-square goodness-of-fit, One-/Two-proportion, McNemar\'s, or Log-linear model). You get the test statistic, p-value, and (where applicable) a CI.\n' +
+    'Syntax: run builtin-categorical.gof {"variable": "region", "expected": ""}\n' +
+    'Syntax: run builtin-categorical.oneProp {"variable": "passed", "p0": 0.5}\n' +
+    'Syntax: run builtin-categorical.twoProp {"outcome": "passed", "groups": "cohort"}\n' +
+    '  • variable / outcome / groups — the categorical variable(s); expected — comma-separated proportions (blank = equal); p0 — the test proportion.\n' +
+    '  • other actions: McNemar\'s test (paired) — run builtin-categorical.mcnemar {"v1": "before", "v2": "after"}; Log-linear model — run builtin-categorical.loglinear {"vars": ["a", "b"], "model": "homogeneous"}.',
   rPackages: [],
   menu: [
     {

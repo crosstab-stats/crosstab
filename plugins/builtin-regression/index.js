@@ -19,6 +19,12 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Regression',
   keywords: ['lm', 'linear', 'ols', 'regression', 'vif', 'residuals', 'diagnostics', 'cook'],
+  howto:
+    'GUI: Regression ▸ Linear, then pick one outcome and one or more predictors. ' +
+    'You get an SPSS-style Model Summary + Coefficients (with VIF) and residual diagnostic plots.\n' +
+    'Syntax: run builtin-regression.run {"dv": "income", "ivs": ["age", "education"]}\n' +
+    '  • dv — the numeric outcome to explain.\n' +
+    '  • ivs — one or more predictor variables.',
   rPackages: ['svglite'],
   menu: [
     {

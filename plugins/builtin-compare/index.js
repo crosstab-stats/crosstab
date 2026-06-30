@@ -23,6 +23,16 @@ export const manifest = {
   category: 'Comparison',
   keywords: ['t-test', 't test', 'anova', 'means', 'compare', 'group', 'welch'],
   disciplines: ['Psychology', 'Public Health', 'Nutrition Food & Dietetics', 'Education', 'Gerontology'],
+  howto:
+    'GUI: Comparison ▸ pick a test (One-sample / Independent-samples / Paired-samples t-test, or One-way ANOVA), then choose the variables. You get SPSS-style group/test tables with effect sizes.\n' +
+    'Syntax: run builtin-compare.oneSample {"x": "score", "mu": 0}\n' +
+    '  • x — numeric test variable; mu — reference value (default 0).\n' +
+    'Syntax: run builtin-compare.independent {"y": "score", "g": "group"}\n' +
+    '  • y — numeric outcome; g — grouping variable (exactly 2 groups).\n' +
+    'Syntax: run builtin-compare.paired {"x1": "pre", "x2": "post"}\n' +
+    '  • x1 / x2 — two numeric measures on the same cases.\n' +
+    'Syntax: run builtin-compare.oneway {"y": "score", "g": "group"}\n' +
+    '  • y — numeric outcome; g — factor (3+ groups; Tukey post-hoc).',
   rPackages: [],
   menu: [
     {

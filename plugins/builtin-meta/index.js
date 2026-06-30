@@ -20,6 +20,14 @@ export const manifest = {
   category: 'Regression',
   keywords: ['meta-analysis', 'meta analysis', 'effect size', 'forest plot', 'heterogeneity', 'random effects', 'metafor', 'evidence synthesis', 'systematic review', 'meta-regression'],
   disciplines: ['Public Health', 'Psychology', 'Nutrition Food & Dietetics', 'Education'],
+  howto:
+    'GUI: Regression ▸ Meta-analysis…, then pick the effect-size and precision columns (one row per study), the model, and optional moderators. ' +
+    'You get the pooled effect, heterogeneity (Q / I² / τ²), and a forest plot.\n' +
+    'Syntax: run builtin-meta.metaAnalysis {"yi": "effect", "prec": "se", "precType": "se", "model": "REML"}\n' +
+    '  • yi — each study\'s effect size; prec — its standard error or sampling variance.\n' +
+    '  • precType — "se" (default) | "var".\n' +
+    '  • model — "REML" random effects (default) | "FE" fixed/common effect.\n' +
+    '  • mods — optional moderators (meta-regression); label — optional study label for the forest plot.',
   rPackages: ['metafor', 'svglite'],
   menu: [
     {

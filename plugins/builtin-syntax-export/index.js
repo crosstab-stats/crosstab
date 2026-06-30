@@ -24,6 +24,9 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Export',
   keywords: ['r', 'script', 'syntax', 'reproducible'],
+  howto:
+    'GUI: File ▸ Export data… ▸ R syntax (.R)…, then save the file. Exports the data-preparation steps (the History panel) as a runnable R script.\n' +
+    'Used through the File menu, not a run command.',
   rPackages: [],
   exports: [{ label: 'R syntax (.R)…', extensions: ['.R'], order: 30, export: 'exportSyntax' }],
 };

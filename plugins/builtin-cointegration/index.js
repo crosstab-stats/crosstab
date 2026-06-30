@@ -22,6 +22,16 @@ export const manifest = {
   category: 'Time Series',
   keywords: ['cointegration', 'johansen', 'vecm', 'error correction', 'garch', 'arch', 'volatility', 'conditional variance', 'urca', 'fgarch'],
   disciplines: ['Economics', 'Business'],
+  howto:
+    'GUI: Time Series ▸ Cointegration (Johansen)…, pick 2+ trending series (time order); or Time Series ▸ GARCH volatility…, pick a return series. You get the trace test + VECM, or a volatility model with a conditional-SD plot.\n' +
+    'Syntax: run builtin-cointegration.cointegration {"series": ["gdp", "consumption"], "ecdet": "const", "K": 2}\n' +
+    '  • series — 2+ non-stationary series, in time order.\n' +
+    '  • ecdet — "const" (default) | "trend" | "none".\n' +
+    '  • K — lags in levels (≥ 2; default 2).\n' +
+    'Syntax: run builtin-cointegration.garch {"series": "returns", "q": 1, "p": 1, "dist": "norm"}\n' +
+    '  • series — the return/series to model.\n' +
+    '  • q / p — ARCH and GARCH orders (default 1, 1).\n' +
+    '  • dist — "norm" (default) | "std" | "ged".',
   rPackages: ['urca', 'fGarch', 'svglite'],
   menu: [
     {

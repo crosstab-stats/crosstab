@@ -18,6 +18,12 @@ export const manifest = {
   category: 'Regression',
   keywords: ['poisson', 'negative binomial', 'count', 'glm', 'rate', 'incidence', 'overdispersion', 'irr'],
   disciplines: ['Public Health', 'Criminology', 'Political Science'],
+  howto:
+    'GUI: Regression ▸ Poisson regression… (or Negative binomial regression…), pick a count outcome and predictors. You get coefficients with incidence-rate ratios (exp B) plus an overdispersion check.\n' +
+    'Syntax: run builtin-countmodels.poisson {"dv": "events", "ivs": ["age", "treatment"]}\n' +
+    'Syntax: run builtin-countmodels.negbin {"dv": "events", "ivs": ["age", "treatment"]}\n' +
+    '  • dv — non-negative count outcome.\n' +
+    '  • ivs — one or more predictors. (negbin is the over-dispersed alternative to poisson.)',
   rPackages: ['MASS'],
   menu: [
     {

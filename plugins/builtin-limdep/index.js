@@ -22,6 +22,14 @@ export const manifest = {
   category: 'Regression',
   keywords: ['quantile regression', 'tobit', 'censored', 'heckman', 'selection', 'rq', 'limited dependent', 'quantreg', 'inverse mills'],
   disciplines: ['Economics', 'Public Policy & Administration'],
+  howto:
+    'GUI: Regression ▸ Quantile regression…, Tobit (censored) regression…, or Heckman selection model…, then choose the variables. You get the relevant coefficient table.\n' +
+    'Syntax: run builtin-limdep.quantile {"y": "wage", "ivs": ["educ"], "taus": "0.25, 0.5, 0.75"}\n' +
+    '  • quantile: y — outcome; ivs — predictors; taus — comma-separated quantiles.\n' +
+    'Syntax: run builtin-limdep.tobit {"y": "hours", "ivs": ["age"], "left": 0, "right": 0}\n' +
+    '  • tobit: left/right — lower/upper censoring limits (0/blank = none).\n' +
+    'Syntax: run builtin-limdep.heckman {"y": "wage", "outIv": ["educ"], "sel": "working", "selIv": ["kids"]}\n' +
+    '  • heckman: sel — selection indicator (1 = observed); outIv/selIv — outcome / selection predictors.',
   rPackages: ['quantreg', 'AER', 'sampleSelection'],
   menu: [
     {

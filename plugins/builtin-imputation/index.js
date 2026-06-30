@@ -16,6 +16,13 @@ export const manifest = {
   category: 'Regression',
   keywords: ['multiple imputation', 'mice', 'missing data', 'attrition', 'rubin', 'fmi', 'pooled', 'pmm'],
   disciplines: ['Public Health', 'Sociology', 'Psychology', 'Gerontology'],
+  howto:
+    'GUI: Regression ▸ Multiple imputation regression…, then pick the outcome and predictors and set the number of imputations. You get pooled (Rubin) coefficients with FMI plus a missingness table.\n' +
+    'Syntax: run builtin-imputation.run {"y": "income", "ivs": ["educ", "age"], "m": 5, "model": "linear"}\n' +
+    '  • y — numeric outcome.\n' +
+    '  • ivs — one or more predictors.\n' +
+    '  • m — number of imputations (default 5).\n' +
+    '  • model — "linear" (default) | "logistic".',
   rPackages: ['mice'],
   menu: [
     {

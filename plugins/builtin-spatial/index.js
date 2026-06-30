@@ -24,6 +24,15 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Spatial',
   keywords: ['spatial', 'gis', 'moran', 'geary', 'autocorrelation', 'choropleth', 'map', 'sf', 'spdep', 'geojson', 'lisa'],
+  howto:
+    'GUI: Spatial ▸ Spatial autocorrelation (Moran’s I), Spatial lag regression, or Choropleth map — pick the variables ' +
+    '(and a GeoJSON boundary file for the map). You get Moran\'s I / Geary\'s C tests, a spatial-lag model, or a shaded region map.\n' +
+    'Syntax: run builtin-spatial.autocorrelation {"value": "rate", "xcoord": "lon", "ycoord": "lat", "k": 4}\n' +
+    'Syntax: run builtin-spatial.lagregression {"outcome": "price", "preds": ["rooms", "age"], "xcoord": "lon", "ycoord": "lat", "k": 5}\n' +
+    'Syntax: run builtin-spatial.choropleth {"region": "GEOID", "value": "rate", "boundary": "counties.geojson", "keyprop": "GEOID"}\n' +
+    '  • value / xcoord / ycoord / k — autocorrelation: the measure, its coordinates, and neighbours k (default 4).\n' +
+    '  • outcome / preds — lag regression: the numeric outcome and its predictors (k default 5).\n' +
+    '  • region / value / boundary / keyprop — choropleth: region key, value to shade, a GeoJSON file, and its matching property.',
   disciplines: ['Environmental Studies', 'Public Policy & Administration', 'Sociology', 'Economics', 'Public Health', 'Ethnic Studies'],
   rPackages: ['sf', 'spdep', 'spatialreg', 'svglite'],
   menu: [

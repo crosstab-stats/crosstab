@@ -22,6 +22,9 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Data',
   keywords: ['csv', 'tsv', 'text', 'delimited', 'file'],
+  howto:
+    'GUI: File ▸ Import data… (or Export data…), choose CSV (.csv / .tsv / .txt). Reads and writes RFC-4180 delimited text.\n' +
+    'Used through the File menu, not a run command.',
   codecs: [
     { id: 'csv', label: 'CSV…', extensions: ['.csv', '.tsv', '.txt'], read: 'readCsv', write: 'writeCsv', order: 10, multiple: true },
   ],

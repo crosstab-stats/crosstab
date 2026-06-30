@@ -27,6 +27,14 @@ export const manifest = {
   category: 'Text',
   keywords: ['text', 'qualitative', 'tidytext', 'word frequency', 'sentiment', 'tf-idf', 'kwic', 'concordance', 'content analysis', 'nlp'],
   disciplines: ['Sociology', 'Anthropology', 'Ethnic Studies', "Women's & Gender Studies", 'Asian Studies', 'Communication'],
+  howto:
+    'GUI: Text ▸ Word frequency… / Sentiment analysis… / TF-IDF… / Keyword in context…, then pick a free-text column. You get word counts, polarity scores, distinctive terms, or a concordance.\n' +
+    'Syntax: run builtin-textanalytics.wordFrequency {"text": "response", "stopwords": "remove", "topn": 25, "minlen": 3}\n' +
+    'Syntax: run builtin-textanalytics.sentiment {"text": "response", "doc": "group"}\n' +
+    'Syntax: run builtin-textanalytics.tfidf {"text": "response", "doc": "group", "topn": 5}\n' +
+    'Syntax: run builtin-textanalytics.kwic {"text": "response", "term": "text", "window": 6}\n' +
+    '  • text — the free-text column to analyse.\n' +
+    '  • other actions: Word cloud, Topic modeling (LDA), Content-analysis dictionary — run builtin-textanalytics.wordCloud / topicModel / dictionary {…}.',
   rPackages: ['tidytext', 'dplyr', 'tibble', 'svglite', 'topicmodels', 'reshape2'],
   menu: [
     {

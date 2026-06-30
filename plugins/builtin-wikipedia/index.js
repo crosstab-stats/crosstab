@@ -33,6 +33,9 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Import',
   keywords: ['web', 'scrape', 'table', 'wikipedia'],
+  howto:
+    'GUI: File ▸ Import data… ▸ Wikipedia table…, then paste an article URL or title and pick a table. Scrapes one wikitable off the page into a dataset.\n' +
+    'Used through the File menu, not a run command.',
   rPackages: [],
   imports: [{ label: 'Wikipedia table…', source: 'web', order: 60, parse: 'importTable' }],
 };

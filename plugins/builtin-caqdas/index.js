@@ -29,6 +29,9 @@ export const manifest = {
   category: 'Qualitative',
   keywords: ['qualitative', 'coding', 'caqdas', 'transcript', 'codebook', 'content analysis'],
   disciplines: ['qualitative', 'sociology', 'education', 'communication', 'nursing', 'anthropology'],
+  howto:
+    'GUI: appears as a workspace tab (Coding) — pick a dataset text column (one document per row), highlight passages, and tag them with codes, then export code frequencies/segments to Output.\n' +
+    'Used through its workspace tab, not a run command.',
   workspaces: [{ id: 'caqdas-coding', title: 'Coding' }],
 };
 

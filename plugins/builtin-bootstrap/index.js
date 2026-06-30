@@ -21,6 +21,14 @@ export const manifest = {
   category: 'Resampling',
   keywords: ['resample', 'bootstrap', 'ci', 'confidence'],
   disciplines: ['Psychology', 'Social Science', 'Public Health'],
+  howto:
+    'GUI: Resampling ▸ pick a method (Bootstrap the mean / a statistic / a correlation, Permutation test, or Power by simulation). You get the estimate, bootstrap SE, and a 95% percentile CI (the mean bootstrap also emits the resample means as a new dataset).\n' +
+    'Syntax: run builtin-bootstrap.run {"x": "income", "reps": 2000}\n' +
+    'Syntax: run builtin-bootstrap.bootStatistic {"x": "income", "stat": "mean", "reps": 2000}\n' +
+    'Syntax: run builtin-bootstrap.permutation {"y": "score", "group": "condition", "stat": "mean", "reps": 5000}\n' +
+    '  • x / y — the numeric variable; reps — number of resamples (default 2000) or permutations (5000).\n' +
+    '  • stat — bootStatistic: "mean"|"median"|"sd"|"var"|"IQR"|"trim"; permutation: "mean"|"median".\n' +
+    '  • other actions: Bootstrap a correlation — run builtin-bootstrap.bootCorr {"x": "x", "y": "y", "reps": 2000}; Power by simulation — run builtin-bootstrap.power {"n": 30, "d": 0.5, "alpha": 0.05, "reps": 2000}.',
   rPackages: ['boot'],
   menu: [
     {

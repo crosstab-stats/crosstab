@@ -17,6 +17,11 @@ export const manifest = {
   category: 'Regression',
   keywords: ['doe', 'design of experiments', 'response surface', 'rsm', 'optimization', 'quadratic', 'stationary point', 'canonical'],
   disciplines: ['Nutrition Food & Dietetics', 'Family & Consumer Sciences', 'Business', 'Environmental Studies'],
+  howto:
+    'GUI: Regression ▸ Response surface (second-order)…, pick a response and 2+ continuous factors. You get the quadratic model, the stationary point, and a canonical (max/min/saddle) classification.\n' +
+    'Syntax: run builtin-doe.run {"y": "yield", "factors": ["temp", "time"]}\n' +
+    '  • y — the numeric response to optimize.\n' +
+    '  • factors — two or more continuous factor variables.',
   rPackages: ['rsm'],
   menu: [
     {

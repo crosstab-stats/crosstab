@@ -21,6 +21,12 @@ export const manifest = {
   category: 'Assumptions',
   keywords: ['normality', 'shapiro', 'levene', 'homogeneity', 'variance', 'q-q', 'qq plot', 'assumptions', 'skewness', 'kurtosis'],
   disciplines: ['Economics', 'Political Science', 'Psychology', 'Social Science'],
+  howto:
+    'GUI: Assumptions ▸ Normality (Shapiro–Wilk), pick numeric variables; you get Shapiro–Wilk, skewness, kurtosis, and a Q–Q plot per variable. Or Assumptions ▸ Homogeneity of variance (Levene\'s) to compare spread across groups.\n' +
+    'Syntax: run builtin-assumptions.normality {"vars": ["income", "age"]}\n' +
+    'Syntax: run builtin-assumptions.levene {"outcome": "income", "groups": "region"}\n' +
+    '  • vars — the numeric variables to check for normality.\n' +
+    '  • outcome / groups — the numeric measure and the variable defining the groups.',
   rPackages: ['svglite'],
   menu: [
     {

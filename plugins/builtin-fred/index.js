@@ -29,6 +29,9 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Import',
   keywords: ['economic', 'time series', 'fed', 'fred', 'macro'],
+  howto:
+    'GUI: File ▸ Import data… ▸ FRED (economic data)…, then enter a series id (e.g. UNRATE) and your free FRED API key. You get a date + value dataset.\n' +
+    'Used through the File menu, not a run command.',
   rPackages: [],
   imports: [{ label: 'FRED (economic data)…', source: 'web', order: 50, parse: 'importSeries' }],
 };

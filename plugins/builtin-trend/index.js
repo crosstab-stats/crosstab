@@ -16,6 +16,10 @@ export const manifest = {
   category: 'Time Series',
   keywords: ['mann-kendall', 'mann kendall', 'sen slope', 'trend', 'monotonic', 'non-parametric trend', 'theil-sen'],
   disciplines: ['Environmental Studies', 'Ecology'],
+  howto:
+    "GUI: Time Series ▸ Mann-Kendall trend + Sen's slope…, then pick a numeric series in time order. You get Kendall's tau, the trend test, and Sen's slope (a robust per-step rate).\n" +
+    'Syntax: run builtin-trend.run {"series": "value"}\n' +
+    '  • series — the numeric measure to test, rows in time order.',
   rPackages: ['trend'],
   menu: [
     {

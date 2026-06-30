@@ -35,6 +35,9 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Workspaces',
   keywords: ['workspace', 'demo', 'reference', 'tab'],
+  howto:
+    'GUI: appears as a workspace tab (Hello WS) once enabled in Edit ▸ Plugins. A reference demo: type a note that persists with the project and count dataset rows.\n' +
+    'Used as a workspace tab, not a run command.',
   workspaces: [{ id: 'hello-workspace', title: 'Hello WS' }],
 };
 

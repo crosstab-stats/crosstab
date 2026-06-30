@@ -16,6 +16,10 @@ export const manifest = {
   category: 'Multivariate',
   keywords: ['ecology', 'diversity', 'shannon', 'simpson', 'richness', 'evenness', 'ordination', 'nmds', 'vegan', 'community'],
   disciplines: ['Ecology', 'Environmental Studies'],
+  howto:
+    'GUI: Multivariate ▸ Diversity & ordination…, pick one count column per species (each row a site). You get per-site richness/Shannon/Simpson/evenness plus an NMDS ordination plot.\n' +
+    'Syntax: run builtin-ecology.run {"species": ["sp1", "sp2", "sp3"]}\n' +
+    '  • species — 2+ numeric count columns (one per species/category).',
   rPackages: ['vegan', 'svglite'],
   menu: [
     {

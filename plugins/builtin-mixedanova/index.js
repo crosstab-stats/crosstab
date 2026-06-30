@@ -25,6 +25,13 @@ export const manifest = {
   category: 'Compare Means',
   keywords: ['ancova', 'ancova', 'repeated measures', 'mixed anova', 'within subjects', 'sphericity', 'covariate', 'aov', 'afex', 'emmeans', 'type iii'],
   disciplines: ['Psychology', 'Education', 'Gerontology'],
+  howto:
+    'GUI: Compare Means ▸ ANCOVA… or Repeated-measures / mixed ANOVA…, then pick the roles. ' +
+    'ANCOVA gives Type III effects, partial η², and adjusted means; repeated-measures gives the within-subjects ANOVA with sphericity correction.\n' +
+    'Syntax: run builtin-mixedanova.ancova {"y": "score", "factors": ["group"], "covs": ["pretest"]}\n' +
+    'Syntax: run builtin-mixedanova.mixedAnova {"within": ["time1", "time2", "time3"], "between": "group"}\n' +
+    '  • ancova: y — outcome; factors — one or more grouping factors; covs — one or more covariates to adjust for.\n' +
+    '  • mixedAnova: within — one column per condition/time (wide format); between — optional between-subjects factor.',
   rPackages: ['car', 'emmeans', 'afex'],
   menu: [
     {

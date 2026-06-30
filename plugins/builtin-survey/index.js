@@ -35,6 +35,15 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Survey',
   keywords: ['survey', 'weights', 'complex sample', 'svydesign', 'svyglm', 'strata', 'cluster', 'gss', 'nhanes', 'anes'],
+  howto:
+    'GUI: Survey ▸ Weighted means, Weighted crosstab, or Survey regression — pick the analysis variables plus a weight ' +
+    '(required) and optional strata and cluster/PSU. You get design-correct estimates with proper standard errors.\n' +
+    'Syntax: run builtin-survey.means {"vars": ["age", "income"], "weight": "wt"}\n' +
+    'Syntax: run builtin-survey.crosstab {"rowvar": "region", "colvar": "vote", "weight": "wt", "strata": "stratum", "cluster": "psu"}\n' +
+    'Syntax: run builtin-survey.regression {"dv": "voted", "ivs": ["age", "income"], "family": "logistic", "weight": "wt"}\n' +
+    '  • weight — the survey weight (required); strata / cluster — optional design ids.\n' +
+    '  • vars / rowvar+colvar / dv+ivs — the measures, the two crosstab variables, or the outcome + predictors.\n' +
+    '  • family — regression only: "linear" (default) or "logistic".',
   disciplines: ['Social Science', 'Sociology', 'Political Science', 'Ethnic Studies', "Women's & Gender Studies", 'Public Health'],
   rPackages: ['survey'],
   menu: [

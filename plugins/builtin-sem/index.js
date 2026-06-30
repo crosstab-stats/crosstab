@@ -45,6 +45,13 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Multivariate',
   keywords: ['cfa', 'sem', 'lavaan', 'confirmatory factor analysis', 'structural equation', 'latent', 'fit indices', 'loadings'],
+  howto:
+    'GUI: Multivariate ▸ Confirmatory factor analysis (pick items for one factor) or Structural equation model (syntax) ' +
+    '(pick the variables, then write lavaan model syntax). You get standardized loadings and fit indices (χ², CFI, TLI, RMSEA, SRMR).\n' +
+    'Syntax: run builtin-sem.cfa {"items": ["x1", "x2", "x3"], "factorName": "Factor"}\n' +
+    'Syntax: run builtin-sem.sem {"vars": ["x1", "x2", "x3", "x4"], "model": "f1 =~ x1+x2 ; f2 =~ x3+x4 ; f1 ~~ f2"}\n' +
+    '  • items / factorName — CFA: the one-factor items and an optional factor name.\n' +
+    '  • vars / model — SEM: every variable used, plus lavaan model syntax (equations separated by ";").',
   disciplines: ['Psychology', 'Sociology'],
   rPackages: ['lavaan'],
   menu: [
