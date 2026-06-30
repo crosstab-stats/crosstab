@@ -949,7 +949,7 @@ export class HistoryPanel {
     else this.#view.render();
     this.#contentEl.hidden = this.#syntax;
     this.#editorEl.style.display = this.#syntax ? 'flex' : 'none';
-    this.#panel?.classList.toggle('history-panel--wide', this.#syntax); // room for two columns
+    this.#panel?.classList.toggle('history-panel--full', this.#syntax); // syntax = full-viewport editor
     if (this.#syntaxBtn) {
       this.#syntaxBtn.textContent = this.#syntax ? '↩ Steps' : '✎ Syntax';
       this.#syntaxBtn.classList.toggle('is-on', this.#syntax);
@@ -1091,7 +1091,7 @@ export class HistoryPanel {
     // not [hidden], so it can't be shown by a stale inline display — see #buildEditor).
     if (this.#editorEl) this.#editorEl.style.display = this.#syntax ? 'flex' : 'none';
     if (this.#contentEl) this.#contentEl.hidden = this.#syntax;
-    this.#panel.classList.toggle('history-panel--wide', this.#syntax);
+    this.#panel.classList.toggle('history-panel--full', this.#syntax);
     // Reopen: keep an unsaved draft rather than reload over it (see #toggleSyntax).
     if (this.#syntax) { if (this.#dirty) this.#renderGutter(); else this.#fillEditor(); }
     else this.#view.render();

@@ -305,9 +305,9 @@
         box-shadow: 0 12px 40px rgba(0,0,0,.22); display: flex; flex-direction: column; overflow: hidden;
       }
       .history-panel[hidden] { display: none; }
-      /* Syntax mode needs room for the gutter + the script text without the default
-         lines spilling into a horizontal scrollbar (the longest seed line ~580px). */
-      .history-panel--wide { width: min(94vw, 810px); }
+      /* Syntax mode is a text editor — give it the full viewport width (Steps mode
+         stays the compact right-docked timeline). top/bottom come from the base rule. */
+      .history-panel--full { left: 12px; right: 12px; width: auto; }
       .history-panel__head {
         display: flex; align-items: center; justify-content: space-between;
         padding: 10px 12px; border-bottom: 1px solid var(--line);
