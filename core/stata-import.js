@@ -81,8 +81,13 @@ function preprocess(text) {
 
   const result = [];
   for (let raw of joined) {
-    const trimmed = raw.trim();
-    if (trimmed === '') { result.push({ kind: 'blank' }); continue; }
+    let trimmed = raw.trim();
+    // Strip a leading Stata console/log prompt — ". " before a command (and a bare
+    // "." for an empty prompt line). Common when a .do is assembled from text pasted
+    // out of the Results window or a .log, where executed commands are echoed with a
+    // leading dot. No real Stata command begins with ". ", so this is safe.
+    trimmed = trimmed.replace(/^\.\s+/, '');
+    if (trimmed === '' || trimmed === '.') { result.push({ kind: 'blank' }); continue; }
     if (trimmed.startsWith('*')) { result.push({ kind: 'comment', text: trimmed.replace(/^\*+\s?/, '') }); continue; }
     // strip a trailing `// comment` (not inside a string)
     const noTrailing = stripLineComment(trimmed);
