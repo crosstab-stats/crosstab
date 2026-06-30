@@ -334,6 +334,12 @@ export class DatasetManager {
   filterCases(expr, label) {
     return this.active.filterCases(expr, label);
   }
+  dropVariables(names) {
+    return this.active.dropVariables(names);
+  }
+  keepVariables(names) {
+    return this.active.keepVariables(names);
+  }
   getTransforms() {
     return this.active.getTransforms();
   }

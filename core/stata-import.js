@@ -11,10 +11,11 @@
  *
  * Pure module — no DOM, no app deps. `stataToScript(text)` → `{ script, stats }`.
  *
- * Deliberately NOT covered (emitted as comments): column keep/drop (no `if`),
- * `rename`, `encode`, by-group prefixes, `#delimit ;`, macros, loops, `egen` beyond a
- * couple of row functions, and analysis commands carrying an `if`/`in` (we comment
- * those out rather than run them on the wrong rows).
+ * Deliberately NOT covered (emitted as comments): `rename`, `encode`, by-group
+ * prefixes, `#delimit ;`, macros, loops, `egen` beyond a couple of row functions, and
+ * analysis commands carrying an `if`/`in` (we comment those out rather than run them
+ * on the wrong rows). Column `keep`/`drop` (no `if`) ARE supported (→ drop/keep
+ * commands in the native grammar).
  */
 
 /**
@@ -251,16 +252,16 @@ function transRecode(text, raw) {
   return ok([`recode ${ident(src)} into ${ident(into)}: ${rules.join('; ')}`]);
 }
 
-/** keep/drop: `if cond` → filter (representable). A varlist (column keep/drop) is
- * not representable in the script grammar yet → comment. */
+/** keep/drop: `if cond` → row filter; a bare varlist → column keep/drop. */
 function transKeepDrop(text, raw, which) {
-  const { cond } = splitIf(text.replace(/^\w+/, '').trim() ? 'X ' + text.replace(/^\w+\s*/, '') : '');
   const ifM = text.match(/\bif\b\s+(.+)$/i);
   if (ifM) {
     const c = stataExpr(ifM[1].trim());
     return ok([which === 'keep' ? `keep if ${c}` : `keep if NOT (${c})`]);
   }
-  return skip(raw, `${which} <varlist> (column keep/drop not yet in CrossTab syntax)`);
+  const vars = text.replace(/^\w+\s*/, '').split(/,/)[0].trim().split(/\s+/).filter((v) => v && /^[A-Za-z_]/.test(v));
+  if (!vars.length) return skip(raw, `${which} (no variables)`);
+  return ok([`${which} ${vars.map(ident).join(', ')}`]);
 }
 
 /** destring/tostring var[s] [, replace gen()] → set type (best effort). */

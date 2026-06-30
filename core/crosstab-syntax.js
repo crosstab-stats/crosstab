@@ -23,6 +23,8 @@
  *         RULE := VALUE -> TO | LO..HI -> TO | missing -> TO
  *         TO   := VALUE | copy | sysmis
  *     keep if EXPR                             (row filter; EXPR is DuckDB boolean)
+ *     drop VAR1, VAR2 …                        (remove columns from the view)
+ *     keep VAR1, VAR2 …                        (keep only these columns)
  *     label variable NAME "Text"
  *     label values NAME code "Label", code "Label", …
  *     set type NAME = numeric|string|factor
@@ -39,7 +41,7 @@ const TYPES = new Set(['numeric', 'string', 'factor']);
 const MEASURES = new Set(['nominal', 'ordinal', 'scale']);
 /** Op types that count as a "data transform" (what getTransforms returns) — used to
  * position analyses in the timeline by how many transforms preceded them. */
-const TRANSFORM_TYPES = new Set(['setVariable', 'setCell', 'computeVar', 'recodeVar', 'filterCases']);
+const TRANSFORM_TYPES = new Set(['setVariable', 'setCell', 'computeVar', 'recodeVar', 'filterCases', 'dropVars', 'keepVars']);
 
 // =============================================================================
 // SERIALIZE  (timeline → text)
@@ -139,6 +141,10 @@ function opToLines(op) {
       return [`compute ${ident(op.name)}${typeSuffix(op.varType)} = ${op.expr}`];
     case 'filterCases':
       return [`keep if ${op.expr}`];
+    case 'dropVars':
+      return [`drop ${(op.names || []).map(ident).join(', ')}`];
+    case 'keepVars':
+      return [`keep ${(op.names || []).map(ident).join(', ')}`];
     case 'recodeVar':
       return [recodeToLine(op)];
     case 'setVariable':
@@ -299,6 +305,21 @@ function parseLine(line) {
     return { type: 'filterCases', expr, label: expr };
   }
 
+  // keep VAR1, VAR2 …  (column keep — distinct from `keep if`)
+  if (/^keep\b/i.test(line)) {
+    const names = parseIdentList(line.replace(/^keep\b/i, ''));
+    if (!names.length) throw new Error('keep: expected `keep if EXPR` or `keep VAR1, VAR2 …`');
+    return { type: 'keepVars', names };
+  }
+
+  // drop VAR1, VAR2 …  (column drop). `drop if` isn't a thing here — use keep if NOT(…).
+  if (/^drop\s+if\b/i.test(line)) throw new Error('drop if isn’t supported — use `keep if NOT (…)` for a row filter');
+  if (/^drop\b/i.test(line)) {
+    const names = parseIdentList(line.replace(/^drop\b/i, ''));
+    if (!names.length) throw new Error('drop: expected `drop VAR1, VAR2 …`');
+    return { type: 'dropVars', names };
+  }
+
   // recode SRC into NAME [as TYPE]: RULES
   if (/^recode\b/i.test(line)) return parseRecode(line);
 
@@ -424,6 +445,19 @@ function takeIdent(s) {
   const m = s.match(/^([A-Za-z_][A-Za-z0-9_.]*)/);
   if (!m) throw new Error(`expected a variable name at "${s}"`);
   return { value: m[1], rest: s.slice(m[1].length) };
+}
+
+/** Parse a list of identifiers separated by commas and/or whitespace (for
+ * `drop`/`keep` varlists — accepts both `a, b` and Stata-style `a b`). */
+function parseIdentList(s) {
+  const names = [];
+  let rest = String(s ?? '').trim();
+  while (rest) {
+    const taken = takeIdent(rest);
+    names.push(taken.value);
+    rest = taken.rest.replace(/^[\s,]+/, '');
+  }
+  return names;
 }
 
 /** Read a VALUE token: a double-quoted string, or a bare number/word. Returns a

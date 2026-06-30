@@ -74,7 +74,7 @@ const CT_ROW = '__ct_row';
 
 /** Log op types that are *data transforms* (vs. load/append/join source ops).
  * `getTransforms()` and the persisted `transforms` array carry only these. */
-const DATA_OPS = new Set(['setVariable', 'setCell', 'computeVar', 'recodeVar', 'filterCases']);
+const DATA_OPS = new Set(['setVariable', 'setCell', 'computeVar', 'recodeVar', 'filterCases', 'dropVars', 'keepVars']);
 
 /** Log op types that are *source* operations (data loads). */
 const SOURCE_OPS = new Set(['load', 'append', 'join']);
@@ -781,6 +781,23 @@ export class DataStore {
             `SELECT * EXCLUDE (${q}), CASE ${quoteIdent(ROWID_COL)} WHEN ${op.rid} ` +
             `THEN ${cellLiteral(op.value, isNum)} ELSE ${q} END AS ${q} FROM (${sql})`;
         }
+      } else if (op.type === 'dropVars') {
+        // Remove columns from the view (the row id is never droppable). Sources stay
+        // intact — this only narrows the derived projection.
+        const drop = (op.names || []).filter((n) => n !== ROWID_COL && byName.has(n));
+        for (const n of drop) byName.delete(n);
+        if (sql !== null && drop.length) {
+          sql = `SELECT * EXCLUDE (${drop.map(quoteIdent).join(', ')}) FROM (${sql})`;
+        }
+      } else if (op.type === 'keepVars') {
+        // Keep only the named columns (plus the stable row id). Order follows the
+        // request; unknown names are ignored.
+        const keep = (op.names || []).filter((n) => byName.has(n));
+        for (const n of [...byName.keys()]) if (!keep.includes(n)) byName.delete(n);
+        if (sql !== null) {
+          const cols = [quoteIdent(ROWID_COL), ...keep.map(quoteIdent)];
+          sql = `SELECT ${cols.join(', ')} FROM (${sql})`;
+        }
       }
     }
 
@@ -968,6 +985,32 @@ export class DataStore {
     if (!expr || !String(expr).trim()) throw new Error('Select cases: the condition is empty.');
     const cond = String(expr).trim();
     await this.#addDerivedVar({ type: 'filterCases', expr: cond, label: label || cond });
+  }
+
+  /**
+   * **Drop variables**: remove columns from the derived view (sources stay intact;
+   * reversible, logged, in History/syntax). The stable row id can't be dropped.
+   * @param {string[]} names
+   * @returns {Promise<void>}
+   */
+  async dropVariables(names) {
+    const list = (Array.isArray(names) ? names : [names]).map((n) => String(n).trim()).filter(Boolean);
+    const drop = list.filter((n) => n !== ROWID_COL && this.#byName.has(n));
+    if (!drop.length) throw new Error('Drop variables: none of those variables exist.');
+    await this.#addDerivedVar({ type: 'dropVars', names: drop });
+  }
+
+  /**
+   * **Keep variables**: narrow the view to only the named columns (the row id is
+   * always kept). Reversible, logged, in History/syntax.
+   * @param {string[]} names
+   * @returns {Promise<void>}
+   */
+  async keepVariables(names) {
+    const list = (Array.isArray(names) ? names : [names]).map((n) => String(n).trim()).filter(Boolean);
+    const keep = list.filter((n) => this.#byName.has(n));
+    if (!keep.length) throw new Error('Keep variables: none of those variables exist.');
+    await this.#addDerivedVar({ type: 'keepVars', names: keep });
   }
 
   /** Push a compute/recode/filter transform and re-derive; roll back if the
@@ -1704,6 +1747,11 @@ function validateOrder(log) {
       available.add(op.name); // expression reads are validated by the re-derive
     } else if (op.type === 'setCell') {
       if (!available.has(op.column)) return `“${op.column}” must exist before a cell of it is edited.`;
+    } else if (op.type === 'dropVars') {
+      for (const n of op.names || []) available.delete(n);
+    } else if (op.type === 'keepVars') {
+      const keep = new Set((op.names || []).filter((n) => available.has(n)));
+      for (const n of [...available]) if (!keep.has(n)) available.delete(n);
     }
   }
   return null;

@@ -1156,6 +1156,14 @@ function describeTransform(t) {
   if (t && t.type === 'filterCases') {
     return { title: 'Selected cases', detail: t.label || t.expr || '' };
   }
+  if (t && t.type === 'dropVars') {
+    const n = (t.names || []).length;
+    return { title: `Dropped ${n} variable${n === 1 ? '' : 's'}`, detail: (t.names || []).join(', ') };
+  }
+  if (t && t.type === 'keepVars') {
+    const n = (t.names || []).length;
+    return { title: `Kept ${n} variable${n === 1 ? '' : 's'}`, detail: (t.names || []).join(', ') };
+  }
   if (!t || t.type !== 'setVariable') return { title: t?.type || 'Change', detail: '' };
   const p = t.patch || {};
   const bits = [];
