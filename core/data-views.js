@@ -930,7 +930,7 @@ export class HistoryPanel {
         const shown = String(r.text || '').split('\n').map((l) => l.replace(/^#\s?/, '')).join('\n');
         const pre = el('div', null, 'history-panel__gcomment');
         pre.textContent = `🔒 ${shown}`;
-        pre.title = 'Read-only — data sources and cell edits aren’t edited as text; change them in the Data grid or the Steps view.';
+        pre.title = 'Read-only — a data source; re-import to change it.';
         pre.style.cssText =
           'font:12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; ' +
           'color:#9aa4ae; padding:5px 6px; white-space:pre-wrap; word-break:break-word;';
