@@ -228,6 +228,9 @@ export class PluginActions {
       // reflects the data AS OF this point (e.g. before a later filter), not the
       // final dataset — the order shown is the order computed.
       at: this.#dataStore?.getTransforms?.().length ?? 0,
+      // Output position before this run, so undo can remove exactly this analysis's
+      // output blocks (the tail it's about to append).
+      outputMark: this.#results.getModel ? this.#results.getModel().length : 0,
     };
     const ok = await this.#execute(entry);
     if (ok) this.#analysisLog?.record(entry);

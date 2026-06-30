@@ -529,7 +529,7 @@ export class ResultsPane {
    *
    * @param {Array<object>} model - A model array from a prior getModel().
    */
-  restoreModel(model) {
+  restoreModel(model, { divider = true } = {}) {
     this.clear(); // wipes DOM + model; shows empty state if nothing to restore
     if (!Array.isArray(model) || model.length === 0) return;
     this.#clearEmptyState();
@@ -608,12 +608,22 @@ export class ResultsPane {
     // always distinguishable from the restored snapshot. It persists until the next
     // save+reload — which restores everything above a fresh divider (the line moves
     // down past it).
-    const divider = document.createElement('div');
-    divider.dataset.restoreDivider = 'true';
-    divider.textContent = '↑ above: restored from your last save · new results appear below';
-    divider.style.cssText =
-      'text-align:center;font-size:12px;color:#7a8590;font-style:italic;margin:16px 12px 4px;padding-top:10px;border-top:1px dashed #c8d0d8;';
-    this.#content.append(divider);
+    if (divider) {
+      const div = document.createElement('div');
+      div.dataset.restoreDivider = 'true';
+      div.textContent = '↑ above: restored from your last save · new results appear below';
+      div.style.cssText =
+        'text-align:center;font-size:12px;color:#7a8590;font-style:italic;margin:16px 12px 4px;padding-top:10px;border-top:1px dashed #c8d0d8;';
+      this.#content.append(div);
+    }
+  }
+
+  /** Drop output blocks from index `n` onward and re-render — used by undo to remove
+   * a just-run analysis's output (no "restored" divider). */
+  truncateTo(n) {
+    if (!Number.isFinite(n) || n < 0) return;
+    if (n >= this.#model.length) return;
+    this.restoreModel(this.#model.slice(0, n), { divider: false });
   }
 
   /** The canonical results stylesheet, so an HTML export can reproduce the look

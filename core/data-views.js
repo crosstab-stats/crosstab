@@ -545,6 +545,7 @@ export class HistoryView {
     this.store = store;
     this.onError = opts.onError ?? (() => {});
     this.analysisLog = opts.analysisLog ?? null;
+    this.undo = opts.undo ?? null; // undo coordinator — tells us if an analysis is the latest action
     host.classList.add('ct-historyhost');
   }
 
@@ -566,8 +567,14 @@ export class HistoryView {
       if (!byAt.has(k)) byAt.set(k, []);
       byAt.get(k).push({ e, idx });
     });
+    // When the most recent action is an analysis, IT is "current" — not the last
+    // data op (so Undo visibly targets the analysis). The latest run is the last
+    // entry in the log (highest idx).
+    const analysisIsCurrent = !!this.undo?.lastActionIsAnalysis?.() && analyses.length > 0;
+    const currentAnalysisIdx = analyses.length - 1;
     const emitAnalyses = (k) => {
-      for (const { e, idx } of byAt.get(k) || []) ol.append(this.#analysisStep(e, idx));
+      for (const { e, idx } of byAt.get(k) || [])
+        ol.append(this.#analysisStep(e, idx, analysisIsCurrent && idx === currentAnalysisIdx));
       byAt.delete(k);
     };
 
@@ -579,7 +586,7 @@ export class HistoryView {
         marker: '○',
         title: 'Start',
         detail: 'empty — before any data',
-        state: applied.length === 0 ? 'current' : 'applied',
+        state: applied.length === 0 && !analysisIsCurrent ? 'current' : 'applied',
       }),
     );
 
@@ -599,7 +606,7 @@ export class HistoryView {
           marker: n,
           title: d.title,
           detail: d.detail,
-          state: n === applied.length ? 'current' : 'applied',
+          state: n === applied.length && !analysisIsCurrent ? 'current' : 'applied',
           index: i,
           canUp: i >= 2,
           canDown: i >= 1 && i < applied.length - 1,
@@ -684,7 +691,7 @@ export class HistoryView {
   /** A timeline row for a logged analysis (crosstab / regression / plot). Shown at
    * its data position, with the data steps. Display-only (not a data state to rewind
    * to) plus a ✕ to drop it from the recorded analyses. */
-  #analysisStep(entry, idx) {
+  #analysisStep(entry, idx, isCurrent = false) {
     const li = document.createElement('li');
     li.className = 'history__step history__step--analysis';
     const row = el('span', null, 'history__btn');
@@ -696,6 +703,7 @@ export class HistoryView {
     const detail = entry.pluginName || '';
     if (detail) body.append(el('span', detail, 'history__detail'));
     row.append(mk, body);
+    if (isCurrent) row.append(el('span', 'current', 'history__badge'));
     li.append(row);
     if (this.analysisLog) {
       const ctl = el('span', null, 'history__ctl');
@@ -748,6 +756,7 @@ export class HistoryPanel {
   // Syntax mode (#134).
   #analysisLog = null;
   #pluginActions = null;
+  #undo = null;
   #syntax = false;
   #contentEl = null;
   #editorEl = null;
@@ -758,14 +767,16 @@ export class HistoryPanel {
   /**
    * @param {import('./data-store.js').DataStore} store
    * @param {import('./event-bus.js').EventBus} bus
-   * @param {{analysisLog?: object, pluginActions?: object}} [opts] - enable the
-   *   Syntax editor: read/replay the analysis log + rebuild via Run.
+   * @param {{analysisLog?: object, pluginActions?: object, undo?: object}} [opts] -
+   *   enable the Syntax editor (read/replay the analysis log + rebuild via Run) and
+   *   pass the undo coordinator so the timeline can mark a just-run analysis 'current'.
    */
-  constructor(store, bus, { analysisLog = null, pluginActions = null } = {}) {
+  constructor(store, bus, { analysisLog = null, pluginActions = null, undo = null } = {}) {
     this.#store = store;
     this.#bus = bus;
     this.#analysisLog = analysisLog;
     this.#pluginActions = pluginActions;
+    this.#undo = undo;
   }
 
   #build() {
@@ -812,7 +823,7 @@ export class HistoryPanel {
     }
     document.body.append(panel);
     this.#panel = panel;
-    this.#view = new HistoryView(content, this.#store, { onError: (m) => this.#showErr(m), analysisLog: this.#analysisLog });
+    this.#view = new HistoryView(content, this.#store, { onError: (m) => this.#showErr(m), analysisLog: this.#analysisLog, undo: this.#undo });
   }
 
   /** The Syntax editor: an ALIGNED grid — each GUI step on the left, its editable

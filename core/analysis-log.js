@@ -36,6 +36,17 @@ export class AnalysisLog {
   /** Append a completed analysis. Entries are stored as deep clones so later edits
    * to the caller's objects can't mutate the log. */
   record(entry) {
+    const e = structuredClone(entry);
+    this.#entries.push(e);
+    // A distinct signal for a NEW run (vs load/remove/clear which only emit
+    // 'changed') so the undo coordinator can track it as the latest action.
+    this.#bus?.emit?.('analysislog:recorded', e);
+    this.#changed();
+  }
+
+  /** Re-append a previously-removed entry (undo's redo) without emitting a new-run
+   * signal — it isn't a fresh action. */
+  restore(entry) {
     this.#entries.push(structuredClone(entry));
     this.#changed();
   }

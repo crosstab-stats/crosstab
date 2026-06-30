@@ -24,6 +24,7 @@ import { DatasetOps } from './dataset-ops.js';
 import { PluginManager } from './plugin-manager.js';
 import { PluginActions } from './plugin-actions.js';
 import { AnalysisLog } from './analysis-log.js';
+import { UndoCoordinator } from './undo-coordinator.js';
 import { CodecService } from './codec-service.js';
 import { PluginCreator } from './plugin-creator.js';
 import { DatasetStore } from './dataset-store.js';
@@ -400,6 +401,16 @@ export async function boot(mounts) {
     dataStore: datasets,
   });
 
+  // One Undo/Redo across BOTH data ops and analysis runs: when the most recent
+  // action is an analysis, Undo removes that analysis + its output (not a data op).
+  const undoCoordinator = new UndoCoordinator({
+    datasets,
+    analysisLog,
+    results,
+    pluginActions,
+    bus,
+  });
+
   // --- shell wiring ----------------------------------------------------------
   wireStatusLine(bus, mounts.status, webr);
   if (mounts.busy) wireBusyIndicator(bus, mounts.busy);
@@ -423,29 +434,30 @@ export async function boot(mounts) {
     bus.on(CoreEvents.SELECTION_CHANGED, () => dataView.syncSelection());
   }
 
-  // Edit ▸ Undo / Redo over the transform log. Host-owned (like the data grid),
-  // not a plugin — registered through the same `menus.register` everything uses.
-  // No-ops when there's nothing to undo/redo; the views refresh on DATA_CHANGED.
+  // Edit ▸ Undo / Redo — routed through the coordinator so a single Undo acts on
+  // the most recent action whether it was a data op OR an analysis run. Host-owned
+  // (like the data grid), registered through the same `menus.register` everything
+  // uses. No-ops when there's nothing to undo/redo; views refresh on DATA_CHANGED.
   menus.register({
     id: 'core:undo',
     path: ['Edit'],
     label: 'Undo',
     order: 10,
-    command: () => void datasets.undo(),
+    command: () => void undoCoordinator.undo(),
   });
   menus.register({
     id: 'core:redo',
     path: ['Edit'],
     label: 'Redo',
     order: 20,
-    command: () => void datasets.redo(),
+    command: () => void undoCoordinator.redo(),
   });
 
   // Edit ▸ History… — the *actions* log (loads + transforms) in a floating panel
   // beside Undo/Redo. Distinct from the Data/Variables/Output tabs (inputs &
   // outputs); History is what you did. Click a step to rewind live, reorder with
   // ▲▼, or remove with ✕.
-  const historyPanel = new HistoryPanel(datasets, bus, { analysisLog, pluginActions });
+  const historyPanel = new HistoryPanel(datasets, bus, { analysisLog, pluginActions, undo: undoCoordinator });
   menus.register({
     id: 'core:history',
     path: ['Edit'],
@@ -628,7 +640,7 @@ export async function boot(mounts) {
   // `dataStore` kept as an alias to the manager (it delegates to the active
   // dataset) so console pokes / older references keep working. Exposed before the
   // launcher so the launcher (and dev tooling) can use the engine.
-  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, recycle, library, projects, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager, codecs, analysisLog, pluginActions };
+  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, recycle, library, projects, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager, codecs, analysisLog, pluginActions, undoCoordinator };
   // eslint-disable-next-line no-undef
   globalThis.crosstab = engine;
 
