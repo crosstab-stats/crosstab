@@ -14,6 +14,7 @@
 import { CoreEvents } from './event-bus.js';
 import { serialize, parse } from './crosstab-syntax.js';
 import { openSyntaxGuide } from './syntax-guide.js';
+import { stataToScript } from './stata-import.js';
 
 /** Syntax editor metrics: the textarea uses a FIXED line-height so the step gutter
  * can place each marker at `PAD + lineIndex * LINE_H` (and the textarea is no-wrap,
@@ -885,12 +886,12 @@ export class HistoryPanel {
     exportBtn.addEventListener('click', () => this.#exportScript());
     const fileInput = document.createElement('input');
     fileInput.type = 'file';
-    fileInput.accept = '.ctscript,.txt,text/plain';
+    fileInput.accept = '.ctscript,.txt,.do,text/plain';
     fileInput.style.display = 'none';
     fileInput.addEventListener('change', () => this.#importScript(fileInput));
     const importBtn = el('button', '⬆ Import', 'history-panel__action');
     importBtn.type = 'button';
-    importBtn.title = 'Load a .ctscript file into the editor (review, then Run)';
+    importBtn.title = 'Load a .ctscript file — or a Stata .do file (best-effort translation) — into the editor (review, then Run)';
     importBtn.addEventListener('click', () => fileInput.click());
     // "Unsaved edits" indicator — the textarea is a draft until you Run; this makes
     // that visible so a draft never feels silently lost.
@@ -1053,7 +1054,12 @@ export class HistoryPanel {
     if (this.#dirty && !confirm('Replace the current script with the imported file? Your unsaved edits will be discarded.')) return;
     try {
       const text = await file.text();
-      this.#ta.value = text;
+      // A Stata .do file is translated to CrossTab syntax (best-effort); a .ctscript
+      // (or .txt) loads as-is. Either way it's a draft for review, never auto-applied.
+      // The translated script carries its own `# Imported from Stata .do — N/M …`
+      // header (see stataToScript), so no separate banner is needed.
+      const content = /\.do$/i.test(file.name) ? stataToScript(text).script : text;
+      this.#ta.value = content;
       this.#dirty = true; // an imported script is a draft until you Run it
       this.#updateDirtyHint();
       this.#renderGutter();
