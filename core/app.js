@@ -25,6 +25,7 @@ import { PluginManager } from './plugin-manager.js';
 import { PluginActions } from './plugin-actions.js';
 import { AnalysisLog } from './analysis-log.js';
 import { UndoCoordinator } from './undo-coordinator.js';
+import { runRScript } from './r-script.js';
 import { CodecService } from './codec-service.js';
 import { PluginCreator } from './plugin-creator.js';
 import { DatasetStore } from './dataset-store.js';
@@ -473,6 +474,18 @@ export async function boot(mounts) {
   // dataset-level manipulation: subset columns into a fresh dataset, and join two
   // open project datasets by key (all four join types) (#121).
   new DatasetOps({ datasets, menus, results: results.api, ui }).activate();
+
+  // Transform ▸ Run R script… — an interop lane (#136): run a user's .R against the
+  // active data in the persistent R session (available as `data`), show output +
+  // plots, then optionally import a resulting data frame as a new dataset. R runs in
+  // its own WASM sandbox — it can't touch the data store.
+  menus.register({
+    id: 'core:run-r-script',
+    path: ['Transform'],
+    label: 'Run R script…',
+    order: 90,
+    command: () => runRScript({ webr, datasets }),
+  });
 
   // Dataset library (OPFS), tier 2: reusable building blocks — explicit
   // "Save dataset to library" / "Add dataset from library". No autosave here;

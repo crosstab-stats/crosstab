@@ -475,6 +475,54 @@ export class WebRManager {
   }
 
   /**
+   * Bind a data.frame built from the given columns into the persistent global env
+   * under `name` (e.g. `data`) — used by "Run R script" so a user's script can
+   * reference the active dataset. Mirrors {@link WebRManager#consoleBind} but with a
+   * caller-chosen name, always a data.frame. Pass no columns to remove it.
+   *
+   * @param {string} name - R variable name to assign in globalenv.
+   * @param {string[]} columns - Variable names to include as columns.
+   * @returns {Promise<{name:string, columns:string[]}>}
+   */
+  bindGlobalFrame(name, columns) {
+    return this.#enqueue(async (webR) => {
+      const G = webR.objs.globalEnv;
+      const shelter = await new webR.Shelter();
+      try {
+        if (!columns || !columns.length) {
+          await shelter.captureR(`if (exists(${rLit(name)}, envir = globalenv())) rm(list = ${rLit(name)}, envir = globalenv())`, { env: G });
+          return { name, columns: [] };
+        }
+        const target = `assign(${rLit(name)}, .d, envir = globalenv())`;
+        // Prefer the Parquet bridge (native types); fall back to JS arrays.
+        if (this.#getInjectionParquet && (await this.#ensureNanoparquet(webR))) {
+          const bytes = await this.#getInjectionParquet({ variables: columns });
+          if (bytes && bytes.byteLength) {
+            await webR.FS.writeFile(INJECT_PATH, bytes);
+            await shelter.captureR(
+              `local({ .d <- as.data.frame(nanoparquet::read_parquet(${rLit(INJECT_PATH)}), check.names = FALSE); ${target} })`,
+              { env: G },
+            );
+            return { name, columns };
+          }
+        }
+        const rawCols = await this.#getColumns({ variables: columns });
+        const cols = {};
+        for (const [k, v] of Object.entries(rawCols)) {
+          cols[k] = Array.from(v, (x) => (typeof x === 'number' && Number.isNaN(x) ? null : x));
+        }
+        await shelter.captureR(
+          `local({ .d <- as.data.frame(.crosstab_data, stringsAsFactors = FALSE, check.names = FALSE); ${target} })`,
+          { env: { '.crosstab_data': cols } },
+        );
+        return { name, columns };
+      } finally {
+        await shelter.purge();
+      }
+    }, 'bindGlobalFrame');
+  }
+
+  /**
    * Shut the runtime down and reset the manager. After this, the next job will
    * cold-start a new runtime. Mainly for tests and "restart R" UX.
    *
