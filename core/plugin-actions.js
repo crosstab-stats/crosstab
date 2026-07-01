@@ -38,6 +38,11 @@ export class PluginActions {
    * script `run id.fn` line can be enriched back into a replayable entry (#134). */
   #runnable = new Map();
 
+  /** Host-action runners (non-plugin analyses like "Run R script", #137): key →
+   * async (inputs) => void that appends output between begin/endAnalysis. Lets such
+   * actions be recorded + replayed through the same analysis-log machinery. */
+  #hostRunners = new Map();
+
   /**
    * @param {Object} deps
    * @param {import('./loader.js').PluginLoader} deps.loader
@@ -289,18 +294,56 @@ export class PluginActions {
     }, 45000);
     let ok = false;
     try {
-      this.#loader.setActiveInputs(e.pluginId, toInjectInputs(e.specs || [], e.inputs));
-      await this.#loader.invoke(e.pluginId, e.run, [e.inputs]);
+      if (e.host) {
+        // A host action (e.g. "Run R script", #137) — no plugin/sandbox; the runner
+        // appends its output into the section opened above.
+        const runner = this.#hostRunners.get(e.host);
+        if (!runner) throw new Error(`no host runner registered for "${e.host}"`);
+        await runner(e.inputs || {});
+      } else {
+        this.#loader.setActiveInputs(e.pluginId, toInjectInputs(e.specs || [], e.inputs));
+        await this.#loader.invoke(e.pluginId, e.run, [e.inputs]);
+      }
       ok = true;
     } catch (err) {
       this.#results.appendError(`${e.label}: ${err.message}`);
-      console.error(`[plugin ${e.pluginId}]`, err);
+      console.error(`[${e.host ? 'host' : 'plugin'} ${e.pluginId}]`, err);
     } finally {
       clearTimeout(watchdog);
-      this.#loader.clearActiveInputs(e.pluginId);
+      if (!e.host) this.#loader.clearActiveInputs(e.pluginId);
       this.#results.endAnalysis();
       this.#bus.emit(CoreEvents.ANALYSIS_FINISHED, { plugin: e.pluginId });
     }
+    return ok;
+  }
+
+  /** Register a host-action runner (see {@link PluginActions#runHost}). */
+  registerHost(key, fn) {
+    this.#hostRunners.set(key, fn);
+  }
+
+  /**
+   * Run a host action (a non-plugin analysis) and record it for replay — the
+   * host-side analog of {@link PluginActions#run}. Framed + logged identically, so it
+   * shows in History, persists in the project, and re-runs on replay/undo.
+   * @param {{host:string, label:string, inputs?:object, pluginName?:string, origin?:string}} a
+   * @returns {Promise<boolean>}
+   */
+  async runHost({ host, label, inputs = {}, pluginName = 'R script', origin = 'built-in' }) {
+    const entry = {
+      host,
+      pluginId: `host:${host}`,
+      pluginName,
+      origin,
+      label,
+      run: '',
+      specs: [],
+      inputs,
+      at: this.#dataStore?.getTransforms?.().length ?? 0,
+      outputMark: this.#results.getModel ? this.#results.getModel().length : 0,
+    };
+    const ok = await this.#execute(entry);
+    if (ok) this.#analysisLog?.record(entry);
     return ok;
   }
 
@@ -367,6 +410,15 @@ export class PluginActions {
     }
     // Leave the dataset at its final state.
     if (appliedLen !== allTransforms.length) await this.#dataStore.replaceTransforms(allTransforms);
+    // R-script (host) steps aren't part of the native syntax text, so they're not in
+    // `steps` — preserve them across a Syntax Run: re-run at the end and keep them in
+    // the log (else a Run would silently drop them).
+    const hostEntries = (this.#analysisLog?.entries() || []).filter((e) => e.host);
+    for (const h of hostEntries) {
+      // eslint-disable-next-line no-await-in-loop -- run in order after the native replay
+      await this.#execute(h);
+      entries.push(h);
+    }
     this.#analysisLog?.load(entries);
     return { unknown };
   }

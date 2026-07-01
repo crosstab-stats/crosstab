@@ -409,6 +409,30 @@ export class ResultsPane {
   }
 
   /**
+   * Append a raster image supplied as a `data:image/…` URL — e.g. an R plot captured
+   * as a bitmap by "Run R script" (#137), where plots come back rasterised, not as
+   * SVG. Persisted in the model as the data URL, so it survives save/reload and flows
+   * into exports. Only inline `data:image/` URLs are accepted (no remote/script srcs).
+   *
+   * @param {string} src - A `data:image/...;base64,…` URL.
+   * @param {{alt?: string}} [opts]
+   */
+  appendImage(src, opts = {}) {
+    const safe = String(src || '');
+    if (!/^data:image\//.test(safe)) return;
+    const block = this.#makeBlock();
+    block.classList.add('results-plot');
+    const img = document.createElement('img');
+    img.src = safe;
+    img.alt = opts.alt || 'R plot';
+    img.style.cssText = 'max-width:100%; height:auto; display:block;';
+    block.append(img);
+    this.#model.push({ kind: 'image', src: safe, alt: img.alt });
+    this.#place(block);
+    this.#bus?.emit?.('output:written');
+  }
+
+  /**
    * Append a **data-driven chart** (`app.results.appendChart`). Unlike
    * {@link ResultsPane#appendPlot} — which takes a finished SVG baked in R — the
    * plugin hands a structured {@link ChartModel} (categories + series + values), and
@@ -582,6 +606,18 @@ export class ResultsPane {
         block.append(save);
         this.#place(block);
         this.#model.push({ kind: 'plot', svg: safe, id: handle });
+      } else if (item.kind === 'image') {
+        const safe = String(item.src || '');
+        if (!/^data:image\//.test(safe)) continue; // reject non-inline srcs from an untrusted save
+        const block = this.#makeBlock();
+        block.classList.add('results-plot');
+        const img = document.createElement('img');
+        img.src = safe;
+        img.alt = item.alt || 'R plot';
+        img.style.cssText = 'max-width:100%; height:auto; display:block;';
+        block.append(img);
+        this.#place(block);
+        this.#model.push({ kind: 'image', src: safe, alt: img.alt });
       } else if (item.kind === 'chart' && item.model && item.model.kind) {
         // Re-render from the saved model+view so the chart stays fully editable
         // (not a frozen image). Fill any view fields a stale save might lack.
@@ -667,6 +703,7 @@ export class ResultsPane {
       endAnalysis: () => this.endAnalysis(),
       appendTable: (data, opts) => this.appendTable(data, opts),
       appendPlot: (s, opts) => this.appendPlot(s, opts),
+      appendImage: (s, opts) => this.appendImage(s, opts),
       appendChart: (model) => this.appendChart(model),
       updatePlot: (handle, s) => this.updatePlot(handle, s),
       appendText: (m) => this.appendText(m),

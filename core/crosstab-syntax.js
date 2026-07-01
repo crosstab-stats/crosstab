@@ -201,6 +201,11 @@ function setVarToLines(op) {
 }
 
 function analysisToLine(a) {
+  // Host actions (e.g. "Run R script", #137) aren't native CrossTab commands — they
+  // run R, not the declarative grammar — so they can't round-trip as `run id.fn`.
+  // Emit a comment so the script stays valid and notes the step; the R step itself
+  // lives in History/Output and is preserved across a Run (see replayScript).
+  if (a.host) return `# ${stripEllipsis(a.label || 'R script')} — R script (Transform ▸ Run R script; not editable here)`;
   const json = JSON.stringify(a.inputs ?? {});
   const label = a.label ? `   # ${stripEllipsis(a.label)}` : '';
   return `run ${a.pluginId}.${a.run} ${json}${label}`;

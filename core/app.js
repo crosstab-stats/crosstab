@@ -25,7 +25,7 @@ import { PluginManager } from './plugin-manager.js';
 import { PluginActions } from './plugin-actions.js';
 import { AnalysisLog } from './analysis-log.js';
 import { UndoCoordinator } from './undo-coordinator.js';
-import { runRScript } from './r-script.js';
+import { runRScript, registerRScriptRunner } from './r-script.js';
 import { CodecService } from './codec-service.js';
 import { PluginCreator } from './plugin-creator.js';
 import { DatasetStore } from './dataset-store.js';
@@ -484,8 +484,11 @@ export async function boot(mounts) {
     path: ['Transform'],
     label: 'Run R script…',
     order: 90,
-    command: () => runRScript({ webr, datasets }),
+    command: () => runRScript({ pluginActions, webr, datasets }),
   });
+  // The runner that executes an R script into the Output pane — registered so the run
+  // is a recorded, replayable analysis step (#137), re-run on replay/undo.
+  registerRScriptRunner({ pluginActions, results: results.api, webr, datasets });
 
   // Dataset library (OPFS), tier 2: reusable building blocks — explicit
   // "Save dataset to library" / "Add dataset from library". No autosave here;

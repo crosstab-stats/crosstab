@@ -1,20 +1,21 @@
 /**
  * @file r-script.js
- * "Run R script…" (#136, Phase 1) — a host-side interop lane: run a user's `.R`
- * against the active dataset in the persistent WebR session, show its text output +
- * plots, then optionally import a data frame the script produced as a NEW CrossTab
- * dataset (the reverse bridge — the only R→CrossTab data path).
+ * "Run R script…" (#136 Phase 1 + #137 Phase 2) — an interop lane: run a user's `.R`
+ * against the active dataset in the persistent WebR session, append its text output +
+ * plots to the **Output pane as a replayable, persisted step**, then optionally import
+ * a data frame the script produced as a NEW CrossTab dataset (the reverse bridge — the
+ * only R→CrossTab data path).
  *
- * Design notes:
- *  - Runs in the SAME persistent R global env as the R Console (via `evalConsole`),
- *    so the script's data frames survive the call for the reverse bridge. The active
- *    dataset is bound as a data.frame named `data` (via `bindGlobalFrame`).
- *  - R (WebR) and the data store (DuckDB) are separate WASM sandboxes with no shared
- *    memory — a script CANNOT touch the DB or the real disk. `write.csv(...)` etc.
- *    write to R's own throwaway VFS. Data only crosses back via the explicit,
- *    user-chosen "import a frame" action here.
- *  - Phase 1 shows results in a modal; Phase 2 will promote this to a persisted,
- *    replayable Output/History step.
+ * Architecture:
+ *  - The RUN is a HOST ACTION recorded in the analysis log (`pluginActions.runHost`),
+ *    so it shows in History, persists in the project, and re-runs on replay/undo —
+ *    framed exactly like a plugin analysis. The registered runner does the work:
+ *    bind the active data as `data`, `evalConsole` the script (persistent global env —
+ *    so plots + frames survive), append the printed output + plot images to Output.
+ *  - Because the script runs in the PERSISTENT env, the frames it created are still
+ *    alive afterward for the reverse bridge (a separate, user-picked import).
+ *  - R (WebR) and the data store (DuckDB) are separate WASM sandboxes: a script can't
+ *    touch the DB or the real disk. The import step is the only R→CrossTab path.
  */
 
 const FILE_ACCEPT = '.R,.r,.txt,text/plain';
@@ -38,11 +39,34 @@ function extractR(name) {
 }
 
 /**
- * Open the "Run R script…" flow: pick a file, run it, show output + plots, offer to
- * import a resulting frame.
- * @param {{ webr: object, datasets: object }} deps
+ * Register the "rscript" host runner with PluginActions — the code that actually runs
+ * a script and appends its output to the Output pane (called on run AND on replay).
+ * @param {{ pluginActions: object, results: object, webr: object, datasets: object }} deps
  */
-export function runRScript({ webr, datasets }) {
+export function registerRScriptRunner({ pluginActions, results, webr, datasets }) {
+  pluginActions.registerHost('rscript', async ({ script }) => {
+    const meta = (await datasets.getVariableMeta?.()) ?? [];
+    const cols = meta.map((m) => m.name);
+    if (cols.length) await webr.bindGlobalFrame('data', cols);
+
+    const res = await webr.evalConsole(String(script ?? ''));
+    const out = (res.output || '').trim();
+    if (out) results.appendText('```\n' + out + '\n```'); // fenced → monospace, whitespace kept
+    for (const img of res.images || []) {
+      const src = bitmapToPng(img);
+      if (src) results.appendImage(src, { alt: 'R plot' });
+    }
+    if (!out && !(res.images || []).length) results.appendText('_The script ran with no printed output or plots._');
+    if (res.error) results.appendError('R reported an error (see the output above).');
+  });
+}
+
+/**
+ * Menu command: pick a `.R`, run it as a recorded Output/History step, then offer to
+ * import a resulting data frame as a new dataset.
+ * @param {{ pluginActions: object, webr: object, datasets: object }} deps
+ */
+export function runRScript({ pluginActions, webr, datasets }) {
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = FILE_ACCEPT;
@@ -51,98 +75,36 @@ export function runRScript({ webr, datasets }) {
     const file = input.files && input.files[0];
     input.remove();
     if (!file) return;
-    const text = await file.text();
-    openRunDialog({ webr, datasets, filename: file.name, script: text });
+    const script = await file.text();
+    const label = `R script: ${file.name}`;
+    await pluginActions.runHost({ host: 'rscript', label, inputs: { script } });
+    await offerImport({ webr, datasets });
   });
   document.body.append(input);
   input.click();
 }
 
-function openRunDialog({ webr, datasets, filename, script }) {
-  const dialog = document.createElement('dialog');
-  dialog.className = 'ct-dialog';
-  dialog.style.cssText = 'max-width:820px; width:94vw;';
-  const form = el('form', null, 'ct-dialog__form');
-  form.method = 'dialog';
-  form.style.cssText = 'padding:0; display:flex; flex-direction:column; max-height:88vh;';
-
-  const head = el('div', null);
-  head.style.cssText = 'display:flex; align-items:baseline; gap:10px; padding:16px 20px 10px; border-bottom:1px solid var(--line,#e2e7ec);';
-  const title = el('h2', 'Run R script', 'ct-dialog__title');
-  title.style.margin = '0';
-  const fname = el('span', filename);
-  fname.style.cssText = 'font-size:12.5px; color:#7a8590;';
-  const closeX = el('button', '✕');
-  closeX.type = 'submit';
-  closeX.value = 'cancel';
-  closeX.title = 'Close';
-  closeX.style.cssText = 'margin-left:auto; border:0; background:none; font-size:16px; cursor:pointer; color:#5a6470;';
-  head.append(title, fname, closeX);
-
-  const body = el('div', null);
-  body.style.cssText = 'overflow:auto; padding:14px 20px 20px;';
-  const note = el('p', 'Your active dataset is available in R as a data.frame named `data`. Output and plots appear below; the script runs in R only — it can’t change your dataset.');
-  note.style.cssText = 'margin:0 0 12px; font-size:12.5px; color:#5a6470; line-height:1.5;';
-  const status = el('div', 'Running…');
-  status.style.cssText = 'font-size:13px; color:#5a6470; margin:0 0 12px;';
-  const outWrap = el('div', null);
-  const importWrap = el('div', null);
-  body.append(note, status, outWrap, importWrap);
-
-  form.append(head, body);
-  dialog.append(form);
-  dialog.addEventListener('close', () => dialog.remove());
-  document.body.append(dialog);
-  dialog.showModal();
-
-  void execute({ webr, datasets, script, status, outWrap, importWrap });
-}
-
-async function execute({ webr, datasets, script, status, outWrap, importWrap }) {
-  try {
-    const meta = (await datasets.getVariableMeta?.()) ?? [];
-    const cols = meta.map((m) => m.name);
-    if (cols.length) await webr.bindGlobalFrame('data', cols);
-
-    const res = await webr.evalConsole(script);
-    status.remove();
-
-    if (res.output && res.output.trim()) {
-      const pre = el('pre');
-      pre.textContent = res.output;
-      pre.style.cssText =
-        'margin:0 0 12px; padding:10px 12px; background:#f6f8fa; border:1px solid var(--line,#e2e7ec); ' +
-        'border-radius:6px; overflow:auto; max-height:340px; white-space:pre-wrap; word-break:break-word; ' +
-        `font:12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color:${res.error ? '#7a201a' : '#243'};`;
-      outWrap.append(pre);
-    }
-    for (const img of res.images || []) outWrap.append(plotCanvas(img));
-    if (!(res.output && res.output.trim()) && !(res.images || []).length) {
-      outWrap.append(hint('The script ran with no printed output or plots.'));
-    }
-
-    await buildImportSection({ webr, datasets, importWrap });
-  } catch (err) {
-    status.textContent = '';
-    outWrap.append(errorBox(`Could not run the script: ${err?.message || err}`));
-  }
-}
-
-/** After a run, list the data frames the script produced and offer to import one. */
-async function buildImportSection({ webr, datasets, importWrap }) {
+/** After a run, if the script left data frames in R, offer to import one. */
+async function offerImport({ webr, datasets }) {
   let frames = [];
   try {
     const { result } = await webr.run(ENUM_R);
-    frames = parseEnum(result).filter((f) => f.name !== 'data'); // exclude the bound input
-  } catch { /* enumeration failed — just skip the import offer */ }
+    frames = parseEnum(result).filter((f) => f.name !== 'data');
+  } catch { return; }
   if (!frames.length) return;
 
-  const wrap = el('div', null);
-  wrap.style.cssText = 'margin-top:14px; padding-top:14px; border-top:1px solid var(--line,#e2e7ec);';
-  wrap.append(sectionHeading('Import a result as a new dataset'));
+  const dialog = document.createElement('dialog');
+  dialog.className = 'ct-dialog';
+  dialog.style.cssText = 'max-width:520px; width:92vw;';
+  const form = el('form', null, 'ct-dialog__form');
+  form.method = 'dialog';
+  form.append(el('h2', 'Import a result as a dataset', 'ct-dialog__title'));
+  const hint = el('p', 'Your R script produced these data frames. Import one as a new CrossTab dataset (optional).');
+  hint.style.cssText = 'margin:0 0 14px; font-size:13px; color:#5a6470; line-height:1.5;';
+  form.append(hint);
 
   const row = el('div', null);
-  row.style.cssText = 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;';
+  row.style.cssText = 'display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0 0 12px;';
   const select = document.createElement('select');
   select.style.cssText = 'font:inherit; font-size:13px; padding:6px 8px; border:1px solid var(--line,#d8dee4); border-radius:6px;';
   for (const f of frames) {
@@ -153,48 +115,58 @@ async function buildImportSection({ webr, datasets, importWrap }) {
   }
   const nameInput = document.createElement('input');
   nameInput.type = 'text';
-  nameInput.placeholder = 'New dataset name';
   nameInput.value = frames[0].name;
-  nameInput.style.cssText = 'font:inherit; font-size:13px; padding:6px 8px; border:1px solid var(--line,#d8dee4); border-radius:6px; flex:1 1 160px; min-width:120px;';
+  nameInput.style.cssText = 'font:inherit; font-size:13px; padding:6px 8px; border:1px solid var(--line,#d8dee4); border-radius:6px; flex:1 1 140px; min-width:110px;';
   select.addEventListener('change', () => { nameInput.value = select.value; });
-  const btn = el('button', 'Import', 'ct-dialog__primary');
-  btn.type = 'button';
-  btn.style.cssText = 'font:inherit; font-size:13px; padding:6px 14px; border-radius:6px; cursor:pointer; background:var(--accent,#2980b9); color:#fff; border:1px solid var(--accent,#2980b9);';
-  const msg = el('span');
-  msg.style.cssText = 'font-size:12.5px; margin-left:4px;';
+  row.append(select, nameInput);
+  form.append(row);
 
-  btn.addEventListener('click', async () => {
-    btn.disabled = true;
+  const msg = el('div');
+  msg.style.cssText = 'font-size:12.5px; margin:0 0 12px; min-height:16px;';
+  form.append(msg);
+
+  const menu = el('menu', null, 'ct-dialog__buttons');
+  menu.style.cssText = 'display:flex; justify-content:flex-end; gap:8px; margin:0; padding:0;';
+  const close = el('button', 'Done');
+  close.type = 'submit';
+  close.value = 'cancel';
+  const importBtn = el('button', 'Import', 'ct-dialog__primary');
+  importBtn.type = 'button';
+  importBtn.style.cssText = 'background:var(--accent,#2980b9); color:#fff; border:1px solid var(--accent,#2980b9); border-radius:6px; padding:6px 14px; cursor:pointer;';
+  importBtn.addEventListener('click', async () => {
+    importBtn.disabled = true;
     msg.textContent = 'Importing…';
     msg.style.color = '#5a6470';
     try {
       const { result } = await webr.run(extractR(select.value));
       const { variables, columns } = frameToDataset(result);
       if (!variables.length) throw new Error('no columns found in that frame');
-      await datasets.createWithData({ name: (nameInput.value || select.value).trim() || select.value, variables, columns, activate: true });
-      msg.textContent = `Imported “${(nameInput.value || select.value).trim()}” as a new dataset.`;
+      const name = (nameInput.value || select.value).trim() || select.value;
+      await datasets.createWithData({ name, variables, columns, activate: true });
+      msg.textContent = `Imported “${name}” as a new dataset.`;
       msg.style.color = '#1a7a3a';
     } catch (err) {
       msg.textContent = `Import failed: ${err?.message || err}`;
       msg.style.color = '#7a201a';
     } finally {
-      btn.disabled = false;
+      importBtn.disabled = false;
     }
   });
+  menu.append(importBtn, close);
+  form.append(menu);
 
-  row.append(select, nameInput, btn);
-  wrap.append(row, msg);
-  importWrap.append(wrap);
+  dialog.append(form);
+  dialog.addEventListener('close', () => dialog.remove());
+  document.body.append(dialog);
+  dialog.showModal();
 }
 
 // --- toJs parsing ------------------------------------------------------------
 
-/** WebR toJs of a column is `{type, values:[…]}`; sometimes a bare array. */
 function colValues(c) {
   return Array.isArray(c?.values) ? c.values : Array.isArray(c) ? c : [];
 }
 
-/** Parse the ENUM_R result → [{name, nrow, ncol}]. */
 function parseEnum(result) {
   const v = result?.values;
   if (!Array.isArray(v) || v.length < 3) return [];
@@ -204,7 +176,6 @@ function parseEnum(result) {
   return names.map((name, i) => ({ name: String(name), nrow: Number(nrow[i] ?? 0), ncol: Number(ncol[i] ?? 0) }));
 }
 
-/** Parse an extracted data.frame → {variables, columns} for createWithData. */
 function frameToDataset(result) {
   const names = result?.names || [];
   const vals = result?.values || [];
@@ -219,33 +190,19 @@ function frameToDataset(result) {
   return { variables, columns };
 }
 
-// --- small DOM helpers -------------------------------------------------------
+// --- helpers -----------------------------------------------------------------
 
-function plotCanvas(img) {
-  const canvas = document.createElement('canvas');
-  canvas.width = img.width;
-  canvas.height = img.height;
-  canvas.style.cssText = 'max-width:100%; height:auto; border:1px solid var(--line,#e2e7ec); border-radius:6px; margin:0 0 12px; display:block;';
-  canvas.getContext('2d').drawImage(img, 0, 0);
-  return canvas;
-}
-
-function errorBox(text) {
-  const d = el('div', text);
-  d.style.cssText = 'background:#fdf3f2; color:#7a201a; font-size:13px; padding:10px 12px; border:1px solid #f0d8d5; border-radius:6px; white-space:pre-wrap;';
-  return d;
-}
-
-function hint(text) {
-  const d = el('div', text);
-  d.style.cssText = 'font-size:12.5px; color:#7a8590;';
-  return d;
-}
-
-function sectionHeading(text) {
-  const h = el('h3', text);
-  h.style.cssText = 'margin:0 0 10px; font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:#7a8590;';
-  return h;
+/** Rasterise a captured plot (ImageBitmap) to a PNG data URL for the Output pane. */
+function bitmapToPng(img) {
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    canvas.getContext('2d').drawImage(img, 0, 0);
+    return canvas.toDataURL('image/png');
+  } catch {
+    return null;
+  }
 }
 
 function el(tag, text, className) {

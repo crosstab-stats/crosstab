@@ -64,6 +64,15 @@ export async function exportDocx(app, { title }) {
           items.push({ t: 'image', path, w, h: Math.min(8, Number((w * ar).toFixed(2)) || 3.7) });
           imgN += 1;
         }
+      } else if (it.kind === 'image' && /^data:image\//.test(String(it.src || ''))) {
+        // Rasterised plot (e.g. from an R script) — decode the data URL to PNG bytes.
+        const png = dataUrlToBytes(it.src);
+        if (png && png.length) {
+          const path = `/tmp/ct_out_img_${imgN}.png`;
+          await app.webr.writeFile(path, png);
+          items.push({ t: 'image', path, w: 6.0, h: 3.7 });
+          imgN += 1;
+        }
       }
     }
 
@@ -176,6 +185,16 @@ function htmlToText(html) {
 }
 
 /** Height/width ratio of an SVG from its viewBox (or width/height), default 0.62. */
+/** Decode a `data:image/…;base64,…` URL to bytes for embedding. */
+function dataUrlToBytes(url) {
+  const i = String(url).indexOf(',');
+  if (i < 0) return null;
+  const bin = atob(url.slice(i + 1));
+  const out = new Uint8Array(bin.length);
+  for (let j = 0; j < bin.length; j++) out[j] = bin.charCodeAt(j);
+  return out;
+}
+
 function svgAspect(svg) {
   try {
     const el = new DOMParser().parseFromString(String(svg ?? ''), 'image/svg+xml').querySelector('svg');

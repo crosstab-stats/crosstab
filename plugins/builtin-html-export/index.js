@@ -64,6 +64,9 @@ function buildHtml(model, css, title) {
       // aspect via the pane's base `svg` rule. Data-driven charts carry their
       // last-rendered SVG in `it.svg`, same as baked plots.
       body += `<div class="results-block">${it.svg ?? ''}</div>`;
+    } else if (it.kind === 'image' && /^data:image\//.test(String(it.src || ''))) {
+      // Rasterised plot (e.g. from an R script) — a data: URL embeds self-contained.
+      body += `<div class="results-block"><img src="${esc(it.src)}" alt="${esc(it.alt || 'plot')}" style="max-width:100%;height:auto"></div>`;
     } else if (it.kind === 'error') {
       body += `<div class="results-block results-error">${esc(it.message ?? '')}</div>`;
     }
