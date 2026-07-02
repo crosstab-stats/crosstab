@@ -150,7 +150,15 @@ export class PluginBroker {
    */
   sendLoad(code) {
     this.#post({ t: 'load', code });
-    return this.#manifestReady.promise;
+    // Bound the wait: a malicious/broken plugin that imports but never posts
+    // {t:'manifest'} would otherwise leave this broker (and its live sandbox)
+    // attached forever — a capability leak on the probe path especially, where
+    // nothing else tears it down until the manifest resolves. Mirrors whenReady().
+    return withTimeout(
+      this.#manifestReady.promise,
+      20000,
+      'plugin did not return a manifest in time',
+    );
   }
 
   /**
@@ -421,6 +429,18 @@ function buildDispatch({ data, results, webr, ui, web }) {
 
     'web.get': (url) => web.get(url),
   };
+}
+
+/** Reject `promise` if it hasn't settled within `ms`, clearing the timer either
+ * way so no dangling handle keeps the broker alive. */
+function withTimeout(promise, ms, message) {
+  return Promise.race([
+    promise,
+    new Promise((_resolve, reject) => {
+      const t = setTimeout(() => reject(new Error(message)), ms);
+      promise.then(() => clearTimeout(t), () => clearTimeout(t));
+    }),
+  ]);
 }
 
 /** A promise plus its resolve/reject, for the handshake steps. */

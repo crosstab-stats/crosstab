@@ -135,7 +135,20 @@ const BUILTIN_PLUGINS = [
 const webService = Object.freeze({
   get: async (url) => {
     if (!/^https?:\/\//i.test(String(url))) throw new Error('web.get: only http(s) URLs');
-    const res = await fetch(String(url));
+    // Do NOT auto-follow redirects. The per-origin consent gate (loader.js
+    // #gatedServices) approves the *requested* origin only; if fetch silently
+    // followed a 30x, a grant for a trusted host would let its (open-)redirect
+    // bounce the request — carrying data in the URL — to an origin the user never
+    // approved, defeating the gate (#89). `redirect: 'manual'` makes a redirect a
+    // dead-stop opaque response, so the cross-origin hop never fires; we surface a
+    // clear error instead of leaking. Callers must use a direct endpoint.
+    const res = await fetch(String(url), { redirect: 'manual' });
+    if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)) {
+      throw new Error(
+        'web.get: the server returned a redirect, which is not followed for your safety ' +
+          '(a redirect could send your data to a site you did not approve). Use the direct URL.',
+      );
+    }
     return { ok: res.ok, status: res.status, text: await res.text() };
   },
 });

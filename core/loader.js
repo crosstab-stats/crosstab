@@ -71,6 +71,32 @@ export function qualifyId(origin, manifest) {
 }
 
 /**
+ * Deny-all service bundle for the {@link Loader#probe} path. Probing only reads a
+ * plugin's manifest, but importing the plugin runs its top-level module code,
+ * which can RPC the broker before the plugin is ever activated or consented to.
+ * Handing that code the real services would let a merely-*inspected* plugin read
+ * the active dataset, run arbitrary R, etc. So the probe broker gets these stubs:
+ * any `app.<ns>.<method>()` throws. A `Proxy` covers every namespace/method the
+ * broker's dispatch might reference (present and future) without enumeration.
+ *
+ * @returns {{data:object, results:object, webr:object, ui:object, web:object}}
+ */
+function probeServices() {
+  const deny = (ns) =>
+    new Proxy(
+      {},
+      {
+        get: (_t, prop) => () => {
+          throw new Error(
+            `app.${ns}.${String(prop)} is unavailable while inspecting a plugin (it isn't activated yet).`,
+          );
+        },
+      },
+    );
+  return { data: deny('data'), results: deny('results'), webr: deny('webr'), ui: deny('ui'), web: deny('web') };
+}
+
+/**
  * A plugin is **fully declarative**: a `manifest` (data) describing what it
  * contributes, plus **named exported functions** the manifest references. The host
  * does all wiring — there is no `activate`, and the `app` surface exposes no
@@ -259,9 +285,13 @@ export class PluginLoader {
   /** Sandbox `code`, return its manifest (id qualified by origin), and dispose the
    * sandbox. No activation. */
   async #probe(code, label, origin) {
-    const ctx = { id: null, name: label };
     const iframe = this.#createIframe();
-    const broker = new PluginBroker({ iframe, services: this.#gatedServices(ctx), onError: () => {} });
+    // A probe only reads the manifest — it must expose NO capabilities. Importing
+    // the plugin runs its top-level module code, which can synchronously RPC the
+    // broker before any activation/consent; with the real service bundle that would
+    // let a merely-inspected (never-trusted) plugin read the active dataset or run R.
+    // So the probe broker gets deny-all stubs: every `app.*` call throws.
+    const broker = new PluginBroker({ iframe, services: probeServices(), onError: () => {} });
     this.#sandboxContainer.append(iframe);
     iframe.src = await this.#sandboxSrc(PLUGIN_HOST_URL);
     try {

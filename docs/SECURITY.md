@@ -79,6 +79,27 @@ no foreign code. This is the shortcut/bookmark feature working as intended. Acce
   to read or overwrite its blob. (`core/workspace-store.js`,
   `core/workspace-manager.js`)
 
+## Fixed in the post-launch plugin-audit pass (2026-07)
+
+A focused review of the plugin/import surface turned up two gaps against controls
+we already intended to enforce; both are closed.
+
+- **`web.get` redirect bypass.** The per-origin consent gate (#89) approved the
+  *requested* origin, but the host fetch used the default `redirect: 'follow'`, so a
+  grant for a trusted host let its (open-)redirect bounce the request — carrying data
+  in the URL — to an origin the user never approved. The host fetch now uses
+  `redirect: 'manual'` and rejects any 30x, so the cross-origin hop never fires; the
+  data can only reach the exact origin the user consented to. (`core/app.js`.) Trade-off:
+  endpoints that rely on redirects (e.g. a Wikipedia REST title that 302s to its
+  canonical) must be given as the direct URL; the error says so.
+- **Probe-time capability exposure.** *Cataloguing* a plugin (reading its manifest,
+  no activation, no consent) built a broker with the full service bundle and imported
+  the plugin, whose top-level module code could then RPC `data.*`/`webr.*` — reading
+  the active dataset or running R before any trust decision. The probe now gets a
+  **deny-all** service bundle (every `app.*` call throws), and `sendLoad` has a 20s
+  timeout so a plugin that imports but never returns a manifest can't keep a live,
+  capable sandbox attached indefinitely. (`core/loader.js`, `core/plugin-broker.js`.)
+
 ## Accepted residual risks (won't fix)
 
 These are real gaps we have consciously chosen **not** to close, because the
