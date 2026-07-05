@@ -41,7 +41,7 @@
  * the picker just gathers them.
  */
 
-import { showFormatPicker, groupFor, byGroupThenOrder } from './format-picker.js';
+import { showFormatPicker, chooseFormat, groupFor, byGroupThenOrder } from './format-picker.js';
 import { readZipEntries } from './zip.js';
 
 /**
@@ -308,12 +308,12 @@ export class ImportService {
     return [...this.#importers.entries()].filter(([, s]) => s.source !== 'web');
   }
 
-  /** Find the file importer that handles `ext` (with the dot, lower-case), or null. */
-  #importerForExt(ext) {
-    for (const [id, spec] of this.#fileImporters()) {
-      if ((spec.extensions || []).some((e) => e.toLowerCase() === ext)) return [id, spec];
-    }
-    return null;
+  /** All file importers that handle `ext` (with the dot, lower-case). More than one
+   * can claim an extension (e.g. `.txt` = CSV table vs text-as-data). */
+  #importersForExt(ext) {
+    return this.#fileImporters().filter(([, spec]) =>
+      (spec.extensions || []).some((e) => e.toLowerCase() === ext),
+    );
   }
 
   /** Every extension a file importer accepts (for "supported formats" messages). */
@@ -346,6 +346,7 @@ export class ImportService {
       console.error('[import:url]', err);
       return;
     }
+    if (!resolved) return; // user cancelled the format chooser
     await this.#dispatchFiles(resolved.spec, [resolved.file], resolved.id);
   }
 
@@ -379,7 +380,7 @@ export class ImportService {
     if (/\.zip$/i.test(name) || (await looksLikeZip(blob))) {
       const buf = new Uint8Array(await blob.arrayBuffer());
       const entries = (await readZipEntries(buf)).filter((e) => !e.name.endsWith('/'));
-      const match = entries.find((e) => this.#importerForExt(extOf(e.name)));
+      const match = entries.find((e) => this.#importersForExt(extOf(e.name)).length);
       if (!match) {
         throw new Error(
           `the ZIP has no importable data file (looked for ${this.#knownExts().join(', ') || 'known formats'}).`,
@@ -388,18 +389,44 @@ export class ImportService {
       dataBlob = new Blob([match.data]);
       dataName = match.name.replace(/^.*[\\/]/, '');
     }
-    const ext = extOf(dataName);
-    const found = this.#importerForExt(ext);
-    if (!found) {
-      throw new Error(
-        ext
-          ? `no importer for "${ext}" files. Supported: ${this.#knownExts().join(', ') || '(none enabled)'}.`
-          : `couldn’t tell the file type from the URL. Make sure it ends in a data extension ` +
-            `(${this.#knownExts().join(', ') || 'e.g. .csv'}) or points to a .zip.`,
-      );
-    }
-    const [id, spec] = found;
+    const chosen = await this.#resolveImporter(extOf(dataName), dataName);
+    if (chosen === null) return null; // user cancelled the chooser
+    const [id, spec] = chosen;
     return { file: new File([dataBlob], dataName), spec, id };
+  }
+
+  /**
+   * Pick the importer for a downloaded file. One claimant → use it. Several claim the
+   * extension → let the user choose (a `.txt` can be a CSV table or text-as-data).
+   * Extension unknown/unmatched → offer the full list rather than dead-ending (a URL
+   * may end in `/download` or `.php` yet still be a CSV). Returns `[id, spec]`, or
+   * `null` if the user cancels. Throws only when no importer could possibly apply.
+   *
+   * @param {string} ext - Lower-cased extension with the dot, or '' if none.
+   * @param {string} dataName - The file's display name, for the chooser hint.
+   * @returns {Promise<[string, object]|null>}
+   */
+  async #resolveImporter(ext, dataName) {
+    const matches = ext ? this.#importersForExt(ext) : [];
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) {
+      const entry = await chooseFormat({
+        title: 'Choose a format',
+        hint: `More than one importer reads “${ext}”. Which should open ${dataName}?`,
+        entries: matches.map(([id, spec]) => ({ id, label: spec.label, extensions: spec.extensions })),
+      });
+      return entry ? matches.find(([id]) => id === entry.id) : null;
+    }
+    const all = this.#fileImporters();
+    if (all.length === 0) throw new Error('no import formats are enabled.');
+    const entry = await chooseFormat({
+      title: 'Choose a format',
+      hint: ext
+        ? `No importer is registered for “${ext}”. Pick the format ${dataName} really is:`
+        : `Couldn’t tell ${dataName}’s format from the URL. Pick the format it is:`,
+      entries: all.map(([id, spec]) => ({ id, label: spec.label, extensions: spec.extensions })),
+    });
+    return entry ? all.find(([id]) => id === entry.id) : null;
   }
 
   /**

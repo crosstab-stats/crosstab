@@ -142,6 +142,73 @@ export function showFormatPicker({ title, hint, emptyText, entries }) {
 }
 
 /**
+ * Promise-returning format chooser for when an extension is claimed by more than
+ * one importer (e.g. a `.txt` URL — a CSV table vs text-as-data), or can't be told
+ * from the URL at all. Unlike {@link showFormatPicker} (fire-and-forget, which runs
+ * a command *synchronously* to keep the click's user-activation alive for a file
+ * dialog), this just resolves the chosen entry — the bytes are already in hand, so
+ * there is no file dialog and no activation to preserve.
+ *
+ * @param {Object} opts
+ * @param {string} opts.title - Dialog title, e.g. `'Choose a format'`.
+ * @param {string} [opts.hint] - Sub-title hint line.
+ * @param {Array<{id: string, label: string, extensions?: string[]}>} opts.entries
+ * @returns {Promise<{id: string, label: string}|null>} the chosen entry, or null if cancelled.
+ */
+export function chooseFormat({ title, hint, entries }) {
+  return new Promise((resolve) => {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'ct-dialog ct-dialog--wide ct-fmt';
+    dialog.innerHTML = `
+      <form method="dialog" class="ct-dialog__form">
+        <h2 class="ct-dialog__title"></h2>
+        <p class="ct-dialog__hint"></p>
+        <div class="ct-fmt__list"></div>
+        <menu class="ct-dialog__buttons">
+          <button value="cancel" type="submit">Cancel</button>
+        </menu>
+      </form>`;
+    dialog.querySelector('.ct-dialog__title').textContent = title;
+    const hintEl = dialog.querySelector('.ct-dialog__hint');
+    if (hint) hintEl.textContent = hint;
+    else hintEl.remove();
+
+    const listEl = dialog.querySelector('.ct-fmt__list');
+    let settled = false;
+    const finish = (v) => {
+      if (settled) return;
+      settled = true;
+      resolve(v);
+      dialog.close();
+    };
+
+    for (const e of entries) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'ct-fmt__row';
+      const name = document.createElement('span');
+      name.className = 'ct-fmt__name';
+      name.textContent = e.label.replace(/…\s*$/, '');
+      row.append(name);
+      if (e.extensions && e.extensions.length) {
+        const ext = document.createElement('span');
+        ext.className = 'ct-fmt__ext';
+        ext.textContent = e.extensions.join('  ');
+        row.append(ext);
+      }
+      row.addEventListener('click', () => finish(e));
+      listEl.append(row);
+    }
+
+    // Escape / Cancel / any close we didn't initiate → treat as cancelled.
+    dialog.addEventListener('cancel', () => finish(null));
+    dialog.addEventListener('close', () => { dialog.remove(); finish(null); });
+    document.body.append(dialog);
+    dialog.showModal();
+  });
+}
+
+/**
  * Ask the user what to name an export. A small in-app dialog — used in preference
  * to the File System Access "save" picker for the same reason {@link showFormatPicker}
  * draws its own list: `showSaveFilePicker` is Chromium-only, so a custom dialog is
