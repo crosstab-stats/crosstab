@@ -770,6 +770,7 @@ export class HistoryPanel {
   #contentEl = null;
   #editorEl = null;
   #ta = null; // the free-form script textarea (the whole script as one editable text)
+  #backdropInner = null; // syntax-highlight layer behind the (transparent-text) textarea
   #gutter = null; // left margin host (clips); #gutterInner is translated to track scroll
   #gutterInner = null;
   #dirty = false; // true once the user types — guards navigation from discarding the draft
@@ -915,6 +916,30 @@ export class HistoryPanel {
     this.#gutter = gutter;
     this.#gutterInner = gutterInner;
 
+    // The editable area is an overlay: a transparent-text <textarea> sits on top of a
+    // <div> "backdrop" that renders the SAME text as colour-coded token spans. Both use
+    // pixel-identical font/line-height/padding + white-space:pre, so the caret and the
+    // coloured glyphs line up exactly (same fixed-metrics trick the gutter relies on).
+    // The textarea stays the interactive layer (typing/selection/caret); the backdrop is
+    // purely visual (pointer-events:none) and is translated to follow the textarea scroll.
+    ensureSyntaxStyles();
+    const FONT = `font:13px/${SYN_LINE_H}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;`;
+    // Slashed zero + no ligatures: makes 0-vs-O (and l-vs-1) unambiguous and keeps
+    // operators like -> from being fused into a glyph.
+    const GLYPH = 'font-feature-settings:"zero" 1; font-variant-ligatures:none;';
+
+    const taWrap = el('div', null, 'history-panel__tawrap');
+    taWrap.style.cssText = 'position:relative; flex:1 1 auto; min-width:0; overflow:hidden;';
+
+    const backdrop = el('div', null, 'history-panel__backdrop');
+    backdrop.style.cssText = 'position:absolute; inset:0; overflow:hidden; pointer-events:none;';
+    const backdropInner = el('div', null, 'history-panel__code');
+    backdropInner.style.cssText =
+      `position:absolute; top:0; left:0; min-width:100%; box-sizing:border-box; will-change:transform; ` +
+      `white-space:pre; tab-size:2; ${FONT} ${GLYPH} padding:${SYN_PAD}px 8px;`;
+    backdrop.append(backdropInner);
+    this.#backdropInner = backdropInner;
+
     const ta = document.createElement('textarea');
     ta.className = 'history-panel__ta';
     ta.spellcheck = false;
@@ -923,15 +948,15 @@ export class HistoryPanel {
     ta.setAttribute('autocorrect', 'off');
     ta.setAttribute('wrap', 'off'); // 1 logical line = 1 visual row → gutter math stays exact
     ta.style.cssText =
-      `flex:1 1 auto; min-width:0; resize:none; border:0; outline:none; box-sizing:border-box; ` +
-      `white-space:pre; overflow:auto; tab-size:2; ` +
-      `font:13px/${SYN_LINE_H}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; ` +
+      `position:absolute; inset:0; width:100%; height:100%; resize:none; border:0; outline:none; box-sizing:border-box; ` +
+      `white-space:pre; overflow:auto; tab-size:2; background:transparent; ${FONT} ${GLYPH} ` +
       `padding:${SYN_PAD}px 8px;`;
     ta.addEventListener('input', () => { this.#dirty = true; this.#updateDirtyHint(); this.#renderGutter(); });
     ta.addEventListener('scroll', () => this.#syncGutterScroll());
     this.#ta = ta;
 
-    body.append(gutter, ta);
+    taWrap.append(backdrop, ta);
+    body.append(gutter, taWrap);
     wrap.append(hint, row, body);
     this.#editorEl = wrap;
     return wrap;
@@ -979,7 +1004,19 @@ export class HistoryPanel {
   /** Keep the gutter scrolled in lockstep with the textarea (vertical only — the
    * markers are positioned absolutely, so we just translate the layer). */
   #syncGutterScroll() {
-    if (this.#gutterInner && this.#ta) this.#gutterInner.style.transform = `translateY(${-this.#ta.scrollTop}px)`;
+    if (!this.#ta) return;
+    const y = -this.#ta.scrollTop;
+    if (this.#gutterInner) this.#gutterInner.style.transform = `translateY(${y}px)`;
+    // The highlight backdrop follows BOTH axes (the gutter only needs vertical).
+    if (this.#backdropInner) this.#backdropInner.style.transform = `translate(${-this.#ta.scrollLeft}px, ${y}px)`;
+  }
+
+  /** Repaint the syntax-highlight backdrop from the current textarea text — one
+   * coloured token layer per line, kept glyph-aligned with the transparent textarea
+   * on top. Called from #renderGutter so it tracks every edit/scroll/reload. */
+  #renderHighlight() {
+    if (!this.#backdropInner || !this.#ta) return;
+    this.#backdropInner.innerHTML = this.#ta.value.split('\n').map(highlightScriptLine).join('\n');
   }
 
   /** Redraw the left margin: one label per script line, positioned at the line's
@@ -988,6 +1025,7 @@ export class HistoryPanel {
    * get no marker. Runs on every keystroke — cheap for the small line counts here. */
   #renderGutter() {
     if (!this.#gutterInner || !this.#ta) return;
+    this.#renderHighlight(); // keep the colour backdrop in lockstep with the gutter
     const lines = this.#ta.value.split('\n');
     const frag = document.createDocumentFragment();
     let stepNo = 0;
@@ -1197,6 +1235,102 @@ function describeTransform(t) {
  * and plain comments (no marker), else `{ kind, title, detail }` where kind is
  * 'source' (🔒 data anchor), 'analysis' (∑ run line), or 'transform'. `describe` maps
  * a transform line to a friendly {title,detail} via a single-line parse. */
+// --- Syntax highlighting for the Syntax-mode editor -------------------------
+// A tiny per-line tokenizer feeds the colour backdrop behind the textarea. It's
+// purely cosmetic (a mis-colour never affects Run), so it favours robustness over
+// a full parse: scan char-by-char, honouring strings/backticks/comments so a `#`
+// or keyword inside a quoted value isn't mis-tagged. Keywords mirror the grammar
+// in crosstab-syntax.js.
+
+/** Leading command verbs (only coloured in first-word position). */
+const HL_CMDS = new Set(['compute', 'recode', 'keep', 'drop', 'rename', 'label', 'set', 'run']);
+/** Clause/keyword words anywhere in a statement. */
+const HL_KEYWORDS = new Set([
+  'as', 'into', 'if', 'to', 'else', 'variable', 'values', 'type', 'measure', 'missing', 'copy', 'sysmis', 'none',
+]);
+/** Type/measure literals (`set type x = numeric`, etc.). */
+const HL_VALUES = new Set(['numeric', 'string', 'factor', 'nominal', 'ordinal', 'scale']);
+
+/** Inject the token colours once (classes keep per-keystroke innerHTML small).
+ *
+ * The palette is **Okabe-Ito** — the same colourblind-safe scheme the chart layer
+ * defaults to (see PALETTES in chart-renderer.js) — darkened where needed for text
+ * contrast on white (WCAG-AA, ~4.5:1+). It deliberately avoids the red-vs-green pair
+ * (which merges under the common deuteranopia/protanopia) and never relies on hue
+ * ALONE: commands are bold AND line-initial, comments are italic, so token roles
+ * survive even with no colour perception. Numbers get their own hue so a bare `0`
+ * reads distinctly from an `O` in an identifier — reinforced by the layer's
+ * slashed-zero font feature. Backtick identifiers stay the default text colour (the
+ * backticks delimit them), keeping the coloured hues few and well-separated. */
+function ensureSyntaxStyles() {
+  if (document.getElementById('ct-syntax-hl-styles')) return;
+  const s = document.createElement('style');
+  s.id = 'ct-syntax-hl-styles';
+  s.textContent = [
+    '.history-panel__ta{color:transparent;-webkit-text-fill-color:transparent;caret-color:#1f2328;}',
+    '.history-panel__ta::selection{background:#b3d4fc;}',
+    '.history-panel__code{color:#1f2328;}',
+    '.history-panel__code .tk-cmd{color:#0072b2;font-weight:600;}', // Okabe-Ito blue (bold)
+    '.history-panel__code .tk-kw{color:#a84c86;}',                  // reddish-purple
+    '.history-panel__code .tk-val{color:#a84c86;}',                 // reddish-purple (a keyword too)
+    '.history-panel__code .tk-num{color:#b34700;}',                 // vermillion — 0 stands out
+    '.history-panel__code .tk-str{color:#0a6b52;}',                 // bluish-green
+    '.history-panel__code .tk-cmt{color:#57606a;font-style:italic;}',
+    '.history-panel__code .tk-op{color:#57606a;}',
+  ].join('\n');
+  document.head.append(s);
+}
+
+/** Tokenize one script line into colour-coded HTML spans (escaped). */
+function highlightScriptLine(line) {
+  const s = String(line ?? '');
+  const n = s.length;
+  let out = '';
+  let i = 0;
+  let firstWord = true; // only the leading verb is a "command"
+  const push = (cls, text) => {
+    out += cls ? `<span class="tk-${cls}">${esc(text)}</span>` : esc(text);
+  };
+  while (i < n) {
+    const c = s[i];
+    if (c === '#') { push('cmt', s.slice(i)); break; } // comment → end of line
+    if (c === '"') {
+      let j = i + 1;
+      while (j < n && !(s[j] === '"' && s[j - 1] !== '\\')) j++;
+      j = Math.min(j + 1, n);
+      push('str', s.slice(i, j)); i = j; firstWord = false; continue;
+    }
+    if (c === '`') {
+      let j = i + 1;
+      while (j < n && s[j] !== '`') j++;
+      j = Math.min(j + 1, n);
+      push('id', s.slice(i, j)); i = j; firstWord = false; continue;
+    }
+    if (c === ' ' || c === '\t') {
+      let j = i; while (j < n && (s[j] === ' ' || s[j] === '\t')) j++;
+      push(null, s.slice(i, j)); i = j; continue; // whitespace: leading verb still "first"
+    }
+    if (/[A-Za-z_]/.test(c)) {
+      let j = i; while (j < n && /[A-Za-z0-9_.]/.test(s[j])) j++;
+      const w = s.slice(i, j);
+      const lw = w.toLowerCase();
+      let cls = null;
+      if (firstWord && HL_CMDS.has(lw)) cls = 'cmd';
+      else if (HL_KEYWORDS.has(lw)) cls = 'kw';
+      else if (HL_VALUES.has(lw)) cls = 'val';
+      push(cls, w); i = j; firstWord = false; continue;
+    }
+    if (/[0-9]/.test(c) || (c === '-' && /[0-9]/.test(s[i + 1] || ''))) {
+      let j = c === '-' ? i + 1 : i; while (j < n && /[0-9.]/.test(s[j])) j++;
+      push('num', s.slice(i, j)); i = j; firstWord = false; continue;
+    }
+    if (s.startsWith('->', i) || s.startsWith('..', i)) { push('op', s.slice(i, i + 2)); i += 2; firstWord = false; continue; }
+    if ('=:;,{}()[]<>+*/%&|!~'.includes(c)) { push('op', c); i++; firstWord = false; continue; }
+    push(null, c); i++; firstWord = false;
+  }
+  return out;
+}
+
 function classifyScriptLine(rawLine, describe) {
   const trimmed = String(rawLine ?? '').trim();
   if (!trimmed) return null;
