@@ -42,6 +42,7 @@
  */
 
 import { showFormatPicker, groupFor, byGroupThenOrder } from './format-picker.js';
+import { readZipEntries } from './zip.js';
 
 /**
  * @typedef {Object} ImporterSpec
@@ -203,6 +204,20 @@ export class ImportService {
         command: () => void this.#runImport(id),
       }))
       .sort(byGroupThenOrder);
+    // A cross-cutting "fetch a data file by URL" entry — routed to the right codec
+    // by the URL's extension, so it needs no per-format registration. Sits atop the
+    // Online sources group with the web importers.
+    if (this.#fileImporters().length) {
+      entries.push({
+        id: 'core:import-url',
+        label: 'From a web address (URL)…',
+        extensions: [],
+        group: 'Online sources',
+        order: -1,
+        command: () => void this.#runUrlImport(),
+      });
+      entries.sort(byGroupThenOrder);
+    }
     showFormatPicker({
       title: 'Import data',
       hint: 'Choose a format to import. Type to filter.',
@@ -255,7 +270,16 @@ export class ImportService {
       return;
     }
     if (!files.length) return; // user cancelled
+    await this.#dispatchFiles(spec, files, id);
+  }
 
+  /**
+   * Given resolved file(s) + their importer, run the combine flow: straight import
+   * when nothing is loaded, else ask replace / add rows / join / new dataset. Shared
+   * by the file-picker path ({@link #runImport}) and the URL path
+   * ({@link #runUrlImport}) so both behave identically once the bytes are in hand.
+   */
+  async #dispatchFiles(spec, files, id) {
     // No data loaded → straight import (no mode dialog). Data loaded → ask how to
     // combine; join is offered only for a single incoming file.
     if (this.#data.rowCount === 0) {
@@ -277,6 +301,105 @@ export class ImportService {
     } else {
       await this.#importFiles(spec, files, mode, id);
     }
+  }
+
+  /** Registered file (non-`web`) importers as `[id, spec]` pairs. */
+  #fileImporters() {
+    return [...this.#importers.entries()].filter(([, s]) => s.source !== 'web');
+  }
+
+  /** Find the file importer that handles `ext` (with the dot, lower-case), or null. */
+  #importerForExt(ext) {
+    for (const [id, spec] of this.#fileImporters()) {
+      if ((spec.extensions || []).some((e) => e.toLowerCase() === ext)) return [id, spec];
+    }
+    return null;
+  }
+
+  /** Every extension a file importer accepts (for "supported formats" messages). */
+  #knownExts() {
+    const s = new Set();
+    for (const [, spec] of this.#fileImporters()) for (const e of spec.extensions || []) s.add(e.toLowerCase());
+    return [...s].sort();
+  }
+
+  /**
+   * Import a data file straight from a URL — the "every device" path for tablets/
+   * phones where saving to a filesystem first is painful. Fetches the bytes host-
+   * side (a real download, distinct from the consent-gated plugin `web.get`), so it
+   * follows redirects; unwraps a `.zip` to the data file inside; then routes the
+   * bytes to the codec matched by extension and runs the normal combine flow.
+   *
+   * Direct-fetch only: a cross-origin URL works when its server allows CORS (GitHub
+   * "raw", jsDelivr, S3-with-CORS, many open-data portals). If it doesn't, the
+   * browser blocks it and we say so — no third-party proxy is involved.
+   */
+  async #runUrlImport() {
+    const url = await promptImportUrl(this.#knownExts());
+    if (!url) return; // cancelled
+    let resolved;
+    try {
+      const { blob, name } = await this.#download(url);
+      resolved = await this.#resolveDownload(blob, name);
+    } catch (err) {
+      this.#results.appendError(`Import from URL failed: ${err.message}`);
+      console.error('[import:url]', err);
+      return;
+    }
+    await this.#dispatchFiles(resolved.spec, [resolved.file], resolved.id);
+  }
+
+  /** Fetch a user-supplied URL to a Blob + a best-guess filename. Host-side, follows
+   * redirects (a plain download the user asked for — no plugin, no consent grant to
+   * launder, so the plugin `web.get` redirect block doesn't apply here). */
+  async #download(url) {
+    if (!/^https?:\/\//i.test(url)) throw new Error('please enter an http(s) URL.');
+    let res;
+    try {
+      res = await fetch(url, { redirect: 'follow' });
+    } catch (e) {
+      throw new Error(
+        `couldn’t reach the URL. The server may block cross-origin downloads (CORS) — ` +
+          `try a direct/"raw" link, or download the file and use Import data…. (${e.message})`,
+      );
+    }
+    if (!res.ok) throw new Error(`the server returned HTTP ${res.status}.`);
+    const blob = await res.blob();
+    return { blob, name: filenameFromResponse(res, url) };
+  }
+
+  /**
+   * Turn a downloaded Blob into `{ file, spec, id }` ready for {@link #dispatchFiles}:
+   * unwrap a `.zip` to the first data file a codec can handle, then match the codec
+   * by extension. Throws (with a clear message) if nothing matches.
+   */
+  async #resolveDownload(blob, name) {
+    let dataBlob = blob;
+    let dataName = name;
+    if (/\.zip$/i.test(name) || (await looksLikeZip(blob))) {
+      const buf = new Uint8Array(await blob.arrayBuffer());
+      const entries = (await readZipEntries(buf)).filter((e) => !e.name.endsWith('/'));
+      const match = entries.find((e) => this.#importerForExt(extOf(e.name)));
+      if (!match) {
+        throw new Error(
+          `the ZIP has no importable data file (looked for ${this.#knownExts().join(', ') || 'known formats'}).`,
+        );
+      }
+      dataBlob = new Blob([match.data]);
+      dataName = match.name.replace(/^.*[\\/]/, '');
+    }
+    const ext = extOf(dataName);
+    const found = this.#importerForExt(ext);
+    if (!found) {
+      throw new Error(
+        ext
+          ? `no importer for "${ext}" files. Supported: ${this.#knownExts().join(', ') || '(none enabled)'}.`
+          : `couldn’t tell the file type from the URL. Make sure it ends in a data extension ` +
+            `(${this.#knownExts().join(', ') || 'e.g. .csv'}) or points to a .zip.`,
+      );
+    }
+    const [id, spec] = found;
+    return { file: new File([dataBlob], dataName), spec, id };
   }
 
   /**
@@ -566,6 +689,86 @@ export class ImportService {
 /** File name without directory or extension, for the provenance tag. */
 function baseName(name) {
   return String(name).replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '');
+}
+
+/** Lower-cased extension (with the dot) of a filename, or '' if none. Handles
+ * digits so `.sas7bdat` matches. */
+function extOf(name) {
+  const m = String(name || '').toLowerCase().match(/\.[a-z0-9]+$/);
+  return m ? m[0] : '';
+}
+
+/** Best-guess download filename: the response's Content-Disposition if exposed,
+ * else the last path segment of the URL, else 'download'. */
+function filenameFromResponse(res, url) {
+  const cd = res.headers.get('content-disposition') || '';
+  const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+  if (m) {
+    try { return decodeURIComponent(m[1]); } catch { return m[1]; }
+  }
+  try {
+    const seg = new URL(url).pathname.split('/').filter(Boolean).pop();
+    if (seg) return decodeURIComponent(seg);
+  } catch { /* fall through */ }
+  return 'download';
+}
+
+/** True if the Blob starts with the ZIP local-file-header signature (`PK`). */
+async function looksLikeZip(blob) {
+  const head = new Uint8Array(await blob.slice(0, 2).arrayBuffer());
+  return head[0] === 0x50 && head[1] === 0x4b;
+}
+
+/**
+ * Prompt for a data-file URL. Resolves to the trimmed URL, or null if cancelled.
+ * @param {string[]} exts - Supported extensions, shown in the hint.
+ * @returns {Promise<string|null>}
+ */
+function promptImportUrl(exts) {
+  return new Promise((resolve) => {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'ct-dialog';
+    const list = exts && exts.length ? exts.join(', ') : '.csv, .sav, .dta, .parquet, …';
+    dialog.innerHTML = `
+      <form method="dialog" class="ct-dialog__form">
+        <h2 class="ct-dialog__title">Import from a web address</h2>
+        <p class="ct-dialog__hint">Paste a direct link to a data file (${escapeText(list)}) — or a
+          <code>.zip</code> containing one. The site must allow cross-origin downloads (most
+          “raw”/open-data links do); if it doesn’t, download the file and use <strong>Import data…</strong>.</p>
+        <label class="ct-dialog__row">
+          <span>URL</span>
+          <input type="url" class="ct-url__input" placeholder="https://…" autocomplete="off"
+            spellcheck="false" style="flex:1 1 auto; min-width:340px;" />
+        </label>
+        <menu class="ct-dialog__buttons">
+          <button value="cancel" type="button" class="ct-url__cancel">Cancel</button>
+          <button value="ok" type="submit" class="ct-dialog__primary">Fetch</button>
+        </menu>
+      </form>`;
+    const input = dialog.querySelector('.ct-url__input');
+    let settled = false;
+    const finish = (v) => {
+      if (settled) return;
+      settled = true;
+      resolve(v);
+      dialog.close();
+    };
+    dialog.querySelector('.ct-url__cancel').addEventListener('click', () => finish(null));
+    dialog.querySelector('.ct-dialog__form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      finish((input.value || '').trim() || null);
+    });
+    dialog.addEventListener('cancel', () => finish(null));
+    dialog.addEventListener('close', () => { dialog.remove(); finish(null); });
+    document.body.append(dialog);
+    dialog.showModal();
+    input.focus();
+  });
+}
+
+/** Minimal text escape for the one interpolation in the URL prompt. */
+function escapeText(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 /**

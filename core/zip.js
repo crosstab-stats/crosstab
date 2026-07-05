@@ -111,6 +111,58 @@ export function readZip(buf) {
   return out;
 }
 
+/**
+ * Parse a ZIP into entries, supporting BOTH stored (method 0) and DEFLATE
+ * (method 8) — unlike {@link readZip}, which is STORE-only for our own bundles.
+ * DEFLATE is inflated with the browser-native `DecompressionStream('deflate-raw')`
+ * (no dependency; iOS Safari 16.4+). Used to unwrap a downloaded/picked `.zip` that
+ * contains a data file (real-world archives are almost always deflated). Directory
+ * entries (names ending in `/`) are returned too; callers filter them out.
+ *
+ * @param {Uint8Array} buf - The whole archive.
+ * @returns {Promise<Array<{name: string, data: Uint8Array}>>}
+ */
+export async function readZipEntries(buf) {
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= 0; i--) {
+    if (rd32(buf, i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('Not a ZIP (no end-of-central-directory).');
+  const count = rd16(buf, eocd + 10);
+  let p = rd32(buf, eocd + 16);
+  const out = [];
+  for (let n = 0; n < count; n++) {
+    if (rd32(buf, p) !== 0x02014b50) throw new Error('Corrupt ZIP central directory.');
+    const method = rd16(buf, p + 10);
+    const compSize = rd32(buf, p + 20);
+    const nameLen = rd16(buf, p + 28);
+    const extraLen = rd16(buf, p + 30);
+    const commentLen = rd16(buf, p + 32);
+    const lhOff = rd32(buf, p + 42);
+    const name = dec.decode(buf.subarray(p + 46, p + 46 + nameLen));
+    const lhNameLen = rd16(buf, lhOff + 26);
+    const lhExtraLen = rd16(buf, lhOff + 28);
+    const dataStart = lhOff + 30 + lhNameLen + lhExtraLen;
+    const raw = buf.subarray(dataStart, dataStart + compSize);
+    let data;
+    if (method === 0) data = raw;
+    else if (method === 8) data = await inflateRaw(raw);
+    else throw new Error(`ZIP entry "${name}" uses an unsupported compression method (${method}).`);
+    out.push({ name, data });
+    p += 46 + nameLen + extraLen + commentLen;
+  }
+  return out;
+}
+
+/** Inflate a raw DEFLATE stream via the browser's DecompressionStream. */
+async function inflateRaw(raw) {
+  if (typeof DecompressionStream === 'undefined') {
+    throw new Error('This browser can’t decompress ZIP entries (no DecompressionStream).');
+  }
+  const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
 function concat(...arrs) {
   let len = 0;
   for (const a of arrs) len += a.length;
