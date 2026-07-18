@@ -22,7 +22,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Import',
   keywords: ['text', 'txt', 'qualitative', 'corpus', 'documents', 'transcripts', 'coding'],
-  disciplines: ['qualitative', 'sociology', 'education', 'communication', 'anthropology', 'nursing'],
+  disciplines: ['Qualitative', 'Sociology', 'Education', 'Communication', 'Anthropology', 'Nursing'],
   howto:
     'GUI: File ▸ Import data… ▸ Text files (one row per file)…, then batch-select your .txt files. Each file becomes one row (a document column + a text column) — the shape CAQDAS coding expects.\n' +
     'Used through the File menu, not a run command.',

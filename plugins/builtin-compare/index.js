@@ -22,7 +22,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Comparison',
   keywords: ['t-test', 't test', 'anova', 'means', 'compare', 'group', 'welch'],
-  disciplines: ['Psychology', 'Public Health', 'Nutrition Food & Dietetics', 'Education', 'Gerontology'],
+  disciplines: ['Psychology', 'Public Health', 'Nutrition, Food & Dietetics', 'Education', 'Gerontology'],
   howto:
     'GUI: Comparison ▸ pick a test (One-sample / Independent-samples / Paired-samples t-test, or One-way ANOVA), then choose the variables. You get SPSS-style group/test tables with effect sizes.\n' +
     'Syntax: run builtin-compare.oneSample {"x": "score", "mu": 0}\n' +

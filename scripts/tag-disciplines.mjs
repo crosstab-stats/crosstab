@@ -13,11 +13,11 @@ import { readFileSync, writeFileSync } from 'node:fs';
 
 const TAGS = {
   'builtin-logistic': ['Political Science', 'Sociology', 'Psychology', 'Public Health', 'Economics', 'Criminology', 'Social Science'],
-  'builtin-nonparametric': ['Psychology', 'Public Health', 'Nutrition Food & Dietetics', 'Gerontology', 'Sociology'],
-  'builtin-compare': ['Psychology', 'Public Health', 'Nutrition Food & Dietetics', 'Education', 'Gerontology'],
+  'builtin-nonparametric': ['Psychology', 'Public Health', 'Nutrition, Food & Dietetics', 'Gerontology', 'Sociology'],
+  'builtin-compare': ['Psychology', 'Public Health', 'Nutrition, Food & Dietetics', 'Education', 'Gerontology'],
   'builtin-factor': ['Psychology', 'Sociology', 'Political Science', 'Communication', "Women's & Gender Studies", 'Education', 'Liberal Studies'],
   'builtin-assumptions': ['Economics', 'Political Science', 'Psychology', 'Social Science'],
-  'builtin-anova': ['Psychology', 'Nutrition Food & Dietetics', 'Education', 'Family & Consumer Sciences', 'Gerontology', 'Public Health'],
+  'builtin-anova': ['Psychology', 'Nutrition, Food & Dietetics', 'Education', 'Family & Consumer Sciences', 'Gerontology', 'Public Health'],
   'builtin-timeseries': ['Economics', 'Public Policy & Administration', 'Environmental Studies'],
   'builtin-manova': ['Psychology', 'Education'],
   'builtin-bayesian': ['Psychology', 'Political Science', 'Public Health', 'Social Science'],
@@ -25,7 +25,7 @@ const TAGS = {
   'builtin-reliability': ['Psychology', 'Education', 'Communication', 'Sociology', "Women's & Gender Studies", 'Liberal Studies'],
   'builtin-margins': ['Economics', 'Political Science', 'Public Policy & Administration'],
   'builtin-categorical': ['Sociology', 'Political Science', 'Public Health', 'Criminology', 'Social Science'],
-  'builtin-meta': ['Public Health', 'Psychology', 'Nutrition Food & Dietetics', 'Education'],
+  'builtin-meta': ['Public Health', 'Psychology', 'Nutrition, Food & Dietetics', 'Education'],
   'builtin-mixedanova': ['Psychology', 'Education', 'Gerontology'],
   'builtin-var': ['Economics', 'Public Policy & Administration'],
   'builtin-cointegration': ['Economics', 'Business'],
@@ -33,7 +33,7 @@ const TAGS = {
   'builtin-clusterse': ['Economics', 'Political Science', 'Public Policy & Administration'],
   'builtin-imputation': ['Public Health', 'Sociology', 'Psychology', 'Gerontology'],
   'builtin-inequality': ['Economics', 'Sociology', 'Ethnic Studies', 'Public Policy & Administration', 'Social Science'],
-  'builtin-doe': ['Nutrition Food & Dietetics', 'Family & Consumer Sciences', 'Business', 'Environmental Studies'],
+  'builtin-doe': ['Nutrition, Food & Dietetics', 'Family & Consumer Sciences', 'Business', 'Environmental Studies'],
   'builtin-sna': ['Sociology', 'Anthropology', 'Communication', 'Political Science'],
   'builtin-ordination': ['Business', 'Communication', 'Anthropology', 'Ecology', 'Environmental Studies', 'Asian Studies'],
 };

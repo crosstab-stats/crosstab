@@ -24,7 +24,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Decision',
   keywords: ['decision', 'cost-effectiveness', 'icer', 'cea', 'mcda', 'decision matrix', 'trade-off', 'willingness to pay'],
-  disciplines: ['economics', 'health', 'public health', 'policy', 'management', 'operations'],
+  disciplines: ['Economics', 'Public Health', 'Public Policy & Administration', 'Business'],
   howto:
     'GUI: appears as a workspace tab (Decisions); inside it pick a tool — Cost-effectiveness (ICER), Decision matrix, Cost-benefit (NPV), Expected value, or Decision tree. Results push to the Output tab.\n' +
     'Used as a workspace tab, not a run command.',

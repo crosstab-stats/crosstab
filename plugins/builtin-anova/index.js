@@ -21,7 +21,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Comparison',
   keywords: ['anova', 'factorial', 'two-way', 'interaction', 'repeated measures', 'within-subjects', 'eta squared'],
-  disciplines: ['Psychology', 'Nutrition Food & Dietetics', 'Education', 'Family & Consumer Sciences', 'Gerontology', 'Public Health'],
+  disciplines: ['Psychology', 'Nutrition, Food & Dietetics', 'Education', 'Family & Consumer Sciences', 'Gerontology', 'Public Health'],
   howto:
     'GUI: Comparison ▸ Factorial ANOVA, pick an outcome and 2+ factors; you get an SS/df/MS/F table with partial η² per term. Or Comparison ▸ Repeated-measures ANOVA for a within-subjects factor given as several numeric columns.\n' +
     'Syntax: run builtin-anova.factorial {"dv": "score", "facs": ["group", "time"]}\n' +

@@ -21,7 +21,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Nonparametric',
   keywords: ['mann-whitney', 'wilcoxon', 'kruskal-wallis', 'rank', 'ordinal', 'nonparametric'],
-  disciplines: ['Psychology', 'Public Health', 'Nutrition Food & Dietetics', 'Gerontology', 'Sociology'],
+  disciplines: ['Psychology', 'Public Health', 'Nutrition, Food & Dietetics', 'Gerontology', 'Sociology'],
   howto:
     'GUI: Nonparametric ▸ Mann-Whitney U / Wilcoxon signed-rank / Kruskal-Wallis…, then pick the variables. ' +
     'You get a ranks table, the test statistic, normal-approx Z, asymptotic p, and an effect size.\n' +

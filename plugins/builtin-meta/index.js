@@ -19,7 +19,7 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Regression',
   keywords: ['meta-analysis', 'meta analysis', 'effect size', 'forest plot', 'heterogeneity', 'random effects', 'metafor', 'evidence synthesis', 'systematic review', 'meta-regression'],
-  disciplines: ['Public Health', 'Psychology', 'Nutrition Food & Dietetics', 'Education'],
+  disciplines: ['Public Health', 'Psychology', 'Nutrition, Food & Dietetics', 'Education'],
   howto:
     'GUI: Regression ▸ Meta-analysis…, then pick the effect-size and precision columns (one row per study), the model, and optional moderators. ' +
     'You get the pooled effect, heterogeneity (Q / I² / τ²), and a forest plot.\n' +
