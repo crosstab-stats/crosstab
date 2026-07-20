@@ -101,7 +101,21 @@ function buildControl(ctl, view, changed) {
     if (ctl.max != null) inp.max = ctl.max;
     if (ctl.step != null) inp.step = ctl.step;
     inp.value = String(ctl.get(view));
+    if (ctl.placeholder) inp.placeholder = ctl.placeholder;
     inp.addEventListener('change', () => { ctl.set(view, inp.value); inp.value = String(ctl.get(view)); changed(); });
+    row.append(span, inp);
+    return row;
+  }
+  if (ctl.type === 'text') {
+    const row = elem('label', 'results-chart__row');
+    const span = elem('span', 'results-chart__rowlabel');
+    span.textContent = ctl.label;
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.className = 'results-chart__text';
+    inp.value = String(ctl.get(view) ?? '');
+    if (ctl.placeholder) inp.placeholder = ctl.placeholder;
+    inp.addEventListener('change', () => { ctl.set(view, inp.value); changed(); });
     row.append(span, inp);
     return row;
   }

@@ -58,11 +58,30 @@
  * @property {boolean} [gridlines] - show gridlines (default true).
  * @property {boolean} [pointOverlay] - categorical: overlay raw data points on bars.
  * @property {'none'|'sem'|'sd'|'ci95'} [errorBars] - categorical: error bar type.
+ * @property {string} [titleText] - override model.title.
+ * @property {number} [titleSize] - title font size (default 15).
+ * @property {boolean} [titleBold] - title bold (default true).
+ * @property {boolean} [titleItalic] - title italic.
+ * @property {string} [xAxisTitle] - override model.axes.x.title.
+ * @property {number} [xAxisTitleSize] - x-axis title font size (default 12).
+ * @property {boolean} [xAxisTitleBold] - x-axis title bold.
+ * @property {boolean} [xAxisTitleItalic] - x-axis title italic.
+ * @property {string} [yAxisTitle] - override model.axes.y.title.
+ * @property {number} [yAxisTitleSize] - y-axis title font size (default 12).
+ * @property {boolean} [yAxisTitleBold] - y-axis title bold.
+ * @property {boolean} [yAxisTitleItalic] - y-axis title italic.
+ * @property {number} [yAxisMin] - user override for y-axis minimum.
+ * @property {number} [yAxisMax] - user override for y-axis maximum.
+ * @property {number} [xAxisMin] - scatter: user override for x-axis minimum.
+ * @property {number} [xAxisMax] - scatter: user override for x-axis maximum.
+ * @property {number} [valueLabelSize] - value label font size.
+ * @property {boolean} [valueLabelBold] - value labels bold.
+ * @property {boolean} [valueLabelItalic] - value labels italic.
  *
  * @typedef {Object} ControlDescriptor
  * @property {string} id
  * @property {string} label
- * @property {'select'|'check'|'number'} type
+ * @property {'select'|'check'|'number'|'text'} type
  * @property {[string,string][]|((model:ChartModel)=>[string,string][])} [options] - for select.
  * @property {number} [min] @property {number} [max] @property {number} [step] - for number.
  * @property {(view:ViewState)=>*} get
@@ -260,6 +279,105 @@ function errorBarsControl(model) {
   };
 }
 
+// --- title / axis / value-label controls -------------------------------------
+
+/** Chart title text + formatting controls. */
+function titleControls(model) {
+  return [
+    {
+      id: 'titleText', label: 'Title', type: 'text',
+      placeholder: model.title || '(none)',
+      get: (v) => v.titleText ?? '',
+      set: (v, x) => { v.titleText = x || undefined; },
+    },
+    {
+      id: 'titleSize', label: 'Title size', type: 'number', min: 8, max: 28, step: 1,
+      get: (v) => v.titleSize || 15,
+      set: (v, x) => { v.titleSize = Number(x) || undefined; },
+      visible: (v) => !!(v.titleText || model.title),
+    },
+    {
+      id: 'titleBold', label: 'Title bold', type: 'check',
+      get: (v) => v.titleBold !== false,
+      set: (v, x) => { v.titleBold = x; },
+      visible: (v) => !!(v.titleText || model.title),
+    },
+    {
+      id: 'titleItalic', label: 'Title italic', type: 'check',
+      get: (v) => !!v.titleItalic,
+      set: (v, x) => { v.titleItalic = x; },
+      visible: (v) => !!(v.titleText || model.title),
+    },
+  ];
+}
+
+/** Axis title + formatting + min/max controls for one axis. */
+function axisControls(axis, model) {
+  const upper = axis.toUpperCase();
+  const modelTitle = model.axes?.[axis]?.title || '';
+  const prefix = `${axis}Axis`;
+  return [
+    {
+      id: `${prefix}Title`, label: `${upper} axis title`, type: 'text',
+      placeholder: modelTitle || '(none)',
+      get: (v) => v[`${prefix}Title`] ?? '',
+      set: (v, x) => { v[`${prefix}Title`] = x || undefined; },
+    },
+    {
+      id: `${prefix}TitleSize`, label: `${upper} title size`, type: 'number', min: 8, max: 22, step: 1,
+      get: (v) => v[`${prefix}TitleSize`] || 12,
+      set: (v, x) => { v[`${prefix}TitleSize`] = Number(x) || undefined; },
+      visible: (v) => !!(v[`${prefix}Title`] || modelTitle),
+    },
+    {
+      id: `${prefix}TitleBold`, label: `${upper} title bold`, type: 'check',
+      get: (v) => !!v[`${prefix}TitleBold`],
+      set: (v, x) => { v[`${prefix}TitleBold`] = x; },
+      visible: (v) => !!(v[`${prefix}Title`] || modelTitle),
+    },
+    {
+      id: `${prefix}TitleItalic`, label: `${upper} title italic`, type: 'check',
+      get: (v) => !!v[`${prefix}TitleItalic`],
+      set: (v, x) => { v[`${prefix}TitleItalic`] = x; },
+      visible: (v) => !!(v[`${prefix}Title`] || modelTitle),
+    },
+    {
+      id: `${prefix}Min`, label: `${upper} axis min`, type: 'number', placeholder: 'auto',
+      get: (v) => v[`${prefix}Min`] ?? '',
+      set: (v, x) => { v[`${prefix}Min`] = x === '' ? undefined : Number(x); },
+    },
+    {
+      id: `${prefix}Max`, label: `${upper} axis max`, type: 'number', placeholder: 'auto',
+      get: (v) => v[`${prefix}Max`] ?? '',
+      set: (v, x) => { v[`${prefix}Max`] = x === '' ? undefined : Number(x); },
+    },
+  ];
+}
+
+/** Value label formatting controls (size, bold, italic). */
+function valueLabelFormatControls() {
+  return [
+    {
+      id: 'valueLabelSize', label: 'Label size', type: 'number', min: 6, max: 18, step: 0.5,
+      get: (v) => v.valueLabelSize || 9.5,
+      set: (v, x) => { v.valueLabelSize = Number(x) || undefined; },
+      visible: (v) => !!v.valueLabels,
+    },
+    {
+      id: 'valueLabelBold', label: 'Labels bold', type: 'check',
+      get: (v) => !!v.valueLabelBold,
+      set: (v, x) => { v.valueLabelBold = x; },
+      visible: (v) => !!v.valueLabels,
+    },
+    {
+      id: 'valueLabelItalic', label: 'Labels italic', type: 'check',
+      get: (v) => !!v.valueLabelItalic,
+      set: (v, x) => { v.valueLabelItalic = x; },
+      visible: (v) => !!v.valueLabels,
+    },
+  ];
+}
+
 // --- shared drawing helpers --------------------------------------------------
 
 const W = 720;
@@ -272,8 +390,8 @@ function errorSvg(msg) {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 80" font-family="${FONT}"><text x="12" y="44" font-size="13" fill="#b00">${esc(msg)}</text></svg>`;
 }
 
-function text(x, y, content, { size = 12, anchor = 'start', fill = '#000', weight } = {}) {
-  return `<text x="${r(x)}" y="${r(y)}" font-size="${size}" fill="${fill}" text-anchor="${anchor}"${weight ? ` font-weight="${weight}"` : ''}>${content}</text>`;
+function text(x, y, content, { size = 12, anchor = 'start', fill = '#000', weight, italic } = {}) {
+  return `<text x="${r(x)}" y="${r(y)}" font-size="${size}" fill="${fill}" text-anchor="${anchor}"${weight ? ` font-weight="${weight}"` : ''}${italic ? ' font-style="italic"' : ''}>${content}</text>`;
 }
 
 function r(n) { return Math.round(n * 100) / 100; }
@@ -438,6 +556,10 @@ registerChartKind('categorical', {
     paletteControl(),
     legendControl(),
     valueLabelsControl(),
+    ...valueLabelFormatControls(),
+    ...titleControls(model),
+    ...axisControls('x', model),
+    ...axisControls('y', model),
   ],
   render: (model, view) => renderCategorical(model, view),
 });
@@ -474,18 +596,24 @@ function renderCategorical(model, view) {
     yMax = Math.max(1, ...all);
     yMin = Math.min(0, ...all);
   }
+  if (Number.isFinite(view.yAxisMin)) yMin = view.yAxisMin;
+  if (Number.isFinite(view.yAxisMax)) yMax = view.yAxisMax;
   const ticks = niceTicks(yMin, yMax, 5);
   yMin = ticks[0];
   yMax = ticks[ticks.length - 1];
 
+  const chartTitle = view.titleText || model.title;
+  const xTitle = view.xAxisTitle || model.axes?.x?.title;
+  const yTitle = view.yAxisTitle || model.axes?.y?.title;
+
   const legendRight = view.legend === 'right' && series.length > 1;
   const longest = Math.max(0, ...series.map((s) => (s.label || s.key).length));
   const mRight = legendRight ? Math.min(220, Math.max(70, longest * 7 + 28)) : 18;
-  const mTop = (model.title ? 34 : 14) + (view.legend === 'top' && series.length > 1 ? 22 : 0);
+  const mTop = (chartTitle ? 34 : 14) + (view.legend === 'top' && series.length > 1 ? 22 : 0);
   const rotate = cats.length > 6 || Math.max(0, ...cats.map((c) => (c.label || c.key).length)) > 6;
   const longestX = Math.max(0, ...cats.map((c) => (c.label || c.key).length));
-  const mBottom = (rotate ? Math.min(120, 28 + longestX * 6) : 40) + (model.axes?.x?.title ? 16 : 0) + (view.legend === 'bottom' && series.length > 1 ? 22 : 0);
-  const mLeft = 56 + (model.axes?.y?.title ? 16 : 0);
+  const mBottom = (rotate ? Math.min(120, 28 + longestX * 6) : 40) + (xTitle ? 16 : 0) + (view.legend === 'bottom' && series.length > 1 ? 22 : 0);
+  const mLeft = 56 + (yTitle ? 16 : 0);
 
   const box = { x0: mLeft, x1: W - mRight, y0: H - mBottom, y1: mTop };
   const plotW = box.x1 - box.x0;
@@ -493,7 +621,7 @@ function renderCategorical(model, view) {
   const yScale = (v) => box.y0 - ((v - yMin) / (yMax - yMin || 1)) * plotH;
 
   const out = [svgOpen()];
-  if (model.title) out.push(text(W / 2, 20, esc(model.title), { size: 15, weight: 600, anchor: 'middle', fill: '#222' }));
+  if (chartTitle) out.push(text(W / 2, 20, esc(chartTitle), { size: view.titleSize || 15, weight: view.titleBold !== false ? 600 : 400, italic: !!view.titleItalic, anchor: 'middle', fill: '#222' }));
 
   for (const t of ticks) {
     const y = yScale(t);
@@ -528,10 +656,18 @@ function renderCategorical(model, view) {
     }
   }
 
-  if (model.axes?.x?.title) out.push(text((box.x0 + box.x1) / 2, H - 4, esc(model.axes.x.title), { size: 12, anchor: 'middle', fill: '#333' }));
-  if (model.axes?.y?.title) {
+  if (xTitle) {
+    const xts = view.xAxisTitleSize || 12;
+    const xtw = view.xAxisTitleBold ? ' font-weight="600"' : '';
+    const xti = view.xAxisTitleItalic ? ' font-style="italic"' : '';
+    out.push(`<text x="${r((box.x0 + box.x1) / 2)}" y="${r(H - 4)}" font-size="${xts}" fill="#333" text-anchor="middle"${xtw}${xti}>${esc(xTitle)}</text>`);
+  }
+  if (yTitle) {
+    const yts = view.yAxisTitleSize || 12;
+    const ytw = view.yAxisTitleBold ? ' font-weight="600"' : '';
+    const yti = view.yAxisTitleItalic ? ' font-style="italic"' : '';
     const my = (box.y0 + box.y1) / 2;
-    out.push(`<text x="14" y="${r(my)}" font-size="12" fill="#333" text-anchor="middle" transform="rotate(-90 14 ${r(my)})">${esc(model.axes.y.title)}</text>`);
+    out.push(`<text x="14" y="${r(my)}" font-size="${yts}" fill="#333" text-anchor="middle" transform="rotate(-90 14 ${r(my)})"${ytw}${yti}>${esc(yTitle)}</text>`);
   }
 
   if (series.length > 1) {
@@ -558,7 +694,7 @@ function drawGroupedBars(out, { series, cats, view, valueAt, rawAt, band, x0, yS
       const h = Math.abs(yv - zeroY);
       const x = bx0 + bw * si;
       out.push(`<rect x="${r(x)}" y="${r(top)}" width="${r(Math.max(1, bw - 1))}" height="${r(h)}" fill="${colorFor(view, series[si].key, si)}"/>`);
-      if (view.valueLabels && v) out.push(text(x + bw / 2, top - 3, fmtNum(v), { size: 9.5, anchor: 'middle', fill: '#444' }));
+      if (view.valueLabels && v) out.push(text(x + bw / 2, top - 3, fmtNum(v), { size: view.valueLabelSize || 9.5, anchor: 'middle', fill: '#444', weight: view.valueLabelBold ? 600 : undefined, italic: !!view.valueLabelItalic }));
     }
   }
 
@@ -619,7 +755,7 @@ function drawStackedBars(out, { series, cats, view, valueAt, stack, band, x0, yS
       const h = Math.abs(yBot - yTop);
       out.push(`<rect x="${r(x)}" y="${r(yTop)}" width="${r(bw)}" height="${r(h)}" fill="${colorFor(view, series[si].key, si)}"/>`);
       if (view.valueLabels && h > 12) {
-        out.push(text(x + bw / 2, (yTop + yBot) / 2 + 3, stack === 'percent' ? `${Math.round(v)}%` : fmtNum(v), { size: 9.5, anchor: 'middle', fill: '#fff', weight: 600 }));
+        out.push(text(x + bw / 2, (yTop + yBot) / 2 + 3, stack === 'percent' ? `${Math.round(v)}%` : fmtNum(v), { size: view.valueLabelSize || 9.5, anchor: 'middle', fill: '#fff', weight: 600, italic: !!view.valueLabelItalic }));
       }
       cum += v;
     }
@@ -635,7 +771,7 @@ function drawLines(out, { series, cats, view, valueAt, xCenter, yScale }) {
       const cx = xCenter(ci);
       const cy = yScale(valueAt(series[si], ci));
       out.push(`<circle cx="${r(cx)}" cy="${r(cy)}" r="3.2" fill="${col}"/>`);
-      if (view.valueLabels) out.push(text(cx, cy - 7, fmtNum(valueAt(series[si], ci)), { size: 9.5, anchor: 'middle', fill: '#444' }));
+      if (view.valueLabels) out.push(text(cx, cy - 7, fmtNum(valueAt(series[si], ci)), { size: view.valueLabelSize || 9.5, anchor: 'middle', fill: '#444', weight: view.valueLabelBold ? 600 : undefined, italic: !!view.valueLabelItalic }));
     }
   }
 }
@@ -669,6 +805,9 @@ registerChartKind('scatter', {
     gridlinesControl(),
     paletteControl(),
     legendControl(),
+    ...titleControls(model),
+    ...axisControls('x', model),
+    ...axisControls('y', model),
   ],
   render: (model, view) => renderScatter(model, view),
 });
@@ -689,22 +828,34 @@ function renderScatter(model, view) {
   let yMin = Math.min(...ys, 0);
   let yMax = Math.max(...ys, 1);
   if (!pts.length) { xMin = 0; xMax = 1; yMin = 0; yMax = 1; }
-  const xticks = niceTicks(Math.min(...xs, xMin), Math.max(...xs, xMax), 6);
-  const yticks = niceTicks(Math.min(...ys, yMin), Math.max(...ys, yMax), 5);
+  const xMinUser = Number.isFinite(view.xAxisMin);
+  const xMaxUser = Number.isFinite(view.xAxisMax);
+  const yMinUser = Number.isFinite(view.yAxisMin);
+  const yMaxUser = Number.isFinite(view.yAxisMax);
+  if (xMinUser) xMin = view.xAxisMin;
+  if (xMaxUser) xMax = view.xAxisMax;
+  if (yMinUser) yMin = view.yAxisMin;
+  if (yMaxUser) yMax = view.yAxisMax;
+  const xticks = niceTicks(xMinUser ? xMin : Math.min(...xs, xMin), xMaxUser ? xMax : Math.max(...xs, xMax), 6);
+  const yticks = niceTicks(yMinUser ? yMin : Math.min(...ys, yMin), yMaxUser ? yMax : Math.max(...ys, yMax), 5);
   xMin = xticks[0]; xMax = xticks[xticks.length - 1];
   yMin = yticks[0]; yMax = yticks[yticks.length - 1];
 
+  const chartTitle = view.titleText || model.title;
+  const xTitle = view.xAxisTitle || model.axes?.x?.title;
+  const yTitle = view.yAxisTitle || model.axes?.y?.title;
+
   const legendRight = view.legend === 'right' && groups && groups.length > 1;
   const mRight = legendRight ? Math.min(200, Math.max(70, Math.max(...groups.map((g) => (g.label || g.key).length)) * 7 + 28)) : 18;
-  const mTop = model.title ? 34 : 16;
-  const mBottom = 42 + (model.axes?.x?.title ? 16 : 0);
-  const mLeft = 56 + (model.axes?.y?.title ? 16 : 0);
+  const mTop = chartTitle ? 34 : 16;
+  const mBottom = 42 + (xTitle ? 16 : 0);
+  const mLeft = 56 + (yTitle ? 16 : 0);
   const box = { x0: mLeft, x1: W - mRight, y0: H - mBottom, y1: mTop };
   const xScale = (x) => box.x0 + ((x - xMin) / (xMax - xMin || 1)) * (box.x1 - box.x0);
   const yScale = (y) => box.y0 - ((y - yMin) / (yMax - yMin || 1)) * (box.y0 - box.y1);
 
   const out = [svgOpen()];
-  if (model.title) out.push(text(W / 2, 20, esc(model.title), { size: 15, weight: 600, anchor: 'middle', fill: '#222' }));
+  if (chartTitle) out.push(text(W / 2, 20, esc(chartTitle), { size: view.titleSize || 15, weight: view.titleBold !== false ? 600 : 400, italic: !!view.titleItalic, anchor: 'middle', fill: '#222' }));
 
   for (const t of yticks) {
     const y = yScale(t);
@@ -740,10 +891,18 @@ function renderScatter(model, view) {
     if (Number.isFinite(r2)) out.push(text(box.x1, box.y1 - 4, `R² = ${r2.toFixed(3)}`, { size: 12, anchor: 'end', fill: '#e74c3c' }));
   }
 
-  if (model.axes?.x?.title) out.push(text((box.x0 + box.x1) / 2, H - 4, esc(model.axes.x.title), { size: 12, anchor: 'middle', fill: '#333' }));
-  if (model.axes?.y?.title) {
+  if (xTitle) {
+    const xts = view.xAxisTitleSize || 12;
+    const xtw = view.xAxisTitleBold ? ' font-weight="600"' : '';
+    const xti = view.xAxisTitleItalic ? ' font-style="italic"' : '';
+    out.push(`<text x="${r((box.x0 + box.x1) / 2)}" y="${r(H - 4)}" font-size="${xts}" fill="#333" text-anchor="middle"${xtw}${xti}>${esc(xTitle)}</text>`);
+  }
+  if (yTitle) {
+    const yts = view.yAxisTitleSize || 12;
+    const ytw = view.yAxisTitleBold ? ' font-weight="600"' : '';
+    const yti = view.yAxisTitleItalic ? ' font-style="italic"' : '';
     const my = (box.y0 + box.y1) / 2;
-    out.push(`<text x="14" y="${r(my)}" font-size="12" fill="#333" text-anchor="middle" transform="rotate(-90 14 ${r(my)})">${esc(model.axes.y.title)}</text>`);
+    out.push(`<text x="14" y="${r(my)}" font-size="${yts}" fill="#333" text-anchor="middle" transform="rotate(-90 14 ${r(my)})"${ytw}${yti}>${esc(yTitle)}</text>`);
   }
 
   if (groups && groups.length > 1) {
