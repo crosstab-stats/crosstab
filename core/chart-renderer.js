@@ -35,7 +35,7 @@
  * @property {string} kind - a registered chart kind ('categorical' | 'scatter' | 'pie').
  * @property {string} [title]
  * @property {{key:string,label:string}[]} [categories] - x items (categorical), natural order.
- * @property {{key:string,label:string,values:(number|null)[]}[]} [series] - categorical series; values align to categories.
+ * @property {{key:string,label:string,values:(number|null)[],rawValues?:number[][]}[]} [series] - categorical series; values align to categories. Optional rawValues: per-category arrays of raw observations (enables point overlay + error bars).
  * @property {{x:number,y:number,g?:string}[]} [points] - scatter points (optional group key `g`).
  * @property {{key:string,label:string}[]} [groups] - scatter group legend entries (when points carry `g`).
  * @property {{slope:number,intercept:number,r2:number}} [trend] - scatter regression line.
@@ -55,6 +55,9 @@
  * @property {boolean} [trendLine] - scatter: draw the regression line.
  * @property {number} [pointSize] - scatter: point radius.
  * @property {number} [pieRotation] - pie: start-angle offset in degrees.
+ * @property {boolean} [gridlines] - show gridlines (default true).
+ * @property {boolean} [pointOverlay] - categorical: overlay raw data points on bars.
+ * @property {'none'|'sem'|'sd'|'ci95'} [errorBars] - categorical: error bar type.
  *
  * @typedef {Object} ControlDescriptor
  * @property {string} id
@@ -119,6 +122,7 @@ const SHARED_DEFAULTS = {
   palette: DEFAULT_PALETTE,
   legend: 'right',
   valueLabels: false,
+  gridlines: true,
   colors: {},
 };
 
@@ -221,6 +225,41 @@ export function valueLabelsControl(label = 'Value labels') {
   };
 }
 
+/** Gridlines toggle. */
+export function gridlinesControl() {
+  return {
+    id: 'gridlines', label: 'Gridlines', type: 'check',
+    get: (v) => v.gridlines !== false,
+    set: (v, x) => { v.gridlines = x; },
+  };
+}
+
+/** Whether any series carries raw observations (gates point/error controls). */
+function hasRawValues(model) {
+  return (model.series || []).some((s) => s.rawValues && s.rawValues.some((a) => a && a.length));
+}
+
+/** Point overlay toggle (only when raw values are available). */
+function pointOverlayControl(model) {
+  return {
+    id: 'pointOverlay', label: 'Show data points', type: 'check',
+    get: (v) => !!v.pointOverlay,
+    set: (v, x) => { v.pointOverlay = x; },
+    visible: () => hasRawValues(model),
+  };
+}
+
+/** Error bars selector (only when raw values are available). */
+function errorBarsControl(model) {
+  return {
+    id: 'errorBars', label: 'Error bars', type: 'select',
+    options: [['none', 'None'], ['sem', 'SEM'], ['sd', 'SD'], ['ci95', '95% CI']],
+    get: (v) => v.errorBars || 'none',
+    set: (v, x) => { v.errorBars = x; },
+    visible: () => hasRawValues(model),
+  };
+}
+
 // --- shared drawing helpers --------------------------------------------------
 
 const W = 720;
@@ -255,6 +294,54 @@ function fmtNum(v) {
   if (a !== 0 && (a >= 1e6 || a < 1e-3)) return v.toExponential(1);
   const rounded = Math.round(v * 100) / 100;
   return rounded.toLocaleString('en-US', { maximumFractionDigits: 2 });
+}
+
+/** Descriptive stats from raw values (for error bars). */
+function computeStats(values) {
+  const xs = (values || []).filter((v) => Number.isFinite(v));
+  const n = xs.length;
+  if (n === 0) return null;
+  const mean = xs.reduce((a, b) => a + b, 0) / n;
+  if (n < 2) return { mean, n, sd: 0, sem: 0 };
+  const variance = xs.reduce((a, x) => a + (x - mean) ** 2, 0) / (n - 1);
+  const sd = Math.sqrt(variance);
+  const sem = sd / Math.sqrt(n);
+  return { mean, n, sd, sem };
+}
+
+/** Error bar bounds for a given type. Returns {lo, hi} or null. */
+function errorBounds(stats, type) {
+  if (!stats) return null;
+  const { mean, sd, sem } = stats;
+  if (type === 'sem') return { lo: mean - sem, hi: mean + sem };
+  if (type === 'sd') return { lo: mean - sd, hi: mean + sd };
+  if (type === 'ci95') return { lo: mean - 1.96 * sem, hi: mean + 1.96 * sem };
+  return null;
+}
+
+/** Deterministic horizontal offsets for n points within a given width. */
+function jitterOffsets(n, width) {
+  if (n <= 0) return [];
+  if (n === 1) return [0];
+  const span = width * (n <= 5 ? 0.5 : 0.7);
+  const step = span / (n - 1);
+  return Array.from({ length: n }, (_, i) => -span / 2 + step * i);
+}
+
+/** Draw minor tick marks between major ticks on a numeric axis.
+ *  `axis` = 'y' (horizontal ticks on left edge) or 'x' (vertical ticks on bottom edge). */
+function minorTicks(out, ticks, scale, axis, anchor) {
+  for (let i = 0; i < ticks.length - 1; i++) {
+    const step = (ticks[i + 1] - ticks[i]) / 5;
+    for (let j = 1; j < 5; j++) {
+      const pos = scale(ticks[i] + step * j);
+      if (axis === 'y') {
+        out.push(`<line x1="${r(anchor - 3)}" y1="${r(pos)}" x2="${r(anchor)}" y2="${r(pos)}" stroke="${AXIS}" stroke-width="0.7"/>`);
+      } else {
+        out.push(`<line x1="${r(pos)}" y1="${r(anchor)}" x2="${r(pos)}" y2="${r(anchor + 3)}" stroke="${AXIS}" stroke-width="0.7"/>`);
+      }
+    }
+  }
 }
 
 /** "Nice" axis ticks spanning [min,max] — rounded step (1/2/2.5/5 × 10^k). */
@@ -345,6 +432,9 @@ registerChartKind('categorical', {
       get: (v) => v.stack || 'none', set: (v, x) => { v.stack = x; },
       visible: (v) => v.mark !== 'line' && (model.series || []).length > 1,
     },
+    pointOverlayControl(model),
+    errorBarsControl(model),
+    gridlinesControl(),
     paletteControl(),
     legendControl(),
     valueLabelsControl(),
@@ -363,6 +453,12 @@ function renderCategorical(model, view) {
     return Number.isFinite(v) ? v : 0;
   };
 
+  const rawAt = (s, ci) => {
+    if (!s.rawValues) return null;
+    const idx = catIndex.get(cats[ci].key);
+    return idx != null ? s.rawValues[idx] : null;
+  };
+
   let yMin = 0;
   let yMax = 1;
   if (stack === 'percent') {
@@ -371,7 +467,10 @@ function renderCategorical(model, view) {
     yMax = Math.max(1, ...cats.map((_, ci) => series.reduce((acc, s) => acc + Math.max(0, valueAt(s, ci)), 0)));
   } else {
     const all = [];
-    for (const s of series) for (let ci = 0; ci < cats.length; ci++) all.push(valueAt(s, ci));
+    for (const s of series) {
+      for (let ci = 0; ci < cats.length; ci++) all.push(valueAt(s, ci));
+      if (s.rawValues) for (const rv of s.rawValues) if (rv) for (const v of rv) if (Number.isFinite(v)) all.push(v);
+    }
     yMax = Math.max(1, ...all);
     yMin = Math.min(0, ...all);
   }
@@ -398,11 +497,15 @@ function renderCategorical(model, view) {
 
   for (const t of ticks) {
     const y = yScale(t);
-    out.push(`<line x1="${box.x0}" y1="${r(y)}" x2="${box.x1}" y2="${r(y)}" stroke="${GRID}" stroke-width="1"/>`);
+    if (view.gridlines !== false) {
+      out.push(`<line x1="${box.x0}" y1="${r(y)}" x2="${box.x1}" y2="${r(y)}" stroke="${GRID}" stroke-width="1"/>`);
+    }
+    out.push(`<line x1="${r(box.x0 - 5)}" y1="${r(y)}" x2="${r(box.x0)}" y2="${r(y)}" stroke="${AXIS}" stroke-width="1"/>`);
     out.push(text(box.x0 - 8, y + 4, fmtNum(t), { size: 11, anchor: 'end', fill: AXIS }));
   }
-  out.push(`<line x1="${box.x0}" y1="${box.y1}" x2="${box.x0}" y2="${box.y0}" stroke="${AXIS}" stroke-width="1"/>`);
-  out.push(`<line x1="${box.x0}" y1="${box.y0}" x2="${box.x1}" y2="${box.y0}" stroke="${AXIS}" stroke-width="1"/>`);
+  minorTicks(out, ticks, yScale, 'y', box.x0);
+  out.push(`<line x1="${box.x0}" y1="${r(yScale(yMax))}" x2="${box.x0}" y2="${r(yScale(yMin))}" stroke="${AXIS}" stroke-width="1"/>`);
+  out.push(`<line x1="${box.x0}" y1="${r(yScale(yMin))}" x2="${box.x1}" y2="${r(yScale(yMin))}" stroke="${AXIS}" stroke-width="1"/>`);
 
   const band = plotW / Math.max(1, cats.length);
   const xCenter = (ci) => box.x0 + band * (ci + 0.5);
@@ -410,7 +513,7 @@ function renderCategorical(model, view) {
   if (isLine) {
     drawLines(out, { series, cats, view, valueAt, xCenter, yScale });
   } else if (stack === 'none') {
-    drawGroupedBars(out, { series, cats, view, valueAt, band, x0: box.x0, yScale, yMin });
+    drawGroupedBars(out, { series, cats, view, valueAt, rawAt, band, x0: box.x0, yScale, yMin });
   } else {
     drawStackedBars(out, { series, cats, view, valueAt, stack, band, x0: box.x0, yScale });
   }
@@ -440,7 +543,7 @@ function renderCategorical(model, view) {
   return out.join('');
 }
 
-function drawGroupedBars(out, { series, cats, view, valueAt, band, x0, yScale, yMin }) {
+function drawGroupedBars(out, { series, cats, view, valueAt, rawAt, band, x0, yScale, yMin }) {
   const n = Math.max(1, series.length);
   const pad = band * 0.18;
   const inner = band - pad * 2;
@@ -456,6 +559,46 @@ function drawGroupedBars(out, { series, cats, view, valueAt, band, x0, yScale, y
       const x = bx0 + bw * si;
       out.push(`<rect x="${r(x)}" y="${r(top)}" width="${r(Math.max(1, bw - 1))}" height="${r(h)}" fill="${colorFor(view, series[si].key, si)}"/>`);
       if (view.valueLabels && v) out.push(text(x + bw / 2, top - 3, fmtNum(v), { size: 9.5, anchor: 'middle', fill: '#444' }));
+    }
+  }
+
+  // Error bars (grouped bars only, requires raw observations)
+  const ebType = view.errorBars || 'none';
+  if (ebType !== 'none' && rawAt) {
+    for (let ci = 0; ci < cats.length; ci++) {
+      const bx0 = x0 + band * ci + pad;
+      for (let si = 0; si < series.length; si++) {
+        const raw = rawAt(series[si], ci);
+        if (!raw || raw.length < 2) continue;
+        const stats = computeStats(raw);
+        const eb = errorBounds(stats, ebType);
+        if (!eb) continue;
+        const cx = bx0 + bw * si + bw / 2;
+        const yLo = yScale(eb.lo);
+        const yHi = yScale(eb.hi);
+        const capW = Math.min(bw * 0.4, 6);
+        out.push(`<line x1="${r(cx)}" y1="${r(yLo)}" x2="${r(cx)}" y2="${r(yHi)}" stroke="#333" stroke-width="1.5"/>`);
+        out.push(`<line x1="${r(cx - capW)}" y1="${r(yLo)}" x2="${r(cx + capW)}" y2="${r(yLo)}" stroke="#333" stroke-width="1.5"/>`);
+        out.push(`<line x1="${r(cx - capW)}" y1="${r(yHi)}" x2="${r(cx + capW)}" y2="${r(yHi)}" stroke="#333" stroke-width="1.5"/>`);
+      }
+    }
+  }
+
+  // Point overlay (grouped bars only, requires raw observations)
+  if (view.pointOverlay && rawAt) {
+    for (let ci = 0; ci < cats.length; ci++) {
+      const bx0 = x0 + band * ci + pad;
+      for (let si = 0; si < series.length; si++) {
+        const raw = rawAt(series[si], ci);
+        if (!raw || !raw.length) continue;
+        const cx = bx0 + bw * si + bw / 2;
+        const offsets = jitterOffsets(raw.length, bw * 0.7);
+        const col = colorFor(view, series[si].key, si);
+        for (let pi = 0; pi < raw.length; pi++) {
+          if (!Number.isFinite(raw[pi])) continue;
+          out.push(`<circle cx="${r(cx + offsets[pi])}" cy="${r(yScale(raw[pi]))}" r="2.5" fill="${col}" stroke="#fff" stroke-width="0.7" fill-opacity="0.75"/>`);
+        }
+      }
     }
   }
 }
@@ -523,6 +666,7 @@ registerChartKind('scatter', {
       options: [['3', 'Small'], ['4', 'Medium'], ['6', 'Large']],
       get: (v) => String(v.pointSize || 4), set: (v, x) => { v.pointSize = Number(x); },
     },
+    gridlinesControl(),
     paletteControl(),
     legendControl(),
   ],
@@ -564,16 +708,24 @@ function renderScatter(model, view) {
 
   for (const t of yticks) {
     const y = yScale(t);
-    out.push(`<line x1="${box.x0}" y1="${r(y)}" x2="${box.x1}" y2="${r(y)}" stroke="${GRID}" stroke-width="1"/>`);
+    if (view.gridlines !== false) {
+      out.push(`<line x1="${box.x0}" y1="${r(y)}" x2="${box.x1}" y2="${r(y)}" stroke="${GRID}" stroke-width="1"/>`);
+    }
+    out.push(`<line x1="${r(box.x0 - 5)}" y1="${r(y)}" x2="${r(box.x0)}" y2="${r(y)}" stroke="${AXIS}" stroke-width="1"/>`);
     out.push(text(box.x0 - 8, y + 4, fmtNum(t), { size: 11, anchor: 'end', fill: AXIS }));
   }
   for (const t of xticks) {
     const x = xScale(t);
-    out.push(`<line x1="${r(x)}" y1="${box.y1}" x2="${r(x)}" y2="${box.y0}" stroke="${GRID}" stroke-width="1"/>`);
-    out.push(text(x, box.y0 + 16, fmtNum(t), { size: 11, anchor: 'middle', fill: AXIS }));
+    if (view.gridlines !== false) {
+      out.push(`<line x1="${r(x)}" y1="${box.y1}" x2="${r(x)}" y2="${box.y0}" stroke="${GRID}" stroke-width="1"/>`);
+    }
+    out.push(`<line x1="${r(x)}" y1="${r(box.y0)}" x2="${r(x)}" y2="${r(box.y0 + 5)}" stroke="${AXIS}" stroke-width="1"/>`);
+    out.push(text(x, box.y0 + 18, fmtNum(t), { size: 11, anchor: 'middle', fill: AXIS }));
   }
-  out.push(`<line x1="${box.x0}" y1="${box.y1}" x2="${box.x0}" y2="${box.y0}" stroke="${AXIS}" stroke-width="1"/>`);
-  out.push(`<line x1="${box.x0}" y1="${box.y0}" x2="${box.x1}" y2="${box.y0}" stroke="${AXIS}" stroke-width="1"/>`);
+  minorTicks(out, yticks, yScale, 'y', box.x0);
+  minorTicks(out, xticks, xScale, 'x', box.y0);
+  out.push(`<line x1="${box.x0}" y1="${r(yScale(yMax))}" x2="${box.x0}" y2="${r(yScale(yMin))}" stroke="${AXIS}" stroke-width="1"/>`);
+  out.push(`<line x1="${box.x0}" y1="${r(yScale(yMin))}" x2="${r(xScale(xMax))}" y2="${r(yScale(yMin))}" stroke="${AXIS}" stroke-width="1"/>`);
 
   const r0 = Math.max(1.5, view.pointSize || 4);
   for (const p of pts) {
