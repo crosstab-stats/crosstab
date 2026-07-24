@@ -110,7 +110,7 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 .caqdas__imgwrap { position: relative; display: inline-block; max-width: 100%; margin: 0 auto; line-height: 0; }
 .caqdas__img { display: block; max-width: 100%; max-height: calc(100vh - 220px); user-select: none; -webkit-user-select: none; }
 .caqdas__overlay { position: absolute; inset: 0; cursor: crosshair; }
-.caqdas__region { position: absolute; border: 2px solid; box-sizing: border-box; cursor: pointer; }
+.caqdas__region { position: absolute; border: 2px solid; box-sizing: border-box; pointer-events: none; }
 .caqdas__region .caqdas__rlabel { position: absolute; top: -18px; left: -2px; font-size: 10px; line-height: 14px; padding: 0 4px; border-radius: 3px 3px 0 0; color: #fff; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 .caqdas__region.has-memo { box-shadow: 0 0 0 2px rgba(0,0,0,.35) inset; }
 .caqdas__regionsel { position: absolute; border: 2px dashed #2f6fb0; background: rgba(47,111,176,.12); box-sizing: border-box; pointer-events: none; }
@@ -132,6 +132,7 @@ export const workspace = {
     let mediaLoadToken = 0; // guards against a slow load landing after a doc switch
     let imageSel = null; // pending drawn region {x,y,w,h} (normalised 0..1), session-only
     let currentOverlay = null; // the live image overlay, for in-place region refreshes
+    const hiddenCodes = new Set(); // codes whose image regions are hidden (per-code layer visibility, session-only)
     const docLabel = (rid) => {
       const i = docs.findIndex((d) => d.rid === rid);
       return (i >= 0 && docs[i].label) || `#${i + 1}`;
@@ -414,20 +415,27 @@ export const workspace = {
       renderCodes();
     }
 
-    /** Draw each stored region for a doc as a coloured box over the image. */
+    /** Draw a doc's regions as translucent coloured boxes, one visual layer per code.
+     * Hidden codes are skipped (per-code visibility), and boxes are pointer-events:none
+     * so the OVERLAY handles clicks — that's what makes overlapping regions all
+     * selectable (a click surfaces every coding under the point, see finish()). */
     function drawRegions(overlay, doc) {
       overlay.querySelectorAll('.caqdas__region').forEach((n) => n.remove());
-      for (const s of segsFor(doc.rid)) {
-        if (!s.region) continue;
+      const order = new Map(state.codes.map((c, i) => [c.id, i]));
+      const segs = segsFor(doc.rid)
+        .filter((s) => s.region && !hiddenCodes.has(s.codeId))
+        .sort((a, b) => (order.get(a.codeId) ?? 0) - (order.get(b.codeId) ?? 0)); // codebook order = layer order
+      for (const s of segs) {
         const code = codeById(s.codeId);
+        const color = code ? code.color : '#888';
         const box = el('div', 'caqdas__region' + (s.memo ? ' has-memo' : ''));
         positionPct(box, s.region);
-        box.style.borderColor = code ? code.color : '#888';
+        box.style.borderColor = color;
+        box.style.backgroundColor = hexToRgba(color, 0.18);
         const lbl = el('span', 'caqdas__rlabel');
         lbl.textContent = code ? code.name : '(code)';
-        lbl.style.backgroundColor = code ? code.color : '#888';
+        lbl.style.backgroundColor = color;
         box.append(lbl);
-        box.addEventListener('click', (e) => { e.stopPropagation(); openSegmentMenu([s], e); });
         overlay.append(box);
       }
     }
@@ -443,7 +451,6 @@ export const workspace = {
       };
       overlay.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
-        if (e.target.closest('.caqdas__region')) return; // clicking a region opens its menu, not a new draw
         e.preventDefault();
         overlay.querySelectorAll('.caqdas__regionsel').forEach((n) => n.remove());
         try { overlay.setPointerCapture(e.pointerId); } catch { /* ok */ }
@@ -462,7 +469,14 @@ export const workspace = {
         if (!start) return;
         const rect = rectOf(start, norm(e));
         start = null;
-        if (rect.w < 0.01 || rect.h < 0.01) { selEl?.remove(); selEl = null; imageSel = null; return; } // a click, not a drag
+        if (rect.w < 0.01 || rect.h < 0.01) {
+          // A click, not a drag → open every coding under this point (all overlapping
+          // regions across codes, not just the top layer).
+          selEl?.remove(); selEl = null; imageSel = null;
+          const hits = regionsAt(doc, rect.x, rect.y);
+          if (hits.length) openSegmentMenu(hits, e);
+          return;
+        }
         imageSel = rect;
         if (activeCodeId) addRegionSegment(activeCodeId, imageSel); // paint mode
       };
@@ -486,6 +500,16 @@ export const workspace = {
       refreshView();
     }
 
+    /** Every visible region coding of a doc whose box contains the normalised point —
+     * so a click surfaces all overlapping codes, not just the topmost. */
+    function regionsAt(doc, x, y) {
+      return segsFor(doc.rid).filter(
+        (s) => s.region && !hiddenCodes.has(s.codeId)
+          && x >= s.region.x && x <= s.region.x + s.region.w
+          && y >= s.region.y && y <= s.region.y + s.region.h,
+      );
+    }
+
     function renderCodes() {
       codePane.textContent = '';
       const h = el('h3'); h.textContent = 'Codebook'; codePane.append(h);
@@ -495,6 +519,9 @@ export const workspace = {
       const counts = {};
       for (const s of state.segments) counts[s.codeId] = (counts[s.codeId] || 0) + 1;
       const armed = activeCodeId;
+      // Per-code region-visibility toggles are only meaningful on an image doc.
+      const activeDoc = docs.find((d) => d.rid === activeRid);
+      const activeIsMedia = !!activeDoc && activeDoc.kind === 'media';
       // Group codes into themes by their `group`; ungrouped fall to the bottom.
       const groups = new Map();
       for (const code of state.codes) { const g = code.group || ''; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(code); }
@@ -521,6 +548,21 @@ export const workspace = {
           pb.textContent = '🖌';
           pb.title = 'Paint mode: arm this code so selecting passages auto-applies it';
           pb.addEventListener('click', (e) => { e.stopPropagation(); setArmed(code.id); });
+          // Per-code region-layer visibility (image docs only): hide/show this code's
+          // boxes so overlapping codings can be isolated or compared.
+          let vb = null;
+          if (activeIsMedia) {
+            const hidden = hiddenCodes.has(code.id);
+            vb = el('button', 'caqdas__iconbtn' + (hidden ? '' : ' has'));
+            vb.textContent = hidden ? '◌' : '👁';
+            vb.title = hidden ? 'Show this code’s regions' : 'Hide this code’s regions';
+            vb.addEventListener('click', (e) => {
+              e.stopPropagation();
+              if (hidden) hiddenCodes.delete(code.id); else hiddenCodes.add(code.id);
+              refreshRegions();
+              renderCodes();
+            });
+          }
           const x = el('button', 'x'); x.textContent = '✕'; x.title = 'Delete code + its segments';
           x.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -560,7 +602,9 @@ export const workspace = {
               addSegment(code.id, span);
             }
           });
-          r.append(sw, nm, ct, rb, mb, pb, x);
+          r.append(sw, nm, ct, rb, mb, pb);
+          if (vb) r.append(vb);
+          r.append(x);
           codePane.append(r);
           // ✎ details: theme group + analytic memo, both persisted on the code.
           if (memoOpen.has(code.id)) {
@@ -994,6 +1038,15 @@ function positionPct(elm, r) {
 function regionLabel(r) {
   const p = (v) => Math.round(v * 100);
   return `▭ ${p(r.x)},${p(r.y)} ${p(r.w)}×${p(r.h)}%`;
+}
+
+/** A translucent `rgba()` fill from a `#rgb`/`#rrggbb` hex + alpha (region layers). */
+function hexToRgba(hex, alpha) {
+  let h = String(hex).replace('#', '');
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+  const n = parseInt(h, 16);
+  if (h.length !== 6 || !Number.isFinite(n)) return `rgba(136,136,136,${alpha})`;
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 }
 
 /** Absolute character offset of (node, offset) within `container`'s text — so a

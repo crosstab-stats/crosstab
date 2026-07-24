@@ -985,6 +985,9 @@ function wireWorkspaceTabs(bus, mounts, { dataView, variableView, results, rCons
   const workspaceSection = results.parentElement; // the .workspace <section>
   return {
     show,
+    /** The currently-shown view key — so a workspace re-mount can restore it instead
+     * of stranding the user on Output. */
+    activeView: () => current,
     /** Add a runtime tab. `view` = unique data-view key; `pane` = the view element
      * (the workspace manager mounts the plugin iframe into it). */
     addTab({ view, title, pane, onShow: hook }) {

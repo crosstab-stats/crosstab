@@ -88,8 +88,14 @@ export class WorkspaceManager {
    * @param {Array<{id, loaded, url, workspaces?}>} pluginList - From PluginManager#list().
    */
   async remountActive(pluginList) {
+    // Tearing down the tab the user is on falls the tab bar back to Output. Capture
+    // it first and restore it after re-mount (show() no-ops if it wasn't re-created),
+    // so a re-mount triggered by e.g. switching datasets keeps the user on the tab
+    // they were looking at instead of dumping them to Output.
+    const wasActive = this.#tabs.activeView?.();
     for (const id of [...this.#mounted.keys()]) this.#teardown(id);
     await this.reconcile(pluginList);
+    if (wasActive) this.#tabs.show?.(wasActive);
   }
 
   async #mount(plugin, ws) {
