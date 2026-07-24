@@ -24,13 +24,16 @@
 export const manifest = {
   id: 'builtin-caqdas',
   name: 'Qualitative Coding (CAQDAS)',
-  version: '0.2.0',
+  version: '0.3.0',
   apiVersion: '0.1.0',
   category: 'Qualitative',
-  keywords: ['qualitative', 'coding', 'caqdas', 'transcript', 'codebook', 'content analysis'],
+  // Renders media (images now; audio/video next) from the host media store, so it
+  // mounts in the media-CSP sandbox (img-src/media-src blob:). #139.
+  media: true,
+  keywords: ['qualitative', 'coding', 'caqdas', 'transcript', 'codebook', 'content analysis', 'image', 'media'],
   disciplines: ['Qualitative', 'Sociology', 'Education', 'Communication', 'Nursing', 'Anthropology'],
   howto:
-    'GUI: appears as a workspace tab (Coding) — pick a dataset text column (one document per row), highlight passages, and tag them with codes, then export code frequencies/segments to Output.\n' +
+    'GUI: appears as a workspace tab (Coding) — pick a dataset column of documents (a text column, or a media column from an image/audio/video import), then tag passages/regions with codes and export code frequencies/segments to Output.\n' +
     'Used through its workspace tab, not a run command.',
   workspaces: [{ id: 'caqdas-coding', title: 'Coding' }],
 };
@@ -103,6 +106,15 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 .caqdas__segrm { border: 0; background: none; font: inherit; color: #b04a4a; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
 .caqdas__segrm:hover { background: #fbeaea; }
 .caqdas__segmemo { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; padding: 6px 8px; border: 1px solid #ccd2d8; border-radius: 6px; resize: vertical; margin: 0 0 6px; }
+/* --- media (image) coding --- */
+.caqdas__imgwrap { position: relative; display: inline-block; max-width: 100%; margin: 0 auto; line-height: 0; }
+.caqdas__img { display: block; max-width: 100%; max-height: calc(100vh - 220px); user-select: none; -webkit-user-select: none; }
+.caqdas__overlay { position: absolute; inset: 0; cursor: crosshair; }
+.caqdas__region { position: absolute; border: 2px solid; box-sizing: border-box; cursor: pointer; }
+.caqdas__region .caqdas__rlabel { position: absolute; top: -18px; left: -2px; font-size: 10px; line-height: 14px; padding: 0 4px; border-radius: 3px 3px 0 0; color: #fff; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.caqdas__region.has-memo { box-shadow: 0 0 0 2px rgba(0,0,0,.35) inset; }
+.caqdas__regionsel { position: absolute; border: 2px dashed #2f6fb0; background: rgba(47,111,176,.12); box-sizing: border-box; pointer-events: none; }
+.caqdas__mediahint { font-size: 12px; color: #8a93a0; padding: 8px 20px 0; }
 `;
 
 export const workspace = {
@@ -115,6 +127,11 @@ export const workspace = {
     let activeCodeId = null; // armed code for "paint mode" (session-only, not saved)
     let retrieveCodeId = null; // when set, the transcript pane shows this code's segments
     const memoOpen = new Set(); // code ids whose memo editor is expanded (session-only)
+    // --- media (image) session state -----------------------------------------
+    let mediaObjectUrl = null; // object URL of the loaded media blob (revoked on doc switch)
+    let mediaLoadToken = 0; // guards against a slow load landing after a doc switch
+    let imageSel = null; // pending drawn region {x,y,w,h} (normalised 0..1), session-only
+    let currentOverlay = null; // the live image overlay, for in-place region refreshes
     const docLabel = (rid) => {
       const i = docs.findIndex((d) => d.rid === rid);
       return (i >= 0 && docs[i].label) || `#${i + 1}`;
@@ -140,7 +157,7 @@ export const workspace = {
     const wrap = el('div', 'caqdas');
 
     const bar = el('div', 'caqdas__bar');
-    const colLabel = el('label'); colLabel.textContent = 'Transcript column:';
+    const colLabel = el('label'); colLabel.textContent = 'Documents column:';
     const colSel = el('select');
     const labelLabel = el('label'); labelLabel.textContent = 'Label by:';
     const labelSel = el('select');
@@ -231,11 +248,16 @@ export const workspace = {
       const vars = [state.textColumn];
       if (state.labelColumn && state.labelColumn !== state.textColumn) vars.push(state.labelColumn);
       const rows = await app.data.getRows({ variables: vars, includeRowId: true, limit: MAX_DOCS });
-      docs = rows.map((r) => ({
-        rid: String(r.__rid),
-        text: String(r[state.textColumn] ?? ''),
-        label: state.labelColumn && r[state.labelColumn] != null ? String(r[state.labelColumn]) : '',
-      }));
+      docs = rows.map((r) => {
+        const raw = String(r[state.textColumn] ?? '');
+        const label = state.labelColumn && r[state.labelColumn] != null ? String(r[state.labelColumn]) : '';
+        // A media column holds a JSON array of `asset:`/`data:` refs (list-shaped even
+        // for a single clip). Anything else is a plain text document.
+        const refs = parseMediaRefs(raw);
+        return refs
+          ? { rid: String(r.__rid), kind: 'media', refs, label }
+          : { rid: String(r.__rid), kind: 'text', text: raw, label };
+      });
       activeRid = docs.length ? docs[0].rid : null;
     }
 
@@ -247,7 +269,7 @@ export const workspace = {
       docList.textContent = '';
       if (!docs.length) {
         const e = el('div', 'caqdas__empty');
-        e.textContent = state.textColumn ? 'No rows.' : 'Pick a transcript column to begin.';
+        e.textContent = state.textColumn ? 'No rows.' : 'Pick a column of documents (text or media) to begin.';
         docList.append(e);
         return;
       }
@@ -256,7 +278,8 @@ export const workspace = {
         const n = el('span', 'n'); n.textContent = d.label || '#' + (i + 1);
         const cnt = segsFor(d.rid).length;
         const c = el('span', 'c'); if (cnt) c.textContent = cnt + '▮';
-        const t = document.createTextNode(' ' + (d.text.slice(0, 40) || '(empty)'));
+        const preview = d.kind === 'media' ? '🖼 ' + (d.label || 'media') : (d.text.slice(0, 40) || '(empty)');
+        const t = document.createTextNode(' ' + preview);
         row.append(n, c, t);
         row.addEventListener('click', () => { activeRid = d.rid; renderDocList(); renderText(); });
         docList.append(row);
@@ -268,6 +291,7 @@ export const workspace = {
       if (retrieveCodeId) { renderRetrieve(); return; }
       const doc = docs.find((d) => d.rid === activeRid);
       if (!doc) { const e = el('div', 'caqdas__empty'); e.textContent = 'Select a document.'; textPane.append(e); return; }
+      if (doc.kind === 'media') { void renderMedia(doc); return; }
       const segs = segsFor(doc.rid).slice().sort((a, b) => a.start - b.start || a.end - b.end);
       // Boundary-split the text so overlapping codes still render; each run is
       // coloured by the FIRST covering segment (v1).
@@ -326,6 +350,142 @@ export const workspace = {
       }
     }
 
+    // --- media (image) coding ------------------------------------------------
+    // The image analogue of the text coder: the selector is a 2-D region (normalised
+    // 0..1 so it survives any display size) instead of a character span. Everything
+    // else — codebook, retrieve, memos, frequencies, export — is shared. The media is
+    // never inlined in the dataset; the host hands us a Blob via app.media.load and we
+    // render it from an in-realm blob: URL (allowed by the media-CSP sandbox).
+    async function renderMedia(doc) {
+      textPane.textContent = '';
+      imageSel = null;
+      const loading = el('div', 'caqdas__empty'); loading.textContent = 'Loading media…';
+      textPane.append(loading);
+      const token = ++mediaLoadToken;
+      let blob = null;
+      try { blob = await app.media.load(doc.refs[0]); } catch { blob = null; }
+      if (token !== mediaLoadToken) return; // a newer doc switch superseded this load
+      if (mediaObjectUrl) { URL.revokeObjectURL(mediaObjectUrl); mediaObjectUrl = null; }
+      textPane.textContent = '';
+      if (!blob) {
+        const e = el('div', 'caqdas__empty');
+        e.textContent = 'Media unavailable — this asset isn’t in the browser’s store on this device.';
+        textPane.append(e);
+        return;
+      }
+      const kind = String(blob.type || '').split('/')[0];
+      if (kind !== 'image') {
+        const e = el('div', 'caqdas__empty');
+        e.textContent = `${kind || 'This'} coding isn’t available yet — image coding is live; audio and video are next.`;
+        textPane.append(e);
+        return;
+      }
+      mediaObjectUrl = URL.createObjectURL(blob);
+      const hint = el('div', 'caqdas__mediahint');
+      hint.textContent = 'Drag on the image to draw a region, then click a code to tag it (right-click, or 🖌 to paint). Click a region to memo or remove it.';
+      const wrap = el('div', 'caqdas__imgwrap');
+      const img = el('img', 'caqdas__img');
+      const overlay = el('div', 'caqdas__overlay');
+      currentOverlay = overlay;
+      wrap.append(img, overlay);
+      img.addEventListener('load', () => drawRegions(overlay, doc));
+      img.src = mediaObjectUrl;
+      attachRegionDrawing(overlay, doc);
+      textPane.append(hint, wrap);
+    }
+
+    /** Redraw the region boxes over the live image without re-fetching it (used after
+     * add/remove/memo so the image doesn't flicker), and clear any pending drag box. */
+    function refreshRegions() {
+      if (!currentOverlay) return;
+      currentOverlay.querySelectorAll('.caqdas__regionsel').forEach((n) => n.remove());
+      const doc = docs.find((d) => d.rid === activeRid);
+      if (doc && doc.kind === 'media') drawRegions(currentOverlay, doc);
+    }
+
+    /** Re-render after a segment change, the light way for each doc kind: a media doc
+     * just repaints its region boxes (no image reload); a text doc re-renders normally.
+     * The codebook + doc list (counts) refresh either way. */
+    function refreshView() {
+      const doc = docs.find((d) => d.rid === activeRid);
+      if (doc && doc.kind === 'media') refreshRegions();
+      else renderText();
+      renderDocList();
+      renderCodes();
+    }
+
+    /** Draw each stored region for a doc as a coloured box over the image. */
+    function drawRegions(overlay, doc) {
+      overlay.querySelectorAll('.caqdas__region').forEach((n) => n.remove());
+      for (const s of segsFor(doc.rid)) {
+        if (!s.region) continue;
+        const code = codeById(s.codeId);
+        const box = el('div', 'caqdas__region' + (s.memo ? ' has-memo' : ''));
+        positionPct(box, s.region);
+        box.style.borderColor = code ? code.color : '#888';
+        const lbl = el('span', 'caqdas__rlabel');
+        lbl.textContent = code ? code.name : '(code)';
+        lbl.style.backgroundColor = code ? code.color : '#888';
+        box.append(lbl);
+        box.addEventListener('click', (e) => { e.stopPropagation(); openSegmentMenu([s], e); });
+        overlay.append(box);
+      }
+    }
+
+    /** Wire drag-to-draw on the image overlay: a finished rectangle becomes the pending
+     * `imageSel`, applied when a code is clicked (or immediately in paint mode). */
+    function attachRegionDrawing(overlay, doc) {
+      let start = null; // {x,y} normalised
+      let selEl = null;
+      const norm = (e) => {
+        const r = overlay.getBoundingClientRect();
+        return { x: clamp01((e.clientX - r.left) / r.width), y: clamp01((e.clientY - r.top) / r.height) };
+      };
+      overlay.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        if (e.target.closest('.caqdas__region')) return; // clicking a region opens its menu, not a new draw
+        e.preventDefault();
+        overlay.querySelectorAll('.caqdas__regionsel').forEach((n) => n.remove());
+        try { overlay.setPointerCapture(e.pointerId); } catch { /* ok */ }
+        start = norm(e);
+        imageSel = null;
+        selEl = el('div', 'caqdas__regionsel');
+        overlay.append(selEl);
+        positionPct(selEl, { x: start.x, y: start.y, w: 0, h: 0 });
+      });
+      overlay.addEventListener('pointermove', (e) => {
+        if (!start) return;
+        const p = norm(e);
+        positionPct(selEl, rectOf(start, p));
+      });
+      const finish = (e) => {
+        if (!start) return;
+        const rect = rectOf(start, norm(e));
+        start = null;
+        if (rect.w < 0.01 || rect.h < 0.01) { selEl?.remove(); selEl = null; imageSel = null; return; } // a click, not a drag
+        imageSel = rect;
+        if (activeCodeId) addRegionSegment(activeCodeId, imageSel); // paint mode
+      };
+      overlay.addEventListener('pointerup', finish);
+      overlay.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        if (imageSel) openAssignMenu({ kind: 'region', region: imageSel }, e);
+      });
+    }
+
+    /** Record a region-coding segment (the 2-D analogue of {@link addSegment}). */
+    function addRegionSegment(codeId, region) {
+      state.segments.push({
+        doc: activeRid,
+        codeId,
+        region: { x: round4(region.x), y: round4(region.y), w: round4(region.w), h: round4(region.h) },
+        text: regionLabel(region), // a human label so retrieve/export/counts work unchanged
+      });
+      imageSel = null;
+      save();
+      refreshView();
+    }
+
     function renderCodes() {
       codePane.textContent = '';
       const h = el('h3'); h.textContent = 'Codebook'; codePane.append(h);
@@ -377,6 +537,13 @@ export const workspace = {
           r.addEventListener('pointerdown', (e) => {
             if (e.button !== 0 || e.target.closest('button, input, textarea')) return;
             e.preventDefault();
+            // Media doc: apply to the drawn region (the 2-D analogue of a text span).
+            const activeDoc = docs.find((d) => d.rid === activeRid);
+            if (activeDoc && activeDoc.kind === 'media') {
+              if (imageSel) addRegionSegment(code.id, imageSel);
+              else flashHint(hint);
+              return;
+            }
             const span = currentSpan();
             if (!span) { flashHint(hint); return; }
             // Tap-to-toggle: if the selection sits inside an existing coding of THIS
@@ -511,7 +678,11 @@ export const workspace = {
     function openAssignMenu(span, evt) {
       closeMenu();
       menu = el('div', 'caqdas__menu');
-      const choose = (codeId) => { closeMenu(); addSegment(codeId, span); };
+      const choose = (codeId) => {
+        closeMenu();
+        if (span && span.kind === 'region') addRegionSegment(codeId, span.region);
+        else addSegment(codeId, span);
+      };
       for (const code of state.codes) {
         const b = el('button');
         const sw = el('span', 'caqdas__sw'); sw.style.backgroundColor = code.color;
@@ -556,7 +727,7 @@ export const workspace = {
         rm.addEventListener('click', (e) => {
           e.stopPropagation();
           state.segments = state.segments.filter((s) => s !== seg);
-          save(); closeMenu(); renderText(); renderDocList(); renderCodes();
+          save(); closeMenu(); refreshView();
         });
         head.append(sw, nm, rm); menu.append(head);
         const ta = el('textarea', 'caqdas__segmemo'); ta.rows = 2; ta.placeholder = 'Memo on this coding…'; ta.value = seg.memo || '';
@@ -672,6 +843,7 @@ function buildThemedCloud(state, codeById) {
   const themeMap = new Map(); // theme name -> Map(word -> {count, byCode:{id:count}})
   const order = [];
   for (const s of state.segments) {
+    if (s.region) continue; // region codings have no text passage — skip the cloud
     const code = codeById(s.codeId);
     if (!code) continue;
     const theme = (code.group && code.group.trim()) || code.name;
@@ -789,6 +961,39 @@ function normalize(raw) {
       ? s.segments.filter((x) => x && x.doc && x.codeId).map((x) => ({ ...x, memo: typeof x.memo === 'string' ? x.memo : '' }))
       : [],
   };
+}
+
+/** Parse a media cell — a JSON array of `asset:`/`data:` refs — into a ref list, or
+ * null if the cell isn't a media reference (i.e. it's a plain text document). */
+function parseMediaRefs(raw) {
+  const s = String(raw).trim();
+  if (s[0] !== '[') return null;
+  let arr;
+  try { arr = JSON.parse(s); } catch { return null; }
+  if (!Array.isArray(arr)) return null;
+  const refs = arr.filter((x) => typeof x === 'string' && (x.startsWith('asset:') || x.startsWith('data:')));
+  return refs.length ? refs : null;
+}
+
+/** Clamp to [0,1]. */
+function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+/** Round a normalised coordinate to 4 dp — ample precision, compact in the blob. */
+function round4(v) { return Math.round(v * 1e4) / 1e4; }
+/** A normalised rectangle {x,y,w,h} from two corner points. */
+function rectOf(a, b) {
+  return { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(a.x - b.x), h: Math.abs(a.y - b.y) };
+}
+/** Position an absolutely-placed element from a normalised rect (percent units). */
+function positionPct(elm, r) {
+  elm.style.left = r.x * 100 + '%';
+  elm.style.top = r.y * 100 + '%';
+  elm.style.width = r.w * 100 + '%';
+  elm.style.height = r.h * 100 + '%';
+}
+/** A short human label for a region coding — shown in retrieve and exports. */
+function regionLabel(r) {
+  const p = (v) => Math.round(v * 100);
+  return `▭ ${p(r.x)},${p(r.y)} ${p(r.w)}×${p(r.h)}%`;
 }
 
 /** Absolute character offset of (node, offset) within `container`'s text — so a
