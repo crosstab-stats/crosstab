@@ -24,7 +24,7 @@
 export const manifest = {
   id: 'builtin-caqdas',
   name: 'Qualitative Coding (CAQDAS)',
-  version: '0.4.0',
+  version: '0.5.0',
   apiVersion: '0.1.0',
   category: 'Qualitative',
   // Renders media (text, image regions, audio/video time-ranges) from the host media
@@ -117,7 +117,16 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 .caqdas__mediahint { font-size: 12px; color: #8a93a0; padding: 8px 20px 0; }
 /* --- media (audio/video) coding: player + timeline lanes --- */
 .caqdas__audioel { width: 100%; max-width: 640px; display: block; margin: 8px 20px 0; }
-.caqdas__video { display: block; max-width: calc(100% - 40px); max-height: calc(100vh - 320px); margin: 8px auto 0; background: #000; }
+.caqdas__vidwrap { position: relative; display: inline-block; max-width: calc(100% - 40px); margin: 8px 20px 0; line-height: 0; }
+.caqdas__video { display: block; max-width: 100%; max-height: calc(100vh - 340px); background: #000; }
+.caqdas__vidoverlay { position: absolute; inset: 0; pointer-events: none; }
+.caqdas__vidoverlay.is-drawing { pointer-events: auto; cursor: crosshair; }
+.caqdas__trackbox { position: absolute; border: 2px solid; box-sizing: border-box; pointer-events: none; }
+.caqdas__trackbox.is-active { box-shadow: 0 0 0 1px rgba(0,0,0,.4), 0 0 0 3px rgba(255,255,255,.35); }
+.caqdas__tracktb { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 20px 0; }
+.caqdas__tracklabel { font-size: 12px; font-weight: 600; }
+.caqdas__tracktb .caqdas__btn { font-size: 12px; padding: 3px 8px; }
+.caqdas__lanebar.is-track { box-shadow: inset 0 0 0 1px rgba(255,255,255,.6); border-radius: 5px; }
 .caqdas__mediactrl { display: flex; align-items: center; gap: 6px; padding: 8px 20px 0; }
 .caqdas__speedlabel { font-size: 12px; color: #7a8590; margin-right: 2px; }
 .caqdas__speedbtn { font: inherit; font-size: 12px; padding: 2px 8px; border: 1px solid #ccd2d8; border-radius: 6px; background: #fff; cursor: pointer; }
@@ -154,7 +163,14 @@ export const workspace = {
     let timeSel = null; // pending drawn time span {tStart,tEnd} (seconds), session-only
     let currentTimeline = null, currentLanes = null, currentMediaEl = null; // live audio/video timeline refs
     let currentMedium = null; // 'image' | 'audio' | 'video' of the loaded doc
+    // --- video spatiotemporal (region-over-time) state ------------------------
+    let activeTrack = null; // the keyframed region segment being edited (or null)
+    let videoSel = null; // pending drawn box on a video frame (for a NEW track)
+    let currentVideoOverlay = null; // the live video frame overlay
+    let trackToolbarEl = null; // the track-editing toolbar element
+    let tracking = false; // the auto-tracker loop is running
     const hiddenCodes = new Set(); // codes whose regions/lanes are hidden (per-code layer visibility, session-only)
+    const docActive = () => docs.find((d) => d.rid === activeRid);
     const docLabel = (rid) => {
       const i = docs.findIndex((d) => d.rid === rid);
       return (i >= 0 && docs[i].label) || `#${i + 1}`;
@@ -427,14 +443,27 @@ export const workspace = {
      * selector is a time range — the 1-D-in-time analogue of the image region — and
      * each code is a lane (the ELAN tier model, the time version of image layers). */
     function renderTimeMedia(doc, kind) {
-      const mediaEl = document.createElement(kind === 'video' ? 'video' : 'audio');
+      const isVideo = kind === 'video';
+      const mediaEl = document.createElement(isVideo ? 'video' : 'audio');
       mediaEl.controls = true;
       mediaEl.preload = 'metadata';
-      mediaEl.className = kind === 'video' ? 'caqdas__video' : 'caqdas__audioel';
+      mediaEl.crossOrigin = 'anonymous'; // blob is same-origin; keeps the canvas untainted for tracking
+      mediaEl.className = isVideo ? 'caqdas__video' : 'caqdas__audioel';
       mediaEl.src = mediaObjectUrl;
       currentMediaEl = mediaEl;
+      activeTrack = null; videoSel = null; currentVideoOverlay = null; trackToolbarEl = null; tracking = false;
 
-      // Playback-speed control (reviewing long field recordings).
+      // Video gets a frame overlay for spatiotemporal (region-over-time) coding.
+      let playerNode = mediaEl, overlay = null;
+      if (isVideo) {
+        const wrap = el('div', 'caqdas__vidwrap');
+        overlay = el('div', 'caqdas__vidoverlay'); // pointer-events:none until "Region" mode is on
+        currentVideoOverlay = overlay;
+        wrap.append(mediaEl, overlay);
+        playerNode = wrap;
+        attachVideoRegionDrawing(overlay, doc, mediaEl);
+      }
+
       const ctrl = el('div', 'caqdas__mediactrl');
       const sl = el('span', 'caqdas__speedlabel'); sl.textContent = 'Speed';
       ctrl.append(sl);
@@ -447,8 +476,23 @@ export const workspace = {
         });
         ctrl.append(b);
       }
+      if (isVideo) {
+        // "Region" mode: while on, the overlay captures drawing (and covers the native
+        // controls — seek via the ruler below); while off, the video plays normally and
+        // the overlay just displays the tracked boxes.
+        const dt = el('button', 'caqdas__speedbtn'); dt.textContent = '✎ Region';
+        dt.title = 'Draw region-over-time boxes on the frame. While on, use the ruler below to seek.';
+        dt.addEventListener('click', () => dt.classList.toggle('is-on', overlay.classList.toggle('is-drawing')));
+        ctrl.append(dt);
+      }
+
       const hint = el('div', 'caqdas__mediahint');
-      hint.textContent = 'Drag on the timeline to select a span, then click a code to tag it (right-click, or 🖌 to paint). Click a coding bar to memo/remove; click the ruler to seek.';
+      hint.textContent = isVideo
+        ? 'Time coding: drag the ruler → pick a code. Region-over-time: turn on ✎ Region, draw a box where a subject is, pick a code, then scrub + redraw (or ⦿ Auto-track) to add keyframes; the box interpolates between.'
+        : 'Drag on the timeline to select a span, then click a code to tag it (right-click, or 🖌 to paint). Click a coding bar to memo/remove; click the ruler to seek.';
+
+      const trackToolbar = el('div', 'caqdas__tracktb'); trackToolbar.style.display = 'none';
+      trackToolbarEl = trackToolbar;
 
       const timeline = el('div', 'caqdas__timeline');
       currentTimeline = timeline;
@@ -461,11 +505,16 @@ export const workspace = {
       timeline.append(track, lanes);
 
       attachTimelineDrawing(track, doc, mediaEl);
-      const sync = () => { const d = mediaEl.duration || 0; if (d > 0) playhead.style.left = (mediaEl.currentTime / d) * 100 + '%'; };
+      const sync = () => {
+        const d = mediaEl.duration || 0;
+        if (d > 0) playhead.style.left = (mediaEl.currentTime / d) * 100 + '%';
+        if (isVideo && !tracking) drawTrackBoxes(overlay, doc, mediaEl.currentTime || 0);
+      };
       mediaEl.addEventListener('timeupdate', sync);
+      mediaEl.addEventListener('seeked', sync);
       mediaEl.addEventListener('loadedmetadata', () => { sync(); drawLanes(lanes, doc, mediaEl.duration || 1); });
 
-      textPane.append(mediaEl, ctrl, hint, timeline);
+      textPane.append(playerNode, ctrl, trackToolbar, hint, timeline);
       if (mediaEl.readyState >= 1) drawLanes(lanes, doc, mediaEl.duration || 1); // metadata already cached
     }
 
@@ -500,7 +549,10 @@ export const workspace = {
       if (!currentLanes || !currentMediaEl) return;
       currentTimeline?.querySelectorAll('.caqdas__tlsel').forEach((n) => { n.style.display = 'none'; });
       const doc = docs.find((d) => d.rid === activeRid);
-      if (doc && doc.kind === 'media') drawLanes(currentLanes, doc, currentMediaEl.duration || 1);
+      if (doc && doc.kind === 'media') {
+        drawLanes(currentLanes, doc, currentMediaEl.duration || 1);
+        if (currentVideoOverlay) drawTrackBoxes(currentVideoOverlay, doc, currentMediaEl.currentTime || 0);
+      }
     }
 
     /** Draw a doc's regions as translucent coloured boxes, one visual layer per code.
@@ -626,12 +678,14 @@ export const workspace = {
         lane.append(label);
         const strip = el('div', 'caqdas__lanestrip');
         for (const s of byCode.get(cid)) {
-          const bar = el('div', 'caqdas__lanebar' + (s.memo ? ' has-memo' : ''));
+          const bar = el('div', 'caqdas__lanebar' + (s.memo ? ' has-memo' : '') + (s.keys ? ' is-track' : ''));
           bar.style.left = (s.tStart / dur) * 100 + '%';
           bar.style.width = Math.max(0.4, ((s.tEnd - s.tStart) / dur) * 100) + '%';
           bar.style.backgroundColor = color;
-          bar.title = `${code ? code.name : ''} ${fmtTime(s.tStart)}–${fmtTime(s.tEnd)}${s.memo ? ' — ' + s.memo : ''}`;
-          bar.addEventListener('click', (e) => { e.stopPropagation(); openSegmentMenu([s], e); });
+          const kind = s.keys ? ` · region-over-time (${s.keys.length} kf)` : '';
+          bar.title = `${code ? code.name : ''} ${fmtTime(s.tStart)}–${fmtTime(s.tEnd)}${kind}${s.memo ? ' — ' + s.memo : ''}`;
+          // A tracked region opens for editing; a plain time coding opens its memo/remove menu.
+          bar.addEventListener('click', (e) => { e.stopPropagation(); if (s.keys) activateTrack(s); else openSegmentMenu([s], e); });
           strip.append(bar);
         }
         lane.append(strip);
@@ -697,6 +751,220 @@ export const workspace = {
       timeSel = null;
       save();
       refreshView();
+    }
+
+    // --- video: region-over-time (spatiotemporal) ----------------------------
+    // A tracked region is a segment with `keys:[{t,x,y,w,h}]` — a box that moves by
+    // interpolating between keyframes (rung 2). Keyframes are set by hand (draw the box
+    // at a time) or suggested by the rough tracker (rung 3). It still has tStart/tEnd +
+    // text, so it appears on the lanes and in retrieve/export like any other segment.
+
+    /** Draw on the video frame overlay (only while ✎ Region mode is on): a drag adds a
+     * keyframe to the active track (or, with none active, a pending box for a new one);
+     * a click selects/deselects a track box. */
+    function attachVideoRegionDrawing(overlay, doc, mediaEl) {
+      let start = null, selEl = null;
+      const norm = (e) => { const r = overlay.getBoundingClientRect(); return { x: clamp01((e.clientX - r.left) / r.width), y: clamp01((e.clientY - r.top) / r.height) }; };
+      overlay.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0 || !overlay.classList.contains('is-drawing')) return;
+        e.preventDefault();
+        try { overlay.setPointerCapture(e.pointerId); } catch { /* ok */ }
+        overlay.querySelectorAll('.caqdas__regionsel').forEach((n) => n.remove());
+        start = norm(e); videoSel = null;
+        selEl = el('div', 'caqdas__regionsel'); overlay.append(selEl);
+        positionPct(selEl, { x: start.x, y: start.y, w: 0, h: 0 });
+      });
+      overlay.addEventListener('pointermove', (e) => { if (start) positionPct(selEl, rectOf(start, norm(e))); });
+      overlay.addEventListener('pointerup', (e) => {
+        if (start == null) return;
+        const rect = rectOf(start, norm(e));
+        start = null;
+        const t = mediaEl.currentTime || 0;
+        if (rect.w < 0.01 || rect.h < 0.01) {
+          selEl?.remove(); selEl = null; videoSel = null;
+          const hit = trackBoxAt(doc, t, rect.x, rect.y);
+          if (hit) activateTrack(hit);
+          else { activeTrack = null; renderTrackToolbar(); drawTrackBoxes(overlay, doc, t); }
+          return;
+        }
+        selEl?.remove(); selEl = null;
+        if (activeTrack) upsertKeyframe(activeTrack, t, rect); // add a keyframe to the active track
+        else { videoSel = rect; if (activeCodeId) createTrack(activeCodeId, rect); } // else stage a new track
+      });
+      overlay.addEventListener('contextmenu', (e) => {
+        if (!overlay.classList.contains('is-drawing')) return;
+        e.preventDefault();
+        if (videoSel) openAssignMenu({ kind: 'vregion', region: videoSel }, e);
+      });
+    }
+
+    /** Start a new tracked region for a code at the current time (its first keyframe). */
+    function createTrack(codeId, region) {
+      const t = round3(currentMediaEl?.currentTime || 0);
+      const seg = {
+        doc: activeRid, codeId,
+        keys: [{ t, x: round4(region.x), y: round4(region.y), w: round4(region.w), h: round4(region.h) }],
+        tStart: t, tEnd: t, text: timeLabel(t, t),
+      };
+      state.segments.push(seg);
+      activeTrack = seg; videoSel = null;
+      save();
+      refreshLanes(); renderCodes(); renderTrackToolbar();
+      drawTrackBoxes(currentVideoOverlay, docActive(), t);
+    }
+
+    /** Insert or replace the keyframe at (about) time `t`, keeping keys time-sorted. */
+    function upsertKeyframe(seg, t, region, quiet) {
+      const key = { t: round3(t), x: round4(region.x), y: round4(region.y), w: round4(region.w), h: round4(region.h) };
+      const i = seg.keys.findIndex((k) => Math.abs(k.t - key.t) < 0.05);
+      if (i >= 0) seg.keys[i] = key; else seg.keys.push(key);
+      seg.keys.sort((a, b) => a.t - b.t);
+      seg.tStart = seg.keys[0].t; seg.tEnd = seg.keys[seg.keys.length - 1].t;
+      seg.text = timeLabel(seg.tStart, seg.tEnd);
+      if (!quiet) {
+        save(); refreshLanes(); renderTrackToolbar();
+        drawTrackBoxes(currentVideoOverlay, docActive(), currentMediaEl?.currentTime || 0);
+      }
+    }
+
+    /** Delete the keyframe near the current time (removing the whole track if it was
+     * the last one). */
+    function deleteKeyframeAt(seg, t) {
+      const i = seg.keys.findIndex((k) => Math.abs(k.t - t) < 0.25);
+      if (i < 0) return;
+      seg.keys.splice(i, 1);
+      if (!seg.keys.length) { state.segments = state.segments.filter((s) => s !== seg); activeTrack = null; }
+      else { seg.tStart = seg.keys[0].t; seg.tEnd = seg.keys[seg.keys.length - 1].t; seg.text = timeLabel(seg.tStart, seg.tEnd); }
+      save(); refreshLanes(); renderCodes(); renderTrackToolbar();
+      drawTrackBoxes(currentVideoOverlay, docActive(), t);
+    }
+
+    /** Remove an entire tracked region. */
+    function removeTrack(seg) {
+      state.segments = state.segments.filter((s) => s !== seg);
+      if (activeTrack === seg) activeTrack = null;
+      save(); refreshLanes(); renderCodes(); renderTrackToolbar();
+      drawTrackBoxes(currentVideoOverlay, docActive(), currentMediaEl?.currentTime || 0);
+    }
+
+    /** Make a track the one being edited and seek to its start. */
+    function activateTrack(seg) {
+      activeTrack = seg;
+      if (currentMediaEl && seg.keys?.length) currentMediaEl.currentTime = seg.tStart;
+      renderTrackToolbar();
+      drawTrackBoxes(currentVideoOverlay, docActive(), seg.tStart);
+    }
+
+    /** The topmost tracked region whose interpolated box contains the point at time t. */
+    function trackBoxAt(doc, t, x, y) {
+      const segs = segsFor(doc.rid).filter((s) => s.keys && !hiddenCodes.has(s.codeId));
+      for (let i = segs.length - 1; i >= 0; i--) {
+        const s = segs[i];
+        if (t < s.tStart - 0.001 || t > s.tEnd + 0.001) continue;
+        const r = regionAtTime(s.keys, t);
+        if (r && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return s;
+      }
+      return null;
+    }
+
+    /** Draw every visible tracked region's interpolated box at time `t` on the overlay. */
+    function drawTrackBoxes(overlay, doc, t) {
+      if (!overlay) return;
+      overlay.querySelectorAll('.caqdas__trackbox').forEach((n) => n.remove());
+      for (const s of segsFor(doc.rid)) {
+        if (!s.keys || hiddenCodes.has(s.codeId)) continue;
+        if (t < s.tStart - 0.001 || t > s.tEnd + 0.001) continue;
+        const r = regionAtTime(s.keys, t);
+        if (!r) continue;
+        const code = codeById(s.codeId);
+        const color = code ? code.color : '#888';
+        const box = el('div', 'caqdas__trackbox' + (s === activeTrack ? ' is-active' : ''));
+        positionPct(box, r);
+        box.style.borderColor = color;
+        box.style.backgroundColor = hexToRgba(color, 0.12);
+        const lbl = el('span', 'caqdas__rlabel'); lbl.textContent = code ? code.name : '(code)'; lbl.style.backgroundColor = color;
+        box.append(lbl);
+        overlay.append(box);
+      }
+    }
+
+    /** Show/refresh the track-editing toolbar for the active track (or hide it). */
+    function renderTrackToolbar() {
+      if (!trackToolbarEl) return;
+      trackToolbarEl.textContent = '';
+      if (!activeTrack) { trackToolbarEl.style.display = 'none'; return; }
+      trackToolbarEl.style.display = 'flex';
+      const code = codeById(activeTrack.codeId);
+      const n = activeTrack.keys.length;
+      const label = el('span', 'caqdas__tracklabel');
+      label.textContent = `⦿ ${code ? code.name : '?'} · ${n} keyframe${n === 1 ? '' : 's'}`;
+      if (code) label.style.color = code.color;
+      const trackBtn = el('button', 'caqdas__btn');
+      trackBtn.textContent = tracking ? '■ Stop' : '⦿ Auto-track ▶';
+      trackBtn.title = 'Follow the box forward frame-by-frame (rough — correct any drift by re-drawing)';
+      trackBtn.addEventListener('click', () => { if (tracking) tracking = false; else void trackForward(activeTrack, currentMediaEl); });
+      const delBtn = el('button', 'caqdas__btn'); delBtn.textContent = '⌫ keyframe';
+      delBtn.title = 'Delete the keyframe at the current time';
+      delBtn.addEventListener('click', () => deleteKeyframeAt(activeTrack, currentMediaEl?.currentTime || 0));
+      const rmBtn = el('button', 'caqdas__btn'); rmBtn.textContent = '🗑 track';
+      rmBtn.title = 'Remove this whole tracked region';
+      rmBtn.addEventListener('click', () => removeTrack(activeTrack));
+      const doneBtn = el('button', 'caqdas__btn caqdas__btn--primary'); doneBtn.textContent = '✓ Done';
+      doneBtn.addEventListener('click', () => { activeTrack = null; renderTrackToolbar(); drawTrackBoxes(currentVideoOverlay, docActive(), currentMediaEl?.currentTime || 0); });
+      trackToolbarEl.append(label, trackBtn, delBtn, rmBtn, doneBtn);
+    }
+
+    /** Rough auto-tracker (rung 3): step forward from the current time, template-matching
+     * the box's patch frame-to-frame and dropping a keyframe each step. Runs on a
+     * downscaled canvas; bails gracefully if the browser taints the canvas. */
+    async function trackForward(seg, mediaEl) {
+      if (tracking || !mediaEl) return;
+      const dur = mediaEl.duration || 0;
+      const vw = mediaEl.videoWidth || 0;
+      if (!dur || !vw) return;
+      const W = Math.min(480, vw);
+      const H = Math.round((mediaEl.videoHeight || 270) * (W / vw));
+      const canvas = document.createElement('canvas'); canvas.width = W; canvas.height = H;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      const seekTo = (tt) => new Promise((res) => {
+        const on = () => { mediaEl.removeEventListener('seeked', on); res(); };
+        mediaEl.addEventListener('seeked', on);
+        mediaEl.currentTime = Math.min(dur, Math.max(0, tt));
+      });
+      const step = 0.4;
+      let t = mediaEl.currentTime || 0;
+      let region = regionAtTime(seg.keys, t);
+      if (!region) return;
+      mediaEl.pause();
+      tracking = true; renderTrackToolbar();
+      try {
+        await seekTo(t);
+        ctx.drawImage(mediaEl, 0, 0, W, H);
+        let tmpl = grayPatch(ctx, region, W, H); // throws here first if tainted
+        let cur = { x: region.x, y: region.y, w: region.w, h: region.h };
+        let added = 0;
+        // Cap per click (~a minute of footage) so a long video can't spin forever;
+        // click Auto-track again to continue from where it left off.
+        while (tracking && t + step <= dur && added < 150) {
+          t += step;
+          added++;
+          await seekTo(t);
+          if (!tracking) break;
+          ctx.drawImage(mediaEl, 0, 0, W, H);
+          cur = matchTemplate(ctx, tmpl, cur, W, H);
+          upsertKeyframe(seg, t, cur, true);
+          drawTrackBoxes(currentVideoOverlay, docActive(), t);
+          tmpl = grayPatch(ctx, cur, W, H); // adapt the template to slow appearance change
+        }
+      } catch (err) {
+        app.results?.appendError?.(
+          'Auto-track couldn’t read the video pixels on this device (the browser blocked it). Manual keyframes still work — scrub and re-draw the box.',
+        );
+      } finally {
+        tracking = false;
+        save(); refreshLanes(); renderTrackToolbar();
+        drawTrackBoxes(currentVideoOverlay, docActive(), mediaEl.currentTime || 0);
+      }
     }
 
     function renderCodes() {
@@ -772,6 +1040,7 @@ export const workspace = {
             const activeDoc = docs.find((d) => d.rid === activeRid);
             if (activeDoc && activeDoc.kind === 'media') {
               if (imageSel) addRegionSegment(code.id, imageSel);
+              else if (videoSel) createTrack(code.id, videoSel);
               else if (timeSel) addTimeSegment(code.id, timeSel);
               else flashHint(hint);
               return;
@@ -915,6 +1184,7 @@ export const workspace = {
       const choose = (codeId) => {
         closeMenu();
         if (span && span.kind === 'region') addRegionSegment(codeId, span.region);
+        else if (span && span.kind === 'vregion') createTrack(codeId, span.region);
         else if (span && span.kind === 'time') addTimeSegment(codeId, span.span);
         else addSegment(codeId, span);
       };
@@ -1242,6 +1512,72 @@ function fmtTime(s) {
 }
 /** A human label for a time-range coding — shown in retrieve and exports. */
 function timeLabel(t0, t1) { return `${fmtTime(t0)}–${fmtTime(t1)}`; }
+
+/** Linear interpolate. */
+function lerp(a, b, f) { return a + (b - a) * f; }
+
+/** The interpolated region {x,y,w,h} of a keyframed track at time `t` (clamped to the
+ * end keyframes outside the span). Null if no keyframes. This is what turns a handful
+ * of keyframes into a box that moves every frame (rung 2). */
+function regionAtTime(keys, t) {
+  if (!keys || !keys.length) return null;
+  if (t <= keys[0].t) return keys[0];
+  const last = keys[keys.length - 1];
+  if (t >= last.t) return last;
+  for (let i = 0; i < keys.length - 1; i++) {
+    const a = keys[i], b = keys[i + 1];
+    if (t >= a.t && t <= b.t) {
+      const f = b.t > a.t ? (t - a.t) / (b.t - a.t) : 0;
+      return { x: lerp(a.x, b.x, f), y: lerp(a.y, b.y, f), w: lerp(a.w, b.w, f), h: lerp(a.h, b.h, f) };
+    }
+  }
+  return last;
+}
+
+/** Grab a grayscale template patch for a normalised region from a canvas context.
+ * Throws if the canvas is tainted (blob videos shouldn't taint, but we surface it). */
+function grayPatch(ctx, region, W, H) {
+  const px = Math.max(0, Math.min(W - 2, Math.round(region.x * W)));
+  const py = Math.max(0, Math.min(H - 2, Math.round(region.y * H)));
+  const pw = Math.max(2, Math.min(W - px, Math.round(region.w * W)));
+  const ph = Math.max(2, Math.min(H - py, Math.round(region.h * H)));
+  const img = ctx.getImageData(px, py, pw, ph); // SecurityError if tainted
+  const g = new Float32Array(pw * ph);
+  const d = img.data;
+  for (let i = 0; i < pw * ph; i++) g[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+  return { g, w: pw, h: ph };
+}
+
+/** Rough translation tracker (rung 3): slide the grayscale template around the last
+ * position and return the best-SSD match as a new normalised region (size preserved).
+ * Deliberately simple — translation only, subsampled, early-terminated — a *suggestion*
+ * the user corrects, not a robust tracker (that's the deferred WASM rung 4). */
+function matchTemplate(ctx, tmpl, near, W, H) {
+  const pw = tmpl.w, ph = tmpl.h;
+  const cx = Math.round(near.x * W), cy = Math.round(near.y * H);
+  const rx = Math.round(pw * 0.6) + 8, ry = Math.round(ph * 0.6) + 8;
+  const ax = Math.max(0, cx - rx), ay = Math.max(0, cy - ry);
+  const aw = Math.min(W - ax, pw + 2 * rx), ah = Math.min(H - ay, ph + 2 * ry);
+  if (aw < pw || ah < ph) return { ...near };
+  const img = ctx.getImageData(ax, ay, aw, ah);
+  const d = img.data, iw = aw;
+  const grayAt = (X, Y) => { const i = (Y * iw + X) * 4; return 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]; };
+  let best = Infinity, bx = cx, by = cy;
+  for (let oy = 0; oy + ph <= ah; oy += 2) {
+    for (let ox = 0; ox + pw <= aw; ox += 2) {
+      let ssd = 0;
+      for (let ty = 0; ty < ph && ssd < best; ty += 2) {
+        for (let tx = 0; tx < pw; tx += 2) {
+          const diff = grayAt(ox + tx, oy + ty) - tmpl.g[ty * pw + tx];
+          ssd += diff * diff;
+          if (ssd >= best) break;
+        }
+      }
+      if (ssd < best) { best = ssd; bx = ax + ox; by = ay + oy; }
+    }
+  }
+  return { x: bx / W, y: by / H, w: near.w, h: near.h };
+}
 
 /** A translucent `rgba()` fill from a `#rgb`/`#rrggbb` hex + alpha (region layers). */
 function hexToRgba(hex, alpha) {

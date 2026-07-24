@@ -608,6 +608,23 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     region coding (2-D selector + canvas); (4) **video** (time + keyframed spatial overlay);
     (5) **REFI-QDA/QDPX** import/export across all selector types; (6) **Whisper Phase 2**
     auto-transcription. Media-asset storage (with `#143`/`#144` ties) lands with step 2.
+    **STATUS: (1)–(4) BUILT** (text, image regions+layers, audio/video time-ranges+lanes,
+    and video **region-over-time** — static + interpolated manual keyframes + a rough
+    template-matching auto-tracker). (5) REFI-QDA and (6) Whisper are the remaining rungs.
+  - **Video region-over-time — tracker rungs (built 1–3; rung 4 deferred).** Region-over-
+    time coding is a spatiotemporal segment `{keys:[{t,x,y,w,h}], tStart,tEnd}` — a box
+    that interpolates between keyframes (`regionAtTime`). **Built:** (1) static region +
+    time span, (2) manual keyframes + interpolation, (3) a **rough in-JS auto-tracker** —
+    downscaled-canvas grayscale **template matching** (translation only, subsampled,
+    suggestion-with-correction; `matchTemplate`/`grayPatch` in builtin-caqdas). Good for
+    slow/roughly-rigid motion (e.g. proxemics); weak on fast/deforming/occluding subjects.
+    - **Rung 4 — robust ML/CV tracker (CSRT/KCF via OpenCV.js, or a deep tracker):
+      INTENTIONALLY DEFERRED, possibly never.** Only pursue if rung 3 proves too rough for
+      real footage. Cost is real: it's **WASM**, which the media-CSP workspace sandbox does
+      **not** allow (only the codec sandbox has `wasm-unsafe-eval`), so it needs either
+      widening that CSP (a security decision) or a separate WASM worker, plus a large model
+      download. None of rungs 1–4 round-trip to QDPX (video is time-only there) — a
+      deliberate CrossTab-only extension.
 
 - [~] **File import — as a plugin extension point.** Importers register via the
       public `app.importers.register({ label, extensions, parse })`; the engine
