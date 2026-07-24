@@ -264,10 +264,46 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       infrastructure on the table).
     - *Late-join.* Snapshot-then-tail: ship the whole existing op-log to a joiner,
       then follow with the live tail.
+  - **Concurrency detection / presence — "Jane has this open, co-author?"** The key
+    reframe: **presence is separable from storage** — "who else has project X open"
+    rides the *network*, not the bytes, so you answer it *once* (a thin layer keyed on
+    project id) and all three storage modes borrow it, rather than solving it per mode.
+    - *Live mode gets it free.* In Trystero the **room is the presence mechanism** —
+      `onPeerJoin`/`onPeerLeave` fire on join. Not a feature added on top of live mode;
+      a byproduct of it.
+    - *Folder + Graph borrow the same beacon.* On open, every client (wherever its
+      files live) joins a lightweight Trystero **presence room** and broadcasts a tiny
+      `{who, mode, since}` beacon — no data channel, just "I'm here." Seeing a peer →
+      prompt *"Jane also has this open — start co-authoring?"* → escalating promotes the
+      **same room** to a reliable data channel + op-log sync. So detection and the
+      live-mode handshake are the same machinery pointed at the same room.
+    - *Filesystem-native path is the degraded fallback.* A **lock file**
+      (`project.lock`, heartbeat + staleness timeout) is the offline answer but is
+      advisory and slow: OneDrive sync latency (seconds–minutes) means two people can
+      both "open simultaneously" inside the sync window and neither sees the other's
+      lock; crashes leave stale locks (hence heartbeats); OneDrive can conflict-copy the
+      lock file itself. **Graph** only offers change *notifications* (webhooks/delta —
+      "the file changed"), not "someone has it open," so it also falls back to a
+      drive-lock-file or (better) the beacon. Hierarchy: **beacon when networked
+      (good), lock file when not (best-effort warning only).**
+    - *Nice consequence:* presence-only is buildable **cheaply and early**, ahead of the
+      hard merge foundation — ship *"Jane's in here too"* + the co-author prompt on
+      Trystero alone, and it doubles as the escalation handshake later.
+    - *Caveats:* (1) **same population problem** — the beacon needs a reachable public
+      MQTT broker, so on locked-down university networks / air-gap it may not connect
+      (back to the lock file, which needs the sync client, or nothing); (2) **detected ≠
+      connectable** — the beacon can say "Jane's here" while TURN-less P2P then fails to
+      link up, so the UI must handle that gracefully (ties to the TURN note above);
+      (3) **room-key privacy** — derive the presence room key from a **salted hash of
+      the project UUID** (store already mints `crypto.randomUUID()` ids) so the room is
+      unguessable and non-enumerable on a public broker, not "is anyone editing
+      `dissertation`?".
   - **Suggested build order:** (1) mergeable op-log foundation — stable op ids +
     common-ancestor + per-class merge rules; (2) folder transport (FSA seam in
-    `project-store.js`); (3) Graph backend for iPad; (4) live transport (Trystero +
-    reliable channel + TURN).
+    `project-store.js`); (3) presence beacon (cheap, standalone — the "Jane's here,
+    co-author?" prompt on Trystero, no convergence needed yet); (4) Graph backend for
+    iPad; (5) live transport (Trystero + reliable channel + TURN), which reuses the
+    presence room as its handshake.
 
 - [~] **File import — as a plugin extension point.** Importers register via the
       public `app.importers.register({ label, extensions, parse })`; the engine
