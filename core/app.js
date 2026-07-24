@@ -669,6 +669,19 @@ export async function boot(mounts) {
     const reconcileWorkspaces = () => void workspaceManager.reconcile(plugins.list());
     bus.on(CoreEvents.PLUGINS_CHANGED, reconcileWorkspaces);
     reconcileWorkspaces();
+    // A workspace reads the active dataset's columns at mount (e.g. the CAQDAS coding
+    // tab's document-column picker), so it must re-mount when the ACTIVE dataset
+    // changes — otherwise it's frozen on whatever booted and can't see a
+    // newly-imported dataset's columns. Gate on the active id actually changing so
+    // renames / row edits (which also emit DATASETS_CHANGED / DATA_CHANGED) don't churn
+    // it. The codebook + segments persist in the workspace store, so a re-mount is
+    // lossless.
+    let lastActiveId = datasets.activeId;
+    bus.on(DATASETS_CHANGED, () => {
+      if (datasets.activeId === lastActiveId) return;
+      lastActiveId = datasets.activeId;
+      void workspaceManager.remountActive(plugins.list());
+    });
   }
   // In-app plugin creator (Edit ▸ Create plugin…, and the manager's "Create new…"):
   // authors a plugin from a template and loads it through the same sandbox.
