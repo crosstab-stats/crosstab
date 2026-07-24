@@ -298,12 +298,75 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       the project UUID** (store already mints `crypto.randomUUID()` ids) so the room is
       unguessable and non-enumerable on a public broker, not "is anyone editing
       `dissertation`?".
+  - **Access control / confidentiality — a shared secret, kept separate from the
+    room key.** The salted-UUID-hash room key (caveat 3 above) makes the room
+    *unguessable to outsiders* but not *private from the broker/relay operator*, who
+    routes by that key and so necessarily knows it. A hash is one-way for the *string*
+    but not for *participation*: the operator still sees the topic has subscribers and
+    reads whatever rides it in the clear. Fix = split the two roles, don't conflate:
+    - *Addressing* stays the salted UUID hash — the operator sees this topic regardless.
+    - *Confidentiality* = a shared secret → strong KDF (Argon2id/scrypt) → AES key that
+      encrypts everything on the broker: **signaling and the presence beacon**. Keep it
+      **orthogonal** to the room key — folding the secret into the key means rotating it
+      changes the room *address* (collaborators lose each other) and a weak secret
+      becomes an enumerable topic.
+    - *What needs protecting is smaller than it looks.* Once WebRTC connects, the bulk
+      op-log is **DTLS-encrypted peer-to-peer** already, so the secret's real job is the
+      **signaling (which leaks participant IPs via ICE)** and the **beacon**
+      (`{who,mode,since}`) — not the data. **Trystero ships a built-in `password` config
+      that AES-encrypts its signaling**, which would do most of this for free (confirm
+      against the pinned version — not vendored yet, only referenced here).
+    - *Default should be a generated high-entropy key, not a typed password* — delivered
+      in the invite link/code (key in the URL fragment, never hits a server; the
+      Jitsi/Excalidraw E2EE pattern) so it's immune to the offline dictionary grind a
+      memorable password invites. Offer a user-chosen password as the memorable-but-
+      weaker opt-in.
+    - *Residual, stated honestly (no theatre):* even fully encrypted, the operator still
+      sees topic existence, subscriber count, timing, and message sizes — traffic
+      analysis that encryption can't hide.
+  - **Onboarding + base-data sharing — the invite carries the key; an index fills the
+    gaps.** Two questions the op-log foundation quietly skips: how the second user gets
+    *in*, and how they get the *base bytes*. The log's first op is `load`, referencing an
+    immutable source the joiner may not hold — e.g. two field studies in different cities,
+    each holding only its own data file and needing to combine **both ways**.
+    - *Invitation = key distribution.* The invite link/code is exactly the artifact from
+      the access-control note: room topic (UUID hash) + high-entropy key. One thing to
+      share out-of-band; accepting it decrypts signaling, connects, and late-joins.
+    - *Late-join already ships the op-log snapshot* (above) — but its `load/append/join`
+      ops (`data-store.js` §log, the universal operation log) point at immutable sources
+      persisted as `ds{id}_src{i}.parquet` (`project-store.js:101`) that the joiner lacks.
+      **That's the gap.**
+    - *Index/manifest, separate from bytes (the user's instinct).* Broadcast a cheap
+      manifest — `{datasetId, sourceHash, name, rows, cols, byteSize}` — content-**hashing**
+      each Parquet source (today they're named only *positionally*, `ds{id}_src{i}`; a
+      hash is what makes "do I have this?" answerable, enables dedup so identical files
+      aren't re-sent, and lets a received file be integrity-checked against what the log
+      expects). Replaying a log and hitting a `load`/`join` for a hash you don't hold =
+      the gap → prompt **"share this file!"**.
+    - *"Both ways" falls out of the foundation.* A merged log with A's `load city-A` +
+      B's `load city-B` + an `append` means each peer, replaying, hits a gap for the
+      *other's* source and fetches it — combine-in-both-directions is just the mergeable
+      op-log plus on-demand fetch, not a separate feature.
+    - *Transfer is consent- and size-gated, not silent.* Sources can be multi-GB (codec
+      note); auto-streaming one over a field-site link is rude. Both sides see size —
+      needer: *"missing city-B.parquet (3.1 GB) — request from Jane?"*; haver: *"Jane
+      needs city-B.parquet (3.1 GB) — send?"* Bytes stream chunked over the same reliable
+      data channel.
+    - *Sneakernet fallback for locked-down / air-gap nets* (same population problem as the
+      beacon): when P2P won't connect, the index still names *exactly which file* to hand
+      over out-of-band, and CrossTab verifies the imported bytes' hash against the log's
+      expectation — the index earns its keep even with no automated transfer.
+    - *Async/folder mode mostly gets this free* — the sync client mirrors the Parquet
+      sources, so gaps appear only inside the sync-latency window; the mechanism is
+      chiefly a live-mode concern plus the sneakernet path.
   - **Suggested build order:** (1) mergeable op-log foundation — stable op ids +
     common-ancestor + per-class merge rules; (2) folder transport (FSA seam in
     `project-store.js`); (3) presence beacon (cheap, standalone — the "Jane's here,
-    co-author?" prompt on Trystero, no convergence needed yet); (4) Graph backend for
+    co-author?" prompt on Trystero, no convergence needed yet) + its confidentiality
+    (encrypt the beacon; the beacon is where metadata first leaks); (4) Graph backend for
     iPad; (5) live transport (Trystero + reliable channel + TURN), which reuses the
-    presence room as its handshake.
+    presence room as its handshake, the invite link as its key distribution, and the
+    index/gap-fill for base-data sharing.
 
 - [~] **File import — as a plugin extension point.** Importers register via the
       public `app.importers.register({ label, extensions, parse })`; the engine
