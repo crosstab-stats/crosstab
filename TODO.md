@@ -594,6 +594,14 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     exactly like the R packages / runtime assets already do (fits the CDN-default +
     "make available offline" pattern, and the air-gap vendoring path #71). So Phase 2 is
     viable when we want it — the deferral is *scope/effort*, not feasibility.
+    - *Mobile WebGPU is new — design WASM-fallback-first.* WebGPU only just reached mobile:
+      **iPadOS/iOS Safari 26+** (on by default, but the last major platform to ship it, so
+      older institutional iPads lack it) and **Android Chrome 121+** gated on **Android 12+
+      with a supported GPU**. So on a *current* iPad you get the 5–8× path, but on an older
+      iPad / low-end Android you fall back to WASM (~2–3×) with tighter RAM — realistically
+      **tiny/base only** on mobile. Treat WebGPU as the bonus fast path, WASM as baseline;
+      on tablets prefer **transcript import** or desktop-transcribe-then-sync (via the #143
+      asset share) over grinding a model on-device.
   - **Suggested phasing:** (1) generalize the segment selector + refactor the text coder
     onto it (no behavior change — pure groundwork); (2) **audio** coding (closest to text —
     1-D time selector + timeline drag) + transcript import & time-aligned seek; (3) **image**
