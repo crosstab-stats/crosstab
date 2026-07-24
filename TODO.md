@@ -269,6 +269,39 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     backend slots in the same way. Only reach for Graph where iPad/mobile is the hard
     requirement; on Chromium desktop the free folder-handle route stays strictly
     better.
+    - **Same model, REST driver.** Graph isn't a distinct collab mode — it's the *same*
+      async folder-backed model with an HTTP driver: identical `project.json` + Parquet
+      layout in the same OneDrive, reached via `GET/PUT …/content` (small files simple
+      PUT, large Parquet via resumable **upload session**) instead of
+      `getFile`/`createWritable`. The cheap-save maps directly.
+    - **Change detection beats the folder route:** **delta query** (`/delta` + token →
+      server-computed diff, poll the *diff* not the files) and **ETag `If-Match`
+      compare-and-swap** (a `412` on write = detected collision → route into the
+      three-way merge, instead of OneDrive's silent conflict copies). But **webhooks
+      need a public HTTPS endpoint** a browser-only app lacks → for serverless CrossTab
+      the practical path is **delta polling, not webhooks**. Graph still only signals
+      "the *file* changed," never "someone has it *open*" → presence stays on the beacon.
+    - **Auth decision — own registration + device-code UX; borrowed first-party
+      client-id rejected.** The tempting shortcut (device-code flow against a well-known
+      pre-consented Microsoft client_id — Azure CLI / Office / Graph-PS — so *no* app
+      registration) is **rejected**: (1) Microsoft is actively closing it, and tenants
+      lock-down enough to block **device code flow via Conditional Access** are exactly
+      our university targets — it trips the same wire it was meant to dodge; (2) consent
+      screen + sign-in logs show the *borrowed* app ("Azure CLI"), not "CrossTab" — an
+      audit/IRB-integrity problem for human-subjects data; (3) we don't own it, can't
+      scope it, likely violates MS terms. Crucially it **doesn't escape the hard case** —
+      a tenant needing admin consent / blocking device-code blocks the borrowed app too.
+      So: **register our own Azure app** (free, one-time, stable id we control, correct
+      "CrossTab" naming, exact scopes) — the cost was always *admin consent*, not the
+      registration — but **keep the device-code *flow*** ("pop a short code, log in on
+      MS's page, poll for the token"; MFA/CA handled by Microsoft) with *our* client_id
+      for the same no-redirect ergonomics. Public client → **auth-code+PKCE or
+      device-code**, `offline_access` for refresh.
+    - **Invitation is half OneDrive's ACL.** Multi-user needs the folder actually
+      *shared* between accounts (OneDrive share, or a SharePoint/Teams library both
+      reach via `/me/drive/sharedWithMe` or the shared drive id) — so onboarding is half
+      CrossTab's invite-key, half Microsoft's sharing dialog; reconcile with the live-
+      mode self-contained invite when unifying modes.
   - **Live transport — P2P over WebRTC (proven pattern, from sortie).** The
     serverless-handshake part is already solved and battle-tested in *sortie*
     (asteroids clone, https://lograh.github.io/sortie-game): **Trystero (MQTT
