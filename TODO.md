@@ -625,6 +625,20 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       widening that CSP (a security decision) or a separate WASM worker, plus a large model
       download. None of rungs 1–4 round-trip to QDPX (video is time-only there) — a
       deliberate CrossTab-only extension.
+    - **Box editing — BUILT.** The active track box is drag-to-move + 8-handle resize in ✎
+      Region mode (`attachBoxEditing`); a gesture upserts the keyframe at the current time,
+      so fixing tracker drift is scrub → nudge, and a tighter box feeds the matcher less
+      background. Decision (user, testing rects first): favour **better rect-editing tools
+      over a heavier tracker**.
+    - **Polygon / non-rect shapes — DEFERRED refinement (evaluate after rectangles).**
+      Would sharpen target definition and (via a polygon mask on the template) cut spurious
+      background from the matcher. Not built yet — too much to design blindly before the
+      rectangle pain points are known. When revisited, the load-bearing constraints: region
+      gains an optional `pts` vertex list (rects untouched, polygon opt-in); **fixed vertex
+      count per shape** so keyframes interpolate vertex-by-vertex (variable-vertex morphing
+      is out of scope); tracker masks SSD to in-polygon pixels and translates all vertices
+      together; touches draw + vertex-edit + hit-test (point-in-polygon) + interpolation
+      across BOTH image regions and video tracks. Still CrossTab-only (no QDPX round-trip).
 
 - [~] **File import — as a plugin extension point.** Importers register via the
       public `app.importers.register({ label, extensions, parse })`; the engine
