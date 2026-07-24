@@ -24,7 +24,7 @@
 export const manifest = {
   id: 'builtin-caqdas',
   name: 'Qualitative Coding (CAQDAS)',
-  version: '0.5.0',
+  version: '0.5.1',
   apiVersion: '0.1.0',
   category: 'Qualitative',
   // Renders media (text, image regions, audio/video time-ranges) from the host media
@@ -239,12 +239,39 @@ export const workspace = {
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') disarm(); });
 
     // --- column picker -------------------------------------------------------
-    const meta = await app.data.getVariableMeta();
-    const textCols = meta.filter((m) => m.type !== 'numeric').map((m) => m.name);
-    const opt0 = el('option'); opt0.value = ''; opt0.textContent = textCols.length ? '— choose —' : '(no text columns)';
-    colSel.append(opt0);
-    for (const name of textCols) { const o = el('option'); o.value = name; o.textContent = name; colSel.append(o); }
-    if (state.textColumn && textCols.includes(state.textColumn)) colSel.value = state.textColumn;
+    // Build (and re-build) the pickers from the ACTIVE dataset's variables. Re-runnable
+    // so the tab can refresh when it's shown — the active dataset may have changed since
+    // mount (e.g. a just-imported one), and the picker is otherwise frozen. Returns
+    // whether the codeable-column set changed, so the caller can skip a needless reload.
+    let lastColsSig = null;
+    async function populateColumns() {
+      const meta = await app.data.getVariableMeta();
+      const cols = meta.filter((m) => m.type !== 'numeric').map((m) => m.name);
+      const sig = cols.join('');
+      // Document (codeable) column.
+      colSel.textContent = '';
+      const opt0 = el('option'); opt0.value = ''; opt0.textContent = cols.length ? '— choose —' : '(no columns to code)';
+      colSel.append(opt0);
+      for (const name of cols) { const o = el('option'); o.value = name; o.textContent = name; colSel.append(o); }
+      if (state.textColumn && !cols.includes(state.textColumn)) state.textColumn = null; // stale (dataset changed)
+      colSel.value = state.textColumn || '';
+      // "Label by" — the column that identifies each document (filename, participant id,
+      // …), for the doc list + segments export. Any column qualifies; default Row number.
+      labelSel.textContent = '';
+      const lopt0 = el('option'); lopt0.value = ''; lopt0.textContent = 'Row number'; labelSel.append(lopt0);
+      for (const m of meta) { const o = el('option'); o.value = m.name; o.textContent = m.name; labelSel.append(o); }
+      if (!state.labelColumn || !meta.some((m) => m.name === state.labelColumn)) {
+        // Auto-pick a source-attribution-looking column (e.g. the importers' `name`).
+        // Memory-only — never save() here (a mount-time write can clobber a not-yet-
+        // hydrated codebook); it's deterministic and re-derived, persisted on real edits.
+        state.labelColumn = meta.map((m) => m.name)
+          .find((n) => n !== state.textColumn && /^(document|source|file|filename|doc|id|name|participant|case|respondent|speaker)$/i.test(n)) || null;
+      }
+      labelSel.value = state.labelColumn || '';
+      const changed = sig !== lastColsSig;
+      lastColsSig = sig;
+      return changed;
+    }
 
     colSel.addEventListener('change', async () => {
       state.textColumn = colSel.value || null;
@@ -252,33 +279,14 @@ export const workspace = {
       await loadDocs();
       renderAll();
     });
-
-    // "Label by" — which column identifies each document (filename, participant id,
-    // …) for the doc list + the segments export. Any column qualifies; default to
-    // "Row number". Auto-pick a source-attribution-looking column when present
-    // (e.g. the text importer's `document`), so it Just Works for that workflow.
-    const lopt0 = el('option'); lopt0.value = ''; lopt0.textContent = 'Row number';
-    labelSel.append(lopt0);
-    for (const m of meta) { const o = el('option'); o.value = m.name; o.textContent = m.name; labelSel.append(o); }
-    if (!state.labelColumn) {
-      const guess = meta
-        .map((m) => m.name)
-        .find((n) => n !== state.textColumn && /^(document|source|file|filename|doc|id|name|participant|case|respondent|speaker)$/i.test(n));
-      // Set the guess in memory only — DON'T save() during mount. A mount-time write
-      // is what let a workspace that mounted before its state was hydrated persist an
-      // empty default over the real codebook. The guess is deterministic, so it's
-      // re-derived on the next mount; it gets persisted the moment the user actually
-      // changes anything (paints a code, edits the column, …).
-      if (guess) state.labelColumn = guess;
-    }
-    if (state.labelColumn && meta.some((m) => m.name === state.labelColumn)) labelSel.value = state.labelColumn;
-
     labelSel.addEventListener('change', async () => {
       state.labelColumn = labelSel.value || null;
       save();
       await loadDocs();
       renderAll();
     });
+
+    await populateColumns();
 
     async function loadDocs() {
       docs = [];
@@ -1298,6 +1306,23 @@ export const workspace = {
       );
       await app.results.endAnalysis();
     });
+
+    // Refresh the pickers whenever the tab is shown again — the active dataset may have
+    // changed since mount (e.g. a freshly-imported one whose columns loaded AFTER the
+    // mount), and the picker would otherwise stay frozen. IntersectionObserver fires when
+    // this (previously display:none) workspace frame becomes visible. Reload documents
+    // only when the codeable columns actually changed, so a plain revisit stays cheap;
+    // the initial observe fires a no-op (signature already set by the mount populate).
+    try {
+      const io = new IntersectionObserver(async (entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        const changed = await populateColumns();
+        if (changed) { await loadDocs(); renderAll(); }
+      });
+      io.observe(document.documentElement);
+    } catch {
+      /* no IntersectionObserver → mount populate + the active-dataset-switch remount still apply */
+    }
 
     // --- go ------------------------------------------------------------------
     await loadDocs();
