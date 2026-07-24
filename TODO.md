@@ -441,14 +441,54 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     - *Async/folder mode mostly gets this free* — the sync client mirrors the Parquet
       sources, so gaps appear only inside the sync-latency window; the mechanism is
       chiefly a live-mode concern plus the sneakernet path.
+  - **Core-vs-plugin boundary — apply the doctrine we already have, don't invent one.**
+    `import-service.js` states the rule: the engine owns **"only what the security model
+    forces it to"** — host UI, the user-activated picker, and **the commit** ("a plugin
+    only *describes* the data; the engine commits it, so no plugin can replace your data
+    unprompted"). No privileged importer; official CSV/SPSS register through the same
+    public call a third party uses. Plugins run in a **sandboxed opaque-origin iframe**
+    over the `plugin-broker` postMessage bridge. Collaboration = the *same* split applied
+    to storage + transport:
+    - **Kernel (core), because integrity/security force it:** the op-log +
+      **three-way merge** (a wrong silent merge = plausible-but-wrong published numbers —
+      can't live in untrusted code); the **crypto envelope** (KDF/AES/invite-key); the
+      **content-hash / index / gap** logic; the storage **interface + the commit**; and the
+      **presence *concept*** (who's-here keyed on project id).
+    - **Plugins (pure pipes) behind those contracts:** every **storage driver**
+      (FSA-folder, OneDrive/Graph, Dropbox, Google Drive, **WebDAV → Nextcloud/OwnCloud/
+      self-hosted in one adapter**, S3…); the **presence/signaling transport** (Trystero
+      strategy — MQTT/Nostr/…); provider **OAuth** bundled per driver. The WebRTC
+      data-channel⇄op-log stays core (coupled to merge); only the *rendezvous* is a plugin.
+    - **The insight that makes untrusted storage drivers safe:** core encrypts *before*
+      `write` and decrypts *after* `read`, so a driver only ever touches **ciphertext** —
+      even a malicious provider plugin can't read content (residual: metadata — paths,
+      sizes, timing). Pushing crypto into the kernel is what lets the whole provider
+      ecosystem be untrusted plugins. Analog of format-equality: no privileged provider.
+    - **Proposed extension point** (by analogy to `importers.register`):
+      `app.storage.register({ id, label, auth, read→{bytes,rev,mtime,size,contentHash?},
+      write(path,bytes,{ifMatch:rev})→rev, delta(cursor)→{changes,cursor}, watch?(cb),
+      capabilities:{conditionalWrite,contentHash,nativeWatch,sharing} })`. Core reads the
+      **capability flags** and degrades: no CAS → lock-file/beacon; no `contentHash` → host
+      computes it; no `nativeWatch` → poll `delta` (longpoll/delta/PROPFIND all normalize
+      here).
+    - **Two caveats storage-plugins have that codecs don't:** (1) the postMessage boundary
+      vs **gigabytes** — must pass bytes by reference / transferable / streaming (importers
+      already pass `File` by handle to avoid copying into the sandbox), and it's open
+      whether a sandboxed iframe is even the right execution model for a high-throughput
+      network driver; (2) a storage driver makes its own `fetch()` and custodies **OAuth
+      tokens** — network + credentials → a **higher trust tier than a codec** (ciphertext
+      guards confidentiality, but a bad driver can still refuse/corrupt/DoS sync and sees
+      metadata). WebDAV extra: no native change-feed (→ poll) and **CORS** (self-hosted
+      servers must send headers; many don't by default).
   - **Suggested build order:** (1) mergeable op-log foundation — stable op ids +
     common-ancestor + per-class merge rules; (2) folder transport (FSA seam in
-    `project-store.js`); (3) presence beacon (cheap, standalone — the "Jane's here,
-    co-author?" prompt on Trystero, no convergence needed yet) + its confidentiality
-    (encrypt the beacon; the beacon is where metadata first leaks); (4) Graph backend for
-    iPad; (5) live transport (Trystero + reliable channel + TURN), which reuses the
-    presence room as its handshake, the invite link as its key distribution, and the
-    index/gap-fill for base-data sharing.
+    `project-store.js`) — first driver behind the new `app.storage` contract; (3) presence
+    beacon (cheap, standalone — the "Jane's here, co-author?" prompt on Trystero, no
+    convergence needed yet) + its confidentiality (encrypt the beacon; the beacon is where
+    metadata first leaks); (4) cloud-API drivers as plugins (Graph / Dropbox / WebDAV) for
+    tablet/mobile reach; (5) live transport (Trystero + reliable channel + TURN), which
+    reuses the presence room as its handshake, the invite link as its key distribution, and
+    the index/gap-fill for base-data sharing.
 
 - [~] **File import — as a plugin extension point.** Importers register via the
       public `app.importers.register({ label, extensions, parse })`; the engine
