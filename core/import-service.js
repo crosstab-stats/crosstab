@@ -284,6 +284,11 @@ export class ImportService {
     // combine; join is offered only for a single incoming file.
     if (this.#data.rowCount === 0) {
       await this.#importFiles(spec, files, 'replace', id);
+      // An importer that declares a collection name (e.g. media → "Images") shouldn't
+      // leave the dataset as the blank boot seed's "Dataset 1".
+      if (spec.datasetName && this.#data.activeId != null) {
+        this.#data.rename(this.#data.activeId, spec.datasetName);
+      }
       return;
     }
     // Join needs inline columns to preview matches; a streaming codec delivers
@@ -295,7 +300,9 @@ export class ImportService {
     } else if (mode === 'new') {
       // Import into a brand-new dataset in this project — the current one is left
       // untouched. Create + activate an empty dataset, then load as a replace into it.
-      const name = files.length === 1 ? baseName(files[0].name) : 'Imported data';
+      // An importer that names its collection (media → "Images") wins over the
+      // single-file basename, which would misname a media dataset after one photo.
+      const name = spec.datasetName ?? (files.length === 1 ? baseName(files[0].name) : 'Imported data');
       this.#data.add(name, { activate: true });
       await this.#importFiles(spec, files, 'replace', id);
     } else {

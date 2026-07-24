@@ -113,6 +113,7 @@ export class PluginActions {
         source: imp.source,
         stage: imp.stage,
         group: imp.group, // optional picker group heading (else inferred by groupFor)
+        datasetName: imp.datasetName, // optional collection name for the new dataset
         parse: (req) =>
           this.#bridge(this.#importers, req.ticket, () =>
             this.#loader.invoke(id, imp.parse, [{ name: req.name, file: req.file, path: req.path }]),

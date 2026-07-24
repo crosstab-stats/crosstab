@@ -33,6 +33,8 @@ export const manifest = {
       label: 'Audio files (MP3, WAV, M4A, …) → one row per file…',
       extensions: ['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.oga', '.opus', '.flac', '.weba'],
       group: 'Media',
+      datasetName: 'Audio',
+
       order: 21,
       multiple: true,
       parse: 'parseFile',

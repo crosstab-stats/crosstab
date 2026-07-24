@@ -32,6 +32,8 @@ export const manifest = {
       label: 'Image files (PNG, JPEG, …) → one row per file…',
       extensions: ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.avif'],
       group: 'Media',
+      datasetName: 'Images', // name the collection, not the first file
+
       order: 20,
       multiple: true,
       parse: 'parseFile',

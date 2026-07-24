@@ -33,6 +33,8 @@ export const manifest = {
       label: 'Video files (MP4, WebM, MOV, …) → one row per file…',
       extensions: ['.mp4', '.webm', '.mov', '.m4v', '.ogv', '.mkv'],
       group: 'Media',
+      datasetName: 'Video',
+
       order: 22,
       multiple: true,
       parse: 'parseFile',
