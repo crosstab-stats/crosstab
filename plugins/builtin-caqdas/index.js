@@ -24,7 +24,7 @@
 export const manifest = {
   id: 'builtin-caqdas',
   name: 'Qualitative Coding (CAQDAS)',
-  version: '0.5.3',
+  version: '0.5.4',
   apiVersion: '0.1.0',
   category: 'Qualitative',
   // Renders media (text, image regions, audio/video time-ranges) from the host media
@@ -984,7 +984,7 @@ export const workspace = {
       const dur = mediaEl.duration || 0;
       const vw = mediaEl.videoWidth || 0;
       if (!dur || !vw) return;
-      const W = Math.min(480, vw);
+      const W = Math.min(720, vw); // downscale for speed, but keep enough detail to lock on
       const H = Math.round((mediaEl.videoHeight || 270) * (W / vw));
       const canvas = document.createElement('canvas'); canvas.width = W; canvas.height = H;
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -1002,7 +1002,12 @@ export const workspace = {
       try {
         await seekTo(t);
         ctx.drawImage(mediaEl, 0, 0, W, H);
-        let tmpl = grayPatch(ctx, region, W, H); // throws here first if tainted
+        // FIXED template from the starting keyframe — deliberately NOT re-grabbed each
+        // frame: an adaptive template accumulates any small misalignment and drifts the
+        // box off a subject over time (worse the more static the subject). If the subject
+        // changes appearance and lock is lost, the user corrects a keyframe and re-runs
+        // Auto-track from there, which re-anchors the template to the corrected box.
+        const tmpl = grayPatch(ctx, region, W, H); // throws here first if tainted
         let cur = { x: region.x, y: region.y, w: region.w, h: region.h };
         let added = 0;
         // Cap per click (~a minute of footage) so a long video can't spin forever;
@@ -1016,7 +1021,6 @@ export const workspace = {
           cur = matchTemplate(ctx, tmpl, cur, W, H);
           upsertKeyframe(seg, t, cur, true);
           drawTrackBoxes(currentVideoOverlay, docActive(), t);
-          tmpl = grayPatch(ctx, cur, W, H); // adapt the template to slow appearance change
         }
       } catch (err) {
         app.results?.appendError?.(
@@ -1634,7 +1638,9 @@ function grayPatch(ctx, region, W, H) {
 function matchTemplate(ctx, tmpl, near, W, H) {
   const pw = tmpl.w, ph = tmpl.h;
   const cx = Math.round(near.x * W), cy = Math.round(near.y * H);
-  const rx = Math.round(pw * 0.6) + 8, ry = Math.round(ph * 0.6) + 8;
+  // Search radius: enough for the motion between 0.4 s steps, capped so a big subject at
+  // 1px precision doesn't blow up the inner loop.
+  const rx = Math.min(Math.round(pw * 0.6) + 8, 64), ry = Math.min(Math.round(ph * 0.6) + 8, 64);
   const ax = Math.max(0, cx - rx), ay = Math.max(0, cy - ry);
   const aw = Math.min(W - ax, pw + 2 * rx), ah = Math.min(H - ay, ph + 2 * ry);
   if (aw < pw || ah < ph) return { ...near };
@@ -1642,8 +1648,8 @@ function matchTemplate(ctx, tmpl, near, W, H) {
   const d = img.data, iw = aw;
   const grayAt = (X, Y) => { const i = (Y * iw + X) * 4; return 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]; };
   let best = Infinity, bx = cx, by = cy;
-  for (let oy = 0; oy + ph <= ah; oy += 2) {
-    for (let ox = 0; ox + pw <= aw; ox += 2) {
+  for (let oy = 0; oy + ph <= ah; oy += 1) {
+    for (let ox = 0; ox + pw <= aw; ox += 1) {
       let ssd = 0;
       for (let ty = 0; ty < ph && ssd < best; ty += 2) {
         for (let tx = 0; tx < pw; tx += 2) {
