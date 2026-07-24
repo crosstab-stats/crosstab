@@ -32,9 +32,10 @@ export const API_VERSION = '0.1.0';
 
 // The sandbox document + its per-capability CSP live in one place now
 // (plugin-sandbox.js); the loader just asks for a capability by name. A codec plugin
-// needs the WASM/worker CSP; everything else computes under `strict`. (Media is a
-// *render* capability, granted to the visible workspace frame by the workspace
-// manager — the hidden compute frame here never renders, so it stays strict.)
+// needs the WASM/worker CSP; a media plugin (importer probing bytes, or a coding
+// workspace) needs the media CSP in this compute frame too; everything else is
+// `strict`. (A media workspace ALSO gets the media CSP on its separate visible frame,
+// granted by the workspace manager, since that's where it renders.)
 
 /**
  * Compute a plugin's **qualified id** — its globally-unique identity — by
@@ -351,6 +352,15 @@ export class PluginLoader {
         broker.dispose();
         iframe.remove();
         return this.#instantiate(code, label, origin, { capability: 'codec', entryUrl, assets });
+      }
+      // A media plugin (importer or workspace) needs the media CSP to decode/probe or
+      // render media in this frame. (#139). A media importer probes its file HERE, in
+      // the compute frame — so unlike the visible-only workspace case, the loader grants
+      // it too. blob: only, so it's still egress-safe.
+      if (manifest.media === true && capability !== 'media' && capability !== 'codec') {
+        broker.dispose();
+        iframe.remove();
+        return this.#instantiate(code, label, origin, { capability: 'media', entryUrl, assets });
       }
       if (this.#plugins.has(manifest.id)) {
         throw new Error(`Plugin "${manifest.id}" is already activated`);

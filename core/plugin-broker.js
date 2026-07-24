@@ -124,6 +124,7 @@ export class PluginBroker {
     // asset store; the plugin only ever gets bytes back, never a handle or a path.
     if (services.media) {
       this.#dispatch['media.load'] = (ref) => services.media.load(ref);
+      this.#dispatch['media.put'] = (file, meta) => services.media.put(file, meta);
     }
     this.#listener = (e) => this.#onMessage(e);
     window.addEventListener('message', this.#listener);

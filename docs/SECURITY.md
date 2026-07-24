@@ -116,15 +116,23 @@ gets it (that is the one that renders); its hidden compute frame stays strict.
   here would undo the `connect-src 'none'` "a plugin can't phone home" guarantee. Blob
   is same-origin-opaque and unreadable off-device, so it grants *display*, not *reach*.
 - **The plugin never fetches, and never touches the store.** It calls
-  `app.media.load(ref)`; the host reads the bytes from the content-addressed media
-  store (`core/media-store.js`) and posts back a `Blob`; the plugin turns that into a
-  blob: URL *inside its own realm*. Refs resolve **locally only** — `asset:<hash>`
-  (the store) or `data:` (inline) — and any other scheme is rejected, so a ref cannot
-  reach the network (the remote-URL fetcher is deliberately deferred, #143/B).
-- **No new data exposure.** `media.load` returns the user's own local media bytes to
-  an already-activated plugin (which is already trusted with the active dataset); with
-  egress still closed, this is not a new exfiltration surface. Everything that bounds
-  *reach* — `connect-src 'none'`, opaque origin, the broker allowlist — is unchanged.
+  `app.media.load(ref)` to read (host reads the content-addressed store,
+  `core/media-store.js`, and posts back a `Blob` the plugin renders as a blob: URL in
+  its own realm) and `app.media.put(file, meta)` to write (an importer plugin hands the
+  host-held `File` back **by reference** — no byte copy — and the host streams it to
+  OPFS and returns an `asset:<hash>` ref). The plugin only ever holds a ref or a Blob,
+  never a handle or a path. Refs resolve **locally only** — `asset:<hash>` (the store)
+  or `data:` (inline); any other scheme is rejected, so a ref cannot reach the network
+  (the remote-URL fetcher is deliberately deferred, #143/B).
+- **Media CSP is granted to a plugin's compute frame too, not just a visible one.** A
+  media *importer* decodes/probes its file in the loader's compute frame, so the loader
+  grants the media CSP on `manifest.media` (the workspace manager independently grants
+  it to a coding workspace's visible frame). Still `blob:`-only, so egress stays closed.
+- **No new data exposure.** `media.load` returns the user's own local media bytes to an
+  already-activated plugin (already trusted with the active dataset), and `media.put`
+  stores the user's own file under a user-initiated import; with egress still closed,
+  neither is a new exfiltration surface. Everything that bounds *reach* —
+  `connect-src 'none'`, opaque origin, the broker allowlist — is unchanged.
 
 ## Accepted residual risks (won't fix)
 

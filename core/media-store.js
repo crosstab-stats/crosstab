@@ -24,6 +24,11 @@
 
 const ROOT = 'media-assets';
 
+/** Files up to this size get a full SHA-256 content id (read at once — cheap here);
+ * larger files are streamed and fingerprinted instead, so a multi-GB movie never has
+ * to sit in RAM to be hashed. */
+const FULL_HASH_MAX = 256 * 1024 * 1024; // 256 MB
+
 export class MediaStore {
   /** @returns {boolean} Whether OPFS is available in this browser. */
   get available() {
@@ -47,6 +52,62 @@ export class MediaStore {
     const info = { type: 'application/octet-stream', name: '', ...meta, size: data.byteLength };
     await this.#write(root, id + '.json', new TextEncoder().encode(JSON.stringify(info)));
     return { id, ...info };
+  }
+
+  /**
+   * Store a **File by streaming** it to OPFS — memory-bounded, so a multi-GB movie
+   * doesn't OOM (and it dodges the browser's ~2 GB single-blob read wall, since no
+   * single read is large). This is the sink an importer plugin drives via `media.put`;
+   * the plugin hands over the host-held File *by reference* (no byte copy across the
+   * sandbox), and the heavy I/O happens here.
+   *
+   * The content id is a full SHA-256 for files up to {@link FULL_HASH_MAX} (true dedup
+   * + integrity), else a deterministic **fingerprint** of `size ‖ head ‖ tail` — Web
+   * Crypto has no streaming digest, so hashing a 4 GB file in full would mean holding
+   * it in RAM; the fingerprint is streaming-cheap, still dedups a re-imported file, and
+   * has negligible collision risk. Both are plain hex ids — the ref stays opaque.
+   *
+   * @param {File|Blob} file
+   * @param {{type?: string, name?: string, [k: string]: any}} [meta]
+   * @returns {Promise<{id: string, size: number, type: string, name: string}>}
+   */
+  async putFile(file, meta = {}) {
+    const id = await this.#idForFile(file);
+    const root = await this.#root(true);
+    const fh = await root.getFileHandle(id + '.bin', { create: true });
+    try {
+      // pipeTo streams the File chunk-by-chunk into OPFS and closes the writable.
+      await file.stream().pipeTo(await fh.createWritable());
+    } catch (e) {
+      try { await root.removeEntry(id + '.bin'); } catch { /* nothing partial to clean */ }
+      throw e;
+    }
+    const info = {
+      type: file.type || 'application/octet-stream',
+      name: file.name || '',
+      ...meta,
+      size: file.size,
+    };
+    await this.#write(root, id + '.json', new TextEncoder().encode(JSON.stringify(info)));
+    return { id, ...info };
+  }
+
+  /** Content id for a File: full SHA-256 when small enough to read at once, else a
+   * streaming-cheap fingerprint of size + first/last 1 MB (slices are small even for a
+   * multi-GB file, so this never materialises the whole thing). */
+  async #idForFile(file) {
+    if (file.size <= FULL_HASH_MAX) {
+      return sha256hex(new Uint8Array(await file.arrayBuffer()));
+    }
+    const HEAD = 1024 * 1024;
+    const head = new Uint8Array(await file.slice(0, HEAD).arrayBuffer());
+    const tail = new Uint8Array(await file.slice(Math.max(HEAD, file.size - HEAD)).arrayBuffer());
+    const tag = new TextEncoder().encode(`ctfp:${file.size}:`);
+    const buf = new Uint8Array(tag.length + head.length + tail.length);
+    buf.set(tag, 0);
+    buf.set(head, tag.length);
+    buf.set(tail, tag.length + head.length);
+    return sha256hex(buf);
   }
 
   /**
@@ -158,6 +219,18 @@ export function createMediaService(store) {
       if (s.startsWith('asset:')) return store.getBlob(s.slice('asset:'.length));
       if (s.startsWith('data:')) return dataUriToBlob(s);
       throw new Error('media.load: only asset: and data: references are supported (remote URLs are not fetched)');
+    },
+    /**
+     * The write sink an importer plugin drives (#139): stream a host-held File into the
+     * store and return its `asset:<id>` ref. The File crosses from the sandbox by
+     * reference (no byte copy), and {@link MediaStore#putFile} streams it to OPFS, so
+     * even a multi-GB movie is memory-bounded. Returns the ref plus the resolved
+     * metadata (id/size/type) for the importer to put in its dataset row.
+     */
+    async put(file, meta) {
+      if (!(file instanceof Blob)) throw new Error('media.put: expected a File/Blob');
+      const info = await store.putFile(file, meta || {});
+      return { ...info, ref: `asset:${info.id}` };
     },
   };
 }
