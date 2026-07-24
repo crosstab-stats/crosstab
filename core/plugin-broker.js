@@ -120,6 +120,11 @@ export class PluginBroker {
       this.#dispatch['codec.writeChunk'] = (bytes) => services.codec.writeChunk(bytes);
       this.#dispatch['codec.loadAsset'] = (name) => services.codec.loadAsset(name);
     }
+    // Media plugins (#139): resolve a media ref to an opaque Blob. The host owns the
+    // asset store; the plugin only ever gets bytes back, never a handle or a path.
+    if (services.media) {
+      this.#dispatch['media.load'] = (ref) => services.media.load(ref);
+    }
     this.#listener = (e) => this.#onMessage(e);
     window.addEventListener('message', this.#listener);
   }

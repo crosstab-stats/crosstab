@@ -196,6 +196,9 @@
             // Codec plugins (#98): streaming format read/write. Live only during a
             // codec invocation; no-op host-side otherwise.
             codec: makeNamespace('codec', ['size', 'sourceFile', 'read', 'begin', 'batch', 'writeChunk', 'loadAsset']),
+            // Media plugins (#139): resolve an `asset:`/`data:` ref to a Blob. Only the
+            // media sandbox (plugin-host-media.html) can render it; harmless elsewhere.
+            media: makeNamespace('media', ['load']),
           });
         }
 

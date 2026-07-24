@@ -42,6 +42,7 @@ import { exportProjectBundle, importProjectBundle, pickBundleFile, downloadBlob,
 import { WorkspaceStore } from './workspace-store.js';
 import { WorkspaceManager } from './workspace-manager.js';
 import { PluginPackageStore } from './plugin-package-store.js';
+import { MediaStore, createMediaService } from './media-store.js';
 
 /**
  * URLs of the built-in plugins to load at startup. These load through the exact
@@ -384,6 +385,13 @@ export async function boot(mounts) {
   // so the broker sees it. Codecs are registered from manifests via pluginActions.
   const codecs = new CodecService({ importers, exporters, loader, results: results.api });
   services.codec = codecs.serviceApi;
+  // Media assets (#139): qualitative audio/image/video live in a content-addressed
+  // OPFS store; the dataset holds only `asset:<id>` refs, never the bytes. The
+  // `media.load(ref) -> Blob` service is the ONLY door a (media-CSP) plugin has to
+  // them — it never sees the store, a handle, or the filesystem. Added post-loader
+  // like `codec`; plugins load post-boot, so the broker sees it.
+  const mediaStore = new MediaStore();
+  services.media = createMediaService(mediaStore);
   // SPSS/Stata/SAS (ReadStat) is a sandboxed codec plugin again (#130) — see the codec
   // plugin list above; it runs on the codec sandbox's main thread (ASYNCIFY, no worker).
 

@@ -34,6 +34,10 @@ const PLUGIN_HOST_URL = './plugin-host.html';
 /** Sandbox document for codec plugins (#98): same runtime, CSP widened for WASM +
  * an in-sandbox worker. Used only for plugins that declare `manifest.codecs`. */
 const CODEC_HOST_URL = './plugin-host-codec.html';
+/** Sandbox document for media plugins (#139): same runtime, CSP widened to
+ * `media-src blob:; img-src blob:` so a qualitative-coding workspace can render
+ * host-provided media. Used only for plugins that declare `manifest.media`. */
+const MEDIA_HOST_URL = './plugin-host-media.html';
 
 /**
  * Compute a plugin's **qualified id** — its globally-unique identity — by
@@ -352,6 +356,15 @@ export class PluginLoader {
         broker.dispose();
         iframe.remove();
         return this.#instantiate(code, label, origin, { hostUrl: CODEC_HOST_URL, entryUrl, assets });
+      }
+      // A media-coding workspace needs the img/media-src blob: sandbox to render
+      // <audio>/<img>/<video> from host-provided blobs. Same reselection dance as
+      // codecs above (codec + media on one plugin isn't a case today — a codec parses
+      // bytes, it doesn't render; if it ever arises, a combined host is the fix).
+      if (manifest.media === true && hostUrl !== MEDIA_HOST_URL && hostUrl !== CODEC_HOST_URL) {
+        broker.dispose();
+        iframe.remove();
+        return this.#instantiate(code, label, origin, { hostUrl: MEDIA_HOST_URL, entryUrl, assets });
       }
       if (this.#plugins.has(manifest.id)) {
         throw new Error(`Plugin "${manifest.id}" is already activated`);
