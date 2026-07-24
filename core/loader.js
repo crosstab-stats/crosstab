@@ -20,6 +20,7 @@
  */
 
 import { PluginBroker } from './plugin-broker.js';
+import { sandboxBlobUrl } from './plugin-sandbox.js';
 
 /**
  * API contract version the engine implements. A plugin declares the version it
@@ -29,15 +30,11 @@ import { PluginBroker } from './plugin-broker.js';
  */
 export const API_VERSION = '0.1.0';
 
-/** URL of the sandbox document every plugin iframe loads. */
-const PLUGIN_HOST_URL = './plugin-host.html';
-/** Sandbox document for codec plugins (#98): same runtime, CSP widened for WASM +
- * an in-sandbox worker. Used only for plugins that declare `manifest.codecs`. */
-const CODEC_HOST_URL = './plugin-host-codec.html';
-/** Sandbox document for media plugins (#139): same runtime, CSP widened to
- * `media-src blob:; img-src blob:` so a qualitative-coding workspace can render
- * host-provided media. Used only for plugins that declare `manifest.media`. */
-const MEDIA_HOST_URL = './plugin-host-media.html';
+// The sandbox document + its per-capability CSP live in one place now
+// (plugin-sandbox.js); the loader just asks for a capability by name. A codec plugin
+// needs the WASM/worker CSP; everything else computes under `strict`. (Media is a
+// *render* capability, granted to the visible workspace frame by the workspace
+// manager — the hidden compute frame here never renders, so it stays strict.)
 
 /**
  * Compute a plugin's **qualified id** — its globally-unique identity — by
@@ -202,9 +199,7 @@ export class PluginLoader {
    * fail offline once the SW controls the page (installed PWAs). Fetching the host
    * HTML on the (SW-controlled) main thread caches it; loading the iframe from a
    * blob: URL then needs no network or SW — same isolation (opaque origin), but works
-   * offline (#92). Same mechanism the loader already uses for plugin code + the DuckDB
-   * worker. @type {Map<string, Promise<string>>} */
-  #hostHtml = new Map();
+   * offline (#92). Fetch + blob caching now lives in plugin-sandbox.js. */
 
   /** Asks the user to allow a plugin's first `app.web.get`. A *remembered* grant
    * resolves true without prompting; otherwise the user is prompted (and an allow
@@ -297,7 +292,7 @@ export class PluginLoader {
     // So the probe broker gets deny-all stubs: every `app.*` call throws.
     const broker = new PluginBroker({ iframe, services: probeServices(), onError: () => {} });
     this.#sandboxContainer.append(iframe);
-    iframe.src = await this.#sandboxSrc(PLUGIN_HOST_URL);
+    iframe.src = await sandboxBlobUrl('strict');
     try {
       await broker.whenReady();
       const manifest = await broker.sendLoad(code);
@@ -323,7 +318,7 @@ export class PluginLoader {
    * @param {string} label - URL or filename, for errors/consent.
    * @returns {Promise<PluginManifest>}
    */
-  async #instantiate(code, label, origin, { hostUrl = PLUGIN_HOST_URL, entryUrl = null, assets = null } = {}) {
+  async #instantiate(code, label, origin, { capability = 'strict', entryUrl = null, assets = null } = {}) {
     // Identity for the consent gate. The manifest id isn't known until the plugin
     // loads, so the gate reads it from this holder — `web.get` only ever fires
     // after load + activate, by which point it's filled in.
@@ -337,9 +332,9 @@ export class PluginLoader {
 
     // Append + point the iframe at a blob: URL of the sandbox document; the runtime
     // posts {t:'ready'} once wired up. blob: (not the host URL) so it works offline —
-    // see #hostHtml.
+    // see plugin-sandbox.js.
     this.#sandboxContainer.append(iframe);
-    iframe.src = await this.#sandboxSrc(hostUrl);
+    iframe.src = await sandboxBlobUrl(capability);
 
     try {
       await broker.whenReady();
@@ -352,19 +347,10 @@ export class PluginLoader {
       // A codec plugin needs the WASM/worker-enabled sandbox. We load into the
       // default (strict) host just to read the manifest; if it declares codecs,
       // re-instantiate it in the codec host (cheap — the source is already fetched).
-      if (Array.isArray(manifest.codecs) && manifest.codecs.length && hostUrl !== CODEC_HOST_URL) {
+      if (Array.isArray(manifest.codecs) && manifest.codecs.length && capability !== 'codec') {
         broker.dispose();
         iframe.remove();
-        return this.#instantiate(code, label, origin, { hostUrl: CODEC_HOST_URL, entryUrl, assets });
-      }
-      // A media-coding workspace needs the img/media-src blob: sandbox to render
-      // <audio>/<img>/<video> from host-provided blobs. Same reselection dance as
-      // codecs above (codec + media on one plugin isn't a case today — a codec parses
-      // bytes, it doesn't render; if it ever arises, a combined host is the fix).
-      if (manifest.media === true && hostUrl !== MEDIA_HOST_URL && hostUrl !== CODEC_HOST_URL) {
-        broker.dispose();
-        iframe.remove();
-        return this.#instantiate(code, label, origin, { hostUrl: MEDIA_HOST_URL, entryUrl, assets });
+        return this.#instantiate(code, label, origin, { capability: 'codec', entryUrl, assets });
       }
       if (this.#plugins.has(manifest.id)) {
         throw new Error(`Plugin "${manifest.id}" is already activated`);
@@ -540,31 +526,6 @@ export class PluginLoader {
    * The origin is owned by the plugin manager, hence set here post-load. */
   setAttribution(id, attribution) {
     this.#plugins.get(id)?.broker.setAttribution(attribution);
-  }
-
-  /** A fresh blob: URL of the sandbox document for an iframe's `src` (#92). The host
-   * HTML is fetched once per host URL and cached (the fetch goes through the service
-   * worker, so it's available offline); each iframe gets its own blob: URL built from
-   * that text. Loading from blob: needs no network or SW — yet `sandbox="allow-scripts"`
-   * still forces an opaque origin + isolated heap, so isolation is unchanged. The URL
-   * is revoked shortly after (the iframe loads it in milliseconds). */
-  async #sandboxSrc(hostUrl) {
-    let p = this.#hostHtml.get(hostUrl);
-    if (!p) {
-      p = (async () => {
-        const res = await fetch(hostUrl);
-        if (!res.ok) throw new Error(`Failed to load plugin sandbox ${hostUrl}: HTTP ${res.status}`);
-        return res.text();
-      })().catch((err) => {
-        this.#hostHtml.delete(hostUrl); // don't cache a failure — allow retry
-        throw err;
-      });
-      this.#hostHtml.set(hostUrl, p);
-    }
-    const html = await p;
-    const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
-    setTimeout(() => URL.revokeObjectURL(url), 15000); // iframe loads it in ms
-    return url;
   }
 
   /** Build a hidden, sandboxed iframe for a plugin. */

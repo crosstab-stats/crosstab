@@ -18,8 +18,8 @@
  *
  * The store is host-only. A plugin never touches it: it asks `app.media.load(ref)`
  * and gets back an opaque {@link Blob}, so the sandbox stays walled off from the
- * filesystem (see the media service in app.js and the `media-src blob:` sandbox,
- * plugin-host-media.html).
+ * filesystem (see the media service in app.js and the `media-src blob:` CSP variant
+ * injected by core/plugin-sandbox.js).
  */
 
 const ROOT = 'media-assets';

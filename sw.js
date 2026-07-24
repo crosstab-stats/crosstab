@@ -59,11 +59,11 @@ const SHELL_PRECACHE = [
   'index.html',
   'manifest.json',
   'core/app.js',
-  // The plugin sandbox documents — every plugin loads in one of these iframes, so
-  // they must be cached for plugins (hence analyses, importers, the demo data) to
+  // The plugin sandbox document — every plugin loads in an iframe built from this one
+  // template (the per-capability CSP is injected at runtime; see core/plugin-sandbox.js),
+  // so it must be cached for plugins (hence analyses, importers, the demo data) to
   // work offline.
   'plugin-host.html',
-  'plugin-host-codec.html',
   'vendor/icon-192.png',
   'vendor/icon-180.png',
 ];

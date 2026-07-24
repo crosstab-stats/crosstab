@@ -265,6 +265,9 @@ export class PluginManager {
       workspaces: Array.isArray(manifest.workspaces)
         ? manifest.workspaces.filter((w) => w && typeof w.id === 'string').map((w) => ({ id: w.id, title: String(w.title || w.id) }))
         : [],
+      // Media-render capability (#139): a workspace that codes audio/image/video. The
+      // workspace manager mounts it in the media-CSP sandbox so it can render media.
+      media: manifest.media === true,
       // Streaming format codecs the plugin declares (#98): [{id, label, extensions}].
       codecs: Array.isArray(manifest.codecs)
         ? manifest.codecs
@@ -783,6 +786,7 @@ export class PluginManager {
         rPackages: cat?.rPackages ?? [],
         menu: cat?.menu ?? [],
         workspaces: cat?.workspaces ?? [],
+        media: cat?.media ?? false,
         codecs: cat?.codecs ?? [],
         url: e.url ?? null, // entry source URL (for the workspace manager to fetch)
         enabled: !this.#disabled.has(e.key),

