@@ -112,6 +112,7 @@ export class PluginActions {
         multiple: imp.multiple,
         source: imp.source,
         stage: imp.stage,
+        group: imp.group, // optional picker group heading (else inferred by groupFor)
         parse: (req) =>
           this.#bridge(this.#importers, req.ticket, () =>
             this.#loader.invoke(id, imp.parse, [{ name: req.name, file: req.file, path: req.path }]),

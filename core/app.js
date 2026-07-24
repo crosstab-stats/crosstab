@@ -43,7 +43,6 @@ import { WorkspaceStore } from './workspace-store.js';
 import { WorkspaceManager } from './workspace-manager.js';
 import { PluginPackageStore } from './plugin-package-store.js';
 import { MediaStore, createMediaService } from './media-store.js';
-import { registerMediaImporter } from './media-import.js';
 
 /**
  * URLs of the built-in plugins to load at startup. These load through the exact
@@ -55,6 +54,11 @@ import { registerMediaImporter } from './media-import.js';
  */
 const BUILTIN_PLUGINS = [
   './plugins/builtin-text-import/index.js', // .txt corpus → one row per file (for CAQDAS #67)
+  // Media importers — one row per file, bytes streamed host-side into the media store,
+  // dimensions probed in-plugin (per-medium family, #139).
+  './plugins/builtin-image-import/index.js',
+  './plugins/builtin-audio-import/index.js',
+  './plugins/builtin-video-import/index.js',
   // File formats (CSV, Parquet, NDJSON, SPSS/Stata/SAS) are streaming codec plugins
   // (#98), grouped near the bottom of this list.
   './plugins/builtin-frequencies/index.js',
@@ -393,10 +397,9 @@ export async function boot(mounts) {
   // like `codec`; plugins load post-boot, so the broker sees it.
   const mediaStore = new MediaStore();
   services.media = createMediaService(mediaStore);
-  // Host media importer (#139): "Media files…" in the unified Import picker. Host-side
-  // (not a sandboxed plugin) because it writes the media store and probes dimensions
-  // via DOM elements; it drives the same picker → parse → deliver → commit flow.
-  registerMediaImporter({ importers, mediaStore, results: results.api });
+  // Media importers are per-medium plugins (builtin-image/audio/video-import, #139):
+  // they probe in their own media-CSP sandbox and stream bytes into the store via the
+  // `media.put` sink above — no privileged host importer.
   // SPSS/Stata/SAS (ReadStat) is a sandboxed codec plugin again (#130) — see the codec
   // plugin list above; it runs on the codec sandbox's main thread (ASYNCIFY, no worker).
 
