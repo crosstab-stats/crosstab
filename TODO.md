@@ -181,6 +181,94 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Deferred features (intentionally not built yet)
 
+- [ ] **Online collaboration — async (folder-backed) + live (P2P) (#143).**
+      Recurring faculty ask; keeps coming back. Two features people picture as
+      separate — "put my project in a OneDrive folder" and "two of us edit at
+      once" — are really *one* build wearing two hats. **The load-bearing piece is
+      neither OneDrive nor WebRTC; it's making the op-log mergeable.** Live-sync and
+      folder-sync are just two *transports* over that foundation.
+  - **The foundation — a mergeable op-log (the real project).** The transform log
+    (`core/data-store.js`, op types at ~L149–153: `load/append/join/setVariable/
+    setCell/computeVar/recodeVar`) is a **dependent pipeline**, not a bag of
+    commuting changes — each op folds onto the accumulated result of the prior ones
+    (`(sql) UNION ALL BY NAME (…)`, joins resolve columns against the `byName` map
+    built so far, recodes read earlier-derived vars). So you **cannot** drop a CRDT
+    (Yjs/Automerge) over the whole thing: if A renames a var and B concurrently
+    recodes reading the old name, "union the op sets" yields a pipeline that won't
+    run — a *dependency* conflict, not a merge conflict a CRDT resolves. Conflict
+    resolution therefore splits **per class of state**, and only one class is hard:
+    - *Transform pipeline* — **git-style three-way merge**: common ancestor + replay
+      each side, auto-merge provably-disjoint ops, and **surface** genuine collisions
+      / broken dependencies to the user. **No silent auto-merge here** — not just on
+      effort but on principle: a wrong silent merge in a stats tool doesn't crash, it
+      produces plausible numbers that feed a published finding. Faculty vastly prefer
+      being asked ("you and Pat both edited `income_recode` — keep yours / theirs /
+      see both"). This is also the cheapest correct MVP: detection + user resolution
+      ships long before any clever auto-merge.
+    - *Variable metadata* (`setVariable {name, patch}`) — per-field last-writer-wins;
+      commutes across different variables. CRDT-easy.
+    - *CAQDAS codebook* (the opaque workspace blob, `core/workspace-store.js`) —
+      set-like codes → add-wins CRDT. **This** is where Yjs actually earns its keep.
+    - *Output* — regenerable; union or replace.
+    - **The primitive that unifies both transports:** give every op a **stable id**
+      and record a **common ancestor** (last op both sides agreed on). Then folder =
+      three-way merge of two divergent files; live = the *same* three-way merge run
+      continuously. Same algorithm, different clock.
+  - **Async transport — folder-backed projects (FSA, small once the foundation
+    exists).** `core/project-store.js` is *already* written entirely against
+    `FileSystemDirectoryHandle` (`getDirectoryHandle`/`getFileHandle`/
+    `createWritable`/`getFile`); the **only** OPFS-specific line is `#root()` at
+    `project-store.js:244` (`navigator.storage.getDirectory()`).
+    `showDirectoryPicker()` returns the *identical* handle type, so:
+    - Parameterize `#root()` to take an injected picked handle, falling back to OPFS.
+    - Persist the handle in IndexedDB (handles are structured-cloneable); re-grant
+      write via `requestPermission()` once per session (browser won't give silent
+      persistent write to a user folder — one click, unavoidable).
+    - **OneDrive sync itself is free**: CrossTab does plain local file I/O, the
+      OneDrive *desktop client* mirrors the folder to the cloud. No Graph, no OAuth,
+      no CrossTab cloud code. **Provider-agnostic** — Dropbox / Google Drive / iCloud
+      folders are the identical mechanism. The `writeSourcesFor` cheap-save
+      (`project-store.js:101`, rewrites `project.json` + only the changed dataset's
+      Parquet) is already sync-client-friendly (no gigabyte re-uploads per edit).
+    - **Costs:** Chromium **desktop only** (`showDirectoryPicker` absent in Firefox /
+      Safari / **iPad Safari**); needs the desktop sync client installed; good for
+      *sequential* use (laptop ↔ desktop, or close-then-hand-off) but **simultaneous**
+      open → OneDrive drops `project-DESKTOP-xyz.json` conflict copies (it syncs
+      files, not op-logs) → that's the doorway back to the live layer.
+  - **Graph mode — to include iPads (wanted).** Because `showDirectoryPicker` doesn't
+    exist on iPad Safari, the folder route can't reach tablets. **Microsoft Graph /
+    OneDrive REST** works without the desktop client and *on iPad/mobile*. Cost:
+    OAuth + Azure app registration + token refresh + network handling, and it's
+    OneDrive-specific — reintroduces some backend coupling. Design it as a
+    **pluggable storage backend** so FSA-handle and Graph are two implementations
+    behind one seam (`project-store` root), and a future Google Drive / Dropbox API
+    backend slots in the same way. Only reach for Graph where iPad/mobile is the hard
+    requirement; on Chromium desktop the free folder-handle route stays strictly
+    better.
+  - **Live transport — P2P over WebRTC (proven pattern, from sortie).** The
+    serverless-handshake part is already solved and battle-tested in *sortie*
+    (asteroids clone, https://lograh.github.io/sortie-game): **Trystero (MQTT
+    strategy)** does signaling via public MQTT brokers (EMQX/HiveMQ) — nothing we
+    host — then drops to a real WebRTC data channel. Its "repair" channels use
+    `createDataChannel()` defaults = **ordered + reliable**, exactly the mode an
+    op-log wants (and *not* the mode a game usually wants). What sortie did **not**
+    need and CrossTab does:
+    - *Convergence, not just dedup.* A game floods ephemeral state and self-heals each
+      frame; `_mid` dedup is enough. Op-logs must *converge* — a missed op can't be
+      papered over by "the next frame." Needs the mergeable-op-log foundation above
+      (sequenced, gap-detecting, or CRDT per state class).
+    - *TURN, probably.* Sortie's clever peer-**gossip** relay dodged TURN — but it
+      only rescues connectivity when there's a **third peer** to route through.
+      CrossTab's core case is **two** faculty, both behind university symmetric NATs,
+      no third party → likely needs a real **TURN** server (the one piece of
+      infrastructure on the table).
+    - *Late-join.* Snapshot-then-tail: ship the whole existing op-log to a joiner,
+      then follow with the live tail.
+  - **Suggested build order:** (1) mergeable op-log foundation — stable op ids +
+    common-ancestor + per-class merge rules; (2) folder transport (FSA seam in
+    `project-store.js`); (3) Graph backend for iPad; (4) live transport (Trystero +
+    reliable channel + TURN).
+
 - [~] **File import — as a plugin extension point.** Importers register via the
       public `app.importers.register({ label, extensions, parse })`; the engine
       (`core/import-service.js`) owns the File ▸ Import menu, the picker, and the
