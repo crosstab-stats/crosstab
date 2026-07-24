@@ -24,7 +24,7 @@
 export const manifest = {
   id: 'builtin-caqdas',
   name: 'Qualitative Coding (CAQDAS)',
-  version: '0.5.4',
+  version: '0.5.5',
   apiVersion: '0.1.0',
   category: 'Qualitative',
   // Renders media (text, image regions, audio/video time-ranges) from the host media
@@ -1002,12 +1002,11 @@ export const workspace = {
       try {
         await seekTo(t);
         ctx.drawImage(mediaEl, 0, 0, W, H);
-        // FIXED template from the starting keyframe — deliberately NOT re-grabbed each
-        // frame: an adaptive template accumulates any small misalignment and drifts the
-        // box off a subject over time (worse the more static the subject). If the subject
-        // changes appearance and lock is lost, the user corrects a keyframe and re-runs
-        // Auto-track from there, which re-anchors the template to the corrected box.
-        const tmpl = grayPatch(ctx, region, W, H); // throws here first if tainted
+        // ADAPTIVE template: re-grabbed from the matched box each frame so it follows
+        // gradual appearance change. (Can drift long-term as small misalignments
+        // accumulate; correct a keyframe + re-run Auto-track to re-anchor. A fixed
+        // template was tried and was worse on real footage.)
+        let tmpl = grayPatch(ctx, region, W, H); // throws here first if tainted
         let cur = { x: region.x, y: region.y, w: region.w, h: region.h };
         let added = 0;
         // Cap per click (~a minute of footage) so a long video can't spin forever;
@@ -1021,6 +1020,7 @@ export const workspace = {
           cur = matchTemplate(ctx, tmpl, cur, W, H);
           upsertKeyframe(seg, t, cur, true);
           drawTrackBoxes(currentVideoOverlay, docActive(), t);
+          tmpl = grayPatch(ctx, cur, W, H); // adapt to slow appearance change
         }
       } catch (err) {
         app.results?.appendError?.(
