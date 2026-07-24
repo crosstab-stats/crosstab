@@ -24,7 +24,7 @@
 export const manifest = {
   id: 'builtin-caqdas',
   name: 'Qualitative Coding (CAQDAS)',
-  version: '0.5.2',
+  version: '0.5.3',
   apiVersion: '0.1.0',
   category: 'Qualitative',
   // Renders media (text, image regions, audio/video time-ranges) from the host media
@@ -140,6 +140,10 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 .caqdas__tltrack { position: relative; height: 22px; background: #eef1f4; border: 1px solid #e2e6ea; border-radius: 4px; cursor: crosshair; overflow: hidden; touch-action: none; }
 .caqdas__tlsel { position: absolute; top: 0; bottom: 0; background: rgba(47,111,176,.18); border-left: 2px solid #2f6fb0; border-right: 2px solid #2f6fb0; box-sizing: border-box; pointer-events: none; }
 .caqdas__playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #b04a4a; pointer-events: none; }
+.caqdas__scrub { position: absolute; top: 0; bottom: 0; width: 16px; margin-left: -8px; cursor: ew-resize; z-index: 3; touch-action: none; }
+.caqdas__scrub::before { content: ''; position: absolute; top: 1px; bottom: 1px; left: 5px; width: 6px; background: rgba(176,74,74,.28); border-radius: 3px; }
+.caqdas__scrub:hover::before { background: rgba(176,74,74,.5); }
+.caqdas__vol { width: 84px; vertical-align: middle; }
 .caqdas__lanes { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
 .caqdas__lane { display: flex; align-items: center; gap: 8px; }
 .caqdas__lanelabel { flex: 0 0 120px; font-size: 12px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -501,6 +505,18 @@ export const workspace = {
         speedBtns.push(b); ctrl.append(b);
       }
       if (isVideo) {
+        // Volume / mute (lost with the native controls).
+        const volBtn = el('button', 'caqdas__ctlbtn'); volBtn.title = 'Mute / unmute';
+        const vol = el('input', 'caqdas__vol'); vol.type = 'range'; vol.min = '0'; vol.max = '1'; vol.step = '0.05'; vol.value = '1'; vol.title = 'Volume';
+        const syncVol = () => { volBtn.textContent = mediaEl.muted || mediaEl.volume === 0 ? '🔇' : '🔊'; };
+        volBtn.addEventListener('click', () => {
+          mediaEl.muted = !mediaEl.muted;
+          if (!mediaEl.muted && mediaEl.volume === 0) { mediaEl.volume = 1; }
+        });
+        vol.addEventListener('input', () => { mediaEl.volume = Number(vol.value); mediaEl.muted = Number(vol.value) === 0; });
+        mediaEl.addEventListener('volumechange', () => { vol.value = String(mediaEl.muted ? 0 : mediaEl.volume); syncVol(); });
+        syncVol();
+        ctrl.append(volBtn, vol);
         // "Region" mode: while on, the overlay captures drawing; while off, the frame
         // plays normally (click to play/pause) and the overlay just shows tracked boxes.
         const dt = el('button', 'caqdas__ctlbtn caqdas__regionbtn'); dt.textContent = '✎ Region';
@@ -522,7 +538,8 @@ export const workspace = {
       const track = el('div', 'caqdas__tltrack');
       const tlsel = el('div', 'caqdas__tlsel'); tlsel.style.display = 'none';
       const playhead = el('div', 'caqdas__playhead');
-      track.append(tlsel, playhead);
+      const scrub = el('div', 'caqdas__scrub'); // draggable thumb over the playhead (scrub)
+      track.append(tlsel, playhead, scrub);
       const lanes = el('div', 'caqdas__lanes');
       currentLanes = lanes;
       timeline.append(track, lanes);
@@ -530,9 +547,27 @@ export const workspace = {
       attachTimelineDrawing(track, doc, mediaEl);
       const sync = () => {
         const d = mediaEl.duration || 0;
-        if (d > 0) playhead.style.left = (mediaEl.currentTime / d) * 100 + '%';
+        if (d > 0) { const p = (mediaEl.currentTime / d) * 100 + '%'; playhead.style.left = p; scrub.style.left = p; }
         if (isVideo && !tracking) drawTrackBoxes(overlay, doc, mediaEl.currentTime || 0);
       };
+      // Draggable scrubber: grab the playhead thumb and drag to seek. A plain drag on the
+      // rest of the ruler still creates a time coding; a click still jumps.
+      let scrubbing = false;
+      const scrubTo = (e) => {
+        const r = track.getBoundingClientRect();
+        const d = mediaEl.duration || 0;
+        if (d > 0) mediaEl.currentTime = clamp01((e.clientX - r.left) / r.width) * d;
+      };
+      scrub.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault(); e.stopPropagation(); // don't start a time-coding drag
+        scrubbing = true;
+        try { scrub.setPointerCapture(e.pointerId); } catch { /* ok */ }
+      });
+      scrub.addEventListener('pointermove', (e) => { if (scrubbing) scrubTo(e); });
+      const endScrub = () => { scrubbing = false; };
+      scrub.addEventListener('pointerup', endScrub);
+      scrub.addEventListener('pointercancel', endScrub);
       mediaEl.addEventListener('timeupdate', sync);
       mediaEl.addEventListener('seeked', sync);
       mediaEl.addEventListener('loadedmetadata', () => { sync(); drawLanes(lanes, doc, mediaEl.duration || 1); });
@@ -728,6 +763,7 @@ export const workspace = {
       const posOf = (e) => { const r = track.getBoundingClientRect(); return clamp01((e.clientX - r.left) / r.width); };
       track.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
+        if (e.target.closest('.caqdas__scrub')) return; // grabbing the scrubber, not coding
         e.preventDefault();
         try { track.setPointerCapture(e.pointerId); } catch { /* ok */ }
         start = posOf(e);
