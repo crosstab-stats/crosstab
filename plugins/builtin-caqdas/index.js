@@ -24,7 +24,7 @@
 export const manifest = {
   id: 'builtin-caqdas',
   name: 'Qualitative Coding (CAQDAS)',
-  version: '0.5.5',
+  version: '0.6.0',
   apiVersion: '0.1.0',
   category: 'Qualitative',
   // Renders media (text, image regions, audio/video time-ranges) from the host media
@@ -123,6 +123,17 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 .caqdas__vidoverlay.is-drawing { pointer-events: auto; cursor: crosshair; }
 .caqdas__trackbox { position: absolute; border: 2px solid; box-sizing: border-box; pointer-events: none; }
 .caqdas__trackbox.is-active { box-shadow: 0 0 0 1px rgba(0,0,0,.4), 0 0 0 3px rgba(255,255,255,.35); }
+.caqdas__trackbox.is-editing { pointer-events: auto; cursor: move; }
+.caqdas__trackbox.is-editing .caqdas__rlabel { pointer-events: none; }
+.caqdas__handle { position: absolute; width: 11px; height: 11px; background: #fff; border: 1px solid #2f6fb0; box-sizing: border-box; border-radius: 2px; }
+.caqdas__h-nw { left: -6px; top: -6px; cursor: nwse-resize; }
+.caqdas__h-ne { right: -6px; top: -6px; cursor: nesw-resize; }
+.caqdas__h-se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+.caqdas__h-sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
+.caqdas__h-n { left: 50%; top: -6px; margin-left: -6px; cursor: ns-resize; }
+.caqdas__h-s { left: 50%; bottom: -6px; margin-left: -6px; cursor: ns-resize; }
+.caqdas__h-e { right: -6px; top: 50%; margin-top: -6px; cursor: ew-resize; }
+.caqdas__h-w { left: -6px; top: 50%; margin-top: -6px; cursor: ew-resize; }
 .caqdas__tracktb { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 20px 0; }
 .caqdas__tracklabel { font-size: 12px; font-weight: 600; }
 .caqdas__tracktb .caqdas__btn { font-size: 12px; padding: 3px 8px; }
@@ -527,7 +538,7 @@ export const workspace = {
 
       const hint = el('div', 'caqdas__mediahint');
       hint.textContent = isVideo
-        ? 'Play/scrub with the controls below the frame (or click the frame to play/pause; click the ruler to jump). Time coding: drag the ruler → pick a code. Region-over-time: turn on ✎ Region, draw a box where a subject is, pick a code, then scrub + redraw (or ⦿ Auto-track) to add keyframes.'
+        ? 'Play/scrub with the controls below the frame (or click the frame to play/pause; drag the ruler thumb to scrub). Time coding: drag the ruler → pick a code. Region-over-time: turn on ✎ Region, draw a box on a subject, pick a code, then scrub and drag/resize the box (or ⦿ Auto-track) to add keyframes — nudge a drifted box back on target with its handles.'
         : 'Drag on the timeline to select a span, then click a code to tag it (right-click, or 🖌 to paint). Click a coding bar to memo/remove; click the ruler to seek.';
 
       const trackToolbar = el('div', 'caqdas__tracktb'); trackToolbar.style.display = 'none';
@@ -947,6 +958,62 @@ export const workspace = {
         const lbl = el('span', 'caqdas__rlabel'); lbl.textContent = code ? code.name : '(code)'; lbl.style.backgroundColor = color;
         box.append(lbl);
         overlay.append(box);
+        // The active track's box is directly editable while in ✎ Region mode: drag to
+        // move, or a handle to resize — the fast way to fix tracker drift.
+        if (s === activeTrack && overlay.classList.contains('is-drawing')) attachBoxEditing(box, s, overlay);
+      }
+    }
+
+    /** Make a track box draggable (move) + resizable (8 handles). Committing a gesture
+     * upserts the keyframe at the current time, so nudging a drifted box back on target
+     * is one drag. */
+    function attachBoxEditing(box, seg, overlay) {
+      box.classList.add('is-editing');
+      for (const h of ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']) {
+        const hd = el('div', 'caqdas__handle caqdas__h-' + h);
+        hd.addEventListener('pointerdown', (e) => startEdit(e, h));
+        box.append(hd);
+      }
+      box.addEventListener('pointerdown', (e) => { if (e.target === box) startEdit(e, null); });
+
+      function startEdit(e, handle) {
+        if (e.button !== 0) return;
+        e.preventDefault(); e.stopPropagation(); // don't start a new-box draw
+        const orect = overlay.getBoundingClientRect();
+        const t = currentMediaEl?.currentTime || 0;
+        const r0 = regionAtTime(seg.keys, t);
+        if (!r0) return;
+        const sx = clamp01((e.clientX - orect.left) / orect.width);
+        const sy = clamp01((e.clientY - orect.top) / orect.height);
+        let rect = { x: r0.x, y: r0.y, w: r0.w, h: r0.h };
+        let moved = false;
+        const onMove = (ev) => {
+          moved = true;
+          const dx = clamp01((ev.clientX - orect.left) / orect.width) - sx;
+          const dy = clamp01((ev.clientY - orect.top) / orect.height) - sy;
+          if (!handle) {
+            const x = Math.min(Math.max(0, r0.x + dx), 1 - r0.w);
+            const y = Math.min(Math.max(0, r0.y + dy), 1 - r0.h);
+            rect = { x, y, w: r0.w, h: r0.h };
+          } else {
+            let x1 = r0.x, y1 = r0.y, x2 = r0.x + r0.w, y2 = r0.y + r0.h;
+            if (handle.includes('w')) x1 = r0.x + dx;
+            if (handle.includes('e')) x2 = r0.x + r0.w + dx;
+            if (handle.includes('n')) y1 = r0.y + dy;
+            if (handle.includes('s')) y2 = r0.y + r0.h + dy;
+            const nx = clamp01(Math.min(x1, x2)), nx2 = clamp01(Math.max(x1, x2));
+            const ny = clamp01(Math.min(y1, y2)), ny2 = clamp01(Math.max(y1, y2));
+            rect = { x: nx, y: ny, w: Math.max(0.01, nx2 - nx), h: Math.max(0.01, ny2 - ny) };
+          }
+          positionPct(box, rect);
+        };
+        const onUp = () => {
+          window.removeEventListener('pointermove', onMove);
+          window.removeEventListener('pointerup', onUp);
+          if (moved) upsertKeyframe(seg, t, rect);
+        };
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
       }
     }
 
