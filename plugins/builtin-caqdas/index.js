@@ -24,13 +24,13 @@
 export const manifest = {
   id: 'builtin-caqdas',
   name: 'Qualitative Coding (CAQDAS)',
-  version: '0.3.0',
+  version: '0.4.0',
   apiVersion: '0.1.0',
   category: 'Qualitative',
-  // Renders media (images now; audio/video next) from the host media store, so it
-  // mounts in the media-CSP sandbox (img-src/media-src blob:). #139.
+  // Renders media (text, image regions, audio/video time-ranges) from the host media
+  // store, so it mounts in the media-CSP sandbox (img-src/media-src blob:). #139.
   media: true,
-  keywords: ['qualitative', 'coding', 'caqdas', 'transcript', 'codebook', 'content analysis', 'image', 'media'],
+  keywords: ['qualitative', 'coding', 'caqdas', 'transcript', 'codebook', 'content analysis', 'image', 'audio', 'video', 'media'],
   disciplines: ['Qualitative', 'Sociology', 'Education', 'Communication', 'Nursing', 'Anthropology'],
   howto:
     'GUI: appears as a workspace tab (Coding) — pick a dataset column of documents (a text column, or a media column from an image/audio/video import), then tag passages/regions with codes and export code frequencies/segments to Output.\n' +
@@ -115,6 +115,25 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 .caqdas__region.has-memo { box-shadow: 0 0 0 2px rgba(0,0,0,.35) inset; }
 .caqdas__regionsel { position: absolute; border: 2px dashed #2f6fb0; background: rgba(47,111,176,.12); box-sizing: border-box; pointer-events: none; }
 .caqdas__mediahint { font-size: 12px; color: #8a93a0; padding: 8px 20px 0; }
+/* --- media (audio/video) coding: player + timeline lanes --- */
+.caqdas__audioel { width: 100%; max-width: 640px; display: block; margin: 8px 20px 0; }
+.caqdas__video { display: block; max-width: calc(100% - 40px); max-height: calc(100vh - 320px); margin: 8px auto 0; background: #000; }
+.caqdas__mediactrl { display: flex; align-items: center; gap: 6px; padding: 8px 20px 0; }
+.caqdas__speedlabel { font-size: 12px; color: #7a8590; margin-right: 2px; }
+.caqdas__speedbtn { font: inherit; font-size: 12px; padding: 2px 8px; border: 1px solid #ccd2d8; border-radius: 6px; background: #fff; cursor: pointer; }
+.caqdas__speedbtn.is-on { background: #2f6fb0; color: #fff; border-color: #2f6fb0; }
+.caqdas__timeline { padding: 6px 20px 16px; }
+.caqdas__tltrack { position: relative; height: 22px; background: #eef1f4; border: 1px solid #e2e6ea; border-radius: 4px; cursor: crosshair; overflow: hidden; touch-action: none; }
+.caqdas__tlsel { position: absolute; top: 0; bottom: 0; background: rgba(47,111,176,.18); border-left: 2px solid #2f6fb0; border-right: 2px solid #2f6fb0; box-sizing: border-box; pointer-events: none; }
+.caqdas__playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #b04a4a; pointer-events: none; }
+.caqdas__lanes { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+.caqdas__lane { display: flex; align-items: center; gap: 8px; }
+.caqdas__lanelabel { flex: 0 0 120px; font-size: 12px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.caqdas__lanestrip { position: relative; flex: 1; height: 16px; background: #f5f7f9; border-radius: 3px; }
+.caqdas__lanebar { position: absolute; top: 1px; bottom: 1px; min-width: 3px; border-radius: 3px; cursor: pointer; opacity: .85; }
+.caqdas__lanebar:hover { opacity: 1; }
+.caqdas__lanebar.has-memo { box-shadow: inset 0 0 0 2px rgba(0,0,0,.35); }
+.caqdas__lanesempty { font-size: 12px; color: #99a1ab; font-style: italic; padding: 4px 0; }
 `;
 
 export const workspace = {
@@ -132,7 +151,10 @@ export const workspace = {
     let mediaLoadToken = 0; // guards against a slow load landing after a doc switch
     let imageSel = null; // pending drawn region {x,y,w,h} (normalised 0..1), session-only
     let currentOverlay = null; // the live image overlay, for in-place region refreshes
-    const hiddenCodes = new Set(); // codes whose image regions are hidden (per-code layer visibility, session-only)
+    let timeSel = null; // pending drawn time span {tStart,tEnd} (seconds), session-only
+    let currentTimeline = null, currentLanes = null, currentMediaEl = null; // live audio/video timeline refs
+    let currentMedium = null; // 'image' | 'audio' | 'video' of the loaded doc
+    const hiddenCodes = new Set(); // codes whose regions/lanes are hidden (per-code layer visibility, session-only)
     const docLabel = (rid) => {
       const i = docs.findIndex((d) => d.rid === rid);
       return (i >= 0 && docs[i].label) || `#${i + 1}`;
@@ -279,7 +301,7 @@ export const workspace = {
         const n = el('span', 'n'); n.textContent = d.label || '#' + (i + 1);
         const cnt = segsFor(d.rid).length;
         const c = el('span', 'c'); if (cnt) c.textContent = cnt + '▮';
-        const preview = d.kind === 'media' ? '🖼 ' + (d.label || 'media') : (d.text.slice(0, 40) || '(empty)');
+        const preview = d.kind === 'media' ? '▸ media' : (d.text.slice(0, 40) || '(empty)');
         const t = document.createTextNode(' ' + preview);
         row.append(n, c, t);
         row.addEventListener('click', () => { activeRid = d.rid; renderDocList(); renderText(); });
@@ -359,7 +381,8 @@ export const workspace = {
     // render it from an in-realm blob: URL (allowed by the media-CSP sandbox).
     async function renderMedia(doc) {
       textPane.textContent = '';
-      imageSel = null;
+      imageSel = null; timeSel = null;
+      currentOverlay = null; currentTimeline = null; currentLanes = null; currentMediaEl = null; currentMedium = null;
       const loading = el('div', 'caqdas__empty'); loading.textContent = 'Loading media…';
       textPane.append(loading);
       const token = ++mediaLoadToken;
@@ -375,13 +398,18 @@ export const workspace = {
         return;
       }
       const kind = String(blob.type || '').split('/')[0];
-      if (kind !== 'image') {
-        const e = el('div', 'caqdas__empty');
-        e.textContent = `${kind || 'This'} coding isn’t available yet — image coding is live; audio and video are next.`;
-        textPane.append(e);
-        return;
-      }
       mediaObjectUrl = URL.createObjectURL(blob);
+      currentMedium = kind;
+      if (kind === 'image') renderImage(doc);
+      else if (kind === 'audio' || kind === 'video') renderTimeMedia(doc, kind);
+      else {
+        const e = el('div', 'caqdas__empty'); e.textContent = 'This media type isn’t supported for coding.';
+        textPane.append(e);
+      }
+    }
+
+    /** Render an image doc: the picture + a region overlay (the 2-D selector). */
+    function renderImage(doc) {
       const hint = el('div', 'caqdas__mediahint');
       hint.textContent = 'Drag on the image to draw a region, then click a code to tag it (right-click, or 🖌 to paint). Click a region to memo or remove it.';
       const wrap = el('div', 'caqdas__imgwrap');
@@ -395,6 +423,52 @@ export const workspace = {
       textPane.append(hint, wrap);
     }
 
+    /** Render an audio/video doc: the player + a timeline with per-code lanes. The
+     * selector is a time range — the 1-D-in-time analogue of the image region — and
+     * each code is a lane (the ELAN tier model, the time version of image layers). */
+    function renderTimeMedia(doc, kind) {
+      const mediaEl = document.createElement(kind === 'video' ? 'video' : 'audio');
+      mediaEl.controls = true;
+      mediaEl.preload = 'metadata';
+      mediaEl.className = kind === 'video' ? 'caqdas__video' : 'caqdas__audioel';
+      mediaEl.src = mediaObjectUrl;
+      currentMediaEl = mediaEl;
+
+      // Playback-speed control (reviewing long field recordings).
+      const ctrl = el('div', 'caqdas__mediactrl');
+      const sl = el('span', 'caqdas__speedlabel'); sl.textContent = 'Speed';
+      ctrl.append(sl);
+      for (const rate of [0.5, 1, 1.5, 2]) {
+        const b = el('button', 'caqdas__speedbtn' + (rate === 1 ? ' is-on' : ''));
+        b.textContent = rate + '×';
+        b.addEventListener('click', () => {
+          mediaEl.playbackRate = rate;
+          ctrl.querySelectorAll('.caqdas__speedbtn').forEach((x) => x.classList.toggle('is-on', x === b));
+        });
+        ctrl.append(b);
+      }
+      const hint = el('div', 'caqdas__mediahint');
+      hint.textContent = 'Drag on the timeline to select a span, then click a code to tag it (right-click, or 🖌 to paint). Click a coding bar to memo/remove; click the ruler to seek.';
+
+      const timeline = el('div', 'caqdas__timeline');
+      currentTimeline = timeline;
+      const track = el('div', 'caqdas__tltrack');
+      const tlsel = el('div', 'caqdas__tlsel'); tlsel.style.display = 'none';
+      const playhead = el('div', 'caqdas__playhead');
+      track.append(tlsel, playhead);
+      const lanes = el('div', 'caqdas__lanes');
+      currentLanes = lanes;
+      timeline.append(track, lanes);
+
+      attachTimelineDrawing(track, doc, mediaEl);
+      const sync = () => { const d = mediaEl.duration || 0; if (d > 0) playhead.style.left = (mediaEl.currentTime / d) * 100 + '%'; };
+      mediaEl.addEventListener('timeupdate', sync);
+      mediaEl.addEventListener('loadedmetadata', () => { sync(); drawLanes(lanes, doc, mediaEl.duration || 1); });
+
+      textPane.append(mediaEl, ctrl, hint, timeline);
+      if (mediaEl.readyState >= 1) drawLanes(lanes, doc, mediaEl.duration || 1); // metadata already cached
+    }
+
     /** Redraw the region boxes over the live image without re-fetching it (used after
      * add/remove/memo so the image doesn't flicker), and clear any pending drag box. */
     function refreshRegions() {
@@ -405,14 +479,28 @@ export const workspace = {
     }
 
     /** Re-render after a segment change, the light way for each doc kind: a media doc
-     * just repaints its region boxes (no image reload); a text doc re-renders normally.
+     * repaints its regions/lanes in place (no reload); a text doc re-renders normally.
      * The codebook + doc list (counts) refresh either way. */
     function refreshView() {
       const doc = docs.find((d) => d.rid === activeRid);
-      if (doc && doc.kind === 'media') refreshRegions();
+      if (doc && doc.kind === 'media') refreshMedia();
       else renderText();
       renderDocList();
       renderCodes();
+    }
+
+    /** Repaint the live media view in place (no reload): image regions or timeline lanes. */
+    function refreshMedia() {
+      if (currentMedium === 'image') refreshRegions();
+      else if (currentMedium === 'audio' || currentMedium === 'video') refreshLanes();
+    }
+
+    /** Redraw the timeline lanes in place, clearing any pending selection span. */
+    function refreshLanes() {
+      if (!currentLanes || !currentMediaEl) return;
+      currentTimeline?.querySelectorAll('.caqdas__tlsel').forEach((n) => { n.style.display = 'none'; });
+      const doc = docs.find((d) => d.rid === activeRid);
+      if (doc && doc.kind === 'media') drawLanes(currentLanes, doc, currentMediaEl.duration || 1);
     }
 
     /** Draw a doc's regions as translucent coloured boxes, one visual layer per code.
@@ -510,6 +598,107 @@ export const workspace = {
       );
     }
 
+    /** Draw the timeline lanes: one row per code that has codings (in codebook order),
+     * each coding a bar positioned by its time span. Hidden codes are skipped. Bars are
+     * clickable (memo/remove). This is the time-dimension twin of {@link drawRegions}. */
+    function drawLanes(lanesEl, doc, duration) {
+      lanesEl.textContent = '';
+      const dur = duration > 0 ? duration : 1;
+      const order = new Map(state.codes.map((c, i) => [c.id, i]));
+      const byCode = new Map();
+      for (const s of segsFor(doc.rid)) {
+        if (s.tStart == null || hiddenCodes.has(s.codeId)) continue;
+        if (!byCode.has(s.codeId)) byCode.set(s.codeId, []);
+        byCode.get(s.codeId).push(s);
+      }
+      const ids = [...byCode.keys()].sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
+      if (!ids.length) {
+        const e = el('div', 'caqdas__lanesempty');
+        e.textContent = 'No codings yet — drag on the ruler above, then click a code.';
+        lanesEl.append(e);
+        return;
+      }
+      for (const cid of ids) {
+        const code = codeById(cid);
+        const color = code ? code.color : '#888';
+        const lane = el('div', 'caqdas__lane');
+        const label = el('span', 'caqdas__lanelabel'); label.textContent = code ? code.name : '(code)'; label.style.color = color;
+        lane.append(label);
+        const strip = el('div', 'caqdas__lanestrip');
+        for (const s of byCode.get(cid)) {
+          const bar = el('div', 'caqdas__lanebar' + (s.memo ? ' has-memo' : ''));
+          bar.style.left = (s.tStart / dur) * 100 + '%';
+          bar.style.width = Math.max(0.4, ((s.tEnd - s.tStart) / dur) * 100) + '%';
+          bar.style.backgroundColor = color;
+          bar.title = `${code ? code.name : ''} ${fmtTime(s.tStart)}–${fmtTime(s.tEnd)}${s.memo ? ' — ' + s.memo : ''}`;
+          bar.addEventListener('click', (e) => { e.stopPropagation(); openSegmentMenu([s], e); });
+          strip.append(bar);
+        }
+        lane.append(strip);
+        lanesEl.append(lane);
+      }
+    }
+
+    /** Wire drag-to-select on the timeline ruler: a finished span becomes the pending
+     * `timeSel` (applied on code-click, or immediately in paint mode); a plain click
+     * seeks the player. The time twin of {@link attachRegionDrawing}. */
+    function attachTimelineDrawing(track, doc, mediaEl) {
+      let start = null;
+      const tlsel = track.querySelector('.caqdas__tlsel');
+      const posOf = (e) => { const r = track.getBoundingClientRect(); return clamp01((e.clientX - r.left) / r.width); };
+      track.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        try { track.setPointerCapture(e.pointerId); } catch { /* ok */ }
+        start = posOf(e);
+        timeSel = null;
+        tlsel.style.display = 'block';
+        tlsel.style.left = start * 100 + '%';
+        tlsel.style.width = '0%';
+      });
+      track.addEventListener('pointermove', (e) => {
+        if (start == null) return;
+        const p = posOf(e);
+        tlsel.style.left = Math.min(start, p) * 100 + '%';
+        tlsel.style.width = Math.abs(p - start) * 100 + '%';
+      });
+      const finish = (e) => {
+        if (start == null) return;
+        const p = posOf(e);
+        const lo = Math.min(start, p), hi = Math.max(start, p);
+        start = null;
+        const dur = mediaEl.duration || 0;
+        if (hi - lo < 0.005 || dur <= 0) {
+          // A click, not a drag → seek the player to that point.
+          tlsel.style.display = 'none';
+          timeSel = null;
+          if (dur > 0) mediaEl.currentTime = lo * dur;
+          return;
+        }
+        timeSel = { tStart: lo * dur, tEnd: hi * dur };
+        if (activeCodeId) addTimeSegment(activeCodeId, timeSel); // paint mode
+      };
+      track.addEventListener('pointerup', finish);
+      track.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        if (timeSel) openAssignMenu({ kind: 'time', span: timeSel }, e);
+      });
+    }
+
+    /** Record a time-range coding segment (the time twin of {@link addRegionSegment}). */
+    function addTimeSegment(codeId, span) {
+      state.segments.push({
+        doc: activeRid,
+        codeId,
+        tStart: round3(span.tStart),
+        tEnd: round3(span.tEnd),
+        text: timeLabel(span.tStart, span.tEnd),
+      });
+      timeSel = null;
+      save();
+      refreshView();
+    }
+
     function renderCodes() {
       codePane.textContent = '';
       const h = el('h3'); h.textContent = 'Codebook'; codePane.append(h);
@@ -559,7 +748,7 @@ export const workspace = {
             vb.addEventListener('click', (e) => {
               e.stopPropagation();
               if (hidden) hiddenCodes.delete(code.id); else hiddenCodes.add(code.id);
-              refreshRegions();
+              refreshMedia();
               renderCodes();
             });
           }
@@ -583,6 +772,7 @@ export const workspace = {
             const activeDoc = docs.find((d) => d.rid === activeRid);
             if (activeDoc && activeDoc.kind === 'media') {
               if (imageSel) addRegionSegment(code.id, imageSel);
+              else if (timeSel) addTimeSegment(code.id, timeSel);
               else flashHint(hint);
               return;
             }
@@ -725,6 +915,7 @@ export const workspace = {
       const choose = (codeId) => {
         closeMenu();
         if (span && span.kind === 'region') addRegionSegment(codeId, span.region);
+        else if (span && span.kind === 'time') addTimeSegment(codeId, span.span);
         else addSegment(codeId, span);
       };
       for (const code of state.codes) {
@@ -887,7 +1078,7 @@ function buildThemedCloud(state, codeById) {
   const themeMap = new Map(); // theme name -> Map(word -> {count, byCode:{id:count}})
   const order = [];
   for (const s of state.segments) {
-    if (s.region) continue; // region codings have no text passage — skip the cloud
+    if (s.region || s.tStart != null) continue; // region/time codings have no text passage — skip the cloud
     const code = codeById(s.codeId);
     if (!code) continue;
     const theme = (code.group && code.group.trim()) || code.name;
@@ -1039,6 +1230,18 @@ function regionLabel(r) {
   const p = (v) => Math.round(v * 100);
   return `▭ ${p(r.x)},${p(r.y)} ${p(r.w)}×${p(r.h)}%`;
 }
+
+/** Round to 3 dp — sub-millisecond time precision, compact in the blob. */
+function round3(v) { return Math.round(v * 1e3) / 1e3; }
+/** Format seconds as `M:SS` (or `H:MM:SS` past an hour). */
+function fmtTime(s) {
+  s = Math.max(0, Math.floor(s || 0));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  const ss = String(sec).padStart(2, '0');
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+}
+/** A human label for a time-range coding — shown in retrieve and exports. */
+function timeLabel(t0, t1) { return `${fmtTime(t0)}–${fmtTime(t1)}`; }
 
 /** A translucent `rgba()` fill from a `#rgb`/`#rrggbb` hex + alpha (region layers). */
 function hexToRgba(hex, alpha) {
