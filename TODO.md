@@ -302,6 +302,31 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       reach via `/me/drive/sharedWithMe` or the shared drive id) — so onboarding is half
       CrossTab's invite-key, half Microsoft's sharing dialog; reconcile with the live-
       mode self-contained invite when unifying modes.
+  - **Vendor-neutral cloud-API family — Dropbox & Google Drive are peers, not
+    afterthoughts.** Two corrections to "Graph = *the* tablet story": (1) the
+    `showDirectoryPicker` gap is **not iPad-specific** — Android Chrome and mobile
+    browsers generally lack the FSA directory picker too (**verify current support**), so
+    *every* tablet/phone needs *a* cloud API regardless of vendor; **Chromebooks** are the
+    edge case (Chrome OS is desktop Chrome → folder mode works), but a third-party cloud
+    folder isn't always mounted as a pickable local dir there, so the API may still be the
+    path. (2) Provider choice is the **user's**, not ours — Dropbox and Google Drive are
+    **peer backends**, not OneDrive-with-an-asterisk (the storage analog of format-equality
+    / no-lock-in: don't privilege one vendor). The seam makes it cheap: **device** decides
+    you need a cloud API, **the user's provider** decides which driver — all three sit
+    behind `project-store` root as near-identical drivers (OAuth2 + PKCE, `GET/PUT`
+    content + chunked upload, a delta/cursor change feed, rev/ETag conflict detection), so
+    build the *interface* once and vendor-neutrally, adding drivers as real demand appears:
+    - *Dropbox* (App Console reg): **friendlier to a serverless browser app** —
+      `list_folder/longpoll` waits for changes with **no public endpoint** (vs Graph
+      webhooks) and a **server-provided `content_hash`** partly hands you the shared-index
+      primitive. Downside: **no device-code flow** (redirect/popup PKCE only).
+    - *Google Drive* (Google Cloud reg): natural for **Chromebook** users; `changes.list`
+      + page tokens for delta, push webhooks need an endpoint (→ poll), OAuth2 + PKCE —
+      same shape as the others.
+    - *No shared/borrowed id across providers* — each is its own one-time registration
+      (the borrowed-client-id trap was Microsoft-specific and rejected anyway). But
+      **desktop users of any provider need none** — the desktop sync client + folder mode
+      already covers them (Dropbox/OneDrive/Drive/iCloud folders are identical to FSA).
   - **Live transport — P2P over WebRTC (proven pattern, from sortie).** The
     serverless-handshake part is already solved and battle-tested in *sortie*
     (asteroids clone, https://lograh.github.io/sortie-game): **Trystero (MQTT
