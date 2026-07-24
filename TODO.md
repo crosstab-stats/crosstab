@@ -530,6 +530,77 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     ciphertext) and with export streaming for big files. **Resolve the large-file story
     first; it likely decides the whole feature's shape.**
 
+- [ ] **Multimedia qualitative coding — audio / image / video (#139).** Mature the
+      qualitative side from text-only to multimedia. The current coder
+      (`plugins/builtin-caqdas/index.js`) does text: pick a text column (one document per
+      row), highlight character spans, tag with codes; a segment is
+      `{doc: rowId, codeId, start, end, text}`, the codebook lives in the workspace blob,
+      plus retrieve-by-code, per-segment memos, merge-on-overlap, paint mode.
+  - **Core insight — generalize the *selector*, don't build four coders.** A text segment
+    is a **1-D interval in character space**. Every medium is the *same* segment over a
+    different coordinate space, so the segment becomes `{doc, codeId, selector}`:
+    - *Text* — `{start, end}` chars (today).
+    - *Audio* — `{tStart, tEnd}` seconds (1-D interval, float instead of int — nearly
+      identical to text).
+    - *Image* — `{region}` bbox/polygon (2-D, no time).
+    - *Video* — `{tStart, tEnd, region?}` — time **+** optional spatial region, region
+      keyframed over the interval.
+    Then the **entire existing apparatus is reused** — codebook, retrieve-by-code, memos,
+    code frequencies, overlap handling. Only two things vary by medium: the **selector
+    type** and the **rendering surface** (text pane → `<audio>`/`<video>`/`<img>` + overlay
+    canvas). This is deliberately the W3C **Web Annotation** selector model.
+  - **Interop target — REFI-QDA / QDPX.** That exchange format (NVivo, ATLAS.ti, MAXQDA,
+    Dedoose, Taguette all read/write it) already models audio/video **time** selectors and
+    picture **regions**. Shape our selectors at REFI-QDA so a coded project round-trips to
+    the other tools — the format-equality / no-lock-in principle applied to qual. **Reject**
+    the old "embed coding inside the media" ideas (MP4 alternate stream, PNG
+    steganography/metadata): media must stay **immutable and referenced**, annotations live
+    in the project — embedding breaks on any re-encode, is non-standard, and throws away
+    this interop.
+  - **Media are assets, not cells (CrossTab-specific, ties to two live threads).** Text is
+    one-doc-per-row in a column; media are large binaries that can't sit in dataset cells.
+    Mirror the Parquet-source model: media live as **assets** (OPFS files / handles), the
+    row holds a **reference** (`assetId` + content hash), segments reference
+    `{assetId, time/region}`. This plugs straight into: (1) **collab base-data sharing
+    (#143)** — a media asset *is* the big base file a collaborator may lack → the
+    content-hashed index + "share this file!" gap-fill is its transport; (2) **encryption /
+    OOM (#144)** — a `<video>` streams from an OPFS file URL without loading into memory,
+    but *encrypted* media can't stream to the element → same large-file wall as #144, same
+    solution surface.
+  - **Rendering surfaces & gestures:**
+    - *Audio/video* — `<media>` element + a timeline; **drag-select a time range → apply
+      code** (the same paint-mode gesture, in time instead of chars). Playback **speed
+      control** is trivial (`HTMLMediaElement.playbackRate`).
+    - *Image* — `<img>`/`<canvas>` with a region tool (bbox → polygon).
+    - *Video spatial* — overlay canvas on the `<video>`, region keyframed across the time
+      interval ("where in the frame," the old open question — it's just the 2-D selector).
+  - **Transcript-linked is the target workflow (fork resolved).** The dominant real
+    practice isn't coding a raw waveform — it's a **time-aligned transcript**: code the
+    text, click a line to **seek the playhead** (NVivo/oTranscribe style). Make the
+    time-aligned transcript a **first-class document that references the media**, not just
+    media-timeline coding. More work, but it's what qual researchers actually do.
+  - **Transcription — import first, auto-transcribe as a deferred Phase 2 (fork resolved).**
+    Phase 1: **import existing transcripts** (VTT / SRT / timestamped rows) → 80% of the
+    value cheaply. Phase 2: in-browser auto-transcription — **feasibility CONFIRMED** (see
+    below), but a real epic (30–180 MB model download, WebGPU-dependent speed, worker
+    architecture), so it waits.
+  - **Whisper feasibility (checked 2026-07, available):** two mature fully-client-side
+    routes — **transformers.js** (Xenova) running ONNX Whisper on **WebGPU with a WASM
+    fallback** (`whisper-web`, `browser-whisper`), and **whisper.cpp WASM** (SIMD). Models:
+    tiny 75 MB (Q5 31 MB), base 142 MB (Q5 57 MB), small 466 MB (Q5 182 MB) — **small is the
+    browser ceiling**; tiny/base are practical. Speed: **WebGPU ~5–8× real-time** on a ~76 MB
+    model (5–10×+ faster than WASM); **WASM-only ~2–3× real-time** (60 s clip in ~20–30 s).
+    WebGPU needs Chromium 113+; WASM SIMD is the broad fallback. Models **cache for offline**
+    exactly like the R packages / runtime assets already do (fits the CDN-default +
+    "make available offline" pattern, and the air-gap vendoring path #71). So Phase 2 is
+    viable when we want it — the deferral is *scope/effort*, not feasibility.
+  - **Suggested phasing:** (1) generalize the segment selector + refactor the text coder
+    onto it (no behavior change — pure groundwork); (2) **audio** coding (closest to text —
+    1-D time selector + timeline drag) + transcript import & time-aligned seek; (3) **image**
+    region coding (2-D selector + canvas); (4) **video** (time + keyframed spatial overlay);
+    (5) **REFI-QDA/QDPX** import/export across all selector types; (6) **Whisper Phase 2**
+    auto-transcription. Media-asset storage (with `#143`/`#144` ties) lands with step 2.
+
 - [~] **File import — as a plugin extension point.** Importers register via the
       public `app.importers.register({ label, extensions, parse })`; the engine
       (`core/import-service.js`) owns the File ▸ Import menu, the picker, and the
