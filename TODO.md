@@ -490,6 +490,46 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     reuses the presence room as its handshake, the invite link as its key distribution, and
     the index/gap-fill for base-data sharing.
 
+- [ ] **Encryption at rest — opt-in for local storage, opt-out for exports (#144).**
+      Today the whole project bundle persists **plaintext** to OPFS / IndexedDB /
+      localStorage, and exports land plaintext wherever saved (see SECURITY.md #10 for the
+      full threat scope). Browser storage is origin-isolated (other *sites* can't read it)
+      but offers nothing against **local/offline access** — stolen or shared machine,
+      forensic image, profile backup/sync. **Primary at-rest answer stays OS full-disk
+      encryption** (BitLocker/FileVault/LUKS) — document + nudge, don't reinvent. This TODO
+      is the *optional* app-level layer for the FDE-gap and the off-machine case, built on
+      the **collaboration crypto kernel** (same KDF/AES envelope — do not fork a second
+      crypto path).
+  - **Two different default postures, deliberately asymmetric:**
+    - *Local storage → opt-**in**.* Passphrase off by default (most users have FDE; always-on
+      would tax everyone and fight the large-data path). A "protect this project with a
+      passphrase" toggle: key derived from the passphrase via the shared KDF, **never
+      stored**, unlock once per session (in-memory key only). Forgotten passphrase =
+      unrecoverable (no server) → the UX must say so unmistakably.
+    - *Exports → opt-**out** (default-on).* Data leaving the machine is the higher-risk
+      moment, so the nudge is stronger: encrypt exports **by default**, user can turn it off
+      per-export. Applies to *all* export formats, not just `.crosstab` (format-equality /
+      no-lock-in) — an encrypted wrapper around the produced bytes, with a clear "this file
+      is passphrase-protected" affordance for the recipient.
+  - **Why keyed by a user secret, not an auto-stored key:** automatic decrypt ⇒ the key sits
+    on disk beside the ciphertext = theatre. Only a passphrase (or hardware-backed key) the
+    machine doesn't persist is real. This is *the* reason it can't just mirror the collab
+    "storage only sees ciphertext" pattern for free — locally, key-holder == storage-holder
+    unless a human supplies the secret.
+  - **Open problem — passphrase vs OOM-prone data (the hard part, must design before
+    building).** DuckDB reads Parquet **directly from OPFS handles** (`BROWSER_FSACCESS`,
+    `core/duckdb-manager.js`) so it can *stream* multi-GB sources without loading them into
+    WASM memory. Naïve at-rest encryption breaks that: decrypt-whole-file-into-memory OOMs
+    on exactly the large datasets the codec/large-file architecture exists for. Options to
+    weigh, none free: (a) encrypt only the *small* stuff (`project.json`, metadata, output)
+    and leave large Parquet to FDE — honest but leaves the biggest bytes plaintext;
+    (b) **streaming/chunked AES** with a DuckDB read path that decrypts block-by-block
+    (real fix, but needs a supported streaming-read seam in DuckDB-wasm — likely fragile);
+    (c) decrypt to a scratch OPFS file on unlock (defeats the purpose — plaintext hits disk
+    again). Also interacts with the storage-driver plugins (those already only see
+    ciphertext) and with export streaming for big files. **Resolve the large-file story
+    first; it likely decides the whole feature's shape.**
+
 - [~] **File import — as a plugin extension point.** Importers register via the
       public `app.importers.register({ label, extensions, parse })`; the engine
       (`core/import-service.js`) owns the File ▸ Import menu, the picker, and the

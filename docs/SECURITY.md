@@ -125,3 +125,34 @@ warrants for a local single-user tool. Recorded so the trade-off is deliberate.
   own origin (the air-gap path, #71, already produces it), which removes the CDN from
   the trusted path with zero ongoing hashing — a deploy-time choice (#90), not a code
   obligation here.
+- **#10 — data at rest is plaintext (local storage *and* exports).** The whole project
+  bundle persists to **OPFS / IndexedDB / localStorage in the clear**, and DuckDB reads
+  the Parquet sources *directly* from OPFS handles (`BROWSER_FSACCESS`,
+  `core/duckdb-manager.js`). Exported `.crosstab`/data files land wherever the user saves
+  them, also plaintext. **Threat scope — be precise about what this is and isn't:**
+  browser storage is **origin-isolated**, so *other websites cannot read it* (that's the
+  same-origin threat the platform is built to stop, and it holds). The gap is **local /
+  offline access to the bytes** — a stolen or shared machine, a forensic disk image, or a
+  backup/sync of the browser profile — where OPFS/IndexedDB are ordinary app-data files
+  with no more protection than any other app's. It is **not** a defence against malware
+  running *as the user while a project is open* (that reads the decrypted data or scrapes
+  the key from memory regardless); at-rest encryption only ever protects the
+  powered-off / offline / backup copy.
+  - *Why not always-on app-level encryption:* it would be **theatre** unless keyed by a
+    secret the machine doesn't store. If the app can auto-decrypt on next launch, the key
+    sits on disk beside the ciphertext (a "non-extractable" `CryptoKey` resists *script*
+    extraction but still lives in the same profile) — a disk image has both. It is *real*
+    only when keyed by a **user passphrase** (or hardware-backed key) entered per session.
+    And mandatory encryption would **break the large-data path**: DuckDB's direct-OPFS
+    streaming read can't run against ciphertext, so multi-GB Parquet would have to be
+    decrypted into memory and OOM.
+  - *Primary answer (recommended, documented):* **OS full-disk encryption**
+    (BitLocker / FileVault / LUKS) protects *all* app data uniformly, keyed off-disk
+    (TPM/login), with zero app cost and no fight with DuckDB. This is the correct at-rest
+    control; app-level encryption on top is largely redundant for the stolen-laptop threat.
+  - *Planned optional mitigation* for the FDE-gap (no-FDE machines, shared computers) and
+    the off-machine export case: **opt-in passphrase encryption for local storage,
+    default-on (opt-*out*) for exports**, reusing the collaboration crypto kernel (same
+    KDF/AES envelope). Real, because keyed by a user secret; non-taxing, because scoped to
+    who asks for it. Tracked as TODO #144 (incl. the unresolved OOM-vs-encryption
+    interaction). **Accepted as the default posture; the opt-in is the mitigation.**
