@@ -32,17 +32,19 @@ export class MediaStore {
 
   /**
    * Store bytes keyed by their SHA-256. Idempotent: re-storing identical bytes is a
-   * no-op on the payload (dedup) and just refreshes the metadata sidecar.
+   * no-op on the payload (dedup) and just refreshes the metadata sidecar. Any metadata
+   * keys are persisted verbatim (type/name plus probed `medium`/`duration`/`width`/
+   * `height`, #139), so the asset is self-describing independent of any dataset.
    * @param {Uint8Array|ArrayBuffer} bytes
-   * @param {{type?: string, name?: string}} [meta]
+   * @param {{type?: string, name?: string, [k: string]: any}} [meta]
    * @returns {Promise<{id: string, size: number, type: string, name: string}>}
    */
-  async put(bytes, { type = 'application/octet-stream', name = '' } = {}) {
+  async put(bytes, meta = {}) {
     const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
     const id = await sha256hex(data);
     const root = await this.#root(true);
     await this.#write(root, id + '.bin', data);
-    const info = { type, name, size: data.byteLength };
+    const info = { type: 'application/octet-stream', name: '', ...meta, size: data.byteLength };
     await this.#write(root, id + '.json', new TextEncoder().encode(JSON.stringify(info)));
     return { id, ...info };
   }
@@ -65,7 +67,9 @@ export class MediaStore {
       } catch {
         /* metadata sidecar missing — fall back to a generic blob */
       }
-      return { bytes, type: meta.type || 'application/octet-stream', name: meta.name || '', size: bytes.byteLength };
+      // Spread the sidecar so probed fields (medium/duration/width/height) come
+      // through; type/name defaulted, size authoritative from the bytes.
+      return { type: 'application/octet-stream', name: '', ...meta, bytes, size: bytes.byteLength };
     } catch {
       return null;
     }

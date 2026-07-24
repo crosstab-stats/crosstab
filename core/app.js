@@ -43,6 +43,7 @@ import { WorkspaceStore } from './workspace-store.js';
 import { WorkspaceManager } from './workspace-manager.js';
 import { PluginPackageStore } from './plugin-package-store.js';
 import { MediaStore, createMediaService } from './media-store.js';
+import { registerMediaImporter } from './media-import.js';
 
 /**
  * URLs of the built-in plugins to load at startup. These load through the exact
@@ -392,6 +393,10 @@ export async function boot(mounts) {
   // like `codec`; plugins load post-boot, so the broker sees it.
   const mediaStore = new MediaStore();
   services.media = createMediaService(mediaStore);
+  // Host media importer (#139): "Media files…" in the unified Import picker. Host-side
+  // (not a sandboxed plugin) because it writes the media store and probes dimensions
+  // via DOM elements; it drives the same picker → parse → deliver → commit flow.
+  registerMediaImporter({ importers, mediaStore, results: results.api });
   // SPSS/Stata/SAS (ReadStat) is a sandboxed codec plugin again (#130) — see the codec
   // plugin list above; it runs on the codec sandbox's main thread (ASYNCIFY, no worker).
 
