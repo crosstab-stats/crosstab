@@ -235,6 +235,30 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       *sequential* use (laptop ↔ desktop, or close-then-hand-off) but **simultaneous**
       open → OneDrive drops `project-DESKTOP-xyz.json` conflict copies (it syncs
       files, not op-logs) → that's the doorway back to the live layer.
+    - **Change detection — watch the manifest, not the folder.** FSA gives **no change
+      events** (no `onchange`, no watch) in its baseline, so polling is the floor — but
+      "scan the folder every second" is wrong on both axes:
+      - *Wrong granularity.* `project.json` already rewrites on every save and already
+        indexes every dataset (`project-store.js:16-18,143`), so watching **that one
+        file** covers adds/removes/edits. `getFileHandle('project.json') → getFile()`
+        exposes `.lastModified`/`.size` — a **stat, not a read**. When mtime moves, *then*
+        parse it, diff the manifest, and fetch only the Parquet sources whose entries
+        changed (ties to the content-hashed index above). No directory walk.
+      - *Wrong rate.* The **sync client's latency (seconds–minutes) is the real floor**,
+        not the poll rate — 1 Hz just spins waiting for bytes the client hasn't landed.
+        Poll ~2–5 s while focused, **back off when the tab is hidden** (Page Visibility),
+        and **poll-now right after a local save** (when a reply is expected).
+      - *Two levers beyond a dumb timer:* (1) **`FileSystemObserver`** — emerging Chromium
+        API giving real change callbacks on FSA handles; use as progressive enhancement,
+        poll as universal fallback (**verify current availability** — new, uneven). (2)
+        **Trystero beacon as a "look now" nudge** — when both are online, an "I just
+        saved" ping means network says *look now*, filesystem delivers the bytes; near-
+        instant without fast polling, degrades to the timer when the beacon can't connect.
+      - *Sync-client gotchas:* **torn reads** (may read a half-written `project.json` mid-
+        sync → `JSON.parse` throws) → write **atomically (temp + rename)** and
+        **tolerate-and-retry** next tick rather than treating a parse failure as
+        corruption. **Conflict-copy filenames** (`project (conflicted copy).json`) are
+        themselves an after-the-fact concurrency signal → the doorway back to live.
   - **Graph mode — to include iPads (wanted).** Because `showDirectoryPicker` doesn't
     exist on iPad Safari, the folder route can't reach tablets. **Microsoft Graph /
     OneDrive REST** works without the desktop client and *on iPad/mobile*. Cost:
