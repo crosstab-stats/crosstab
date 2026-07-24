@@ -24,7 +24,7 @@
 export const manifest = {
   id: 'builtin-caqdas',
   name: 'Qualitative Coding (CAQDAS)',
-  version: '0.5.1',
+  version: '0.5.2',
   apiVersion: '0.1.0',
   category: 'Qualitative',
   // Renders media (text, image regions, audio/video time-ranges) from the host media
@@ -131,6 +131,11 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 .caqdas__speedlabel { font-size: 12px; color: #7a8590; margin-right: 2px; }
 .caqdas__speedbtn { font: inherit; font-size: 12px; padding: 2px 8px; border: 1px solid #ccd2d8; border-radius: 6px; background: #fff; cursor: pointer; }
 .caqdas__speedbtn.is-on { background: #2f6fb0; color: #fff; border-color: #2f6fb0; }
+.caqdas__transport { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 20px; background: #eef2f6; border-top: 1px solid #e2e6ea; border-bottom: 1px solid #e2e6ea; }
+.caqdas__ctlbtn { font: inherit; font-size: 12px; padding: 3px 9px; border: 1px solid #ccd2d8; border-radius: 6px; background: #fff; cursor: pointer; }
+.caqdas__ctlbtn.is-on { background: #2f6fb0; color: #fff; border-color: #2f6fb0; }
+.caqdas__playbtn { min-width: 40px; font-size: 12px; }
+.caqdas__regionbtn { margin-left: auto; }
 .caqdas__timeline { padding: 6px 20px 16px; }
 .caqdas__tltrack { position: relative; height: 22px; background: #eef1f4; border: 1px solid #e2e6ea; border-radius: 4px; cursor: crosshair; overflow: hidden; touch-action: none; }
 .caqdas__tlsel { position: absolute; top: 0; bottom: 0; background: rgba(47,111,176,.18); border-left: 2px solid #2f6fb0; border-right: 2px solid #2f6fb0; box-sizing: border-box; pointer-events: none; }
@@ -453,7 +458,7 @@ export const workspace = {
     function renderTimeMedia(doc, kind) {
       const isVideo = kind === 'video';
       const mediaEl = document.createElement(isVideo ? 'video' : 'audio');
-      mediaEl.controls = true;
+      mediaEl.controls = !isVideo; // video uses the custom transport bar below (frame is for drawing)
       mediaEl.preload = 'metadata';
       mediaEl.crossOrigin = 'anonymous'; // blob is same-origin; keeps the canvas untainted for tracking
       mediaEl.className = isVideo ? 'caqdas__video' : 'caqdas__audioel';
@@ -472,31 +477,41 @@ export const workspace = {
         attachVideoRegionDrawing(overlay, doc, mediaEl);
       }
 
-      const ctrl = el('div', 'caqdas__mediactrl');
+      // Transport bar — a clear off-frame strip (play/pause for video + speed [+ ✎ Region]).
+      // For video it sits right above the ruler so the whole frame is free for drawing;
+      // for audio it's a plain speed row alongside the native controls.
+      const ctrl = el('div', isVideo ? 'caqdas__transport' : 'caqdas__mediactrl');
+      if (isVideo) {
+        const playBtn = el('button', 'caqdas__ctlbtn caqdas__playbtn'); playBtn.textContent = '▶'; playBtn.title = 'Play / pause';
+        const syncPlay = () => { playBtn.textContent = mediaEl.paused ? '▶' : '⏸'; };
+        playBtn.addEventListener('click', () => { if (mediaEl.paused) mediaEl.play(); else mediaEl.pause(); });
+        mediaEl.addEventListener('play', syncPlay);
+        mediaEl.addEventListener('pause', syncPlay);
+        // Click the frame itself (when not in Region mode) to play/pause too.
+        mediaEl.addEventListener('click', () => { if (!overlay.classList.contains('is-drawing')) { if (mediaEl.paused) mediaEl.play(); else mediaEl.pause(); } });
+        ctrl.append(playBtn);
+      }
       const sl = el('span', 'caqdas__speedlabel'); sl.textContent = 'Speed';
       ctrl.append(sl);
+      const speedBtns = [];
       for (const rate of [0.5, 1, 1.5, 2]) {
-        const b = el('button', 'caqdas__speedbtn' + (rate === 1 ? ' is-on' : ''));
+        const b = el('button', 'caqdas__ctlbtn caqdas__speedbtn' + (rate === 1 ? ' is-on' : ''));
         b.textContent = rate + '×';
-        b.addEventListener('click', () => {
-          mediaEl.playbackRate = rate;
-          ctrl.querySelectorAll('.caqdas__speedbtn').forEach((x) => x.classList.toggle('is-on', x === b));
-        });
-        ctrl.append(b);
+        b.addEventListener('click', () => { mediaEl.playbackRate = rate; speedBtns.forEach((x) => x.classList.toggle('is-on', x === b)); });
+        speedBtns.push(b); ctrl.append(b);
       }
       if (isVideo) {
-        // "Region" mode: while on, the overlay captures drawing (and covers the native
-        // controls — seek via the ruler below); while off, the video plays normally and
-        // the overlay just displays the tracked boxes.
-        const dt = el('button', 'caqdas__speedbtn'); dt.textContent = '✎ Region';
-        dt.title = 'Draw region-over-time boxes on the frame. While on, use the ruler below to seek.';
+        // "Region" mode: while on, the overlay captures drawing; while off, the frame
+        // plays normally (click to play/pause) and the overlay just shows tracked boxes.
+        const dt = el('button', 'caqdas__ctlbtn caqdas__regionbtn'); dt.textContent = '✎ Region';
+        dt.title = 'Draw region-over-time boxes on the frame';
         dt.addEventListener('click', () => dt.classList.toggle('is-on', overlay.classList.toggle('is-drawing')));
         ctrl.append(dt);
       }
 
       const hint = el('div', 'caqdas__mediahint');
       hint.textContent = isVideo
-        ? 'Time coding: drag the ruler → pick a code. Region-over-time: turn on ✎ Region, draw a box where a subject is, pick a code, then scrub + redraw (or ⦿ Auto-track) to add keyframes; the box interpolates between.'
+        ? 'Play/scrub with the controls below the frame (or click the frame to play/pause; click the ruler to jump). Time coding: drag the ruler → pick a code. Region-over-time: turn on ✎ Region, draw a box where a subject is, pick a code, then scrub + redraw (or ⦿ Auto-track) to add keyframes.'
         : 'Drag on the timeline to select a span, then click a code to tag it (right-click, or 🖌 to paint). Click a coding bar to memo/remove; click the ruler to seek.';
 
       const trackToolbar = el('div', 'caqdas__tracktb'); trackToolbar.style.display = 'none';
@@ -522,7 +537,10 @@ export const workspace = {
       mediaEl.addEventListener('seeked', sync);
       mediaEl.addEventListener('loadedmetadata', () => { sync(); drawLanes(lanes, doc, mediaEl.duration || 1); });
 
-      textPane.append(playerNode, ctrl, trackToolbar, hint, timeline);
+      // Video: player, hint, track toolbar, then the transport strip RIGHT above the
+      // ruler (controls off the frame). Audio: player (native controls) + speed row.
+      if (isVideo) textPane.append(playerNode, hint, trackToolbar, ctrl, timeline);
+      else textPane.append(playerNode, ctrl, hint, timeline);
       if (mediaEl.readyState >= 1) drawLanes(lanes, doc, mediaEl.duration || 1); // metadata already cached
     }
 
