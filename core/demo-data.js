@@ -165,9 +165,9 @@ export function makeSpatialDemoDataset() {
       fileName: 'Sacramento congressional districts',
       keyProp: 'district', dataColumn: 'district',
       features: [
-        {type:'Feature',properties:{district:'CA-06',representative:'Matsui'},geometry:{type:'Polygon',coordinates:[[[-121.56,38.56],[-121.46,38.56],[-121.46,38.67],[-121.56,38.67],[-121.56,38.56]]]}},
-        {type:'Feature',properties:{district:'CA-07',representative:'Bera'},geometry:{type:'Polygon',coordinates:[[[-121.46,38.56],[-121.37,38.56],[-121.37,38.67],[-121.46,38.67],[-121.46,38.56]]]}},
-        {type:'Feature',properties:{district:'CA-03',representative:'Kiley'},geometry:{type:'Polygon',coordinates:[[[-121.56,38.49],[-121.37,38.49],[-121.37,38.56],[-121.56,38.56],[-121.56,38.49]]]}},
+        {type:'Feature',properties:{district:'CA-06'},geometry:{type:'Polygon',coordinates:[[[-121.56,38.56],[-121.46,38.56],[-121.46,38.67],[-121.56,38.67],[-121.56,38.56]]]}},
+        {type:'Feature',properties:{district:'CA-07'},geometry:{type:'Polygon',coordinates:[[[-121.46,38.56],[-121.37,38.56],[-121.37,38.67],[-121.46,38.67],[-121.46,38.56]]]}},
+        {type:'Feature',properties:{district:'CA-03'},geometry:{type:'Polygon',coordinates:[[[-121.56,38.49],[-121.37,38.49],[-121.37,38.56],[-121.56,38.56],[-121.56,38.49]]]}},
       ],
     },
   ];
