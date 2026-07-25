@@ -116,9 +116,9 @@ export function makeQualDemoDataset() {
  * @returns {{ variables: import('./data-store.js').VariableMeta[], columns: Object<string, Array> }}
  */
 export function makeSpatialDemoDataset() {
-  const zips = ['95814','95816','95819','95822','95823','95826','95828','95833','95834','95841'];
+  const zips = ['95814','95816','95817','95819','95822','95823','95826','95828','95833','95834','95841'];
   const zipDistrict = {
-    '95814': 'CA-07', '95816': 'CA-07', '95819': 'CA-07',
+    '95814': 'CA-07', '95816': 'CA-07', '95817': 'CA-07', '95819': 'CA-07',
     '95822': 'CA-07', '95823': 'CA-07', '95826': 'CA-07', '95828': 'CA-07',
     '95833': 'CA-06', '95834': 'CA-06', '95841': 'CA-06',
   };
@@ -150,6 +150,7 @@ export function makeSpatialDemoDataset() {
       features: [
         {type:'Feature',properties:{ZCTA:'95814',name:'Downtown'},geometry:{type:'Polygon',coordinates:[[[-121.51,38.575],[-121.49,38.575],[-121.49,38.59],[-121.51,38.59],[-121.51,38.575]]]}},
         {type:'Feature',properties:{ZCTA:'95816',name:'Midtown'},geometry:{type:'Polygon',coordinates:[[[-121.49,38.565],[-121.47,38.565],[-121.47,38.585],[-121.49,38.585],[-121.49,38.565]]]}},
+        {type:'Feature',properties:{ZCTA:'95817',name:'Elmhurst / Med Center'},geometry:{type:'Polygon',coordinates:[[[-121.49,38.545],[-121.47,38.545],[-121.47,38.565],[-121.49,38.565],[-121.49,38.545]]]}},
         {type:'Feature',properties:{ZCTA:'95819',name:'East Sacramento'},geometry:{type:'Polygon',coordinates:[[[-121.47,38.555],[-121.44,38.555],[-121.44,38.58],[-121.47,38.58],[-121.47,38.555]]]}},
         {type:'Feature',properties:{ZCTA:'95822',name:'South Sacramento'},geometry:{type:'Polygon',coordinates:[[[-121.52,38.52],[-121.49,38.52],[-121.49,38.545],[-121.52,38.545],[-121.52,38.52]]]}},
         {type:'Feature',properties:{ZCTA:'95823',name:'Parkway / South'},geometry:{type:'Polygon',coordinates:[[[-121.47,38.50],[-121.44,38.50],[-121.44,38.525],[-121.47,38.525],[-121.47,38.50]]]}},
