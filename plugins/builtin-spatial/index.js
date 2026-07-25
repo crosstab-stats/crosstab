@@ -44,6 +44,7 @@ export const manifest = {
       { id: 'filter-to-selection', label: 'Filter to selection', run: 'filterToSelection', category: 'toolbar' },
       { id: 'clear-boundaries', label: 'Clear', run: 'clearBoundaries', category: 'toolbar' },
       { id: 'export-map', label: 'Export map', run: 'exportMap', category: 'toolbar' },
+      { id: 'import-boundaries', label: 'GeoJSON boundaries (.geojson, .json)…', run: 'importBoundaries', category: 'import', needsFile: { extensions: ['.geojson', '.json'] }, group: 'Spatial' },
     ],
   }],
   menu: [
@@ -434,6 +435,62 @@ export async function loadBoundaries(app, opts) {
     return { ok: false, message: `Invalid GeoJSON: ${e.message}` };
   }
   return wsApplyBoundaries(app, geojson, file.name);
+}
+
+// --- import verb (runs in the compute iframe, no workspace DOM access) -------
+
+export async function importBoundaries(app, opts) {
+  const file = opts?.__file;
+  if (!file) return { ok: false, message: 'No file provided.' };
+  let geojson;
+  try {
+    const text = new TextDecoder().decode(file.bytes);
+    geojson = JSON.parse(text);
+  } catch (e) {
+    return { ok: false, message: `Invalid GeoJSON: ${e.message}` };
+  }
+  const fc = geojson.type === 'FeatureCollection' ? geojson
+    : geojson.type === 'Feature' ? { type: 'FeatureCollection', features: [geojson] }
+    : null;
+  if (!fc?.features?.length) return { ok: false, message: 'No features found.' };
+  const features = fc.features.filter(
+    (f) => f.geometry && (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon'),
+  );
+  if (!features.length) return { ok: false, message: 'No Polygon/MultiPolygon features found.' };
+
+  const allProps = new Set();
+  for (const f of features) {
+    if (f.properties) for (const k of Object.keys(f.properties)) allProps.add(k);
+  }
+  if (!allProps.size) return { ok: false, message: 'Features have no properties to use as a region key.' };
+  const propList = [...allProps].sort();
+  const keyItems = propList.map((p) => ({ value: p, label: p }));
+  const keyPick = await app.ui.selectFromList({
+    title: 'Region key property',
+    hint: 'Which property in the GeoJSON identifies each region?',
+    items: keyItems, multiple: false,
+  });
+  if (!keyPick) return { ok: false, message: 'Cancelled.' };
+  const keyProp = keyPick[0];
+
+  const colPick = await app.ui.selectVariables({
+    title: 'Match to data column',
+    hint: `Which column in your data matches the "${keyProp}" property in the map?`,
+    multiple: false,
+  });
+  if (!colPick) return { ok: false, message: 'Cancelled.' };
+  const dataColumn = colPick[0];
+
+  const existing = await app.state.read('spatial-map') || {};
+  const sets = existing.boundarySets || [];
+  sets.push({ fileName: file.name, keyProp, dataColumn, features });
+  await app.state.write('spatial-map', {
+    ...existing,
+    keyProp, dataColumn,
+    fileName: file.name,
+    boundarySets: sets,
+  });
+  return { ok: true, message: `Loaded ${features.length} boundaries from ${file.name}.`, refresh: 'workspace' };
 }
 
 async function wsApplyBoundaries(app, geojson, fileName, presetKeyProp, presetDataCol) {

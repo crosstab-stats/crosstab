@@ -333,6 +333,7 @@ export class PluginActions {
       for (const r of refreshes) {
         if (r === 'output') this.#bus.emit('output:written');
         if (r === 'dataset' || r === 'columns') this.#bus.emit(CoreEvents.DATA_CHANGED);
+        if (r === 'workspace') this.#bus.emit('workspace:refresh');
       }
     }
   }

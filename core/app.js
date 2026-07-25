@@ -731,6 +731,9 @@ export async function boot(mounts) {
         if (!handled) void workspaceManager.remountActive(plugins.list());
       });
     });
+    bus.on('workspace:refresh', () => {
+      void workspaceManager.remountActive(plugins.list());
+    });
   }
   // In-app plugin creator (Edit ▸ Create plugin…, and the manager's "Create new…"):
   // authors a plugin from a template and loads it through the same sandbox.

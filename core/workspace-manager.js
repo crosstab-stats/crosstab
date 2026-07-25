@@ -273,6 +273,7 @@ export class WorkspaceManager {
       for (const r of refreshes) {
         if (r === 'output') bus?.emit?.('output:written');
         if (r === 'dataset' || r === 'columns') bus?.emit?.('data:changed');
+        if (r === 'workspace') bus?.emit?.('workspace:refresh');
       }
     }
   }
