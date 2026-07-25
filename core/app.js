@@ -761,7 +761,7 @@ export async function boot(mounts) {
   // Connectivity indicator in the status bar — most useful on a field device, where
   // it tells the user why an online importer is quiet and confirms "you're cached."
   if (mounts.status) wireConnectivityIndicator(mounts.status, offline);
-  const launcher = new Launcher({ plugins, datasets, bus, projects, offline });
+  const launcher = new Launcher({ plugins, datasets, bus, projects, offline, workspaceStore });
   engine.launcher = launcher;
   const launchFlag = new URLSearchParams(location.search).get('launch');
   let bypassed = false;

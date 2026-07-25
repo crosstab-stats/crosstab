@@ -40,7 +40,7 @@ const PRESETS = {
 const LS_SEEN = 'crosstab.launcher.seen';
 
 export class Launcher {
-  #plugins; #datasets; #bus; #projects; #offline;
+  #plugins; #datasets; #bus; #projects; #offline; #workspaceStore;
   #root = null;
   /** Selected plugin keys (the checked set). @type {Set<string>} */
   #selected = new Set();
@@ -59,13 +59,16 @@ export class Launcher {
    *   saved-projects rail + the `?launch=<projectName>` bypass.
    * @param {import('./offline.js').OfflineManager} [deps.offline] - Enables the
    *   "Make available offline" control in the About panel.
+   * @param {import('./workspace-store.js').WorkspaceStore} [deps.workspaceStore] -
+   *   Pre-seeds workspace state for demo sources (e.g. spatial boundaries).
    */
-  constructor({ plugins, datasets, bus, projects, offline }) {
+  constructor({ plugins, datasets, bus, projects, offline, workspaceStore }) {
     this.#plugins = plugins;
     this.#datasets = datasets;
     this.#bus = bus;
     this.#projects = projects ?? null;
     this.#offline = offline ?? null;
+    this.#workspaceStore = workspaceStore ?? null;
   }
 
   /** Load a data source by key (also used by the URL bypass) and name the active
@@ -82,6 +85,20 @@ export class Launcher {
       if (this.#datasets.activeId != null) this.#datasets.rename(this.#datasets.activeId, name);
     } catch {
       /* naming is best-effort */
+    }
+    if (dataset.boundaries && this.#workspaceStore) {
+      const dsId = this.#datasets.activeId;
+      const first = dataset.boundaries[0];
+      if (first && dsId != null) {
+        this.#workspaceStore.set('builtin', 'spatial-map', dsId, {
+          keyProp: first.keyProp,
+          dataColumn: first.dataColumn,
+          shadeColumn: null,
+          fileName: first.fileName,
+          selected: [],
+          __demoBoundaries: dataset.boundaries,
+        });
+      }
     }
   }
 

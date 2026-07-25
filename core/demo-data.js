@@ -143,7 +143,33 @@ export function makeSpatialDemoDataset() {
     { name: 'income_k', label: 'Household income ($K)', type: 'numeric', measurementLevel: 'scale' },
     { name: 'household_size', label: 'Household size', type: 'numeric', measurementLevel: 'scale' },
   ];
-  return { variables, columns: { zip_code, district, satisfaction, commute_min, income_k, household_size } };
+  const boundaries = [
+    {
+      fileName: 'Sacramento ZIP codes',
+      keyProp: 'ZCTA', dataColumn: 'zip_code',
+      features: [
+        {type:'Feature',properties:{ZCTA:'95814',name:'Downtown'},geometry:{type:'Polygon',coordinates:[[[-121.51,38.575],[-121.49,38.575],[-121.49,38.59],[-121.51,38.59],[-121.51,38.575]]]}},
+        {type:'Feature',properties:{ZCTA:'95816',name:'Midtown'},geometry:{type:'Polygon',coordinates:[[[-121.49,38.565],[-121.47,38.565],[-121.47,38.585],[-121.49,38.585],[-121.49,38.565]]]}},
+        {type:'Feature',properties:{ZCTA:'95819',name:'East Sacramento'},geometry:{type:'Polygon',coordinates:[[[-121.47,38.555],[-121.44,38.555],[-121.44,38.58],[-121.47,38.58],[-121.47,38.555]]]}},
+        {type:'Feature',properties:{ZCTA:'95822',name:'South Sacramento'},geometry:{type:'Polygon',coordinates:[[[-121.52,38.52],[-121.49,38.52],[-121.49,38.545],[-121.52,38.545],[-121.52,38.52]]]}},
+        {type:'Feature',properties:{ZCTA:'95823',name:'Parkway / South'},geometry:{type:'Polygon',coordinates:[[[-121.47,38.50],[-121.44,38.50],[-121.44,38.525],[-121.47,38.525],[-121.47,38.50]]]}},
+        {type:'Feature',properties:{ZCTA:'95826',name:'College Greens'},geometry:{type:'Polygon',coordinates:[[[-121.44,38.545],[-121.41,38.545],[-121.41,38.57],[-121.44,38.57],[-121.44,38.545]]]}},
+        {type:'Feature',properties:{ZCTA:'95828',name:'Vineyard'},geometry:{type:'Polygon',coordinates:[[[-121.44,38.50],[-121.40,38.50],[-121.40,38.53],[-121.44,38.53],[-121.44,38.50]]]}},
+        {type:'Feature',properties:{ZCTA:'95833',name:'Natomas'},geometry:{type:'Polygon',coordinates:[[[-121.54,38.60],[-121.50,38.60],[-121.50,38.635],[-121.54,38.635],[-121.54,38.60]]]}},
+        {type:'Feature',properties:{ZCTA:'95834',name:'North Natomas'},geometry:{type:'Polygon',coordinates:[[[-121.54,38.635],[-121.49,38.635],[-121.49,38.665],[-121.54,38.665],[-121.54,38.635]]]}},
+        {type:'Feature',properties:{ZCTA:'95841',name:'Arden-Arcade'},geometry:{type:'Polygon',coordinates:[[[-121.41,38.58],[-121.37,38.58],[-121.37,38.61],[-121.41,38.61],[-121.41,38.58]]]}},
+      ],
+    },
+    {
+      fileName: 'Sacramento congressional districts',
+      keyProp: 'district', dataColumn: 'district',
+      features: [
+        {type:'Feature',properties:{district:'CA-06',representative:'Matsui'},geometry:{type:'Polygon',coordinates:[[[-121.56,38.58],[-121.44,38.58],[-121.37,38.58],[-121.37,38.61],[-121.41,38.635],[-121.44,38.665],[-121.54,38.665],[-121.56,38.635],[-121.56,38.58]]]}},
+        {type:'Feature',properties:{district:'CA-07',representative:'Bera'},geometry:{type:'Polygon',coordinates:[[[-121.56,38.49],[-121.37,38.49],[-121.37,38.58],[-121.44,38.58],[-121.56,38.58],[-121.56,38.49]]]}},
+      ],
+    },
+  ];
+  return { variables, columns: { zip_code, district, satisfaction, commute_min, income_k, household_size }, boundaries };
 }
 
 /** An empty starter dataset (one placeholder column) for "Start blank" — the user

@@ -312,23 +312,6 @@ function flat(rList) {
 
 let _ws = null; // module-level workspace state (fresh per iframe mount)
 
-const DEMO_ZIPS = {"type":"FeatureCollection","features":[
-  {"type":"Feature","properties":{"ZCTA":"95814","name":"Downtown"},"geometry":{"type":"Polygon","coordinates":[[[-121.51,38.575],[-121.49,38.575],[-121.49,38.59],[-121.51,38.59],[-121.51,38.575]]]}},
-  {"type":"Feature","properties":{"ZCTA":"95816","name":"Midtown"},"geometry":{"type":"Polygon","coordinates":[[[-121.49,38.565],[-121.47,38.565],[-121.47,38.585],[-121.49,38.585],[-121.49,38.565]]]}},
-  {"type":"Feature","properties":{"ZCTA":"95819","name":"East Sacramento"},"geometry":{"type":"Polygon","coordinates":[[[-121.47,38.555],[-121.44,38.555],[-121.44,38.58],[-121.47,38.58],[-121.47,38.555]]]}},
-  {"type":"Feature","properties":{"ZCTA":"95822","name":"South Sacramento"},"geometry":{"type":"Polygon","coordinates":[[[-121.52,38.52],[-121.49,38.52],[-121.49,38.545],[-121.52,38.545],[-121.52,38.52]]]}},
-  {"type":"Feature","properties":{"ZCTA":"95823","name":"Parkway / South"},"geometry":{"type":"Polygon","coordinates":[[[-121.47,38.50],[-121.44,38.50],[-121.44,38.525],[-121.47,38.525],[-121.47,38.50]]]}},
-  {"type":"Feature","properties":{"ZCTA":"95826","name":"College Greens"},"geometry":{"type":"Polygon","coordinates":[[[-121.44,38.545],[-121.41,38.545],[-121.41,38.57],[-121.44,38.57],[-121.44,38.545]]]}},
-  {"type":"Feature","properties":{"ZCTA":"95828","name":"Vineyard"},"geometry":{"type":"Polygon","coordinates":[[[-121.44,38.50],[-121.40,38.50],[-121.40,38.53],[-121.44,38.53],[-121.44,38.50]]]}},
-  {"type":"Feature","properties":{"ZCTA":"95833","name":"Natomas"},"geometry":{"type":"Polygon","coordinates":[[[-121.54,38.60],[-121.50,38.60],[-121.50,38.635],[-121.54,38.635],[-121.54,38.60]]]}},
-  {"type":"Feature","properties":{"ZCTA":"95834","name":"North Natomas"},"geometry":{"type":"Polygon","coordinates":[[[-121.54,38.635],[-121.49,38.635],[-121.49,38.665],[-121.54,38.665],[-121.54,38.635]]]}},
-  {"type":"Feature","properties":{"ZCTA":"95841","name":"Arden-Arcade"},"geometry":{"type":"Polygon","coordinates":[[[-121.41,38.58],[-121.37,38.58],[-121.37,38.61],[-121.41,38.61],[-121.41,38.58]]]}}
-]};
-const DEMO_DISTRICTS = {"type":"FeatureCollection","features":[
-  {"type":"Feature","properties":{"district":"CA-06","representative":"Matsui"},"geometry":{"type":"Polygon","coordinates":[[[-121.56,38.58],[-121.44,38.58],[-121.37,38.58],[-121.37,38.61],[-121.41,38.635],[-121.44,38.665],[-121.54,38.665],[-121.56,38.635],[-121.56,38.58]]]}},
-  {"type":"Feature","properties":{"district":"CA-07","representative":"Bera"},"geometry":{"type":"Polygon","coordinates":[[[-121.56,38.49],[-121.37,38.49],[-121.37,38.58],[-121.44,38.58],[-121.56,38.58],[-121.56,38.49]]]}}
-]};
-
 export const workspace = {
   async mount(app, root) {
     _ws = {
@@ -367,9 +350,9 @@ export const workspace = {
       button.sm { font: inherit; font-size: 12px; padding: 2px 8px; border: 1px solid #ccd2d8; border-radius: 4px; background: #fff; cursor: pointer; }
       button.sm:hover { background: #eef3f8; }
       .empty { padding: 20px; text-align: center; color: #8899a6; }
-      .demo-hint { padding: 16px 20px; text-align: center; color: #5a6a78; line-height: 1.6; }
-      .demo-hint a { color: #2980b9; cursor: pointer; text-decoration: underline; }
-      .demo-hint a:hover { color: #1a5276; }
+      .demo-links { padding: 16px 20px; text-align: center; color: #5a6a78; line-height: 1.6; }
+      .demo-links a { color: #2980b9; cursor: pointer; text-decoration: underline; }
+      .demo-links a:hover { color: #1a5276; }
     `);
     document.adoptedStyleSheets = [sheet];
 
@@ -403,28 +386,25 @@ export const workspace = {
     listPane.append(listHeader, listBody);
     root.append(mapPane, listPane);
 
-    if (!_ws.fileName) {
-      const cols = await app.data.getColumns();
-      const colNames = cols?.names || cols?.map?.((c) => c.name) || [];
-      const hasZip = colNames.includes('zip_code');
-      const hasDist = colNames.includes('district');
-      if (hasZip || hasDist) {
-        const hint = el('div', null, 'demo-hint');
-        hint.textContent = 'Demo boundaries available: ';
-        if (hasZip) {
+    if (saved?.__demoBoundaries?.length) {
+      const sets = saved.__demoBoundaries;
+      const first = sets[0];
+      const fc = { type: 'FeatureCollection', features: first.features };
+      await wsApplyBoundaries(app, fc, first.fileName, first.keyProp, first.dataColumn);
+      if (sets.length > 1) {
+        const links = el('div', null, 'demo-links');
+        links.textContent = 'Switch boundaries: ';
+        for (let i = 0; i < sets.length; i++) {
+          if (i > 0) links.append(document.createTextNode(' · '));
+          const s = sets[i];
           const a = document.createElement('a');
-          a.textContent = 'ZIP codes';
-          a.addEventListener('click', () => { hint.remove(); wsLoadDemo(app, DEMO_ZIPS, 'Sacramento ZIP codes', 'ZCTA', 'zip_code'); });
-          hint.append(a);
+          a.textContent = s.fileName;
+          a.addEventListener('click', () => {
+            wsApplyBoundaries(app, { type: 'FeatureCollection', features: s.features }, s.fileName, s.keyProp, s.dataColumn);
+          });
+          links.append(a);
         }
-        if (hasZip && hasDist) hint.append(document.createTextNode(' · '));
-        if (hasDist) {
-          const a = document.createElement('a');
-          a.textContent = 'Congressional districts';
-          a.addEventListener('click', () => { hint.remove(); wsLoadDemo(app, DEMO_DISTRICTS, 'Sacramento districts', 'district', 'district'); });
-          hint.append(a);
-        }
-        _ws.svgEl.insertAdjacentElement('afterend', hint);
+        _ws.svgEl.insertAdjacentElement('afterend', links);
       }
     }
   },
@@ -514,10 +494,6 @@ async function wsApplyBoundaries(app, geojson, fileName, presetKeyProp, presetDa
   const n = validFeatures.length;
   _ws.statusEl.textContent = `${fileName} — ${n} region${n !== 1 ? 's' : ''} loaded (key: ${keyProp}).`;
   return { ok: true };
-}
-
-async function wsLoadDemo(app, geojson, fileName, keyProp, dataCol) {
-  await wsApplyBoundaries(app, geojson, fileName, keyProp, dataCol);
 }
 
 export async function shadeByVariable(app) {
