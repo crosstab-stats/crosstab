@@ -202,6 +202,17 @@ export async function parseAcme(app, { name, file }) {
 missing codes that neither columns nor Parquet convey. (A `"web"` importer sets
 `source: 'web'`, gets no file, and fetches its own bytes via `app.web.get`.)
 
+**Self-committing importers.** If your format isn't one table — a project archive
+that fans out into several datasets, or one that also carries workspace state (e.g.
+a QDPX project with its own qualitative-coding blob + media) — declare
+`selfCommit: true` on the import spec. Then `parse` **creates its own dataset(s)**
+via `app.data.create` (additive — it can't touch existing data) and
+`app.state.write` (your *own* workspace state, owner-scoped), and **returns a
+receipt** (any truthy value, e.g. `{ name, rows }`) to report success, or `null` if
+it aborted. The host runs no replace/append/join/new dialog and no commit of its
+own — you've already committed. The destructive commit into the *active* dataset
+stays host-only either way: no importer can overwrite your loaded data unprompted.
+
 One-shot `imports`/`exports` hold the whole dataset in memory, so they're best for
 small-to-medium files. For large files (or any format you want to stream), use a
 **codec** instead — see "Large files & new formats" below.

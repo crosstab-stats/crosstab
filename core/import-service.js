@@ -11,9 +11,21 @@
  *  - The **file picker** — opened synchronously on the user's menu click so the
  *    browser's user-activation requirement for file dialogs is satisfied. (A
  *    plugin-driven picker would lose activation across the postMessage hops.)
- *  - The **commit** into the dataset (`DataStore.loadDataset`). A plugin only
- *    ever *describes* the parsed data; the engine commits it, and only as part
- *    of a user-initiated import — so no plugin can replace your data unprompted.
+ *  - The **destructive commit** into your loaded data — replace / append / join
+ *    (`DataStore.loadDataset` with those modes). This is host-only and is never
+ *    exposed to a plugin: in the default contract the plugin only *describes* the
+ *    parsed data and the engine commits it, as part of a user-initiated import —
+ *    so no plugin can replace or overwrite your active dataset unprompted.
+ *
+ *    A plugin *can* create **new** datasets (that is `app.data.create`, an
+ *    additive capability any activated plugin already has — it can't touch an
+ *    existing dataset) and write its **own** workspace state (`app.state.write`,
+ *    owner-scoped: host-asserted identity + manifest-declared + reservation). A
+ *    `selfCommit` importer (see {@link ImporterSpec}) uses exactly those to build
+ *    its own dataset(s) instead of delivering one — so the engine still runs no
+ *    merge and performs no `loadDataset`. The boundary is *additive vs
+ *    destructive*, not *host vs plugin*: creating alongside your data is open;
+ *    replacing your data is the engine's alone.
  *
  * ## Flow
  * 1. A plugin calls `app.importers.register({ label, extensions, parse })`.
@@ -28,6 +40,14 @@
  *    RPC back to the engine — with `{ variables, columns }` or
  *    `{ variables, parquet }` (the dual contract).
  * 5. The engine resolves that ticket and commits via `DataStore.loadDataset`.
+ *
+ * A `selfCommit` importer (`manifest.imports[].selfCommit`) inverts steps 4–5:
+ * instead of delivering a dataset it *creates* its own via `app.data.create` +
+ * `app.state.write` (e.g. a QDPX project → a new dataset with its own coding blob
+ * + media), then delivers a **receipt** (any truthy value) purely to report
+ * success. The engine shows no replace/append/join/new dialog and calls no
+ * `loadDataset` — there is nothing to merge into your active data. Still additive
+ * only; the destructive path above stays host-owned.
  *
  * This rides entirely on the existing protocol (one-way callbacks + plugin→host
  * RPC); no wire-protocol change was needed.

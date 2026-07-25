@@ -40,6 +40,19 @@ grants it the active dataset. Combined with the consented `app.web.get`
 plugin reading the data still cannot send it off-device without an explicit allow.
 (WebR network egress is a known gap — see "Deferred", #4.)
 
+**Writes are additive, not destructive.** The trust above is read trust; the write
+surface is deliberately narrower. An activated plugin can **create new** datasets
+(`app.data.create`), switch which one is active (`app.data.setActive`), and write
+its **own** workspace state (`app.state.write` — owner-scoped: host-asserted plugin
+identity, must be declared in the manifest, and a non-builtin can't write a
+builtin's id). It **cannot** destructively replace, append-into, or join-over your
+loaded data: `DataStore.loadDataset` in those modes is host-only and reached solely
+through a user-initiated **File ▸ Import** (see `core/import-service.js`). A
+`selfCommit` importer builds its own dataset via the additive calls above instead
+of delivering one — so the boundary is *additive vs destructive*, not *host vs
+plugin*. Worst case, a malicious activated plugin litters new datasets; it cannot
+silently overwrite the data you have open.
+
 ### Opening an untrusted bundle reconciles the active plugin set
 
 Opening a `.crosstab` drives the active plugin set to exactly the bundle's list —

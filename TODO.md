@@ -443,9 +443,10 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       chiefly a live-mode concern plus the sneakernet path.
   - **Core-vs-plugin boundary — apply the doctrine we already have, don't invent one.**
     `import-service.js` states the rule: the engine owns **"only what the security model
-    forces it to"** — host UI, the user-activated picker, and **the commit** ("a plugin
-    only *describes* the data; the engine commits it, so no plugin can replace your data
-    unprompted"). No privileged importer; official CSV/SPSS register through the same
+    forces it to"** — host UI, the user-activated picker, and **the destructive commit**
+    (replace/append/join is host-only, so no plugin can overwrite your active data
+    unprompted; a plugin *may* create **new** datasets and write its **own** state —
+    additive vs destructive, not host vs plugin). No privileged importer; official CSV/SPSS register through the same
     public call a third party uses. Plugins run in a **sandboxed opaque-origin iframe**
     over the `plugin-broker` postMessage bridge. Collaboration = the *same* split applied
     to storage + transport:
