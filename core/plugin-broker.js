@@ -76,6 +76,9 @@ export class PluginBroker {
   /** Deferred for the workspace mount handshake (#93). */
   #workspaceMounted = deferred();
 
+  /** Deferred for an in-flight lifecycle hook (datasetChanged / deactivate). */
+  #lifecycleAck = null;
+
   /** Host-stamped output attribution ("Name · origin") for this plugin, applied to
    * its workspace-driven results so they're traceable like menu analyses. */
   #attribution = null;
@@ -237,6 +240,32 @@ export class PluginBroker {
   }
 
   /**
+   * Lifecycle hook: notify the workspace iframe that the active dataset changed.
+   * If the plugin exports `workspace.onDatasetChanged`, it can re-read state and
+   * re-render in place without a full remount. Resolves when the hook returns.
+   * @param {object} [plugin] - Identity for makeApp if not already built.
+   */
+  sendDatasetChanged(plugin) {
+    this.#lifecycleAck = deferred();
+    this.#post({ t: 'datasetChanged', plugin });
+    return this.#lifecycleAck.promise;
+  }
+
+  /**
+   * Lifecycle hook: notify the workspace iframe it is being deactivated so it can
+   * flush unsaved state. Resolves when the hook returns (or times out).
+   * @param {object} [plugin] - Identity for makeApp if not already built.
+   */
+  sendDeactivate(plugin) {
+    this.#lifecycleAck = deferred();
+    this.#post({ t: 'deactivate', plugin });
+    return Promise.race([
+      this.#lifecycleAck.promise,
+      new Promise((r) => setTimeout(r, 500)),
+    ]);
+  }
+
+  /**
    * Tear down: run every outstanding disposer (menu items, subscriptions) and
    * stop listening. The caller is responsible for removing the iframe element,
    * which destroys the plugin's heap.
@@ -298,6 +327,12 @@ export class PluginBroker {
         if (msg.ok) this.#workspaceMounted.resolve();
         else this.#workspaceMounted.reject(new Error(msg.error || 'workspace mount failed'));
         break;
+      case 'lifecycleAck': {
+        const lc = this.#lifecycleAck;
+        this.#lifecycleAck = null;
+        if (lc) { if (msg.ok) lc.resolve(); else lc.reject(new Error(msg.error || 'lifecycle hook failed')); }
+        break;
+      }
       case 'invoked': {
         const p = this.#invokePending;
         this.#invokePending = null;

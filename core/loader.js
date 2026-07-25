@@ -171,6 +171,41 @@ function probeServices() {
  *   `{filename, mimeType, data}` for the host to download.
  * @property {string[]} [extensions]
  * @property {number} [order]
+ *
+ * @typedef {Object} WorkspaceDecl
+ * @property {string} id - Unique workspace id, e.g. `'caqdas-coding'`.
+ * @property {string} [title] - Tab title; defaults to `id`.
+ * @property {Array<VerbDecl>} [verbs] - Operations the workspace exposes to the
+ *   host. The host renders them (toolbar buttons, import/export picker entries,
+ *   menu items) and routes clicks to the plugin's named function; the plugin owns
+ *   the semantics and returns a typed envelope.
+ *
+ * @typedef {Object} VerbDecl
+ * @property {string} id - Unique within this workspace, e.g. `'import-qdpx'`.
+ * @property {string} label - User-facing label, e.g. `'Import QDPX project…'`.
+ * @property {string} run - Name of the exported function: `run(app, {file?})` →
+ *   `VerbResult`. The host calls this when the user clicks the verb.
+ * @property {'toolbar'|'import'|'export'|'menu'} [category='toolbar'] - Where the
+ *   host surfaces the verb: `toolbar` = workspace tab toolbar strip, `import` =
+ *   File ▸ Import picker, `export` = File ▸ Export picker, `menu` = top-level menu.
+ * @property {{extensions: string[]}} [needsFile] - If present, the host opens a
+ *   file picker synchronously on the click (preserving user activation) and passes
+ *   the `File` to the verb function. Required for any verb that consumes a file —
+ *   the browser's activation rule prevents the plugin from opening its own picker.
+ * @property {Array<InputDecl>} [inputs] - Optional host-gathered inputs (variable
+ *   pickers, number fields, etc.) collected before invoking the verb. Most workspace
+ *   verbs gather their own inputs via `app.ui.*`; use this for the rare case where
+ *   host-gathered variable selection is needed before running.
+ * @property {number} [order] - Sort weight within the category (lower first).
+ * @property {string} [group] - Picker group heading (import/export categories).
+ *
+ * @typedef {Object} VerbResult
+ * @property {boolean} ok - Whether the verb succeeded.
+ * @property {string} [message] - Status text shown as a toast/inline message.
+ * @property {string|string[]} [refresh] - What the host should re-read after the
+ *   verb completes. Vocabulary: `'columns'` (variable metadata changed), `'dataset'`
+ *   (a new dataset was created), `'output'` (results appended — flip to Output tab),
+ *   `'workspace'` (workspace state changed — trigger autosave).
  */
 
 /**

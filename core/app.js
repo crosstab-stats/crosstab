@@ -724,7 +724,12 @@ export async function boot(mounts) {
     bus.on(DATASETS_CHANGED, () => {
       if (datasets.activeId === lastActiveId) return;
       lastActiveId = datasets.activeId;
-      void workspaceManager.remountActive(plugins.list());
+      // Try the lifecycle hook first — if all mounted workspaces handle
+      // onDatasetChanged, they re-render in place (faster, preserves DOM state).
+      // Fall back to full remount if any workspace lacks the hook.
+      void workspaceManager.notifyDatasetChanged(plugins.list()).then((handled) => {
+        if (!handled) void workspaceManager.remountActive(plugins.list());
+      });
     });
   }
   // In-app plugin creator (Edit ▸ Create plugin…, and the manager's "Create new…"):

@@ -71,9 +71,13 @@ export class PluginActions {
 
   /** True if a manifest uses the declarative model (this module should wire it). */
   static isDeclarative(manifest) {
-    return ['menu', 'imports', 'exports', 'outputExports', 'codecs'].some(
+    if (['menu', 'imports', 'exports', 'outputExports', 'codecs'].some(
       (k) => Array.isArray(manifest?.[k]) && manifest[k].length > 0,
-    );
+    )) return true;
+    for (const ws of manifest?.workspaces ?? []) {
+      if (Array.isArray(ws.verbs) && ws.verbs.length > 0) return true;
+    }
+    return false;
   }
 
   /**
@@ -146,6 +150,54 @@ export class PluginActions {
           ),
       });
       if (typeof dispose === 'function') disposers.push(dispose);
+    }
+
+    // Workspace verbs: wire import/export/menu category verbs through the host
+    // services. Toolbar verbs are handled by WorkspaceManager (they live in the
+    // workspace iframe, not the compute iframe).
+    for (const ws of manifest.workspaces ?? []) {
+      for (const verb of ws.verbs ?? []) {
+        const cat = verb.category || 'toolbar';
+        if (cat === 'toolbar') continue; // WorkspaceManager owns these
+
+        if (cat === 'import') {
+          const dispose = this.#importers.register({
+            id: `${id}:${verb.id}`,
+            label: verb.label,
+            order: verb.order,
+            extensions: verb.needsFile?.extensions,
+            group: verb.group,
+            selfCommit: true, // workspace verbs always manage their own commits
+            parse: (req) =>
+              this.#bridge(this.#importers, req.ticket, async () => {
+                const result = await this.#loader.invoke(id, verb.run, [{ name: req.name, file: req.file, path: req.path }]);
+                return result?.ok ? result : null;
+              }),
+          });
+          if (typeof dispose === 'function') disposers.push(dispose);
+        } else if (cat === 'export') {
+          const dispose = this.#exporters.register({
+            id: `${id}:${verb.id}`,
+            label: verb.label,
+            order: verb.order,
+            extensions: verb.needsFile?.extensions,
+            group: verb.group,
+            export: (req) =>
+              this.#bridge(this.#exporters, req.ticket, () => this.#loader.invoke(id, verb.run, [])),
+          });
+          if (typeof dispose === 'function') disposers.push(dispose);
+        } else if (cat === 'menu') {
+          const dispose = this.#menus.register({
+            id: `${id}:${verb.id}`,
+            path: [category],
+            label: verb.label,
+            order: verb.order,
+            command: () => this.#runVerb(manifest, originLabel, verb),
+          });
+          if (typeof dispose === 'function') disposers.push(dispose);
+          this.#runnable.set(`${id}::${verb.run}`, { manifest, item: verb, origin: originLabel });
+        }
+      }
     }
 
     // Streaming format codecs (#98): a unified read/write per format, routed through
@@ -244,6 +296,45 @@ export class PluginActions {
       specs: Array.isArray(t.item.inputs) ? t.item.inputs : [],
       inputs: a.inputs || {},
     };
+  }
+
+  /** Run a workspace verb with category:'menu'. Gathers optional inputs, invokes
+   * the verb function, and processes the result envelope. */
+  async #runVerb(manifest, originLabel, verb) {
+    const specs = Array.isArray(verb.inputs) ? verb.inputs : [];
+    let gathered = {};
+    if (specs.length) {
+      gathered = await gatherInputs(this.#ui, specs, verb);
+      if (gathered === null) return;
+    }
+    if (verb.needsFile) {
+      const file = await pickFile(verb.needsFile.extensions);
+      if (!file) return;
+      gathered.__file = { name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) };
+    }
+    try {
+      const result = await this.#loader.invoke(manifest.id, verb.run, [gathered]);
+      this.#handleVerbResult(result);
+    } catch (err) {
+      this.#results.appendError(`${verb.label}: ${err.message}`);
+      console.error(`[verb ${manifest.id}.${verb.run}]`, err);
+    }
+  }
+
+  /** Process a verb's return envelope — show message and trigger host refreshes. */
+  #handleVerbResult(result) {
+    if (!result) return;
+    if (result.message) {
+      if (result.ok) this.#results.appendText?.(result.message);
+      else this.#results.appendError?.(result.message);
+    }
+    if (result.refresh) {
+      const refreshes = Array.isArray(result.refresh) ? result.refresh : [result.refresh];
+      for (const r of refreshes) {
+        if (r === 'output') this.#bus.emit('output:written');
+        if (r === 'dataset' || r === 'columns') this.#bus.emit(CoreEvents.DATA_CHANGED);
+      }
+    }
   }
 
   /** Run one menu action: gather inputs → execute → record it for replay (the

@@ -35,16 +35,14 @@ export const manifest = {
   howto:
     'GUI: appears as a workspace tab (Coding) — pick a dataset column of documents (a text column, or a media column from an image/audio/video import), then tag passages/regions with codes and export code frequencies/segments to Output.\n' +
     'Used through its workspace tab, not a run command.',
-  workspaces: [{ id: 'caqdas-coding', title: 'Coding' }],
-  // caqdas wears two hats: a coding workspace AND a REFI-QDA exporter (#139). Same
-  // plugin ⇒ same owner ⇒ it can read its own codings (via app.state.read) from the
-  // export's compute frame, without host-owned code cracking open the private blob.
-  imports: [
-    { label: 'REFI-QDA / QDPX project (.qdpx)…', extensions: ['.qdpx'], parse: 'parseQdpx', group: 'Qualitative', selfCommit: true },
-  ],
-  exports: [
-    { label: 'REFI-QDA / QDPX project (.qdpx)…', extensions: ['.qdpx'], export: 'exportQdpx', group: 'Qualitative' },
-  ],
+  workspaces: [{
+    id: 'caqdas-coding',
+    title: 'Coding',
+    verbs: [
+      { id: 'import-qdpx', label: 'REFI-QDA / QDPX project (.qdpx)…', run: 'parseQdpx', category: 'import', needsFile: { extensions: ['.qdpx'] }, group: 'Qualitative' },
+      { id: 'export-qdpx', label: 'REFI-QDA / QDPX project (.qdpx)…', run: 'exportQdpx', category: 'export', group: 'Qualitative' },
+    ],
+  }],
 };
 
 /** Distinct, readable highlight colours (assigned round-robin to new codes). */

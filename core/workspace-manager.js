@@ -108,7 +108,26 @@ export class WorkspaceManager {
     const title = ws.title || ws.id;
 
     const pane = document.createElement('div');
-    pane.style.cssText = 'position:relative;height:100%;min-height:420px;';
+    pane.style.cssText = 'position:relative;height:100%;min-height:420px;display:flex;flex-direction:column;';
+    // Toolbar strip for declared verbs (category:'toolbar'). Sits above the iframe;
+    // each button is host-rendered so styling is consistent across workspaces and the
+    // host can handle file-picker activation synchronously on click.
+    const toolbarVerbs = (ws.verbs || []).filter((v) => (v.category || 'toolbar') === 'toolbar');
+    let toolbar = null;
+    if (toolbarVerbs.length) {
+      toolbar = buildVerbToolbar(toolbarVerbs, async (verb, file) => {
+        const entry = this.#mounted.get(ws.id);
+        if (!entry?.broker) return;
+        try {
+          const args = file ? [{ __file: { name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) } }] : [{}];
+          const result = await entry.broker.invoke(verb.run, args);
+          this.#handleVerbResult(result);
+        } catch (err) {
+          this.#onError(new Error(`verb "${verb.id}" failed: ${err.message}`));
+        }
+      });
+      pane.append(toolbar);
+    }
     const iframe = makeIframe(title);
     pane.append(iframe);
     // A loading overlay covers the iframe during the handshake. It both signals
@@ -214,11 +233,49 @@ export class WorkspaceManager {
     );
   }
 
-  #teardown(id) {
+  /**
+   * Notify all mounted workspaces that the active dataset changed. For each
+   * workspace whose plugin exports `onDatasetChanged`, sends the lifecycle hook
+   * (avoiding a full remount). Returns true if ALL mounted workspaces handled the
+   * hook; returns false if any workspace lacks the hook (caller should fall back
+   * to {@link remountActive}).
+   *
+   * @param {Array} pluginList - From PluginManager#list().
+   * @returns {Promise<boolean>} true if all workspaces handled the hook in place.
+   */
+  async notifyDatasetChanged(pluginList) {
+    if (!this.#mounted.size) return true;
+    for (const [id, entry] of this.#mounted) {
+      if (!entry.broker) return false;
+      try {
+        await entry.broker.sendDatasetChanged();
+      } catch {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** Process a verb's return envelope — emit events so the host refreshes. */
+  #handleVerbResult(result) {
+    if (!result) return;
+    if (result.message && !result.ok) this.#onError(new Error(result.message));
+    if (result.refresh) {
+      const bus = this.#services.bus;
+      const refreshes = Array.isArray(result.refresh) ? result.refresh : [result.refresh];
+      for (const r of refreshes) {
+        if (r === 'output') bus?.emit?.('output:written');
+        if (r === 'dataset' || r === 'columns') bus?.emit?.('data:changed');
+      }
+    }
+  }
+
+  async #teardown(id) {
     const entry = this.#mounted.get(id);
     if (!entry) return;
     this.#mounted.delete(id);
     try {
+      if (entry.broker) await entry.broker.sendDeactivate().catch(() => {});
       entry.broker?.dispose();
     } catch (err) {
       console.error('[workspace] dispose threw', err);
@@ -296,4 +353,55 @@ function ensureSpinKeyframes() {
   const s = document.createElement('style');
   s.textContent = '@keyframes ws-spin { to { transform: rotate(360deg); } }';
   document.head.append(s);
+}
+
+/** Build a host-rendered toolbar strip for a workspace's declared toolbar verbs.
+ * Each verb gets a button; `needsFile` verbs open a file picker synchronously on
+ * click (preserving user activation). The `onInvoke(verb, file?)` callback handles
+ * the actual invocation via the workspace broker. */
+function buildVerbToolbar(verbs, onInvoke) {
+  const bar = document.createElement('div');
+  bar.className = 'ws-verb-toolbar';
+  bar.style.cssText =
+    'display:flex;align-items:center;gap:6px;padding:6px 10px;border-bottom:1px solid #e2e6ea;' +
+    'background:#f7f8fa;flex:none;flex-wrap:wrap;';
+  for (const verb of verbs) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = verb.label.replace(/\s*[…\.]+\s*$/, '');
+    btn.title = verb.label;
+    btn.style.cssText =
+      'font:inherit;font-size:13px;padding:4px 10px;border:1px solid #ccd2d8;border-radius:6px;' +
+      'background:#fff;cursor:pointer;';
+    btn.addEventListener('mouseenter', () => { btn.style.background = '#eef3f8'; });
+    btn.addEventListener('mouseleave', () => { btn.style.background = '#fff'; });
+    btn.addEventListener('click', () => {
+      if (verb.needsFile) {
+        verbPickFile(verb.needsFile.extensions).then((file) => {
+          if (file) onInvoke(verb, file);
+        });
+      } else {
+        onInvoke(verb, null);
+      }
+    });
+    bar.append(btn);
+  }
+  return bar;
+}
+
+/** Open a native file picker for a verb's needsFile declaration. Must be called
+ * synchronously from a click handler to preserve user activation. */
+function verbPickFile(extensions) {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    if (Array.isArray(extensions) && extensions.length) input.accept = extensions.join(',');
+    input.style.display = 'none';
+    let settled = false;
+    const finish = (v) => { if (settled) return; settled = true; input.remove(); resolve(v); };
+    input.addEventListener('change', () => finish(input.files?.[0] ?? null));
+    input.addEventListener('cancel', () => finish(null));
+    document.body.append(input);
+    input.click();
+  });
 }

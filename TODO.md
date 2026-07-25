@@ -35,8 +35,8 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         (`workspaceRead`/`Write`, `applyWorkspaces` migrate), `workspace-manager.js`
         (get/set signatures), `plugin-manager.js` (deactivation purge), SECURITY.md
         reframe. **Verify:** CAQDAS import/export round-trip + legacy-project load.
-  - [ ] **Space-verb dispatch interface (deferred — needs a 2nd space to design
-        against).** The endgame from the design chat: the host should own a *shell*,
+  - [ ] **Space-verb dispatch interface (UNBLOCKED — spatial workspace is the 2nd
+        consumer).** The endgame from the design chat: the host should own a *shell*,
         not a merge vocabulary. A "space" plugin declares its own **verbs** (buttons)
         — the four we know (New/Append/Join/Merge) are just verbs a *tabular* space
         would declare; a different space might declare "stamp/stomp/strike/stare".
@@ -44,12 +44,19 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         enforces only the **envelope**, never the meaning:
         - **Contract:** verb → real exported fn; writes only to its own space;
           typed return **envelope** `{ ok, message?, refresh? }` drives host refresh.
+          Refresh vocabulary: `columns`, `dataset`, `output`, `workspace`.
         - **Inputs:** a verb gathers most inputs itself mid-run via `app.ui.*`. The
           one **irreducible** exception is a **picked file** — the browser's
           user-activation rule forces the host to open the file dialog *synchronously
           on the click* (see `import-service.js` header), so any file-consuming verb
-          must **declare** that up front. File-input is the host's only structural
-          input concern; everything else is the plugin's.
+          must **declare** `needsFile: { extensions }` up front. File-input is the
+          host's only structural input concern; everything else is the plugin's.
+          Optionally a verb may also declare `inputs` (the existing host-gathered
+          variable-picker schema) for cases like column selection before running.
+        - **Category controls placement:** `toolbar` (workspace tab toolbar strip),
+          `import` (File ▸ Import picker), `export` (File ▸ Export picker), `menu`
+          (top-level menu alongside analysis items). The host renders; the plugin
+          defines meaning.
         - **Escape hatch:** anything the host shell can't present, the plugin
           presents **inside its own tab** (`workspace.mount` is a full realm) — so
           there's no ceiling, just a boundary routing each verb to whoever can render
@@ -63,11 +70,39 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
           the semantic merge on A's blob** (A stays sole writer). One interface,
           both features. The host can't blind-merge an opaque blob the way it
           SQL-joins a dataset — the owner must apply.
-        - **Why deferred:** an interface designed against one implementor (CAQDAS)
-          bakes in coding-shaped assumptions. Wait for a second space type / a real
-          cross-space import. *Orthogonal to the ownership refactor above* — that can
-          and does land first. **Blocked on:** dreaming up a 2nd space sufficiently
-          unlike CAQDAS to force the abstraction honest.
+        - **Lifecycle hooks** (opt-in, safe fallback to remount if absent):
+          `onDatasetChanged(app)` — the active dataset switched, space should re-read
+          `app.state.get()` and re-render without a full iframe teardown.
+          `onDeactivate(app)` — plugin deactivating, flush unsaved state.
+        - **`menu` and `verbs` coexist.** Analysis plugins keep `menu`; workspace
+          plugins use `verbs` for space-bound ops + optionally `menu` for standalone
+          analyses (e.g. spatial plugin's Moran's I stays a `menu` item).
+        - **Migration order:** (1) build schema, (2) migrate CAQDAS as first client
+          (QDPX import/export → `category:'import'`/`'export'` verbs; toolbar buttons
+          → `category:'toolbar'` verbs), (3) build spatial workspace as 2nd client
+          (load-boundaries, shade-by-variable, export-map, clear-boundaries verbs),
+          (4) refactor import picker to discover space verbs.
+        - **2nd consumer: spatial workspace.** `builtin-spatial` gains a workspace
+          tab (interactive boundary map, region checkbox selection, coverage audit).
+          sf/spdep/spatialreg already work in WebR. Spatial filtering (point-in-polygon)
+          is pure JS (Turf.js) for responsiveness; R reserved for statistical tests.
+          No tile server — boundaries rendered from local GeoJSON, consistent with
+          offline/privacy promise. Real-world users: PPA (constituent surveys by
+          district), Public Health (screening by census tract), political orgs
+          (precinct canvass coverage). Verb set is structurally unlike CAQDAS — validates
+          the abstraction is honest.
+        - **Spatial region-filtered analysis pattern:** the spatial workspace owns
+          the filtering — it does point-in-polygon in JS (Turf.js), creates a
+          **derived dataset** via `app.data.create`, and invokes analysis as a normal
+          `run builtin-histogram.histogram` (or whatever) against it. The host never
+          needs to know about spatial filtering; the verb returns
+          `{ ok, refresh: 'dataset' }` and the user picks their analysis from the
+          menu as usual. This means "filtered subset" is NOT an input type the verb
+          schema needs to handle — it's an output the spatial workspace produces.
+        - **Input shapes are sufficient as-is:** (1) file via `needsFile`,
+          (2) own workspace state via implicit `app.state.get()`, (3) dataset
+          columns via optional `inputs` array. No `hostProvides` or typed
+          capabilities declaration needed.
 
 - [~] **Build and prove the DuckDB-WASM data engine — FOUNDATIONAL.**
       *Core engine wired in and live (desktop Chrome):* `core/duckdb-manager.js`
