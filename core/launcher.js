@@ -351,14 +351,10 @@ export class Launcher {
         await this.#projects.openProject(this.#pendingProject.id, { applyPlugins: false });
         await this.#applySelection(this.#selected);
       } else {
-        await this.#applySelection(this.#selected);
         if (this.#pendingSource || !reopen) {
-          // Loading a fresh data source (Demo/Blank). On reopen, FIRST detach into a
-          // new project — otherwise setDataset mutates the currently-open project's
-          // active dataset and autosave overwrites it (clobbering a saved project).
-          // Run it as a *seed load* so merely loading regenerable demo/blank data
-          // doesn't auto-create an "Untitled project" (the boot seed's exemption,
-          // extended to the reopen path). The user's first real action still saves.
+          // Load data + seed workspace state BEFORE activating plugins, so a
+          // workspace plugin's mount() finds pre-seeded state (same ordering
+          // guarantee as the project-open path above).
           const doLoad = async () => {
             if (reopen) await this.#projects?.newProject?.();
             await this.#loadSource(this.#pendingSource || 'blank');
@@ -366,6 +362,7 @@ export class Launcher {
           if (this.#projects?.loadingSeed) await this.#projects.loadingSeed(doLoad);
           else await doLoad();
         }
+        await this.#applySelection(this.#selected);
       }
       markSeen();
     } catch (err) {
