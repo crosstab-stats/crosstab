@@ -118,9 +118,9 @@ export function makeQualDemoDataset() {
 export function makeSpatialDemoDataset() {
   const zips = ['95814','95816','95817','95819','95822','95823','95826','95828','95833','95834','95841'];
   const zipDistrict = {
-    '95814': 'CA-07', '95816': 'CA-07', '95817': 'CA-07', '95819': 'CA-07',
-    '95822': 'CA-07', '95823': 'CA-07', '95826': 'CA-07', '95828': 'CA-07',
-    '95833': 'CA-06', '95834': 'CA-06', '95841': 'CA-06',
+    '95814': 'CA-06', '95816': 'CA-06', '95833': 'CA-06', '95834': 'CA-06',
+    '95819': 'CA-07', '95841': 'CA-07',
+    '95817': 'CA-03', '95822': 'CA-03', '95823': 'CA-03', '95826': 'CA-03', '95828': 'CA-03',
   };
   const N = 60;
   const zip_code = [], district = [], satisfaction = [], commute_min = [], income_k = [], household_size = [];
@@ -165,8 +165,9 @@ export function makeSpatialDemoDataset() {
       fileName: 'Sacramento congressional districts',
       keyProp: 'district', dataColumn: 'district',
       features: [
-        {type:'Feature',properties:{district:'CA-06',representative:'Matsui'},geometry:{type:'Polygon',coordinates:[[[-121.56,38.58],[-121.44,38.58],[-121.37,38.58],[-121.37,38.61],[-121.41,38.635],[-121.44,38.665],[-121.54,38.665],[-121.56,38.635],[-121.56,38.58]]]}},
-        {type:'Feature',properties:{district:'CA-07',representative:'Bera'},geometry:{type:'Polygon',coordinates:[[[-121.56,38.49],[-121.37,38.49],[-121.37,38.58],[-121.44,38.58],[-121.56,38.58],[-121.56,38.49]]]}},
+        {type:'Feature',properties:{district:'CA-06',representative:'Matsui'},geometry:{type:'Polygon',coordinates:[[[-121.56,38.56],[-121.46,38.56],[-121.46,38.67],[-121.56,38.67],[-121.56,38.56]]]}},
+        {type:'Feature',properties:{district:'CA-07',representative:'Bera'},geometry:{type:'Polygon',coordinates:[[[-121.46,38.56],[-121.37,38.56],[-121.37,38.67],[-121.46,38.67],[-121.46,38.56]]]}},
+        {type:'Feature',properties:{district:'CA-03',representative:'Kiley'},geometry:{type:'Polygon',coordinates:[[[-121.56,38.49],[-121.37,38.49],[-121.37,38.56],[-121.56,38.56],[-121.56,38.49]]]}},
       ],
     },
   ];
