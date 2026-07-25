@@ -108,7 +108,8 @@ export class WorkspaceManager {
     const title = ws.title || ws.id;
 
     const pane = document.createElement('div');
-    pane.style.cssText = 'position:relative;height:100%;min-height:420px;display:flex;flex-direction:column;';
+    pane.className = 'ws-pane';
+    pane.style.cssText = 'position:relative;height:100%;min-height:420px;';
     // Toolbar strip: verb buttons (if any) on the left, restart on the right.
     // Always rendered — the restart button is available for every workspace.
     const toolbarVerbs = (ws.verbs || []).filter((v) => (v.category || 'toolbar') === 'toolbar');
@@ -357,7 +358,10 @@ function ensureSpinKeyframes() {
   if (spinInjected) return;
   spinInjected = true;
   const s = document.createElement('style');
-  s.textContent = '@keyframes ws-spin { to { transform: rotate(360deg); } }';
+  s.textContent =
+    '@keyframes ws-spin { to { transform: rotate(360deg); } } ' +
+    '.ws-pane { display: flex; flex-direction: column; } ' +
+    '.ws-pane[hidden] { display: none; }';
   document.head.append(s);
 }
 
