@@ -412,6 +412,9 @@ export class DatasetManager {
       /** Emit a derived dataset (e.g. bootstrap resamples) as a new active
        * dataset. Resolves to its id. */
       create: (dataset) => this.createWithData(dataset),
+      /** Make a dataset active — for an importer that creates a dataset and then wants
+       * to switch to it after attaching workspace state (#139). No-op for a bad id. */
+      setActive: (id) => this.setActive(id),
     });
   }
 

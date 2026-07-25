@@ -171,7 +171,7 @@
             data: makeNamespace('data', [
               'getDataFrame', 'getColumns', 'getRows', 'getVariableMeta',
               'getSelectedVariables', 'getRowCount', 'getTransforms', 'getHistory', 'create',
-              'maxOctetLengths',
+              'setActive', 'maxOctetLengths',
             ]),
             results: makeNamespace('results', [
               'beginAnalysis', 'endAnalysis',
@@ -185,7 +185,7 @@
             // host to this workspace's id. `read(wsId)` (#139) reads a workspace blob
             // this plugin DECLARES — owner-scoped, read-only — so an exporter can reach
             // its own codings from the compute frame.
-            state: makeNamespace('state', ['get', 'set', 'read']),
+            state: makeNamespace('state', ['get', 'set', 'read', 'write']),
             // Codec plugins (#98): streaming format read/write. Live only during a
             // codec invocation; no-op host-side otherwise.
             codec: makeNamespace('codec', ['size', 'sourceFile', 'read', 'begin', 'batch', 'writeChunk', 'loadAsset']),

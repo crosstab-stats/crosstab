@@ -420,10 +420,12 @@ export class PluginLoader {
         return realWeb.get(url);
       },
     });
-    // Owner-scoped read of a workspace blob this plugin declares (#139) — bound to the
-    // calling plugin's id so a plugin can only ever reach its own declared workspaces.
+    // Owner-scoped read/write of a workspace blob this plugin declares (#139) — bound
+    // to the calling plugin's id so a plugin can only ever reach its own declared
+    // workspaces (for a dataset it chooses, or the active one).
     const stateRead = (wsId) => this.#services.workspaceRead?.(ctx.id, wsId) ?? null;
-    return Object.freeze({ ...this.#services, web, stateRead });
+    const stateWrite = (wsId, value, dsId) => this.#services.workspaceWrite?.(ctx.id, wsId, value, dsId);
+    return Object.freeze({ ...this.#services, web, stateRead, stateWrite });
   }
 
   /**

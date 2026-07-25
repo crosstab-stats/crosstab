@@ -135,6 +135,11 @@ export class PluginBroker {
     if (services.stateRead) {
       this.#dispatch['state.read'] = (wsId) => services.stateRead(wsId);
     }
+    // Owner-scoped WRITE of a workspace blob the plugin declares, for a chosen dataset
+    // (#139) — lets an importer attach coding state to a dataset it created.
+    if (services.stateWrite) {
+      this.#dispatch['state.write'] = (wsId, value, dsId) => services.stateWrite(wsId, value, dsId);
+    }
     this.#listener = (e) => this.#onMessage(e);
     window.addEventListener('message', this.#listener);
   }
@@ -420,6 +425,7 @@ function buildDispatch({ data, results, webr, ui, web }) {
     'data.getTransforms': () => data.getTransforms(),
     'data.getHistory': () => data.getHistory(),
     'data.create': (dataset) => data.create(dataset),
+    'data.setActive': (id) => data.setActive(id),
 
     'results.appendTable': (d, opts) => results.appendTable(d, opts),
     'results.appendPlot': (s, opts) => results.appendPlot(s, opts),

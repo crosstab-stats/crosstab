@@ -24,7 +24,7 @@
 export const manifest = {
   id: 'builtin-caqdas',
   name: 'Qualitative Coding (CAQDAS)',
-  version: '0.7.0',
+  version: '0.8.0',
   apiVersion: '0.1.0',
   category: 'Qualitative',
   // Renders media (text, image regions, audio/video time-ranges) from the host media
@@ -39,6 +39,9 @@ export const manifest = {
   // caqdas wears two hats: a coding workspace AND a REFI-QDA exporter (#139). Same
   // plugin ⇒ same owner ⇒ it can read its own codings (via app.state.read) from the
   // export's compute frame, without host-owned code cracking open the private blob.
+  imports: [
+    { label: 'REFI-QDA / QDPX project (.qdpx)…', extensions: ['.qdpx'], parse: 'parseQdpx', group: 'Qualitative' },
+  ],
   exports: [
     { label: 'REFI-QDA / QDPX project (.qdpx)…', extensions: ['.qdpx'], export: 'exportQdpx', group: 'Qualitative' },
   ],
@@ -1455,8 +1458,34 @@ export const workspace = {
       /* no IntersectionObserver → mount populate + the active-dataset-switch remount still apply */
     }
 
+    /** Resolve a just-imported QDPX project's codings (keyed by row index) into real
+     * segments now that docs (with row-ids) are loaded, then clear the marker + save.
+     * Rows are in source order, so `docs[row]` is the source that coding belongs to. */
+    function resolvePendingImport() {
+      const pending = state.pendingImport;
+      if (!pending || !Array.isArray(pending.codings)) { delete state.pendingImport; return; }
+      for (const pc of pending.codings) {
+        const doc = docs[pc.row];
+        if (!doc || !pc.codeId || !pc.data) continue;
+        const memo = typeof pc.memo === 'string' ? pc.memo : '';
+        if (pc.type === 'text') {
+          const start = pc.data.start | 0, end = pc.data.end | 0;
+          const text = doc.kind === 'text' ? String(doc.text || '').slice(start, end) : '';
+          state.segments.push({ doc: doc.rid, codeId: pc.codeId, start, end, text, memo });
+        } else if (pc.type === 'region') {
+          const g = pc.data;
+          state.segments.push({ doc: doc.rid, codeId: pc.codeId, region: { x: round4(g.x), y: round4(g.y), w: round4(g.w), h: round4(g.h) }, text: regionLabel(g), memo });
+        } else if (pc.type === 'time') {
+          state.segments.push({ doc: doc.rid, codeId: pc.codeId, tStart: round3(pc.data.tStart), tEnd: round3(pc.data.tEnd), text: timeLabel(pc.data.tStart, pc.data.tEnd), memo });
+        }
+      }
+      delete state.pendingImport;
+      save();
+    }
+
     // --- go ------------------------------------------------------------------
     await loadDocs();
+    if (state.pendingImport) resolvePendingImport();
     renderAll();
   },
 };
@@ -1621,6 +1650,9 @@ function normalize(raw) {
     segments: Array.isArray(s.segments)
       ? s.segments.filter((x) => x && x.doc && x.codeId).map((x) => ({ ...x, memo: typeof x.memo === 'string' ? x.memo : '' }))
       : [],
+    // A just-imported QDPX project stashes codings keyed by row index here; the mount
+    // resolves them to row-ids once docs are loaded, then clears it (#139).
+    ...(s.pendingImport && typeof s.pendingImport === 'object' ? { pendingImport: s.pendingImport } : {}),
   };
 }
 
@@ -1919,3 +1951,136 @@ function qdpxUuid() {
     return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
   });
 }
+
+// =====================================================================
+// REFI-QDA / QDPX import (#139) — the mirror of the exporter (manifest.imports).
+// Does the whole job with capabilities (no host commit): unzip, parse project.qde,
+// put media into the store, CREATE a dataset (inactive), write its coding blob keyed
+// by ROW INDEX, then activate it. caqdas resolves row-index → row-id at mount (see
+// resolvePendingImport) — sidestepping the row-id chicken-and-egg. Faithful: text
+// spans → text codings, picture rects → image regions, audio/video time → time
+// codings (no region-over-time — the user adds spatial later). Same schema caveats as
+// the exporter (TIME_SCALE ms vs s; not XSD-verified).
+// =====================================================================
+
+export async function parseQdpx(app, { name, file }) {
+  const buf = new Uint8Array(await file.arrayBuffer());
+  const entries = await app.zip.read(buf);
+  const byName = new Map(entries.map((e) => [e.name.replace(/^\.\//, ''), e.data]));
+  const qde = entries.find((e) => /(^|\/)project\.qde$/i.test(e.name));
+  if (!qde) throw new Error('Not a QDPX project — no project.qde inside the archive.');
+  const doc = new DOMParser().parseFromString(new TextDecoder('utf-8').decode(qde.data), 'application/xml');
+  if (doc.getElementsByTagName('parsererror').length) throw new Error('Could not parse the QDPX project XML.');
+
+  // Codes: guid → a fresh caqdas code.
+  const codeIdByGuid = new Map();
+  const codes = [];
+  for (const el of doc.getElementsByTagName('Code')) {
+    const guid = el.getAttribute('guid');
+    if (!guid || codeIdByGuid.has(guid)) continue;
+    const id = 'c_' + guid;
+    codeIdByGuid.set(guid, id);
+    codes.push({ id, name: el.getAttribute('name') || '(code)', color: el.getAttribute('color') || PALETTE[codes.length % PALETTE.length], group: '', memo: '' });
+  }
+
+  const names = [];
+  const content = [];
+  const codings = []; // { row, type, data, codeId, memo }
+  const sourcesEl = doc.getElementsByTagName('Sources')[0];
+  const internal = (p) => String(p || '').replace(/^internal:\/\//, '');
+  const codeRefs = (sel) => Array.from(sel.getElementsByTagName('CodeRef')).map((r) => codeIdByGuid.get(r.getAttribute('targetGUID'))).filter(Boolean);
+  const memoOf = (sel) => {
+    const d = sel.getElementsByTagName('Description')[0];
+    return d ? d.textContent || '' : '';
+  };
+  let row = 0;
+  for (const s of sourcesEl ? Array.from(sourcesEl.children) : []) {
+    const tag = s.localName;
+    const label = s.getAttribute('name') || `Source ${row + 1}`;
+    if (tag === 'TextSource') {
+      const raw = byName.get('Sources/' + internal(s.getAttribute('plainTextPath')));
+      names.push(label);
+      content.push(raw ? new TextDecoder('utf-8').decode(raw) : s.textContent || '');
+      for (const sel of s.getElementsByTagName('PlainTextSelection')) {
+        const data = { start: parseInt(sel.getAttribute('startPosition'), 10) || 0, end: parseInt(sel.getAttribute('endPosition'), 10) || 0 };
+        for (const cid of codeRefs(sel)) codings.push({ row, type: 'text', data, codeId: cid, memo: memoOf(sel) });
+      }
+    } else if (tag === 'PictureSource') {
+      const bytes = byName.get('Sources/' + internal(s.getAttribute('path')));
+      const ref = bytes ? await putImportedMedia(app, bytes, internal(s.getAttribute('path')), label) : null;
+      names.push(label);
+      content.push(ref ? JSON.stringify([ref]) : '');
+      const dims = bytes ? await decodeImageDims(bytes, mimeForPath(internal(s.getAttribute('path')))) : { w: 0, h: 0 };
+      const W = dims.w || 1000, H = dims.h || 1000;
+      for (const sel of s.getElementsByTagName('PictureSelection')) {
+        const x1 = num(sel.getAttribute('firstX')), y1 = num(sel.getAttribute('firstY'));
+        const x2 = num(sel.getAttribute('secondX')), y2 = num(sel.getAttribute('secondY'));
+        const data = { x: Math.min(x1, x2) / W, y: Math.min(y1, y2) / H, w: Math.abs(x2 - x1) / W, h: Math.abs(y2 - y1) / H };
+        for (const cid of codeRefs(sel)) codings.push({ row, type: 'region', data, codeId: cid, memo: memoOf(sel) });
+      }
+    } else if (tag === 'AudioSource' || tag === 'VideoSource') {
+      const p = internal(s.getAttribute('path'));
+      const bytes = byName.get('Sources/' + p);
+      const ref = bytes ? await putImportedMedia(app, bytes, p, label) : null;
+      names.push(label);
+      content.push(ref ? JSON.stringify([ref]) : '');
+      const seltag = tag === 'VideoSource' ? 'VideoSelection' : 'AudioSelection';
+      for (const sel of s.getElementsByTagName(seltag)) {
+        const data = { tStart: num(sel.getAttribute('begin')) / TIME_SCALE, tEnd: num(sel.getAttribute('end')) / TIME_SCALE };
+        for (const cid of codeRefs(sel)) codings.push({ row, type: 'time', data, codeId: cid, memo: memoOf(sel) });
+      }
+    } else {
+      continue; // PDF / unknown source types skipped for now
+    }
+    row++;
+  }
+  if (!names.length) throw new Error('No text/image/audio/video sources found in the QDPX project.');
+
+  const variables = [
+    { name: 'name', type: 'string', measurementLevel: 'nominal', label: 'Source' },
+    { name: 'source', type: 'string', measurementLevel: 'nominal', label: 'Document' },
+  ];
+  const projName = doc.documentElement.getAttribute('name') || String(name || '').replace(/\.[^.]+$/, '') || 'Imported coding';
+  // Create the dataset WITHOUT activating, attach the coding blob, THEN switch to it —
+  // so the blob is present before the workspace mounts (no race).
+  const newId = await app.data.create({ name: projName, variables, columns: { name: names, source: content }, activate: false });
+  const blob = { version: 1, textColumn: 'source', labelColumn: 'name', codes, segments: [], pendingImport: { codings } };
+  await app.state.write('caqdas-coding', blob, newId);
+  await app.data.setActive(newId);
+  return null; // we created the dataset + codings ourselves; nothing for the host to commit
+}
+
+/** Store an imported media file, returning its asset ref. */
+async function putImportedMedia(app, bytes, path, name) {
+  const blob = new Blob([bytes], { type: mimeForPath(path) });
+  const info = await app.media.put(blob, { name, type: blob.type });
+  return info && info.ref;
+}
+
+/** Decode an image's natural dimensions (needs the media-CSP frame). Never rejects. */
+function decodeImageDims(bytes, type) {
+  return new Promise((resolve) => {
+    let url;
+    try { url = URL.createObjectURL(new Blob([bytes], { type: type || 'image/png' })); } catch { resolve({ w: 0, h: 0 }); return; }
+    const done = (o) => { URL.revokeObjectURL(url); resolve(o); };
+    const t = setTimeout(() => done({ w: 0, h: 0 }), 10000);
+    const img = new Image();
+    img.onload = () => { clearTimeout(t); done({ w: img.naturalWidth, h: img.naturalHeight }); };
+    img.onerror = () => { clearTimeout(t); done({ w: 0, h: 0 }); };
+    img.src = url;
+  });
+}
+
+/** A MIME type from a Sources/ filename extension. */
+function mimeForPath(path) {
+  const ext = String(path).split('.').pop().toLowerCase();
+  const map = {
+    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', svg: 'image/svg+xml',
+    mp3: 'audio/mpeg', wav: 'audio/wav', m4a: 'audio/mp4', aac: 'audio/aac', ogg: 'audio/ogg', flac: 'audio/flac',
+    mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', mkv: 'video/x-matroska',
+  };
+  return map[ext] || 'application/octet-stream';
+}
+
+/** Parse a numeric attribute, defaulting to 0. */
+function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }

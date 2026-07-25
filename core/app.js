@@ -685,6 +685,20 @@ export async function boot(mounts) {
     if (reservedByBuiltin && !p.builtin) return null; // #89: don't let a non-built-in read a built-in's id
     return workspaceStore.get(wsId, datasets.activeId, null); // the active dataset's coding blob (#139)
   };
+  // Owner-scoped WRITE counterpart (#139): same authorisation as the read; writes the
+  // blob for a chosen dataset (or the active one). Lets a same-owner importer attach
+  // coding state to a dataset it just created.
+  const wsWriteAuthorised = (pluginId, wsId) => {
+    const list = plugins ? plugins.list() : [];
+    const p = list.find((x) => x.id === pluginId);
+    if (!p || !(p.workspaces || []).some((w) => w.id === wsId)) return false;
+    const reservedByBuiltin = list.some((x) => x.builtin && (x.workspaces || []).some((w) => w.id === wsId));
+    return !(reservedByBuiltin && !p.builtin);
+  };
+  services.workspaceWrite = (pluginId, wsId, value, dsId) => {
+    if (!wsWriteAuthorised(pluginId, wsId)) return;
+    workspaceStore.set(wsId, dsId ?? datasets.activeId, value, null);
+  };
 
   // Plugin workspaces (#93): mount/unmount workspace TABS to match the active
   // plugin set. Rides PLUGINS_CHANGED (same signal as menu wiring) + one initial
