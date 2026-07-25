@@ -350,9 +350,9 @@ export const workspace = {
       button.sm { font: inherit; font-size: 12px; padding: 2px 8px; border: 1px solid #ccd2d8; border-radius: 4px; background: #fff; cursor: pointer; }
       button.sm:hover { background: #eef3f8; }
       .empty { padding: 20px; text-align: center; color: #8899a6; }
-      .demo-links { padding: 16px 20px; text-align: center; color: #5a6a78; line-height: 1.6; }
-      .demo-links a { color: #2980b9; cursor: pointer; text-decoration: underline; }
-      .demo-links a:hover { color: #1a5276; }
+      .set-links { padding: 6px 10px; text-align: center; color: #5a6a78; font-size: 12px; border-top: 1px solid #e2e6ea; }
+      .set-links a { color: #2980b9; cursor: pointer; text-decoration: underline; }
+      .set-links a:hover { color: #1a5276; }
     `);
     document.adoptedStyleSheets = [sheet];
 
@@ -386,13 +386,13 @@ export const workspace = {
     listPane.append(listHeader, listBody);
     root.append(mapPane, listPane);
 
-    if (saved?.__demoBoundaries?.length) {
-      const sets = saved.__demoBoundaries;
+    if (saved?.boundarySets?.length) {
+      const sets = saved.boundarySets;
       const first = sets[0];
       const fc = { type: 'FeatureCollection', features: first.features };
       await wsApplyBoundaries(app, fc, first.fileName, first.keyProp, first.dataColumn);
       if (sets.length > 1) {
-        const links = el('div', null, 'demo-links');
+        const links = el('div', null, 'set-links');
         links.textContent = 'Switch boundaries: ';
         for (let i = 0; i < sets.length; i++) {
           if (i > 0) links.append(document.createTextNode(' · '));
@@ -404,7 +404,7 @@ export const workspace = {
           });
           links.append(a);
         }
-        _ws.svgEl.insertAdjacentElement('afterend', links);
+        _ws.statusEl.insertAdjacentElement('beforebegin', links);
       }
     }
   },

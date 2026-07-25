@@ -96,7 +96,7 @@ export class Launcher {
           shadeColumn: null,
           fileName: first.fileName,
           selected: [],
-          __demoBoundaries: dataset.boundaries,
+          boundarySets: dataset.boundaries,
         });
       }
     }
