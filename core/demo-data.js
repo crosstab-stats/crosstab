@@ -107,6 +107,45 @@ export function makeQualDemoDataset() {
   return { variables, columns: { response, site } };
 }
 
+/**
+ * A spatial demo: fabricated survey responses across Sacramento County zip codes
+ * and congressional districts, so the Map workspace has something to shade and
+ * filter out of the box. Includes numeric outcomes (satisfaction, commute, income)
+ * and two geographic keys (zip_code, district) for loading overlapping boundary
+ * sets from sample-data/*.geojson.
+ * @returns {{ variables: import('./data-store.js').VariableMeta[], columns: Object<string, Array> }}
+ */
+export function makeSpatialDemoDataset() {
+  const zips = ['95814','95816','95819','95822','95823','95826','95828','95833','95834','95841'];
+  const zipDistrict = {
+    '95814': 'CA-07', '95816': 'CA-07', '95819': 'CA-07',
+    '95822': 'CA-07', '95823': 'CA-07', '95826': 'CA-07', '95828': 'CA-07',
+    '95833': 'CA-06', '95834': 'CA-06', '95841': 'CA-06',
+  };
+  const N = 60;
+  const zip_code = [], district = [], satisfaction = [], commute_min = [], income_k = [], household_size = [];
+  for (let i = 0; i < N; i++) {
+    const z = zips[((i * 7) + (i >> 2)) % zips.length];
+    zip_code.push(z);
+    district.push(zipDistrict[z]);
+    const base = ((zips.indexOf(z) + 1) * 13 + i * 3) % 10;
+    satisfaction.push(Math.min(10, Math.max(1, base + 1)));
+    commute_min.push(15 + ((i * 11 + zips.indexOf(z) * 7) % 55));
+    const incBase = 38 + zips.indexOf(z) * 6 + ((i * 13) % 30);
+    income_k.push(incBase);
+    household_size.push(1 + ((i * 3 + zips.indexOf(z)) % 5));
+  }
+  const variables = [
+    { name: 'zip_code', label: 'ZIP code', type: 'string', measurementLevel: 'nominal' },
+    { name: 'district', label: 'Congressional district', type: 'string', measurementLevel: 'nominal' },
+    { name: 'satisfaction', label: 'Satisfaction (1-10)', type: 'numeric', measurementLevel: 'scale' },
+    { name: 'commute_min', label: 'Commute time (minutes)', type: 'numeric', measurementLevel: 'scale' },
+    { name: 'income_k', label: 'Household income ($K)', type: 'numeric', measurementLevel: 'scale' },
+    { name: 'household_size', label: 'Household size', type: 'numeric', measurementLevel: 'scale' },
+  ];
+  return { variables, columns: { zip_code, district, satisfaction, commute_min, income_k, household_size } };
+}
+
 /** An empty starter dataset (one placeholder column) for "Start blank" — the user
  * imports their own data. Kept minimal so the grid renders without erroring. */
 export function makeBlankDataset() {

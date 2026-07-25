@@ -14,7 +14,7 @@
  * Host-owned (drives the loader/manager); not a plugin.
  */
 
-import { makeDemoDataset, makeQualDemoDataset, makeBlankDataset } from './demo-data.js';
+import { makeDemoDataset, makeQualDemoDataset, makeSpatialDemoDataset, makeBlankDataset } from './demo-data.js';
 
 /** Curated-core analysis plugins, pre-selected on a fresh "Start blank". */
 const CORE_IDS = new Set([
@@ -34,6 +34,7 @@ const PRESETS = {
   'start-blank': { source: 'blank', label: 'Blank', plugins: [...CORE_IDS] },
   'demo-quant': { source: 'demo-quant', label: 'Demo (quantitative)', plugins: [...CORE_IDS] },
   'demo-qual': { source: 'demo-qual', label: 'Demo (qualitative)', plugins: [...CORE_IDS, 'builtin-textanalytics', 'builtin-caqdas'] },
+  'demo-spatial': { source: 'demo-spatial', label: 'Demo (spatial)', plugins: [...CORE_IDS, 'builtin-spatial'] },
 };
 
 const LS_SEEN = 'crosstab.launcher.seen';
@@ -74,6 +75,7 @@ export class Launcher {
     let dataset, name;
     if (key === 'demo-quant') { dataset = makeDemoDataset(); name = 'Demo data'; }
     else if (key === 'demo-qual') { dataset = makeQualDemoDataset(); name = 'Qualitative demo'; }
+    else if (key === 'demo-spatial') { dataset = makeSpatialDemoDataset(); name = 'Sacramento County survey'; }
     else { dataset = makeBlankDataset(); name = 'Dataset 1'; } // 'blank' / default
     await this.#datasets.setDataset(dataset);
     try {
@@ -670,6 +672,7 @@ function SHELL_HTML(reopen) {
           <button type="button" class="ctl__source" data-source="blank">Start blank</button>
           <button type="button" class="ctl__source" data-source="demo-quant">Demo · quantitative</button>
           <button type="button" class="ctl__source" data-source="demo-qual">Demo · qualitative</button>
+          <button type="button" class="ctl__source" data-source="demo-spatial">Demo · spatial</button>
           <div class="ctl__railnote">Or import your own data once you're in.</div>
           <div class="ctl__railhead ctl__railhead--projects" hidden>Projects</div>
           <div class="ctl__projects"></div>
