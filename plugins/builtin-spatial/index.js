@@ -35,6 +35,17 @@ export const manifest = {
     '  • region / value / boundary / keyprop — choropleth: region key, value to shade, a GeoJSON file, and its matching property.',
   disciplines: ['Environmental Studies', 'Public Policy & Administration', 'Sociology', 'Economics', 'Public Health', 'Ethnic Studies'],
   rPackages: ['sf', 'spdep', 'spatialreg', 'svglite'],
+  workspaces: [{
+    id: 'spatial-map',
+    title: 'Map',
+    verbs: [
+      { id: 'load-boundaries', label: 'Load boundaries…', run: 'loadBoundaries', category: 'toolbar', needsFile: { extensions: ['.geojson', '.json'] } },
+      { id: 'shade-by-variable', label: 'Shade by variable…', run: 'shadeByVariable', category: 'toolbar' },
+      { id: 'filter-to-selection', label: 'Filter to selection', run: 'filterToSelection', category: 'toolbar' },
+      { id: 'clear-boundaries', label: 'Clear', run: 'clearBoundaries', category: 'toolbar' },
+      { id: 'export-map', label: 'Export map', run: 'exportMap', category: 'toolbar' },
+    ],
+  }],
   menu: [
     {
       label: 'Spatial autocorrelation (Moran’s I)…',
@@ -290,4 +301,407 @@ function flat(rList) {
       return a.length ? String(a[0]) : '';
     },
   };
+}
+
+// === Spatial workspace tab ===================================================
+//
+// An interactive boundary-map viewer. The user loads a GeoJSON of region shapes,
+// joins it to their data by a key column, shades regions by a numeric variable,
+// and selects regions to filter the dataset for analysis. Boundaries are session-
+// only (not persisted — GeoJSON files can be large); settings persist via state.
+
+let _ws = null; // module-level workspace state (fresh per iframe mount)
+
+export const workspace = {
+  async mount(app, root) {
+    _ws = {
+      features: [], regionKeys: [], pathEls: [],
+      keyProp: null, dataColumn: null, shadeColumn: null,
+      selected: new Set(), fileName: null,
+      svgEl: null, listEl: null, statusEl: null, root,
+    };
+    const saved = await app.state.get();
+    if (saved) {
+      _ws.keyProp = saved.keyProp || null;
+      _ws.dataColumn = saved.dataColumn || null;
+      _ws.shadeColumn = saved.shadeColumn || null;
+      _ws.selected = new Set(saved.selected || []);
+      _ws.fileName = saved.fileName || null;
+    }
+
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(`
+      :host, * { box-sizing: border-box; }
+      body { margin: 0; font: 13px/1.4 system-ui, sans-serif; color: #2c3e50; display: flex; height: 100vh; }
+      .map-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid #e2e6ea; }
+      .map-pane svg { flex: 1; background: #fafbfc; cursor: crosshair; }
+      .map-pane svg path { stroke: #fff; stroke-width: 0.5; fill: #d5dbe2; transition: fill 0.15s; }
+      .map-pane svg path:hover { stroke: #2980b9; stroke-width: 1.2; }
+      .map-pane svg path.selected { stroke: #e74c3c; stroke-width: 1.5; }
+      .status { padding: 6px 10px; border-top: 1px solid #e2e6ea; font-size: 12px; color: #6b7685; }
+      .list-pane { width: 220px; display: flex; flex-direction: column; overflow: hidden; }
+      .list-header { padding: 8px 10px; border-bottom: 1px solid #e2e6ea; display: flex; gap: 6px; align-items: center; }
+      .list-header strong { flex: 1; }
+      .list-body { flex: 1; overflow-y: auto; padding: 2px 0; }
+      .region-row { display: flex; align-items: center; gap: 6px; padding: 2px 10px; cursor: pointer; }
+      .region-row:hover { background: #f0f4f8; }
+      .region-row input { margin: 0; }
+      .swatch { width: 12px; height: 12px; border-radius: 2px; border: 1px solid #ccc; flex: none; }
+      button.sm { font: inherit; font-size: 12px; padding: 2px 8px; border: 1px solid #ccd2d8; border-radius: 4px; background: #fff; cursor: pointer; }
+      button.sm:hover { background: #eef3f8; }
+      .empty { padding: 20px; text-align: center; color: #8899a6; }
+    `);
+    document.adoptedStyleSheets = [sheet];
+
+    root.innerHTML = '';
+    const mapPane = el('div', 'map-pane');
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 800 500');
+    svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    _ws.svgEl = svg;
+    mapPane.append(svg);
+    const status = el('div', 'status');
+    status.textContent = _ws.fileName
+      ? `Re-load ${_ws.fileName} to continue.`
+      : 'Load a GeoJSON boundary file to begin.';
+    _ws.statusEl = status;
+    mapPane.append(status);
+
+    const listPane = el('div', 'list-pane');
+    const listHeader = el('div', 'list-header');
+    const title = document.createElement('strong');
+    title.textContent = 'Regions';
+    const btnAll = document.createElement('button');
+    btnAll.className = 'sm'; btnAll.textContent = 'All';
+    btnAll.addEventListener('click', () => wsSelectAll(true));
+    const btnNone = document.createElement('button');
+    btnNone.className = 'sm'; btnNone.textContent = 'None';
+    btnNone.addEventListener('click', () => wsSelectAll(false));
+    listHeader.append(title, btnAll, btnNone);
+    const listBody = el('div', 'list-body');
+    _ws.listEl = listBody;
+    listPane.append(listHeader, listBody);
+    root.append(mapPane, listPane);
+  },
+
+  async onDatasetChanged(app) {
+    if (!_ws?.features.length || !_ws.shadeColumn) return;
+    await wsApplyShading(app);
+  },
+
+  async onDeactivate(app) {
+    if (!_ws) return;
+    await wsSaveState(app);
+  },
+};
+
+// --- workspace verb functions (run in the workspace iframe) ------------------
+
+export async function loadBoundaries(app, opts) {
+  if (!_ws) return { ok: false, message: 'Workspace not mounted.' };
+  const file = opts?.__file;
+  if (!file) return { ok: false, message: 'No file provided.' };
+  let geojson;
+  try {
+    const text = new TextDecoder().decode(file.bytes);
+    geojson = JSON.parse(text);
+  } catch (e) {
+    return { ok: false, message: `Invalid GeoJSON: ${e.message}` };
+  }
+  const fc = geojson.type === 'FeatureCollection' ? geojson
+    : geojson.type === 'Feature' ? { type: 'FeatureCollection', features: [geojson] }
+    : null;
+  if (!fc?.features?.length) return { ok: false, message: 'No features found in the GeoJSON.' };
+  const validFeatures = fc.features.filter(
+    (f) => f.geometry && (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon'),
+  );
+  if (!validFeatures.length) return { ok: false, message: 'No Polygon/MultiPolygon features found.' };
+
+  const allProps = new Set();
+  for (const f of validFeatures) {
+    if (f.properties) for (const k of Object.keys(f.properties)) allProps.add(k);
+  }
+  const propList = [...allProps].sort();
+  if (!propList.length) return { ok: false, message: 'Features have no properties to use as a region key.' };
+
+  let keyProp = _ws.keyProp;
+  if (!keyProp || !allProps.has(keyProp)) {
+    const items = propList.map((p) => ({ value: p, label: p }));
+    const pick = await app.ui.selectFromList({
+      title: 'Region key property',
+      hint: 'Which property in the GeoJSON identifies each region?',
+      items,
+      multiple: false,
+    });
+    if (!pick) return { ok: false, message: 'Cancelled.' };
+    keyProp = pick[0];
+  }
+
+  const cols = await app.data.getColumns();
+  const colNames = cols?.names || cols?.map?.((c) => c.name) || [];
+  if (colNames.length) {
+    let dataCol = _ws.dataColumn;
+    if (!dataCol || !colNames.includes(dataCol)) {
+      const pick = await app.ui.selectVariables({
+        title: 'Match to data column',
+        hint: `Which column in your data matches the "${keyProp}" property in the map?`,
+        multiple: false,
+      });
+      if (!pick) return { ok: false, message: 'Cancelled.' };
+      dataCol = pick[0];
+    }
+    _ws.dataColumn = dataCol;
+  }
+
+  _ws.features = validFeatures;
+  _ws.keyProp = keyProp;
+  _ws.fileName = file.name;
+  _ws.regionKeys = validFeatures.map((f) => String(f.properties?.[keyProp] ?? ''));
+
+  wsRenderMap();
+  wsRenderList();
+  await wsSaveState(app);
+
+  const n = validFeatures.length;
+  _ws.statusEl.textContent = `${file.name} — ${n} region${n !== 1 ? 's' : ''} loaded (key: ${keyProp}).`;
+  return { ok: true };
+}
+
+export async function shadeByVariable(app) {
+  if (!_ws?.features.length) return { ok: false, message: 'Load boundaries first.' };
+  const pick = await app.ui.selectVariables({
+    title: 'Shade regions by',
+    hint: 'Choose a numeric variable — each region is shaded by its mean value.',
+    multiple: false,
+    types: ['numeric'],
+  });
+  if (!pick) return { ok: false, message: 'Cancelled.' };
+  _ws.shadeColumn = pick[0];
+  await wsApplyShading(app);
+  await wsSaveState(app);
+  return { ok: true };
+}
+
+export async function filterToSelection(app) {
+  if (!_ws) return { ok: false, message: 'Workspace not mounted.' };
+  if (!_ws.selected.size) return { ok: false, message: 'No regions selected.' };
+  if (!_ws.dataColumn) return { ok: false, message: 'No data column matched — load boundaries first.' };
+  const rows = await app.data.getRows();
+  const cols = await app.data.getColumns();
+  const colNames = cols?.names || cols?.map?.((c) => c.name) || [];
+  const keyIdx = colNames.indexOf(_ws.dataColumn);
+  if (keyIdx < 0) return { ok: false, message: `Column "${_ws.dataColumn}" not found in data.` };
+
+  const keep = [];
+  for (const row of rows || []) {
+    const val = String(row[keyIdx] ?? '');
+    if (_ws.selected.has(val)) keep.push(row);
+  }
+  if (!keep.length) return { ok: false, message: 'No rows match the selected regions.' };
+
+  await app.data.create({
+    name: `Selection (${_ws.selected.size} regions)`,
+    columns: colNames,
+    rows: keep,
+  });
+  return { ok: true, message: `Created dataset with ${keep.length} rows from ${_ws.selected.size} regions.`, refresh: 'dataset' };
+}
+
+export async function clearBoundaries(app) {
+  if (!_ws) return { ok: false, message: 'Workspace not mounted.' };
+  _ws.features = []; _ws.regionKeys = []; _ws.pathEls = [];
+  _ws.keyProp = null; _ws.shadeColumn = null; _ws.selected.clear();
+  _ws.svgEl.innerHTML = '';
+  _ws.listEl.innerHTML = '';
+  _ws.statusEl.textContent = 'Load a GeoJSON boundary file to begin.';
+  await wsSaveState(app);
+  return { ok: true };
+}
+
+export async function exportMap() {
+  if (!_ws?.svgEl) return { ok: false, message: 'No map to export.' };
+  if (!_ws.features.length) return { ok: false, message: 'Load boundaries first.' };
+  const svgMarkup = _ws.svgEl.outerHTML;
+  const full = `<?xml version="1.0" encoding="UTF-8"?>\n${svgMarkup}`;
+  const blob = new Blob([full], { type: 'image/svg+xml' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = (_ws.fileName || 'map').replace(/\.\w+$/, '') + '_map.svg';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  return { ok: true, message: 'Map exported.' };
+}
+
+// --- workspace rendering helpers ---------------------------------------------
+
+function el(tag, className) {
+  const e = document.createElement(tag);
+  if (className) e.className = className;
+  return e;
+}
+
+function wsRenderMap() {
+  const svg = _ws.svgEl;
+  svg.innerHTML = '';
+  _ws.pathEls = [];
+  if (!_ws.features.length) return;
+
+  const { project } = wsProjection(_ws.features, 800, 500);
+  for (let i = 0; i < _ws.features.length; i++) {
+    const f = _ws.features[i];
+    const d = wsGeometryToPath(f.geometry, project);
+    if (!d) continue;
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', d);
+    const key = _ws.regionKeys[i];
+    path.dataset.key = key;
+    if (_ws.selected.has(key)) path.classList.add('selected');
+    path.addEventListener('click', () => wsToggleRegion(key));
+    const label = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+    label.textContent = key;
+    path.append(label);
+    svg.append(path);
+    _ws.pathEls[i] = path;
+  }
+}
+
+function wsRenderList() {
+  const list = _ws.listEl;
+  list.innerHTML = '';
+  if (!_ws.regionKeys.length) {
+    list.innerHTML = '<div class="empty">No regions loaded.</div>';
+    return;
+  }
+  const sorted = _ws.regionKeys.map((k, i) => ({ key: k, idx: i }))
+    .sort((a, b) => a.key.localeCompare(b.key, undefined, { numeric: true }));
+  for (const { key, idx } of sorted) {
+    const row = el('label', 'region-row');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = _ws.selected.has(key);
+    cb.addEventListener('change', () => wsToggleRegion(key));
+    const swatch = el('span', 'swatch');
+    swatch.style.background = _ws.pathEls[idx]?.getAttribute('fill') || '#d5dbe2';
+    swatch.dataset.idx = idx;
+    const lbl = document.createElement('span');
+    lbl.textContent = key;
+    row.append(cb, swatch, lbl);
+    row.dataset.key = key;
+    list.append(row);
+  }
+}
+
+function wsToggleRegion(key) {
+  if (_ws.selected.has(key)) _ws.selected.delete(key);
+  else _ws.selected.add(key);
+  for (let i = 0; i < _ws.regionKeys.length; i++) {
+    if (_ws.regionKeys[i] !== key) continue;
+    _ws.pathEls[i]?.classList.toggle('selected', _ws.selected.has(key));
+  }
+  const row = _ws.listEl.querySelector(`[data-key="${CSS.escape(key)}"]`);
+  const cb = row?.querySelector('input');
+  if (cb) cb.checked = _ws.selected.has(key);
+}
+
+function wsSelectAll(on) {
+  if (on) _ws.regionKeys.forEach((k) => _ws.selected.add(k));
+  else _ws.selected.clear();
+  for (let i = 0; i < _ws.pathEls.length; i++) {
+    _ws.pathEls[i]?.classList.toggle('selected', on);
+  }
+  for (const cb of _ws.listEl.querySelectorAll('input[type="checkbox"]')) {
+    cb.checked = on;
+  }
+}
+
+async function wsApplyShading(app) {
+  if (!_ws?.features.length || !_ws.shadeColumn || !_ws.dataColumn) return;
+  let rows, cols;
+  try {
+    rows = await app.data.getRows();
+    cols = await app.data.getColumns();
+  } catch { return; }
+  const colNames = cols?.names || cols?.map?.((c) => c.name) || [];
+  const keyIdx = colNames.indexOf(_ws.dataColumn);
+  const valIdx = colNames.indexOf(_ws.shadeColumn);
+  if (keyIdx < 0 || valIdx < 0) return;
+
+  const regionSums = new Map();
+  const regionCounts = new Map();
+  for (const row of rows || []) {
+    const rk = String(row[keyIdx] ?? '');
+    const v = Number(row[valIdx]);
+    if (!rk || !Number.isFinite(v)) continue;
+    regionSums.set(rk, (regionSums.get(rk) || 0) + v);
+    regionCounts.set(rk, (regionCounts.get(rk) || 0) + 1);
+  }
+  const means = new Map();
+  let lo = Infinity, hi = -Infinity;
+  for (const [k, s] of regionSums) {
+    const m = s / regionCounts.get(k);
+    means.set(k, m);
+    if (m < lo) lo = m;
+    if (m > hi) hi = m;
+  }
+  const range = hi - lo || 1;
+  const COLORS = ['#f7fbff', '#deebf7', '#c6dbef', '#9ecae1', '#6baed6', '#4292c6', '#2171b5', '#084594'];
+  for (let i = 0; i < _ws.regionKeys.length; i++) {
+    const m = means.get(_ws.regionKeys[i]);
+    let fill = '#d5dbe2';
+    if (m != null) {
+      const t = (m - lo) / range;
+      fill = COLORS[Math.min(Math.floor(t * COLORS.length), COLORS.length - 1)];
+    }
+    _ws.pathEls[i]?.setAttribute('fill', fill);
+  }
+  // Update swatches in the list
+  for (const sw of _ws.listEl.querySelectorAll('.swatch')) {
+    const idx = Number(sw.dataset.idx);
+    sw.style.background = _ws.pathEls[idx]?.getAttribute('fill') || '#d5dbe2';
+  }
+  _ws.statusEl.textContent =
+    `${_ws.fileName} — shaded by ${_ws.shadeColumn} (${means.size} matched of ${_ws.regionKeys.length} regions).`;
+}
+
+async function wsSaveState(app) {
+  await app.state.set({
+    keyProp: _ws.keyProp, dataColumn: _ws.dataColumn,
+    shadeColumn: _ws.shadeColumn, fileName: _ws.fileName,
+    selected: [..._ws.selected],
+  });
+}
+
+// --- GeoJSON → SVG projection ------------------------------------------------
+
+function wsProjection(features, width, height) {
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  const visit = (coords) => {
+    if (typeof coords[0] === 'number') {
+      if (coords[0] < minX) minX = coords[0];
+      if (coords[0] > maxX) maxX = coords[0];
+      if (coords[1] < minY) minY = coords[1];
+      if (coords[1] > maxY) maxY = coords[1];
+    } else { for (const c of coords) visit(c); }
+  };
+  for (const f of features) visit(f.geometry.coordinates);
+  const pad = 20, w = width - 2 * pad, h = height - 2 * pad;
+  const scale = Math.min(w / ((maxX - minX) || 1), h / ((maxY - minY) || 1));
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  return {
+    project: ([lon, lat]) => [
+      pad + w / 2 + (lon - cx) * scale,
+      pad + h / 2 - (lat - cy) * scale,
+    ],
+  };
+}
+
+function wsGeometryToPath(geom, project) {
+  const ring = (coords) =>
+    coords.map(([lon, lat], i) => {
+      const [x, y] = project([lon, lat]);
+      return `${i ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join('') + 'Z';
+  if (geom.type === 'Polygon') return geom.coordinates.map(ring).join('');
+  if (geom.type === 'MultiPolygon') return geom.coordinates.flatMap((p) => p.map(ring)).join('');
+  return '';
 }
