@@ -10,6 +10,65 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
+- [~] **Workspace ownership model → "read the world, write your own" (#145).**
+      *Decision (committed):* **activation = full trust**, so we stop pretending
+      plugin workspace state is confidential. A dataset is already world-readable to
+      any activated plugin; a coding blob is just derived data and shouldn't get a
+      *stronger* secrecy class merely because it lives in a blob instead of a
+      dataset column. The one guarantee worth keeping is **integrity**: a plugin can
+      mutate only its own persistent state (blobs are the sole place plugins hold
+      read-*write* state; datasets are read + additive-create, destructive commit is
+      host-only). So ownership becomes **namespacing for integrity, not isolation for
+      secrecy**.
+  - [~] **Owner-keyed storage refactor (in progress).** Key workspace state by
+        `(owner, wsId, dataset)` so a colliding `wsId` from a different author is a
+        *different slot* — collision-safe and squat-proof by construction. Drop the
+        fragile TOFU `#owners` map + `#mayAccess`; drop the null-bypass on the
+        plugin `state.read`/`state.write` path (it silently defeated #89 — a
+        same-id third-party could read/corrupt another plugin's blob). Reads scope
+        to the caller's own owner (addressing default, **not** a claimed security
+        barrier — cross-space read is an unbuilt convenience we don't preclude).
+        Writes are own-only by construction. Persistence bumps to `__wsv:3`
+        (owner-nested) with best-effort v2/flat migration (resolve owner from the
+        declaring plugin; the only real legacy case is builtin `caqdas-coding`).
+        Files: `workspace-store.js` (keying + `ownerToken` moves here), `app.js`
+        (`workspaceRead`/`Write`, `applyWorkspaces` migrate), `workspace-manager.js`
+        (get/set signatures), `plugin-manager.js` (deactivation purge), SECURITY.md
+        reframe. **Verify:** CAQDAS import/export round-trip + legacy-project load.
+  - [ ] **Space-verb dispatch interface (deferred — needs a 2nd space to design
+        against).** The endgame from the design chat: the host should own a *shell*,
+        not a merge vocabulary. A "space" plugin declares its own **verbs** (buttons)
+        — the four we know (New/Append/Join/Merge) are just verbs a *tabular* space
+        would declare; a different space might declare "stamp/stomp/strike/stare".
+        The host renders declared verbs, routes a click to the plugin fn, and
+        enforces only the **envelope**, never the meaning:
+        - **Contract:** verb → real exported fn; writes only to its own space;
+          typed return **envelope** `{ ok, message?, refresh? }` drives host refresh.
+        - **Inputs:** a verb gathers most inputs itself mid-run via `app.ui.*`. The
+          one **irreducible** exception is a **picked file** — the browser's
+          user-activation rule forces the host to open the file dialog *synchronously
+          on the click* (see `import-service.js` header), so any file-consuming verb
+          must **declare** that up front. File-input is the host's only structural
+          input concern; everything else is the plugin's.
+        - **Escape hatch:** anything the host shell can't present, the plugin
+          presents **inside its own tab** (`workspace.mount` is a full realm) — so
+          there's no ceiling, just a boundary routing each verb to whoever can render
+          it.
+        - **Reuse:** this is the existing declarative-action pattern (`label` +
+          `inputs`, host-gathered + dispatched, scriptable via `run <id>.<fn>`)
+          applied to spaces — not greenfield. The import dialog is the one hardcoded
+          holdout to dissolve.
+        - **Cross-owner "contribute" falls out of this.** B contributing into A's
+          space = host mediates workflow + identity + consent, **A's own verb does
+          the semantic merge on A's blob** (A stays sole writer). One interface,
+          both features. The host can't blind-merge an opaque blob the way it
+          SQL-joins a dataset — the owner must apply.
+        - **Why deferred:** an interface designed against one implementor (CAQDAS)
+          bakes in coding-shaped assumptions. Wait for a second space type / a real
+          cross-space import. *Orthogonal to the ownership refactor above* — that can
+          and does land first. **Blocked on:** dreaming up a 2nd space sufficiently
+          unlike CAQDAS to force the abstraction honest.
+
 - [~] **Build and prove the DuckDB-WASM data engine — FOUNDATIONAL.**
       *Core engine wired in and live (desktop Chrome):* `core/duckdb-manager.js`
       owns the runtime; `core/data-store.js` is now a facade over a DuckDB table

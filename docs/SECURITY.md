@@ -43,15 +43,29 @@ plugin reading the data still cannot send it off-device without an explicit allo
 **Writes are additive, not destructive.** The trust above is read trust; the write
 surface is deliberately narrower. An activated plugin can **create new** datasets
 (`app.data.create`), switch which one is active (`app.data.setActive`), and write
-its **own** workspace state (`app.state.write` — owner-scoped: host-asserted plugin
-identity, must be declared in the manifest, and a non-builtin can't write a
-builtin's id). It **cannot** destructively replace, append-into, or join-over your
-loaded data: `DataStore.loadDataset` in those modes is host-only and reached solely
-through a user-initiated **File ▸ Import** (see `core/import-service.js`). A
-`selfCommit` importer builds its own dataset via the additive calls above instead
-of delivering one — so the boundary is *additive vs destructive*, not *host vs
-plugin*. Worst case, a malicious activated plugin litters new datasets; it cannot
-silently overwrite the data you have open.
+its **own** workspace state (`app.state.write`). It **cannot** destructively replace,
+append-into, or join-over your loaded data: `DataStore.loadDataset` in those modes is
+host-only and reached solely through a user-initiated **File ▸ Import** (see
+`core/import-service.js`). A `selfCommit` importer builds its own dataset via the
+additive calls above instead of delivering one — so the boundary is *additive vs
+destructive*, not *host vs plugin*. Worst case, a malicious activated plugin litters
+new datasets; it cannot silently overwrite the data you have open.
+
+**Workspace state: integrity, not secrecy (#145).** Plugin workspace blobs
+(`app.state.*`, e.g. CAQDAS coding) are **not** treated as confidential from other
+activated plugins — consistent with datasets being world-readable to any activated
+plugin, and honest about the fact that a blob is just derived data (a codebook,
+codings) with no claim to a stronger secrecy class than the dataset it derives from.
+What the store *does* enforce is **integrity**: state is keyed by `(owner, workspace
+id, dataset)`, where the owner is derived from the plugin's host-asserted identity
+(built-ins share one `builtin` owner; others get an author/host namespace). Because
+the owner is part of the key, a plugin can only ever write its **own** slot, and two
+different authors declaring the same workspace id get **separate slots** — so one
+plugin cannot corrupt, clobber, or squat another's state. There is no runtime
+"first-accessor claims" race (an earlier model had one, letting a same-id plugin
+read/corrupt a just-imported blob; that is closed by construction now). Reads address
+the caller's own owner by default; that is an *addressing* default, not a claimed
+barrier — nothing is promised to be unreadable, so nothing is over-promised.
 
 ### Opening an untrusted bundle reconciles the active plugin set
 

@@ -17,6 +17,7 @@
 
 import { PluginBroker } from './plugin-broker.js';
 import { sandboxBlobUrl } from './plugin-sandbox.js';
+import { ownerToken } from './workspace-store.js';
 
 const API_VERSION = '1';
 
@@ -141,24 +142,27 @@ export class WorkspaceManager {
     const { plugin, ws, iframe } = entry;
     const title = ws.title || ws.id;
     // Ownership token: the plugin's namespace (built-ins share one; URL/file plugins
-    // get their host/author namespace). Same namespace ⇒ may share a workspace id
-    // (intended lite/heavy sharing); a different namespace is denied access to an
-    // id another owner already claimed (#89).
+    // get their host/author namespace). It is part of the storage KEY (#145), so a
+    // different author declaring the same id gets a separate slot — collision-safe by
+    // construction, no runtime claim. Built-in ids stay reserved at the TAB level so a
+    // non-built-in can't hijack a built-in's visible tab (identity, not data — the
+    // owner-keyed store already isolates the data either way).
     const owner = ownerToken(plugin);
-    // Built-in ids are reserved: a non-built-in plugin may neither read nor write
-    // them, even if it declares the same id and mounts first.
     const reserved = this.#builtinWsIds.has(ws.id) && !plugin.builtin;
     // Bind this mount to the dataset that was active when it opened — coding state is
-    // per-(workspace, dataset), so switching datasets (which re-mounts) swaps the blob.
+    // per-(owner, workspace, dataset), so switching datasets (which re-mounts) swaps
+    // the blob.
     const dsId = this.#activeDatasetId();
     const services = {
       ...this.#services,
-      // state.get/set scoped to THIS workspace id + dataset (the host is the source of truth).
+      // state.get/set scoped to THIS (owner, workspace id, dataset). The host is the
+      // source of truth; the owner comes from host-asserted identity, so setState is
+      // write-your-own by construction.
       workspace: {
-        getState: () => (reserved ? null : this.#store.get(ws.id, dsId, owner)),
+        getState: () => (reserved ? null : this.#store.get(owner, ws.id, dsId)),
         setState: (value) => {
           if (reserved) throw new Error(`Workspace id "${ws.id}" is reserved by a built-in plugin.`);
-          this.#store.set(ws.id, dsId, value, owner);
+          this.#store.set(owner, ws.id, dsId, value);
         },
       },
     };
@@ -226,19 +230,6 @@ export class WorkspaceManager {
     }
     this.#tabs.removeTab(entry.view);
   }
-}
-
-/** The ownership namespace for a plugin's workspace state. Built-ins are mutually
- * trusting (one shared `builtin` owner). For others the qualified id is
- * `<namespace>:<local>` (host for URL plugins, author for file/authored — see
- * qualifyId), so the namespace prefix is the owner: two plugins from the same
- * author/host may share a workspace id, a different author cannot (#89). */
-function ownerToken(plugin) {
-  if (plugin.builtin) return 'builtin';
-  const qid = String(plugin.id || '');
-  const i = qid.indexOf(':');
-  if (i > 0) return `ns:${qid.slice(0, i)}`;
-  return plugin.origin ? `origin:${plugin.origin}` : `plugin:${qid}`;
 }
 
 /** Fetch a plugin's entry-module source text (builtin/URL plugins). */

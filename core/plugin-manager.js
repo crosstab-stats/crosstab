@@ -26,6 +26,7 @@
 import { PluginActions } from './plugin-actions.js';
 import { CoreEvents } from './event-bus.js';
 import { packPlugin, unpackPlugin, looksLikeZip } from './plugin-package.js';
+import { ownerToken } from './workspace-store.js';
 
 const LS_DISABLED = 'crosstab.plugins.disabled';
 const LS_CATALOG = 'crosstab.plugins.catalog';
@@ -639,12 +640,14 @@ export class PluginManager {
   }
 
   /** The plugin's workspace ids that currently hold saved data in the open project
-   * (#118). A plugin's data lives in workspace-store blobs keyed by the workspace ids
-   * it declares (its `manifest.workspaces`), preserved opaquely by the host. */
-  #projectDataIds(key) {
+   * (#118). A plugin's data lives in workspace-store blobs keyed by (owner, workspace
+   * id, dataset) — the workspace ids it declares, under its own owner (#145) — held
+   * opaquely by the host. */
+  #projectDataIds(p) {
     if (!this.#workspaceStore) return [];
-    const wsIds = (this.#catalog[key]?.workspaces || []).map((w) => w.id).filter(Boolean);
-    return wsIds.filter((id) => this.#workspaceStore.hasAny(id));
+    const wsIds = (this.#catalog[p.key]?.workspaces || []).map((w) => w.id).filter(Boolean);
+    const owner = ownerToken(p);
+    return wsIds.filter((id) => this.#workspaceStore.hasAny(owner, id));
   }
 
   /**
@@ -657,7 +660,7 @@ export class PluginManager {
    * @returns {Promise<boolean>} whether deactivation proceeded.
    */
   async #deactivateFromPicker(p) {
-    const dataIds = this.#projectDataIds(p.key);
+    const dataIds = this.#projectDataIds(p);
     if (!dataIds.length) {
       // No project data — deactivate and drop it from the project's plugin set (b).
       await this.setEnabled(p.key, false);
@@ -667,8 +670,9 @@ export class PluginManager {
     const choice = await this.#promptDeactivateData(p);
     if (choice === 'cancel') return false;
     if (choice === 'delete') {
-      // Purge the plugin's project data, then drop it from the plugin set.
-      for (const id of dataIds) this.#workspaceStore.clearWorkspace(id);
+      // Purge the plugin's project data (its own owner's slots), then drop it from the set.
+      const owner = ownerToken(p);
+      for (const id of dataIds) this.#workspaceStore.clearWorkspace(owner, id);
       this.#project?.dropPlugin?.({ key: p.key, id: p.id });
     } else {
       // Keep the data + the project association; just deactivate for this session.

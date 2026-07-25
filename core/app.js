@@ -39,7 +39,7 @@ import { installDialogKeybindings } from './dialog-keys.js';
 import { Launcher } from './launcher.js';
 import { OfflineManager } from './offline.js';
 import { exportProjectBundle, importProjectBundle, pickBundleFile, downloadBlob, slug } from './project-bundle.js';
-import { WorkspaceStore, migrateWorkspaceBlob } from './workspace-store.js';
+import { WorkspaceStore, migrateWorkspaceBlob, ownerToken } from './workspace-store.js';
 import { WorkspaceManager } from './workspace-manager.js';
 import { PluginPackageStore } from './plugin-package-store.js';
 import { MediaStore, createMediaService } from './media-store.js';
@@ -546,8 +546,9 @@ export async function boot(mounts) {
   projStatus.id = 'proj-status';
   projStatus.className = 'lib-status';
   mounts.status.parentElement?.append(projStatus);
-  // Host store for plugin workspace state (#93). Persists per-project, keyed by
-  // workspace id; opaque to the host. Empty until a workspace plugin writes.
+  // Host store for plugin workspace state (#93). Persists per-project, keyed per
+  // (owner, workspace id, dataset) (#145); opaque to the host. Empty until a
+  // workspace plugin writes.
   const workspaceStore = new WorkspaceStore({ bus });
   const projects = new ProjectSync({
     projectStore: new ProjectStore(),
@@ -572,10 +573,15 @@ export async function boot(mounts) {
     // reconcile() alone wouldn't refresh it and it would keep showing stale data.
     getWorkspaces: () => workspaceStore.export(),
     applyWorkspaces: (obj) => {
-      // Migrate a legacy flat blob (pre-#139) to the per-dataset shape, best-effort
-      // attaching it to the active dataset (old row-ids collided across datasets, so a
-      // clean split is impossible — never destructive).
-      workspaceStore.import(migrateWorkspaceBlob(obj, datasets.activeId));
+      // Migrate an older saved blob to the v3 owner-nested shape (#145). Legacy flat
+      // (pre-#139) blobs are best-effort attached to the active dataset (old row-ids
+      // collided across datasets, so a clean split is impossible — never destructive);
+      // v2 blobs are wrapped under the owner of the plugin that declares each wsId.
+      const resolveOwner = (wsId) => {
+        const p = plugins && plugins.list().find((x) => (x.workspaces || []).some((w) => w.id === wsId));
+        return p ? ownerToken(p) : null;
+      };
+      workspaceStore.import(migrateWorkspaceBlob(obj, { targetDatasetId: datasets.activeId, resolveOwner }));
       if (workspaceManager && plugins) void workspaceManager.remountActive(plugins.list());
     },
     // …and the Output tab's results, so reopening shows them (and switching
@@ -671,33 +677,25 @@ export async function boot(mounts) {
   });
   plugins.activate();
 
-  // Owner-scoped workspace-state read (#139): lets a plugin read the coding blob of a
-  // workspace IT declares — from its compute frame — so an exporter (e.g. caqdas's
-  // REFI-QDA export) can reach codings the sandbox otherwise walls off. Authorised by
-  // manifest declaration + the #89 reservation rule (a non-built-in can't read a
-  // built-in's reserved id); the store read itself is the sanctioned host-internal
-  // bypass (`get(id, null)`). It is a READ — no write path is exposed.
+  // Workspace-state read from a plugin's compute frame (#139) — so an exporter (e.g.
+  // caqdas's REFI-QDA export) can reach codings the sandbox otherwise walls off. The
+  // read is keyed by the caller's OWN owner (#145): it addresses the plugin's own
+  // space, which it must declare. This is not a confidentiality barrier (activation
+  // is full trust; a blob is no more secret than the dataset) — it's the addressing
+  // default; cross-space read would just pass a different owner, and isn't built yet.
   services.workspaceRead = (pluginId, wsId) => {
-    const list = plugins ? plugins.list() : [];
-    const p = list.find((x) => x.id === pluginId);
+    const p = plugins ? plugins.list().find((x) => x.id === pluginId) : null;
     if (!p || !(p.workspaces || []).some((w) => w.id === wsId)) return null; // must declare it
-    const reservedByBuiltin = list.some((x) => x.builtin && (x.workspaces || []).some((w) => w.id === wsId));
-    if (reservedByBuiltin && !p.builtin) return null; // #89: don't let a non-built-in read a built-in's id
-    return workspaceStore.get(wsId, datasets.activeId, null); // the active dataset's coding blob (#139)
+    return workspaceStore.get(ownerToken(p), wsId, datasets.activeId);
   };
-  // Owner-scoped WRITE counterpart (#139): same authorisation as the read; writes the
-  // blob for a chosen dataset (or the active one). Lets a same-owner importer attach
-  // coding state to a dataset it just created.
-  const wsWriteAuthorised = (pluginId, wsId) => {
-    const list = plugins ? plugins.list() : [];
-    const p = list.find((x) => x.id === pluginId);
-    if (!p || !(p.workspaces || []).some((w) => w.id === wsId)) return false;
-    const reservedByBuiltin = list.some((x) => x.builtin && (x.workspaces || []).some((w) => w.id === wsId));
-    return !(reservedByBuiltin && !p.builtin);
-  };
+  // WRITE counterpart (#139, #145): a plugin writes only its OWN space — the owner is
+  // derived from host-asserted identity, so write-your-own is guaranteed by construction
+  // (a colliding id from another author is a different slot). Lets a same-owner importer
+  // attach coding state to a dataset it just created.
   services.workspaceWrite = (pluginId, wsId, value, dsId) => {
-    if (!wsWriteAuthorised(pluginId, wsId)) return;
-    workspaceStore.set(wsId, dsId ?? datasets.activeId, value, null);
+    const p = plugins ? plugins.list().find((x) => x.id === pluginId) : null;
+    if (!p || !(p.workspaces || []).some((w) => w.id === wsId)) return; // must declare it
+    workspaceStore.set(ownerToken(p), wsId, dsId ?? datasets.activeId, value);
   };
 
   // Plugin workspaces (#93): mount/unmount workspace TABS to match the active
