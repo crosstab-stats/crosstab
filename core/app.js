@@ -39,7 +39,7 @@ import { installDialogKeybindings } from './dialog-keys.js';
 import { Launcher } from './launcher.js';
 import { OfflineManager } from './offline.js';
 import { exportProjectBundle, importProjectBundle, pickBundleFile, downloadBlob, slug } from './project-bundle.js';
-import { WorkspaceStore } from './workspace-store.js';
+import { WorkspaceStore, migrateWorkspaceBlob } from './workspace-store.js';
 import { WorkspaceManager } from './workspace-manager.js';
 import { PluginPackageStore } from './plugin-package-store.js';
 import { MediaStore, createMediaService } from './media-store.js';
@@ -572,7 +572,10 @@ export async function boot(mounts) {
     // reconcile() alone wouldn't refresh it and it would keep showing stale data.
     getWorkspaces: () => workspaceStore.export(),
     applyWorkspaces: (obj) => {
-      workspaceStore.import(obj);
+      // Migrate a legacy flat blob (pre-#139) to the per-dataset shape, best-effort
+      // attaching it to the active dataset (old row-ids collided across datasets, so a
+      // clean split is impossible — never destructive).
+      workspaceStore.import(migrateWorkspaceBlob(obj, datasets.activeId));
       if (workspaceManager && plugins) void workspaceManager.remountActive(plugins.list());
     },
     // …and the Output tab's results, so reopening shows them (and switching
@@ -680,7 +683,7 @@ export async function boot(mounts) {
     if (!p || !(p.workspaces || []).some((w) => w.id === wsId)) return null; // must declare it
     const reservedByBuiltin = list.some((x) => x.builtin && (x.workspaces || []).some((w) => w.id === wsId));
     if (reservedByBuiltin && !p.builtin) return null; // #89: don't let a non-built-in read a built-in's id
-    return workspaceStore.get(wsId, null);
+    return workspaceStore.get(wsId, datasets.activeId, null); // the active dataset's coding blob (#139)
   };
 
   // Plugin workspaces (#93): mount/unmount workspace TABS to match the active
@@ -689,7 +692,12 @@ export async function boot(mounts) {
   // workspace exists (it won't in a headless/embedded mount).
   let workspaceManager = null;
   if (workspaceTabs) {
-    workspaceManager = new WorkspaceManager({ tabs: workspaceTabs, store: workspaceStore, services });
+    workspaceManager = new WorkspaceManager({
+      tabs: workspaceTabs,
+      store: workspaceStore,
+      services,
+      activeDatasetId: () => datasets.activeId, // coding state is per-dataset (#139)
+    });
     const reconcileWorkspaces = () => void workspaceManager.reconcile(plugins.list());
     bus.on(CoreEvents.PLUGINS_CHANGED, reconcileWorkspaces);
     reconcileWorkspaces();

@@ -644,7 +644,7 @@ export class PluginManager {
   #projectDataIds(key) {
     if (!this.#workspaceStore) return [];
     const wsIds = (this.#catalog[key]?.workspaces || []).map((w) => w.id).filter(Boolean);
-    return wsIds.filter((id) => this.#workspaceStore.has(id));
+    return wsIds.filter((id) => this.#workspaceStore.hasAny(id));
   }
 
   /**
@@ -668,7 +668,7 @@ export class PluginManager {
     if (choice === 'cancel') return false;
     if (choice === 'delete') {
       // Purge the plugin's project data, then drop it from the plugin set.
-      for (const id of dataIds) this.#workspaceStore.set(id, null);
+      for (const id of dataIds) this.#workspaceStore.clearWorkspace(id);
       this.#project?.dropPlugin?.({ key: p.key, id: p.id });
     } else {
       // Keep the data + the project association; just deactivate for this session.

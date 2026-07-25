@@ -24,6 +24,7 @@ export class WorkspaceManager {
   #tabs;
   #store;
   #services;
+  #activeDatasetId;
   #onError;
   /** workspaceId → { view, iframe, broker, pluginId }. @type {Map<string, object>} */
   #mounted = new Map();
@@ -40,10 +41,13 @@ export class WorkspaceManager {
    * @param {Object} deps.services - The host service bundle (data/results/webr/ui/web).
    * @param {(err: Error) => void} [deps.onError]
    */
-  constructor({ tabs, store, services, onError }) {
+  constructor({ tabs, store, services, activeDatasetId, onError }) {
     this.#tabs = tabs;
     this.#store = store;
     this.#services = services;
+    // Which dataset a mount is bound to (coding state is per-dataset, #139). Read at
+    // mount; a dataset switch re-mounts (see app.js), binding to the new one.
+    this.#activeDatasetId = activeDatasetId ?? (() => null);
     this.#onError = onError ?? ((e) => console.error('[workspace]', e));
   }
 
@@ -144,14 +148,17 @@ export class WorkspaceManager {
     // Built-in ids are reserved: a non-built-in plugin may neither read nor write
     // them, even if it declares the same id and mounts first.
     const reserved = this.#builtinWsIds.has(ws.id) && !plugin.builtin;
+    // Bind this mount to the dataset that was active when it opened — coding state is
+    // per-(workspace, dataset), so switching datasets (which re-mounts) swaps the blob.
+    const dsId = this.#activeDatasetId();
     const services = {
       ...this.#services,
-      // state.get/set scoped to THIS workspace id (the host is the source of truth).
+      // state.get/set scoped to THIS workspace id + dataset (the host is the source of truth).
       workspace: {
-        getState: () => (reserved ? null : this.#store.get(ws.id, owner)),
+        getState: () => (reserved ? null : this.#store.get(ws.id, dsId, owner)),
         setState: (value) => {
           if (reserved) throw new Error(`Workspace id "${ws.id}" is reserved by a built-in plugin.`);
-          this.#store.set(ws.id, value, owner);
+          this.#store.set(ws.id, dsId, value, owner);
         },
       },
     };
