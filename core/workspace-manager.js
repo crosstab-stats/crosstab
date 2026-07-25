@@ -109,25 +109,21 @@ export class WorkspaceManager {
 
     const pane = document.createElement('div');
     pane.style.cssText = 'position:relative;height:100%;min-height:420px;display:flex;flex-direction:column;';
-    // Toolbar strip for declared verbs (category:'toolbar'). Sits above the iframe;
-    // each button is host-rendered so styling is consistent across workspaces and the
-    // host can handle file-picker activation synchronously on click.
+    // Toolbar strip: verb buttons (if any) on the left, restart on the right.
+    // Always rendered — the restart button is available for every workspace.
     const toolbarVerbs = (ws.verbs || []).filter((v) => (v.category || 'toolbar') === 'toolbar');
-    let toolbar = null;
-    if (toolbarVerbs.length) {
-      toolbar = buildVerbToolbar(toolbarVerbs, async (verb, file) => {
-        const entry = this.#mounted.get(ws.id);
-        if (!entry?.broker) return;
-        try {
-          const args = file ? [{ __file: { name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) } }] : [{}];
-          const result = await entry.broker.invoke(verb.run, args);
-          this.#handleVerbResult(result);
-        } catch (err) {
-          this.#onError(new Error(`verb "${verb.id}" failed: ${err.message}`));
-        }
-      });
-      pane.append(toolbar);
-    }
+    const toolbar = buildVerbToolbar(toolbarVerbs, async (verb, file) => {
+      const entry = this.#mounted.get(ws.id);
+      if (!entry?.broker) return;
+      try {
+        const args = file ? [{ __file: { name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) } }] : [{}];
+        const result = await entry.broker.invoke(verb.run, args);
+        this.#handleVerbResult(result);
+      } catch (err) {
+        this.#onError(new Error(`verb "${verb.id}" failed: ${err.message}`));
+      }
+    }, () => void this.#restart(ws.id));
+    pane.append(toolbar);
     const iframe = makeIframe(title);
     pane.append(iframe);
     // A loading overlay covers the iframe during the handshake. It both signals
@@ -152,6 +148,16 @@ export class WorkspaceManager {
         this.#onError(new Error(`workspace "${ws.id}" failed to mount: ${e.message}`));
       },
     );
+  }
+
+  /** User-initiated restart: flush the workspace's state via deactivate, then
+   * tear down and remount the iframe in place. Safe even if the workspace is
+   * wedged — deactivate has a timeout, and on failure we proceed anyway. */
+  async #restart(id) {
+    const entry = this.#mounted.get(id);
+    if (!entry) return;
+    try { await entry.broker?.sendDeactivate?.(); } catch { /* timeout or dead — fine */ }
+    await this.#retry(id);
   }
 
   /** Build the broker and run the load → activate → mount handshake into
@@ -355,11 +361,11 @@ function ensureSpinKeyframes() {
   document.head.append(s);
 }
 
-/** Build a host-rendered toolbar strip for a workspace's declared toolbar verbs.
- * Each verb gets a button; `needsFile` verbs open a file picker synchronously on
- * click (preserving user activation). The `onInvoke(verb, file?)` callback handles
- * the actual invocation via the workspace broker. */
-function buildVerbToolbar(verbs, onInvoke) {
+/** Build a host-rendered toolbar strip for a workspace. Verb buttons on the left,
+ * a restart button pushed to the right. Always rendered — even workspaces with no
+ * toolbar verbs get the strip (for restart). `needsFile` verbs open a file picker
+ * synchronously on click (preserving user activation). */
+function buildVerbToolbar(verbs, onInvoke, onRestart) {
   const bar = document.createElement('div');
   bar.className = 'ws-verb-toolbar';
   bar.style.cssText =
@@ -386,6 +392,22 @@ function buildVerbToolbar(verbs, onInvoke) {
     });
     bar.append(btn);
   }
+
+  // Restart button — right-aligned, always present.
+  const spacer = document.createElement('div');
+  spacer.style.cssText = 'flex:1;';
+  const restart = document.createElement('button');
+  restart.type = 'button';
+  restart.textContent = 'Restart';
+  restart.title = 'Restart this workspace (saves state first)';
+  restart.style.cssText =
+    'font:inherit;font-size:12px;padding:3px 8px;border:1px solid #ccd2d8;border-radius:6px;' +
+    'background:#fff;cursor:pointer;color:#5a6470;';
+  restart.addEventListener('mouseenter', () => { restart.style.background = '#eef3f8'; });
+  restart.addEventListener('mouseleave', () => { restart.style.background = '#fff'; });
+  restart.addEventListener('click', () => onRestart());
+  bar.append(spacer, restart);
+
   return bar;
 }
 
