@@ -476,6 +476,14 @@ export interface ImportSpec {
   /** Host-mount a large upload into WebR and pass its `path` (no `file`). */
   stage?: boolean;
   multiple?: boolean;
+  /** This importer **creates and commits its own dataset(s)** (via `app.data.*` /
+   * `app.state.write`) rather than returning one for the host to load — e.g. a
+   * QDPX project that mints a dataset with its own coding blob + media, or an
+   * archive that fans out into several datasets. When set, the host skips the
+   * replace/append/join/new merge (nothing to merge) and performs no commit;
+   * `parse` returns a truthy **receipt** (e.g. `{ name, rows }`) on success, or
+   * `null` if it aborted (having reported its own error). */
+  selfCommit?: boolean;
   order?: number;
   id?: string;
 }

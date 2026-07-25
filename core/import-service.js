@@ -68,6 +68,16 @@ import { readZipEntries } from './zip.js';
  * @property {boolean} [multiple=false] - Allow selecting several files at once
  *   (they stack/append into one pooled dataset). `parse` is still called once
  *   per file.
+ * @property {boolean} [selfCommit=false] - This importer **creates and commits its
+ *   own dataset(s)** rather than delivering one for the host to load — e.g. a QDPX
+ *   project that mints a new dataset with its own coding blob + media, or any
+ *   archive that fans a file out into several datasets. For these the host runs no
+ *   replace/append/join/new merge (there is nothing to merge into the active
+ *   dataset) and performs no commit: `parse` does the committing via `app.data.*`
+ *   / `app.state.write` and then **delivers a receipt** (any truthy value — a
+ *   `{ name, rows }` is nice) to report success, or `null` to signal it aborted
+ *   (having surfaced its own error). Just another declared contract, open to any
+ *   plugin — no importer is privileged.
  */
 
 export class ImportService {
@@ -280,6 +290,11 @@ export class ImportService {
    * ({@link #runUrlImport}) so both behave identically once the bytes are in hand.
    */
   async #dispatchFiles(spec, files, id) {
+    // A self-committing importer owns its own dataset creation (QDPX → new dataset
+    // + coding blob + media; any multi-dataset archive). There is nothing to merge
+    // into the active dataset, so the replace/append/join/new dialog would be a
+    // meaningless prompt — skip it and let each file's parse commit itself.
+    if (spec.selfCommit) return this.#runSelfCommit(spec, files, id);
     // No data loaded → straight import (no mode dialog). Data loaded → ask how to
     // combine; join is offered only for a single incoming file.
     if (this.#data.rowCount === 0) {
@@ -515,6 +530,38 @@ export class ImportService {
   }
 
   /**
+   * Run a **self-committing** importer (`spec.selfCommit`): the plugin creates and
+   * commits its own dataset(s) — the host neither merges nor loads. We just invoke
+   * `parse` per file (inside the started/ended progress bracket) and treat its
+   * delivered receipt as the success signal: any truthy value counts as committed,
+   * `null` means the importer aborted (and already reported why). No mode dialog,
+   * no `loadDataset`.
+   */
+  async #runSelfCommit(spec, files, id) {
+    let committed = 0;
+    for (const file of files) {
+      this.#bus.emit('import:started', { importer: id, file: file.name });
+      try {
+        const receipt = await this.#parseOne(spec, file);
+        if (receipt) committed += 1; // null/undefined/false = aborted (self-reported)
+      } catch (err) {
+        this.#results.appendError(`Import of "${file.name}" failed: ${err.message}`);
+        console.error('[import]', err);
+      } finally {
+        this.#bus.emit('import:ended', { importer: id, file: file.name });
+      }
+    }
+    if (committed > 0) {
+      this.#bus.emit('import:finished', {
+        importer: id,
+        files: files.length,
+        committed,
+        rowCount: this.#data.rowCount,
+      });
+    }
+  }
+
+  /**
    * Parse each file and commit it — the first of a Replace creates the table,
    * everything else stacks (append). Used for replace/append (not join).
    */
@@ -633,6 +680,12 @@ export class ImportService {
     } catch (err) {
       this.#results.appendError(`Import failed: ${err.message}`);
       console.error('[import]', err);
+      return;
+    }
+    // A self-committing web importer delivers a receipt, not a dataset: it already
+    // created + committed its own data, so there's nothing to merge — just report.
+    if (spec.selfCommit) {
+      if (dataset) this.#emitFinished(id, 1);
       return;
     }
     // null / empty = the importer aborted (and reported its own error).

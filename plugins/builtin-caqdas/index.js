@@ -40,7 +40,7 @@ export const manifest = {
   // plugin ⇒ same owner ⇒ it can read its own codings (via app.state.read) from the
   // export's compute frame, without host-owned code cracking open the private blob.
   imports: [
-    { label: 'REFI-QDA / QDPX project (.qdpx)…', extensions: ['.qdpx'], parse: 'parseQdpx', group: 'Qualitative' },
+    { label: 'REFI-QDA / QDPX project (.qdpx)…', extensions: ['.qdpx'], parse: 'parseQdpx', group: 'Qualitative', selfCommit: true },
   ],
   exports: [
     { label: 'REFI-QDA / QDPX project (.qdpx)…', extensions: ['.qdpx'], export: 'exportQdpx', group: 'Qualitative' },
@@ -2047,7 +2047,10 @@ export async function parseQdpx(app, { name, file }) {
   const blob = { version: 1, textColumn: 'source', labelColumn: 'name', codes, segments: [], pendingImport: { codings } };
   await app.state.write('caqdas-coding', blob, newId);
   await app.data.setActive(newId);
-  return null; // we created the dataset + codings ourselves; nothing for the host to commit
+  // Self-committing importer (manifest `selfCommit`): we created the dataset +
+  // codings ourselves, so we deliver a receipt (not a dataset) — the host runs no
+  // merge dialog and no commit, just reports success from this.
+  return { name: projName, rows: names.length, codings: codings.length };
 }
 
 /** Store an imported media file, returning its asset ref. */
