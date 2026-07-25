@@ -43,6 +43,7 @@ import { WorkspaceStore } from './workspace-store.js';
 import { WorkspaceManager } from './workspace-manager.js';
 import { PluginPackageStore } from './plugin-package-store.js';
 import { MediaStore, createMediaService } from './media-store.js';
+import { makeZip, readZipEntries } from './zip.js';
 
 /**
  * URLs of the built-in plugins to load at startup. These load through the exact
@@ -397,6 +398,14 @@ export async function boot(mounts) {
   // like `codec`; plugins load post-boot, so the broker sees it.
   const mediaStore = new MediaStore();
   services.media = createMediaService(mediaStore);
+  // ZIP for plugins (#139): surface the host's zip module so an archive-format
+  // exporter/importer (e.g. REFI-QDA .qdpx) can build/read a ZIP without bundling its
+  // own lib or being host-owned. Pure computation on bytes the plugin already holds —
+  // `make` returns the archive bytes; `read` unwraps stored + deflated entries.
+  services.zip = {
+    make: async (entries) => new Uint8Array(await makeZip(entries).arrayBuffer()),
+    read: (bytes) => readZipEntries(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)),
+  };
   // Media importers are per-medium plugins (builtin-image/audio/video-import, #139):
   // they probe in their own media-CSP sandbox and stream bytes into the store via the
   // `media.put` sink above — no privileged host importer.
@@ -658,6 +667,21 @@ export async function boot(mounts) {
     packageStore: new PluginPackageStore(),
   });
   plugins.activate();
+
+  // Owner-scoped workspace-state read (#139): lets a plugin read the coding blob of a
+  // workspace IT declares — from its compute frame — so an exporter (e.g. caqdas's
+  // REFI-QDA export) can reach codings the sandbox otherwise walls off. Authorised by
+  // manifest declaration + the #89 reservation rule (a non-built-in can't read a
+  // built-in's reserved id); the store read itself is the sanctioned host-internal
+  // bypass (`get(id, null)`). It is a READ — no write path is exposed.
+  services.workspaceRead = (pluginId, wsId) => {
+    const list = plugins ? plugins.list() : [];
+    const p = list.find((x) => x.id === pluginId);
+    if (!p || !(p.workspaces || []).some((w) => w.id === wsId)) return null; // must declare it
+    const reservedByBuiltin = list.some((x) => x.builtin && (x.workspaces || []).some((w) => w.id === wsId));
+    if (reservedByBuiltin && !p.builtin) return null; // #89: don't let a non-built-in read a built-in's id
+    return workspaceStore.get(wsId, null);
+  };
 
   // Plugin workspaces (#93): mount/unmount workspace TABS to match the active
   // plugin set. Rides PLUGINS_CHANGED (same signal as menu wiring) + one initial

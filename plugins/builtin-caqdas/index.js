@@ -24,7 +24,7 @@
 export const manifest = {
   id: 'builtin-caqdas',
   name: 'Qualitative Coding (CAQDAS)',
-  version: '0.6.0',
+  version: '0.7.0',
   apiVersion: '0.1.0',
   category: 'Qualitative',
   // Renders media (text, image regions, audio/video time-ranges) from the host media
@@ -36,6 +36,12 @@ export const manifest = {
     'GUI: appears as a workspace tab (Coding) — pick a dataset column of documents (a text column, or a media column from an image/audio/video import), then tag passages/regions with codes and export code frequencies/segments to Output.\n' +
     'Used through its workspace tab, not a run command.',
   workspaces: [{ id: 'caqdas-coding', title: 'Coding' }],
+  // caqdas wears two hats: a coding workspace AND a REFI-QDA exporter (#139). Same
+  // plugin ⇒ same owner ⇒ it can read its own codings (via app.state.read) from the
+  // export's compute frame, without host-owned code cracking open the private blob.
+  exports: [
+    { label: 'REFI-QDA / QDPX project (.qdpx)…', extensions: ['.qdpx'], export: 'exportQdpx', group: 'Qualitative' },
+  ],
 };
 
 /** Distinct, readable highlight colours (assigned round-robin to new codes). */
@@ -1779,4 +1785,137 @@ function setSelectionRange(container, lo, hi) {
     }
     acc += len;
   }
+}
+
+// =====================================================================
+// REFI-QDA / QDPX export (#139)
+// The host invokes this from File ▸ Export data… (declared in manifest.exports). It
+// runs in the plugin's COMPUTE frame, reads its OWN codings via app.state.read (the
+// owner-scoped capability), reads the source docs from the active dataset, maps them
+// to the QDPX schema, and builds the .qdpx ZIP with app.zip. A .qdpx is a ZIP holding
+// `project.qde` (the XML) + a `Sources/` folder of the actual text/media files.
+//
+// Fidelity: text spans, image rectangles, and audio/video time spans round-trip;
+// region-over-time exports as its TIME SPAN only (QDPX has no moving-region concept).
+//
+// SCHEMA CAVEATS to validate against a real tool (NVivo/ATLAS/MAXQDA) and adjust:
+//   - TIME UNITS: begin/end are emitted in MILLISECONDS. If the target expects
+//     seconds, flip TIME_SCALE to 1.
+//   - Exact element/attribute names follow the published REFI-QDA structure; verify
+//     against the .xsd before relying on interop.
+// =====================================================================
+
+const TIME_SCALE = 1000; // seconds → the unit QDPX begin/end expect (ms). See caveat above.
+
+export async function exportQdpx(app) {
+  const state = normalize(await app.state.read('caqdas-coding'));
+  if (!state.textColumn) throw new Error('Open the Coding tab and pick a documents column before exporting.');
+  if (!state.segments.length) throw new Error('Nothing to export yet — code some passages first.');
+
+  const codeGuid = new Map();
+  for (const c of state.codes) codeGuid.set(c.id, qdpxUuid());
+
+  const meta = await app.data.getVariableMeta();
+  const has = (n) => meta.some((m) => m.name === n);
+  const vars = [state.textColumn];
+  if (state.labelColumn && state.labelColumn !== state.textColumn) vars.push(state.labelColumn);
+  for (const c of ['width', 'height']) if (has(c) && !vars.includes(c)) vars.push(c);
+  const rows = await app.data.getRows({ variables: vars, includeRowId: true, limit: 100000 });
+
+  const byDoc = new Map();
+  for (const s of state.segments) { if (!byDoc.has(s.doc)) byDoc.set(s.doc, []); byDoc.get(s.doc).push(s); }
+
+  const sourceEls = [];
+  const files = []; // ZIP entries for Sources/
+  for (const r of rows) {
+    const rid = String(r.__rid);
+    const segs = byDoc.get(rid);
+    if (!segs || !segs.length) continue; // only export coded documents
+    const label = state.labelColumn && r[state.labelColumn] != null ? String(r[state.labelColumn]) : `Document ${rid}`;
+    const cell = String(r[state.textColumn] ?? '');
+    const refs = parseMediaRefs(cell);
+    const guid = qdpxUuid();
+
+    if (!refs) {
+      // Text document → TextSource + PlainTextSelections.
+      const fname = guid + '.txt';
+      files.push({ name: 'Sources/' + fname, data: cell });
+      const sels = segs.filter((s) => s.start != null).map((s) =>
+        `<PlainTextSelection guid="${qdpxUuid()}" startPosition="${s.start}" endPosition="${s.end}">${codingXml(s, codeGuid)}</PlainTextSelection>`,
+      );
+      sourceEls.push(`<TextSource guid="${guid}" name="${xesc(label)}" plainTextPath="internal://${fname}">${sels.join('')}</TextSource>`);
+      continue;
+    }
+
+    const blob = await app.media.load(refs[0]);
+    if (!blob) continue;
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const medium = String(blob.type || '').split('/')[0];
+    const fname = guid + '.' + extForType(blob.type);
+    files.push({ name: 'Sources/' + fname, data: bytes });
+
+    if (medium === 'image') {
+      const W = Number(r.width) || 1000, H = Number(r.height) || 1000;
+      const sels = segs.filter((s) => s.region).map((s) => {
+        const g = s.region;
+        return `<PictureSelection guid="${qdpxUuid()}" firstX="${Math.round(g.x * W)}" firstY="${Math.round(g.y * H)}" secondX="${Math.round((g.x + g.w) * W)}" secondY="${Math.round((g.y + g.h) * H)}">${codingXml(s, codeGuid)}</PictureSelection>`;
+      });
+      sourceEls.push(`<PictureSource guid="${guid}" name="${xesc(label)}" path="internal://${fname}">${sels.join('')}</PictureSource>`);
+    } else if (medium === 'audio' || medium === 'video') {
+      const stag = medium === 'video' ? 'VideoSource' : 'AudioSource';
+      const seltag = medium === 'video' ? 'VideoSelection' : 'AudioSelection';
+      // time-only AND region-over-time both export as a time span (region-over-time
+      // drops its spatial keyframes — QDPX can't represent them).
+      const sels = segs.filter((s) => s.tStart != null).map((s) =>
+        `<${seltag} guid="${qdpxUuid()}" begin="${Math.round(s.tStart * TIME_SCALE)}" end="${Math.round(s.tEnd * TIME_SCALE)}">${codingXml(s, codeGuid)}</${seltag}>`,
+      );
+      sourceEls.push(`<${stag} guid="${guid}" name="${xesc(label)}" path="internal://${fname}">${sels.join('')}</${stag}>`);
+    }
+  }
+
+  const codeEls = state.codes.map((c) =>
+    `<Code guid="${codeGuid.get(c.id)}" name="${xesc(c.name)}" isCodable="true"${c.color ? ` color="${xesc(c.color)}"` : ''}/>`,
+  ).join('');
+  const qde =
+    `<?xml version="1.0" encoding="utf-8"?>\n` +
+    `<Project xmlns="urn:QDA-XML:project:1.0" name="${xesc(state.labelColumn || 'CrossTab coding')}" origin="CrossTab">` +
+    `<CodeBook><Codes>${codeEls}</Codes></CodeBook>` +
+    `<Sources>${sourceEls.join('')}</Sources>` +
+    `</Project>`;
+  files.unshift({ name: 'project.qde', data: qde });
+
+  const zipBytes = await app.zip.make(files);
+  return { filename: 'coding.qdpx', mimeType: 'application/zip', data: zipBytes };
+}
+
+/** A `<Coding>` wrapping a `<CodeRef>` to the segment's code (+ its memo as a note). */
+function codingXml(s, codeGuid) {
+  const ref = codeGuid.get(s.codeId);
+  if (!ref) return '';
+  const note = s.memo ? `<Description>${xesc(s.memo)}</Description>` : '';
+  return `<Coding guid="${qdpxUuid()}"><CodeRef targetGUID="${ref}"/>${note}</Coding>`;
+}
+
+/** XML-escape text/attribute content. */
+function xesc(v) {
+  return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** A file extension for a media MIME type (for the internal Sources/ filename). */
+function extForType(type) {
+  const map = {
+    'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/bmp': 'bmp', 'image/svg+xml': 'svg',
+    'audio/mpeg': 'mp3', 'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/mp4': 'm4a', 'audio/aac': 'aac', 'audio/ogg': 'ogg', 'audio/flac': 'flac',
+    'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov', 'video/x-matroska': 'mkv',
+  };
+  return map[type] || (String(type).split('/')[1] || 'bin').replace(/[^a-z0-9]/gi, '');
+}
+
+/** A GUID for QDPX entities. */
+function qdpxUuid() {
+  try { if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID(); } catch { /* fall through */ }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
 }

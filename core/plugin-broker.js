@@ -126,6 +126,15 @@ export class PluginBroker {
       this.#dispatch['media.load'] = (ref) => services.media.load(ref);
       this.#dispatch['media.put'] = (file, meta) => services.media.put(file, meta);
     }
+    // ZIP for archive-format plugins (#139): build/read a ZIP host-side.
+    if (services.zip) {
+      this.#dispatch['zip.make'] = (entries) => services.zip.make(entries);
+      this.#dispatch['zip.read'] = (bytes) => services.zip.read(bytes);
+    }
+    // Owner-scoped read of a workspace blob the plugin declares (#139) — read-only.
+    if (services.stateRead) {
+      this.#dispatch['state.read'] = (wsId) => services.stateRead(wsId);
+    }
     this.#listener = (e) => this.#onMessage(e);
     window.addEventListener('message', this.#listener);
   }

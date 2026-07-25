@@ -127,6 +127,7 @@ export class PluginActions {
         label: exp.label,
         order: exp.order,
         extensions: exp.extensions,
+        group: exp.group, // optional picker group heading (else inferred)
         export: (req) =>
           this.#bridge(this.#exporters, req.ticket, () => this.#loader.invoke(id, exp.export, [])),
       });
