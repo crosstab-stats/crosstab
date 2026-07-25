@@ -610,7 +610,15 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     auto-transcription. Media-asset storage (with `#143`/`#144` ties) lands with step 2.
     **STATUS: (1)–(4) BUILT** (text, image regions+layers, audio/video time-ranges+lanes,
     and video **region-over-time** — static + interpolated manual keyframes + a rough
-    template-matching auto-tracker). (5) REFI-QDA and (6) Whisper are the remaining rungs.
+    template-matching auto-tracker). **(5) REFI-QDA EXPORT BUILT** — caqdas
+    `manifest.exports`/`exportQdpx`, on two new reusable capabilities: **`app.zip`**
+    (surfaces core/zip.js) and **`app.state.read(wsId)`** (owner-scoped read of a
+    workspace blob the plugin declares, from the compute frame — #89-safe). text/image-
+    rect/time round-trip; region-over-time exports time-span only. SCHEMA to validate vs
+    NVivo/ATLAS (time units ms vs s = `TIME_SCALE`; not XSD-verified). Remaining: (5b)
+    QDPX **import** (time-selections → time codings, faithful, per user; spatialize-later
+    needs a time-coding→region-over-time upgrade path that does NOT exist yet) and (6)
+    Whisper.
   - **Video region-over-time — tracker rungs (built 1–3; rung 4 deferred).** Region-over-
     time coding is a spatiotemporal segment `{keys:[{t,x,y,w,h}], tStart,tEnd}` — a box
     that interpolates between keyframes (`regionAtTime`). **Built:** (1) static region +
