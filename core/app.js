@@ -54,12 +54,6 @@ import { makeZip, readZipEntries } from './zip.js';
  * @type {string[]}
  */
 const BUILTIN_PLUGINS = [
-  './plugins/builtin-text-import/index.js', // .txt corpus → one row per file (for CAQDAS #67)
-  // Media importers — one row per file, bytes streamed host-side into the media store,
-  // dimensions probed in-plugin (per-medium family, #139).
-  './plugins/builtin-image-import/index.js',
-  './plugins/builtin-audio-import/index.js',
-  './plugins/builtin-video-import/index.js',
   // File formats (CSV, Parquet, NDJSON, SPSS/Stata/SAS) are streaming codec plugins
   // (#98), grouped near the bottom of this list.
   './plugins/builtin-frequencies/index.js',

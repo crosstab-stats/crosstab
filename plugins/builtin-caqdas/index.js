@@ -35,6 +35,43 @@ export const manifest = {
   howto:
     'GUI: appears as a workspace tab (Coding) — pick a dataset column of documents (a text column, or a media column from an image/audio/video import), then tag passages/regions with codes and export code frequencies/segments to Output.\n' +
     'Used through its workspace tab, not a run command.',
+  imports: [
+    {
+      label: 'Text files → one row per file…',
+      extensions: ['.txt', '.text', '.md'],
+      group: 'Qualitative',
+      order: 15,
+      multiple: true,
+      parse: 'parseTextFile',
+    },
+    {
+      label: 'Image files (PNG, JPEG, …) → one row per file…',
+      extensions: ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.avif'],
+      group: 'Media',
+      datasetName: 'Images',
+      order: 20,
+      multiple: true,
+      parse: 'parseImageFile',
+    },
+    {
+      label: 'Audio files (MP3, WAV, M4A, …) → one row per file…',
+      extensions: ['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.oga', '.opus', '.flac', '.weba'],
+      group: 'Media',
+      datasetName: 'Audio',
+      order: 21,
+      multiple: true,
+      parse: 'parseAudioFile',
+    },
+    {
+      label: 'Video files (MP4, WebM, MOV, …) → one row per file…',
+      extensions: ['.mp4', '.webm', '.mov', '.m4v', '.ogv', '.mkv'],
+      group: 'Media',
+      datasetName: 'Video',
+      order: 22,
+      multiple: true,
+      parse: 'parseVideoFile',
+    },
+  ],
   workspaces: [{
     id: 'caqdas-coding',
     title: 'Coding',
@@ -2085,3 +2122,90 @@ function mimeForPath(path) {
 
 /** Parse a numeric attribute, defaulting to 0. */
 function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
+
+// =====================================================================
+// Media importers (#139) — formerly standalone plugins, now CAQDAS-owned
+// so they only appear in File ▸ Import when CAQDAS is activated.
+// =====================================================================
+
+export async function parseTextFile(_app, { name, file }) {
+  const text = new TextDecoder('utf-8').decode(await file.arrayBuffer());
+  const document = String(name).replace(/\.[^.]+$/, '') || String(name);
+  return {
+    variables: [
+      { name: 'document', type: 'string', measurementLevel: 'nominal', label: 'Source file' },
+      { name: 'text', type: 'string', measurementLevel: 'nominal', label: 'Document text' },
+    ],
+    columns: { document: [document], text: [text] },
+  };
+}
+
+export async function parseImageFile(app, { name, file }) {
+  const dims = await probeMedia(file, 'image');
+  const { ref } = await app.media.put(file, { type: file.type || '', name, medium: 'image', ...dims });
+  return importMediaRow({ name, ref, medium: 'image', size: file.size, dims });
+}
+
+export async function parseAudioFile(app, { name, file }) {
+  const dims = await probeMedia(file, 'audio');
+  const { ref } = await app.media.put(file, { type: file.type || '', name, medium: 'audio', ...dims });
+  return importMediaRow({ name, ref, medium: 'audio', size: file.size, dims });
+}
+
+export async function parseVideoFile(app, { name, file }) {
+  const dims = await probeMedia(file, 'video');
+  const { ref } = await app.media.put(file, { type: file.type || '', name, medium: 'video', ...dims });
+  return importMediaRow({ name, ref, medium: 'video', size: file.size, dims });
+}
+
+function probeMedia(file, medium) {
+  return new Promise((resolve) => {
+    let url;
+    try { url = URL.createObjectURL(file); } catch { resolve({}); return; }
+    let settled = false;
+    const done = (out) => { if (settled) return; settled = true; clearTimeout(timer); URL.revokeObjectURL(url); resolve(out); };
+    const timer = setTimeout(() => done({}), 15000);
+    if (medium === 'image') {
+      const img = new Image();
+      img.onload = () => done({ width: img.naturalWidth || undefined, height: img.naturalHeight || undefined });
+      img.onerror = () => done({});
+      img.src = url;
+    } else {
+      const el = document.createElement(medium === 'audio' ? 'audio' : 'video');
+      el.preload = 'metadata';
+      if (medium === 'video') el.muted = true;
+      el.onloadedmetadata = () => {
+        const out = {};
+        if (Number.isFinite(el.duration) && el.duration > 0) out.duration = Math.round(el.duration * 1000) / 1000;
+        if (el.videoWidth) out.width = el.videoWidth;
+        if (el.videoHeight) out.height = el.videoHeight;
+        done(out);
+      };
+      el.onerror = () => done({});
+      el.src = url;
+    }
+  });
+}
+
+function importMediaRow({ name, ref, medium, size, dims }) {
+  const variables = [
+    { name: 'name', type: 'string', measurementLevel: 'nominal', label: 'File name' },
+    { name: 'media', type: 'string', measurementLevel: 'nominal', label: 'Media' },
+    { name: 'type', type: 'string', measurementLevel: 'nominal', label: 'Kind' },
+    { name: 'size', type: 'numeric', measurementLevel: 'scale', label: 'Size (bytes)' },
+  ];
+  const columns = { name: [name], media: [JSON.stringify([ref])], type: [medium], size: [size] };
+  if (dims.duration != null) {
+    variables.push({ name: 'duration', type: 'numeric', measurementLevel: 'scale', label: 'Duration (s)' });
+    columns.duration = [dims.duration];
+  }
+  if (dims.width != null) {
+    variables.push({ name: 'width', type: 'numeric', measurementLevel: 'scale', label: 'Width (px)' });
+    columns.width = [dims.width];
+  }
+  if (dims.height != null) {
+    variables.push({ name: 'height', type: 'numeric', measurementLevel: 'scale', label: 'Height (px)' });
+    columns.height = [dims.height];
+  }
+  return { variables, columns, source: name };
+}
