@@ -295,17 +295,21 @@ export class WorkspaceManager {
     // Rebind each dataset-scoped workspace to the now-active dataset BEFORE
     // sending the hook, so any state.get() the plugin calls inside
     // onDatasetChanged reads the correct (new) dataset's blob.
+    let allHandled = true;
     for (const [id, entry] of this.#mounted) {
-      if (!entry.broker) return false;
+      if (!entry.broker) { allHandled = false; continue; }
       const scope = entry.ws?.scope || 'dataset';
       if (scope === 'dataset') entry.dsId = this.#activeDatasetId();
       try {
-        await entry.broker.sendDatasetChanged();
+        await Promise.race([
+          entry.broker.sendDatasetChanged(),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000)),
+        ]);
       } catch {
-        return false;
+        allHandled = false;
       }
     }
-    return true;
+    return allHandled;
   }
 
   /**
