@@ -105,9 +105,17 @@ export class DuckDBManager {
     await conn.query(`DROP TABLE IF EXISTS ${quoteIdent(name)}`);
 
     const colNames = Object.keys(columns);
-    // An empty dataset still has a valid (table-less) state; getColumns guards on
-    // the row count, so we simply leave no table behind.
-    if (colNames.length === 0 || columns[colNames[0]].length === 0) return;
+    if (colNames.length === 0) return;
+
+    if (columns[colNames[0]].length === 0) {
+      const defs = colNames.map((c) => {
+        const sample = columns[c];
+        const t = sample instanceof Float64Array || sample instanceof Float32Array ? 'DOUBLE' : 'VARCHAR';
+        return `${quoteIdent(c)} ${t}`;
+      });
+      await conn.query(`CREATE TABLE ${quoteIdent(name)} (${defs.join(', ')})`);
+      return;
+    }
 
     const table = arrow.tableFromArrays(columns);
     const ipc = arrow.tableToIPC(table, 'stream');
