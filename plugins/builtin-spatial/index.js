@@ -588,12 +588,23 @@ export async function shadeByVariable(app) {
 export async function filterToSelection(app) {
   if (!_ws) return { ok: false, message: 'Workspace not mounted.' };
   if (!_ws.selected.size) return { ok: false, message: 'No regions selected.' };
-  if (!_ws.dataColumn) return { ok: false, message: 'No data column matched — load boundaries first.' };
   const rows = await app.data.getRows();
   const cols = await app.data.getColumns();
   const colNames = cols?.names || cols?.map?.((c) => c.name) || [];
-  const keyIdx = colNames.indexOf(_ws.dataColumn);
-  if (keyIdx < 0) return { ok: false, message: `Column "${_ws.dataColumn}" not found in data.` };
+  let dataCol = _ws.dataColumn;
+  if (!dataCol || !colNames.includes(dataCol)) {
+    const pick = await app.ui.selectVariables({
+      title: 'Match to data column',
+      hint: 'Which column in your data identifies the region each row belongs to?',
+      multiple: false,
+    });
+    if (!pick) return { ok: false, message: 'Cancelled.' };
+    dataCol = pick[0];
+    _ws.dataColumn = dataCol;
+    await wsSaveState(app);
+  }
+  const keyIdx = colNames.indexOf(dataCol);
+  if (keyIdx < 0) return { ok: false, message: `Column "${dataCol}" not found in data.` };
 
   const keep = [];
   for (const row of rows || []) {
