@@ -541,7 +541,7 @@ async function wsApplyBoundaries(app, geojson, fileName, presetKeyProp, presetDa
   }
 
   const cols = await app.data.getColumns();
-  const colNames = cols?.names || cols?.map?.((c) => c.name) || [];
+  const colNames = Array.isArray(cols) ? cols.map((c) => c.name) : Object.keys(cols || {});
   if (colNames.length) {
     let dataCol = presetDataCol || _ws.dataColumn;
     if (!dataCol || !colNames.includes(dataCol)) {
@@ -590,7 +590,7 @@ export async function filterToSelection(app) {
   if (!_ws.selected.size) return { ok: false, message: 'No regions selected.' };
   const rows = await app.data.getRows();
   const cols = await app.data.getColumns();
-  const colNames = cols?.names || cols?.map?.((c) => c.name) || [];
+  const colNames = Array.isArray(cols) ? cols.map((c) => c.name) : Object.keys(cols || {});
   let dataCol = _ws.dataColumn;
   if (!dataCol || !colNames.includes(dataCol)) {
     const pick = await app.ui.selectVariables({
@@ -603,12 +603,11 @@ export async function filterToSelection(app) {
     _ws.dataColumn = dataCol;
     await wsSaveState(app);
   }
-  const keyIdx = colNames.indexOf(dataCol);
-  if (keyIdx < 0) return { ok: false, message: `Column "${dataCol}" not found in data.` };
+  if (!colNames.includes(dataCol)) return { ok: false, message: `Column "${dataCol}" not found in data.` };
 
   const keep = [];
   for (const row of rows || []) {
-    const val = String(row[keyIdx] ?? '');
+    const val = String(row[dataCol] ?? '');
     if (_ws.selected.has(val)) keep.push(row);
   }
   if (!keep.length) return { ok: false, message: 'No rows match the selected regions.' };
@@ -629,10 +628,16 @@ export async function filterToSelection(app) {
   if (!pick) return { ok: false, message: 'Cancelled.' };
   const choice = pick[0];
 
+  // Convert row objects to the columnar { variables, columns } shape data.create expects.
+  const colData = {};
+  for (const n of colNames) colData[n] = keep.map((r) => r[n] ?? null);
+  const meta = (await app.data.getVariableMeta()) || [];
+  const metaByName = Object.fromEntries(meta.map((m) => [m.name, m]));
+  const vars = colNames.map((n) => metaByName[n] || { name: n });
   await app.data.create({
     name: `Selection (${_ws.selected.size} regions)`,
-    columns: colNames,
-    rows: keep,
+    variables: vars,
+    columns: colData,
   });
 
   if (choice !== '__create_only__') {
@@ -762,16 +767,14 @@ async function wsApplyShading(app) {
     rows = await app.data.getRows();
     cols = await app.data.getColumns();
   } catch { return; }
-  const colNames = cols?.names || cols?.map?.((c) => c.name) || [];
-  const keyIdx = colNames.indexOf(_ws.dataColumn);
-  const valIdx = colNames.indexOf(_ws.shadeColumn);
-  if (keyIdx < 0 || valIdx < 0) return;
+  const colNames = Array.isArray(cols) ? cols.map((c) => c.name) : Object.keys(cols || {});
+  if (!colNames.includes(_ws.dataColumn) || !colNames.includes(_ws.shadeColumn)) return;
 
   const regionSums = new Map();
   const regionCounts = new Map();
   for (const row of rows || []) {
-    const rk = String(row[keyIdx] ?? '');
-    const v = Number(row[valIdx]);
+    const rk = String(row[_ws.dataColumn] ?? '');
+    const v = Number(row[_ws.shadeColumn]);
     if (!rk || !Number.isFinite(v)) continue;
     regionSums.set(rk, (regionSums.get(rk) || 0) + v);
     regionCounts.set(rk, (regionCounts.get(rk) || 0) + 1);
