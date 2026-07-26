@@ -139,7 +139,7 @@ export class WorkspaceManager {
     // double-mount; KEEP it even if the handshake fails (the tab stays, showing a
     // retry overlay) so a transient sandbox timeout never silently deletes a
     // workspace and its unsaved-looking state.
-    const entry = { view, iframe, broker: null, pluginId: plugin.id, pane, ws, plugin };
+    const entry = { view, iframe, broker: null, pluginId: plugin.id, pane, ws, plugin, dsId: null };
     this.#mounted.set(ws.id, entry);
 
     void this.#mountWithRetry(entry, overlay, ws.id);
@@ -203,29 +203,30 @@ export class WorkspaceManager {
     // (default) use the active dataset id. The host enforces the scope so the plugin
     // doesn't need to care.
     const scope = ws.scope || 'dataset';
-    const dsId = scope === 'project' ? NO_DS : this.#activeDatasetId();
+    // dsId lives on the entry so notifyDatasetChanged can update it — the
+    // closures below read entry.dsId, keeping state calls bound to whichever
+    // dataset is current rather than the one that was active at mount time.
+    entry.dsId = scope === 'project' ? NO_DS : this.#activeDatasetId();
     const services = {
       ...this.#services,
-      // state.get/set/list/delete scoped to THIS (owner, workspace id, dataset).
-      // slotId is plugin-chosen; defaults to DEFAULT_SLOT for backward compatibility.
       workspace: {
         getState: (slotId) => {
           if (reserved) return null;
-          return this.#store.get(owner, ws.id, slotId || DEFAULT_SLOT, dsId);
+          return this.#store.get(owner, ws.id, slotId || DEFAULT_SLOT, entry.dsId);
         },
         setState: (value, opts) => {
           if (reserved) throw new Error(`Workspace id "${ws.id}" is reserved by a built-in plugin.`);
           const slotId = opts?.slot || DEFAULT_SLOT;
-          this.#store.set(owner, ws.id, slotId, dsId, value, { label: opts?.label });
+          this.#store.set(owner, ws.id, slotId, entry.dsId, value, { label: opts?.label });
         },
         listSlots: () => {
           if (reserved) return [];
-          return this.#store.listSlots(owner, ws.id, dsId);
+          return this.#store.listSlots(owner, ws.id, entry.dsId);
         },
         deleteSlot: (slotId) => {
           if (reserved) throw new Error(`Workspace id "${ws.id}" is reserved by a built-in plugin.`);
           if (!slotId) return;
-          this.#store.set(owner, ws.id, slotId, dsId, null);
+          this.#store.set(owner, ws.id, slotId, entry.dsId, null);
         },
       },
     };
@@ -283,8 +284,13 @@ export class WorkspaceManager {
    */
   async notifyDatasetChanged(pluginList) {
     if (!this.#mounted.size) return true;
+    // Rebind each dataset-scoped workspace to the now-active dataset BEFORE
+    // sending the hook, so any state.get() the plugin calls inside
+    // onDatasetChanged reads the correct (new) dataset's blob.
     for (const [id, entry] of this.#mounted) {
       if (!entry.broker) return false;
+      const scope = entry.ws?.scope || 'dataset';
+      if (scope === 'dataset') entry.dsId = this.#activeDatasetId();
       try {
         await entry.broker.sendDatasetChanged();
       } catch {
