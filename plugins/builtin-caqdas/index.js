@@ -1518,10 +1518,40 @@ export const workspace = {
       save();
     }
 
+    // --- dataset-change refresh ------------------------------------------------
+    // Stash a callback so onDatasetChanged (outside mount's closure) can trigger
+    // a full state reload without tearing down the iframe.
+    workspace._onDsChanged = async () => {
+      if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+      const fresh = normalize(await app.state.get());
+      Object.assign(state, fresh);
+      docs = [];
+      activeRid = null;
+      activeCodeId = null;
+      retrieveCodeId = null;
+      memoOpen.clear();
+      hiddenCodes.clear();
+      if (mediaObjectUrl) { URL.revokeObjectURL(mediaObjectUrl); mediaObjectUrl = null; }
+      mediaLoadToken++;
+      imageSel = null; currentOverlay = null;
+      timeSel = null; currentTimeline = null; currentLanes = null; currentMediaEl = null;
+      currentMedium = null;
+      activeTrack = null; videoSel = null; currentVideoOverlay = null; trackToolbarEl = null;
+      tracking = false;
+      await populateColumns();
+      await loadDocs();
+      if (state.pendingImport) resolvePendingImport();
+      renderAll();
+    };
+
     // --- go ------------------------------------------------------------------
     await loadDocs();
     if (state.pendingImport) resolvePendingImport();
     renderAll();
+  },
+
+  async onDatasetChanged(app) {
+    if (workspace._onDsChanged) await workspace._onDsChanged();
   },
 };
 
