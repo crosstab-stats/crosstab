@@ -255,6 +255,21 @@
               }
               break;
 
+            case 'workspaceRefresh':
+              // Lifecycle hook: persisted state changed externally (e.g. an import
+              // verb wrote new boundary data). Re-read state and re-render in place.
+              try {
+                const wsRefresh = pluginModule && pluginModule.workspace;
+                if (wsRefresh && typeof wsRefresh.onRefresh === 'function') {
+                  if (!app) app = makeApp(msg.plugin || {});
+                  await wsRefresh.onRefresh(app);
+                }
+                post({ t: 'lifecycleAck', hook: 'workspaceRefresh', ok: true });
+              } catch (err) {
+                post({ t: 'lifecycleAck', hook: 'workspaceRefresh', ok: false, error: String(err && err.message || err) });
+              }
+              break;
+
             case 'deactivate':
               // Lifecycle hook: the plugin is being deactivated. Flush unsaved state.
               try {

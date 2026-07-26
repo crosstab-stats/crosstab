@@ -389,25 +389,22 @@ export const workspace = {
 
     if (saved?.boundarySets?.length) {
       const sets = saved.boundarySets;
-      const first = sets[0];
-      const fc = { type: 'FeatureCollection', features: first.features };
-      await wsApplyBoundaries(app, fc, first.fileName, first.keyProp, first.dataColumn);
-      if (sets.length > 1) {
-        const links = el('div', null, 'set-links');
-        links.textContent = 'Switch boundaries: ';
-        for (let i = 0; i < sets.length; i++) {
-          if (i > 0) links.append(document.createTextNode(' · '));
-          const s = sets[i];
-          const a = document.createElement('a');
-          a.textContent = s.fileName;
-          a.addEventListener('click', () => {
-            wsApplyBoundaries(app, { type: 'FeatureCollection', features: s.features }, s.fileName, s.keyProp, s.dataColumn);
-          });
-          links.append(a);
-        }
-        _ws.statusEl.insertAdjacentElement('beforebegin', links);
-      }
+      const last = sets[sets.length - 1];
+      const fc = { type: 'FeatureCollection', features: last.features };
+      await wsApplyBoundaries(app, fc, last.fileName, last.keyProp, last.dataColumn);
+      wsRebuildSetLinks(app, sets);
     }
+  },
+
+  async onRefresh(app) {
+    if (!_ws) return;
+    const saved = await app.state.get();
+    if (!saved?.boundarySets?.length) return;
+    const sets = saved.boundarySets;
+    const last = sets[sets.length - 1];
+    const fc = { type: 'FeatureCollection', features: last.features };
+    await wsApplyBoundaries(app, fc, last.fileName, last.keyProp, last.dataColumn);
+    wsRebuildSetLinks(app, sets);
   },
 
   async onDatasetChanged(app) {
@@ -444,7 +441,8 @@ export async function importBoundaries(app, opts) {
   if (!raw) return { ok: false, message: 'No file provided.' };
   let geojson;
   try {
-    const bytes = raw.bytes ?? new Uint8Array(await raw.arrayBuffer());
+    const bytes = raw.bytes instanceof Uint8Array ? raw.bytes
+      : new Uint8Array(await raw.arrayBuffer());
     const text = new TextDecoder().decode(bytes);
     geojson = JSON.parse(text);
   } catch (e) {
@@ -484,14 +482,31 @@ export async function importBoundaries(app, opts) {
 
   const fileName = opts?.name ?? raw.name ?? 'boundaries';
   const existing = await app.state.read('spatial-map') || {};
-  const sets = existing.boundarySets || [];
+  let sets = existing.boundarySets || [];
+  if (sets.length) {
+    const mode = await app.ui.selectFromList({
+      title: 'Existing boundaries loaded',
+      hint: `You already have ${sets.length} boundary set${sets.length > 1 ? 's' : ''}. What would you like to do?`,
+      items: [
+        { value: 'replace', label: 'Replace existing boundaries' },
+        { value: 'add', label: 'Add as a new layer' },
+      ],
+      multiple: false,
+    });
+    if (!mode) return { ok: false, message: 'Cancelled.' };
+    if (mode[0] === 'replace') sets = [];
+  }
   sets.push({ fileName, keyProp, dataColumn, features });
-  await app.state.write('spatial-map', {
-    ...existing,
-    keyProp, dataColumn,
-    fileName,
-    boundarySets: sets,
-  });
+  try {
+    await app.state.write('spatial-map', {
+      ...existing,
+      keyProp, dataColumn,
+      fileName,
+      boundarySets: sets,
+    });
+  } catch (e) {
+    return { ok: false, message: `Failed to save boundaries: ${e.message}` };
+  }
   return { ok: true, message: `Loaded ${features.length} boundaries from ${fileName}.`, refresh: 'workspace' };
 }
 
@@ -602,7 +617,9 @@ export async function clearBoundaries(app) {
   _ws.svgEl.innerHTML = '';
   _ws.listEl.innerHTML = '';
   _ws.statusEl.textContent = 'Load a GeoJSON boundary file to begin.';
-  await wsSaveState(app);
+  const old = _ws.root.querySelector('.set-links');
+  if (old) old.remove();
+  await app.state.set({ boundarySets: [] });
   return { ok: true };
 }
 
@@ -751,8 +768,30 @@ async function wsApplyShading(app) {
     `${_ws.fileName} — shaded by ${_ws.shadeColumn} (${means.size} matched of ${_ws.regionKeys.length} regions).`;
 }
 
+function wsRebuildSetLinks(app, sets) {
+  if (!_ws) return;
+  const old = _ws.root.querySelector('.set-links');
+  if (old) old.remove();
+  if (sets.length < 2) return;
+  const links = el('div', null, 'set-links');
+  links.textContent = 'Switch boundaries: ';
+  for (let i = 0; i < sets.length; i++) {
+    if (i > 0) links.append(document.createTextNode(' · '));
+    const s = sets[i];
+    const a = document.createElement('a');
+    a.textContent = s.fileName;
+    a.addEventListener('click', () => {
+      wsApplyBoundaries(app, { type: 'FeatureCollection', features: s.features }, s.fileName, s.keyProp, s.dataColumn);
+    });
+    links.append(a);
+  }
+  _ws.statusEl.insertAdjacentElement('beforebegin', links);
+}
+
 async function wsSaveState(app) {
+  const prev = await app.state.get() || {};
   await app.state.set({
+    boundarySets: prev.boundarySets || [],
     keyProp: _ws.keyProp, dataColumn: _ws.dataColumn,
     shadeColumn: _ws.shadeColumn, fileName: _ws.fileName,
     selected: [..._ws.selected],

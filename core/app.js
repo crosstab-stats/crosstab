@@ -726,7 +726,9 @@ export async function boot(mounts) {
       });
     });
     bus.on('workspace:refresh', () => {
-      void workspaceManager.remountActive(plugins.list());
+      void workspaceManager.notifyWorkspaceRefresh().then((handled) => {
+        if (!handled) void workspaceManager.remountActive(plugins.list());
+      });
     });
   }
   // In-app plugin creator (Edit ▸ Create plugin…, and the manager's "Create new…"):

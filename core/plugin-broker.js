@@ -149,18 +149,10 @@ export class PluginBroker {
 
   /** @returns {Promise<void>} Resolves when the iframe runtime is ready, or
    * rejects if it doesn't signal ready in time — so a stuck/dropped sandbox
-   * handshake fails fast (and the loader can retry) instead of hanging forever. */
-  whenReady() {
-    return Promise.race([
-      this.#ready.promise,
-      new Promise((_resolve, reject) => {
-        const t = setTimeout(
-          () => reject(new Error('plugin sandbox did not become ready in time')),
-          20000,
-        );
-        this.#ready.promise.then(() => clearTimeout(t), () => clearTimeout(t));
-      }),
-    ]);
+   * handshake fails fast (and the loader can retry) instead of hanging forever.
+   * @param {number} [ms=20000] */
+  whenReady(ms = 20000) {
+    return withTimeout(this.#ready.promise, ms, 'plugin sandbox did not become ready in time');
   }
 
   /**
@@ -248,6 +240,18 @@ export class PluginBroker {
   sendDatasetChanged(plugin) {
     this.#lifecycleAck = deferred();
     this.#post({ t: 'datasetChanged', plugin });
+    return this.#lifecycleAck.promise;
+  }
+
+  /**
+   * Lifecycle hook: notify the workspace iframe that its persisted state changed
+   * externally (e.g. an import verb wrote new data via `app.state.write`). If the
+   * plugin exports `workspace.onRefresh`, it can re-read state and re-render in
+   * place — avoiding a full iframe teardown/remount.
+   */
+  sendWorkspaceRefresh() {
+    this.#lifecycleAck = deferred();
+    this.#post({ t: 'workspaceRefresh' });
     return this.#lifecycleAck.promise;
   }
 

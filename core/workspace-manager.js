@@ -142,13 +142,32 @@ export class WorkspaceManager {
     const entry = { view, iframe, broker: null, pluginId: plugin.id, pane, ws, plugin };
     this.#mounted.set(ws.id, entry);
 
-    await this.#handshake(entry).then(
-      () => overlay.remove(),
-      (e) => {
-        showRetryOverlay(overlay, () => void this.#retry(ws.id));
-        this.#onError(new Error(`workspace "${ws.id}" failed to mount: ${e.message}`));
-      },
-    );
+    void this.#mountWithRetry(entry, overlay, ws.id);
+  }
+
+  static #RETRY_TIMEOUTS = [20_000, 40_000, 60_000];
+
+  async #mountWithRetry(entry, overlay, id, attempt = 0) {
+    const timeouts = WorkspaceManager.#RETRY_TIMEOUTS;
+    const ms = timeouts[Math.min(attempt, timeouts.length - 1)];
+    try {
+      await this.#handshake(entry, ms);
+      overlay.remove();
+    } catch (e) {
+      if (attempt < timeouts.length - 1) {
+        try { entry.broker?.dispose(); } catch { /* ignore */ }
+        try { entry.iframe?.remove(); } catch { /* ignore */ }
+        const iframe = makeIframe(entry.ws.title || entry.ws.id);
+        entry.iframe = iframe;
+        entry.broker = null;
+        entry.pane.insertBefore(iframe, overlay);
+        updateOverlayMessage(overlay, `Retrying (${attempt + 1}/${timeouts.length - 1})…`);
+        await this.#mountWithRetry(entry, overlay, id, attempt + 1);
+      } else {
+        showRetryOverlay(overlay, () => void this.#retry(id));
+        this.#onError(new Error(`workspace "${id}" failed to mount: ${e.message}`));
+      }
+    }
   }
 
   /** User-initiated restart: flush the workspace's state via deactivate, then
@@ -163,8 +182,10 @@ export class WorkspaceManager {
 
   /** Build the broker and run the load → activate → mount handshake into
    * `entry.iframe`. Rejects if the sandbox doesn't become ready in time (caught by
-   * the caller, which shows a retry overlay rather than tearing the tab down). */
-  async #handshake(entry) {
+   * the caller, which shows a retry overlay rather than tearing the tab down).
+   * @param {object} entry
+   * @param {number} [readyMs=20000] - Timeout for the sandbox ready signal. */
+  async #handshake(entry, readyMs = 20000) {
     const { plugin, ws, iframe } = entry;
     const title = ws.title || ws.id;
     // Ownership token: the plugin's namespace (built-ins share one; URL/file plugins
@@ -203,7 +224,7 @@ export class WorkspaceManager {
     // is the ONLY frame that renders — the loader's hidden compute frame never does,
     // so media capability lives here, not there (least privilege, #139).
     iframe.src = await sandboxBlobUrl(plugin.media ? 'media' : 'strict');
-    await broker.whenReady();
+    await broker.whenReady(readyMs);
     const source = await fetchSource(plugin.url);
     const manifest = await broker.sendLoad(source);
     const identity = {
@@ -231,13 +252,7 @@ export class WorkspaceManager {
     entry.broker = null;
     const overlay = makeOverlay();
     entry.pane.append(iframe, overlay);
-    await this.#handshake(entry).then(
-      () => overlay.remove(),
-      (e) => {
-        showRetryOverlay(overlay, () => void this.#retry(id));
-        this.#onError(new Error(`workspace "${entry.ws.id}" failed to mount: ${e.message}`));
-      },
-    );
+    await this.#mountWithRetry(entry, overlay, id);
   }
 
   /**
@@ -256,6 +271,28 @@ export class WorkspaceManager {
       if (!entry.broker) return false;
       try {
         await entry.broker.sendDatasetChanged();
+      } catch {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Notify all mounted workspaces that their persisted state may have changed
+   * externally (e.g. an import verb wrote new boundary data via
+   * `app.state.write`). If every workspace handles `onRefresh`, returns true
+   * (no remount needed). Returns false if any workspace lacks the hook, so the
+   * caller can fall back to {@link remountActive}.
+   *
+   * @returns {Promise<boolean>}
+   */
+  async notifyWorkspaceRefresh() {
+    if (!this.#mounted.size) return true;
+    for (const [, entry] of this.#mounted) {
+      if (!entry.broker) return false;
+      try {
+        await entry.broker.sendWorkspaceRefresh();
       } catch {
         return false;
       }
@@ -330,9 +367,16 @@ function makeOverlay() {
     'width:28px;height:28px;border:3px solid #c8d0d8;border-top-color:var(--accent,#2980b9);' +
     'border-radius:50%;animation:ws-spin .8s linear infinite;';
   const msg = document.createElement('div');
+  msg.className = 'ws-overlay-msg';
   msg.textContent = 'Loading workspace…';
   o.append(spin, msg);
   return o;
+}
+
+/** Update the text line in a loading overlay (used for retry progress). */
+function updateOverlayMessage(overlay, text) {
+  const msg = overlay.querySelector('.ws-overlay-msg');
+  if (msg) msg.textContent = text;
 }
 
 /** Convert a loading overlay into a failure prompt with a "Reload" button. Keeps
