@@ -51,6 +51,11 @@
         /** The `app` proxy handed to the plugin, built once on 'activate'. */
         let app = null;
 
+        /** Debug logging gate — set to true when the host sends `debug: true`
+         * in the activate message. Plugins read `app.debug` to gate their own
+         * diagnostic output. */
+        let debugEnabled = false;
+
         // Post a message to the host. Prefer TRANSFERRING any ArrayBuffers (zero-copy):
         // a codec's row batches carry large numeric column buffers, and cloning each
         // churns memory on wide files (the ~7k-column GSS). Transfer neuters the buffer
@@ -208,6 +213,7 @@
               onChange: (fn) => { if (typeof fn === 'function') pluginsChangedListeners.push(fn); },
             }),
             run: makeNamespace('run', ['analysis']),
+            debug: debugEnabled,
           });
         }
 
@@ -228,6 +234,7 @@
                 // Handshake only: build + keep the app proxy. Declarative plugins
                 // do nothing else here — the host reads the manifest and drives
                 // them via 'invoke' (run/parse/export named functions).
+                if (msg.debug) debugEnabled = true;
                 app = makeApp(msg.plugin);
                 post({ t: 'activated', ok: true });
               } catch (err) {
@@ -260,12 +267,15 @@
                 const wsHook = pluginModule && pluginModule.workspace;
                 if (wsHook && typeof wsHook.onDatasetChanged === 'function') {
                   if (!app) app = makeApp(msg.plugin || {});
+                  if (debugEnabled) console.debug('[plugin-host] datasetChanged → calling hook');
                   await wsHook.onDatasetChanged(app);
                   post({ t: 'lifecycleAck', hook: 'datasetChanged', ok: true });
                 } else {
+                  if (debugEnabled) console.debug('[plugin-host] datasetChanged → no hook, ack false');
                   post({ t: 'lifecycleAck', hook: 'datasetChanged', ok: false });
                 }
               } catch (err) {
+                if (debugEnabled) console.debug('[plugin-host] datasetChanged → threw:', err && err.message);
                 post({ t: 'lifecycleAck', hook: 'datasetChanged', ok: false, error: String(err && err.message || err) });
               }
               break;

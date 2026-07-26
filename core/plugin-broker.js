@@ -36,6 +36,8 @@
  * iframe window, and post back with target origin `"*"`.
  */
 
+import { debug } from './debug.js';
+
 /** Bumped on any breaking change to the wire protocol above. */
 export const PROTOCOL_VERSION = 1;
 
@@ -83,6 +85,9 @@ export class PluginBroker {
    * its workspace-driven results so they're traceable like menu analyses. */
   #attribution = null;
 
+  /** Whether host-side debug logging is active (forwarded to the iframe). */
+  #debug = false;
+
   /**
    * @param {Object} args
    * @param {HTMLIFrameElement} args.iframe - The plugin's sandboxed iframe.
@@ -95,6 +100,7 @@ export class PluginBroker {
     this.#onError = onError ?? ((e) => console.error('[plugin-broker]', e));
     this.#services = services;
     this.#attribution = attribution ?? null;
+    try { this.#debug = typeof localStorage !== 'undefined' && !!localStorage.getItem('crosstab_debug'); } catch { /* sandboxed */ }
     this.#dispatch = buildDispatch(services);
     // Output bracketing for plugin-driven output (e.g. a workspace's own buttons):
     // the plugin supplies only the title; the host stamps the trustworthy
@@ -225,7 +231,7 @@ export class PluginBroker {
    * @returns {Promise<void>} Resolves when `activate` returns.
    */
   sendActivate(plugin) {
-    this.#post({ t: 'activate', plugin });
+    this.#post({ t: 'activate', plugin, debug: this.#debug });
     return this.#activated.promise;
   }
 
@@ -347,6 +353,7 @@ export class PluginBroker {
         else this.#workspaceMounted.reject(new Error(msg.error || 'workspace mount failed'));
         break;
       case 'lifecycleAck': {
+        debug('broker', `lifecycleAck: ${msg.hook} ok=${msg.ok}`, msg.error || '');
         const lc = this.#lifecycleAck;
         this.#lifecycleAck = null;
         if (lc) { if (msg.ok) lc.resolve(); else lc.reject(new Error(msg.error || 'lifecycle hook failed')); }
@@ -387,6 +394,7 @@ export class PluginBroker {
       const result = await handler(...revived);
       this.#post({ t: 'result', id, ok: true, value: this.#marshalReturn(result) });
     } catch (err) {
+      debug('broker', `RPC error: ${method} —`, err.message);
       this.#post({ t: 'result', id, ok: false, error: String(err?.message ?? err) });
     } finally {
       if (stampAttr) this.#services.results.setActiveAttribution(null);

@@ -18,6 +18,7 @@
 import { PluginBroker } from './plugin-broker.js';
 import { sandboxBlobUrl } from './plugin-sandbox.js';
 import { ownerToken, DEFAULT_SLOT, NO_DS } from './workspace-store.js';
+import { debug } from './debug.js';
 
 const API_VERSION = '1';
 
@@ -74,6 +75,7 @@ export class WorkspaceManager {
         if (ws && ws.id && ws.tab !== false) wanted.set(ws.id, { plugin: p, ws });
       }
     }
+    debug('ws-mgr', 'reconcile — wanted:', [...wanted.keys()], 'mounted:', [...this.#mounted.keys()]);
     for (const id of [...this.#mounted.keys()]) {
       if (!wanted.has(id)) this.#teardown(id);
     }
@@ -95,6 +97,7 @@ export class WorkspaceManager {
    * @param {Array<{id, loaded, url, workspaces?}>} pluginList - From PluginManager#list().
    */
   async remountActive(pluginList) {
+    debug('ws-mgr', 'remountActive — tearing down:', [...this.#mounted.keys()]);
     // Tearing down the tab the user is on falls the tab bar back to Output. Capture
     // it first and restore it after re-mount (show() no-ops if it wasn't re-created),
     // so a re-mount triggered by e.g. switching datasets keeps the user on the tab
@@ -106,6 +109,7 @@ export class WorkspaceManager {
   }
 
   async #mount(plugin, ws) {
+    debug('ws-mgr', `mount ${ws.id} (scope=${ws.scope || 'dataset'})`);
     const view = `ws:${ws.id}`;
     const title = ws.title || ws.id;
 
@@ -154,8 +158,10 @@ export class WorkspaceManager {
     const ms = timeouts[Math.min(attempt, timeouts.length - 1)];
     try {
       await this.#handshake(entry, ms);
+      debug('ws-mgr', `${id}: handshake OK`);
       overlay.remove();
     } catch (e) {
+      debug('ws-mgr', `${id}: handshake FAILED (attempt ${attempt}) —`, e.message);
       if (attempt < timeouts.length - 1) {
         try { entry.broker?.dispose(); } catch { /* ignore */ }
         try { entry.iframe?.remove(); } catch { /* ignore */ }
@@ -291,24 +297,30 @@ export class WorkspaceManager {
    * @returns {Promise<boolean>} true if all workspaces handled the hook in place.
    */
   async notifyDatasetChanged(pluginList) {
-    if (!this.#mounted.size) return true;
+    if (!this.#mounted.size) { debug('ws-mgr', 'notifyDatasetChanged: no mounted workspaces'); return true; }
+    const activeDsId = this.#activeDatasetId();
+    debug('ws-mgr', 'notifyDatasetChanged START — mounted:', [...this.#mounted.keys()], 'activeDs:', activeDsId);
     // Rebind each dataset-scoped workspace to the now-active dataset BEFORE
     // sending the hook, so any state.get() the plugin calls inside
     // onDatasetChanged reads the correct (new) dataset's blob.
     let allHandled = true;
     for (const [id, entry] of this.#mounted) {
-      if (!entry.broker) { allHandled = false; continue; }
+      if (!entry.broker) { debug('ws-mgr', `${id}: SKIP (no broker)`); allHandled = false; continue; }
       const scope = entry.ws?.scope || 'dataset';
-      if (scope === 'dataset') entry.dsId = this.#activeDatasetId();
+      if (scope === 'dataset') entry.dsId = activeDsId;
+      debug('ws-mgr', `${id}: sending hook (scope=${scope}, dsId=${entry.dsId})`);
       try {
         await Promise.race([
           entry.broker.sendDatasetChanged(),
           new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000)),
         ]);
-      } catch {
+        debug('ws-mgr', `${id}: hook OK`);
+      } catch (err) {
+        debug('ws-mgr', `${id}: hook FAILED —`, err.message);
         allHandled = false;
       }
     }
+    debug('ws-mgr', 'notifyDatasetChanged END — allHandled:', allHandled);
     return allHandled;
   }
 
@@ -323,6 +335,7 @@ export class WorkspaceManager {
    */
   async notifyWorkspaceRefresh() {
     if (!this.#mounted.size) return true;
+    debug('ws-mgr', 'notifyWorkspaceRefresh — mounted:', [...this.#mounted.keys()]);
     for (const [, entry] of this.#mounted) {
       if (!entry.broker) return false;
       try {
@@ -352,6 +365,7 @@ export class WorkspaceManager {
   async #teardown(id) {
     const entry = this.#mounted.get(id);
     if (!entry) return;
+    debug('ws-mgr', `teardown ${id}`);
     this.#mounted.delete(id);
     try {
       if (entry.broker) await entry.broker.sendDeactivate().catch(() => {});

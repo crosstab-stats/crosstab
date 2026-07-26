@@ -29,6 +29,7 @@ import { runRScript, registerRScriptRunner } from './r-script.js';
 import { CodecService } from './codec-service.js';
 import { PluginCreator } from './plugin-creator.js';
 import { DatasetStore } from './dataset-store.js';
+import { debug } from './debug.js';
 import { DatasetLibrary, LIBRARY_CHANGED } from './library.js';
 import { ProjectStore } from './project-store.js';
 import { ProjectSync, PROJECT_CHANGED } from './project-sync.js';
@@ -687,12 +688,14 @@ export async function boot(mounts) {
   // default; cross-space read would just pass a different owner, and isn't built yet.
   services.workspaceRead = (pluginId, wsId, slotId) => {
     const p = plugins ? plugins.list().find((x) => x.id === pluginId) : null;
-    if (!p) return null;
+    if (!p) { debug('app', 'workspaceRead: plugin not found:', pluginId); return null; }
     const wsDef = (p.workspaces || []).find((w) => w.id === wsId);
-    if (!wsDef) return null;
+    if (!wsDef) { debug('app', 'workspaceRead: wsDef not found:', wsId); return null; }
     const scope = wsDef.scope || 'dataset';
     const dsId = scope === 'project' ? null : datasets.activeId;
-    return workspaceStore.get(ownerToken(p), wsId, slotId || '_default', dsId);
+    const result = workspaceStore.get(ownerToken(p), wsId, slotId || '_default', dsId);
+    debug('app', `workspaceRead ${wsId} slot=${slotId} scope=${scope} dsId=${dsId} →`, result != null ? 'HAS DATA' : 'null');
+    return result;
   };
   services.workspaceWrite = (pluginId, wsId, value, dsId, slotId) => {
     const p = plugins ? plugins.list().find((x) => x.id === pluginId) : null;
@@ -701,6 +704,7 @@ export async function boot(mounts) {
     if (!wsDef) return;
     const scope = wsDef.scope || 'dataset';
     const effectiveDsId = scope === 'project' ? null : (dsId ?? datasets.activeId);
+    debug('app', `workspaceWrite ${wsId} slot=${slotId} scope=${scope} dsId=${effectiveDsId}`);
     workspaceStore.set(ownerToken(p), wsId, slotId || '_default', effectiveDsId, value);
   };
 
@@ -738,11 +742,13 @@ export async function boot(mounts) {
     let lastActiveId = datasets.activeId;
     bus.on(DATASETS_CHANGED, () => {
       if (datasets.activeId === lastActiveId) return;
+      debug('app', 'dataset switched:', lastActiveId, '→', datasets.activeId);
       lastActiveId = datasets.activeId;
       // Try the lifecycle hook first — if all mounted workspaces handle
       // onDatasetChanged, they re-render in place (faster, preserves DOM state).
       // Fall back to full remount if any workspace lacks the hook.
       void workspaceManager.notifyDatasetChanged(plugins.list()).then((handled) => {
+        debug('app', 'notifyDatasetChanged resolved — handled:', handled, handled ? '' : '→ remounting');
         if (!handled) void workspaceManager.remountActive(plugins.list());
       });
     });

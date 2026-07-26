@@ -410,14 +410,18 @@ export const workspace = {
   },
 
   async onDatasetChanged(app) {
-    if (!_ws?.features.length || !_ws.activeSlot) return;
+    const _d = app.debug ? (...a) => console.debug('[spatial]', ...a) : () => {};
+    _d('onDatasetChanged — features:', _ws?.features?.length, 'slot:', _ws?.activeSlot);
+    if (!_ws?.features.length || !_ws.activeSlot) { _d('early-exit (no features or slot)'); return; }
     const link = await app.state.read('spatial-link', _ws.activeSlot);
     _ws.dataColumn = link?.dataColumn || null;
     _ws.shadeColumn = link?.shadeColumn || null;
     _ws.selected = new Set(link?.selected || []);
+    _d('linkage:', link ? `dataCol=${_ws.dataColumn} shadeCol=${_ws.shadeColumn}` : 'null');
     wsRenderList();
     const mapPane = _ws.svgEl?.closest('.map-pane');
     if (_ws.shadeColumn && _ws.dataColumn) {
+      _d('branch: shaded');
       mapPane?.classList.remove('unlinked');
       await wsApplyShading(app);
     } else {
@@ -425,9 +429,11 @@ export const workspace = {
       for (const sw of _ws.listEl.querySelectorAll('.swatch')) sw.style.background = '#d5dbe2';
       const n = _ws.features.length;
       if (_ws.dataColumn) {
+        _d('branch: linked (no shading)');
         mapPane?.classList.remove('unlinked');
         _ws.statusEl.textContent = `${_ws.fileName} — ${n} region${n !== 1 ? 's' : ''} (linked to "${_ws.dataColumn}").`;
       } else {
+        _d('branch: unlinked');
         mapPane?.classList.add('unlinked');
         _ws.statusEl.textContent = `${_ws.fileName} — ${n} region${n !== 1 ? 's' : ''}. Not linked to this dataset — use "Shade by variable" to link.`;
       }

@@ -1551,7 +1551,9 @@ export const workspace = {
   },
 
   async onDatasetChanged(app) {
+    if (app.debug) console.debug('[caqdas] onDatasetChanged');
     if (workspace._onDsChanged) await workspace._onDsChanged();
+    if (app.debug) console.debug('[caqdas] onDatasetChanged OK');
   },
 };
 
