@@ -261,10 +261,13 @@ export class PluginManager {
       // R packages the plugin declares — used by the offline cache to pre-fetch the
       // dependency closure of the *enabled* plugins.
       rPackages: Array.isArray(manifest.rPackages) ? manifest.rPackages : [],
-      // Workspace tabs the plugin declares (#93): [{id, title}]. Recorded so the
-      // workspace manager can mount tabs for active workspace plugins.
+      // Workspace tabs the plugin declares (#93): [{id, title, verbs}]. Recorded so
+      // the workspace manager can mount tabs and toolbar verb buttons.
       workspaces: Array.isArray(manifest.workspaces)
-        ? manifest.workspaces.filter((w) => w && typeof w.id === 'string').map((w) => ({ id: w.id, title: String(w.title || w.id) }))
+        ? manifest.workspaces.filter((w) => w && typeof w.id === 'string').map((w) => ({
+          id: w.id, title: String(w.title || w.id),
+          verbs: Array.isArray(w.verbs) ? w.verbs : [],
+        }))
         : [],
       // Media-render capability (#139): a workspace that codes audio/image/video. The
       // workspace manager mounts it in the media-CSP sandbox so it can render media.

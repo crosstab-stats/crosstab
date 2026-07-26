@@ -483,6 +483,14 @@ export class PluginLoader {
     return [...this.#plugins.values()].map((p) => p.manifest);
   }
 
+  /** Push a `pluginsChanged` notification to every loaded plugin's iframe so
+   * workspace plugins that registered `app.plugins.onChange(cb)` can re-query. */
+  broadcastPluginsChanged() {
+    for (const record of this.#plugins.values()) {
+      record.broker.sendPluginsChanged();
+    }
+  }
+
   /**
    * Invoke a named export on a loaded plugin (declarative API entry path). The
    * host gathers inputs and calls `run`/`parse`/`export` this way.

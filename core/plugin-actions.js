@@ -448,6 +448,58 @@ export class PluginActions {
   }
 
   /**
+   * Cross-plugin invocation (#147): run another plugin's analysis function.
+   * The caller supplies `target` as `"pluginId.fnName"` and optional pre-filled
+   * `inputs`. Any declared inputs NOT supplied are gathered via host dialogs;
+   * fully pre-filled inputs skip the picker entirely. The analysis runs on
+   * whatever dataset is currently active — the caller should create/activate a
+   * filtered dataset beforehand if needed (via `app.data.create`).
+   *
+   * @param {string} target - `"pluginId.fnName"` identifying the analysis.
+   * @param {{inputs?: object}} [opts]
+   * @returns {Promise<{ok: boolean, error?: string}>}
+   */
+  async runAnalysis(target, opts = {}) {
+    const dot = target.indexOf('.');
+    if (dot < 1) return { ok: false, error: `invalid target "${target}" — use "pluginId.fnName"` };
+    const pluginId = target.slice(0, dot);
+    const run = target.slice(dot + 1);
+    const t = this.#runnable.get(`${pluginId}::${run}`);
+    if (!t) return { ok: false, error: `no active analysis "${target}"` };
+
+    const specs = Array.isArray(t.item.inputs) ? t.item.inputs : [];
+    const supplied = opts.inputs || {};
+    const missing = specs.filter((s) => !(s.name in supplied) && !s.optional);
+
+    let gathered;
+    if (missing.length) {
+      gathered = await gatherInputs(this.#ui, specs, t.item);
+      if (gathered === null) return { ok: false, error: 'cancelled' };
+      Object.assign(gathered, supplied);
+    } else {
+      gathered = { ...supplied };
+      for (const s of specs) {
+        if (!(s.name in gathered) && s.optional) gathered[s.name] = s.default ?? null;
+      }
+    }
+
+    const entry = {
+      pluginId,
+      pluginName: t.manifest.name,
+      origin: t.origin,
+      label: t.item.label,
+      run,
+      specs,
+      inputs: gathered,
+      at: this.#dataStore?.getTransforms?.().length ?? 0,
+      outputMark: this.#results.getModel ? this.#results.getModel().length : 0,
+    };
+    const ok = await this.#execute(entry);
+    if (ok) this.#analysisLog?.record(entry);
+    return { ok };
+  }
+
+  /**
    * Re-execute one recorded analysis entry (does NOT re-record it — replay must be
    * idempotent). Used by {@link PluginActions#replayAnalyses} and the script editor.
    * @param {import('./analysis-log.js').AnalysisEntry} entry

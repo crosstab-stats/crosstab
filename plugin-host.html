@@ -160,6 +160,9 @@
           return Object.freeze(obj);
         }
 
+        /** Listeners for host-pushed `pluginsChanged` notifications. */
+        const pluginsChangedListeners = [];
+
         /** Assemble the `app` object handed to the plugin's activate(). */
         function makeApp(identity) {
           // Declarative plugins don't register anything — the host wires menus,
@@ -196,6 +199,13 @@
             media: makeNamespace('media', ['load', 'put']),
             // ZIP for archive-format plugins (#139): make(entries)->bytes, read(bytes).
             zip: makeNamespace('zip', ['make', 'read']),
+            // Cross-plugin discovery + invocation (#147): list active plugins and
+            // their analysis functions, run another plugin's analysis.
+            plugins: Object.freeze({
+              list: () => call('plugins.list', []).then(reviveValue),
+              onChange: (fn) => { if (typeof fn === 'function') pluginsChangedListeners.push(fn); },
+            }),
+            run: makeNamespace('run', ['analysis']),
           });
         }
 
@@ -281,6 +291,12 @@
                 post({ t: 'lifecycleAck', hook: 'deactivate', ok: true });
               } catch (err) {
                 post({ t: 'lifecycleAck', hook: 'deactivate', ok: false, error: String(err && err.message || err) });
+              }
+              break;
+
+            case 'pluginsChanged':
+              for (const fn of pluginsChangedListeners) {
+                try { fn(); } catch (err) { console.error('[plugin] onChange threw', err); }
               }
               break;
 

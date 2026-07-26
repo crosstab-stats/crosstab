@@ -143,6 +143,14 @@ export class PluginBroker {
     if (services.stateWrite) {
       this.#dispatch['state.write'] = (wsId, value, dsId) => services.stateWrite(wsId, value, dsId);
     }
+    // Cross-plugin discovery + invocation (#147): list active analysis plugins and
+    // run another plugin's analysis function (host-mediated, never direct).
+    if (services.plugins) {
+      this.#dispatch['plugins.list'] = () => services.plugins.list();
+    }
+    if (services.runAnalysis) {
+      this.#dispatch['run.analysis'] = (target, inputs) => services.runAnalysis(target, inputs);
+    }
     this.#listener = (e) => this.#onMessage(e);
     window.addEventListener('message', this.#listener);
   }
@@ -253,6 +261,12 @@ export class PluginBroker {
     this.#lifecycleAck = deferred();
     this.#post({ t: 'workspaceRefresh' });
     return this.#lifecycleAck.promise;
+  }
+
+  /** Push notification: the set of active plugins changed — workspace plugins that
+   * registered `app.plugins.onChange(cb)` should re-query `app.plugins.list()`. */
+  sendPluginsChanged() {
+    this.#post({ t: 'pluginsChanged' });
   }
 
   /**

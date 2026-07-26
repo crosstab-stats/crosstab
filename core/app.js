@@ -434,6 +434,10 @@ export async function boot(mounts) {
     dataStore: datasets,
   });
 
+  // Cross-plugin invocation (#147): a plugin can call `app.run.analysis(target, opts)`
+  // and the host routes it through pluginActions. Added post-creation like codec.
+  services.runAnalysis = (target, opts) => pluginActions.runAnalysis(target, opts);
+
   // One Undo/Redo across BOTH data ops and analysis runs: when the most recent
   // action is an analysis, Undo removes that analysis + its output (not a data op).
   const undoCoordinator = new UndoCoordinator({
@@ -695,6 +699,15 @@ export async function boot(mounts) {
     if (!p || !(p.workspaces || []).some((w) => w.id === wsId)) return; // must declare it
     workspaceStore.set(ownerToken(p), wsId, dsId ?? datasets.activeId, value);
   };
+
+  // Cross-plugin discovery (#147): plugins call `app.plugins.list()` to see what
+  // analyses are available. Returns only activated plugins with their menu items.
+  services.plugins = {
+    list: () => pluginActions.listRunnable(),
+  };
+  // Notify all loaded plugin iframes when the set of active plugins changes, so
+  // workspace plugins that registered `app.plugins.onChange(cb)` can re-query.
+  bus.on(CoreEvents.PLUGINS_CHANGED, () => loader.broadcastPluginsChanged());
 
   // Plugin workspaces (#93): mount/unmount workspace TABS to match the active
   // plugin set. Rides PLUGINS_CHANGED (same signal as menu wiring) + one initial

@@ -103,6 +103,21 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
           (2) own workspace state via implicit `app.state.get()`, (3) dataset
           columns via optional `inputs` array. No `hostProvides` or typed
           capabilities declaration needed.
+        - **Cross-plugin invocation (#147) — BUILT.** A plugin can discover and
+          run another plugin's analysis: `app.plugins.list()` returns active
+          analyses (id, label, inputs), `app.plugins.onChange(cb)` fires when the
+          active set changes, `app.run.analysis('pluginId.fn', { inputs })` runs
+          through the host dispatcher (same path as do-file `run id.fn`). Inputs
+          fully pre-filled skip the picker; missing required inputs show host
+          dialogs. Spatial workspace uses this: "Analyse selection…" → filtered
+          dataset → picker of available analyses → cross-plugin `app.run.analysis`.
+  - [ ] **CAQDAS cross-plugin invocation.** The coding workspace should be able
+        to run analysis plugins on coded-theme subsets (e.g. run frequencies on
+        all segments coded "anxiety"). Needs design thought on: does the derived
+        dataset contain the coded text segments, the source rows, or a
+        frequency table of codes? Different analyses want different shapes.
+        The `app.run.analysis` plumbing is ready — this is a CAQDAS design
+        question, not an infrastructure one.
 
 - [ ] **Plugin data as first-class citizens (#146).**
       Workspace blobs (spatial boundaries, CAQDAS codings) are second-class

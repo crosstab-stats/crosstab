@@ -41,7 +41,7 @@ export const manifest = {
     verbs: [
       { id: 'load-boundaries', label: 'Load boundaries…', run: 'loadBoundaries', category: 'toolbar', needsFile: { extensions: ['.geojson', '.json'] } },
       { id: 'shade-by-variable', label: 'Shade by variable…', run: 'shadeByVariable', category: 'toolbar' },
-      { id: 'filter-to-selection', label: 'Filter to selection', run: 'filterToSelection', category: 'toolbar' },
+      { id: 'filter-to-selection', label: 'Analyse selection…', run: 'filterToSelection', category: 'toolbar' },
       { id: 'clear-boundaries', label: 'Clear', run: 'clearBoundaries', category: 'toolbar' },
       { id: 'export-map', label: 'Export map', run: 'exportMap', category: 'toolbar' },
       { id: 'import-boundaries', label: 'GeoJSON boundaries (.geojson, .json)…', run: 'importBoundaries', category: 'import', needsFile: { extensions: ['.geojson', '.json'] }, group: 'Spatial' },
@@ -602,11 +602,36 @@ export async function filterToSelection(app) {
   }
   if (!keep.length) return { ok: false, message: 'No rows match the selected regions.' };
 
+  // List available analysis plugins and let the user choose what to run, or
+  // just create the filtered dataset without running anything.
+  const analyses = await app.plugins.list();
+  const items = [
+    { value: '__create_only__', label: 'Just create filtered dataset' },
+    ...analyses.map((a) => ({ value: `${a.pluginId}.${a.run}`, label: `${a.label} (${a.pluginName})` })),
+  ];
+  const pick = await app.ui.selectFromList({
+    title: `Run on ${keep.length} rows (${_ws.selected.size} regions)`,
+    hint: 'Choose an analysis to run on the selected rows, or create a filtered dataset.',
+    items,
+    multiple: false,
+  });
+  if (!pick) return { ok: false, message: 'Cancelled.' };
+  const choice = pick[0];
+
   await app.data.create({
     name: `Selection (${_ws.selected.size} regions)`,
     columns: colNames,
     rows: keep,
   });
+
+  if (choice !== '__create_only__') {
+    const result = await app.run.analysis(choice, {});
+    if (!result?.ok) {
+      return { ok: false, message: result?.error || 'Analysis failed.', refresh: 'dataset' };
+    }
+    return { ok: true, message: `Ran analysis on ${keep.length} rows from ${_ws.selected.size} regions.`, refresh: ['dataset', 'output'] };
+  }
+
   return { ok: true, message: `Created dataset with ${keep.length} rows from ${_ws.selected.size} regions.`, refresh: 'dataset' };
 }
 
