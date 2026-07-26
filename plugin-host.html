@@ -255,13 +255,16 @@
               // Lifecycle hook: the active dataset switched. If the workspace exports
               // onDatasetChanged, call it so the workspace can re-read state and
               // re-render in place (avoiding a full iframe teardown/remount).
+              // If missing, ack ok:false so the host falls back to a full remount.
               try {
                 const wsHook = pluginModule && pluginModule.workspace;
                 if (wsHook && typeof wsHook.onDatasetChanged === 'function') {
                   if (!app) app = makeApp(msg.plugin || {});
                   await wsHook.onDatasetChanged(app);
+                  post({ t: 'lifecycleAck', hook: 'datasetChanged', ok: true });
+                } else {
+                  post({ t: 'lifecycleAck', hook: 'datasetChanged', ok: false });
                 }
-                post({ t: 'lifecycleAck', hook: 'datasetChanged', ok: true });
               } catch (err) {
                 post({ t: 'lifecycleAck', hook: 'datasetChanged', ok: false, error: String(err && err.message || err) });
               }
@@ -270,13 +273,16 @@
             case 'workspaceRefresh':
               // Lifecycle hook: persisted state changed externally (e.g. an import
               // verb wrote new boundary data). Re-read state and re-render in place.
+              // If missing, ack ok:false so the host falls back to a full remount.
               try {
                 const wsRefresh = pluginModule && pluginModule.workspace;
                 if (wsRefresh && typeof wsRefresh.onRefresh === 'function') {
                   if (!app) app = makeApp(msg.plugin || {});
                   await wsRefresh.onRefresh(app);
+                  post({ t: 'lifecycleAck', hook: 'workspaceRefresh', ok: true });
+                } else {
+                  post({ t: 'lifecycleAck', hook: 'workspaceRefresh', ok: false });
                 }
-                post({ t: 'lifecycleAck', hook: 'workspaceRefresh', ok: true });
               } catch (err) {
                 post({ t: 'lifecycleAck', hook: 'workspaceRefresh', ok: false, error: String(err && err.message || err) });
               }
