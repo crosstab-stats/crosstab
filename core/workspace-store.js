@@ -41,6 +41,9 @@ export class WorkspaceStore {
   /** owner → (workspaceId → (datasetKey → value)).
    * @type {Map<string, Map<string, Map<string, any>>>} */
   #states = new Map();
+  /** "owner\0wsId\0dsKey" → display label. Host-managed metadata, separate from
+   * the opaque blob so the host can render it without interpreting the value. */
+  #labels = new Map();
   #bus;
 
   /** @param {{bus?: import('./event-bus.js').EventBus}} [deps] */
@@ -61,16 +64,24 @@ export class WorkspaceStore {
   /** Persist an (owner, workspace, dataset) value and announce the change (drives
    * autosave). null/undefined clears it. A plugin can only reach its own `owner`
    * (the service derives it from host-asserted identity), so this is write-your-own
-   * by construction — no access check needed. */
-  set(owner, wsId, dsId, value) {
+   * by construction — no access check needed.
+   * @param {string} owner
+   * @param {string} wsId
+   * @param {string|null} dsId
+   * @param {any} value
+   * @param {{label?: string}} [meta] - Host-managed metadata (display label). */
+  set(owner, wsId, dsId, value, meta) {
     if (!owner || !wsId) return;
     let byWs = this.#states.get(owner);
     if (!byWs) { byWs = new Map(); this.#states.set(owner, byWs); }
     let perDs = byWs.get(wsId);
     if (!perDs) { perDs = new Map(); byWs.set(wsId, perDs); }
     const k = this.#dsKey(dsId);
-    if (value == null) perDs.delete(k);
-    else perDs.set(k, value);
+    if (value == null) { perDs.delete(k); this.#labels.delete(`${owner}\0${wsId}\0${k}`); }
+    else {
+      perDs.set(k, value);
+      if (meta?.label != null) this.#labels.set(`${owner}\0${wsId}\0${k}`, meta.label);
+    }
     this.#bus?.emit(CoreEvents.WORKSPACE_CHANGED, { owner, id: wsId, dataset: dsId ?? null });
   }
 
@@ -85,10 +96,44 @@ export class WorkspaceStore {
     return !!perDs && perDs.size > 0;
   }
 
+  /** List every (owner, wsId) that holds a blob for the given dataset.
+   * @param {string|null} dsId
+   * @returns {Array<{owner: string, wsId: string, label: string|null}>} */
+  listForDataset(dsId) {
+    const k = this.#dsKey(dsId);
+    const out = [];
+    for (const [owner, byWs] of this.#states) {
+      for (const [wsId, perDs] of byWs) {
+        if (perDs.has(k)) {
+          const lk = `${owner}\0${wsId}\0${k}`;
+          out.push({ owner, wsId, label: this.#labels.get(lk) ?? null });
+        }
+      }
+    }
+    return out;
+  }
+
+  /** Get the display label for a blob, or null. */
+  getLabel(owner, wsId, dsId) {
+    return this.#labels.get(`${owner}\0${wsId}\0${this.#dsKey(dsId)}`) ?? null;
+  }
+
+  /** Set the display label without touching the blob value. */
+  setLabel(owner, wsId, dsId, label) {
+    const k = `${owner}\0${wsId}\0${this.#dsKey(dsId)}`;
+    if (label == null) this.#labels.delete(k);
+    else this.#labels.set(k, label);
+    this.#bus?.emit(CoreEvents.WORKSPACE_CHANGED, { owner, id: wsId, dataset: dsId ?? null });
+  }
+
   /** Clear one (owner, workspace) across ALL datasets — the deactivation purge (#118). */
   clearWorkspace(owner, wsId) {
     const byWs = this.#states.get(owner);
     if (!byWs) return;
+    const perDs = byWs.get(wsId);
+    if (perDs) {
+      for (const k of perDs.keys()) this.#labels.delete(`${owner}\0${wsId}\0${k}`);
+    }
     byWs.delete(wsId);
     if (byWs.size === 0) this.#states.delete(owner);
   }
@@ -96,12 +141,17 @@ export class WorkspaceStore {
   /** Drop every workspace's blob for a dataset that's been removed (across all owners). */
   dropDataset(dsId) {
     const k = this.#dsKey(dsId);
-    for (const byWs of this.#states.values()) for (const perDs of byWs.values()) perDs.delete(k);
+    for (const [owner, byWs] of this.#states) {
+      for (const [wsId, perDs] of byWs) {
+        if (perDs.delete(k)) this.#labels.delete(`${owner}\0${wsId}\0${k}`);
+      }
+    }
   }
 
   /** Snapshot for the project save — the versioned owner-nested shape
    * `{ __wsv: 3, ws: { owner: { wsId: { dsKey: value } } } }`. Includes owners/ids with
-   * no installed plugin (preserve-on-missing). Deep-cloned. */
+   * no installed plugin (preserve-on-missing). Deep-cloned. Labels are stored as
+   * `labels: { "owner\0wsId\0dsKey": string }`. */
   export() {
     const ws = {};
     for (const [owner, byWs] of this.#states) {
@@ -113,7 +163,8 @@ export class WorkspaceStore {
       }
       ws[owner] = o;
     }
-    return { __wsv: 3, ws };
+    const labels = this.#labels.size ? Object.fromEntries(this.#labels) : undefined;
+    return { __wsv: 3, ws, labels };
   }
 
   /** Replace the store from a project's saved blob. Accepts the v3 owner-nested shape;
@@ -122,6 +173,7 @@ export class WorkspaceStore {
    * plugin context to assign owners). Anything unknown is dropped. */
   import(obj) {
     this.#states.clear();
+    this.#labels.clear();
     const ws = obj && obj.__wsv === 3 ? obj.ws : null;
     if (!ws || typeof ws !== 'object') return;
     for (const owner of Object.keys(ws)) {
@@ -135,10 +187,16 @@ export class WorkspaceStore {
       }
       this.#states.set(owner, byWs);
     }
+    if (obj.labels && typeof obj.labels === 'object') {
+      for (const [k, v] of Object.entries(obj.labels)) {
+        if (typeof v === 'string') this.#labels.set(k, v);
+      }
+    }
   }
 
   clear() {
     this.#states.clear();
+    this.#labels.clear();
   }
 }
 

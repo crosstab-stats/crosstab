@@ -642,7 +642,11 @@ export async function boot(mounts) {
 
   // The sidebar project manager (active project + datasets, other projects,
   // building blocks). Created here, after the services it drives exist.
-  new ProjectSidebar(mounts.sidebar, { datasets, projects, library, bus, recycle });
+  new ProjectSidebar(mounts.sidebar, {
+    datasets, projects, library, bus, recycle,
+    workspaceStore,
+    pluginList: () => (plugins ? plugins.list() : []),
+  });
 
   // --- warm the runtimes ------------------------------------------------------
   // WebR warms in the background. DuckDB cold-starts when the launcher loads the
@@ -1082,16 +1086,19 @@ class ProjectSidebar {
    * @param {import('./library.js').DatasetLibrary} deps.library
    * @param {EventBus} deps.bus
    */
-  constructor(host, { datasets, projects, library, bus, recycle }) {
+  constructor(host, { datasets, projects, library, bus, recycle, workspaceStore, pluginList }) {
     this.host = host;
     this.datasets = datasets;
     this.projects = projects;
     this.library = library;
     this.recycle = recycle ?? null;
+    this.wsStore = workspaceStore ?? null;
+    this.pluginList = pluginList ?? (() => []);
     this.projectName = null;
     bus.on(DATASETS_CHANGED, () => this.render());
     bus.on(CoreEvents.DATA_CHANGED, () => this.render());
     bus.on(LIBRARY_CHANGED, () => this.render());
+    bus.on(CoreEvents.WORKSPACE_CHANGED, () => this.render());
     bus.on(PROJECT_CHANGED, ({ name } = {}) => {
       this.projectName = name;
       this.render();
@@ -1246,6 +1253,54 @@ class ProjectSidebar {
       'proj__ds-x',
     );
     li.append(edit, x);
+
+    const frag = document.createDocumentFragment();
+    frag.append(li);
+    if (this.wsStore) {
+      const blobs = this.wsStore.listForDataset(it.id);
+      if (blobs.length) {
+        const wsTitles = this.#wsIdTitles();
+        for (const b of blobs) {
+          frag.append(this.#blobRow(b, it.id, wsTitles));
+        }
+      }
+    }
+    return frag;
+  }
+
+  #wsIdTitles() {
+    const map = new Map();
+    for (const p of this.pluginList()) {
+      if (!Array.isArray(p.workspaces)) continue;
+      for (const ws of p.workspaces) {
+        if (ws?.id && ws.title) map.set(ws.id, ws.title);
+      }
+    }
+    return map;
+  }
+
+  #blobRow(blob, dsId, wsTitles) {
+    const li = document.createElement('li');
+    li.className = 'proj__blob';
+    const wsTitle = wsTitles.get(blob.wsId) || blob.wsId;
+    const label = blob.label || '';
+    const text = label ? `${wsTitle}: ${label}` : wsTitle;
+    const name = el('span', text, 'proj__blob-name');
+    name.title = 'Double-click to rename';
+    name.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      this.#inlineRename(li, name, label, (v) => {
+        this.wsStore.setLabel(blob.owner, blob.wsId, dsId, v || null);
+      }, 'proj__blob-name');
+    });
+    li.append(name);
+    const edit = iconBtn('✎', 'Rename', (e) => {
+      e.stopPropagation();
+      this.#inlineRename(li, name, label, (v) => {
+        this.wsStore.setLabel(blob.owner, blob.wsId, dsId, v || null);
+      }, 'proj__blob-name');
+    }, 'proj__ds-x');
+    li.append(edit);
     return li;
   }
 

@@ -104,6 +104,29 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
           columns via optional `inputs` array. No `hostProvides` or typed
           capabilities declaration needed.
 
+- [ ] **Plugin data as first-class citizens (#146).**
+      Workspace blobs (spatial boundaries, CAQDAS codings) are second-class
+      compared to datasets: invisible in the project manager, can't be
+      independently renamed/deleted, can't be offered as building blocks, trapped
+      inside one dataset's opaque storage slot. The concrete driver: a user's
+      congressional-district boundary set is reusable reference data across
+      different polling runs — today it's locked to one dataset and can't be shared.
+  - **Phase 1 (interim — sidebar visibility):** show one line per workspace blob
+    under each dataset in the project sidebar (`"{wsTitle}: {blobLabel}"`). Blob
+    label is host-managed metadata (inline rename reuses dataset rename UX). The
+    workspace store gains a `label` field alongside each blob; plugins provide the
+    initial label via state writes. No store schema change — one blob per
+    `(owner, wsId, dsId)`.
+  - **Phase 2 (first-class attachments):** promote plugin data to host-managed
+    objects with their own identity, rename/delete, building-block eligibility, and
+    export. Requires: new store key dimension or separate attachment store, project
+    manager section, building-block contract expansion, plugin manifest schema for
+    attachment types. The host manages lifecycle; plugins declare attachment schemas
+    so the host can snapshot/restore without understanding the blob's internals.
+  - **Design constraint:** datasets and plugin data should have parity in the
+    project manager. If datasets can be renamed, deleted, and used as building
+    blocks, so should plugin data — anything less is structural inequality.
+
 - [~] **Build and prove the DuckDB-WASM data engine — FOUNDATIONAL.**
       *Core engine wired in and live (desktop Chrome):* `core/duckdb-manager.js`
       owns the runtime; `core/data-store.js` is now a facade over a DuckDB table
