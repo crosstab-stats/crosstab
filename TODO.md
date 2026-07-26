@@ -119,28 +119,25 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         The `app.run.analysis` plumbing is ready — this is a CAQDAS design
         question, not an infrastructure one.
 
-- [ ] **Plugin data as first-class citizens (#146).**
-      Workspace blobs (spatial boundaries, CAQDAS codings) are second-class
-      compared to datasets: invisible in the project manager, can't be
-      independently renamed/deleted, can't be offered as building blocks, trapped
-      inside one dataset's opaque storage slot. The concrete driver: a user's
-      congressional-district boundary set is reusable reference data across
-      different polling runs — today it's locked to one dataset and can't be shared.
-  - **Phase 1 (interim — sidebar visibility):** show one line per workspace blob
-    under each dataset in the project sidebar (`"{wsTitle}: {blobLabel}"`). Blob
-    label is host-managed metadata (inline rename reuses dataset rename UX). The
-    workspace store gains a `label` field alongside each blob; plugins provide the
-    initial label via state writes. No store schema change — one blob per
-    `(owner, wsId, dsId)`.
-  - **Phase 2 (first-class attachments):** promote plugin data to host-managed
-    objects with their own identity, rename/delete, building-block eligibility, and
-    export. Requires: new store key dimension or separate attachment store, project
-    manager section, building-block contract expansion, plugin manifest schema for
-    attachment types. The host manages lifecycle; plugins declare attachment schemas
-    so the host can snapshot/restore without understanding the blob's internals.
-  - **Design constraint:** datasets and plugin data should have parity in the
-    project manager. If datasets can be renamed, deleted, and used as building
-    blocks, so should plugin data — anything less is structural inequality.
+- [x] **Plugin data as first-class citizens (#146).** *Built.*
+      Workspace blobs promoted from opaque side-cars to host-managed, independently
+      addressable objects. **Phase 1** (sidebar visibility) shipped earlier. **Phase 2**
+      (first-class attachments) now complete:
+  - **4-dimensional store:** `(owner, wsId, slotId, dsId)` — each workspace blob
+    lives in a named **slot** chosen by the plugin. Spatial plugin stores each
+    boundary set in its own slot (e.g. "us-counties", "voting-districts");
+    CAQDAS uses the default `_default` slot unchanged.
+  - **Plugin manifest `scope`:** `'dataset'` (default, CAQDAS — one blob per
+    dataset) vs `'project'` (spatial — boundaries shared across datasets, stored
+    with `NO_DS` sentinel). Host enforces scope — plugins don't need to care.
+  - **Sidebar:** each slot appears as its own line, independently renameable via
+    inline edit. Project-scoped blobs appear after all datasets.
+  - **Plugin API:** `app.state.get(slotId?)`, `app.state.set(value, {slot?, label?})`,
+    `app.state.list()`, `app.state.delete(slotId)`.
+  - **Migration:** v3 → v4 lifts all existing blobs under `_default` slot; labels
+    get a 4-part key. v2/legacy migrations chain through.
+  - [ ] **Building-block eligibility** — a slot can be saved as a reusable
+    building block (pending building-block contract expansion).
 
 - [~] **Build and prove the DuckDB-WASM data engine — FOUNDATIONAL.**
       *Core engine wired in and live (desktop Chrome):* `core/duckdb-manager.js`

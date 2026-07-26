@@ -1,48 +1,51 @@
 /**
  * @file workspace-store.js
- * Host-side store for plugin **workspace state** (#93), keyed **per owner, per
- * dataset** (#139, #145).
+ * Host-side store for plugin **workspace state** (#93, #146), keyed
+ * **per owner, per workspace, per slot, per dataset**.
  *
- * A workspace plugin (e.g. CAQDAS coding) owns a blob of state the host persists but
- * does NOT interpret. The blob is scoped to an **(owner, workspace id, dataset id)**
- * triple:
- *  - **per dataset** because qualitative coding is per-dataset exactly like
- *    quantitative analysis — switching the active dataset switches the whole coding
- *    state with it (no cross-dataset codebook pollution, no row-id collision).
- *  - **per owner** because the workspace id is a *shared* namespace: two plugins from
- *    different authors may both declare `wsId: 'notes'`, and they must not clobber or
- *    read-through each other. The owner (see {@link ownerToken}) is part of the
- *    storage *key*, so a colliding id from a different author is simply a different
- *    slot — collision-safe and squat-proof by construction, with no runtime
- *    claim/race to get wrong.
+ * A workspace plugin (e.g. CAQDAS coding, spatial map) owns blobs of state the
+ * host persists but does NOT interpret. Each blob is scoped to an
+ * **(owner, workspace id, slot id, dataset key)** quad:
  *
- * ## What ownership does and does NOT buy (#145)
- * The model is **"read the world, write your own."** Activation is full trust, so we
- * do NOT treat a blob as confidential from other activated plugins — a plugin can
- * already read the whole active *dataset*, and a blob is just derived data. What
- * ownership enforces is **integrity**: because the key carries the owner and the
- * services derive that owner from host-asserted identity, a plugin can only ever
- * write its *own* slot. It is namespacing for integrity, not isolation for secrecy.
- * (The read *addressing* happens to default to your own owner; that is a convenience,
- * not a claimed barrier — a cross-owner read would just pass a different owner.)
+ *  - **slot** is the plugin-chosen sub-key within a workspace. A CAQDAS workspace
+ *    stores one blob per dataset → one default slot. A spatial workspace stores
+ *    separate boundary sets (US counties, voting districts, …) each in its own
+ *    slot, so each can be independently renamed, deleted, or promoted to a
+ *    building block.
+ *  - **dataset key** is either the active dataset id (for dataset-scoped
+ *    workspaces like CAQDAS) or the {@link NO_DS} sentinel (for project-scoped
+ *    workspaces like spatial boundaries, which are independent of the survey data).
+ *  - **owner** is the plugin's namespace token (see {@link ownerToken}), part of
+ *    the storage KEY — a colliding workspace id from a different author is simply
+ *    a different slot.
+ *
+ * ## Slot lifecycle
+ * Plugins create, rename, and delete slots freely via `app.state`. The host
+ * renders each slot as its own line in the project sidebar, so the user can
+ * manage them individually — renaming a boundary set, deleting one without
+ * affecting the others, or eventually marking one as a reusable building block.
  *
  * Properties preserved:
- *  - **Opaque**: the host never reads the value; the plugin owns its schema/versioning.
- *  - **Preserve-on-missing-plugin**: a value survives even if no plugin for its id is
- *    installed, so a shared project's coding data isn't dropped.
+ *  - **Opaque**: the host never reads the value; the plugin owns its schema.
+ *  - **Preserve-on-missing-plugin**: a value survives even if no plugin for its
+ *    id is installed, so a shared project's data isn't dropped.
  */
 
 import { CoreEvents } from './event-bus.js';
 
-/** Bucket key for the "no dataset" case (a workspace not tied to a dataset). */
+/** Bucket key for project-scoped workspaces (not tied to a dataset). */
 const NO_DS = ' ';
 
+/** Default slot id when the plugin doesn't specify one. */
+const DEFAULT_SLOT = '_default';
+
+export { NO_DS, DEFAULT_SLOT };
+
 export class WorkspaceStore {
-  /** owner → (workspaceId → (datasetKey → value)).
-   * @type {Map<string, Map<string, Map<string, any>>>} */
+  /** owner → wsId → slotId → dsKey → value.
+   * @type {Map<string, Map<string, Map<string, Map<string, any>>>>} */
   #states = new Map();
-  /** "owner\0wsId\0dsKey" → display label. Host-managed metadata, separate from
-   * the opaque blob so the host can render it without interpreting the value. */
+  /** "owner\0wsId\0slotId\0dsKey" → display label. */
   #labels = new Map();
   #bus;
 
@@ -55,135 +58,176 @@ export class WorkspaceStore {
     return dsId == null || dsId === '' ? NO_DS : String(dsId);
   }
 
-  /** Value for an (owner, workspace, dataset), or null. */
-  get(owner, wsId, dsId) {
-    const v = this.#states.get(owner)?.get(wsId)?.get(this.#dsKey(dsId));
+  #labelKey(owner, wsId, slotId, dsKey) {
+    return `${owner}\0${wsId}\0${slotId}\0${dsKey}`;
+  }
+
+  /** Value for an (owner, workspace, slot, dataset), or null. */
+  get(owner, wsId, slotId, dsId) {
+    const dk = this.#dsKey(dsId);
+    const v = this.#states.get(owner)?.get(wsId)?.get(slotId)?.get(dk);
     return v === undefined ? null : v;
   }
 
-  /** Persist an (owner, workspace, dataset) value and announce the change (drives
-   * autosave). null/undefined clears it. A plugin can only reach its own `owner`
-   * (the service derives it from host-asserted identity), so this is write-your-own
-   * by construction — no access check needed.
+  /** Persist an (owner, workspace, slot, dataset) value.
    * @param {string} owner
    * @param {string} wsId
+   * @param {string} slotId
    * @param {string|null} dsId
-   * @param {any} value
-   * @param {{label?: string}} [meta] - Host-managed metadata (display label). */
-  set(owner, wsId, dsId, value, meta) {
-    if (!owner || !wsId) return;
+   * @param {any} value — null/undefined clears it.
+   * @param {{label?: string}} [meta] */
+  set(owner, wsId, slotId, dsId, value, meta) {
+    if (!owner || !wsId || !slotId) return;
     let byWs = this.#states.get(owner);
     if (!byWs) { byWs = new Map(); this.#states.set(owner, byWs); }
-    let perDs = byWs.get(wsId);
-    if (!perDs) { perDs = new Map(); byWs.set(wsId, perDs); }
-    const k = this.#dsKey(dsId);
-    if (value == null) { perDs.delete(k); this.#labels.delete(`${owner}\0${wsId}\0${k}`); }
-    else {
-      perDs.set(k, value);
-      if (meta?.label != null) this.#labels.set(`${owner}\0${wsId}\0${k}`, meta.label);
+    let bySlot = byWs.get(wsId);
+    if (!bySlot) { bySlot = new Map(); byWs.set(wsId, bySlot); }
+    let perDs = bySlot.get(slotId);
+    if (!perDs) { perDs = new Map(); bySlot.set(slotId, perDs); }
+    const dk = this.#dsKey(dsId);
+    const lk = this.#labelKey(owner, wsId, slotId, dk);
+    if (value == null) {
+      perDs.delete(dk);
+      this.#labels.delete(lk);
+      if (!perDs.size) bySlot.delete(slotId);
+    } else {
+      perDs.set(dk, value);
+      if (meta?.label != null) this.#labels.set(lk, meta.label);
     }
-    this.#bus?.emit(CoreEvents.WORKSPACE_CHANGED, { owner, id: wsId, dataset: dsId ?? null });
+    this.#bus?.emit(CoreEvents.WORKSPACE_CHANGED, { owner, id: wsId, slot: slotId, dataset: dsId ?? null });
   }
 
-  has(owner, wsId, dsId) {
-    return !!this.#states.get(owner)?.get(wsId)?.has(this.#dsKey(dsId));
+  has(owner, wsId, slotId, dsId) {
+    return !!this.#states.get(owner)?.get(wsId)?.get(slotId)?.has(this.#dsKey(dsId));
   }
 
-  /** Does this (owner, workspace) hold data for ANY dataset? (Deciding whether a
-   * plugin's project data must be reckoned with on deactivation, #118.) */
+  /** Does this (owner, workspace) hold data in ANY slot for ANY dataset? */
   hasAny(owner, wsId) {
-    const perDs = this.#states.get(owner)?.get(wsId);
-    return !!perDs && perDs.size > 0;
+    const bySlot = this.#states.get(owner)?.get(wsId);
+    if (!bySlot) return false;
+    for (const perDs of bySlot.values()) {
+      if (perDs.size > 0) return true;
+    }
+    return false;
   }
 
-  /** List every (owner, wsId) that holds a blob for the given dataset.
+  /** List every (owner, wsId, slotId) that holds a blob for the given dataset.
    * @param {string|null} dsId
-   * @returns {Array<{owner: string, wsId: string, label: string|null}>} */
+   * @returns {Array<{owner: string, wsId: string, slotId: string, label: string|null}>} */
   listForDataset(dsId) {
-    const k = this.#dsKey(dsId);
+    const dk = this.#dsKey(dsId);
     const out = [];
     for (const [owner, byWs] of this.#states) {
-      for (const [wsId, perDs] of byWs) {
-        if (perDs.has(k)) {
-          const lk = `${owner}\0${wsId}\0${k}`;
-          out.push({ owner, wsId, label: this.#labels.get(lk) ?? null });
+      for (const [wsId, bySlot] of byWs) {
+        for (const [slotId, perDs] of bySlot) {
+          if (perDs.has(dk)) {
+            const lk = this.#labelKey(owner, wsId, slotId, dk);
+            out.push({ owner, wsId, slotId, label: this.#labels.get(lk) ?? null });
+          }
         }
       }
     }
     return out;
   }
 
+  /** List slots for a specific (owner, workspace, dataset).
+   * @returns {Array<{slotId: string, label: string|null}>} */
+  listSlots(owner, wsId, dsId) {
+    const dk = this.#dsKey(dsId);
+    const bySlot = this.#states.get(owner)?.get(wsId);
+    if (!bySlot) return [];
+    const out = [];
+    for (const [slotId, perDs] of bySlot) {
+      if (perDs.has(dk)) {
+        const lk = this.#labelKey(owner, wsId, slotId, dk);
+        out.push({ slotId, label: this.#labels.get(lk) ?? null });
+      }
+    }
+    return out;
+  }
+
   /** Get the display label for a blob, or null. */
-  getLabel(owner, wsId, dsId) {
-    return this.#labels.get(`${owner}\0${wsId}\0${this.#dsKey(dsId)}`) ?? null;
+  getLabel(owner, wsId, slotId, dsId) {
+    return this.#labels.get(this.#labelKey(owner, wsId, slotId, this.#dsKey(dsId))) ?? null;
   }
 
   /** Set the display label without touching the blob value. */
-  setLabel(owner, wsId, dsId, label) {
-    const k = `${owner}\0${wsId}\0${this.#dsKey(dsId)}`;
-    if (label == null) this.#labels.delete(k);
-    else this.#labels.set(k, label);
-    this.#bus?.emit(CoreEvents.WORKSPACE_CHANGED, { owner, id: wsId, dataset: dsId ?? null });
+  setLabel(owner, wsId, slotId, dsId, label) {
+    const lk = this.#labelKey(owner, wsId, slotId, this.#dsKey(dsId));
+    if (label == null) this.#labels.delete(lk);
+    else this.#labels.set(lk, label);
+    this.#bus?.emit(CoreEvents.WORKSPACE_CHANGED, { owner, id: wsId, slot: slotId, dataset: dsId ?? null });
   }
 
-  /** Clear one (owner, workspace) across ALL datasets — the deactivation purge (#118). */
+  /** Clear one (owner, workspace) across ALL slots and datasets — the deactivation purge. */
   clearWorkspace(owner, wsId) {
     const byWs = this.#states.get(owner);
     if (!byWs) return;
-    const perDs = byWs.get(wsId);
-    if (perDs) {
-      for (const k of perDs.keys()) this.#labels.delete(`${owner}\0${wsId}\0${k}`);
+    const bySlot = byWs.get(wsId);
+    if (bySlot) {
+      for (const [slotId, perDs] of bySlot) {
+        for (const dk of perDs.keys()) {
+          this.#labels.delete(this.#labelKey(owner, wsId, slotId, dk));
+        }
+      }
     }
     byWs.delete(wsId);
     if (byWs.size === 0) this.#states.delete(owner);
   }
 
-  /** Drop every workspace's blob for a dataset that's been removed (across all owners). */
+  /** Drop every workspace's blob for a dataset that's been removed (across all owners/slots). */
   dropDataset(dsId) {
-    const k = this.#dsKey(dsId);
+    const dk = this.#dsKey(dsId);
     for (const [owner, byWs] of this.#states) {
-      for (const [wsId, perDs] of byWs) {
-        if (perDs.delete(k)) this.#labels.delete(`${owner}\0${wsId}\0${k}`);
+      for (const [wsId, bySlot] of byWs) {
+        for (const [slotId, perDs] of bySlot) {
+          if (perDs.delete(dk)) this.#labels.delete(this.#labelKey(owner, wsId, slotId, dk));
+        }
       }
     }
   }
 
-  /** Snapshot for the project save — the versioned owner-nested shape
-   * `{ __wsv: 3, ws: { owner: { wsId: { dsKey: value } } } }`. Includes owners/ids with
-   * no installed plugin (preserve-on-missing). Deep-cloned. Labels are stored as
-   * `labels: { "owner\0wsId\0dsKey": string }`. */
+  /** Snapshot for the project save.
+   * Shape: `{ __wsv: 4, ws: { owner: { wsId: { slotId: { dsKey: value } } } }, labels }`. */
   export() {
     const ws = {};
     for (const [owner, byWs] of this.#states) {
       const o = {};
-      for (const [wsId, perDs] of byWs) {
-        const d = {};
-        for (const [k, value] of perDs) d[k] = structuredClone(value);
-        o[wsId] = d;
+      for (const [wsId, bySlot] of byWs) {
+        const s = {};
+        for (const [slotId, perDs] of bySlot) {
+          const d = {};
+          for (const [dk, value] of perDs) d[dk] = structuredClone(value);
+          s[slotId] = d;
+        }
+        o[wsId] = s;
       }
       ws[owner] = o;
     }
     const labels = this.#labels.size ? Object.fromEntries(this.#labels) : undefined;
-    return { __wsv: 3, ws, labels };
+    return { __wsv: 4, ws, labels };
   }
 
-  /** Replace the store from a project's saved blob. Accepts the v3 owner-nested shape;
-   * an older shape (v2 `{ wsId: { dsKey } }` or legacy flat `{ wsId: value }`) must be
-   * migrated *before* import — see {@link migrateWorkspaceBlob} (the store has no
-   * plugin context to assign owners). Anything unknown is dropped. */
+  /** Replace the store from a project's saved blob. Accepts v4; older shapes must
+   * be migrated via {@link migrateWorkspaceBlob} first. */
   import(obj) {
     this.#states.clear();
     this.#labels.clear();
-    const ws = obj && obj.__wsv === 3 ? obj.ws : null;
+    const ws = obj && obj.__wsv === 4 ? obj.ws : null;
     if (!ws || typeof ws !== 'object') return;
     for (const owner of Object.keys(ws)) {
       const byWs = new Map();
       const o = ws[owner] || {};
       for (const wsId of Object.keys(o)) {
-        const perDs = new Map();
-        const d = o[wsId] || {};
-        for (const k of Object.keys(d)) perDs.set(k, d[k]);
-        byWs.set(wsId, perDs);
+        const bySlot = new Map();
+        const slots = o[wsId] || {};
+        for (const slotId of Object.keys(slots)) {
+          const perDs = new Map();
+          const d = slots[slotId] || {};
+          for (const dk of Object.keys(d)) perDs.set(dk, d[dk]);
+          bySlot.set(slotId, perDs);
+        }
+        byWs.set(wsId, bySlot);
       }
       this.#states.set(owner, byWs);
     }
@@ -201,11 +245,8 @@ export class WorkspaceStore {
 }
 
 /**
- * The ownership namespace for a plugin's workspace state (#89, #145). Built-ins are
- * mutually trusting (one shared `builtin` owner). For others the qualified id is
- * `<namespace>:<local>` (host for URL plugins, author for file/authored), so the
- * namespace prefix is the owner: two plugins from the same author/host may share a
- * workspace id, a different author gets a separate slot.
+ * The ownership namespace for a plugin's workspace state (#89, #145). Built-ins
+ * share one `builtin` owner. For others the qualified id prefix is the owner.
  *
  * @param {{builtin?: boolean, id?: string, origin?: string}} plugin
  * @returns {string}
@@ -219,38 +260,68 @@ export function ownerToken(plugin) {
 }
 
 /**
- * Migrate a saved workspace blob to the v3 owner-nested shape. A v3 blob passes
- * through. Older shapes are lifted best-effort and **never destructively**:
- *  - **v2** `{ __wsv: 2, ws: { wsId: { dsKey: value } } }` — each `wsId` is wrapped
- *    under the owner of the plugin that declares it (via `resolveOwner`).
- *  - **legacy flat** `{ wsId: value }` (pre-#139) — attached to a single dataset
- *    (`targetDatasetId`) then wrapped under its owner. A clean per-dataset split is
- *    impossible (old row-ids collided across datasets), so this is best-effort.
+ * Migrate a saved workspace blob to the v4 slot-aware shape. A v4 blob passes
+ * through. Older shapes are lifted best-effort:
  *
- * An id whose owner can't be resolved (no installed plugin declares it) is kept under
- * a synthetic `legacy:<wsId>` owner so the data survives; the declaring plugin can be
- * re-associated later. In practice the only real legacy case is the built-in
- * `caqdas-coding` → `builtin`.
+ *  - **v3** `{ __wsv: 3, ws: { owner: { wsId: { dsKey: value } } } }` — each
+ *    (wsId, dsKey) gets wrapped under the `_default` slot.
+ *  - **v2** `{ __wsv: 2, ws: { wsId: { dsKey: value } } }` — each wsId goes
+ *    under its resolved owner + `_default` slot.
+ *  - **legacy flat** `{ wsId: value }` — attached to `targetDatasetId` under
+ *    its resolved owner + `_default` slot.
  *
  * @param {any} obj - The saved workspace section.
  * @param {{targetDatasetId?: string|number|null, resolveOwner?: (wsId: string) => (string|null)}} [opts]
- * @returns {{__wsv: 3, ws: object}}
+ * @returns {{__wsv: 4, ws: object, labels?: object}}
  */
 export function migrateWorkspaceBlob(obj, opts = {}) {
   const { targetDatasetId = null, resolveOwner } = opts;
-  if (obj && obj.__wsv === 3) return obj;
-  const ownerOf = (wsId) => (resolveOwner && resolveOwner(wsId)) || `legacy:${wsId}`;
-  const out = {};
-  const put = (owner, wsId, perDs) => {
-    if (!out[owner]) out[owner] = {};
-    out[owner][wsId] = perDs;
-  };
-  if (obj && obj.__wsv === 2 && obj.ws && typeof obj.ws === 'object') {
-    for (const wsId of Object.keys(obj.ws)) put(ownerOf(wsId), wsId, obj.ws[wsId] || {});
-  } else if (obj && typeof obj === 'object') {
-    // Legacy flat: { wsId: value } → one dataset bucket.
-    const key = targetDatasetId == null || targetDatasetId === '' ? NO_DS : String(targetDatasetId);
-    for (const wsId of Object.keys(obj)) put(ownerOf(wsId), wsId, { [key]: obj[wsId] });
+  if (obj && obj.__wsv === 4) return obj;
+
+  // First lift to v3 shape (the old migration path handles v2 + legacy).
+  let v3;
+  if (obj && obj.__wsv === 3) {
+    v3 = obj;
+  } else {
+    const ownerOf = (wsId) => (resolveOwner && resolveOwner(wsId)) || `legacy:${wsId}`;
+    const out = {};
+    const put = (owner, wsId, perDs) => {
+      if (!out[owner]) out[owner] = {};
+      out[owner][wsId] = perDs;
+    };
+    if (obj && obj.__wsv === 2 && obj.ws && typeof obj.ws === 'object') {
+      for (const wsId of Object.keys(obj.ws)) put(ownerOf(wsId), wsId, obj.ws[wsId] || {});
+    } else if (obj && typeof obj === 'object') {
+      const key = targetDatasetId == null || targetDatasetId === '' ? NO_DS : String(targetDatasetId);
+      for (const wsId of Object.keys(obj)) put(ownerOf(wsId), wsId, { [key]: obj[wsId] });
+    }
+    v3 = { __wsv: 3, ws: out };
   }
-  return { __wsv: 3, ws: out };
+
+  // Now lift v3 → v4: wrap each (wsId → { dsKey: value }) under _default slot.
+  const ws4 = {};
+  const v3ws = v3.ws || {};
+  for (const owner of Object.keys(v3ws)) {
+    ws4[owner] = {};
+    for (const wsId of Object.keys(v3ws[owner] || {})) {
+      ws4[owner][wsId] = { [DEFAULT_SLOT]: v3ws[owner][wsId] || {} };
+    }
+  }
+
+  // Migrate labels: v3 labels had 3-part keys "owner\0wsId\0dsKey" → inject _default slot.
+  let labels;
+  if (v3.labels && typeof v3.labels === 'object') {
+    labels = {};
+    for (const [k, v] of Object.entries(v3.labels)) {
+      if (typeof v !== 'string') continue;
+      const parts = k.split('\0');
+      if (parts.length === 3) {
+        labels[`${parts[0]}\0${parts[1]}\0${DEFAULT_SLOT}\0${parts[2]}`] = v;
+      } else {
+        labels[k] = v;
+      }
+    }
+  }
+
+  return { __wsv: 4, ws: ws4, labels };
 }

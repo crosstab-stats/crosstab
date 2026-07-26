@@ -685,19 +685,23 @@ export async function boot(mounts) {
   // space, which it must declare. This is not a confidentiality barrier (activation
   // is full trust; a blob is no more secret than the dataset) — it's the addressing
   // default; cross-space read would just pass a different owner, and isn't built yet.
-  services.workspaceRead = (pluginId, wsId) => {
+  services.workspaceRead = (pluginId, wsId, slotId) => {
     const p = plugins ? plugins.list().find((x) => x.id === pluginId) : null;
-    if (!p || !(p.workspaces || []).some((w) => w.id === wsId)) return null; // must declare it
-    return workspaceStore.get(ownerToken(p), wsId, datasets.activeId);
+    if (!p) return null;
+    const wsDef = (p.workspaces || []).find((w) => w.id === wsId);
+    if (!wsDef) return null;
+    const scope = wsDef.scope || 'dataset';
+    const dsId = scope === 'project' ? null : datasets.activeId;
+    return workspaceStore.get(ownerToken(p), wsId, slotId || '_default', dsId);
   };
-  // WRITE counterpart (#139, #145): a plugin writes only its OWN space — the owner is
-  // derived from host-asserted identity, so write-your-own is guaranteed by construction
-  // (a colliding id from another author is a different slot). Lets a same-owner importer
-  // attach coding state to a dataset it just created.
-  services.workspaceWrite = (pluginId, wsId, value, dsId) => {
+  services.workspaceWrite = (pluginId, wsId, value, dsId, slotId) => {
     const p = plugins ? plugins.list().find((x) => x.id === pluginId) : null;
-    if (!p || !(p.workspaces || []).some((w) => w.id === wsId)) return; // must declare it
-    workspaceStore.set(ownerToken(p), wsId, dsId ?? datasets.activeId, value);
+    if (!p) return;
+    const wsDef = (p.workspaces || []).find((w) => w.id === wsId);
+    if (!wsDef) return;
+    const scope = wsDef.scope || 'dataset';
+    const effectiveDsId = scope === 'project' ? null : (dsId ?? datasets.activeId);
+    workspaceStore.set(ownerToken(p), wsId, slotId || '_default', effectiveDsId, value);
   };
 
   // Cross-plugin discovery (#147): plugins call `app.plugins.list()` to see what
@@ -1202,6 +1206,14 @@ class ProjectSidebar {
     this.#dropTarget(list, 'block', (id) => this.library.addBlockToProject(id));
     const items = this.datasets.list();
     for (const it of items) list.append(this.#datasetRow(it, items.length, blockVer));
+    // Project-scoped workspace blobs (NO_DS) appear after all datasets.
+    if (this.wsStore) {
+      const projectBlobs = this.wsStore.listForDataset(null);
+      if (projectBlobs.length) {
+        const wsTitles = this.#wsIdTitles();
+        for (const b of projectBlobs) list.append(this.#blobRow(b, null, wsTitles));
+      }
+    }
     frag.append(list);
 
     const add = document.createElement('button');
@@ -1297,21 +1309,23 @@ class ProjectSidebar {
     li.className = 'proj__blob';
     const wsTitle = wsTitles.get(blob.wsId) || blob.wsId;
     const label = blob.label || '';
-    const text = label ? `${wsTitle}: ${label}` : wsTitle;
+    const slotSuffix = blob.slotId && blob.slotId !== '_default' ? blob.slotId : '';
+    const text = label ? `${wsTitle}: ${label}`
+      : slotSuffix ? `${wsTitle}: ${slotSuffix}`
+      : wsTitle;
     const name = el('span', text, 'proj__blob-name');
     name.title = 'Double-click to rename';
+    const renameAction = (v) => {
+      this.wsStore.setLabel(blob.owner, blob.wsId, blob.slotId, dsId, v || null);
+    };
     name.addEventListener('dblclick', (e) => {
       e.stopPropagation();
-      this.#inlineRename(li, name, label, (v) => {
-        this.wsStore.setLabel(blob.owner, blob.wsId, dsId, v || null);
-      }, 'proj__blob-name');
+      this.#inlineRename(li, name, label || slotSuffix, renameAction, 'proj__blob-name');
     });
     li.append(name);
     const edit = iconBtn('✎', 'Rename', (e) => {
       e.stopPropagation();
-      this.#inlineRename(li, name, label, (v) => {
-        this.wsStore.setLabel(blob.owner, blob.wsId, dsId, v || null);
-      }, 'proj__blob-name');
+      this.#inlineRename(li, name, label || slotSuffix, renameAction, 'proj__blob-name');
     }, 'proj__ds-x');
     li.append(edit);
     return li;

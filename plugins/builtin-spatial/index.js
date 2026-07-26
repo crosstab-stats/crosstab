@@ -38,6 +38,7 @@ export const manifest = {
   workspaces: [{
     id: 'spatial-map',
     title: 'Map',
+    scope: 'project',
     verbs: [
       { id: 'load-boundaries', label: 'Load boundaries…', run: 'loadBoundaries', category: 'toolbar', needsFile: { extensions: ['.geojson', '.json'] } },
       { id: 'shade-by-variable', label: 'Shade by variable…', run: 'shadeByVariable', category: 'toolbar' },
@@ -308,8 +309,12 @@ function flat(rList) {
 //
 // An interactive boundary-map viewer. The user loads a GeoJSON of region shapes,
 // joins it to their data by a key column, shades regions by a numeric variable,
-// and selects regions to filter the dataset for analysis. Boundaries are session-
-// only (not persisted — GeoJSON files can be large); settings persist via state.
+// and selects regions to filter the dataset for analysis.
+//
+// Each boundary set is stored in its own SLOT (#146) — the slot id is the file
+// name. This lets the user manage each set independently (rename, delete, or
+// eventually promote to a building block). The workspace is project-scoped
+// (scope: 'project' in the manifest), so boundaries are shared across datasets.
 
 let _ws = null; // module-level workspace state (fresh per iframe mount)
 
@@ -318,17 +323,9 @@ export const workspace = {
     _ws = {
       features: [], regionKeys: [], pathEls: [],
       keyProp: null, dataColumn: null, shadeColumn: null,
-      selected: new Set(), fileName: null,
+      selected: new Set(), fileName: null, activeSlot: null,
       svgEl: null, listEl: null, statusEl: null, root,
     };
-    const saved = await app.state.get();
-    if (saved) {
-      _ws.keyProp = saved.keyProp || null;
-      _ws.dataColumn = saved.dataColumn || null;
-      _ws.shadeColumn = saved.shadeColumn || null;
-      _ws.selected = new Set(saved.selected || []);
-      _ws.fileName = saved.fileName || null;
-    }
 
     const sheet = new CSSStyleSheet();
     sheet.replaceSync(`
@@ -365,9 +362,7 @@ export const workspace = {
     _ws.svgEl = svg;
     mapPane.append(svg);
     const status = el('div', 'status');
-    status.textContent = _ws.fileName
-      ? `Re-load ${_ws.fileName} to continue.`
-      : 'Load a GeoJSON boundary file to begin.';
+    status.textContent = 'Load a GeoJSON boundary file to begin.';
     _ws.statusEl = status;
     mapPane.append(status);
 
@@ -387,24 +382,18 @@ export const workspace = {
     listPane.append(listHeader, listBody);
     root.append(mapPane, listPane);
 
-    if (saved?.boundarySets?.length) {
-      const sets = saved.boundarySets;
-      const last = sets[sets.length - 1];
-      const fc = { type: 'FeatureCollection', features: last.features };
-      await wsApplyBoundaries(app, fc, last.fileName, last.keyProp, last.dataColumn);
-      wsRebuildSetLinks(app, sets);
+    // Restore from slots: load the last slot's boundary set.
+    const slots = await app.state.list();
+    if (slots.length) {
+      await wsLoadFromSlots(app, slots);
     }
   },
 
   async onRefresh(app) {
     if (!_ws) return;
-    const saved = await app.state.get();
-    if (!saved?.boundarySets?.length) return;
-    const sets = saved.boundarySets;
-    const last = sets[sets.length - 1];
-    const fc = { type: 'FeatureCollection', features: last.features };
-    await wsApplyBoundaries(app, fc, last.fileName, last.keyProp, last.dataColumn);
-    wsRebuildSetLinks(app, sets);
+    const slots = await app.state.list();
+    if (!slots.length) return;
+    await wsLoadFromSlots(app, slots);
   },
 
   async onDatasetChanged(app) {
@@ -431,7 +420,13 @@ export async function loadBoundaries(app, opts) {
   } catch (e) {
     return { ok: false, message: `Invalid GeoJSON: ${e.message}` };
   }
-  return wsApplyBoundaries(app, geojson, file.name);
+  const result = await wsApplyBoundaries(app, geojson, file.name);
+  if (result?.ok) {
+    // Rebuild slot links after loading new boundaries.
+    const slots = await app.state.list();
+    wsRebuildSetLinks(app, slots);
+  }
+  return result;
 }
 
 // --- import verb (runs in the compute iframe, no workspace DOM access) -------
@@ -481,29 +476,13 @@ export async function importBoundaries(app, opts) {
   const dataColumn = colPick[0];
 
   const fileName = opts?.name ?? raw.name ?? 'boundaries';
-  const existing = await app.state.read('spatial-map') || {};
-  let sets = existing.boundarySets || [];
-  if (sets.length) {
-    const mode = await app.ui.selectFromList({
-      title: 'Existing boundaries loaded',
-      hint: `You already have ${sets.length} boundary set${sets.length > 1 ? 's' : ''}. What would you like to do?`,
-      items: [
-        { value: 'replace', label: 'Replace existing boundaries' },
-        { value: 'add', label: 'Add as a new layer' },
-      ],
-      multiple: false,
-    });
-    if (!mode) return { ok: false, message: 'Cancelled.' };
-    if (mode[0] === 'replace') sets = [];
-  }
-  sets.push({ fileName, keyProp, dataColumn, features });
+  const slotId = fileName;
   try {
     await app.state.write('spatial-map', {
-      ...existing,
-      keyProp, dataColumn,
-      fileName,
-      boundarySets: sets,
-    });
+      keyProp, dataColumn, shadeColumn: null,
+      fileName, selected: [],
+      features,
+    }, null, slotId);
   } catch (e) {
     return { ok: false, message: `Failed to save boundaries: ${e.message}` };
   }
@@ -559,6 +538,7 @@ async function wsApplyBoundaries(app, geojson, fileName, presetKeyProp, presetDa
   _ws.features = validFeatures;
   _ws.keyProp = keyProp;
   _ws.fileName = fileName;
+  _ws.activeSlot = fileName;
   _ws.regionKeys = validFeatures.map((f) => String(f.properties?.[keyProp] ?? ''));
 
   wsRenderMap();
@@ -655,12 +635,14 @@ export async function clearBoundaries(app) {
   if (!_ws) return { ok: false, message: 'Workspace not mounted.' };
   _ws.features = []; _ws.regionKeys = []; _ws.pathEls = [];
   _ws.keyProp = null; _ws.shadeColumn = null; _ws.selected.clear();
+  _ws.activeSlot = null;
   _ws.svgEl.innerHTML = '';
   _ws.listEl.innerHTML = '';
   _ws.statusEl.textContent = 'Load a GeoJSON boundary file to begin.';
   const old = _ws.root.querySelector('.set-links');
   if (old) old.remove();
-  await app.state.set({ boundarySets: [] });
+  const slots = await app.state.list();
+  for (const s of slots) await app.state.delete(s.slotId);
   return { ok: true };
 }
 
@@ -807,34 +789,49 @@ async function wsApplyShading(app) {
     `${_ws.fileName} — shaded by ${_ws.shadeColumn} (${means.size} matched of ${_ws.regionKeys.length} regions).`;
 }
 
-function wsRebuildSetLinks(app, sets) {
+function wsRebuildSetLinks(app, slots) {
   if (!_ws) return;
   const old = _ws.root.querySelector('.set-links');
   if (old) old.remove();
-  if (sets.length < 2) return;
-  const links = el('div', null, 'set-links');
+  if (slots.length < 2) return;
+  const links = el('div', 'set-links');
   links.textContent = 'Switch boundaries: ';
-  for (let i = 0; i < sets.length; i++) {
+  for (let i = 0; i < slots.length; i++) {
     if (i > 0) links.append(document.createTextNode(' · '));
-    const s = sets[i];
+    const s = slots[i];
     const a = document.createElement('a');
-    a.textContent = s.fileName;
-    a.addEventListener('click', () => {
-      wsApplyBoundaries(app, { type: 'FeatureCollection', features: s.features }, s.fileName, s.keyProp, s.dataColumn);
+    a.textContent = s.label || s.slotId;
+    a.addEventListener('click', async () => {
+      const data = await app.state.get(s.slotId);
+      if (!data?.features) return;
+      const fc = { type: 'FeatureCollection', features: data.features };
+      await wsApplyBoundaries(app, fc, data.fileName || s.slotId, data.keyProp, data.dataColumn);
     });
     links.append(a);
   }
   _ws.statusEl.insertAdjacentElement('beforebegin', links);
 }
 
+async function wsLoadFromSlots(app, slots) {
+  if (!slots.length) return;
+  const last = slots[slots.length - 1];
+  const data = await app.state.get(last.slotId);
+  if (!data?.features) return;
+  const fc = { type: 'FeatureCollection', features: data.features };
+  _ws.selected = new Set(data.selected || []);
+  _ws.shadeColumn = data.shadeColumn || null;
+  await wsApplyBoundaries(app, fc, data.fileName || last.slotId, data.keyProp, data.dataColumn);
+  wsRebuildSetLinks(app, slots);
+}
+
 async function wsSaveState(app) {
-  const prev = await app.state.get() || {};
+  if (!_ws.activeSlot) return;
   await app.state.set({
-    boundarySets: prev.boundarySets || [],
     keyProp: _ws.keyProp, dataColumn: _ws.dataColumn,
     shadeColumn: _ws.shadeColumn, fileName: _ws.fileName,
     selected: [..._ws.selected],
-  });
+    features: _ws.features,
+  }, { slot: _ws.activeSlot, label: _ws.fileName });
 }
 
 // --- GeoJSON → SVG projection ------------------------------------------------

@@ -87,17 +87,16 @@ export class Launcher {
       /* naming is best-effort */
     }
     if (dataset.boundaries && this.#workspaceStore) {
-      const dsId = this.#datasets.activeId;
-      const first = dataset.boundaries[0];
-      if (first && dsId != null) {
-        this.#workspaceStore.set('builtin', 'spatial-map', dsId, {
-          keyProp: first.keyProp,
-          dataColumn: first.dataColumn,
+      for (const b of dataset.boundaries) {
+        const slotId = b.fileName || `boundary-${Date.now()}`;
+        this.#workspaceStore.set('builtin', 'spatial-map', slotId, null, {
+          keyProp: b.keyProp,
+          dataColumn: b.dataColumn,
           shadeColumn: null,
-          fileName: first.fileName,
+          fileName: b.fileName,
           selected: [],
-          boundarySets: dataset.boundaries,
-        });
+          features: b.features,
+        }, { label: b.fileName });
       }
     }
   }

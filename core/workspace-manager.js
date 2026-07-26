@@ -17,7 +17,7 @@
 
 import { PluginBroker } from './plugin-broker.js';
 import { sandboxBlobUrl } from './plugin-sandbox.js';
-import { ownerToken } from './workspace-store.js';
+import { ownerToken, DEFAULT_SLOT, NO_DS } from './workspace-store.js';
 
 const API_VERSION = '1';
 
@@ -199,17 +199,33 @@ export class WorkspaceManager {
     // Bind this mount to the dataset that was active when it opened — coding state is
     // per-(owner, workspace, dataset), so switching datasets (which re-mounts) swaps
     // the blob.
-    const dsId = this.#activeDatasetId();
+    // Project-scoped workspaces (scope: 'project') always use NO_DS; dataset-scoped
+    // (default) use the active dataset id. The host enforces the scope so the plugin
+    // doesn't need to care.
+    const scope = ws.scope || 'dataset';
+    const dsId = scope === 'project' ? NO_DS : this.#activeDatasetId();
     const services = {
       ...this.#services,
-      // state.get/set scoped to THIS (owner, workspace id, dataset). The host is the
-      // source of truth; the owner comes from host-asserted identity, so setState is
-      // write-your-own by construction.
+      // state.get/set/list/delete scoped to THIS (owner, workspace id, dataset).
+      // slotId is plugin-chosen; defaults to DEFAULT_SLOT for backward compatibility.
       workspace: {
-        getState: () => (reserved ? null : this.#store.get(owner, ws.id, dsId)),
-        setState: (value) => {
+        getState: (slotId) => {
+          if (reserved) return null;
+          return this.#store.get(owner, ws.id, slotId || DEFAULT_SLOT, dsId);
+        },
+        setState: (value, opts) => {
           if (reserved) throw new Error(`Workspace id "${ws.id}" is reserved by a built-in plugin.`);
-          this.#store.set(owner, ws.id, dsId, value);
+          const slotId = opts?.slot || DEFAULT_SLOT;
+          this.#store.set(owner, ws.id, slotId, dsId, value, { label: opts?.label });
+        },
+        listSlots: () => {
+          if (reserved) return [];
+          return this.#store.listSlots(owner, ws.id, dsId);
+        },
+        deleteSlot: (slotId) => {
+          if (reserved) throw new Error(`Workspace id "${ws.id}" is reserved by a built-in plugin.`);
+          if (!slotId) return;
+          this.#store.set(owner, ws.id, slotId, dsId, null);
         },
       },
     };

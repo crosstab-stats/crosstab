@@ -108,8 +108,10 @@ export class PluginBroker {
     // Workspace plugins (#93): a `workspace` service scopes state.get/set to this
     // iframe's workspace id (the host store is the single source of truth).
     if (services.workspace) {
-      this.#dispatch['state.get'] = () => services.workspace.getState();
-      this.#dispatch['state.set'] = (value) => services.workspace.setState(value);
+      this.#dispatch['state.get'] = (slotId) => services.workspace.getState(slotId);
+      this.#dispatch['state.set'] = (value, opts) => services.workspace.setState(value, opts);
+      this.#dispatch['state.list'] = () => services.workspace.listSlots();
+      this.#dispatch['state.delete'] = (slotId) => services.workspace.deleteSlot(slotId);
     }
     // Codec plugins (#98): the streaming format-codec surface — random source-byte
     // access + streaming ingest on read, output-byte emit on write, and
@@ -134,14 +136,13 @@ export class PluginBroker {
       this.#dispatch['zip.make'] = (entries) => services.zip.make(entries);
       this.#dispatch['zip.read'] = (bytes) => services.zip.read(bytes);
     }
-    // Owner-scoped read of a workspace blob the plugin declares (#139) — read-only.
+    // Owner-scoped read of a workspace blob the plugin declares (#139, #146).
     if (services.stateRead) {
-      this.#dispatch['state.read'] = (wsId) => services.stateRead(wsId);
+      this.#dispatch['state.read'] = (wsId, slotId) => services.stateRead(wsId, slotId);
     }
-    // Owner-scoped WRITE of a workspace blob the plugin declares, for a chosen dataset
-    // (#139) — lets an importer attach coding state to a dataset it created.
+    // Owner-scoped WRITE of a workspace blob the plugin declares (#139, #146).
     if (services.stateWrite) {
-      this.#dispatch['state.write'] = (wsId, value, dsId) => services.stateWrite(wsId, value, dsId);
+      this.#dispatch['state.write'] = (wsId, value, dsId, slotId) => services.stateWrite(wsId, value, dsId, slotId);
     }
     // Cross-plugin discovery + invocation (#147): list active analysis plugins and
     // run another plugin's analysis function (host-mediated, never direct).
