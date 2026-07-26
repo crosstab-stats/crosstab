@@ -358,6 +358,8 @@ export const workspace = {
       .swatch { width: 12px; height: 12px; border-radius: 2px; border: 1px solid #ccc; flex: none; }
       button.sm { font: inherit; font-size: 12px; padding: 2px 8px; border: 1px solid #ccd2d8; border-radius: 4px; background: #fff; cursor: pointer; }
       button.sm:hover { background: #eef3f8; }
+      .map-pane.unlinked svg { opacity: 0.35; }
+      .map-pane.unlinked .status { background: #fef9e7; color: #7d6608; }
       .empty { padding: 20px; text-align: center; color: #8899a6; }
       .set-links { padding: 6px 10px; text-align: center; color: #5a6a78; font-size: 12px; border-top: 1px solid #e2e6ea; }
       .set-links a { color: #2980b9; cursor: pointer; text-decoration: underline; }
@@ -414,14 +416,21 @@ export const workspace = {
     _ws.shadeColumn = link?.shadeColumn || null;
     _ws.selected = new Set(link?.selected || []);
     wsRenderList();
+    const mapPane = _ws.svgEl?.closest('.map-pane');
     if (_ws.shadeColumn && _ws.dataColumn) {
+      mapPane?.classList.remove('unlinked');
       await wsApplyShading(app);
     } else {
       for (const p of _ws.pathEls) p?.setAttribute('fill', '#d5dbe2');
       for (const sw of _ws.listEl.querySelectorAll('.swatch')) sw.style.background = '#d5dbe2';
       const n = _ws.features.length;
-      const linkStatus = _ws.dataColumn ? ` (linked to "${_ws.dataColumn}").` : ' (not linked to this dataset).';
-      _ws.statusEl.textContent = `${_ws.fileName} — ${n} region${n !== 1 ? 's' : ''}${linkStatus}`;
+      if (_ws.dataColumn) {
+        mapPane?.classList.remove('unlinked');
+        _ws.statusEl.textContent = `${_ws.fileName} — ${n} region${n !== 1 ? 's' : ''} (linked to "${_ws.dataColumn}").`;
+      } else {
+        mapPane?.classList.add('unlinked');
+        _ws.statusEl.textContent = `${_ws.fileName} — ${n} region${n !== 1 ? 's' : ''}. Not linked to this dataset — use "Shade by variable" to link.`;
+      }
     }
   },
 
