@@ -440,11 +440,12 @@ export async function loadBoundaries(app, opts) {
 // --- import verb (runs in the compute iframe, no workspace DOM access) -------
 
 export async function importBoundaries(app, opts) {
-  const file = opts?.__file;
-  if (!file) return { ok: false, message: 'No file provided.' };
+  const raw = opts?.file ?? opts?.__file;
+  if (!raw) return { ok: false, message: 'No file provided.' };
   let geojson;
   try {
-    const text = new TextDecoder().decode(file.bytes);
+    const bytes = raw.bytes ?? new Uint8Array(await raw.arrayBuffer());
+    const text = new TextDecoder().decode(bytes);
     geojson = JSON.parse(text);
   } catch (e) {
     return { ok: false, message: `Invalid GeoJSON: ${e.message}` };
@@ -481,16 +482,17 @@ export async function importBoundaries(app, opts) {
   if (!colPick) return { ok: false, message: 'Cancelled.' };
   const dataColumn = colPick[0];
 
+  const fileName = opts?.name ?? raw.name ?? 'boundaries';
   const existing = await app.state.read('spatial-map') || {};
   const sets = existing.boundarySets || [];
-  sets.push({ fileName: file.name, keyProp, dataColumn, features });
+  sets.push({ fileName, keyProp, dataColumn, features });
   await app.state.write('spatial-map', {
     ...existing,
     keyProp, dataColumn,
-    fileName: file.name,
+    fileName,
     boundarySets: sets,
   });
-  return { ok: true, message: `Loaded ${features.length} boundaries from ${file.name}.`, refresh: 'workspace' };
+  return { ok: true, message: `Loaded ${features.length} boundaries from ${fileName}.`, refresh: 'workspace' };
 }
 
 async function wsApplyBoundaries(app, geojson, fileName, presetKeyProp, presetDataCol) {

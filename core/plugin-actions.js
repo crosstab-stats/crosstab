@@ -171,7 +171,11 @@ export class PluginActions {
             parse: (req) =>
               this.#bridge(this.#importers, req.ticket, async () => {
                 const result = await this.#loader.invoke(id, verb.run, [{ name: req.name, file: req.file, path: req.path }]);
-                return result?.ok ? result : null;
+                if (result?.ok) {
+                  this.#handleVerbResult(result);
+                  return result;
+                }
+                return null;
               }),
           });
           if (typeof dispose === 'function') disposers.push(dispose);
