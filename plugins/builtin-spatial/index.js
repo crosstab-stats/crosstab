@@ -35,19 +35,26 @@ export const manifest = {
     '  • region / value / boundary / keyprop — choropleth: region key, value to shade, a GeoJSON file, and its matching property.',
   disciplines: ['Environmental Studies', 'Public Policy & Administration', 'Sociology', 'Economics', 'Public Health', 'Ethnic Studies'],
   rPackages: ['sf', 'spdep', 'spatialreg', 'svglite'],
-  workspaces: [{
-    id: 'spatial-map',
-    title: 'Map',
-    scope: 'project',
-    verbs: [
-      { id: 'load-boundaries', label: 'Load boundaries…', run: 'loadBoundaries', category: 'toolbar', needsFile: { extensions: ['.geojson', '.json'] } },
-      { id: 'shade-by-variable', label: 'Shade by variable…', run: 'shadeByVariable', category: 'toolbar' },
-      { id: 'filter-to-selection', label: 'Analyse selection…', run: 'filterToSelection', category: 'toolbar' },
-      { id: 'clear-boundaries', label: 'Clear', run: 'clearBoundaries', category: 'toolbar' },
-      { id: 'export-map', label: 'Export map', run: 'exportMap', category: 'toolbar' },
-      { id: 'import-boundaries', label: 'GeoJSON boundaries (.geojson, .json)…', run: 'importBoundaries', category: 'import', needsFile: { extensions: ['.geojson', '.json'] }, group: 'Spatial' },
-    ],
-  }],
+  workspaces: [
+    {
+      id: 'spatial-map',
+      title: 'Map',
+      scope: 'project',
+      verbs: [
+        { id: 'load-boundaries', label: 'Load boundaries…', run: 'loadBoundaries', category: 'toolbar', needsFile: { extensions: ['.geojson', '.json'] } },
+        { id: 'shade-by-variable', label: 'Shade by variable…', run: 'shadeByVariable', category: 'toolbar' },
+        { id: 'filter-to-selection', label: 'Analyse selection…', run: 'filterToSelection', category: 'toolbar' },
+        { id: 'clear-boundaries', label: 'Clear', run: 'clearBoundaries', category: 'toolbar' },
+        { id: 'export-map', label: 'Export map', run: 'exportMap', category: 'toolbar' },
+        { id: 'import-boundaries', label: 'GeoJSON boundaries (.geojson, .json)…', run: 'importBoundaries', category: 'import', needsFile: { extensions: ['.geojson', '.json'] }, group: 'Spatial' },
+      ],
+    },
+    {
+      id: 'spatial-link',
+      scope: 'dataset',
+      tab: false,
+    },
+  ],
   menu: [
     {
       label: 'Spatial autocorrelation (Moran’s I)…',
@@ -315,6 +322,10 @@ function flat(rList) {
 // name. This lets the user manage each set independently (rename, delete, or
 // eventually promote to a building block). The workspace is project-scoped
 // (scope: 'project' in the manifest), so boundaries are shared across datasets.
+//
+// Column linkages (dataColumn, shadeColumn, selected) are per-dataset — stored
+// in a separate `spatial-link` workspace (scope: 'dataset', tab: false). The
+// slot id matches the geometry slot so linkage and geometry pair up by name.
 
 let _ws = null; // module-level workspace state (fresh per iframe mount)
 
@@ -397,8 +408,21 @@ export const workspace = {
   },
 
   async onDatasetChanged(app) {
-    if (!_ws?.features.length || !_ws.shadeColumn) return;
-    await wsApplyShading(app);
+    if (!_ws?.features.length || !_ws.activeSlot) return;
+    const link = await app.state.read('spatial-link', _ws.activeSlot);
+    _ws.dataColumn = link?.dataColumn || null;
+    _ws.shadeColumn = link?.shadeColumn || null;
+    _ws.selected = new Set(link?.selected || []);
+    wsRenderList();
+    if (_ws.shadeColumn && _ws.dataColumn) {
+      await wsApplyShading(app);
+    } else {
+      for (const p of _ws.pathEls) p?.setAttribute('fill', '#d5dbe2');
+      for (const sw of _ws.listEl.querySelectorAll('.swatch')) sw.style.background = '#d5dbe2';
+      const n = _ws.features.length;
+      const linkStatus = _ws.dataColumn ? ` (linked to "${_ws.dataColumn}").` : ' (not linked to this dataset).';
+      _ws.statusEl.textContent = `${_ws.fileName} — ${n} region${n !== 1 ? 's' : ''}${linkStatus}`;
+    }
   },
 
   async onDeactivate(app) {
@@ -420,9 +444,8 @@ export async function loadBoundaries(app, opts) {
   } catch (e) {
     return { ok: false, message: `Invalid GeoJSON: ${e.message}` };
   }
-  const result = await wsApplyBoundaries(app, geojson, file.name);
+  const result = await wsApplyBoundaries(app, geojson, file.name, null, null, { prompt: true });
   if (result?.ok) {
-    // Rebuild slot links after loading new boundaries.
     const slots = await app.state.list();
     wsRebuildSetLinks(app, slots);
   }
@@ -479,9 +502,10 @@ export async function importBoundaries(app, opts) {
   const slotId = fileName;
   try {
     await app.state.write('spatial-map', {
-      keyProp, dataColumn, shadeColumn: null,
-      fileName, selected: [],
-      features,
+      keyProp, fileName, features,
+    }, null, slotId);
+    await app.state.write('spatial-link', {
+      dataColumn, shadeColumn: null, selected: [],
     }, null, slotId);
   } catch (e) {
     return { ok: false, message: `Failed to save boundaries: ${e.message}` };
@@ -489,7 +513,7 @@ export async function importBoundaries(app, opts) {
   return { ok: true, message: `Loaded ${features.length} boundaries from ${fileName}.`, refresh: 'workspace' };
 }
 
-async function wsApplyBoundaries(app, geojson, fileName, presetKeyProp, presetDataCol) {
+async function wsApplyBoundaries(app, geojson, fileName, presetKeyProp, presetDataCol, { prompt = false } = {}) {
   const fc = geojson.type === 'FeatureCollection' ? geojson
     : geojson.type === 'Feature' ? { type: 'FeatureCollection', features: [geojson] }
     : null;
@@ -519,20 +543,26 @@ async function wsApplyBoundaries(app, geojson, fileName, presetKeyProp, presetDa
     keyProp = pick[0];
   }
 
-  const cols = await app.data.getColumns();
-  const colNames = Array.isArray(cols) ? cols.map((c) => c.name) : Object.keys(cols || {});
-  if (colNames.length) {
-    let dataCol = presetDataCol || _ws.dataColumn;
-    if (!dataCol || !colNames.includes(dataCol)) {
-      const pick = await app.ui.selectVariables({
-        title: 'Match to data column',
-        hint: `Which column in your data matches the "${keyProp}" property in the map?`,
-        multiple: false,
-      });
-      if (!pick) return { ok: false, message: 'Cancelled.' };
-      dataCol = pick[0];
+  // Data-column linkage: only prompt when explicitly requested (first import).
+  // On restore/switch, just use whatever linkage the current dataset has (or none).
+  if (prompt) {
+    const cols = await app.data.getColumns();
+    const colNames = Array.isArray(cols) ? cols.map((c) => c.name) : Object.keys(cols || {});
+    if (colNames.length) {
+      let dataCol = presetDataCol || _ws.dataColumn;
+      if (!dataCol || !colNames.includes(dataCol)) {
+        const pick = await app.ui.selectVariables({
+          title: 'Match to data column',
+          hint: `Which column in your data matches the "${keyProp}" property in the map?`,
+          multiple: false,
+        });
+        if (!pick) return { ok: false, message: 'Cancelled.' };
+        dataCol = pick[0];
+      }
+      _ws.dataColumn = dataCol;
     }
-    _ws.dataColumn = dataCol;
+  } else {
+    _ws.dataColumn = presetDataCol || null;
   }
 
   _ws.features = validFeatures;
@@ -546,12 +576,22 @@ async function wsApplyBoundaries(app, geojson, fileName, presetKeyProp, presetDa
   await wsSaveState(app);
 
   const n = validFeatures.length;
-  _ws.statusEl.textContent = `${fileName} — ${n} region${n !== 1 ? 's' : ''} loaded (key: ${keyProp}).`;
+  const linkStatus = _ws.dataColumn ? ` (key: ${keyProp}, linked to "${_ws.dataColumn}").` : ` (key: ${keyProp}, not linked to this dataset).`;
+  _ws.statusEl.textContent = `${fileName} — ${n} region${n !== 1 ? 's' : ''}${linkStatus}`;
   return { ok: true };
 }
 
 export async function shadeByVariable(app) {
   if (!_ws?.features.length) return { ok: false, message: 'Load boundaries first.' };
+  if (!_ws.dataColumn) {
+    const dcPick = await app.ui.selectVariables({
+      title: 'Match to data column',
+      hint: `Which column in your data matches the "${_ws.keyProp}" property in the map?`,
+      multiple: false,
+    });
+    if (!dcPick) return { ok: false, message: 'Cancelled.' };
+    _ws.dataColumn = dcPick[0];
+  }
   const pick = await app.ui.selectVariables({
     title: 'Shade regions by',
     hint: 'Choose a numeric variable — each region is shaded by its mean value.',
@@ -561,7 +601,7 @@ export async function shadeByVariable(app) {
   if (!pick) return { ok: false, message: 'Cancelled.' };
   _ws.shadeColumn = pick[0];
   await wsApplyShading(app);
-  await wsSaveState(app);
+  await wsSaveLinkage(app);
   return { ok: true };
 }
 
@@ -581,7 +621,7 @@ export async function filterToSelection(app) {
     if (!pick) return { ok: false, message: 'Cancelled.' };
     dataCol = pick[0];
     _ws.dataColumn = dataCol;
-    await wsSaveState(app);
+    await wsSaveLinkage(app);
   }
   if (!colNames.includes(dataCol)) return { ok: false, message: `Column "${dataCol}" not found in data.` };
 
@@ -634,7 +674,7 @@ export async function filterToSelection(app) {
 export async function clearBoundaries(app) {
   if (!_ws) return { ok: false, message: 'Workspace not mounted.' };
   _ws.features = []; _ws.regionKeys = []; _ws.pathEls = [];
-  _ws.keyProp = null; _ws.shadeColumn = null; _ws.selected.clear();
+  _ws.keyProp = null; _ws.dataColumn = null; _ws.shadeColumn = null; _ws.selected.clear();
   _ws.activeSlot = null;
   _ws.svgEl.innerHTML = '';
   _ws.listEl.innerHTML = '';
@@ -642,7 +682,10 @@ export async function clearBoundaries(app) {
   const old = _ws.root.querySelector('.set-links');
   if (old) old.remove();
   const slots = await app.state.list();
-  for (const s of slots) await app.state.delete(s.slotId);
+  for (const s of slots) {
+    await app.state.delete(s.slotId);
+    await app.state.write('spatial-link', null, null, s.slotId);
+  }
   return { ok: true };
 }
 
@@ -804,8 +847,9 @@ function wsRebuildSetLinks(app, slots) {
     a.addEventListener('click', async () => {
       const data = await app.state.get(s.slotId);
       if (!data?.features) return;
+      const link = await app.state.read('spatial-link', s.slotId);
       const fc = { type: 'FeatureCollection', features: data.features };
-      await wsApplyBoundaries(app, fc, data.fileName || s.slotId, data.keyProp, data.dataColumn);
+      await wsApplyBoundaries(app, fc, data.fileName || s.slotId, data.keyProp, link?.dataColumn);
     });
     links.append(a);
   }
@@ -817,21 +861,30 @@ async function wsLoadFromSlots(app, slots) {
   const last = slots[slots.length - 1];
   const data = await app.state.get(last.slotId);
   if (!data?.features) return;
+  const link = await app.state.read('spatial-link', last.slotId);
   const fc = { type: 'FeatureCollection', features: data.features };
-  _ws.selected = new Set(data.selected || []);
-  _ws.shadeColumn = data.shadeColumn || null;
-  await wsApplyBoundaries(app, fc, data.fileName || last.slotId, data.keyProp, data.dataColumn);
+  _ws.selected = new Set(link?.selected || []);
+  _ws.shadeColumn = link?.shadeColumn || null;
+  await wsApplyBoundaries(app, fc, data.fileName || last.slotId, data.keyProp, link?.dataColumn);
   wsRebuildSetLinks(app, slots);
 }
 
 async function wsSaveState(app) {
   if (!_ws.activeSlot) return;
   await app.state.set({
-    keyProp: _ws.keyProp, dataColumn: _ws.dataColumn,
-    shadeColumn: _ws.shadeColumn, fileName: _ws.fileName,
-    selected: [..._ws.selected],
+    keyProp: _ws.keyProp, fileName: _ws.fileName,
     features: _ws.features,
   }, { slot: _ws.activeSlot, label: _ws.fileName });
+  await wsSaveLinkage(app);
+}
+
+async function wsSaveLinkage(app) {
+  if (!_ws.activeSlot) return;
+  await app.state.write('spatial-link', {
+    dataColumn: _ws.dataColumn,
+    shadeColumn: _ws.shadeColumn,
+    selected: [..._ws.selected],
+  }, null, _ws.activeSlot);
 }
 
 // --- GeoJSON → SVG projection ------------------------------------------------

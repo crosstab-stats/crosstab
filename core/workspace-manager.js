@@ -70,7 +70,9 @@ export class WorkspaceManager {
     const wanted = new Map(); // workspaceId → { plugin, ws }
     for (const p of pluginList || []) {
       if (!p.activated || !Array.isArray(p.workspaces)) continue;
-      for (const ws of p.workspaces) if (ws && ws.id) wanted.set(ws.id, { plugin: p, ws });
+      for (const ws of p.workspaces) {
+        if (ws && ws.id && ws.tab !== false) wanted.set(ws.id, { plugin: p, ws });
+      }
     }
     for (const id of [...this.#mounted.keys()]) {
       if (!wanted.has(id)) this.#teardown(id);
@@ -230,6 +232,12 @@ export class WorkspaceManager {
         },
       },
     };
+    if (this.#services.workspaceRead) {
+      services.stateRead = (wsId, slotId) => this.#services.workspaceRead(plugin.id, wsId, slotId);
+    }
+    if (this.#services.workspaceWrite) {
+      services.stateWrite = (wsId, value, dsId, slotId) => this.#services.workspaceWrite(plugin.id, wsId, value, dsId, slotId);
+    }
     // Host-stamped attribution for this plugin's workspace output (matches the
     // menu-analysis format "Name · origin", e.g. "Qualitative Coding · built-in").
     const attribution = `${plugin.name || plugin.id} · ${plugin.origin || 'plugin'}`;

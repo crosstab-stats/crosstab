@@ -1204,14 +1204,15 @@ class ProjectSidebar {
     list.className = 'proj__datasets';
     // The datasets list is a drop target for building blocks (add to project).
     this.#dropTarget(list, 'block', (id) => this.library.addBlockToProject(id));
+    const hidden = this.#hiddenWsIds();
     const items = this.datasets.list();
-    for (const it of items) list.append(this.#datasetRow(it, items.length, blockVer));
+    for (const it of items) list.append(this.#datasetRow(it, items.length, blockVer, hidden));
     frag.append(list);
 
     // Project-scoped workspace blobs (NO_DS) get their own section —
     // they aren't tied to a dataset and shouldn't appear subordinate to one.
     if (this.wsStore) {
-      const projectBlobs = this.wsStore.listForDataset(null);
+      const projectBlobs = this.wsStore.listForDataset(null).filter((b) => !hidden.has(b.wsId));
       if (projectBlobs.length) {
         frag.append(el('div', 'Map layers', 'proj__sub'));
         const blobList = document.createElement('ul');
@@ -1234,7 +1235,7 @@ class ProjectSidebar {
     return frag;
   }
 
-  #datasetRow(it, count, blockVer) {
+  #datasetRow(it, count, blockVer, hidden) {
     const li = document.createElement('li');
     li.className = 'proj__ds' + (it.active ? ' proj__ds--active' : '');
     li.draggable = true;
@@ -1288,7 +1289,7 @@ class ProjectSidebar {
     const frag = document.createDocumentFragment();
     frag.append(li);
     if (this.wsStore) {
-      const blobs = this.wsStore.listForDataset(it.id);
+      const blobs = this.wsStore.listForDataset(it.id).filter((b) => !hidden?.has(b.wsId));
       if (blobs.length) {
         const wsTitles = this.#wsIdTitles();
         for (const b of blobs) {
@@ -1297,6 +1298,17 @@ class ProjectSidebar {
       }
     }
     return frag;
+  }
+
+  #hiddenWsIds() {
+    const set = new Set();
+    for (const p of this.pluginList()) {
+      if (!Array.isArray(p.workspaces)) continue;
+      for (const ws of p.workspaces) {
+        if (ws?.id && !ws.tab) set.add(ws.id);
+      }
+    }
+    return set;
   }
 
   #wsIdTitles() {

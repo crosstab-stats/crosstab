@@ -267,6 +267,7 @@ export class PluginManager {
         ? manifest.workspaces.filter((w) => w && typeof w.id === 'string').map((w) => ({
           id: w.id, title: String(w.title || w.id),
           scope: w.scope === 'project' ? 'project' : 'dataset',
+          tab: w.tab !== false,
           verbs: Array.isArray(w.verbs) ? w.verbs : [],
         }))
         : [],
