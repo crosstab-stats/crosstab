@@ -29,7 +29,7 @@ import { runRScript, registerRScriptRunner } from './r-script.js';
 import { CodecService } from './codec-service.js';
 import { PluginCreator } from './plugin-creator.js';
 import { DatasetStore } from './dataset-store.js';
-import { debug } from './debug.js';
+import { debug, isDebug, setDebug, saveLog } from './debug.js';
 import { DatasetLibrary, LIBRARY_CHANGED } from './library.js';
 import { ProjectStore } from './project-store.js';
 import { ProjectSync, PROJECT_CHANGED } from './project-sync.js';
@@ -768,6 +768,23 @@ export async function boot(mounts) {
     label: 'Create plugin…',
     order: 41,
     command: () => pluginCreator.open(null),
+  });
+  const registerDebugToggle = () => {
+    menus.register({
+      id: 'core:debug-toggle',
+      path: ['Edit', 'Debugging'],
+      label: isDebug() ? '● Logging on' : '○ Logging off',
+      order: 10,
+      command: () => { setDebug(!isDebug()); registerDebugToggle(); },
+    });
+  };
+  registerDebugToggle();
+  menus.register({
+    id: 'core:debug-save',
+    path: ['Edit', 'Debugging'],
+    label: 'Save debug log…',
+    order: 20,
+    command: () => saveLog(),
   });
 
   // `dataStore` kept as an alias to the manager (it delegates to the active
