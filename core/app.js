@@ -1206,15 +1206,21 @@ class ProjectSidebar {
     this.#dropTarget(list, 'block', (id) => this.library.addBlockToProject(id));
     const items = this.datasets.list();
     for (const it of items) list.append(this.#datasetRow(it, items.length, blockVer));
-    // Project-scoped workspace blobs (NO_DS) appear after all datasets.
+    frag.append(list);
+
+    // Project-scoped workspace blobs (NO_DS) get their own section —
+    // they aren't tied to a dataset and shouldn't appear subordinate to one.
     if (this.wsStore) {
       const projectBlobs = this.wsStore.listForDataset(null);
       if (projectBlobs.length) {
+        frag.append(el('div', 'Map layers', 'proj__sub'));
+        const blobList = document.createElement('ul');
+        blobList.className = 'proj__datasets';
         const wsTitles = this.#wsIdTitles();
-        for (const b of projectBlobs) list.append(this.#blobRow(b, null, wsTitles));
+        for (const b of projectBlobs) blobList.append(this.#blobRow(b, null, wsTitles));
+        frag.append(blobList);
       }
     }
-    frag.append(list);
 
     const add = document.createElement('button');
     add.type = 'button';
@@ -1327,7 +1333,11 @@ class ProjectSidebar {
       e.stopPropagation();
       this.#inlineRename(li, name, label || slotSuffix, renameAction, 'proj__blob-name');
     }, 'proj__ds-x');
-    li.append(edit);
+    const x = iconBtn('✕', 'Delete', (e) => {
+      e.stopPropagation();
+      this.wsStore.set(blob.owner, blob.wsId, blob.slotId, dsId, null);
+    }, 'proj__ds-x');
+    li.append(edit, x);
     return li;
   }
 
