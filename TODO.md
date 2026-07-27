@@ -346,20 +346,46 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Open questions / decisions to make
 
-- [ ] **API major-version migration policy.** Loader enforces matching major +
-      engine-minor ≥ plugin-minor (`core/loader.js`); what a breaking bump means
-      for installed plugins (shims? hard break?) is undecided.
-- [ ] **R package pre-loading strategy.** Plugins declare `rPackages` in their
-      manifest, but which packages ship with the default plugin set vs. install
-      on demand — and how heavy shared deps are handled — is open.
+- [ ] **API version mismatch → warn-and-allow (decided approach; to build).** No
+      **shims** (a permanent maintenance treadmill) and no **hard break** either — a
+      plugin often uses only the parts of the API that *didn't* change across a bump, so
+      refusing to load it is too blunt. Decision: on ANY `apiVersion` mismatch (major
+      differs, or the plugin's minor is newer than the engine's), **still load it** —
+      but flag it **red in the plugin manager** with a user-facing "Built for a
+      different version of CrossTab — may not work correctly," and let the user attempt
+      to run it. A call to a genuinely-changed/removed API just errors at runtime,
+      sandbox-contained (the plugin's problem, surfaced honestly — not the host's).
+      *Build:* replace the hard `throw` in `assertApiCompatible` (`core/loader.js`) with
+      a returned compat status (`ok` / `older` / `newer`); the loader records it on the
+      plugin record and activates anyway; the plugin manager renders the red badge +
+      tooltip.
+- [x] **R package pre-loading — DECIDED: keep on-demand.** Don't pre-declare a
+      "preload" set — we won't guess which packages matter enough to warm speculatively,
+      and heavy ones (Stan/brms, lavaan) risk the WebR ~4 GB ceiling. Packages install
+      on demand when an analysis first runs (the "installing…" watchdog progress already
+      covers the wait); the "Make available offline" toggle prefetches the dependency
+      closure for offline use. Revisit only if on-demand latency becomes a real
+      complaint. The `bit64` sub-decision below stands.
   - *Decided: `bit64` is install-on-demand, not default.* int64 columns are
     carried as **character** by default (storage stays native `BIGINT` in DuckDB;
     R has no native int64 — see the data-engine item). `bit64::integer64` buys
     nothing for storage/transport/display (JS `Number` hits the same 2⁵³ wall),
     so it's only worth loading for genuine 64-bit *arithmetic in R* — a per-
     variable opt-in to add later, purely additive, no debt from deferring.
-- [ ] **Multi-file plugins.** Blob-imported modules can't resolve relative
-      imports. Decide on an import-map or bundling story so plugins can span files.
+- [ ] **Multi-file plugins via import maps (decided approach; to build).** Let a
+      plugin's *code* span several ES modules with normal relative imports
+      (`import { foo } from './util.js'`). **Chosen: import maps, not bundling** — no
+      build step (fits the no-tooling / everything-inspectable ethos), and it reuses the
+      `.ctplugin` bundle plumbing (#119). Mechanism: the host creates a `blob:` URL per
+      module file the plugin ships and injects an **import map** into the sandbox
+      document mapping each relative specifier → its blob URL, so `import './x.js'`
+      resolves inside the opaque-origin sandbox. *Why it's needed:* today the entry
+      module is a single blob-imported file (relative imports don't resolve against a
+      blob origin); a `.ctplugin` bundle already carries multiple **asset** files
+      (fetched by name via `app.*.loadAsset` → `resolveAsset`), but those are *data, not
+      importable modules* — this closes exactly that gap. *Build:* a manifest way to
+      list the module files, per-file blob creation in `core/loader.js`, and import-map
+      injection in `core/plugin-sandbox.js`.
 
 ## Deferred features (intentionally not built yet)
 
