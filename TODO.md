@@ -312,9 +312,15 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       DOMPurify** and adding a **host-page CSP** (tuned around the WebR/DuckDB CDNs +
       blob workers) as defence-in-depth before public release, so an SVG-sanitiser
       miss can't execute in the host. The plugin *sandbox* CSP is already in place.
-- [ ] **Pin the WebR version and vendor its assets.** `core/webr-manager.js`
-      currently loads `…/latest/webr.mjs` for convenience. Pin a version and
-      self-host for reproducibility + offline PWA use.
+- [x] **Pin the WebR version — DONE; vendoring decided against.** The CDN default now
+      pins **WebR v0.6.0** (`core/assets.js`: `webrUrl` + `webrOptions.baseUrl` both on
+      `…/v0.6.0/`), matching the already-pinned DuckDB/Arrow/hyparquet — so a silent
+      WebR release can't shift R results under us. Pulled live from the CDN, **not
+      vendored** (consistent with the DuckDB decision — don't vendor what we don't have
+      to). **Verified in Chrome:** WebR loads its payload from the versioned baseUrl and
+      runs R 4.6.0 (`mean(1:5)=3`). *Vendoring capability still exists* for the opt-in
+      air-gap deploy (`./vendor/` via `scripts/vendor-assets.mjs`, which records the
+      grabbed version). Bump the pin deliberately when adopting a new WebR.
 - [ ] **PWA precaching.** Fold asset precaching into `sw.js` once WebR assets are
       vendored, so the app works offline (`sw.js` TODO).
 

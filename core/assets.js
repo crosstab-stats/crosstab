@@ -32,10 +32,12 @@
 
 /** CDN asset set — the default. Versions pinned for reproducibility. */
 const CDN = Object.freeze({
-  webrUrl: 'https://webr.r-wasm.org/latest/webr.mjs',
-  // WebR derives its baseUrl (R.bin/*.data/*.wasm) and package repo from its own
-  // CDN by default, so no extra options are needed in cdn mode.
-  webrOptions: {},
+  // Pinned (not `latest`) for reproducibility — a silent WebR release must not
+  // change R behaviour/results under us. Pull live from the CDN (no vendoring); bump
+  // this deliberately. baseUrl is pinned to the same version so the runtime payload
+  // (R.bin.*, worker) matches the module. (#hardening)
+  webrUrl: 'https://webr.r-wasm.org/v0.6.0/webr.mjs',
+  webrOptions: { baseUrl: 'https://webr.r-wasm.org/v0.6.0/' },
   duckdbUrl: 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev56.0/+esm',
   arrowUrl: 'https://cdn.jsdelivr.net/npm/apache-arrow@17.0.0/+esm',
   hyparquetWriterUrl: 'https://cdn.jsdelivr.net/npm/hyparquet-writer@0.16.1/+esm',
