@@ -37,10 +37,8 @@ export async function run(app, { series: sName }) {
   if (!sName) { await app.results.appendError('Mann-Kendall: choose a numeric series (in time order).'); return; }
   await app.webr.installPackages(['trend']);
   const meta = metaMap(await app.data.getVariableMeta());
-  const recodes = recodeLine('series', meta.get(sName));
   const rCode = `
     suppressMessages(library(trend))
-    ${recodes}
     x <- as.numeric(series); x <- x[is.finite(x)]
     mk <- mk.test(x); ss <- sens.slope(x)
     list(z = as.numeric(mk$statistic), p = mk$p.value,
@@ -74,10 +72,6 @@ export async function run(app, { series: sName }) {
 
 // --- helpers -----------------------------------------------------------------
 function metaMap(meta) { return new Map(meta.map((m) => [m.name, m])); }
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
-}
 function labelOf(meta, name) { return meta?.label ? `${meta.label} (${name})` : name; }
 function f(n, d) { return Number.isFinite(n) ? n.toFixed(d) : '—'; }
 function ci(lo, hi) { return Number.isFinite(lo) && Number.isFinite(hi) ? `[${lo.toFixed(4)}, ${hi.toFixed(4)}]` : '—'; }

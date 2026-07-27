@@ -61,9 +61,7 @@ export async function kmeans(app, { vars, k, standardize }) {
     return;
   }
   const meta = metaMap(await app.data.getVariableMeta());
-  const recodes = vars.map((n) => recodeLine(`vars[[${rStr(n)}]]`, meta.get(n))).filter(Boolean).join('\n');
   const rCode = `
-    ${recodes}
     d <- vars[stats::complete.cases(vars), , drop = FALSE]
     if (nrow(d) < 3) stop("need at least 3 complete cases")
     k <- max(2L, as.integer(if (is.finite(k)) k else 3))
@@ -114,11 +112,6 @@ function identicalRaw(s) {
 
 function metaMap(meta) {
   return new Map(meta.map((m) => [m.name, m]));
-}
-
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
 }
 
 function labelOf(meta, name) {

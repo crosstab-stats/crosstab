@@ -3,7 +3,7 @@
  * Built-in plugin: Regression ▸ Linear.
  *
  * Ordinary least squares (`lm`) with an SPSS-style Model Summary + Coefficients.
- * Factor predictors are dummy-coded; user-missing codes are recoded to NA first.
+ * Factor predictors are dummy-coded.
  * Computed in R; the host renders the structured tables.
  *
  * Declarative plugin: the manifest declares the outcome + predictor inputs (both
@@ -50,19 +50,11 @@ export async function run(app, { dv: dvName, ivs: ivNames }) {
   }
   const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
 
-  const recodes = [
-    recodeLine('dv', meta.get(dvName)),
-    ...ivNames.map((n) => recodeLine(`ivs[[${rStr(n)}]]`, meta.get(n))),
-  ]
-    .filter(Boolean)
-    .join('\n');
-
   const term = (name) =>
     meta.get(name)?.type === 'factor' ? `factor(\`${name}\`)` : `\`${name}\``;
   const formula = `.dv ~ ${ivNames.map(term).join(' + ')}`;
 
   const rCode = `
-    ${recodes}
     d <- cbind(.dv = dv, ivs)
     fit <- lm(as.formula(${rStr(formula)}), data = d)
     s <- summary(fit); co <- s$coefficients; fst <- s$fstatistic
@@ -151,11 +143,6 @@ export async function run(app, { dv: dvName, ivs: ivNames }) {
 }
 
 // --- helpers -----------------------------------------------------------------
-
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
-}
 
 function labelOf(meta, name) {
   return meta?.label ? `${meta.label} (${name})` : name;

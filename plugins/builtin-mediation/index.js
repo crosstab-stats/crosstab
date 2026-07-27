@@ -84,10 +84,6 @@ export async function mediation(app, { x: xName, m: mName, y: yName, covs: covNa
   const meta = metaMap(await app.data.getVariableMeta());
   const covs = covNames || [];
   const covTok = covs.map((_, i) => `C${i + 1}`);
-  const recodes = [
-    recodeLine('x', meta.get(xName)), recodeLine('m', meta.get(mName)), recodeLine('y', meta.get(yName)),
-    ...covs.map((n) => recodeLine(`covs[[${rStr(n)}]]`, meta.get(n))),
-  ].filter(Boolean).join('\n');
   const covMk = covs.map((n, i) => `d$${covTok[i]} <- as.numeric(covs[[${rStr(n)}]])`).join('\n');
   const covPart = covTok.length ? ' + ' + covTok.join(' + ') : '';
   const boot = se === 'bootstrap';
@@ -98,7 +94,6 @@ export async function mediation(app, { x: xName, m: mName, y: yName, covs: covNa
   const ciType = boot ? '"perc"' : '"standard"';
   const rCode = `
     ${LAVAAN_PRELUDE}
-    ${recodes}
     d <- data.frame(X = as.numeric(x), M = as.numeric(m), Y = as.numeric(y))
     ${covMk}
     d <- d[stats::complete.cases(d), , drop = FALSE]
@@ -143,17 +138,12 @@ export async function moderation(app, { y: yName, x: xName, w: wName, covs: covN
   const meta = metaMap(await app.data.getVariableMeta());
   const covs = covNames || [];
   const covTok = covs.map((_, i) => `C${i + 1}`);
-  const recodes = [
-    recodeLine('y', meta.get(yName)), recodeLine('x', meta.get(xName)), recodeLine('w', meta.get(wName)),
-    ...covs.map((n) => recodeLine(`covs[[${rStr(n)}]]`, meta.get(n))),
-  ].filter(Boolean).join('\n');
   const covMk = covs.map((n, i) => {
     const fac = meta.get(n)?.type === 'factor';
     return `d$${covTok[i]} <- ${fac ? `factor(covs[[${rStr(n)}]])` : `as.numeric(covs[[${rStr(n)}]])`}`;
   }).join('\n');
   const covPart = covTok.length ? ' + ' + covTok.join(' + ') : '';
   const rCode = `
-    ${recodes}
     d <- data.frame(Y = as.numeric(y), X = as.numeric(x), W = as.numeric(w))
     ${covMk}
     d <- d[stats::complete.cases(d), , drop = FALSE]
@@ -218,11 +208,6 @@ function modTerm(term, meta, xName, wName) {
 
 function metaMap(meta) {
   return new Map(meta.map((m) => [m.name, m]));
-}
-
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
 }
 
 function prettyTerm(term) {

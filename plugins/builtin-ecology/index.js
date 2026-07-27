@@ -41,11 +41,8 @@ export async function run(app, { species }) {
     return;
   }
   await app.webr.installPackages(['vegan']);
-  const meta = metaMap(await app.data.getVariableMeta());
-  const recodes = species.map((n) => recodeLine(`species[[${rStr(n)}]]`, meta.get(n))).filter(Boolean).join('\n');
   const rCode = `
     suppressMessages({library(vegan); library(svglite)})
-    ${recodes}
     m <- as.matrix(as.data.frame(lapply(species, as.numeric)))
     m[is.na(m)] <- 0; m <- m[rowSums(m) > 0, , drop = FALSE]
     rich <- specnumber(m); shan <- diversity(m, "shannon"); simp <- diversity(m, "simpson")
@@ -88,12 +85,6 @@ export async function run(app, { species }) {
 
 // --- helpers -----------------------------------------------------------------
 function cleanSvg(svg) { return String(svg).replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1').replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1'); }
-function metaMap(meta) { return new Map(meta.map((m) => [m.name, m])); }
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
-}
-function rStr(s) { return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`; }
 function f(n, d) { return Number.isFinite(n) ? n.toFixed(d) : '—'; }
 function flat(rList) {
   const byName = {};

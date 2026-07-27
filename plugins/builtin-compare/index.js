@@ -10,8 +10,7 @@
  *
  * Computed in base R (t.test / aov); the host renders SPSS-style tables. The host
  * binds each declared input into R by name (single variable → vector, grouping
- * variable → vector, the test value → a scalar); user-missing codes are recoded
- * to NA first.
+ * variable → vector, the test value → a scalar).
  */
 
 /** @type {import('../../core/loader.js').PluginManifest} */
@@ -80,7 +79,6 @@ export async function oneSample(app, { x: name, mu }) {
   if (!name) return;
   const meta = await metaMap(app);
   const rCode = `
-    ${recode('x', name, meta)}
     x <- as.numeric(x); x <- x[is.finite(x)]
     if (length(x) < 2) stop("need at least 2 non-missing values")
     if (!is.finite(mu)) mu <- 0
@@ -109,8 +107,6 @@ export async function independent(app, { y: yName, g: gName }) {
   if (!yName || !gName) return;
   const meta = await metaMap(app);
   const rCode = `
-    ${recode('y', yName, meta)}
-    ${recode('g', gName, meta)}
     y <- as.numeric(y); g <- as.factor(g)
     ok <- is.finite(y) & !is.na(g); y <- y[ok]; g <- droplevels(g[ok])
     lv <- levels(g)
@@ -150,8 +146,6 @@ export async function paired(app, { x1: n1, x2: n2 }) {
   if (!n1 || !n2) return;
   const meta = await metaMap(app);
   const rCode = `
-    ${recode('x1', n1, meta)}
-    ${recode('x2', n2, meta)}
     x1 <- as.numeric(x1); x2 <- as.numeric(x2)
     ok <- is.finite(x1) & is.finite(x2); x1 <- x1[ok]; x2 <- x2[ok]
     if (length(x1) < 2) stop("need at least 2 complete pairs")
@@ -191,8 +185,6 @@ export async function oneway(app, { y: yName, g: gName }) {
   if (!yName || !gName) return;
   const meta = await metaMap(app);
   const rCode = `
-    ${recode('y', yName, meta)}
-    ${recode('g', gName, meta)}
     y <- as.numeric(y); g <- as.factor(g)
     ok <- is.finite(y) & !is.na(g); y <- y[ok]; g <- droplevels(g[ok])
     if (nlevels(g) < 2) stop("need at least 2 groups")
@@ -253,12 +245,6 @@ export async function oneway(app, { y: yName, g: gName }) {
 
 async function metaMap(app) {
   return new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
-}
-
-/** R line recoding a bound vector's user-missing codes to NA (numeric codes). */
-function recode(boundName, varName, meta) {
-  const mv = (meta.get(varName)?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${boundName}[${boundName} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
 }
 
 function label(meta, name) {

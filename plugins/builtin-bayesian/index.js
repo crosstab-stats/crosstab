@@ -91,15 +91,11 @@ export async function regression(app, { dv: dvName, ivs: ivNames }) {
   await app.webr.installPackages(['MCMCpack']);
   const meta = metaMap(await app.data.getVariableMeta());
 
-  const recodes = [recodeLine('dv', meta.get(dvName)), ...ivNames.map((n) => recodeLine(`ivs[[${rStr(n)}]]`, meta.get(n)))]
-    .filter(Boolean)
-    .join('\n');
   const term = (n) => (meta.get(n)?.type === 'factor' ? `factor(\`${n}\`)` : `\`${n}\``);
   const formula = `.dv ~ ${ivNames.map(term).join(' + ')}`;
 
   const rCode = `
     suppressMessages(library(MCMCpack))
-    ${recodes}
     d <- cbind(.dv = dv, ivs)
     d <- d[stats::complete.cases(d), , drop = FALSE]
     if (nrow(d) < ncol(d) + 2) stop("not enough complete cases for this model")
@@ -154,7 +150,6 @@ export async function bfTTest(app, { y: yName, group: gName }) {
 
   const rCode = `
     suppressMessages(library(BayesFactor))
-    ${recodeLine('y', meta.get(yName))}
     g <- as.factor(group); ok <- is.finite(y) & !is.na(g)
     y <- y[ok]; g <- droplevels(g[ok]); lv <- levels(g)
     if (length(lv) != 2) stop("group must have exactly 2 levels (has ", length(lv), ")")
@@ -198,8 +193,6 @@ export async function bfCorr(app, { x: xName, y: yName }) {
 
   const rCode = `
     suppressMessages(library(BayesFactor))
-    ${recodeLine('x', meta.get(xName))}
-    ${recodeLine('y', meta.get(yName))}
     ok <- is.finite(x) & is.finite(y); x <- x[ok]; y <- y[ok]
     if (length(x) < 4) stop("need at least 4 complete pairs")
     bf <- extractBF(correlationBF(x, y))$bf
@@ -233,10 +226,8 @@ export async function bvar(app, { series: seriesNames, lags, horizon }) {
   await app.webr.installPackages(['BVAR']);
   const meta = metaMap(await app.data.getVariableMeta());
 
-  const recodes = seriesNames.map((n) => recodeLine(`series[[${rStr(n)}]]`, meta.get(n))).filter(Boolean).join('\n');
   const rCode = `
     suppressMessages(library(BVAR))
-    ${recodes}
     Y <- as.matrix(series); Y <- Y[stats::complete.cases(Y), , drop = FALSE]
     if (ncol(Y) < 2) stop("need at least 2 series")
     if (nrow(Y) < 20) stop("need at least ~20 complete time points")
@@ -314,11 +305,6 @@ function bfWords(bf, effectPhrase) {
 
 function metaMap(meta) {
   return new Map(meta.map((m) => [m.name, m]));
-}
-
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
 }
 
 function labelOf(meta, name) {

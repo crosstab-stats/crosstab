@@ -50,19 +50,11 @@ export async function run(app, { dv: dvName, ivs: ivNames }) {
   }
   const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
 
-  const recodes = [
-    recodeLine('dv', meta.get(dvName)),
-    ...ivNames.map((n) => recodeLine(`ivs[[${rStr(n)}]]`, meta.get(n))),
-  ]
-    .filter(Boolean)
-    .join('\n');
-
   const term = (name) =>
     meta.get(name)?.type === 'factor' ? `factor(\`${name}\`)` : `\`${name}\``;
   const formula = `.y ~ ${ivNames.map(term).join(' + ')}`;
 
   const rCode = `
-    ${recodes}
     u <- sort(unique(dv[!is.na(dv)]))
     if (length(u) != 2) stop("dependent must have exactly 2 categories (found ", length(u), ")")
     d <- cbind(.y = as.integer(factor(dv, levels = u)) - 1L, ivs)
@@ -110,11 +102,6 @@ export async function run(app, { dv: dvName, ivs: ivNames }) {
 }
 
 // --- helpers -----------------------------------------------------------------
-
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
-}
 
 function labelOf(meta, name) {
   return meta?.label ? `${meta.label} (${name})` : name;

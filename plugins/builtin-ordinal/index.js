@@ -69,12 +69,10 @@ export async function ordinal(app, { dv: dvName, ivs: ivNames }) {
   await app.webr.installPackages(['MASS']);
   const meta = metaMap(await app.data.getVariableMeta());
   const dvMeta = meta.get(dvName);
-  const recodes = [recodeLine('dv', dvMeta), ...ivNames.map((n) => recodeLine(`ivs[[${rStr(n)}]]`, meta.get(n)))].filter(Boolean).join('\n');
   const term = (n) => (meta.get(n)?.type === 'factor' ? `factor(\`${n}\`)` : `\`${n}\``);
   const formula = `.y ~ ${ivNames.map(term).join(' + ')}`;
   const rCode = `
     suppressMessages(library(MASS))
-    ${recodes}
     .y <- factor(dv, levels = sort(unique(dv[!is.na(dv)])), ordered = TRUE)
     if (nlevels(.y) < 3) stop("ordinal regression needs at least 3 ordered categories (use binary Logistic for 2)")
     d <- ivs; d[[".y"]] <- .y; d <- d[stats::complete.cases(d), , drop = FALSE]; d <- droplevels(d)
@@ -149,12 +147,10 @@ export async function multinomial(app, { dv: dvName, ivs: ivNames }) {
   await app.webr.installPackages(['nnet']);
   const meta = metaMap(await app.data.getVariableMeta());
   const dvMeta = meta.get(dvName);
-  const recodes = [recodeLine('dv', dvMeta), ...ivNames.map((n) => recodeLine(`ivs[[${rStr(n)}]]`, meta.get(n)))].filter(Boolean).join('\n');
   const term = (n) => (meta.get(n)?.type === 'factor' ? `factor(\`${n}\`)` : `\`${n}\``);
   const formula = `.y ~ ${ivNames.map(term).join(' + ')}`;
   const rCode = `
     suppressMessages(library(nnet))
-    ${recodes}
     .y <- factor(dv, levels = sort(unique(dv[!is.na(dv)])))
     if (nlevels(.y) < 3) stop("multinomial needs at least 3 outcome categories (use binary Logistic for 2)")
     d <- ivs; d[[".y"]] <- .y; d <- d[stats::complete.cases(d), , drop = FALSE]; d <- droplevels(d)
@@ -243,11 +239,6 @@ function erfc(x) {
 
 function metaMap(meta) {
   return new Map(meta.map((m) => [m.name, m]));
-}
-
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
 }
 
 function labelOf(meta, name) {

@@ -5,8 +5,7 @@
  * Pearson correlation matrix over two or more scale variables. For each pair: the
  * coefficient (with significance stars), its 2-tailed p, and the pairwise N —
  * stacked in one cell, the SPSS layout. Computed in R (`cor.test`); the host
- * renders the structured table. User-missing codes are recoded to NA first
- * (pairwise-complete), matching SPSS.
+ * renders the structured table.
  *
  * Declarative plugin: the manifest declares the menu item + its input; the host
  * gathers the chosen variables and binds them in R as the data.frame `vars`.
@@ -86,18 +85,7 @@ export async function run(app, { vars, method }) {
   const methodLabel = { pearson: 'Pearson', spearman: "Spearman's rho", kendall: "Kendall's tau" }[m];
   const meta = new Map((await app.data.getVariableMeta()).map((mm) => [mm.name, mm]));
 
-  const recode = vars
-    .map((name) => {
-      const mv = (meta.get(name)?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-      if (!mv.length) return '';
-      const col = `vars[[${rStr(name)}]]`;
-      return `${col}[${col} %in% c(${mv.map(Number).join(', ')})] <- NA`;
-    })
-    .filter(Boolean)
-    .join('\n');
-
   const rCode = `
-    ${recode}
     d <- data.frame(lapply(vars, function(c) suppressWarnings(as.numeric(c))), check.names = FALSE)
     k <- ncol(d)
     r <- matrix(NA_real_, k, k); p <- matrix(NA_real_, k, k); n <- matrix(0, k, k)
@@ -155,18 +143,8 @@ export async function partial(app, { vars, controls, type }) {
   }
   const semip = type === 'semipartial';
   const meta = new Map((await app.data.getVariableMeta()).map((mm) => [mm.name, mm]));
-  const recodeOne = (name, holder) => {
-    const mv = (meta.get(name)?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-    if (!mv.length) return '';
-    const col = `${holder}[[${rStr(name)}]]`;
-    return `${col}[${col} %in% c(${mv.map(Number).join(', ')})] <- NA`;
-  };
-  const recode = [...vars.map((n) => recodeOne(n, 'vars')), ...controls.map((n) => recodeOne(n, 'controls'))]
-    .filter(Boolean)
-    .join('\n');
 
   const rCode = `
-    ${recode}
     V <- data.frame(lapply(vars, function(c) suppressWarnings(as.numeric(c))), check.names = FALSE)
     Z <- data.frame(lapply(controls, function(c) suppressWarnings(as.numeric(c))), check.names = FALSE)
     ok <- stats::complete.cases(cbind(V, Z))

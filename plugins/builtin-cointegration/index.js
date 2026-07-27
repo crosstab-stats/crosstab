@@ -79,10 +79,8 @@ export async function cointegration(app, { series, ecdet, K }) {
   const meta = metaMap(await app.data.getVariableMeta());
   const ec = ['const', 'trend', 'none'].includes(ecdet) ? ecdet : 'const';
   const k = Number.isFinite(K) && K >= 2 ? Math.floor(K) : 2;
-  const recodes = series.map((n) => recodeLine(`series[[${rStr(n)}]]`, meta.get(n))).filter(Boolean).join('\n');
   const rCode = `
     suppressMessages(library(urca))
-    ${recodes}
     d <- as.data.frame(lapply(series, as.numeric)); colnames(d) <- paste0("V", seq_len(ncol(d)))
     nm <- c(${series.map((n) => rStr(labelOf(meta.get(n), n))).join(', ')})
     d <- d[stats::complete.cases(d), , drop = FALSE]
@@ -140,10 +138,8 @@ export async function garch(app, { series: sName, q, p, dist }) {
   const Q = Number.isFinite(q) && q >= 1 ? Math.floor(q) : 1;
   const P = Number.isFinite(p) && p >= 0 ? Math.floor(p) : 1;
   const cd = ['norm', 'std', 'ged'].includes(dist) ? dist : 'norm';
-  const recodes = recodeLine('series', meta.get(sName));
   const rCode = `
     suppressMessages({library(fGarch); library(svglite)})
-    ${recodes}
     x <- as.numeric(series); x <- x[is.finite(x)]
     fit <- garchFit(~ garch(${Q}, ${P}), data = x, trace = FALSE, cond.dist = ${rStr(cd)})
     cf <- fit@fit$matcoef
@@ -215,11 +211,6 @@ function garchTerm(t) {
 
 function metaMap(meta) {
   return new Map(meta.map((m) => [m.name, m]));
-}
-
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
 }
 
 function labelOf(meta, name) {

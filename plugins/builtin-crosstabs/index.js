@@ -2,9 +2,8 @@
  * @file plugins/builtin-crosstabs/index.js
  * Built-in plugin: Descriptive Statistics ▸ Crosstabs.
  *
- * A two-way contingency table plus a Pearson chi-square test. User-missing codes
- * on either variable are recoded to NA first. Computed in R; the host renders the
- * structured tables (counts + value labels).
+ * A two-way contingency table plus a Pearson chi-square test. Computed in R; the
+ * host renders the structured tables (counts + value labels).
  *
  * Declarative plugin: the manifest declares two categorical inputs marked
  * `unique` (so the column picker excludes the already-chosen row variable); the
@@ -88,8 +87,6 @@ export async function run(app, { rowvar: rowName, colvar: colName, pmethod, meas
 
   const rCode = `
     ${ORD_MEASURES_R}
-    ${recode('rowvar', meta.get(rowName))}
-    ${recode('colvar', meta.get(colName))}
     tab <- table(rowvar, colvar)
     om <- tryCatch(ord_measures(tab), error = function(e) NULL)
     chi <- tryCatch(suppressWarnings(chisq.test(tab)), error = function(e) NULL)
@@ -299,12 +296,6 @@ ord_measures <- function(tab){
 }`;
 
 // --- helpers -----------------------------------------------------------------
-
-/** R line recoding a bound vector's user-missing codes to NA. */
-function recode(varName, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${varName}[${varName} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
-}
 
 function labelOf(meta, name) {
   return meta?.label ? `${meta.label} (${name})` : name;

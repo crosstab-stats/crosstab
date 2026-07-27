@@ -84,15 +84,10 @@ export async function did(app, { y: yName, treat: treatName, post: postName, cov
   await app.webr.installPackages(['sandwich', 'lmtest']);
   const meta = metaMap(await app.data.getVariableMeta());
   const covs = covNames || [];
-  const recodes = [
-    recodeLine('y', meta.get(yName)), recodeLine('treat', meta.get(treatName)), recodeLine('post', meta.get(postName)),
-    ...covs.map((n) => recodeLine(`covs[[${rStr(n)}]]`, meta.get(n))),
-  ].filter(Boolean).join('\n');
   const term = (n) => (meta.get(n)?.type === 'factor' ? `factor(\`${n}\`)` : `\`${n}\``);
   const covPart = covs.length ? ' + ' + covs.map(term).join(' + ') : '';
   const rCode = `
     suppressMessages({library(sandwich); library(lmtest)})
-    ${recodes}
     .t <- bin01(treat); .p <- bin01(post)
     d <- data.frame(.y = as.numeric(y), .t = .t, .p = .p)
     ${covs.length ? 'd <- cbind(d, covs)' : ''}
@@ -133,10 +128,8 @@ export async function rdd(app, { y: yName, run: runName, cutoff, bw }) {
   const meta = metaMap(await app.data.getVariableMeta());
   const c0 = Number.isFinite(cutoff) ? cutoff : 0;
   const hArg = Number.isFinite(bw) && bw > 0 ? `, h = ${bw}` : '';
-  const recodes = [recodeLine('y', meta.get(yName)), recodeLine('run', meta.get(runName))].filter(Boolean).join('\n');
   const rCode = `
     suppressMessages(library(rdrobust))
-    ${recodes}
     yy <- as.numeric(y); xx <- as.numeric(run)
     ok <- is.finite(yy) & is.finite(xx); yy <- yy[ok]; xx <- xx[ok]
     rd <- rdrobust(yy, xx, c = ${c0}${hArg})
@@ -182,15 +175,10 @@ export async function matching(app, { y: yName, treat: treatName, covs: covNames
   await app.webr.installPackages(['MatchIt', 'sandwich', 'lmtest']);
   const meta = metaMap(await app.data.getVariableMeta());
   const dist = distance === 'mahalanobis' ? 'mahalanobis' : 'glm';
-  const recodes = [
-    recodeLine('y', meta.get(yName)), recodeLine('treat', meta.get(treatName)),
-    ...covNames.map((n) => recodeLine(`covs[[${rStr(n)}]]`, meta.get(n))),
-  ].filter(Boolean).join('\n');
   const term = (n) => (meta.get(n)?.type === 'factor' ? `factor(\`${n}\`)` : `\`${n}\``);
   const formula = `.t ~ ${covNames.map(term).join(' + ')}`;
   const rCode = `
     suppressMessages({library(MatchIt); library(sandwich); library(lmtest)})
-    ${recodes}
     .t <- bin01(treat)
     d <- data.frame(.y = as.numeric(y), .t = .t)
     d <- cbind(d, covs)
@@ -253,11 +241,6 @@ function didLabel(term, treatName, postName, meta) {
 
 function metaMap(meta) {
   return new Map(meta.map((m) => [m.name, m]));
-}
-
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
 }
 
 function labelOf(meta, name) {

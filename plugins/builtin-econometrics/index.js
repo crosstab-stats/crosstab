@@ -86,8 +86,6 @@ export async function robust(app, { dv, ivs }) {
   const rCode = `
     .ivs <- as.data.frame(ivs, check.names = FALSE); names(.ivs) <- ${rNames(ivNames)}
     d <- data.frame(.y = dv, .ivs, check.names = FALSE)
-    ${recodeCol('d[[".y"]]', missing(meta, dv))}
-    ${ivNames.map((n) => recodeCol(`d[[${rStr(n)}]]`, missing(meta, n))).filter(Boolean).join('\n')}
     d <- d[stats::complete.cases(d), , drop = FALSE]
     fit <- lm(as.formula(${rStr(`.y ~ ${ivNames.map((n) => term(meta, n)).join(' + ')}`)}), data = d)
     library(sandwich); library(lmtest)
@@ -122,7 +120,6 @@ export async function iv(app, { dv, endog, instruments, controls }) {
     return void app.results.appendError('IV needs an outcome, endogenous regressor(s), and instrument(s).');
   }
   const meta = metaMap(await app.data.getVariableMeta());
-  const allNames = [...endogN, ...instrN, ...ctrlN];
   const rhs1 = [...endogN, ...ctrlN].map((n) => term(meta, n)).join(' + ');
   const rhs2 = [...instrN, ...ctrlN].map((n) => term(meta, n)).join(' + ');
   const rCode = `
@@ -130,8 +127,6 @@ export async function iv(app, { dv, endog, instruments, controls }) {
     .instr <- as.data.frame(instruments, check.names = FALSE); names(.instr) <- ${rNames(instrN)}
     ${ctrlN.length ? `.ctrl <- as.data.frame(controls, check.names = FALSE); names(.ctrl) <- ${rNames(ctrlN)}` : ''}
     d <- data.frame(.y = dv, .endog, .instr${ctrlN.length ? ', .ctrl' : ''}, check.names = FALSE)
-    ${recodeCol('d[[".y"]]', missing(meta, dv))}
-    ${allNames.map((n) => recodeCol(`d[[${rStr(n)}]]`, missing(meta, n))).filter(Boolean).join('\n')}
     d <- d[stats::complete.cases(d), , drop = FALSE]
     library(AER)
     fit <- ivreg(as.formula(${rStr(`.y ~ ${rhs1} | ${rhs2}`)}), data = d)
@@ -164,8 +159,6 @@ export async function panel(app, { dv, ivs, id, time, model }) {
   const rCode = `
     .ivs <- as.data.frame(ivs, check.names = FALSE); names(.ivs) <- ${rNames(ivNames)}
     d <- data.frame(.y = dv, .ivs, .id = id, .time = time, check.names = FALSE)
-    ${recodeCol('d[[".y"]]', missing(meta, dv))}
-    ${ivNames.map((n) => recodeCol(`d[[${rStr(n)}]]`, missing(meta, n))).filter(Boolean).join('\n')}
     d <- d[stats::complete.cases(d), , drop = FALSE]
     library(plm)
     pd <- pdata.frame(d, index = c(".id", ".time"))
@@ -216,12 +209,6 @@ function metaMap(meta) {
 }
 function label(meta, name) {
   return meta.get(name)?.label || name;
-}
-function missing(meta, name) {
-  return (meta.get(name)?.missingValues ?? []).filter((v) => Number.isFinite(Number(v))).map(Number);
-}
-function recodeCol(expr, mv) {
-  return mv.length ? `${expr}[${expr} %in% c(${mv.join(', ')})] <- NA` : '';
 }
 function term(meta, name) {
   return meta.get(name)?.type === 'factor' ? `factor(\`${name}\`)` : `\`${name}\``;

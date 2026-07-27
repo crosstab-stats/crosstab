@@ -55,13 +55,9 @@ export async function factorial(app, { dv, facs }) {
     return;
   }
   const meta = metaMap(await app.data.getVariableMeta());
-  const recodes = [recode('dv', missing(meta, dv)), ...facNames.map((n, i) => recode(`facs[[${i + 1}]]`, missing(meta, n)))]
-    .filter(Boolean)
-    .join('\n');
   const rhs = facNames.map((n) => `factor(\`${n}\`)`).join(' * ');
 
   const rCode = `
-    ${recodes}
     d <- data.frame(.y = dv, facs, check.names = FALSE)
     d <- d[stats::complete.cases(d), , drop = FALSE]
     fit <- aov(as.formula(${rStr(`.y ~ ${rhs}`)}), data = d)
@@ -105,11 +101,9 @@ export async function repeated(app, { vars }) {
     return;
   }
   const meta = metaMap(await app.data.getVariableMeta());
-  const recodes = names.map((n, i) => recode(`d[[${i + 1}]]`, missing(meta, n))).filter(Boolean).join('\n');
 
   const rCode = `
     d <- as.data.frame(vars, check.names = FALSE)
-    ${recodes}
     d <- d[stats::complete.cases(d), , drop = FALSE]
     n <- nrow(d); k <- ncol(d)
     if (n < 2 || k < 2) stop("need at least 2 complete rows and 2 columns")
@@ -160,12 +154,6 @@ function metaMap(meta) {
 }
 function label(meta, name) {
   return meta.get(name)?.label || name;
-}
-function missing(meta, name) {
-  return (meta.get(name)?.missingValues ?? []).filter((v) => Number.isFinite(Number(v))).map(Number);
-}
-function recode(rvar, mv) {
-  return mv.length ? `${rvar}[${rvar} %in% c(${mv.join(', ')})] <- NA` : '';
 }
 /** Clean an aov term: factor(`x`) → x; an interaction's ":" → " × ". */
 function prettyTerm(t) {

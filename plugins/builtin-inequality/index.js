@@ -57,10 +57,8 @@ export async function inequality(app, { x: xName }) {
   if (!xName) { await app.results.appendError('Inequality: choose a numeric quantity.'); return; }
   await app.webr.installPackages(['ineq']);
   const meta = metaMap(await app.data.getVariableMeta());
-  const recodes = recodeLine('x', meta.get(xName));
   const rCode = `
     suppressMessages({library(ineq); library(svglite)})
-    ${recodes}
     v <- as.numeric(x); v <- v[is.finite(v) & v >= 0]
     g <- Gini(v); th <- Theil(v); at <- Atkinson(v, parameter = 0.5); cv <- sd(v) / mean(v)
     lc <- Lc(v)
@@ -100,9 +98,7 @@ export async function inequality(app, { x: xName }) {
 export async function segregation(app, { groupA: aName, groupB: bName }) {
   if (!aName || !bName) { await app.results.appendError('Segregation: choose two group-count columns (one row per spatial unit).'); return; }
   const meta = metaMap(await app.data.getVariableMeta());
-  const recodes = [recodeLine('groupA', meta.get(aName)), recodeLine('groupB', meta.get(bName))].filter(Boolean).join('\n');
   const rCode = `
-    ${recodes}
     A <- as.numeric(groupA); B <- as.numeric(groupB)
     ok <- is.finite(A) & is.finite(B) & (A + B) > 0; A <- A[ok]; B <- B[ok]
     TA <- sum(A); TB <- sum(B); Tot <- TA + TB
@@ -141,10 +137,6 @@ function cleanSvg(svg) {
   return String(svg).replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1').replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1');
 }
 function metaMap(meta) { return new Map(meta.map((m) => [m.name, m])); }
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
-}
 function labelOf(meta, name) { return meta?.label ? `${meta.label} (${name})` : name; }
 function f(n, d) { return Number.isFinite(n) ? n.toFixed(d) : '—'; }
 function flat(rList) {

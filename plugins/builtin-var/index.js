@@ -60,10 +60,8 @@ export async function varModel(app, { series, lag, type, horizon }) {
   const dtype = ['const', 'trend', 'both', 'none'].includes(type) ? type : 'const';
   const H = Number.isFinite(horizon) && horizon > 0 ? Math.floor(horizon) : 10;
   const pFixed = Number.isFinite(lag) && lag >= 1 ? Math.floor(lag) : 0;
-  const recodes = series.map((n) => recodeLine(`series[[${rStr(n)}]]`, meta.get(n))).filter(Boolean).join('\n');
   const rCode = `
     suppressMessages({library(vars); library(svglite)})
-    ${recodes}
     d <- as.data.frame(lapply(series, as.numeric))
     colnames(d) <- paste0("V", seq_len(ncol(d)))
     nm <- c(${series.map((n) => rStr(labelOf(meta.get(n), n))).join(', ')})
@@ -179,11 +177,6 @@ function varTerm(term, disp, varcols) {
 
 function metaMap(meta) {
   return new Map(meta.map((m) => [m.name, m]));
-}
-
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
 }
 
 function labelOf(meta, name) {

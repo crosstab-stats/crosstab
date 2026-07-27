@@ -1274,10 +1274,14 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       paths. **Verified in Chrome:** injected R `vars` stripped `1,2,3,NA,5` vs opt-out
       raw `1,2,3,-99,5`; grid raw `-99`; Descriptives N=4 / Missing=1 / mean=2.75; a real
       Descriptives run carries `keepMissing=false`, Frequencies `keepMissing=true`.
-  - [ ] *Deferred cleanup:* remove the now-redundant per-plugin `%in% codes <- NA`
-        recode from the ~44 exclude-style analysis plugins (a harmless no-op today,
-        since the central strip already covers them). Leave it in analyses that opt out
-        (Frequencies).
+  - [x] *Cleanup — DONE.* Removed the now-redundant per-plugin `%in% codes <- NA`
+        recode (and its `missingValues` extraction) from **41 exclude-style analysis
+        plugins** — the central strip covers them. Kept in the three that genuinely
+        need raw codes: **Frequencies** (opts out via `keepMissing`), **plots** (reads
+        `getColumns`/`injectData` raw — neither is stripped), and **syntax-export**
+        (emits the recode into the exported standalone `.R`). Verified: all plugins
+        parse; `missingValues` gone from the 41; no dangling references; descriptives/
+        correlation/regression run clean with `-99` still excluded (x: N=5, Missing=1).
 - [x] **`app.ui.showForm`** — a general declarative form dialog (text/password/
       number fields). Built (`core/ui-service.js`) for the FRED importer; also used
       by the dataset library's name prompt.

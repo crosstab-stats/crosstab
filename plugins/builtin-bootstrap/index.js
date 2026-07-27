@@ -117,10 +117,8 @@ export async function run(app, { x: name, reps }) {
   if (!name) return;
   const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
   const label = meta.get(name)?.label || name;
-  const mv = (meta.get(name)?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
 
   const rCode = `
-    ${mv.length ? `x[x %in% c(${mv.map(Number).join(', ')})] <- NA` : ''}
     x <- as.numeric(x); x <- x[is.finite(x)]
     n <- length(x)
     if (n < 2) stop("need at least 2 non-missing values")
@@ -203,7 +201,6 @@ export async function bootStatistic(app, { x: name, stat, reps }) {
   const meta = metaMap(await app.data.getVariableMeta());
   const rCode = `
     suppressMessages(library(boot))
-    ${recodeLine('x', meta.get(name))}
     x <- as.numeric(x); x <- x[is.finite(x)]; n <- length(x)
     if (n < 3) stop("need at least 3 non-missing values")
     B <- as.integer(min(max(if (is.finite(reps)) reps else 2000, 200), 100000))
@@ -242,8 +239,6 @@ export async function bootCorr(app, { x: xName, y: yName, reps }) {
   const meta = metaMap(await app.data.getVariableMeta());
   const rCode = `
     suppressMessages(library(boot))
-    ${recodeLine('x', meta.get(xName))}
-    ${recodeLine('y', meta.get(yName))}
     ok <- is.finite(x) & is.finite(y); d <- data.frame(x = x[ok], y = y[ok])
     if (nrow(d) < 4) stop("need at least 4 complete pairs")
     B <- as.integer(min(max(if (is.finite(reps)) reps else 2000, 200), 100000))
@@ -272,7 +267,6 @@ export async function permutation(app, { y: yName, group: gName, stat, reps }) {
   if (!yName || !gName) return;
   const meta = metaMap(await app.data.getVariableMeta());
   const rCode = `
-    ${recodeLine('y', meta.get(yName))}
     g <- as.factor(group); ok <- is.finite(y) & !is.na(g)
     y <- y[ok]; g <- droplevels(g[ok]); lv <- levels(g)
     if (length(lv) != 2) stop("group must have exactly 2 levels (has ", length(lv), ")")
@@ -360,11 +354,6 @@ export async function power(app, { n, d, alpha, reps }) {
 
 function metaMap(meta) {
   return new Map(meta.map((m) => [m.name, m]));
-}
-
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
 }
 
 function labelOf(meta, name) {

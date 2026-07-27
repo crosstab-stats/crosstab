@@ -94,12 +94,10 @@ export async function cfa(app, { items, factorName }) {
   }
   const meta = metaMap(await app.data.getVariableMeta());
   const fac = sanitizeName(factorName) || 'Factor';
-  const recodes = items.map((n) => recodeLine(`items[[${rStr(n)}]]`, meta.get(n))).filter(Boolean).join('\n');
   // lavaan model syntax uses plain names (NOT R backticks).
   const model = `${fac} =~ ${items.join(' + ')}`;
   const rCode = `
     ${LAVAAN_PRELUDE}
-    ${recodes}
     fit <- cfa(${rStr(model)}, data = items, std.lv = TRUE)
     fm <- fitMeasures(fit, c("chisq","df","pvalue","cfi","tli","rmsea","rmsea.ci.lower","rmsea.ci.upper","srmr"))
     ld <- standardizedSolution(fit); ld <- ld[ld$op == "=~", ]
@@ -152,13 +150,11 @@ export async function sem(app, { vars, model }) {
     return;
   }
   const meta = metaMap(await app.data.getVariableMeta());
-  const recodes = vars.map((n) => recodeLine(`d[[${rStr(n)}]]`, meta.get(n))).filter(Boolean).join('\n');
   // Users type one line with ';' separators; lavaan wants newline-separated.
   const modelSyntax = model.replace(/;/g, '\n');
   const rCode = `
     ${LAVAAN_PRELUDE}
     d <- vars
-    ${recodes}
     fit <- sem(${rStr(modelSyntax)}, data = d)
     fm <- fitMeasures(fit, c("chisq","df","pvalue","cfi","tli","rmsea","srmr"))
     ps <- standardizedSolution(fit); ps <- ps[ps$op %in% c("=~","~","~~"), ]
@@ -214,11 +210,6 @@ function sanitizeName(s) {
 
 function metaMap(meta) {
   return new Map(meta.map((m) => [m.name, m]));
-}
-
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
 }
 
 function labelOf(meta, name) {

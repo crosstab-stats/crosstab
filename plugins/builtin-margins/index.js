@@ -98,10 +98,6 @@ export async function margins(app, { dv: dvName, ivs: ivNames, family, kind }) {
   const atmeans = kind === 'mem';
   const meta = metaMap(await app.data.getVariableMeta());
 
-  const recodes = [
-    recodeLine('dv', meta.get(dvName)),
-    ...ivNames.map((n) => recodeLine(`ivs[[${rStr(n)}]]`, meta.get(n))),
-  ].filter(Boolean).join('\n');
   const factorConv = ivNames
     .filter((n) => meta.get(n)?.type === 'factor')
     .map((n) => factorLine(n, meta.get(n)))
@@ -150,7 +146,6 @@ export async function margins(app, { dv: dvName, ivs: ivNames, family, kind }) {
       list(term = labs, est = est, se = se, z = z, p = p, lo = est - 1.96 * se, hi = est + 1.96 * se, n = nrow(mf))
     }
 
-    ${recodes}
     ${dvCode}
     d <- cbind(.dv = dv, ivs)
     ${factorConv}
@@ -208,11 +203,6 @@ function prettyMargin(term, meta) {
 
 function metaMap(meta) {
   return new Map(meta.map((m) => [m.name, m]));
-}
-
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
 }
 
 function labelOf(meta, name) {

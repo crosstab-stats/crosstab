@@ -68,8 +68,6 @@ export async function mannWhitney(app, { y: yName, g: gName }) {
   if (!yName || !gName) return;
   const meta = await metaMap(app);
   const rCode = `
-    ${recode('y', yName, meta)}
-    ${recode('g', gName, meta)}
     y <- as.numeric(y); g <- as.factor(g)
     ok <- is.finite(y) & !is.na(g); y <- y[ok]; g <- droplevels(g[ok])
     lv <- levels(g)
@@ -112,8 +110,6 @@ export async function wilcoxon(app, { x1: n1, x2: n2 }) {
   if (!n1 || !n2) return;
   const meta = await metaMap(app);
   const rCode = `
-    ${recode('x1', n1, meta)}
-    ${recode('x2', n2, meta)}
     x1 <- as.numeric(x1); x2 <- as.numeric(x2)
     ok <- is.finite(x1) & is.finite(x2); x1 <- x1[ok]; x2 <- x2[ok]
     d <- x2 - x1; nz <- d[d != 0]; ties <- sum(d == 0)
@@ -163,8 +159,6 @@ export async function kruskal(app, { y: yName, g: gName }) {
   if (!yName || !gName) return;
   const meta = await metaMap(app);
   const rCode = `
-    ${recode('y', yName, meta)}
-    ${recode('g', gName, meta)}
     y <- as.numeric(y); g <- as.factor(g)
     ok <- is.finite(y) & !is.na(g); y <- y[ok]; g <- droplevels(g[ok])
     k <- nlevels(g); N <- length(y)
@@ -200,10 +194,6 @@ export async function kruskal(app, { y: yName, g: gName }) {
 
 async function metaMap(app) {
   return new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
-}
-function recode(boundName, varName, meta) {
-  const mv = (meta.get(varName)?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${boundName}[${boundName} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
 }
 function label(meta, name) {
   return meta.get(name)?.label || name;

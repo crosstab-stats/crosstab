@@ -52,7 +52,6 @@ export async function run(app, { y: yName, ivs: ivNames, m, model }) {
   const M = Number.isFinite(m) && m >= 2 ? Math.floor(m) : 5;
   const logistic = model === 'logistic';
   const tok = ivNames.map((_, i) => `V${i + 1}`);
-  const recodes = [recodeLine('y', meta.get(yName)), ...ivNames.map((n) => recodeLine(`ivs[[${rStr(n)}]]`, meta.get(n)))].filter(Boolean).join('\n');
   const mk = ivNames.map((n, i) => {
     const fac = meta.get(n)?.type === 'factor';
     return `d$${tok[i]} <- ${fac ? `as.factor(ivs[[${rStr(n)}]])` : `as.numeric(ivs[[${rStr(n)}]])`}`;
@@ -61,7 +60,6 @@ export async function run(app, { y: yName, ivs: ivNames, m, model }) {
   const fitCall = logistic ? `glm(.y ~ ${rhs}, family = binomial())` : `lm(.y ~ ${rhs})`;
   const rCode = `
     suppressMessages(library(mice))
-    ${recodes}
     d <- data.frame(.y = ${logistic ? 'as.integer(as.numeric(y))' : 'as.numeric(y)'})
     ${mk}
     miss <- colSums(is.na(d)); nrow_all <- nrow(d); ncc <- sum(stats::complete.cases(d))
@@ -124,10 +122,6 @@ function prettyTermTok(term, ivNames, meta) {
   return term;
 }
 function metaMap(meta) { return new Map(meta.map((m) => [m.name, m])); }
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
-}
 function labelOf(meta, name) { return meta?.label ? `${meta.label} (${name})` : name; }
 function f(n, d) { return Number.isFinite(n) ? n.toFixed(d) : '—'; }
 function ci(lo, hi) { return Number.isFinite(lo) && Number.isFinite(hi) ? `[${lo.toFixed(3)}, ${hi.toFixed(3)}]` : '—'; }

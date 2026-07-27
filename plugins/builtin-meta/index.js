@@ -64,10 +64,6 @@ export async function metaAnalysis(app, { yi: yiName, prec: precName, precType, 
   const mods = modNames || [];
   const modTok = mods.map((_, i) => `M${i + 1}`);
   const hasLabel = !!labelName;
-  const recodes = [
-    recodeLine('yi', meta.get(yiName)), recodeLine('prec', meta.get(precName)),
-    ...mods.map((n) => recodeLine(`mods[[${rStr(n)}]]`, meta.get(n))),
-  ].filter(Boolean).join('\n');
   const modMk = mods.map((n, i) => {
     const fac = meta.get(n)?.type === 'factor';
     return `d$${modTok[i]} <- ${fac ? `factor(mods[[${rStr(n)}]])` : `as.numeric(mods[[${rStr(n)}]])`}`;
@@ -75,7 +71,6 @@ export async function metaAnalysis(app, { yi: yiName, prec: precName, precType, 
   const viExpr = precType === 'var' ? 'as.numeric(prec)' : 'as.numeric(prec)^2';
   const rCode = `
     suppressMessages({library(metafor); library(svglite)})
-    ${recodes}
     d <- data.frame(.yi = as.numeric(yi), .vi = ${viExpr})
     ${hasLabel ? 'd$.slab <- as.character(label)' : 'd$.slab <- paste("Study", seq_len(nrow(d)))'}
     ${modMk}
@@ -168,11 +163,6 @@ function metaRegTerm(term, mods, meta) {
 
 function metaMap(meta) {
   return new Map(meta.map((m) => [m.name, m]));
-}
-
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
 }
 
 function labelOf(meta, name) {

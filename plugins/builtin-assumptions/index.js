@@ -60,18 +60,9 @@ export async function normality(app, { vars }) {
   const meta = metaMap(await app.data.getVariableMeta());
 
   // Coerce the binding (vector for one var, data.frame for several) to a uniform
-  // data.frame, then recode each column's user-missing codes by position.
-  const recode = names
-    .map((nm, i) => {
-      const mv = missing(meta, nm);
-      return mv.length ? `d[[${i + 1}]][d[[${i + 1}]] %in% c(${mv})] <- NA` : '';
-    })
-    .filter(Boolean)
-    .join('\n');
-
+  // data.frame.
   const rCode = `
     d <- if (is.data.frame(vars)) vars else data.frame(v = vars)
-    ${recode}
     library(svglite)
     stat <- function(col) {
       x <- suppressWarnings(as.numeric(col)); x <- x[is.finite(x)]; n <- length(x)
@@ -132,10 +123,8 @@ export async function levene(app, { outcome, groups }) {
     return;
   }
   const meta = metaMap(await app.data.getVariableMeta());
-  const recodeY = missing(meta, outcome);
   const rCode = `
     y <- suppressWarnings(as.numeric(outcome))
-    ${recodeY.length ? `y[y %in% c(${recodeY})] <- NA` : ''}
     g <- as.factor(groups)
     ok <- is.finite(y) & !is.na(g)
     y <- y[ok]; g <- droplevels(g[ok])
@@ -176,9 +165,6 @@ function metaMap(meta) {
 }
 function label(meta, name) {
   return meta.get(name)?.label || name;
-}
-function missing(meta, name) {
-  return (meta.get(name)?.missingValues ?? []).filter((v) => Number.isFinite(Number(v))).map(Number);
 }
 /** svglite emits a fixed pt width/height; drop them so the plot fills its box. */
 function stripSize(svg) {

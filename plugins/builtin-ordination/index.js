@@ -64,10 +64,8 @@ export async function correspondence(app, { rowvar: rowName, colvar: colName }) 
   await app.webr.installPackages(['ca']);
   const meta = metaMap(await app.data.getVariableMeta());
   const lv = (name, code) => meta.get(name)?.valueLabels?.[code] ?? code;
-  const recodes = [recodeLine('rowvar', meta.get(rowName)), recodeLine('colvar', meta.get(colName))].filter(Boolean).join('\n');
   const rCode = `
     suppressMessages({library(ca); library(svglite)})
-    ${recodes}
     tab <- table(rowvar, colvar)
     cc <- ca(tab)
     iner <- cc$sv^2; tot <- sum(iner); pct <- 100 * iner / tot
@@ -104,10 +102,8 @@ export async function mds(app, { vars, label: labelName }) {
   if (!vars || vars.length < 2) { await app.results.appendError('MDS: choose at least two numeric attributes.'); return; }
   const meta = metaMap(await app.data.getVariableMeta());
   const hasLabel = !!labelName;
-  const recodes = vars.map((n) => recodeLine(`vars[[${rStr(n)}]]`, meta.get(n))).filter(Boolean).join('\n');
   const rCode = `
     suppressMessages(library(svglite))
-    ${recodes}
     m <- as.matrix(as.data.frame(lapply(vars, as.numeric)))
     ${hasLabel ? 'lab <- as.character(label)' : 'lab <- as.character(seq_len(nrow(m)))'}
     ok <- stats::complete.cases(m); m <- m[ok, , drop = FALSE]; lab <- lab[ok]
@@ -149,10 +145,6 @@ export async function mds(app, { vars, label: labelName }) {
 // --- helpers -----------------------------------------------------------------
 function cleanSvg(svg) { return String(svg).replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1').replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1'); }
 function metaMap(meta) { return new Map(meta.map((m) => [m.name, m])); }
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
-}
 function labelOf(meta, name) { return meta?.label ? `${meta.label} (${name})` : name; }
 function f(n, d) { return Number.isFinite(n) ? n.toFixed(d) : '—'; }
 function rStr(s) { return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`; }

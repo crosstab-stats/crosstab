@@ -67,16 +67,11 @@ export async function linear(app, { y: yName, fixed: fixedNames, group: groupNam
   }
   await app.webr.installPackages(['lme4', 'lmerTest']);
   const meta = metaMap(await app.data.getVariableMeta());
-  const recodes = [
-    recodeLine('y', meta.get(yName)), recodeLine('group', meta.get(groupName)),
-    ...fixedNames.map((n) => recodeLine(`fixed[[${rStr(n)}]]`, meta.get(n))),
-  ].filter(Boolean).join('\n');
   const term = (n) => (meta.get(n)?.type === 'factor' ? `factor(\`${n}\`)` : `\`${n}\``);
   const ranPart = slopeName ? `(1 + \`${slopeName}\` | .g)` : `(1 | .g)`;
   const formula = `.y ~ ${fixedNames.map(term).join(' + ')} + ${ranPart}`;
   const rCode = `
     suppressMessages(library(lmerTest))
-    ${recodes}
     d <- data.frame(.y = as.numeric(y)); d <- cbind(d, fixed); d$.g <- factor(group)
     d <- d[stats::complete.cases(d), , drop = FALSE]
     fit <- lmer(as.formula(${rStr(formula)}), data = d)
@@ -133,16 +128,11 @@ export async function logistic(app, { y: yName, fixed: fixedNames, group: groupN
   }
   await app.webr.installPackages(['lme4']);
   const meta = metaMap(await app.data.getVariableMeta());
-  const recodes = [
-    recodeLine('y', meta.get(yName)), recodeLine('group', meta.get(groupName)),
-    ...fixedNames.map((n) => recodeLine(`fixed[[${rStr(n)}]]`, meta.get(n))),
-  ].filter(Boolean).join('\n');
   const term = (n) => (meta.get(n)?.type === 'factor' ? `factor(\`${n}\`)` : `\`${n}\``);
   const formula = `.y ~ ${fixedNames.map(term).join(' + ')} + (1 | .g)`;
   const rCode = `
     suppressMessages(library(lme4))
     ${BIN01_R}
-    ${recodes}
     d <- data.frame(.y = bin01(y)); d <- cbind(d, fixed); d$.g <- factor(group)
     d <- d[stats::complete.cases(d), , drop = FALSE]
     fit <- glmer(as.formula(${rStr(formula)}), data = d, family = binomial())
@@ -195,11 +185,6 @@ async function runR(app, rCode) {
 
 function metaMap(meta) {
   return new Map(meta.map((m) => [m.name, m]));
-}
-
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
 }
 
 function labelOf(meta, name) {

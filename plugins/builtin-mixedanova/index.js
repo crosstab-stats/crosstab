@@ -67,11 +67,6 @@ export async function ancova(app, { y: yName, factors: factorNames, covs: covNam
   const meta = metaMap(await app.data.getVariableMeta());
   const fTok = factorNames.map((_, i) => `F${i + 1}`);
   const cTok = covNames.map((_, i) => `C${i + 1}`);
-  const recodes = [
-    recodeLine('y', meta.get(yName)),
-    ...factorNames.map((n) => recodeLine(`factors[[${rStr(n)}]]`, meta.get(n))),
-    ...covNames.map((n) => recodeLine(`covs[[${rStr(n)}]]`, meta.get(n))),
-  ].filter(Boolean).join('\n');
   const mk = [
     ...factorNames.map((n, i) => `d$${fTok[i]} <- factor(factors[[${rStr(n)}]])`),
     ...covNames.map((n, i) => `d$${cTok[i]} <- as.numeric(covs[[${rStr(n)}]])`),
@@ -80,7 +75,6 @@ export async function ancova(app, { y: yName, factors: factorNames, covs: covNam
   const emmRhs = fTok.join(' * ');
   const rCode = `
     suppressMessages({library(car); library(emmeans)})
-    ${recodes}
     d <- data.frame(.y = as.numeric(y))
     ${mk}
     d <- d[stats::complete.cases(d), , drop = FALSE]
@@ -133,14 +127,9 @@ export async function mixedAnova(app, { within: withinNames, between: betweenNam
   await app.webr.installPackages(['afex']);
   const meta = metaMap(await app.data.getVariableMeta());
   const hasBetween = !!betweenName;
-  const recodes = [
-    ...withinNames.map((n) => recodeLine(`within[[${rStr(n)}]]`, meta.get(n))),
-    hasBetween ? recodeLine('between', meta.get(betweenName)) : '',
-  ].filter(Boolean).join('\n');
   const levelNames = withinNames.map((n) => labelOf(meta.get(n), n));
   const rCode = `
     suppressMessages(library(afex))
-    ${recodes}
     W <- as.data.frame(lapply(within, as.numeric)); names(W) <- paste0("L", seq_len(ncol(W)))
     ok <- stats::complete.cases(W)${hasBetween ? ' & !is.na(between)' : ''}
     W <- W[ok, , drop = FALSE]
@@ -196,11 +185,6 @@ function rmTerm(term, betweenName, meta) {
 
 function metaMap(meta) {
   return new Map(meta.map((m) => [m.name, m]));
-}
-
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
 }
 
 function labelOf(meta, name) {

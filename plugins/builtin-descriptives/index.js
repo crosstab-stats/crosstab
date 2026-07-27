@@ -38,7 +38,7 @@ export const manifest = {
 /**
  * Compute descriptives for the chosen variables. `vars` (the chosen columns) is
  * already bound in R as a data.frame; `inputs.vars` is the list of names, used
- * here only to apply each variable's user-missing codes before the stats.
+ * here only to label each row with the variable's label.
  *
  * @param {object} app
  * @param {{vars: string[]}} inputs
@@ -47,20 +47,7 @@ export async function run(app, { vars }) {
   if (!vars || !vars.length) return;
   const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
 
-  // Recode each column's user-missing codes to NA (SPSS convention), in R, on the
-  // bound `vars` data.frame. Codes come from variable metadata.
-  const recode = vars
-    .map((name) => {
-      const mv = (meta.get(name)?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-      if (!mv.length) return '';
-      const col = `vars[[${rStr(name)}]]`;
-      return `${col}[${col} %in% c(${mv.map(Number).join(', ')})] <- NA`;
-    })
-    .filter(Boolean)
-    .join('\n');
-
   const rCode = `
-    ${recode}
     nm  <- names(vars)
     num <- lapply(nm, function(n) suppressWarnings(as.numeric(vars[[n]])))
     fin <- function(x) x[is.finite(x)]
@@ -99,9 +86,4 @@ function withLabels(result, vars, meta) {
     rows.push(result.names.map((_, ci) => (ci === 0 ? display(String(cols[0][i])) : cols[ci][i])));
   }
   return { columns: result.names, rows, rowHeaders: true };
-}
-
-/** R string literal (escapes backslash and quote). */
-function rStr(s) {
-  return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }

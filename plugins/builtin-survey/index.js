@@ -15,8 +15,7 @@
  *
  * Stateless + reproducible by design: each analysis carries its own design inputs
  * (no hidden global "weight by" state), so every result documents the design used
- * and exports faithfully. User-missing codes are recoded to NA first; non-positive
- * /missing weights drop the case.
+ * and exports faithfully. Non-positive/missing weights drop the case.
  */
 
 /** Shared design inputs appended to every action: weight (required) + optional
@@ -102,11 +101,9 @@ export async function means(app, { vars, weight, strata, cluster }) {
     return;
   }
   const meta = metaMap(await app.data.getVariableMeta());
-  const recodes = vars.map((n) => recodeLine(`vars[[${rStr(n)}]]`, meta.get(n))).filter(Boolean).join('\n');
   const fml = `~ ${vars.map((n) => `\`${n}\``).join(' + ')}`;
   const rCode = `
     suppressMessages(library(survey))
-    ${recodes}
     d <- vars
     d[[".w"]] <- as.numeric(weight)
     ${strata ? 'd[[".st"]] <- strata' : ''}
@@ -150,8 +147,6 @@ export async function crosstab(app, { rowvar, colvar, weight, strata, cluster })
   const meta = metaMap(await app.data.getVariableMeta());
   const rCode = `
     suppressMessages(library(survey))
-    ${recodeLine('rowvar', meta.get(rowvar))}
-    ${recodeLine('colvar', meta.get(colvar))}
     d <- data.frame(.r = as.factor(rowvar), .c = as.factor(colvar), .w = as.numeric(weight)${strata ? ', .st = strata' : ''}${cluster ? ', .cl = cluster' : ''})
     d <- d[is.finite(d$.w) & d$.w > 0 & !is.na(d$.r) & !is.na(d$.c), , drop = FALSE]
     if (nrow(d) < 2) stop("not enough complete, positively-weighted cases")
@@ -197,12 +192,10 @@ export async function regression(app, { dv, ivs, family, weight, strata, cluster
   }
   const meta = metaMap(await app.data.getVariableMeta());
   const logistic = family === 'logistic';
-  const recodes = [recodeLine('dv', meta.get(dv)), ...ivs.map((n) => recodeLine(`ivs[[${rStr(n)}]]`, meta.get(n)))].filter(Boolean).join('\n');
   const term = (n) => (meta.get(n)?.type === 'factor' ? `factor(\`${n}\`)` : `\`${n}\``);
   const formula = `.dv ~ ${ivs.map(term).join(' + ')}`;
   const rCode = `
     suppressMessages(library(survey))
-    ${recodes}
     dv <- as.numeric(dv)
     ${logistic ? 'dv <- as.numeric(dv == max(dv, na.rm = TRUE))  # model the higher category as 1' : ''}
     d <- cbind(.dv = dv, ivs)
@@ -264,11 +257,6 @@ async function runR(app, rCode) {
 
 function metaMap(meta) {
   return new Map(meta.map((m) => [m.name, m]));
-}
-
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
 }
 
 function labelOf(meta, name) {

@@ -68,7 +68,6 @@ async function fitCount(app, { dv: dvName, ivs: ivNames }, nb) {
   }
   if (nb) await app.webr.installPackages(['MASS']);
   const meta = metaMap(await app.data.getVariableMeta());
-  const recodes = [recodeLine('dv', meta.get(dvName)), ...ivNames.map((n) => recodeLine(`ivs[[${rStr(n)}]]`, meta.get(n)))].filter(Boolean).join('\n');
   const term = (n) => (meta.get(n)?.type === 'factor' ? `factor(\`${n}\`)` : `\`${n}\``);
   const formula = `.dv ~ ${ivNames.map(term).join(' + ')}`;
   const fitCall = nb
@@ -76,7 +75,6 @@ async function fitCount(app, { dv: dvName, ivs: ivNames }, nb) {
     : `glm(as.formula(${rStr(formula)}), data = d, family = poisson())`;
   const rCode = `
     ${nb ? 'suppressMessages(library(MASS))' : ''}
-    ${recodes}
     dv <- as.numeric(dv)
     if (any(dv[is.finite(dv)] < 0, na.rm = TRUE)) stop("count outcome must be non-negative")
     d <- cbind(.dv = dv, ivs); d <- d[stats::complete.cases(d), , drop = FALSE]
@@ -119,11 +117,6 @@ async function fitCount(app, { dv: dvName, ivs: ivNames }, nb) {
 
 function metaMap(meta) {
   return new Map(meta.map((m) => [m.name, m]));
-}
-
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
 }
 
 function labelOf(meta, name) {

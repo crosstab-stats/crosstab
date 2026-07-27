@@ -44,10 +44,8 @@ export async function run(app, { exposure: expName, outcome: outName }) {
     return;
   }
   const meta = metaMap(await app.data.getVariableMeta());
-  const recodes = [recodeLine('exposure', meta.get(expName)), recodeLine('outcome', meta.get(outName))].filter(Boolean).join('\n');
   const rCode = `
     ${BIN01_R}
-    ${recodes}
     e <- bin01(exposure); o <- bin01(outcome)
     ok <- !is.na(e) & !is.na(o); e <- e[ok]; o <- o[ok]
     a <- sum(e == 1 & o == 1); b <- sum(e == 1 & o == 0)
@@ -117,10 +115,6 @@ const BIN01_R = `bin01 <- function(v){ v <- suppressWarnings(as.numeric(v)); u <
 
 function pct(x) { return Number.isFinite(x) ? `${(100 * x).toFixed(1)}%` : '—'; }
 function metaMap(meta) { return new Map(meta.map((m) => [m.name, m])); }
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
-}
 function labelOf(meta, name) { return meta?.label ? `${meta.label} (${name})` : name; }
 function f(n, d) { return Number.isFinite(n) ? n.toFixed(d) : '—'; }
 function ci(lo, hi) { return Number.isFinite(lo) && Number.isFinite(hi) ? `[${lo.toFixed(3)}, ${hi.toFixed(3)}]` : '—'; }

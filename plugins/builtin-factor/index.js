@@ -78,22 +78,11 @@ export async function run(app, { vars, nfactors, method, rotation }) {
   const rot = ['none', 'varimax', 'oblimin', 'promax'].includes(rotation) ? rotation : 'varimax';
   const nf = Number.isFinite(nfactors) && nfactors >= 1 ? Math.round(nfactors) : 0;
 
-  const recode = vars
-    .map((name) => {
-      const mv = (meta.get(name)?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-      if (!mv.length) return '';
-      const col = `vars[[${rStr(name)}]]`;
-      return `${col}[${col} %in% c(${mv.map(Number).join(', ')})] <- NA`;
-    })
-    .filter(Boolean)
-    .join('\n');
-
   const fitExpr = fm
     ? `psych::fa(d, nfactors = nf, rotate = ${rStr(rot)}, fm = ${rStr(fm)})`
     : `psych::principal(d, nfactors = nf, rotate = ${rStr(rot)})`;
 
   const rCode = `
-    ${recode}
     d <- as.data.frame(lapply(vars, function(c) suppressWarnings(as.numeric(c))), check.names = FALSE)
     d <- d[stats::complete.cases(d), , drop = FALSE]
     if (ncol(d) < 2 || nrow(d) < 3) stop("need at least 2 items and 3 complete cases")

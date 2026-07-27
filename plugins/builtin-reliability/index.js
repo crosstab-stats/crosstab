@@ -5,7 +5,7 @@
  *
  * Computed with `psych::alpha` (installed on demand); rendered SPSS-style: overall
  * Cronbach's α (raw + standardized), and per-item statistics — corrected
- * item-total correlation and "α if item deleted". User-missing recoded to NA.
+ * item-total correlation and "α if item deleted".
  * (Reverse-keyed items aren't auto-flipped; recode them first via Transform.)
  */
 
@@ -45,18 +45,7 @@ export async function run(app, { vars }) {
   }
   const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
 
-  const recode = vars
-    .map((name) => {
-      const mv = (meta.get(name)?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-      if (!mv.length) return '';
-      const col = `vars[[${rStr(name)}]]`;
-      return `${col}[${col} %in% c(${mv.map(Number).join(', ')})] <- NA`;
-    })
-    .filter(Boolean)
-    .join('\n');
-
   const rCode = `
-    ${recode}
     d <- as.data.frame(lapply(vars, function(c) suppressWarnings(as.numeric(c))), check.names = FALSE)
     a <- psych::alpha(d, warnings = FALSE, check.keys = FALSE)
     # McDonald's omega (total) from a single-factor congeneric model. Needs >= 3

@@ -98,19 +98,10 @@ export async function loglinear(app, { vars, model }) {
     return;
   }
   const meta = metaMap(await app.data.getVariableMeta());
-  const recodes = vars
-    .map((n) => {
-      const mv = missing(meta, n);
-      const col = `vars[[${rStr(n)}]]`;
-      return mv.length ? `${col}[${col} %in% c(${mv.join(', ')})] <- NA` : '';
-    })
-    .filter(Boolean)
-    .join('\n');
   const X = vars.map((_, i) => `X${i + 1}`);
   const terms = model === 'independence' ? X.join(' + ') : model === 'saturated' ? X.join(' * ') : `(${X.join(' + ')})^2`;
   const modelLabel = { independence: 'Mutual independence', homogeneous: 'Homogeneous association (all two-way)', saturated: 'Saturated' }[model] || model;
   const rCode = `
-    ${recodes}
     vv <- as.data.frame(lapply(vars, function(c) factor(c)), check.names = FALSE)
     names(vv) <- paste0("X", seq_len(ncol(vv)))
     tabdf <- as.data.frame(table(vv))
@@ -184,7 +175,6 @@ export async function gof(app, { variable, expected }) {
   const meta = metaMap(await app.data.getVariableMeta());
   const exp = parseProps(expected);
   const rCode = `
-    ${recode('variable', missing(meta, variable))}
     x <- variable[!is.na(variable)]
     tab <- table(x)
     .pin <- c(${exp.join(', ')})
@@ -227,7 +217,6 @@ export async function oneProp(app, { variable, p0 }) {
   const meta = metaMap(await app.data.getVariableMeta());
   const test = Number.isFinite(p0) ? p0 : 0.5;
   const rCode = `
-    ${recode('variable', missing(meta, variable))}
     x <- as.factor(variable[!is.na(variable)])
     if (nlevels(x) != 2) stop("need a variable with exactly 2 categories")
     tab <- table(x); succ <- tab[2]; nn <- sum(tab)
@@ -267,8 +256,6 @@ export async function twoProp(app, { outcome, groups }) {
   if (!outcome || !groups) return void app.results.appendError('Pick a binary outcome and a 2-group variable.');
   const meta = metaMap(await app.data.getVariableMeta());
   const rCode = `
-    ${recode('outcome', missing(meta, outcome))}
-    ${recode('groups', missing(meta, groups))}
     y <- as.factor(outcome); g <- as.factor(groups)
     ok <- !is.na(y) & !is.na(g); y <- droplevels(y[ok]); g <- droplevels(g[ok])
     if (nlevels(g) != 2 || nlevels(y) != 2) stop("need a 2-category outcome and exactly 2 groups")
@@ -311,8 +298,6 @@ export async function mcnemar(app, { v1, v2 }) {
   if (!v1 || !v2) return void app.results.appendError("McNemar's test needs two variables.");
   const meta = metaMap(await app.data.getVariableMeta());
   const rCode = `
-    ${recode('v1', missing(meta, v1))}
-    ${recode('v2', missing(meta, v2))}
     a <- as.factor(v1); b <- as.factor(v2)
     ok <- !is.na(a) & !is.na(b); a <- droplevels(a[ok]); b <- droplevels(b[ok])
     tab <- table(a, b)
@@ -356,13 +341,6 @@ function label(meta, name) {
 }
 function vlab(meta, name, code) {
   return meta.get(name)?.valueLabels?.[code] ?? code;
-}
-function missing(meta, name) {
-  return (meta.get(name)?.missingValues ?? []).filter((v) => Number.isFinite(Number(v))).map(Number);
-}
-/** Recode line for a bound vector `rvar` (the input's R variable). */
-function recode(rvar, mv) {
-  return mv.length ? `${rvar}[${rvar} %in% c(${mv.join(', ')})] <- NA` : '';
 }
 function parseProps(s) {
   return String(s || '')

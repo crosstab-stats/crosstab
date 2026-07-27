@@ -44,12 +44,8 @@ export async function run(app, { dvs, group }) {
     return;
   }
   const meta = metaMap(await app.data.getVariableMeta());
-  const recodes = [...dvNames.map((n, i) => recode(`dvs[[${i + 1}]]`, missing(meta, n))), recode('group', missing(meta, group))]
-    .filter(Boolean)
-    .join('\n');
 
   const rCode = `
-    ${recodes}
     Y <- as.matrix(as.data.frame(dvs, check.names = FALSE))
     g <- as.factor(group)
     ok <- stats::complete.cases(Y) & !is.na(g)
@@ -107,12 +103,6 @@ function metaMap(meta) {
 }
 function label(meta, name) {
   return meta.get(name)?.label || name;
-}
-function missing(meta, name) {
-  return (meta.get(name)?.missingValues ?? []).filter((v) => Number.isFinite(Number(v))).map(Number);
-}
-function recode(rvar, mv) {
-  return mv.length ? `${rvar}[${rvar} %in% c(${mv.join(', ')})] <- NA` : '';
 }
 function flat(rList) {
   const byName = {};

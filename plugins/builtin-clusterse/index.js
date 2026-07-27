@@ -46,14 +46,9 @@ export async function run(app, { y: yName, ivs: ivNames, cluster: clName }) {
   await app.webr.installPackages(['sandwich', 'lmtest']);
   const meta = metaMap(await app.data.getVariableMeta());
   const term = (n) => (meta.get(n)?.type === 'factor' ? `factor(\`${n}\`)` : `\`${n}\``);
-  const recodes = [
-    recodeLine('y', meta.get(yName)), recodeLine('cluster', meta.get(clName)),
-    ...ivNames.map((n) => recodeLine(`ivs[[${rStr(n)}]]`, meta.get(n))),
-  ].filter(Boolean).join('\n');
   const formula = `.y ~ ${ivNames.map(term).join(' + ')}`;
   const rCode = `
     suppressMessages({library(sandwich); library(lmtest)})
-    ${recodes}
     d <- data.frame(.y = as.numeric(y), .cl = as.factor(cluster)); d <- cbind(d, ivs)
     d <- d[stats::complete.cases(d), , drop = FALSE]
     fit <- lm(as.formula(${rStr(formula)}), data = d)
@@ -82,10 +77,6 @@ export async function run(app, { y: yName, ivs: ivNames, cluster: clName }) {
 // --- helpers -----------------------------------------------------------------
 
 function metaMap(meta) { return new Map(meta.map((m) => [m.name, m])); }
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
-}
 function labelOf(meta, name) { return meta?.label ? `${meta.label} (${name})` : name; }
 function prettyTerm(term) {
   const m = /^factor\(`?(.+?)`?\)(.*)$/.exec(term);

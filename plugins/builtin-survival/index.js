@@ -70,16 +70,11 @@ export async function kaplanMeier(app, { time: timeName, status: statusName, gro
   await app.webr.installPackages(['survival']);
   const meta = metaMap(await app.data.getVariableMeta());
   const hasGroup = !!groupName;
-  const recodes = [
-    recodeLine('time', meta.get(timeName)), recodeLine('status', meta.get(statusName)),
-    hasGroup ? recodeLine('group', meta.get(groupName)) : '',
-  ].filter(Boolean).join('\n');
   const rhs = hasGroup ? 'grp' : '1';
   const cols = PALETTE.slice(0, 6).map((c) => `"${c}"`).join(', ');
   const rCode = `
     suppressMessages({library(survival); library(svglite)})
     ${STATUS01_R}
-    ${recodes}
     .time <- as.numeric(time); .st <- status01(status)
     ${hasGroup ? 'grp <- factor(group)' : ''}
     d <- data.frame(.time = .time, .st = .st${hasGroup ? ', grp = grp' : ''})
@@ -138,16 +133,11 @@ export async function cox(app, { time: timeName, status: statusName, preds: pred
   }
   await app.webr.installPackages(['survival']);
   const meta = metaMap(await app.data.getVariableMeta());
-  const recodes = [
-    recodeLine('time', meta.get(timeName)), recodeLine('status', meta.get(statusName)),
-    ...predNames.map((n) => recodeLine(`preds[[${rStr(n)}]]`, meta.get(n))),
-  ].filter(Boolean).join('\n');
   const term = (n) => (meta.get(n)?.type === 'factor' ? `factor(\`${n}\`)` : `\`${n}\``);
   const formula = `Surv(.time, .st) ~ ${predNames.map(term).join(' + ')}`;
   const rCode = `
     suppressMessages(library(survival))
     ${STATUS01_R}
-    ${recodes}
     .time <- as.numeric(time); .st <- status01(status)
     d <- data.frame(.time = .time, .st = .st)
     d <- cbind(d, preds)
@@ -231,11 +221,6 @@ function lvl(meta, code) {
 
 function metaMap(meta) {
   return new Map(meta.map((m) => [m.name, m]));
-}
-
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
 }
 
 function labelOf(meta, name) {

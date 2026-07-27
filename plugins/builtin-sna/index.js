@@ -45,12 +45,9 @@ const ACCENT = '#2980b9';
 export async function run(app, { from: fromName, to: toName, directed }) {
   if (!fromName || !toName) { await app.results.appendError('Network analysis: choose a "from" and a "to" column (an edge list).'); return; }
   await app.webr.installPackages(['igraph']);
-  const meta = metaMap(await app.data.getVariableMeta());
   const dir = directed === 'directed';
-  const recodes = [recodeLine('from', meta.get(fromName)), recodeLine('to', meta.get(toName))].filter(Boolean).join('\n');
   const rCode = `
     suppressMessages({library(igraph); library(svglite)})
-    ${recodes}
     el <- cbind(as.character(from), as.character(to))
     el <- el[stats::complete.cases(el) & el[,1] != "" & el[,2] != "", , drop = FALSE]
     g <- graph_from_edgelist(el, directed = ${dir ? 'TRUE' : 'FALSE'})
@@ -107,11 +104,6 @@ export async function run(app, { from: fromName, to: toName, directed }) {
 
 // --- helpers -----------------------------------------------------------------
 function cleanSvg(svg) { return String(svg).replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1').replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1'); }
-function metaMap(meta) { return new Map(meta.map((m) => [m.name, m])); }
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
-}
 function f(n, d) { return Number.isFinite(n) ? n.toFixed(d) : '—'; }
 function flat(rList) {
   const byName = {};

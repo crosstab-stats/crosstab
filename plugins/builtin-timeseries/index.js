@@ -74,7 +74,6 @@ export async function correlogram(app, { series, maxlag }) {
   const meta = metaMap(await app.data.getVariableMeta());
   const ml = Number.isFinite(maxlag) && maxlag >= 1 ? Math.round(maxlag) : null;
   const rCode = `
-    ${recode('series', missing(meta, series))}
     x <- series[is.finite(series)]
     library(svglite)
     .d1 <- svgstring(width = 6.2, height = 3.4, pointsize = 10); par(mar = c(4, 4, 2, 1))
@@ -106,7 +105,6 @@ export async function stationarity(app, { series }) {
   if (!series) return void app.results.appendError('Pick a series.');
   const meta = metaMap(await app.data.getVariableMeta());
   const rCode = `
-    ${recode('series', missing(meta, series))}
     x <- series[is.finite(series)]
     library(tseries)
     adf <- suppressWarnings(adf.test(x)); kp <- suppressWarnings(kpss.test(x))
@@ -132,7 +130,6 @@ export async function decompose(app, { series, frequency }) {
   const meta = metaMap(await app.data.getVariableMeta());
   const freq = Number.isFinite(frequency) ? Math.round(frequency) : 12;
   const rCode = `
-    ${recode('series', missing(meta, series))}
     x <- series[is.finite(series)]
     f <- ${freq}
     if (f < 2) stop("STL needs a seasonal frequency >= 2")
@@ -153,7 +150,6 @@ export async function arima(app, { series, h, frequency }) {
   const horizon = Number.isFinite(h) && h >= 1 ? Math.round(h) : 10;
   const freq = Number.isFinite(frequency) && frequency >= 1 ? Math.round(frequency) : 1;
   const rCode = `
-    ${recode('series', missing(meta, series))}
     x <- series[is.finite(series)]
     ts1 <- ts(x, frequency = ${freq})
     library(forecast)
@@ -197,12 +193,6 @@ function metaMap(meta) {
 }
 function label(meta, name) {
   return meta.get(name)?.label || name;
-}
-function missing(meta, name) {
-  return (meta.get(name)?.missingValues ?? []).filter((v) => Number.isFinite(Number(v))).map(Number);
-}
-function recode(rvar, mv) {
-  return mv.length ? `${rvar}[${rvar} %in% c(${mv.join(', ')})] <- NA` : '';
 }
 function stripSize(svg) {
   return svg.replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1').replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1');

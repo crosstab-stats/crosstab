@@ -80,11 +80,9 @@ export async function quantile(app, { y: yName, ivs: ivNames, taus }) {
   const meta = metaMap(await app.data.getVariableMeta());
   const tauList = String(taus || '').split(',').map((x) => Number(x.trim())).filter((x) => x > 0 && x < 1);
   const tv = tauList.length ? tauList : [0.25, 0.5, 0.75];
-  const recodes = [recodeLine('y', meta.get(yName)), ...ivNames.map((n) => recodeLine(`ivs[[${rStr(n)}]]`, meta.get(n)))].filter(Boolean).join('\n');
   const formula = `.y ~ ${ivNames.map((n) => term(n, meta)).join(' + ')}`;
   const rCode = `
     suppressMessages(library(quantreg))
-    ${recodes}
     d <- data.frame(.y = as.numeric(y)); d <- cbind(d, ivs); d <- d[stats::complete.cases(d), , drop = FALSE]
     taus <- c(${tv.join(', ')})
     fit <- rq(as.formula(${rStr(formula)}), tau = taus, data = d)
@@ -123,11 +121,9 @@ export async function tobit(app, { y: yName, ivs: ivNames, left, right }) {
   const R = Number.isFinite(right) && right !== 0 && right > (L ?? -Infinity) ? right : null;
   const leftArg = L != null ? `left = ${L}` : 'left = -Inf';
   const rightArg = R != null ? `right = ${R}` : 'right = Inf';
-  const recodes = [recodeLine('y', meta.get(yName)), ...ivNames.map((n) => recodeLine(`ivs[[${rStr(n)}]]`, meta.get(n)))].filter(Boolean).join('\n');
   const formula = `.y ~ ${ivNames.map((n) => term(n, meta)).join(' + ')}`;
   const rCode = `
     suppressMessages(library(AER))
-    ${recodes}
     d <- data.frame(.y = as.numeric(y)); d <- cbind(d, ivs); d <- d[stats::complete.cases(d), , drop = FALSE]
     fit <- AER::tobit(as.formula(${rStr(formula)}), ${leftArg}, ${rightArg}, data = d)
     s <- summary(fit); co <- s$coefficients
@@ -162,10 +158,6 @@ export async function heckman(app, { y: yName, outIv: outNames, sel: selName, se
   const meta = metaMap(await app.data.getVariableMeta());
   const allIv = Array.from(new Set([...outNames, ...selNames]));
   const srcOf = (n) => (outNames.includes(n) ? 'outIv' : 'selIv');
-  const recodes = [
-    recodeLine('y', meta.get(yName)), recodeLine('sel', meta.get(selName)),
-    ...allIv.map((n) => recodeLine(`${srcOf(n)}[[${rStr(n)}]]`, meta.get(n))),
-  ].filter(Boolean).join('\n');
   const mk = allIv.map((n) => `d[[${rStr(n)}]] <- ${srcOf(n)}[[${rStr(n)}]]`).join('\n');
   const selF = `.sel ~ ${selNames.map((n) => term(n, meta)).join(' + ')}`;
   const outF = `.y ~ ${outNames.map((n) => term(n, meta)).join(' + ')}`;
@@ -173,7 +165,6 @@ export async function heckman(app, { y: yName, outIv: outNames, sel: selName, se
   const nOut = outNames.length + 1;
   const rCode = `
     suppressMessages(library(sampleSelection))
-    ${recodes}
     d <- data.frame(.y = as.numeric(y), .sel = as.integer(as.numeric(sel) > 0))
     ${mk}
     fit <- heckit(as.formula(${rStr(selF)}), as.formula(${rStr(outF)}), data = d)
@@ -227,11 +218,6 @@ function heckLabel(t) {
 
 function metaMap(meta) {
   return new Map(meta.map((m) => [m.name, m]));
-}
-
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
 }
 
 function labelOf(meta, name) {

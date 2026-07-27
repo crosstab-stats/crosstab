@@ -44,11 +44,9 @@ export async function run(app, { y: yName, factors: facNames }) {
   await app.webr.installPackages(['rsm']);
   const meta = metaMap(await app.data.getVariableMeta());
   const tok = facNames.map((_, i) => `x${i + 1}`);
-  const recodes = [recodeLine('y', meta.get(yName)), ...facNames.map((n) => recodeLine(`factors[[${rStr(n)}]]`, meta.get(n)))].filter(Boolean).join('\n');
   const mk = facNames.map((n, i) => `d$${tok[i]} <- as.numeric(factors[[${rStr(n)}]])`).join('\n');
   const rCode = `
     suppressMessages(library(rsm))
-    ${recodes}
     d <- data.frame(.y = as.numeric(y))
     ${mk}
     d <- d[stats::complete.cases(d), , drop = FALSE]
@@ -97,10 +95,6 @@ function doeTerm(t, fac) {
   return s.replace(/:/g, ' × ').replace(/I\((.+?)\^2\)/g, '$1²').replace(/\^2/g, '²');
 }
 function metaMap(meta) { return new Map(meta.map((m) => [m.name, m])); }
-function recodeLine(expr, meta) {
-  const mv = (meta?.missingValues ?? []).filter((v) => Number.isFinite(Number(v)));
-  return mv.length ? `${expr}[${expr} %in% c(${mv.map(Number).join(', ')})] <- NA` : '';
-}
 function labelOf(meta, name) { return meta?.label ? `${meta.label} (${name})` : name; }
 function f(n, d) { return Number.isFinite(n) ? n.toFixed(d) : '—'; }
 function fmtP(p) { return !Number.isFinite(p) ? '—' : p < 0.001 ? '< .001' : p.toFixed(3); }
