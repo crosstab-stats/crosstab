@@ -913,17 +913,20 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - *Note:* the Parquet return path (`DataStore.loadDataset` +
     `DuckDBManager.replaceTableFromParquet`) is built and unit-exercised by the
     contract but not yet driven end to end until the `haven` importer lands.
-- [x] **Excel import (`.xlsx`/`.xls`) via SheetJS — DONE.** `plugins/builtin-excel-codec/`
-      — a read-only format codec (#98). Reads the workbook with SheetJS, prompts for a
-      sheet when there's more than one (single-sheet imports straight through), treats
-      the first row as the header, conservative numeric inference matching the CSV codec
-      (a column is numeric only if every non-empty value is a real number; dates → ISO
-      text; blank/duplicate headers auto-named/uniquified), then batches rows into the
-      host ingest. SheetJS (`xlsx@0.18.5`) is a host-vetted shared library fetched via
-      `app.codec.loadAsset('xlsx')` (CDN by default), blob-imported in the sandbox.
-      **Verified in Chrome** end to end (menu → import picker → sandboxed parse → DuckDB
-      grid) with a mixed-type/date/blank/duplicate-header workbook. *Follow-ups:* Excel
-      **export** (write codec) and pooling multiple sheets into one dataset.
+- [x] **Excel (`.xlsx`/`.xls`) import + export via SheetJS — DONE.**
+      `plugins/builtin-excel-codec/` — a read+write format codec (#98). **Import** reads
+      the workbook with SheetJS, prompts for a sheet when there's more than one
+      (single-sheet imports straight through), treats the first row as the header,
+      conservative numeric inference matching the CSV codec (numeric only if every
+      non-empty value is a real number; dates → ISO text; blank/duplicate headers
+      auto-named/uniquified), then batches rows into the host ingest. **Export** writes
+      the current dataset to a single-sheet `.xlsx` (raw values — numbers as numbers,
+      missing → empty cell; Excel row-ceiling guarded). SheetJS (`xlsx@0.18.5`) is a
+      host-vetted shared library fetched via `app.codec.loadAsset('xlsx')` (CDN by
+      default), blob-imported in the sandbox. **Both directions verified in Chrome** end
+      to end (import: menu → picker → sandboxed parse → DuckDB grid; export: round-trip
+      re-parsed identically) with a mixed-type/date/blank/duplicate-header workbook.
+      *Follow-up:* pooling multiple sheets into one dataset on import.
 - [x] **Multi-file import / import-as-append (pooled, row-stack).** Decision:
       pool into ONE table with a `source_file` provenance column (not a
       multi-dataset workspace); row-stack only (column-join/merge is separate).

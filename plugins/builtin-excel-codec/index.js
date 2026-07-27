@@ -1,37 +1,38 @@
 /**
  * @file plugins/builtin-excel-codec/index.js
- * Excel (.xlsx/.xls/.xlsm/.xlsb) as a read-only format codec (#98), via SheetJS.
+ * Excel (.xlsx/.xls/.xlsm/.xlsb) as a format codec (#98) — read + write — via SheetJS.
  *
- * Import only (no export) for v1 — the common ask is "open my spreadsheet." Unlike
- * the CSV/ReadStat codecs this does NOT stream the *read*: a spreadsheet is an
- * inherently bounded format (≤ ~1,048,576 rows, and practically far smaller) and
- * SheetJS parses the whole workbook in memory anyway, so we read the whole file,
- * decode it, then emit rows to the host ingest in batches (so the commit stays
- * memory-bounded through DuckDB regardless).
+ * Unlike the CSV/ReadStat codecs this does NOT stream: a spreadsheet is an inherently
+ * bounded format (≤ ~1,048,576 rows, and practically far smaller) and SheetJS builds
+ * the whole workbook in memory anyway. So read decodes the whole file then emits rows
+ * to the host ingest in batches (the commit stays memory-bounded through DuckDB), and
+ * write pulls all rows, builds one worksheet, and emits the `.xlsx` bytes in one chunk.
  *
  * SheetJS is a host-vetted shared library fetched via `app.codec.loadAsset('xlsx')`
  * (the sandbox has `connect-src 'none'` and can't fetch it itself) and blob-imported.
  *
- * Type handling mirrors the CSV codec: a column is numeric only if every non-empty
+ * Read type handling mirrors the CSV codec: a column is numeric only if every non-empty
  * value is a real number; everything else (text, booleans, dates) becomes a string
  * column. `cellDates: true` turns date cells into JS `Date`s, carried as ISO text
- * (consistent with the engine's Bridge-A temporal convention).
+ * (consistent with the engine's Bridge-A temporal convention). Write emits raw values
+ * (numbers as numbers, everything else as text; missing → empty cell) so a file
+ * round-trips — the same "raw values, not labels" contract the CSV codec uses.
  *
  * Multi-sheet workbooks: one sheet imported per file. A single-sheet workbook uses
  * it directly; a multi-sheet workbook prompts for which sheet (pooling several
- * sheets into one dataset is a possible follow-up).
+ * sheets into one dataset is a possible follow-up). Export writes a single sheet.
  */
 
 export const manifest = {
   id: 'builtin-excel-codec',
   name: 'Excel codec',
-  version: '1',
+  version: '2', // #91 freshness marker: bumped when export was added
   apiVersion: '0.1.0',
   category: 'Data',
   keywords: ['excel', 'xlsx', 'xls', 'spreadsheet', 'workbook', 'sheetjs', 'file'],
   rPackages: [],
   howto:
-    'GUI: File ▸ Import data…, choose Excel (.xlsx / .xls). Reads a worksheet as a table — first row is the header, one column per spreadsheet column. Multi-sheet workbooks ask which sheet to import.\n' +
+    'GUI: File ▸ Import data… (or Export data…), choose Excel (.xlsx / .xls). Import reads a worksheet as a table — first row is the header, one column per spreadsheet column (multi-sheet workbooks ask which sheet). Export writes the current dataset to a single-sheet .xlsx.\n' +
     'Used through the File menu, not a run command.',
   codecs: [
     {
@@ -39,6 +40,7 @@ export const manifest = {
       label: 'Excel…',
       extensions: ['.xlsx', '.xls', '.xlsm', '.xlsb'],
       read: 'readXlsx',
+      write: 'writeXlsx',
       order: 11, // just after CSV (10)
       multiple: true,
     },
@@ -189,6 +191,54 @@ function uniqueName(base, used) {
   let i = 2;
   while (`${base}_${i}` in used) i++;
   return `${base}_${i}`;
+}
+
+// --- write -------------------------------------------------------------------
+
+/** Excel's hard row ceiling (header + data rows), per the .xlsx grid limit. */
+const XLSX_MAX_ROWS = 1_048_576;
+
+/** Encode the current (derived) dataset as a single-sheet .xlsx. Pulls rows in
+ * batches to build the sheet, writes raw values (numbers as numbers, everything else
+ * as text; missing → empty cell), and emits the whole workbook as one byte chunk
+ * (SheetJS builds it in memory — Excel is bounded, so this is fine). */
+export async function writeXlsx(app, _info) {
+  const meta = await app.data.getVariableMeta();
+  if (!meta.length) throw new Error('no variables to export');
+  const names = meta.map((m) => m.name);
+  const total = await app.data.getRowCount();
+  if (total + 1 > XLSX_MAX_ROWS) {
+    throw new Error(
+      `Excel supports at most ${(XLSX_MAX_ROWS - 1).toLocaleString()} rows; this dataset has ` +
+        `${total.toLocaleString()}. Export as CSV or Parquet instead.`,
+    );
+  }
+
+  const XLSX = await importAsset(await app.codec.loadAsset('xlsx'));
+  const aoa = [names];
+  const BATCH = 50_000;
+  for (let off = 0; off < total; off += BATCH) {
+    const rows = await app.data.getRows({ offset: off, limit: BATCH });
+    for (const r of rows) aoa.push(names.map((n) => exportCell(r[n])));
+  }
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Data');
+  const ab = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+  await app.codec.writeChunk(new Uint8Array(ab));
+  return {
+    filename: 'crosstab-export.xlsx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  };
+}
+
+/** A cell value for export: numbers stay numbers (NaN → empty), missing → empty
+ * cell (null, which SheetJS renders blank), everything else → text. */
+function exportCell(v) {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'number') return Number.isNaN(v) ? null : v;
+  return String(v);
 }
 
 // --- helpers -----------------------------------------------------------------
