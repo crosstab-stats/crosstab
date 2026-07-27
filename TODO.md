@@ -1694,15 +1694,16 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Blocked until public deploy (GitHub Pages)
 
-- [ ] **Milestone 3 — verify on iPad Safari.** Deferred to the bottom: it's gated
-      on switching the repo to public + standing up GitHub Pages (a real served
-      origin to test from on a device). The desktop-Chrome path is confirmed;
-      Safari/iPadOS is the remaining unknown. Risks to check once it's hosted:
-  - [ ] Blob-module `import()` inside the sandboxed (opaque-origin) iframe
-        (`plugin-host.html`). Fallback if it fails: `data:`-URL import or a build step.
-  - [ ] Cross-origin isolation via the **`coi-serviceworker`** reload path
-        (`sw.js`) — local testing used real COOP/COEP headers, so `sw.js` itself
-        is still unexercised on a device.
-  - [ ] Also sanity-check `<dialog>` modal behaviour and touch targets on iPad.
-  - *Adjacent prep that unblocks the deploy:* `LICENSE`, PWA icons, vendor+pin the
-    WebR/DuckDB assets, and PWA precaching (all already listed above).
+- [x] **Milestone 3 — verify on iPad Safari — DONE.** The deploy gate is lifted (live
+      at crosstab-stats.github.io/crosstab/) and the app has been **tested multiple times
+      on iPad and iPhone** with data import working end to end — which exercises all three
+      risks below. Safari/iPadOS is no longer an unknown.
+  - [x] Blob-module `import()` inside the sandboxed (opaque-origin) iframe — works
+        (codecs/plugins blob-import to parse, and import succeeds on device).
+  - [x] Cross-origin isolation via the **`coi-serviceworker`** reload path (`sw.js`) —
+        works: the deployed site gets isolation from the SW (Pages sends no COOP/COEP),
+        and that's exactly what iPad/iPhone hit, so `sw.js` is now exercised on device.
+  - [x] `<dialog>` modal behaviour and touch targets on iPad — fine (the import picker
+        and sheet/mode dialogs drive correctly by touch).
+  - *Adjacent prep (all now resolved above):* `LICENSE` (Unlicense) and PWA icons done;
+    vendor+pin decided against (keep CDN); PWA precaching shipped.
