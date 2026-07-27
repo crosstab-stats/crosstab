@@ -346,19 +346,17 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Open questions / decisions to make
 
-- [ ] **API version mismatch → warn-and-allow (decided approach; to build).** No
-      **shims** (a permanent maintenance treadmill) and no **hard break** either — a
-      plugin often uses only the parts of the API that *didn't* change across a bump, so
-      refusing to load it is too blunt. Decision: on ANY `apiVersion` mismatch (major
-      differs, or the plugin's minor is newer than the engine's), **still load it** —
-      but flag it **red in the plugin manager** with a user-facing "Built for a
-      different version of CrossTab — may not work correctly," and let the user attempt
-      to run it. A call to a genuinely-changed/removed API just errors at runtime,
-      sandbox-contained (the plugin's problem, surfaced honestly — not the host's).
-      *Build:* replace the hard `throw` in `assertApiCompatible` (`core/loader.js`) with
-      a returned compat status (`ok` / `older` / `newer`); the loader records it on the
-      plugin record and activates anyway; the plugin manager renders the red badge +
-      tooltip.
+- [x] **API version mismatch → warn-and-allow — DONE.** No shims, no hard break: a
+      plugin whose `apiVersion` differs from the engine (different major, or a newer
+      minor) **still loads** — the loader classifies it (`apiCompatStatus` →
+      `ok`/`older`/`newer`, `core/loader.js`) and activates anyway, recording the level
+      on the plugin record (`loader.apiCompat(id)`). The plugin manager renders a red
+      **⚠ old API / ⚠ new API** badge with a "Built for a different version of CrossTab
+      — may not work correctly" tooltip. A call into a genuinely-changed/removed API
+      just errors at runtime, sandbox-contained. A *missing/malformed* apiVersion stays
+      a hard error (invalid manifest). **Verified in Chrome:** a builtin bumped to
+      apiVersion `1.0.0` loaded, ran normally, and showed the red `⚠ new API` badge —
+      only on that plugin.
 - [x] **R package pre-loading — DECIDED: keep on-demand.** Don't pre-declare a
       "preload" set — we won't guess which packages matter enough to warm speculatively,
       and heavy ones (Stan/brms, lavaan) risk the WebR ~4 GB ceiling. Packages install

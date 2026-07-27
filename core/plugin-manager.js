@@ -800,6 +800,9 @@ export class PluginManager {
         url: e.url ?? null, // entry source URL (for the workspace manager to fetch)
         enabled: !this.#disabled.has(e.key),
         activated: cat?.id ? activated.has(cat.id) : false,
+        // 'ok' | 'older' | 'newer' — API version vs the engine (warn-and-allow).
+        // Only meaningful once loaded; a non-'ok' value shows a red mismatch badge.
+        apiCompat: cat?.id ? this.#loader.apiCompat(cat.id) : 'ok',
         webAllowed: this.isWebAllowed(cat?.id),
         removable: !e.builtin,
         editable: e.kind === 'authored',
@@ -957,6 +960,21 @@ export class PluginManager {
     const right = el('span', null, 'ct-plugin__right');
     const metaText = p.enabled ? (p.activated ? p.origin : 'failed') : 'disabled';
     right.append(el('span', metaText, 'ct-plugin__meta'));
+
+    // Version-mismatch badge (warn-and-allow): a loaded plugin whose apiVersion
+    // differs from the engine's is flagged red — it still runs, but a changed/removed
+    // API may fail. Only shown once activated (compat is known only after load).
+    if (p.activated && (p.apiCompat === 'older' || p.apiCompat === 'newer')) {
+      const badge = el('span', p.apiCompat === 'older' ? '⚠ old API' : '⚠ new API', 'ct-plugin__compat');
+      badge.title =
+        p.apiCompat === 'older'
+          ? 'Built for an older version of CrossTab — may not work correctly.'
+          : 'Built for a newer version of CrossTab — may not work correctly.';
+      badge.style.cssText =
+        'color:#fff;background:#c0392b;font-size:11px;font-weight:600;padding:1px 6px;' +
+        'border-radius:8px;margin-left:6px;cursor:help;white-space:nowrap;';
+      right.append(badge);
+    }
 
     // 🔍 How-to: show the plugin's author-written usage note (GUI + syntax). Only when
     // the manifest declares `howto` — no icon means the author didn't include one.

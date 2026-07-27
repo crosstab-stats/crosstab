@@ -24,8 +24,10 @@ import { sandboxBlobUrl } from './plugin-sandbox.js';
 
 /**
  * API contract version the engine implements. A plugin declares the version it
- * targets in its manifest; the loader requires the same MAJOR and an engine
- * MINOR ≥ the plugin's. (Migration policy for major bumps is an open question.)
+ * targets in its manifest. The loader is **warn-and-allow**: any mismatch (different
+ * major, or a newer minor than the engine) still loads the plugin but marks it with a
+ * compat level ({@link apiCompatStatus}) the plugin manager shows as a red "built for
+ * a different version" badge — no shims, no hard break.
  * @type {string}
  */
 export const API_VERSION = '0.1.0';
@@ -408,7 +410,15 @@ export class PluginLoader {
       if (this.#plugins.has(manifest.id)) {
         throw new Error(`Plugin "${manifest.id}" is already activated`);
       }
-      assertApiCompatible(manifest);
+      // Warn-and-allow: a version mismatch is surfaced (a red badge in the plugin
+      // manager) but does NOT stop the plugin loading — the user can still attempt it.
+      const compat = apiCompatStatus(manifest); // throws only on missing/malformed apiVersion
+      if (compat.level !== 'ok') {
+        console.warn(
+          `[loader] "${manifest.id}" targets API ${compat.declared} vs engine ${API_VERSION} ` +
+            `(${compat.level}) — loading anyway`,
+        );
+      }
 
       // The gate's consent prompt / remembered-grant lookup keys off the plugin's
       // own identity, now that it's known.
@@ -426,7 +436,7 @@ export class PluginLoader {
       // Retain origin/entryUrl + any bundled package assets so the plugin's
       // declared assets can be resolved on demand (#119) — from its own bundle, or
       // from a same-origin sibling of its entry URL.
-      this.#plugins.set(manifest.id, { manifest, iframe, broker, origin, entryUrl, assets });
+      this.#plugins.set(manifest.id, { manifest, iframe, broker, origin, entryUrl, assets, apiCompat: compat.level });
       return manifest;
     } catch (err) {
       // Roll back a partially-loaded plugin so a failure leaves no orphan iframe.
@@ -489,6 +499,13 @@ export class PluginLoader {
   /** @returns {PluginManifest[]} Manifests of all currently loaded plugins. */
   list() {
     return [...this.#plugins.values()].map((p) => p.manifest);
+  }
+
+  /** API-compat level of a loaded plugin: `'ok' | 'older' | 'newer'` (see
+   * {@link apiCompatStatus}); `'ok'` if the id isn't loaded. Drives the plugin
+   * manager's version-mismatch badge. */
+  apiCompat(id) {
+    return this.#plugins.get(id)?.apiCompat ?? 'ok';
   }
 
   /** Push a `pluginsChanged` notification to every loaded plugin's iframe so
@@ -609,31 +626,38 @@ export class PluginLoader {
 }
 
 /**
- * Check a plugin's declared API version against {@link API_VERSION}.
- * Policy: MAJOR must match exactly; engine MINOR must be ≥ plugin MINOR.
+ * Classify a plugin's declared API version against {@link API_VERSION}.
+ *
+ * Policy is **warn-and-allow, not hard-break**: a version mismatch does NOT stop the
+ * plugin loading — a plugin often uses only parts of the API that didn't change
+ * across a bump, so we let the user attempt it and surface the risk instead of
+ * refusing outright. The returned `level` drives the plugin manager's red
+ * "built for a different version" badge:
+ *   - `ok`    — same major, and the plugin's minor ≤ engine minor.
+ *   - `older` — plugin's major < engine major (built for an older CrossTab).
+ *   - `newer` — plugin's major > engine major, OR same major but a newer minor
+ *               (built for a newer CrossTab; may expect APIs we don't have).
+ * A call into a genuinely-changed/removed API just errors at runtime, sandbox-
+ * contained. A *missing or malformed* apiVersion is still a hard error — that's an
+ * invalid manifest, not a version mismatch.
  *
  * @param {PluginManifest} manifest
- * @throws if incompatible.
+ * @returns {{ level: 'ok'|'older'|'newer', declared: string }}
+ * @throws only when apiVersion is absent or unparseable.
  */
-function assertApiCompatible(manifest) {
+function apiCompatStatus(manifest) {
   const declared = manifest.apiVersion;
   if (typeof declared !== 'string') {
     throw new Error(`Plugin "${manifest.id}" does not declare an apiVersion`);
   }
   const [pMajor, pMinor] = declared.split('.').map(Number);
   const [eMajor, eMinor] = API_VERSION.split('.').map(Number);
-
-  if (pMajor !== eMajor) {
-    throw new Error(
-      `Plugin "${manifest.id}" targets API ${declared} but engine is ${API_VERSION} ` +
-        `(incompatible major version).`,
-    );
+  if (!Number.isFinite(pMajor) || !Number.isFinite(pMinor)) {
+    throw new Error(`Plugin "${manifest.id}" has a malformed apiVersion "${declared}"`);
   }
-  if (pMinor > eMinor) {
-    throw new Error(
-      `Plugin "${manifest.id}" targets API ${declared}, newer than engine ${API_VERSION}.`,
-    );
-  }
+  if (pMajor !== eMajor) return { level: pMajor < eMajor ? 'older' : 'newer', declared };
+  if (pMinor > eMinor) return { level: 'newer', declared };
+  return { level: 'ok', declared };
 }
 
 /**
