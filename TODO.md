@@ -20,7 +20,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       read-*write* state; datasets are read + additive-create, destructive commit is
       host-only). So ownership becomes **namespacing for integrity, not isolation for
       secrecy**.
-  - [~] **Owner-keyed storage refactor (in progress).** Key workspace state by
+  - [x] **Owner-keyed storage refactor — DONE.** Key workspace state by
         `(owner, wsId, dataset)` so a colliding `wsId` from a different author is a
         *different slot* — collision-safe and squat-proof by construction. Drop the
         fragile TOFU `#owners` map + `#mayAccess`; drop the null-bypass on the
@@ -34,7 +34,8 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         Files: `workspace-store.js` (keying + `ownerToken` moves here), `app.js`
         (`workspaceRead`/`Write`, `applyWorkspaces` migrate), `workspace-manager.js`
         (get/set signatures), `plugin-manager.js` (deactivation purge), SECURITY.md
-        reframe. **Verify:** CAQDAS import/export round-trip + legacy-project load.
+        reframe. *Superseded/extended by #146, which pushed the key to 4-D
+        `(owner, wsId, slotId, dataset)` at `__wsv:4`.*
   - [ ] **Space-verb dispatch interface (UNBLOCKED — spatial workspace is the 2nd
         consumer).** The endgame from the design chat: the host should own a *shell*,
         not a merge vocabulary. A "space" plugin declares its own **verbs** (buttons)
@@ -103,6 +104,12 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
           (2) own workspace state via implicit `app.state.get()`, (3) dataset
           columns via optional `inputs` array. No `hostProvides` or typed
           capabilities declaration needed.
+        - [ ] **Layer tree in region selection column.** Display loaded boundary
+          sets as a tree in the region-selection sidebar, so the user can
+          expand/collapse layers and select regions within each.
+        - [ ] **Point-in-polygon geocoding.** Given boundaries and a dataset with
+          lat/long columns, assign each observation to the region it falls in
+          (adds a region-ID column). Pure JS via Turf.js — no R needed.
         - **Cross-plugin invocation (#147) — BUILT.** A plugin can discover and
           run another plugin's analysis: `app.plugins.list()` returns active
           analyses (id, label, inputs), `app.plugins.onChange(cb)` fires when the
@@ -255,6 +262,11 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     `LIMIT/OFFSET` SQL windows over DuckDB — a natural fit), **Data
     transform/recode API** (becomes SQL / `CREATE TABLE AS`). Settle the
     `getDataFrame`/`getColumns` contract here so those don't get reworked later.
+- [ ] **Verify CAQDAS import/export round-trip + legacy-project load.** Runtime
+      regression check (not tied to any one code change): confirm a CAQDAS coding
+      project exports and re-imports losslessly (QDPX / project bundle), and that an
+      older-format saved project still loads and hydrates its coding state. Exercises
+      the workspace-store migration chain (legacy → v2 → v3 → v4) end to end in the app.
 - [ ] **Add a committed dev server for contributors.** The README points at
       `python -m http.server`, which on Windows can serve `.js` with the wrong
       MIME type and sets no COOP/COEP. Ship a small `scripts/dev-server.mjs`

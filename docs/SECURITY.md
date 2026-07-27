@@ -98,13 +98,15 @@ no foreign code. This is the shortcut/bookmark feature working as intended. Acce
   longer authorises fetching from (and exfiltrating to) any host. The legacy
   boolean "any-URL" grant is dropped on upgrade (one-time re-prompt).
   (`core/loader.js`, `core/plugin-manager.js`, `core/app.js`)
-- **Workspace-state ownership** — workspace state is still keyed by workspace id
-  (so same-author lite/heavy plugins share, and the on-disk `{id: value}` format is
-  unchanged), but a built-in's workspace ids are **reserved** against non-built-in
-  plugins, and any id is otherwise bound to the first plugin namespace that touches
-  it this session. A third-party plugin can no longer squat `caqdas-coding` (etc.)
-  to read or overwrite its blob. (`core/workspace-store.js`,
-  `core/workspace-manager.js`)
+- **Workspace-state ownership** — workspace state is keyed by **owner** (part of the
+  storage key, derived from the plugin's host-asserted identity), so a plugin can only
+  write its **own** slot and two authors declaring the same workspace id get **separate
+  slots** — squat-proof by construction, with no runtime trust-on-first-use to defeat.
+  A built-in's workspace ids stay **reserved** at the tab level so a non-built-in can't
+  hijack a built-in's visible tab (identity, not data — the owner-keyed store isolates
+  the data either way). See *"Workspace state: integrity, not secrecy (#145)"* above for
+  the full model. (`core/workspace-store.js`, `core/workspace-manager.js`,
+  `core/app.js`, `core/plugin-manager.js`)
 
 ## Fixed in the post-launch plugin-audit pass (2026-07)
 
