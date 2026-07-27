@@ -56,17 +56,23 @@ The plugin contract is documented in
 ## Running locally
 
 Everything is static files and native ES modules — no build step. Serve it over
-HTTP (ES modules and service workers don't work from `file://`):
+HTTP (ES modules and service workers don't work from `file://`) with the bundled
+dev server, which needs only Node (no dependencies):
 
 ```sh
-python -m http.server 8080
-# open http://localhost:8080/
+npm run dev
+# → http://localhost:8080/   (pass a port: node scripts/dev-server.mjs 3000)
 ```
 
-The bundled `sw.js` injects the COOP/COEP headers needed for cross-origin
-isolation (SharedArrayBuffer for WebR). On first load the page registers the
-service worker and reloads once; WebR downloads in the background the first time
-you run an analysis.
+Use this rather than `python -m http.server`: the dev server sends the COOP/COEP
+headers that make the page cross-origin-isolated (SharedArrayBuffer, required by
+the WebR and DuckDB threaded-WASM paths) and serves `.js`/`.mjs`/`.wasm` with the
+correct MIME types (Python's server mis-types `.js` on Windows, so the app won't
+boot). It also sends `Cache-Control: no-store` so edits show on a plain reload.
+
+In deployment the bundled `sw.js` injects the same COOP/COEP headers (GitHub
+Pages sends none), so the live site reloads once on first load to gain isolation;
+WebR downloads in the background the first time you run an analysis.
 
 ## Deployment
 

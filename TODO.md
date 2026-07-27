@@ -278,14 +278,16 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       project exports and re-imports losslessly (QDPX / project bundle), and that an
       older-format saved project still loads and hydrates its coding state. Exercises
       the workspace-store migration chain (legacy → v2 → v3 → v4) end to end in the app.
-- [ ] **Add a committed dev server for contributors.** The README points at
-      `python -m http.server`, which on Windows can serve `.js` with the wrong
-      MIME type and sets no COOP/COEP. Ship a small `scripts/dev-server.mjs`
-      (correct MIME + isolation headers) and an npm script, replacing the
-      throwaway temp-file server used during testing.
-- [ ] **Add a `LICENSE`.** Intended to be open source; license is currently TBD.
-- [ ] **Provide the PWA icons** referenced by `manifest.json`
-      (`vendor/icon-192.png`, `vendor/icon-512.png`) — they don't exist yet.
+- [x] **Add a committed dev server for contributors — DONE.**
+      `scripts/dev-server.mjs` (zero-dependency Node) serves the repo root with
+      COOP `same-origin` + COEP `credentialless` + CORP `cross-origin`, correct
+      `.js`/`.mjs`/`.wasm` MIME types, and `Cache-Control: no-store`. Wired as
+      `npm run dev`; README updated to use it instead of `python -m http.server`.
+      This is the same server we use for internal Chrome testing — dogfood it.
+- [x] **Add a `LICENSE` — DONE.** Released public-domain under the **Unlicense**
+      (#137); `vendor/readstat/` noted as MIT.
+- [x] **Provide the PWA icons — DONE.** `vendor/icon-192.png`, `vendor/icon-512.png`
+      (+ `icon-180.png` Apple touch) exist and are referenced by `manifest.json`.
 
 ## Hardening before any public/shared deploy
 
