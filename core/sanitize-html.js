@@ -15,9 +15,15 @@
  * `style` is value-filtered against URL/escape/expression tricks, and the whole
  * fragment is size-capped against a denial-of-service blob.
  *
- * It is still NOT a fully audited XSS library. For a public release, vendoring
- * **DOMPurify** (and adding a host-page CSP tuned around the WebR/DuckDB CDNs as
- * defence-in-depth) remains the recommended upgrade — see the hardening TODO.
+ * It is NOT a fully audited XSS library, and that's a deliberate, standing decision:
+ * adopting **DOMPurify** would mean *vendoring* a security library (it runs on every
+ * plugin result, including offline/air-gap, so it can't be lazily CDN-loaded — it must
+ * always be present), i.e. a permanent pin-and-CVE maintenance burden the project
+ * avoids. The residual risk is accepted because the surface is tiny (plot SVG only —
+ * tables are host-rendered from data, notes are escaped markdown) and the #89 audit
+ * found no confirmed bypass. Revisit only if a real bypass surfaces. A **host-page
+ * CSP** (separate, no dependency) remains a cheap defence-in-depth option — see the
+ * hardening TODO.
  */
 
 /** Elements we render and keep, lowercased. Anything else is unwrapped. */

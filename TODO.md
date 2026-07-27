@@ -303,15 +303,23 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 > decision (#9 — vendor-from-own-origin at deploy, no hash babysitting), and shell
 > PWA precache already shipped (#92).
 
-- [~] **Replace the HTML sanitiser with a vetted library (DOMPurify).**
-      *Surface much reduced:* with the declarative API, plugins no longer send table
-      HTML (tables are host-rendered from data) or note HTML (markdown, escaped), so
-      `core/sanitize-html.js` now only ever processes **plugin plot SVG** — a small,
-      constrained drawing subset. It's a hardened allowlist (no `on*`/URL attrs,
-      `style` value-filtered, size-capped). Still worth **vendoring + pinning
-      DOMPurify** and adding a **host-page CSP** (tuned around the WebR/DuckDB CDNs +
-      blob workers) as defence-in-depth before public release, so an SVG-sanitiser
-      miss can't execute in the host. The plugin *sandbox* CSP is already in place.
+- [x] **Replace the HTML sanitiser with DOMPurify — DEFERRED (won't vendor).**
+      *Decision:* keep the hand-rolled allowlist (`core/sanitize-html.js`); do **not**
+      adopt DOMPurify. Rationale: adopting it means **vendoring a security library**
+      (it runs on every plugin result incl. offline/air-gap, so it can't be lazily CDN-
+      loaded — it must always be present), which is exactly the lifelong pin-and-CVE
+      maintenance burden the project deliberately avoids. The residual risk is small and
+      accepted: the declarative API shrank the surface to **plugin plot SVG only** (a
+      constrained drawing subset — tables are host-rendered from data, notes are escaped
+      markdown), the allowlist is hardened (no `on*`/URL attrs, `style` value-filtered,
+      size-capped), and the **#89 audit found no confirmed bypass**. Consistent with the
+      security-no-theatre / no-needless-vendoring stance (see docs/SECURITY.md). Revisit
+      only if a real bypass surfaces.
+  - *Separable, still-open (NOT a dependency — no vendoring):* a **host-page CSP**
+        (tuned around the WebR/DuckDB CDNs + blob workers) as cheap defence-in-depth, so
+        even a sanitiser miss can't execute in the host. The plugin *sandbox* CSP is
+        already in place; this is just the host document. Its own small item, unaffected
+        by the DOMPurify decision.
 - [x] **Pin the WebR version — DONE; vendoring decided against.** The CDN default now
       pins **WebR v0.6.0** (`core/assets.js`: `webrUrl` + `webrOptions.baseUrl` both on
       `…/v0.6.0/`), matching the already-pinned DuckDB/Arrow/hyparquet — so a silent
