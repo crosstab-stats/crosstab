@@ -685,7 +685,12 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     ciphertext) and with export streaming for big files. **Resolve the large-file story
     first; it likely decides the whole feature's shape.**
 
-- [ ] **Multimedia qualitative coding — audio / image / video (#139).** Mature the
+- [x] **Multimedia qualitative coding — audio / image / video (#139) — CORE DONE.**
+      Selector generalization, image/audio/video import + rendering, region-over-time
+      keyframing, and REFI-QDA/QDPX export are all built (see the STATUS line below).
+      **The transcript-linked workflow, transcript import, and Whisper auto-transcription
+      are broken out to their own TODO below** ("Transcript-linked qualitative coding")
+      — still wanted, not yet built. Original design notes kept here for reference. Mature the
       qualitative side from text-only to multimedia. The current coder
       (`plugins/builtin-caqdas/index.js`) does text: pick a text column (one document per
       row), highlight character spans, tag with codes; a segment is
@@ -803,6 +808,24 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       together; touches draw + vertex-edit + hit-test (point-in-polygon) + interpolation
       across BOTH image regions and video tracks. Still CrossTab-only (no QDPX round-trip).
 
+- [ ] **Transcript-linked qualitative coding (#139 follow-on).** Broken out from the
+      multimedia item above (whose media-coding core is done). Still wanted — it's the
+      dominant real qual practice. Two parts + a deferred phase:
+  - [ ] **Transcript import (Phase 1).** Import existing time-aligned transcripts —
+        **VTT / SRT / timestamped rows** — as a first-class document that references the
+        media asset. ~80% of the value cheaply; no ML needed. New importer parsers
+        (`.vtt`/`.srt` → cues with `{tStart, tEnd, text}`), attach to a media row.
+  - [ ] **Transcript-linked coding surface.** A time-aligned transcript pane beside the
+        `<audio>`/`<video>`: code the *text* (reuse the char-span selector), and clicking
+        a line **seeks the playhead** (NVivo / oTranscribe style). The playhead/seek
+        machinery already exists (`builtin-caqdas`); this adds the transcript document
+        model + the line↔time binding.
+  - [ ] **Whisper auto-transcription (Phase 2 — DEFERRED, feasibility confirmed).** In-
+        browser transcription via transformers.js (WebGPU + WASM fallback) or whisper.cpp
+        WASM; models cache offline like the R packages. A real epic (30–180 MB model
+        download, worker architecture) — the deferral is scope/effort, not feasibility.
+        See the Whisper feasibility notes under #139 above.
+
 - [~] **File import — as a plugin extension point.** Importers register via the
       public `app.importers.register({ label, extensions, parse })`; the engine
       (`core/import-service.js`) owns the File ▸ Import menu, the picker, and the
@@ -824,14 +847,19 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         GSS missing codes (DK/Refused/NAP) survive as sentinels + metadata rather
         than collapsing to NA. **Verified in Chrome** with a haven-written `.sav`
         round-trip: value labels render in Frequencies, `-99` recodes to Missing.
-    - [ ] *Still to test:* real GSS files (the synthetic round-trip proves the
-          mechanism, not every real-file quirk); SAS value labels need the
-          separate `.sas7bcat` catalog (`read_sas(data, catalog_file)`) — not yet
-          wired; `na_range` (range-style SPSS missing) not yet captured, only
-          discrete `na_values`.
-    - [ ] **Large-file ceilings (the haven-in-WebR path).** Two distinct limits,
-          both hit by the full GSS 1972–2024 cumulative (`.sav` 3.8 GB,
-          `.sas7bdat` 2.4 GB, `.dta` 597 MB):
+    - [x] **Real GSS files — VERIFIED.** Real GSS `.sav` (including large) imported
+          end to end, not just the synthetic round-trip. *Residual (distinct, still
+          open):* SAS value labels need the separate `.sas7bcat` catalog
+          (`read_sas(data, catalog_file)`) — not yet wired; `na_range` (range-style
+          SPSS missing) not yet captured, only discrete `na_values`.
+    - [x] **Large-file ceilings (the haven-in-WebR path) — RESOLVED via the ReadStat
+          codec.** haven-in-WebR kept OOMing on large files, so the streaming
+          **ReadStat codec** (`plugins/builtin-readstat-codec/` — the "compile ReadStat
+          to wasm + stream rows → Parquet/DuckDB" lift noted below) became the
+          large-file path; real + large GSS now import through it, while haven stays
+          for the labelled small/extract case. Original per-limit analysis kept for
+          context. Two distinct limits, both hit by the full GSS 1972–2024 cumulative
+          (`.sav` 3.8 GB, `.sas7bdat` 2.4 GB, `.dta` 597 MB):
       - **WebR `FS.writeFile` ~128 MB (the *first* wall) — LIFTED via WORKERFS.**
         `FS.writeFile` throws "Invalid array length" above ~128–160 MB (a channel
         limit). The haven importer no longer uses it: it stages the upload by
@@ -881,10 +909,21 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         streaming lift above. Note: `.sav` is compressed so `col_select` there must
         stream (slower than `.dta`), but still memory-safe.
       - Typical GSS *extracts* (well under 128 MB) import whole fine today.
-  - [ ] **Excel** via SheetJS later, if wanted (also a plugin).
+  - Excel import broken out to its own top-level TODO below (in progress).
   - *Note:* the Parquet return path (`DataStore.loadDataset` +
     `DuckDBManager.replaceTableFromParquet`) is built and unit-exercised by the
     contract but not yet driven end to end until the `haven` importer lands.
+- [x] **Excel import (`.xlsx`/`.xls`) via SheetJS — DONE.** `plugins/builtin-excel-codec/`
+      — a read-only format codec (#98). Reads the workbook with SheetJS, prompts for a
+      sheet when there's more than one (single-sheet imports straight through), treats
+      the first row as the header, conservative numeric inference matching the CSV codec
+      (a column is numeric only if every non-empty value is a real number; dates → ISO
+      text; blank/duplicate headers auto-named/uniquified), then batches rows into the
+      host ingest. SheetJS (`xlsx@0.18.5`) is a host-vetted shared library fetched via
+      `app.codec.loadAsset('xlsx')` (CDN by default), blob-imported in the sandbox.
+      **Verified in Chrome** end to end (menu → import picker → sandboxed parse → DuckDB
+      grid) with a mixed-type/date/blank/duplicate-header workbook. *Follow-ups:* Excel
+      **export** (write codec) and pooling multiple sheets into one dataset.
 - [x] **Multi-file import / import-as-append (pooled, row-stack).** Decision:
       pool into ONE table with a `source_file` provenance column (not a
       multi-dataset workspace); row-stack only (column-join/merge is separate).

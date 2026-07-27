@@ -55,6 +55,10 @@ const ASSETS = {
   // `blob:` URL and can't fetch anything itself. Same pattern the vendor script uses.
   hyparquet: { url: 'https://esm.sh/hyparquet@1?bundle&target=es2022', kind: 'text' },
   'hyparquet-writer': { url: 'https://esm.sh/hyparquet-writer@0.16.1?bundle&target=es2022', kind: 'text' },
+  // SheetJS (Excel .xlsx/.xls) for builtin-excel-codec. 0.18.5 is the last version
+  // published to npm (SheetJS later self-host only), so esm.sh mirrors it; `?bundle`
+  // inlines its deps into one self-contained module the sandbox blob-imports.
+  xlsx: { url: 'https://esm.sh/xlsx@0.18.5?bundle&target=es2022', kind: 'text' },
 };
 
 export class CodecService {

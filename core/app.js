@@ -120,6 +120,9 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-csv-codec/index.js',
   './plugins/builtin-ndjson-codec/index.js',
   './plugins/builtin-parquet-codec/index.js',
+  // Excel (.xlsx/.xls) via SheetJS — read-only codec (import), whole-file (not
+  // streaming: Excel is inherently bounded), then batched into the host ingest.
+  './plugins/builtin-excel-codec/index.js',
   // ReadStat (SPSS/Stata/SAS) — a sandboxed codec again (#130). It runs on the codec
   // sandbox's MAIN thread (no worker — iOS won't start one there, #123) because the
   // WASM is built with ASYNCIFY, so its sync read/write IO can suspend for async JS.
