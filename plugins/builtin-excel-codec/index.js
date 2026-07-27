@@ -18,9 +18,15 @@
  * (numbers as numbers, everything else as text; missing → empty cell) so a file
  * round-trips — the same "raw values, not labels" contract the CSV codec uses.
  *
- * Multi-sheet workbooks: one sheet imported per file. A single-sheet workbook uses
- * it directly; a multi-sheet workbook prompts for which sheet (pooling several
- * sheets into one dataset is a possible follow-up). Export writes a single sheet.
+ * Multi-sheet workbooks: a single-sheet workbook imports straight through; a
+ * multi-sheet workbook prompts with a checklist of sheets (row×col hints, first
+ * sheet pre-checked) so summary/codebook sheets can be skipped. Selected sheets are
+ * **split into separate datasets** — one per sheet — because workbook sheets are
+ * usually heterogeneous (data + codebook + summary), so pooling/row-stacking them
+ * would be wrong; joining is a deliberate keyed operation the existing Merge feature
+ * owns. The first selected sheet streams through the host ingest as the primary
+ * dataset (the codec must emit a schema); each additional sheet is created as its
+ * own named dataset via `app.data.create`. Export writes a single sheet.
  */
 
 export const manifest = {
@@ -51,9 +57,10 @@ const EMIT_BATCH = 50_000;
 
 // --- read --------------------------------------------------------------------
 
-/** Decode an Excel workbook into the dataset: parse with SheetJS, choose a sheet,
- * treat the first row as a header, infer per-column type, then stream rows to the
- * host ingest in batches. */
+/** Decode an Excel workbook: parse with SheetJS, choose which sheet(s) to import,
+ * and split them into datasets — the first streams through the host ingest (the
+ * primary), each additional sheet becomes its own dataset via `app.data.create`.
+ * Each sheet: first row = header, per-column type inference, rows in batches. */
 export async function readXlsx(app, { name }) {
   const size = await app.codec.size();
   const bytes = await readAll(app, size);
@@ -66,38 +73,75 @@ export async function readXlsx(app, { name }) {
   const sheetNames = wb.SheetNames || [];
   if (!sheetNames.length) throw new Error('Excel: the workbook has no sheets');
 
-  const sheetName = await chooseSheet(app, sheetNames, name);
-  if (sheetName == null) throw new Error('Excel import cancelled');
+  const chosen = await chooseSheets(app, XLSX, wb, sheetNames, name);
+  if (chosen == null) throw new Error('Excel import cancelled');
+  if (!chosen.length) throw new Error('Excel: no sheets selected');
 
-  const ws = wb.Sheets[sheetName];
-  // header:1 → array-of-arrays; raw:true keeps native JS types (numbers as numbers,
-  // Dates as Dates); defval:null fills gaps; blankrows:false drops fully-empty rows.
-  const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null, blankrows: false });
-  const { variables, storageTypes, columns } = buildColumns(aoa);
-  if (!variables.length) throw new Error(`Excel: sheet "${sheetName}" has no columns`);
+  // Build each chosen sheet's columns; drop any that turn out to have no columns.
+  const built = chosen
+    .map((sn) => ({ sheet: sn, ...buildColumns(sheetAoa(XLSX, wb.Sheets[sn])) }))
+    .filter((b) => b.variables.length);
+  if (!built.length) throw new Error('Excel: the selected sheet(s) have no columns');
 
-  await app.codec.begin(variables, storageTypes);
-  const total = columns[variables[0].name].length;
+  // First chosen sheet → stream through the host ingest as the primary dataset
+  // (the codec contract requires emitting a schema via begin()).
+  const primary = built[0];
+  await app.codec.begin(primary.variables, primary.storageTypes);
+  const total = primary.columns[primary.variables[0].name].length;
   for (let off = 0; off < total; off += EMIT_BATCH) {
     const chunk = {};
-    for (const v of variables) chunk[v.name] = columns[v.name].slice(off, off + EMIT_BATCH);
+    for (const v of primary.variables) chunk[v.name] = primary.columns[v.name].slice(off, off + EMIT_BATCH);
     await app.codec.batch(chunk);
+  }
+
+  // Additional chosen sheets → each its own new dataset (split, not pooled/joined).
+  // activate:false so focus stays on the primary import. If app.data.create isn't
+  // available for some reason, surface it rather than silently dropping sheets.
+  for (let i = 1; i < built.length; i++) {
+    const b = built[i];
+    if (!app.data || typeof app.data.create !== 'function') {
+      throw new Error('Excel: cannot create extra sheet datasets (app.data.create unavailable)');
+    }
+    // eslint-disable-next-line no-await-in-loop -- create sequentially to avoid racing the engine.
+    await app.data.create({ name: b.sheet, variables: b.variables, columns: b.columns, activate: false });
   }
 }
 
-/** Pick which sheet to import. One sheet → use it; several → prompt (falling back
- * to the first if the UI service isn't available in this context). */
-async function chooseSheet(app, sheetNames, fileName) {
-  if (sheetNames.length === 1) return sheetNames[0];
-  if (!app.ui || typeof app.ui.selectFromList !== 'function') return sheetNames[0];
-  const chosen = await app.ui.selectFromList({
-    title: 'Choose a sheet',
-    hint: `“${fileName || 'Workbook'}” has ${sheetNames.length} sheets — pick one to import.`,
-    items: sheetNames.map((s) => ({ value: s, label: s })),
-    multiple: false,
+/** Choose which sheet(s) to import. One sheet → use it. Several → a multi-select
+ * checklist (first sheet pre-checked; summary/codebook sheets can be unticked),
+ * falling back to the first sheet if the UI service isn't available here. Returns
+ * the chosen sheet names, `[]` if none picked, or `null` if cancelled. */
+async function chooseSheets(app, XLSX, wb, sheetNames, fileName) {
+  if (sheetNames.length === 1) return [sheetNames[0]];
+  if (!app.ui || typeof app.ui.selectFromList !== 'function') return [sheetNames[0]];
+  const items = sheetNames.map((sn) => {
+    const { rows, cols } = sheetDims(XLSX, wb.Sheets[sn]);
+    return { value: sn, label: `${sn}  (${rows.toLocaleString()} rows × ${cols} cols)` };
   });
-  if (chosen === null) return null; // cancelled
-  return Array.isArray(chosen) ? chosen[0] : chosen;
+  const chosen = await app.ui.selectFromList({
+    title: 'Choose sheets to import',
+    hint: `“${fileName || 'Workbook'}” has ${sheetNames.length} sheets. Each selected sheet becomes its own dataset — skip summary/codebook sheets you don’t need.`,
+    items,
+    multiple: true,
+    okLabel: 'Import',
+    selected: [sheetNames[0]], // first sheet pre-checked
+  });
+  return chosen; // array of names, [] if none, or null if cancelled
+}
+
+/** Header:1 array-of-arrays for a worksheet: raw JS types (numbers as numbers,
+ * Dates as Dates); defval:null fills gaps; blankrows:false drops fully-empty rows. */
+function sheetAoa(XLSX, ws) {
+  return XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null, blankrows: false });
+}
+
+/** Data-row and column counts for a worksheet (rows excludes the header), for the
+ * sheet-picker hint. Empty sheet → 0×0. */
+function sheetDims(XLSX, ws) {
+  const ref = ws && ws['!ref'];
+  if (!ref) return { rows: 0, cols: 0 };
+  const r = XLSX.utils.decode_range(ref);
+  return { rows: Math.max(0, r.e.r - r.s.r), cols: r.e.c - r.s.c + 1 };
 }
 
 /** Read the whole source via chunked random-access reads, concatenated. */

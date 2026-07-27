@@ -134,6 +134,9 @@ export class UiService {
    * @param {boolean} [options.multiple=true]
    * @param {string} [options.okLabel='OK']
    * @param {string} [options.searchPlaceholder='Filter…']
+   * @param {string[]} [options.selected] - Values pre-checked when the dialog opens
+   *   (for `multiple`; single-select seeds the radio from the first). Values not in
+   *   `items` are ignored.
    * @returns {Promise<string[] | null>} Chosen values, or `null` if cancelled.
    */
   selectFromList(options = {}) {
@@ -144,9 +147,11 @@ export class UiService {
       multiple = true,
       okLabel = 'OK',
       searchPlaceholder = 'Filter…',
+      selected: initialSelected = [],
     } = options;
     const CAP = 500; // max rows rendered at once; refine search to see more
-    const selected = new Set();
+    const seed = multiple ? initialSelected : initialSelected.slice(0, 1);
+    const selected = new Set(seed);
 
     return new Promise((resolve) => {
       const dialog = document.createElement('dialog');

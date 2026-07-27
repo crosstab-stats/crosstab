@@ -926,7 +926,16 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       default), blob-imported in the sandbox. **Both directions verified in Chrome** end
       to end (import: menu → picker → sandboxed parse → DuckDB grid; export: round-trip
       re-parsed identically) with a mixed-type/date/blank/duplicate-header workbook.
-      *Follow-up:* pooling multiple sheets into one dataset on import.
+      **Multi-sheet import — DONE (split model).** A multi-sheet workbook prompts with a
+      sheet checklist (row×col hints, first sheet pre-checked) so summary/codebook sheets
+      can be skipped; each selected sheet becomes **its own dataset** (heterogeneous
+      sheets shouldn't be pooled/row-stacked — join is the existing Merge feature's job).
+      First selected sheet streams as the primary; the rest are created via
+      `app.data.create` (added `selected` seed to `ui.selectFromList`). **Verified in
+      Chrome** — a 2-sheet workbook split into two correct datasets. *Minor follow-up:*
+      the primary dataset takes the host's default import name (e.g. "Dataset 1") rather
+      than its sheet name — a host-level codec-naming behavior shared by all codecs, not
+      Excel-specific; extra sheets are already sheet-named.
 - [x] **Multi-file import / import-as-append (pooled, row-stack).** Decision:
       pool into ONE table with a `source_file` provenance column (not a
       multi-dataset workspace); row-stack only (column-join/merge is separate).
