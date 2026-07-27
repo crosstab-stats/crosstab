@@ -1047,8 +1047,10 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     it's the import path), and preview for parquet-only importers (haven — needs
     staging the incoming key to DuckDB first; columns-based importers work today).
     Row order isn't base-stable after a join (DuckDB join order) — polish later.
-- [~] **SPSS-style data grid view.** *Read-only v1 built* (`core/data-views.js`):
-      a tabbed workspace (**Data | Variables | Output**) beside the sidebar.
+- [x] **SPSS-style data grid view — DONE** (incl. edit-in-cell). Read-only grid
+      (`core/data-views.js`) + the separate editable-cells item below; only cosmetic
+      polish remains (see *Still to do*).
+      A tabbed workspace (**Data | Variables | Output**) beside the sidebar.
   - **Data View** — **2-D virtualised** cell grid: renders only the rows *and*
     columns near the viewport, fetching each block via `DataStore.getRows` →
     DuckDB `LIMIT/OFFSET` (with the visible column subset). Fixed 120px columns
@@ -1108,7 +1110,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - *Still to do:* edit a factor cell by picking a **label** (today you type the
     raw code); range/fill edits; the old `VariablesSidebar` stand-in in `app.js`
     can now lean on this for any remaining inline editing.
-- [~] **Source-immutability + transform log — BUILT** (`core/data-store.js`).
+- [x] **Source-immutability + transform log — DONE** (`core/data-store.js`).
       Re-architected per the README principle: immutable per-file source tables
       (`ct_source_N`) + an ordered transform log → a derived DuckDB **VIEW**
       (`dataset`) that every read queries. Metadata transforms recompute only the
@@ -1208,8 +1210,11 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - **Accepted boundary (not a violation):** "source" = the *as-imported* table,
     not the original file bytes. Pair with the **Dataset library** to enable full
     file→result reproduction if wanted.
-- [~] **Data transform/recode.** *Metadata transforms built* (Phase 1) via an
-      **editable Variable View** — click a variable to edit it.
+- [x] **Data transform/recode — DONE** (both phases). Phase 1 *metadata transforms*
+      via an **editable Variable View** — click a variable to edit it; Phase 2
+      *compute/recode new variables* via the Transform menu (both below). The
+      cross-cutting "honour missingValues everywhere" concern is split out to its own
+      item below; remaining bits are noted polish.
   - `DataStore.updateVariable(name, patch)`: set label / type / measure / value
     labels / missing codes. **Non-destructive** (data not rewritten, reversible),
     except re-typing **to numeric** casts the column `TRY_CAST → DOUBLE` so numeric
@@ -1251,9 +1256,15 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     iap/dk/na/refused/… labels); **range** missing (e.g. all `< 0`), not just a
     discrete list; value-label conflict policy on multi-year append; and the
     earlier idea of surfacing a warning when imported data has un-designated
-    candidate missing codes. Also: only the Frequencies plugin honours
-    `missingValues` today — future analyses must too (or centralise it at
-    injection).
+    candidate missing codes. (The "honour `missingValues` in every analysis" gap is
+    now its own item below.)
+- [ ] **Honour `missingValues` across ALL analyses (correctness gap).** Today only the
+      **Frequencies** plugin respects designated missing codes; other analyses read the
+      raw values, so a GSS `-99`/DK/NAP would leak into means, regressions, crosstabs,
+      etc. Centralise missing-code handling at the **injection boundary** (the DuckDB→
+      WebR bridge) so every analysis honours `missingValues` uniformly rather than each
+      plugin re-implementing it. Split out from Data transform/recode — this is a
+      correctness gap, not polish.
 - [x] **`app.ui.showForm`** — a general declarative form dialog (text/password/
       number fields). Built (`core/ui-service.js`) for the FRED importer; also used
       by the dataset library's name prompt.
