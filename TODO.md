@@ -146,7 +146,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - [ ] **Building-block eligibility** — a slot can be saved as a reusable
     building block (pending building-block contract expansion).
 
-- [~] **Build and prove the DuckDB-WASM data engine — FOUNDATIONAL.**
+- [x] **Build and prove the DuckDB-WASM data engine — FOUNDATIONAL — DONE.**
       *Core engine wired in and live (desktop Chrome):* `core/duckdb-manager.js`
       owns the runtime; `core/data-store.js` is now a facade over a DuckDB table
       (Arrow IPC in, SQL query out) with metadata cached app-side. The demo
@@ -169,11 +169,22 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         kicks off DuckDB; `webr.preload()` runs concurrently); status shows
         "Loading data engine…" and the sidebar shows "Loading data…" until the
         first `DATA_CHANGED`.
-  - [ ] **Ingest path for large/real data.** Demo uses a one-shot Arrow ingest of
-        small JS arrays; exercise/representative-test bulk ingest (and revisit
-        explicit Arrow column typing so a leading-NULL column can't mis-infer).
-  - [ ] **Vendor + pin** DuckDB-WASM + Arrow assets (currently CDN) — see below.
-  - [ ] **iPad Safari** run of the whole engine (Milestone 3).
+  - [x] **Ingest path for large/real data — DONE.** Three Arrow-based tiers, all
+        wired to importers: small one-shot (`replaceTable`), out-of-core streaming
+        (`beginStreamIngest` → OPFS Parquet parts → CTAS), and ultra-wide
+        (`openParquetWriter`/`registerParquetFile`, JS Parquet encode). Explicit
+        column typing closes the leading-NULL mis-infer risk — the streaming path
+        builds the Arrow schema from `types` (not inferred), and even `replaceTable`
+        is fed metadata-typed arrays via `coerceColumn`. **Verified with a real
+        4.6 GB GSS `.sav` import.** (`.arrow`/Feather *file* import is deliberately
+        NOT built — Parquet covers the columnar-file case; Arrow stays an internal
+        interchange format only. Trivially codec-addable later if demand appears.)
+  - [x] **Vendor + pin DuckDB-WASM + Arrow — DECIDED AGAINST.** Keep pulling the
+        current versions live from CDN; not worth the long-term maintenance of
+        vendoring what we don't have to. (Air-gap mode already serves from
+        `./vendor/` when self-hosted — that path stays available for offline use.)
+  - [x] **iPad Safari** run of the whole engine (Milestone 3) — **DONE**, verified
+        working on iPad and iPhone.
       Original framing kept below for context.
   - This is meant to be a real tool for real social-science work — datasets get
       large (hundreds of variables × hundreds of thousands of cases) — so the
@@ -253,10 +264,10 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     loads DuckDB-WASM, generates 200 × 500k in-engine, pushes an aggregate down to
     DuckDB, bridges a reduced result into WebR, and runs `lm()` — measuring memory
     and timings throughout. Round-trip demonstrated; see `spike/RESULTS.md`. The
-    remaining acceptance gap is the **iPad Safari** run of the same path.
-  - **Vendor + pin** the DuckDB-WASM build and its worker/WASM assets the same
-    way the WebR pin is planned (see Hardening), for reproducibility + offline
-    PWA use.
+    iPad Safari run of the same path is also **verified** (works on iPad + iPhone).
+  - ~~**Vendor + pin** the DuckDB-WASM build and its worker/WASM assets.~~
+    *Decided against* — keep pulling current versions live from CDN (not worth the
+    maintenance); air-gap mode still serves `./vendor/` when self-hosted.
   - Blocks/feeds: **File import** (DuckDB reads CSV/Parquet natively, which
     reshapes that task), **SPSS-style data grid** (virtualised grid backed by
     `LIMIT/OFFSET` SQL windows over DuckDB — a natural fit), **Data
