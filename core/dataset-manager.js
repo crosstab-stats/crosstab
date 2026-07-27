@@ -409,8 +409,12 @@ export class DatasetManager {
       getHistory: () => this.getHistory(),
       onDataChanged: (fn) => this.#bus.on(CoreEvents.DATA_CHANGED, fn),
       onSelectionChanged: (fn) => this.#bus.on(CoreEvents.SELECTION_CHANGED, fn),
-      /** Emit a derived dataset (e.g. bootstrap resamples) as a new active
-       * dataset. Resolves to its id. */
+      /** Emit a derived dataset (e.g. bootstrap resamples, a filtered subset) as a
+       * new active dataset. Resolves to its id. **Carry the source variables'
+       * metadata** (`missingValues`, value labels, measure) into the `variables` you
+       * pass — the host folds designated `missingValues` to `NA` at analysis
+       * injection, so a derived dataset that preserves them stays correct for missing;
+       * one built with bare name+type would lose that. */
       create: (dataset) => this.createWithData(dataset),
       /** Make a dataset active — for an importer that creates a dataset and then wants
        * to switch to it after attaching workspace state (#139). No-op for a bad id. */

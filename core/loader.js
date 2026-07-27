@@ -124,7 +124,9 @@ function probeServices() {
  *   Frequencies. Syntax: run builtin-frequencies.run {"vars": ["gender","region"]}`.
  * @property {Array<MenuItem>} [menu] - Menu actions. Each item is filed under
  *   `category`; clicking it gathers the item's `inputs`, binds them into R by name,
- *   then calls the named `run` function.
+ *   then calls the named `run` function. Each variable's **designated missing codes
+ *   are folded to `NA` at injection** by the host, so an analysis never needs to
+ *   recode user-missing values itself (see `MenuItem.keepMissing` to opt out).
  * @property {Array<ImporterDecl>} [imports] - File/web importers (File ▸ Import).
  * @property {Array<ExporterDecl>} [exports] - Data exporters (File ▸ Export).
  * @property {Array<ExporterDecl>} [outputExports] - Report exporters (Export output…).
@@ -134,6 +136,12 @@ function probeServices() {
  * @property {string} run - Name of the exported function to call: `run(app, inputs)`.
  * @property {number} [order] - Sort weight within the category menu (lower first).
  * @property {Array<InputDecl>} [inputs] - Inputs gathered (in order) before `run`.
+ * @property {boolean} [keepMissing] - By default the host strips each bound
+ *   variable's designated `missingValues` to `NA` at injection, so the analysis sees
+ *   clean data with no recode of its own. Set `true` to receive the **raw codes**
+ *   instead — only for analyses that report missingness themselves (e.g. Frequencies'
+ *   valid/missing breakdown). The Data grid and the raw r-console path are never
+ *   stripped regardless.
  *
  * @typedef {Object} InputDecl
  * @property {string} name - Key under which the value is passed in `inputs` and
