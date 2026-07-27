@@ -10,7 +10,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
-- [~] **Workspace ownership model → "read the world, write your own" (#145).**
+- [x] **Workspace ownership model → "read the world, write your own" (#145) — DONE.**
       *Decision (committed):* **activation = full trust**, so we stop pretending
       plugin workspace state is confidential. A dataset is already world-readable to
       any activated plugin; a coding blob is just derived data and shouldn't get a
@@ -36,8 +36,8 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         (get/set signatures), `plugin-manager.js` (deactivation purge), SECURITY.md
         reframe. *Superseded/extended by #146, which pushed the key to 4-D
         `(owner, wsId, slotId, dataset)` at `__wsv:4`.*
-  - [ ] **Space-verb dispatch interface (UNBLOCKED — spatial workspace is the 2nd
-        consumer).** The endgame from the design chat: the host should own a *shell*,
+  - [x] **Space-verb dispatch interface — BUILT.** (Spatial workspace is the 2nd
+        consumer.) The endgame from the design chat: the host should own a *shell*,
         not a merge vocabulary. A "space" plugin declares its own **verbs** (buttons)
         — the four we know (New/Append/Join/Merge) are just verbs a *tabular* space
         would declare; a different space might declare "stamp/stomp/strike/stare".
@@ -104,12 +104,6 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
           (2) own workspace state via implicit `app.state.get()`, (3) dataset
           columns via optional `inputs` array. No `hostProvides` or typed
           capabilities declaration needed.
-        - [ ] **Layer tree in region selection column.** Display loaded boundary
-          sets as a tree in the region-selection sidebar, so the user can
-          expand/collapse layers and select regions within each.
-        - [ ] **Point-in-polygon geocoding.** Given boundaries and a dataset with
-          lat/long columns, assign each observation to the region it falls in
-          (adds a region-ID column). Pure JS via Turf.js — no R needed.
         - **Cross-plugin invocation (#147) — BUILT.** A plugin can discover and
           run another plugin's analysis: `app.plugins.list()` returns active
           analyses (id, label, inputs), `app.plugins.onChange(cb)` fires when the
@@ -118,13 +112,21 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
           fully pre-filled skip the picker; missing required inputs show host
           dialogs. Spatial workspace uses this: "Analyse selection…" → filtered
           dataset → picker of available analyses → cross-plugin `app.run.analysis`.
-  - [ ] **CAQDAS cross-plugin invocation.** The coding workspace should be able
-        to run analysis plugins on coded-theme subsets (e.g. run frequencies on
-        all segments coded "anxiety"). Needs design thought on: does the derived
-        dataset contain the coded text segments, the source rows, or a
-        frequency table of codes? Different analyses want different shapes.
-        The `app.run.analysis` plumbing is ready — this is a CAQDAS design
-        question, not an infrastructure one.
+- [ ] **CAQDAS cross-plugin invocation.** (Pulled out of #145 — a CAQDAS/#147
+      concern, not the ownership model.) The coding workspace should be able to run
+      analysis plugins on coded-theme subsets (e.g. run frequencies on all segments
+      coded "anxiety"). Needs design thought on: does the derived dataset contain the
+      coded text segments, the source rows, or a frequency table of codes? Different
+      analyses want different shapes. The `app.run.analysis` plumbing is ready — this
+      is a CAQDAS design question, not an infrastructure one.
+- [ ] **Spatial workspace features (post-verb).** Pulled out of #145's space-verb
+      item — these are `builtin-spatial` features, unrelated to verb dispatch.
+  - [ ] **Layer tree in region selection column.** Display loaded boundary sets as a
+        tree in the region-selection sidebar, so the user can expand/collapse layers
+        and select regions within each.
+  - [ ] **Point-in-polygon geocoding.** Given boundaries and a dataset with lat/long
+        columns, assign each observation to the region it falls in (adds a region-ID
+        column). Pure JS via Turf.js — no R needed.
 
 - [x] **Plugin data as first-class citizens (#146).** *Built.*
       Workspace blobs promoted from opaque side-cars to host-managed, independently
