@@ -1258,13 +1258,26 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     earlier idea of surfacing a warning when imported data has un-designated
     candidate missing codes. (The "honour `missingValues` in every analysis" gap is
     now its own item below.)
-- [ ] **Honour `missingValues` across ALL analyses (correctness gap).** Today only the
-      **Frequencies** plugin respects designated missing codes; other analyses read the
-      raw values, so a GSS `-99`/DK/NAP would leak into means, regressions, crosstabs,
-      etc. Centralise missing-code handling at the **injection boundary** (the DuckDB→
-      WebR bridge) so every analysis honours `missingValues` uniformly rather than each
-      plugin re-implementing it. Split out from Data transform/recode — this is a
-      correctness gap, not polish.
+- [x] **Honour `missingValues` centrally at injection — DONE.** (Correction to the
+      earlier note: it was never "only Frequencies" — **~45 analysis plugins each
+      re-implemented** the same `x[x %in% codes] <- NA` recode; the real risk was
+      duplication + any plugin forgetting/diverging.) The host now folds designated
+      missing codes to SQL `NULL` (→ R `NA`) at the **analysis injection boundary** — a
+      `CASE WHEN TRY_CAST(col AS DOUBLE) IN (codes) THEN NULL` in
+      `DataStore.getInjectionParquet`/`getColumns` (`#missingWrap`), gated by an
+      `applyMissing` flag threaded from `webr.run`. Every declarative analysis honours
+      `missingValues` for free, correct-by-construction. **Opt-out:** an analysis item
+      declares `keepMissing: true` to receive raw codes (Frequencies, which reports the
+      valid/missing breakdown); the raw `injectData`/r-console path and the **Data grid
+      (`getRows`) stay raw** (SPSS shows the code). Plumbed through
+      plugin-actions → loader → broker across the menu, script-replay, and `runAnalysis`
+      paths. **Verified in Chrome:** injected R `vars` stripped `1,2,3,NA,5` vs opt-out
+      raw `1,2,3,-99,5`; grid raw `-99`; Descriptives N=4 / Missing=1 / mean=2.75; a real
+      Descriptives run carries `keepMissing=false`, Frequencies `keepMissing=true`.
+  - [ ] *Deferred cleanup:* remove the now-redundant per-plugin `%in% codes <- NA`
+        recode from the ~44 exclude-style analysis plugins (a harmless no-op today,
+        since the central strip already covers them). Leave it in analyses that opt out
+        (Frequencies).
 - [x] **`app.ui.showForm`** — a general declarative form dialog (text/password/
       number fields). Built (`core/ui-service.js`) for the FRED importer; also used
       by the dataset library's name prompt.

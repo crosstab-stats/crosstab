@@ -128,6 +128,10 @@ function buildInputAliases(injectInputs) {
  *   `{kind:'number'|'choice'|'text', value}`). Each is bound into R under its name
  *   before `code` runs (see {@link buildInputAliases}). Supersedes `injectData`/
  *   `variables` for declarative plugins.
+ * @property {boolean} [keepMissing=false] - With `injectInputs`, skip the central
+ *   missing-value strip so the analysis receives the raw designated codes (for
+ *   analyses that report missingness themselves, e.g. Frequencies). Ignored for the
+ *   raw `injectData` path, which is never stripped. (#missing-values)
  */
 
 /**
@@ -333,7 +337,7 @@ export class WebRManager {
    * @returns {Promise<RunResult>}
    */
   run(code, options = {}) {
-    const { injectData = false, variables, captureGraphics = false, injectInputs = null } = options;
+    const { injectData = false, variables, captureGraphics = false, injectInputs = null, keepMissing = false } = options;
     return this.#enqueue(async (webR) => {
       const shelter = await new webR.Shelter();
       try {
@@ -344,10 +348,14 @@ export class WebRManager {
           // a single-variable input → a vector, a multi → a data.frame, a scalar
           // input → its value. `df` is built (union of all chosen columns) as the
           // source the aliases slice from.
+          // Designated missing codes are folded to NA at injection so every analysis
+          // honours them centrally (#missing-values) — unless the analysis opts out
+          // via `keepMissing` (e.g. Frequencies, which reports the missing breakdown).
           const cols = inputColumns(injectInputs);
-          if (cols.length) prelude = await this.#buildInjection(webR, env, cols);
+          if (cols.length) prelude = await this.#buildInjection(webR, env, cols, !keepMissing);
           prelude += buildInputAliases(injectInputs);
         } else if (injectData) {
+          // Raw dataset bind (r-console / manual R) stays raw — the escape hatch.
           prelude = await this.#buildInjection(webR, env, variables);
         }
 
@@ -603,8 +611,8 @@ export class WebRManager {
    * @param {string[]} [variables]
    * @returns {Promise<string>} R prelude source.
    */
-  async #buildInjection(webR, env, variables) {
-    const opts = variables ? { variables } : undefined;
+  async #buildInjection(webR, env, variables, applyMissing = false) {
+    const opts = { ...(variables ? { variables } : {}), applyMissing };
 
     if (this.#getInjectionParquet && (await this.#ensureNanoparquet(webR))) {
       try {

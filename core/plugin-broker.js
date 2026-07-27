@@ -72,6 +72,10 @@ export class PluginBroker {
    * plugin's `webr.run` calls (so the plugin's R sees them bound by name). */
   #activeInputs = null;
 
+  /** Injection options for the in-flight action (e.g. `{ keepMissing }`), merged
+   * into the auto-injected `webr.run` call. @type {object} */
+  #activeInjectOpts = {};
+
   /** Deferred for an in-flight {@link PluginBroker#invoke}. */
   #invokePending = null;
 
@@ -110,7 +114,10 @@ export class PluginBroker {
     // Declarative plugins call `webr.run(code)` with no injection args; the host
     // binds the action's gathered inputs into R for them (see #activeInputs).
     this.#dispatch['webr.run'] = (code, opts) =>
-      this.#services.webr.run(code, this.#activeInputs ? { ...opts, injectInputs: this.#activeInputs } : opts);
+      this.#services.webr.run(
+        code,
+        this.#activeInputs ? { ...opts, injectInputs: this.#activeInputs, ...this.#activeInjectOpts } : opts,
+      );
     // Workspace plugins (#93): a `workspace` service scopes state.get/set to this
     // iframe's workspace id (the host store is the single source of truth).
     if (services.workspace) {
@@ -208,12 +215,14 @@ export class PluginBroker {
 
   /** Bind the host-gathered inputs for the in-flight action (auto-injected into
    * the plugin's `webr.run`). Cleared with {@link PluginBroker#clearActiveInputs}. */
-  setActiveInputs(inputs) {
+  setActiveInputs(inputs, opts = {}) {
     this.#activeInputs = inputs;
+    this.#activeInjectOpts = opts || {};
   }
 
   clearActiveInputs() {
     this.#activeInputs = null;
+    this.#activeInjectOpts = {};
   }
 
   /** Host-facing: set this plugin's output attribution ("Name · origin"). The

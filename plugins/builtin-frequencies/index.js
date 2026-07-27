@@ -30,6 +30,9 @@ export const manifest = {
       label: 'Frequencies…',
       run: 'run',
       order: 10,
+      // Opt out of the host's central missing-value strip: Frequencies reports the
+      // valid/missing breakdown itself, so it needs the raw designated codes (#missing-values).
+      keepMissing: true,
       inputs: [{ name: 'vars', kind: 'variables', hint: 'The variables to tabulate into counts and percentages.', multiple: true }],
     },
   ],

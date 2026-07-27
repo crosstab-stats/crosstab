@@ -571,8 +571,8 @@ export class PluginLoader {
 
   /** Bind the host-gathered inputs for a plugin's in-flight action (auto-injected
    * into its `webr.run`). Paired with {@link PluginLoader#clearActiveInputs}. */
-  setActiveInputs(id, inputs) {
-    this.#plugins.get(id)?.broker.setActiveInputs(inputs);
+  setActiveInputs(id, inputs, opts) {
+    this.#plugins.get(id)?.broker.setActiveInputs(inputs, opts);
   }
 
   clearActiveInputs(id) {

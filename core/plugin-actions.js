@@ -298,6 +298,7 @@ export class PluginActions {
       label: t.item.label,
       run: a.run,
       specs: Array.isArray(t.item.inputs) ? t.item.inputs : [],
+      keepMissing: !!t.item.keepMissing,
       inputs: a.inputs || {},
     };
   }
@@ -356,6 +357,7 @@ export class PluginActions {
       label: item.label,
       run: item.run,
       specs,
+      keepMissing: !!item.keepMissing,
       inputs: gathered,
       // The data position this analysis was run at: how many data transforms were
       // applied at the time. The script places/replays it here so its output
@@ -401,7 +403,9 @@ export class PluginActions {
         if (!runner) throw new Error(`no host runner registered for "${e.host}"`);
         await runner(e.inputs || {});
       } else {
-        this.#loader.setActiveInputs(e.pluginId, toInjectInputs(e.specs || [], e.inputs));
+        this.#loader.setActiveInputs(e.pluginId, toInjectInputs(e.specs || [], e.inputs), {
+          keepMissing: !!e.keepMissing,
+        });
         await this.#loader.invoke(e.pluginId, e.run, [e.inputs]);
       }
       ok = true;
@@ -490,6 +494,7 @@ export class PluginActions {
       label: t.item.label,
       run,
       specs,
+      keepMissing: !!t.item.keepMissing,
       inputs: gathered,
       at: this.#dataStore?.getTransforms?.().length ?? 0,
       outputMark: this.#results.getModel ? this.#results.getModel().length : 0,

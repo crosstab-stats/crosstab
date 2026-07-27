@@ -1413,8 +1413,8 @@ export class DataStore {
    * @param {string[]} [opts.variables] - Restrict/reorder columns.
    * @returns {Promise<Object<string, Float64Array | Array<string|null>>>}
    */
-  async getColumns({ variables } = {}) {
-    const plan = this.#columnPlan(variables);
+  async getColumns({ variables, applyMissing = false } = {}) {
+    const plan = this.#columnPlan(variables, { applyMissing });
     if (this.#rowCount === 0 || plan.length === 0) return {};
 
     const table = await this.#duckdb.query(
@@ -1456,34 +1456,59 @@ export class DataStore {
    * @param {string[]} [variables]
    * @returns {Array<{name: string, expr: string, numeric: boolean}>}
    */
-  #columnPlan(variables) {
+  #columnPlan(variables, { applyMissing = false } = {}) {
     const names = variables ?? this.#variables.map((v) => v.name);
     return names
       .filter((n) => this.#byName.has(n))
       .map((name) => {
         const kind = classifySqlType(this.#sqlTypes.get(name));
         const q = quoteIdent(name);
-        let expr;
+        let value;
         switch (kind) {
           case 'numeric':
-            expr = `CAST(${q} AS DOUBLE) AS ${q}`;
+            value = `CAST(${q} AS DOUBLE)`;
             break;
           case 'date':
-            expr = `strftime(${q}, '%Y-%m-%d') AS ${q}`;
+            value = `strftime(${q}, '%Y-%m-%d')`;
             break;
           case 'timestamp':
-            expr = `strftime(${q}, '%Y-%m-%d %H:%M:%S') AS ${q}`;
+            value = `strftime(${q}, '%Y-%m-%d %H:%M:%S')`;
             break;
           case 'int64':
           case 'time':
           case 'bool':
-            expr = `CAST(${q} AS VARCHAR) AS ${q}`;
+            value = `CAST(${q} AS VARCHAR)`;
             break;
           default: // text
-            expr = q;
+            value = `${q}`;
         }
+        const expr = `${this.#missingWrap(name, q, value, applyMissing)} AS ${q}`;
         return { name, expr, numeric: kind === 'numeric' };
       });
+  }
+
+  /** Numeric user-missing codes designated for a variable (finite numbers only —
+   * mirrors the per-plugin `filter(Number.isFinite)` this centralises). */
+  #numericMissing(name) {
+    const mv = this.#byName.get(name)?.missingValues;
+    return Array.isArray(mv) ? mv.map(Number).filter(Number.isFinite) : [];
+  }
+
+  /**
+   * Wrap a column's value expression so its designated missing codes become SQL
+   * `NULL` (→ R `NA`) when `applyMissing` — the central version of the
+   * `x[x %in% c(codes)] <- NA` recode ~45 analysis plugins each used to emit
+   * (#missing-values). Applied only at analysis **injection** (see
+   * {@link getColumns}/{@link getInjectionParquet}), never in {@link getRows} — the
+   * Data grid must keep showing the raw codes (SPSS model). Compares via `TRY_CAST`
+   * so a non-numeric column simply never matches a numeric code (no error, no false
+   * strip). Returns `value` unchanged when off or when the column has no codes.
+   */
+  #missingWrap(name, q, value, applyMissing) {
+    if (!applyMissing) return value;
+    const codes = this.#numericMissing(name);
+    if (!codes.length) return value;
+    return `CASE WHEN TRY_CAST(${q} AS DOUBLE) IN (${codes.join(', ')}) THEN NULL ELSE ${value} END`;
   }
 
   /**
@@ -1546,7 +1571,7 @@ export class DataStore {
    * @param {string[]} [opts.variables]
    * @returns {Promise<Uint8Array | null>} Parquet bytes, or `null` if empty.
    */
-  async getInjectionParquet({ variables } = {}) {
+  async getInjectionParquet({ variables, applyMissing = false } = {}) {
     const names = (variables ?? this.#variables.map((v) => v.name)).filter((n) =>
       this.#byName.has(n),
     );
@@ -1556,10 +1581,12 @@ export class DataStore {
       .map((name) => {
         const q = quoteIdent(name);
         // Keep everything native (Parquet carries dates/decimals/bools/text
-        // faithfully); only 64-bit ints need the character cast.
-        return classifySqlType(this.#sqlTypes.get(name)) === 'int64'
-          ? `CAST(${q} AS VARCHAR) AS ${q}`
-          : q;
+        // faithfully); only 64-bit ints need the character cast. When applyMissing,
+        // designated missing codes are folded to NULL here (→ R NA) so every analysis
+        // honours them without its own recode (#missing-values).
+        const value =
+          classifySqlType(this.#sqlTypes.get(name)) === 'int64' ? `CAST(${q} AS VARCHAR)` : `${q}`;
+        return `${this.#missingWrap(name, q, value, applyMissing)} AS ${q}`;
       })
       .join(', ');
     return this.#duckdb.queryToParquet(
