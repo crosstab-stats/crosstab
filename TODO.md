@@ -321,8 +321,20 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       runs R 4.6.0 (`mean(1:5)=3`). *Vendoring capability still exists* for the opt-in
       air-gap deploy (`./vendor/` via `scripts/vendor-assets.mjs`, which records the
       grabbed version). Bump the pin deliberately when adopting a new WebR.
-- [ ] **PWA precaching.** Fold asset precaching into `sw.js` once WebR assets are
-      vendored, so the app works offline (`sw.js` TODO).
+- [x] **PWA precaching — DONE** (stale framing: it never needed vendoring). `sw.js`
+      already does a two-tier cache (#92): the same-origin app shell is precached on
+      install + cached-on-use; the cross-origin runtimes (WebR/DuckDB/Arrow/hyparquet)
+      and R-package binaries cache-on-use from the known runtime hosts, served
+      cache-first. Verified in Chrome: after one warm run the SW cache holds **197
+      entries / ~117 MB** — full WebR runtime, 48 R-package files, DuckDB/Arrow, and the
+      app shell. **Fixed a real bug:** the page-side `core/offline.js` was pinned to
+      cache name `crosstab-offline-v1` while the SW had moved to `v3`, so `status()`
+      reported 0 (looked like "nothing is happening"), `disable()` deleted the wrong
+      cache, and the marker was written where the SW never looks. `offline.js` now
+      resolves the live `crosstab-offline-*` cache by prefix — skew-proof against future
+      SW cache-name bumps. (True offline *serving* not automation-tested — can't cut the
+      network in the driver — but the cache is correctly populated and the SW serves it
+      cache-first.)
 
 ## Open questions / decisions to make
 

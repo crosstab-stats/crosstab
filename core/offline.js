@@ -25,9 +25,26 @@
  */
 
 const SW_URL = 'sw.js';
-const CACHE = 'crosstab-offline-v1';
+// The service worker owns the versioned cache name (`sw.js` CACHE, e.g.
+// `crosstab-offline-v3`) and keeps exactly ONE `crosstab-offline-*` cache — older
+// versions are purged on its `activate`. The page must NOT hardcode the version:
+// doing so skewed badly (the page was pinned to `v1` while the SW had moved to `v3`),
+// so `status()` read an empty cache, `disable()` deleted the wrong one, and the
+// marker was written where the SW never looks — the whole "offline caching does
+// nothing" symptom, even though the SW was caching ~200 entries correctly. Resolve
+// the live cache(s) by prefix instead, so a future SW cache-name bump can't desync us.
+const CACHE_PREFIX = 'crosstab-offline-';
 // Must match sw.js OFFLINE_MARKER.
 const MARKER = 'https://crosstab.local/__offline_enabled__';
+
+/** Live SW offline cache name(s), by prefix (normally exactly one). */
+async function offlineCacheNames() {
+  try {
+    return (await caches.keys()).filter((k) => k.startsWith(CACHE_PREFIX));
+  } catch {
+    return [];
+  }
+}
 // Survives the one control-gaining reload, so we resume the warm afterwards.
 const RESUME_KEY = 'crosstab.offline.resume';
 // The WebR binary package repo (CDN mode). The R-minor dir must match the WebR
@@ -69,20 +86,22 @@ export class OfflineManager {
     let count = 0;
     let bytes = 0;
     try {
-      const c = await caches.open(CACHE);
-      for (const req of await c.keys()) {
-        if (req.url === MARKER) {
-          enabled = true;
-          continue;
+      for (const name of await offlineCacheNames()) {
+        const c = await caches.open(name);
+        for (const req of await c.keys()) {
+          if (req.url === MARKER) {
+            enabled = true;
+            continue;
+          }
+          count++;
+          // The WebR engine being cached (CDN host or vendored same-origin) is what
+          // lets analyses run offline.
+          if (/webr\.r-wasm\.org|\/vendor\/webr\//.test(req.url)) runtimeCached = true;
+          // Headers only (no body reads) so status stays fast with ~100 MB cached.
+          const r = await c.match(req);
+          const len = Number(r?.headers.get('content-length') || 0);
+          if (len) bytes += len;
         }
-        count++;
-        // The WebR engine being cached (CDN host or vendored same-origin) is what
-        // lets analyses run offline.
-        if (/webr\.r-wasm\.org|\/vendor\/webr\//.test(req.url)) runtimeCached = true;
-        // Headers only (no body reads) so status stays fast with ~100 MB cached.
-        const r = await c.match(req);
-        const len = Number(r?.headers.get('content-length') || 0);
-        if (len) bytes += len;
       }
     } catch {
       /* Cache API unavailable */
@@ -195,7 +214,7 @@ export class OfflineManager {
   /** Turn it off and drop the cache. */
   async disable() {
     try {
-      await caches.delete(CACHE);
+      for (const name of await offlineCacheNames()) await caches.delete(name);
     } catch {
       /* ignore */
     }
@@ -322,10 +341,15 @@ export class OfflineManager {
     await Promise.all([...urls].map((u) => fetch(u, { cache: 'reload' }).catch(() => {})));
   }
 
-  /** Write the "offline on" marker straight into the cache (page-side). */
+  /** Write the "offline on" marker into the live SW cache (page-side), so the SW
+   * hydrates "enabled" from it on activate. If no SW cache exists yet (SW not
+   * installed), skip — the SW's `offline-enable` message writes the marker into its
+   * own cache once the page is under control (see {@link #runWarm}). */
   async #setMarker() {
     try {
-      const c = await caches.open(CACHE);
+      const [name] = await offlineCacheNames();
+      if (!name) return;
+      const c = await caches.open(name);
       await c.put(MARKER, new Response('1'));
     } catch {
       /* ignore */
