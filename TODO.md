@@ -1725,7 +1725,10 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     bar/line/error migrations reuse an existing kind; only new glyphs need renderer work.
     - [x] **Migrated (new engine):** `plots` scatter, trends, pie.
     - [ ] **Tier A — fits an existing kind (bar/line/error), high value:**
-      - [ ] `plots`: histogram (bars), errorBars (bars + error).
+      - [x] `plots`: histogram (bars), errorBars (bars + error). **DONE** — pure-JS from
+            `getColumns` (like scatter/trends); histogram bins via Sturges, errorBars
+            passes per-group `rawValues` so the renderer draws ci95 whiskers. Verified in
+            Chrome (live "Chart options", error whiskers render).
       - [ ] discrete-x: `factor` scree (line), `timeseries` correlogram/ACF (bars).
       - [ ] continuous-x lines: `cointegration`, `timeseries` forecast, `survival`
             Kaplan-Meier (step), `inequality` Lorenz (+diagonal ref), `ecology`

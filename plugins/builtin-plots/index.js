@@ -121,12 +121,27 @@ const ACCENT = '#2980b9';
 export async function histogram(app, { v: name }) {
   if (!name) return;
   const meta = await metaMap(app);
-  const code = `
-    ${recodeR([name], meta)}
-    x <- as.numeric(df[[${rlit(name)}]]); x <- x[is.finite(x)]
-    hist(x, col = "${ACCENT}", border = "white",
-         main = ${rlit(label(meta, name))}, xlab = ${rlit(label(meta, name))})`;
-  await renderPlot(app, 'Histogram', code, [name]);
+  const cols = await app.data.getColumns({ variables: [name] });
+  const miss = missingSet(meta, name);
+  const xs = [];
+  for (const raw of cols[name] || []) {
+    if (isBlank(raw) || miss.has(String(raw))) continue;
+    const n = Number(raw);
+    if (Number.isFinite(n)) xs.push(n);
+  }
+  if (!xs.length) { await app.results.appendError('Histogram: no finite values to plot.'); return; }
+  const { edges, counts } = binData(xs);
+  // Bins become categories (gapped bars — the smart-chart trade for live recolour/
+  // reorder/relabel + persistence). Value = count per bin.
+  const categories = counts.map((_, i) => ({ key: String(i), label: `${round2(edges[i])}–${round2(edges[i + 1])}` }));
+  await app.results.appendChart({
+    kind: 'categorical',
+    title: `Histogram of ${label(meta, name)}`,
+    categories,
+    series: [{ key: 'count', label: 'Count', values: counts }],
+    axes: { x: { title: label(meta, name) }, y: { title: 'Count' } },
+    view: { mark: 'bar', legend: 'none' },
+  });
 }
 
 export async function scatter(app, { x, y }) {
@@ -318,19 +333,39 @@ export async function pie(app, { v: name }) {
 export async function errorBars(app, { y, g }) {
   if (!y || !g) return;
   const meta = await metaMap(app);
-  const code = `
-    ${recodeR([y, g], meta)}
-    yy <- as.numeric(df[[${rlit(y)}]]); gg <- as.factor(df[[${rlit(g)}]])
-    ok <- is.finite(yy) & !is.na(gg); yy <- yy[ok]; gg <- droplevels(gg[ok])
-    m <- tapply(yy, gg, mean); s <- tapply(yy, gg, sd); n <- tapply(yy, gg, length)
-    se <- s / sqrt(n); ci <- qt(0.975, pmax(n - 1, 1)) * se
-    top <- max(m + ci, na.rm = TRUE); bot <- min(0, min(m - ci, na.rm = TRUE))
-    bp <- barplot(m, col = "${ACCENT}33", border = "${ACCENT}", ylim = c(bot, top * 1.1),
-                  xlab = ${rlit(label(meta, g))}, ylab = paste("Mean", ${rlit(label(meta, y))}),
-                  main = paste("Mean", ${rlit(label(meta, y))}, "by", ${rlit(label(meta, g))}))
-    arrows(bp, m - ci, bp, m + ci, angle = 90, code = 3, length = 0.05, col = "#333")
-    mtext("Error bars: 95% CI", side = 3, line = 0.2, cex = 0.8, col = "#777")`;
-  await renderPlot(app, 'Bar chart with error bars', code, [y, g]);
+  const cols = await app.data.getColumns({ variables: [y, g] });
+  const yv = cols[y] || [];
+  const gv = cols[g] || [];
+  const yMiss = missingSet(meta, y);
+  const gMiss = missingSet(meta, g);
+  const gLabelOf = labelMapper(meta, g);
+  const groups = new Map(); // group key → raw numeric y values
+  for (let i = 0; i < yv.length; i++) {
+    const yy = yv[i];
+    const gg = gv[i];
+    if (isBlank(yy) || isBlank(gg) || yMiss.has(String(yy)) || gMiss.has(String(gg))) continue;
+    const yn = Number(yy);
+    if (!Number.isFinite(yn)) continue;
+    const gk = String(gg);
+    if (!groups.has(gk)) groups.set(gk, []);
+    groups.get(gk).push(yn);
+  }
+  if (!groups.size) { await app.results.appendError('Bar chart: no complete cases to plot.'); return; }
+  const gkeys = [...groups.keys()].sort(numAwareCmp);
+  const categories = gkeys.map((k) => ({ key: k, label: gLabelOf(k) }));
+  // rawValues drives the renderer's error bars (it computes sem/sd/ci95); the bar
+  // height is the group mean. The user can switch the error type or turn it off.
+  const rawValues = gkeys.map((k) => groups.get(k));
+  const values = gkeys.map((k) => round2(meanOf(groups.get(k))));
+  const yLab = `Mean ${label(meta, y)}`;
+  await app.results.appendChart({
+    kind: 'categorical',
+    title: `${yLab} by ${label(meta, g)}`,
+    categories,
+    series: [{ key: y, label: yLab, values, rawValues }],
+    axes: { x: { title: label(meta, g) }, y: { title: yLab } },
+    view: { mark: 'bar', legend: 'none', errorBars: 'ci95' },
+  });
 }
 
 // --- shared render harness ---------------------------------------------------
@@ -437,6 +472,32 @@ function numAwareCmp(a, b) {
 /** Round to 2 dp (compact, avoids float noise in the persisted model). */
 function round2(v) {
   return Math.round(v * 100) / 100;
+}
+
+/** Arithmetic mean of a numeric array (NaN if empty). */
+function meanOf(arr) {
+  return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : NaN;
+}
+
+/** Even-width histogram bins over [min,max] using Sturges' rule (k = ⌈log₂n⌉+1).
+ * Returns `{edges: number[k+1], counts: number[k]}`; the max value lands in the last
+ * bin. A single distinct value degenerates to one bin. */
+function binData(xs) {
+  const min = Math.min(...xs);
+  const max = Math.max(...xs);
+  if (min === max) return { edges: [min, min + 1], counts: [xs.length] };
+  const k = Math.max(1, Math.ceil(Math.log2(xs.length)) + 1);
+  const width = (max - min) / k;
+  const edges = Array.from({ length: k + 1 }, (_, i) => min + i * width);
+  edges[k] = max; // guard float drift so max is included, not spilled past the edge
+  const counts = new Array(k).fill(0);
+  for (const x of xs) {
+    let b = Math.floor((x - min) / width);
+    if (b >= k) b = k - 1; // the max value → last bin
+    if (b < 0) b = 0;
+    counts[b] += 1;
+  }
+  return { edges, counts };
 }
 
 /** Ordinary least-squares fit of y on x → {slope, intercept, r2}, or null if the
