@@ -1715,34 +1715,38 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       being a poor viz), and **bar chart with error bars** (group means by a factor,
       **±95% CI**, t-based, labelled on the plot). Honours `missingValues`,
       app-blue theme, responsive via `viewBox`.
-  - **Chart-engine migration (#131) — TRACKING.** Two engines coexist: the OLD
-    `app.results.appendPlot(svg)` (plugin builds the SVG in R via `svglite`; the host
-    just displays it — no post-draw edits) and the NEW `app.results.appendChart(model)`
-    (plugin emits a chart **data model**; the host renders SVG in JS with live controls
-    — recolour, reorder, restack, relabel, axis/legend/palette — `core/chart-renderer.js`).
-    Registered chart **kinds**: `categorical` (bar OR line, multi-series, stacking,
-    error bars `sem`/`sd`/`ci95`, point overlay), `scatter` (+OLS trend), `pie`. So
-    bar/line/error migrations reuse an existing kind; only new glyphs need renderer work.
-    - [x] **Migrated (new engine):** `plots` scatter, trends, pie.
-    - [ ] **Tier A — fits an existing kind (bar/line/error), high value:**
-      - [x] `plots`: histogram (bars), errorBars (bars + error). **DONE** — pure-JS from
-            `getColumns` (like scatter/trends); histogram bins via Sturges, errorBars
-            passes per-group `rawValues` so the renderer draws ci95 whiskers. Verified in
-            Chrome (live "Chart options", error whiskers render).
-      - [ ] discrete-x: `factor` scree (line), `timeseries` correlogram/ACF (bars).
-      - [ ] continuous-x lines: `cointegration`, `timeseries` forecast, `survival`
-            Kaplan-Meier (step), `inequality` Lorenz (+diagonal ref), `ecology`
-            accumulation/rarefaction, `var` IRF. *Verify the categorical `line` mark
-            renders a dense/continuous x acceptably; if not, a small continuous-x line
-            addition is needed (nudges these toward Tier B).*
-    - [ ] **Tier B — needs a NEW chart kind/glyph in the renderer first:** `plots`
-          boxplot (box-and-whisker), `meta` forest (point + CI per study), `ordination`
-          biplot (scatter + loading vectors).
-    - **Tier C — no natural data model; stays on `svglite`/`appendPlot` (correct):**
-          `sna` network, `textanalytics` word cloud + dendrogram, `caqdas` themed word
-          cloud, `timeseries` decomposition (multi-panel), `spatial` map,
-          `assumptions`/`regression` Q-Q + residual diagnostics (technically scatter, but
-          live editing adds little — low priority).
+  - **Chart interaction architecture (#131) — DECIDED: three layers, not
+    "model-ise everything."** The host data-model renderer
+    (`app.results.appendChart` → `core/chart-renderer.js`) is great for common charts
+    but can't model the *variety* of statistical graphics — box/forest/biplot/network/
+    word-cloud/dendrogram/step/multi-panel all fell out of it. Forcing everything through
+    a host model both boils the ocean AND caps what plugins can draw. So interaction
+    splits into three layers (each chart picks a layer; we no longer force outliers into
+    the model):
+    - [ ] **Layer 1 — universal host FRAME (model-free). HIGHEST ROI, build first.**
+      Title, subtitle/caption, axis titles, fonts, theme, and download (SVG/PNG) are
+      *frame-level* — they don't care how the body was drawn. The host wraps **any** chart
+      (svglite SVG *or* model-rendered) in a frame it owns and edits host-side. Gives every
+      existing `appendPlot` chart cosmetic editing with **zero migration**. Requires each
+      plugin to pass title/axis-labels as **metadata** (not bake them into the SVG) so the
+      host owns that text — a small per-plugin change:
+      `app.results.appendPlot(svg, { title, caption, axes })`.
+    - [~] **Layer 2 — host data-model renderer (`appendChart`).** Instant, no-round-trip
+      body controls (recolour / reorder / restack) for the common `categorical` /
+      `scatter` / `pie` kinds. KEEP — but reserved for high-value **common** charts,
+      opt-in, NOT a universal mandate. *Done:* `plots` scatter, trends, pie, histogram,
+      errorBars. Later candidates that fit cleanly (line/bar): `factor` scree,
+      `timeseries` correlogram — migrate only if the instant controls are worth the
+      per-plugin R-data extraction; otherwise they ride Layer 1.
+    - [ ] **Layer 3 — plugin-declared, host-mediated re-chart.** A plugin draws its own
+      SVG (full R power) AND declares the alterations it supports
+      (`controls: [{ id, label, type, options }]`); the host renders those controls and
+      calls back to re-chart on change (generalises the existing `onRedraw` size-recipe).
+      Opt-in, for the complex charts (networks, forest, biplot, step curves, multi-panel)
+      where a round-trip is worth it.
+    - **Superseded:** the earlier Tier A/B/C "migrate-to-model" matrix. Outliers keep
+      their svglite bodies and gain Layer 1 (frame) + optional Layer 3 (declared controls);
+      only common charts warrant full Layer 2 model migration.
   - *Generalise plots over derived data — RESOLVED via multi-dataset.* The
     on-architecture answer ("analyses emit a derived dataset; plots consume
     datasets like everything else") is now real: see the **multi-dataset workspace**
