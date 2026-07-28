@@ -286,19 +286,19 @@ export async function boxplot(app, { y, g }) {
   if (!y) return;
   const meta = await metaMap(app);
   const vars = g ? [y, g] : [y];
+  const title = g ? `${label(meta, y)} by ${label(meta, g)}` : `Boxplot of ${label(meta, y)}`;
   const code = g
     ? `
     ${recodeR([y, g], meta)}
     yy <- as.numeric(df[[${rlit(y)}]]); gg <- as.factor(df[[${rlit(g)}]])
     boxplot(yy ~ gg, col = "${ACCENT}33", border = "${ACCENT}",
-            xlab = ${rlit(label(meta, g))}, ylab = ${rlit(label(meta, y))},
-            main = ${rlit(label(meta, y))})`
+            xlab = ${rlit(label(meta, g))}, ylab = ${rlit(label(meta, y))})`
     : `
     ${recodeR([y], meta)}
     yy <- as.numeric(df[[${rlit(y)}]]); yy <- yy[is.finite(yy)]
     boxplot(yy, col = "${ACCENT}33", border = "${ACCENT}",
-            ylab = ${rlit(label(meta, y))}, main = ${rlit(label(meta, y))})`;
-  await renderPlot(app, 'Boxplot', code, vars);
+            ylab = ${rlit(label(meta, y))})`;
+  await renderPlot(app, title, code, vars);
 }
 
 export async function pie(app, { v: name }) {
@@ -380,6 +380,7 @@ async function renderPlot(app, title, code, vars) {
     const svg = await drawSvg(app, code, vars, 7, 4.5);
     let handle;
     handle = await app.results.appendPlot(svg, {
+      title, // host-owned editable title (Layer 1) — no longer baked into the SVG
       onRedraw: (wpx, hpx) => void redrawPlot(app, handle, title, code, vars, wpx, hpx),
     });
   } catch (err) {

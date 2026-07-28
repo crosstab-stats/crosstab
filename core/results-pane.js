@@ -109,6 +109,31 @@ const RESULTS_STYLES = `
     background: #fff; border: 1px solid var(--accent, #2980b9);
     color: var(--accent, #2980b9); border-radius: 6px; cursor: pointer;
   }
+  /* Layer-1 universal frame: a host-owned editable title above, caption below, any
+     chart body (svglite plot OR model chart). Title/caption are host text, never
+     baked into the SVG, so they're renameable + persisted. */
+  .results-plot-wrap { max-width: 672px; }
+  .results-plot__title {
+    font: inherit; font-size: 15px; font-weight: 600; color: #222;
+    margin: 0 0 6px; padding: 2px 4px; border-radius: 4px; outline: none; cursor: text;
+  }
+  .results-plot__caption {
+    font: inherit; font-size: 12.5px; font-style: italic; color: #667;
+    margin: 6px 0 0; padding: 2px 4px; border-radius: 4px; outline: none; cursor: text;
+  }
+  .results-plot__title:hover, .results-plot__caption:hover { background: #f2f4f7; }
+  .results-plot__title:focus, .results-plot__caption:focus {
+    background: #eef3f8; box-shadow: 0 0 0 1px var(--accent, #2980b9);
+  }
+  .results-plot__title:empty, .results-plot__caption:empty { min-height: 1em; }
+  /* Empty title/caption is invisible until you hover the block (or focus it), so a
+     titleless plot isn't cluttered with placeholder text. */
+  .results-plot__title:empty:before, .results-plot__caption:empty:before { content: ''; }
+  .results-plot-wrap:hover .results-plot__title:empty:before,
+  .results-plot-wrap:hover .results-plot__caption:empty:before,
+  .results-plot__title:focus:empty:before, .results-plot__caption:focus:empty:before {
+    content: attr(data-placeholder); color: #b0b7bf; font-weight: 400; font-style: italic;
+  }
   .results-empty { color: #888; font-style: italic; }
   /* Data-driven charts (appendChart): a responsive SVG with an options panel and
      save buttons below it (auto height, so the controls aren't clipped like the
@@ -350,46 +375,81 @@ export class ResultsPane {
    *   insertion (the sanitiser allows a conservative SVG drawing subset).
    */
   appendPlot(svgString, opts = {}) {
+    const item = {
+      kind: 'plot',
+      svg: sanitizeHtml(svgString),
+      id: 0,
+      // Layer-1 frame: host-owned title/caption (plain text), NOT baked into the SVG,
+      // so they're renameable and persist across save/reload.
+      title: typeof opts.title === 'string' ? opts.title : '',
+      caption: typeof opts.caption === 'string' ? opts.caption : '',
+    };
+    this.#model.push(item);
+    const block = this.#buildPlotBlock(item, { onRedraw: opts.onRedraw });
+    this.#place(block);
+    this.#bus?.emit?.('output:written');
+    return item.id;
+  }
+
+  /** Build the DOM block for a `plot` item: the universal Layer-1 frame (editable
+   * title above, caption below) wrapping the fixed resizable SVG box (with the
+   * redraw + SVG/PNG controls). Registers the holder for PNG export and stamps
+   * `item.id`. Shared by {@link ResultsPane#appendPlot} and {@link ResultsPane#restoreModel}. */
+  #buildPlotBlock(item, { onRedraw } = {}) {
     const block = this.#makeBlock();
-    // Resizable wrapper: a lower-right grip scales the plot (vector → crisp).
-    block.classList.add('results-plot');
+    const wrap = document.createElement('div');
+    wrap.className = 'results-plot-wrap';
+    block.append(wrap);
+
+    wrap.append(
+      makeEditable(item.title || '', 'Add a title…', 'results-plot__title', (t) => {
+        item.title = t;
+        this.#bus?.emit?.('output:written');
+      }),
+    );
+
+    // Resizable box: a lower-right grip scales the plot (vector → crisp).
+    const box = document.createElement('div');
+    box.className = 'results-plot';
     const holder = document.createElement('div');
     holder.className = 'results-plot__svg';
-    holder.innerHTML = sanitizeHtml(svgString);
-    block.append(holder);
+    holder.innerHTML = sanitizeHtml(item.svg || '');
+    box.append(holder);
 
     const handle = this.#nextPlotId++;
+    item.id = handle;
     this.#plots.set(handle, holder);
-    this.#model.push({ kind: 'plot', svg: sanitizeHtml(svgString), id: handle });
 
-    // If the plot knows how to redraw itself (a plugin callback), offer a button
-    // that re-runs it at the box's *current* dimensions — the only way to change
-    // the plot's aspect ratio without distorting it (drag alone just scales).
-    if (typeof opts.onRedraw === 'function') {
+    // If the plot knows how to redraw itself (a plugin callback), offer a button that
+    // re-runs it at the box's current dimensions — the only way to change the aspect
+    // ratio without distorting (drag alone just scales).
+    if (typeof onRedraw === 'function') {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'results-plot__redraw';
       btn.textContent = '⟳ Redraw at this size';
       btn.title = 'Re-render at the current box size — re-lays-out at the new ratio';
-      btn.addEventListener('click', () => {
-        opts.onRedraw(Math.max(1, holder.clientWidth), Math.max(1, holder.clientHeight));
-      });
-      block.append(btn);
+      btn.addEventListener('click', () => onRedraw(Math.max(1, holder.clientWidth), Math.max(1, holder.clientHeight)));
+      box.append(btn);
     }
 
-    // A "save this plot" control: SVG is direct (the plot already is SVG); PNG is
-    // rasterised from it via a canvas. Hover-revealed, like the redraw button.
+    // "Save this plot": SVG direct (already SVG); PNG rasterised via canvas.
     const save = document.createElement('div');
     save.className = 'results-plot__save';
     save.append(
       makeSaveBtn('⬇ SVG', () => savePlotSvg(holder, handle)),
       makeSaveBtn('⬇ PNG', () => savePlotPng(holder, handle)),
     );
-    block.append(save);
+    box.append(save);
+    wrap.append(box);
 
-    this.#place(block);
-    this.#bus?.emit?.('output:written');
-    return handle;
+    wrap.append(
+      makeEditable(item.caption || '', 'Add a caption…', 'results-plot__caption', (c) => {
+        item.caption = c;
+        this.#bus?.emit?.('output:written');
+      }),
+    );
+    return block;
   }
 
   /**
@@ -589,24 +649,18 @@ export class ResultsPane {
         this.#place(block);
         this.#model.push({ kind: 'text', html: safe });
       } else if (item.kind === 'plot') {
-        const block = this.#makeBlock();
-        block.classList.add('results-plot');
-        const holder = document.createElement('div');
-        holder.className = 'results-plot__svg';
-        const safe = sanitizeHtml(item.svg || '');
-        holder.innerHTML = safe;
-        block.append(holder);
-        const handle = this.#nextPlotId++;
-        this.#plots.set(handle, holder);
-        const save = document.createElement('div');
-        save.className = 'results-plot__save';
-        save.append(
-          makeSaveBtn('⬇ SVG', () => savePlotSvg(holder, handle)),
-          makeSaveBtn('⬇ PNG', () => savePlotPng(holder, handle)),
-        );
-        block.append(save);
+        // Rebuild through the shared frame so a restored plot keeps its editable
+        // title/caption (Layer 1). No onRedraw on restore — the plugin callback is gone.
+        const restored = {
+          kind: 'plot',
+          svg: sanitizeHtml(item.svg || ''),
+          id: 0,
+          title: typeof item.title === 'string' ? item.title : '',
+          caption: typeof item.caption === 'string' ? item.caption : '',
+        };
+        const block = this.#buildPlotBlock(restored);
         this.#place(block);
-        this.#model.push({ kind: 'plot', svg: safe, id: handle });
+        this.#model.push(restored);
       } else if (item.kind === 'image') {
         const safe = String(item.src || '');
         if (!/^data:image\//.test(safe)) continue; // reject non-inline srcs from an untrusted save
@@ -878,6 +932,33 @@ function makeSaveBtn(label, onClick) {
   b.textContent = label;
   b.addEventListener('click', onClick);
   return b;
+}
+
+/** An inline-editable single-line text element (host-owned chart title/caption, the
+ * Layer-1 frame). Shows `placeholder` (dimmed, on hover/focus) when empty; commits the
+ * trimmed text via `onCommit` on blur or Enter, reverts on Escape. Plain text only —
+ * never HTML — so it can't inject into the results DOM. */
+function makeEditable(text, placeholder, className, onCommit) {
+  const el = document.createElement('div');
+  el.className = className;
+  el.contentEditable = 'plaintext-only';
+  el.spellcheck = false;
+  el.setAttribute('role', 'textbox');
+  el.setAttribute('aria-label', placeholder);
+  el.dataset.placeholder = placeholder;
+  el.textContent = text || '';
+  let last = el.textContent;
+  const commit = () => {
+    const t = el.textContent.replace(/\s+/g, ' ').trim();
+    if (t !== el.textContent) el.textContent = t;
+    if (t !== last) { last = t; onCommit(t); }
+  };
+  el.addEventListener('blur', commit);
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); el.blur(); }
+    else if (e.key === 'Escape') { e.preventDefault(); el.textContent = last; el.blur(); }
+  });
+  return el;
 }
 
 /**
