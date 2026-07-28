@@ -1715,6 +1715,31 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       being a poor viz), and **bar chart with error bars** (group means by a factor,
       **±95% CI**, t-based, labelled on the plot). Honours `missingValues`,
       app-blue theme, responsive via `viewBox`.
+  - **Chart-engine migration (#131) — TRACKING.** Two engines coexist: the OLD
+    `app.results.appendPlot(svg)` (plugin builds the SVG in R via `svglite`; the host
+    just displays it — no post-draw edits) and the NEW `app.results.appendChart(model)`
+    (plugin emits a chart **data model**; the host renders SVG in JS with live controls
+    — recolour, reorder, restack, relabel, axis/legend/palette — `core/chart-renderer.js`).
+    Registered chart **kinds**: `categorical` (bar OR line, multi-series, stacking,
+    error bars `sem`/`sd`/`ci95`, point overlay), `scatter` (+OLS trend), `pie`. So
+    bar/line/error migrations reuse an existing kind; only new glyphs need renderer work.
+    - [x] **Migrated (new engine):** `plots` scatter, trends, pie.
+    - [ ] **Tier A — fits an existing kind (bar/line/error), high value:**
+      - [ ] `plots`: histogram (bars), errorBars (bars + error).
+      - [ ] discrete-x: `factor` scree (line), `timeseries` correlogram/ACF (bars).
+      - [ ] continuous-x lines: `cointegration`, `timeseries` forecast, `survival`
+            Kaplan-Meier (step), `inequality` Lorenz (+diagonal ref), `ecology`
+            accumulation/rarefaction, `var` IRF. *Verify the categorical `line` mark
+            renders a dense/continuous x acceptably; if not, a small continuous-x line
+            addition is needed (nudges these toward Tier B).*
+    - [ ] **Tier B — needs a NEW chart kind/glyph in the renderer first:** `plots`
+          boxplot (box-and-whisker), `meta` forest (point + CI per study), `ordination`
+          biplot (scatter + loading vectors).
+    - **Tier C — no natural data model; stays on `svglite`/`appendPlot` (correct):**
+          `sna` network, `textanalytics` word cloud + dendrogram, `caqdas` themed word
+          cloud, `timeseries` decomposition (multi-panel), `spatial` map,
+          `assumptions`/`regression` Q-Q + residual diagnostics (technically scatter, but
+          live editing adds little — low priority).
   - *Generalise plots over derived data — RESOLVED via multi-dataset.* The
     on-architecture answer ("analyses emit a derived dataset; plots consume
     datasets like everything else") is now real: see the **multi-dataset workspace**
