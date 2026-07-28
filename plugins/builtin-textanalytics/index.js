@@ -35,7 +35,7 @@ export const manifest = {
     'Syntax: run builtin-textanalytics.kwic {"text": "response", "term": "text", "window": 6}\n' +
     '  • text — the free-text column to analyse.\n' +
     '  • other actions: Word cloud, Topic modeling (LDA), Content-analysis dictionary — run builtin-textanalytics.wordCloud / topicModel / dictionary {…}.',
-  rPackages: ['tidytext', 'dplyr', 'tibble', 'svglite', 'topicmodels', 'reshape2'],
+  rPackages: ['tidytext', 'dplyr', 'tibble', 'topicmodels', 'reshape2'],
   menu: [
     {
       label: 'Word frequency…',
@@ -140,7 +140,6 @@ export async function wordFrequency(app, { text, stopwords, topn, minlen }) {
   const ML = Number.isFinite(minlen) ? Math.max(1, Math.floor(minlen)) : 3;
   const rCode = `
     ${PRELUDE}
-    suppressMessages(library(svglite))
     txt <- as.character(text)
     d <- tibble(.row = seq_along(txt), text = txt)
     toks <- d %>% unnest_tokens(word, text)
@@ -150,16 +149,7 @@ export async function wordFrequency(app, { text, stopwords, topn, minlen }) {
     freq <- toks %>% count(word, sort = TRUE)
     nDistinct <- nrow(freq)
     topf <- head(freq, ${N})
-    topb <- head(freq, min(20L, ${N}))
-    svg <- ""
-    if (nrow(topb) > 0) {
-      .ct_dev <- svgstring(width = 7, height = 5, pointsize = 11)
-      par(mar = c(4.2, 9, 2.2, 1), col.axis = "#555555", col.lab = "#333333", fg = "#cccccc")
-      barplot(rev(topb$n), names.arg = rev(topb$word), horiz = TRUE, las = 1,
-              col = "${ACCENT}", border = "white", xlab = "Count")
-      dev.off(); svg <- .ct_dev()
-    }
-    list(words = topf$word, n = topf$n, total = total, nDistinct = nDistinct, svg = svg)`;
+    list(words = topf$word, n = topf$n, total = total, nDistinct = nDistinct)`;
   const { result } = await app.webr.run(rCode);
   const r = flat(result);
   const words = r.strs('words'), counts = r.nums('n'), total = r.num('total');
@@ -175,8 +165,17 @@ export async function wordFrequency(app, { text, stopwords, topn, minlen }) {
     },
     { caption: `Word Frequency — ${total.toLocaleString()} word tokens, ${r.num('nDistinct').toLocaleString()} distinct` },
   );
-  const svg = r.str1('svg');
-  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg), { title: 'Most frequent words' });
+  // Layer-2 bar chart of the top words (was a horizontal svglite barplot). Vertical
+  // bars, host-rendered with live recolour/reorder; capped at 20 like the old plot.
+  const chartN = Math.min(20, words.length);
+  await app.results.appendChart({
+    kind: 'categorical',
+    title: 'Most frequent words',
+    categories: words.slice(0, chartN).map((w) => ({ key: w, label: w })),
+    series: [{ key: 'n', label: 'Count', values: counts.slice(0, chartN) }],
+    axes: { x: { title: 'Word' }, y: { title: 'Count' } },
+    view: { mark: 'bar', legend: 'none' },
+  });
 }
 
 // --- Word cloud --------------------------------------------------------------

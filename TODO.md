@@ -1735,22 +1735,34 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       baked doubles (incl. the `qqnorm(main=NULL)` edge). *Follow-ups if wanted:* a small
       "frame options" popover for title font/size + a host caption default; axis-title
       editing for svglite bodies (harder — host can't place them around an opaque SVG).
-    - [~] **Layer 2 — host data-model renderer (`appendChart`).** Instant, no-round-trip
-      body controls (recolour / reorder / restack) for the common `categorical` /
-      `scatter` / `pie` kinds. KEEP — but reserved for high-value **common** charts,
-      opt-in, NOT a universal mandate. *Done:* `plots` scatter, trends, pie, histogram,
-      errorBars. Later candidates that fit cleanly (line/bar): `factor` scree,
-      `timeseries` correlogram — migrate only if the instant controls are worth the
-      per-plugin R-data extraction; otherwise they ride Layer 1.
+    - [x] **Layer 2 — host data-model renderer (`appendChart`) — DONE (all strong
+      candidates).** Instant, no-round-trip body controls (recolour / reorder / restack)
+      for the common `categorical` / `scatter` / `pie` kinds. Reserved for high-value
+      **common** charts, NOT a universal mandate. *Migrated:* `plots` scatter, trends,
+      pie, histogram, errorBars; **`factor` scree** (line from eigenvalues), **`timeseries`
+      correlogram** (ACF/PACF bars from `acf`/`pacf` values), **`textanalytics` word
+      frequency** (bars from top-N counts). Each verified in Chrome (correct values, live
+      chart). The three R-extraction migrations also dropped `svglite` where it became
+      unused. **No further Layer-2 migrations planned** — the remaining charts are either
+      fine on the Layer 1 frame or need a new glyph; their optional body-interactivity is
+      deferred to Layer 3 (below), not forced into the model.
     - [ ] **Layer 3 — plugin-declared, host-mediated re-chart.** A plugin draws its own
       SVG (full R power) AND declares the alterations it supports
       (`controls: [{ id, label, type, options }]`); the host renders those controls and
       calls back to re-chart on change (generalises the existing `onRedraw` size-recipe).
-      Opt-in, for the complex charts (networks, forest, biplot, step curves, multi-panel)
-      where a round-trip is worth it.
+      Opt-in, for everything not in Layer 2 where body edits are worth a round-trip:
+      - *Marginal-fit charts (weren't worth a Layer-2 model):* `decisions` tornado + CE
+        plane, `ecology` NMDS, `inequality` Lorenz, `cointegration` volatility,
+        `timeseries` forecast.
+      - *New-glyph charts (Tier B — no existing kind):* `plots` boxplot, `meta` forest,
+        `ordination` biplot, `survival` Kaplan-Meier (step line).
+      - *No-data-model charts (only Layer 1 + maybe a redraw/param control):* `sna`
+        network, `spatial` map, `decisions` tree, `timeseries` STL decomposition, `var`
+        IRF (multi-panel), word clouds, `assumptions`/`regression` Q-Q + residual
+        diagnostics.
     - **Superseded:** the earlier Tier A/B/C "migrate-to-model" matrix. Outliers keep
       their svglite bodies and gain Layer 1 (frame) + optional Layer 3 (declared controls);
-      only common charts warrant full Layer 2 model migration.
+      only common charts warranted full Layer 2 model migration — now complete.
   - *Generalise plots over derived data — RESOLVED via multi-dataset.* The
     on-architecture answer ("analyses emit a derived dataset; plots consume
     datasets like everything else") is now real: see the **multi-dataset workspace**

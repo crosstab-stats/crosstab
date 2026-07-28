@@ -25,7 +25,7 @@ export const manifest = {
     '  • nfactors — number of factors (0 = auto, eigenvalue > 1).\n' +
     '  • method — "principal" (default) | "pa" | "ml".\n' +
     '  • rotation — "varimax" (default) | "none" | "oblimin" | "promax".',
-  rPackages: ['psych', 'GPArotation', 'svglite'],
+  rPackages: ['psych', 'GPArotation'],
   menu: [
     {
       label: 'Factor analysis…',
@@ -93,18 +93,11 @@ export async function run(app, { vars, nfactors, method, rotation }) {
     bt <- tryCatch(psych::cortest.bartlett(Rm, n = nrow(d)), error = function(e) NULL)
     fit <- ${fitExpr}
     load <- unclass(fit$loadings)
-    library(svglite)
-    .dev <- svgstring(width = 6, height = 4, pointsize = 11)
-    par(mar = c(4.2, 4.2, 2.2, 1))
-    plot(ev, type = "b", pch = 19, col = "#2980b9", xlab = "Component", ylab = "Eigenvalue")
-    abline(h = 1, lty = 2, col = "#999999")
-    dev.off()
     list(
       kmo = km, bartChi = if (is.null(bt)) NA_real_ else bt$chisq,
       bartDf = if (is.null(bt)) NA_real_ else bt$df, bartP = if (is.null(bt)) NA_real_ else bt$p.value,
       ev = ev, nf = nf, n = nrow(d), items = colnames(d),
-      loadings = as.numeric(load), nItems = nrow(load), nFac = ncol(load),
-      scree = .dev()
+      loadings = as.numeric(load), nItems = nrow(load), nFac = ncol(load)
     )`;
 
   const { result } = await app.webr.run(rCode);
@@ -137,10 +130,19 @@ export async function run(app, { vars, nfactors, method, rotation }) {
     { caption: `Total Variance Explained — ${int(r.n1('nf'))} factor(s) extracted` },
   );
 
-  // Scree plot.
-  const scree = r.s1('scree');
-  if (scree && /<svg[\s>]/i.test(scree)) {
-    await app.results.appendPlot(stripSize(scree), { title: 'Scree Plot' });
+  // Scree plot — Layer-2 data model (line over components), host-rendered with live
+  // controls. `ev` is the eigenvalue array already parsed above. (The Kaiser
+  // eigenvalue>1 cutoff isn't drawn as a reference line — the categorical kind has
+  // none — but the variance table above shows which components clear it.)
+  if (ev.length) {
+    await app.results.appendChart({
+      kind: 'categorical',
+      title: 'Scree Plot',
+      categories: ev.map((_, i) => ({ key: String(i + 1), label: String(i + 1) })),
+      series: [{ key: 'ev', label: 'Eigenvalue', values: ev.map((e) => Math.round(e * 1000) / 1000) }],
+      axes: { x: { title: 'Component' }, y: { title: 'Eigenvalue' } },
+      view: { mark: 'line', legend: 'none' },
+    });
   }
 
   // Factor loadings (rotated), small loadings (|λ| < .30) blanked for legibility.
@@ -169,10 +171,6 @@ export async function run(app, { vars, nfactors, method, rotation }) {
 
 function label(meta, name) {
   return meta.get(name)?.label || name;
-}
-/** svglite emits a fixed pt width/height; drop them so the plot fills its box. */
-function stripSize(svg) {
-  return svg.replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1').replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1');
 }
 function flat(rList) {
   const byName = {};

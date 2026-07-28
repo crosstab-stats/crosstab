@@ -73,20 +73,38 @@ export async function correlogram(app, { series, maxlag }) {
   if (!series) return void app.results.appendError('Pick a series.');
   const meta = metaMap(await app.data.getVariableMeta());
   const ml = Number.isFinite(maxlag) && maxlag >= 1 ? Math.round(maxlag) : null;
+  // Layer-2 correlograms: compute ACF/PACF values (plot = FALSE) and emit bar charts
+  // the host renders with live controls; no svglite for these two.
   const rCode = `
     x <- series[is.finite(series)]
-    library(svglite)
-    .d1 <- svgstring(width = 6.2, height = 3.4, pointsize = 10); par(mar = c(4, 4, 2, 1))
-    acf(x, lag.max = ${ml || 'NULL'}, main = ""); dev.off(); svgAcf <- .d1()
-    .d2 <- svgstring(width = 6.2, height = 3.4, pointsize = 10); par(mar = c(4, 4, 2, 1))
-    pacf(x, lag.max = ${ml || 'NULL'}, main = ""); dev.off(); svgPacf <- .d2()
+    af <- acf(x, lag.max = ${ml || 'NULL'}, plot = FALSE)
+    pf <- pacf(x, lag.max = ${ml || 'NULL'}, plot = FALSE)
     lb <- Box.test(x, lag = min(20, length(x) - 1), type = "Ljung-Box")
-    list(svgAcf = svgAcf, svgPacf = svgPacf, n = length(x),
-         lbStat = unname(lb$statistic), lbDf = unname(lb$parameter), lbP = lb$p.value)`;
+    list(
+      acf = as.numeric(af$acf), acfLag = as.numeric(af$lag),
+      pacf = as.numeric(pf$acf), pacfLag = as.numeric(pf$lag),
+      ci = qnorm(0.975) / sqrt(length(x)), n = length(x),
+      lbStat = unname(lb$statistic), lbDf = unname(lb$parameter), lbP = lb$p.value)`;
   const r = flat((await app.webr.run(rCode)).result);
-  await app.results.appendText(`**Correlogram — ${label(meta, series)}** (N = ${int(r.n1('n'))})`);
-  if (/<svg[\s>]/i.test(r.s1('svgAcf'))) await app.results.appendPlot(stripSize(r.s1('svgAcf')), { title: `ACF — ${label(meta, series)}` });
-  if (/<svg[\s>]/i.test(r.s1('svgPacf'))) await app.results.appendPlot(stripSize(r.s1('svgPacf')), { title: `PACF — ${label(meta, series)}` });
+  const seriesLabel = label(meta, series);
+  await app.results.appendText(`**Correlogram — ${seriesLabel}** (N = ${int(r.n1('n'))})`);
+  const round3 = (v) => Math.round(v * 1000) / 1000;
+  const corrChart = (title, seriesLbl, vals, lags) => ({
+    kind: 'categorical',
+    title,
+    categories: lags.map((L) => ({ key: String(Math.round(L)), label: String(Math.round(L)) })),
+    series: [{ key: 'r', label: seriesLbl, values: vals.map(round3) }],
+    axes: { x: { title: 'Lag' }, y: { title: 'Correlation' } },
+    view: { mark: 'bar', legend: 'none' },
+  });
+  const acf = r.num('acf');
+  const pacf = r.num('pacf');
+  if (acf.length) await app.results.appendChart(corrChart(`ACF — ${seriesLabel}`, 'ACF', acf, r.num('acfLag')));
+  if (pacf.length) await app.results.appendChart(corrChart(`PACF — ${seriesLabel}`, 'Partial ACF', pacf, r.num('pacfLag')));
+  const ci = r.n1('ci');
+  if (Number.isFinite(ci)) {
+    await app.results.appendText(`_95% significance bound ≈ ±${round3(ci)}; bars beyond it indicate autocorrelation._`);
+  }
   await app.results.appendTable(
     {
       columns: ['', 'Value'],
