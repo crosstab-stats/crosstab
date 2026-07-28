@@ -65,7 +65,7 @@ export async function inequality(app, { x: xName }) {
     .ct_dev <- svgstring(width = 5.2, height = 5, pointsize = 11)
     par(mar = c(4.2, 4.2, 2, 1), col.axis = "#555555", col.lab = "#333333", fg = "#999999")
     plot(lc$p, lc$L, type = "l", lwd = 2, col = "${ACCENT}", xlab = "Cumulative share of population",
-         ylab = "Cumulative share of quantity", main = "Lorenz curve", asp = 1)
+         ylab = "Cumulative share of quantity", asp = 1)
     abline(0, 1, col = "#cccccc", lty = 2)
     dev.off(); svg <- .ct_dev()
     list(gini = g, theil = th, atkinson = at, cv = cv, n = length(v), mean = mean(v), svg = svg)`;
@@ -87,7 +87,7 @@ export async function inequality(app, { x: xName }) {
     { caption: `Inequality — ${labelOf(meta.get(xName), xName)} (N = ${r.num('n')}, mean = ${f(r.num('mean'), 2)})` },
   );
   const svg = r.str1('svg');
-  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg));
+  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg), { title: 'Lorenz curve' });
   await app.results.appendText(
     'All indices are 0 at perfect equality and rise with inequality (**Gini** 0–1 is the share of the area above the Lorenz curve; **Theil** and **Atkinson** are entropy/welfare-based and decomposable). The **Lorenz curve** plots cumulative quantity against cumulative population — the further it bows below the 45° line, the more unequal.',
   );

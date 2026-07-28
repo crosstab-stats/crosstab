@@ -115,7 +115,7 @@ export async function metaAnalysis(app, { yi: yiName, prec: precName, precType, 
     { caption: 'Heterogeneity' },
   );
   const svg = r.str1('svg');
-  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg));
+  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg), { title: 'Forest plot' });
 
   if (r.num('hasMods') === 1 || r.strs('mrTerms').length) {
     const mt = r.strs('mrTerms'), me = r.nums('mrEst'), ms = r.nums('mrSe'), mz = r.nums('mrZ'), mp = r.nums('mrP');

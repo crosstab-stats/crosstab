@@ -87,7 +87,7 @@ export async function kaplanMeier(app, { time: timeName, status: statusName, gro
     .ct_dev <- svgstring(width = 7, height = 4.8, pointsize = 11)
     par(mar = c(4.2, 4.4, 2.2, 1), col.axis = "#555555", col.lab = "#333333", fg = "#999999")
     plot(sf, col = cols_pal[seq_len(max(1, length(sf$strata)))], lwd = 2, mark.time = TRUE,
-         xlab = "Time", ylab = "Survival probability", main = "Kaplan–Meier survival")
+         xlab = "Time", ylab = "Survival probability")
     ${hasGroup ? 'legend("topright", legend = sub("grp=", "", names(sf$strata)), col = cols_pal, lwd = 2, bty = "n")' : ''}
     dev.off(); svg <- .ct_dev()
     lr <- NULL
@@ -111,7 +111,7 @@ export async function kaplanMeier(app, { time: timeName, status: statusName, gro
     { caption: `Kaplan–Meier — time: ${labelOf(meta.get(timeName), timeName)}` },
   );
   const svg = r.str1('svg');
-  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg));
+  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg), { title: 'Kaplan–Meier survival' });
 
   if (Number.isFinite(r.num('lrChi'))) {
     await app.results.appendTable(

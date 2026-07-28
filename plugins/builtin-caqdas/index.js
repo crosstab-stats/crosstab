@@ -1465,7 +1465,7 @@ export const workspace = {
       await app.results.beginAnalysis('Themed word cloud');
       const render = (w, h) => themedCloudSvg(model.themes, w, h);
       let handle;
-      handle = await app.results.appendPlot(render(720, 480), { onRedraw: (w, h) => app.results.updatePlot(handle, render(w, h)) });
+      handle = await app.results.appendPlot(render(720, 480), { title: 'Themed word cloud', onRedraw: (w, h) => app.results.updatePlot(handle, render(w, h)) });
       await app.results.appendTable(
         { columns: ['Theme', 'Code', 'Word', 'Count'], rows: model.tableRows, rowHeaders: false },
         { caption: `Themed Word Cloud — top ${model.tableRows.length} words across ${model.themes.length} theme(s)` },

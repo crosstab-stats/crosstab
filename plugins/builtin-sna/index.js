@@ -59,7 +59,7 @@ export async function run(app, { from: fromName, to: toName, directed }) {
     set.seed(1)
     plot(g, vertex.size = pmin(25, 6 + 2 * deg), vertex.color = "${ACCENT}", vertex.frame.color = "white",
          vertex.label.cex = 0.7, vertex.label.color = "#222222", edge.arrow.size = 0.4,
-         edge.color = "#bbbbbb", main = "Network")
+         edge.color = "#bbbbbb")
     dev.off(); svg <- .ct_dev()
     list(nodes = vcount(g), edges = ecount(g), density = edge_density(g), ncomp = components(g)$no,
          transitivity = transitivity(g, type = "global"), apl = mean_distance(g),
@@ -96,7 +96,7 @@ export async function run(app, { from: fromName, to: toName, directed }) {
     { caption: 'Most Central Actors (top 10 by degree)' },
   );
   const svg = r.str1('svg');
-  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg));
+  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg), { title: 'Network' });
   await app.results.appendText(
     '**Density** is the share of possible ties present; **components** are disconnected sub-networks; **transitivity** is the chance two of a node\'s contacts are themselves tied (clustering). Centrality flavours: **degree** (how many ties), **betweenness** (bridging/broker position), **closeness** (reach), **eigenvector** (tied to well-connected others).',
   );

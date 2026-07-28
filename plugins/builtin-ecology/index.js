@@ -47,22 +47,22 @@ export async function run(app, { species }) {
     m[is.na(m)] <- 0; m <- m[rowSums(m) > 0, , drop = FALSE]
     rich <- specnumber(m); shan <- diversity(m, "shannon"); simp <- diversity(m, "simpson")
     invsimp <- diversity(m, "invsimpson"); even <- ifelse(rich > 1, shan / log(rich), NA)
-    svg <- ""
+    svg <- ""; stress <- NA_real_
     if (nrow(m) >= 4 && ncol(m) >= 3) {
       nmds <- tryCatch(metaMDS(m, distance = "bray", k = 2, trace = 0, trymax = 20), error = function(e) NULL)
       if (!is.null(nmds)) {
+        stress <- nmds$stress
         pts <- nmds$points
         .ct_dev <- svgstring(width = 5.6, height = 5, pointsize = 11)
         par(mar = c(4.2, 4.2, 2, 1), col.axis = "#555555", col.lab = "#333333", fg = "#999999")
-        plot(pts[, 1], pts[, 2], pch = 19, col = "${ACCENT}", xlab = "NMDS1", ylab = "NMDS2",
-             main = paste0("NMDS ordination (stress = ", round(nmds$stress, 3), ")"))
+        plot(pts[, 1], pts[, 2], pch = 19, col = "${ACCENT}", xlab = "NMDS1", ylab = "NMDS2")
         text(pts[, 1], pts[, 2], labels = seq_len(nrow(pts)), pos = 3, cex = 0.7, col = "#555555")
         dev.off(); svg <- .ct_dev()
       }
     }
     list(site = seq_len(nrow(m)), rich = as.numeric(rich), shan = as.numeric(shan),
          simp = as.numeric(simp), invsimp = as.numeric(invsimp), even = as.numeric(even),
-         nSites = nrow(m), nSpec = ncol(m), svg = svg)`;
+         nSites = nrow(m), nSpec = ncol(m), stress = stress, svg = svg)`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
@@ -77,7 +77,11 @@ export async function run(app, { species }) {
     { caption: `Diversity Indices — ${r.num('nSpec')} species across ${r.num('nSites')} sites` },
   );
   const svg = r.str1('svg');
-  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg));
+  if (svg && /<svg[\s>]/i.test(svg)) {
+    const stress = r.num('stress');
+    const title = Number.isFinite(stress) ? `NMDS ordination (stress = ${Number(stress.toFixed(3))})` : 'NMDS ordination';
+    await app.results.appendPlot(cleanSvg(svg), { title });
+  }
   await app.results.appendText(
     '**Richness** = number of species present; **Shannon H** and **Simpson D** combine richness and evenness (higher = more diverse); **Pielou evenness J** = H / log(richness) is 1 when all species are equally abundant. The **NMDS** plot places similar communities close together (Bray-Curtis); a stress < 0.2 indicates a usable 2-D representation.',
   );

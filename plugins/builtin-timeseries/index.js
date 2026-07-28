@@ -77,16 +77,16 @@ export async function correlogram(app, { series, maxlag }) {
     x <- series[is.finite(series)]
     library(svglite)
     .d1 <- svgstring(width = 6.2, height = 3.4, pointsize = 10); par(mar = c(4, 4, 2, 1))
-    acf(x, lag.max = ${ml || 'NULL'}, main = "ACF"); dev.off(); svgAcf <- .d1()
+    acf(x, lag.max = ${ml || 'NULL'}, main = ""); dev.off(); svgAcf <- .d1()
     .d2 <- svgstring(width = 6.2, height = 3.4, pointsize = 10); par(mar = c(4, 4, 2, 1))
-    pacf(x, lag.max = ${ml || 'NULL'}, main = "PACF"); dev.off(); svgPacf <- .d2()
+    pacf(x, lag.max = ${ml || 'NULL'}, main = ""); dev.off(); svgPacf <- .d2()
     lb <- Box.test(x, lag = min(20, length(x) - 1), type = "Ljung-Box")
     list(svgAcf = svgAcf, svgPacf = svgPacf, n = length(x),
          lbStat = unname(lb$statistic), lbDf = unname(lb$parameter), lbP = lb$p.value)`;
   const r = flat((await app.webr.run(rCode)).result);
   await app.results.appendText(`**Correlogram — ${label(meta, series)}** (N = ${int(r.n1('n'))})`);
-  if (/<svg[\s>]/i.test(r.s1('svgAcf'))) await app.results.appendPlot(stripSize(r.s1('svgAcf')));
-  if (/<svg[\s>]/i.test(r.s1('svgPacf'))) await app.results.appendPlot(stripSize(r.s1('svgPacf')));
+  if (/<svg[\s>]/i.test(r.s1('svgAcf'))) await app.results.appendPlot(stripSize(r.s1('svgAcf')), { title: `ACF — ${label(meta, series)}` });
+  if (/<svg[\s>]/i.test(r.s1('svgPacf'))) await app.results.appendPlot(stripSize(r.s1('svgPacf')), { title: `PACF — ${label(meta, series)}` });
   await app.results.appendTable(
     {
       columns: ['', 'Value'],
@@ -137,11 +137,11 @@ export async function decompose(app, { series, frequency }) {
     ts1 <- ts(x, frequency = f)
     fit <- stl(ts1, s.window = "periodic")
     library(svglite); .d <- svgstring(width = 6.6, height = 5.2, pointsize = 10)
-    plot(fit, main = "STL Decomposition"); dev.off()
+    plot(fit); dev.off()
     list(svg = .d(), n = length(x))`;
   const r = flat((await app.webr.run(rCode)).result);
   await app.results.appendText(`**STL Decomposition — ${label(meta, series)}** (frequency ${freq}, N = ${int(r.n1('n'))})`);
-  if (/<svg[\s>]/i.test(r.s1('svg'))) await app.results.appendPlot(stripSize(r.s1('svg')));
+  if (/<svg[\s>]/i.test(r.s1('svg'))) await app.results.appendPlot(stripSize(r.s1('svg')), { title: `STL Decomposition — ${label(meta, series)}` });
 }
 
 export async function arima(app, { series, h, frequency }) {
@@ -156,7 +156,7 @@ export async function arima(app, { series, h, frequency }) {
     fit <- auto.arima(ts1)
     fc <- forecast(fit, h = ${horizon})
     library(svglite); .d <- svgstring(width = 6.6, height = 4, pointsize = 10); par(mar = c(4, 4, 2, 1))
-    plot(fc, main = "ARIMA forecast"); dev.off()
+    plot(fc, main = ""); dev.off()
     list(order = paste(arimaorder(fit), collapse = ", "), aic = fit$aic,
          point = as.numeric(fc$mean), lo = as.numeric(fc$lower[, ncol(fc$lower)]),
          hi = as.numeric(fc$upper[, ncol(fc$upper)]), svg = .d())`;
@@ -183,7 +183,7 @@ export async function arima(app, { series, h, frequency }) {
     },
     { caption: 'Forecast' },
   );
-  if (/<svg[\s>]/i.test(r.s1('svg'))) await app.results.appendPlot(stripSize(r.s1('svg')));
+  if (/<svg[\s>]/i.test(r.s1('svg'))) await app.results.appendPlot(stripSize(r.s1('svg')), { title: `ARIMA forecast — ${label(meta, series)}` });
 }
 
 // --- helpers -----------------------------------------------------------------

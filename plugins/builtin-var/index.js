@@ -142,7 +142,7 @@ export async function varModel(app, { series, lag, type, horizon }) {
   );
 
   const svg = r.str1('svg');
-  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg));
+  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg), { title: 'Impulse-Response Functions (orthogonalized)' });
   await app.results.appendText(
     'Each VAR equation regresses one series on lags of *all* series. **Granger causality** asks whether a variable\'s past helps predict the others beyond their own past (a small p = yes). The **impulse-response** grid (orthogonalized) traces how a one-time shock to the column variable propagates to each row variable over the horizon — the core of VAR interpretation. Make sure the series are stationary first (see the Time Series ▸ stationarity tests).',
   );

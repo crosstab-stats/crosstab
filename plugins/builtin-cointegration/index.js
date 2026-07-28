@@ -149,8 +149,7 @@ export async function garch(app, { series: sName, q, p, dist }) {
     persist <- sum(cf[grepl("^alpha", aterms), 1]) + sum(cf[grepl("^beta", aterms), 1])
     .ct_dev <- svgstring(width = 7, height = 3.6, pointsize = 11)
     par(mar = c(4, 4.2, 2, 1), col.axis = "#555555", col.lab = "#333333", fg = "#999999")
-    plot(vol, type = "l", col = "${ACCENT}", lwd = 1.4, xlab = "Time", ylab = "Conditional SD",
-         main = "Conditional volatility")
+    plot(vol, type = "l", col = "${ACCENT}", lwd = 1.4, xlab = "Time", ylab = "Conditional SD")
     dev.off(); svg <- .ct_dev()
     list(terms = aterms, est = as.numeric(cf[, 1]), se = as.numeric(cf[, 2]),
          t = as.numeric(cf[, 3]), p = as.numeric(cf[, 4]),
@@ -179,7 +178,7 @@ export async function garch(app, { series: sName, q, p, dist }) {
     { caption: 'Model Summary' },
   );
   const svg = r.str1('svg');
-  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg));
+  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg), { title: 'Conditional volatility' });
   await app.results.appendText(
     'GARCH models **volatility clustering** — periods where large changes follow large changes. **α** is the reaction to recent shocks, **β** the carry-over of past volatility; **persistence (α+β)** near 1 means shocks to volatility die out slowly. The plot shows the estimated conditional standard deviation over time.',
   );

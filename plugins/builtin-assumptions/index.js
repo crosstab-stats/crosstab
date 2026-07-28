@@ -108,8 +108,7 @@ export async function normality(app, { vars }) {
   const svgs = r.str('svg');
   for (let i = 0; i < names.length; i++) {
     if (!/<svg[\s>]/i.test(svgs[i] || '')) continue;
-    await app.results.appendText(`**Q–Q plot — ${label(meta, names[i])}**`);
-    await app.results.appendPlot(stripSize(svgs[i]));
+    await app.results.appendPlot(stripSize(svgs[i]), { title: `Q–Q plot — ${label(meta, names[i])}` });
   }
 }
 

@@ -156,7 +156,7 @@ export async function wordFrequency(app, { text, stopwords, topn, minlen }) {
       .ct_dev <- svgstring(width = 7, height = 5, pointsize = 11)
       par(mar = c(4.2, 9, 2.2, 1), col.axis = "#555555", col.lab = "#333333", fg = "#cccccc")
       barplot(rev(topb$n), names.arg = rev(topb$word), horiz = TRUE, las = 1,
-              col = "${ACCENT}", border = "white", main = "Most frequent words", xlab = "Count")
+              col = "${ACCENT}", border = "white", xlab = "Count")
       dev.off(); svg <- .ct_dev()
     }
     list(words = topf$word, n = topf$n, total = total, nDistinct = nDistinct, svg = svg)`;
@@ -176,7 +176,7 @@ export async function wordFrequency(app, { text, stopwords, topn, minlen }) {
     { caption: `Word Frequency — ${total.toLocaleString()} word tokens, ${r.num('nDistinct').toLocaleString()} distinct` },
   );
   const svg = r.str1('svg');
-  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg));
+  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg), { title: 'Most frequent words' });
 }
 
 // --- Word cloud --------------------------------------------------------------
@@ -250,6 +250,7 @@ export async function wordCloud(app, { text, topn, minlen, stopwords, layout, th
 
   let handle;
   handle = await app.results.appendPlot(render(680, 440), {
+    title: 'Word cloud',
     onRedraw: (w, h) => app.results.updatePlot(handle, render(w, h)),
   });
 

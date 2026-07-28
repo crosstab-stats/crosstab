@@ -68,10 +68,10 @@ export async function run(app, { dv: dvName, ivs: ivNames }) {
     cook <- cooks.distance(fit); thr <- 4 / n
     library(svglite)
     .d1 <- svgstring(width = 5.6, height = 3.6, pointsize = 10); par(mar = c(4.2, 4.2, 2, 1))
-    plot(fitv, res, xlab = "Fitted values", ylab = "Residuals", main = "Residuals vs Fitted", pch = 19, col = "#2980b9", cex = 0.7)
+    plot(fitv, res, xlab = "Fitted values", ylab = "Residuals", pch = 19, col = "#2980b9", cex = 0.7)
     abline(h = 0, lty = 2, col = "#999999"); dev.off(); svgResid <- .d1()
     .d2 <- svgstring(width = 5.6, height = 3.6, pointsize = 10); par(mar = c(4.2, 4.2, 2, 1))
-    qqnorm(res, main = "Normal Q-Q (residuals)", pch = 19, col = "#2980b9", cex = 0.7); qqline(res, lty = 2, col = "#999999"); dev.off(); svgQQ <- .d2()
+    qqnorm(res, main = NULL, pch = 19, col = "#2980b9", cex = 0.7); qqline(res, lty = 2, col = "#999999"); dev.off(); svgQQ <- .d2()
     list(
       terms = rownames(co), estimate = co[, 1], se = co[, 2], t = co[, 3], p = co[, 4],
       ciLo = ci[, 1], ciHi = ci[, 2], vifNames = colnames(X), vif = unname(vifv),
@@ -138,8 +138,8 @@ export async function run(app, { dv: dvName, ivs: ivNames }) {
   await app.results.appendText(
     'Residuals should scatter randomly around 0 (constant variance, linearity) and track the diagonal on the Q–Q plot (normality). Durbin–Watson near 2 suggests independent residuals (1.5–2.5 is fine); VIF above ~5–10 flags multicollinearity.',
   );
-  if (/<svg[\s>]/i.test(m.svgResid)) await app.results.appendPlot(stripSize(m.svgResid));
-  if (/<svg[\s>]/i.test(m.svgQQ)) await app.results.appendPlot(stripSize(m.svgQQ));
+  if (/<svg[\s>]/i.test(m.svgResid)) await app.results.appendPlot(stripSize(m.svgResid), { title: 'Residuals vs Fitted' });
+  if (/<svg[\s>]/i.test(m.svgQQ)) await app.results.appendPlot(stripSize(m.svgQQ), { title: 'Normal Q-Q (residuals)' });
 }
 
 // --- helpers -----------------------------------------------------------------

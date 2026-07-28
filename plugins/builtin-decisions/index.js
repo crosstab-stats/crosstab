@@ -158,7 +158,7 @@ export const workspace = {
       await app.results.appendText(`Willingness-to-pay: **${fmt(num(t.wtp))}** per unit effect. ICER = Δcost ÷ Δeffect vs the next-cheaper non-dominated option. (Simple frontier — no extended-dominance pass.)`);
       await app.results.appendTable({ columns: ['Option', 'Cost', 'Effect', 'ICER', 'Status'], rows });
       const plot = cePlaneSvg(res);
-      if (plot) await app.results.appendPlot(plot);
+      if (plot) await app.results.appendPlot(plot, { title: 'Cost-effectiveness plane' });
       await app.results.endAnalysis();
     }
 
@@ -383,7 +383,7 @@ export const workspace = {
       const rootChoice = res.choice != null && root.children?.[res.choice] ? (root.children[res.choice].label || `branch ${res.choice + 1}`) : null;
       await app.results.appendText(`Expected value (fold-back): **${fmt(res.value)}**.${rootChoice ? ` Optimal first decision: **${rootChoice}**.` : ''}`);
       const svg = treeSvg(root);
-      if (svg) await app.results.appendPlot(svg);
+      if (svg) await app.results.appendPlot(svg, { title: 'Decision tree' });
       await app.results.endAnalysis();
     }
 
@@ -432,6 +432,12 @@ export const workspace = {
       const chart = el('div'); chart.style.cssText = 'margin: 10px 0; overflow: auto;';
       const summary = el('div', 'ds__hint'); summary.style.marginTop = '0';
       let currentSvg = '';
+      // The workspace preview keeps its own baked-in title; the Output frame owns an
+      // editable title (Layer 1), so we hand appendPlot a title-less SVG + opts.title.
+      // `currentTitle`/`currentSvgFor(title)` capture the live view so "Send to Output"
+      // can re-emit the same chart without the baked title.
+      let currentTitle = '';
+      let currentSvgFor = () => currentSvg;
 
       if (cfg.mode === 'tornado') {
         const sp = el('div', 'ds__row');
@@ -441,7 +447,9 @@ export const workspace = {
         const redrawT = () => {
           const pct = num(spi.value) ?? 50;
           const bars = sensTornado(model, state, params, pct / 100);
-          currentSvg = sensTornadoSvg(bars, { title: `${model.label}: tornado (±${Math.round(pct)}%)`, outLabel: model.outLabel, baseline });
+          currentTitle = `${model.label}: tornado (±${Math.round(pct)}%)`;
+          currentSvgFor = (t) => sensTornadoSvg(bars, { title: t, outLabel: model.outLabel, baseline });
+          currentSvg = currentSvgFor(currentTitle);
           chart.innerHTML = currentSvg;
           summary.textContent = bars.length ? `Most influential: ${bars[0].label} (swings ${model.outLabel} by ${fmt(bars[0].swing)}).` : 'No parameter has a non-zero base to vary.';
         };
@@ -482,7 +490,9 @@ export const workspace = {
           const flips = sensFlips(pts);
           const at = +slider.value;
           const cur = model.evalAt(state, param.key, at);
-          currentSvg = sensLineSvg(pts, { title: `${model.label}: ${param.label}`, xLabel: param.label, yLabel: model.outLabel, reference: model.reference, base, threshold: thr, flips, marker: { x: at, y: cur.y } });
+          currentTitle = `${model.label}: ${param.label}`;
+          currentSvgFor = (t) => sensLineSvg(pts, { title: t, xLabel: param.label, yLabel: model.outLabel, reference: model.reference, base, threshold: thr, flips, marker: { x: at, y: cur.y } });
+          currentSvg = currentSvgFor(currentTitle);
           chart.innerHTML = currentSvg;
           readout.textContent = `${param.label} = ${fmt(at)} → ${model.outLabel} ${fmt(cur.y)}${cur.choice ? ` · ${cur.choice}` : ''}`;
           const bits = [];
@@ -501,7 +511,7 @@ export const workspace = {
         if (!currentSvg) return;
         await app.results.beginAnalysis(`Sensitivity — ${model.label}`);
         await app.results.appendText(summary.textContent || `${cfg.mode === 'tornado' ? 'Tornado' : 'One-way'} sensitivity of ${model.outLabel}.`);
-        await app.results.appendPlot(currentSvg);
+        await app.results.appendPlot(currentSvgFor(''), { title: currentTitle });
         await app.results.endAnalysis();
       });
       body.append(go);

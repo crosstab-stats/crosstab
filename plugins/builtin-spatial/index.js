@@ -261,7 +261,7 @@ export async function choropleth(app, { region, value, boundary, keyprop }) {
     return;
   }
   const svg = r.str1('svg');
-  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg));
+  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg), { title: 'Choropleth map' });
   const nMatched = r.num('nMatched'), nRegions = r.num('nRegions'), nData = r.num('nData');
   await app.results.appendText(
     `Shaded **${nMatched} of ${nRegions}** regions from **${nData}** data rows.` +

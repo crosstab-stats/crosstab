@@ -71,7 +71,7 @@ export async function correspondence(app, { rowvar: rowName, colvar: colName }) 
     iner <- cc$sv^2; tot <- sum(iner); pct <- 100 * iner / tot
     .ct_dev <- svgstring(width = 6, height = 5.4, pointsize = 11)
     par(mar = c(4.2, 4.2, 2, 1), col.axis = "#555555", col.lab = "#333333", fg = "#999999")
-    plot(cc, main = "Correspondence biplot")
+    plot(cc)
     dev.off(); svg <- .ct_dev()
     list(dim = seq_along(iner), sv = cc$sv, inertia = iner, pct = pct, cum = cumsum(pct),
          totalInertia = tot, chisq = tot * sum(tab), n = sum(tab), svg = svg,
@@ -90,7 +90,7 @@ export async function correspondence(app, { rowvar: rowName, colvar: colName }) 
     { caption: `Correspondence Analysis — ${labelOf(meta.get(rowName), rowName)} × ${labelOf(meta.get(colName), colName)} (total inertia = ${f(r.num('totalInertia'), 4)})` },
   );
   const svg = r.str1('svg');
-  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg));
+  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg), { title: 'Correspondence biplot' });
   await app.results.appendText(
     'Correspondence analysis decomposes the table\'s **inertia** (total χ²/N association) into dimensions, like PCA for categories. In the **biplot**, row and column categories that lie in the same direction from the origin tend to co-occur; categories near the origin are close to the average profile. Keep the first 1–2 dimensions if they capture most of the inertia.',
   );
@@ -114,7 +114,7 @@ export async function mds(app, { vars, label: labelName }) {
     .ct_dev <- svgstring(width = 6, height = 5.4, pointsize = 11)
     par(mar = c(4.2, 4.2, 2, 1), col.axis = "#555555", col.lab = "#333333", fg = "#999999")
     plot(pts[, 1], pts[, 2], pch = 19, col = "${ACCENT}", xlab = "Dimension 1", ylab = "Dimension 2",
-         main = "MDS perceptual map", asp = 1)
+         asp = 1)
     text(pts[, 1], pts[, 2], labels = lab, pos = 3, cex = 0.7, col = "#555555")
     dev.off(); svg <- .ct_dev()
     list(n = nrow(m), goodness = goodness, ev1 = ev[1], ev2 = ev[2], svg = svg)`;
@@ -136,7 +136,7 @@ export async function mds(app, { vars, label: labelName }) {
     { caption: `Multidimensional Scaling — ${vars.length} attributes` },
   );
   const svg = r.str1('svg');
-  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg));
+  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg), { title: 'MDS perceptual map' });
   await app.results.appendText(
     'Classical MDS places objects so that 2-D distances approximate their dissimilarity across the (standardized) attributes — objects close together are similar. **Goodness of fit** near 1 means two dimensions represent the structure well. This is the perceptual-map workhorse for branding/marketing and similarity studies.',
   );

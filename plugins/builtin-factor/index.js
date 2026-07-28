@@ -96,7 +96,7 @@ export async function run(app, { vars, nfactors, method, rotation }) {
     library(svglite)
     .dev <- svgstring(width = 6, height = 4, pointsize = 11)
     par(mar = c(4.2, 4.2, 2.2, 1))
-    plot(ev, type = "b", pch = 19, col = "#2980b9", xlab = "Component", ylab = "Eigenvalue", main = "Scree Plot")
+    plot(ev, type = "b", pch = 19, col = "#2980b9", xlab = "Component", ylab = "Eigenvalue")
     abline(h = 1, lty = 2, col = "#999999")
     dev.off()
     list(
@@ -140,7 +140,7 @@ export async function run(app, { vars, nfactors, method, rotation }) {
   // Scree plot.
   const scree = r.s1('scree');
   if (scree && /<svg[\s>]/i.test(scree)) {
-    await app.results.appendPlot(stripSize(scree));
+    await app.results.appendPlot(stripSize(scree), { title: 'Scree Plot' });
   }
 
   // Factor loadings (rotated), small loadings (|λ| < .30) blanked for legibility.

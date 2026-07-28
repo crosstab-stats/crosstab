@@ -1723,14 +1723,18 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     a host model both boils the ocean AND caps what plugins can draw. So interaction
     splits into three layers (each chart picks a layer; we no longer force outliers into
     the model):
-    - [ ] **Layer 1 — universal host FRAME (model-free). HIGHEST ROI, build first.**
-      Title, subtitle/caption, axis titles, fonts, theme, and download (SVG/PNG) are
-      *frame-level* — they don't care how the body was drawn. The host wraps **any** chart
-      (svglite SVG *or* model-rendered) in a frame it owns and edits host-side. Gives every
-      existing `appendPlot` chart cosmetic editing with **zero migration**. Requires each
-      plugin to pass title/axis-labels as **metadata** (not bake them into the SVG) so the
-      host owns that text — a small per-plugin change:
-      `app.results.appendPlot(svg, { title, caption, axes })`.
+    - [x] **Layer 1 — universal host FRAME (model-free) — DONE.** Every `appendPlot`
+      chart now gets a host-owned **editable title + caption** rendered *around* the SVG
+      body (not baked into it), persisted in the model (survive save/reload), injection-
+      safe (`plaintext-only`). `app.results.appendPlot(svg, { title, caption })`;
+      `#buildPlotBlock` in `core/results-pane.js` (shared by append + restore).
+      **All 17 appendPlot plugins swept** to pass `opts.title` and drop the baked R
+      `main=` (auto-titles suppressed with `main=""`/`NULL`; `xlab`/`ylab` stay
+      plugin-drawn — axis-title editing remains model-only, Layer 2). Verified in Chrome:
+      boxplot title editable + persists; regression's two plots show host titles with no
+      baked doubles (incl. the `qqnorm(main=NULL)` edge). *Follow-ups if wanted:* a small
+      "frame options" popover for title font/size + a host caption default; axis-title
+      editing for svglite bodies (harder — host can't place them around an opaque SVG).
     - [~] **Layer 2 — host data-model renderer (`appendChart`).** Instant, no-round-trip
       body controls (recolour / reorder / restack) for the common `categorical` /
       `scatter` / `pie` kinds. KEEP — but reserved for high-value **common** charts,
