@@ -1674,6 +1674,19 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## More analyses (each is just another plugin)
 
+- [ ] **Single-Case Experimental Design (SCED) — NEW GAP (coverage backlog).** The
+      **multiple-baseline / ABAB / withdrawal** graphs + non-overlap effect sizes that
+      applied-behaviour-analysis, special-ed, early-childhood-intervention and school-
+      psychology researchers live on (publication-required under What Works Clearinghouse
+      SCED standards). Raised by an early-childhood-dev faculty member doing this work
+      with students (real, in-scope). **Not supported today** — no chart kind fits (the
+      host renderer is single-panel; a multiple-baseline graph is *multi-panel* with
+      **staggered phase-change lines**, per-phase line segmentation, and condition
+      labels). Plan: a new plugin — phase structure + target behaviours/data → the graph
+      (drawn via svglite, so it gets the Layer-1 chart frame for free) **plus** the
+      non-overlap stats (**Tau-U, NAP, PND**). R **`scan`** does both graphs + stats;
+      `SCDA`/ggplot are alternatives. *First step:* a WebR feasibility probe that `scan`
+      installs and runs (like the Phase-0 probes). See the stats-coverage-backlog memory.
 - [x] **Comparison: t-tests + one-way ANOVA** (`plugins/builtin-compare/`) — fills
       the *Comparison* menu with four declarative analyses: one-sample t-test,
       independent-samples t-test (Welch), paired-samples t-test, one-way ANOVA.
