@@ -148,6 +148,32 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - [ ] **Building-block eligibility** — a slot can be saved as a reusable
     building block (pending building-block contract expansion).
 
+- [ ] **Undoable plugin actions — let plugins add actions to the history where
+      appropriate.** Today the core transform op-log (`data-store.js #log`) is fully
+      undoable/redoable, but **plugin actions are not** — e.g. CAQDAS "mark this
+      passage with a code" writes straight to the workspace blob via a debounced
+      `app.state.set()` (`builtin-caqdas` ~L245), so it never enters the undo stack.
+      A coder can't Ctrl-Z a mis-code, and the History/do-file panel doesn't show
+      qualitative work at all. Want plugin actions to participate in history where it
+      makes sense. **Design TBD** — two shapes to weigh:
+  - *Plugins add each action to the **main** history* — one unified undo timeline the
+    user already knows; the action shows in the History panel alongside recodes; and
+    it would **compose with the collaboration work** (#143) — a logged action gets a
+    stable op id + merge treatment for free, instead of the whole blob merging as one
+    opaque unit. Cost: the op-log is currently a *tabular* pipeline (`rederive`
+    replays it into DuckDB); plugin ops would need to be replayable no-ops on the data
+    side that instead re-drive the owning plugin's state, i.e. the log stops being
+    purely tabular.
+  - *Plugins maintain their **own** history* — a per-plugin undo stack the workspace
+    owns; simpler blast radius, no changes to `rederive`, but a second undo model the
+    user has to understand (whose Ctrl-Z am I in?) and it doesn't unify with the main
+    timeline or the merge op-log.
+  - *Open questions:* granularity (every keystroke vs. per-coding-action); does a
+    global Ctrl-Z reach into whichever surface is focused; how it interacts with the
+    debounced blob-save; and whether the add-wins merge already makes fine-grained
+    coding-op identity worthwhile. Ties to [[dofile-editor]], [[plugin-verb-declaration]],
+    and the op-identity work in [[collab-merge-kernel]].
+
 - [x] **Build and prove the DuckDB-WASM data engine — FOUNDATIONAL — DONE.**
       *Core engine wired in and live (desktop Chrome):* `core/duckdb-manager.js`
       owns the runtime; `core/data-store.js` is now a facade over a DuckDB table
