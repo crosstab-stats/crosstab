@@ -22,6 +22,7 @@
 
 import { mergeManifests } from './collab-sync.js';
 import { stableStringify } from './merge.js';
+import { buildManifest } from './project-store.js';
 
 /** Content signature of a manifest, ignoring fields that change without being a
  * real edit: `savedAt` (stamped every write) and `output` (regenerable analysis
@@ -109,4 +110,60 @@ export async function syncOnce({ store, id, mine, mergers = {}, resolutions = nu
   await store.writeManifest(id, stamped);
   await store.writeBase(id, stamped);
   return { ...decision, manifest: stamped };
+}
+
+/**
+ * The full folder-sync pass for the live app: land my Parquet, build my manifest,
+ * merge against the peer + base, resolve any conflicts, write the result, and — if a
+ * peer contributed changes — hand the merged manifest back so the caller reloads it
+ * into the app. This is what a folder-backed save/poll calls; it's the merge-aware
+ * replacement for a blind `store.save` (two clients share one `project.json`, so a
+ * plain overwrite would clobber the peer).
+ *
+ * Ordering matters: read the peer + base **before** writing anything, then land my
+ * Parquet (so merged file-refs resolve), then own `project.json` via the merge.
+ *
+ * @param {object} arg
+ * @param {import('./project-store.js').ProjectStore} arg.store  folder-backed store
+ * @param {string} arg.id
+ * @param {string} arg.name
+ * @param {object} arg.bundle    this app's current bundle (from the project snapshot)
+ * @param {Record<string, object>} [arg.mergers]  from `buildMergers`
+ * @param {(conflicts: object[]) => Promise<object|null>} [arg.resolveConflicts]  show
+ *   the conflict UI and return a resolutions map, or null to cancel the sync.
+ * @param {(id: string, manifest: object) => Promise<void>} [arg.applyMerged]  reload
+ *   the merged project into the app (called only when a peer actually contributed).
+ * @param {Set<number>} [arg.dirty]  dataset ids whose Parquet changed (omit = all).
+ * @param {number} [arg.now]
+ * @returns {Promise<{action: string, conflicts: object[], changed: boolean}>}
+ */
+export async function syncFolderProject({ store, id, name, bundle, mergers = {}, resolveConflicts, applyMerged, dirty, now }) {
+  const savedAt = now ?? Date.now();
+  // 1. Read the peer + ancestor BEFORE writing anything.
+  const theirs = await store.readManifest(id);
+  const base = await store.readBase(id);
+  // 2. Land my Parquet so a merged manifest's file refs resolve.
+  await store.writeSourcesOnly(id, bundle, dirty);
+  // 3. My manifest (pure — same builder save() uses).
+  const mine = buildManifest({ name, savedAt, bundle });
+
+  // 4. Decide; resolve conflicts if any. `surfaced` is what the user was asked
+  //    about, reported back even after it's resolved (for a "merged, N resolved" note).
+  let decision = decideSync(base, mine, theirs, mergers);
+  const surfaced = decision.conflicts;
+  if (decision.action === 'merge' && decision.conflicts.length) {
+    const resolutions = resolveConflicts ? await resolveConflicts(decision.conflicts) : null;
+    if (resolutions == null) return { action: 'cancelled', conflicts: surfaced, changed: false };
+    decision = decideSync(base, mine, theirs, mergers, resolutions);
+  }
+
+  // 5. Write the outcome + record it as the new common ancestor.
+  const merged = { ...decision.manifest, savedAt };
+  await store.writeManifest(id, merged);
+  await store.writeBase(id, merged);
+
+  // 6. If a peer contributed (the result isn't just my own manifest), reload it.
+  const changed = decision.action === 'merge' && !manifestsEqual(merged, mine);
+  if (changed && applyMerged) await applyMerged(id, merged);
+  return { action: decision.action, conflicts: surfaced, changed };
 }

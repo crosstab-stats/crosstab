@@ -115,50 +115,10 @@ export class ProjectStore {
     id = id || crypto.randomUUID();
     const dir = await root.getDirectoryHandle(id, { create: true });
 
-    const datasets = [];
-    for (const d of bundle.datasets) {
-      const writeSources = !writeSourcesFor || writeSourcesFor.has(d.id);
-      const sources = [];
-      for (let i = 0; i < d.state.sources.length; i++) {
-        const s = d.state.sources[i];
-        const file = `ds${d.id}_src${i + 1}.parquet`;
-        if (writeSources) {
-          if (!s.parquet) throw new Error(`save: dataset ${d.id} source ${i + 1} has no parquet`);
-          await this.#write(dir, file, s.parquet);
-        }
-        const entry = { id: s.id ?? null, meta: s.meta, label: s.label ?? null, combine: s.combine ?? 'base', file };
-        if (s.combine === 'join') {
-          entry.joinKey = s.joinKey;
-          entry.aliases = s.aliases ?? [];
-        }
-        // A wide source's `file` is a single read_parquet-backed Parquet (not a
-        // table); the flag tells load/restore to re-register it rather than CTAS it.
-        if (s.wide) {
-          entry.wide = true;
-          entry.rowidBase = s.rowidBase;
-        }
-        sources.push(entry);
-      }
-      datasets.push({
-        id: d.id,
-        name: d.name,
-        libraryLink: d.libraryLink ?? null,
-        sources,
-        transforms: d.state.transforms ?? [],
-        order: d.state.order ?? null,
-      });
-    }
-
-    // `activePlugins` (load keys of the plugins active when saved) lets opening a
-    // project restore its analysis set. Null/absent ⇒ pre-feature save ⇒ leave the
-    // current plugin set alone on open (back-compatible).
-    const activePlugins = Array.isArray(bundle.activePlugins) ? bundle.activePlugins : null;
-    // Plugin workspace blobs (#93), keyed by workspace id — opaque to the host,
-    // preserved verbatim (incl. ids whose plugin isn't installed here).
-    const workspaces = bundle.workspaces && typeof bundle.workspaces === 'object' ? bundle.workspaces : null;
-    // The Output tab's result model (#103) — sections/tables/plots/text/errors.
-    const output = Array.isArray(bundle.output) ? bundle.output : null;
-    const manifest = { name, savedAt, activeId: bundle.activeId, activePlugins, workspaces, output, datasets };
+    // Parquet first, then the manifest — the same manifest shape folder-sync merges,
+    // built by the shared {@link buildManifest} so save and sync never drift.
+    await this.#writeSources(dir, bundle, writeSourcesFor);
+    const manifest = buildManifest({ name, savedAt, bundle });
     await this.#write(dir, 'project.json', JSON.stringify(manifest));
 
     const release = await this.#acquire();
@@ -166,7 +126,7 @@ export class ProjectStore {
       const cat = await this.#readCatalog();
       // The summary carries activePlugins too, so the launcher's rail can seed its
       // picker from a project without loading the whole bundle.
-      const summary = { id, name, savedAt, datasetCount: datasets.length, activePlugins };
+      const summary = { id, name, savedAt, datasetCount: manifest.datasets.length, activePlugins: manifest.activePlugins };
       const idx = cat.entries.findIndex((e) => e.id === id);
       if (idx >= 0) cat.entries[idx] = summary;
       else cat.entries.push(summary);
@@ -353,6 +313,33 @@ export class ProjectStore {
     }
   }
 
+  /** Write each dataset's Parquet sources (all datasets, or only those in `only`).
+   * Shared by {@link ProjectStore#save} and {@link ProjectStore#writeSourcesOnly}. */
+  async #writeSources(dir, bundle, only) {
+    for (const d of bundle.datasets) {
+      if (only && !only.has(d.id)) continue;
+      for (let i = 0; i < d.state.sources.length; i++) {
+        const s = d.state.sources[i];
+        if (!s.parquet) throw new Error(`save: dataset ${d.id} source ${i + 1} has no parquet`);
+        await this.#write(dir, `ds${d.id}_src${i + 1}.parquet`, s.parquet);
+      }
+    }
+  }
+
+  /**
+   * Write only the Parquet sources of a bundle (no `project.json`) — the folder-sync
+   * step that lands *my* data so a merged manifest's file refs resolve, while
+   * {@link folder-sync} owns `project.json` via the merge (#143). File names match
+   * {@link buildManifest}'s (`ds<id>_src<n>.parquet`).
+   * @param {string} id
+   * @param {object} bundle
+   * @param {Set<number>} [only]  dataset ids to write; omit for all.
+   */
+  async writeSourcesOnly(id, bundle, only) {
+    const dir = await (await this.#root(true)).getDirectoryHandle(id, { create: true });
+    await this.#writeSources(dir, bundle, only);
+  }
+
   /** Write then atomically swap into place, so a peer polling the file over a sync
    * folder can't read a half-written manifest (#143). Uses `FileSystemFileHandle
    * .move()` (a same-dir rename) where available; falls back to a direct write. */
@@ -377,4 +364,44 @@ export class ProjectStore {
     const fh = await dir.getFileHandle(name);
     return (await fh.getFile()).arrayBuffer();
   }
+}
+
+/**
+ * Build the `project.json` **manifest** (metadata + transform logs + Parquet file
+ * refs, no bytes) from an in-memory bundle — the exact shape {@link ProjectStore#save}
+ * writes and {@link module:core/collab-sync~mergeManifests} merges. Pure, so it also
+ * produces "my" manifest for a folder sync without touching disk. File refs follow
+ * `ds<id>_src<n>.parquet` (matching {@link ProjectStore#writeSourcesOnly}).
+ *
+ * @param {{name: string, savedAt: number, bundle: object}} arg
+ * @returns {object} the manifest
+ */
+export function buildManifest({ name, savedAt, bundle }) {
+  const datasets = [];
+  for (const d of bundle.datasets) {
+    const sources = [];
+    for (let i = 0; i < d.state.sources.length; i++) {
+      const s = d.state.sources[i];
+      const entry = { id: s.id ?? null, meta: s.meta, label: s.label ?? null, combine: s.combine ?? 'base', file: `ds${d.id}_src${i + 1}.parquet` };
+      if (s.combine === 'join') {
+        entry.joinKey = s.joinKey;
+        entry.aliases = s.aliases ?? [];
+      }
+      if (s.wide) {
+        entry.wide = true;
+        entry.rowidBase = s.rowidBase;
+      }
+      sources.push(entry);
+    }
+    datasets.push({ id: d.id, name: d.name, libraryLink: d.libraryLink ?? null, sources, transforms: d.state.transforms ?? [], order: d.state.order ?? null });
+  }
+  return {
+    name,
+    savedAt,
+    activeId: bundle.activeId,
+    activePlugins: Array.isArray(bundle.activePlugins) ? bundle.activePlugins : null,
+    workspaces: bundle.workspaces && typeof bundle.workspaces === 'object' ? bundle.workspaces : null,
+    output: Array.isArray(bundle.output) ? bundle.output : null,
+    datasets,
+  };
 }
