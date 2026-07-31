@@ -18,6 +18,7 @@ import { MenuShell } from './menu-shell.js';
 import { UiService } from './ui-service.js';
 import { ImportService } from './import-service.js';
 import { ExportService } from './export-service.js';
+import { installPassphraseUI } from './passphrase-ui.js';
 import { OutputExportService } from './output-export.js';
 import { ComputeRecode } from './compute-recode.js';
 import { DatasetOps } from './dataset-ops.js';
@@ -337,6 +338,7 @@ export async function boot(mounts) {
   // SPSS/Stata/SAS (ReadStat) is a sandboxed codec plugin (builtin-readstat-codec, #130),
   // joining this same Import/Export picker via the codec interface like CSV/Parquet.
   const exporters = new ExportService({ menus, data: datasets, results: results.api, bus });
+  installPassphraseUI(); // register the at-rest passphrase prompt (#144) for export/import/folder
   // Output export: host owns the "Export output…" dialog + the (host-only) print
   // path; formats (HTML, Word, …) are plugins that register via app.outputExporters
   // and read the result model through app.results.getModel.
