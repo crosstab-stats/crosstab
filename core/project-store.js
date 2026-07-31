@@ -1,6 +1,6 @@
 /**
  * @file project-store.js
- * Persistent **projects** in OPFS — the top tier of the two-tier model.
+ * Persistent **projects** — the top tier of the two-tier model.
  *
  * A *project* is the whole working set: every open dataset (each its own
  * immutable sources + transform log) plus which one is active. It's a living
@@ -9,17 +9,21 @@
  *
  *   projects/
  *     catalog.json                 — the browse index (one summary per project)
+ *     crosstab-encryption.json     — plaintext salt/verifier (only when encrypted)
  *     <projectId>/
  *       project.json               — { name, savedAt, activeId, datasets: [...] }
+ *       project.base.json          — the sync common-ancestor snapshot (#143)
  *       ds<dsId>_src<n>.parquet     — each dataset's immutable sources, flat
  *
- * `project.json` holds every dataset's manifest (metadata + transform log + file
- * refs); the Parquet sources sit alongside, prefixed by dataset id. Autosave can
- * rewrite just `project.json` plus the *changed* dataset's Parquet
- * (`writeSourcesFor`), leaving big unchanged sources on disk — the same
- * cheap-metadata-save trick the dataset library uses, one tier up.
+ * Bytes live behind a swappable {@link StorageDriver} (OPFS by default, or a picked
+ * folder mirrored to OneDrive/Dropbox — {@link ProjectStore#useDirectory}), so the
+ * *where* is one implementation and a future cloud-API driver reuses the same seam.
+ * At-rest **encryption** ({@link ProjectStore#unlock}) sits ABOVE the driver: bytes
+ * are enciphered before `write` and deciphered after `read`, so a driver — even an
+ * untrusted provider — only ever sees ciphertext (#143/#144).
  */
 
+import { OpfsDriver, FsaFolderDriver } from './storage-driver.js';
 import { deriveKey, encryptWithKey, decryptWithKey, isEnveloped, newSalt, DEFAULT_ITERATIONS } from './crypto-envelope.js';
 
 const ROOT = 'projects';
@@ -27,27 +31,25 @@ const CATALOG = 'catalog.json';
 const ENC_META = 'crosstab-encryption.json'; // plaintext salt/verifier for the folder
 const VERIFIER = 'crosstab-folder-v1'; // known token, encrypted, to check a passphrase on unlock
 
+const te = new TextEncoder();
 const b64 = (bytes) => btoa(String.fromCharCode(...bytes));
 const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
 export class ProjectStore {
-  /** @returns {boolean} Whether OPFS is available. */
   /** Serialises catalog read-modify-write ops so an autosave can't interleave
    * with a delete/rename and resurrect a just-removed entry (orphan in the list). */
   #tail = Promise.resolve();
 
-  /** A picked folder handle (from `showDirectoryPicker`) the `projects/` tree lives
-   * inside, instead of OPFS — the folder-backed transport for collaboration (#143).
-   * The ONE OPFS-specific line (`#root`) is parameterized around this; everything
-   * else is already `FileSystemDirectoryHandle`-generic. Null ⇒ OPFS. */
-  #injectedRoot = null;
+  /** The byte backend (see {@link module:core/storage-driver}). OPFS by default;
+   * {@link ProjectStore#useDirectory} swaps in a picked folder. */
+  #driver = new OpfsDriver();
 
   /** AES-GCM master key for at-rest encryption, or null (plaintext). Set by
    * {@link ProjectStore#unlock}; never persisted. When set, every data file
    * (`project.json`, `project.base.json`, Parquet, and the catalog) is written as a
    * ciphertext envelope and decrypted on read — so a driver / cloud provider that
-   * mirrors the folder only ever sees ciphertext (#143/#144). The salt + a verifier
-   * live plaintext in `crosstab-encryption.json` (a salt isn't secret). */
+   * mirrors the folder only ever sees ciphertext. The salt + a verifier live
+   * plaintext in `crosstab-encryption.json` (a salt isn't secret). */
   #key = null;
 
   /** Point the store at a picked folder (a OneDrive/Dropbox/local folder the OS
@@ -55,7 +57,22 @@ export class ProjectStore {
    * write permission (`requestPermission`) first — the browser won't give silent
    * persistent write to a user folder. */
   useDirectory(handle) {
-    this.#injectedRoot = handle ?? null;
+    this.#driver = handle ? new FsaFolderDriver(handle) : new OpfsDriver();
+  }
+
+  /** Swap in an arbitrary storage driver (the general seam — e.g. a future cloud
+   * driver). Null resets to OPFS. */
+  useDriver(driver) {
+    this.#driver = driver ?? new OpfsDriver();
+  }
+
+  /** @returns {boolean} Whether the store is currently folder-backed (vs OPFS). */
+  get folderBacked() {
+    return this.#driver.kind === 'folder';
+  }
+
+  get available() {
+    return this.#driver.available;
   }
 
   /** @returns {boolean} Whether at-rest encryption is currently on. */
@@ -72,11 +89,12 @@ export class ProjectStore {
    * @param {string} passphrase
    */
   async unlock(passphrase) {
-    const root = await this.#root(true);
+    // The salt/verifier meta is plaintext — read/write it via the driver DIRECTLY,
+    // bypassing the crypto wrappers (chicken-and-egg: we need it to derive the key).
+    const metaPath = `${ROOT}/${ENC_META}`;
     let meta = null;
-    try {
-      meta = JSON.parse(await (await (await root.getFileHandle(ENC_META)).getFile()).text());
-    } catch { /* first time for this folder */ }
+    const rawMeta = await this.#driver.read(metaPath);
+    if (rawMeta) { try { meta = JSON.parse(new TextDecoder().decode(rawMeta)); } catch { meta = null; } }
 
     const salt = meta ? unb64(meta.salt) : newSalt();
     const iterations = meta?.iterations || DEFAULT_ITERATIONS;
@@ -88,9 +106,7 @@ export class ProjectStore {
       if (!ok) throw new Error('Wrong passphrase for this folder.');
     } else {
       const verifier = b64(await encryptWithKey(key, VERIFIER));
-      const fh = await root.getFileHandle(ENC_META, { create: true });
-      const w = await fh.createWritable();
-      try { await w.write(JSON.stringify({ v: 1, salt: b64(salt), iterations, verifier })); } finally { await w.close(); }
+      await this.#driver.write(metaPath, te.encode(JSON.stringify({ v: 1, salt: b64(salt), iterations, verifier })));
     }
     this.#key = key;
   }
@@ -98,15 +114,6 @@ export class ProjectStore {
   /** Drop the in-memory key (e.g. closing a folder project). */
   lock() {
     this.#key = null;
-  }
-
-  /** @returns {boolean} Whether the store is currently folder-backed (vs OPFS). */
-  get folderBacked() {
-    return this.#injectedRoot != null;
-  }
-
-  get available() {
-    return this.#injectedRoot != null || (typeof navigator !== 'undefined' && !!navigator.storage?.getDirectory);
   }
 
   /** Acquire the mutex; returns a release fn. */
@@ -127,21 +134,9 @@ export class ProjectStore {
     const release = await this.#acquire();
     try {
       const cat = await this.#readCatalog();
-      const kept = [];
-      let dropped = false;
-      const root = await this.#root(true);
-      for (const e of cat.entries) {
-        let ok = false;
-        try {
-          await root.getDirectoryHandle(e.id);
-          ok = true;
-        } catch {
-          ok = false;
-        }
-        if (ok) kept.push(e);
-        else dropped = true;
-      }
-      if (dropped) await this.#write(root, CATALOG, JSON.stringify({ entries: kept }));
+      const present = new Set(await this.#driver.list(ROOT));
+      const kept = cat.entries.filter((e) => present.has(e.id));
+      if (kept.length !== cat.entries.length) await this.#write(`${ROOT}/${CATALOG}`, JSON.stringify({ entries: kept }));
       return kept.slice().sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
     } finally {
       release();
@@ -168,15 +163,13 @@ export class ProjectStore {
         /* best effort */
       }
     }
-    const root = await this.#root(true);
     id = id || crypto.randomUUID();
-    const dir = await root.getDirectoryHandle(id, { create: true });
 
     // Parquet first, then the manifest — the same manifest shape folder-sync merges,
     // built by the shared {@link buildManifest} so save and sync never drift.
-    await this.#writeSources(dir, bundle, writeSourcesFor);
+    await this.#writeSources(id, bundle, writeSourcesFor);
     const manifest = buildManifest({ name, savedAt, bundle });
-    await this.#write(dir, 'project.json', JSON.stringify(manifest));
+    await this.#write(this.#file(id, 'project.json'), JSON.stringify(manifest));
 
     const release = await this.#acquire();
     try {
@@ -187,7 +180,7 @@ export class ProjectStore {
       const idx = cat.entries.findIndex((e) => e.id === id);
       if (idx >= 0) cat.entries[idx] = summary;
       else cat.entries.push(summary);
-      await this.#write(root, CATALOG, JSON.stringify(cat));
+      await this.#write(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
     } finally {
       release();
     }
@@ -200,14 +193,12 @@ export class ProjectStore {
    * @returns {Promise<{id: string, name: string, bundle: {activeId: number, datasets: Array<{id: number, name: string, state: object}>}}>}
    */
   async load(id) {
-    const root = await this.#root();
-    const dir = await root.getDirectoryHandle(id);
-    const manifest = JSON.parse(await this.#read(dir, 'project.json'));
+    const manifest = JSON.parse(await this.#read(this.#file(id, 'project.json')));
     const datasets = [];
     for (const d of manifest.datasets) {
       const sources = [];
       for (const s of d.sources) {
-        const buf = await this.#readBytes(dir, s.file);
+        const bytes = await this.#readBytes(this.#file(id, s.file));
         sources.push({
           id: s.id ?? undefined, // stable merge identity (absent on pre-collab saves → restore re-derives it)
           meta: s.meta,
@@ -217,7 +208,7 @@ export class ProjectStore {
           aliases: s.aliases,
           wide: s.wide ?? false,
           rowidBase: s.rowidBase,
-          parquet: new Uint8Array(buf),
+          parquet: new Uint8Array(bytes),
         });
       }
       datasets.push({
@@ -252,8 +243,7 @@ export class ProjectStore {
    */
   async readManifest(id) {
     try {
-      const dir = await (await this.#root()).getDirectoryHandle(id);
-      return JSON.parse(await this.#read(dir, 'project.json'));
+      return JSON.parse(await this.#read(this.#file(id, 'project.json')));
     } catch {
       return null;
     }
@@ -269,8 +259,7 @@ export class ProjectStore {
    */
   async readBase(id) {
     try {
-      const dir = await (await this.#root()).getDirectoryHandle(id);
-      return JSON.parse(await this.#read(dir, 'project.base.json'));
+      return JSON.parse(await this.#read(this.#file(id, 'project.base.json')));
     } catch {
       return null;
     }
@@ -278,22 +267,20 @@ export class ProjectStore {
 
   /** Record the common-ancestor snapshot (see {@link ProjectStore#readBase}). */
   async writeBase(id, manifest) {
-    const dir = await (await this.#root(true)).getDirectoryHandle(id, { create: true });
-    await this.#write(dir, 'project.base.json', JSON.stringify(manifest));
+    await this.#write(this.#file(id, 'project.base.json'), JSON.stringify(manifest));
   }
 
   /**
    * Write a **merged** manifest straight to `project.json` (folder-sync, #143) —
    * the result of a three-way merge, whose dataset `file` refs point at Parquet the
    * OS sync client has already mirrored from both sides (so no bytes to write here).
-   * Written atomically (temp + rename) so a peer polling `project.json` mid-write
-   * never reads a torn file. Refreshes the catalog summary so `list()` stays in step.
+   * The driver's `write` is atomic (temp + rename), so a peer polling `project.json`
+   * mid-write never reads a torn file. Refreshes the catalog so `list()` stays in step.
    * @param {string} id
    * @param {object} manifest
    */
   async writeManifest(id, manifest) {
-    const dir = await (await this.#root(true)).getDirectoryHandle(id, { create: true });
-    await this.#writeAtomic(dir, 'project.json', JSON.stringify(manifest));
+    await this.#write(this.#file(id, 'project.json'), JSON.stringify(manifest));
     const release = await this.#acquire();
     try {
       const cat = await this.#readCatalog();
@@ -301,7 +288,7 @@ export class ProjectStore {
       const idx = cat.entries.findIndex((e) => e.id === id);
       if (idx >= 0) cat.entries[idx] = summary;
       else cat.entries.push(summary);
-      await this.#write(await this.#root(true), CATALOG, JSON.stringify(cat));
+      await this.#write(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
     } finally {
       release();
     }
@@ -309,17 +296,15 @@ export class ProjectStore {
 
   /** Rename a project (updates its manifest + the catalog). */
   async rename(id, name) {
-    const root = await this.#root(true);
-    const dir = await root.getDirectoryHandle(id);
-    const manifest = JSON.parse(await this.#read(dir, 'project.json'));
+    const manifest = JSON.parse(await this.#read(this.#file(id, 'project.json')));
     manifest.name = name;
-    await this.#write(dir, 'project.json', JSON.stringify(manifest));
+    await this.#write(this.#file(id, 'project.json'), JSON.stringify(manifest));
     const release = await this.#acquire();
     try {
       const cat = await this.#readCatalog();
       const e = cat.entries.find((x) => x.id === id);
       if (e) e.name = name;
-      await this.#write(root, CATALOG, JSON.stringify(cat));
+      await this.#write(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
     } finally {
       release();
     }
@@ -327,73 +312,14 @@ export class ProjectStore {
 
   /** Delete a project bundle and drop it from the catalog. */
   async delete(id) {
-    const root = await this.#root(true);
-    try {
-      await root.removeEntry(id, { recursive: true });
-    } catch {
-      /* already gone */
-    }
+    await this.#driver.removeTree(`${ROOT}/${id}`);
     const release = await this.#acquire();
     try {
       const cat = await this.#readCatalog();
       cat.entries = cat.entries.filter((e) => e.id !== id);
-      await this.#write(root, CATALOG, JSON.stringify(cat));
+      await this.#write(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
     } finally {
       release();
-    }
-  }
-
-  // --- internals -------------------------------------------------------------
-
-  async #root(create = false) {
-    const base = this.#injectedRoot ?? (await navigator.storage.getDirectory());
-    return base.getDirectoryHandle(ROOT, { create });
-  }
-
-  async #readCatalog() {
-    try {
-      const root = await this.#root();
-      const parsed = JSON.parse(await this.#read(root, CATALOG));
-      return Array.isArray(parsed.entries) ? parsed : { entries: [] };
-    } catch {
-      return { entries: [] };
-    }
-  }
-
-  async #write(dir, name, data) {
-    const payload = this.#key ? await encryptWithKey(this.#key, data) : data;
-    const fh = await dir.getFileHandle(name, { create: true });
-    const w = await fh.createWritable();
-    try {
-      await w.write(payload);
-    } finally {
-      await w.close();
-    }
-  }
-
-  /** Read a file's raw bytes, transparently decrypting an encryption envelope when
-   * a key is set. An enveloped file with no key loaded is a clear, actionable error
-   * rather than a garbled parse. Plaintext (legacy / unencrypted) passes through, so
-   * a folder can be read + migrated in place. */
-  async #readDecrypted(dir, name) {
-    const raw = new Uint8Array(await (await (await dir.getFileHandle(name)).getFile()).arrayBuffer());
-    if (isEnveloped(raw)) {
-      if (!this.#key) throw new Error('This project is encrypted — unlock it with its passphrase first.');
-      return decryptWithKey(this.#key, raw);
-    }
-    return raw;
-  }
-
-  /** Write each dataset's Parquet sources (all datasets, or only those in `only`).
-   * Shared by {@link ProjectStore#save} and {@link ProjectStore#writeSourcesOnly}. */
-  async #writeSources(dir, bundle, only) {
-    for (const d of bundle.datasets) {
-      if (only && !only.has(d.id)) continue;
-      for (let i = 0; i < d.state.sources.length; i++) {
-        const s = d.state.sources[i];
-        if (!s.parquet) throw new Error(`save: dataset ${d.id} source ${i + 1} has no parquet`);
-        await this.#write(dir, `ds${d.id}_src${i + 1}.parquet`, s.parquet);
-      }
     }
   }
 
@@ -407,31 +333,66 @@ export class ProjectStore {
    * @param {Set<number>} [only]  dataset ids to write; omit for all.
    */
   async writeSourcesOnly(id, bundle, only) {
-    const dir = await (await this.#root(true)).getDirectoryHandle(id, { create: true });
-    await this.#writeSources(dir, bundle, only);
+    await this.#writeSources(id, bundle, only);
   }
 
-  /** Write then atomically swap into place, so a peer polling the file over a sync
-   * folder can't read a half-written manifest (#143). Uses `FileSystemFileHandle
-   * .move()` (a same-dir rename) where available; falls back to a direct write. */
-  async #writeAtomic(dir, name, data) {
-    const tmp = `${name}.tmp`;
-    await this.#write(dir, tmp, data);
-    const tfh = await dir.getFileHandle(tmp);
-    if (typeof tfh.move === 'function') {
-      await tfh.move(name); // atomic rename within the directory (overwrites)
-    } else {
-      await this.#write(dir, name, data);
-      try { await dir.removeEntry(tmp); } catch { /* best effort */ }
+  // --- internals -------------------------------------------------------------
+
+  /** Path of a file inside a project bundle. */
+  #file(id, name) {
+    return `${ROOT}/${id}/${name}`;
+  }
+
+  async #readCatalog() {
+    try {
+      const parsed = JSON.parse(await this.#read(`${ROOT}/${CATALOG}`));
+      return Array.isArray(parsed.entries) ? parsed : { entries: [] };
+    } catch {
+      return { entries: [] };
     }
   }
 
-  async #read(dir, name) {
-    return new TextDecoder().decode(await this.#readDecrypted(dir, name));
+  /** Encrypt-when-keyed, then hand opaque bytes to the driver. Strings are UTF-8
+   * encoded first (JSON manifests); Uint8Arrays (Parquet) pass through. */
+  async #write(path, data) {
+    let bytes;
+    if (this.#key) bytes = await encryptWithKey(this.#key, data);
+    else bytes = typeof data === 'string' ? te.encode(data) : data;
+    await this.#driver.write(path, bytes);
   }
 
-  async #readBytes(dir, name) {
-    return this.#readDecrypted(dir, name); // Uint8Array (callers wrap as needed)
+  /** Read raw bytes via the driver, transparently decrypting an encryption envelope
+   * when a key is set. An enveloped file with no key is a clear, actionable error
+   * rather than a garbled parse. Plaintext (legacy / unencrypted) passes through, so
+   * a folder can be read + migrated in place. Missing file → throws (callers catch). */
+  async #readRaw(path) {
+    const raw = await this.#driver.read(path);
+    if (raw == null) throw new Error(`not found: ${path}`);
+    if (isEnveloped(raw)) {
+      if (!this.#key) throw new Error('This project is encrypted — unlock it with its passphrase first.');
+      return decryptWithKey(this.#key, raw);
+    }
+    return raw;
+  }
+
+  async #read(path) {
+    return new TextDecoder().decode(await this.#readRaw(path));
+  }
+
+  async #readBytes(path) {
+    return this.#readRaw(path); // Uint8Array (callers wrap as needed)
+  }
+
+  /** Write each dataset's Parquet sources (all datasets, or only those in `only`). */
+  async #writeSources(id, bundle, only) {
+    for (const d of bundle.datasets) {
+      if (only && !only.has(d.id)) continue;
+      for (let i = 0; i < d.state.sources.length; i++) {
+        const s = d.state.sources[i];
+        if (!s.parquet) throw new Error(`save: dataset ${d.id} source ${i + 1} has no parquet`);
+        await this.#write(this.#file(id, `ds${d.id}_src${i + 1}.parquet`), s.parquet);
+      }
+    }
   }
 }
 
