@@ -483,11 +483,24 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     dataset *set* — never drop data), owner-dispatched workspace-leaf merge,
     `buildMergers` resolving each plugin's `merge` (strategy or `via`→exported fn),
     one aggregated dataset-tagged conflict list. 9 headless tests (28 total).
-    *Still to wire (browser-only, next):* the `showDirectoryPicker()` call + the
-    IndexedDB handle-persist + `requestPermission` re-grant; the poll/`readManifest`
-    change-detector; the sync orchestration (read theirs+base+mine → `mergeManifests`
-    → write + `writeBase`); atomic (temp+rename) writes for torn-read safety; and the
-    host conflict-resolution UI. See [[collab-merge-kernel]]. Original plan below.
+    **Orchestration + handle-persist now DONE too** (commits fd66f7d, 90fd138):
+    `core/folder-sync.js` — `decideSync` (seed/in-sync/push/merge) + `syncOnce`
+    (read theirs+base → decide → write manifest+base); `ProjectStore.writeManifest`
+    with atomic temp+`move()` rename (`#writeAtomic`, torn-read-safe);
+    `core/folder-handle.js` — IndexedDB persist of the picked dir handle +
+    `ensureReadWrite`. **34 headless tests + VERIFIED IN-BROWSER** against real OPFS
+    File System Access I/O (OPFS dir as a stand-in shared folder): a peer's on-disk
+    edits + local edits three-way merge (dataset op-log + caqdas codebook via the
+    real `mergeState`), 0 conflicts on disjoint edits, atomic write leaves no `.tmp`,
+    base updated to merged; dir handle round-trips IndexedDB as a live handle. Op-id
+    persistence path also verified end-to-end through real DuckDB.
+    *Still to wire (next — the "make it clickable" layer, needs MANUAL picker testing;
+    `showDirectoryPicker` is an OS dialog CDP can't drive):* the File-menu "Open
+    folder…" command; **app integration in `project-sync.js`** — produce "mine"
+    manifest from the live app (extract a bundle→manifest helper) + apply a merged
+    manifest back (`loadBundle`); the poll/`readManifest` change-detector (backoff
+    when hidden); and the **host conflict-resolution UI**. See [[collab-merge-kernel]].
+    Original plan below.
     `core/project-store.js` is *already* written entirely against
     `FileSystemDirectoryHandle` (`getDirectoryHandle`/`getFileHandle`/
     `createWritable`/`getFile`); the **only** OPFS-specific line is `#root()` at
