@@ -795,7 +795,21 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     reuses the presence room as its handshake, the invite link as its key distribution, and
     the index/gap-fill for base-data sharing.
 
-- [ ] **Encryption at rest — opt-in for local storage, opt-out for exports (#144).**
+- [~] **Encryption at rest — opt-in for local storage, opt-out for exports (#144).**
+      **CRYPTO KERNEL + FOLDER AT-REST DONE** (commit 341879e): `core/crypto-envelope.js`
+      (PBKDF2-HMAC-SHA256 → AES-256-GCM, native WebCrypto — no vendored lib; master key
+      derived once per session from passphrase + per-project public salt, fresh IV per
+      file; self-describing envelope so plaintext/ciphertext coexist and migrate in place;
+      key never persisted). `ProjectStore.unlock()/lock()/encrypted` wrap all data I/O →
+      a folder handed to OneDrive/Dropbox holds only ciphertext (project.json, catalog,
+      Parquet); salt/verifier meta stays plaintext; wrong passphrase caught at unlock.
+      51 headless tests + verified in-browser incl. a full ENCRYPTED folder sync.
+      *Still open:* the **opt-out (default-on) ENCRYPTED EXPORTS** side (all formats, not
+      just `.crosstab`); a **passphrase UI** (set/unlock prompts, the "unrecoverable"
+      warning); wiring unlock into the folder-open flow; the **chunked-Parquet** path for
+      multi-GB sources (today a source is encrypted whole — fine to ~100s of MB, the OOM
+      concern below still applies at GBs); and opt-in encryption for plain OPFS/local
+      projects (mechanism is ready — just needs the toggle + prompt). Original design below.
       Today the whole project bundle persists **plaintext** to OPFS / IndexedDB /
       localStorage, and exports land plaintext wherever saved (see SECURITY.md #10 for the
       full threat scope). Browser storage is origin-isolated (other *sites* can't read it)
