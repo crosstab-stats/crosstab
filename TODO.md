@@ -847,12 +847,19 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       a folder handed to OneDrive/Dropbox holds only ciphertext (project.json, catalog,
       Parquet); salt/verifier meta stays plaintext; wrong passphrase caught at unlock.
       51 headless tests + verified in-browser incl. a full ENCRYPTED folder sync.
-      *Still open:* the **opt-out (default-on) ENCRYPTED EXPORTS** side (all formats, not
-      just `.crosstab`); a **passphrase UI** (set/unlock prompts, the "unrecoverable"
-      warning); wiring unlock into the folder-open flow; the **chunked-Parquet** path for
-      multi-GB sources (today a source is encrypted whole — fine to ~100s of MB, the OOM
-      concern below still applies at GBs); and opt-in encryption for plain OPFS/local
-      projects (mechanism is ready — just needs the toggle + prompt). Original design below.
+      **POLICY + ENCRYPTED EXPORTS now DONE too** (commit 99736fb): `core/at-rest.js` =
+      per-target policy (export & folder default-ON/opt-out, local default-OFF/opt-in) +
+      persisted overrides + an injected passphrase-provider seam (safe-by-default: no
+      provider → plaintext). `core/crypto-envelope.js` gained a **self-contained**
+      envelope (salt embedded) for exports; `export-service.js` `#runExport` encrypts a
+      leaving file when policy+passphrase say so (`.enc`, all formats). 88 tests + in-
+      browser verified. *Still open (UI/manual):* the **passphrase PROMPT**
+      (`setPassphraseProvider` from app.js — set/unlock dialogs + "unrecoverable" warning);
+      the recipient **import-side decrypt** (detect `isSelfContained` → prompt → decrypt →
+      parse); wiring `unlock` into the folder-open flow + opt-in toggle for OPFS; a
+      settings UI to flip defaults; and the **chunked-Parquet** path for multi-GB sources
+      (today a source encrypts whole — fine to ~100s of MB; OOM concern below at GBs).
+      Original design below.
       Today the whole project bundle persists **plaintext** to OPFS / IndexedDB /
       localStorage, and exports land plaintext wherever saved (see SECURITY.md #10 for the
       full threat scope). Browser storage is origin-isolated (other *sites* can't read it)
