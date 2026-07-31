@@ -75,6 +75,11 @@ export const manifest = {
   workspaces: [{
     id: 'caqdas-coding',
     title: 'Coding',
+    // Collaboration merge (#143): this workspace's blob is a *composite* (codebook
+    // + coded segments + config), so it can't use a single built-in strategy —
+    // it declares a custom merger, the module's `mergeState` export. The host
+    // resolves `via` → the named export and calls it with the merge helpers.
+    merge: { via: 'mergeState' },
     verbs: [
       { id: 'import-qdpx', label: 'REFI-QDA / QDPX project (.qdpx)…', run: 'parseQdpx', category: 'import', needsFile: { extensions: ['.qdpx'] }, group: 'Qualitative' },
       { id: 'export-qdpx', label: 'REFI-QDA / QDPX project (.qdpx)…', run: 'exportQdpx', category: 'export', group: 'Qualitative' },
@@ -1705,6 +1710,58 @@ function themedCloudSvg(themes, W, H) {
 }
 
 /** Coerce a loaded/empty blob into the working shape. */
+/**
+ * Collaboration merge for the CAQDAS coding blob (#143). The blob is a *composite*
+ * of independent collections that each merge differently, so this is a custom
+ * merger (declared `merge: { via: 'mergeState' }`) rather than one built-in
+ * strategy — exactly the case the "owner defines merge" design exists for.
+ *
+ *  - **codes** — add-wins by stable code id (two coders' new codes both survive;
+ *    a concurrent delete loses to a keep); same code edited two ways → surfaced.
+ *  - **segments** — add-wins by the passage's natural key `doc|codeId|span`, so
+ *    two people coding the *same* passage under the same code converge, and coding
+ *    *different* passages both stick. Coded segments have no stored id, and this is
+ *    the right identity anyway (it makes re-coding the same span idempotent).
+ *  - **config** (text/label column) — last-writer-wins, conflict if truly divergent.
+ *
+ * Pure: receives the merge helpers, imports nothing (headlessly testable). Writes
+ * only this plugin's own blob — the integrity envelope (#145/#146) that makes a
+ * plugin-defined merger safe.
+ *
+ * @param {{ancestor:object, mine:object, theirs:object, helpers:object}} arg
+ * @returns {{resolved:object, conflicts:object[]}}
+ */
+export function mergeState({ ancestor, mine, theirs, helpers }) {
+  const a = normalize(ancestor);
+  const m = normalize(mine);
+  const t = normalize(theirs);
+  const OWNER = 'builtin-caqdas';
+  const conflicts = [];
+
+  const codes = helpers.addWinsSet(a.codes, m.codes, t.codes, (c) => c.id, OWNER);
+  const segKey = (s) =>
+    `${s.doc}|${s.codeId}|${s.start ?? ''}|${s.end ?? ''}|${s.tStart ?? ''}|${s.tEnd ?? ''}|${s.region ? helpers.stableStringify(s.region) : ''}`;
+  const segments = helpers.addWinsSet(a.segments, m.segments, t.segments, segKey, OWNER);
+  conflicts.push(...codes.conflicts, ...segments.conflicts);
+
+  const cfg = (key) => {
+    const r = helpers.lww(a[key], { value: m[key] }, { value: t[key] }, OWNER, key);
+    conflicts.push(...r.conflicts);
+    return r.resolved;
+  };
+
+  return {
+    resolved: {
+      version: 1,
+      textColumn: cfg('textColumn'),
+      labelColumn: cfg('labelColumn'),
+      codes: codes.resolved,
+      segments: segments.resolved,
+    },
+    conflicts,
+  };
+}
+
 function normalize(raw) {
   const s = raw && typeof raw === 'object' ? raw : {};
   return {

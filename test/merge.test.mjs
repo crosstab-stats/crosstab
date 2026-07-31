@@ -16,6 +16,10 @@ import {
   lww,
   mergeProject,
 } from '../core/merge.js';
+import { mergeState as caqdasMerge } from '../plugins/builtin-caqdas/index.js';
+
+/** The helper bundle the host hands a plugin's custom merge() (see resolveMerger). */
+const HELPERS = { threeWayLog, addWinsSet, lww, stableStringify };
 
 // --- op identity -----------------------------------------------------------
 
@@ -167,6 +171,103 @@ test('mergeProject dispatches per owner and aggregates conflicts across tiers', 
   assert.equal(spatialConflicts.length, 1);
   // Only the spatial tier conflicts; the other two merged cleanly.
   assert.equal(r.conflicts.length, 1);
+});
+
+// --- REAL builtin mergers against real state shapes ------------------------
+
+const seg = (doc, codeId, start, end, text) => ({ doc, codeId, start, end, text });
+
+test('CAQDAS: two coders on the same transcripts merge cleanly (the Dedoose case)', () => {
+  // Ancestor: one code, one coded passage.
+  const ancestor = {
+    version: 1, textColumn: 'transcript', labelColumn: null,
+    codes: [{ id: 'c1', name: 'anxiety', color: '#ffd166', group: '', memo: '' }],
+    segments: [seg('r1', 'c1', 0, 10, 'I felt so')],
+  };
+  // Coder A: adds a code and codes a new passage under the existing code.
+  const mine = {
+    ...ancestor,
+    codes: [...ancestor.codes, { id: 'c2', name: 'coping', color: '#8ecae6', group: '', memo: '' }],
+    segments: [...ancestor.segments, seg('r2', 'c1', 5, 20, 'worried about')],
+  };
+  // Coder B: adds a different code and codes a different passage.
+  const theirs = {
+    ...ancestor,
+    codes: [...ancestor.codes, { id: 'c3', name: 'stigma', color: '#a7c957', group: '', memo: '' }],
+    segments: [...ancestor.segments, seg('r3', 'c1', 0, 8, 'people judge')],
+  };
+  const r = caqdasMerge({ ancestor, mine, theirs, helpers: HELPERS });
+  assert.equal(r.conflicts.length, 0);
+  assert.deepEqual(r.resolved.codes.map((c) => c.id).sort(), ['c1', 'c2', 'c3']);
+  assert.equal(r.resolved.segments.length, 3); // ancestor's + one from each coder
+});
+
+test('CAQDAS: coding the SAME passage under the same code converges (no duplicate)', () => {
+  const ancestor = { version: 1, textColumn: 't', labelColumn: null, codes: [{ id: 'c1', name: 'x' }], segments: [] };
+  const same = seg('r1', 'c1', 3, 9, 'the same');
+  const r = caqdasMerge({ ancestor, mine: { ...ancestor, segments: [same] }, theirs: { ...ancestor, segments: [{ ...same }] }, helpers: HELPERS });
+  assert.equal(r.conflicts.length, 0);
+  assert.equal(r.resolved.segments.length, 1); // converged, not duplicated
+});
+
+test('CAQDAS: same code recoloured two ways surfaces an edit/edit conflict', () => {
+  const ancestor = { version: 1, textColumn: 't', labelColumn: null, codes: [{ id: 'c1', name: 'anxiety', color: '#000' }], segments: [] };
+  const r = caqdasMerge({
+    ancestor,
+    mine: { ...ancestor, codes: [{ id: 'c1', name: 'anxiety', color: '#f00' }] },
+    theirs: { ...ancestor, codes: [{ id: 'c1', name: 'anxiety', color: '#0f0' }] },
+    helpers: HELPERS,
+  });
+  assert.equal(r.conflicts.length, 1);
+  assert.equal(r.conflicts[0].owner, 'builtin-caqdas');
+});
+
+test('CAQDAS: renaming a code loses to a keep? no — add-wins keeps a one-side edit', () => {
+  // One coder renames c1; the other leaves it. The rename is taken, no conflict.
+  const ancestor = { version: 1, textColumn: 't', labelColumn: null, codes: [{ id: 'c1', name: 'anx' }], segments: [] };
+  const r = caqdasMerge({ ancestor, mine: { ...ancestor, codes: [{ id: 'c1', name: 'anxiety' }] }, theirs: ancestor, helpers: HELPERS });
+  assert.equal(r.conflicts.length, 0);
+  assert.equal(r.resolved.codes[0].name, 'anxiety');
+});
+
+test('spatial: add-wins slots + LWW bytes via mergeProject (real per-slot blob keys)', () => {
+  // Each boundary set is its own blob key (owner tag → builtin-spatial → strategy lww).
+  const slot = (name, ver) => ({ fileName: name, keyProp: 'GEOID', geojson: `FC:${name}:${ver}` });
+  const ancestor = { log: [], blobs: {
+    'builtin-spatial::counties': { owner: 'builtin-spatial', value: slot('counties', 1) },
+  } };
+  // Coder A re-shades counties (new bytes) and adds a NEW slot (tracts).
+  const mine = { log: [], blobs: {
+    'builtin-spatial::counties': { owner: 'builtin-spatial', value: slot('counties', 2) },
+    'builtin-spatial::tracts': { owner: 'builtin-spatial', value: slot('tracts', 1) },
+  } };
+  // Coder B leaves counties, adds a different NEW slot (districts).
+  const theirs = { log: [], blobs: {
+    'builtin-spatial::counties': { owner: 'builtin-spatial', value: slot('counties', 1) },
+    'builtin-spatial::districts': { owner: 'builtin-spatial', value: slot('districts', 1) },
+  } };
+  const r = mergeProject({ ancestor, mine, theirs, mergers: { 'builtin-spatial': { strategy: 'lww' } } });
+  // All three slots present (add-wins on the slot set); counters's one-side byte change taken; no conflict.
+  assert.deepEqual(Object.keys(r.blobs).sort(), ['builtin-spatial::counties', 'builtin-spatial::districts', 'builtin-spatial::tracts']);
+  assert.equal(r.blobs['builtin-spatial::counties'].value.geojson, 'FC:counties:2');
+  assert.equal(r.conflicts.length, 0);
+});
+
+test('full project merge: core log + CAQDAS custom merger resolved via manifest `via`', () => {
+  // Simulate what the transport does: read manifest.merge.via → the module export.
+  const mergers = {
+    core: { strategy: 'three-way' },
+    'builtin-caqdas': { merge: caqdasMerge }, // resolved from { via: 'mergeState' }
+  };
+  const base = { id: 'load1', type: 'load', src: { label: 'interviews', meta: [] } };
+  const cb = (codes, segments) => ({ version: 1, textColumn: 't', labelColumn: null, codes, segments });
+  const ancestor = { log: [base], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: cb([{ id: 'c1', name: 'anx' }], []) } } };
+  const mine = { log: [base, { id: 'm1', type: 'recodeVar', name: 'age' }], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: cb([{ id: 'c1', name: 'anx' }, { id: 'c2', name: 'coping' }], []) } } };
+  const theirs = { log: [base, { id: 't1', type: 'recodeVar', name: 'income' }], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: cb([{ id: 'c1', name: 'anx' }, { id: 'c3', name: 'stigma' }], []) } } };
+  const r = mergeProject({ ancestor, mine, theirs, mergers });
+  assert.equal(r.conflicts.length, 0);
+  assert.deepEqual(r.log.map((o) => o.id), ['load1', 'm1', 't1']); // disjoint recodes merged
+  assert.deepEqual(r.blobs['builtin-caqdas'].value.codes.map((c) => c.id).sort(), ['c1', 'c2', 'c3']); // codebook unioned
 });
 
 test('mergeProject: a plugin custom merge() function is envelope-wrapped and tagged with owner', () => {
