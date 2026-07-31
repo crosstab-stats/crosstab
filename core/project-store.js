@@ -29,8 +29,27 @@ export class ProjectStore {
    * with a delete/rename and resurrect a just-removed entry (orphan in the list). */
   #tail = Promise.resolve();
 
+  /** A picked folder handle (from `showDirectoryPicker`) the `projects/` tree lives
+   * inside, instead of OPFS — the folder-backed transport for collaboration (#143).
+   * The ONE OPFS-specific line (`#root`) is parameterized around this; everything
+   * else is already `FileSystemDirectoryHandle`-generic. Null ⇒ OPFS. */
+  #injectedRoot = null;
+
+  /** Point the store at a picked folder (a OneDrive/Dropbox/local folder the OS
+   * sync client mirrors), or null to revert to OPFS. The caller must have re-granted
+   * write permission (`requestPermission`) first — the browser won't give silent
+   * persistent write to a user folder. */
+  useDirectory(handle) {
+    this.#injectedRoot = handle ?? null;
+  }
+
+  /** @returns {boolean} Whether the store is currently folder-backed (vs OPFS). */
+  get folderBacked() {
+    return this.#injectedRoot != null;
+  }
+
   get available() {
-    return typeof navigator !== 'undefined' && !!navigator.storage?.getDirectory;
+    return this.#injectedRoot != null || (typeof navigator !== 'undefined' && !!navigator.storage?.getDirectory);
   }
 
   /** Acquire the mutex; returns a release fn. */
@@ -107,7 +126,7 @@ export class ProjectStore {
           if (!s.parquet) throw new Error(`save: dataset ${d.id} source ${i + 1} has no parquet`);
           await this.#write(dir, file, s.parquet);
         }
-        const entry = { meta: s.meta, label: s.label ?? null, combine: s.combine ?? 'base', file };
+        const entry = { id: s.id ?? null, meta: s.meta, label: s.label ?? null, combine: s.combine ?? 'base', file };
         if (s.combine === 'join') {
           entry.joinKey = s.joinKey;
           entry.aliases = s.aliases ?? [];
@@ -173,6 +192,7 @@ export class ProjectStore {
       for (const s of d.sources) {
         const buf = await this.#readBytes(dir, s.file);
         sources.push({
+          id: s.id ?? undefined, // stable merge identity (absent on pre-collab saves → restore re-derives it)
           meta: s.meta,
           label: s.label ?? null,
           combine: s.combine ?? 'base',
@@ -201,6 +221,48 @@ export class ProjectStore {
         datasets,
       },
     };
+  }
+
+  /**
+   * Read a project's raw manifest (`project.json`) **without** materialising its
+   * Parquet sources — a *stat + parse*, not a full load. This is how folder-sync
+   * cheaply reads "their" latest version to diff against, and how change-detection
+   * watches one file (`project.json` rewrites on every save and indexes every
+   * dataset). Returns null if absent/unparseable (tolerate torn reads mid-sync —
+   * retry next tick rather than treating a parse failure as corruption).
+   * @param {string} id
+   * @returns {Promise<object|null>}
+   */
+  async readManifest(id) {
+    try {
+      const dir = await (await this.#root()).getDirectoryHandle(id);
+      return JSON.parse(await this.#read(dir, 'project.json'));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The **common-ancestor** snapshot for merge (#143): the last manifest this client
+   * successfully synced, stored as a `project.base.json` sidecar in the bundle. A
+   * three-way merge diffs *my* current manifest and *their* on-disk manifest against
+   * this base. After a successful sync, the merged manifest becomes the new base.
+   * @param {string} id
+   * @returns {Promise<object|null>}
+   */
+  async readBase(id) {
+    try {
+      const dir = await (await this.#root()).getDirectoryHandle(id);
+      return JSON.parse(await this.#read(dir, 'project.base.json'));
+    } catch {
+      return null;
+    }
+  }
+
+  /** Record the common-ancestor snapshot (see {@link ProjectStore#readBase}). */
+  async writeBase(id, manifest) {
+    const dir = await (await this.#root(true)).getDirectoryHandle(id, { create: true });
+    await this.#write(dir, 'project.base.json', JSON.stringify(manifest));
   }
 
   /** Rename a project (updates its manifest + the catalog). */
@@ -242,8 +304,8 @@ export class ProjectStore {
   // --- internals -------------------------------------------------------------
 
   async #root(create = false) {
-    const opfs = await navigator.storage.getDirectory();
-    return opfs.getDirectoryHandle(ROOT, { create });
+    const base = this.#injectedRoot ?? (await navigator.storage.getDirectory());
+    return base.getDirectoryHandle(ROOT, { create });
   }
 
   async #readCatalog() {
