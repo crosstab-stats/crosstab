@@ -631,8 +631,18 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       (the borrowed-client-id trap was Microsoft-specific and rejected anyway). But
       **desktop users of any provider need none** — the desktop sync client + folder mode
       already covers them (Dropbox/OneDrive/Drive/iCloud folders are identical to FSA).
-  - **Live transport — P2P over WebRTC (proven pattern, from sortie).** The
-    serverless-handshake part is already solved and battle-tested in *sortie*
+  - **Live transport — P2P over WebRTC (proven pattern, from sortie). [~] SIGNALING
+    LAYER BUILT** (commit 20d6427): `assets.js` pins trystero@0.21.5 (MQTT), lazy-loaded;
+    `core/live-invite.js` (rendezvous addressing = hashed-UUID topic + invite secret in
+    the URL fragment); `core/live-sync.js` (`LiveSession` wrapping a Trystero room —
+    presence + beacon + ordered/reliable op-log actions — plus `buildIceServers` /
+    get·setTurnConfig). 58 headless tests; in-browser verified the pinned lib loads +
+    TURN config threads. *Still to build:* the op-log WIRE PROTOCOL over the channel
+    (snapshot-then-tail late-join, gap detection — convergence reuses the mergeable
+    op-log), and the presence/invite UI. *Verification boundary:* the actual peer
+    CONNECTION is a 2-machine/2-network + reachable-broker test (Trystero filters
+    same-page selfId → un-testable in one tab), user-gated like the OS picker.
+    The serverless-handshake part is already solved and battle-tested in *sortie*
     (asteroids clone, https://lograh.github.io/sortie-game): **Trystero (MQTT
     strategy)** does signaling via public MQTT brokers (EMQX/HiveMQ) — nothing we
     host — then drops to a real WebRTC data channel. Its "repair" channels use
@@ -643,11 +653,16 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       frame; `_mid` dedup is enough. Op-logs must *converge* — a missed op can't be
       papered over by "the next frame." Needs the mergeable-op-log foundation above
       (sequenced, gap-detecting, or CRDT per state class).
-    - *TURN, probably.* Sortie's clever peer-**gossip** relay dodged TURN — but it
-      only rescues connectivity when there's a **third peer** to route through.
-      CrossTab's core case is **two** faculty, both behind university symmetric NATs,
-      no third party → likely needs a real **TURN** server (the one piece of
-      infrastructure on the table).
+    - *TURN — DECIDED: bring-your-own, we host nothing.* Sortie's clever peer-**gossip**
+      relay dodged TURN — but it only rescues connectivity when there's a **third peer**
+      to route through. CrossTab's core case is **two** faculty behind university
+      symmetric NATs, no third party → sometimes needs a real **TURN** relay. Decision:
+      **we run none.** Instead the user (or their institution) can define a TURN server —
+      `setTurnConfig({urls,username,credential})`, threaded into `iceServers` by
+      `buildIceServers` (default = public STUN only). So an institution adopting the app
+      can stand up its own TURN for its faculty; without one, a hard-NAT pair simply
+      can't connect and the UI must say so (**detected ≠ connectable**). Built in
+      `core/live-sync.js` (commit 20d6427).
     - *Late-join.* Snapshot-then-tail: ship the whole existing op-log to a joiner,
       then follow with the live tail.
   - **Concurrency detection / presence — "Jane has this open, co-author?"** The key
