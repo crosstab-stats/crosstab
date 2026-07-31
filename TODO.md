@@ -853,13 +853,17 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       provider → plaintext). `core/crypto-envelope.js` gained a **self-contained**
       envelope (salt embedded) for exports; `export-service.js` `#runExport` encrypts a
       leaving file when policy+passphrase say so (`.enc`, all formats). 88 tests + in-
-      browser verified. *Still open (UI/manual):* the **passphrase PROMPT**
-      (`setPassphraseProvider` from app.js — set/unlock dialogs + "unrecoverable" warning);
-      the recipient **import-side decrypt** (detect `isSelfContained` → prompt → decrypt →
-      parse); wiring `unlock` into the folder-open flow + opt-in toggle for OPFS; a
-      settings UI to flip defaults; and the **chunked-Parquet** path for multi-GB sources
-      (today a source encrypts whole — fine to ~100s of MB; OOM concern below at GBs).
-      Original design below.
+      browser verified. **Passphrase PROMPT UI DONE** (commit 30969de):
+      `core/passphrase-ui.js` (enter/set modes, confirm-match, "no recovery" warning) +
+      `installPassphraseUI()` wired from app.js as the at-rest provider — so encrypted
+      export now prompts + engages. Verified in-browser (DOM). *Still open (UI/manual):*
+      the recipient **import-side decrypt** — this is import-*flow* work, not just a
+      prompt: a `.enc` file must be routed to a decrypt step and re-detected by its inner
+      format (`data.csv.enc`→`data.csv`→CSV importer), touching `import-service` dispatch;
+      only verifiable by actually picking a file, so deferred. Also: wiring `unlock` into
+      the folder-open flow + opt-in toggle for OPFS; a settings UI to flip defaults; and
+      the **chunked-Parquet** path for multi-GB sources (today a source encrypts whole —
+      fine to ~100s of MB; OOM concern below at GBs). Original design below.
       Today the whole project bundle persists **plaintext** to OPFS / IndexedDB /
       localStorage, and exports land plaintext wherever saved (see SECURITY.md #10 for the
       full threat scope). Browser storage is origin-isolated (other *sites* can't read it)
