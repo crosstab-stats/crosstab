@@ -769,7 +769,16 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       even a malicious provider plugin can't read content (residual: metadata — paths,
       sizes, timing). Pushing crypto into the kernel is what lets the whole provider
       ecosystem be untrusted plugins. Analog of format-equality: no privileged provider.
-    - **Proposed extension point** (by analogy to `importers.register`):
+    - **[~] BUILT (core interface, not sandboxed) — commit 34fc4de.** `core/storage-driver.js`
+      is the path-based seam (`read/write/remove/removeTree/list/stat` + `kind/available`);
+      `OpfsDriver` + `FsaFolderDriver` extend a `HandleDriver` base, and `ProjectStore`
+      sits on it via `useDirectory()`/`useDriver()`. Deliberately a **core-registered
+      interface, NOT `app.storage.register` in a sandbox** — resolving the "two caveats"
+      below (FSA gesture/handle + gigabytes over postMessage) in favor of main-thread
+      drivers. **Crypto sits above it**, so drivers only ever see ciphertext. A cloud
+      driver now = implement the same surface over HTTP + `useDriver()`; the flags below
+      (CAS/contentHash/nativeWatch) are the still-unbuilt capability-negotiation layer.
+    - **Original proposed extension point** (by analogy to `importers.register`):
       `app.storage.register({ id, label, auth, read→{bytes,rev,mtime,size,contentHash?},
       write(path,bytes,{ifMatch:rev})→rev, delta(cursor)→{changes,cursor}, watch?(cb),
       capabilities:{conditionalWrite,contentHash,nativeWatch,sharing} })`. Core reads the
