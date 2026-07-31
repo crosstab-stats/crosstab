@@ -26,6 +26,7 @@
  */
 
 import { getAssets } from './assets.js';
+import { LiveDoc } from './live-protocol.js';
 
 /** Public STUN for address discovery (not a relay; nothing we host). The user can
  * override or extend via {@link setTurnConfig}. */
@@ -152,4 +153,22 @@ export class LiveSession {
   #emit(kind, ...args) {
     for (const cb of this.#handlers[kind]) { try { cb(...args); } catch (e) { console.error('[live-sync] handler error', e); } }
   }
+}
+
+/**
+ * Wire a {@link module:core/live-protocol~LiveDoc} onto a {@link LiveSession}: the
+ * session's op-log channel becomes the doc's transport (send out, receive in) and a
+ * peer leaving is forwarded. Returns the LiveDoc; call `doc.hello()` after
+ * `session.join()`. Kept out of LiveDoc so the protocol stays transport-agnostic and
+ * headlessly testable; this is the one place they meet.
+ *
+ * @param {LiveSession} session
+ * @param {object} docOpts  everything {@link LiveDoc} takes except `send`
+ * @returns {LiveDoc}
+ */
+export function attachLiveDoc(session, docOpts) {
+  const doc = new LiveDoc({ ...docOpts, send: (m) => session.sendOps(m) });
+  session.onOps((m, peerId) => doc.receive(m, peerId));
+  session.onPeerLeave((peerId) => doc.peerLeft(peerId));
+  return doc;
 }
