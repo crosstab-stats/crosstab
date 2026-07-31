@@ -159,7 +159,19 @@ export function opTarget(op) {
 const byId = (ops) => new Map((ops ?? []).map((o) => [o.id, o]));
 
 /**
+ * A **stable** conflict key — the same inputs always produce the same key, so a
+ * user's resolution (`key → choice`) re-runs deterministically to a clean merge.
+ * `scope` distinguishes the same target across datasets/blobs (set by the
+ * coordinator); `disc` (an op/item id) distinguishes conflicts sharing a target.
+ * @returns {string}
+ */
+function ckey(owner, scope, target, kind, disc = '') {
+  return `${scope ?? ''}::${owner}::${target}::${kind}::${disc}`;
+}
+
+/**
  * @typedef {Object} Conflict
+ * @property {string} key     Stable id for `resolutions` (see {@link ckey}).
  * @property {string} owner   Which state class the conflict is in (`'core'` or a plugin id).
  * @property {string} target  The thing both sides edited (see {@link opTarget}) / blob key.
  * @property {string} kind    `'edit/edit'` | `'edit/delete'` | `'add/add'`.
@@ -167,6 +179,15 @@ const byId = (ops) => new Map((ops ?? []).map((o) => [o.id, o]));
  * @property {*} mine         This side's value/op.
  * @property {*} theirs       Their side's value/op.
  * @property {string[]} options  Choices the host offers, e.g. `['mine','theirs','both']`.
+ */
+
+/**
+ * @typedef {Object} MergeOpts
+ * @property {Record<string,'mine'|'theirs'|'both'>|null} [resolutions]  User choices
+ *   keyed by conflict {@link ckey}. A resolved conflict is applied silently (not
+ *   re-surfaced); an unresolved one is recorded with a sensible default.
+ * @property {string} [scope]  Coordinator-set namespace (dataset id / blob key) so
+ *   the same target in two datasets gets distinct conflict keys.
  */
 
 /**
@@ -205,7 +226,8 @@ const byId = (ops) => new Map((ops ?? []).map((o) => [o.id, o]));
  * @param {string} [owner='core']
  * @returns {MergeResult}
  */
-export function threeWayLog(ancestor, mine, theirs, owner = 'core') {
+export function threeWayLog(ancestor, mine, theirs, owner = 'core', opts = {}) {
+  const { resolutions = null, scope = '' } = opts;
   const a = byId(ancestor);
   const m = byId(mine);
   const t = byId(theirs);
@@ -216,6 +238,16 @@ export function threeWayLog(ancestor, mine, theirs, owner = 'core') {
   const chosen = new Map();
   const allIds = new Set([...a.keys(), ...m.keys(), ...t.keys()]);
 
+  /** Return the user's choice for a conflict, or — if none — record it (with a
+   * stable key) and return null so the caller applies its default. */
+  const decide = (target, kind, disc, mo, to, options, label) => {
+    const key = ckey(owner, scope, target, kind, disc);
+    const choice = resolutions?.[key];
+    if (choice) return choice;
+    conflicts.push({ key, owner, target, kind, label, mine: mo ?? null, theirs: to ?? null, options });
+    return null;
+  };
+
   for (const id of allIds) {
     const ao = a.get(id);
     const mo = m.get(id);
@@ -225,8 +257,9 @@ export function threeWayLog(ancestor, mine, theirs, owner = 'core') {
     if (!ao) {
       // Added on one or both sides (not in the common ancestor).
       if (mo && to) {
-        if (sig(mo) === sig(to)) chosen.set(id, mo); // same op both sides → converge
-        else conflicts.push({ owner, target: opTarget(mo), kind: 'add/add', label: `both added ${label(mo)} differently`, mine: mo, theirs: to, options: ['mine', 'theirs', 'both'] });
+        if (sig(mo) === sig(to)) { chosen.set(id, mo); continue; } // same op both sides → converge
+        const c = decide(opTarget(mo), 'add/add', id, mo, to, ['mine', 'theirs'], `both added ${label(mo)} differently`);
+        chosen.set(id, c === 'theirs' ? to : mo); // default (and 'mine') → mine
       } else chosen.set(id, mo ?? to);
       continue;
     }
@@ -237,12 +270,21 @@ export function threeWayLog(ancestor, mine, theirs, owner = 'core') {
     const tRemoved = !to;
 
     if (mRemoved && tRemoved) continue; // both removed → gone
-    if (mRemoved && tChanged) { conflicts.push({ owner, target: opTarget(to), kind: 'edit/delete', label: `you removed ${label(ao)}, they changed it`, mine: null, theirs: to, options: ['mine', 'theirs'] }); continue; }
-    if (tRemoved && mChanged) { conflicts.push({ owner, target: opTarget(mo), kind: 'edit/delete', label: `they removed ${label(ao)}, you changed it`, mine: mo, theirs: null, options: ['mine', 'theirs'] }); continue; }
+    if (mRemoved && tChanged) {
+      const c = decide(opTarget(to), 'edit/delete', id, null, to, ['mine', 'theirs'], `you removed ${label(ao)}, they changed it`);
+      if (c === 'theirs') chosen.set(id, to); // default (and 'mine') → my delete stands
+      continue;
+    }
+    if (tRemoved && mChanged) {
+      const c = decide(opTarget(mo), 'edit/delete', id, mo, null, ['mine', 'theirs'], `they removed ${label(ao)}, you changed it`);
+      if (c !== 'theirs') chosen.set(id, mo); // default (and 'mine') → keep my edit; 'theirs' → their delete
+      continue;
+    }
     if (mRemoved || tRemoved) continue; // removed one side, unchanged other → remove
     if (mChanged && tChanged) {
-      if (sig(mo) === sig(to)) chosen.set(id, mo); // converged to the same edit
-      else conflicts.push({ owner, target: opTarget(mo), kind: 'edit/edit', label: `both changed ${label(ao)} differently`, mine: mo, theirs: to, options: ['mine', 'theirs'] });
+      if (sig(mo) === sig(to)) { chosen.set(id, mo); continue; } // converged to the same edit
+      const c = decide(opTarget(mo), 'edit/edit', id, mo, to, ['mine', 'theirs'], `both changed ${label(ao)} differently`);
+      chosen.set(id, c === 'theirs' ? to : mo);
       continue;
     }
     if (mChanged) chosen.set(id, mo);
@@ -257,9 +299,13 @@ export function threeWayLog(ancestor, mine, theirs, owner = 'core') {
   const theirTargets = new Map(addedTheirs.map((o) => [opTarget(o), o]));
   for (const mo of addedMine) {
     const to = theirTargets.get(opTarget(mo));
-    if (to && to.id !== mo.id) {
-      conflicts.push({ owner, target: opTarget(mo), kind: 'add/add', label: `both independently added ${mo.type} ${mo.name ?? ''}`.trim(), mine: mo, theirs: to, options: ['mine', 'theirs', 'both'] });
-    }
+    if (!to || to.id === mo.id) continue;
+    const key = ckey(owner, scope, opTarget(mo), 'add/add', `${mo.id}+${to.id}`);
+    const choice = resolutions?.[key];
+    if (choice === 'mine') chosen.delete(to.id);
+    else if (choice === 'theirs') chosen.delete(mo.id);
+    else if (choice === 'both') { /* keep both */ }
+    else conflicts.push({ key, owner, target: opTarget(mo), kind: 'add/add', label: `both independently added ${mo.type} ${mo.name ?? ''}`.trim(), mine: mo, theirs: to, options: ['mine', 'theirs', 'both'] });
   }
 
   // Ordering (MVP): ancestor order for survivors, then mine-adds, then theirs-adds.
@@ -286,7 +332,8 @@ export function threeWayLog(ancestor, mine, theirs, owner = 'core') {
  * @param {string} [owner='plugin']
  * @returns {MergeResult}
  */
-export function addWinsSet(ancestor, mine, theirs, keyFn, owner = 'plugin') {
+export function addWinsSet(ancestor, mine, theirs, keyFn, owner = 'plugin', opts = {}) {
+  const { resolutions = null, scope = '' } = opts;
   const a = new Map((ancestor ?? []).map((x) => [keyFn(x), x]));
   const m = new Map((mine ?? []).map((x) => [keyFn(x), x]));
   const t = new Map((theirs ?? []).map((x) => [keyFn(x), x]));
@@ -306,7 +353,12 @@ export function addWinsSet(ancestor, mine, theirs, keyFn, owner = 'plugin') {
       if (stableStringify(mx) === stableStringify(tx)) resolved.push(mx);
       else if (ax && stableStringify(mx) === stableStringify(ax)) resolved.push(tx); // only theirs edited
       else if (ax && stableStringify(tx) === stableStringify(ax)) resolved.push(mx); // only mine edited
-      else { resolved.push(mx); conflicts.push({ owner, target: `item:${k}`, kind: 'edit/edit', label: `both edited item ${k}`, mine: mx, theirs: tx, options: ['mine', 'theirs'] }); }
+      else {
+        const key = ckey(owner, scope, `item:${k}`, 'edit/edit');
+        const choice = resolutions?.[key];
+        if (choice) resolved.push(choice === 'theirs' ? tx : mx);
+        else { resolved.push(mx); conflicts.push({ key, owner, target: `item:${k}`, kind: 'edit/edit', label: `both edited item ${k}`, mine: mx, theirs: tx, options: ['mine', 'theirs'] }); }
+      }
     } else {
       resolved.push(mx ?? tx); // one side deleted, add-wins keeps the survivor
     }
@@ -326,24 +378,30 @@ export function addWinsSet(ancestor, mine, theirs, keyFn, owner = 'plugin') {
  * @param {string} [target='blob']
  * @returns {MergeResult}
  */
-export function lww(ancestor, mine, theirs, owner = 'plugin', target = 'blob') {
+export function lww(ancestor, mine, theirs, owner = 'plugin', target = 'blob', opts = {}) {
+  const { resolutions = null, scope = '' } = opts;
   const aS = stableStringify(ancestor?.value ?? ancestor);
-  const mS = stableStringify(mine?.value ?? mine);
-  const tS = stableStringify(theirs?.value ?? theirs);
-  if (mS === tS) return { resolved: mine?.value ?? mine, conflicts: [] };
+  const mV = mine?.value ?? mine;
+  const tV = theirs?.value ?? theirs;
+  const mS = stableStringify(mV);
+  const tS = stableStringify(tV);
+  if (mS === tS) return { resolved: mV, conflicts: [] };
   const mChanged = mS !== aS;
   const tChanged = tS !== aS;
-  if (mChanged && !tChanged) return { resolved: mine?.value ?? mine, conflicts: [] };
-  if (tChanged && !mChanged) return { resolved: theirs?.value ?? theirs, conflicts: [] };
+  if (mChanged && !tChanged) return { resolved: mV, conflicts: [] };
+  if (tChanged && !mChanged) return { resolved: tV, conflicts: [] };
   // Both changed differently.
   const mc = mine?.clock;
   const tc = theirs?.clock;
   if (typeof mc === 'number' && typeof tc === 'number' && mc !== tc) {
     return { resolved: (mc > tc ? mine : theirs).value, conflicts: [] };
   }
+  const key = ckey(owner, scope, target, 'edit/edit');
+  const choice = resolutions?.[key];
+  if (choice) return { resolved: choice === 'theirs' ? tV : mV, conflicts: [] };
   return {
-    resolved: mine?.value ?? mine,
-    conflicts: [{ owner, target, kind: 'edit/edit', label: `both changed ${target}`, mine: mine?.value ?? mine, theirs: theirs?.value ?? theirs, options: ['mine', 'theirs'] }],
+    resolved: mV,
+    conflicts: [{ key, owner, target, kind: 'edit/edit', label: `both changed ${target}`, mine: mV, theirs: tV, options: ['mine', 'theirs'] }],
   };
 }
 
@@ -357,12 +415,12 @@ export function lww(ancestor, mine, theirs, owner = 'plugin', target = 'blob') {
  * @type {Record<string, (a:*, m:*, t:*, decl:object, owner:string) => MergeResult>}
  */
 export const STRATEGIES = {
-  'three-way': (a, m, t, _decl, owner) => threeWayLog(a ?? [], m ?? [], t ?? [], owner),
-  'add-wins': (a, m, t, decl, owner) => {
+  'three-way': (a, m, t, _decl, owner, opts) => threeWayLog(a ?? [], m ?? [], t ?? [], owner, opts),
+  'add-wins': (a, m, t, decl, owner, opts) => {
     const keyFn = decl.keyFn ?? ((x) => x?.id ?? stableStringify(x));
-    return addWinsSet(a ?? [], m ?? [], t ?? [], keyFn, owner);
+    return addWinsSet(a ?? [], m ?? [], t ?? [], keyFn, owner, opts);
   },
-  lww: (a, m, t, _decl, owner) => lww(a, { value: m }, { value: t }, owner),
+  lww: (a, m, t, _decl, owner, opts) => lww(a, { value: m }, { value: t }, owner, 'blob', opts),
 };
 
 /**
@@ -371,23 +429,42 @@ export const STRATEGIES = {
  * function the plugin exported). Unknown/absent → a safe default that surfaces any
  * difference as a single conflict (never a silent pick).
  *
+ * `ctx` carries the coordinator's `{ resolutions, scope }` so the merge is a pure
+ * function of the user's conflict choices — the same inputs + resolutions always
+ * produce the same clean result. For a **custom** merger, the helpers handed to the
+ * plugin are pre-bound to this ctx, so a plugin's own `helpers.addWinsSet(...)`
+ * calls become resolution/scope-aware with **no change to the plugin**.
+ *
  * @param {object} decl  `manifest.merge` for this owner (or a core descriptor).
+ * @param {MergeOpts} [ctx]
  * @returns {(ancestor:*, mine:*, theirs:*, owner:string) => MergeResult}
  */
-export function resolveMerger(decl) {
+export function resolveMerger(decl, ctx = {}) {
+  const { resolutions = null, scope = '' } = ctx;
+  const opts = { resolutions, scope };
   if (!decl) {
-    return (a, m, t, owner) => (stableStringify(m) === stableStringify(t)
-      ? { resolved: m, conflicts: [] }
-      : { resolved: m, conflicts: [{ owner, target: 'state', kind: 'edit/edit', label: 'state differs (no merge strategy declared)', mine: m, theirs: t, options: ['mine', 'theirs'] }] });
+    return (a, m, t, owner) => {
+      if (stableStringify(m) === stableStringify(t)) return { resolved: m, conflicts: [] };
+      const key = ckey(owner, scope, 'state', 'edit/edit');
+      const choice = resolutions?.[key];
+      if (choice) return { resolved: choice === 'theirs' ? t : m, conflicts: [] };
+      return { resolved: m, conflicts: [{ key, owner, target: 'state', kind: 'edit/edit', label: 'state differs (no merge strategy declared)', mine: m, theirs: t, options: ['mine', 'theirs'] }] };
+    };
   }
   if (typeof decl.merge === 'function') {
+    const helpers = {
+      threeWayLog: (a, m, t, owner = 'plugin') => threeWayLog(a, m, t, owner, opts),
+      addWinsSet: (a, m, t, keyFn, owner = 'plugin') => addWinsSet(a, m, t, keyFn, owner, opts),
+      lww: (a, m, t, owner = 'plugin', target = 'blob') => lww(a, m, t, owner, target, opts),
+      stableStringify,
+    };
     return (a, m, t, owner) => {
-      const r = decl.merge({ ancestor: a, mine: m, theirs: t, helpers: { threeWayLog, addWinsSet, lww, stableStringify } }) ?? {};
+      const r = decl.merge({ ancestor: a, mine: m, theirs: t, helpers, resolutions }) ?? {};
       return { resolved: r.resolved, conflicts: (r.conflicts ?? []).map((c) => ({ owner, ...c })) };
     };
   }
   const strat = STRATEGIES[decl.strategy];
-  return (a, m, t, owner) => (strat ? strat(a, m, t, decl, owner) : { resolved: m, conflicts: [] });
+  return (a, m, t, owner) => (strat ? strat(a, m, t, decl, owner, opts) : { resolved: m, conflicts: [] });
 }
 
 /**
@@ -402,14 +479,18 @@ export function resolveMerger(decl) {
  * algorithm both transports run: folder-sync runs it on two files; live-sync runs
  * it continuously.
  *
- * @param {{ancestor: object, mine: object, theirs: object, mergers?: Record<string, object>}} arg
+ * `resolutions` (from the conflict-resolution UI) makes this a pure function of the
+ * user's choices: pass it back in and the surfaced conflicts resolve to a clean
+ * result, deterministically.
+ *
+ * @param {{ancestor: object, mine: object, theirs: object, mergers?: Record<string, object>, resolutions?: object|null}} arg
  * @returns {{log: object[], blobs: Record<string, *>, conflicts: Conflict[]}}
  */
-export function mergeProject({ ancestor, mine, theirs, mergers = {} }) {
+export function mergeProject({ ancestor, mine, theirs, mergers = {}, resolutions = null }) {
   const conflicts = [];
 
   // Tier 1: the core transform op-log (three-way; core owns the tabular class).
-  const logMerge = resolveMerger(mergers.core ?? { strategy: 'three-way' })(
+  const logMerge = resolveMerger(mergers.core ?? { strategy: 'three-way' }, { resolutions, scope: 'log' })(
     ancestor?.log ?? [], mine?.log ?? [], theirs?.log ?? [], 'core',
   );
   conflicts.push(...logMerge.conflicts);
@@ -428,7 +509,7 @@ export function mergeProject({ ancestor, mine, theirs, mergers = {} }) {
     const tv = theirs?.blobs?.[key]?.value;
     if (mv === undefined && tv === undefined) continue;
     if (mv === undefined || tv === undefined) { blobs[key] = { owner, value: mv ?? tv }; continue; } // present one side
-    const r = resolveMerger(mergers[owner])(av, mv, tv, owner);
+    const r = resolveMerger(mergers[owner], { resolutions, scope: key })(av, mv, tv, owner);
     blobs[key] = { owner, value: r.resolved };
     conflicts.push(...r.conflicts);
   }

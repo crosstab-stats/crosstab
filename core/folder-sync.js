@@ -55,14 +55,16 @@ export function manifestsEqual(a, b) {
  * @param {object} mine
  * @param {object|null} theirs
  * @param {Record<string, object>} mergers  from `buildMergers` (see collab-sync)
+ * @param {object|null} [resolutions]  user conflict choices (see the conflict UI);
+ *   pass them back to re-run a merge to a clean result.
  * @returns {{action: 'seed'|'in-sync'|'push'|'merge', manifest: object, conflicts: object[]}}
  */
-export function decideSync(base, mine, theirs, mergers = {}) {
+export function decideSync(base, mine, theirs, mergers = {}, resolutions = null) {
   if (!theirs) return { action: 'seed', manifest: mine, conflicts: [] };
   if (manifestsEqual(theirs, mine)) return { action: 'in-sync', manifest: theirs, conflicts: [] };
   if (base && manifestsEqual(theirs, base)) return { action: 'push', manifest: mine, conflicts: [] };
   const ancestor = base ?? theirs;
-  const { manifest, conflicts } = mergeManifests(ancestor, mine, theirs, mergers);
+  const { manifest, conflicts } = mergeManifests(ancestor, mine, theirs, mergers, resolutions);
   return { action: 'merge', manifest, conflicts };
 }
 
@@ -80,17 +82,27 @@ export function decideSync(base, mine, theirs, mergers = {}) {
  * @param {string} arg.id       project id
  * @param {object} arg.mine     this client's current manifest
  * @param {Record<string, object>} [arg.mergers]
+ * @param {object|null} [arg.resolutions]  user conflict choices — pass on a *second*
+ *   call (after the conflict UI) to write a resolved merge. Absent + unresolved
+ *   conflicts ⇒ nothing is written; the caller resolves then calls again.
  * @param {number} [arg.now]
  * @returns {Promise<{action: string, manifest: object, conflicts: object[]}>}
  */
-export async function syncOnce({ store, id, mine, mergers = {}, now }) {
+export async function syncOnce({ store, id, mine, mergers = {}, resolutions = null, now }) {
   const theirs = await store.readManifest(id);
   const base = await store.readBase(id);
-  const decision = decideSync(base, mine, theirs, mergers);
+  const decision = decideSync(base, mine, theirs, mergers, resolutions);
 
   if (decision.action === 'in-sync') {
     if (!base) await store.writeBase(id, theirs); // adopt the on-disk state as our ancestor
     return decision;
+  }
+
+  // A merge with conflicts and no resolutions yet: don't write a half-decided
+  // manifest — hand the conflicts back so the host can surface them, then call
+  // again with `resolutions` to write the clean result.
+  if (decision.action === 'merge' && decision.conflicts.length && !resolutions) {
+    return { action: 'conflicts', manifest: decision.manifest, conflicts: decision.conflicts };
   }
 
   const stamped = { ...decision.manifest, savedAt: now ?? Date.now() };
