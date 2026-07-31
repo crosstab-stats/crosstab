@@ -20,8 +20,15 @@
  * cheap-metadata-save trick the dataset library uses, one tier up.
  */
 
+import { deriveKey, encryptWithKey, decryptWithKey, isEnveloped, newSalt, DEFAULT_ITERATIONS } from './crypto-envelope.js';
+
 const ROOT = 'projects';
 const CATALOG = 'catalog.json';
+const ENC_META = 'crosstab-encryption.json'; // plaintext salt/verifier for the folder
+const VERIFIER = 'crosstab-folder-v1'; // known token, encrypted, to check a passphrase on unlock
+
+const b64 = (bytes) => btoa(String.fromCharCode(...bytes));
+const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
 export class ProjectStore {
   /** @returns {boolean} Whether OPFS is available. */
@@ -35,12 +42,62 @@ export class ProjectStore {
    * else is already `FileSystemDirectoryHandle`-generic. Null ⇒ OPFS. */
   #injectedRoot = null;
 
+  /** AES-GCM master key for at-rest encryption, or null (plaintext). Set by
+   * {@link ProjectStore#unlock}; never persisted. When set, every data file
+   * (`project.json`, `project.base.json`, Parquet, and the catalog) is written as a
+   * ciphertext envelope and decrypted on read — so a driver / cloud provider that
+   * mirrors the folder only ever sees ciphertext (#143/#144). The salt + a verifier
+   * live plaintext in `crosstab-encryption.json` (a salt isn't secret). */
+  #key = null;
+
   /** Point the store at a picked folder (a OneDrive/Dropbox/local folder the OS
    * sync client mirrors), or null to revert to OPFS. The caller must have re-granted
    * write permission (`requestPermission`) first — the browser won't give silent
    * persistent write to a user folder. */
   useDirectory(handle) {
     this.#injectedRoot = handle ?? null;
+  }
+
+  /** @returns {boolean} Whether at-rest encryption is currently on. */
+  get encrypted() {
+    return this.#key != null;
+  }
+
+  /**
+   * Turn on at-rest encryption with a passphrase. On first use for a folder this
+   * mints + stores a public salt and a verifier; afterwards it checks the passphrase
+   * against that verifier and throws on mismatch (so the user learns immediately,
+   * not on the first corrupt read). The derived key is held in memory only —
+   * **a forgotten passphrase is unrecoverable** (no server, by design).
+   * @param {string} passphrase
+   */
+  async unlock(passphrase) {
+    const root = await this.#root(true);
+    let meta = null;
+    try {
+      meta = JSON.parse(await (await (await root.getFileHandle(ENC_META)).getFile()).text());
+    } catch { /* first time for this folder */ }
+
+    const salt = meta ? unb64(meta.salt) : newSalt();
+    const iterations = meta?.iterations || DEFAULT_ITERATIONS;
+    const key = await deriveKey(passphrase, salt, iterations);
+
+    if (meta?.verifier) {
+      let ok = false;
+      try { ok = new TextDecoder().decode(await decryptWithKey(key, unb64(meta.verifier))) === VERIFIER; } catch { ok = false; }
+      if (!ok) throw new Error('Wrong passphrase for this folder.');
+    } else {
+      const verifier = b64(await encryptWithKey(key, VERIFIER));
+      const fh = await root.getFileHandle(ENC_META, { create: true });
+      const w = await fh.createWritable();
+      try { await w.write(JSON.stringify({ v: 1, salt: b64(salt), iterations, verifier })); } finally { await w.close(); }
+    }
+    this.#key = key;
+  }
+
+  /** Drop the in-memory key (e.g. closing a folder project). */
+  lock() {
+    this.#key = null;
   }
 
   /** @returns {boolean} Whether the store is currently folder-backed (vs OPFS). */
@@ -304,13 +361,27 @@ export class ProjectStore {
   }
 
   async #write(dir, name, data) {
+    const payload = this.#key ? await encryptWithKey(this.#key, data) : data;
     const fh = await dir.getFileHandle(name, { create: true });
     const w = await fh.createWritable();
     try {
-      await w.write(data);
+      await w.write(payload);
     } finally {
       await w.close();
     }
+  }
+
+  /** Read a file's raw bytes, transparently decrypting an encryption envelope when
+   * a key is set. An enveloped file with no key loaded is a clear, actionable error
+   * rather than a garbled parse. Plaintext (legacy / unencrypted) passes through, so
+   * a folder can be read + migrated in place. */
+  async #readDecrypted(dir, name) {
+    const raw = new Uint8Array(await (await (await dir.getFileHandle(name)).getFile()).arrayBuffer());
+    if (isEnveloped(raw)) {
+      if (!this.#key) throw new Error('This project is encrypted — unlock it with its passphrase first.');
+      return decryptWithKey(this.#key, raw);
+    }
+    return raw;
   }
 
   /** Write each dataset's Parquet sources (all datasets, or only those in `only`).
@@ -356,13 +427,11 @@ export class ProjectStore {
   }
 
   async #read(dir, name) {
-    const fh = await dir.getFileHandle(name);
-    return (await fh.getFile()).text();
+    return new TextDecoder().decode(await this.#readDecrypted(dir, name));
   }
 
   async #readBytes(dir, name) {
-    const fh = await dir.getFileHandle(name);
-    return (await fh.getFile()).arrayBuffer();
+    return this.#readDecrypted(dir, name); // Uint8Array (callers wrap as needed)
   }
 }
 
