@@ -67,6 +67,48 @@ export async function createInviteLink({ baseUrl, projectUuid, secret }) {
 }
 
 /**
+ * Ensure a project has a **collab identity** — a stable `collabId` and a
+ * `collabSecret`, minted once and carried in the manifest. This is what makes the
+ * **folder path seamless**: both fields ride the OneDrive sync to the receiving
+ * faculty, so opening the shared folder is itself entry to the signaling room — no
+ * separate invite link needed. The secret's protection equals the folder's (its ACL,
+ * plus at-rest encryption); folder members are already authorized collaborators.
+ *
+ * Pass a manifest/bundle; returns the (possibly newly minted) identity + whether it
+ * changed, so the caller persists it back on save.
+ * @param {{collabId?: string, collabSecret?: string}|null} obj
+ * @returns {{collabId: string, collabSecret: string, minted: boolean}}
+ */
+export function ensureCollabIdentity(obj) {
+  const collabId = obj?.collabId || globalThis.crypto.randomUUID();
+  const collabSecret = obj?.collabSecret || newInviteSecret();
+  return { collabId, collabSecret, minted: !obj?.collabId || !obj?.collabSecret };
+}
+
+/**
+ * The signaling room + secret for a project, derived from its manifest's collab
+ * identity — the folder path's entry point. Both peers holding the folder-synced
+ * manifest compute the **identical** room id + secret, so they meet in the same
+ * encrypted room. Null if the project has no collab identity yet.
+ * @param {{collabId?: string, collabSecret?: string}} manifest
+ * @returns {Promise<{roomId: string, secret: string} | null>}
+ */
+export async function roomFor(manifest) {
+  if (!manifest?.collabId || !manifest?.collabSecret) return null;
+  return { roomId: await deriveRoomId(manifest.collabId), secret: manifest.collabSecret };
+}
+
+/**
+ * A shareable invite link for a project (the pure-live path, when there's no shared
+ * folder to carry the identity). Same room + secret as {@link roomFor}.
+ * @param {{baseUrl: string, manifest: {collabId: string, collabSecret: string}}} arg
+ * @returns {Promise<string>}
+ */
+export function inviteLinkFor({ baseUrl, manifest }) {
+  return createInviteLink({ baseUrl, projectUuid: manifest.collabId, secret: manifest.collabSecret });
+}
+
+/**
  * Parse an invite link's fragment → `{ roomId, secret }`, or null if it isn't one.
  * @param {string} url
  * @returns {{roomId: string, secret: string} | null}

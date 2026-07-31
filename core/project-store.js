@@ -226,6 +226,8 @@ export class ProjectStore {
         activePlugins: Array.isArray(manifest.activePlugins) ? manifest.activePlugins : null,
         workspaces: manifest.workspaces && typeof manifest.workspaces === 'object' ? manifest.workspaces : null,
         output: Array.isArray(manifest.output) ? manifest.output : null,
+        collabId: manifest.collabId ?? null,
+        collabSecret: manifest.collabSecret ?? null,
         datasets,
       },
     };
@@ -432,6 +434,10 @@ export function buildManifest({ name, savedAt, bundle }) {
     activePlugins: Array.isArray(bundle.activePlugins) ? bundle.activePlugins : null,
     workspaces: bundle.workspaces && typeof bundle.workspaces === 'object' ? bundle.workspaces : null,
     output: Array.isArray(bundle.output) ? bundle.output : null,
+    // Collaboration identity (#143): carried in the manifest so it rides folder sync —
+    // both peers derive the same signaling room + secret. Minted by the app on save.
+    collabId: bundle.collabId ?? null,
+    collabSecret: bundle.collabSecret ?? null,
     datasets,
   };
 }
