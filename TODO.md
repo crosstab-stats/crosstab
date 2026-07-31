@@ -494,12 +494,20 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     real `mergeState`), 0 conflicts on disjoint edits, atomic write leaves no `.tmp`,
     base updated to merged; dir handle round-trips IndexedDB as a live handle. Op-id
     persistence path also verified end-to-end through real DuckDB.
+    **Conflict resolution now DONE too** (commit 4c22509): merge is a pure function
+    of user choices — every conflict carries a stable key, and feeding a `resolutions`
+    map (key→mine/theirs/both) back re-runs deterministically to 0 conflicts (threaded
+    through the whole kernel + `mergeManifests` + `syncOnce`, which withholds the write
+    until conflicts are resolved). `core/conflict-ui.js` renders the "keep yours /
+    theirs / both" modal. Resolution even reaches *inside* the caqdas custom merger
+    with no plugin change (resolveMerger pre-binds the ctx into its helpers). 40
+    headless tests; VERIFIED IN-BROWSER (2 conflicts → form → flip → re-merge → clean).
     *Still to wire (next — the "make it clickable" layer, needs MANUAL picker testing;
     `showDirectoryPicker` is an OS dialog CDP can't drive):* the File-menu "Open
     folder…" command; **app integration in `project-sync.js`** — produce "mine"
     manifest from the live app (extract a bundle→manifest helper) + apply a merged
-    manifest back (`loadBundle`); the poll/`readManifest` change-detector (backoff
-    when hidden); and the **host conflict-resolution UI**. See [[collab-merge-kernel]].
+    manifest back (`loadBundle`) + wire syncOnce→showConflictDialog→syncOnce(resolutions);
+    the poll/`readManifest` change-detector (backoff when hidden). See [[collab-merge-kernel]].
     Original plan below.
     `core/project-store.js` is *already* written entirely against
     `FileSystemDirectoryHandle` (`getDirectoryHandle`/`getFileHandle`/
