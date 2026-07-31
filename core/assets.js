@@ -41,6 +41,10 @@ const CDN = Object.freeze({
   duckdbUrl: 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev56.0/+esm',
   arrowUrl: 'https://cdn.jsdelivr.net/npm/apache-arrow@17.0.0/+esm',
   hyparquetWriterUrl: 'https://cdn.jsdelivr.net/npm/hyparquet-writer@0.16.1/+esm',
+  // Trystero (MQTT strategy) — serverless WebRTC rendezvous for live collaboration
+  // (#143). Signaling rides public MQTT brokers (nothing we host); it then drops to a
+  // direct WebRTC data channel. Lazy-loaded only when live collab is used. Pinned.
+  trysteroUrl: 'https://cdn.jsdelivr.net/npm/trystero@0.21.5/mqtt/+esm',
   // null ⇒ DuckDBManager uses duckdb.getJsDelivrBundles() (the jsDelivr URLs).
   duckdbBundles: null,
 });
@@ -58,6 +62,9 @@ const LOCAL = Object.freeze({
   duckdbUrl: './vendor/duckdb/dist/duckdb-browser.mjs',
   arrowUrl: './vendor/arrow/arrow.mjs',
   hyparquetWriterUrl: './vendor/hyparquet-writer/hyparquet-writer.mjs',
+  // Air-gap note: live P2P collaboration needs a reachable MQTT broker + peers, so
+  // it's inherently non-offline; this mirror only keeps the import resolvable.
+  trysteroUrl: './vendor/trystero/mqtt.mjs',
   // A local DuckDB bundle (mvp + eh builds); selectBundle() picks per browser
   // features from whatever we provide. Returned as a function so the worker/wasm
   // URLs are produced lazily (and stay relative to the document).
