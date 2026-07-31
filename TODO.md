@@ -502,13 +502,23 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     theirs / both" modal. Resolution even reaches *inside* the caqdas custom merger
     with no plugin change (resolveMerger pre-binds the ctx into its helpers). 40
     headless tests; VERIFIED IN-BROWSER (2 conflicts → form → flip → re-merge → clean).
-    *Still to wire (next — the "make it clickable" layer, needs MANUAL picker testing;
-    `showDirectoryPicker` is an OS dialog CDP can't drive):* the File-menu "Open
-    folder…" command; **app integration in `project-sync.js`** — produce "mine"
-    manifest from the live app (extract a bundle→manifest helper) + apply a merged
-    manifest back (`loadBundle`) + wire syncOnce→showConflictDialog→syncOnce(resolutions);
-    the poll/`readManifest` change-detector (backoff when hidden). See [[collab-merge-kernel]].
-    Original plan below.
+    **The full app sync flow is now DONE too** (commit feaf9c1): `syncFolderProject`
+    — land my Parquet (`writeSourcesOnly`), build my manifest (`buildManifest`,
+    extracted from `save()` so save & sync never drift), read peer+base, merge,
+    resolve via a callback, write merged+base atomically, reload only when a peer
+    contributed. 44 headless tests; VERIFIED IN-BROWSER against real OPFS (peer+I
+    edit income → conflict → resolve → merged reloads). So the **entire reusable
+    engine** — kernel → clients → project merge → folder sync → conflict UI → app
+    flow — is built, tested, and in-browser-verified.
+    *Genuinely all that's left is the "clickable" layer, and ALL of it needs a MANUAL
+    folder pick to verify (`showDirectoryPicker` is an OS dialog CDP can't drive) — so
+    it's a LOCAL-session job:* (1) the File-menu **"Open folder…"** button
+    (`showDirectoryPicker` → `useDirectory` + `saveFolderHandle` → save/load there);
+    (2) **hook `project-sync.js`** to route folder-mode saves through `syncFolderProject`
+    (bundle from `#snapshot`, `resolveConflicts` = `showConflictDialog`, `applyMerged`
+    = re-open) instead of blind `store.save`; (3) a **poll loop** (`readManifest` mtime,
+    backoff when hidden) that syncs on peer change; (4) **IndexedDB handle restore** on
+    boot (reconnect via `ensureReadWrite`). See [[collab-merge-kernel]]. Original plan below.
     `core/project-store.js` is *already* written entirely against
     `FileSystemDirectoryHandle` (`getDirectoryHandle`/`getFileHandle`/
     `createWritable`/`getFile`); the **only** OPFS-specific line is `#root()` at
