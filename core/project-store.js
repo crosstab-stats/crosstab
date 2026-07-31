@@ -265,6 +265,31 @@ export class ProjectStore {
     await this.#write(dir, 'project.base.json', JSON.stringify(manifest));
   }
 
+  /**
+   * Write a **merged** manifest straight to `project.json` (folder-sync, #143) —
+   * the result of a three-way merge, whose dataset `file` refs point at Parquet the
+   * OS sync client has already mirrored from both sides (so no bytes to write here).
+   * Written atomically (temp + rename) so a peer polling `project.json` mid-write
+   * never reads a torn file. Refreshes the catalog summary so `list()` stays in step.
+   * @param {string} id
+   * @param {object} manifest
+   */
+  async writeManifest(id, manifest) {
+    const dir = await (await this.#root(true)).getDirectoryHandle(id, { create: true });
+    await this.#writeAtomic(dir, 'project.json', JSON.stringify(manifest));
+    const release = await this.#acquire();
+    try {
+      const cat = await this.#readCatalog();
+      const summary = { id, name: manifest.name, savedAt: manifest.savedAt, datasetCount: (manifest.datasets ?? []).length, activePlugins: manifest.activePlugins ?? null };
+      const idx = cat.entries.findIndex((e) => e.id === id);
+      if (idx >= 0) cat.entries[idx] = summary;
+      else cat.entries.push(summary);
+      await this.#write(await this.#root(true), CATALOG, JSON.stringify(cat));
+    } finally {
+      release();
+    }
+  }
+
   /** Rename a project (updates its manifest + the catalog). */
   async rename(id, name) {
     const root = await this.#root(true);
@@ -325,6 +350,21 @@ export class ProjectStore {
       await w.write(data);
     } finally {
       await w.close();
+    }
+  }
+
+  /** Write then atomically swap into place, so a peer polling the file over a sync
+   * folder can't read a half-written manifest (#143). Uses `FileSystemFileHandle
+   * .move()` (a same-dir rename) where available; falls back to a direct write. */
+  async #writeAtomic(dir, name, data) {
+    const tmp = `${name}.tmp`;
+    await this.#write(dir, tmp, data);
+    const tfh = await dir.getFileHandle(tmp);
+    if (typeof tfh.move === 'function') {
+      await tfh.move(name); // atomic rename within the directory (overwrites)
+    } else {
+      await this.#write(dir, name, data);
+      try { await dir.removeEntry(tmp); } catch { /* best effort */ }
     }
   }
 
