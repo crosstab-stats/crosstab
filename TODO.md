@@ -406,11 +406,19 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     declares `manifest.merge = { strategy }` or exports a `merge()` fn; core is just
     the owner of the tabular class (so its three-way merge isn't a kernel exception).
     The #145/#146 integrity model contains an untrusted merger to its own blob, which
-    is what makes delegating merge *meaning* safe. *Still open:* stored common-
+    is what makes delegating merge *meaning* safe.
+    **CAQDAS + spatial builtins now declare their merge** (commit be8200a): caqdas
+    exports a custom `mergeState` (composite blob — `merge:{via:'mergeState'}`,
+    codes/segments add-wins + config LWW; the "two coders on the same transcripts"
+    Dedoose case is a passing test); spatial declares `merge:{strategy:'lww'}` per
+    slot (add-wins slot set + LWW bytes). 19 headless tests, all green, incl. the
+    real caqdas merger imported from the plugin. *Still open:* stored common-
     ancestor marker (a transport concern — the merge fn takes ancestor as an arg
-    today); wiring `mergeProject` into a real transport; declaring `manifest.merge`
-    on the CAQDAS + spatial builtins; dependency-aware op ordering (MVP appends
-    mine-adds then theirs-adds); the host conflict-resolution UI. See [[collab-merge-kernel]].
+    today); wiring `mergeProject` into a real transport (incl. the tiny glue that
+    resolves a manifest `merge.via` string → the module's exported fn); dependency-
+    aware op ordering (MVP appends mine-adds then theirs-adds); the host conflict-
+    resolution UI; **in-browser check of the op-id persistence path** (syntax-checked
+    only — DuckDB path can't run headlessly). See [[collab-merge-kernel]].
     The transform log
     (`core/data-store.js`, op types at ~L149–153: `load/append/join/setVariable/
     setCell/computeVar/recodeVar`) is a **dependent pipeline**, not a bag of
