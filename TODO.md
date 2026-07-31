@@ -735,6 +735,15 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     - *Residual, stated honestly (no theatre):* even fully encrypted, the operator still
       sees topic existence, subscriber count, timing, and message sizes — traffic
       analysis that encryption can't hide.
+  - **[~] Base-data GAP-FILL BUILT (headless) — commit 89e99a2.** `core/gap-fill.js`:
+    fetch a Parquet source a peer lacks over the channel — identity = the manifest source
+    **op id** (no schema change / no per-file hash), integrity = transfer-time SHA-256
+    verified before store, chunked (256 KiB) for multi-GB, consent/size-gated via
+    `allowSend`. `SourceExchange` (requestMissing → need → chunk+hash+send → reassemble+
+    verify+store) rides the live channel (`t:'need'/'src-chunk'`; LiveDoc ignores). 75
+    tests incl. full 2-peer round-trip, consent-decline, integrity-reject. Byte read/store
+    are ProjectStore callbacks; real transfer over Trystero is part of the 2-machine test.
+    The *invite* half + the sneakernet index UI below remain. Original design follows.
   - **Onboarding + base-data sharing — the invite carries the key; an index fills the
     gaps.** Two questions the op-log foundation quietly skips: how the second user gets
     *in*, and how they get the *base bytes*. The log's first op is `load`, referencing an
