@@ -393,7 +393,25 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       once" — are really *one* build wearing two hats. **The load-bearing piece is
       neither OneDrive nor WebRTC; it's making the op-log mergeable.** Live-sync and
       folder-sync are just two *transports* over that foundation.
-  - **The foundation — a mergeable op-log (the real project).** The transform log
+  - **The foundation — a mergeable op-log (the real project). [~] STARTED** —
+    `core/merge.js` + op identity in `core/data-store.js` shipped on branch
+    `feat/collab-merge-kernel`, 13 headless tests (`npm test`). Done so far:
+    (1) every `#log` op carries a **stable id** (deterministic content+index id for
+    pre-collab legacy saves so they stay mergeable; random for new ops), persisted
+    in export/restore, undo/redo-safe; (2) the pure merge kernel — `threeWayLog`
+    (core tabular class), `addWinsSet` (CAQDAS codebook), `lww` (spatial slot bytes),
+    and `mergeProject()` which **dispatches each state class to its owner's declared
+    merger** and aggregates conflicts across tiers. **Key architecture decision (from
+    design chat): the engine coordinates, the *owner* defines "merge"** — a plugin
+    declares `manifest.merge = { strategy }` or exports a `merge()` fn; core is just
+    the owner of the tabular class (so its three-way merge isn't a kernel exception).
+    The #145/#146 integrity model contains an untrusted merger to its own blob, which
+    is what makes delegating merge *meaning* safe. *Still open:* stored common-
+    ancestor marker (a transport concern — the merge fn takes ancestor as an arg
+    today); wiring `mergeProject` into a real transport; declaring `manifest.merge`
+    on the CAQDAS + spatial builtins; dependency-aware op ordering (MVP appends
+    mine-adds then theirs-adds); the host conflict-resolution UI. See [[collab-merge-kernel]].
+    The transform log
     (`core/data-store.js`, op types at ~L149–153: `load/append/join/setVariable/
     setCell/computeVar/recodeVar`) is a **dependent pipeline**, not a bag of
     commuting changes — each op folds onto the accumulated result of the prior ones
