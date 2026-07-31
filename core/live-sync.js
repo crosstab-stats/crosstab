@@ -27,6 +27,7 @@
 
 import { getAssets } from './assets.js';
 import { LiveDoc } from './live-protocol.js';
+import { PresenceRoom } from './presence.js';
 
 /** Public STUN for address discovery (not a relay; nothing we host). The user can
  * override or extend via {@link setTurnConfig}. */
@@ -171,4 +172,23 @@ export function attachLiveDoc(session, docOpts) {
   session.onOps((m, peerId) => doc.receive(m, peerId));
   session.onPeerLeave((peerId) => doc.peerLeft(peerId));
   return doc;
+}
+
+/**
+ * Wire a {@link module:core/presence~PresenceRoom} onto a {@link LiveSession}: room
+ * join/leave and beacon messages feed the roster, and this peer announces itself so
+ * others see it. Returns the PresenceRoom (read `.others` / `.hasOthers`, or use
+ * `onChange`). Call after `session.join()`.
+ *
+ * @param {LiveSession} session
+ * @param {{ self?: object, onChange?: (roster: object[]) => void }} opts
+ * @returns {PresenceRoom}
+ */
+export function attachPresence(session, { self = {}, onChange } = {}) {
+  const room = new PresenceRoom({ self, onChange });
+  session.onPeerJoin((peerId) => room.peerJoined(peerId));
+  session.onPeerLeave((peerId) => room.peerLeft(peerId));
+  session.onBeacon((info, peerId) => room.beacon(peerId, info));
+  session.announce(room.selfBeacon); // let everyone already here learn who we are
+  return room;
 }
