@@ -472,8 +472,23 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       and record a **common ancestor** (last op both sides agreed on). Then folder =
       three-way merge of two divergent files; live = the *same* three-way merge run
       continuously. Same algorithm, different clock.
-  - **Async transport — folder-backed projects (FSA, small once the foundation
-    exists).** `core/project-store.js` is *already* written entirely against
+  - **Async transport — folder-backed projects (FSA). [~] FOUNDATION STARTED**
+    (branch `feat/collab-merge-kernel`, commit 7e8cdb8). Done: the FSA **seam** —
+    `ProjectStore.useDirectory(handle)`/`folderBacked`, `#root()` now parameterized
+    around an injected picked-folder handle (falls back to OPFS); op `id` threaded
+    through source save/load; `readManifest()` (cheap stat+parse for change-detection
+    / reading "theirs"), `readBase()`/`writeBase()` (the `project.base.json`
+    common-ancestor snapshot). Plus **`core/collab-sync.js`** — the project-level
+    three-way merge (`mergeManifests`): per-dataset op-log three-way (add-wins the
+    dataset *set* — never drop data), owner-dispatched workspace-leaf merge,
+    `buildMergers` resolving each plugin's `merge` (strategy or `via`→exported fn),
+    one aggregated dataset-tagged conflict list. 9 headless tests (28 total).
+    *Still to wire (browser-only, next):* the `showDirectoryPicker()` call + the
+    IndexedDB handle-persist + `requestPermission` re-grant; the poll/`readManifest`
+    change-detector; the sync orchestration (read theirs+base+mine → `mergeManifests`
+    → write + `writeBase`); atomic (temp+rename) writes for torn-read safety; and the
+    host conflict-resolution UI. See [[collab-merge-kernel]]. Original plan below.
+    `core/project-store.js` is *already* written entirely against
     `FileSystemDirectoryHandle` (`getDirectoryHandle`/`getFileHandle`/
     `createWritable`/`getFile`); the **only** OPFS-specific line is `#root()` at
     `project-store.js:244` (`navigator.storage.getDirectory()`).
