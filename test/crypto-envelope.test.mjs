@@ -4,7 +4,8 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { deriveKey, encryptWithKey, decryptWithKey, decryptText, isEnveloped, newSalt, MAGIC } from '../core/crypto-envelope.js';
+import { deriveKey, encryptWithKey, decryptWithKey, decryptText, isEnveloped, newSalt, MAGIC,
+  encryptSelfContained, decryptSelfContained, isSelfContained } from '../core/crypto-envelope.js';
 
 const te = new TextEncoder();
 
@@ -62,4 +63,26 @@ test('isEnveloped distinguishes ciphertext from plaintext JSON / Parquet', async
   assert.ok(!isEnveloped(te.encode('{"name":"P"}')));       // JSON manifest
   assert.ok(!isEnveloped(te.encode('PAR1')));                // Parquet magic
   assert.ok(!isEnveloped(new Uint8Array([MAGIC[0], MAGIC[1]]))); // too short
+});
+
+// --- self-contained (export) envelope --------------------------------------
+
+test('self-contained envelope round-trips from passphrase alone (no sidecar)', async () => {
+  const env = await encryptSelfContained('export-pw', 'sensitive export bytes');
+  assert.ok(isSelfContained(env));
+  assert.ok(!isEnveloped(env));                              // distinct from the keyed envelope
+  assert.equal(new TextDecoder().decode(await decryptSelfContained('export-pw', env)), 'sensitive export bytes');
+});
+
+test('self-contained: wrong passphrase fails; each export has a unique salt/iv', async () => {
+  const a = await encryptSelfContained('pw', 'x');
+  const b = await encryptSelfContained('pw', 'x');
+  assert.notDeepEqual([...a], [...b]);                       // fresh salt + iv per export
+  await assert.rejects(() => decryptSelfContained('nope', a), /wrong passphrase or corrupted/);
+});
+
+test('self-contained handles ArrayBuffer/Uint8Array payloads (Parquet/xlsx exports)', async () => {
+  const bytes = new Uint8Array([80, 65, 82, 49, 0, 255, 7]);
+  const env = await encryptSelfContained('pw', bytes.buffer);
+  assert.deepEqual([...(await decryptSelfContained('pw', env))], [...bytes]);
 });

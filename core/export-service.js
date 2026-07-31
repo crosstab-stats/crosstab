@@ -31,6 +31,8 @@
  */
 
 import { showFormatPicker, showSaveAsDialog, groupFor, byGroupThenOrder } from './format-picker.js';
+import { shouldEncrypt, passphraseFor } from './at-rest.js';
+import { encryptSelfContained } from './crypto-envelope.js';
 
 /**
  * @typedef {Object} ExporterSpec
@@ -206,16 +208,38 @@ export class ExportService {
     // null = the plugin aborted (and reported its own error).
     if (!payload || payload.data == null) return;
 
+    // Encrypt-at-rest for files LEAVING the browser (default-on / opt-out, #144).
+    // Engages only when a passphrase prompt is registered AND the user supplies one;
+    // otherwise the export is plaintext (unchanged). The self-contained envelope
+    // carries its own salt so the recipient needs only the passphrase.
+    let outName = filename;
+    let mime = payload.mimeType || 'application/octet-stream';
+    let data = payload.data;
+    try {
+      if (shouldEncrypt('export')) {
+        const pass = await passphraseFor('export', { filename });
+        if (pass) {
+          data = await encryptSelfContained(pass, data);
+          outName = `${filename}.enc`;
+          mime = 'application/octet-stream';
+        }
+      }
+    } catch (err) {
+      this.#results.appendError(`Export encryption failed: ${err.message}`);
+      console.error('[export]', err);
+      return;
+    }
+
     try {
       // The user's chosen name wins over whatever the plugin suggested (codecs hand
       // back a generic 'data.<ext>'); the plugin still supplies the MIME type.
-      downloadFile(filename, payload.mimeType || 'application/octet-stream', payload.data);
+      downloadFile(outName, mime, data);
     } catch (err) {
       this.#results.appendError(`Export failed: ${err.message}`);
       console.error('[export]', err);
       return;
     }
-    this.#bus.emit('export:finished', { exporter: id, filename });
+    this.#bus.emit('export:finished', { exporter: id, filename: outName });
   }
 
   /**
