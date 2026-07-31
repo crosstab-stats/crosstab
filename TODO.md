@@ -642,6 +642,16 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     op-log), and the presence/invite UI. *Verification boundary:* the actual peer
     CONNECTION is a 2-machine/2-network + reachable-broker test (Trystero filters
     same-page selfId → un-testable in one tab), user-gated like the OS picker.
+    **[~] CONVERGENCE PROTOCOL + PRESENCE now BUILT too** (commits 8202ebc, 0eb4065):
+    `core/live-protocol.js` `LiveDoc` runs the same three-way merge continuously over
+    the channel — commutativity solved by canonicalising operand order by peer id (no
+    kernel change); late-join = same `state` message (empty joiner add-wins to full);
+    conflicts SHARED via a `resolve` message so peers don't re-surface them; full-
+    manifest exchange sidesteps per-op gap detection. `core/presence.js` `PresenceRoom`
+    = pure "who's here" roster. Glue: `attachLiveDoc` / `attachPresence`. 69 headless
+    tests + in-browser stack-load/run verified. *Still to build:* base-data gap-fill
+    (Parquet a peer lacks — detection headless, transfer channel-gated) + the UIs +
+    the real 2-machine connection test. Editing SHARED data needs no gap-fill.
     The serverless-handshake part is already solved and battle-tested in *sortie*
     (asteroids clone, https://lograh.github.io/sortie-game): **Trystero (MQTT
     strategy)** does signaling via public MQTT brokers (EMQX/HiveMQ) — nothing we
