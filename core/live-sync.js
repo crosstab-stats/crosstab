@@ -28,6 +28,7 @@
 import { getAssets } from './assets.js';
 import { LiveDoc } from './live-protocol.js';
 import { PresenceRoom } from './presence.js';
+import { debug } from './debug.js';
 
 /** Public STUN for address discovery (not a relay; nothing we host). The user can
  * override or extend via {@link setTurnConfig}. */
@@ -119,19 +120,21 @@ export class LiveSession {
       this.#opts.roomId,
     );
 
+    debug('live', 'joined room', { selfId: this.#selfId, room: this.#opts.roomId });
     const [sendOps, getOps] = this.#room.makeAction('ops');
     const [sendBeacon, getBeacon] = this.#room.makeAction('beacon');
     this.#sendOps = sendOps;
     this.#sendBeacon = sendBeacon;
-    getOps((data, peerId) => this.#emit('ops', data, peerId));
-    getBeacon((data, peerId) => this.#emit('beacon', data, peerId));
+    getOps((data, peerId) => { debug('live', '← ops', data?.t, 'from', peerId); this.#emit('ops', data, peerId); });
+    getBeacon((data, peerId) => { debug('live', '← beacon', 'from', peerId, data?.initials); this.#emit('beacon', data, peerId); });
 
     this.#room.onPeerJoin((peerId) => {
+      debug('live', 'peerJoin', peerId);
       this.#emit('peerJoin', peerId);
       // Greet a newcomer with who we are (presence).
       if (this.#opts.self) this.#sendBeacon({ ...this.#opts.self, since: this.#opts.self.since }, peerId);
     });
-    this.#room.onPeerLeave((peerId) => this.#emit('peerLeave', peerId));
+    this.#room.onPeerLeave((peerId) => { debug('live', 'peerLeave', peerId); this.#emit('peerLeave', peerId); });
   }
 
   onPeerJoin(cb) { this.#handlers.peerJoin.push(cb); return this; }
@@ -142,9 +145,9 @@ export class LiveSession {
   onBeacon(cb) { this.#handlers.beacon.push(cb); return this; }
 
   /** Send op-log data to all peers (or one, if `peerId` given). */
-  sendOps(data, peerId) { this.#sendOps?.(data, peerId); }
+  sendOps(data, peerId) { debug('live', '→ ops', data?.t, peerId || 'all', 'peers=', this.peers.length); this.#sendOps?.(data, peerId); }
   /** Broadcast this peer's presence beacon. */
-  announce(beacon) { this.#sendBeacon?.(beacon); }
+  announce(beacon) { debug('live', '→ beacon', beacon?.initials); this.#sendBeacon?.(beacon); }
 
   /** This peer's stable Trystero id (available after {@link join}) — LiveDoc uses it
    * for canonical operand ordering so both peers converge to byte-identical state. */

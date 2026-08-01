@@ -36,6 +36,7 @@
 
 import { mergeManifests } from './collab-sync.js';
 import { manifestsEqual } from './folder-sync.js';
+import { debug } from './debug.js';
 
 /**
  * A live, convergent view of one project shared over a channel.
@@ -79,12 +80,14 @@ export class LiveDoc {
 
   /** Announce presence + publish current state (call once on join). */
   hello() {
+    debug('live', 'doc.hello', this.#selfId);
     this.#send({ t: 'hello', peerId: this.#selfId });
     this.#publish();
   }
 
   /** A local edit changed the project — publish it and re-converge. */
   localUpdate(manifest) {
+    debug('live', 'doc.localUpdate');
     this.#mine = manifest;
     this.#publish();
   }
@@ -92,6 +95,7 @@ export class LiveDoc {
   /** Feed an incoming protocol message (from peer `from`, e.g. Trystero peerId). */
   receive(msg, from) {
     if (!msg) return;
+    if (msg.t === 'hello' || msg.t === 'state' || msg.t === 'resolve') debug('live', 'doc.receive', msg.t, 'from', from, 'knownPeers=', this.#peers.size);
     if (msg.t === 'hello') {
       this.#publish(); // greet the newcomer with our state
       return;
@@ -135,12 +139,14 @@ export class LiveDoc {
       const lower = iAmLower ? this.#mine : theirs;
       const higher = iAmLower ? theirs : this.#mine;
       const { manifest: merged, conflicts } = mergeManifests(this.#base, lower, higher, this.#mergers, this.#resolutions);
+      const changed = !manifestsEqual(merged, this.#mine);
+      debug('live', 'converge', { peer: pid, iAmLower, conflicts: conflicts.length, changed });
 
       if (conflicts.length && this.#onConflicts) {
         this.#onConflicts(conflicts); // hold until resolve() supplies choices
         continue;
       }
-      if (!manifestsEqual(merged, this.#mine)) {
+      if (changed) {
         this.#mine = merged;
         this.#onChange?.(merged);
         this.#publish(); // let peers converge onto the merged result

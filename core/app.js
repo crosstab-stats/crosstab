@@ -900,6 +900,7 @@ export async function boot(mounts) {
         offerBtn.classList.remove('is-live');
         offerBtn.title = 'Start live co-authoring — your edits and theirs sync in real time.';
       }
+      debug('live', 'render', { roster: roster.length, live: presence.live, co: projects.coauthoring, offerHidden: offerBtn.hidden });
     };
     // Defensive: never show yourself as a peer (drop any roster entry with your own
     // authorId — a self-echo from the relay). Real peers have distinct authorIds.
@@ -945,6 +946,7 @@ export async function boot(mounts) {
     });
 
     offerBtn.addEventListener('click', async () => {
+      debug('live', 'offer CLICK', { co: projects.coauthoring, live: presence.live, hasSession: !!presence.session, roster: roster.length });
       offerBtn.disabled = true;
       try {
         if (projects.coauthoring) projects.stopCoauthoring();

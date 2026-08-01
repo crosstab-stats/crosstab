@@ -19,6 +19,7 @@ import { DATASETS_CHANGED } from './dataset-manager.js';
 import { ProjectStore, FOLDER_PROJECT_ID, buildManifest } from './project-store.js';
 import { attachLiveDoc } from './live-sync.js';
 import { SourceExchange } from './gap-fill.js';
+import { debug } from './debug.js';
 import { rememberFolder, listFolders, forgetFolder, ensureReadWrite } from './folder-handle.js';
 import { passphraseFor, shouldEncrypt, PASSPHRASE_ABORT } from './at-rest.js';
 import { syncFolderProject, manifestsEqual } from './folder-sync.js';
@@ -1155,6 +1156,7 @@ export class ProjectSync {
    * @param {import('./live-sync.js').LiveSession} session
    */
   async startCoauthoring(session) {
+    debug('live', 'startCoauthoring', { has: !!this.#liveDoc, selfId: session?.selfId, peers: session?.peers?.length });
     if (this.#liveDoc || !session) return;
     const manifest = await this.#currentManifest();
     this.#liveSession = session;
@@ -1203,6 +1205,7 @@ export class ProjectSync {
 
   /** Stop co-authoring (the presence layer owns leaving the room). */
   stopCoauthoring() {
+    debug('live', 'stopCoauthoring', { had: !!this.#liveDoc });
     if (this.#livePublishTimer) { clearTimeout(this.#livePublishTimer); this.#livePublishTimer = null; }
     this.#liveDoc = null;
     this.#liveSession = null;
@@ -1235,6 +1238,7 @@ export class ProjectSync {
    * structure is unchanged (the common coding-only case), applying just the blobs.
    */
   async #applyLiveManifest(manifest) {
+    debug('live', 'applyMerged', { datasets: (manifest?.datasets || []).length });
     this.#loading = true; // suppress autosave + echo-publish during apply
     try {
       const mine = await this.#snapshot(true);
