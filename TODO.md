@@ -853,6 +853,45 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     reuses the presence room as its handshake, the invite link as its key distribution, and
     the index/gap-fill for base-data sharing.
 
+- [~] **Collaborator identity, authorship & memos (#148).** Who did what — the human
+      layer on top of the merge kernel (#143). Driven by qualitative practice: **inter-
+      coder reliability** (Cohen's κ / Krippendorff's α, coder-vs-coder comparison, bias/
+      drift) is a first-class qual method and is *impossible without per-coder attribution*
+      — the Dedoose-parity gap. Decided with the user (chat rejected as out-of-scope side-
+      conversation; comments reframed as **memos/annotations**, a named qual technique —
+      grounded-theory memoing + reflexivity + audit trail — anchored, persistent, part of
+      the record, and useful SOLO not just in collab). Identity is **self-asserted** (no
+      auth, serverless) → attribution is advisory, not forensic; κ needs consistent labels,
+      not verified ones. Ties: [[collab-merge-kernel]] op identity, [[first-class-plugin-data]]
+      (a memo is exactly the first-class attachment that's currently second-class), the
+      "plugins add actions to the log" item, [[qualitative-first-class]].
+  - [ ] **1. User identity profile (name / initials / colour).** Per-USER, per-device
+    (localStorage) — travels across all their projects, NOT per-project. A stable minted
+    `authorId` so attribution survives a display-name change; initials auto-derived from the
+    name but editable; a CB-safe colour for avatars. Small editor dialog. Distinct from the
+    project-level `collabId`/`collabSecret`. **BUILDING NOW.**
+  - [ ] **2. Authorship stamp on codes / ops.** Snapshot `{authorId, initials, name}` into
+    each code-application / log op the user creates (snapshot, so it survives a later
+    rename and other peers see it without the author's live profile). The prerequisite for
+    step 3. **BUILDING NOW.**
+  - [ ] **3. Memos / annotations (anchored comments).** Word/Docs-style margin comments,
+    but anchored + persistent + part of the analytic record. **Open decision: the anchoring
+    model** — start with the highest-value anchor (a coded segment / a code) and generalise
+    to cells / variables / analysis outputs later; resist a speculative "comment on
+    anything" engine. Author-stamped (needs step 1+2 first). Merge = add-wins set keyed by
+    memo id (like the codebook); threads = comment + replies, resolve/unresolve. **STARTING
+    after 1+2.**
+  - [ ] **4. Inter-coder reliability analysis (κ / α).** The payoff. Consumes the
+    per-coder attribution from steps 2–3 to compute agreement + surface disagreements.
+    Later; identity + authorship + memos all feed it.
+  - [ ] **5. Presence chips in the top bar.** Live editors shown by initials/colour. Cheap
+    add-on, but coupled to **live P2P** (`core/presence.js` broadcasts peers) — lands WITH
+    the live co-authoring chunk, not before. The self-chip built in step 1 is its seed.
+  - [ ] **~~In-project chat~~ — DEFERRED / maybe never.** Disproportionate scope
+    (persistence, history, retention, notifications) for uncertain value when teams already
+    have Slack/Teams; and it's the *unanchored* opposite of a memo. If ever, rescope to
+    ephemeral live-session-only messages, decided on its own. (Talked through with the user.)
+
 - [~] **Encryption at rest — opt-in for local storage, opt-out for exports (#144).**
       **CRYPTO KERNEL + FOLDER AT-REST DONE** (commit 341879e): `core/crypto-envelope.js`
       (PBKDF2-HMAC-SHA256 → AES-256-GCM, native WebCrypto — no vendored lib; master key
