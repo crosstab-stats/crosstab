@@ -156,14 +156,14 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 .caqdas__segrm:hover { background: #fbeaea; }
 .caqdas__segmemo { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; padding: 6px 8px; border: 1px solid #ccd2d8; border-radius: 6px; resize: vertical; margin: 0 0 6px; }
 /* memo/annotation thread (#148) */
-.caqdas__thread { display: flex; flex-direction: column; gap: 6px; margin: 0 0 8px; min-width: 240px; }
-.caqdas__notes { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow: auto; }
+.caqdas__thread { display: flex; flex-direction: column; gap: 6px; margin: 0 0 8px; min-width: 0; }
+.caqdas__notes { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto; overflow-x: hidden; }
 .caqdas__notesempty { font-size: 12px; color: #99a1ab; font-style: italic; }
-.caqdas__note { background: #f6f8fa; border: 1px solid #e3e8ee; border-radius: 6px; padding: 5px 7px; }
+.caqdas__note { background: #f6f8fa; border: 1px solid #e3e8ee; border-radius: 6px; padding: 5px 7px; min-width: 0; }
 .caqdas__note--legacy { background: #fbfaf3; }
-.caqdas__noterow { display: flex; align-items: center; gap: 6px; margin: 0 0 3px; }
+.caqdas__noterow { display: flex; align-items: center; gap: 6px; margin: 0 0 3px; min-width: 0; }
 .caqdas__notechip { flex: none; width: 18px; height: 18px; border-radius: 50%; color: #fff; font-size: 9px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
-.caqdas__notewho { font-size: 11px; font-weight: 600; color: #41505e; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.caqdas__notewho { font-size: 11px; font-weight: 600; color: #41505e; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .caqdas__notemeta { font-size: 10.5px; color: #9aa3ab; font-style: italic; margin: 0 0 2px; }
 .caqdas__notedel { flex: none; border: 0; background: none; color: #b04a4a; cursor: pointer; font-size: 11px; padding: 0 2px; }
 .caqdas__notebody { font-size: 12px; color: #2c3742; white-space: pre-wrap; word-break: break-word; }
