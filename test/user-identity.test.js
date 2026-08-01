@@ -58,6 +58,17 @@ test('authorId survives a display-name change (attribution is stable)', () => {
   assert.equal(renamed.initials, 'JS');
 });
 
+test('autoLive setting round-trips and defaults off', () => {
+  assert.equal(getIdentity().autoLive, false);
+  const on = setIdentity({ name: 'Jane', autoLive: true });
+  assert.equal(on.autoLive, true);
+  assert.equal(getIdentity().autoLive, true);
+  // a later unrelated edit preserves it
+  const renamed = setIdentity({ name: 'Jane Q.' });
+  assert.equal(renamed.autoLive, true);
+  assert.equal(setIdentity({ autoLive: false }).autoLive, false);
+});
+
 test('currentAuthor is a compact snapshot with authorId always present', () => {
   setIdentity({ name: 'Ada Lovelace', color: '#009e73' });
   const a = currentAuthor();

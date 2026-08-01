@@ -19,7 +19,7 @@ import { UiService } from './ui-service.js';
 import { ImportService } from './import-service.js';
 import { ExportService } from './export-service.js';
 import { installPassphraseUI } from './passphrase-ui.js';
-import { installIdentityChip, getIdentity } from './user-identity.js';
+import { installIdentityChip, getIdentity, onIdentityChange } from './user-identity.js';
 import { LivePresence } from './live-presence.js';
 import { OutputExportService } from './output-export.js';
 import { ComputeRecode } from './compute-recode.js';
@@ -876,24 +876,37 @@ export async function boot(mounts) {
       goLiveBtn.classList.toggle('is-live', presence.live);
       goLiveBtn.title = presence.live
         ? 'You’re sharing presence in this project’s room — click to stop'
-        : 'Show who else is editing (joins this shared project’s live room)';
+        : 'Show who else is editing (joins this project’s live room)';
+    };
+
+    // Join the current project's room, broadcasting this user's identity beacon.
+    const startLive = async () => {
+      const room = await projects.activeRoom();
+      if (!room) return false; // not saved yet → no room
+      const id = getIdentity();
+      await presence.start({
+        roomId: room.roomId,
+        secret: room.secret,
+        self: { authorId: id.authorId, initials: id.initials, name: id.name, color: id.color, since: Date.now() },
+      });
+      return true;
+    };
+
+    // Auto-join when the user opted in ("auto-check for live collaborators"), the project
+    // is shareable, and we're online. The setting IS the air-gap/privacy control; being
+    // offline just skips it silently (the broker is unreachable anyway).
+    let autoStarting = false;
+    const maybeAutoLive = async () => {
+      if (!getIdentity().autoLive || presence.live || autoStarting || !projects.collabReady || !navigator.onLine) return;
+      autoStarting = true;
+      try { await startLive(); } catch { /* offline / broker unreachable — stay silent */ } finally { autoStarting = false; refreshGoLive(); }
     };
 
     goLiveBtn.addEventListener('click', async () => {
       goLiveBtn.disabled = true;
       try {
-        if (presence.live) {
-          await presence.stop();
-        } else {
-          const room = await projects.activeRoom();
-          if (!room) { engine.results?.appendError?.('This project isn’t shareable yet — move it to a folder first.'); return; }
-          const id = getIdentity();
-          await presence.start({
-            roomId: room.roomId,
-            secret: room.secret,
-            self: { authorId: id.authorId, initials: id.initials, name: id.name, color: id.color, since: Date.now() },
-          });
-        }
+        if (presence.live) await presence.stop();
+        else if (!(await startLive())) engine.results?.appendError?.('This project isn’t shareable yet — save it first.');
       } catch (err) {
         engine.results?.appendError?.(`Live presence failed: ${err.message}`);
       } finally {
@@ -902,9 +915,16 @@ export async function boot(mounts) {
       }
     });
 
-    // Leaving/switching a project drops you from its room; refresh the toggle for the new one.
-    bus.on(PROJECT_CHANGED, async () => { if (presence.live) await presence.stop(); refreshGoLive(); });
+    // Leaving/switching a project drops you from its room; refresh + maybe auto-join the new one.
+    bus.on(PROJECT_CHANGED, async () => {
+      if (presence.live) await presence.stop();
+      refreshGoLive();
+      void maybeAutoLive();
+    });
+    // Toggling "auto-check" on goes live for the current project right away.
+    onIdentityChange(() => { refreshGoLive(); void maybeAutoLive(); });
     refreshGoLive();
+    void maybeAutoLive(); // the project open at boot
   }
 
   // Boot done: from the next change on, an unsaved session auto-starts an

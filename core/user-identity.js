@@ -65,7 +65,7 @@ export function getIdentity() {
     persist(id);
   }
   if (!id.color) id.color = colorFor(id.authorId);
-  return { ...id, set: !!(id.name && id.name.trim()) };
+  return { ...id, autoLive: !!id.autoLive, set: !!(id.name && id.name.trim()) };
 }
 
 /**
@@ -82,7 +82,8 @@ export function setIdentity(patch = {}) {
     .slice(0, 4)
     .toUpperCase();
   const color = patch.color || cur.color;
-  const next = { authorId: cur.authorId, name, initials, color };
+  const autoLive = patch.autoLive != null ? !!patch.autoLive : cur.autoLive;
+  const next = { authorId: cur.authorId, name, initials, color, autoLive };
   persist(next);
   try {
     globalThis.dispatchEvent?.(new CustomEvent(EVENT, { detail: next }));
@@ -132,6 +133,9 @@ export function showIdentityDialog() {
       <label class="ct-dialog__row"><span>Initials</span>
         <input type="text" class="ct-input ct-identity__initials" maxlength="4" placeholder="JP" style="width:5rem" /></label>
       <div class="ct-dialog__row"><span>Colour</span><div class="ct-identity__colors"></div></div>
+      <label class="ct-identity__auto"><input type="checkbox" class="ct-identity__autolive" />
+        <span><strong>Automatically check for live collaborators</strong><br>
+        <span class="ct-identity__autosub">When on, opening a project quietly joins its live room so you can see who else is here (needs a connection). When off, use the “Go live” button.</span></span></label>
       <menu class="ct-dialog__buttons">
         <button type="button" class="ct-identity__cancel">Cancel</button>
         <button type="submit" class="ct-dialog__primary">Save</button>
@@ -141,8 +145,10 @@ export function showIdentityDialog() {
   const nameEl = dialog.querySelector('.ct-identity__name');
   const initEl = dialog.querySelector('.ct-identity__initials');
   const colorsEl = dialog.querySelector('.ct-identity__colors');
+  const autoEl = dialog.querySelector('.ct-identity__autolive');
   nameEl.value = cur.name;
   initEl.value = cur.initials;
+  autoEl.checked = cur.autoLive;
   let color = cur.color;
   let initialsEdited = !!cur.initials;
 
@@ -166,7 +172,7 @@ export function showIdentityDialog() {
   dialog.querySelector('.ct-identity__cancel').addEventListener('click', finish);
   dialog.querySelector('form').addEventListener('submit', (e) => {
     e.preventDefault();
-    setIdentity({ name: nameEl.value, initials: initEl.value, color });
+    setIdentity({ name: nameEl.value, initials: initEl.value, color, autoLive: autoEl.checked });
     finish();
   });
   dialog.addEventListener('close', () => dialog.remove());
@@ -215,6 +221,9 @@ function injectStyles() {
     .ct-identity__colors { display: flex; gap: 6px; }
     .ct-identity__sw { width: 24px; height: 24px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
     .ct-identity__sw.sel { border-color: var(--bar, #2c3e50); outline: 1px solid #fff; }
+    .ct-identity__auto { display: flex; gap: 8px; align-items: flex-start; margin: 12px 0 4px; cursor: pointer; font-size: 13px; }
+    .ct-identity__auto input { margin-top: 3px; flex: none; }
+    .ct-identity__autosub { font-size: 12px; color: #5a6570; line-height: 1.4; }
     /* live presence (#148 step 5) */
     .ct-peers { display: flex; align-items: center; gap: 4px; flex: none; }
     .ct-peerchip { width: 26px; height: 26px; border-radius: 50%; border: 2px solid rgba(255,255,255,.6);
