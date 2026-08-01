@@ -19,7 +19,8 @@ import { UiService } from './ui-service.js';
 import { ImportService } from './import-service.js';
 import { ExportService } from './export-service.js';
 import { installPassphraseUI } from './passphrase-ui.js';
-import { installIdentityChip } from './user-identity.js';
+import { installIdentityChip, getIdentity } from './user-identity.js';
+import { LivePresence } from './live-presence.js';
 import { OutputExportService } from './output-export.js';
 import { ComputeRecode } from './compute-recode.js';
 import { DatasetOps } from './dataset-ops.js';
@@ -839,8 +840,71 @@ export async function boot(mounts) {
   }
 
   // Your identity self-chip in the top bar (#148) — shows your initials, click to edit.
-  // Seed for the live-presence row; other editors' chips will sit beside it later.
   installIdentityChip(document.querySelector('header'));
+
+  // Live presence (#148 step 5): a "Go live" toggle (only for shareable/folder projects)
+  // + peer chips showing who else is in the room. Explicit opt-in — joining the public
+  // broker is a deliberate act. Presence carries only the identity beacon, never data.
+  const headerEl = document.querySelector('header');
+  if (headerEl) {
+    const peersEl = document.createElement('div');
+    peersEl.className = 'ct-peers';
+    const goLiveBtn = document.createElement('button');
+    goLiveBtn.type = 'button';
+    goLiveBtn.className = 'ct-golive';
+    goLiveBtn.hidden = true;
+    headerEl.append(peersEl, goLiveBtn);
+
+    const renderPeers = (roster) => {
+      peersEl.replaceChildren();
+      for (const p of roster || []) {
+        const chip = document.createElement('span');
+        chip.className = 'ct-peerchip';
+        chip.textContent = p.initials || '·';
+        chip.style.background = p.color || '#8a94a0';
+        chip.title = p.name || p.initials || 'Someone editing';
+        peersEl.append(chip);
+      }
+    };
+    const presence = new LivePresence({ onRoster: renderPeers });
+    engine.presence = presence;
+
+    const refreshGoLive = () => {
+      goLiveBtn.hidden = !projects.collabReady && !presence.live;
+      goLiveBtn.textContent = presence.live ? '● Live' : 'Go live';
+      goLiveBtn.classList.toggle('is-live', presence.live);
+      goLiveBtn.title = presence.live
+        ? 'You’re sharing presence in this project’s room — click to stop'
+        : 'Show who else is editing (joins this shared project’s live room)';
+    };
+
+    goLiveBtn.addEventListener('click', async () => {
+      goLiveBtn.disabled = true;
+      try {
+        if (presence.live) {
+          await presence.stop();
+        } else {
+          const room = await projects.activeRoom();
+          if (!room) { engine.results?.appendError?.('This project isn’t shareable yet — move it to a folder first.'); return; }
+          const id = getIdentity();
+          await presence.start({
+            roomId: room.roomId,
+            secret: room.secret,
+            self: { authorId: id.authorId, initials: id.initials, name: id.name, color: id.color, since: Date.now() },
+          });
+        }
+      } catch (err) {
+        engine.results?.appendError?.(`Live presence failed: ${err.message}`);
+      } finally {
+        goLiveBtn.disabled = false;
+        refreshGoLive();
+      }
+    });
+
+    // Leaving/switching a project drops you from its room; refresh the toggle for the new one.
+    bus.on(PROJECT_CHANGED, async () => { if (presence.live) await presence.stop(); refreshGoLive(); });
+    refreshGoLive();
+  }
 
   // Boot done: from the next change on, an unsaved session auto-starts an
   // autosaving "Untitled project" (so the launcher's data load doesn't spawn one).

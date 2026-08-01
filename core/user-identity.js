@@ -214,6 +214,14 @@ function injectStyles() {
     .ct-idchip:hover { filter: brightness(1.1); }
     .ct-identity__colors { display: flex; gap: 6px; }
     .ct-identity__sw { width: 24px; height: 24px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
-    .ct-identity__sw.sel { border-color: var(--bar, #2c3e50); outline: 1px solid #fff; }`;
+    .ct-identity__sw.sel { border-color: var(--bar, #2c3e50); outline: 1px solid #fff; }
+    /* live presence (#148 step 5) */
+    .ct-peers { display: flex; align-items: center; gap: 4px; flex: none; }
+    .ct-peerchip { width: 26px; height: 26px; border-radius: 50%; border: 2px solid rgba(255,255,255,.6);
+      color: #fff; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+    .ct-golive { flex: none; font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; cursor: pointer;
+      background: transparent; color: var(--bar-fg, #ecf0f1); border: 1px solid rgba(255,255,255,.4); }
+    .ct-golive:hover { background: rgba(255,255,255,.12); }
+    .ct-golive.is-live { background: #2e7d32; border-color: #2e7d32; color: #fff; }`;
   document.head.append(s);
 }
