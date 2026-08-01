@@ -865,15 +865,21 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       not verified ones. Ties: [[collab-merge-kernel]] op identity, [[first-class-plugin-data]]
       (a memo is exactly the first-class attachment that's currently second-class), the
       "plugins add actions to the log" item, [[qualitative-first-class]].
-  - [ ] **1. User identity profile (name / initials / colour).** Per-USER, per-device
+  - [x] **1. User identity profile (name / initials / colour). DONE.** Per-USER, per-device
     (localStorage) — travels across all their projects, NOT per-project. A stable minted
     `authorId` so attribution survives a display-name change; initials auto-derived from the
     name but editable; a CB-safe colour for avatars. Small editor dialog. Distinct from the
     project-level `collabId`/`collabSecret`. **BUILDING NOW.**
-  - [ ] **2. Authorship stamp on codes / ops.** Snapshot `{authorId, initials, name}` into
-    each code-application / log op the user creates (snapshot, so it survives a later
+  - [~] **2. Authorship stamp on codes / ops.** Snapshot `{authorId, initials, name, colour}`
+    into each code-application / log op the user creates (snapshot, so it survives a later
     rename and other peers see it without the author's live profile). The prerequisite for
-    step 3. **BUILDING NOW.**
+    step 3.
+    - [x] **2a. Core log ops DONE** — stamped in `data-store.js#ensureIds` (new ops only,
+      never retroactive); round-trips export/restore; verified in-browser.
+    - [ ] **2b. CAQDAS code-application authorship** — the qual-critical half (inter-coder
+      reliability). Needs a read-only `app.identity` in the plugin broker
+      (`plugin-broker.js` dispatch → `currentAuthor()`) + the CAQDAS plugin stamping each
+      code application with the author and preserving it through its add-wins merge. NEXT.
   - [ ] **3. Memos / annotations (anchored comments).** Word/Docs-style margin comments,
     but anchored + persistent + part of the analytic record. **Open decision: the anchoring
     model** — start with the highest-value anchor (a coded segment / a code) and generalise
