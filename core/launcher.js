@@ -245,7 +245,11 @@ export class Launcher {
     overlay.querySelectorAll('[data-source]').forEach((btn) => {
       btn.addEventListener('click', () => {
         this.#pendingSource = btn.dataset.source;
-        overlay.querySelectorAll('[data-source]').forEach((b) => b.classList.toggle('is-active', b === btn));
+        // Selecting a data source clears any saved-project/folder pick — the choices are
+        // mutually exclusive, so highlight only this one across ALL source rows.
+        this.#pendingProject = null;
+        this.#pendingFolder = null;
+        overlay.querySelectorAll('.ctl__source').forEach((b) => b.classList.toggle('is-active', b === btn));
         // A demo/blank choice seeds its preset's plugin selection (user can tweak).
         const preset = Object.values(PRESETS).find((p) => p.source === btn.dataset.source);
         if (preset) {
