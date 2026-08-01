@@ -687,27 +687,49 @@ export class ProjectSync {
     this.#stopPoll();
   }
 
-  /** Open the (single) project in an already-attached folder store: one-gate
-   * passphrase, then load it and enter folder mode. Shared by pick + reconnect. */
+  /**
+   * Open the (single) project in a folder. Validates the folder — permission,
+   * passphrase, a project present — against a THROWAWAY probe store FIRST, and only
+   * switches the live store + loads once cleared. So a wrong/cancelled passphrase or
+   * an empty folder never clobbers the currently-open project: nothing that touches
+   * the live project happens until we know we can open the incoming one. Takes a raw
+   * handle (does its own attach) and is shared by pick + reconnect.
+   * @param {FileSystemDirectoryHandle} handle
+   */
   async #openExistingFolder(handle) {
-    if (await this.#store.hasEncryption()) {
-      const pass = await passphraseFor('folder'); // enter mode
-      if (!pass) { this.#detachFolder(); return false; }
-      try {
-        await this.#store.unlock(pass);
-      } catch {
-        this.#results.appendError('Wrong passphrase for this folder.');
-        this.#detachFolder();
-        return false;
-      }
-    }
-    const entries = await this.#store.list();
-    if (!entries.length) {
-      this.#results.appendError('No CrossTab project in that folder — use “Move project to a folder…” to put one there.');
-      this.#detachFolder();
+    if (!(await ensureReadWrite(handle))) {
+      this.#results.appendError('Folder write access wasn’t granted.');
       return false;
     }
-    await this.openProject(entries[0].id); // the folder's project
+    // Probe on a throwaway store — never touch the live project until validated.
+    // These are reads only: hasEncryption/list read, and unlock() only checks the
+    // passphrase against the stored verifier (an already-set-up folder isn't written).
+    const probe = new ProjectStore();
+    probe.useDirectory(handle);
+    let pass = null;
+    if (await probe.hasEncryption()) {
+      pass = await passphraseFor('folder'); // enter mode
+      if (!pass) return false; // cancelled — live project untouched
+      try {
+        await probe.unlock(pass); // throws on a wrong passphrase
+      } catch {
+        this.#results.appendError('Wrong passphrase for this folder.');
+        return false; // untouched
+      }
+    }
+    let entries = [];
+    try { entries = await probe.list(); } catch { entries = []; }
+    if (!entries.length) {
+      this.#results.appendError('No CrossTab project in that folder — use “Move project to a folder…” to put one there.');
+      return false; // untouched
+    }
+
+    // --- cleared to load: only now switch the live store (flushing the outgoing
+    // project) and load the incoming one -------------------------------------------
+    if (!(await this.#attach(handle))) return false;
+    if (pass) await this.#store.unlock(pass);
+    await this.openProject(entries[0].id); // #folderMode still false here → openProject won't detach
+    if (!this.#binding) { this.#detachFolder(); return false; } // load failed (damaged) → recover to OPFS
     this.#folderMode = true;
     this.#lastManifest = await this.#store.readManifest(this.#binding.id);
     this.#activeFolderId = await rememberFolder(handle, { name: this.#binding.name, savedAt: Date.now() }); // first-class in launcher + sidebar
@@ -783,12 +805,6 @@ export class ProjectSync {
   }
 
   /**
-   * **Open project from a folder…** — open an existing project a collaborator shared
-   * via a folder. Prompts for the passphrase if the folder is encrypted (one gate:
-   * it opens the files *and* is the key to the collaboration). Refuses an empty
-   * folder (use *Move project to a folder…* to seed one).
-   */
-  /**
    * Drop the OS-facing double-click shortcuts (Windows `.url`, Mac `.webloc`, a
    * HOW-TO note) into the folder if they're not already there (#143), so a
    * recipient can launch CrossTab straight from the shared folder. Plaintext,
@@ -808,8 +824,17 @@ export class ProjectSync {
     } catch { /* shortcuts are a convenience — never block folder open/save */ }
   }
 
+  /**
+   * **Open project from a folder…** — open an existing project a collaborator shared
+   * via a folder. Prompts for the passphrase if the folder is encrypted (one gate:
+   * it opens the files *and* is the key to the collaboration). Refuses an empty
+   * folder (use *Move project to a folder…* to seed one).
+   */
   async openFromFolder() {
-    const handle = await this.#pickFolder();
+    // Pick WITHOUT attaching — #openExistingFolder validates against a probe store
+    // and only switches the live store once cleared, so a wrong/cancelled passphrase
+    // never clobbers the currently-open project.
+    const handle = await this.#pickFolderHandle();
     if (!handle) return;
     try {
       await this.#openExistingFolder(handle);
@@ -821,13 +846,13 @@ export class ProjectSync {
 
   /**
    * Reconnect a **remembered** folder (the launcher's boot-time reopen entry) — no
-   * picker, but the browser still requires re-granting write via a user gesture
-   * (`ensureReadWrite`), so this runs from that click.
+   * picker. The browser still requires re-granting write via a user gesture, which
+   * `#openExistingFolder` does (`ensureReadWrite`) before probing, so this runs from
+   * that click. Like the pick path, it validates before touching the live project.
    * @param {FileSystemDirectoryHandle} handle  from {@link module:core/folder-handle}
    */
   async reopenFolder(handle) {
     if (!handle) return;
-    if (!(await this.#attach(handle))) return;
     try {
       await this.#openExistingFolder(handle);
     } catch (err) {
