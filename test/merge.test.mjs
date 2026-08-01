@@ -87,6 +87,33 @@ test('threeWayLog: both edit the same ancestor op differently → edit/edit conf
   assert.equal(r.conflicts[0].kind, 'edit/edit');
 });
 
+test('threeWayLog: one side REORDERS steps → the reorder is kept (order is editable)', () => {
+  const ancestor = [recode('o1', 'a'), recode('o2', 'b'), recode('o3', 'c')];
+  const mine = [recode('o2', 'b'), recode('o1', 'a'), recode('o3', 'c')]; // swapped o1/o2
+  const theirs = [recode('o1', 'a'), recode('o2', 'b'), recode('o3', 'c')]; // unchanged
+  const r = threeWayLog(ancestor, mine, theirs);
+  assert.equal(r.conflicts.length, 0);
+  assert.deepEqual(r.resolved.map((o) => o.id), ['o2', 'o1', 'o3']); // mine's reorder wins
+  // Symmetric: the reorder on the *theirs* side is equally kept (convergence).
+  const r2 = threeWayLog(ancestor, theirs, mine);
+  assert.deepEqual(r2.resolved.map((o) => o.id), ['o2', 'o1', 'o3']);
+});
+
+test('threeWayLog: both reorder differently → order conflict, resolvable', () => {
+  const ancestor = [recode('o1', 'a'), recode('o2', 'b'), recode('o3', 'c')];
+  const mine = [recode('o2', 'b'), recode('o1', 'a'), recode('o3', 'c')];   // swap o1/o2
+  const theirs = [recode('o1', 'a'), recode('o3', 'c'), recode('o2', 'b')]; // swap o2/o3
+  const first = threeWayLog(ancestor, mine, theirs);
+  assert.equal(first.conflicts.length, 1);
+  assert.equal(first.conflicts[0].kind, 'order');
+  const key = first.conflicts[0].key;
+  const mineWins = threeWayLog(ancestor, mine, theirs, 'core', { resolutions: { [key]: 'mine' } });
+  assert.equal(mineWins.conflicts.length, 0);
+  assert.deepEqual(mineWins.resolved.map((o) => o.id), ['o2', 'o1', 'o3']);
+  const theirsWins = threeWayLog(ancestor, mine, theirs, 'core', { resolutions: { [key]: 'theirs' } });
+  assert.deepEqual(theirsWins.resolved.map((o) => o.id), ['o1', 'o3', 'o2']);
+});
+
 test('threeWayLog: edit-vs-delete surfaces; delete-vs-delete removes cleanly', () => {
   const ancestor = [recode('r1', 'income', { rules: 'orig' }), recode('r2', 'age')];
   // mine deletes r1, theirs edits it → conflict.

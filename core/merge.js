@@ -308,12 +308,35 @@ export function threeWayLog(ancestor, mine, theirs, owner = 'core', opts = {}) {
     else conflicts.push({ key, owner, target: opTarget(mo), kind: 'add/add', label: `both independently added ${mo.type} ${mo.name ?? ''}`.trim(), mine: mo, theirs: to, options: ['mine', 'theirs', 'both'] });
   }
 
-  // Ordering (MVP): ancestor order for survivors, then mine-adds, then theirs-adds.
+  // Ordering: a step's ORDER is editable state (the do-file editor's up/down), not
+  // something derived from the ancestor — so respect a side's REORDER of the common
+  // (ancestor-present) survivors. Take whichever side diverged from the ancestor
+  // order; if BOTH reordered differently, surface an order conflict (default: mine).
+  // Added ops follow, in mine-then-theirs order. (Symmetric in mine/theirs, so the
+  // canonical-operand merge stays convergent for folder/live sync.)
+  const survives = (id) => chosen.has(id);
+  const commonSeq = (ops) => ops.map((o) => o.id).filter((id) => survives(id) && a.has(id));
+  const aSeq = commonSeq(ancestor);
+  const mSeq = commonSeq(mine);
+  const tSeq = commonSeq(theirs);
+  const seqEq = (x, y) => x.length === y.length && x.every((v, i) => v === y[i]);
+  let baseOrder;
+  if (seqEq(mSeq, aSeq)) baseOrder = tSeq;         // only theirs reordered
+  else if (seqEq(tSeq, aSeq)) baseOrder = mSeq;    // only mine reordered
+  else if (seqEq(mSeq, tSeq)) baseOrder = mSeq;    // both applied the same reorder
+  else {
+    const key = ckey(owner, scope, 'sequence', 'order');
+    const choice = resolutions?.[key];
+    baseOrder = choice === 'theirs' ? tSeq : mSeq;
+    if (!choice) conflicts.push({ key, owner, target: 'sequence', kind: 'order', label: 'both reordered the steps differently', mine: mSeq, theirs: tSeq, options: ['mine', 'theirs'] });
+  }
+
   const merged = [];
   const emit = (id) => { if (chosen.has(id)) { merged.push(chosen.get(id)); chosen.delete(id); } };
-  for (const op of ancestor) emit(op.id);
-  for (const op of mine) emit(op.id);
-  for (const op of theirs) emit(op.id);
+  for (const id of baseOrder) emit(id);                     // common survivors, in the chosen order
+  for (const op of mine) if (!a.has(op.id)) emit(op.id);    // mine's added ops
+  for (const op of theirs) if (!a.has(op.id)) emit(op.id);  // theirs' added ops
+  for (const id of [...chosen.keys()]) emit(id);            // safety: never drop a surviving op
 
   return { resolved: merged, conflicts };
 }
