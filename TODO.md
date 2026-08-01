@@ -870,16 +870,18 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     `authorId` so attribution survives a display-name change; initials auto-derived from the
     name but editable; a CB-safe colour for avatars. Small editor dialog. Distinct from the
     project-level `collabId`/`collabSecret`. **BUILDING NOW.**
-  - [~] **2. Authorship stamp on codes / ops.** Snapshot `{authorId, initials, name, colour}`
+  - [x] **2. Authorship stamp on codes / ops. DONE.** Snapshot `{authorId, initials, name, colour}`
     into each code-application / log op the user creates (snapshot, so it survives a later
     rename and other peers see it without the author's live profile). The prerequisite for
     step 3.
     - [x] **2a. Core log ops DONE** — stamped in `data-store.js#ensureIds` (new ops only,
       never retroactive); round-trips export/restore; verified in-browser.
-    - [ ] **2b. CAQDAS code-application authorship** — the qual-critical half (inter-coder
-      reliability). Needs a read-only `app.identity` in the plugin broker
-      (`plugin-broker.js` dispatch → `currentAuthor()`) + the CAQDAS plugin stamping each
-      code application with the author and preserving it through its add-wins merge. NEXT.
+    - [x] **2b. CAQDAS code-application authorship DONE** — `app.identity` broker RPC +
+      `app.identity` namespace in plugin-host; the CAQDAS mount fetches `me` and stamps
+      each code + each applied segment (text/region/time/track) via `authored()`; import-
+      resolved codings + the QDPX parser are left unstamped. Author survives the add-wins
+      merge (normalize spreads). End-to-end coding attribution to confirm by reading the
+      persisted blob after coding (CAQDAS is cross-origin, can't be driven from the page).
   - [ ] **3. Memos / annotations (anchored comments).** Word/Docs-style margin comments,
     but anchored + persistent + part of the analytic record. **Open decision: the anchoring
     model** — start with the highest-value anchor (a coded segment / a code) and generalise
