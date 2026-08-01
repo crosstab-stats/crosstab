@@ -129,7 +129,7 @@ const STYLES = `
 .caqdas__code .x { cursor: pointer; color: #b04a4a; border: 0; background: none; font: inherit; padding: 0 4px; }
 .caqdas__newcode { display: flex; gap: 6px; padding: 8px 6px; }
 .caqdas__newcode input { flex: 1; min-width: 0; font: inherit; padding: 5px 8px; border: 1px solid #ccd2d8; border-radius: 6px; }
-.caqdas__menu { position: absolute; z-index: 20; background: #fff; border: 1px solid #ccd2d8; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 6px; min-width: 180px; max-height: 260px; overflow: auto; }
+.caqdas__menu { position: absolute; z-index: 20; background: #fff; border: 1px solid #ccd2d8; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 6px; min-width: 270px; max-width: 340px; max-height: 340px; overflow: auto; }
 .caqdas__menu button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: none; font: inherit; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
 .caqdas__menu button:hover { background: #eef5fb; }
 .caqdas__menu .row { display: flex; gap: 6px; padding: 6px 4px 2px; border-top: 1px solid #eef0f2; margin-top: 4px; }
@@ -155,6 +155,21 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 .caqdas__segrm { border: 0; background: none; font: inherit; color: #b04a4a; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
 .caqdas__segrm:hover { background: #fbeaea; }
 .caqdas__segmemo { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; padding: 6px 8px; border: 1px solid #ccd2d8; border-radius: 6px; resize: vertical; margin: 0 0 6px; }
+/* memo/annotation thread (#148) */
+.caqdas__thread { display: flex; flex-direction: column; gap: 6px; margin: 0 0 8px; min-width: 240px; }
+.caqdas__notes { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow: auto; }
+.caqdas__notesempty { font-size: 12px; color: #99a1ab; font-style: italic; }
+.caqdas__note { background: #f6f8fa; border: 1px solid #e3e8ee; border-radius: 6px; padding: 5px 7px; }
+.caqdas__note--legacy { background: #fbfaf3; }
+.caqdas__noterow { display: flex; align-items: center; gap: 6px; margin: 0 0 3px; }
+.caqdas__notechip { flex: none; width: 18px; height: 18px; border-radius: 50%; color: #fff; font-size: 9px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+.caqdas__notewho { font-size: 11px; font-weight: 600; color: #41505e; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.caqdas__notemeta { font-size: 10.5px; color: #9aa3ab; font-style: italic; margin: 0 0 2px; }
+.caqdas__notedel { flex: none; border: 0; background: none; color: #b04a4a; cursor: pointer; font-size: 11px; padding: 0 2px; }
+.caqdas__notebody { font-size: 12px; color: #2c3742; white-space: pre-wrap; word-break: break-word; }
+.caqdas__noteadd { display: flex; flex-direction: column; gap: 4px; }
+.caqdas__noteinput { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; padding: 6px 8px; border: 1px solid #ccd2d8; border-radius: 6px; resize: vertical; }
+.caqdas__noteadd .caqdas__btn { align-self: flex-end; font-size: 12px; padding: 3px 10px; }
 /* --- media (image) coding --- */
 .caqdas__imgwrap { position: relative; display: inline-block; max-width: 100%; margin: 0 auto; line-height: 0; }
 .caqdas__img { display: block; max-width: 100%; max-height: calc(100vh - 220px); user-select: none; -webkit-user-select: none; }
@@ -279,6 +294,71 @@ export const workspace = {
     }
     root.textContent = '';
     const el = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
+
+    // --- memos / annotation threads (#148 step 3) ----------------------------
+    // Flat, chronological, author-stamped notes anchored to a segment or code by id.
+    // Separate add-wins collection (state.memos) so faculty + student can both annotate
+    // the same coding without clobbering. Replaces the old single inline `memo` string
+    // (any legacy value shows as a read-only "earlier note").
+    const memosFor = (anchorId) =>
+      (state.memos || (state.memos = [])).filter((n) => n.anchorId === anchorId).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    const hasNotes = (obj) => !!(obj && ((typeof obj.memo === 'string' && obj.memo.trim()) || (obj.id && memosFor(obj.id).length)));
+    // Ensure an anchor has a stable id (legacy segments predate ids) so a note can point
+    // at it; a fresh id here is a rare one-off for old data.
+    const anchorIdOf = (obj) => { if (!obj.id) { obj.id = uid(); save(); } return obj.id; };
+    const addMemo = (anchorKind, anchorId, text) => {
+      const t = String(text || '').trim();
+      if (!t) return;
+      (state.memos || (state.memos = [])).push({ id: uid(), anchorKind, anchorId, text: t, ...(me ? { author: me } : {}), createdAt: Date.now() });
+      save();
+    };
+    const deleteMemo = (id) => { state.memos = (state.memos || []).filter((n) => n.id !== id); save(); };
+
+    /** Build a notes-thread panel for one anchor (a segment or code): a chronological,
+     * author-stamped list + an add-note box. `onChange` refreshes any has-note markers. */
+    function renderThread(anchorKind, anchorObj, onChange) {
+      const anchorId = anchorIdOf(anchorObj);
+      const wrap = el('div', 'caqdas__thread');
+      const list = el('div', 'caqdas__notes');
+      const rebuild = () => {
+        list.replaceChildren();
+        const legacy = typeof anchorObj.memo === 'string' && anchorObj.memo.trim();
+        if (legacy) {
+          const n = el('div', 'caqdas__note caqdas__note--legacy');
+          const meta = el('div', 'caqdas__notemeta'); meta.textContent = 'earlier note';
+          const body = el('div', 'caqdas__notebody'); body.textContent = anchorObj.memo;
+          n.append(meta, body); list.append(n);
+        }
+        for (const note of memosFor(anchorId)) {
+          const a = note.author || {};
+          const n = el('div', 'caqdas__note');
+          const row = el('div', 'caqdas__noterow');
+          const chip = el('span', 'caqdas__notechip'); chip.textContent = a.initials || '·';
+          chip.style.background = a.color || '#8a94a0'; chip.title = a.name || a.initials || 'Unknown';
+          const who = el('span', 'caqdas__notewho'); who.textContent = a.name || a.initials || 'Unknown';
+          row.append(chip, who);
+          if (me && a.authorId === me.authorId) {
+            const del = el('button', 'caqdas__notedel'); del.textContent = '✕'; del.title = 'Delete your note';
+            del.addEventListener('click', (e) => { e.stopPropagation(); deleteMemo(note.id); rebuild(); onChange?.(); });
+            row.append(del);
+          }
+          const body = el('div', 'caqdas__notebody'); body.textContent = note.text;
+          n.append(row, body); list.append(n);
+        }
+        if (!list.children.length) { const e0 = el('div', 'caqdas__notesempty'); e0.textContent = 'No notes yet.'; list.append(e0); }
+      };
+      rebuild();
+      const addRow = el('div', 'caqdas__noteadd');
+      const ta = el('textarea', 'caqdas__noteinput'); ta.rows = 2; ta.placeholder = 'Add a note…';
+      ta.addEventListener('click', (e) => e.stopPropagation());
+      ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); post(); } });
+      const btn = el('button', 'caqdas__btn'); btn.textContent = 'Add note';
+      const post = () => { if (!ta.value.trim()) return; addMemo(anchorKind, anchorId, ta.value); ta.value = ''; rebuild(); onChange?.(); };
+      btn.addEventListener('click', (e) => { e.stopPropagation(); post(); });
+      addRow.append(ta, btn);
+      wrap.append(list, addRow);
+      return wrap;
+    }
     const wrap = el('div', 'caqdas');
 
     const bar = el('div', 'caqdas__bar');
@@ -440,7 +520,7 @@ export const workspace = {
         const m = el('mark');
         const code = codeById(covering[0].codeId);
         m.style.backgroundColor = code ? code.color : '#eee';
-        const memoed = covering.some((s) => s.memo);
+        const memoed = covering.some((s) => hasNotes(s));
         m.title = covering.map((s) => codeById(s.codeId)?.name + (s.memo ? ` — ${s.memo}` : '')).filter(Boolean).join(', ');
         if (memoed) m.classList.add('has-memo');
         m.textContent = slice;
@@ -706,7 +786,7 @@ export const workspace = {
       for (const s of segs) {
         const code = codeById(s.codeId);
         const color = code ? code.color : '#888';
-        const box = el('div', 'caqdas__region' + (s.memo ? ' has-memo' : ''));
+        const box = el('div', 'caqdas__region' + (hasNotes(s) ? ' has-memo' : ''));
         positionPct(box, s.region);
         box.style.borderColor = color;
         box.style.backgroundColor = hexToRgba(color, 0.18);
@@ -816,7 +896,7 @@ export const workspace = {
         lane.append(label);
         const strip = el('div', 'caqdas__lanestrip');
         for (const s of byCode.get(cid)) {
-          const bar = el('div', 'caqdas__lanebar' + (s.memo ? ' has-memo' : '') + (s.keys ? ' is-track' : ''));
+          const bar = el('div', 'caqdas__lanebar' + (hasNotes(s) ? ' has-memo' : '') + (s.keys ? ' is-track' : ''));
           bar.style.left = (s.tStart / dur) * 100 + '%';
           bar.style.width = Math.max(0.4, ((s.tEnd - s.tStart) / dur) * 100) + '%';
           bar.style.backgroundColor = color;
@@ -1198,7 +1278,7 @@ export const workspace = {
           const ct = el('span', 'ct'); ct.textContent = counts[code.id] || 0;
           const rb = el('button', 'caqdas__iconbtn'); rb.textContent = '🔍'; rb.title = 'Show every passage coded with this';
           rb.addEventListener('click', (e) => { e.stopPropagation(); retrieveCodeId = code.id; renderText(); });
-          const mb = el('button', 'caqdas__iconbtn' + (code.memo ? ' has' : '')); mb.textContent = '✎'; mb.title = 'Memo + theme group (code details)';
+          const mb = el('button', 'caqdas__iconbtn' + (hasNotes(code) ? ' has' : '')); mb.textContent = '✎'; mb.title = 'Notes + theme group (code details)';
           mb.addEventListener('click', (e) => { e.stopPropagation(); memoOpen.has(code.id) ? memoOpen.delete(code.id) : memoOpen.add(code.id); renderCodes(); });
           const pb = el('button', 'pb' + (armed === code.id ? ' is-on' : ''));
           pb.textContent = '🖌';
@@ -1270,9 +1350,8 @@ export const workspace = {
             const gi = el('input', 'caqdas__grpinp'); gi.placeholder = 'theme / group'; gi.value = code.group || '';
             gi.addEventListener('input', () => { code.group = gi.value; save(); });
             gi.addEventListener('blur', renderCodes);
-            const ta = el('textarea', 'caqdas__memo'); ta.rows = 3; ta.placeholder = 'Memo — analytic note on this code…'; ta.value = code.memo || '';
-            ta.addEventListener('input', () => { code.memo = ta.value; save(); });
-            panel.append(gi, ta); codePane.append(panel);
+            panel.append(gi, renderThread('code', code, renderCodes)); // author-stamped notes thread (#148)
+            codePane.append(panel);
           }
         }
       }
@@ -1336,7 +1415,12 @@ export const workspace = {
         for (const s of hits) { lo = Math.min(lo, s.start); hi = Math.max(hi, s.end); if (s.memo) memos.push(s.memo); }
         const doc = docs.find((d) => d.rid === activeRid);
         const merged = authored({ doc: activeRid, codeId, start: lo, end: hi, text: doc ? doc.text.slice(lo, hi) : span.text });
-        if (memos.length) merged.memo = memos.join('\n'); // keep any per-coding notes
+        if (memos.length) merged.memo = memos.join('\n'); // keep any legacy inline notes
+        // Re-anchor annotation notes from the absorbed segments onto the merged one (#148).
+        const hitIds = new Set(hits.map((s) => s.id).filter(Boolean));
+        if (hitIds.size && Array.isArray(state.memos)) {
+          for (const n of state.memos) if (hitIds.has(n.anchorId)) n.anchorId = merged.id;
+        }
         state.segments = state.segments.filter((s) => !hits.includes(s));
         state.segments.push(merged);
         save();
@@ -1434,10 +1518,7 @@ export const workspace = {
           save(); closeMenu(); refreshView();
         });
         head.append(sw, nm, rm); menu.append(head);
-        const ta = el('textarea', 'caqdas__segmemo'); ta.rows = 2; ta.placeholder = 'Memo on this coding…'; ta.value = seg.memo || '';
-        ta.addEventListener('click', (e) => e.stopPropagation());
-        ta.addEventListener('input', () => { seg.memo = ta.value; save(); });
-        menu.append(ta);
+        menu.append(renderThread('segment', seg, refreshView)); // author-stamped notes thread (#148)
       }
       menu.style.left = Math.round(evt.clientX) + 'px';
       menu.style.top = Math.round(evt.clientY + 4) + 'px';
