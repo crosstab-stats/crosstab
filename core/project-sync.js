@@ -76,6 +76,7 @@ export class ProjectSync {
   #liveExchange = null;
   #liveSourceBytes = new Map();
   #liveLastManifest = null;
+  #livePaused = false; // testing: hold outgoing live updates (see pauseLiveSync)
   /** Plugin identifiers recorded in the open project that AREN'T installed here —
    * carried forward verbatim on every save so the association survives until the
    * plugin is added and resolves (#102). Empty for a fully-resolved project. */
@@ -1212,12 +1213,22 @@ export class ProjectSync {
     this.#liveExchange = null;
     this.#liveSourceBytes = new Map();
     this.#liveLastManifest = null;
+    this.#livePaused = false;
     this.#emitProject();
+  }
+
+  /** Testing aid: hold outgoing live updates so a real conflict can be staged (pause
+   * BOTH peers, edit the same thing in each, resume → the two edits collide from the
+   * same base). Incoming updates still apply. `crosstab.projects.pauseLiveSync(true/false)`. */
+  pauseLiveSync(on) {
+    this.#livePaused = !!on;
+    debug('live', on ? 'sync PAUSED (testing)' : 'sync RESUMED');
+    if (!on) this.#scheduleLivePublish(); // flush whatever accumulated while paused
   }
 
   /** Debounced: publish the local project state to co-authors after an edit settles. */
   #scheduleLivePublish() {
-    if (!this.#liveDoc || this.#loading) return;
+    if (!this.#liveDoc || this.#loading || this.#livePaused) return;
     if (this.#livePublishTimer) clearTimeout(this.#livePublishTimer);
     this.#livePublishTimer = setTimeout(async () => {
       this.#livePublishTimer = null;
