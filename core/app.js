@@ -901,7 +901,9 @@ export async function boot(mounts) {
         offerBtn.title = 'Start live co-authoring — your edits and theirs sync in real time.';
       }
     };
-    const presence = new LivePresence({ onRoster: (r) => { roster = r || []; render(); } });
+    // Defensive: never show yourself as a peer (drop any roster entry with your own
+    // authorId — a self-echo from the relay). Real peers have distinct authorIds.
+    const presence = new LivePresence({ onRoster: (r) => { const me = getIdentity().authorId; roster = (r || []).filter((p) => p.authorId !== me); render(); } });
     engine.presence = presence;
 
     // Join the current project's room, broadcasting this user's identity beacon.

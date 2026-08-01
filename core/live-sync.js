@@ -193,9 +193,12 @@ export function attachLiveDoc(session, docOpts) {
  */
 export function attachPresence(session, { self = {}, onChange } = {}) {
   const room = new PresenceRoom({ self, onChange });
-  session.onPeerJoin((peerId) => room.peerJoined(peerId));
+  // Never fold our OWN peer id into the roster — some relays echo a broadcast back to
+  // the sender, which would make a peer "see itself" (a self chip + "co-author with me").
+  const notSelf = (peerId) => peerId != null && peerId !== session.selfId;
+  session.onPeerJoin((peerId) => { if (notSelf(peerId)) room.peerJoined(peerId); });
   session.onPeerLeave((peerId) => room.peerLeft(peerId));
-  session.onBeacon((info, peerId) => room.beacon(peerId, info));
+  session.onBeacon((info, peerId) => { if (notSelf(peerId)) room.beacon(peerId, info); });
   session.announce(room.selfBeacon); // let everyone already here learn who we are
   return room;
 }
