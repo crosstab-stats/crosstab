@@ -882,6 +882,22 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       resolved codings + the QDPX parser are left unstamped. Author survives the add-wins
       merge (normalize spreads). End-to-end coding attribution to confirm by reading the
       persisted blob after coding (CAQDAS is cross-origin, can't be driven from the page).
+  - [ ] **Authorship DISPLAY (tabled — user pondering the shape).** Surface who-coded-what
+    in the CAQDAS UI (colour + initials chip on segments / retrieve list). User's steer:
+    a plain "stamp every edit visibly" gets cluttered → lean toward **showing the chip only
+    when the author ≠ the current viewer** (your own edits stay clean). Data already stamps
+    everything (step 2); this is display-only. Revisit after the shape settles.
+  - [ ] **PREREQUISITE for 3 + 4 — segment identity & author-aware merge.** Found while
+    verifying step 2b: `mergeState` keys segments by CONTENT
+    (`doc|codeId|start|end|tStart|tEnd|region`), with **no author** in the key. Two
+    consequences: (a) a content key is not a stable anchor for a memo (edit the span → key
+    changes); (b) worse — **two coders applying the SAME code to the SAME passage collapse to
+    ONE segment** under add-wins, silently discarding coder B's application. That *defeats
+    inter-coder reliability* (κ/α need to see BOTH coded it). Fix: give each segment a stable
+    `id` (fold into the `authored()` helper: `{ id: o.id || uid(), ...o, author }`), and make
+    `segKey` use the id when present (content-key fallback for legacy/imported segments) — so
+    per-coder codings stay DISTINCT and memos get a durable anchor. Changes merge semantics
+    (more segments survive a merge), so confirm the methodology intent before shipping.
   - [ ] **3. Memos / annotations (anchored comments).** Word/Docs-style margin comments,
     but anchored + persistent + part of the analytic record. **Open decision: the anchoring
     model** — start with the highest-value anchor (a coded segment / a code) and generalise
