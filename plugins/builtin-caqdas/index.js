@@ -219,6 +219,13 @@ export const workspace = {
     // --- state ---------------------------------------------------------------
     const raw = await app.state.get();
     const state = normalize(raw);
+    // Who's coding (#148): stamp each code/segment THIS user creates with an identity
+    // snapshot, so a team can run inter-coder reliability (κ/α). Self-asserted; the
+    // authorId is always present even before a name is set. Imported codings (resolved
+    // from a QDPX) are left unstamped — they aren't this user's work.
+    let me = null;
+    try { me = await app.identity?.get?.(); } catch { /* identity is optional */ }
+    const authored = (o) => (me ? { ...o, author: me } : o);
     let docs = []; // [{ rid, text }]
     let activeRid = null;
     let activeCodeId = null; // armed code for "paint mode" (session-only, not saved)
@@ -750,12 +757,12 @@ export const workspace = {
 
     /** Record a region-coding segment (the 2-D analogue of {@link addSegment}). */
     function addRegionSegment(codeId, region) {
-      state.segments.push({
+      state.segments.push(authored({
         doc: activeRid,
         codeId,
         region: { x: round4(region.x), y: round4(region.y), w: round4(region.w), h: round4(region.h) },
         text: regionLabel(region), // a human label so retrieve/export/counts work unchanged
-      });
+      }));
       imageSel = null;
       save();
       refreshView();
@@ -863,13 +870,13 @@ export const workspace = {
 
     /** Record a time-range coding segment (the time twin of {@link addRegionSegment}). */
     function addTimeSegment(codeId, span) {
-      state.segments.push({
+      state.segments.push(authored({
         doc: activeRid,
         codeId,
         tStart: round3(span.tStart),
         tEnd: round3(span.tEnd),
         text: timeLabel(span.tStart, span.tEnd),
-      });
+      }));
       timeSel = null;
       save();
       refreshView();
@@ -923,11 +930,11 @@ export const workspace = {
     /** Start a new tracked region for a code at the current time (its first keyframe). */
     function createTrack(codeId, region) {
       const t = round3(currentMediaEl?.currentTime || 0);
-      const seg = {
+      const seg = authored({
         doc: activeRid, codeId,
         keys: [{ t, x: round4(region.x), y: round4(region.y), w: round4(region.w), h: round4(region.h) }],
         tStart: t, tEnd: t, text: timeLabel(t, t),
-      };
+      });
       state.segments.push(seg);
       activeTrack = seg; videoSel = null;
       save();
@@ -1266,7 +1273,7 @@ export const workspace = {
       const commit = () => {
         const name = inp.value.trim();
         if (!name) return;
-        state.codes.push({ id: uid(), name, color: PALETTE[state.codes.length % PALETTE.length], group: '', memo: '' });
+        state.codes.push(authored({ id: uid(), name, color: PALETTE[state.codes.length % PALETTE.length], group: '', memo: '' }));
         inp.value = ''; save(); renderCodes();
       };
       add.addEventListener('click', commit);
@@ -1318,13 +1325,13 @@ export const workspace = {
         const memos = [];
         for (const s of hits) { lo = Math.min(lo, s.start); hi = Math.max(hi, s.end); if (s.memo) memos.push(s.memo); }
         const doc = docs.find((d) => d.rid === activeRid);
-        const merged = { doc: activeRid, codeId, start: lo, end: hi, text: doc ? doc.text.slice(lo, hi) : span.text };
+        const merged = authored({ doc: activeRid, codeId, start: lo, end: hi, text: doc ? doc.text.slice(lo, hi) : span.text });
         if (memos.length) merged.memo = memos.join('\n'); // keep any per-coding notes
         state.segments = state.segments.filter((s) => !hits.includes(s));
         state.segments.push(merged);
         save();
       } else {
-        state.segments.push({ doc: activeRid, codeId, start: lo, end: hi, text: span.text });
+        state.segments.push(authored({ doc: activeRid, codeId, start: lo, end: hi, text: span.text }));
         save();
       }
       renderText(); renderDocList(); renderCodes();
@@ -1384,7 +1391,7 @@ export const workspace = {
       const mk = () => {
         const name = inp.value.trim();
         if (!name) return;
-        const code = { id: uid(), name, color: PALETTE[state.codes.length % PALETTE.length], group: '', memo: '' };
+        const code = authored({ id: uid(), name, color: PALETTE[state.codes.length % PALETTE.length], group: '', memo: '' });
         state.codes.push(code); choose(code.id);
       };
       inp.addEventListener('click', (e) => e.stopPropagation());
