@@ -19,6 +19,7 @@ import { UiService } from './ui-service.js';
 import { ImportService } from './import-service.js';
 import { ExportService } from './export-service.js';
 import { installPassphraseUI } from './passphrase-ui.js';
+import { installIdentityChip } from './user-identity.js';
 import { OutputExportService } from './output-export.js';
 import { ComputeRecode } from './compute-recode.js';
 import { DatasetOps } from './dataset-ops.js';
@@ -836,6 +837,10 @@ export async function boot(mounts) {
     brand.title = 'Open the launcher / plugin picker';
     brand.addEventListener('click', () => void launcher.open({ reopen: true }));
   }
+
+  // Your identity self-chip in the top bar (#148) — shows your initials, click to edit.
+  // Seed for the live-presence row; other editors' chips will sit beside it later.
+  installIdentityChip(document.querySelector('header'));
 
   // Boot done: from the next change on, an unsaved session auto-starts an
   // autosaving "Untitled project" (so the launcher's data load doesn't spawn one).
