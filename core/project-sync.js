@@ -1354,6 +1354,13 @@ export class ProjectSync {
     return !!(this.#collabId && this.#collabSecret);
   }
 
+  /** A stable identity for the CURRENTLY-OPEN project — changes only on a real project
+   * switch, NOT on status/co-author re-emits. Lets listeners tell "switched projects"
+   * from "same project, something updated" (so presence isn't torn down on every emit). */
+  get projectKey() {
+    return this.#collabId ?? this.#binding?.id ?? null;
+  }
+
   /** The live signaling room + secret for the active project, or null if it has no
    * collab identity (a non-shared OPFS project). Both folder peers derive the same
    * room from the manifest — the entry point for presence + live co-authoring (#148). */

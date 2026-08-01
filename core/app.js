@@ -786,7 +786,9 @@ export async function boot(mounts) {
     menus.register({
       id: 'core:debug-toggle',
       path: ['Edit', 'Debugging'],
-      label: isDebug() ? '● Logging on' : '○ Logging off',
+      // Checkbox idiom: the glyph reflects the CURRENT state (☑ on / ☐ off) and
+      // clicking toggles it — so it's unambiguously a stateful toggle, not an action.
+      label: (isDebug() ? '☑' : '☐') + ' Debug logging',
       order: 10,
       command: () => { setDebug(!isDebug()); registerDebugToggle(); },
     });
@@ -961,12 +963,22 @@ export async function boot(mounts) {
       }
     });
 
-    // Leaving/switching a project drops you from its room; refresh + maybe auto-join the new one.
+    // PROJECT_CHANGED fires on EVERY project emit (save status, co-author start/stop),
+    // not just a real switch — so only tear down presence when the project actually
+    // CHANGED (compare projectKey). Otherwise startCoauthoring's own emit would trip
+    // the handler and immediately stop itself (the "co-author button bounces" storm).
+    let lastProjectKey = projects.projectKey;
     bus.on(PROJECT_CHANGED, async () => {
-      if (presence.live) await stopLive();
-      roster = [];
-      render();
-      void maybeAutoLive();
+      const key = projects.projectKey;
+      if (key !== lastProjectKey) {
+        lastProjectKey = key;
+        if (presence.live) await stopLive(); // left/switched project → leave its room
+        roster = [];
+        render();
+        void maybeAutoLive(); // auto-join the newly-opened project if opted in
+      } else {
+        render(); // same project, just a status/co-author re-emit → refresh UI only
+      }
     });
     // Toggling "auto-check" on goes live for the current project right away.
     onIdentityChange(() => { render(); void maybeAutoLive(); });
