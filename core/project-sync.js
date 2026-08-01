@@ -919,32 +919,34 @@ export class ProjectSync {
   }
 
   /**
-   * **Protect this project…** — set a passphrase on the CURRENT OPFS project so its
-   * data is encrypted at rest (#144). Each OPFS project has its own passphrase (the
-   * shared-lab case). Also the migration path for an existing plaintext project: it
-   * mints the project's key + meta, then re-saves the whole bundle encrypted.
+   * **Protect this project…** — set a passphrase so the project's data is encrypted at
+   * rest (#144). Works for both an OPFS project (its own per-project passphrase — the
+   * shared-lab case) and a folder project (its folder passphrase). Also the migration
+   * path for an existing plaintext project: mint the key + meta, re-save encrypted.
    */
   async protectProject() {
-    if (this.#folderMode || this.#store.folderBacked) {
-      this.#results.appendError('This project lives in a folder — its protection is the folder passphrase, set when you moved it there.');
-      return;
-    }
-    await this.#settle(); // make sure it's saved (and has a binding) before we re-key it
-    if (!this.#binding) {
+    const folder = this.#folderMode || this.#store.folderBacked;
+    await this.#settle(); // make sure it's saved (and, for OPFS, has a binding) before we re-key it
+    if (!folder && !this.#binding) {
       this.#results.appendError('Add some data first — an empty project has nothing to protect yet.');
       return;
     }
-    const id = this.#binding.id;
+    const id = folder ? FOLDER_PROJECT_ID : this.#binding.id;
+    const name = this.#binding?.name ?? 'this project';
     if (await this.#store.hasEncryption(id)) {
       this.#results.appendError('This project is already protected.');
       return;
     }
-    const pass = await passphraseFor('local-new'); // set mode: passphrase + confirm + "no recovery"
+    // OPFS is on-device (per-project); a folder is opened "on any machine" and shared.
+    const pass = await passphraseFor(folder ? 'enable' : 'local-new'); // set mode + "no recovery"
     if (!pass) return; // cancelled — unchanged
     try {
-      await this.#store.unlock(pass, id); // mints per-project salt/verifier + key
-      await this.#fullSave(id, this.#binding.name); // rewrite the bundle, now encrypted
-      this.#results.appendText?.(`🔒 **“${this.#binding.name}” is now protected.** You'll need this passphrase to open it on this device — it isn't stored anywhere and can't be recovered.`);
+      await this.#store.unlock(pass, id); // mints salt/verifier + key
+      if (folder) await this.#folderRewrite(name);
+      else await this.#fullSave(id, name);
+      this.#results.appendText?.(folder
+        ? `🔒 **“${name}” is now protected.** Everyone who opens this folder will need this passphrase — share it with your collaborators out of band. It isn't stored anywhere and can't be recovered.`
+        : `🔒 **“${name}” is now protected.** You'll need this passphrase to open it on this device — it isn't stored anywhere and can't be recovered.`);
     } catch (err) {
       this.#results.appendError(`Couldn’t protect the project: ${err.message}`);
     }
@@ -952,37 +954,55 @@ export class ProjectSync {
   }
 
   /**
-   * **Remove protection…** — decrypt the current OPFS project back to plaintext on
-   * this device. Requires a confirmation (it lowers the project's at-rest security).
-   * The project is already unlocked (we opened it with the passphrase), so this drops
-   * the key + meta and re-saves the bundle in the clear.
+   * **Remove protection…** — decrypt the project back to plaintext IN PLACE (#144).
+   * Requires a confirmation (it lowers at-rest security). For a folder project the
+   * warning is stronger: it exposes the data to everyone sharing the folder and to
+   * whatever cloud service mirrors it. The project is already unlocked, so this drops
+   * the key + meta and re-writes the whole bundle in the clear.
    */
   async unprotectProject() {
-    if (this.#folderMode || this.#store.folderBacked) {
-      this.#results.appendError('This is a folder project — remove its protection by moving it out of the folder, not here.');
-      return;
-    }
-    if (!this.#binding) return;
-    const id = this.#binding.id;
+    const folder = this.#folderMode || this.#store.folderBacked;
+    await this.#settle();
+    if (!folder && !this.#binding) return;
+    const id = folder ? FOLDER_PROJECT_ID : this.#binding.id;
+    const name = this.#binding?.name ?? 'this project';
     if (!(await this.#store.hasEncryption(id))) {
       this.#results.appendError('This project isn’t protected.');
       return;
     }
     const ok = await confirmDialog({
       title: 'Remove protection?',
-      message: `“${this.#binding.name}” will be stored unencrypted on this device. Anyone (or any program) that can read this browser's files could then read it.`,
+      message: folder
+        ? `“${name}” will be re-written UNENCRYPTED in its folder. Anyone who has the folder — and whatever cloud service it syncs through — will then be able to read it with no passphrase. This turns off protection for everyone the folder is shared with.`
+        : `“${name}” will be stored unencrypted on this device. Anyone (or any program) that can read this browser's files could then read it.`,
       okLabel: 'Remove protection',
       danger: true,
     });
     if (!ok) return;
     try {
       await this.#store.removeEncryption(id); // deletes the meta + drops the key
-      await this.#fullSave(id, this.#binding.name); // rewrite the bundle plaintext (key now null)
-      this.#results.appendText?.(`🔓 **“${this.#binding.name}” is no longer protected** — it's stored unencrypted on this device now.`);
+      if (folder) await this.#folderRewrite(name);
+      else await this.#fullSave(id, name);
+      this.#results.appendText?.(folder
+        ? `🔓 **“${name}” is no longer protected** — its data is now stored unencrypted in the folder (and wherever that folder syncs).`
+        : `🔓 **“${name}” is no longer protected** — it's stored unencrypted on this device now.`);
     } catch (err) {
       this.#results.appendError(`Couldn’t remove protection: ${err.message}`);
     }
     this.#emitProject();
+  }
+
+  /**
+   * Blind full re-write of the current folder project's bundle with whatever key
+   * state is set now — used to flip a folder project's at-rest protection in place
+   * (protect: key set → encrypted; unprotect: key null → plaintext). Bypasses the
+   * merge sync (an explicit one-shot admin action), then resets the per-peer base so
+   * the poll doesn't read its own write back as a remote change.
+   */
+  async #folderRewrite(name) {
+    const bundle = await this.#snapshot(true); // all sources
+    await this.#store.save({ id: FOLDER_PROJECT_ID, name, savedAt: Date.now(), bundle });
+    this.#lastManifest = await this.#store.readManifest(FOLDER_PROJECT_ID);
   }
 
   /** Remembered folder projects (for the sidebar + launcher lists). */
