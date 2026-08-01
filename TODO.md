@@ -952,27 +952,27 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       (hidden for OPFS, wired, no errors); needs a two-window test on a shared folder to
       confirm peers actually see each other's chips. This is also the first live-P2P
       session wired — the handshake the future **live data co-authoring** layer reuses.
-  - [~] **6. Live DATA co-authoring — the layer the "start co-authoring" prompt launches.**
+  - [~] **6. Live DATA co-authoring — WIRED end-to-end (6a+6b+6c); awaiting a two-window test.** — the layer the "start co-authoring" prompt launches.**
     Presence (step 5) is *awareness only*. The convergence **ENGINE is done + proven
     headlessly** — `core/live-protocol.js` `LiveDoc` (canonical-peerId ordering → byte
     convergence) + `attachLiveDoc`, with tests covering disjoint recodes, order-independence,
     late-join, a genuine conflict resolving, AND CAQDAS codebooks converging live. `LiveSession`
     now exposes `.selfId` (done) for the wiring. What remains is the **app integration**, and
     studying it surfaced **three concrete prerequisites** (none trivial, so NOT built blind):
-    - [ ] **6a. Live-apply materialisation.** Applying a peer's merged manifest live has NO
+    - [x] **6a. Live-apply materialisation. DONE.** Applying a peer's merged manifest live has NO
       disk round-trip (unlike folder `#applyMergedManifest`, which reloads from the folder
       after the merge wrote it). Need a path that rebuilds datasets from the merged manifest
       **reusing the local Parquet** (matched by source id) + merged transforms + merged
       workspace blobs — i.e. restoreState-from-manifest without re-fetching bytes we already
       have. Feasible for the shared-base case (both peers hold the same sources).
-    - [ ] **6b. Plugin-merger assembly (ALSO fixes folder-sync coding merge).** The app never
+    - [x] **6b. Plugin-merger assembly DONE — (ALSO fixes folder-sync coding merge).** The app never
       calls `buildMergers` with real plugin modules — `#folderSave` passes `{core}` only — so
       plugin/blob (CAQDAS coding) merge doesn't happen in the REAL app today, folder OR live;
       it surfaces as conflict/LWW. Need host access to builtin plugin mergers (import
       builtin `mergeState` host-side — builtins are trusted) or the sandbox-bridge for
       3rd-party. **High value: unblocks coder-merge for BOTH transports**, and it's the
       office-hours driver. Ties [[plugin-verb-declaration]].
-    - [ ] **6c. Base-data byte gap-fill.** Cold join / a peer adding a NEW dataset → the
+    - [x] **6c. Base-data byte gap-fill. DONE (wired).** Cold join / a peer adding a NEW dataset → the
       merged manifest references Parquet the other lacks → transfer over the channel
       (content-hash index → "send this file"). `core/gap-fill.js` (`SourceExchange`) exists
       but isn't wired. Required for the flash-drive/OPFS-import cold-start case; shared-base
