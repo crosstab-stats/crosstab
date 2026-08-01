@@ -898,13 +898,23 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     `segKey` use the id when present (content-key fallback for legacy/imported segments) — so
     per-coder codings stay DISTINCT and memos get a durable anchor. Changes merge semantics
     (more segments survive a merge), so confirm the methodology intent before shipping.
-  - [ ] **3. Memos / annotations (anchored comments).** Word/Docs-style margin comments,
-    but anchored + persistent + part of the analytic record. **Open decision: the anchoring
-    model** — start with the highest-value anchor (a coded segment / a code) and generalise
-    to cells / variables / analysis outputs later; resist a speculative "comment on
-    anything" engine. Author-stamped (needs step 1+2 first). Merge = add-wins set keyed by
-    memo id (like the codebook); threads = comment + replies, resolve/unresolve. **STARTING
-    after 1+2.**
+  - [~] **3. Memos / annotations (anchored comments).** Word/Docs-style margin comments,
+    but anchored + persistent + part of the analytic record. **Decisions (with user):**
+    (i) memos REPLACE the old inline `memo` string going forward (legacy memo shown as a
+    read-only first note; no lossy migration); (ii) **flat / chronological, author-stamped**
+    — not nested threads — so a faculty reply in the teaching/office-hours case can't get
+    buried under a fold and all students see it (record leaves room for an optional
+    `replyTo` later); (iii) memos are their OWN add-wins collection anchored by id, NOT
+    nested in the segment — required so faculty + student can both annotate the same coding
+    without one clobbering the other. Anchor: coded segment / code first (segments now have
+    stable ids); generalise to cells/variables/outputs later.
+    - [x] **3a. Data model + merge DONE** — `state.memos = [{id, anchorKind, anchorId,
+      author, text, createdAt}]`; add-wins by memo id in `mergeState` + normalize; +1 test
+      (both people's annotations on one coding survive). 113 pass.
+    - [ ] **3b. Thread UI** — a per-anchor notes panel in the coding pane (transcript margin
+      / retrieve / code memo area): list author-stamped notes chronologically, add a note,
+      delete your own; replace the inline memo editors; re-anchor notes when overlapping
+      same-code segments merge locally. (Cross-origin plugin → verify by reading the blob.)
   - [ ] **4. Inter-coder reliability analysis (κ / α).** The payoff. Consumes the
     per-coder attribution from steps 2–3 to compute agreement + surface disagreements.
     Later; identity + authorship + memos all feed it.
