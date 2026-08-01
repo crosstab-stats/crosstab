@@ -21,6 +21,7 @@ import { rememberFolder, listFolders, forgetFolder, ensureReadWrite } from './fo
 import { passphraseFor, shouldEncrypt } from './at-rest.js';
 import { syncFolderProject, manifestsEqual } from './folder-sync.js';
 import { showConflictDialog } from './conflict-ui.js';
+import { shortcutFiles } from './folder-shortcut.js';
 
 const DEBOUNCE_MS = 800;
 
@@ -695,6 +696,7 @@ export class ProjectSync {
     this.#folderMode = true;
     this.#lastManifest = await this.#store.readManifest(this.#binding.id);
     this.#activeFolderId = await rememberFolder(handle, { name: this.#binding.name, savedAt: Date.now() }); // first-class in launcher + sidebar
+    await this.#ensureFolderShortcuts(this.#binding.name); // regenerate the on-ramp if a shared folder lacks it
     this.#startPoll();
     this.#emitProject();
     return true;
@@ -732,6 +734,7 @@ export class ProjectSync {
       this.#folderMode = true;
       this.#lastManifest = await this.#store.readManifest(this.#binding.id);
       this.#activeFolderId = await rememberFolder(handle, { name: this.#binding.name, savedAt: Date.now() });
+      await this.#ensureFolderShortcuts(this.#binding.name); // OS-facing double-click on-ramp for recipients
       this.#startPoll();
       this.#emitProject();
       // True move: drop the now-redundant OPFS copy (via a throwaway OPFS store, since
@@ -749,6 +752,26 @@ export class ProjectSync {
    * it opens the files *and* is the key to the collaboration). Refuses an empty
    * folder (use *Move project to a folder…* to seed one).
    */
+  /**
+   * Drop the OS-facing double-click shortcuts (Windows `.url`, Mac `.webloc`, a
+   * HOW-TO note) into the folder if they're not already there (#143), so a
+   * recipient can launch CrossTab straight from the shared folder. Plaintext,
+   * app-URL only — never the passphrase. Best-effort: a shortcut is a convenience,
+   * so a write failure must never block opening or saving the project.
+   */
+  async #ensureFolderShortcuts(name) {
+    try {
+      const files = shortcutFiles(
+        name || this.#binding?.name || 'CrossTab project',
+        location.origin,
+        location.pathname,
+      );
+      for (const f of files) {
+        if (!(await this.#store.hasPlainFile(f.name))) await this.#store.writePlainFile(f.name, f.text);
+      }
+    } catch { /* shortcuts are a convenience — never block folder open/save */ }
+  }
+
   async openFromFolder() {
     const handle = await this.#pickFolder();
     if (!handle) return;

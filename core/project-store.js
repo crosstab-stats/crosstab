@@ -392,6 +392,31 @@ export class ProjectStore {
     await this.#writeSources(id, bundle, only);
   }
 
+  /**
+   * Write a plaintext file directly into the folder, BYPASSING encryption — for
+   * OS-facing files (double-click shortcuts, a HOW-TO note) that the operating
+   * system reads and CrossTab itself never reads back. Folder mode only.
+   * @param {string} name  bare file name (flat folder layout)
+   * @param {string|Uint8Array} data
+   * @returns {Promise<boolean>} false (no-op) unless folder-backed
+   */
+  async writePlainFile(name, data) {
+    if (!this.#flat) return false;
+    const bytes = typeof data === 'string' ? te.encode(data) : data;
+    await this.#driver.write(name, bytes);
+    return true;
+  }
+
+  /** Whether a plaintext file already exists directly in the folder (flat mode). */
+  async hasPlainFile(name) {
+    if (!this.#flat) return false;
+    try {
+      return (await this.#driver.read(name)) != null;
+    } catch {
+      return false;
+    }
+  }
+
   // --- internals -------------------------------------------------------------
 
   /** Path of a file inside a project bundle (layout-aware; see {@link ProjectStore#useDirectory}). */

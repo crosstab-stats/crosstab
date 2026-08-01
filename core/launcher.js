@@ -151,6 +151,51 @@ export class Launcher {
   }
 
   /**
+   * A focused "open the shared folder" landing (#143) — the destination of the
+   * `?launch=open-folder` deep link baked into the double-click shortcuts we drop
+   * into folder projects. A first-time recipient lands here on a single button
+   * instead of the full launcher; clicking it fires the directory picker (the user
+   * gesture the browser demands) → passphrase → project. Resolves once they're in
+   * (or they pick "blank" instead). We can't skip the folder pick — the browser
+   * won't let a web page open a folder without an explicit click.
+   * @returns {Promise<void>}
+   */
+  async openFolderLanding() {
+    if (this.#root) return;
+    injectStyles();
+    const overlay = el('div', null, 'ctl');
+    this.#root = overlay;
+    overlay.innerHTML = `
+      <div class="ctl__card ctl__card--landing">
+        <div class="ctl__header">
+          <div class="ctl__brand">CrossTab</div>
+          <div class="ctl__tagline">Open a shared project</div>
+        </div>
+        <div class="ctl__landingbody">
+          <p class="ctl__landinglead">You've opened a shared CrossTab folder. Click below, then choose <strong>this same folder</strong> when your browser asks — you'll enter its passphrase next.</p>
+          <button type="button" class="ctl__start ctl__openfolder">📂 Open shared folder</button>
+          <button type="button" class="ctl__link ctl__blank">Start a blank project instead</button>
+          <p class="ctl__landingfine">Your browser requires you to pick the folder yourself — for your security, a web page can't open one without your click.</p>
+        </div>
+      </div>`;
+    document.body.append(overlay);
+    overlay.querySelector('.ctl__openfolder').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        await this.#projects.openFromFolder(); // gesture → picker → (passphrase) → folder mode
+        if (this.#projects.folderBacked) { this.#close(); return; } // in — done
+      } catch { /* fall through so they can retry */ }
+      btn.disabled = false; // picker cancelled or open failed — stay on the landing
+    });
+    overlay.querySelector('.ctl__blank').addEventListener('click', async () => {
+      this.#close();
+      try { await this.#projects.newProject(); } catch { /* best-effort */ }
+    });
+    return new Promise((resolve) => { this.#resolve = resolve; });
+  }
+
+  /**
    * Show the launcher and resolve once the user enters the app.
    * @param {{reopen?: boolean}} [opts]
    * @returns {Promise<void>}
@@ -839,6 +884,14 @@ function injectStyles() {
       border-radius: 8px; background: var(--accent, #2980b9); color: #fff; cursor: pointer; }
     .ctl__start:hover { background: #1f6391; }
     .ctl__start:disabled { opacity: .6; cursor: default; }
-    .ctl__howto-body p { margin: 0 0 10px; line-height: 1.5; }`;
+    .ctl__howto-body p { margin: 0 0 10px; line-height: 1.5; }
+    .ctl__card--landing { width: min(560px, 96vw); }
+    .ctl__landingbody { padding: 28px 30px 30px; display: flex; flex-direction: column; align-items: center;
+      text-align: center; gap: 16px; background: var(--bg, #f7f8fa); }
+    .ctl__landinglead { margin: 0; font-size: 15px; line-height: 1.5; color: #34414e; }
+    .ctl__landingfine { margin: 0; font-size: 12px; color: #8a94a0; line-height: 1.45; }
+    .ctl__openfolder { font-size: 16px; padding: 12px 32px; }
+    .ctl__link { font: inherit; font-size: 13px; background: none; border: 0; color: var(--accent, #2980b9); cursor: pointer; padding: 2px 4px; }
+    .ctl__link:hover { text-decoration: underline; }`;
   document.head.append(s);
 }

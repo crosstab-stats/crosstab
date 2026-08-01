@@ -813,7 +813,11 @@ export async function boot(mounts) {
   engine.launcher = launcher;
   const launchFlag = new URLSearchParams(location.search).get('launch');
   let bypassed = false;
-  if (launchFlag) {
+  if (launchFlag === 'open-folder') {
+    // The double-click shortcuts we drop into a folder project (#143) deep-link
+    // here: show a focused "Open shared folder" landing instead of the full picker.
+    try { await launcher.openFolderLanding(); bypassed = true; } catch (err) { console.warn('Open-folder landing failed', err); }
+  } else if (launchFlag) {
     try {
       // `?launch=` accepts a preset (start-blank/demo-quant/demo-qual) or, failing
       // that, a saved project name — opening it (data + its plugins) headless.
