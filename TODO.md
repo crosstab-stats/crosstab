@@ -928,9 +928,15 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     feature, not a collab one, so it lives in **"## More analyses"** below (the stats
     backlog). The collab foundation it needs — per-coder attribution + distinct per-coder
     segments — is DONE here (steps 2–3); the κ/α computation is the analysis-side work.
-  - [ ] **5. Presence chips in the top bar.** Live editors shown by initials/colour. Cheap
+  - [~] **5. Presence chips in the top bar. BUILT (awaiting 2-window verify).** Live editors shown by initials/colour. Cheap
     add-on, but coupled to **live P2P** (`core/presence.js` broadcasts peers) — lands WITH
     the live co-authoring chunk, not before. The self-chip built in step 1 is its seed.
+    - [x] **5a. Collab identity minted+persisted for folder projects** (roomFor now works).
+    - [~] **5b. Go-live toggle + peer chips** — `core/live-presence.js` (LiveSession +
+      PresenceRoom) + header UI; explicit opt-in; identity-beacon only. Solo-verified
+      (hidden for OPFS, wired, no errors); needs a two-window test on a shared folder to
+      confirm peers actually see each other's chips. This is also the first live-P2P
+      session wired — the handshake the future **live data co-authoring** layer reuses.
   - [ ] **~~In-project chat~~ — DEFERRED / maybe never.** Disproportionate scope
     (persistence, history, retention, notifications) for uncertain value when teams already
     have Slack/Teams; and it's the *unanchored* opposite of a memo. If ever, rescope to
