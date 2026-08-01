@@ -22,6 +22,7 @@ import { passphraseFor, shouldEncrypt, PASSPHRASE_ABORT } from './at-rest.js';
 import { syncFolderProject, manifestsEqual } from './folder-sync.js';
 import { showConflictDialog } from './conflict-ui.js';
 import { shortcutFiles } from './folder-shortcut.js';
+import { showEncryptionSettings } from './encryption-settings.js';
 
 const DEBOUNCE_MS = 800;
 
@@ -207,6 +208,7 @@ export class ProjectSync {
     // via their folder passphrase instead, so these guard against that case.
     this.#menus.register({ id: 'core:proj-protect', path: ['File'], label: 'Protect this project…', order: 8, command: () => void this.protectProject() });
     this.#menus.register({ id: 'core:proj-unprotect', path: ['File'], label: 'Remove protection…', order: 9, command: () => void this.unprotectProject() });
+    this.#menus.register({ id: 'core:encryption-settings', path: ['File'], label: 'Encryption settings…', order: 10, command: () => showEncryptionSettings() });
     this.#bus.on(CoreEvents.DATA_CHANGED, (s) => this.#onChange(s));
     this.#bus.on(DATASETS_CHANGED, () => this.#onChange(null));
     this.#bus.on(CoreEvents.PLUGINS_CHANGED, () => this.#onPluginsChanged());
@@ -259,6 +261,23 @@ export class ProjectSync {
 
   /** Write the whole project (all datasets' sources + logs) and (re)bind. */
   async #fullSave(id, name) {
+    // Default-protect a brand-new OPFS project when the policy is on (#144). Pre-mint
+    // the id and set a per-project passphrase so the very first write is already
+    // encrypted (never a plaintext version on disk first). Skipping the prompt leaves
+    // this one project plaintext — it's asked once, at creation, not on every save.
+    if (id == null && !this.#store.folderBacked && !this.#store.encrypted && shouldEncrypt('local')) {
+      const pass = await passphraseFor('local-new');
+      if (pass) {
+        const newId = crypto.randomUUID();
+        try {
+          await this.#store.unlock(pass, newId); // mints per-project meta + key
+          id = newId;
+        } catch (err) {
+          this.#results.appendError(`Couldn’t set up protection — saving unprotected: ${err.message}`);
+          this.#store.lock();
+        }
+      }
+    }
     this.#setStatus('saving', name);
     try {
       const savedId = await this.#attemptSave(async () => {
