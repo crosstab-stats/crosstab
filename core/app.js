@@ -1161,6 +1161,12 @@ class ProjectSidebar {
     } catch {
       /* OPFS unavailable */
     }
+    let folderProjects = [];
+    try {
+      folderProjects = (await this.projects.listFolderProjects?.()) ?? [];
+    } catch {
+      /* no remembered folders */
+    }
     try {
       blocks = await this.library.list();
     } catch {
@@ -1199,7 +1205,7 @@ class ProjectSidebar {
     this.host.replaceChildren();
     this.host.append(this.#projectZone(blockVer));
     if (binned.length) this.host.append(this.#recycleZone(binned));
-    this.host.append(this.#projectsZone(otherProjects));
+    this.host.append(this.#projectsZone(otherProjects, folderProjects));
     this.host.append(this.#blocksZone(blocks));
   }
 
@@ -1482,10 +1488,10 @@ class ProjectSidebar {
 
   // --- zone 2: other saved projects ------------------------------------------
 
-  #projectsZone(projects) {
+  #projectsZone(projects, folderProjects = []) {
     const frag = document.createDocumentFragment();
     frag.append(el('div', 'Projects', 'proj__sub proj__sub--zone'));
-    if (projects.length === 0) {
+    if (projects.length === 0 && folderProjects.length === 0) {
       frag.append(el('div', 'No other saved projects.', 'proj__empty'));
       return frag;
     }
@@ -1510,6 +1516,22 @@ class ProjectSidebar {
         void this.projects.deleteProject(p.id);
       }, 'proj__ds-x');
       li.append(name, edit, del);
+      list.append(li);
+    }
+    // Remembered folder projects (#143) — external folders (OneDrive/Dropbox/local),
+    // first-class alongside in-browser projects. Click reopens (a permission re-grant
+    // happens on the click); ✕ forgets the entry (leaves the folder's files intact).
+    for (const f of folderProjects) {
+      const li = document.createElement('li');
+      li.className = 'proj__ds proj__ds--folder';
+      li.title = `Reopen folder project: ${f.name}`;
+      li.addEventListener('click', () => void this.projects.reopenFolder(f.handle));
+      const name = el('span', `📁 ${f.name}`, 'proj__ds-name');
+      const forget = iconBtn('✕', 'Forget this folder (keeps its files)', (e) => {
+        e.stopPropagation();
+        void this.projects.forgetFolderProject(f.id);
+      }, 'proj__ds-x');
+      li.append(name, forget);
       list.append(li);
     }
     frag.append(list);

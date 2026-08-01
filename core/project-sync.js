@@ -16,7 +16,8 @@
 
 import { CoreEvents } from './event-bus.js';
 import { DATASETS_CHANGED } from './dataset-manager.js';
-import { saveFolderHandle, clearFolderHandle, ensureReadWrite } from './folder-handle.js';
+import { ProjectStore } from './project-store.js';
+import { rememberFolder, listFolders, forgetFolder, ensureReadWrite } from './folder-handle.js';
 import { passphraseFor, shouldEncrypt } from './at-rest.js';
 import { syncFolderProject, manifestsEqual } from './folder-sync.js';
 import { showConflictDialog } from './conflict-ui.js';
@@ -622,6 +623,17 @@ export class ProjectSync {
 
   /** Pick a folder + attach the store to it (shared by move/open). Returns the
    * handle, or null on cancel/denied. Flushes any pending OPFS save first. */
+  /** Re-grant write, flush any pending OPFS save, then point the store at the folder. */
+  async #attach(handle) {
+    if (!(await ensureReadWrite(handle))) {
+      this.#results.appendError('Folder write access wasn’t granted.');
+      return false;
+    }
+    await this.#settle(); // flush any pending OPFS save before switching backends
+    this.#store.useDirectory(handle);
+    return true;
+  }
+
   async #pickFolder() {
     if (typeof window === 'undefined' || !window.showDirectoryPicker) {
       this.#results.appendError('This browser can’t use a project folder — use Chrome or Edge on desktop.');
@@ -633,19 +645,45 @@ export class ProjectSync {
     } catch {
       return null; // user cancelled the picker
     }
-    if (!(await ensureReadWrite(handle))) {
-      this.#results.appendError('Folder write access wasn’t granted.');
-      return null;
-    }
-    await this.#settle(); // flush any pending OPFS save before switching backends
-    this.#store.useDirectory(handle);
-    return handle;
+    return (await this.#attach(handle)) ? handle : null;
   }
 
   /** Revert the store to OPFS after a failed/aborted folder attach. */
   #detachFolder() {
     this.#store.useDirectory(null);
     this.#store.lock();
+    this.#folderMode = false;
+    this.#lastManifest = null;
+    this.#stopPoll();
+  }
+
+  /** Open the (single) project in an already-attached folder store: one-gate
+   * passphrase, then load it and enter folder mode. Shared by pick + reconnect. */
+  async #openExistingFolder(handle) {
+    if (await this.#store.hasEncryption()) {
+      const pass = await passphraseFor('folder'); // enter mode
+      if (!pass) { this.#detachFolder(); return false; }
+      try {
+        await this.#store.unlock(pass);
+      } catch {
+        this.#results.appendError('Wrong passphrase for this folder.');
+        this.#detachFolder();
+        return false;
+      }
+    }
+    const entries = await this.#store.list();
+    if (!entries.length) {
+      this.#results.appendError('No CrossTab project in that folder — use “Move project to a folder…” to put one there.');
+      this.#detachFolder();
+      return false;
+    }
+    await this.openProject(entries[0].id); // the folder's project
+    this.#folderMode = true;
+    this.#lastManifest = await this.#store.readManifest(this.#binding.id);
+    await rememberFolder(handle, { name: this.#binding.name, savedAt: Date.now() }); // first-class in launcher + sidebar
+    this.#startPoll();
+    this.#emitProject();
+    return true;
   }
 
   /**
@@ -657,6 +695,9 @@ export class ProjectSync {
    * be called from the menu click (`showDirectoryPicker` needs a user gesture).
    */
   async moveToFolder() {
+    // If we're moving an OPFS-backed project, remember it so we can drop the leftover
+    // copy after a successful move (a true move, no confusing duplicate in the launcher).
+    const orphanOpfsId = this.#folderMode ? null : this.#binding?.id;
     const handle = await this.#pickFolder();
     if (!handle) return;
     try {
@@ -672,13 +713,16 @@ export class ProjectSync {
         const pass = await passphraseFor('folder-new'); // set mode; null ⇒ opted out → plaintext
         if (pass) await this.#store.unlock(pass);
       }
-      await saveFolderHandle(handle);
       this.#binding = null; // a brand-new entry, living in the folder now
       await this.#fullSave(null, this.activeName || 'My project');
       this.#folderMode = true;
       this.#lastManifest = await this.#store.readManifest(this.#binding.id);
+      await rememberFolder(handle, { name: this.#binding.name, savedAt: Date.now() });
       this.#startPoll();
       this.#emitProject();
+      // True move: drop the now-redundant OPFS copy (via a throwaway OPFS store, since
+      // #store is now folder-backed). Best-effort — the data is safe in the folder.
+      if (orphanOpfsId) { try { await new ProjectStore().delete(orphanOpfsId); } catch { /* leave it */ } }
     } catch (err) {
       this.#results.appendError(`Move to folder failed: ${err.message}`);
       this.#detachFolder();
@@ -695,31 +739,26 @@ export class ProjectSync {
     const handle = await this.#pickFolder();
     if (!handle) return;
     try {
-      if (await this.#store.hasEncryption()) {
-        const pass = await passphraseFor('folder'); // enter mode
-        if (!pass) { this.#detachFolder(); return; }
-        try {
-          await this.#store.unlock(pass);
-        } catch {
-          this.#results.appendError('Wrong passphrase for this folder.');
-          this.#detachFolder();
-          return;
-        }
-      }
-      const entries = await this.#store.list();
-      if (!entries.length) {
-        this.#results.appendError('No CrossTab project in that folder — use “Move project to a folder…” to put one there.');
-        this.#detachFolder();
-        return;
-      }
-      await saveFolderHandle(handle);
-      await this.openProject(entries[0].id); // the folder's (most recent) project
-      this.#folderMode = true;
-      this.#lastManifest = await this.#store.readManifest(this.#binding.id);
-      this.#startPoll();
-      this.#emitProject();
+      await this.#openExistingFolder(handle);
     } catch (err) {
       this.#results.appendError(`Open from folder failed: ${err.message}`);
+      this.#detachFolder();
+    }
+  }
+
+  /**
+   * Reconnect a **remembered** folder (the launcher's boot-time reopen entry) — no
+   * picker, but the browser still requires re-granting write via a user gesture
+   * (`ensureReadWrite`), so this runs from that click.
+   * @param {FileSystemDirectoryHandle} handle  from {@link module:core/folder-handle}
+   */
+  async reopenFolder(handle) {
+    if (!handle) return;
+    if (!(await this.#attach(handle))) return;
+    try {
+      await this.#openExistingFolder(handle);
+    } catch (err) {
+      this.#results.appendError(`Reopen folder failed: ${err.message}`);
       this.#detachFolder();
     }
   }
@@ -728,12 +767,22 @@ export class ProjectSync {
   async closeFolder() {
     if (!this.#folderMode) return;
     this.#stopPoll();
-    await this.#settle();
-    this.#detachFolder();
-    this.#folderMode = false;
-    this.#lastManifest = null;
-    try { await clearFolderHandle(); } catch { /* best effort */ }
+    await this.#settle(); // flush while still folder-backed
+    this.#detachFolder(); // → OPFS, clears folderMode/lastManifest/poll
+    // Keep the folder in the registry (reopenable from the launcher/sidebar) — closing
+    // ≠ forgetting; the sidebar's ✕ is the explicit "forget".
     await this.newProject();
+  }
+
+  /** Remembered folder projects (for the sidebar + launcher lists). */
+  listFolderProjects() {
+    return listFolders();
+  }
+
+  /** Forget a remembered folder (removes the list entry; leaves the folder's files). */
+  async forgetFolderProject(id) {
+    await forgetFolder(id);
+    this.#emitProject(); // refresh sidebar
   }
 
   /**

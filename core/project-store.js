@@ -29,7 +29,12 @@ import { deriveKey, encryptWithKey, decryptWithKey, isEnveloped, newSalt, DEFAUL
 const ROOT = 'projects';
 const CATALOG = 'catalog.json';
 const ENC_META = 'crosstab-encryption.json'; // plaintext salt/verifier for the folder
+const MARKER = 'crosstab-project.json'; // plaintext "this folder IS a CrossTab project" + display name
 const VERIFIER = 'crosstab-folder-v1'; // known token, encrypted, to check a passphrase on unlock
+
+/** In flat (folder) mode there's exactly one project and the id is vestigial — this
+ * stands in wherever the id-centric API needs one. */
+export const FOLDER_PROJECT_ID = '.';
 
 const te = new TextEncoder();
 const b64 = (bytes) => btoa(String.fromCharCode(...bytes));
@@ -52,18 +57,38 @@ export class ProjectStore {
    * plaintext in `crosstab-encryption.json` (a salt isn't secret). */
   #key = null;
 
-  /** Point the store at a picked folder (a OneDrive/Dropbox/local folder the OS
-   * sync client mirrors), or null to revert to OPFS. The caller must have re-granted
-   * write permission (`requestPermission`) first — the browser won't give silent
-   * persistent write to a user folder. */
+  /** **Flat, single-project layout** — for folder mode. The picked folder IS the
+   * project: files live directly in it (`project.json`, `ds<id>_src<n>.parquet`,
+   * `crosstab-encryption.json`, a `crosstab-project.json` marker) with NO `projects/`
+   * prefix, NO per-project id subdir, and NO catalog. OPFS keeps its nested
+   * multi-project layout. So "a project is a folder" (like a Logic/git/.app bundle). */
+  #flat = false;
+
+  /** Point the store at a picked folder (a OneDrive/Dropbox/local folder the OS sync
+   * client mirrors) — the folder itself is the project (flat layout). Null reverts to
+   * OPFS (nested multi-project). The caller must have re-granted write permission
+   * (`requestPermission`) first — the browser won't give silent persistent write. */
   useDirectory(handle) {
     this.#driver = handle ? new FsaFolderDriver(handle) : new OpfsDriver();
+    this.#flat = !!handle;
   }
 
   /** Swap in an arbitrary storage driver (the general seam — e.g. a future cloud
-   * driver). Null resets to OPFS. */
-  useDriver(driver) {
+   * driver, also one-project-per-location → flat). Null resets to OPFS. */
+  useDriver(driver, { flat = true } = {}) {
     this.#driver = driver ?? new OpfsDriver();
+    this.#flat = driver ? flat : false;
+  }
+
+  /** Path of a project file, respecting the layout. Flat (folder): the bare name.
+   * Nested (OPFS): `projects/<id>/<name>`. */
+  #path(id, name) {
+    return this.#flat ? name : `${ROOT}/${id}/${name}`;
+  }
+
+  /** Path of the plaintext encryption meta (salt/verifier). */
+  #metaPath() {
+    return this.#flat ? ENC_META : `${ROOT}/${ENC_META}`;
   }
 
   /** @returns {boolean} Whether the store is currently folder-backed (vs OPFS). */
@@ -91,7 +116,7 @@ export class ProjectStore {
   async unlock(passphrase) {
     // The salt/verifier meta is plaintext — read/write it via the driver DIRECTLY,
     // bypassing the crypto wrappers (chicken-and-egg: we need it to derive the key).
-    const metaPath = `${ROOT}/${ENC_META}`;
+    const metaPath = this.#metaPath();
     let meta = null;
     const rawMeta = await this.#driver.read(metaPath);
     if (rawMeta) { try { meta = JSON.parse(new TextDecoder().decode(rawMeta)); } catch { meta = null; } }
@@ -120,7 +145,7 @@ export class ProjectStore {
    * (an `crosstab-encryption.json` present) — so an open flow knows to *enter* an
    * existing passphrase vs *set* a new one. */
   async hasEncryption() {
-    return !!(await this.#driver.read(`${ROOT}/${ENC_META}`));
+    return !!(await this.#driver.read(this.#metaPath()));
   }
 
   /** Acquire the mutex; returns a release fn. */
@@ -138,6 +163,11 @@ export class ProjectStore {
    * bundle folder is missing (e.g. left by an old race) so the manager never
    * lists a project that can't be opened. */
   async list() {
+    // Flat (folder) mode: exactly one project, derived from its manifest (no catalog).
+    if (this.#flat) {
+      const m = await this.readManifest(FOLDER_PROJECT_ID);
+      return m ? [{ id: FOLDER_PROJECT_ID, name: m.name, savedAt: m.savedAt, datasetCount: (m.datasets ?? []).length, activePlugins: m.activePlugins ?? null }] : [];
+    }
     const release = await this.#acquire();
     try {
       const cat = await this.#readCatalog();
@@ -170,13 +200,20 @@ export class ProjectStore {
         /* best effort */
       }
     }
-    id = id || crypto.randomUUID();
+    id = this.#flat ? FOLDER_PROJECT_ID : (id || crypto.randomUUID());
 
     // Parquet first, then the manifest — the same manifest shape folder-sync merges,
     // built by the shared {@link buildManifest} so save and sync never drift.
     await this.#writeSources(id, bundle, writeSourcesFor);
     const manifest = buildManifest({ name, savedAt, bundle });
     await this.#write(this.#file(id, 'project.json'), JSON.stringify(manifest));
+
+    if (this.#flat) {
+      // Folder = project: a plaintext marker makes the folder self-describing (and
+      // lets the launcher show its name before unlocking). No catalog in flat mode.
+      await this.#driver.write(MARKER, te.encode(JSON.stringify({ app: 'crosstab', name, savedAt })));
+      return id;
+    }
 
     const release = await this.#acquire();
     try {
@@ -290,6 +327,10 @@ export class ProjectStore {
    */
   async writeManifest(id, manifest) {
     await this.#write(this.#file(id, 'project.json'), JSON.stringify(manifest));
+    if (this.#flat) { // folder = project: refresh the plaintext marker, no catalog
+      await this.#driver.write(MARKER, te.encode(JSON.stringify({ app: 'crosstab', name: manifest.name, savedAt: manifest.savedAt })));
+      return;
+    }
     const release = await this.#acquire();
     try {
       const cat = await this.#readCatalog();
@@ -303,11 +344,15 @@ export class ProjectStore {
     }
   }
 
-  /** Rename a project (updates its manifest + the catalog). */
+  /** Rename a project (updates its manifest + the catalog/marker). */
   async rename(id, name) {
     const manifest = JSON.parse(await this.#read(this.#file(id, 'project.json')));
     manifest.name = name;
     await this.#write(this.#file(id, 'project.json'), JSON.stringify(manifest));
+    if (this.#flat) {
+      await this.#driver.write(MARKER, te.encode(JSON.stringify({ app: 'crosstab', name, savedAt: manifest.savedAt })));
+      return;
+    }
     const release = await this.#acquire();
     try {
       const cat = await this.#readCatalog();
@@ -319,8 +364,10 @@ export class ProjectStore {
     }
   }
 
-  /** Delete a project bundle and drop it from the catalog. */
+  /** Delete a project bundle and drop it from the catalog. (Not used in flat/folder
+   * mode — a folder project is deleted by the user removing the folder.) */
   async delete(id) {
+    if (this.#flat) return; // don't blow away the user's picked folder from here
     await this.#driver.removeTree(`${ROOT}/${id}`);
     const release = await this.#acquire();
     try {
@@ -347,9 +394,9 @@ export class ProjectStore {
 
   // --- internals -------------------------------------------------------------
 
-  /** Path of a file inside a project bundle. */
+  /** Path of a file inside a project bundle (layout-aware; see {@link ProjectStore#useDirectory}). */
   #file(id, name) {
-    return `${ROOT}/${id}/${name}`;
+    return this.#path(id, name);
   }
 
   async #readCatalog() {

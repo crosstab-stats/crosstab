@@ -47,6 +47,7 @@ export class Launcher {
   #discipline = 'All';
   #pendingSource = null; // source key chosen this session, applied on Start
   #pendingProject = null; // { id } when a saved project is chosen instead of a source
+  #pendingFolder = null; // a remembered folder handle, when the "reopen folder" entry is chosen
   #resolve = null;
   #onKey = null; // Escape-to-dismiss handler, active only while reopened over a session
 
@@ -232,6 +233,26 @@ export class Launcher {
           projBox.append(btn);
         }
       }
+      // Remembered folder projects (#143): one-click reopen of any picked folder.
+      // Reconnecting needs a write-permission re-grant, which happens on the Start
+      // click (the required user gesture). Shown even if the OPFS rail is empty.
+      if (projBox && this.#projects?.reopenFolder) {
+        let folders = [];
+        try { folders = await this.#projects.listFolderProjects(); } catch { folders = []; }
+        if (folders.length) overlay.querySelector('.ctl__railhead--projects')?.removeAttribute('hidden');
+        for (const folder of folders) {
+          const btn = el('button', `📁 ${folder.name}`, 'ctl__source ctl__source--project ctl__source--folder');
+          btn.type = 'button';
+          btn.title = `Reopen project folder: ${folder.name}`;
+          btn.addEventListener('click', () => {
+            this.#pendingFolder = folder.handle;
+            this.#pendingProject = null;
+            this.#pendingSource = null;
+            overlay.querySelectorAll('.ctl__source').forEach((b) => b.classList.toggle('is-active', b === btn));
+          });
+          projBox.append(btn);
+        }
+      }
     }
 
     overlay.querySelector('.ctl__howto').addEventListener('click', () => this.#showHowTo());
@@ -344,7 +365,12 @@ export class Launcher {
     startBtn.disabled = true;
     startBtn.textContent = 'Starting…';
     try {
-      if (this.#pendingProject && this.#projects) {
+      if (this.#pendingFolder && this.#projects) {
+        // Reopen a remembered folder — reopenFolder re-grants write (this Start click
+        // is the gesture) and restores the folder project + its own plugin set, so the
+        // picker's plugin selection isn't applied over it.
+        await this.#projects.reopenFolder(this.#pendingFolder);
+      } else if (this.#pendingProject && this.#projects) {
         // Open the chosen project's data + workspace state FIRST, *then* apply the
         // picker's selection. Order matters: applying the selection mounts workspace
         // tabs, and a workspace plugin reads its state on mount — so the workspace
@@ -389,6 +415,7 @@ export class Launcher {
     this.#root = null;
     this.#pendingSource = null;
     this.#pendingProject = null;
+    this.#pendingFolder = null;
     const r = this.#resolve; this.#resolve = null;
     r?.();
   }
