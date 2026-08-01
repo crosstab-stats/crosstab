@@ -14,7 +14,7 @@
  * flows get their prompt; before that, those flows fall back to plaintext.
  */
 
-import { setPassphraseProvider } from './at-rest.js';
+import { setPassphraseProvider, PASSPHRASE_ABORT } from './at-rest.js';
 
 /** Purposes that MEAN "choose a new passphrase" (set + confirm + warning). */
 const SET_PURPOSES = new Set(['export', 'set', 'folder-new', 'local-new', 'enable']);
@@ -23,14 +23,24 @@ const SET_PURPOSES = new Set(['export', 'set', 'folder-new', 'local-new', 'enabl
  * Show the passphrase dialog. Resolves to the passphrase, or null if cancelled (the
  * caller then leaves the data plaintext / aborts the open).
  *
+ * Pass `skipLabel` to turn a "set" prompt into a THREE-outcome dialog — used where
+ * "leave it unprotected" and "cancel the whole operation" are genuinely different
+ * (e.g. moving a project to a folder): the primary button returns the passphrase,
+ * the skip button returns `null` (proceed unprotected), and Cancel/Escape return
+ * {@link module:core/at-rest.PASSPHRASE_ABORT} (abort). Without `skipLabel` the
+ * dialog keeps its two-button behaviour (Cancel → null), so existing callers are
+ * unaffected.
+ *
  * @param {object} [opts]
  * @param {'enter'|'set'} [opts.mode='enter']
  * @param {string} [opts.title]
  * @param {string} [opts.message]
  * @param {string} [opts.okLabel]
- * @returns {Promise<string|null>}
+ * @param {string} [opts.skipLabel]   secondary "proceed unprotected" button (→ null)
+ * @param {string} [opts.cancelLabel] relabel the cancel button (e.g. "Cancel move")
+ * @returns {Promise<string|null|symbol>}
  */
-export function showPassphraseDialog({ mode = 'enter', title, message, okLabel } = {}) {
+export function showPassphraseDialog({ mode = 'enter', title, message, okLabel, skipLabel, cancelLabel } = {}) {
   const isSet = mode === 'set';
   return new Promise((resolve) => {
     const dialog = document.createElement('dialog');
@@ -82,12 +92,22 @@ export function showPassphraseDialog({ mode = 'enter', title, message, okLabel }
     menu.className = 'ct-dialog__buttons';
     const cancel = document.createElement('button');
     cancel.type = 'button';
-    cancel.textContent = 'Cancel';
+    cancel.textContent = cancelLabel || 'Cancel';
+    // Three-outcome mode: a distinct "proceed unprotected" button, so Cancel is
+    // unambiguously "abort the whole operation" (the point of the button rename).
+    let skip = null;
+    if (skipLabel) {
+      skip = document.createElement('button');
+      skip.type = 'button';
+      skip.textContent = skipLabel;
+    }
     const ok = document.createElement('button');
     ok.type = 'submit';
     ok.className = 'ct-dialog__primary';
     ok.textContent = okLabel || (isSet ? 'Protect' : 'Unlock');
-    menu.append(cancel, ok);
+    menu.append(cancel);
+    if (skip) menu.append(skip);
+    menu.append(ok);
     form.append(menu);
     dialog.append(form);
 
@@ -105,14 +125,18 @@ export function showPassphraseDialog({ mode = 'enter', title, message, okLabel }
     confirm?.addEventListener('input', refresh);
     refresh();
 
+    // In three-outcome mode, cancelling (button, Escape, or backdrop close) means
+    // "abort the whole operation"; "proceed unprotected" is the explicit skip button.
+    const cancelValue = skip ? PASSPHRASE_ABORT : null;
     let done = false;
     const finish = (value) => { if (!done) { done = true; resolve(value); } dialog.close(); };
-    cancel.addEventListener('click', () => finish(null));
+    cancel.addEventListener('click', () => finish(cancelValue));
+    skip?.addEventListener('click', () => finish(null));
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       if (valid()) finish(pass.value);
     });
-    dialog.addEventListener('close', () => { if (!done) { done = true; resolve(null); } dialog.remove(); });
+    dialog.addEventListener('close', () => { if (!done) { done = true; resolve(cancelValue); } dialog.remove(); });
 
     document.body.append(dialog);
     dialog.showModal();
@@ -132,6 +156,15 @@ function copyFor(purpose, opts = {}) {
     case 'unlock':
       return { title: 'Unlock project', message: 'This project is encrypted. Enter its passphrase to open it.' };
     case 'folder-new':
+      // Three-outcome: this folder can sync to a cloud provider, so "protect" vs
+      // "move unprotected" vs "cancel the move" are all distinct, meaningful choices.
+      return {
+        title: 'Protect this project?',
+        message: 'This folder can sync to a cloud provider (OneDrive, Dropbox…). Set a passphrase to encrypt everything CrossTab writes here — or move it unprotected. It’s required to open the project on any machine and is never stored.',
+        okLabel: 'Protect with passphrase',
+        skipLabel: 'Move without protection',
+        cancelLabel: 'Cancel move',
+      };
     case 'enable':
       return { title: 'Encrypt this project', message: 'Set a passphrase. It’s required to open the project on any machine and is never stored.' };
     default:

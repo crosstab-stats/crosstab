@@ -66,8 +66,18 @@ export function shouldEncrypt(target) {
 let _provider = null;
 
 /**
- * Register the passphrase prompt. `fn(purpose, opts)` → Promise<string|null>
- * (null = the user cancelled / declined → caller falls back to plaintext).
+ * A distinct third outcome for "set" prompts that offer BOTH "protect" and "leave
+ * unprotected": the user wants to abort the whole operation, not just skip
+ * encryption. A provider returns this (instead of a passphrase or `null`) so the
+ * caller can tell "move the project unprotected" (`null`) apart from "cancel the
+ * move entirely" (`PASSPHRASE_ABORT`). Two-button prompts never return it.
+ */
+export const PASSPHRASE_ABORT = Symbol('passphrase:abort');
+
+/**
+ * Register the passphrase prompt. `fn(purpose, opts)` → Promise<string|null|typeof
+ * PASSPHRASE_ABORT> (null = declined → caller falls back to plaintext;
+ * PASSPHRASE_ABORT = cancel the whole operation).
  * `purpose` is e.g. `'export'` | `'open-export'` | `'folder'` so the prompt can
  * tailor its copy (and warn "unrecoverable" when SETTING one).
  */

@@ -18,7 +18,7 @@ import { CoreEvents } from './event-bus.js';
 import { DATASETS_CHANGED } from './dataset-manager.js';
 import { ProjectStore, FOLDER_PROJECT_ID } from './project-store.js';
 import { rememberFolder, listFolders, forgetFolder, ensureReadWrite } from './folder-handle.js';
-import { passphraseFor, shouldEncrypt } from './at-rest.js';
+import { passphraseFor, shouldEncrypt, PASSPHRASE_ABORT } from './at-rest.js';
 import { syncFolderProject, manifestsEqual } from './folder-sync.js';
 import { showConflictDialog } from './conflict-ui.js';
 import { shortcutFiles } from './folder-shortcut.js';
@@ -726,7 +726,10 @@ export class ProjectSync {
         return;
       }
       if (shouldEncrypt('folder')) {
-        const pass = await passphraseFor('folder-new'); // set mode; null ⇒ opted out → plaintext
+        // Three outcomes: a passphrase (protect), null (move unprotected), or
+        // PASSPHRASE_ABORT (cancel the whole move → revert to OPFS, project stays put).
+        const pass = await passphraseFor('folder-new');
+        if (pass === PASSPHRASE_ABORT) { this.#detachFolder(); return; }
         if (pass) await this.#store.unlock(pass);
       }
       this.#binding = null; // a brand-new entry, living in the folder now
