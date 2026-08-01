@@ -871,14 +871,36 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       browser verified. **Passphrase PROMPT UI DONE** (commit 30969de):
       `core/passphrase-ui.js` (enter/set modes, confirm-match, "no recovery" warning) +
       `installPassphraseUI()` wired from app.js as the at-rest provider — so encrypted
-      export now prompts + engages. Verified in-browser (DOM). *Still open (UI/manual):*
-      the recipient **import-side decrypt** — this is import-*flow* work, not just a
-      prompt: a `.enc` file must be routed to a decrypt step and re-detected by its inner
-      format (`data.csv.enc`→`data.csv`→CSV importer), touching `import-service` dispatch;
-      only verifiable by actually picking a file, so deferred. Also: wiring `unlock` into
-      the folder-open flow + opt-in toggle for OPFS; a settings UI to flip defaults; and
-      the **chunked-Parquet** path for multi-GB sources (today a source encrypts whole —
-      fine to ~100s of MB; OOM concern below at GBs). Original design below.
+      export now prompts + engages. Verified in-browser (DOM).
+      **IMPORT-SIDE DECRYPT now DONE** (commit history around import-service): a dedicated
+      "Encrypted CrossTab file (.enc)" importer entry (+ a safety net that catches a `.enc`
+      picked under any format) prompts, decrypts the self-contained envelope, recovers the
+      inner format from the filename (`data.csv.enc`→CSV) and reuses `#resolveDownload`;
+      wrong passphrase fails closed. **OPFS PER-PROJECT AT-REST now DONE**: `ProjectStore`
+      grew per-project encryption (`#metaPath(id)`, `unlock(passphrase,id)`,
+      `hasEncryption(id)`, `removeEncryption(id)`, key bound to `#keyId` + a save-guard
+      against wrong-key writes; catalog kept plaintext since it spans projects with
+      different keys). `openProject` unlocks a protected OPFS project before load;
+      `File ▸ Protect this project… / Remove protection…` set/remove a passphrase **in
+      place for BOTH OPFS and folder** projects (change-your-mind either way); default-
+      protect prompts a new OPFS project at first save when the policy's on;
+      `File ▸ Encryption settings…` toggles that policy. Each OPFS project has its OWN
+      passphrase (shared-lab case). Verified against real OPFS. See [[at-rest-encryption]].
+  - [ ] **SERIOUS GAP — shared-folder encryption change has no live-peer key coordination.**
+      Flipping a *shared* folder project's protection (Protect / Remove protection, or a
+      passphrase change) only lands cleanly for peers who **reopen** the folder. A peer
+      who is **actively connected** keeps their old in-memory key, so their next save
+      re-encrypts with the stale key (after an unprotect) or fails to read the newly-keyed
+      files (after a protect / rekey) — silent divergence or read errors, exactly when the
+      data's confidentiality is what's changing. There is currently **no protocol to tell
+      connected peers "the folder's key changed → re-derive / re-prompt / relock."** Needs:
+      a versioned key epoch in the plaintext folder meta (peers detect a bump on poll) →
+      relock + re-prompt (or, once live P2P is up, an in-band "rekey" control message);
+      and a decision on whether unprotect should force-disconnect peers first. Until then,
+      the UI **warns** (unprotect confirm says it affects everyone), but that's mitigation,
+      not a fix. Ties into the live co-authoring elevation + [[collab-merge-kernel]].
+      *Still open (other):* the **chunked-Parquet** path for multi-GB sources (today a
+      source encrypts whole — fine to ~100s of MB; OOM concern below at GBs). Original design below.
       Today the whole project bundle persists **plaintext** to OPFS / IndexedDB /
       localStorage, and exports land plaintext wherever saved (see SECURITY.md #10 for the
       full threat scope). Browser storage is origin-isolated (other *sites* can't read it)
