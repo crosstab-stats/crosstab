@@ -15,6 +15,7 @@
  */
 
 import { LiveSession, attachPresence } from './live-sync.js';
+import { debug } from './debug.js';
 
 export class LivePresence {
   #session = null;
@@ -41,9 +42,11 @@ export class LivePresence {
    * @param {{ roomId: string, secret: string, self: object }} arg  `self` = the identity beacon
    */
   async start({ roomId, secret, self }) {
+    debug('live', 'presence.start', { room: String(roomId).slice(0, 8), self: self?.initials });
     await this.stop();
     const session = new LiveSession({ roomId, secret, self });
     await session.join();
+    debug('live', 'presence joined', { selfId: session.selfId });
     // attachPresence announces us + folds join/leave/beacon into the roster.
     attachPresence(session, { self, onChange: (roster) => this.#onRoster?.(roster) });
     this.#session = session;

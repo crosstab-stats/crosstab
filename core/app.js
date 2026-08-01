@@ -910,6 +910,7 @@ export async function boot(mounts) {
     // Join the current project's room, broadcasting this user's identity beacon.
     const startLive = async () => {
       const room = await projects.activeRoom();
+      debug('live', 'startLive', { hasRoom: !!room, collabReady: projects.collabReady });
       if (!room) return false; // not saved yet → no room
       const id = getIdentity();
       await presence.start({
@@ -933,6 +934,7 @@ export async function boot(mounts) {
     };
 
     goLiveBtn.addEventListener('click', async () => {
+      debug('live', 'goLive CLICK', { live: presence.live });
       goLiveBtn.disabled = true;
       try {
         if (presence.live) await stopLive();
