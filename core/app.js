@@ -1164,6 +1164,9 @@ class ProjectSidebar {
     let folderProjects = [];
     try {
       folderProjects = (await this.projects.listFolderProjects?.()) ?? [];
+      // Exclude the open folder — it's shown in the active-project zone, not "other".
+      const activeFolderId = this.projects.activeFolderId;
+      if (activeFolderId) folderProjects = folderProjects.filter((f) => f.id !== activeFolderId);
     } catch {
       /* no remembered folders */
     }

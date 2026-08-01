@@ -16,7 +16,7 @@
 
 import { CoreEvents } from './event-bus.js';
 import { DATASETS_CHANGED } from './dataset-manager.js';
-import { ProjectStore } from './project-store.js';
+import { ProjectStore, FOLDER_PROJECT_ID } from './project-store.js';
 import { rememberFolder, listFolders, forgetFolder, ensureReadWrite } from './folder-handle.js';
 import { passphraseFor, shouldEncrypt } from './at-rest.js';
 import { syncFolderProject, manifestsEqual } from './folder-sync.js';
@@ -72,6 +72,13 @@ export class ProjectSync {
   #binding = null;
   /** True while a picked folder (FSA) is the active backend, vs OPFS (#143). */
   #folderMode = false;
+  /** A dedicated OPFS store for LISTING in-browser projects even while the main store
+   * is folder-backed — so the launcher/sidebar list always shows OPFS projects, never
+   * the current folder's single project (which is surfaced via the folder registry). */
+  #opfs = new ProjectStore();
+  /** The registry id of the currently-open folder project (so the sidebar can exclude
+   * the active one from its folder list, matching OPFS behaviour). */
+  #activeFolderId = null;
   /** Last project manifest we wrote/saw in the folder — lets the poll detect a
    * peer's write cheaply (readManifest + compare) without a full merge each tick. */
   #lastManifest = null;
@@ -504,6 +511,10 @@ export class ProjectSync {
       return;
     }
     await this.#settle();
+    // Opening an OPFS project while a folder is open leaves folder mode (the folder
+    // stays remembered in the registry; #openExistingFolder opens with folderMode
+    // still false, so it isn't affected by this).
+    if (this.#folderMode && id !== FOLDER_PROJECT_ID) this.#detachFolder();
     this.#setStatus('loading');
     this.#loading = true;
     let projName = null;
@@ -654,6 +665,7 @@ export class ProjectSync {
     this.#store.lock();
     this.#folderMode = false;
     this.#lastManifest = null;
+    this.#activeFolderId = null;
     this.#stopPoll();
   }
 
@@ -680,7 +692,7 @@ export class ProjectSync {
     await this.openProject(entries[0].id); // the folder's project
     this.#folderMode = true;
     this.#lastManifest = await this.#store.readManifest(this.#binding.id);
-    await rememberFolder(handle, { name: this.#binding.name, savedAt: Date.now() }); // first-class in launcher + sidebar
+    this.#activeFolderId = await rememberFolder(handle, { name: this.#binding.name, savedAt: Date.now() }); // first-class in launcher + sidebar
     this.#startPoll();
     this.#emitProject();
     return true;
@@ -717,7 +729,7 @@ export class ProjectSync {
       await this.#fullSave(null, this.activeName || 'My project');
       this.#folderMode = true;
       this.#lastManifest = await this.#store.readManifest(this.#binding.id);
-      await rememberFolder(handle, { name: this.#binding.name, savedAt: Date.now() });
+      this.#activeFolderId = await rememberFolder(handle, { name: this.#binding.name, savedAt: Date.now() });
       this.#startPoll();
       this.#emitProject();
       // True move: drop the now-redundant OPFS copy (via a throwaway OPFS store, since
@@ -885,7 +897,14 @@ export class ProjectSync {
 
   /** Summaries of all saved projects (for the sidebar's Projects zone). */
   listProjects() {
-    return this.#store.list();
+    // Always the OPFS (in-browser) projects — never the current folder's single
+    // project (that's shown via the folder registry, not this list).
+    return (this.#folderMode ? this.#opfs : this.#store).list();
+  }
+
+  /** Registry id of the open folder project (null if not in a folder). */
+  get activeFolderId() {
+    return this.#activeFolderId;
   }
 
   /** Rename the *active* project. If it has never been saved (no binding), this
