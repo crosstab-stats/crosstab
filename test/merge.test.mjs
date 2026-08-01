@@ -297,6 +297,33 @@ test('full project merge: core log + CAQDAS custom merger resolved via manifest 
   assert.deepEqual(r.blobs['builtin-caqdas'].value.codes.map((c) => c.id).sort(), ['c1', 'c2', 'c3']); // codebook unioned
 });
 
+test('CAQDAS merge: two coders coding the SAME passage stay DISTINCT (per-coder ids)', () => {
+  // The whole point of authorship (#148): inter-coder reliability must see that BOTH
+  // coders coded a passage, so identical-span codings with different ids do NOT collapse.
+  const mergers = { core: { strategy: 'three-way' }, 'builtin-caqdas': { merge: caqdasMerge } };
+  const cb = (segments) => ({ version: 1, textColumn: 't', labelColumn: null, codes: [{ id: 'c1', name: 'anx' }], segments });
+  const seg = (id, who) => ({ id, doc: 'r1', codeId: 'c1', start: 10, end: 50, text: 'x', author: { authorId: who, initials: who.toUpperCase() } });
+  const ancestor = { log: [], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: cb([]) } } };
+  const mine = { log: [], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: cb([seg('s-jane', 'jane')]) } } };
+  const theirs = { log: [], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: cb([seg('s-bob', 'bob')]) } } };
+  const r = mergeProject({ ancestor, mine, theirs, mergers });
+  const segs = r.blobs['builtin-caqdas'].value.segments;
+  assert.equal(segs.length, 2, "both coders' identical-span codings survive");
+  assert.deepEqual(segs.map((s) => s.author.initials).sort(), ['BOB', 'JANE']);
+  assert.equal(r.conflicts.length, 0);
+});
+
+test('CAQDAS merge: legacy id-less identical codings still collapse (content-key fallback)', () => {
+  const mergers = { core: { strategy: 'three-way' }, 'builtin-caqdas': { merge: caqdasMerge } };
+  const cb = (segments) => ({ version: 1, textColumn: 't', labelColumn: null, codes: [{ id: 'c1', name: 'anx' }], segments });
+  const legacy = { doc: 'r1', codeId: 'c1', start: 10, end: 50, text: 'x' }; // pre-#148, no id
+  const ancestor = { log: [], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: cb([]) } } };
+  const mine = { log: [], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: cb([{ ...legacy }]) } } };
+  const theirs = { log: [], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: cb([{ ...legacy }]) } } };
+  const r = mergeProject({ ancestor, mine, theirs, mergers });
+  assert.equal(r.blobs['builtin-caqdas'].value.segments.length, 1, 'id-less identical codings dedupe by content');
+});
+
 test('mergeProject: a plugin custom merge() function is envelope-wrapped and tagged with owner', () => {
   const ancestor = { log: [], blobs: { 'x-plugin': { owner: 'x-plugin', value: { n: 0 } } } };
   const mine = { log: [], blobs: { 'x-plugin': { owner: 'x-plugin', value: { n: 1 } } } };

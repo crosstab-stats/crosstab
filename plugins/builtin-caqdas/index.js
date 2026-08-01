@@ -225,7 +225,17 @@ export const workspace = {
     // from a QDPX) are left unstamped — they aren't this user's work.
     let me = null;
     try { me = await app.identity?.get?.(); } catch { /* identity is optional */ }
-    const authored = (o) => (me ? { ...o, author: me } : o);
+    // Stamp a stable id + the author. The id makes each coder's application a DISTINCT
+    // record so two coders coding the same passage don't collapse under the add-wins
+    // merge (which would silently discard one and defeat inter-coder reliability) — and
+    // it gives a memo (#148 step 3) a durable anchor. Agreement is a DERIVED view over
+    // these per-coder records, not a storage-level coalescing. id is added even when no
+    // identity is set (authorId still distinguishes coders); a code keeps its own id.
+    const authored = (o) => {
+      const r = { id: o.id || uid(), ...o };
+      if (me) r.author = me;
+      return r;
+    };
     let docs = []; // [{ rid, text }]
     let activeRid = null;
     let activeCodeId = null; // armed code for "paint mode" (session-only, not saved)
@@ -1746,7 +1756,11 @@ export function mergeState({ ancestor, mine, theirs, helpers }) {
   const conflicts = [];
 
   const codes = helpers.addWinsSet(a.codes, m.codes, t.codes, (c) => c.id, OWNER);
+  // Prefer the stable per-application id (#148): each coder's coding is its own record,
+  // so two coders on the same passage stay DISTINCT (inter-coder reliability needs to
+  // see both). Legacy/imported segments have no id → fall back to the content key.
   const segKey = (s) =>
+    s.id ||
     `${s.doc}|${s.codeId}|${s.start ?? ''}|${s.end ?? ''}|${s.tStart ?? ''}|${s.tEnd ?? ''}|${s.region ? helpers.stableStringify(s.region) : ''}`;
   const segments = helpers.addWinsSet(a.segments, m.segments, t.segments, segKey, OWNER);
   conflicts.push(...codes.conflicts, ...segments.conflicts);
