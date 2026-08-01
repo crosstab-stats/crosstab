@@ -293,9 +293,16 @@ export function threeWayLog(ancestor, mine, theirs, owner = 'core', opts = {}) {
   }
 
   // Target pass: independent same-target additions from BOTH sides collide even
-  // with different ids (two people each freshly recode the same variable).
-  const addedMine = mine.filter((o) => !a.has(o.id) && chosen.has(o.id));
-  const addedTheirs = theirs.filter((o) => !a.has(o.id) && chosen.has(o.id));
+  // with different ids (two people each freshly recode the same variable). An op that
+  // both sides ALREADY hold (same id on both) is common, not an independent addition —
+  // exclude it, or a peer that merely ADOPTED the other's earlier edit would have that
+  // adopted op mistaken for a rival to a later sequential edit of the same variable
+  // (the "phantom conflict on a revert" bug). So "added by mine" = in mine, not in the
+  // ancestor, AND not already in theirs; symmetrically for theirs.
+  const mineIds = new Set(mine.map((o) => o.id));
+  const theirIds = new Set(theirs.map((o) => o.id));
+  const addedMine = mine.filter((o) => !a.has(o.id) && !theirIds.has(o.id) && chosen.has(o.id));
+  const addedTheirs = theirs.filter((o) => !a.has(o.id) && !mineIds.has(o.id) && chosen.has(o.id));
   const theirTargets = new Map(addedTheirs.map((o) => [opTarget(o), o]));
   for (const mo of addedMine) {
     const to = theirTargets.get(opTarget(mo));

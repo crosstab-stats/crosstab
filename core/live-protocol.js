@@ -62,6 +62,7 @@ export class LiveDoc {
   #onChange;
   #onConflicts;
   #resolutions = null;
+  #lastSwap = false; // whether the last surfaced conflicts were shown mine↔theirs-swapped
 
   constructor({ selfId, manifest, base = null, mergers = {}, send, onChange, onConflicts }) {
     this.#selfId = selfId;
@@ -114,10 +115,13 @@ export class LiveDoc {
     }
   }
 
-  /** Apply user conflict choices (from the conflict UI), broadcast them so peers
-   * apply the same, and re-converge. */
+  /** Apply user conflict choices (from the conflict UI) and broadcast them so peers
+   * apply the same, then re-converge. The UI shows choices from the LOCAL user's
+   * perspective; the stored/broadcast resolutions are CANONICAL (mine = lower peer),
+   * so when we're the higher peer we translate mine↔theirs first (see #converge). */
   resolve(resolutions) {
-    this.#resolutions = { ...this.#resolutions, ...resolutions };
+    const canonical = this.#lastSwap ? swapChoices(resolutions) : resolutions;
+    this.#resolutions = { ...this.#resolutions, ...canonical };
     this.#send({ t: 'resolve', resolutions: this.#resolutions });
     this.#converge();
   }
@@ -143,9 +147,17 @@ export class LiveDoc {
       debug('live', 'converge', { peer: pid, iAmLower, conflicts: conflicts.length, changed });
 
       if (conflicts.length && this.#onConflicts) {
-        this.#onConflicts(conflicts); // hold until resolve() supplies choices
-        continue;
+        // Present from the LOCAL user's perspective: our own value is "mine". The merge
+        // labels mine = the lower peer, so when we're the higher peer, swap for display
+        // (and resolve() swaps the choice back to canonical before broadcasting).
+        this.#lastSwap = !iAmLower;
+        this.#onConflicts(iAmLower ? conflicts : conflicts.map(swapConflict));
+        continue; // hold until resolve() supplies choices
       }
+      // NB: #base stays the session-start snapshot on purpose — a FIXED shared base is
+      // what makes the canonical-order merge converge to byte-identical state on both
+      // peers. (The false-conflict-on-sequential-edits bug is fixed in threeWayLog's
+      // target pass instead, by excluding ops both sides already share.)
       if (changed) {
         this.#mine = merged;
         this.#onChange?.(merged);
@@ -153,4 +165,20 @@ export class LiveDoc {
       }
     }
   }
+}
+
+/** Swap a conflict's two sides (for showing "mine" = the LOCAL user when we're the
+ * higher peer, since the merge labels "mine" = the lower peer). */
+function swapConflict(c) {
+  return { ...c, mine: c.theirs, theirs: c.mine };
+}
+
+/** Swap resolution choices mine↔theirs (translate a LOCAL-perspective choice back to
+ * the canonical mine = lower-peer form for storage/broadcast). */
+function swapChoices(resolutions) {
+  const out = {};
+  for (const [k, v] of Object.entries(resolutions || {})) {
+    out[k] = v === 'mine' ? 'theirs' : v === 'theirs' ? 'mine' : v;
+  }
+  return out;
 }

@@ -66,6 +66,18 @@ test('threeWayLog: both independently recode the SAME variable → add/add confl
   assert.equal(r.conflicts[0].target, 'var:income');
 });
 
+test('threeWayLog: a sequential edit to a variable a peer already ADOPTED does not conflict (live revert bug #148)', () => {
+  // Live scenario: peer B adopted peer A's first edit (op a) to gender; peer A then made
+  // a SECOND edit (op b) to gender. mine (A) = [a, b]; theirs (B) = [a]. op a is common
+  // (same id on both) → not an independent addition, so b must NOT collide with it.
+  const ancestor = [{ id: 'load1', type: 'load', src: { label: 'gss', meta: [] } }];
+  const a = { id: 'a', type: 'setVariable', name: 'gender', patch: { measurementLevel: 'scale' } };
+  const b = { id: 'b', type: 'setVariable', name: 'gender', patch: { measurementLevel: 'nominal' } };
+  const r = threeWayLog(ancestor, [...ancestor, a, b], [...ancestor, a]);
+  assert.equal(r.conflicts.length, 0, 'no phantom add/add — a is shared, b is a clean sequential add');
+  assert.deepEqual(r.resolved.map((o) => o.id), ['load1', 'a', 'b']);
+});
+
 test('threeWayLog: one-side edit of an ancestor op is taken; convergent edits do not conflict', () => {
   const ancestor = [recode('r1', 'income', { rules: 'orig' })];
   const mineEdited = [recode('r1', 'income', { rules: 'new' })];
