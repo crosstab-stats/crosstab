@@ -893,9 +893,15 @@ export async function boot(mounts) {
       const canOffer = roster.length > 0 && presence.live && !co;
       offerBtn.hidden = !canOffer && !co;
       if (co) {
-        offerBtn.textContent = '● Co-authoring';
-        offerBtn.classList.add('is-live');
-        offerBtn.title = 'Live co-authoring — edits sync in real time. Click to stop.';
+        // Co-authoring is opt-in per peer, not a request/approve handshake: clicking
+        // starts OUR side. Show "waiting" until a peer actually joins the doc, so it
+        // doesn't imply the other person is synced before they've clicked.
+        const joined = projects.coauthorPeerCount > 0;
+        offerBtn.textContent = joined ? '● Co-authoring' : 'Waiting for collaborator…';
+        offerBtn.classList.toggle('is-live', joined);
+        offerBtn.title = joined
+          ? 'Live co-authoring — edits sync in real time. Click to stop.'
+          : 'You’re ready to co-author; waiting for someone else to start too. Click to stop.';
       } else if (canOffer) {
         const who = roster.map((p) => p.name || p.initials).filter(Boolean).join(', ') || 'collaborator';
         offerBtn.textContent = `Co-author with ${who}`;

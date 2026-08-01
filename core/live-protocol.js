@@ -61,10 +61,13 @@ export class LiveDoc {
   #send;
   #onChange;
   #onConflicts;
+  #onPeers;
   #resolutions = null;
   #lastSwap = false; // whether the last surfaced conflicts were shown mine↔theirs-swapped
+  #paused = false; // a simulated/real network partition: buffer both directions
+  #active = new Set(); // peers actually co-authoring (we've heard a hello/state from them)
 
-  constructor({ selfId, manifest, base = null, mergers = {}, send, onChange, onConflicts }) {
+  constructor({ selfId, manifest, base = null, mergers = {}, send, onChange, onConflicts, onPeers }) {
     this.#selfId = selfId;
     this.#mine = manifest;
     this.#base = base;
@@ -72,11 +75,33 @@ export class LiveDoc {
     this.#send = send;
     this.#onChange = onChange;
     this.#onConflicts = onConflicts;
+    this.#onPeers = onPeers;
   }
 
   /** The current (converged) manifest. */
   get manifest() {
     return this.#mine;
+  }
+
+  /** How many peers are actively co-authoring (we've heard from them) — 0 until a peer
+   * joins the doc, so the UI can show "waiting" vs "co-authoring". */
+  get activeCount() {
+    return this.#active.size;
+  }
+
+  /** Pause/resume this doc as a partition: while paused it neither publishes nor applies
+   * incoming (peer states are buffered). On resume it flushes its state + converges the
+   * buffered peer states — so two peers editing while paused collide on resume (test the
+   * conflict UI), and it also models a dropped connection reconnecting. */
+  setPaused(on) {
+    this.#paused = !!on;
+    if (!on) { this.#publish(); this.#converge(); }
+  }
+
+  #notePeer(id) {
+    if (id == null || this.#active.has(id)) return;
+    this.#active.add(id);
+    this.#onPeers?.(this.#active.size);
   }
 
   /** Announce presence + publish current state (call once on join). */
@@ -90,7 +115,7 @@ export class LiveDoc {
   localUpdate(manifest) {
     debug('live', 'doc.localUpdate');
     this.#mine = manifest;
-    this.#publish();
+    this.#publish(); // no-op while paused; flushed on resume
   }
 
   /** Feed an incoming protocol message (from peer `from`, e.g. Trystero peerId). */
@@ -98,12 +123,14 @@ export class LiveDoc {
     if (!msg) return;
     if (msg.t === 'hello' || msg.t === 'state' || msg.t === 'resolve') debug('live', 'doc.receive', msg.t, 'from', from, 'knownPeers=', this.#peers.size);
     if (msg.t === 'hello') {
+      this.#notePeer(from); // a peer has joined co-authoring
       this.#publish(); // greet the newcomer with our state
       return;
     }
     if (msg.t === 'state' && msg.manifest) {
+      this.#notePeer(from ?? msg.peerId);
       this.#peers.set(from ?? msg.peerId, msg.manifest);
-      this.#converge();
+      if (!this.#paused) this.#converge(); // paused: buffer; resume converges it
       return;
     }
     // Conflict resolutions are SHARED: a peer resolving `income` in its favour must
@@ -129,13 +156,16 @@ export class LiveDoc {
   /** Forget a departed peer (from `onPeerLeave`). */
   peerLeft(peerId) {
     this.#peers.delete(peerId);
+    if (this.#active.delete(peerId)) this.#onPeers?.(this.#active.size);
   }
 
   #publish() {
+    if (this.#paused) return; // partition: hold outgoing until resume
     this.#send({ t: 'state', peerId: this.#selfId, manifest: this.#mine });
   }
 
   #converge() {
+    if (this.#paused) return; // partition: don't apply incoming until resume
     for (const [pid, theirs] of this.#peers) {
       // Canonical operand order: the lower peer id fills the "mine" slot, so both
       // peers compute the identical merge and converge to byte-identical state.

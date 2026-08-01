@@ -35,6 +35,37 @@ import { debug } from './debug.js';
 export const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
 
 const TURN_KEY = 'crosstab.turn';
+const RELAY_KEY = 'crosstab.relays';
+
+/** MQTT-over-WSS brokers for Trystero rendezvous. Trystero's built-in list includes
+ * some flaky/dead public brokers (notably `mqtt.eclipseprojects.io`) that spam the
+ * console with WebSocket-failed errors even when another broker connects fine — so we
+ * pin a small reliable subset. An institution can override with their OWN broker via
+ * {@link setRelayUrls} (same BYO philosophy as TURN). May need occasional review as
+ * public brokers come and go. */
+export const DEFAULT_RELAYS = [
+  'wss://broker.emqx.io:8084/mqtt',
+  'wss://broker.hivemq.com:8884/mqtt',
+];
+
+/** The MQTT relay URLs to use (persisted override, else the curated default). */
+export function getRelayUrls() {
+  try {
+    const raw = globalThis.localStorage?.getItem(RELAY_KEY);
+    const a = raw ? JSON.parse(raw) : null;
+    return Array.isArray(a) && a.length ? a : DEFAULT_RELAYS;
+  } catch {
+    return DEFAULT_RELAYS;
+  }
+}
+
+/** Persist (or clear, with null/[]) the user/institution MQTT relay list. */
+export function setRelayUrls(urls) {
+  try {
+    if (Array.isArray(urls) && urls.length) globalThis.localStorage?.setItem(RELAY_KEY, JSON.stringify(urls));
+    else globalThis.localStorage?.removeItem(RELAY_KEY);
+  } catch { /* storage unavailable — non-fatal */ }
+}
 
 /**
  * Assemble the WebRTC `iceServers` list: default STUN plus any user/institution TURN
@@ -116,7 +147,12 @@ export class LiveSession {
     this.#selfId = trystero.selfId ?? null; // this peer's stable id — LiveDoc needs it for canonical merge ordering
     const turn = this.#opts.turn !== undefined ? this.#opts.turn : getTurnConfig();
     this.#room = joinRoom(
-      { appId: this.#opts.appId || 'crosstab-collab', password: this.#opts.secret, rtcConfig: { iceServers: buildIceServers(turn) } },
+      {
+        appId: this.#opts.appId || 'crosstab-collab',
+        password: this.#opts.secret,
+        relayUrls: this.#opts.relayUrls || getRelayUrls(), // curated brokers (drop the dead default that spams errors)
+        rtcConfig: { iceServers: buildIceServers(turn) },
+      },
       this.#opts.roomId,
     );
 

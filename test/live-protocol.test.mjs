@@ -42,6 +42,24 @@ function makeNet() {
   return net;
 }
 
+test('setPaused: two peers editing the SAME variable while partitioned collide on resume', () => {
+  const net = makeNet();
+  const A = net.add('A', { manifest: man([]), base: man([]), mergers: buildMergers([]) });
+  const B = net.add('B', { manifest: man([]), base: man([]), mergers: buildMergers([]) });
+  A.hello(); B.hello(); net.drain(); // establish the session
+  // Partition both, then each recodes the SAME variable — nothing crosses while paused.
+  A.setPaused(true); B.setPaused(true);
+  A.localUpdate(man([recode('a1', 'gender')]));
+  B.localUpdate(man([recode('b1', 'gender')]));
+  net.drain();
+  assert.equal(net.q.length, 0, 'no messages flow while partitioned');
+  assert.ok(!net.conflicts.A && !net.conflicts.B, 'no conflict while partitioned');
+  // Reconnect → the two same-target edits from a shared base genuinely collide.
+  A.setPaused(false); B.setPaused(false);
+  net.drain();
+  assert.ok(net.conflicts.A || net.conflicts.B, 'a genuine conflict surfaces on reconnect');
+});
+
 test('disjoint recodes converge to identical state on both peers', () => {
   const net = makeNet();
   const A = net.add('A', { manifest: man([recode('a1', 'income')]), mergers: buildMergers([]) });

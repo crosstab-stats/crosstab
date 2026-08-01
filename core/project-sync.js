@@ -76,7 +76,7 @@ export class ProjectSync {
   #liveExchange = null;
   #liveSourceBytes = new Map();
   #liveLastManifest = null;
-  #livePaused = false; // testing: hold outgoing live updates (see pauseLiveSync)
+  #coauthorPeers = 0; // peers actually co-authoring (drives "waiting" vs "co-authoring")
   /** Plugin identifiers recorded in the open project that AREN'T installed here —
    * carried forward verbatim on every save so the association survives until the
    * plugin is added and resolves (#102). Empty for a fully-resolved project. */
@@ -1139,9 +1139,15 @@ export class ProjectSync {
 
   // --- live co-authoring (#148 step 6) --------------------------------------
 
-  /** Whether a live co-authoring session is active. */
+  /** Whether a live co-authoring session is active (this peer opted in). */
   get coauthoring() {
     return !!this.#liveDoc;
+  }
+
+  /** How many peers are actually co-authoring with us right now (0 = we've opted in but
+   * nobody else has joined the doc yet → the UI shows "waiting"). */
+  get coauthorPeerCount() {
+    return this.#coauthorPeers;
   }
 
   /** The current project as a wire manifest (Parquet stripped to file refs — the
@@ -1161,6 +1167,7 @@ export class ProjectSync {
     if (this.#liveDoc || !session) return;
     const manifest = await this.#currentManifest();
     this.#liveSession = session;
+    this.#coauthorPeers = 0;
     this.#liveDoc = attachLiveDoc(session, {
       selfId: session.selfId,
       manifest,
@@ -1171,6 +1178,7 @@ export class ProjectSync {
         const res = await showConflictDialog(conflicts);
         if (res) this.#liveDoc?.resolve(res);
       },
+      onPeers: (n) => { this.#coauthorPeers = n; this.#emitProject(); }, // "waiting" → "co-authoring"
     });
     // Base-data gap-fill (#148 6c): serve the sources I hold to a peer that lacks them,
     // and fetch any I lack. Rides the SAME ops channel; LiveDoc ignores need/src-chunk.
@@ -1213,7 +1221,7 @@ export class ProjectSync {
     this.#liveExchange = null;
     this.#liveSourceBytes = new Map();
     this.#liveLastManifest = null;
-    this.#livePaused = false;
+    this.#coauthorPeers = 0;
     this.#emitProject();
   }
 
@@ -1221,14 +1229,13 @@ export class ProjectSync {
    * BOTH peers, edit the same thing in each, resume → the two edits collide from the
    * same base). Incoming updates still apply. `crosstab.projects.pauseLiveSync(true/false)`. */
   pauseLiveSync(on) {
-    this.#livePaused = !!on;
     debug('live', on ? 'sync PAUSED (testing)' : 'sync RESUMED');
-    if (!on) this.#scheduleLivePublish(); // flush whatever accumulated while paused
+    this.#liveDoc?.setPaused(!!on); // full partition: holds both directions, flushes on resume
   }
 
   /** Debounced: publish the local project state to co-authors after an edit settles. */
   #scheduleLivePublish() {
-    if (!this.#liveDoc || this.#loading || this.#livePaused) return;
+    if (!this.#liveDoc || this.#loading) return;
     if (this.#livePublishTimer) clearTimeout(this.#livePublishTimer);
     this.#livePublishTimer = setTimeout(async () => {
       this.#livePublishTimer = null;
