@@ -73,7 +73,13 @@ export function decideSync(base, mine, theirs, mergers = {}, resolutions = null)
   if (manifestsEqual(theirs, mine)) return { action: 'in-sync', manifest: theirs, conflicts: [] };
   if (base && manifestsEqual(theirs, base)) return { action: 'push', manifest: mine, conflicts: [] };
   const ancestor = base ?? theirs;
-  const { manifest, conflicts } = mergeManifests(ancestor, mine, theirs, mergers, resolutions);
+  // Canonicalise operand order so BOTH peers compute the IDENTICAL merge. Otherwise
+  // each orders its own added ops first (threeWayLog: ancestor, then mine-adds, then
+  // theirs-adds), yielding logically-equal but differently-ordered manifests that
+  // never `manifestsEqual` — so two idle windows poll-write forever. Lower content
+  // signature fills the "mine" slot on both sides (same trick as the live LiveDoc).
+  const [lo, hi] = contentSig(mine) <= contentSig(theirs) ? [mine, theirs] : [theirs, mine];
+  const { manifest, conflicts } = mergeManifests(ancestor, lo, hi, mergers, resolutions);
   return { action: 'merge', manifest, conflicts };
 }
 

@@ -60,6 +60,19 @@ test('decideSync: a peer advanced the file → merge (disjoint recodes, no confl
   assert.deepEqual(d.manifest.datasets[0].transforms.map((t) => t.id), ['m1', 't1']);
 });
 
+test('decideSync: merge is perspective-independent (no two-window ping-pong)', () => {
+  // The anti-storm guarantee: two peers merging the SAME divergence from swapped
+  // perspectives must produce byte-equal manifests, or their polls rewrite forever.
+  const base = man([ds(1, [])]);
+  const a = man([ds(1, [recode('a1', 'income')])]);
+  const b = man([ds(1, [recode('b1', 'age')])]);
+  const fromA = decideSync(base, a, b, buildMergers([])).manifest;   // A's perspective
+  const fromB = decideSync(base, b, a, buildMergers([])).manifest;   // B's perspective
+  assert.ok(manifestsEqual(fromA, fromB));                           // identical → converges
+  // And a re-merge of the converged result against either side is a no-op (in-sync).
+  assert.equal(decideSync(fromA, fromA, fromB).action, 'in-sync');
+});
+
 test('decideSync: peer advanced + same-variable edit → merge with a surfaced conflict', () => {
   const base = man([ds(1, [])]);
   const mine = man([ds(1, [recode('m1', 'income')])]);
