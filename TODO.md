@@ -472,8 +472,23 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       and record a **common ancestor** (last op both sides agreed on). Then folder =
       three-way merge of two divergent files; live = the *same* three-way merge run
       continuously. Same algorithm, different clock.
-  - **Async transport — folder-backed projects (FSA). [~] FOUNDATION STARTED**
-    (branch `feat/collab-merge-kernel`, commit 7e8cdb8). Done: the FSA **seam** —
+  - **Async transport — folder-backed projects (FSA). [x] DONE + VERIFIED LIVE**
+    (branch `feat/collab-merge-kernel`). Shipped end-to-end and confirmed with **two
+    real Chrome windows co-editing a shared local folder**: File ▸ Move project to a
+    folder… / Open project from a folder… / Close project folder; one-gate passphrase
+    (set for a fresh folder, enter for an encrypted one); autosaves route through the
+    merge-aware `syncFolderProject`; a 3s poll pulls peer writes (backs off when
+    hidden); conflicts via `showConflictDialog`. On-disk everything is ciphertext bar
+    the plaintext salt/verifier. Bidirectional variable-recode merge, **step-reorder
+    merge**, rapid-edit debouncing, and idle quiescence all verified. Four real bugs
+    that live-testing caught (headless tests had missed) were fixed + regression-tested:
+    write-storm (undefined-key JSON asymmetry), two-window ping-pong (canonical operand
+    order), clobber/"A owns it" (per-peer base, not a shared `project.base.json`), and
+    reorder-not-synced (three-way-merge the step order). 93 headless tests.
+    *Remaining (NOT folder-sync):* recipient import-side decrypt of a `.enc` export;
+    live P2P 2-machine test + invite/presence UI; OPFS opt-in toggle + settings;
+    chunked-Parquet crypto. Original foundation notes kept below.
+  - **Async transport — folder-backed projects — foundation notes.** Commit 7e8cdb8. Done: the FSA **seam** —
     `ProjectStore.useDirectory(handle)`/`folderBacked`, `#root()` now parameterized
     around an injected picked-folder handle (falls back to OPFS); op `id` threaded
     through source save/load; `readManifest()` (cheap stat+parse for change-detection
