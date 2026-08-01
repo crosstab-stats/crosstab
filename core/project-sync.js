@@ -16,6 +16,8 @@
 
 import { CoreEvents } from './event-bus.js';
 import { DATASETS_CHANGED } from './dataset-manager.js';
+import { saveFolderHandle, clearFolderHandle, ensureReadWrite } from './folder-handle.js';
+import { passphraseFor, shouldEncrypt } from './at-rest.js';
 
 const DEBOUNCE_MS = 800;
 
@@ -65,6 +67,8 @@ export class ProjectSync {
 
   /** Current project: `{ id, name }` once saved/opened, else `null`. */
   #binding = null;
+  /** True while a picked folder (FSA) is the active backend, vs OPFS (#143). */
+  #folderMode = false;
   /** Dataset ids whose Parquet sources changed since the last save. */
   #sourcesDirty = new Set();
   /** True while loading a project, to suppress autosave during reconstruction. */
@@ -177,6 +181,11 @@ export class ProjectSync {
     this.#menus.register({ id: 'core:proj-open', path: ['File'], label: 'Open project…', order: 2, command: () => void this.openProject() });
     this.#menus.register({ id: 'core:proj-save', path: ['File'], label: 'Save project…', order: 3, command: () => void this.saveInteractive() });
     this.#menus.register({ id: 'core:proj-saveas', path: ['File'], label: 'Save project as…', order: 4, command: () => void this.saveAs() });
+    if (typeof window !== 'undefined' && window.showDirectoryPicker) {
+      this.#menus.register({ id: 'core:proj-folder-move', path: ['File'], label: 'Move project to a folder…', order: 5, command: () => void this.moveToFolder() });
+      this.#menus.register({ id: 'core:proj-folder-open', path: ['File'], label: 'Open project from a folder…', order: 6, command: () => void this.openFromFolder() });
+      this.#menus.register({ id: 'core:proj-folder-close', path: ['File'], label: 'Close project folder', order: 7, command: () => void this.closeFolder() });
+    }
     this.#bus.on(CoreEvents.DATA_CHANGED, (s) => this.#onChange(s));
     this.#bus.on(DATASETS_CHANGED, () => this.#onChange(null));
     this.#bus.on(CoreEvents.PLUGINS_CHANGED, () => this.#onPluginsChanged());
@@ -587,6 +596,123 @@ export class ProjectSync {
     this.#binding = null;
     this.#sourcesDirty.clear();
     await this.#fullSave(null, name || 'Imported project');
+  }
+
+  // --- folder-backed projects (#143) ----------------------------------------
+
+  /** @returns {boolean} Whether a picked folder is the active backend. */
+  get folderBacked() {
+    return this.#folderMode;
+  }
+
+  /** Pick a folder + attach the store to it (shared by move/open). Returns the
+   * handle, or null on cancel/denied. Flushes any pending OPFS save first. */
+  async #pickFolder() {
+    if (typeof window === 'undefined' || !window.showDirectoryPicker) {
+      this.#results.appendError('This browser can’t use a project folder — use Chrome or Edge on desktop.');
+      return null;
+    }
+    let handle;
+    try {
+      handle = await window.showDirectoryPicker({ id: 'crosstab-projects', mode: 'readwrite' });
+    } catch {
+      return null; // user cancelled the picker
+    }
+    if (!(await ensureReadWrite(handle))) {
+      this.#results.appendError('Folder write access wasn’t granted.');
+      return null;
+    }
+    await this.#settle(); // flush any pending OPFS save before switching backends
+    this.#store.useDirectory(handle);
+    return handle;
+  }
+
+  /** Revert the store to OPFS after a failed/aborted folder attach. */
+  #detachFolder() {
+    this.#store.useDirectory(null);
+    this.#store.lock();
+  }
+
+  /**
+   * **Move project to a folder…** — put the *current* project into a picked folder
+   * (the OneDrive/Dropbox/local collaboration path), then work from there. For the
+   * owner setting things up. Refuses a folder that already holds a project (that's
+   * what *Open project from a folder…* is for). Folder storage defaults to encrypted
+   * (opt-out): you're prompted to set a passphrase (Cancel = store plaintext). Must
+   * be called from the menu click (`showDirectoryPicker` needs a user gesture).
+   */
+  async moveToFolder() {
+    const handle = await this.#pickFolder();
+    if (!handle) return;
+    try {
+      // `hasEncryption` reads the plaintext meta, so it detects an occupied folder
+      // even when it's encrypted and we don't have the key (list() would look empty).
+      const occupied = (await this.#store.hasEncryption()) || (await this.#store.list()).length > 0;
+      if (occupied) {
+        this.#results.appendError('That folder already holds a CrossTab project — use “Open project from a folder…” to work in it.');
+        this.#detachFolder();
+        return;
+      }
+      if (shouldEncrypt('folder')) {
+        const pass = await passphraseFor('folder-new'); // set mode; null ⇒ opted out → plaintext
+        if (pass) await this.#store.unlock(pass);
+      }
+      await saveFolderHandle(handle);
+      this.#binding = null; // a brand-new entry, living in the folder now
+      await this.#fullSave(null, this.activeName || 'My project');
+      this.#folderMode = true;
+      this.#emitProject();
+    } catch (err) {
+      this.#results.appendError(`Move to folder failed: ${err.message}`);
+      this.#detachFolder();
+    }
+  }
+
+  /**
+   * **Open project from a folder…** — open an existing project a collaborator shared
+   * via a folder. Prompts for the passphrase if the folder is encrypted (one gate:
+   * it opens the files *and* is the key to the collaboration). Refuses an empty
+   * folder (use *Move project to a folder…* to seed one).
+   */
+  async openFromFolder() {
+    const handle = await this.#pickFolder();
+    if (!handle) return;
+    try {
+      if (await this.#store.hasEncryption()) {
+        const pass = await passphraseFor('folder'); // enter mode
+        if (!pass) { this.#detachFolder(); return; }
+        try {
+          await this.#store.unlock(pass);
+        } catch {
+          this.#results.appendError('Wrong passphrase for this folder.');
+          this.#detachFolder();
+          return;
+        }
+      }
+      const entries = await this.#store.list();
+      if (!entries.length) {
+        this.#results.appendError('No CrossTab project in that folder — use “Move project to a folder…” to put one there.');
+        this.#detachFolder();
+        return;
+      }
+      await saveFolderHandle(handle);
+      await this.openProject(entries[0].id); // the folder's (most recent) project
+      this.#folderMode = true;
+      this.#emitProject();
+    } catch (err) {
+      this.#results.appendError(`Open from folder failed: ${err.message}`);
+      this.#detachFolder();
+    }
+  }
+
+  /** Leave folder mode: flush, revert the store to OPFS, and start a fresh project. */
+  async closeFolder() {
+    if (!this.#folderMode) return;
+    await this.#settle();
+    this.#detachFolder();
+    this.#folderMode = false;
+    try { await clearFolderHandle(); } catch { /* best effort */ }
+    await this.newProject();
   }
 
   async #delete(id) {

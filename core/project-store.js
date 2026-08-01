@@ -116,6 +116,13 @@ export class ProjectStore {
     this.#key = null;
   }
 
+  /** @returns {Promise<boolean>} Whether this store already has encryption set up
+   * (an `crosstab-encryption.json` present) — so an open flow knows to *enter* an
+   * existing passphrase vs *set* a new one. */
+  async hasEncryption() {
+    return !!(await this.#driver.read(`${ROOT}/${ENC_META}`));
+  }
+
   /** Acquire the mutex; returns a release fn. */
   async #acquire() {
     const prev = this.#tail;
