@@ -62,12 +62,13 @@ export class LiveDoc {
   #onChange;
   #onConflicts;
   #onPeers;
+  #onResolved;
   #resolutions = null;
   #lastSwap = false; // whether the last surfaced conflicts were shown mine↔theirs-swapped
   #paused = false; // a simulated/real network partition: buffer both directions
   #active = new Set(); // peers actually co-authoring (we've heard a hello/state from them)
 
-  constructor({ selfId, manifest, base = null, mergers = {}, send, onChange, onConflicts, onPeers }) {
+  constructor({ selfId, manifest, base = null, mergers = {}, send, onChange, onConflicts, onPeers, onResolved }) {
     this.#selfId = selfId;
     this.#mine = manifest;
     this.#base = base;
@@ -76,6 +77,7 @@ export class LiveDoc {
     this.#onChange = onChange;
     this.#onConflicts = onConflicts;
     this.#onPeers = onPeers;
+    this.#onResolved = onResolved;
   }
 
   /** The current (converged) manifest. */
@@ -138,6 +140,7 @@ export class LiveDoc {
     // still holds the rejected edit). Keys are canonical, so they match on every peer.
     if (msg.t === 'resolve' && msg.resolutions) {
       this.#resolutions = { ...this.#resolutions, ...msg.resolutions };
+      this.#onResolved?.(); // a peer resolved — close any stale conflict dialog we have open
       this.#converge();
     }
   }

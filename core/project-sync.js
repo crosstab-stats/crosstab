@@ -77,6 +77,7 @@ export class ProjectSync {
   #liveSourceBytes = new Map();
   #liveLastManifest = null;
   #coauthorPeers = 0; // peers actually co-authoring (drives "waiting" vs "co-authoring")
+  #conflictAbort = null; // aborts an open conflict dialog when a peer resolves it first
   /** Plugin identifiers recorded in the open project that AREN'T installed here —
    * carried forward verbatim on every save so the association survives until the
    * plugin is added and resolves (#102). Empty for a fully-resolved project. */
@@ -1175,9 +1176,14 @@ export class ProjectSync {
       mergers: this.#mergers(), // core + builtin plugin mergers (#148 6b)
       onChange: (m) => { void this.#applyLiveManifest(m); },
       onConflicts: async (conflicts) => {
-        const res = await showConflictDialog(conflicts);
-        if (res) this.#liveDoc?.resolve(res);
+        this.#conflictAbort?.abort(); // supersede any prior open dialog
+        const ctrl = new AbortController();
+        this.#conflictAbort = ctrl;
+        const res = await showConflictDialog(conflicts, { signal: ctrl.signal });
+        if (this.#conflictAbort === ctrl) this.#conflictAbort = null;
+        if (res && this.#liveDoc) this.#liveDoc.resolve(res); // aborted (peer resolved first) → res is null
       },
+      onResolved: () => { this.#conflictAbort?.abort(); this.#conflictAbort = null; }, // peer resolved → close my stale dialog
       onPeers: (n) => { this.#coauthorPeers = n; this.#emitProject(); }, // "waiting" → "co-authoring"
     });
     // Base-data gap-fill (#148 6c): serve the sources I hold to a peer that lacks them,
@@ -1222,6 +1228,8 @@ export class ProjectSync {
     this.#liveSourceBytes = new Map();
     this.#liveLastManifest = null;
     this.#coauthorPeers = 0;
+    this.#conflictAbort?.abort(); // close any open conflict dialog when co-authoring ends
+    this.#conflictAbort = null;
     this.#emitProject();
   }
 

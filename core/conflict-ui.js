@@ -16,13 +16,35 @@
  * DOM-only (no OS picker), so it's buildable and verifiable in-browser headlessly.
  */
 
+/** The distinguishing payload of an op — what it actually set/changed — so the two
+ * sides of a conflict read differently (both share the type+name; that's WHY they
+ * collided, so it's useless to show). e.g. a setVariable's patch, a recode's rules. */
+function opValue(op) {
+  if (op.patch && typeof op.patch === 'object') {
+    const kv = Object.entries(op.patch).map(([k, val]) => `${k} → ${fmt(val)}`).join(', ');
+    if (kv) return kv;
+  }
+  if (op.rules != null) return `rules: ${fmt(op.rules)}`;
+  if (op.value !== undefined) return `= ${fmt(op.value)}`;
+  if (op.expr != null) return `= ${fmt(op.expr)}`;
+  return null;
+}
+
+function fmt(v) {
+  const s = typeof v === 'string' ? v : JSON.stringify(v);
+  return s != null && s.length > 60 ? `${s.slice(0, 57)}…` : String(s);
+}
+
 /** One-line preview of a conflict side's value for the chooser. */
 function preview(v) {
   if (v == null) return '— (removed)';
-  if (typeof v === 'object' && v.type) return `${v.type}${v.name ? ` ${v.name}` : ''}`; // an op
+  if (typeof v === 'object' && v.type) {
+    // an op — lead with WHAT it set (the differing bit), not just type+name
+    const detail = opValue(v);
+    return detail ? `${v.name ? `${v.name}: ` : ''}${detail}` : `${v.type}${v.name ? ` ${v.name}` : ''}`;
+  }
   if (typeof v === 'object' && (v.name || v.id)) return String(v.name ?? v.id); // a keyed item (e.g. a code)
-  const s = typeof v === 'string' ? v : JSON.stringify(v);
-  return s.length > 80 ? `${s.slice(0, 77)}…` : s;
+  return fmt(v);
 }
 
 const OPTION_LABEL = { mine: 'Keep yours', theirs: 'Keep theirs', both: 'Keep both' };
@@ -91,12 +113,18 @@ export function buildConflictForm(conflicts) {
  * or `null` if cancelled (the caller then leaves the sync unresolved and retries).
  * A "keep all yours / all theirs" pair of quick-set buttons speeds the common case.
  *
+ * Pass an `AbortSignal` to close the dialog from outside — used when a co-author
+ * resolves the same conflict first (their choice arrives over the wire), so a stale
+ * copy of the modal doesn't linger on every other peer. An aborted dialog resolves
+ * `null` (no local choice; the remote resolution is applied instead).
+ *
  * @param {object[]} conflicts
- * @param {{title?: string}} [opts]
+ * @param {{title?: string, signal?: AbortSignal}} [opts]
  * @returns {Promise<Record<string,string>|null>}
  */
-export function showConflictDialog(conflicts, { title = 'Resolve sync conflicts' } = {}) {
+export function showConflictDialog(conflicts, { title = 'Resolve sync conflicts', signal } = {}) {
   return new Promise((resolve) => {
+    if (signal?.aborted) { resolve(null); return; }
     const dialog = document.createElement('dialog');
     dialog.className = 'ct-dialog ct-conflict-dialog';
     const form = document.createElement('form');
@@ -148,10 +176,15 @@ export function showConflictDialog(conflicts, { title = 'Resolve sync conflicts'
     form.append(menu);
 
     dialog.append(form);
+    let done = false;
     dialog.addEventListener('close', () => {
+      if (done) return;
+      done = true;
       resolve(dialog.returnValue === 'ok' ? (dialog.__resolutions ?? {}) : null);
       dialog.remove();
     });
+    // A co-author resolved it first → close this now-stale copy (resolves null).
+    signal?.addEventListener('abort', () => { if (!done && dialog.open) dialog.close('remote'); });
     document.body.append(dialog);
     dialog.showModal();
   });
