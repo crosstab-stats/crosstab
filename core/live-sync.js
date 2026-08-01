@@ -93,6 +93,7 @@ export class LiveSession {
   #sendBeacon = null;
   #handlers = { peerJoin: [], peerLeave: [], ops: [], beacon: [] };
   #opts;
+  #selfId = null;
 
   /**
    * @param {object} opts
@@ -109,7 +110,9 @@ export class LiveSession {
   /** Join the room: rendezvous + wire up presence and channels. Idempotent. */
   async join() {
     if (this.#room) return;
-    const { joinRoom } = await loadTrystero();
+    const trystero = await loadTrystero();
+    const { joinRoom } = trystero;
+    this.#selfId = trystero.selfId ?? null; // this peer's stable id — LiveDoc needs it for canonical merge ordering
     const turn = this.#opts.turn !== undefined ? this.#opts.turn : getTurnConfig();
     this.#room = joinRoom(
       { appId: this.#opts.appId || 'crosstab-collab', password: this.#opts.secret, rtcConfig: { iceServers: buildIceServers(turn) } },
@@ -142,6 +145,10 @@ export class LiveSession {
   sendOps(data, peerId) { this.#sendOps?.(data, peerId); }
   /** Broadcast this peer's presence beacon. */
   announce(beacon) { this.#sendBeacon?.(beacon); }
+
+  /** This peer's stable Trystero id (available after {@link join}) — LiveDoc uses it
+   * for canonical operand ordering so both peers converge to byte-identical state. */
+  get selfId() { return this.#selfId; }
 
   /** Peer ids currently connected. */
   get peers() { return this.#room ? Object.keys(this.#room.getPeers()) : []; }

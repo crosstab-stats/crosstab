@@ -952,15 +952,34 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       (hidden for OPFS, wired, no errors); needs a two-window test on a shared folder to
       confirm peers actually see each other's chips. This is also the first live-P2P
       session wired — the handshake the future **live data co-authoring** layer reuses.
-  - [ ] **6. Live DATA co-authoring — the layer the "start co-authoring" prompt launches.**
-    Presence (step 5) is *awareness only*; the "start live co-authoring with X" offer needs
-    real-time op streaming, which is NOT built yet. `core/live-protocol.js` (`LiveDoc`) +
-    `attachLiveDoc` exist but aren't wired to the app's op-log/data-store. This is the
-    chunk that makes co-authoring actually stream edits — and it's what the flash-drive/
-    OPFS-import case *requires* (two OPFS copies share a collabId but have NO transport
-    except live P2P; folder copies also have the async poll-merge). Reuses the presence
-    session as its handshake, the merge kernel for convergence, and gap-fill for base data.
-    The auto-offer prompt gets teeth once this lands. **Next major build.**
+  - [~] **6. Live DATA co-authoring — the layer the "start co-authoring" prompt launches.**
+    Presence (step 5) is *awareness only*. The convergence **ENGINE is done + proven
+    headlessly** — `core/live-protocol.js` `LiveDoc` (canonical-peerId ordering → byte
+    convergence) + `attachLiveDoc`, with tests covering disjoint recodes, order-independence,
+    late-join, a genuine conflict resolving, AND CAQDAS codebooks converging live. `LiveSession`
+    now exposes `.selfId` (done) for the wiring. What remains is the **app integration**, and
+    studying it surfaced **three concrete prerequisites** (none trivial, so NOT built blind):
+    - [ ] **6a. Live-apply materialisation.** Applying a peer's merged manifest live has NO
+      disk round-trip (unlike folder `#applyMergedManifest`, which reloads from the folder
+      after the merge wrote it). Need a path that rebuilds datasets from the merged manifest
+      **reusing the local Parquet** (matched by source id) + merged transforms + merged
+      workspace blobs — i.e. restoreState-from-manifest without re-fetching bytes we already
+      have. Feasible for the shared-base case (both peers hold the same sources).
+    - [ ] **6b. Plugin-merger assembly (ALSO fixes folder-sync coding merge).** The app never
+      calls `buildMergers` with real plugin modules — `#folderSave` passes `{core}` only — so
+      plugin/blob (CAQDAS coding) merge doesn't happen in the REAL app today, folder OR live;
+      it surfaces as conflict/LWW. Need host access to builtin plugin mergers (import
+      builtin `mergeState` host-side — builtins are trusted) or the sandbox-bridge for
+      3rd-party. **High value: unblocks coder-merge for BOTH transports**, and it's the
+      office-hours driver. Ties [[plugin-verb-declaration]].
+    - [ ] **6c. Base-data byte gap-fill.** Cold join / a peer adding a NEW dataset → the
+      merged manifest references Parquet the other lacks → transfer over the channel
+      (content-hash index → "send this file"). `core/gap-fill.js` (`SourceExchange`) exists
+      but isn't wired. Required for the flash-drive/OPFS-import cold-start case; shared-base
+      editing (recodes/coding) needs no transfer.
+    - Then wire the **"start co-authoring with X" offer** (auto-offer on peer-appear) →
+      `attachLiveDoc` on the presence session → local change publishes, merged applies (6a),
+      conflicts → `showConflictDialog`. Needs a two-window live test. **Next major build.**
   - [ ] **~~In-project chat~~ — DEFERRED / maybe never.** Disproportionate scope
     (persistence, history, retention, notifications) for uncertain value when teams already
     have Slack/Teams; and it's the *unanchored* opposite of a memo. If ever, rescope to
