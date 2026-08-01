@@ -16,7 +16,8 @@
 
 import { CoreEvents } from './event-bus.js';
 import { DATASETS_CHANGED } from './dataset-manager.js';
-import { ProjectStore, FOLDER_PROJECT_ID } from './project-store.js';
+import { ProjectStore, FOLDER_PROJECT_ID, buildManifest } from './project-store.js';
+import { attachLiveDoc } from './live-sync.js';
 import { rememberFolder, listFolders, forgetFolder, ensureReadWrite } from './folder-handle.js';
 import { passphraseFor, shouldEncrypt, PASSPHRASE_ABORT } from './at-rest.js';
 import { syncFolderProject, manifestsEqual } from './folder-sync.js';
@@ -61,6 +62,12 @@ export class ProjectSync {
    * a recorded plugin can be told apart from one this install simply doesn't have. */
   #pluginIdentities;
   #getMergers;
+  /** Live co-authoring (#148 step 6): a LiveDoc riding the presence session's op
+   * channel, or null when not co-authoring. Publishes local edits + applies merged
+   * remote state (reusing local Parquet — no disk round-trip). */
+  #liveDoc = null;
+  #liveSession = null;
+  #livePublishTimer = null;
   /** Plugin identifiers recorded in the open project that AREN'T installed here —
    * carried forward verbatim on every save so the association survives until the
    * plugin is added and resolves (#102). Empty for a fully-resolved project. */
@@ -325,6 +332,7 @@ export class ProjectSync {
   #onChange(summary) {
     if (this.#loading) return;
     this.#dirty = true;
+    this.#scheduleLivePublish(); // stream this edit to live co-authors (#148 step 6), if any
     // A source-changing op means that dataset's Parquet must be rewritten. With the
     // universal log, undo/redo/rewind can also add or drop a source op, so they
     // mark sources dirty too (keeps the saved Parquet set in step with the log).
@@ -1115,6 +1123,107 @@ export class ProjectSync {
       this.#applyOutput?.(bundle.output || []);
       this.#applyAnalysisLog?.(bundle.analysisLog || []);
       this.#lastManifest = manifest;
+    } finally {
+      this.#loading = false;
+    }
+  }
+
+  // --- live co-authoring (#148 step 6) --------------------------------------
+
+  /** Whether a live co-authoring session is active. */
+  get coauthoring() {
+    return !!this.#liveDoc;
+  }
+
+  /** The current project as a wire manifest (Parquet stripped to file refs — the
+   * receiver reuses its own local bytes; see {@link #applyLiveManifest}). */
+  async #currentManifest() {
+    return buildManifest({ name: this.#binding?.name ?? 'Live project', savedAt: Date.now(), bundle: await this.#snapshot(true) });
+  }
+
+  /**
+   * Start live co-authoring on an already-joined presence {@link LiveSession}: attach a
+   * {@link LiveDoc} that publishes local edits and applies merged remote state. Same
+   * merge kernel + mergers as folder sync — just on a faster clock.
+   * @param {import('./live-sync.js').LiveSession} session
+   */
+  async startCoauthoring(session) {
+    if (this.#liveDoc || !session) return;
+    const manifest = await this.#currentManifest();
+    this.#liveSession = session;
+    this.#liveDoc = attachLiveDoc(session, {
+      selfId: session.selfId,
+      manifest,
+      base: manifest, // session-start snapshot = the common ancestor
+      mergers: this.#mergers(), // core + builtin plugin mergers (#148 6b)
+      onChange: (m) => { void this.#applyLiveManifest(m); },
+      onConflicts: async (conflicts) => {
+        const res = await showConflictDialog(conflicts);
+        if (res) this.#liveDoc?.resolve(res);
+      },
+    });
+    this.#liveDoc.hello();
+    this.#emitProject();
+  }
+
+  /** Stop co-authoring (the presence layer owns leaving the room). */
+  stopCoauthoring() {
+    if (this.#livePublishTimer) { clearTimeout(this.#livePublishTimer); this.#livePublishTimer = null; }
+    this.#liveDoc = null;
+    this.#liveSession = null;
+    this.#emitProject();
+  }
+
+  /** Debounced: publish the local project state to co-authors after an edit settles. */
+  #scheduleLivePublish() {
+    if (!this.#liveDoc || this.#loading) return;
+    if (this.#livePublishTimer) clearTimeout(this.#livePublishTimer);
+    this.#livePublishTimer = setTimeout(async () => {
+      this.#livePublishTimer = null;
+      if (!this.#liveDoc) return;
+      try { this.#liveDoc.localUpdate(await this.#currentManifest()); } catch (err) { console.error('[live] publish failed', err); }
+    }, 400);
+  }
+
+  /**
+   * Apply a merged manifest from a co-author to the live app WITHOUT a disk round-trip
+   * (#148 step 6a): rebuild datasets from the manifest reusing the **local** Parquet
+   * (matched by source id — I already hold the shared sources' bytes), then apply the
+   * merged workspaces/output. A source id I lack is a collaborator's NEW dataset →
+   * byte gap-fill (#148 6c). Skips the (expensive) dataset reload when the tabular
+   * structure is unchanged (the common coding-only case), applying just the blobs.
+   */
+  async #applyLiveManifest(manifest) {
+    this.#loading = true; // suppress autosave + echo-publish during apply
+    try {
+      const mine = await this.#snapshot(true);
+      const sig = (dss) => JSON.stringify((dss || []).map((d) => ({
+        id: d.id,
+        s: (d.sources || d.state?.sources || []).map((x) => x.id),
+        t: d.transforms ?? d.state?.transforms ?? [],
+      })));
+      const tabularUnchanged = sig(mine.datasets) === sig(manifest.datasets);
+      if (!tabularUnchanged) {
+        const localParquet = new Map();
+        for (const d of mine.datasets) for (const s of d.state.sources) if (s.id && s.parquet) localParquet.set(s.id, s.parquet);
+        let missing = 0;
+        const datasets = [];
+        for (const d of manifest.datasets || []) {
+          const sources = [];
+          for (const s of d.sources || []) {
+            const parquet = s.id ? localParquet.get(s.id) : null;
+            if (!parquet) { missing++; continue; } // new dataset → needs 6c gap-fill
+            sources.push({ id: s.id, meta: s.meta, label: s.label ?? null, combine: s.combine ?? 'base', joinKey: s.joinKey, aliases: s.aliases, wide: s.wide ?? false, rowidBase: s.rowidBase, parquet });
+          }
+          datasets.push({ id: d.id, name: d.name, libraryLink: d.libraryLink ?? null, state: { sources, transforms: d.transforms ?? [], order: d.order ?? null } });
+        }
+        await this.#datasets.loadBundle({ activeId: manifest.activeId, datasets });
+        if (missing) this.#results.appendError('A collaborator added data that hasn’t transferred yet — live sync of NEW datasets is a follow-up (#148 6c).');
+      }
+      this.#applyWorkspaces?.(manifest.workspaces || {});
+      this.#applyOutput?.(manifest.output || []);
+    } catch (err) {
+      console.error('[live] apply failed', err);
     } finally {
       this.#loading = false;
     }

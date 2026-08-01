@@ -30,6 +30,11 @@ export class LivePresence {
     return !!this.#session;
   }
 
+  /** The underlying LiveSession (for elevating presence → live co-authoring), or null. */
+  get session() {
+    return this.#session;
+  }
+
   /**
    * Join a room and start broadcasting this user's presence. Idempotent-ish: any
    * existing session is left first (so switching projects can't leave two rooms joined).

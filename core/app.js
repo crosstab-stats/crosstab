@@ -859,11 +859,19 @@ export async function boot(mounts) {
     goLiveBtn.type = 'button';
     goLiveBtn.className = 'ct-golive';
     goLiveBtn.hidden = true;
-    headerEl.append(peersEl, goLiveBtn);
+    // "Co-author with X" offer (#148 step 6): appears when a peer is present but we're
+    // not yet live-syncing data. One click elevates presence → live co-authoring.
+    const offerBtn = document.createElement('button');
+    offerBtn.type = 'button';
+    offerBtn.className = 'ct-golive ct-coauthor';
+    offerBtn.hidden = true;
+    headerEl.append(peersEl, offerBtn, goLiveBtn);
 
-    const renderPeers = (roster) => {
+    let roster = []; // last presence roster (others)
+    const render = () => {
+      // peer chips
       peersEl.replaceChildren();
-      for (const p of roster || []) {
+      for (const p of roster) {
         const chip = document.createElement('span');
         chip.className = 'ct-peerchip';
         chip.textContent = p.initials || '·';
@@ -871,18 +879,30 @@ export async function boot(mounts) {
         chip.title = p.name || p.initials || 'Someone editing';
         peersEl.append(chip);
       }
-    };
-    const presence = new LivePresence({ onRoster: renderPeers });
-    engine.presence = presence;
-
-    const refreshGoLive = () => {
+      // Go-live toggle (presence)
       goLiveBtn.hidden = !projects.collabReady && !presence.live;
       goLiveBtn.textContent = presence.live ? '● Live' : 'Go live';
       goLiveBtn.classList.toggle('is-live', presence.live);
       goLiveBtn.title = presence.live
         ? 'You’re sharing presence in this project’s room — click to stop'
         : 'Show who else is editing (joins this project’s live room)';
+      // Co-author offer / status
+      const co = projects.coauthoring;
+      const canOffer = roster.length > 0 && presence.live && !co;
+      offerBtn.hidden = !canOffer && !co;
+      if (co) {
+        offerBtn.textContent = '● Co-authoring';
+        offerBtn.classList.add('is-live');
+        offerBtn.title = 'Live co-authoring — edits sync in real time. Click to stop.';
+      } else if (canOffer) {
+        const who = roster.map((p) => p.name || p.initials).filter(Boolean).join(', ') || 'collaborator';
+        offerBtn.textContent = `Co-author with ${who}`;
+        offerBtn.classList.remove('is-live');
+        offerBtn.title = 'Start live co-authoring — your edits and theirs sync in real time.';
+      }
     };
+    const presence = new LivePresence({ onRoster: (r) => { roster = r || []; render(); } });
+    engine.presence = presence;
 
     // Join the current project's room, broadcasting this user's identity beacon.
     const startLive = async () => {
@@ -896,6 +916,8 @@ export async function boot(mounts) {
       });
       return true;
     };
+    // Fully leave: stop data co-authoring first, then presence.
+    const stopLive = async () => { projects.stopCoauthoring(); await presence.stop(); };
 
     // Auto-join when the user opted in ("auto-check for live collaborators"), the project
     // is shareable, and we're online. The setting IS the air-gap/privacy control; being
@@ -904,31 +926,45 @@ export async function boot(mounts) {
     const maybeAutoLive = async () => {
       if (!getIdentity().autoLive || presence.live || autoStarting || !projects.collabReady || !navigator.onLine) return;
       autoStarting = true;
-      try { await startLive(); } catch { /* offline / broker unreachable — stay silent */ } finally { autoStarting = false; refreshGoLive(); }
+      try { await startLive(); } catch { /* offline / broker unreachable — stay silent */ } finally { autoStarting = false; render(); }
     };
 
     goLiveBtn.addEventListener('click', async () => {
       goLiveBtn.disabled = true;
       try {
-        if (presence.live) await presence.stop();
+        if (presence.live) await stopLive();
         else if (!(await startLive())) engine.results?.appendError?.('This project isn’t shareable yet — save it first.');
       } catch (err) {
         engine.results?.appendError?.(`Live presence failed: ${err.message}`);
       } finally {
         goLiveBtn.disabled = false;
-        refreshGoLive();
+        render();
+      }
+    });
+
+    offerBtn.addEventListener('click', async () => {
+      offerBtn.disabled = true;
+      try {
+        if (projects.coauthoring) projects.stopCoauthoring();
+        else if (presence.session) await projects.startCoauthoring(presence.session);
+      } catch (err) {
+        engine.results?.appendError?.(`Live co-authoring failed: ${err.message}`);
+      } finally {
+        offerBtn.disabled = false;
+        render();
       }
     });
 
     // Leaving/switching a project drops you from its room; refresh + maybe auto-join the new one.
     bus.on(PROJECT_CHANGED, async () => {
-      if (presence.live) await presence.stop();
-      refreshGoLive();
+      if (presence.live) await stopLive();
+      roster = [];
+      render();
       void maybeAutoLive();
     });
     // Toggling "auto-check" on goes live for the current project right away.
-    onIdentityChange(() => { refreshGoLive(); void maybeAutoLive(); });
-    refreshGoLive();
+    onIdentityChange(() => { render(); void maybeAutoLive(); });
+    render();
     void maybeAutoLive(); // the project open at boot
   }
 
