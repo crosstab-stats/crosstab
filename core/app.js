@@ -613,7 +613,8 @@ export async function boot(mounts) {
         // Record the active analysis/plugin set so a recipient restores the same
         // analyses (and is warned about any they don't have — #102).
         const activePlugins = plugins.list().filter((p) => p.activated);
-        const blob = await exportProjectBundle({ datasets, projectName: name, plugins: activePlugins });
+        const collab = projects.collabIdentity?.(); // #148 — bundle carries the room identity
+        const blob = await exportProjectBundle({ datasets, projectName: name, plugins: activePlugins, collab });
         downloadBlob(blob, `${slug(name) || 'crosstab-project'}.crosstab`);
         results.api.appendText(`Exported **${name}** as a .crosstab bundle (${(blob.size / 1048576).toFixed(1)} MB).`);
       } catch (err) {

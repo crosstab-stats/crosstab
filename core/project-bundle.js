@@ -33,7 +33,7 @@ const dec = new TextDecoder();
  *   analyses (and be warned about any they don't have — #102).
  * @returns {Promise<Blob>}
  */
-export async function exportProjectBundle({ datasets, projectName, plugins = [] }) {
+export async function exportProjectBundle({ datasets, projectName, plugins = [], collab = null }) {
   const entries = [];
   const index = [];
   const used = new Set();
@@ -78,6 +78,11 @@ export async function exportProjectBundle({ datasets, projectName, plugins = [] 
       origin: p.origin,
       ...(p.url ? { url: p.url } : {}),
     })),
+    // Collab identity (#148) — travels with the bundle so a copy imported to OPFS on
+    // another machine (flash-drive hand-off) meets the origin in the SAME room.
+    // Collaboration is transport-agnostic: whoever holds the bundle is a collaborator
+    // (same trust model as holding the shared folder); encrypt the export to protect it.
+    ...(collab?.collabId ? { collabId: collab.collabId, collabSecret: collab.collabSecret } : {}),
   };
   entries.unshift({ name: 'manifest.json', data: pretty(manifest) });
   entries.push({ name: 'README.md', data: README });
@@ -124,7 +129,11 @@ export function importProjectBundle(buf) {
   const plugins = Array.isArray(manifest.plugins) ? manifest.plugins : [];
   return {
     name: manifest.name || 'Imported project',
-    bundle: { activeId, datasets, activePlugins: plugins.map((p) => p.id).filter(Boolean) },
+    bundle: {
+      activeId, datasets, activePlugins: plugins.map((p) => p.id).filter(Boolean),
+      // Preserve the collab identity so the imported copy shares a room with the origin (#148).
+      collabId: manifest.collabId ?? null, collabSecret: manifest.collabSecret ?? null,
+    },
     plugins,
   };
 }

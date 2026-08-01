@@ -473,7 +473,25 @@ export class ProjectSync {
 
   /** Snapshot all open datasets. With `all`, every dataset's Parquet is included;
    * otherwise only those in `dirty` (the rest save metadata-only). */
+  /** Ensure the project has a collab identity (mint if absent), returning it. Every
+   * project is potentially collaborative (#148) — the identity travels with folder
+   * syncs AND export bundles, so a copy imported elsewhere shares the same room. */
+  #ensureCollab() {
+    if (!this.#collabId || !this.#collabSecret) {
+      const i = ensureCollabIdentity({ collabId: this.#collabId, collabSecret: this.#collabSecret });
+      this.#collabId = i.collabId;
+      this.#collabSecret = i.collabSecret;
+    }
+    return { collabId: this.#collabId, collabSecret: this.#collabSecret };
+  }
+
+  /** The project's collab identity, minting one if needed — for export bundles. */
+  collabIdentity() {
+    return this.#ensureCollab();
+  }
+
   async #snapshot(all, dirty = new Set()) {
+    this.#ensureCollab(); // every saved project carries a collab identity (transport-agnostic)
     const datasets = [];
     for (const ds of this.#datasets.all()) {
       const state = await ds.exportState({ includeParquet: all || dirty.has(ds.id) });
@@ -684,6 +702,10 @@ export class ProjectSync {
     // It's a brand-new project; never bound to (and so never overwriting) the one
     // that was open. Persist + name it from the bundle.
     this.#binding = null;
+    // Preserve the bundle's collab identity (#148) so this imported OPFS copy shares a
+    // room with the origin (the flash-drive hand-off case); null → #snapshot mints one.
+    this.#collabId = bundle.collabId ?? null;
+    this.#collabSecret = bundle.collabSecret ?? null;
     this.#sourcesDirty.clear();
     await this.#fullSave(null, name || 'Imported project');
   }
