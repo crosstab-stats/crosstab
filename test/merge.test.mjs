@@ -340,6 +340,15 @@ test('CAQDAS merge: two people annotating the SAME coding — both memos survive
   assert.equal(r.conflicts.length, 0);
 });
 
+test('mergersFor assembles core + ACTIVE builtin mergers (3rd-party deferred to the bridge)', async () => {
+  const { mergersFor } = await import('../core/builtin-mergers.js');
+  assert.deepEqual(Object.keys(mergersFor([])), ['core']); // core-only when nothing active
+  const m = mergersFor(['builtin-caqdas', 'builtin-spatial', 'some-3rd-party']);
+  assert.equal(typeof m['builtin-caqdas'].merge, 'function', 'CAQDAS coding merger wired');
+  assert.deepEqual(m['builtin-spatial'], { strategy: 'lww' });
+  assert.ok(!('some-3rd-party' in m), '3rd-party blob not host-mergeable yet (needs the sandbox bridge)');
+});
+
 test('mergeProject: a plugin custom merge() function is envelope-wrapped and tagged with owner', () => {
   const ancestor = { log: [], blobs: { 'x-plugin': { owner: 'x-plugin', value: { n: 0 } } } };
   const mine = { log: [], blobs: { 'x-plugin': { owner: 'x-plugin', value: { n: 1 } } } };

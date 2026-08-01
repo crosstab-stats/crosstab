@@ -21,6 +21,7 @@ import { ExportService } from './export-service.js';
 import { installPassphraseUI } from './passphrase-ui.js';
 import { installIdentityChip, getIdentity, onIdentityChange } from './user-identity.js';
 import { LivePresence } from './live-presence.js';
+import { mergersFor } from './builtin-mergers.js';
 import { OutputExportService } from './output-export.js';
 import { ComputeRecode } from './compute-recode.js';
 import { DatasetOps } from './dataset-ops.js';
@@ -573,6 +574,10 @@ export async function boot(mounts) {
     // can tell a recorded-but-uninstalled plugin apart from one it simply has, and
     // carry the former forward across saves (#102).
     pluginIdentities: () => (plugins ? plugins.list().flatMap((p) => [p.key, p.id]).filter(Boolean) : []),
+    // Merger map for sync (#148 6b): core + the ACTIVE builtin plugins' mergers, so a
+    // peer's CAQDAS coding / spatial slots actually MERGE (not clobber) across a shared
+    // folder — and, later, live. Third-party plugin blobs need the sandbox bridge (todo).
+    getMergers: () => mergersFor(plugins ? plugins.list().filter((p) => p.activated).map((p) => p.id).filter(Boolean) : []),
     // A project also remembers each plugin workspace's state blob. After swapping in
     // the new project's blobs, force-remount any live workspace tabs so they re-read
     // their state — a plugin active in both the old and new project stays mounted, so

@@ -60,6 +60,7 @@ export class ProjectSync {
   /** () => string[] : every installed plugin's identifiers (key + manifest id), so
    * a recorded plugin can be told apart from one this install simply doesn't have. */
   #pluginIdentities;
+  #getMergers;
   /** Plugin identifiers recorded in the open project that AREN'T installed here —
    * carried forward verbatim on every save so the association survives until the
    * plugin is added and resolves (#102). Empty for a fully-resolved project. */
@@ -129,7 +130,7 @@ export class ProjectSync {
    * @param {(keys: string[]) => Promise<void>} [deps.applyActivePlugins] - Restore
    *   a project's saved plugin set on open.
    */
-  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaces, applyWorkspaces, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, pluginIdentities }) {
+  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaces, applyWorkspaces, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, pluginIdentities, getMergers }) {
     this.#store = projectStore;
     this.#datasets = datasets;
     this.#ui = ui;
@@ -146,6 +147,12 @@ export class ProjectSync {
     this.#getAnalysisLog = getAnalysisLog ?? null;
     this.#applyAnalysisLog = applyAnalysisLog ?? null;
     this.#pluginIdentities = pluginIdentities ?? null;
+    this.#getMergers = getMergers ?? null;
+  }
+
+  /** Merger map for a sync (core + active builtin plugins), or core-only if unwired. */
+  #mergers() {
+    return (this.#getMergers ? this.#getMergers() : null) ?? { core: { strategy: 'three-way' } };
   }
 
   /** Plugin identifiers the OPEN project references but this install can't resolve
@@ -1084,7 +1091,8 @@ export class ProjectSync {
       name: this.#binding.name,
       bundle,
       base: this.#lastManifest, // MY per-peer ancestor (not a shared disk file) — see folder-sync
-      mergers: { core: { strategy: 'three-way' } },
+      mergers: this.#mergers(), // core + active builtin plugin mergers (#148 6b) — merges CAQDAS coding across peers
+
       resolveConflicts: (conflicts) => showConflictDialog(conflicts),
       applyMerged: (id, manifest) => this.#applyMergedManifest(id, manifest),
       now: Date.now(),
