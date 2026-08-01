@@ -51,11 +51,18 @@ export class ProjectStore {
 
   /** AES-GCM master key for at-rest encryption, or null (plaintext). Set by
    * {@link ProjectStore#unlock}; never persisted. When set, every data file
-   * (`project.json`, `project.base.json`, Parquet, and the catalog) is written as a
-   * ciphertext envelope and decrypted on read — so a driver / cloud provider that
-   * mirrors the folder only ever sees ciphertext. The salt + a verifier live
-   * plaintext in `crosstab-encryption.json` (a salt isn't secret). */
+   * (`project.json`, `project.base.json`, Parquet) is written as a ciphertext
+   * envelope and decrypted on read — so a driver / cloud provider that mirrors the
+   * folder only ever sees ciphertext. The salt + a verifier live plaintext in
+   * `crosstab-encryption.json` (a salt isn't secret). The catalog is always
+   * plaintext (it spans projects, which in OPFS mode can each have a DIFFERENT key). */
   #key = null;
+
+  /** Which project id {@link #key} belongs to. In nested (OPFS) mode each project
+   * can carry its own passphrase, so a save must never encrypt one project's bytes
+   * with another's key (that would make it permanently unopenable) — {@link #save}
+   * guards on this. Flat mode has one project, so it's always FOLDER_PROJECT_ID. */
+  #keyId = null;
 
   /** **Flat, single-project layout** — for folder mode. The picked folder IS the
    * project: files live directly in it (`project.json`, `ds<id>_src<n>.parquet`,
@@ -86,9 +93,11 @@ export class ProjectStore {
     return this.#flat ? name : `${ROOT}/${id}/${name}`;
   }
 
-  /** Path of the plaintext encryption meta (salt/verifier). */
-  #metaPath() {
-    return this.#flat ? ENC_META : `${ROOT}/${ENC_META}`;
+  /** Path of the plaintext encryption meta (salt/verifier). Per-project in nested
+   * (OPFS) mode so every project can carry its OWN passphrase (the shared-lab case);
+   * flat (folder) mode has exactly one project, so the id is vestigial. */
+  #metaPath(id = FOLDER_PROJECT_ID) {
+    return this.#flat ? ENC_META : `${ROOT}/${id}/${ENC_META}`;
   }
 
   /** @returns {boolean} Whether the store is currently folder-backed (vs OPFS). */
@@ -113,10 +122,10 @@ export class ProjectStore {
    * **a forgotten passphrase is unrecoverable** (no server, by design).
    * @param {string} passphrase
    */
-  async unlock(passphrase) {
+  async unlock(passphrase, id = FOLDER_PROJECT_ID) {
     // The salt/verifier meta is plaintext — read/write it via the driver DIRECTLY,
     // bypassing the crypto wrappers (chicken-and-egg: we need it to derive the key).
-    const metaPath = this.#metaPath();
+    const metaPath = this.#metaPath(id);
     let meta = null;
     const rawMeta = await this.#driver.read(metaPath);
     if (rawMeta) { try { meta = JSON.parse(new TextDecoder().decode(rawMeta)); } catch { meta = null; } }
@@ -128,24 +137,37 @@ export class ProjectStore {
     if (meta?.verifier) {
       let ok = false;
       try { ok = new TextDecoder().decode(await decryptWithKey(key, unb64(meta.verifier))) === VERIFIER; } catch { ok = false; }
-      if (!ok) throw new Error('Wrong passphrase for this folder.');
+      if (!ok) throw new Error('Wrong passphrase for this project.');
     } else {
       const verifier = b64(await encryptWithKey(key, VERIFIER));
       await this.#driver.write(metaPath, te.encode(JSON.stringify({ v: 1, salt: b64(salt), iterations, verifier })));
     }
     this.#key = key;
+    this.#keyId = id;
   }
 
-  /** Drop the in-memory key (e.g. closing a folder project). */
+  /** Drop the in-memory key (e.g. closing a project, or before switching to another). */
   lock() {
     this.#key = null;
+    this.#keyId = null;
   }
 
-  /** @returns {Promise<boolean>} Whether this store already has encryption set up
-   * (an `crosstab-encryption.json` present) — so an open flow knows to *enter* an
-   * existing passphrase vs *set* a new one. */
-  async hasEncryption() {
-    return !!(await this.#driver.read(this.#metaPath()));
+  /**
+   * Remove at-rest protection: delete the project's encryption meta and drop the
+   * key. The caller MUST re-save the bundle afterwards so its files are rewritten
+   * plaintext (this removes only the salt/verifier + key, not the ciphertext).
+   * @param {string} [id]
+   */
+  async removeEncryption(id = FOLDER_PROJECT_ID) {
+    await this.#driver.remove(this.#metaPath(id));
+    this.lock();
+  }
+
+  /** @returns {Promise<boolean>} Whether a given project already has encryption set
+   * up (its `crosstab-encryption.json` present) — so an open flow knows to *enter* an
+   * existing passphrase vs *set* a new one. Per-project in nested (OPFS) mode. */
+  async hasEncryption(id = FOLDER_PROJECT_ID) {
+    return !!(await this.#driver.read(this.#metaPath(id)));
   }
 
   /** Acquire the mutex; returns a release fn. */
@@ -173,7 +195,7 @@ export class ProjectStore {
       const cat = await this.#readCatalog();
       const present = new Set(await this.#driver.list(ROOT));
       const kept = cat.entries.filter((e) => present.has(e.id));
-      if (kept.length !== cat.entries.length) await this.#write(`${ROOT}/${CATALOG}`, JSON.stringify({ entries: kept }));
+      if (kept.length !== cat.entries.length) await this.#writePlain(`${ROOT}/${CATALOG}`, JSON.stringify({ entries: kept }));
       return kept.slice().sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
     } finally {
       release();
@@ -202,6 +224,14 @@ export class ProjectStore {
     }
     id = this.#flat ? FOLDER_PROJECT_ID : (id || crypto.randomUUID());
 
+    // Guard: never encrypt one project's bytes with another project's key — that
+    // would make it permanently unopenable. In OPFS mode each project can carry its
+    // own key, so the loaded key MUST belong to the id being saved. (Creating a NEW
+    // protected project pre-mints the id and unlocks it, so #keyId already matches.)
+    if (this.#key && !this.#flat && this.#keyId !== id) {
+      throw new Error('internal: encryption key does not match the project being saved');
+    }
+
     // Parquet first, then the manifest — the same manifest shape folder-sync merges,
     // built by the shared {@link buildManifest} so save and sync never drift.
     await this.#writeSources(id, bundle, writeSourcesFor);
@@ -224,7 +254,7 @@ export class ProjectStore {
       const idx = cat.entries.findIndex((e) => e.id === id);
       if (idx >= 0) cat.entries[idx] = summary;
       else cat.entries.push(summary);
-      await this.#write(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
+      await this.#writePlain(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
     } finally {
       release();
     }
@@ -338,7 +368,7 @@ export class ProjectStore {
       const idx = cat.entries.findIndex((e) => e.id === id);
       if (idx >= 0) cat.entries[idx] = summary;
       else cat.entries.push(summary);
-      await this.#write(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
+      await this.#writePlain(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
     } finally {
       release();
     }
@@ -358,7 +388,7 @@ export class ProjectStore {
       const cat = await this.#readCatalog();
       const e = cat.entries.find((x) => x.id === id);
       if (e) e.name = name;
-      await this.#write(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
+      await this.#writePlain(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
     } finally {
       release();
     }
@@ -373,7 +403,7 @@ export class ProjectStore {
     try {
       const cat = await this.#readCatalog();
       cat.entries = cat.entries.filter((e) => e.id !== id);
-      await this.#write(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
+      await this.#writePlain(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
     } finally {
       release();
     }
@@ -426,11 +456,27 @@ export class ProjectStore {
 
   async #readCatalog() {
     try {
-      const parsed = JSON.parse(await this.#read(`${ROOT}/${CATALOG}`));
+      const parsed = JSON.parse(await this.#readPlain(`${ROOT}/${CATALOG}`));
       return Array.isArray(parsed.entries) ? parsed : { entries: [] };
     } catch {
       return { entries: [] };
     }
+  }
+
+  /** Write a JSON string plaintext (driver-direct, bypassing #key). The catalog uses
+   * this: it spans projects, which in OPFS mode can each carry a DIFFERENT key, so it
+   * can't be encrypted under any one of them. (Project NAMES are therefore visible in
+   * the catalog even for protected projects — same as the plaintext folder marker;
+   * the DATA stays encrypted.) */
+  async #writePlain(path, str) {
+    await this.#driver.write(path, te.encode(str));
+  }
+
+  /** Read a plaintext JSON file as a string, or throw if missing (caller catches). */
+  async #readPlain(path) {
+    const raw = await this.#driver.read(path);
+    if (raw == null) throw new Error(`not found: ${path}`);
+    return new TextDecoder().decode(raw);
   }
 
   /** Encrypt-when-keyed, then hand opaque bytes to the driver. Strings are UTF-8
