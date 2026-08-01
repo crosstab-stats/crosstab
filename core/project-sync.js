@@ -752,12 +752,15 @@ export class ProjectSync {
       id: this.#binding.id,
       name: this.#binding.name,
       bundle,
+      base: this.#lastManifest, // MY per-peer ancestor (not a shared disk file) — see folder-sync
       mergers: { core: { strategy: 'three-way' } },
       resolveConflicts: (conflicts) => showConflictDialog(conflicts),
       applyMerged: (id, manifest) => this.#applyMergedManifest(id, manifest),
       now: Date.now(),
     });
-    if (result.action !== 'cancelled') this.#lastManifest = result.manifest;
+    // Record the written manifest as my new ancestor (drives the poll's change
+    // detection and the next merge). applyMerged already set it when it reloaded.
+    if (result.action !== 'cancelled' && result.manifest) this.#lastManifest = result.manifest;
     return result;
   }
 
