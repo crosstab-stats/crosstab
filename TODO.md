@@ -887,7 +887,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     a plain "stamp every edit visibly" gets cluttered → lean toward **showing the chip only
     when the author ≠ the current viewer** (your own edits stay clean). Data already stamps
     everything (step 2); this is display-only. Revisit after the shape settles.
-  - [ ] **PREREQUISITE for 3 + 4 — segment identity & author-aware merge.** Found while
+  - [x] **PREREQUISITE for 3 + 4 — segment identity & author-aware merge. DONE.** Found while
     verifying step 2b: `mergeState` keys segments by CONTENT
     (`doc|codeId|start|end|tStart|tEnd|region`), with **no author** in the key. Two
     consequences: (a) a content key is not a stable anchor for a memo (edit the span → key
