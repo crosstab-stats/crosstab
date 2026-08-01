@@ -14,7 +14,7 @@
  * Host-owned (drives the loader/manager); not a plugin.
  */
 
-import { makeDemoDataset, makeQualDemoDataset, makeSpatialDemoDataset, makeBlankDataset } from './demo-data.js';
+import { makeDemoDataset, makeQualDemoDataset, makeSpatialDemoDataset } from './demo-data.js';
 
 /** Curated-core analysis plugins, pre-selected on a fresh "Start blank". */
 const CORE_IDS = new Set([
@@ -80,7 +80,17 @@ export class Launcher {
     if (key === 'demo-quant') { dataset = makeDemoDataset(); name = 'Demo data'; }
     else if (key === 'demo-qual') { dataset = makeQualDemoDataset(); name = 'Qualitative demo'; }
     else if (key === 'demo-spatial') { dataset = makeSpatialDemoDataset(); name = 'Sacramento County survey'; }
-    else { dataset = makeBlankDataset(); name = 'Dataset 1'; } // 'blank' / default
+    else {
+      // 'blank' / default / unknown → a truly-empty project: one dataset with NO
+      // sources, so no DuckDB table is created and there are 0 variables (matches
+      // File ▸ New project). setDataset with empty columns can't be used — DuckDB
+      // rejects a 0-column table — which is why the old path seeded a phantom `v1`.
+      await this.#datasets.loadBundle({
+        activeId: 1,
+        datasets: [{ id: 1, name: 'Dataset 1', state: { sources: [], transforms: [] } }],
+      });
+      return;
+    }
     await this.#datasets.setDataset(dataset);
     try {
       if (this.#datasets.activeId != null) this.#datasets.rename(this.#datasets.activeId, name);
