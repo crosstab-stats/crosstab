@@ -931,12 +931,36 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - [~] **5. Presence chips in the top bar. BUILT (awaiting 2-window verify).** Live editors shown by initials/colour. Cheap
     add-on, but coupled to **live P2P** (`core/presence.js` broadcasts peers) — lands WITH
     the live co-authoring chunk, not before. The self-chip built in step 1 is its seed.
-    - [x] **5a. Collab identity minted+persisted for folder projects** (roomFor now works).
+    - **DESIGN (user, 2026) — collaboration is TRANSPORT-AGNOSTIC.** Do NOT assume OPFS
+      projects are non-collaborative: a user can export a bundle → flash drive → a
+      collaborator imports it to OPFS, and the two copies should meet in the SAME room.
+      So **every project carries a collab identity** (collabId/secret), minted on first
+      save and **carried in the export bundle** (+ restored on import), independent of
+      folder/live/cloud. `collabReady` becomes true for all saved projects. (Supersedes
+      5a's folder-only minting.) TODO: mint in `#snapshot` for any project; thread
+      collabId/secret through project-bundle export + openBundle import.
+    - **DESIGN (user) — presence gating = a global setting, not a per-session button.**
+      A profile setting (like name/initials) **"auto-check for live collaborators" on/off**:
+      OFF → today's manual "Go live" button stays; ON → CrossTab auto-joins the room on
+      project open (online + not air-gap) and the user only clicks the final **"start live
+      co-authoring with X"** offer. Presence = automatic awareness; the click consents to
+      DATA streaming.
+    - [x] **5a. Collab identity minted+persisted for folder projects** (roomFor now works)
+      — to be GENERALISED to all projects per the transport-agnostic design above.
     - [~] **5b. Go-live toggle + peer chips** — `core/live-presence.js` (LiveSession +
       PresenceRoom) + header UI; explicit opt-in; identity-beacon only. Solo-verified
       (hidden for OPFS, wired, no errors); needs a two-window test on a shared folder to
       confirm peers actually see each other's chips. This is also the first live-P2P
       session wired — the handshake the future **live data co-authoring** layer reuses.
+  - [ ] **6. Live DATA co-authoring — the layer the "start co-authoring" prompt launches.**
+    Presence (step 5) is *awareness only*; the "start live co-authoring with X" offer needs
+    real-time op streaming, which is NOT built yet. `core/live-protocol.js` (`LiveDoc`) +
+    `attachLiveDoc` exist but aren't wired to the app's op-log/data-store. This is the
+    chunk that makes co-authoring actually stream edits — and it's what the flash-drive/
+    OPFS-import case *requires* (two OPFS copies share a collabId but have NO transport
+    except live P2P; folder copies also have the async poll-merge). Reuses the presence
+    session as its handshake, the merge kernel for convergence, and gap-fill for base data.
+    The auto-offer prompt gets teeth once this lands. **Next major build.**
   - [ ] **~~In-project chat~~ — DEFERRED / maybe never.** Disproportionate scope
     (persistence, history, retention, notifications) for uncertain value when teams already
     have Slack/Teams; and it's the *unanchored* opposite of a memo. If ever, rescope to
