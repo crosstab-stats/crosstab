@@ -648,7 +648,11 @@ export class ProjectSync {
     return true;
   }
 
-  async #pickFolder() {
+  /** Show the OS folder picker and ensure write permission, but do NOT touch the
+   * live store — for flows that must probe/prompt before committing (moveToFolder),
+   * so a cancel leaves the current project's attachment completely untouched.
+   * @returns {Promise<FileSystemDirectoryHandle|null>} */
+  async #pickFolderHandle() {
     if (typeof window === 'undefined' || !window.showDirectoryPicker) {
       this.#results.appendError('This browser can’t use a project folder — use Chrome or Edge on desktop.');
       return null;
@@ -659,6 +663,17 @@ export class ProjectSync {
     } catch {
       return null; // user cancelled the picker
     }
+    if (!(await ensureReadWrite(handle))) {
+      this.#results.appendError('Folder write access wasn’t granted.');
+      return null;
+    }
+    return handle;
+  }
+
+  /** Pick a folder AND attach the live store to it (open/reconnect flows). */
+  async #pickFolder() {
+    const handle = await this.#pickFolderHandle();
+    if (!handle) return null;
     return (await this.#attach(handle)) ? handle : null;
   }
 
@@ -711,27 +726,45 @@ export class ProjectSync {
    * be called from the menu click (`showDirectoryPicker` needs a user gesture).
    */
   async moveToFolder() {
-    // If we're moving an OPFS-backed project, remember it so we can drop the leftover
-    // copy after a successful move (a true move, no confusing duplicate in the launcher).
-    const orphanOpfsId = this.#folderMode ? null : this.#binding?.id;
-    const handle = await this.#pickFolder();
+    const wasFolder = this.#folderMode; // preserve the current attachment for a clean abort
+    // Pick WITHOUT attaching: we must not disturb the live project's store until the
+    // user has actually committed. Everything up to the commit line below is
+    // side-effect-free, so a cancel (picker, occupied folder, or passphrase dialog)
+    // leaves the project exactly where it is — OPFS or its existing folder.
+    const handle = await this.#pickFolderHandle();
     if (!handle) return;
+
+    // Probe the target with a THROWAWAY store, so this read never touches the live
+    // project. `hasEncryption` reads the plaintext meta, so an occupied folder is
+    // detected even when it's encrypted and we hold no key (list() would look empty).
+    let occupied = false;
     try {
-      // `hasEncryption` reads the plaintext meta, so it detects an occupied folder
-      // even when it's encrypted and we don't have the key (list() would look empty).
-      const occupied = (await this.#store.hasEncryption()) || (await this.#store.list()).length > 0;
-      if (occupied) {
-        this.#results.appendError('That folder already holds a CrossTab project — use “Open project from a folder…” to work in it.');
-        this.#detachFolder();
-        return;
-      }
-      if (shouldEncrypt('folder')) {
-        // Three outcomes: a passphrase (protect), null (move unprotected), or
-        // PASSPHRASE_ABORT (cancel the whole move → revert to OPFS, project stays put).
-        const pass = await passphraseFor('folder-new');
-        if (pass === PASSPHRASE_ABORT) { this.#detachFolder(); return; }
-        if (pass) await this.#store.unlock(pass);
-      }
+      const probe = new ProjectStore();
+      probe.useDirectory(handle);
+      occupied = (await probe.hasEncryption()) || (await probe.list()).length > 0;
+    } catch {
+      occupied = true; // unreadable → treat as occupied; never risk clobbering it
+    }
+    if (occupied) {
+      this.#results.appendError('That folder already holds a CrossTab project — use “Open project from a folder…” to work in it.');
+      return; // nothing changed
+    }
+
+    // Decide protection BEFORE mutating anything. Three outcomes: a passphrase
+    // (protect), null (move unprotected), or PASSPHRASE_ABORT (cancel the move).
+    let pass = null;
+    if (shouldEncrypt('folder')) {
+      pass = await passphraseFor('folder-new');
+      if (pass === PASSPHRASE_ABORT) return; // aborted — project untouched
+    }
+
+    // --- committed: only now do we switch the live store and write -------------
+    // If moving an OPFS-backed project, remember it so we can drop the leftover copy
+    // after the move (a true move, no confusing duplicate in the launcher).
+    const orphanOpfsId = wasFolder ? null : this.#binding?.id;
+    try {
+      if (!(await this.#attach(handle))) return; // ensures write, flushes, switches #store
+      if (pass) await this.#store.unlock(pass);
       this.#binding = null; // a brand-new entry, living in the folder now
       await this.#fullSave(null, this.activeName || 'My project');
       this.#folderMode = true;
