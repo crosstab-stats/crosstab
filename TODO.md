@@ -155,8 +155,14 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       `app.state.set()` (`builtin-caqdas` ~L245), so it never enters the undo stack.
       A coder can't Ctrl-Z a mis-code, and the History/do-file panel doesn't show
       qualitative work at all. Want plugin actions to participate in history where it
-      makes sense. **Design TBD** — two shapes to weigh:
-  - *Plugins add each action to the **main** history* — one unified undo timeline the
+      makes sense. **DECISION (2026, deferred to when we tackle it): option 3 — the
+      "principled fix" — plugin actions join the MAIN core history/op-log (the first
+      shape below), NOT a separate per-plugin undo stack.** Chosen so there's ONE undo
+      timeline and plugin ops get op-identity + merge treatment for free (composes with
+      #143/#148). Confirmed while building #148 memos: notes + all CAQDAS coding write to
+      the workspace blob and so escape Edit▸Undo — the concrete driver for this. Kept as a
+      tracked gap; not scheduled yet.
+  - *[DECIDED] Plugins add each action to the **main** history* — one unified undo timeline the
     user already knows; the action shows in the History panel alongside recodes; and
     it would **compose with the collaboration work** (#143) — a logged action gets a
     stable op id + merge treatment for free, instead of the whole blob merging as one
@@ -918,9 +924,10 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       the persisted blob (3 KC-stamped, anchored memos; deletion persisted). Overflow fixed.
       **NOTE:** notes (like ALL CAQDAS actions) persist via the workspace blob, so they are
       NOT covered by core Edit▸Undo — the pre-existing "plugins add actions to the log" gap.
-  - [ ] **4. Inter-coder reliability analysis (κ / α).** The payoff. Consumes the
-    per-coder attribution from steps 2–3 to compute agreement + surface disagreements.
-    Later; identity + authorship + memos all feed it.
+  - **4. Inter-coder reliability analysis (κ / α) — MOVED.** This is an *analysis*
+    feature, not a collab one, so it lives in **"## More analyses"** below (the stats
+    backlog). The collab foundation it needs — per-coder attribution + distinct per-coder
+    segments — is DONE here (steps 2–3); the κ/α computation is the analysis-side work.
   - [ ] **5. Presence chips in the top bar.** Live editors shown by initials/colour. Cheap
     add-on, but coupled to **live P2P** (`core/presence.js` broadcasts peers) — lands WITH
     the live co-authoring chunk, not before. The self-chip built in step 1 is its seed.
@@ -1953,6 +1960,20 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## More analyses (each is just another plugin)
 
+- [ ] **Inter-coder reliability (Cohen's κ / Krippendorff's α) — CAQDAS analysis (from #148).**
+      The payoff of the collaborator-authorship work: compute agreement between coders and
+      surface disagreements for qualitative coding teams (the Dedoose-parity method). The
+      **collab foundation is already DONE** (#148): each coder's coding is a distinct,
+      author-stamped segment (per-coder ids + author-aware merge), so the data needed is
+      present. This item is the *analysis* side: (1) an **agreement grouping** — group
+      overlapping same-code segments across coders into codeable units (text reliability is
+      an overlap/unitising computation, NOT exact-match); (2) the coefficients — **Cohen's
+      κ** (two coders), **Krippendorff's α** / **Fleiss' κ** (≥2 coders), plus a simple
+      percent-agreement + a per-code/per-coder disagreement table; (3) surface it in Output
+      (and, later, a "disagreements" review view in the coding pane). R has `irr` /
+      `icr` (WebR feasibility probe first, per house style), or hand-roll + validate
+      against `irr`. Also decide the unit model (whole-doc code presence vs unitised
+      overlap). Driven by faculty running coder-bias meta-analysis. See [[qualitative-first-class]].
 - [ ] **Single-Case Experimental Design (SCED) — NEW GAP (coverage backlog).** The
       **multiple-baseline / ABAB / withdrawal** graphs + non-overlap effect sizes that
       applied-behaviour-analysis, special-ed, early-childhood-intervention and school-
