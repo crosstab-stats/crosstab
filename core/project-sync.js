@@ -18,6 +18,7 @@ import { CoreEvents } from './event-bus.js';
 import { DATASETS_CHANGED } from './dataset-manager.js';
 import { ProjectStore, FOLDER_PROJECT_ID, buildManifest } from './project-store.js';
 import { attachLiveDoc } from './live-sync.js';
+import { SourceExchange } from './gap-fill.js';
 import { rememberFolder, listFolders, forgetFolder, ensureReadWrite } from './folder-handle.js';
 import { passphraseFor, shouldEncrypt, PASSPHRASE_ABORT } from './at-rest.js';
 import { syncFolderProject, manifestsEqual } from './folder-sync.js';
@@ -68,6 +69,12 @@ export class ProjectSync {
   #liveDoc = null;
   #liveSession = null;
   #livePublishTimer = null;
+  /** Gap-fill (#148 step 6c): fetch Parquet a co-author has that we lack (new dataset
+   * / cold join). Received bytes wait in #liveSourceBytes; #liveLastManifest is re-
+   * applied once they arrive. */
+  #liveExchange = null;
+  #liveSourceBytes = new Map();
+  #liveLastManifest = null;
   /** Plugin identifiers recorded in the open project that AREN'T installed here —
    * carried forward verbatim on every save so the association survives until the
    * plugin is added and resolves (#102). Empty for a fully-resolved project. */
@@ -1162,8 +1169,36 @@ export class ProjectSync {
         if (res) this.#liveDoc?.resolve(res);
       },
     });
+    // Base-data gap-fill (#148 6c): serve the sources I hold to a peer that lacks them,
+    // and fetch any I lack. Rides the SAME ops channel; LiveDoc ignores need/src-chunk.
+    this.#liveSourceBytes = new Map();
+    this.#liveLastManifest = null;
+    const held = new Set();
+    this.#liveExchange = new SourceExchange({
+      held,
+      readSource: async (ref) => {
+        const snap = await this.#snapshot(true);
+        for (const d of snap.datasets) for (const s of d.state.sources) if (s.id === ref.id && s.parquet) return s.parquet;
+        return this.#liveSourceBytes.get(ref.id) ?? null;
+      },
+      storeSource: async (ref, bytes) => { this.#liveSourceBytes.set(ref.id ?? ref.key, bytes); },
+      send: (m, to) => session.sendOps(m, to),
+      onReceived: ({ ok }) => { if (ok && this.#liveLastManifest) void this.#applyLiveManifest(this.#liveLastManifest); },
+    });
+    session.onOps((m, peer) => { void this.#liveExchange?.receive(m, peer); });
+    await this.#refreshHeld(); // seed the exchange with the source ids I already hold
     this.#liveDoc.hello();
     this.#emitProject();
+  }
+
+  /** Refresh the gap-fill "held" set from my current sources (so I can serve them, and
+   * so requestMissing knows what I still lack). */
+  async #refreshHeld() {
+    if (!this.#liveExchange) return;
+    try {
+      const snap = await this.#snapshot(true);
+      for (const d of snap.datasets) for (const s of d.state.sources) if (s.id) this.#liveExchange.held.add(s.id);
+    } catch { /* best effort */ }
   }
 
   /** Stop co-authoring (the presence layer owns leaving the room). */
@@ -1171,6 +1206,9 @@ export class ProjectSync {
     if (this.#livePublishTimer) { clearTimeout(this.#livePublishTimer); this.#livePublishTimer = null; }
     this.#liveDoc = null;
     this.#liveSession = null;
+    this.#liveExchange = null;
+    this.#liveSourceBytes = new Map();
+    this.#liveLastManifest = null;
     this.#emitProject();
   }
 
@@ -1181,7 +1219,10 @@ export class ProjectSync {
     this.#livePublishTimer = setTimeout(async () => {
       this.#livePublishTimer = null;
       if (!this.#liveDoc) return;
-      try { this.#liveDoc.localUpdate(await this.#currentManifest()); } catch (err) { console.error('[live] publish failed', err); }
+      try {
+        await this.#refreshHeld(); // I may have added a dataset — offer it to peers
+        this.#liveDoc.localUpdate(await this.#currentManifest());
+      } catch (err) { console.error('[live] publish failed', err); }
     }, 400);
   }
 
@@ -1210,15 +1251,24 @@ export class ProjectSync {
         const datasets = [];
         for (const d of manifest.datasets || []) {
           const sources = [];
+          let complete = true;
           for (const s of d.sources || []) {
-            const parquet = s.id ? localParquet.get(s.id) : null;
-            if (!parquet) { missing++; continue; } // new dataset → needs 6c gap-fill
+            // Reuse local Parquet, or bytes a co-author already streamed us (#148 6c).
+            const parquet = (s.id ? localParquet.get(s.id) : null) ?? (s.id ? this.#liveSourceBytes.get(s.id) : null);
+            if (!parquet) { missing++; complete = false; continue; } // still lacking → request below
             sources.push({ id: s.id, meta: s.meta, label: s.label ?? null, combine: s.combine ?? 'base', joinKey: s.joinKey, aliases: s.aliases, wide: s.wide ?? false, rowidBase: s.rowidBase, parquet });
           }
-          datasets.push({ id: d.id, name: d.name, libraryLink: d.libraryLink ?? null, state: { sources, transforms: d.transforms ?? [], order: d.order ?? null } });
+          // Only materialise a dataset once ALL its sources are present; an incomplete
+          // one waits for gap-fill (it re-applies via onReceived when the bytes land).
+          if (complete) datasets.push({ id: d.id, name: d.name, libraryLink: d.libraryLink ?? null, state: { sources, transforms: d.transforms ?? [], order: d.order ?? null } });
         }
-        await this.#datasets.loadBundle({ activeId: manifest.activeId, datasets });
-        if (missing) this.#results.appendError('A collaborator added data that hasn’t transferred yet — live sync of NEW datasets is a follow-up (#148 6c).');
+        if (missing) {
+          // A co-author added data we don't hold yet — request the bytes; onReceived
+          // re-applies this manifest once they arrive (#148 6c gap-fill).
+          this.#liveLastManifest = manifest;
+          this.#liveExchange?.requestMissing(manifest);
+        }
+        if (datasets.length) await this.#datasets.loadBundle({ activeId: manifest.activeId, datasets });
       }
       this.#applyWorkspaces?.(manifest.workspaces || {});
       this.#applyOutput?.(manifest.output || []);
