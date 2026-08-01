@@ -165,6 +165,8 @@ function copyFor(purpose, opts = {}) {
         skipLabel: 'Move without protection',
         cancelLabel: 'Cancel move',
       };
+    case 'local-new':
+      return { title: 'Protect this project', message: 'Set a passphrase to encrypt this project’s data on this device. Each project has its own passphrase; it’s required to open the project and is never stored.' };
     case 'enable':
       return { title: 'Encrypt this project', message: 'Set a passphrase. It’s required to open the project on any machine and is never stored.' };
     default:

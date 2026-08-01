@@ -202,6 +202,11 @@ export class ProjectSync {
       this.#menus.register({ id: 'core:proj-folder-open', path: ['File'], label: 'Open project from a folder…', order: 6, command: () => void this.openFromFolder() });
       this.#menus.register({ id: 'core:proj-folder-close', path: ['File'], label: 'Close project folder', order: 7, command: () => void this.closeFolder() });
     }
+    // Per-project at-rest protection for OPFS projects (#144) — set/remove a passphrase
+    // on the CURRENT project (each project has its own). Folder projects are protected
+    // via their folder passphrase instead, so these guard against that case.
+    this.#menus.register({ id: 'core:proj-protect', path: ['File'], label: 'Protect this project…', order: 8, command: () => void this.protectProject() });
+    this.#menus.register({ id: 'core:proj-unprotect', path: ['File'], label: 'Remove protection…', order: 9, command: () => void this.unprotectProject() });
     this.#bus.on(CoreEvents.DATA_CHANGED, (s) => this.#onChange(s));
     this.#bus.on(DATASETS_CHANGED, () => this.#onChange(null));
     this.#bus.on(CoreEvents.PLUGINS_CHANGED, () => this.#onPluginsChanged());
@@ -517,6 +522,28 @@ export class ProjectSync {
     // stays remembered in the registry; #openExistingFolder opens with folderMode
     // still false, so it isn't affected by this).
     if (this.#folderMode && id !== FOLDER_PROJECT_ID) this.#detachFolder();
+    // A protected OPFS project needs its passphrase before we can read it. Check on a
+    // plaintext meta read FIRST (nothing loaded yet), so a wrong/cancelled passphrase
+    // leaves the currently-open project untouched. (Folder mode already unlocked its
+    // store in #openExistingFolder, so skip it there.)
+    if (!this.#store.folderBacked) {
+      this.#store.lock(); // drop any previously-open project's key before switching
+      try {
+        if (await this.#store.hasEncryption(id)) {
+          const pass = await passphraseFor('unlock');
+          if (!pass) return; // cancelled — current project untouched
+          await this.#store.unlock(pass, id); // throws on a wrong passphrase
+        }
+      } catch (err) {
+        this.#results.appendError(
+          /wrong passphrase/i.test(err.message)
+            ? 'Wrong passphrase — the project was not opened.'
+            : `Couldn’t open the project: ${err.message}`,
+        );
+        this.#store.lock();
+        return; // untouched
+      }
+    }
     this.#setStatus('loading');
     this.#loading = true;
     let projName = null;
@@ -872,6 +899,73 @@ export class ProjectSync {
     await this.newProject();
   }
 
+  /**
+   * **Protect this project…** — set a passphrase on the CURRENT OPFS project so its
+   * data is encrypted at rest (#144). Each OPFS project has its own passphrase (the
+   * shared-lab case). Also the migration path for an existing plaintext project: it
+   * mints the project's key + meta, then re-saves the whole bundle encrypted.
+   */
+  async protectProject() {
+    if (this.#folderMode || this.#store.folderBacked) {
+      this.#results.appendError('This project lives in a folder — its protection is the folder passphrase, set when you moved it there.');
+      return;
+    }
+    await this.#settle(); // make sure it's saved (and has a binding) before we re-key it
+    if (!this.#binding) {
+      this.#results.appendError('Add some data first — an empty project has nothing to protect yet.');
+      return;
+    }
+    const id = this.#binding.id;
+    if (await this.#store.hasEncryption(id)) {
+      this.#results.appendError('This project is already protected.');
+      return;
+    }
+    const pass = await passphraseFor('local-new'); // set mode: passphrase + confirm + "no recovery"
+    if (!pass) return; // cancelled — unchanged
+    try {
+      await this.#store.unlock(pass, id); // mints per-project salt/verifier + key
+      await this.#fullSave(id, this.#binding.name); // rewrite the bundle, now encrypted
+      this.#results.appendText?.(`🔒 **“${this.#binding.name}” is now protected.** You'll need this passphrase to open it on this device — it isn't stored anywhere and can't be recovered.`);
+    } catch (err) {
+      this.#results.appendError(`Couldn’t protect the project: ${err.message}`);
+    }
+    this.#emitProject();
+  }
+
+  /**
+   * **Remove protection…** — decrypt the current OPFS project back to plaintext on
+   * this device. Requires a confirmation (it lowers the project's at-rest security).
+   * The project is already unlocked (we opened it with the passphrase), so this drops
+   * the key + meta and re-saves the bundle in the clear.
+   */
+  async unprotectProject() {
+    if (this.#folderMode || this.#store.folderBacked) {
+      this.#results.appendError('This is a folder project — remove its protection by moving it out of the folder, not here.');
+      return;
+    }
+    if (!this.#binding) return;
+    const id = this.#binding.id;
+    if (!(await this.#store.hasEncryption(id))) {
+      this.#results.appendError('This project isn’t protected.');
+      return;
+    }
+    const ok = await confirmDialog({
+      title: 'Remove protection?',
+      message: `“${this.#binding.name}” will be stored unencrypted on this device. Anyone (or any program) that can read this browser's files could then read it.`,
+      okLabel: 'Remove protection',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await this.#store.removeEncryption(id); // deletes the meta + drops the key
+      await this.#fullSave(id, this.#binding.name); // rewrite the bundle plaintext (key now null)
+      this.#results.appendText?.(`🔓 **“${this.#binding.name}” is no longer protected** — it's stored unencrypted on this device now.`);
+    } catch (err) {
+      this.#results.appendError(`Couldn’t remove protection: ${err.message}`);
+    }
+    this.#emitProject();
+  }
+
   /** Remembered folder projects (for the sidebar + launcher lists). */
   listFolderProjects() {
     return listFolders();
@@ -1130,4 +1224,47 @@ export class ProjectSync {
     else text = 'Unsaved project';
     this.#statusEl.textContent = text;
   }
+}
+
+/**
+ * A minimal yes/no confirmation modal (matching the app's `ct-dialog` conventions).
+ * Resolves true only if the user clicks the primary button; Cancel/Escape/backdrop
+ * resolve false. `danger` styles the primary button as a destructive action.
+ * @param {{title: string, message: string, okLabel?: string, danger?: boolean}} opts
+ * @returns {Promise<boolean>}
+ */
+function confirmDialog({ title, message, okLabel = 'OK', danger = false } = {}) {
+  return new Promise((resolve) => {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'ct-dialog';
+    const form = document.createElement('form');
+    form.method = 'dialog';
+    form.className = 'ct-dialog__form';
+    const h2 = document.createElement('h2');
+    h2.className = 'ct-dialog__title';
+    h2.textContent = title;
+    const p = document.createElement('p');
+    p.className = 'ct-dialog__hint';
+    p.textContent = message;
+    const menu = document.createElement('menu');
+    menu.className = 'ct-dialog__buttons';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = 'Cancel';
+    const ok = document.createElement('button');
+    ok.type = 'submit';
+    ok.className = danger ? 'ct-dialog__danger' : 'ct-dialog__primary';
+    ok.textContent = okLabel;
+    menu.append(cancel, ok);
+    form.append(h2, p, menu);
+    dialog.append(form);
+
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } dialog.close(); };
+    cancel.addEventListener('click', () => finish(false));
+    form.addEventListener('submit', (e) => { e.preventDefault(); finish(true); });
+    dialog.addEventListener('close', () => { if (!done) { done = true; resolve(false); } dialog.remove(); });
+    document.body.append(dialog);
+    dialog.showModal();
+  });
 }
