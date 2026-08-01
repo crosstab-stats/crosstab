@@ -23,6 +23,7 @@ import { syncFolderProject, manifestsEqual } from './folder-sync.js';
 import { showConflictDialog } from './conflict-ui.js';
 import { shortcutFiles } from './folder-shortcut.js';
 import { showEncryptionSettings } from './encryption-settings.js';
+import { ensureCollabIdentity, roomFor } from './live-invite.js';
 
 const DEBOUNCE_MS = 800;
 
@@ -81,6 +82,12 @@ export class ProjectSync {
   /** The registry id of the currently-open folder project (so the sidebar can exclude
    * the active one from its folder list, matching OPFS behaviour). */
   #activeFolderId = null;
+  /** The active project's collab identity (#148 step 5 / #143) — a stable id + secret
+   * that derive the live signaling room. Minted for folder projects (they're the
+   * shareable ones) and carried in the manifest so both peers compute the same room.
+   * Null for a plain OPFS project (not shared). */
+  #collabId = null;
+  #collabSecret = null;
   /** Last project manifest we wrote/saw in the folder — lets the poll detect a
    * peer's write cheaply (readManifest + compare) without a full merge each tick. */
   #lastManifest = null;
@@ -487,7 +494,10 @@ export class ProjectSync {
     const workspaces = this.#getWorkspaces ? this.#getWorkspaces() : undefined;
     const output = this.#getOutput ? this.#getOutput() : undefined;
     const analysisLog = this.#getAnalysisLog ? this.#getAnalysisLog() : undefined;
-    return { activeId: this.#datasets.activeId, activePlugins, workspaces, output, analysisLog, datasets };
+    return {
+      activeId: this.#datasets.activeId, activePlugins, workspaces, output, analysisLog, datasets,
+      collabId: this.#collabId, collabSecret: this.#collabSecret, // #148 — persist the live-room identity
+    };
   }
 
   // --- new / open -----------------------------------------------------------
@@ -509,6 +519,8 @@ export class ProjectSync {
       this.#loading = false;
     }
     this.#binding = null;
+    this.#collabId = null; // a fresh (OPFS) project isn't shared → no collab room
+    this.#collabSecret = null;
     this.#sourcesDirty.clear();
     this.#dirty = false;
     this.#unresolvedPlugins = []; // a fresh project carries no unresolved plugins
@@ -569,6 +581,8 @@ export class ProjectSync {
     try {
       const { name, bundle } = await this.#store.load(id);
       projName = name;
+      this.#collabId = bundle.collabId ?? null; // #148 — carry the live-room identity
+      this.#collabSecret = bundle.collabSecret ?? null;
       await this.#datasets.loadBundle(bundle);
       // Restore plugin workspace blobs BEFORE plugins load, so a workspace's
       // mount() sees its saved state via state.get(). Absent ⇒ empty.
@@ -778,6 +792,13 @@ export class ProjectSync {
     if (!this.#binding) { this.#detachFolder(); return false; } // load failed (damaged) → recover to OPFS
     this.#folderMode = true;
     this.#lastManifest = await this.#store.readManifest(this.#binding.id);
+    // A folder project created before collab identity existed gets one now, persisted so
+    // every peer computes the same room (#148). openProject already captured any existing one.
+    if (!this.#collabId || !this.#collabSecret) {
+      const ident = ensureCollabIdentity({ collabId: this.#collabId, collabSecret: this.#collabSecret });
+      this.#collabId = ident.collabId; this.#collabSecret = ident.collabSecret;
+      if (ident.minted) await this.#folderRewrite(this.#binding.name);
+    }
     this.#activeFolderId = await rememberFolder(handle, { name: this.#binding.name, savedAt: Date.now() }); // first-class in launcher + sidebar
     await this.#ensureFolderShortcuts(this.#binding.name); // regenerate the on-ramp if a shared folder lacks it
     this.#startPoll();
@@ -833,8 +854,12 @@ export class ProjectSync {
     try {
       if (!(await this.#attach(handle))) return; // ensures write, flushes, switches #store
       if (pass) await this.#store.unlock(pass);
+      // Mint the live-room identity so this shared folder is collab-ready (#148): it rides
+      // the manifest to collaborators, so opening the shared folder joins the same room.
+      const ident = ensureCollabIdentity({ collabId: this.#collabId, collabSecret: this.#collabSecret });
+      this.#collabId = ident.collabId; this.#collabSecret = ident.collabSecret;
       this.#binding = null; // a brand-new entry, living in the folder now
-      await this.#fullSave(null, this.activeName || 'My project');
+      await this.#fullSave(null, this.activeName || 'My project'); // snapshot now carries collab id/secret
       this.#folderMode = true;
       this.#lastManifest = await this.#store.readManifest(this.#binding.id);
       this.#activeFolderId = await rememberFolder(handle, { name: this.#binding.name, savedAt: Date.now() });
@@ -1128,6 +1153,19 @@ export class ProjectSync {
   /** Registry id of the open folder project (null if not in a folder). */
   get activeFolderId() {
     return this.#activeFolderId;
+  }
+
+  /** Whether the active project can host live collaboration — it has a collab identity
+   * (minted for folder projects), so a signaling room can be derived (#148). */
+  get collabReady() {
+    return !!(this.#collabId && this.#collabSecret);
+  }
+
+  /** The live signaling room + secret for the active project, or null if it has no
+   * collab identity (a non-shared OPFS project). Both folder peers derive the same
+   * room from the manifest — the entry point for presence + live co-authoring (#148). */
+  async activeRoom() {
+    return roomFor({ collabId: this.#collabId, collabSecret: this.#collabSecret });
   }
 
   /** Rename the *active* project. If it has never been saved (no binding), this
