@@ -324,6 +324,22 @@ test('CAQDAS merge: legacy id-less identical codings still collapse (content-key
   assert.equal(r.blobs['builtin-caqdas'].value.segments.length, 1, 'id-less identical codings dedupe by content');
 });
 
+test('CAQDAS merge: two people annotating the SAME coding — both memos survive (office-hours case)', () => {
+  // Memos are a separate add-wins collection anchored by id, so faculty + student can
+  // both comment on the same coding without one clobbering the other (#148 step 3).
+  const mergers = { core: { strategy: 'three-way' }, 'builtin-caqdas': { merge: caqdasMerge } };
+  const blob = (memos) => ({ version: 1, textColumn: 't', labelColumn: null, codes: [{ id: 'c1', name: 'anx' }], segments: [{ id: 's1', doc: 'r1', codeId: 'c1', start: 10, end: 50, text: 'x' }], memos });
+  const memo = (id, who) => ({ id, anchorKind: 'segment', anchorId: 's1', text: `note ${who}`, author: { authorId: who, initials: who.toUpperCase() }, createdAt: 1 });
+  const ancestor = { log: [], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: blob([]) } } };
+  const mine = { log: [], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: blob([memo('n-jane', 'jane')]) } } };
+  const theirs = { log: [], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: blob([memo('n-bob', 'bob')]) } } };
+  const r = mergeProject({ ancestor, mine, theirs, mergers });
+  const memos = r.blobs['builtin-caqdas'].value.memos;
+  assert.equal(memos.length, 2, 'both annotations on the same coding survive');
+  assert.deepEqual(memos.map((n) => n.author.initials).sort(), ['BOB', 'JANE']);
+  assert.equal(r.conflicts.length, 0);
+});
+
 test('mergeProject: a plugin custom merge() function is envelope-wrapped and tagged with owner', () => {
   const ancestor = { log: [], blobs: { 'x-plugin': { owner: 'x-plugin', value: { n: 0 } } } };
   const mine = { log: [], blobs: { 'x-plugin': { owner: 'x-plugin', value: { n: 1 } } } };

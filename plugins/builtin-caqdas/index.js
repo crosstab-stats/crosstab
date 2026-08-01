@@ -1763,7 +1763,12 @@ export function mergeState({ ancestor, mine, theirs, helpers }) {
     s.id ||
     `${s.doc}|${s.codeId}|${s.start ?? ''}|${s.end ?? ''}|${s.tStart ?? ''}|${s.tEnd ?? ''}|${s.region ? helpers.stableStringify(s.region) : ''}`;
   const segments = helpers.addWinsSet(a.segments, m.segments, t.segments, segKey, OWNER);
-  conflicts.push(...codes.conflicts, ...segments.conflicts);
+  // Memos/annotations (#148 step 3) are their OWN add-wins collection keyed by memo id,
+  // each referencing its anchor (a segment or code) by id — so two people annotating the
+  // SAME coding produce two distinct records that BOTH survive (the office-hours case),
+  // rather than one clobbering the other if memos were nested inside the segment.
+  const memos = helpers.addWinsSet(a.memos, m.memos, t.memos, (n) => n.id, OWNER);
+  conflicts.push(...codes.conflicts, ...segments.conflicts, ...memos.conflicts);
 
   const cfg = (key) => {
     const r = helpers.lww(a[key], { value: m[key] }, { value: t[key] }, OWNER, key);
@@ -1778,6 +1783,7 @@ export function mergeState({ ancestor, mine, theirs, helpers }) {
       labelColumn: cfg('labelColumn'),
       codes: codes.resolved,
       segments: segments.resolved,
+      memos: memos.resolved,
     },
     conflicts,
   };
@@ -1794,6 +1800,11 @@ function normalize(raw) {
       : [],
     segments: Array.isArray(s.segments)
       ? s.segments.filter((x) => x && x.doc && x.codeId).map((x) => ({ ...x, memo: typeof x.memo === 'string' ? x.memo : '' }))
+      : [],
+    // Memos/annotations (#148 step 3): first-class records anchored to a segment/code by
+    // id. Keep only well-formed ones (id + anchorId + text) so the add-wins merge has a key.
+    memos: Array.isArray(s.memos)
+      ? s.memos.filter((n) => n && n.id && n.anchorId && typeof n.text === 'string').map((n) => ({ ...n }))
       : [],
     // A just-imported QDPX project stashes codings keyed by row index here; the mount
     // resolves them to row-ids once docs are loaded, then clears it (#139).
