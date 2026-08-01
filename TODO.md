@@ -898,7 +898,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     `segKey` use the id when present (content-key fallback for legacy/imported segments) — so
     per-coder codings stay DISTINCT and memos get a durable anchor. Changes merge semantics
     (more segments survive a merge), so confirm the methodology intent before shipping.
-  - [~] **3. Memos / annotations (anchored comments).** Word/Docs-style margin comments,
+  - [x] **3. Memos / annotations (anchored comments). DONE (3a data+merge, 3b UI).** Word/Docs-style margin comments,
     but anchored + persistent + part of the analytic record. **Decisions (with user):**
     (i) memos REPLACE the old inline `memo` string going forward (legacy memo shown as a
     read-only first note; no lossy migration); (ii) **flat / chronological, author-stamped**
@@ -911,10 +911,13 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     - [x] **3a. Data model + merge DONE** — `state.memos = [{id, anchorKind, anchorId,
       author, text, createdAt}]`; add-wins by memo id in `mergeState` + normalize; +1 test
       (both people's annotations on one coding survive). 113 pass.
-    - [ ] **3b. Thread UI** — a per-anchor notes panel in the coding pane (transcript margin
-      / retrieve / code memo area): list author-stamped notes chronologically, add a note,
-      delete your own; replace the inline memo editors; re-anchor notes when overlapping
-      same-code segments merge locally. (Cross-origin plugin → verify by reading the blob.)
+    - [x] **3b. Thread UI DONE** — `renderThread()` replaces the inline memo editors on
+      the segment popup + code details: chronological author-stamped notes (colour+initials
+      chip), add (button / Ctrl+Cmd-Enter), delete your own; legacy memo shown read-only;
+      has-note markers updated; notes re-anchor when same-code segments merge. Verified via
+      the persisted blob (3 KC-stamped, anchored memos; deletion persisted). Overflow fixed.
+      **NOTE:** notes (like ALL CAQDAS actions) persist via the workspace blob, so they are
+      NOT covered by core Edit▸Undo — the pre-existing "plugins add actions to the log" gap.
   - [ ] **4. Inter-coder reliability analysis (κ / α).** The payoff. Consumes the
     per-coder attribution from steps 2–3 to compute agreement + surface disagreements.
     Later; identity + authorship + memos all feed it.
