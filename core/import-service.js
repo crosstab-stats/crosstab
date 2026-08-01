@@ -63,6 +63,8 @@
 
 import { showFormatPicker, chooseFormat, groupFor, byGroupThenOrder } from './format-picker.js';
 import { readZipEntries } from './zip.js';
+import { isSelfContained, decryptSelfContained } from './crypto-envelope.js';
+import { passphraseFor } from './at-rest.js';
 
 /**
  * @typedef {Object} ImporterSpec
@@ -246,6 +248,17 @@ export class ImportService {
         order: -1,
         command: () => void this.#runUrlImport(),
       });
+      // Open a passphrase-protected export (#144). Format-agnostic: it wraps ANY
+      // exported format, so after decrypting we recover the inner format from the
+      // filename (exports are named `<original>.enc`) and route to the real importer.
+      entries.push({
+        id: 'core:import-enc',
+        label: 'Encrypted CrossTab file (.enc)…',
+        extensions: ['.enc'],
+        group: 'Encrypted files',
+        order: -1,
+        command: () => void this.#runEncImport(),
+      });
       entries.sort(byGroupThenOrder);
     }
     showFormatPicker({
@@ -300,6 +313,13 @@ export class ImportService {
       return;
     }
     if (!files.length) return; // user cancelled
+    // Safety net: a self-contained encrypted export (.enc) can be chosen under any
+    // format if the OS picker allowed it. Decrypt + reroute rather than feeding
+    // ciphertext to the wrong parser. (The "Encrypted CrossTab file…" entry is the
+    // discoverable path; this catches the picked-it-anyway case.)
+    if (files.length === 1 && (await looksEncrypted(files[0]))) {
+      return this.#decryptAndDispatch(files[0]);
+    }
     await this.#dispatchFiles(spec, files, id);
   }
 
@@ -386,6 +406,66 @@ export class ImportService {
     } catch (err) {
       this.#results.appendError(`Import from URL failed: ${err.message}`);
       console.error('[import:url]', err);
+      return;
+    }
+    if (!resolved) return; // user cancelled the format chooser
+    await this.#dispatchFiles(resolved.spec, [resolved.file], resolved.id);
+  }
+
+  /**
+   * Open a passphrase-protected export (`.enc`, #144) — the receiving end of the
+   * default-on export encryption. Pick the file, then decrypt + route via the shared
+   * {@link #decryptAndDispatch}.
+   */
+  async #runEncImport() {
+    let files;
+    try {
+      files = await pickFiles(['.enc'], false);
+    } catch (err) {
+      this.#results.appendError(`Import: could not open file picker: ${err.message}`);
+      return;
+    }
+    if (!files.length) return; // cancelled
+    await this.#decryptAndDispatch(files[0]);
+  }
+
+  /**
+   * Decrypt a self-contained encrypted export and hand the plaintext to the normal
+   * import flow. The inner format is recovered from the filename (an export is named
+   * `<original>.enc`, e.g. `study.csv.enc` → `study.csv`); {@link #resolveDownload}
+   * then unwraps a `.zip` if needed and matches the importer by extension, offering a
+   * chooser when the name is ambiguous. A wrong passphrase fails cleanly (AES-GCM
+   * auth) — the file's contents never reach a parser.
+   * @param {File} encFile
+   */
+  async #decryptAndDispatch(encFile) {
+    let raw;
+    try {
+      raw = new Uint8Array(await encFile.arrayBuffer());
+    } catch (err) {
+      this.#results.appendError(`Couldn’t read “${encFile.name}”: ${err.message}`);
+      return;
+    }
+    if (!isSelfContained(raw)) {
+      this.#results.appendError(`“${encFile.name}” isn’t an encrypted CrossTab file.`);
+      return;
+    }
+    const pass = await passphraseFor('open-export', { filename: encFile.name });
+    if (!pass) return; // cancelled — nothing decrypted
+    let plain;
+    try {
+      plain = await decryptSelfContained(pass, raw);
+    } catch {
+      this.#results.appendError('Wrong passphrase — couldn’t decrypt the file. Run Import again to retry.');
+      return;
+    }
+    const innerName = encFile.name.replace(/\.enc$/i, '') || 'data';
+    let resolved;
+    try {
+      resolved = await this.#resolveDownload(new Blob([plain]), innerName);
+    } catch (err) {
+      this.#results.appendError(`Import failed: ${err.message}`);
+      console.error('[import:enc]', err);
       return;
     }
     if (!resolved) return; // user cancelled the format chooser
@@ -824,6 +904,18 @@ function filenameFromResponse(res, url) {
 async function looksLikeZip(blob) {
   const head = new Uint8Array(await blob.slice(0, 2).arrayBuffer());
   return head[0] === 0x50 && head[1] === 0x4b;
+}
+
+/** True if the file begins with the self-contained encrypted-export magic (#144),
+ * so it can be rerouted to decryption regardless of the chosen format. Reads a
+ * prefix long enough to clear isSelfContained's minimum-header length guard (any
+ * real envelope is far larger; a file too short to hold the header can't be one). */
+async function looksEncrypted(file) {
+  try {
+    return isSelfContained(new Uint8Array(await file.slice(0, 64).arrayBuffer()));
+  } catch {
+    return false;
+  }
 }
 
 /**
