@@ -26,10 +26,18 @@ import { buildManifest } from './project-store.js';
 
 /** Content signature of a manifest, ignoring fields that change without being a
  * real edit: `savedAt` (stamped every write) and `output` (regenerable analysis
- * results). Two manifests with the same signature are the same *work*. */
+ * results). Two manifests with the same signature are the same *work*.
+ *
+ * The `JSON.parse(JSON.stringify(...))` canonicalisation is load-bearing: an
+ * in-memory manifest can carry `undefined`-valued keys (e.g. a non-join source's
+ * `joinKey: undefined`) that a JSON round-trip **drops**. Without normalising, an
+ * in-memory manifest would never signature-match the same manifest read back from
+ * disk — so a poll would see a phantom "peer wrote" every tick and rewrite forever
+ * (a self-inflicted write storm). Canonicalising both sides the way disk does makes
+ * the comparison symmetric. */
 function contentSig(m) {
   if (!m || typeof m !== 'object') return null;
-  const { savedAt, output, ...rest } = m;
+  const { savedAt, output, ...rest } = JSON.parse(JSON.stringify(m));
   return stableStringify(rest);
 }
 

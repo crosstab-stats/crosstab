@@ -18,6 +18,8 @@ import { CoreEvents } from './event-bus.js';
 import { DATASETS_CHANGED } from './dataset-manager.js';
 import { saveFolderHandle, clearFolderHandle, ensureReadWrite } from './folder-handle.js';
 import { passphraseFor, shouldEncrypt } from './at-rest.js';
+import { syncFolderProject, manifestsEqual } from './folder-sync.js';
+import { showConflictDialog } from './conflict-ui.js';
 
 const DEBOUNCE_MS = 800;
 
@@ -69,6 +71,11 @@ export class ProjectSync {
   #binding = null;
   /** True while a picked folder (FSA) is the active backend, vs OPFS (#143). */
   #folderMode = false;
+  /** Last project manifest we wrote/saw in the folder — lets the poll detect a
+   * peer's write cheaply (readManifest + compare) without a full merge each tick. */
+  #lastManifest = null;
+  /** Folder-mode change-detection poll timer. */
+  #pollTimer = null;
   /** Dataset ids whose Parquet sources changed since the last save. */
   #sourcesDirty = new Set();
   /** True while loading a project, to suppress autosave during reconstruction. */
@@ -354,13 +361,17 @@ export class ProjectSync {
     const dirty = this.#sourcesDirty;
     this.#sourcesDirty = new Set();
     try {
-      await this.#attemptSave(async () => {
-        const bundle = await this.#snapshot(false, dirty);
-        return this.#store.save(
-          { id: this.#binding.id, name: this.#binding.name, savedAt: Date.now(), bundle },
-          { writeSourcesFor: dirty },
-        );
-      });
+      if (this.#folderMode) {
+        await this.#attemptSave(() => this.#folderSave(dirty)); // merge-aware (never clobbers a peer)
+      } else {
+        await this.#attemptSave(async () => {
+          const bundle = await this.#snapshot(false, dirty);
+          return this.#store.save(
+            { id: this.#binding.id, name: this.#binding.name, savedAt: Date.now(), bundle },
+            { writeSourcesFor: dirty },
+          );
+        });
+      }
       this.#dirty = false;
       this.#setStatus('saved');
     } catch (err) {
@@ -395,13 +406,17 @@ export class ProjectSync {
       const dirty = this.#sourcesDirty;
       this.#sourcesDirty = new Set();
       try {
-        await this.#attemptSave(async () => {
-          const bundle = await this.#snapshot(false, dirty);
-          return this.#store.save(
-            { id: this.#binding.id, name: this.#binding.name, savedAt: Date.now(), bundle },
-            { writeSourcesFor: dirty },
-          );
-        });
+        if (this.#folderMode) {
+          await this.#attemptSave(() => this.#folderSave(dirty));
+        } else {
+          await this.#attemptSave(async () => {
+            const bundle = await this.#snapshot(false, dirty);
+            return this.#store.save(
+              { id: this.#binding.id, name: this.#binding.name, savedAt: Date.now(), bundle },
+              { writeSourcesFor: dirty },
+            );
+          });
+        }
         this.#dirty = false;
       } catch (err) {
         console.error('[project] settle save failed', err);
@@ -661,6 +676,8 @@ export class ProjectSync {
       this.#binding = null; // a brand-new entry, living in the folder now
       await this.#fullSave(null, this.activeName || 'My project');
       this.#folderMode = true;
+      this.#lastManifest = await this.#store.readManifest(this.#binding.id);
+      this.#startPoll();
       this.#emitProject();
     } catch (err) {
       this.#results.appendError(`Move to folder failed: ${err.message}`);
@@ -698,6 +715,8 @@ export class ProjectSync {
       await saveFolderHandle(handle);
       await this.openProject(entries[0].id); // the folder's (most recent) project
       this.#folderMode = true;
+      this.#lastManifest = await this.#store.readManifest(this.#binding.id);
+      this.#startPoll();
       this.#emitProject();
     } catch (err) {
       this.#results.appendError(`Open from folder failed: ${err.message}`);
@@ -708,11 +727,83 @@ export class ProjectSync {
   /** Leave folder mode: flush, revert the store to OPFS, and start a fresh project. */
   async closeFolder() {
     if (!this.#folderMode) return;
+    this.#stopPoll();
     await this.#settle();
     this.#detachFolder();
     this.#folderMode = false;
+    this.#lastManifest = null;
     try { await clearFolderHandle(); } catch { /* best effort */ }
     await this.newProject();
+  }
+
+  /**
+   * A folder-mode save: instead of a blind overwrite (which would clobber a peer
+   * sharing the same `project.json`), run the merge-aware {@link syncFolderProject} —
+   * land my Parquet, three-way merge against the peer + base, resolve conflicts, write
+   * the result, and (if a peer contributed) reload it. Core (tabular) merges host-side;
+   * plugin-blob (e.g. CAQDAS codebook) merge needs the sandbox bridge — a follow-up —
+   * so those currently surface as conflicts rather than auto-merging.
+   */
+  async #folderSave(dirty) {
+    if (!this.#binding) return;
+    const bundle = await this.#snapshot(true, dirty); // include Parquet — syncFolderProject writes sources
+    const result = await syncFolderProject({
+      store: this.#store,
+      id: this.#binding.id,
+      name: this.#binding.name,
+      bundle,
+      mergers: { core: { strategy: 'three-way' } },
+      resolveConflicts: (conflicts) => showConflictDialog(conflicts),
+      applyMerged: (id, manifest) => this.#applyMergedManifest(id, manifest),
+      now: Date.now(),
+    });
+    if (result.action !== 'cancelled') this.#lastManifest = result.manifest;
+    return result;
+  }
+
+  /** Reload a merged manifest into the live app (datasets + workspaces + output) when
+   * a peer's changes came in. Keeps the binding + plugin set (same project); suppresses
+   * autosave during the reload. */
+  async #applyMergedManifest(id, manifest) {
+    this.#loading = true;
+    try {
+      const { bundle } = await this.#store.load(id);
+      await this.#datasets.loadBundle(bundle);
+      this.#applyWorkspaces?.(bundle.workspaces || {});
+      this.#applyOutput?.(bundle.output || []);
+      this.#applyAnalysisLog?.(bundle.analysisLog || []);
+      this.#lastManifest = manifest;
+    } finally {
+      this.#loading = false;
+    }
+  }
+
+  #startPoll() {
+    this.#stopPoll();
+    this.#pollTimer = setInterval(() => void this.#folderPull(), 3000);
+  }
+
+  #stopPoll() {
+    if (this.#pollTimer) { clearInterval(this.#pollTimer); this.#pollTimer = null; }
+  }
+
+  /** Poll tick: cheaply read the folder's manifest; if a peer advanced it, merge it
+   * in. Skips while the tab is hidden, or a save/load/merge is already in flight. */
+  async #folderPull() {
+    if (!this.#folderMode || !this.#binding || this.#saving || this.#loading) return;
+    if (typeof document !== 'undefined' && document.hidden) return; // back off when hidden
+    let theirs;
+    try { theirs = await this.#store.readManifest(this.#binding.id); } catch { return; }
+    if (!theirs || (this.#lastManifest && manifestsEqual(theirs, this.#lastManifest))) return;
+    // A peer wrote → pull it in via the merge-aware save (guarded like #flush).
+    this.#saving = true;
+    try {
+      await this.#folderSave();
+    } catch (err) {
+      console.error('[project] folder pull failed', err);
+    } finally {
+      this.#saving = false;
+    }
   }
 
   async #delete(id) {

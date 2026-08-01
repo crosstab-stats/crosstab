@@ -21,6 +21,15 @@ test('manifestsEqual ignores savedAt and output', () => {
   assert.ok(!manifestsEqual(a, man([ds(1, [recode('r1', 'income')])])));
 });
 
+test('manifestsEqual: in-memory undefined keys match their JSON round-trip (no write storm)', () => {
+  // In-memory manifests carry undefined-valued keys (e.g. a non-join source's
+  // joinKey) that JSON drops; the on-disk copy is JSON-round-tripped. These must be
+  // equal, or a poll rewrites forever. This is the regression guard for that storm.
+  const inMemory = man([{ id: 1, name: 'ds1', libraryLink: null, sources: [{ id: 's1', meta: [{ name: 'x' }], label: 'f', combine: 'base', file: 's1.parquet', joinKey: undefined, aliases: undefined, wide: undefined }], transforms: [], order: ['s'] }]);
+  const onDisk = JSON.parse(JSON.stringify(inMemory)); // what readManifest returns (undefined keys gone)
+  assert.ok(manifestsEqual(inMemory, onDisk));
+});
+
 test('decideSync: nothing on disk → seed', () => {
   const mine = man([ds(1, [])]);
   assert.equal(decideSync(null, mine, null).action, 'seed');
