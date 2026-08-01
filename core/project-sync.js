@@ -470,6 +470,7 @@ export class ProjectSync {
   /** Start a fresh project: one empty dataset, unbound. */
   async newProject() {
     await this.#settle();
+    if (this.#folderMode) this.#detachFolder(); // a fresh project is OPFS, not the folder's
     this.#loading = true;
     try {
       await this.#datasets.loadBundle({
@@ -590,6 +591,7 @@ export class ProjectSync {
    */
   async openBundle({ name, bundle }) {
     await this.#settle();
+    if (this.#folderMode) this.#detachFolder(); // an imported bundle is a fresh OPFS project
     this.#setStatus('loading');
     this.#loading = true;
     try {
