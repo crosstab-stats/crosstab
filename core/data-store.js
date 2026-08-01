@@ -46,6 +46,7 @@
 import { CoreEvents } from './event-bus.js';
 import { quoteIdent } from './duckdb-manager.js';
 import { newOpId, deterministicOpId } from './merge.js';
+import { currentAuthor } from './user-identity.js';
 
 /** Column auto-added when stacking files, tagging each row with its origin so a
  * pooled multi-file/multi-year dataset stays distinguishable (group/filter by
@@ -574,7 +575,16 @@ export class DataStore {
    * this runs, so those are preserved. Idempotent, so calling it on every rederive
    * is cheap. Undo/redo preserve ids because they move the op object intact. */
   #ensureIds() {
-    for (const op of this.#log) if (!op.id) op.id = newOpId();
+    // An op lacking an id is genuinely NEW (restore pre-assigns ids to every loaded
+    // op), so this is the one safe point to stamp authorship (#148 step 2) — a
+    // snapshot of who made the change, at creation, never applied retroactively to
+    // legacy ops (which would falsely attribute them to whoever opened the project).
+    for (const op of this.#log) {
+      if (!op.id) {
+        op.id = newOpId();
+        op.author = currentAuthor(); // {authorId, initials, name, color}; snapshot, survives a later rename
+      }
+    }
   }
 
   /**
@@ -1295,6 +1305,7 @@ export class DataStore {
         label: op.src.label,
         combine: op.type === 'load' ? 'base' : op.type,
       };
+      if (op.author) entry.author = op.author; // authorship (#148) — round-trips source ops
       if (op.type === 'join') {
         entry.joinKey = op.joinKey;
         entry.aliases = op.aliases ?? [];
@@ -1351,6 +1362,7 @@ export class DataStore {
       const type = i === 0 ? 'load' : src.combine === 'join' ? 'join' : 'append';
       const op = type === 'join' ? { type, src: created, joinKey: src.joinKey, aliases: src.aliases ?? [], joinType: src.joinType ?? 'left' } : { type, src: created };
       if (src.id) op.id = src.id; // preserve merge identity from a collab-era save
+      if (src.author) op.author = src.author; // preserve authorship (#148) across restore
       srcOps.push(op);
     }
 
