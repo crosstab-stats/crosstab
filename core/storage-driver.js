@@ -84,7 +84,14 @@ class HandleDriver {
     let w = await tfh.createWritable();
     try { await w.write(bytes); } finally { await w.close(); }
     if (typeof tfh.move === 'function') {
-      await tfh.move(name); // rename within the dir (overwrites)
+      try {
+        await tfh.move(name); // rename within the dir (overwrites)
+      } catch (err) {
+        // e.g. the File System Access API blocks the target extension. Don't leave an
+        // orphan `.tmp` behind — clean it up, then surface the failure.
+        try { await dir.removeEntry(tmp); } catch { /* best effort */ }
+        throw err;
+      }
     } else {
       const fh = await dir.getFileHandle(name, { create: true });
       w = await fh.createWritable();

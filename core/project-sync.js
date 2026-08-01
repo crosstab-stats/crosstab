@@ -865,7 +865,11 @@ export class ProjectSync {
         location.pathname,
       );
       for (const f of files) {
-        if (!(await this.#store.hasPlainFile(f.name))) await this.#store.writePlainFile(f.name, f.text);
+        // Independent per file: one write failing (e.g. a blocked extension) must not
+        // abort the others — that once left a `.url.tmp` and no README behind.
+        try {
+          if (!(await this.#store.hasPlainFile(f.name))) await this.#store.writePlainFile(f.name, f.text);
+        } catch { /* skip this one */ }
       }
     } catch { /* shortcuts are a convenience — never block folder open/save */ }
   }
