@@ -331,7 +331,17 @@ export class DatasetManager {
       const ds = new DataStore(this.#bus, this.#duckdb, { id: d.id, name: d.name });
       ds.libraryLink = d.libraryLink ?? null;
       this.#datasets.set(d.id, ds);
-      await ds.restoreState(d.state);
+      try {
+        await ds.restoreState(d.state);
+      } catch (err) {
+        // A dataset whose sources didn't materialise (e.g. gap-fill bytes not yet here)
+        // must NOT linger in the Map with no tables — a later #snapshot would try to
+        // export its missing source and throw, breaking ALL sync. Drop it; it stays in
+        // the collection membership and re-materialises on the next apply once complete.
+        console.error('[dataset] restore failed; dropping until its data arrives:', d.id, err);
+        this.#datasets.delete(d.id);
+        try { await ds.dispose(); } catch { /* best-effort */ }
+      }
     }
     this.#activeId = this.#datasets.has(activeId)
       ? activeId

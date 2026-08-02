@@ -95,6 +95,11 @@ export class ProjectSync {
   #liveSourceBytes = new Map();
   #liveLastManifest = null;
   #coauthorPeers = 0; // peers actually co-authoring (drives "waiting" vs "co-authoring")
+  /** Serialises merge applies. Each apply snapshots then disposes+rebuilds DuckDB
+   * tables; two overlapping applies (a merge tick + a gap-fill re-apply, both fired
+   * un-awaited) would race — one drops a table the other is exporting. Chained here so
+   * they run strictly one-at-a-time. */
+  #applyChain = Promise.resolve();
   #conflictAbort = null; // aborts an open conflict dialog when a peer resolves it first
   /** Plugin identifiers recorded in the open project that AREN'T installed here —
    * carried forward verbatim on every save so the association survives until the
@@ -1287,7 +1292,17 @@ export class ProjectSync {
    * byte gap-fill (#148 6c). Skips the (expensive) dataset reload when the tabular
    * structure is unchanged (the common coding-only case), applying just the blobs.
    */
-  async #applyLiveManifest(manifest) {
+  /** Public entry: serialise applies through {@link #applyChain} so a merge apply and a
+   * gap-fill re-apply never overlap on DuckDB (which caused "table does not exist" when
+   * one apply's dispose raced the other's snapshot). */
+  #applyLiveManifest(manifest) {
+    this.#applyChain = this.#applyChain
+      .then(() => this.#applyMergedManifestLive(manifest))
+      .catch((err) => console.error('[live] apply failed', err));
+    return this.#applyChain;
+  }
+
+  async #applyMergedManifestLive(manifest) {
     debug('live', 'applyMerged', { datasets: (manifest?.datasets || []).length });
     this.#loading = true; // suppress autosave + echo-publish during apply
     try {
