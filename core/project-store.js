@@ -1,6 +1,6 @@
 /**
  * @file project-store.js
- * Persistent **projects** in OPFS — the top tier of the two-tier model.
+ * Persistent **projects** — the top tier of the two-tier model.
  *
  * A *project* is the whole working set: every open dataset (each its own
  * immutable sources + transform log) plus which one is active. It's a living
@@ -9,28 +9,165 @@
  *
  *   projects/
  *     catalog.json                 — the browse index (one summary per project)
+ *     crosstab-encryption.json     — plaintext salt/verifier (only when encrypted)
  *     <projectId>/
  *       project.json               — { name, savedAt, activeId, datasets: [...] }
+ *       project.base.json          — the sync common-ancestor snapshot (#143)
  *       ds<dsId>_src<n>.parquet     — each dataset's immutable sources, flat
  *
- * `project.json` holds every dataset's manifest (metadata + transform log + file
- * refs); the Parquet sources sit alongside, prefixed by dataset id. Autosave can
- * rewrite just `project.json` plus the *changed* dataset's Parquet
- * (`writeSourcesFor`), leaving big unchanged sources on disk — the same
- * cheap-metadata-save trick the dataset library uses, one tier up.
+ * Bytes live behind a swappable {@link StorageDriver} (OPFS by default, or a picked
+ * folder mirrored to OneDrive/Dropbox — {@link ProjectStore#useDirectory}), so the
+ * *where* is one implementation and a future cloud-API driver reuses the same seam.
+ * At-rest **encryption** ({@link ProjectStore#unlock}) sits ABOVE the driver: bytes
+ * are enciphered before `write` and deciphered after `read`, so a driver — even an
+ * untrusted provider — only ever sees ciphertext (#143/#144).
  */
+
+import { OpfsDriver, FsaFolderDriver } from './storage-driver.js';
+import { deriveKey, encryptWithKey, decryptWithKey, isEnveloped, newSalt, DEFAULT_ITERATIONS } from './crypto-envelope.js';
 
 const ROOT = 'projects';
 const CATALOG = 'catalog.json';
+const ENC_META = 'crosstab-encryption.json'; // plaintext salt/verifier for the folder
+const MARKER = 'crosstab-project.json'; // plaintext "this folder IS a CrossTab project" + display name
+const VERIFIER = 'crosstab-folder-v1'; // known token, encrypted, to check a passphrase on unlock
+
+/** In flat (folder) mode there's exactly one project and the id is vestigial — this
+ * stands in wherever the id-centric API needs one. */
+export const FOLDER_PROJECT_ID = '.';
+
+const te = new TextEncoder();
+const b64 = (bytes) => btoa(String.fromCharCode(...bytes));
+const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
 export class ProjectStore {
-  /** @returns {boolean} Whether OPFS is available. */
   /** Serialises catalog read-modify-write ops so an autosave can't interleave
    * with a delete/rename and resurrect a just-removed entry (orphan in the list). */
   #tail = Promise.resolve();
 
+  /** The byte backend (see {@link module:core/storage-driver}). OPFS by default;
+   * {@link ProjectStore#useDirectory} swaps in a picked folder. */
+  #driver = new OpfsDriver();
+
+  /** AES-GCM master key for at-rest encryption, or null (plaintext). Set by
+   * {@link ProjectStore#unlock}; never persisted. When set, every data file
+   * (`project.json`, `project.base.json`, Parquet) is written as a ciphertext
+   * envelope and decrypted on read — so a driver / cloud provider that mirrors the
+   * folder only ever sees ciphertext. The salt + a verifier live plaintext in
+   * `crosstab-encryption.json` (a salt isn't secret). The catalog is always
+   * plaintext (it spans projects, which in OPFS mode can each have a DIFFERENT key). */
+  #key = null;
+
+  /** Which project id {@link #key} belongs to. In nested (OPFS) mode each project
+   * can carry its own passphrase, so a save must never encrypt one project's bytes
+   * with another's key (that would make it permanently unopenable) — {@link #save}
+   * guards on this. Flat mode has one project, so it's always FOLDER_PROJECT_ID. */
+  #keyId = null;
+
+  /** **Flat, single-project layout** — for folder mode. The picked folder IS the
+   * project: files live directly in it (`project.json`, `ds<id>_src<n>.parquet`,
+   * `crosstab-encryption.json`, a `crosstab-project.json` marker) with NO `projects/`
+   * prefix, NO per-project id subdir, and NO catalog. OPFS keeps its nested
+   * multi-project layout. So "a project is a folder" (like a Logic/git/.app bundle). */
+  #flat = false;
+
+  /** Point the store at a picked folder (a OneDrive/Dropbox/local folder the OS sync
+   * client mirrors) — the folder itself is the project (flat layout). Null reverts to
+   * OPFS (nested multi-project). The caller must have re-granted write permission
+   * (`requestPermission`) first — the browser won't give silent persistent write. */
+  useDirectory(handle) {
+    this.#driver = handle ? new FsaFolderDriver(handle) : new OpfsDriver();
+    this.#flat = !!handle;
+  }
+
+  /** Swap in an arbitrary storage driver (the general seam — e.g. a future cloud
+   * driver, also one-project-per-location → flat). Null resets to OPFS. */
+  useDriver(driver, { flat = true } = {}) {
+    this.#driver = driver ?? new OpfsDriver();
+    this.#flat = driver ? flat : false;
+  }
+
+  /** Path of a project file, respecting the layout. Flat (folder): the bare name.
+   * Nested (OPFS): `projects/<id>/<name>`. */
+  #path(id, name) {
+    return this.#flat ? name : `${ROOT}/${id}/${name}`;
+  }
+
+  /** Path of the plaintext encryption meta (salt/verifier). Per-project in nested
+   * (OPFS) mode so every project can carry its OWN passphrase (the shared-lab case);
+   * flat (folder) mode has exactly one project, so the id is vestigial. */
+  #metaPath(id = FOLDER_PROJECT_ID) {
+    return this.#flat ? ENC_META : `${ROOT}/${id}/${ENC_META}`;
+  }
+
+  /** @returns {boolean} Whether the store is currently folder-backed (vs OPFS). */
+  get folderBacked() {
+    return this.#driver.kind === 'folder';
+  }
+
   get available() {
-    return typeof navigator !== 'undefined' && !!navigator.storage?.getDirectory;
+    return this.#driver.available;
+  }
+
+  /** @returns {boolean} Whether at-rest encryption is currently on. */
+  get encrypted() {
+    return this.#key != null;
+  }
+
+  /**
+   * Turn on at-rest encryption with a passphrase. On first use for a folder this
+   * mints + stores a public salt and a verifier; afterwards it checks the passphrase
+   * against that verifier and throws on mismatch (so the user learns immediately,
+   * not on the first corrupt read). The derived key is held in memory only —
+   * **a forgotten passphrase is unrecoverable** (no server, by design).
+   * @param {string} passphrase
+   */
+  async unlock(passphrase, id = FOLDER_PROJECT_ID) {
+    // The salt/verifier meta is plaintext — read/write it via the driver DIRECTLY,
+    // bypassing the crypto wrappers (chicken-and-egg: we need it to derive the key).
+    const metaPath = this.#metaPath(id);
+    let meta = null;
+    const rawMeta = await this.#driver.read(metaPath);
+    if (rawMeta) { try { meta = JSON.parse(new TextDecoder().decode(rawMeta)); } catch { meta = null; } }
+
+    const salt = meta ? unb64(meta.salt) : newSalt();
+    const iterations = meta?.iterations || DEFAULT_ITERATIONS;
+    const key = await deriveKey(passphrase, salt, iterations);
+
+    if (meta?.verifier) {
+      let ok = false;
+      try { ok = new TextDecoder().decode(await decryptWithKey(key, unb64(meta.verifier))) === VERIFIER; } catch { ok = false; }
+      if (!ok) throw new Error('Wrong passphrase for this project.');
+    } else {
+      const verifier = b64(await encryptWithKey(key, VERIFIER));
+      await this.#driver.write(metaPath, te.encode(JSON.stringify({ v: 1, salt: b64(salt), iterations, verifier })));
+    }
+    this.#key = key;
+    this.#keyId = id;
+  }
+
+  /** Drop the in-memory key (e.g. closing a project, or before switching to another). */
+  lock() {
+    this.#key = null;
+    this.#keyId = null;
+  }
+
+  /**
+   * Remove at-rest protection: delete the project's encryption meta and drop the
+   * key. The caller MUST re-save the bundle afterwards so its files are rewritten
+   * plaintext (this removes only the salt/verifier + key, not the ciphertext).
+   * @param {string} [id]
+   */
+  async removeEncryption(id = FOLDER_PROJECT_ID) {
+    await this.#driver.remove(this.#metaPath(id));
+    this.lock();
+  }
+
+  /** @returns {Promise<boolean>} Whether a given project already has encryption set
+   * up (its `crosstab-encryption.json` present) — so an open flow knows to *enter* an
+   * existing passphrase vs *set* a new one. Per-project in nested (OPFS) mode. */
+  async hasEncryption(id = FOLDER_PROJECT_ID) {
+    return !!(await this.#driver.read(this.#metaPath(id)));
   }
 
   /** Acquire the mutex; returns a release fn. */
@@ -48,24 +185,17 @@ export class ProjectStore {
    * bundle folder is missing (e.g. left by an old race) so the manager never
    * lists a project that can't be opened. */
   async list() {
+    // Flat (folder) mode: exactly one project, derived from its manifest (no catalog).
+    if (this.#flat) {
+      const m = await this.readManifest(FOLDER_PROJECT_ID);
+      return m ? [{ id: FOLDER_PROJECT_ID, name: m.name, savedAt: m.savedAt, datasetCount: (m.datasets ?? []).length, activePlugins: m.activePlugins ?? null }] : [];
+    }
     const release = await this.#acquire();
     try {
       const cat = await this.#readCatalog();
-      const kept = [];
-      let dropped = false;
-      const root = await this.#root(true);
-      for (const e of cat.entries) {
-        let ok = false;
-        try {
-          await root.getDirectoryHandle(e.id);
-          ok = true;
-        } catch {
-          ok = false;
-        }
-        if (ok) kept.push(e);
-        else dropped = true;
-      }
-      if (dropped) await this.#write(root, CATALOG, JSON.stringify({ entries: kept }));
+      const present = new Set(await this.#driver.list(ROOT));
+      const kept = cat.entries.filter((e) => present.has(e.id));
+      if (kept.length !== cat.entries.length) await this.#writePlain(`${ROOT}/${CATALOG}`, JSON.stringify({ entries: kept }));
       return kept.slice().sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
     } finally {
       release();
@@ -92,66 +222,39 @@ export class ProjectStore {
         /* best effort */
       }
     }
-    const root = await this.#root(true);
-    id = id || crypto.randomUUID();
-    const dir = await root.getDirectoryHandle(id, { create: true });
+    id = this.#flat ? FOLDER_PROJECT_ID : (id || crypto.randomUUID());
 
-    const datasets = [];
-    for (const d of bundle.datasets) {
-      const writeSources = !writeSourcesFor || writeSourcesFor.has(d.id);
-      const sources = [];
-      for (let i = 0; i < d.state.sources.length; i++) {
-        const s = d.state.sources[i];
-        const file = `ds${d.id}_src${i + 1}.parquet`;
-        if (writeSources) {
-          if (!s.parquet) throw new Error(`save: dataset ${d.id} source ${i + 1} has no parquet`);
-          await this.#write(dir, file, s.parquet);
-        }
-        const entry = { meta: s.meta, label: s.label ?? null, combine: s.combine ?? 'base', file };
-        if (s.combine === 'join') {
-          entry.joinKey = s.joinKey;
-          entry.aliases = s.aliases ?? [];
-        }
-        // A wide source's `file` is a single read_parquet-backed Parquet (not a
-        // table); the flag tells load/restore to re-register it rather than CTAS it.
-        if (s.wide) {
-          entry.wide = true;
-          entry.rowidBase = s.rowidBase;
-        }
-        sources.push(entry);
-      }
-      datasets.push({
-        id: d.id,
-        name: d.name,
-        libraryLink: d.libraryLink ?? null,
-        sources,
-        transforms: d.state.transforms ?? [],
-        order: d.state.order ?? null,
-      });
+    // Guard: never encrypt one project's bytes with another project's key — that
+    // would make it permanently unopenable. In OPFS mode each project can carry its
+    // own key, so the loaded key MUST belong to the id being saved. (Creating a NEW
+    // protected project pre-mints the id and unlocks it, so #keyId already matches.)
+    if (this.#key && !this.#flat && this.#keyId !== id) {
+      throw new Error('internal: encryption key does not match the project being saved');
     }
 
-    // `activePlugins` (load keys of the plugins active when saved) lets opening a
-    // project restore its analysis set. Null/absent ⇒ pre-feature save ⇒ leave the
-    // current plugin set alone on open (back-compatible).
-    const activePlugins = Array.isArray(bundle.activePlugins) ? bundle.activePlugins : null;
-    // Plugin workspace blobs (#93), keyed by workspace id — opaque to the host,
-    // preserved verbatim (incl. ids whose plugin isn't installed here).
-    const workspaces = bundle.workspaces && typeof bundle.workspaces === 'object' ? bundle.workspaces : null;
-    // The Output tab's result model (#103) — sections/tables/plots/text/errors.
-    const output = Array.isArray(bundle.output) ? bundle.output : null;
-    const manifest = { name, savedAt, activeId: bundle.activeId, activePlugins, workspaces, output, datasets };
-    await this.#write(dir, 'project.json', JSON.stringify(manifest));
+    // Parquet first, then the manifest — the same manifest shape folder-sync merges,
+    // built by the shared {@link buildManifest} so save and sync never drift.
+    await this.#writeSources(id, bundle, writeSourcesFor);
+    const manifest = buildManifest({ name, savedAt, bundle });
+    await this.#write(this.#file(id, 'project.json'), JSON.stringify(manifest));
+
+    if (this.#flat) {
+      // Folder = project: a plaintext marker makes the folder self-describing (and
+      // lets the launcher show its name before unlocking). No catalog in flat mode.
+      await this.#driver.write(MARKER, te.encode(JSON.stringify({ app: 'crosstab', name, savedAt })));
+      return id;
+    }
 
     const release = await this.#acquire();
     try {
       const cat = await this.#readCatalog();
       // The summary carries activePlugins too, so the launcher's rail can seed its
       // picker from a project without loading the whole bundle.
-      const summary = { id, name, savedAt, datasetCount: datasets.length, activePlugins };
+      const summary = { id, name, savedAt, datasetCount: manifest.datasets.length, activePlugins: manifest.activePlugins };
       const idx = cat.entries.findIndex((e) => e.id === id);
       if (idx >= 0) cat.entries[idx] = summary;
       else cat.entries.push(summary);
-      await this.#write(root, CATALOG, JSON.stringify(cat));
+      await this.#writePlain(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
     } finally {
       release();
     }
@@ -164,15 +267,14 @@ export class ProjectStore {
    * @returns {Promise<{id: string, name: string, bundle: {activeId: number, datasets: Array<{id: number, name: string, state: object}>}}>}
    */
   async load(id) {
-    const root = await this.#root();
-    const dir = await root.getDirectoryHandle(id);
-    const manifest = JSON.parse(await this.#read(dir, 'project.json'));
+    const manifest = JSON.parse(await this.#read(this.#file(id, 'project.json')));
     const datasets = [];
     for (const d of manifest.datasets) {
       const sources = [];
       for (const s of d.sources) {
-        const buf = await this.#readBytes(dir, s.file);
+        const bytes = await this.#readBytes(this.#file(id, s.file));
         sources.push({
+          id: s.id ?? undefined, // stable merge identity (absent on pre-collab saves → restore re-derives it)
           meta: s.meta,
           label: s.label ?? null,
           combine: s.combine ?? 'base',
@@ -180,7 +282,7 @@ export class ProjectStore {
           aliases: s.aliases,
           wide: s.wide ?? false,
           rowidBase: s.rowidBase,
-          parquet: new Uint8Array(buf),
+          parquet: new Uint8Array(bytes),
         });
       }
       datasets.push({
@@ -198,81 +300,269 @@ export class ProjectStore {
         activePlugins: Array.isArray(manifest.activePlugins) ? manifest.activePlugins : null,
         workspaces: manifest.workspaces && typeof manifest.workspaces === 'object' ? manifest.workspaces : null,
         output: Array.isArray(manifest.output) ? manifest.output : null,
+        collabId: manifest.collabId ?? null,
+        collabSecret: manifest.collabSecret ?? null,
         datasets,
       },
     };
   }
 
-  /** Rename a project (updates its manifest + the catalog). */
+  /**
+   * Read a project's raw manifest (`project.json`) **without** materialising its
+   * Parquet sources — a *stat + parse*, not a full load. This is how folder-sync
+   * cheaply reads "their" latest version to diff against, and how change-detection
+   * watches one file (`project.json` rewrites on every save and indexes every
+   * dataset). Returns null if absent/unparseable (tolerate torn reads mid-sync —
+   * retry next tick rather than treating a parse failure as corruption).
+   * @param {string} id
+   * @returns {Promise<object|null>}
+   */
+  async readManifest(id) {
+    try {
+      return JSON.parse(await this.#read(this.#file(id, 'project.json')));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The **common-ancestor** snapshot for merge (#143): the last manifest this client
+   * successfully synced, stored as a `project.base.json` sidecar in the bundle. A
+   * three-way merge diffs *my* current manifest and *their* on-disk manifest against
+   * this base. After a successful sync, the merged manifest becomes the new base.
+   * @param {string} id
+   * @returns {Promise<object|null>}
+   */
+  async readBase(id) {
+    try {
+      return JSON.parse(await this.#read(this.#file(id, 'project.base.json')));
+    } catch {
+      return null;
+    }
+  }
+
+  /** Record the common-ancestor snapshot (see {@link ProjectStore#readBase}). */
+  async writeBase(id, manifest) {
+    await this.#write(this.#file(id, 'project.base.json'), JSON.stringify(manifest));
+  }
+
+  /**
+   * Write a **merged** manifest straight to `project.json` (folder-sync, #143) —
+   * the result of a three-way merge, whose dataset `file` refs point at Parquet the
+   * OS sync client has already mirrored from both sides (so no bytes to write here).
+   * The driver's `write` is atomic (temp + rename), so a peer polling `project.json`
+   * mid-write never reads a torn file. Refreshes the catalog so `list()` stays in step.
+   * @param {string} id
+   * @param {object} manifest
+   */
+  async writeManifest(id, manifest) {
+    await this.#write(this.#file(id, 'project.json'), JSON.stringify(manifest));
+    if (this.#flat) { // folder = project: refresh the plaintext marker, no catalog
+      await this.#driver.write(MARKER, te.encode(JSON.stringify({ app: 'crosstab', name: manifest.name, savedAt: manifest.savedAt })));
+      return;
+    }
+    const release = await this.#acquire();
+    try {
+      const cat = await this.#readCatalog();
+      const summary = { id, name: manifest.name, savedAt: manifest.savedAt, datasetCount: (manifest.datasets ?? []).length, activePlugins: manifest.activePlugins ?? null };
+      const idx = cat.entries.findIndex((e) => e.id === id);
+      if (idx >= 0) cat.entries[idx] = summary;
+      else cat.entries.push(summary);
+      await this.#writePlain(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
+    } finally {
+      release();
+    }
+  }
+
+  /** Rename a project (updates its manifest + the catalog/marker). */
   async rename(id, name) {
-    const root = await this.#root(true);
-    const dir = await root.getDirectoryHandle(id);
-    const manifest = JSON.parse(await this.#read(dir, 'project.json'));
+    const manifest = JSON.parse(await this.#read(this.#file(id, 'project.json')));
     manifest.name = name;
-    await this.#write(dir, 'project.json', JSON.stringify(manifest));
+    await this.#write(this.#file(id, 'project.json'), JSON.stringify(manifest));
+    if (this.#flat) {
+      await this.#driver.write(MARKER, te.encode(JSON.stringify({ app: 'crosstab', name, savedAt: manifest.savedAt })));
+      return;
+    }
     const release = await this.#acquire();
     try {
       const cat = await this.#readCatalog();
       const e = cat.entries.find((x) => x.id === id);
       if (e) e.name = name;
-      await this.#write(root, CATALOG, JSON.stringify(cat));
+      await this.#writePlain(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
     } finally {
       release();
     }
   }
 
-  /** Delete a project bundle and drop it from the catalog. */
+  /** Delete a project bundle and drop it from the catalog. (Not used in flat/folder
+   * mode — a folder project is deleted by the user removing the folder.) */
   async delete(id) {
-    const root = await this.#root(true);
-    try {
-      await root.removeEntry(id, { recursive: true });
-    } catch {
-      /* already gone */
-    }
+    if (this.#flat) return; // don't blow away the user's picked folder from here
+    await this.#driver.removeTree(`${ROOT}/${id}`);
     const release = await this.#acquire();
     try {
       const cat = await this.#readCatalog();
       cat.entries = cat.entries.filter((e) => e.id !== id);
-      await this.#write(root, CATALOG, JSON.stringify(cat));
+      await this.#writePlain(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
     } finally {
       release();
+    }
+  }
+
+  /**
+   * Write only the Parquet sources of a bundle (no `project.json`) — the folder-sync
+   * step that lands *my* data so a merged manifest's file refs resolve, while
+   * {@link folder-sync} owns `project.json` via the merge (#143). File names match
+   * {@link buildManifest}'s (`ds<id>_src<n>.parquet`).
+   * @param {string} id
+   * @param {object} bundle
+   * @param {Set<number>} [only]  dataset ids to write; omit for all.
+   */
+  async writeSourcesOnly(id, bundle, only) {
+    await this.#writeSources(id, bundle, only);
+  }
+
+  /**
+   * Write a plaintext file directly into the folder, BYPASSING encryption — for
+   * OS-facing files (double-click shortcuts, a HOW-TO note) that the operating
+   * system reads and CrossTab itself never reads back. Folder mode only.
+   * @param {string} name  bare file name (flat folder layout)
+   * @param {string|Uint8Array} data
+   * @returns {Promise<boolean>} false (no-op) unless folder-backed
+   */
+  async writePlainFile(name, data) {
+    if (!this.#flat) return false;
+    const bytes = typeof data === 'string' ? te.encode(data) : data;
+    await this.#driver.write(name, bytes);
+    return true;
+  }
+
+  /** Whether a plaintext file already exists directly in the folder (flat mode). */
+  async hasPlainFile(name) {
+    if (!this.#flat) return false;
+    try {
+      return (await this.#driver.read(name)) != null;
+    } catch {
+      return false;
     }
   }
 
   // --- internals -------------------------------------------------------------
 
-  async #root(create = false) {
-    const opfs = await navigator.storage.getDirectory();
-    return opfs.getDirectoryHandle(ROOT, { create });
+  /** Path of a file inside a project bundle (layout-aware; see {@link ProjectStore#useDirectory}). */
+  #file(id, name) {
+    return this.#path(id, name);
   }
 
   async #readCatalog() {
     try {
-      const root = await this.#root();
-      const parsed = JSON.parse(await this.#read(root, CATALOG));
+      const parsed = JSON.parse(await this.#readPlain(`${ROOT}/${CATALOG}`));
       return Array.isArray(parsed.entries) ? parsed : { entries: [] };
     } catch {
       return { entries: [] };
     }
   }
 
-  async #write(dir, name, data) {
-    const fh = await dir.getFileHandle(name, { create: true });
-    const w = await fh.createWritable();
-    try {
-      await w.write(data);
-    } finally {
-      await w.close();
+  /** Write a JSON string plaintext (driver-direct, bypassing #key). The catalog uses
+   * this: it spans projects, which in OPFS mode can each carry a DIFFERENT key, so it
+   * can't be encrypted under any one of them. (Project NAMES are therefore visible in
+   * the catalog even for protected projects — same as the plaintext folder marker;
+   * the DATA stays encrypted.) */
+  async #writePlain(path, str) {
+    await this.#driver.write(path, te.encode(str));
+  }
+
+  /** Read a plaintext JSON file as a string, or throw if missing (caller catches). */
+  async #readPlain(path) {
+    const raw = await this.#driver.read(path);
+    if (raw == null) throw new Error(`not found: ${path}`);
+    return new TextDecoder().decode(raw);
+  }
+
+  /** Encrypt-when-keyed, then hand opaque bytes to the driver. Strings are UTF-8
+   * encoded first (JSON manifests); Uint8Arrays (Parquet) pass through. */
+  async #write(path, data) {
+    let bytes;
+    if (this.#key) bytes = await encryptWithKey(this.#key, data);
+    else bytes = typeof data === 'string' ? te.encode(data) : data;
+    await this.#driver.write(path, bytes);
+  }
+
+  /** Read raw bytes via the driver, transparently decrypting an encryption envelope
+   * when a key is set. An enveloped file with no key is a clear, actionable error
+   * rather than a garbled parse. Plaintext (legacy / unencrypted) passes through, so
+   * a folder can be read + migrated in place. Missing file → throws (callers catch). */
+  async #readRaw(path) {
+    const raw = await this.#driver.read(path);
+    if (raw == null) throw new Error(`not found: ${path}`);
+    if (isEnveloped(raw)) {
+      if (!this.#key) throw new Error('This project is encrypted — unlock it with its passphrase first.');
+      return decryptWithKey(this.#key, raw);
+    }
+    return raw;
+  }
+
+  async #read(path) {
+    return new TextDecoder().decode(await this.#readRaw(path));
+  }
+
+  async #readBytes(path) {
+    return this.#readRaw(path); // Uint8Array (callers wrap as needed)
+  }
+
+  /** Write each dataset's Parquet sources (all datasets, or only those in `only`). */
+  async #writeSources(id, bundle, only) {
+    for (const d of bundle.datasets) {
+      if (only && !only.has(d.id)) continue;
+      for (let i = 0; i < d.state.sources.length; i++) {
+        const s = d.state.sources[i];
+        if (!s.parquet) throw new Error(`save: dataset ${d.id} source ${i + 1} has no parquet`);
+        await this.#write(this.#file(id, `ds${d.id}_src${i + 1}.parquet`), s.parquet);
+      }
     }
   }
+}
 
-  async #read(dir, name) {
-    const fh = await dir.getFileHandle(name);
-    return (await fh.getFile()).text();
+/**
+ * Build the `project.json` **manifest** (metadata + transform logs + Parquet file
+ * refs, no bytes) from an in-memory bundle — the exact shape {@link ProjectStore#save}
+ * writes and {@link module:core/collab-sync~mergeManifests} merges. Pure, so it also
+ * produces "my" manifest for a folder sync without touching disk. File refs follow
+ * `ds<id>_src<n>.parquet` (matching {@link ProjectStore#writeSourcesOnly}).
+ *
+ * @param {{name: string, savedAt: number, bundle: object}} arg
+ * @returns {object} the manifest
+ */
+export function buildManifest({ name, savedAt, bundle }) {
+  const datasets = [];
+  for (const d of bundle.datasets) {
+    const sources = [];
+    for (let i = 0; i < d.state.sources.length; i++) {
+      const s = d.state.sources[i];
+      const entry = { id: s.id ?? null, meta: s.meta, label: s.label ?? null, combine: s.combine ?? 'base', file: `ds${d.id}_src${i + 1}.parquet` };
+      if (s.combine === 'join') {
+        entry.joinKey = s.joinKey;
+        entry.aliases = s.aliases ?? [];
+      }
+      if (s.wide) {
+        entry.wide = true;
+        entry.rowidBase = s.rowidBase;
+      }
+      sources.push(entry);
+    }
+    datasets.push({ id: d.id, name: d.name, libraryLink: d.libraryLink ?? null, sources, transforms: d.state.transforms ?? [], order: d.state.order ?? null });
   }
-
-  async #readBytes(dir, name) {
-    const fh = await dir.getFileHandle(name);
-    return (await fh.getFile()).arrayBuffer();
-  }
+  return {
+    name,
+    savedAt,
+    activeId: bundle.activeId,
+    activePlugins: Array.isArray(bundle.activePlugins) ? bundle.activePlugins : null,
+    workspaces: bundle.workspaces && typeof bundle.workspaces === 'object' ? bundle.workspaces : null,
+    output: Array.isArray(bundle.output) ? bundle.output : null,
+    // Collaboration identity (#143): carried in the manifest so it rides folder sync —
+    // both peers derive the same signaling room + secret. Minted by the app on save.
+    collabId: bundle.collabId ?? null,
+    collabSecret: bundle.collabSecret ?? null,
+    datasets,
+  };
 }

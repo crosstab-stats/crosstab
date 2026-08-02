@@ -37,6 +37,7 @@
  */
 
 import { debug } from './debug.js';
+import { currentAuthor } from './user-identity.js';
 
 /** Bumped on any breaking change to the wire protocol above. */
 export const PROTOCOL_VERSION = 1;
@@ -520,6 +521,11 @@ function buildDispatch({ data, results, webr, ui, web }) {
     'ui.showForm': (opts) => ui.showForm(opts),
 
     'web.get': (url) => web.get(url),
+
+    // The current user's self-set identity snapshot (#148) — so a plugin can stamp
+    // authorship on what it creates (e.g. CAQDAS code applications → inter-coder
+    // reliability). Read-only; self-asserted; the user's own name, not subject data.
+    'identity.get': () => currentAuthor(),
   };
 }
 

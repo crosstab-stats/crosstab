@@ -45,6 +45,8 @@
 
 import { CoreEvents } from './event-bus.js';
 import { quoteIdent } from './duckdb-manager.js';
+import { newOpId, deterministicOpId } from './merge.js';
+import { currentAuthor } from './user-identity.js';
 
 /** Column auto-added when stacking files, tagging each row with its origin so a
  * pooled multi-file/multi-year dataset stays distinguishable (group/filter by
@@ -567,6 +569,24 @@ export class DataStore {
     return this.#log.filter((o) => o.type === 'load' || o.type === 'append' || o.type === 'join');
   }
 
+  /** Stamp every op with a stable id (collaboration/merge identity — see
+   * {@link module:core/merge}). New ops from the push sites arrive without one and
+   * get a fresh random id; restore assigns *deterministic* ids to legacy ops before
+   * this runs, so those are preserved. Idempotent, so calling it on every rederive
+   * is cheap. Undo/redo preserve ids because they move the op object intact. */
+  #ensureIds() {
+    // An op lacking an id is genuinely NEW (restore pre-assigns ids to every loaded
+    // op), so this is the one safe point to stamp authorship (#148 step 2) — a
+    // snapshot of who made the change, at creation, never applied retroactively to
+    // legacy ops (which would falsely attribute them to whoever opened the project).
+    for (const op of this.#log) {
+      if (!op.id) {
+        op.id = newOpId();
+        op.author = currentAuthor(); // {authorId, initials, name, color}; snapshot, survives a later rename
+      }
+    }
+  }
+
   /**
    * Materialise one immutable source table from a loaded file and return its
    * descriptor `{table, meta, label}`. A fresh, never-reused sequence number names
@@ -682,6 +702,7 @@ export class DataStore {
    * @returns {Promise<void>}
    */
   async rederive(reason = 'change') {
+    this.#ensureIds(); // every op carries a stable merge id before it is derived/persisted
     // STRICT SEQUENTIAL REPLAY: fold the log in order, so each op sees exactly the
     // dataset state the ops before it produced — true script semantics. A compute
     // logged before a join is evaluated over the pre-join data (and appended rows
@@ -1279,10 +1300,12 @@ export class DataStore {
     const sources = [];
     for (const op of this.#sourceOps()) {
       const entry = {
+        id: op.id, // stable merge identity (see core/merge.js); absent on pre-collab saves
         meta: op.src.meta.map((m) => ({ ...m })),
         label: op.src.label,
         combine: op.type === 'load' ? 'base' : op.type,
       };
+      if (op.author) entry.author = op.author; // authorship (#148) — round-trips source ops
       if (op.type === 'join') {
         entry.joinKey = op.joinKey;
         entry.aliases = op.aliases ?? [];
@@ -1337,7 +1360,10 @@ export class DataStore {
         ? await this.#restoreWideSource(src)
         : await this.#createSource({ variables: src.meta, parquet: src.parquet, source: src.label });
       const type = i === 0 ? 'load' : src.combine === 'join' ? 'join' : 'append';
-      srcOps.push(type === 'join' ? { type, src: created, joinKey: src.joinKey, aliases: src.aliases ?? [], joinType: src.joinType ?? 'left' } : { type, src: created });
+      const op = type === 'join' ? { type, src: created, joinKey: src.joinKey, aliases: src.aliases ?? [], joinType: src.joinType ?? 'left' } : { type, src: created };
+      if (src.id) op.id = src.id; // preserve merge identity from a collab-era save
+      if (src.author) op.author = src.author; // preserve authorship (#148) across restore
+      srcOps.push(op);
     }
 
     const log = [];
@@ -1350,6 +1376,11 @@ export class DataStore {
       for (const op of srcOps) log.push(op);
       for (const t of txs) log.push({ ...t });
     }
+    // Stamp any op lacking a persisted id with a DETERMINISTIC content+index id, so
+    // a project saved before collaboration existed gets the SAME ids on every
+    // machine — a pre-collab shared project stays mergeable. Collab-era saves
+    // already carry ids (preserved above); this touches only legacy ops.
+    log.forEach((op, i) => { if (!op.id) op.id = deterministicOpId(op, i); });
     this.#log = log;
     this.#redoStack = [];
     await this.rederive('restore');

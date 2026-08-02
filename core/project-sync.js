@@ -16,11 +16,40 @@
 
 import { CoreEvents } from './event-bus.js';
 import { DATASETS_CHANGED } from './dataset-manager.js';
+import { ProjectStore, FOLDER_PROJECT_ID, buildManifest } from './project-store.js';
+import { attachLiveDoc } from './live-sync.js';
+import { SourceExchange } from './gap-fill.js';
+import { debug } from './debug.js';
+import { rememberFolder, listFolders, forgetFolder, ensureReadWrite } from './folder-handle.js';
+import { passphraseFor, shouldEncrypt, PASSPHRASE_ABORT } from './at-rest.js';
+import { syncFolderProject, manifestsEqual } from './folder-sync.js';
+import { showConflictDialog } from './conflict-ui.js';
+import { shortcutFiles } from './folder-shortcut.js';
+import { showEncryptionSettings } from './encryption-settings.js';
+import { ensureCollabIdentity, roomFor } from './live-invite.js';
 
 const DEBOUNCE_MS = 800;
 
 /** Bus event: the current project's name/binding changed (drives the sidebar header). */
 export const PROJECT_CHANGED = 'project:changed';
+
+// Gap-fill chunks carry raw Parquet bytes (a Uint8Array). Trystero's action channel
+// only transmits binary when the WHOLE payload is a TypedArray; a Uint8Array nested
+// inside a plain object gets JSON-serialised to a numeric-keyed object and arrives
+// corrupt (the SHA-256 check then rejects it, so a new dataset silently never lands).
+// So base64 the bytes across the wire — the SourceExchange stays binary end-to-end.
+function bytesToB64(bytes) {
+  let bin = '';
+  const CH = 0x8000; // fromCharCode.apply chokes on huge spreads; walk it in windows
+  for (let i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  return btoa(bin);
+}
+function b64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
 
 export class ProjectSync {
   #store;
@@ -52,6 +81,21 @@ export class ProjectSync {
   /** () => string[] : every installed plugin's identifiers (key + manifest id), so
    * a recorded plugin can be told apart from one this install simply doesn't have. */
   #pluginIdentities;
+  #getMergers;
+  /** Live co-authoring (#148 step 6): a LiveDoc riding the presence session's op
+   * channel, or null when not co-authoring. Publishes local edits + applies merged
+   * remote state (reusing local Parquet — no disk round-trip). */
+  #liveDoc = null;
+  #liveSession = null;
+  #livePublishTimer = null;
+  /** Gap-fill (#148 step 6c): fetch Parquet a co-author has that we lack (new dataset
+   * / cold join). Received bytes wait in #liveSourceBytes; #liveLastManifest is re-
+   * applied once they arrive. */
+  #liveExchange = null;
+  #liveSourceBytes = new Map();
+  #liveLastManifest = null;
+  #coauthorPeers = 0; // peers actually co-authoring (drives "waiting" vs "co-authoring")
+  #conflictAbort = null; // aborts an open conflict dialog when a peer resolves it first
   /** Plugin identifiers recorded in the open project that AREN'T installed here —
    * carried forward verbatim on every save so the association survives until the
    * plugin is added and resolves (#102). Empty for a fully-resolved project. */
@@ -65,6 +109,26 @@ export class ProjectSync {
 
   /** Current project: `{ id, name }` once saved/opened, else `null`. */
   #binding = null;
+  /** True while a picked folder (FSA) is the active backend, vs OPFS (#143). */
+  #folderMode = false;
+  /** A dedicated OPFS store for LISTING in-browser projects even while the main store
+   * is folder-backed — so the launcher/sidebar list always shows OPFS projects, never
+   * the current folder's single project (which is surfaced via the folder registry). */
+  #opfs = new ProjectStore();
+  /** The registry id of the currently-open folder project (so the sidebar can exclude
+   * the active one from its folder list, matching OPFS behaviour). */
+  #activeFolderId = null;
+  /** The active project's collab identity (#148 step 5 / #143) — a stable id + secret
+   * that derive the live signaling room. Minted for folder projects (they're the
+   * shareable ones) and carried in the manifest so both peers compute the same room.
+   * Null for a plain OPFS project (not shared). */
+  #collabId = null;
+  #collabSecret = null;
+  /** Last project manifest we wrote/saw in the folder — lets the poll detect a
+   * peer's write cheaply (readManifest + compare) without a full merge each tick. */
+  #lastManifest = null;
+  /** Folder-mode change-detection poll timer. */
+  #pollTimer = null;
   /** Dataset ids whose Parquet sources changed since the last save. */
   #sourcesDirty = new Set();
   /** True while loading a project, to suppress autosave during reconstruction. */
@@ -101,7 +165,7 @@ export class ProjectSync {
    * @param {(keys: string[]) => Promise<void>} [deps.applyActivePlugins] - Restore
    *   a project's saved plugin set on open.
    */
-  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaces, applyWorkspaces, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, pluginIdentities }) {
+  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaces, applyWorkspaces, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, pluginIdentities, getMergers }) {
     this.#store = projectStore;
     this.#datasets = datasets;
     this.#ui = ui;
@@ -118,6 +182,12 @@ export class ProjectSync {
     this.#getAnalysisLog = getAnalysisLog ?? null;
     this.#applyAnalysisLog = applyAnalysisLog ?? null;
     this.#pluginIdentities = pluginIdentities ?? null;
+    this.#getMergers = getMergers ?? null;
+  }
+
+  /** Merger map for a sync (core + active builtin plugins), or core-only if unwired. */
+  #mergers() {
+    return (this.#getMergers ? this.#getMergers() : null) ?? { core: { strategy: 'three-way' } };
   }
 
   /** Plugin identifiers the OPEN project references but this install can't resolve
@@ -177,6 +247,17 @@ export class ProjectSync {
     this.#menus.register({ id: 'core:proj-open', path: ['File'], label: 'Open project…', order: 2, command: () => void this.openProject() });
     this.#menus.register({ id: 'core:proj-save', path: ['File'], label: 'Save project…', order: 3, command: () => void this.saveInteractive() });
     this.#menus.register({ id: 'core:proj-saveas', path: ['File'], label: 'Save project as…', order: 4, command: () => void this.saveAs() });
+    if (typeof window !== 'undefined' && window.showDirectoryPicker) {
+      this.#menus.register({ id: 'core:proj-folder-move', path: ['File'], label: 'Move project to a folder…', order: 5, command: () => void this.moveToFolder() });
+      this.#menus.register({ id: 'core:proj-folder-open', path: ['File'], label: 'Open project from a folder…', order: 6, command: () => void this.openFromFolder() });
+      this.#menus.register({ id: 'core:proj-folder-close', path: ['File'], label: 'Close project folder', order: 7, command: () => void this.closeFolder() });
+    }
+    // Per-project at-rest protection for OPFS projects (#144) — set/remove a passphrase
+    // on the CURRENT project (each project has its own). Folder projects are protected
+    // via their folder passphrase instead, so these guard against that case.
+    this.#menus.register({ id: 'core:proj-protect', path: ['File'], label: 'Protect this project…', order: 8, command: () => void this.protectProject() });
+    this.#menus.register({ id: 'core:proj-unprotect', path: ['File'], label: 'Remove protection…', order: 9, command: () => void this.unprotectProject() });
+    this.#menus.register({ id: 'core:encryption-settings', path: ['File'], label: 'Encryption settings…', order: 10, command: () => showEncryptionSettings() });
     this.#bus.on(CoreEvents.DATA_CHANGED, (s) => this.#onChange(s));
     this.#bus.on(DATASETS_CHANGED, () => this.#onChange(null));
     this.#bus.on(CoreEvents.PLUGINS_CHANGED, () => this.#onPluginsChanged());
@@ -229,6 +310,23 @@ export class ProjectSync {
 
   /** Write the whole project (all datasets' sources + logs) and (re)bind. */
   async #fullSave(id, name) {
+    // Default-protect a brand-new OPFS project when the policy is on (#144). Pre-mint
+    // the id and set a per-project passphrase so the very first write is already
+    // encrypted (never a plaintext version on disk first). Skipping the prompt leaves
+    // this one project plaintext — it's asked once, at creation, not on every save.
+    if (id == null && !this.#store.folderBacked && !this.#store.encrypted && shouldEncrypt('local')) {
+      const pass = await passphraseFor('local-new');
+      if (pass) {
+        const newId = crypto.randomUUID();
+        try {
+          await this.#store.unlock(pass, newId); // mints per-project meta + key
+          id = newId;
+        } catch (err) {
+          this.#results.appendError(`Couldn’t set up protection — saving unprotected: ${err.message}`);
+          this.#store.lock();
+        }
+      }
+    }
     this.#setStatus('saving', name);
     try {
       const savedId = await this.#attemptSave(async () => {
@@ -262,6 +360,7 @@ export class ProjectSync {
   #onChange(summary) {
     if (this.#loading) return;
     this.#dirty = true;
+    this.#scheduleLivePublish(); // stream this edit to live co-authors (#148 step 6), if any
     // A source-changing op means that dataset's Parquet must be rewritten. With the
     // universal log, undo/redo/rewind can also add or drop a source op, so they
     // mark sources dirty too (keeps the saved Parquet set in step with the log).
@@ -345,13 +444,17 @@ export class ProjectSync {
     const dirty = this.#sourcesDirty;
     this.#sourcesDirty = new Set();
     try {
-      await this.#attemptSave(async () => {
-        const bundle = await this.#snapshot(false, dirty);
-        return this.#store.save(
-          { id: this.#binding.id, name: this.#binding.name, savedAt: Date.now(), bundle },
-          { writeSourcesFor: dirty },
-        );
-      });
+      if (this.#folderMode) {
+        await this.#attemptSave(() => this.#folderSave(dirty)); // merge-aware (never clobbers a peer)
+      } else {
+        await this.#attemptSave(async () => {
+          const bundle = await this.#snapshot(false, dirty);
+          return this.#store.save(
+            { id: this.#binding.id, name: this.#binding.name, savedAt: Date.now(), bundle },
+            { writeSourcesFor: dirty },
+          );
+        });
+      }
       this.#dirty = false;
       this.#setStatus('saved');
     } catch (err) {
@@ -386,13 +489,17 @@ export class ProjectSync {
       const dirty = this.#sourcesDirty;
       this.#sourcesDirty = new Set();
       try {
-        await this.#attemptSave(async () => {
-          const bundle = await this.#snapshot(false, dirty);
-          return this.#store.save(
-            { id: this.#binding.id, name: this.#binding.name, savedAt: Date.now(), bundle },
-            { writeSourcesFor: dirty },
-          );
-        });
+        if (this.#folderMode) {
+          await this.#attemptSave(() => this.#folderSave(dirty));
+        } else {
+          await this.#attemptSave(async () => {
+            const bundle = await this.#snapshot(false, dirty);
+            return this.#store.save(
+              { id: this.#binding.id, name: this.#binding.name, savedAt: Date.now(), bundle },
+              { writeSourcesFor: dirty },
+            );
+          });
+        }
         this.#dirty = false;
       } catch (err) {
         console.error('[project] settle save failed', err);
@@ -409,7 +516,25 @@ export class ProjectSync {
 
   /** Snapshot all open datasets. With `all`, every dataset's Parquet is included;
    * otherwise only those in `dirty` (the rest save metadata-only). */
+  /** Ensure the project has a collab identity (mint if absent), returning it. Every
+   * project is potentially collaborative (#148) — the identity travels with folder
+   * syncs AND export bundles, so a copy imported elsewhere shares the same room. */
+  #ensureCollab() {
+    if (!this.#collabId || !this.#collabSecret) {
+      const i = ensureCollabIdentity({ collabId: this.#collabId, collabSecret: this.#collabSecret });
+      this.#collabId = i.collabId;
+      this.#collabSecret = i.collabSecret;
+    }
+    return { collabId: this.#collabId, collabSecret: this.#collabSecret };
+  }
+
+  /** The project's collab identity, minting one if needed — for export bundles. */
+  collabIdentity() {
+    return this.#ensureCollab();
+  }
+
   async #snapshot(all, dirty = new Set()) {
+    this.#ensureCollab(); // every saved project carries a collab identity (transport-agnostic)
     const datasets = [];
     for (const ds of this.#datasets.all()) {
       const state = await ds.exportState({ includeParquet: all || dirty.has(ds.id) });
@@ -430,7 +555,10 @@ export class ProjectSync {
     const workspaces = this.#getWorkspaces ? this.#getWorkspaces() : undefined;
     const output = this.#getOutput ? this.#getOutput() : undefined;
     const analysisLog = this.#getAnalysisLog ? this.#getAnalysisLog() : undefined;
-    return { activeId: this.#datasets.activeId, activePlugins, workspaces, output, analysisLog, datasets };
+    return {
+      activeId: this.#datasets.activeId, activePlugins, workspaces, output, analysisLog, datasets,
+      collabId: this.#collabId, collabSecret: this.#collabSecret, // #148 — persist the live-room identity
+    };
   }
 
   // --- new / open -----------------------------------------------------------
@@ -438,6 +566,7 @@ export class ProjectSync {
   /** Start a fresh project: one empty dataset, unbound. */
   async newProject() {
     await this.#settle();
+    if (this.#folderMode) this.#detachFolder(); // a fresh project is OPFS, not the folder's
     this.#loading = true;
     try {
       await this.#datasets.loadBundle({
@@ -451,6 +580,8 @@ export class ProjectSync {
       this.#loading = false;
     }
     this.#binding = null;
+    this.#collabId = null; // a fresh (OPFS) project isn't shared → no collab room
+    this.#collabSecret = null;
     this.#sourcesDirty.clear();
     this.#dirty = false;
     this.#unresolvedPlugins = []; // a fresh project carries no unresolved plugins
@@ -479,12 +610,40 @@ export class ProjectSync {
       return;
     }
     await this.#settle();
+    // Opening an OPFS project while a folder is open leaves folder mode (the folder
+    // stays remembered in the registry; #openExistingFolder opens with folderMode
+    // still false, so it isn't affected by this).
+    if (this.#folderMode && id !== FOLDER_PROJECT_ID) this.#detachFolder();
+    // A protected OPFS project needs its passphrase before we can read it. Check on a
+    // plaintext meta read FIRST (nothing loaded yet), so a wrong/cancelled passphrase
+    // leaves the currently-open project untouched. (Folder mode already unlocked its
+    // store in #openExistingFolder, so skip it there.)
+    if (!this.#store.folderBacked) {
+      this.#store.lock(); // drop any previously-open project's key before switching
+      try {
+        if (await this.#store.hasEncryption(id)) {
+          const pass = await passphraseFor('unlock');
+          if (!pass) return; // cancelled — current project untouched
+          await this.#store.unlock(pass, id); // throws on a wrong passphrase
+        }
+      } catch (err) {
+        this.#results.appendError(
+          /wrong passphrase/i.test(err.message)
+            ? 'Wrong passphrase — the project was not opened.'
+            : `Couldn’t open the project: ${err.message}`,
+        );
+        this.#store.lock();
+        return; // untouched
+      }
+    }
     this.#setStatus('loading');
     this.#loading = true;
     let projName = null;
     try {
       const { name, bundle } = await this.#store.load(id);
       projName = name;
+      this.#collabId = bundle.collabId ?? null; // #148 — carry the live-room identity
+      this.#collabSecret = bundle.collabSecret ?? null;
       await this.#datasets.loadBundle(bundle);
       // Restore plugin workspace blobs BEFORE plugins load, so a workspace's
       // mount() sees its saved state via state.get(). Absent ⇒ empty.
@@ -554,6 +713,7 @@ export class ProjectSync {
    */
   async openBundle({ name, bundle }) {
     await this.#settle();
+    if (this.#folderMode) this.#detachFolder(); // an imported bundle is a fresh OPFS project
     this.#setStatus('loading');
     this.#loading = true;
     try {
@@ -585,8 +745,620 @@ export class ProjectSync {
     // It's a brand-new project; never bound to (and so never overwriting) the one
     // that was open. Persist + name it from the bundle.
     this.#binding = null;
+    // Preserve the bundle's collab identity (#148) so this imported OPFS copy shares a
+    // room with the origin (the flash-drive hand-off case); null → #snapshot mints one.
+    this.#collabId = bundle.collabId ?? null;
+    this.#collabSecret = bundle.collabSecret ?? null;
     this.#sourcesDirty.clear();
     await this.#fullSave(null, name || 'Imported project');
+  }
+
+  // --- folder-backed projects (#143) ----------------------------------------
+
+  /** @returns {boolean} Whether a picked folder is the active backend. */
+  get folderBacked() {
+    return this.#folderMode;
+  }
+
+  /** Pick a folder + attach the store to it (shared by move/open). Returns the
+   * handle, or null on cancel/denied. Flushes any pending OPFS save first. */
+  /** Re-grant write, flush any pending OPFS save, then point the store at the folder. */
+  async #attach(handle) {
+    if (!(await ensureReadWrite(handle))) {
+      this.#results.appendError('Folder write access wasn’t granted.');
+      return false;
+    }
+    await this.#settle(); // flush any pending OPFS save before switching backends
+    this.#store.useDirectory(handle);
+    return true;
+  }
+
+  /** Show the OS folder picker and ensure write permission, but do NOT touch the
+   * live store — for flows that must probe/prompt before committing (moveToFolder),
+   * so a cancel leaves the current project's attachment completely untouched.
+   * @returns {Promise<FileSystemDirectoryHandle|null>} */
+  async #pickFolderHandle() {
+    if (typeof window === 'undefined' || !window.showDirectoryPicker) {
+      this.#results.appendError('This browser can’t use a project folder — use Chrome or Edge on desktop.');
+      return null;
+    }
+    let handle;
+    try {
+      handle = await window.showDirectoryPicker({ id: 'crosstab-projects', mode: 'readwrite' });
+    } catch {
+      return null; // user cancelled the picker
+    }
+    if (!(await ensureReadWrite(handle))) {
+      this.#results.appendError('Folder write access wasn’t granted.');
+      return null;
+    }
+    return handle;
+  }
+
+  /** Pick a folder AND attach the live store to it (open/reconnect flows). */
+  async #pickFolder() {
+    const handle = await this.#pickFolderHandle();
+    if (!handle) return null;
+    return (await this.#attach(handle)) ? handle : null;
+  }
+
+  /** Revert the store to OPFS after a failed/aborted folder attach. */
+  #detachFolder() {
+    this.#store.useDirectory(null);
+    this.#store.lock();
+    this.#folderMode = false;
+    this.#lastManifest = null;
+    this.#activeFolderId = null;
+    this.#stopPoll();
+  }
+
+  /**
+   * Open the (single) project in a folder. Validates the folder — permission,
+   * passphrase, a project present — against a THROWAWAY probe store FIRST, and only
+   * switches the live store + loads once cleared. So a wrong/cancelled passphrase or
+   * an empty folder never clobbers the currently-open project: nothing that touches
+   * the live project happens until we know we can open the incoming one. Takes a raw
+   * handle (does its own attach) and is shared by pick + reconnect.
+   * @param {FileSystemDirectoryHandle} handle
+   */
+  async #openExistingFolder(handle) {
+    if (!(await ensureReadWrite(handle))) {
+      this.#results.appendError('Folder write access wasn’t granted.');
+      return false;
+    }
+    // Probe on a throwaway store — never touch the live project until validated.
+    // These are reads only: hasEncryption/list read, and unlock() only checks the
+    // passphrase against the stored verifier (an already-set-up folder isn't written).
+    const probe = new ProjectStore();
+    probe.useDirectory(handle);
+    let pass = null;
+    if (await probe.hasEncryption()) {
+      pass = await passphraseFor('folder'); // enter mode
+      if (!pass) return false; // cancelled — live project untouched
+      try {
+        await probe.unlock(pass); // throws on a wrong passphrase
+      } catch {
+        this.#results.appendError('Wrong passphrase for this folder.');
+        return false; // untouched
+      }
+    }
+    let entries = [];
+    try { entries = await probe.list(); } catch { entries = []; }
+    if (!entries.length) {
+      this.#results.appendError('No CrossTab project in that folder — use “Move project to a folder…” to put one there.');
+      return false; // untouched
+    }
+
+    // --- cleared to load: only now switch the live store (flushing the outgoing
+    // project) and load the incoming one -------------------------------------------
+    if (!(await this.#attach(handle))) return false;
+    if (pass) await this.#store.unlock(pass);
+    await this.openProject(entries[0].id); // #folderMode still false here → openProject won't detach
+    if (!this.#binding) { this.#detachFolder(); return false; } // load failed (damaged) → recover to OPFS
+    this.#folderMode = true;
+    this.#lastManifest = await this.#store.readManifest(this.#binding.id);
+    // A folder project created before collab identity existed gets one now, persisted so
+    // every peer computes the same room (#148). openProject already captured any existing one.
+    if (!this.#collabId || !this.#collabSecret) {
+      const ident = ensureCollabIdentity({ collabId: this.#collabId, collabSecret: this.#collabSecret });
+      this.#collabId = ident.collabId; this.#collabSecret = ident.collabSecret;
+      if (ident.minted) await this.#folderRewrite(this.#binding.name);
+    }
+    this.#activeFolderId = await rememberFolder(handle, { name: this.#binding.name, savedAt: Date.now() }); // first-class in launcher + sidebar
+    await this.#ensureFolderShortcuts(this.#binding.name); // regenerate the on-ramp if a shared folder lacks it
+    this.#startPoll();
+    this.#emitProject();
+    return true;
+  }
+
+  /**
+   * **Move project to a folder…** — put the *current* project into a picked folder
+   * (the OneDrive/Dropbox/local collaboration path), then work from there. For the
+   * owner setting things up. Refuses a folder that already holds a project (that's
+   * what *Open project from a folder…* is for). Folder storage defaults to encrypted
+   * (opt-out): you're prompted to set a passphrase (Cancel = store plaintext). Must
+   * be called from the menu click (`showDirectoryPicker` needs a user gesture).
+   */
+  async moveToFolder() {
+    const wasFolder = this.#folderMode; // preserve the current attachment for a clean abort
+    // Pick WITHOUT attaching: we must not disturb the live project's store until the
+    // user has actually committed. Everything up to the commit line below is
+    // side-effect-free, so a cancel (picker, occupied folder, or passphrase dialog)
+    // leaves the project exactly where it is — OPFS or its existing folder.
+    const handle = await this.#pickFolderHandle();
+    if (!handle) return;
+
+    // Probe the target with a THROWAWAY store, so this read never touches the live
+    // project. `hasEncryption` reads the plaintext meta, so an occupied folder is
+    // detected even when it's encrypted and we hold no key (list() would look empty).
+    let occupied = false;
+    try {
+      const probe = new ProjectStore();
+      probe.useDirectory(handle);
+      occupied = (await probe.hasEncryption()) || (await probe.list()).length > 0;
+    } catch {
+      occupied = true; // unreadable → treat as occupied; never risk clobbering it
+    }
+    if (occupied) {
+      this.#results.appendError('That folder already holds a CrossTab project — use “Open project from a folder…” to work in it.');
+      return; // nothing changed
+    }
+
+    // Decide protection BEFORE mutating anything. Three outcomes: a passphrase
+    // (protect), null (move unprotected), or PASSPHRASE_ABORT (cancel the move).
+    let pass = null;
+    if (shouldEncrypt('folder')) {
+      pass = await passphraseFor('folder-new');
+      if (pass === PASSPHRASE_ABORT) return; // aborted — project untouched
+    }
+
+    // --- committed: only now do we switch the live store and write -------------
+    // If moving an OPFS-backed project, remember it so we can drop the leftover copy
+    // after the move (a true move, no confusing duplicate in the launcher).
+    const orphanOpfsId = wasFolder ? null : this.#binding?.id;
+    try {
+      if (!(await this.#attach(handle))) return; // ensures write, flushes, switches #store
+      if (pass) await this.#store.unlock(pass);
+      // Mint the live-room identity so this shared folder is collab-ready (#148): it rides
+      // the manifest to collaborators, so opening the shared folder joins the same room.
+      const ident = ensureCollabIdentity({ collabId: this.#collabId, collabSecret: this.#collabSecret });
+      this.#collabId = ident.collabId; this.#collabSecret = ident.collabSecret;
+      this.#binding = null; // a brand-new entry, living in the folder now
+      await this.#fullSave(null, this.activeName || 'My project'); // snapshot now carries collab id/secret
+      this.#folderMode = true;
+      this.#lastManifest = await this.#store.readManifest(this.#binding.id);
+      this.#activeFolderId = await rememberFolder(handle, { name: this.#binding.name, savedAt: Date.now() });
+      await this.#ensureFolderShortcuts(this.#binding.name); // OS-facing double-click on-ramp for recipients
+      this.#startPoll();
+      this.#emitProject();
+      // True move: drop the now-redundant OPFS copy (via a throwaway OPFS store, since
+      // #store is now folder-backed). Best-effort — the data is safe in the folder.
+      if (orphanOpfsId) { try { await new ProjectStore().delete(orphanOpfsId); } catch { /* leave it */ } }
+    } catch (err) {
+      this.#results.appendError(`Move to folder failed: ${err.message}`);
+      this.#detachFolder();
+    }
+  }
+
+  /**
+   * Drop the OS-facing double-click shortcuts (Windows `.url`, Mac `.webloc`, a
+   * HOW-TO note) into the folder if they're not already there (#143), so a
+   * recipient can launch CrossTab straight from the shared folder. Plaintext,
+   * app-URL only — never the passphrase. Best-effort: a shortcut is a convenience,
+   * so a write failure must never block opening or saving the project.
+   */
+  async #ensureFolderShortcuts(name) {
+    try {
+      const files = shortcutFiles(
+        name || this.#binding?.name || 'CrossTab project',
+        location.origin,
+        location.pathname,
+      );
+      for (const f of files) {
+        // Independent per file: one write failing (e.g. a blocked extension) must not
+        // abort the others — that once left a `.url.tmp` and no README behind.
+        try {
+          if (!(await this.#store.hasPlainFile(f.name))) await this.#store.writePlainFile(f.name, f.text);
+        } catch { /* skip this one */ }
+      }
+    } catch { /* shortcuts are a convenience — never block folder open/save */ }
+  }
+
+  /**
+   * **Open project from a folder…** — open an existing project a collaborator shared
+   * via a folder. Prompts for the passphrase if the folder is encrypted (one gate:
+   * it opens the files *and* is the key to the collaboration). Refuses an empty
+   * folder (use *Move project to a folder…* to seed one).
+   */
+  async openFromFolder() {
+    // Pick WITHOUT attaching — #openExistingFolder validates against a probe store
+    // and only switches the live store once cleared, so a wrong/cancelled passphrase
+    // never clobbers the currently-open project.
+    const handle = await this.#pickFolderHandle();
+    if (!handle) return;
+    try {
+      await this.#openExistingFolder(handle);
+    } catch (err) {
+      this.#results.appendError(`Open from folder failed: ${err.message}`);
+      this.#detachFolder();
+    }
+  }
+
+  /**
+   * Reconnect a **remembered** folder (the launcher's boot-time reopen entry) — no
+   * picker. The browser still requires re-granting write via a user gesture, which
+   * `#openExistingFolder` does (`ensureReadWrite`) before probing, so this runs from
+   * that click. Like the pick path, it validates before touching the live project.
+   * @param {FileSystemDirectoryHandle} handle  from {@link module:core/folder-handle}
+   */
+  async reopenFolder(handle) {
+    if (!handle) return;
+    try {
+      await this.#openExistingFolder(handle);
+    } catch (err) {
+      this.#results.appendError(`Reopen folder failed: ${err.message}`);
+      this.#detachFolder();
+    }
+  }
+
+  /** Leave folder mode: flush, revert the store to OPFS, and start a fresh project. */
+  async closeFolder() {
+    if (!this.#folderMode) return;
+    this.#stopPoll();
+    await this.#settle(); // flush while still folder-backed
+    this.#detachFolder(); // → OPFS, clears folderMode/lastManifest/poll
+    // Keep the folder in the registry (reopenable from the launcher/sidebar) — closing
+    // ≠ forgetting; the sidebar's ✕ is the explicit "forget".
+    await this.newProject();
+  }
+
+  /**
+   * **Protect this project…** — set a passphrase so the project's data is encrypted at
+   * rest (#144). Works for both an OPFS project (its own per-project passphrase — the
+   * shared-lab case) and a folder project (its folder passphrase). Also the migration
+   * path for an existing plaintext project: mint the key + meta, re-save encrypted.
+   */
+  async protectProject() {
+    const folder = this.#folderMode || this.#store.folderBacked;
+    await this.#settle(); // make sure it's saved (and, for OPFS, has a binding) before we re-key it
+    if (!folder && !this.#binding) {
+      this.#results.appendError('Add some data first — an empty project has nothing to protect yet.');
+      return;
+    }
+    const id = folder ? FOLDER_PROJECT_ID : this.#binding.id;
+    const name = this.#binding?.name ?? 'this project';
+    if (await this.#store.hasEncryption(id)) {
+      this.#results.appendError('This project is already protected.');
+      return;
+    }
+    // OPFS is on-device (per-project); a folder is opened "on any machine" and shared.
+    const pass = await passphraseFor(folder ? 'enable' : 'local-new'); // set mode + "no recovery"
+    if (!pass) return; // cancelled — unchanged
+    try {
+      await this.#store.unlock(pass, id); // mints salt/verifier + key
+      if (folder) await this.#folderRewrite(name);
+      else await this.#fullSave(id, name);
+      this.#results.appendText?.(folder
+        ? `🔒 **“${name}” is now protected.** Everyone who opens this folder will need this passphrase — share it with your collaborators out of band. It isn't stored anywhere and can't be recovered.`
+        : `🔒 **“${name}” is now protected.** You'll need this passphrase to open it on this device — it isn't stored anywhere and can't be recovered.`);
+    } catch (err) {
+      this.#results.appendError(`Couldn’t protect the project: ${err.message}`);
+    }
+    this.#emitProject();
+  }
+
+  /**
+   * **Remove protection…** — decrypt the project back to plaintext IN PLACE (#144).
+   * Requires a confirmation (it lowers at-rest security). For a folder project the
+   * warning is stronger: it exposes the data to everyone sharing the folder and to
+   * whatever cloud service mirrors it. The project is already unlocked, so this drops
+   * the key + meta and re-writes the whole bundle in the clear.
+   */
+  async unprotectProject() {
+    const folder = this.#folderMode || this.#store.folderBacked;
+    await this.#settle();
+    if (!folder && !this.#binding) return;
+    const id = folder ? FOLDER_PROJECT_ID : this.#binding.id;
+    const name = this.#binding?.name ?? 'this project';
+    if (!(await this.#store.hasEncryption(id))) {
+      this.#results.appendError('This project isn’t protected.');
+      return;
+    }
+    const ok = await confirmDialog({
+      title: 'Remove protection?',
+      message: folder
+        ? `“${name}” will be re-written UNENCRYPTED in its folder. Anyone who has the folder — and whatever cloud service it syncs through — will then be able to read it with no passphrase. This turns off protection for everyone the folder is shared with.`
+        : `“${name}” will be stored unencrypted on this device. Anyone (or any program) that can read this browser's files could then read it.`,
+      okLabel: 'Remove protection',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await this.#store.removeEncryption(id); // deletes the meta + drops the key
+      if (folder) await this.#folderRewrite(name);
+      else await this.#fullSave(id, name);
+      this.#results.appendText?.(folder
+        ? `🔓 **“${name}” is no longer protected** — its data is now stored unencrypted in the folder (and wherever that folder syncs).`
+        : `🔓 **“${name}” is no longer protected** — it's stored unencrypted on this device now.`);
+    } catch (err) {
+      this.#results.appendError(`Couldn’t remove protection: ${err.message}`);
+    }
+    this.#emitProject();
+  }
+
+  /**
+   * Blind full re-write of the current folder project's bundle with whatever key
+   * state is set now — used to flip a folder project's at-rest protection in place
+   * (protect: key set → encrypted; unprotect: key null → plaintext). Bypasses the
+   * merge sync (an explicit one-shot admin action), then resets the per-peer base so
+   * the poll doesn't read its own write back as a remote change.
+   */
+  async #folderRewrite(name) {
+    const bundle = await this.#snapshot(true); // all sources
+    await this.#store.save({ id: FOLDER_PROJECT_ID, name, savedAt: Date.now(), bundle });
+    this.#lastManifest = await this.#store.readManifest(FOLDER_PROJECT_ID);
+  }
+
+  /** Remembered folder projects (for the sidebar + launcher lists). */
+  listFolderProjects() {
+    return listFolders();
+  }
+
+  /** Forget a remembered folder (removes the list entry; leaves the folder's files). */
+  async forgetFolderProject(id) {
+    await forgetFolder(id);
+    this.#emitProject(); // refresh sidebar
+  }
+
+  /**
+   * A folder-mode save: instead of a blind overwrite (which would clobber a peer
+   * sharing the same `project.json`), run the merge-aware {@link syncFolderProject} —
+   * land my Parquet, three-way merge against the peer + base, resolve conflicts, write
+   * the result, and (if a peer contributed) reload it. Core (tabular) merges host-side;
+   * plugin-blob (e.g. CAQDAS codebook) merge needs the sandbox bridge — a follow-up —
+   * so those currently surface as conflicts rather than auto-merging.
+   */
+  async #folderSave(dirty) {
+    if (!this.#binding) return;
+    const bundle = await this.#snapshot(true, dirty); // include Parquet — syncFolderProject writes sources
+    const result = await syncFolderProject({
+      store: this.#store,
+      id: this.#binding.id,
+      name: this.#binding.name,
+      bundle,
+      base: this.#lastManifest, // MY per-peer ancestor (not a shared disk file) — see folder-sync
+      mergers: this.#mergers(), // core + active builtin plugin mergers (#148 6b) — merges CAQDAS coding across peers
+
+      resolveConflicts: (conflicts) => showConflictDialog(conflicts),
+      applyMerged: (id, manifest) => this.#applyMergedManifest(id, manifest),
+      now: Date.now(),
+    });
+    // Record the written manifest as my new ancestor (drives the poll's change
+    // detection and the next merge). applyMerged already set it when it reloaded.
+    if (result.action !== 'cancelled' && result.manifest) this.#lastManifest = result.manifest;
+    return result;
+  }
+
+  /** Reload a merged manifest into the live app (datasets + workspaces + output) when
+   * a peer's changes came in. Keeps the binding + plugin set (same project); suppresses
+   * autosave during the reload. */
+  async #applyMergedManifest(id, manifest) {
+    this.#loading = true;
+    try {
+      const { bundle } = await this.#store.load(id);
+      await this.#datasets.loadBundle(bundle);
+      this.#applyWorkspaces?.(bundle.workspaces || {});
+      this.#applyOutput?.(bundle.output || []);
+      this.#applyAnalysisLog?.(bundle.analysisLog || []);
+      this.#lastManifest = manifest;
+    } finally {
+      this.#loading = false;
+    }
+  }
+
+  // --- live co-authoring (#148 step 6) --------------------------------------
+
+  /** Whether a live co-authoring session is active (this peer opted in). */
+  get coauthoring() {
+    return !!this.#liveDoc;
+  }
+
+  /** How many peers are actually co-authoring with us right now (0 = we've opted in but
+   * nobody else has joined the doc yet → the UI shows "waiting"). */
+  get coauthorPeerCount() {
+    return this.#coauthorPeers;
+  }
+
+  /** The current project as a wire manifest (Parquet stripped to file refs — the
+   * receiver reuses its own local bytes; see {@link #applyLiveManifest}). */
+  async #currentManifest() {
+    return buildManifest({ name: this.#binding?.name ?? 'Live project', savedAt: Date.now(), bundle: await this.#snapshot(true) });
+  }
+
+  /**
+   * Start live co-authoring on an already-joined presence {@link LiveSession}: attach a
+   * {@link LiveDoc} that publishes local edits and applies merged remote state. Same
+   * merge kernel + mergers as folder sync — just on a faster clock.
+   * @param {import('./live-sync.js').LiveSession} session
+   */
+  async startCoauthoring(session) {
+    debug('live', 'startCoauthoring', { has: !!this.#liveDoc, selfId: session?.selfId, peers: session?.peers?.length });
+    if (this.#liveDoc || !session) return;
+    const manifest = await this.#currentManifest();
+    this.#liveSession = session;
+    this.#coauthorPeers = 0;
+    this.#liveDoc = attachLiveDoc(session, {
+      selfId: session.selfId,
+      manifest,
+      base: manifest, // session-start snapshot = the common ancestor
+      mergers: this.#mergers(), // core + builtin plugin mergers (#148 6b)
+      onChange: (m) => { void this.#applyLiveManifest(m); },
+      onConflicts: async (conflicts) => {
+        this.#conflictAbort?.abort(); // supersede any prior open dialog
+        const ctrl = new AbortController();
+        this.#conflictAbort = ctrl;
+        const res = await showConflictDialog(conflicts, { signal: ctrl.signal });
+        if (this.#conflictAbort === ctrl) this.#conflictAbort = null;
+        if (res && this.#liveDoc) this.#liveDoc.resolve(res); // aborted (peer resolved first) → res is null
+      },
+      onResolved: () => { this.#conflictAbort?.abort(); this.#conflictAbort = null; }, // peer resolved → close my stale dialog
+      onPeers: (n) => { this.#coauthorPeers = n; this.#emitProject(); }, // "waiting" → "co-authoring"
+    });
+    // Base-data gap-fill (#148 6c): serve the sources I hold to a peer that lacks them,
+    // and fetch any I lack. Rides the SAME ops channel; LiveDoc ignores need/src-chunk.
+    this.#liveSourceBytes = new Map();
+    this.#liveLastManifest = null;
+    const held = new Set();
+    this.#liveExchange = new SourceExchange({
+      held,
+      readSource: async (ref) => {
+        const snap = await this.#snapshot(true);
+        for (const d of snap.datasets) for (const s of d.state.sources) if (s.id === ref.id && s.parquet) return s.parquet;
+        return this.#liveSourceBytes.get(ref.id) ?? null;
+      },
+      storeSource: async (ref, bytes) => { this.#liveSourceBytes.set(ref.id ?? ref.key, bytes); },
+      // Base64 the chunk bytes going out (see bytesToB64) so Trystero doesn't mangle them.
+      send: (m, to) => session.sendOps(m.t === 'src-chunk' ? { ...m, bytes: bytesToB64(m.bytes) } : m, to),
+      onReceived: ({ ok, key }) => { debug('live', 'gap-fill received', { key, ok }); if (ok && this.#liveLastManifest) void this.#applyLiveManifest(this.#liveLastManifest); },
+    });
+    // Decode chunk bytes back to a Uint8Array before the exchange reassembles them.
+    session.onOps((m, peer) => {
+      const msg = m?.t === 'src-chunk' && typeof m.bytes === 'string' ? { ...m, bytes: b64ToBytes(m.bytes) } : m;
+      void this.#liveExchange?.receive(msg, peer);
+    });
+    await this.#refreshHeld(); // seed the exchange with the source ids I already hold
+    this.#liveDoc.hello();
+    this.#emitProject();
+  }
+
+  /** Refresh the gap-fill "held" set from my current sources (so I can serve them, and
+   * so requestMissing knows what I still lack). */
+  async #refreshHeld() {
+    if (!this.#liveExchange) return;
+    try {
+      const snap = await this.#snapshot(true);
+      for (const d of snap.datasets) for (const s of d.state.sources) if (s.id) this.#liveExchange.held.add(s.id);
+    } catch { /* best effort */ }
+  }
+
+  /** Stop co-authoring (the presence layer owns leaving the room). */
+  stopCoauthoring() {
+    debug('live', 'stopCoauthoring', { had: !!this.#liveDoc });
+    if (this.#livePublishTimer) { clearTimeout(this.#livePublishTimer); this.#livePublishTimer = null; }
+    this.#liveDoc = null;
+    this.#liveSession = null;
+    this.#liveExchange = null;
+    this.#liveSourceBytes = new Map();
+    this.#liveLastManifest = null;
+    this.#coauthorPeers = 0;
+    this.#conflictAbort?.abort(); // close any open conflict dialog when co-authoring ends
+    this.#conflictAbort = null;
+    this.#emitProject();
+  }
+
+  /** Testing aid: hold outgoing live updates so a real conflict can be staged (pause
+   * BOTH peers, edit the same thing in each, resume → the two edits collide from the
+   * same base). Incoming updates still apply. `crosstab.projects.pauseLiveSync(true/false)`. */
+  pauseLiveSync(on) {
+    debug('live', on ? 'sync PAUSED (testing)' : 'sync RESUMED');
+    this.#liveDoc?.setPaused(!!on); // full partition: holds both directions, flushes on resume
+  }
+
+  /** Debounced: publish the local project state to co-authors after an edit settles. */
+  #scheduleLivePublish() {
+    if (!this.#liveDoc || this.#loading) return;
+    if (this.#livePublishTimer) clearTimeout(this.#livePublishTimer);
+    this.#livePublishTimer = setTimeout(async () => {
+      this.#livePublishTimer = null;
+      if (!this.#liveDoc) return;
+      try {
+        await this.#refreshHeld(); // I may have added a dataset — offer it to peers
+        this.#liveDoc.localUpdate(await this.#currentManifest());
+      } catch (err) { console.error('[live] publish failed', err); }
+    }, 400);
+  }
+
+  /**
+   * Apply a merged manifest from a co-author to the live app WITHOUT a disk round-trip
+   * (#148 step 6a): rebuild datasets from the manifest reusing the **local** Parquet
+   * (matched by source id — I already hold the shared sources' bytes), then apply the
+   * merged workspaces/output. A source id I lack is a collaborator's NEW dataset →
+   * byte gap-fill (#148 6c). Skips the (expensive) dataset reload when the tabular
+   * structure is unchanged (the common coding-only case), applying just the blobs.
+   */
+  async #applyLiveManifest(manifest) {
+    debug('live', 'applyMerged', { datasets: (manifest?.datasets || []).length });
+    this.#loading = true; // suppress autosave + echo-publish during apply
+    try {
+      const mine = await this.#snapshot(true);
+      const sig = (dss) => JSON.stringify((dss || []).map((d) => ({
+        id: d.id,
+        s: (d.sources || d.state?.sources || []).map((x) => x.id),
+        t: d.transforms ?? d.state?.transforms ?? [],
+      })));
+      const tabularUnchanged = sig(mine.datasets) === sig(manifest.datasets);
+      if (!tabularUnchanged) {
+        const localParquet = new Map();
+        for (const d of mine.datasets) for (const s of d.state.sources) if (s.id && s.parquet) localParquet.set(s.id, s.parquet);
+        let missing = 0;
+        const datasets = [];
+        for (const d of manifest.datasets || []) {
+          const sources = [];
+          let complete = true;
+          for (const s of d.sources || []) {
+            // Reuse local Parquet, or bytes a co-author already streamed us (#148 6c).
+            const parquet = (s.id ? localParquet.get(s.id) : null) ?? (s.id ? this.#liveSourceBytes.get(s.id) : null);
+            if (!parquet) { missing++; complete = false; continue; } // still lacking → request below
+            sources.push({ id: s.id, meta: s.meta, label: s.label ?? null, combine: s.combine ?? 'base', joinKey: s.joinKey, aliases: s.aliases, wide: s.wide ?? false, rowidBase: s.rowidBase, parquet });
+          }
+          // Only materialise a dataset once ALL its sources are present; an incomplete
+          // one waits for gap-fill (it re-applies via onReceived when the bytes land).
+          if (complete) datasets.push({ id: d.id, name: d.name, libraryLink: d.libraryLink ?? null, state: { sources, transforms: d.transforms ?? [], order: d.order ?? null } });
+        }
+        if (missing) {
+          // A co-author added data we don't hold yet — request the bytes; onReceived
+          // re-applies this manifest once they arrive (#148 6c gap-fill).
+          this.#liveLastManifest = manifest;
+          const refs = this.#liveExchange?.requestMissing(manifest);
+          debug('live', 'gap-fill requesting', { missing, refs: refs?.length });
+        }
+        if (datasets.length) await this.#datasets.loadBundle({ activeId: manifest.activeId, datasets });
+      }
+      this.#applyWorkspaces?.(manifest.workspaces || {});
+      this.#applyOutput?.(manifest.output || []);
+    } catch (err) {
+      console.error('[live] apply failed', err);
+    } finally {
+      this.#loading = false;
+    }
+  }
+
+  #startPoll() {
+    this.#stopPoll();
+    this.#pollTimer = setInterval(() => void this.#folderPull(), 3000);
+  }
+
+  #stopPoll() {
+    if (this.#pollTimer) { clearInterval(this.#pollTimer); this.#pollTimer = null; }
+  }
+
+  /** Poll tick: cheaply read the folder's manifest; if a peer advanced it, merge it
+   * in. Skips while the tab is hidden, or a save/load/merge is already in flight. */
+  async #folderPull() {
+    if (!this.#folderMode || !this.#binding || this.#saving || this.#loading) return;
+    if (typeof document !== 'undefined' && document.hidden) return; // back off when hidden
+    let theirs;
+    try { theirs = await this.#store.readManifest(this.#binding.id); } catch { return; }
+    if (!theirs || (this.#lastManifest && manifestsEqual(theirs, this.#lastManifest))) return;
+    // A peer wrote → pull it in via the merge-aware save (guarded like #flush).
+    this.#saving = true;
+    try {
+      await this.#folderSave();
+    } catch (err) {
+      console.error('[project] folder pull failed', err);
+    } finally {
+      this.#saving = false;
+    }
   }
 
   async #delete(id) {
@@ -616,7 +1388,34 @@ export class ProjectSync {
 
   /** Summaries of all saved projects (for the sidebar's Projects zone). */
   listProjects() {
-    return this.#store.list();
+    // Always the OPFS (in-browser) projects — never the current folder's single
+    // project (that's shown via the folder registry, not this list).
+    return (this.#folderMode ? this.#opfs : this.#store).list();
+  }
+
+  /** Registry id of the open folder project (null if not in a folder). */
+  get activeFolderId() {
+    return this.#activeFolderId;
+  }
+
+  /** Whether the active project can host live collaboration — it has a collab identity
+   * (minted for folder projects), so a signaling room can be derived (#148). */
+  get collabReady() {
+    return !!(this.#collabId && this.#collabSecret);
+  }
+
+  /** A stable identity for the CURRENTLY-OPEN project — changes only on a real project
+   * switch, NOT on status/co-author re-emits. Lets listeners tell "switched projects"
+   * from "same project, something updated" (so presence isn't torn down on every emit). */
+  get projectKey() {
+    return this.#collabId ?? this.#binding?.id ?? null;
+  }
+
+  /** The live signaling room + secret for the active project, or null if it has no
+   * collab identity (a non-shared OPFS project). Both folder peers derive the same
+   * room from the manifest — the entry point for presence + live co-authoring (#148). */
+  async activeRoom() {
+    return roomFor({ collabId: this.#collabId, collabSecret: this.#collabSecret });
   }
 
   /** Rename the *active* project. If it has never been saved (no binding), this
@@ -756,4 +1555,47 @@ export class ProjectSync {
     else text = 'Unsaved project';
     this.#statusEl.textContent = text;
   }
+}
+
+/**
+ * A minimal yes/no confirmation modal (matching the app's `ct-dialog` conventions).
+ * Resolves true only if the user clicks the primary button; Cancel/Escape/backdrop
+ * resolve false. `danger` styles the primary button as a destructive action.
+ * @param {{title: string, message: string, okLabel?: string, danger?: boolean}} opts
+ * @returns {Promise<boolean>}
+ */
+function confirmDialog({ title, message, okLabel = 'OK', danger = false } = {}) {
+  return new Promise((resolve) => {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'ct-dialog';
+    const form = document.createElement('form');
+    form.method = 'dialog';
+    form.className = 'ct-dialog__form';
+    const h2 = document.createElement('h2');
+    h2.className = 'ct-dialog__title';
+    h2.textContent = title;
+    const p = document.createElement('p');
+    p.className = 'ct-dialog__hint';
+    p.textContent = message;
+    const menu = document.createElement('menu');
+    menu.className = 'ct-dialog__buttons';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = 'Cancel';
+    const ok = document.createElement('button');
+    ok.type = 'submit';
+    ok.className = danger ? 'ct-dialog__danger' : 'ct-dialog__primary';
+    ok.textContent = okLabel;
+    menu.append(cancel, ok);
+    form.append(h2, p, menu);
+    dialog.append(form);
+
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } dialog.close(); };
+    cancel.addEventListener('click', () => finish(false));
+    form.addEventListener('submit', (e) => { e.preventDefault(); finish(true); });
+    dialog.addEventListener('close', () => { if (!done) { done = true; resolve(false); } dialog.remove(); });
+    document.body.append(dialog);
+    dialog.showModal();
+  });
 }

@@ -18,6 +18,10 @@ import { MenuShell } from './menu-shell.js';
 import { UiService } from './ui-service.js';
 import { ImportService } from './import-service.js';
 import { ExportService } from './export-service.js';
+import { installPassphraseUI } from './passphrase-ui.js';
+import { installIdentityChip, getIdentity, onIdentityChange } from './user-identity.js';
+import { LivePresence } from './live-presence.js';
+import { mergersFor } from './builtin-mergers.js';
 import { OutputExportService } from './output-export.js';
 import { ComputeRecode } from './compute-recode.js';
 import { DatasetOps } from './dataset-ops.js';
@@ -337,6 +341,7 @@ export async function boot(mounts) {
   // SPSS/Stata/SAS (ReadStat) is a sandboxed codec plugin (builtin-readstat-codec, #130),
   // joining this same Import/Export picker via the codec interface like CSV/Parquet.
   const exporters = new ExportService({ menus, data: datasets, results: results.api, bus });
+  installPassphraseUI(); // register the at-rest passphrase prompt (#144) for export/import/folder
   // Output export: host owns the "Export output…" dialog + the (host-only) print
   // path; formats (HTML, Word, …) are plugins that register via app.outputExporters
   // and read the result model through app.results.getModel.
@@ -569,6 +574,10 @@ export async function boot(mounts) {
     // can tell a recorded-but-uninstalled plugin apart from one it simply has, and
     // carry the former forward across saves (#102).
     pluginIdentities: () => (plugins ? plugins.list().flatMap((p) => [p.key, p.id]).filter(Boolean) : []),
+    // Merger map for sync (#148 6b): core + the ACTIVE builtin plugins' mergers, so a
+    // peer's CAQDAS coding / spatial slots actually MERGE (not clobber) across a shared
+    // folder — and, later, live. Third-party plugin blobs need the sandbox bridge (todo).
+    getMergers: () => mergersFor(plugins ? plugins.list().filter((p) => p.activated).map((p) => p.id).filter(Boolean) : []),
     // A project also remembers each plugin workspace's state blob. After swapping in
     // the new project's blobs, force-remount any live workspace tabs so they re-read
     // their state — a plugin active in both the old and new project stays mounted, so
@@ -609,7 +618,8 @@ export async function boot(mounts) {
         // Record the active analysis/plugin set so a recipient restores the same
         // analyses (and is warned about any they don't have — #102).
         const activePlugins = plugins.list().filter((p) => p.activated);
-        const blob = await exportProjectBundle({ datasets, projectName: name, plugins: activePlugins });
+        const collab = projects.collabIdentity?.(); // #148 — bundle carries the room identity
+        const blob = await exportProjectBundle({ datasets, projectName: name, plugins: activePlugins, collab });
         downloadBlob(blob, `${slug(name) || 'crosstab-project'}.crosstab`);
         results.api.appendText(`Exported **${name}** as a .crosstab bundle (${(blob.size / 1048576).toFixed(1)} MB).`);
       } catch (err) {
@@ -776,7 +786,9 @@ export async function boot(mounts) {
     menus.register({
       id: 'core:debug-toggle',
       path: ['Edit', 'Debugging'],
-      label: isDebug() ? '● Logging on' : '○ Logging off',
+      // Checkbox idiom: the glyph reflects the CURRENT state (☑ on / ☐ off) and
+      // clicking toggles it — so it's unambiguously a stateful toggle, not an action.
+      label: (isDebug() ? '☑' : '☐') + ' Debug logging',
       order: 10,
       command: () => { setDebug(!isDebug()); registerDebugToggle(); },
     });
@@ -811,7 +823,11 @@ export async function boot(mounts) {
   engine.launcher = launcher;
   const launchFlag = new URLSearchParams(location.search).get('launch');
   let bypassed = false;
-  if (launchFlag) {
+  if (launchFlag === 'open-folder') {
+    // The double-click shortcuts we drop into a folder project (#143) deep-link
+    // here: show a focused "Open shared folder" landing instead of the full picker.
+    try { await launcher.openFolderLanding(); bypassed = true; } catch (err) { console.warn('Open-folder landing failed', err); }
+  } else if (launchFlag) {
     try {
       // `?launch=` accepts a preset (start-blank/demo-quant/demo-qual) or, failing
       // that, a saved project name — opening it (data + its plugins) headless.
@@ -829,6 +845,151 @@ export async function boot(mounts) {
     brand.style.cursor = 'pointer';
     brand.title = 'Open the launcher / plugin picker';
     brand.addEventListener('click', () => void launcher.open({ reopen: true }));
+  }
+
+  // Your identity self-chip in the top bar (#148) — shows your initials, click to edit.
+  installIdentityChip(document.querySelector('header'));
+
+  // Live presence (#148 step 5): a "Go live" toggle (only for shareable/folder projects)
+  // + peer chips showing who else is in the room. Explicit opt-in — joining the public
+  // broker is a deliberate act. Presence carries only the identity beacon, never data.
+  const headerEl = document.querySelector('header');
+  if (headerEl) {
+    const peersEl = document.createElement('div');
+    peersEl.className = 'ct-peers';
+    const goLiveBtn = document.createElement('button');
+    goLiveBtn.type = 'button';
+    goLiveBtn.className = 'ct-golive';
+    goLiveBtn.hidden = true;
+    // "Co-author with X" offer (#148 step 6): appears when a peer is present but we're
+    // not yet live-syncing data. One click elevates presence → live co-authoring.
+    const offerBtn = document.createElement('button');
+    offerBtn.type = 'button';
+    offerBtn.className = 'ct-golive ct-coauthor';
+    offerBtn.hidden = true;
+    headerEl.append(peersEl, offerBtn, goLiveBtn);
+
+    let roster = []; // last presence roster (others)
+    const render = () => {
+      // peer chips
+      peersEl.replaceChildren();
+      for (const p of roster) {
+        const chip = document.createElement('span');
+        chip.className = 'ct-peerchip';
+        chip.textContent = p.initials || '·';
+        chip.style.background = p.color || '#8a94a0';
+        chip.title = p.name || p.initials || 'Someone editing';
+        peersEl.append(chip);
+      }
+      // Go-live toggle (presence)
+      goLiveBtn.hidden = !projects.collabReady && !presence.live;
+      goLiveBtn.textContent = presence.live ? '● Live' : 'Go live';
+      goLiveBtn.classList.toggle('is-live', presence.live);
+      goLiveBtn.title = presence.live
+        ? 'You’re sharing presence in this project’s room — click to stop'
+        : 'Show who else is editing (joins this project’s live room)';
+      // Co-author offer / status
+      const co = projects.coauthoring;
+      const canOffer = roster.length > 0 && presence.live && !co;
+      offerBtn.hidden = !canOffer && !co;
+      if (co) {
+        // Co-authoring is opt-in per peer, not a request/approve handshake: clicking
+        // starts OUR side. Show "waiting" until a peer actually joins the doc, so it
+        // doesn't imply the other person is synced before they've clicked.
+        const joined = projects.coauthorPeerCount > 0;
+        offerBtn.textContent = joined ? '● Co-authoring' : 'Waiting for collaborator…';
+        offerBtn.classList.toggle('is-live', joined);
+        offerBtn.title = joined
+          ? 'Live co-authoring — edits sync in real time. Click to stop.'
+          : 'You’re ready to co-author; waiting for someone else to start too. Click to stop.';
+      } else if (canOffer) {
+        const who = roster.map((p) => p.name || p.initials).filter(Boolean).join(', ') || 'collaborator';
+        offerBtn.textContent = `Co-author with ${who}`;
+        offerBtn.classList.remove('is-live');
+        offerBtn.title = 'Start live co-authoring — your edits and theirs sync in real time.';
+      }
+      debug('live', 'render', { roster: roster.length, live: presence.live, co: projects.coauthoring, offerHidden: offerBtn.hidden });
+    };
+    // Defensive: never show yourself as a peer (drop any roster entry with your own
+    // authorId — a self-echo from the relay). Real peers have distinct authorIds.
+    const presence = new LivePresence({ onRoster: (r) => { const me = getIdentity().authorId; roster = (r || []).filter((p) => p.authorId !== me); render(); } });
+    engine.presence = presence;
+
+    // Join the current project's room, broadcasting this user's identity beacon.
+    const startLive = async () => {
+      const room = await projects.activeRoom();
+      debug('live', 'startLive', { hasRoom: !!room, collabReady: projects.collabReady });
+      if (!room) return false; // not saved yet → no room
+      const id = getIdentity();
+      await presence.start({
+        roomId: room.roomId,
+        secret: room.secret,
+        self: { authorId: id.authorId, initials: id.initials, name: id.name, color: id.color, since: Date.now() },
+      });
+      return true;
+    };
+    // Fully leave: stop data co-authoring first, then presence.
+    const stopLive = async () => { projects.stopCoauthoring(); await presence.stop(); };
+
+    // Auto-join when the user opted in ("auto-check for live collaborators"), the project
+    // is shareable, and we're online. The setting IS the air-gap/privacy control; being
+    // offline just skips it silently (the broker is unreachable anyway).
+    let autoStarting = false;
+    const maybeAutoLive = async () => {
+      if (!getIdentity().autoLive || presence.live || autoStarting || !projects.collabReady || !navigator.onLine) return;
+      autoStarting = true;
+      try { await startLive(); } catch { /* offline / broker unreachable — stay silent */ } finally { autoStarting = false; render(); }
+    };
+
+    goLiveBtn.addEventListener('click', async () => {
+      debug('live', 'goLive CLICK', { live: presence.live });
+      goLiveBtn.disabled = true;
+      try {
+        if (presence.live) await stopLive();
+        else if (!(await startLive())) engine.results?.appendError?.('This project isn’t shareable yet — save it first.');
+      } catch (err) {
+        engine.results?.appendError?.(`Live presence failed: ${err.message}`);
+      } finally {
+        goLiveBtn.disabled = false;
+        render();
+      }
+    });
+
+    offerBtn.addEventListener('click', async () => {
+      debug('live', 'offer CLICK', { co: projects.coauthoring, live: presence.live, hasSession: !!presence.session, roster: roster.length });
+      offerBtn.disabled = true;
+      try {
+        if (projects.coauthoring) projects.stopCoauthoring();
+        else if (presence.session) await projects.startCoauthoring(presence.session);
+      } catch (err) {
+        engine.results?.appendError?.(`Live co-authoring failed: ${err.message}`);
+      } finally {
+        offerBtn.disabled = false;
+        render();
+      }
+    });
+
+    // PROJECT_CHANGED fires on EVERY project emit (save status, co-author start/stop),
+    // not just a real switch — so only tear down presence when the project actually
+    // CHANGED (compare projectKey). Otherwise startCoauthoring's own emit would trip
+    // the handler and immediately stop itself (the "co-author button bounces" storm).
+    let lastProjectKey = projects.projectKey;
+    bus.on(PROJECT_CHANGED, async () => {
+      const key = projects.projectKey;
+      if (key !== lastProjectKey) {
+        lastProjectKey = key;
+        if (presence.live) await stopLive(); // left/switched project → leave its room
+        roster = [];
+        render();
+        void maybeAutoLive(); // auto-join the newly-opened project if opted in
+      } else {
+        render(); // same project, just a status/co-author re-emit → refresh UI only
+      }
+    });
+    // Toggling "auto-check" on goes live for the current project right away.
+    onIdentityChange(() => { render(); void maybeAutoLive(); });
+    render();
+    void maybeAutoLive(); // the project open at boot
   }
 
   // Boot done: from the next change on, an unsaved session auto-starts an
@@ -1159,6 +1320,15 @@ class ProjectSidebar {
     } catch {
       /* OPFS unavailable */
     }
+    let folderProjects = [];
+    try {
+      folderProjects = (await this.projects.listFolderProjects?.()) ?? [];
+      // Exclude the open folder — it's shown in the active-project zone, not "other".
+      const activeFolderId = this.projects.activeFolderId;
+      if (activeFolderId) folderProjects = folderProjects.filter((f) => f.id !== activeFolderId);
+    } catch {
+      /* no remembered folders */
+    }
     try {
       blocks = await this.library.list();
     } catch {
@@ -1197,7 +1367,7 @@ class ProjectSidebar {
     this.host.replaceChildren();
     this.host.append(this.#projectZone(blockVer));
     if (binned.length) this.host.append(this.#recycleZone(binned));
-    this.host.append(this.#projectsZone(otherProjects));
+    this.host.append(this.#projectsZone(otherProjects, folderProjects));
     this.host.append(this.#blocksZone(blocks));
   }
 
@@ -1480,10 +1650,10 @@ class ProjectSidebar {
 
   // --- zone 2: other saved projects ------------------------------------------
 
-  #projectsZone(projects) {
+  #projectsZone(projects, folderProjects = []) {
     const frag = document.createDocumentFragment();
     frag.append(el('div', 'Projects', 'proj__sub proj__sub--zone'));
-    if (projects.length === 0) {
+    if (projects.length === 0 && folderProjects.length === 0) {
       frag.append(el('div', 'No other saved projects.', 'proj__empty'));
       return frag;
     }
@@ -1508,6 +1678,22 @@ class ProjectSidebar {
         void this.projects.deleteProject(p.id);
       }, 'proj__ds-x');
       li.append(name, edit, del);
+      list.append(li);
+    }
+    // Remembered folder projects (#143) — external folders (OneDrive/Dropbox/local),
+    // first-class alongside in-browser projects. Click reopens (a permission re-grant
+    // happens on the click); ✕ forgets the entry (leaves the folder's files intact).
+    for (const f of folderProjects) {
+      const li = document.createElement('li');
+      li.className = 'proj__ds proj__ds--folder';
+      li.title = `Reopen folder project: ${f.name}`;
+      li.addEventListener('click', () => void this.projects.reopenFolder(f.handle));
+      const name = el('span', `📁 ${f.name}`, 'proj__ds-name');
+      const forget = iconBtn('✕', 'Forget this folder (keeps its files)', (e) => {
+        e.stopPropagation();
+        void this.projects.forgetFolderProject(f.id);
+      }, 'proj__ds-x');
+      li.append(name, forget);
       list.append(li);
     }
     frag.append(list);

@@ -394,6 +394,20 @@
       .ct-dialog::backdrop { background: rgba(0,0,0,.35); }
       .ct-dialog--wide { max-width: 640px; }
 
+      /* sync-conflict resolver: roomier, and each choice on its own line */
+      .ct-conflict-dialog { max-width: 560px; }
+      .ct-conflict { margin: 0 0 14px; }
+      .ct-conflict:last-of-type { margin-bottom: 0; }
+      .ct-conflict__head { font-weight: 600; margin: 0 0 8px; }
+      .ct-conflict__opts { display: flex; flex-direction: column; gap: 6px; }
+      .ct-conflict__opt {
+        display: flex; align-items: flex-start; gap: 8px; padding: 7px 9px;
+        border: 1px solid var(--line); border-radius: 6px; cursor: pointer;
+      }
+      .ct-conflict__opt:hover { background: #f4f8fc; }
+      .ct-conflict__opt:has(input:checked) { border-color: var(--accent); background: #eef5fb; }
+      .ct-conflict__opt input { margin-top: 3px; flex: none; }
+
       /* join review dialog */
       .ct-join__keys { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
       .ct-join__keys select { font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; }

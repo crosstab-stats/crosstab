@@ -75,6 +75,11 @@ export const manifest = {
   workspaces: [{
     id: 'caqdas-coding',
     title: 'Coding',
+    // Collaboration merge (#143): this workspace's blob is a *composite* (codebook
+    // + coded segments + config), so it can't use a single built-in strategy —
+    // it declares a custom merger, the module's `mergeState` export. The host
+    // resolves `via` → the named export and calls it with the merge helpers.
+    merge: { via: 'mergeState' },
     verbs: [
       { id: 'import-qdpx', label: 'REFI-QDA / QDPX project (.qdpx)…', run: 'parseQdpx', category: 'import', needsFile: { extensions: ['.qdpx'] }, group: 'Qualitative' },
       { id: 'export-qdpx', label: 'REFI-QDA / QDPX project (.qdpx)…', run: 'exportQdpx', category: 'export', group: 'Qualitative' },
@@ -124,7 +129,7 @@ const STYLES = `
 .caqdas__code .x { cursor: pointer; color: #b04a4a; border: 0; background: none; font: inherit; padding: 0 4px; }
 .caqdas__newcode { display: flex; gap: 6px; padding: 8px 6px; }
 .caqdas__newcode input { flex: 1; min-width: 0; font: inherit; padding: 5px 8px; border: 1px solid #ccd2d8; border-radius: 6px; }
-.caqdas__menu { position: absolute; z-index: 20; background: #fff; border: 1px solid #ccd2d8; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 6px; min-width: 180px; max-height: 260px; overflow: auto; }
+.caqdas__menu { position: absolute; z-index: 20; background: #fff; border: 1px solid #ccd2d8; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 6px; min-width: 270px; max-width: 340px; max-height: 340px; overflow: auto; }
 .caqdas__menu button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: none; font: inherit; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
 .caqdas__menu button:hover { background: #eef5fb; }
 .caqdas__menu .row { display: flex; gap: 6px; padding: 6px 4px 2px; border-top: 1px solid #eef0f2; margin-top: 4px; }
@@ -150,6 +155,21 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 .caqdas__segrm { border: 0; background: none; font: inherit; color: #b04a4a; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
 .caqdas__segrm:hover { background: #fbeaea; }
 .caqdas__segmemo { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; padding: 6px 8px; border: 1px solid #ccd2d8; border-radius: 6px; resize: vertical; margin: 0 0 6px; }
+/* memo/annotation thread (#148) */
+.caqdas__thread { display: flex; flex-direction: column; gap: 6px; margin: 0 0 8px; min-width: 0; }
+.caqdas__notes { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto; overflow-x: hidden; }
+.caqdas__notesempty { font-size: 12px; color: #99a1ab; font-style: italic; }
+.caqdas__note { background: #f6f8fa; border: 1px solid #e3e8ee; border-radius: 6px; padding: 5px 7px; min-width: 0; }
+.caqdas__note--legacy { background: #fbfaf3; }
+.caqdas__noterow { display: flex; align-items: center; gap: 6px; margin: 0 0 3px; min-width: 0; }
+.caqdas__notechip { flex: none; width: 18px; height: 18px; border-radius: 50%; color: #fff; font-size: 9px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+.caqdas__notewho { font-size: 11px; font-weight: 600; color: #41505e; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.caqdas__notemeta { font-size: 10.5px; color: #9aa3ab; font-style: italic; margin: 0 0 2px; }
+.caqdas__notedel { flex: none; border: 0; background: none; color: #b04a4a; cursor: pointer; font-size: 11px; padding: 0 2px; }
+.caqdas__notebody { font-size: 12px; color: #2c3742; white-space: pre-wrap; word-break: break-word; }
+.caqdas__noteadd { display: flex; flex-direction: column; gap: 4px; }
+.caqdas__noteinput { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; padding: 6px 8px; border: 1px solid #ccd2d8; border-radius: 6px; resize: vertical; }
+.caqdas__noteadd .caqdas__btn { align-self: flex-end; font-size: 12px; padding: 3px 10px; }
 /* --- media (image) coding --- */
 .caqdas__imgwrap { position: relative; display: inline-block; max-width: 100%; margin: 0 auto; line-height: 0; }
 .caqdas__img { display: block; max-width: 100%; max-height: calc(100vh - 220px); user-select: none; -webkit-user-select: none; }
@@ -214,6 +234,23 @@ export const workspace = {
     // --- state ---------------------------------------------------------------
     const raw = await app.state.get();
     const state = normalize(raw);
+    // Who's coding (#148): stamp each code/segment THIS user creates with an identity
+    // snapshot, so a team can run inter-coder reliability (κ/α). Self-asserted; the
+    // authorId is always present even before a name is set. Imported codings (resolved
+    // from a QDPX) are left unstamped — they aren't this user's work.
+    let me = null;
+    try { me = await app.identity?.get?.(); } catch { /* identity is optional */ }
+    // Stamp a stable id + the author. The id makes each coder's application a DISTINCT
+    // record so two coders coding the same passage don't collapse under the add-wins
+    // merge (which would silently discard one and defeat inter-coder reliability) — and
+    // it gives a memo (#148 step 3) a durable anchor. Agreement is a DERIVED view over
+    // these per-coder records, not a storage-level coalescing. id is added even when no
+    // identity is set (authorId still distinguishes coders); a code keeps its own id.
+    const authored = (o) => {
+      const r = { id: o.id || uid(), ...o };
+      if (me) r.author = me;
+      return r;
+    };
     let docs = []; // [{ rid, text }]
     let activeRid = null;
     let activeCodeId = null; // armed code for "paint mode" (session-only, not saved)
@@ -257,6 +294,71 @@ export const workspace = {
     }
     root.textContent = '';
     const el = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
+
+    // --- memos / annotation threads (#148 step 3) ----------------------------
+    // Flat, chronological, author-stamped notes anchored to a segment or code by id.
+    // Separate add-wins collection (state.memos) so faculty + student can both annotate
+    // the same coding without clobbering. Replaces the old single inline `memo` string
+    // (any legacy value shows as a read-only "earlier note").
+    const memosFor = (anchorId) =>
+      (state.memos || (state.memos = [])).filter((n) => n.anchorId === anchorId).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    const hasNotes = (obj) => !!(obj && ((typeof obj.memo === 'string' && obj.memo.trim()) || (obj.id && memosFor(obj.id).length)));
+    // Ensure an anchor has a stable id (legacy segments predate ids) so a note can point
+    // at it; a fresh id here is a rare one-off for old data.
+    const anchorIdOf = (obj) => { if (!obj.id) { obj.id = uid(); save(); } return obj.id; };
+    const addMemo = (anchorKind, anchorId, text) => {
+      const t = String(text || '').trim();
+      if (!t) return;
+      (state.memos || (state.memos = [])).push({ id: uid(), anchorKind, anchorId, text: t, ...(me ? { author: me } : {}), createdAt: Date.now() });
+      save();
+    };
+    const deleteMemo = (id) => { state.memos = (state.memos || []).filter((n) => n.id !== id); save(); };
+
+    /** Build a notes-thread panel for one anchor (a segment or code): a chronological,
+     * author-stamped list + an add-note box. `onChange` refreshes any has-note markers. */
+    function renderThread(anchorKind, anchorObj, onChange) {
+      const anchorId = anchorIdOf(anchorObj);
+      const wrap = el('div', 'caqdas__thread');
+      const list = el('div', 'caqdas__notes');
+      const rebuild = () => {
+        list.replaceChildren();
+        const legacy = typeof anchorObj.memo === 'string' && anchorObj.memo.trim();
+        if (legacy) {
+          const n = el('div', 'caqdas__note caqdas__note--legacy');
+          const meta = el('div', 'caqdas__notemeta'); meta.textContent = 'earlier note';
+          const body = el('div', 'caqdas__notebody'); body.textContent = anchorObj.memo;
+          n.append(meta, body); list.append(n);
+        }
+        for (const note of memosFor(anchorId)) {
+          const a = note.author || {};
+          const n = el('div', 'caqdas__note');
+          const row = el('div', 'caqdas__noterow');
+          const chip = el('span', 'caqdas__notechip'); chip.textContent = a.initials || '·';
+          chip.style.background = a.color || '#8a94a0'; chip.title = a.name || a.initials || 'Unknown';
+          const who = el('span', 'caqdas__notewho'); who.textContent = a.name || a.initials || 'Unknown';
+          row.append(chip, who);
+          if (me && a.authorId === me.authorId) {
+            const del = el('button', 'caqdas__notedel'); del.textContent = '✕'; del.title = 'Delete your note';
+            del.addEventListener('click', (e) => { e.stopPropagation(); deleteMemo(note.id); rebuild(); onChange?.(); });
+            row.append(del);
+          }
+          const body = el('div', 'caqdas__notebody'); body.textContent = note.text;
+          n.append(row, body); list.append(n);
+        }
+        if (!list.children.length) { const e0 = el('div', 'caqdas__notesempty'); e0.textContent = 'No notes yet.'; list.append(e0); }
+      };
+      rebuild();
+      const addRow = el('div', 'caqdas__noteadd');
+      const ta = el('textarea', 'caqdas__noteinput'); ta.rows = 2; ta.placeholder = 'Add a note…';
+      ta.addEventListener('click', (e) => e.stopPropagation());
+      ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); post(); } });
+      const btn = el('button', 'caqdas__btn'); btn.textContent = 'Add note';
+      const post = () => { if (!ta.value.trim()) return; addMemo(anchorKind, anchorId, ta.value); ta.value = ''; rebuild(); onChange?.(); };
+      btn.addEventListener('click', (e) => { e.stopPropagation(); post(); });
+      addRow.append(ta, btn);
+      wrap.append(list, addRow);
+      return wrap;
+    }
     const wrap = el('div', 'caqdas');
 
     const bar = el('div', 'caqdas__bar');
@@ -418,7 +520,7 @@ export const workspace = {
         const m = el('mark');
         const code = codeById(covering[0].codeId);
         m.style.backgroundColor = code ? code.color : '#eee';
-        const memoed = covering.some((s) => s.memo);
+        const memoed = covering.some((s) => hasNotes(s));
         m.title = covering.map((s) => codeById(s.codeId)?.name + (s.memo ? ` — ${s.memo}` : '')).filter(Boolean).join(', ');
         if (memoed) m.classList.add('has-memo');
         m.textContent = slice;
@@ -684,7 +786,7 @@ export const workspace = {
       for (const s of segs) {
         const code = codeById(s.codeId);
         const color = code ? code.color : '#888';
-        const box = el('div', 'caqdas__region' + (s.memo ? ' has-memo' : ''));
+        const box = el('div', 'caqdas__region' + (hasNotes(s) ? ' has-memo' : ''));
         positionPct(box, s.region);
         box.style.borderColor = color;
         box.style.backgroundColor = hexToRgba(color, 0.18);
@@ -745,12 +847,12 @@ export const workspace = {
 
     /** Record a region-coding segment (the 2-D analogue of {@link addSegment}). */
     function addRegionSegment(codeId, region) {
-      state.segments.push({
+      state.segments.push(authored({
         doc: activeRid,
         codeId,
         region: { x: round4(region.x), y: round4(region.y), w: round4(region.w), h: round4(region.h) },
         text: regionLabel(region), // a human label so retrieve/export/counts work unchanged
-      });
+      }));
       imageSel = null;
       save();
       refreshView();
@@ -794,7 +896,7 @@ export const workspace = {
         lane.append(label);
         const strip = el('div', 'caqdas__lanestrip');
         for (const s of byCode.get(cid)) {
-          const bar = el('div', 'caqdas__lanebar' + (s.memo ? ' has-memo' : '') + (s.keys ? ' is-track' : ''));
+          const bar = el('div', 'caqdas__lanebar' + (hasNotes(s) ? ' has-memo' : '') + (s.keys ? ' is-track' : ''));
           bar.style.left = (s.tStart / dur) * 100 + '%';
           bar.style.width = Math.max(0.4, ((s.tEnd - s.tStart) / dur) * 100) + '%';
           bar.style.backgroundColor = color;
@@ -858,13 +960,13 @@ export const workspace = {
 
     /** Record a time-range coding segment (the time twin of {@link addRegionSegment}). */
     function addTimeSegment(codeId, span) {
-      state.segments.push({
+      state.segments.push(authored({
         doc: activeRid,
         codeId,
         tStart: round3(span.tStart),
         tEnd: round3(span.tEnd),
         text: timeLabel(span.tStart, span.tEnd),
-      });
+      }));
       timeSel = null;
       save();
       refreshView();
@@ -918,11 +1020,11 @@ export const workspace = {
     /** Start a new tracked region for a code at the current time (its first keyframe). */
     function createTrack(codeId, region) {
       const t = round3(currentMediaEl?.currentTime || 0);
-      const seg = {
+      const seg = authored({
         doc: activeRid, codeId,
         keys: [{ t, x: round4(region.x), y: round4(region.y), w: round4(region.w), h: round4(region.h) }],
         tStart: t, tEnd: t, text: timeLabel(t, t),
-      };
+      });
       state.segments.push(seg);
       activeTrack = seg; videoSel = null;
       save();
@@ -1176,7 +1278,7 @@ export const workspace = {
           const ct = el('span', 'ct'); ct.textContent = counts[code.id] || 0;
           const rb = el('button', 'caqdas__iconbtn'); rb.textContent = '🔍'; rb.title = 'Show every passage coded with this';
           rb.addEventListener('click', (e) => { e.stopPropagation(); retrieveCodeId = code.id; renderText(); });
-          const mb = el('button', 'caqdas__iconbtn' + (code.memo ? ' has' : '')); mb.textContent = '✎'; mb.title = 'Memo + theme group (code details)';
+          const mb = el('button', 'caqdas__iconbtn' + (hasNotes(code) ? ' has' : '')); mb.textContent = '✎'; mb.title = 'Notes + theme group (code details)';
           mb.addEventListener('click', (e) => { e.stopPropagation(); memoOpen.has(code.id) ? memoOpen.delete(code.id) : memoOpen.add(code.id); renderCodes(); });
           const pb = el('button', 'pb' + (armed === code.id ? ' is-on' : ''));
           pb.textContent = '🖌';
@@ -1248,9 +1350,8 @@ export const workspace = {
             const gi = el('input', 'caqdas__grpinp'); gi.placeholder = 'theme / group'; gi.value = code.group || '';
             gi.addEventListener('input', () => { code.group = gi.value; save(); });
             gi.addEventListener('blur', renderCodes);
-            const ta = el('textarea', 'caqdas__memo'); ta.rows = 3; ta.placeholder = 'Memo — analytic note on this code…'; ta.value = code.memo || '';
-            ta.addEventListener('input', () => { code.memo = ta.value; save(); });
-            panel.append(gi, ta); codePane.append(panel);
+            panel.append(gi, renderThread('code', code, renderCodes)); // author-stamped notes thread (#148)
+            codePane.append(panel);
           }
         }
       }
@@ -1261,7 +1362,7 @@ export const workspace = {
       const commit = () => {
         const name = inp.value.trim();
         if (!name) return;
-        state.codes.push({ id: uid(), name, color: PALETTE[state.codes.length % PALETTE.length], group: '', memo: '' });
+        state.codes.push(authored({ id: uid(), name, color: PALETTE[state.codes.length % PALETTE.length], group: '', memo: '' }));
         inp.value = ''; save(); renderCodes();
       };
       add.addEventListener('click', commit);
@@ -1313,13 +1414,18 @@ export const workspace = {
         const memos = [];
         for (const s of hits) { lo = Math.min(lo, s.start); hi = Math.max(hi, s.end); if (s.memo) memos.push(s.memo); }
         const doc = docs.find((d) => d.rid === activeRid);
-        const merged = { doc: activeRid, codeId, start: lo, end: hi, text: doc ? doc.text.slice(lo, hi) : span.text };
-        if (memos.length) merged.memo = memos.join('\n'); // keep any per-coding notes
+        const merged = authored({ doc: activeRid, codeId, start: lo, end: hi, text: doc ? doc.text.slice(lo, hi) : span.text });
+        if (memos.length) merged.memo = memos.join('\n'); // keep any legacy inline notes
+        // Re-anchor annotation notes from the absorbed segments onto the merged one (#148).
+        const hitIds = new Set(hits.map((s) => s.id).filter(Boolean));
+        if (hitIds.size && Array.isArray(state.memos)) {
+          for (const n of state.memos) if (hitIds.has(n.anchorId)) n.anchorId = merged.id;
+        }
         state.segments = state.segments.filter((s) => !hits.includes(s));
         state.segments.push(merged);
         save();
       } else {
-        state.segments.push({ doc: activeRid, codeId, start: lo, end: hi, text: span.text });
+        state.segments.push(authored({ doc: activeRid, codeId, start: lo, end: hi, text: span.text }));
         save();
       }
       renderText(); renderDocList(); renderCodes();
@@ -1379,7 +1485,7 @@ export const workspace = {
       const mk = () => {
         const name = inp.value.trim();
         if (!name) return;
-        const code = { id: uid(), name, color: PALETTE[state.codes.length % PALETTE.length], group: '', memo: '' };
+        const code = authored({ id: uid(), name, color: PALETTE[state.codes.length % PALETTE.length], group: '', memo: '' });
         state.codes.push(code); choose(code.id);
       };
       inp.addEventListener('click', (e) => e.stopPropagation());
@@ -1412,10 +1518,7 @@ export const workspace = {
           save(); closeMenu(); refreshView();
         });
         head.append(sw, nm, rm); menu.append(head);
-        const ta = el('textarea', 'caqdas__segmemo'); ta.rows = 2; ta.placeholder = 'Memo on this coding…'; ta.value = seg.memo || '';
-        ta.addEventListener('click', (e) => e.stopPropagation());
-        ta.addEventListener('input', () => { seg.memo = ta.value; save(); });
-        menu.append(ta);
+        menu.append(renderThread('segment', seg, refreshView)); // author-stamped notes thread (#148)
       }
       menu.style.left = Math.round(evt.clientX) + 'px';
       menu.style.top = Math.round(evt.clientY + 4) + 'px';
@@ -1705,6 +1808,68 @@ function themedCloudSvg(themes, W, H) {
 }
 
 /** Coerce a loaded/empty blob into the working shape. */
+/**
+ * Collaboration merge for the CAQDAS coding blob (#143). The blob is a *composite*
+ * of independent collections that each merge differently, so this is a custom
+ * merger (declared `merge: { via: 'mergeState' }`) rather than one built-in
+ * strategy — exactly the case the "owner defines merge" design exists for.
+ *
+ *  - **codes** — add-wins by stable code id (two coders' new codes both survive;
+ *    a concurrent delete loses to a keep); same code edited two ways → surfaced.
+ *  - **segments** — add-wins by the passage's natural key `doc|codeId|span`, so
+ *    two people coding the *same* passage under the same code converge, and coding
+ *    *different* passages both stick. Coded segments have no stored id, and this is
+ *    the right identity anyway (it makes re-coding the same span idempotent).
+ *  - **config** (text/label column) — last-writer-wins, conflict if truly divergent.
+ *
+ * Pure: receives the merge helpers, imports nothing (headlessly testable). Writes
+ * only this plugin's own blob — the integrity envelope (#145/#146) that makes a
+ * plugin-defined merger safe.
+ *
+ * @param {{ancestor:object, mine:object, theirs:object, helpers:object}} arg
+ * @returns {{resolved:object, conflicts:object[]}}
+ */
+export function mergeState({ ancestor, mine, theirs, helpers }) {
+  const a = normalize(ancestor);
+  const m = normalize(mine);
+  const t = normalize(theirs);
+  const OWNER = 'builtin-caqdas';
+  const conflicts = [];
+
+  const codes = helpers.addWinsSet(a.codes, m.codes, t.codes, (c) => c.id, OWNER);
+  // Prefer the stable per-application id (#148): each coder's coding is its own record,
+  // so two coders on the same passage stay DISTINCT (inter-coder reliability needs to
+  // see both). Legacy/imported segments have no id → fall back to the content key.
+  const segKey = (s) =>
+    s.id ||
+    `${s.doc}|${s.codeId}|${s.start ?? ''}|${s.end ?? ''}|${s.tStart ?? ''}|${s.tEnd ?? ''}|${s.region ? helpers.stableStringify(s.region) : ''}`;
+  const segments = helpers.addWinsSet(a.segments, m.segments, t.segments, segKey, OWNER);
+  // Memos/annotations (#148 step 3) are their OWN add-wins collection keyed by memo id,
+  // each referencing its anchor (a segment or code) by id — so two people annotating the
+  // SAME coding produce two distinct records that BOTH survive (the office-hours case),
+  // rather than one clobbering the other if memos were nested inside the segment.
+  const memos = helpers.addWinsSet(a.memos, m.memos, t.memos, (n) => n.id, OWNER);
+  conflicts.push(...codes.conflicts, ...segments.conflicts, ...memos.conflicts);
+
+  const cfg = (key) => {
+    const r = helpers.lww(a[key], { value: m[key] }, { value: t[key] }, OWNER, key);
+    conflicts.push(...r.conflicts);
+    return r.resolved;
+  };
+
+  return {
+    resolved: {
+      version: 1,
+      textColumn: cfg('textColumn'),
+      labelColumn: cfg('labelColumn'),
+      codes: codes.resolved,
+      segments: segments.resolved,
+      memos: memos.resolved,
+    },
+    conflicts,
+  };
+}
+
 function normalize(raw) {
   const s = raw && typeof raw === 'object' ? raw : {};
   return {
@@ -1716,6 +1881,11 @@ function normalize(raw) {
       : [],
     segments: Array.isArray(s.segments)
       ? s.segments.filter((x) => x && x.doc && x.codeId).map((x) => ({ ...x, memo: typeof x.memo === 'string' ? x.memo : '' }))
+      : [],
+    // Memos/annotations (#148 step 3): first-class records anchored to a segment/code by
+    // id. Keep only well-formed ones (id + anchorId + text) so the add-wins merge has a key.
+    memos: Array.isArray(s.memos)
+      ? s.memos.filter((n) => n && n.id && n.anchorId && typeof n.text === 'string').map((n) => ({ ...n }))
       : [],
     // A just-imported QDPX project stashes codings keyed by row index here; the mount
     // resolves them to row-ids once docs are loaded, then clears it (#139).

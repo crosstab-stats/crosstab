@@ -148,6 +148,38 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - [ ] **Building-block eligibility** — a slot can be saved as a reusable
     building block (pending building-block contract expansion).
 
+- [ ] **Undoable plugin actions — let plugins add actions to the history where
+      appropriate.** Today the core transform op-log (`data-store.js #log`) is fully
+      undoable/redoable, but **plugin actions are not** — e.g. CAQDAS "mark this
+      passage with a code" writes straight to the workspace blob via a debounced
+      `app.state.set()` (`builtin-caqdas` ~L245), so it never enters the undo stack.
+      A coder can't Ctrl-Z a mis-code, and the History/do-file panel doesn't show
+      qualitative work at all. Want plugin actions to participate in history where it
+      makes sense. **DECISION (2026, deferred to when we tackle it): option 3 — the
+      "principled fix" — plugin actions join the MAIN core history/op-log (the first
+      shape below), NOT a separate per-plugin undo stack.** Chosen so there's ONE undo
+      timeline and plugin ops get op-identity + merge treatment for free (composes with
+      #143/#148). Confirmed while building #148 memos: notes + all CAQDAS coding write to
+      the workspace blob and so escape Edit▸Undo — the concrete driver for this. Kept as a
+      tracked gap; not scheduled yet.
+  - *[DECIDED] Plugins add each action to the **main** history* — one unified undo timeline the
+    user already knows; the action shows in the History panel alongside recodes; and
+    it would **compose with the collaboration work** (#143) — a logged action gets a
+    stable op id + merge treatment for free, instead of the whole blob merging as one
+    opaque unit. Cost: the op-log is currently a *tabular* pipeline (`rederive`
+    replays it into DuckDB); plugin ops would need to be replayable no-ops on the data
+    side that instead re-drive the owning plugin's state, i.e. the log stops being
+    purely tabular.
+  - *Plugins maintain their **own** history* — a per-plugin undo stack the workspace
+    owns; simpler blast radius, no changes to `rederive`, but a second undo model the
+    user has to understand (whose Ctrl-Z am I in?) and it doesn't unify with the main
+    timeline or the merge op-log.
+  - *Open questions:* granularity (every keystroke vs. per-coding-action); does a
+    global Ctrl-Z reach into whichever surface is focused; how it interacts with the
+    debounced blob-save; and whether the add-wins merge already makes fine-grained
+    coding-op identity worthwhile. Ties to [[dofile-editor]], [[plugin-verb-declaration]],
+    and the op-identity work in [[collab-merge-kernel]].
+
 - [x] **Build and prove the DuckDB-WASM data engine — FOUNDATIONAL — DONE.**
       *Core engine wired in and live (desktop Chrome):* `core/duckdb-manager.js`
       owns the runtime; `core/data-store.js` is now a facade over a DuckDB table
@@ -393,7 +425,33 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       once" — are really *one* build wearing two hats. **The load-bearing piece is
       neither OneDrive nor WebRTC; it's making the op-log mergeable.** Live-sync and
       folder-sync are just two *transports* over that foundation.
-  - **The foundation — a mergeable op-log (the real project).** The transform log
+  - **The foundation — a mergeable op-log (the real project). [~] STARTED** —
+    `core/merge.js` + op identity in `core/data-store.js` shipped on branch
+    `feat/collab-merge-kernel`, 13 headless tests (`npm test`). Done so far:
+    (1) every `#log` op carries a **stable id** (deterministic content+index id for
+    pre-collab legacy saves so they stay mergeable; random for new ops), persisted
+    in export/restore, undo/redo-safe; (2) the pure merge kernel — `threeWayLog`
+    (core tabular class), `addWinsSet` (CAQDAS codebook), `lww` (spatial slot bytes),
+    and `mergeProject()` which **dispatches each state class to its owner's declared
+    merger** and aggregates conflicts across tiers. **Key architecture decision (from
+    design chat): the engine coordinates, the *owner* defines "merge"** — a plugin
+    declares `manifest.merge = { strategy }` or exports a `merge()` fn; core is just
+    the owner of the tabular class (so its three-way merge isn't a kernel exception).
+    The #145/#146 integrity model contains an untrusted merger to its own blob, which
+    is what makes delegating merge *meaning* safe.
+    **CAQDAS + spatial builtins now declare their merge** (commit be8200a): caqdas
+    exports a custom `mergeState` (composite blob — `merge:{via:'mergeState'}`,
+    codes/segments add-wins + config LWW; the "two coders on the same transcripts"
+    Dedoose case is a passing test); spatial declares `merge:{strategy:'lww'}` per
+    slot (add-wins slot set + LWW bytes). 19 headless tests, all green, incl. the
+    real caqdas merger imported from the plugin. *Still open:* stored common-
+    ancestor marker (a transport concern — the merge fn takes ancestor as an arg
+    today); wiring `mergeProject` into a real transport (incl. the tiny glue that
+    resolves a manifest `merge.via` string → the module's exported fn); dependency-
+    aware op ordering (MVP appends mine-adds then theirs-adds); the host conflict-
+    resolution UI; **in-browser check of the op-id persistence path** (syntax-checked
+    only — DuckDB path can't run headlessly). See [[collab-merge-kernel]].
+    The transform log
     (`core/data-store.js`, op types at ~L149–153: `load/append/join/setVariable/
     setCell/computeVar/recodeVar`) is a **dependent pipeline**, not a bag of
     commuting changes — each op folds onto the accumulated result of the prior ones
@@ -420,8 +478,69 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       and record a **common ancestor** (last op both sides agreed on). Then folder =
       three-way merge of two divergent files; live = the *same* three-way merge run
       continuously. Same algorithm, different clock.
-  - **Async transport — folder-backed projects (FSA, small once the foundation
-    exists).** `core/project-store.js` is *already* written entirely against
+  - **Async transport — folder-backed projects (FSA). [x] DONE + VERIFIED LIVE**
+    (branch `feat/collab-merge-kernel`). Shipped end-to-end and confirmed with **two
+    real Chrome windows co-editing a shared local folder**: File ▸ Move project to a
+    folder… / Open project from a folder… / Close project folder; one-gate passphrase
+    (set for a fresh folder, enter for an encrypted one); autosaves route through the
+    merge-aware `syncFolderProject`; a 3s poll pulls peer writes (backs off when
+    hidden); conflicts via `showConflictDialog`. On-disk everything is ciphertext bar
+    the plaintext salt/verifier. Bidirectional variable-recode merge, **step-reorder
+    merge**, rapid-edit debouncing, and idle quiescence all verified. Four real bugs
+    that live-testing caught (headless tests had missed) were fixed + regression-tested:
+    write-storm (undefined-key JSON asymmetry), two-window ping-pong (canonical operand
+    order), clobber/"A owns it" (per-peer base, not a shared `project.base.json`), and
+    reorder-not-synced (three-way-merge the step order). 93 headless tests.
+    *Remaining (NOT folder-sync):* recipient import-side decrypt of a `.enc` export;
+    live P2P 2-machine test + invite/presence UI; OPFS opt-in toggle + settings;
+    chunked-Parquet crypto. Original foundation notes kept below.
+  - **Async transport — folder-backed projects — foundation notes.** Commit 7e8cdb8. Done: the FSA **seam** —
+    `ProjectStore.useDirectory(handle)`/`folderBacked`, `#root()` now parameterized
+    around an injected picked-folder handle (falls back to OPFS); op `id` threaded
+    through source save/load; `readManifest()` (cheap stat+parse for change-detection
+    / reading "theirs"), `readBase()`/`writeBase()` (the `project.base.json`
+    common-ancestor snapshot). Plus **`core/collab-sync.js`** — the project-level
+    three-way merge (`mergeManifests`): per-dataset op-log three-way (add-wins the
+    dataset *set* — never drop data), owner-dispatched workspace-leaf merge,
+    `buildMergers` resolving each plugin's `merge` (strategy or `via`→exported fn),
+    one aggregated dataset-tagged conflict list. 9 headless tests (28 total).
+    **Orchestration + handle-persist now DONE too** (commits fd66f7d, 90fd138):
+    `core/folder-sync.js` — `decideSync` (seed/in-sync/push/merge) + `syncOnce`
+    (read theirs+base → decide → write manifest+base); `ProjectStore.writeManifest`
+    with atomic temp+`move()` rename (`#writeAtomic`, torn-read-safe);
+    `core/folder-handle.js` — IndexedDB persist of the picked dir handle +
+    `ensureReadWrite`. **34 headless tests + VERIFIED IN-BROWSER** against real OPFS
+    File System Access I/O (OPFS dir as a stand-in shared folder): a peer's on-disk
+    edits + local edits three-way merge (dataset op-log + caqdas codebook via the
+    real `mergeState`), 0 conflicts on disjoint edits, atomic write leaves no `.tmp`,
+    base updated to merged; dir handle round-trips IndexedDB as a live handle. Op-id
+    persistence path also verified end-to-end through real DuckDB.
+    **Conflict resolution now DONE too** (commit 4c22509): merge is a pure function
+    of user choices — every conflict carries a stable key, and feeding a `resolutions`
+    map (key→mine/theirs/both) back re-runs deterministically to 0 conflicts (threaded
+    through the whole kernel + `mergeManifests` + `syncOnce`, which withholds the write
+    until conflicts are resolved). `core/conflict-ui.js` renders the "keep yours /
+    theirs / both" modal. Resolution even reaches *inside* the caqdas custom merger
+    with no plugin change (resolveMerger pre-binds the ctx into its helpers). 40
+    headless tests; VERIFIED IN-BROWSER (2 conflicts → form → flip → re-merge → clean).
+    **The full app sync flow is now DONE too** (commit feaf9c1): `syncFolderProject`
+    — land my Parquet (`writeSourcesOnly`), build my manifest (`buildManifest`,
+    extracted from `save()` so save & sync never drift), read peer+base, merge,
+    resolve via a callback, write merged+base atomically, reload only when a peer
+    contributed. 44 headless tests; VERIFIED IN-BROWSER against real OPFS (peer+I
+    edit income → conflict → resolve → merged reloads). So the **entire reusable
+    engine** — kernel → clients → project merge → folder sync → conflict UI → app
+    flow — is built, tested, and in-browser-verified.
+    *Genuinely all that's left is the "clickable" layer, and ALL of it needs a MANUAL
+    folder pick to verify (`showDirectoryPicker` is an OS dialog CDP can't drive) — so
+    it's a LOCAL-session job:* (1) the File-menu **"Open folder…"** button
+    (`showDirectoryPicker` → `useDirectory` + `saveFolderHandle` → save/load there);
+    (2) **hook `project-sync.js`** to route folder-mode saves through `syncFolderProject`
+    (bundle from `#snapshot`, `resolveConflicts` = `showConflictDialog`, `applyMerged`
+    = re-open) instead of blind `store.save`; (3) a **poll loop** (`readManifest` mtime,
+    backoff when hidden) that syncs on peer change; (4) **IndexedDB handle restore** on
+    boot (reconnect via `ensureReadWrite`). See [[collab-merge-kernel]]. Original plan below.
+    `core/project-store.js` is *already* written entirely against
     `FileSystemDirectoryHandle` (`getDirectoryHandle`/`getFileHandle`/
     `createWritable`/`getFile`); the **only** OPFS-specific line is `#root()` at
     `project-store.js:244` (`navigator.storage.getDirectory()`).
@@ -533,8 +652,28 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       (the borrowed-client-id trap was Microsoft-specific and rejected anyway). But
       **desktop users of any provider need none** — the desktop sync client + folder mode
       already covers them (Dropbox/OneDrive/Drive/iCloud folders are identical to FSA).
-  - **Live transport — P2P over WebRTC (proven pattern, from sortie).** The
-    serverless-handshake part is already solved and battle-tested in *sortie*
+  - **Live transport — P2P over WebRTC (proven pattern, from sortie). [~] SIGNALING
+    LAYER BUILT** (commit 20d6427): `assets.js` pins trystero@0.21.5 (MQTT), lazy-loaded;
+    `core/live-invite.js` (rendezvous addressing = hashed-UUID topic + invite secret in
+    the URL fragment); `core/live-sync.js` (`LiveSession` wrapping a Trystero room —
+    presence + beacon + ordered/reliable op-log actions — plus `buildIceServers` /
+    get·setTurnConfig). 58 headless tests; in-browser verified the pinned lib loads +
+    TURN config threads. *Still to build:* the op-log WIRE PROTOCOL over the channel
+    (snapshot-then-tail late-join, gap detection — convergence reuses the mergeable
+    op-log), and the presence/invite UI. *Verification boundary:* the actual peer
+    CONNECTION is a 2-machine/2-network + reachable-broker test (Trystero filters
+    same-page selfId → un-testable in one tab), user-gated like the OS picker.
+    **[~] CONVERGENCE PROTOCOL + PRESENCE now BUILT too** (commits 8202ebc, 0eb4065):
+    `core/live-protocol.js` `LiveDoc` runs the same three-way merge continuously over
+    the channel — commutativity solved by canonicalising operand order by peer id (no
+    kernel change); late-join = same `state` message (empty joiner add-wins to full);
+    conflicts SHARED via a `resolve` message so peers don't re-surface them; full-
+    manifest exchange sidesteps per-op gap detection. `core/presence.js` `PresenceRoom`
+    = pure "who's here" roster. Glue: `attachLiveDoc` / `attachPresence`. 69 headless
+    tests + in-browser stack-load/run verified. *Still to build:* base-data gap-fill
+    (Parquet a peer lacks — detection headless, transfer channel-gated) + the UIs +
+    the real 2-machine connection test. Editing SHARED data needs no gap-fill.
+    The serverless-handshake part is already solved and battle-tested in *sortie*
     (asteroids clone, https://lograh.github.io/sortie-game): **Trystero (MQTT
     strategy)** does signaling via public MQTT brokers (EMQX/HiveMQ) — nothing we
     host — then drops to a real WebRTC data channel. Its "repair" channels use
@@ -545,11 +684,16 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       frame; `_mid` dedup is enough. Op-logs must *converge* — a missed op can't be
       papered over by "the next frame." Needs the mergeable-op-log foundation above
       (sequenced, gap-detecting, or CRDT per state class).
-    - *TURN, probably.* Sortie's clever peer-**gossip** relay dodged TURN — but it
-      only rescues connectivity when there's a **third peer** to route through.
-      CrossTab's core case is **two** faculty, both behind university symmetric NATs,
-      no third party → likely needs a real **TURN** server (the one piece of
-      infrastructure on the table).
+    - *TURN — DECIDED: bring-your-own, we host nothing.* Sortie's clever peer-**gossip**
+      relay dodged TURN — but it only rescues connectivity when there's a **third peer**
+      to route through. CrossTab's core case is **two** faculty behind university
+      symmetric NATs, no third party → sometimes needs a real **TURN** relay. Decision:
+      **we run none.** Instead the user (or their institution) can define a TURN server —
+      `setTurnConfig({urls,username,credential})`, threaded into `iceServers` by
+      `buildIceServers` (default = public STUN only). So an institution adopting the app
+      can stand up its own TURN for its faculty; without one, a hard-NAT pair simply
+      can't connect and the UI must say so (**detected ≠ connectable**). Built in
+      `core/live-sync.js` (commit 20d6427).
     - *Late-join.* Snapshot-then-tail: ship the whole existing op-log to a joiner,
       then follow with the live tail.
   - **Concurrency detection / presence — "Jane has this open, co-author?"** The key
@@ -612,6 +756,15 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     - *Residual, stated honestly (no theatre):* even fully encrypted, the operator still
       sees topic existence, subscriber count, timing, and message sizes — traffic
       analysis that encryption can't hide.
+  - **[~] Base-data GAP-FILL BUILT (headless) — commit 89e99a2.** `core/gap-fill.js`:
+    fetch a Parquet source a peer lacks over the channel — identity = the manifest source
+    **op id** (no schema change / no per-file hash), integrity = transfer-time SHA-256
+    verified before store, chunked (256 KiB) for multi-GB, consent/size-gated via
+    `allowSend`. `SourceExchange` (requestMissing → need → chunk+hash+send → reassemble+
+    verify+store) rides the live channel (`t:'need'/'src-chunk'`; LiveDoc ignores). 75
+    tests incl. full 2-peer round-trip, consent-decline, integrity-reject. Byte read/store
+    are ProjectStore callbacks; real transfer over Trystero is part of the 2-machine test.
+    The *invite* half + the sneakernet index UI below remain. Original design follows.
   - **Onboarding + base-data sharing — the invite carries the key; an index fills the
     gaps.** Two questions the op-log foundation quietly skips: how the second user gets
     *in*, and how they get the *base bytes*. The log's first op is `load`, referencing an
@@ -671,7 +824,16 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       even a malicious provider plugin can't read content (residual: metadata — paths,
       sizes, timing). Pushing crypto into the kernel is what lets the whole provider
       ecosystem be untrusted plugins. Analog of format-equality: no privileged provider.
-    - **Proposed extension point** (by analogy to `importers.register`):
+    - **[~] BUILT (core interface, not sandboxed) — commit 34fc4de.** `core/storage-driver.js`
+      is the path-based seam (`read/write/remove/removeTree/list/stat` + `kind/available`);
+      `OpfsDriver` + `FsaFolderDriver` extend a `HandleDriver` base, and `ProjectStore`
+      sits on it via `useDirectory()`/`useDriver()`. Deliberately a **core-registered
+      interface, NOT `app.storage.register` in a sandbox** — resolving the "two caveats"
+      below (FSA gesture/handle + gigabytes over postMessage) in favor of main-thread
+      drivers. **Crypto sits above it**, so drivers only ever see ciphertext. A cloud
+      driver now = implement the same surface over HTTP + `useDriver()`; the flags below
+      (CAS/contentHash/nativeWatch) are the still-unbuilt capability-negotiation layer.
+    - **Original proposed extension point** (by analogy to `importers.register`):
       `app.storage.register({ id, label, auth, read→{bytes,rev,mtime,size,contentHash?},
       write(path,bytes,{ifMatch:rev})→rev, delta(cursor)→{changes,cursor}, watch?(cb),
       capabilities:{conditionalWrite,contentHash,nativeWatch,sharing} })`. Core reads the
@@ -697,7 +859,190 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     reuses the presence room as its handshake, the invite link as its key distribution, and
     the index/gap-fill for base-data sharing.
 
-- [ ] **Encryption at rest — opt-in for local storage, opt-out for exports (#144).**
+- [~] **Collaborator identity, authorship & memos (#148).** Who did what — the human
+      layer on top of the merge kernel (#143). Driven by qualitative practice: **inter-
+      coder reliability** (Cohen's κ / Krippendorff's α, coder-vs-coder comparison, bias/
+      drift) is a first-class qual method and is *impossible without per-coder attribution*
+      — the Dedoose-parity gap. Decided with the user (chat rejected as out-of-scope side-
+      conversation; comments reframed as **memos/annotations**, a named qual technique —
+      grounded-theory memoing + reflexivity + audit trail — anchored, persistent, part of
+      the record, and useful SOLO not just in collab). Identity is **self-asserted** (no
+      auth, serverless) → attribution is advisory, not forensic; κ needs consistent labels,
+      not verified ones. Ties: [[collab-merge-kernel]] op identity, [[first-class-plugin-data]]
+      (a memo is exactly the first-class attachment that's currently second-class), the
+      "plugins add actions to the log" item, [[qualitative-first-class]].
+  - [x] **1. User identity profile (name / initials / colour). DONE.** Per-USER, per-device
+    (localStorage) — travels across all their projects, NOT per-project. A stable minted
+    `authorId` so attribution survives a display-name change; initials auto-derived from the
+    name but editable; a CB-safe colour for avatars. Small editor dialog. Distinct from the
+    project-level `collabId`/`collabSecret`. **BUILDING NOW.**
+  - [x] **2. Authorship stamp on codes / ops. DONE.** Snapshot `{authorId, initials, name, colour}`
+    into each code-application / log op the user creates (snapshot, so it survives a later
+    rename and other peers see it without the author's live profile). The prerequisite for
+    step 3.
+    - [x] **2a. Core log ops DONE** — stamped in `data-store.js#ensureIds` (new ops only,
+      never retroactive); round-trips export/restore; verified in-browser.
+    - [x] **2b. CAQDAS code-application authorship DONE** — `app.identity` broker RPC +
+      `app.identity` namespace in plugin-host; the CAQDAS mount fetches `me` and stamps
+      each code + each applied segment (text/region/time/track) via `authored()`; import-
+      resolved codings + the QDPX parser are left unstamped. Author survives the add-wins
+      merge (normalize spreads). End-to-end coding attribution to confirm by reading the
+      persisted blob after coding (CAQDAS is cross-origin, can't be driven from the page).
+  - [ ] **Authorship DISPLAY (tabled — user pondering the shape).** Surface who-coded-what
+    in the CAQDAS UI (colour + initials chip on segments / retrieve list). User's steer:
+    a plain "stamp every edit visibly" gets cluttered → lean toward **showing the chip only
+    when the author ≠ the current viewer** (your own edits stay clean). Data already stamps
+    everything (step 2); this is display-only. Revisit after the shape settles.
+  - [x] **PREREQUISITE for 3 + 4 — segment identity & author-aware merge. DONE.** Found while
+    verifying step 2b: `mergeState` keys segments by CONTENT
+    (`doc|codeId|start|end|tStart|tEnd|region`), with **no author** in the key. Two
+    consequences: (a) a content key is not a stable anchor for a memo (edit the span → key
+    changes); (b) worse — **two coders applying the SAME code to the SAME passage collapse to
+    ONE segment** under add-wins, silently discarding coder B's application. That *defeats
+    inter-coder reliability* (κ/α need to see BOTH coded it). Fix: give each segment a stable
+    `id` (fold into the `authored()` helper: `{ id: o.id || uid(), ...o, author }`), and make
+    `segKey` use the id when present (content-key fallback for legacy/imported segments) — so
+    per-coder codings stay DISTINCT and memos get a durable anchor. Changes merge semantics
+    (more segments survive a merge), so confirm the methodology intent before shipping.
+  - [x] **3. Memos / annotations (anchored comments). DONE (3a data+merge, 3b UI).** Word/Docs-style margin comments,
+    but anchored + persistent + part of the analytic record. **Decisions (with user):**
+    (i) memos REPLACE the old inline `memo` string going forward (legacy memo shown as a
+    read-only first note; no lossy migration); (ii) **flat / chronological, author-stamped**
+    — not nested threads — so a faculty reply in the teaching/office-hours case can't get
+    buried under a fold and all students see it (record leaves room for an optional
+    `replyTo` later); (iii) memos are their OWN add-wins collection anchored by id, NOT
+    nested in the segment — required so faculty + student can both annotate the same coding
+    without one clobbering the other. Anchor: coded segment / code first (segments now have
+    stable ids); generalise to cells/variables/outputs later.
+    - [x] **3a. Data model + merge DONE** — `state.memos = [{id, anchorKind, anchorId,
+      author, text, createdAt}]`; add-wins by memo id in `mergeState` + normalize; +1 test
+      (both people's annotations on one coding survive). 113 pass.
+    - [x] **3b. Thread UI DONE** — `renderThread()` replaces the inline memo editors on
+      the segment popup + code details: chronological author-stamped notes (colour+initials
+      chip), add (button / Ctrl+Cmd-Enter), delete your own; legacy memo shown read-only;
+      has-note markers updated; notes re-anchor when same-code segments merge. Verified via
+      the persisted blob (3 KC-stamped, anchored memos; deletion persisted). Overflow fixed.
+      **NOTE:** notes (like ALL CAQDAS actions) persist via the workspace blob, so they are
+      NOT covered by core Edit▸Undo — the pre-existing "plugins add actions to the log" gap.
+  - **4. Inter-coder reliability analysis (κ / α) — MOVED.** This is an *analysis*
+    feature, not a collab one, so it lives in **"## More analyses"** below (the stats
+    backlog). The collab foundation it needs — per-coder attribution + distinct per-coder
+    segments — is DONE here (steps 2–3); the κ/α computation is the analysis-side work.
+  - [~] **5. Presence chips in the top bar. BUILT (awaiting 2-window verify).** Live editors shown by initials/colour. Cheap
+    add-on, but coupled to **live P2P** (`core/presence.js` broadcasts peers) — lands WITH
+    the live co-authoring chunk, not before. The self-chip built in step 1 is its seed.
+    - **DESIGN (user, 2026) — collaboration is TRANSPORT-AGNOSTIC.** Do NOT assume OPFS
+      projects are non-collaborative: a user can export a bundle → flash drive → a
+      collaborator imports it to OPFS, and the two copies should meet in the SAME room.
+      So **every project carries a collab identity** (collabId/secret), minted on first
+      save and **carried in the export bundle** (+ restored on import), independent of
+      folder/live/cloud. `collabReady` becomes true for all saved projects. (Supersedes
+      5a's folder-only minting.) TODO: mint in `#snapshot` for any project; thread
+      collabId/secret through project-bundle export + openBundle import.
+    - **DESIGN (user) — presence gating = a global setting, not a per-session button.**
+      A profile setting (like name/initials) **"auto-check for live collaborators" on/off**:
+      OFF → today's manual "Go live" button stays; ON → CrossTab auto-joins the room on
+      project open (online + not air-gap) and the user only clicks the final **"start live
+      co-authoring with X"** offer. Presence = automatic awareness; the click consents to
+      DATA streaming.
+    - [x] **5a. Collab identity minted+persisted for folder projects** (roomFor now works)
+      — to be GENERALISED to all projects per the transport-agnostic design above.
+    - [~] **5b. Go-live toggle + peer chips** — `core/live-presence.js` (LiveSession +
+      PresenceRoom) + header UI; explicit opt-in; identity-beacon only. Solo-verified
+      (hidden for OPFS, wired, no errors); needs a two-window test on a shared folder to
+      confirm peers actually see each other's chips. This is also the first live-P2P
+      session wired — the handshake the future **live data co-authoring** layer reuses.
+  - [~] **6. Live DATA co-authoring — WIRED end-to-end (6a+6b+6c); awaiting a two-window test.** — the layer the "start co-authoring" prompt launches.**
+    Presence (step 5) is *awareness only*. The convergence **ENGINE is done + proven
+    headlessly** — `core/live-protocol.js` `LiveDoc` (canonical-peerId ordering → byte
+    convergence) + `attachLiveDoc`, with tests covering disjoint recodes, order-independence,
+    late-join, a genuine conflict resolving, AND CAQDAS codebooks converging live. `LiveSession`
+    now exposes `.selfId` (done) for the wiring. What remains is the **app integration**, and
+    studying it surfaced **three concrete prerequisites** (none trivial, so NOT built blind):
+    - [x] **6a. Live-apply materialisation. DONE.** Applying a peer's merged manifest live has NO
+      disk round-trip (unlike folder `#applyMergedManifest`, which reloads from the folder
+      after the merge wrote it). Need a path that rebuilds datasets from the merged manifest
+      **reusing the local Parquet** (matched by source id) + merged transforms + merged
+      workspace blobs — i.e. restoreState-from-manifest without re-fetching bytes we already
+      have. Feasible for the shared-base case (both peers hold the same sources).
+    - [x] **6b. Plugin-merger assembly DONE — (ALSO fixes folder-sync coding merge).** The app never
+      calls `buildMergers` with real plugin modules — `#folderSave` passes `{core}` only — so
+      plugin/blob (CAQDAS coding) merge doesn't happen in the REAL app today, folder OR live;
+      it surfaces as conflict/LWW. Need host access to builtin plugin mergers (import
+      builtin `mergeState` host-side — builtins are trusted) or the sandbox-bridge for
+      3rd-party. **High value: unblocks coder-merge for BOTH transports**, and it's the
+      office-hours driver. Ties [[plugin-verb-declaration]].
+    - [x] **6c. Base-data byte gap-fill. DONE (wired).** Cold join / a peer adding a NEW dataset → the
+      merged manifest references Parquet the other lacks → transfer over the channel
+      (content-hash index → "send this file"). `core/gap-fill.js` (`SourceExchange`) exists
+      but isn't wired. Required for the flash-drive/OPFS-import cold-start case; shared-base
+      editing (recodes/coding) needs no transfer.
+    - Then wire the **"start co-authoring with X" offer** (auto-offer on peer-appear) →
+      `attachLiveDoc` on the presence session → local change publishes, merged applies (6a),
+      conflicts → `showConflictDialog`. **DONE + wired.**
+    - **LANDED ON MAIN 2026-08-01** pending wider device/lab testing. Two-window
+      verification found + fixed: self-echo presence, the co-author-button "bounce"
+      (emitProject→PROJECT_CHANGED→stopLive recursion), phantom conflicts on sequential
+      edits + inverted conflict labels, MQTT broker spam, conflict-dialog auto-dismiss on
+      remote resolve, **gap-fill chunk bytes mangled by Trystero's JSON action encoding
+      (base64 fix)**, and **dataset deletion not propagating (add-wins → proper three-way
+      delete)**.
+    - **Known edges still open** (not blockers): (a) delete-vs-concurrent-edit keeps the
+      data with no user prompt (no silent loss, but no choice); (b) deleting the *last*
+      remaining dataset doesn't propagate live (empty-project apply path is guarded).
+  - [ ] **~~In-project chat~~ — DEFERRED / maybe never.** Disproportionate scope
+    (persistence, history, retention, notifications) for uncertain value when teams already
+    have Slack/Teams; and it's the *unanchored* opposite of a memo. If ever, rescope to
+    ephemeral live-session-only messages, decided on its own. (Talked through with the user.)
+
+- [~] **Encryption at rest — opt-in for local storage, opt-out for exports (#144).**
+      **CRYPTO KERNEL + FOLDER AT-REST DONE** (commit 341879e): `core/crypto-envelope.js`
+      (PBKDF2-HMAC-SHA256 → AES-256-GCM, native WebCrypto — no vendored lib; master key
+      derived once per session from passphrase + per-project public salt, fresh IV per
+      file; self-describing envelope so plaintext/ciphertext coexist and migrate in place;
+      key never persisted). `ProjectStore.unlock()/lock()/encrypted` wrap all data I/O →
+      a folder handed to OneDrive/Dropbox holds only ciphertext (project.json, catalog,
+      Parquet); salt/verifier meta stays plaintext; wrong passphrase caught at unlock.
+      51 headless tests + verified in-browser incl. a full ENCRYPTED folder sync.
+      **POLICY + ENCRYPTED EXPORTS now DONE too** (commit 99736fb): `core/at-rest.js` =
+      per-target policy (export & folder default-ON/opt-out, local default-OFF/opt-in) +
+      persisted overrides + an injected passphrase-provider seam (safe-by-default: no
+      provider → plaintext). `core/crypto-envelope.js` gained a **self-contained**
+      envelope (salt embedded) for exports; `export-service.js` `#runExport` encrypts a
+      leaving file when policy+passphrase say so (`.enc`, all formats). 88 tests + in-
+      browser verified. **Passphrase PROMPT UI DONE** (commit 30969de):
+      `core/passphrase-ui.js` (enter/set modes, confirm-match, "no recovery" warning) +
+      `installPassphraseUI()` wired from app.js as the at-rest provider — so encrypted
+      export now prompts + engages. Verified in-browser (DOM).
+      **IMPORT-SIDE DECRYPT now DONE** (commit history around import-service): a dedicated
+      "Encrypted CrossTab file (.enc)" importer entry (+ a safety net that catches a `.enc`
+      picked under any format) prompts, decrypts the self-contained envelope, recovers the
+      inner format from the filename (`data.csv.enc`→CSV) and reuses `#resolveDownload`;
+      wrong passphrase fails closed. **OPFS PER-PROJECT AT-REST now DONE**: `ProjectStore`
+      grew per-project encryption (`#metaPath(id)`, `unlock(passphrase,id)`,
+      `hasEncryption(id)`, `removeEncryption(id)`, key bound to `#keyId` + a save-guard
+      against wrong-key writes; catalog kept plaintext since it spans projects with
+      different keys). `openProject` unlocks a protected OPFS project before load;
+      `File ▸ Protect this project… / Remove protection…` set/remove a passphrase **in
+      place for BOTH OPFS and folder** projects (change-your-mind either way); default-
+      protect prompts a new OPFS project at first save when the policy's on;
+      `File ▸ Encryption settings…` toggles that policy. Each OPFS project has its OWN
+      passphrase (shared-lab case). Verified against real OPFS. See [[at-rest-encryption]].
+  - [ ] **SERIOUS GAP — shared-folder encryption change has no live-peer key coordination.**
+      Flipping a *shared* folder project's protection (Protect / Remove protection, or a
+      passphrase change) only lands cleanly for peers who **reopen** the folder. A peer
+      who is **actively connected** keeps their old in-memory key, so their next save
+      re-encrypts with the stale key (after an unprotect) or fails to read the newly-keyed
+      files (after a protect / rekey) — silent divergence or read errors, exactly when the
+      data's confidentiality is what's changing. There is currently **no protocol to tell
+      connected peers "the folder's key changed → re-derive / re-prompt / relock."** Needs:
+      a versioned key epoch in the plaintext folder meta (peers detect a bump on poll) →
+      relock + re-prompt (or, once live P2P is up, an in-band "rekey" control message);
+      and a decision on whether unprotect should force-disconnect peers first. Until then,
+      the UI **warns** (unprotect confirm says it affects everyone), but that's mitigation,
+      not a fix. Ties into the live co-authoring elevation + [[collab-merge-kernel]].
+      *Still open (other):* the **chunked-Parquet** path for multi-GB sources (today a
+      source encrypts whole — fine to ~100s of MB; OOM concern below at GBs). Original design below.
       Today the whole project bundle persists **plaintext** to OPFS / IndexedDB /
       localStorage, and exports land plaintext wherever saved (see SECURITY.md #10 for the
       full threat scope). Browser storage is origin-isolated (other *sites* can't read it)
@@ -1674,6 +2019,20 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## More analyses (each is just another plugin)
 
+- [ ] **Inter-coder reliability (Cohen's κ / Krippendorff's α) — CAQDAS analysis (from #148).**
+      The payoff of the collaborator-authorship work: compute agreement between coders and
+      surface disagreements for qualitative coding teams (the Dedoose-parity method). The
+      **collab foundation is already DONE** (#148): each coder's coding is a distinct,
+      author-stamped segment (per-coder ids + author-aware merge), so the data needed is
+      present. This item is the *analysis* side: (1) an **agreement grouping** — group
+      overlapping same-code segments across coders into codeable units (text reliability is
+      an overlap/unitising computation, NOT exact-match); (2) the coefficients — **Cohen's
+      κ** (two coders), **Krippendorff's α** / **Fleiss' κ** (≥2 coders), plus a simple
+      percent-agreement + a per-code/per-coder disagreement table; (3) surface it in Output
+      (and, later, a "disagreements" review view in the coding pane). R has `irr` /
+      `icr` (WebR feasibility probe first, per house style), or hand-roll + validate
+      against `irr`. Also decide the unit model (whole-doc code presence vs unitised
+      overlap). Driven by faculty running coder-bias meta-analysis. See [[qualitative-first-class]].
 - [ ] **Single-Case Experimental Design (SCED) — NEW GAP (coverage backlog).** The
       **multiple-baseline / ABAB / withdrawal** graphs + non-overlap effect sizes that
       applied-behaviour-analysis, special-ed, early-childhood-intervention and school-

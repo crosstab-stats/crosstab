@@ -174,11 +174,3 @@ export function makeSpatialDemoDataset() {
   return { variables, columns: { zip_code, district, satisfaction, commute_min, income_k, household_size }, boundaries };
 }
 
-/** An empty starter dataset (one placeholder column) for "Start blank" — the user
- * imports their own data. Kept minimal so the grid renders without erroring. */
-export function makeBlankDataset() {
-  return {
-    variables: [{ name: 'v1', label: '', type: 'numeric', measurementLevel: 'scale' }],
-    columns: { v1: [] },
-  };
-}

@@ -14,7 +14,7 @@
  * Host-owned (drives the loader/manager); not a plugin.
  */
 
-import { makeDemoDataset, makeQualDemoDataset, makeSpatialDemoDataset, makeBlankDataset } from './demo-data.js';
+import { makeDemoDataset, makeQualDemoDataset, makeSpatialDemoDataset } from './demo-data.js';
 
 /** Curated-core analysis plugins, pre-selected on a fresh "Start blank". */
 const CORE_IDS = new Set([
@@ -47,6 +47,7 @@ export class Launcher {
   #discipline = 'All';
   #pendingSource = null; // source key chosen this session, applied on Start
   #pendingProject = null; // { id } when a saved project is chosen instead of a source
+  #pendingFolder = null; // a remembered folder handle, when the "reopen folder" entry is chosen
   #resolve = null;
   #onKey = null; // Escape-to-dismiss handler, active only while reopened over a session
 
@@ -79,7 +80,17 @@ export class Launcher {
     if (key === 'demo-quant') { dataset = makeDemoDataset(); name = 'Demo data'; }
     else if (key === 'demo-qual') { dataset = makeQualDemoDataset(); name = 'Qualitative demo'; }
     else if (key === 'demo-spatial') { dataset = makeSpatialDemoDataset(); name = 'Sacramento County survey'; }
-    else { dataset = makeBlankDataset(); name = 'Dataset 1'; } // 'blank' / default
+    else {
+      // 'blank' / default / unknown → a truly-empty project: one dataset with NO
+      // sources, so no DuckDB table is created and there are 0 variables (matches
+      // File ▸ New project). setDataset with empty columns can't be used — DuckDB
+      // rejects a 0-column table — which is why the old path seeded a phantom `v1`.
+      await this.#datasets.loadBundle({
+        activeId: 1,
+        datasets: [{ id: 1, name: 'Dataset 1', state: { sources: [], transforms: [] } }],
+      });
+      return;
+    }
     await this.#datasets.setDataset(dataset);
     try {
       if (this.#datasets.activeId != null) this.#datasets.rename(this.#datasets.activeId, name);
@@ -140,6 +151,51 @@ export class Launcher {
   }
 
   /**
+   * A focused "open the shared folder" landing (#143) — the destination of the
+   * `?launch=open-folder` deep link baked into the double-click shortcuts we drop
+   * into folder projects. A first-time recipient lands here on a single button
+   * instead of the full launcher; clicking it fires the directory picker (the user
+   * gesture the browser demands) → passphrase → project. Resolves once they're in
+   * (or they pick "blank" instead). We can't skip the folder pick — the browser
+   * won't let a web page open a folder without an explicit click.
+   * @returns {Promise<void>}
+   */
+  async openFolderLanding() {
+    if (this.#root) return;
+    injectStyles();
+    const overlay = el('div', null, 'ctl');
+    this.#root = overlay;
+    overlay.innerHTML = `
+      <div class="ctl__card ctl__card--landing">
+        <div class="ctl__header">
+          <div class="ctl__brand">CrossTab</div>
+          <div class="ctl__tagline">Open a shared project</div>
+        </div>
+        <div class="ctl__landingbody">
+          <p class="ctl__landinglead">You've opened a shared CrossTab folder. Click below, then choose <strong>this same folder</strong> when your browser asks — you'll enter its passphrase next.</p>
+          <button type="button" class="ctl__start ctl__openfolder">📂 Open shared folder</button>
+          <button type="button" class="ctl__link ctl__blank">Start a blank project instead</button>
+          <p class="ctl__landingfine">Your browser requires you to pick the folder yourself — for your security, a web page can't open one without your click.</p>
+        </div>
+      </div>`;
+    document.body.append(overlay);
+    overlay.querySelector('.ctl__openfolder').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        await this.#projects.openFromFolder(); // gesture → picker → (passphrase) → folder mode
+        if (this.#projects.folderBacked) { this.#close(); return; } // in — done
+      } catch { /* fall through so they can retry */ }
+      btn.disabled = false; // picker cancelled or open failed — stay on the landing
+    });
+    overlay.querySelector('.ctl__blank').addEventListener('click', async () => {
+      this.#close();
+      try { await this.#projects.newProject(); } catch { /* best-effort */ }
+    });
+    return new Promise((resolve) => { this.#resolve = resolve; });
+  }
+
+  /**
    * Show the launcher and resolve once the user enters the app.
    * @param {{reopen?: boolean}} [opts]
    * @returns {Promise<void>}
@@ -189,7 +245,11 @@ export class Launcher {
     overlay.querySelectorAll('[data-source]').forEach((btn) => {
       btn.addEventListener('click', () => {
         this.#pendingSource = btn.dataset.source;
-        overlay.querySelectorAll('[data-source]').forEach((b) => b.classList.toggle('is-active', b === btn));
+        // Selecting a data source clears any saved-project/folder pick — the choices are
+        // mutually exclusive, so highlight only this one across ALL source rows.
+        this.#pendingProject = null;
+        this.#pendingFolder = null;
+        overlay.querySelectorAll('.ctl__source').forEach((b) => b.classList.toggle('is-active', b === btn));
         // A demo/blank choice seeds its preset's plugin selection (user can tweak).
         const preset = Object.values(PRESETS).find((p) => p.source === btn.dataset.source);
         if (preset) {
@@ -228,6 +288,26 @@ export class Launcher {
               this.#selected = new Set(p.activePlugins.filter((k) => list.some((x) => x.key === k)));
               rerender();
             }
+          });
+          projBox.append(btn);
+        }
+      }
+      // Remembered folder projects (#143): one-click reopen of any picked folder.
+      // Reconnecting needs a write-permission re-grant, which happens on the Start
+      // click (the required user gesture). Shown even if the OPFS rail is empty.
+      if (projBox && this.#projects?.reopenFolder) {
+        let folders = [];
+        try { folders = await this.#projects.listFolderProjects(); } catch { folders = []; }
+        if (folders.length) overlay.querySelector('.ctl__railhead--projects')?.removeAttribute('hidden');
+        for (const folder of folders) {
+          const btn = el('button', `📁 ${folder.name}`, 'ctl__source ctl__source--project ctl__source--folder');
+          btn.type = 'button';
+          btn.title = `Reopen project folder: ${folder.name}`;
+          btn.addEventListener('click', () => {
+            this.#pendingFolder = folder.handle;
+            this.#pendingProject = null;
+            this.#pendingSource = null;
+            overlay.querySelectorAll('.ctl__source').forEach((b) => b.classList.toggle('is-active', b === btn));
           });
           projBox.append(btn);
         }
@@ -344,7 +424,12 @@ export class Launcher {
     startBtn.disabled = true;
     startBtn.textContent = 'Starting…';
     try {
-      if (this.#pendingProject && this.#projects) {
+      if (this.#pendingFolder && this.#projects) {
+        // Reopen a remembered folder — reopenFolder re-grants write (this Start click
+        // is the gesture) and restores the folder project + its own plugin set, so the
+        // picker's plugin selection isn't applied over it.
+        await this.#projects.reopenFolder(this.#pendingFolder);
+      } else if (this.#pendingProject && this.#projects) {
         // Open the chosen project's data + workspace state FIRST, *then* apply the
         // picker's selection. Order matters: applying the selection mounts workspace
         // tabs, and a workspace plugin reads its state on mount — so the workspace
@@ -389,6 +474,7 @@ export class Launcher {
     this.#root = null;
     this.#pendingSource = null;
     this.#pendingProject = null;
+    this.#pendingFolder = null;
     const r = this.#resolve; this.#resolve = null;
     r?.();
   }
@@ -802,6 +888,14 @@ function injectStyles() {
       border-radius: 8px; background: var(--accent, #2980b9); color: #fff; cursor: pointer; }
     .ctl__start:hover { background: #1f6391; }
     .ctl__start:disabled { opacity: .6; cursor: default; }
-    .ctl__howto-body p { margin: 0 0 10px; line-height: 1.5; }`;
+    .ctl__howto-body p { margin: 0 0 10px; line-height: 1.5; }
+    .ctl__card--landing { width: min(560px, 96vw); }
+    .ctl__landingbody { padding: 28px 30px 30px; display: flex; flex-direction: column; align-items: center;
+      text-align: center; gap: 16px; background: var(--bg, #f7f8fa); }
+    .ctl__landinglead { margin: 0; font-size: 15px; line-height: 1.5; color: #34414e; }
+    .ctl__landingfine { margin: 0; font-size: 12px; color: #8a94a0; line-height: 1.45; }
+    .ctl__openfolder { font-size: 16px; padding: 12px 32px; }
+    .ctl__link { font: inherit; font-size: 13px; background: none; border: 0; color: var(--accent, #2980b9); cursor: pointer; padding: 2px 4px; }
+    .ctl__link:hover { text-decoration: underline; }`;
   document.head.append(s);
 }

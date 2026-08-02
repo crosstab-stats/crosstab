@@ -189,6 +189,10 @@
             webr: makeNamespace('webr', ['run', 'installPackages', 'writeFile', 'readFile', 'mountFile', 'unmount']),
             ui: makeNamespace('ui', ['selectVariables', 'selectFromList', 'showForm']),
             web: makeNamespace('web', ['get']),
+            // The current user's identity snapshot (#148): { authorId, initials, name,
+            // colour } — for stamping authorship on what the plugin creates (CAQDAS
+            // code applications → inter-coder reliability). Read-only, self-asserted.
+            identity: makeNamespace('identity', ['get']),
             // Workspace plugins (#93, #146) persist opaque state blobs, scoped by
             // the host to this workspace's id. Each blob lives in a named SLOT
             // (plugin-chosen; defaults to '_default'). `list` returns all slots for

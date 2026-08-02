@@ -40,6 +40,12 @@ export const manifest = {
       id: 'spatial-map',
       title: 'Map',
       scope: 'project',
+      // Collaboration merge (#143): each boundary set lives in its own SLOT, so
+      // the SET of slots merges add-wins for free (the host unions slot keys — a
+      // slot loaded on either side survives), and each slot's GeoJSON bytes are
+      // ATOMIC (you don't line-merge polygons), so per-slot bytes are LWW. Net
+      // effect: "add-wins slots + last-writer-wins bytes".
+      merge: { strategy: 'lww' },
       verbs: [
         { id: 'load-boundaries', label: 'Load boundaries…', run: 'loadBoundaries', category: 'toolbar', needsFile: { extensions: ['.geojson', '.json'] } },
         { id: 'shade-by-variable', label: 'Shade by variable…', run: 'shadeByVariable', category: 'toolbar' },
@@ -53,6 +59,7 @@ export const manifest = {
       id: 'spatial-link',
       scope: 'dataset',
       tab: false,
+      merge: { strategy: 'lww' }, // per-slot dataset↔region link config is atomic → LWW
     },
   ],
   menu: [
