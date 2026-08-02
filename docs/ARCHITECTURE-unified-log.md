@@ -254,6 +254,9 @@ was designed for this; both pay off here — the compounding return.
 4. **Fold in System 2 (dataset collection)** as the first live aggregate — first
    in-browser milestone (`removeDataset` merges; delete-inference deleted).
 5. **Fold in System 4 (analysis runs)** — ids + merge the list.
+5b. **Output pane keyed by analysis `runId`** — output blocks are tagged with the run
+   that produced them; History-delete and undo remove output BY ID (precise for
+   middle-deletes), not by fragile position. Found while testing unit 5.
 6. **Point merge at the real log**; retire `datasetToOps`/`buildManifest`-as-truth,
    `project.base.json`, `#lastManifest`, `deterministicOpId`.
 7. **Content-addressed assets**; unify gap-fill.
