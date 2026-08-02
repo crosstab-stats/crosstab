@@ -54,6 +54,18 @@ const COLLECTION = {
   },
 };
 
+/** A globally-unique id for a NEW dataset. Random (~48 bits), NOT a shared local
+ * counter — two peers creating datasets concurrently (offline, or live from the same
+ * bundle) must never mint the same id, or their DuckDB tables / Parquet files collide
+ * AND the merge sees the two different datasets as rival `addDataset(coll/ds:<id>)` ops
+ * (a false "both added" conflict). Kept a plain integer < 2^53 so it stays a valid
+ * DuckDB identifier suffix and JSON number — no id-type churn across the app. Starts at
+ * 2, leaving 0/1 for the reserved blank-project dataset. */
+function newDatasetId() {
+  const r = crypto.getRandomValues(new Uint32Array(2));
+  return (r[0] % 0x1000000) * 0x1000000 + (r[1] % 0x1000000) + 2;
+}
+
 const collAdd = (id, name) => ({ target: `coll/ds:${id}`, owner: 'core', type: 'addDataset', payload: { id, name } });
 const collRename = (id, name) => ({ target: `coll/ds:${id}`, owner: 'core', type: 'renameDataset', payload: { id, name } });
 const collRemove = (id) => ({ target: `coll/ds:${id}`, owner: 'core', type: 'removeDataset', payload: { id } });
@@ -68,8 +80,6 @@ export class DatasetManager {
   #datasets = new Map();
   /** Active dataset id — VIEW STATE, not a logged op. */
   #activeId = null;
-  /** Monotonic dataset id. */
-  #nextId = 1;
   /** The project's unified op log; here it carries the dataset-collection tier. Later
    * units register more projections (analysis, plugin) on the SAME log. @type {ProjectLog} */
   #log;
@@ -150,7 +160,7 @@ export class DatasetManager {
    * @returns {DataStore}
    */
   add(name = 'Dataset', { activate = false } = {}) {
-    const id = this.#nextId++;
+    const id = newDatasetId();
     const ds = new DataStore(this.#bus, this.#duckdb, { id, name });
     this.#datasets.set(id, ds);
     this.#log.append(collAdd(id, name)); // membership is recorded, not just held in the Map
@@ -276,7 +286,7 @@ export class DatasetManager {
    * @returns {Promise<number>} the new dataset id.
    */
   async addFromState({ name = 'Restored dataset', state, activate = true }) {
-    const id = this.#nextId++;
+    const id = newDatasetId();
     const ds = new DataStore(this.#bus, this.#duckdb, { id, name });
     this.#datasets.set(id, ds);
     this.#log.append(collAdd(id, name)); // recycle-bin restore is a real add to the collection
@@ -323,8 +333,6 @@ export class DatasetManager {
       this.#datasets.set(d.id, ds);
       await ds.restoreState(d.state);
     }
-    const maxId = datasets.reduce((m, d) => Math.max(m, Number(d.id) || 0), 0);
-    this.#nextId = Math.max(this.#nextId, maxId + 1);
     this.#activeId = this.#datasets.has(activeId)
       ? activeId
       : (this.#datasets.keys().next().value ?? null);
