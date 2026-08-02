@@ -150,6 +150,14 @@ export class ProjectLog {
     this.#redo = [];
   }
 
+  /** Drop every op (active + redo) matching `pred` — clears ONE tier/projection of a
+   * shared log without disturbing the others (e.g. reload the dataset collection while
+   * leaving the analysis tier alone). */
+  clearWhere(pred) {
+    this.#ops = this.#ops.filter((o) => !pred(o));
+    this.#redo = this.#redo.filter((o) => !pred(o));
+  }
+
   get canUndo() { return this.#ops.length > 0; }
   get canRedo() { return this.#redo.length > 0; }
 

@@ -19,7 +19,8 @@ import { UiService } from './ui-service.js';
 import { ImportService } from './import-service.js';
 import { ExportService } from './export-service.js';
 import { installPassphraseUI } from './passphrase-ui.js';
-import { installIdentityChip, getIdentity, onIdentityChange } from './user-identity.js';
+import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } from './user-identity.js';
+import { ProjectLog } from './project-log.js';
 import { LivePresence } from './live-presence.js';
 import { mergersFor } from './builtin-mergers.js';
 import { OutputExportService } from './output-export.js';
@@ -317,10 +318,14 @@ export async function boot(mounts) {
   // --- core services ---------------------------------------------------------
   const bus = new EventBus();
   const duckdb = new DuckDBManager();
+  // The project's single unified operation log (docs/ARCHITECTURE-unified-log.md).
+  // Shared across the tiers that fold from it — the dataset collection and the
+  // analysis-run list today; more to come. Created once here, injected into each.
+  const projectLog = new ProjectLog({ author: currentAuthor });
   // `datasets` owns the open datasets and presents the active one through the
   // same surface a single DataStore used to (it delegates). Everything that used
   // to hold "the dataset" now holds the manager.
-  const datasets = new DatasetManager(bus, duckdb);
+  const datasets = new DatasetManager(bus, duckdb, projectLog);
   // Create the first (empty) dataset up front so there's always an active dataset
   // for the UI to render against; its data is loaded below.
   // Neutral seed name; the launcher renames the active dataset to match the chosen
@@ -420,7 +425,7 @@ export async function boot(mounts) {
   // the plugin's named function. The PluginManager calls wire/unwire on load/unload.
   // Ordered, replayable record of analyses run (the analysis half of the script,
   // #132). Data ops already replay via the data-store log; this covers analyses.
-  const analysisLog = new AnalysisLog(bus);
+  const analysisLog = new AnalysisLog(bus, projectLog);
   // Replacing the base dataset (a fresh demo/blank load, an import-replace, a new
   // project) starts a new analysis context — the prior analyses ran against data
   // that's now gone, so clear them. (Transforms/reorders/appends keep their

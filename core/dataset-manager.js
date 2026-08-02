@@ -295,9 +295,11 @@ export class DatasetManager {
     this.#activeId = null;
     // Rebuild the collection tier of the log from the bundle. Deterministic ids
     // (`coll-add-<datasetId>`) and a fixed base clock keep it identical across loads
-    // and machines. (Unit 6 will persist/merge the log directly and drop this
-    // reconstruction; today the transport merge still runs on the datasets[] snapshot.)
-    this.#log.reset();
+    // and machines. Clear only THIS tier — the log is shared with other projections
+    // (e.g. analysis), which their own load path restores. (Unit 6 will persist/merge
+    // the log directly and drop this reconstruction; today the transport merge still
+    // runs on the datasets[] snapshot.)
+    this.#log.clearWhere(COLLECTION.match);
     this.#log.receiveOps(
       (datasets ?? []).map((d, i) => makeOp(collAdd(d.id, d.name), { id: `coll-add-${d.id}`, hlc: { wall: 0, counter: i }, author: { authorId: 'restore' } })),
     );
