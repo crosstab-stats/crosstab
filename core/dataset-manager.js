@@ -161,7 +161,7 @@ export class DatasetManager {
    */
   add(name = 'Dataset', { activate = false } = {}) {
     const id = newDatasetId();
-    const ds = new DataStore(this.#bus, this.#duckdb, { id, name });
+    const ds = new DataStore(this.#bus, this.#duckdb, { id, name, log: this.#log });
     this.#datasets.set(id, ds);
     this.#log.append(collAdd(id, name)); // membership is recorded, not just held in the Map
     if (activate || this.#activeId === null) this.#activeId = id;
@@ -196,6 +196,10 @@ export class DatasetManager {
     await ds.dispose();
     this.#datasets.delete(id);
     this.#log.append(collRemove(id)); // deletion is a recorded op — not just absence
+    // The dataset is gone from the collection; hard-drop its now-orphaned data ops so
+    // the log doesn't carry dead pipeline steps (the collRemove is the authoritative
+    // deletion signal that propagates on merge).
+    this.#log.clearWhere((op) => op.owner === 'core' && typeof op.target === 'string' && op.target.startsWith(`ds:${id}/`));
     if (this.#datasets.size === 0) {
       // Start fresh: a single empty dataset, ready to import into.
       this.#activeId = null;
@@ -287,7 +291,7 @@ export class DatasetManager {
    */
   async addFromState({ name = 'Restored dataset', state, activate = true }) {
     const id = newDatasetId();
-    const ds = new DataStore(this.#bus, this.#duckdb, { id, name });
+    const ds = new DataStore(this.#bus, this.#duckdb, { id, name, log: this.#log });
     this.#datasets.set(id, ds);
     this.#log.append(collAdd(id, name)); // recycle-bin restore is a real add to the collection
     await ds.restoreState(state);
@@ -310,9 +314,12 @@ export class DatasetManager {
     for (const ds of this.#datasets.values()) await ds.dispose();
     this.#datasets.clear();
     this.#activeId = null;
-    // Rebuild the collection tier of the log. Clear only THIS tier — the log is shared
-    // with other projections (e.g. analysis), whose own load path restores them.
-    this.#log.clearWhere(COLLECTION.match);
+    // Rebuild the collection + data tiers of the log from the bundle. Leave OTHER
+    // projections (e.g. analysis) alone — their own load path restores them on the
+    // shared log.
+    this.#log.clearWhere(
+      (op) => COLLECTION.match(op) || (op.owner === 'core' && typeof op.target === 'string' && op.target.startsWith('ds:')),
+    );
     if (Array.isArray(collectionLog) && collectionLog.length) {
       // Unit 6: the REAL persisted/merged collection ops (with their ids + HLC), so
       // membership — including deletes — comes straight from the log and both peers
@@ -328,7 +335,7 @@ export class DatasetManager {
     // Recreate with the SAVED ids so a project's Parquet files (named by dataset
     // id) map back consistently across save/load.
     for (const d of datasets) {
-      const ds = new DataStore(this.#bus, this.#duckdb, { id: d.id, name: d.name });
+      const ds = new DataStore(this.#bus, this.#duckdb, { id: d.id, name: d.name, log: this.#log });
       ds.libraryLink = d.libraryLink ?? null;
       this.#datasets.set(d.id, ds);
       try {
