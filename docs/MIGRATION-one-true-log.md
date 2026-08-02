@@ -26,35 +26,45 @@ Branch `feat/unified-op-log`; nothing pushed. Backbone headless tests green
       (retract), undo-of-retract, moveOp, real DuckDB data all correct. Decisions in
       [the explicit-ops memory] endorsed by the user.
 
-### Layer 5 — merge/transport (NEXT), with a prerequisite
+### Layer 5 — merge/transport (NEXT)
 
-**Prerequisite (do FIRST — it's a confirmed single-peer BUG, not just collab prep):**
-reshape `project.json` to carry `ProjectLog.serialize()` (the WHOLE log — collection +
-data + analysis tiers, with **stable** op ids/hlc/author) + source assets, and make
-load restore it *preserving ids* (not the current per-dataset re-mint).
+**Prerequisite — DONE (`data`-tier raw round-trip):** the project save/load path now
+persists & restores each dataset's **raw** log slice (full op envelopes, stable
+ids/hlc/author, including `retract`/`reorder`) instead of the folded recipe. Source
+bytes are Parquet sidecars **keyed by source-op id** (`src_<opid>.parquet`); the
+peer-local DuckDB table name is stripped on save and re-materialised on load; a
+retracted (byte-less) source persists as a bare envelope and is skipped on restore.
 
-> **BUG that proves it (user, 2026-08-02, via `dumpLog`):** save FOLDS the data tier.
-> Repro: load project → `dumpLog` shows `…, recodeVar:region, recodeVar:gender`. Reorder
-> them in History → `dumpLog` shows a trailing `reorder` op. Save, reload → `dumpLog`
-> shows `…, recodeVar:gender, recodeVar:region` **and the `reorder` op is GONE**. The
-> reorder's *effect* (order) was saved; the *op* was lost.
->
-> **Root cause:** `project-sync.#snapshot` → `DataStore.exportState()` → `#steps()` →
-> `foldDataOps()` applies & DROPS `reorder`/`retract` before persisting. The collection
-> tier persists raw ops (`collectionLog`); the data tier folds. Asymmetry = the bug.
->
-> **Fix:** the project save/load path must persist & restore the **raw** log verbatim
-> (all tiers), stable ids preserved — NOT the folded recipe. Keep `exportState`'s folded
-> `{ops}` recipe ONLY for the library/bundle re-home path (where re-mint is correct);
-> add a raw whole-log path for project save/load. Touches: `project-sync.#snapshot`,
-> `project-store` (save/load/buildManifest/writeSources), `dataset-manager.loadBundle`,
-> and a DataStore raw-export + source-materialize seam (source bytes keyed by source-op
-> id; strip the peer-local table name from the persisted op, rematerialise on load).
-> Verify with the exact repro above + `dumpLog` before/after reload.
+- Seam: `DataStore.rawExport`/`rawRestore` (project save/load) vs the pre-existing
+  `exportState`/`restoreState` (kept ONLY for the library/bundle re-home path, where
+  re-mint under a fresh id is correct). `loadBundle` branches on op shape (raw envelope
+  `hlc`/`target` → `rawRestore`; folded recipe → `restoreState`).
+- Touched: `data-store.js`, `project-store.js` (load/buildManifest/#writeSources),
+  `dataset-manager.loadBundle`, `project-sync.#snapshot`.
+- **Browser-verified (2026-08-02)** with the user's exact repro: two transforms →
+  reorder → autosave → reload → load: `dumpLog` shows the `reorder` op **retained** with
+  its **original id**, and History shows the reordered order. Also verified a `replace`
+  (re-import) whose retracted source is byte-less: saves without throwing, restores with
+  correct live data (the retracted source skipped).
+
+> **The bug this fixed (user, 2026-08-02, via `dumpLog`):** save FOLDED the data tier —
+> `project-sync.#snapshot` → `DataStore.exportState()` → `#steps()` → `foldDataOps()`
+> applied & DROPPED `reorder`/`retract` before persisting, so a reorder's *effect* was
+> saved but the *op* was lost (and ids were re-minted on load). The collection tier
+> already persisted raw; the asymmetry was the bug.
+
+**Two follow-ups this left (not blockers for merge):**
+- **`analysis` tier still folds + re-mints** (`AnalysisLog.toJSON`→`state('analysis')`,
+  `load`→deterministic ids). No reorder there yet so it's invisible single-peer, but for
+  merge it needs the same raw round-trip (`slice(ANALYSIS.match)` / `receiveOps`). Do it
+  as part of the transport rewrite (its blast radius is the entries-vs-ops shape).
+- **Orphan sidecars**: op-id-keyed `src_<opid>.parquet` files from a since-retracted
+  source are no longer overwritten (old positional `ds<id>_src<n>` self-reused names).
+  Minor storage leak; a GC/Seal-time sweep, not urgent.
 
 Merge convergence requires two peers to share op identity for the data tier; Layer 4's
-re-mint is fine single-peer, wrong for collab. This unifies save with the log and is the
-last thing standing between "works single-peer" and "mergeable".
+re-mint was fine single-peer, wrong for collab. The data tier now round-trips with
+identity — the last thing standing between "works single-peer" and "mergeable".
 
 Then: delete `collab-sync.mergeManifests`/`datasetToOps`/`opsToDataset`; rewrite
 `folder-sync` (decideSync/syncFolderProject) + `project-sync` (live + gap-fill) onto

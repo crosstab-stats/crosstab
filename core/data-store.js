@@ -1414,6 +1414,91 @@ export class DataStore {
   }
 
   /**
+   * Serialise this dataset's **raw** slice of the shared log for the PROJECT save
+   * path — the one-true-log counterpart to {@link DataStore#exportState} (which folds
+   * to a re-homeable recipe for the library/bundle tier). Returns the full op
+   * envelopes in HLC order, **including the `retract`/`reorder` structural ops** and
+   * with each op's stable `id`/`hlc`/`author`/`target` preserved, so save/reload
+   * round-trips the log verbatim (a folded save silently dropped the reorder/retract
+   * ops — the #148 save-folds-the-data-tier bug) and a later merge can match op
+   * identity across peers. Source ops carry their Parquet bytes on `payload.src.parquet`
+   * for {@link ProjectStore} to write as a sidecar, with the **peer-local DuckDB
+   * `table` name stripped** (re-materialised on load); `includeParquet:false` omits the
+   * bytes (metadata-only autosave — the existing sidecar is reused).
+   *
+   * @param {Object} [opts]
+   * @param {boolean} [opts.includeParquet=true]
+   * @returns {Promise<{ops: object[]}>}
+   */
+  async rawExport({ includeParquet = true } = {}) {
+    // Only LIVE source ops have a materialised DuckDB table / OPFS file to export. A
+    // RETRACTED source (e.g. one replaced by a re-import) had its bytes dropped by the
+    // reset, so its `table` is gone — reading it would throw. Its op envelope is still
+    // persisted (audit + merge), just byte-less; the fold drops it on reload anyway.
+    const liveSrcIds = new Set(this.#steps().filter((s) => SOURCE_OPS.has(s.type)).map((s) => s.id));
+    const ops = [];
+    for (const op of this.#dataSlice()) {
+      const env = { id: op.id, hlc: op.hlc, target: op.target, owner: op.owner, type: op.type };
+      if (op.author) env.author = op.author;
+      if (op.reads?.length) env.reads = op.reads;
+      if (SOURCE_OPS.has(op.type)) {
+        const s = op.payload.src;
+        const src = { meta: s.meta.map((m) => ({ ...m })), label: s.label ?? null };
+        if (s.wide) { src.wide = true; src.rowidBase = s.rowidBase; }
+        if (liveSrcIds.has(op.id)) {
+          // Byte sidecar is keyed by the STABLE op id (not a positional index), so a
+          // retracted source interleaved in the log never shifts another's file, and a
+          // future merge can find a source's bytes by op identity.
+          src.file = `src_${op.id}.parquet`;
+          if (includeParquet) {
+            src.parquet = s.wide
+              ? await this.#duckdb.readOpfsFile(s.file)
+              : await this.#duckdb.queryToParquet(`SELECT * FROM ${quoteIdent(s.table)}`);
+          }
+        }
+        env.payload = { ...op.payload, src };
+      } else {
+        env.payload = op.payload;
+      }
+      ops.push(env);
+    }
+    return { ops };
+  }
+
+  /**
+   * Restore this dataset from its **raw** persisted log slice ({@link DataStore#rawExport}):
+   * clear this dataset's ops, materialise each source's DuckDB table from its Parquet,
+   * then re-home the ops into the shared log **preserving their ids/hlc/author** (via
+   * {@link ProjectLog#receiveOps}, NOT re-minting like {@link DataStore#restoreState})
+   * so the `retract`/`reorder` structural ops survive and op identity is stable for
+   * merge. Each source op's `payload.src` is rebuilt to point at the freshly-created
+   * (peer-local) table; the envelope is otherwise verbatim. One re-derive at the end.
+   *
+   * @param {object[]} ops - raw op envelopes; source ops carry `payload.src.parquet`.
+   * @returns {Promise<void>}
+   */
+  async rawRestore(ops) {
+    await this.#resetDataHard();
+    const restored = [];
+    for (const op of Array.isArray(ops) ? ops : []) {
+      // A byte-less source op is a RETRACTED source (its bytes were dropped at save —
+      // see rawExport); keep its envelope verbatim (the fold drops it) but don't try to
+      // materialise a table it has no Parquet for.
+      if (SOURCE_OPS.has(op.type) && op.payload.src?.parquet) {
+        const s = op.payload.src;
+        const created = s.wide
+          ? await this.#restoreWideSource(s)
+          : await this.#createSource({ variables: s.meta, parquet: s.parquet, source: s.label });
+        restored.push({ ...op, payload: { ...op.payload, src: created } });
+      } else {
+        restored.push(op);
+      }
+    }
+    this.#log.receiveOps(restored);
+    await this.rederive('restore');
+  }
+
+  /**
    * Replace the live dataset from a saved recipe ({@link DataStore#exportState}):
    * clear this dataset's ops from the shared log, drop its DuckDB state, then replay
    * the recipe — materialising each source from its Parquet and re-homing every op

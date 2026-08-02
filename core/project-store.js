@@ -275,19 +275,19 @@ export class ProjectStore {
     const manifest = JSON.parse(await this.#read(this.#file(id, 'project.json')));
     const datasets = [];
     for (const d of manifest.datasets) {
-      // The dataset's recipe: an ordered op list (the shape DataStore.restoreState
-      // consumes). Source ops get their Parquet bytes re-attached from the sidecar;
-      // transform ops are inline.
+      // The dataset's RAW log slice (the shape DataStore.rawRestore consumes): full op
+      // envelopes with stable id/hlc/target preserved, including retract/reorder ops.
+      // Source ops get their Parquet bytes re-attached to payload.src from the sidecar;
+      // transform/structural ops are inline verbatim.
       const ops = [];
       for (const op of d.ops ?? []) {
-        if (isSourceOp(op)) {
-          const bytes = await this.#readBytes(this.#file(id, op.file));
-          const src = { meta: op.src.meta, label: op.src.label ?? null, parquet: new Uint8Array(bytes) };
-          if (op.src.wide) { src.wide = true; src.rowidBase = op.src.rowidBase; }
-          const restored = { type: op.type, src };
-          if (op.author) restored.author = op.author;
-          if (op.type === 'join') { restored.joinKey = op.joinKey; restored.aliases = op.aliases ?? []; restored.joinType = op.joinType ?? 'left'; }
-          ops.push(restored);
+        // A LIVE source op carries `payload.src.file` (a byte sidecar keyed by op id) —
+        // re-attach its Parquet. A byte-less source op is a retracted source: keep it
+        // verbatim (the fold drops it) with no bytes to read. Non-source ops pass through.
+        if (isSourceOp(op) && op.payload?.src?.file) {
+          const bytes = await this.#readBytes(this.#file(id, op.payload.src.file));
+          const src = { ...op.payload.src, parquet: new Uint8Array(bytes) };
+          ops.push({ ...op, payload: { ...op.payload, src } });
         } else {
           ops.push(op);
         }
@@ -520,12 +520,12 @@ export class ProjectStore {
   async #writeSources(id, bundle, only) {
     for (const d of bundle.datasets) {
       if (only && !only.has(d.id)) continue;
-      let n = 0;
       for (const op of d.state.ops ?? []) {
         if (!isSourceOp(op)) continue;
-        n++;
-        if (!op.src?.parquet) throw new Error(`save: dataset ${d.id} source ${n} has no parquet`);
-        await this.#write(this.#file(id, `ds${d.id}_src${n}.parquet`), op.src.parquet);
+        const { file, parquet } = op.payload?.src ?? {};
+        if (!file) continue; // retracted (byte-less) source — nothing to write
+        if (!parquet) throw new Error(`save: dataset ${d.id} source ${file} has no parquet`);
+        await this.#write(this.#file(id, file), parquet);
       }
     }
   }
@@ -544,21 +544,23 @@ export class ProjectStore {
 export function buildManifest({ name, savedAt, bundle }) {
   const datasets = [];
   for (const d of bundle.datasets) {
-    // The dataset's recipe as an ordered op list: source ops carry a Parquet FILE ref
-    // (bytes written separately by #writeSources), transform ops are inline + light.
+    // The dataset's RAW log slice: full op envelopes (stable id/hlc/target/owner/author),
+    // including retract/reorder structural ops, so the one true log round-trips verbatim.
+    // Source ops carry a Parquet FILE ref instead of bytes (written separately by
+    // #writeSources); the peer-local DuckDB table name is already stripped by rawExport.
     const ops = [];
-    let n = 0;
     for (const op of d.state.ops ?? []) {
       if (isSourceOp(op)) {
-        n++;
-        const src = { meta: op.src.meta, label: op.src.label ?? null };
-        if (op.src.wide) { src.wide = true; src.rowidBase = op.src.rowidBase; }
-        const entry = { type: op.type, src, file: `ds${d.id}_src${n}.parquet` };
-        if (op.author) entry.author = op.author;
-        if (op.type === 'join') { entry.joinKey = op.joinKey; entry.aliases = op.aliases ?? []; entry.joinType = op.joinType ?? 'left'; }
-        ops.push(entry);
+        const s = op.payload.src;
+        // Keep the byte sidecar's op-id-keyed `file` ref; drop the Parquet bytes and the
+        // peer-local table (rawExport already omitted the table). A byte-less (retracted)
+        // source has no `file` and is persisted as a bare envelope.
+        const src = { meta: s.meta, label: s.label ?? null };
+        if (s.wide) { src.wide = true; src.rowidBase = s.rowidBase; }
+        if (s.file) src.file = s.file;
+        ops.push({ ...op, payload: { ...op.payload, src } });
       } else {
-        ops.push(op); // transform op — no bytes, store as-is
+        ops.push(op); // transform / retract / reorder op — no bytes, store as-is
       }
     }
     datasets.push({ id: d.id, name: d.name, libraryLink: d.libraryLink ?? null, ops });

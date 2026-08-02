@@ -542,7 +542,10 @@ export class ProjectSync {
     this.#ensureCollab(); // every saved project carries a collab identity (transport-agnostic)
     const datasets = [];
     for (const ds of this.#datasets.all()) {
-      const state = await ds.exportState({ includeParquet: all || dirty.has(ds.id) });
+      // The project save path serialises each dataset's RAW log slice (the one true
+      // log — retract/reorder ops preserved, ids stable), NOT the folded recipe that
+      // exportState builds for the library/bundle re-home tier (#148 save-folds bug).
+      const state = await ds.rawExport({ includeParquet: all || dirty.has(ds.id) });
       datasets.push({ id: ds.id, name: ds.name, libraryLink: ds.libraryLink ?? null, state });
     }
     // Record the active plugin set alongside the data, so reopening restores the

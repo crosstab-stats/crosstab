@@ -339,7 +339,16 @@ export class DatasetManager {
       ds.libraryLink = d.libraryLink ?? null;
       this.#datasets.set(d.id, ds);
       try {
-        await ds.restoreState(d.state);
+        // Project-load path (project.json): RAW op envelopes (with id/hlc/target) →
+        // restore verbatim, preserving ids so the retract/reorder structural ops
+        // survive and merge can match op identity. Library/bundle re-home path (folded
+        // recipe, no envelope) → restoreState re-mints under this dataset's fresh id.
+        const ops = d.state?.ops;
+        if (Array.isArray(ops) && ops.length && ops[0]?.hlc != null && ops[0]?.target != null) {
+          await ds.rawRestore(ops);
+        } else {
+          await ds.restoreState(d.state);
+        }
       } catch (err) {
         // A dataset whose sources didn't materialise (e.g. gap-fill bytes not yet here)
         // must NOT linger in the Map with no tables — a later #snapshot would try to
