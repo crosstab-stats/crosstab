@@ -183,6 +183,22 @@ test('mergeManifests (collection-log): a renameDataset op updates the name (log 
   assert.equal(out.datasets.find((d) => d.id === 1).name, 'Renamed');
 });
 
+test('mergeManifests (collection-log): a dataset in MY base but never in theirs is a genuine add, not a delete', () => {
+  // The reported bug: B adds "wiki" BEFORE co-authoring, so B's per-peer session-start
+  // base contains it; A never had it. base-as-ancestor would read "in base+mine, absent
+  // in theirs" as "A deleted wiki" and drop it. The ancestor must be the SHARED history
+  // (demo only), so wiki stays as B's genuine add.
+  const demo = ds(1, [source('s1', 'a', ['x'])], []);
+  const wiki = ds(2, [source('s2', 'b', ['y'])], []);
+  const addDemo = collOp('a1', 'addDataset', 1, 'Demo');
+  const addWiki = collOp('a2', 'addDataset', 2, 'Wiki', 5);
+  const base = { ...manifest({ datasets: [demo, wiki] }), collectionLog: [addDemo, addWiki] }; // B's base wrongly has wiki
+  const mine = { ...manifest({ datasets: [demo, wiki] }), collectionLog: [addDemo, addWiki] }; // B
+  const theirs = { ...manifest({ datasets: [demo] }), collectionLog: [addDemo] }; // A never saw wiki
+  const out = mergeManifests(base, mine, theirs, buildMergers([])).manifest;
+  assert.deepEqual(out.datasets.map((d) => d.id).sort(), [1, 2], 'wiki kept as an add — not dropped as a phantom delete');
+});
+
 test('mergeManifests: without a collectionLog, the legacy delete-inference path still runs', () => {
   const both = [ds(1, [source('s1', 'a', ['x'])], []), ds(2, [source('s2', 'b', ['y'])], [])];
   const base = manifest({ datasets: both });

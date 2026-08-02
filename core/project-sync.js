@@ -1307,8 +1307,14 @@ export class ProjectSync {
           const sources = [];
           let complete = true;
           for (const s of d.sources || []) {
-            // Reuse local Parquet, or bytes a co-author already streamed us (#148 6c).
-            const parquet = (s.id ? localParquet.get(s.id) : null) ?? (s.id ? this.#liveSourceBytes.get(s.id) : null);
+            // Reuse local Parquet (fresh from this snapshot — safe to hand off), or a
+            // COPY of the bytes a co-author streamed us (#148 6c). The copy is essential:
+            // DuckDB's registerFileBuffer TRANSFERS the ArrayBuffer to its worker
+            // (detaching it), so handing over the retained #liveSourceBytes buffer would
+            // detach our cached copy — and the next re-apply would throw "ArrayBuffer …
+            // already detached", aborting loadBundle mid-rebuild and wiping data.
+            const held = s.id ? this.#liveSourceBytes.get(s.id) : null;
+            const parquet = (s.id ? localParquet.get(s.id) : null) ?? (held ? held.slice() : null);
             if (!parquet) { missing++; complete = false; continue; } // still lacking → request below
             sources.push({ id: s.id, meta: s.meta, label: s.label ?? null, combine: s.combine ?? 'base', joinKey: s.joinKey, aliases: s.aliases, wide: s.wide ?? false, rowidBase: s.rowidBase, parquet });
           }
