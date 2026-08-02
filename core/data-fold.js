@@ -28,6 +28,12 @@
 /** Op types that are structural (consumed here), not replayable data steps. */
 const STRUCTURAL = new Set(['retract', 'reorder']);
 
+/** Flatten one op into the replay/History shape: `{id, author, type, ...payload}`.
+ * The inverse convention the mutators use when they `append({type, payload})`. */
+export function flattenStep(op) {
+  return { id: op.id, author: op.author, type: op.type, ...(op.payload ?? {}) };
+}
+
 /**
  * Resolve a dataset's raw op slice (HLC-ordered, from `ProjectLog.slice`) into the
  * ordered list of **live data steps** to replay. Retracted ops are dropped;
@@ -60,7 +66,7 @@ export function foldDataOps(ops) {
     ordered = [...live].sort((a, b) => at(a) - at(b));
   }
 
-  return ordered.map((op) => ({ id: op.id, author: op.author, type: op.type, ...(op.payload ?? {}) }));
+  return ordered.map(flattenStep);
 }
 
 /**

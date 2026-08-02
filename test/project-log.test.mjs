@@ -149,6 +149,32 @@ test('serialize is HLC-ordered regardless of append/receive interleaving', () =>
   assert.deepEqual(a.log.serialize().map((o) => o.id), [o1.id, o2.id]);
 });
 
+test('scoped undo/redo: undoWhere targets one tier on the shared log, leaving others', () => {
+  // The DataStore relies on this to undo ONLY its own dataset's ops on the one log.
+  const { log, tick } = peer(1000);
+  const ds5 = (o) => o.target.startsWith('ds:5/');
+  log.append(addDs(5, 'wide'));                                                  // collection tier
+  tick(1100); const a = log.append({ target: 'ds:5/var:x', owner: 'core', type: 'computeVar', payload: { name: 'x' } });
+  tick(1200); const b = log.append({ target: 'ds:5/var:y', owner: 'core', type: 'computeVar', payload: { name: 'y' } });
+  assert.equal(log.canUndoWhere(ds5), true);
+  const undone = log.undoWhere(ds5);
+  assert.equal(undone.id, b.id, 'undid the highest-HLC ds:5 op');
+  assert.deepEqual(log.slice(ds5).map((o) => o.id), [a.id], 'only a remains live in the slice');
+  assert.deepEqual(log.state('collection'), [{ id: 5, name: 'wide' }], 'the collection tier is untouched');
+  assert.deepEqual(log.undoneOps(ds5).map((o) => o.id), [b.id]);
+  // redoWhere re-applies it
+  assert.equal(log.redoWhere(ds5).id, b.id);
+  assert.deepEqual(log.slice(ds5).map((o) => o.id), [a.id, b.id]);
+});
+
+test('clearWhere hard-drops matching ops from both active and redo (rollback of an invalid op)', () => {
+  const { log } = peer(1000);
+  const a = log.append({ target: 'ds:5/rows', owner: 'core', type: 'filterCases', payload: { expr: 'bad(' } });
+  log.clearWhere((o) => o.id === a.id); // as DataStore does when a transform's SQL fails
+  assert.equal(log.slice((o) => o.target.startsWith('ds:5/')).length, 0);
+  assert.equal(log.canUndo, false);
+});
+
 test('undo/redo walk the log by HLC; a fresh op discards the redo branch', () => {
   const { log, tick } = peer(1000);
   log.append(addDs(1, 'a'));

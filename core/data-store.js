@@ -45,8 +45,9 @@
 
 import { CoreEvents } from './event-bus.js';
 import { quoteIdent } from './duckdb-manager.js';
-import { newOpId, deterministicOpId } from './merge.js';
-import { currentAuthor } from './user-identity.js';
+import { newOpId } from './merge.js';
+import { foldDataOps, flattenStep } from './data-fold.js';
+import { ProjectLog } from './project-log.js';
 
 /** Column auto-added when stacking files, tagging each row with its origin so a
  * pooled multi-file/multi-year dataset stays distinguishable (group/filter by
@@ -146,31 +147,16 @@ export class DataStore {
   libraryLink = null;
 
   /**
-   * The **universal operation log**: one ordered, replayable history of *every*
-   * operation — data loads and data transforms alike. Entry types:
-   *  - `{type:'load', src}` — the base import (a replace resets the log to this).
-   *  - `{type:'append', src}` — stack more rows (another immutable source).
-   *  - `{type:'join', src, joinKey, aliases}` — add columns by a key.
-   *  - `{type:'setVariable', name, patch}` — metadata edit.
-   *  - `{type:'setCell', rid, column, value, row}` — sparse cell override.
-   *  - `{type:'computeVar'|'recodeVar', name, …}` — derived variable.
-   * where `src = {table, meta, label}` references an immutable DuckDB source table.
-   *
-   * {@link DataStore#rederive} partitions this by op kind to build the view, so the
-   * *result* is identical to the old sources+transforms split — but now loads are
-   * first-class history: undoable, rewindable, and shown as steps. The persisted
-   * shape ({@link DataStore#exportState}) stays `{sources, transforms}` (derived
-   * from the log), so the project/library tiers are unchanged.
-   * @type {Array<object>}
+   * The project's **single** operation log (see docs/ARCHITECTURE-unified-log.md).
+   * This dataset does NOT own a private log — its history is the slice of the shared
+   * log whose target is `ds:<id>/…` ({@link DataStore#dataSlice}). Every mutator
+   * appends such an op via `#log.append`; {@link DataStore#rederive} folds the slice
+   * ({@link foldDataOps}: retract tombstones + reorder applied) and replays the live
+   * steps into DuckDB. Undo/redo are scoped to this dataset's ops on the shared log
+   * (`undoWhere`/`redoWhere`).
+   * @type {import('./project-log.js').ProjectLog}
    */
-  #log = [];
-
-  /**
-   * Undone operations, most-recently-undone last — the redo stack. Cleared by any
-   * new operation (standard undo/redo branch-discard).
-   * @type {Array<object>}
-   */
-  #redoStack = [];
+  #log;
 
   /** Monotonic source-table counter (never reused), so an undone source op leaves
    * no naming/row-id collision for a later one. Also the row-id namespace. */
@@ -221,18 +207,58 @@ export class DataStore {
    *   DuckDB tables/view so multiple datasets coexist.
    * @param {string} [opts.name='Dataset'] - Display name.
    */
-  constructor(bus, duckdb, { id = 1, name = 'Dataset' } = {}) {
+  constructor(bus, duckdb, { id = 1, name = 'Dataset', log } = {}) {
     this.#bus = bus;
     this.#duckdb = duckdb;
     this.#id = id;
     this.name = name;
     this.#view = `ct_view_${id}`;
     this.#sourcePrefix = `ct_src_${id}_`;
+    this.#log = log ?? new ProjectLog();
   }
 
   /** @returns {number|string} This dataset's id. */
   get id() {
     return this.#id;
+  }
+
+  /** This dataset's op-target prefix in the shared log (`ds:<id>/`). */
+  get #prefix() {
+    return `ds:${this.#id}/`;
+  }
+
+  /** Does an op belong to THIS dataset's slice of the shared log? */
+  #mine = (op) => op.owner === 'core' && typeof op.target === 'string' && op.target.startsWith(this.#prefix);
+
+  /** This dataset's ops in HLC order (its slice of the shared log). */
+  #dataSlice() {
+    return this.#log.slice(this.#mine);
+  }
+
+  /** The live, ordered data steps to replay (retract + reorder applied), flattened
+   * to `{id, author, type, …payload}` — the shape the {@link DataStore#rederive}
+   * switch reads (identical to when the log was a plain array). */
+  #steps() {
+    return foldDataOps(this.#dataSlice());
+  }
+
+  /**
+   * Append one data op to the shared log, targeted at this dataset. `type` is the
+   * verb; `payload` carries the op's fields (the flattened form the fold produces);
+   * `targetSuffix` sets merge granularity (e.g. `var:income`, `source:<tok>`, `order`),
+   * matching {@link module:core/merge~opTarget} so concurrent edits of the same thing
+   * collide and disjoint ones auto-merge.
+   * @returns {import('./op-log.js').Op}
+   */
+  #append(type, payload, targetSuffix, reads = []) {
+    return this.#log.append({ target: this.#prefix + targetSuffix, owner: 'core', type, payload, reads });
+  }
+
+  /** Retract (log-native delete) a data op of this dataset by id — the fold then
+   * drops it. Deletion is an explicit op so it survives a merge (physical removal is
+   * merge-unsafe under shared-id ancestry). */
+  #retract(opId) {
+    return this.#append('retract', { opId }, `op:${opId}`);
   }
 
   // ---------------------------------------------------------------------------
@@ -283,22 +309,40 @@ export class DataStore {
    */
   async loadDataset({ variables, columns, parquet, mode = 'replace', source, joinKey, aliases, joinType }) {
     const combine = this.#hasData() && (mode === 'append' || mode === 'join') ? mode : 'replace';
-    if (combine === 'replace') {
-      // A replace is a hard reset: the new import becomes the base of a fresh log.
-      await this.#dropAll();
-      const src = await this.#createSource({ variables, columns, parquet, source });
-      this.#log = [{ type: 'load', src }];
-    } else {
-      const src = await this.#createSource({ variables, columns, parquet, source });
-      this.#log.push(
-        combine === 'join'
-          ? { type: 'join', src, joinKey, aliases: aliases ?? [], joinType: joinType ?? 'left' }
-          : { type: 'append', src },
-      );
-    }
-    // A new operation discards the redo branch (standard undo/redo semantics).
-    this.#redoStack = [];
+    if (combine === 'replace') await this.#resetData(); // retract prior steps + drop tables
+    const src = await this.#createSource({ variables, columns, parquet, source });
+    this.#addSourceOp(combine === 'replace' ? 'load' : combine === 'join' ? 'join' : 'append', src, {
+      joinKey,
+      aliases,
+      joinType,
+    });
     await this.rederive(combine === 'replace' ? 'replace' : combine);
+  }
+
+  /**
+   * Append a source op (`load`/`append`/`join`) to the shared log, targeted uniquely
+   * so two independent source adds never collide on merge (`source:<random>`). The
+   * live DuckDB handle rides in `payload.src` for now; moving the *bytes* to a
+   * content-addressed asset (and the table name to a peer-local map) is Layer 4/7.
+   * @returns {import('./op-log.js').Op}
+   */
+  #addSourceOp(type, src, { joinKey, aliases, joinType } = {}) {
+    const payload = { src };
+    if (type === 'join') {
+      payload.joinKey = joinKey;
+      payload.aliases = aliases ?? [];
+      payload.joinType = joinType ?? 'left';
+    }
+    return this.#append(type, payload, `source:${newOpId()}`);
+  }
+
+  /** Reset the dataset for a `replace`: retract every live step (so the reset
+   * survives a merge — deletion is an explicit op) and drop this dataset's DuckDB
+   * tables/files. The shared log is otherwise untouched (other datasets, other tiers).
+   */
+  async #resetData() {
+    for (const step of this.#steps()) this.#retract(step.id);
+    await this.#dropDuckDB();
   }
 
   /**
@@ -312,10 +356,9 @@ export class DataStore {
    * @param {{selectSql: string, variables: VariableMeta[], source?: string}} arg
    */
   async loadFromSql({ selectSql, variables, source }) {
-    await this.#dropAll();
+    await this.#resetData();
     const src = await this.#createSourceFromSql(selectSql, variables, source);
-    this.#log = [{ type: 'load', src }];
-    this.#redoStack = [];
+    this.#addSourceOp('load', src);
     await this.rederive('replace');
   }
 
@@ -332,8 +375,7 @@ export class DataStore {
   async joinFromSql({ selectSql, variables, source, joinKey, joinType }) {
     if (!this.#hasData()) throw new Error('Join needs a base dataset with data.');
     const src = await this.#createSourceFromSql(selectSql, variables, source);
-    this.#log.push({ type: 'join', src, joinKey, aliases: [], joinType: joinType ?? 'left' });
-    this.#redoStack = [];
+    this.#addSourceOp('join', src, { joinKey, aliases: [], joinType });
     await this.rederive('join');
   }
 
@@ -374,7 +416,7 @@ export class DataStore {
    */
   async loadStreaming({ mode = 'replace', source, ingest }) {
     const combine = this.#hasData() && mode === 'append' ? 'append' : 'replace';
-    if (combine === 'replace') await this.#dropAll();
+    if (combine === 'replace') await this.#resetData();
 
     const seq = ++this.#sourceSeq;
     const table = `${this.#sourcePrefix}${seq}`;
@@ -422,9 +464,7 @@ export class DataStore {
     this.#sourceTables.add(table);
     // Row id already baked into the table by the ingest CTAS (no #ensureRowId).
     const src = { table, meta: meta.map((m) => ({ ...m })), label: source ?? null };
-    if (combine === 'replace') this.#log = [{ type: 'load', src }];
-    else this.#log.push({ type: 'append', src });
-    this.#redoStack = [];
+    this.#addSourceOp(combine === 'replace' ? 'load' : 'append', src);
     await this.rederive(combine);
   }
 
@@ -460,7 +500,7 @@ export class DataStore {
       throw new Error('loadWide: variables (the file catalog) are required');
     }
     const combine = this.#hasData() && mode === 'append' ? 'append' : 'replace';
-    if (combine === 'replace') await this.#dropAll();
+    if (combine === 'replace') await this.#resetData();
 
     const seq = ++this.#sourceSeq;
     const base = seq * ROWID_STRIDE;
@@ -526,9 +566,7 @@ export class DataStore {
       meta: variables.map((m) => ({ ...m })),
       label: source ?? null,
     };
-    if (combine === 'replace') this.#log = [{ type: 'load', src }];
-    else this.#log.push({ type: 'append', src });
-    this.#redoStack = [];
+    this.#addSourceOp(combine === 'replace' ? 'load' : 'append', src);
     await this.rederive(combine);
   }
 
@@ -548,8 +586,9 @@ export class DataStore {
    * @returns {{ from: string, rid: string }} `from` SQL relation + row-id expression.
    */
   #readRelation() {
-    if (this.#log.length === 1) {
-      const op = this.#log[0];
+    const steps = this.#steps();
+    if (steps.length === 1) {
+      const op = steps[0];
       if (op.type === 'load' && op.src.wide) {
         return {
           from: `read_parquet(${sqlString(op.src.file)})`,
@@ -564,27 +603,10 @@ export class DataStore {
     return { from: quoteIdent(this.#view), rid: quoteIdent(ROWID_COL), rowKey: null };
   }
 
-  /** The load/append/join ops in the active log, in order (the base is first). */
+  /** The load/append/join steps among the dataset's live ops, in fold order (the
+   * base `load` first). */
   #sourceOps() {
-    return this.#log.filter((o) => o.type === 'load' || o.type === 'append' || o.type === 'join');
-  }
-
-  /** Stamp every op with a stable id (collaboration/merge identity — see
-   * {@link module:core/merge}). New ops from the push sites arrive without one and
-   * get a fresh random id; restore assigns *deterministic* ids to legacy ops before
-   * this runs, so those are preserved. Idempotent, so calling it on every rederive
-   * is cheap. Undo/redo preserve ids because they move the op object intact. */
-  #ensureIds() {
-    // An op lacking an id is genuinely NEW (restore pre-assigns ids to every loaded
-    // op), so this is the one safe point to stamp authorship (#148 step 2) — a
-    // snapshot of who made the change, at creation, never applied retroactively to
-    // legacy ops (which would falsely attribute them to whoever opened the project).
-    for (const op of this.#log) {
-      if (!op.id) {
-        op.id = newOpId();
-        op.author = currentAuthor(); // {authorId, initials, name, color}; snapshot, survives a later rename
-      }
-    }
+    return this.#steps().filter((o) => SOURCE_OPS.has(o.type));
   }
 
   /**
@@ -672,10 +694,11 @@ export class DataStore {
     );
   }
 
-  /** Drop the working view, every source table, and every registered chunk file
-   * this dataset ever materialised (including ones left by undone/discarded ops);
-   * reset the log. */
-  async #dropAll() {
+  /** Drop this dataset's DuckDB state — the working view, every source table, and
+   * every registered chunk file it ever materialised (including ones left by
+   * undone/retracted ops). Peer-local cleanup only; the shared log is untouched (a
+   * `replace` retracts its ops via {@link DataStore#resetData}). */
+  async #dropDuckDB() {
     await this.#duckdb.query(`DROP VIEW IF EXISTS ${quoteIdent(this.#view)}`);
     for (const table of this.#sourceTables) {
       await this.#duckdb.query(`DROP TABLE IF EXISTS ${quoteIdent(table)}`);
@@ -685,8 +708,6 @@ export class DataStore {
       try { await this.#duckdb.dropRegisteredFile(file, { removeFromOpfs: true }); } catch { /* best-effort */ }
     }
     this.#wideFiles.clear();
-    this.#log = [];
-    this.#redoStack = [];
   }
 
   /**
@@ -702,13 +723,13 @@ export class DataStore {
    * @returns {Promise<void>}
    */
   async rederive(reason = 'change') {
-    this.#ensureIds(); // every op carries a stable merge id before it is derived/persisted
-    // STRICT SEQUENTIAL REPLAY: fold the log in order, so each op sees exactly the
-    // dataset state the ops before it produced — true script semantics. A compute
+    // STRICT SEQUENTIAL REPLAY: fold this dataset's slice of the shared log (retract
+    // tombstones + reorder applied → the ordered live steps), so each op sees exactly
+    // the dataset state the ops before it produced — true script semantics. A compute
     // logged before a join is evaluated over the pre-join data (and appended rows
     // added after it get NULL for it, via UNION ALL BY NAME). This guarantees the
     // engine's result matches running the log as a script.
-    const log = this.#log;
+    const log = this.#steps();
     // source_file provenance appears once there's >1 stacked source (load+append).
     const multiStacked = log.filter((o) => o.type === 'load' || o.type === 'append').length > 1;
 
@@ -914,8 +935,7 @@ export class DataStore {
     // retype-to-numeric cast is applied in the derived view (see rederive), so the
     // source column is untouched and the change is reversible via undo(). A fresh
     // edit discards any redo branch (standard undo/redo semantics).
-    this.#log.push({ type: 'setVariable', name, patch });
-    this.#redoStack = [];
+    this.#append('setVariable', { name, patch }, `var:${name}`);
     await this.rederive('transform');
   }
 
@@ -942,14 +962,16 @@ export class DataStore {
   async setCell(rid, column, value, displayRow = 0) {
     if (!this.#byName.has(column)) throw new Error(`setCell: unknown variable "${column}"`);
     if (rid == null || !/^\d+$/.test(String(rid))) throw new Error('setCell: invalid row id');
-    this.#log.push({
-      type: 'setCell',
-      rid: String(rid),
-      column,
-      value: value === '' ? null : value,
-      row: Math.max(0, Math.floor(Number(displayRow) || 0)),
-    });
-    this.#redoStack = [];
+    this.#append(
+      'setCell',
+      {
+        rid: String(rid),
+        column,
+        value: value === '' ? null : value,
+        row: Math.max(0, Math.floor(Number(displayRow) || 0)),
+      },
+      `cell:${column}:${String(rid)}`,
+    );
     await this.rederive('transform');
   }
 
@@ -970,7 +992,7 @@ export class DataStore {
   async computeVariable(name, expr, varType = 'numeric') {
     this.#assertNewVarName(name);
     if (!expr || !String(expr).trim()) throw new Error('Compute: the expression is empty.');
-    await this.#addDerivedVar({ type: 'computeVar', name: name.trim(), expr: String(expr), varType: normType(varType) });
+    await this.#addDerivedVar('computeVar', { name: name.trim(), expr: String(expr), varType: normType(varType) }, `var:${name.trim()}`);
   }
 
   /**
@@ -991,14 +1013,17 @@ export class DataStore {
   async recodeVariable(name, source, rules, varType = 'numeric', elseRule = { kind: 'copy' }) {
     this.#assertNewVarName(name);
     if (!this.#byName.has(source)) throw new Error(`Recode: source variable "${source}" not found.`);
-    await this.#addDerivedVar({
-      type: 'recodeVar',
-      name: name.trim(),
-      source,
-      rules: Array.isArray(rules) ? rules : [],
-      elseRule: elseRule ?? { kind: 'copy' },
-      varType: normType(varType),
-    });
+    await this.#addDerivedVar(
+      'recodeVar',
+      {
+        name: name.trim(),
+        source,
+        rules: Array.isArray(rules) ? rules : [],
+        elseRule: elseRule ?? { kind: 'copy' },
+        varType: normType(varType),
+      },
+      `var:${name.trim()}`,
+    );
   }
 
   /**
@@ -1015,7 +1040,7 @@ export class DataStore {
   async filterCases(expr, label) {
     if (!expr || !String(expr).trim()) throw new Error('Select cases: the condition is empty.');
     const cond = String(expr).trim();
-    await this.#addDerivedVar({ type: 'filterCases', expr: cond, label: label || cond });
+    await this.#addDerivedVar('filterCases', { expr: cond, label: label || cond }, 'rows');
   }
 
   /**
@@ -1028,7 +1053,7 @@ export class DataStore {
     const list = (Array.isArray(names) ? names : [names]).map((n) => String(n).trim()).filter(Boolean);
     const drop = list.filter((n) => n !== ROWID_COL && this.#byName.has(n));
     if (!drop.length) throw new Error('Drop variables: none of those variables exist.');
-    await this.#addDerivedVar({ type: 'dropVars', names: drop });
+    await this.#addDerivedVar('dropVars', { names: drop }, 'schema');
   }
 
   /**
@@ -1041,7 +1066,7 @@ export class DataStore {
     const list = (Array.isArray(names) ? names : [names]).map((n) => String(n).trim()).filter(Boolean);
     const keep = list.filter((n) => this.#byName.has(n));
     if (!keep.length) throw new Error('Keep variables: none of those variables exist.');
-    await this.#addDerivedVar({ type: 'keepVars', names: keep });
+    await this.#addDerivedVar('keepVars', { names: keep }, 'schema');
   }
 
   /**
@@ -1061,18 +1086,19 @@ export class DataStore {
     if (!/^[A-Za-z][A-Za-z0-9_.]*$/.test(to)) {
       throw new Error('Rename: new name must start with a letter and use only letters, digits, _ or .');
     }
-    await this.#addDerivedVar({ type: 'renameVar', from, to });
+    await this.#addDerivedVar('renameVar', { from, to }, `var:${from}`);
   }
 
-  /** Push a compute/recode/filter transform and re-derive; roll back if the
-   * generated SQL is invalid so the dataset is never left broken. */
-  async #addDerivedVar(t) {
-    this.#log.push(t);
-    this.#redoStack = [];
+  /** Append a compute/recode/filter/schema transform op and re-derive; if the
+   * generated SQL is invalid, **hard-drop** the just-appended op (it was never valid,
+   * so it is removed outright — not retracted) and re-derive, so the dataset is never
+   * left broken. */
+  async #addDerivedVar(type, payload, targetSuffix, reads = []) {
+    const op = this.#append(type, payload, targetSuffix, reads);
     try {
       await this.rederive('transform');
     } catch (err) {
-      this.#log.pop();
+      this.#log.clearWhere((o) => o.id === op.id);
       await this.rederive('transform');
       throw new Error(err?.message || String(err));
     }
@@ -1098,32 +1124,33 @@ export class DataStore {
    * @returns {Array<object>}
    */
   getTransforms() {
-    return this.#log.filter((t) => DATA_OPS.has(t.type)).map((t) => structuredClone(t));
+    return this.#steps()
+      .filter((t) => DATA_OPS.has(t.type))
+      .map((t) => structuredClone(t));
   }
 
-  /** @returns {boolean} Whether there is an operation to undo. */
+  /** @returns {boolean} Whether this dataset has an operation to undo. */
   get canUndo() {
-    return this.#log.length > 0;
+    return this.#log.canUndoWhere(this.#mine);
   }
 
-  /** @returns {boolean} Whether there is an undone operation to redo. */
+  /** @returns {boolean} Whether this dataset has an undone operation to redo. */
   get canRedo() {
-    return this.#redoStack.length > 0;
+    return this.#log.canRedoWhere(this.#mine);
   }
 
-  /** Undo the most recent operation (onto the redo stack) and re-derive — now
-   * spans loads/appends/joins too. No-op if the log is empty. */
+  /** Undo this dataset's most recent operation (highest-HLC op in its slice, onto
+   * the shared redo stack) and re-derive — spans loads/appends/joins and the
+   * structural retract/reorder ops too. No-op if this dataset has nothing to undo. */
   async undo() {
-    if (this.#log.length === 0) return;
-    this.#redoStack.push(this.#log.pop());
+    if (!this.#log.undoWhere(this.#mine)) return;
     await this.rederive('undo');
   }
 
-  /** Re-apply the most recently undone operation and re-derive. No-op if there is
-   * nothing to redo. */
+  /** Re-apply this dataset's most recently undone operation and re-derive. No-op if
+   * there is nothing to redo. */
   async redo() {
-    if (this.#redoStack.length === 0) return;
-    this.#log.push(this.#redoStack.pop());
+    if (!this.#log.redoWhere(this.#mine)) return;
     await this.rederive('redo');
   }
 
@@ -1139,8 +1166,12 @@ export class DataStore {
    */
   getHistory() {
     return {
-      applied: this.#log.map((t) => structuredClone(t)),
-      future: [...this.#redoStack].reverse().map((t) => structuredClone(t)),
+      applied: this.#steps().map((t) => structuredClone(t)),
+      future: this.#log
+        .undoneOps(this.#mine)
+        .reverse() // most-recently-undone first — the next op a redo would re-apply
+        .filter((o) => o.type !== 'retract' && o.type !== 'reorder')
+        .map((o) => structuredClone(flattenStep(o))),
     };
   }
 
@@ -1156,11 +1187,18 @@ export class DataStore {
    * @returns {Promise<void>}
    */
   async rewindTo(n) {
-    const total = this.#log.length + this.#redoStack.length;
-    const target = Math.max(0, Math.min(Math.floor(n), total));
-    if (target === this.#log.length) return;
-    while (this.#log.length > target) this.#redoStack.push(this.#log.pop());
-    while (this.#log.length < target) this.#log.push(this.#redoStack.pop());
+    const target = Math.max(0, Math.floor(n));
+    // Undo down: each undo targets a currently-LIVE step (highest HLC among them),
+    // so it removes exactly one from the applied list — robust even with tombstones.
+    let guard = 0;
+    while (this.#steps().length > target && guard++ < 10000) {
+      const liveIds = new Set(this.#steps().map((s) => s.id));
+      if (!this.#log.undoWhere((o) => this.#mine(o) && liveIds.has(o.id))) break;
+    }
+    // Redo up: re-apply the most-recently-undone replayable (non-structural) ops.
+    while (this.#steps().length < target && guard++ < 10000) {
+      if (!this.#log.redoWhere((o) => this.#mine(o) && o.type !== 'retract' && o.type !== 'reorder')) break;
+    }
     await this.rederive('rewind');
   }
 
@@ -1177,15 +1215,15 @@ export class DataStore {
    * @returns {Promise<void>}
    */
   async moveOp(from, to) {
-    const n = this.#log.length;
+    const ids = this.#steps().map((s) => s.id);
+    const n = ids.length;
     from = Math.floor(from);
     to = Math.floor(to);
     if (from < 0 || from >= n || to < 0 || to >= n || from === to) return;
     if (from === 0 || to === 0) throw new Error('The base import stays first.');
-    const next = [...this.#log];
-    const [op] = next.splice(from, 1);
-    next.splice(to, 0, op);
-    await this.#applyReorder(next, op);
+    const [id] = ids.splice(from, 1);
+    ids.splice(to, 0, id);
+    await this.#applyReorder(ids, 'move');
   }
 
   /**
@@ -1197,12 +1235,23 @@ export class DataStore {
    * @returns {Promise<void>}
    */
   async removeOp(index) {
+    const steps = this.#steps();
     index = Math.floor(index);
-    if (index < 0 || index >= this.#log.length) return;
-    if (this.#log[index]?.type === 'load') throw new Error('The base import can’t be removed — use File ▸ replace instead.');
-    const next = [...this.#log];
-    next.splice(index, 1);
-    await this.#applyReorder(next);
+    if (index < 0 || index >= steps.length) return;
+    if (steps[index]?.type === 'load') throw new Error('The base import can’t be removed — use File ▸ replace instead.');
+    // Validate the resulting pipeline first (dependency guard).
+    const problem = validateOrder(steps.filter((_, i) => i !== index));
+    if (problem) throw new Error(`That removal isn’t valid here: ${problem}`);
+    // Deletion is an explicit retract op (survives a merge); hard-drop it only if the
+    // re-derive somehow still fails, so the pipeline is never left broken.
+    const op = this.#retract(steps[index].id);
+    try {
+      await this.rederive('reorder');
+    } catch (err) {
+      this.#log.clearWhere((o) => o.id === op.id);
+      await this.rederive('reorder');
+      throw new Error(`That removal isn’t valid here: ${err?.message || err}`);
+    }
   }
 
   /**
@@ -1215,12 +1264,13 @@ export class DataStore {
    * @returns {Promise<void>}
    */
   async collectImports() {
-    const firstTx = this.#log.findIndex((o) => !SOURCE_OPS.has(o.type));
+    const steps = this.#steps();
+    const firstTx = steps.findIndex((o) => !SOURCE_OPS.has(o.type));
     if (firstTx === -1) return; // no transforms — nothing to pull above
-    if (!this.#log.slice(firstTx).some((o) => SOURCE_OPS.has(o.type))) return; // already collected
-    const sources = this.#log.filter((o) => SOURCE_OPS.has(o.type));
-    const transforms = this.#log.filter((o) => !SOURCE_OPS.has(o.type));
-    await this.#applyReorder([...sources, ...transforms], true);
+    if (!steps.slice(firstTx).some((o) => SOURCE_OPS.has(o.type))) return; // already collected
+    const sources = steps.filter((o) => SOURCE_OPS.has(o.type)).map((o) => o.id);
+    const transforms = steps.filter((o) => !SOURCE_OPS.has(o.type)).map((o) => o.id);
+    await this.#applyReorder([...sources, ...transforms], 'collect imports');
   }
 
   /**
@@ -1237,8 +1287,10 @@ export class DataStore {
    * @returns {Promise<void>}
    */
   async replaceTransforms(transforms) {
-    const sources = this.#log.filter((o) => SOURCE_OPS.has(o.type));
-    const liveCells = this.#log.filter((o) => o.type === 'setCell');
+    const steps = this.#steps();
+    const liveCells = steps.filter((o) => o.type === 'setCell');
+    const priorTx = steps.filter((o) => !SOURCE_OPS.has(o.type)); // the transforms to replace
+    const sources = steps.filter((o) => SOURCE_OPS.has(o.type));
     const resolved = [];
     for (const t of transforms) {
       if (t.type !== 'setCell') { resolved.push(structuredClone(t)); continue; }
@@ -1253,8 +1305,49 @@ export class DataStore {
       if (rid == null) throw new Error(`cell edit: row ${(t.row ?? 0) + 1} doesn’t exist`);
       resolved.push({ type: 'setCell', rid: String(rid), column: t.column, value: t.value === '' ? null : t.value, row: t.row ?? 0 });
     }
-    const next = [...sources, ...resolved];
-    await this.#applyReorder(next, 'script change');
+    // Validate the resulting pipeline (sources kept, transforms replaced) before
+    // committing. Sources keep their (older) HLC, the new transforms get newer HLCs,
+    // so the fold order is sources-then-new-transforms with no explicit reorder.
+    const problem = validateOrder([...sources, ...resolved]);
+    if (problem) throw new Error(`That script change isn’t valid here: ${problem}`);
+    // Commit atomically: retract every prior transform, append the new ones. On any
+    // re-derive failure, hard-drop everything we just created (retracts + appends) so
+    // the pipeline is exactly as it was.
+    const created = [];
+    for (const op of priorTx) created.push(this.#retract(op.id));
+    for (const t of resolved) {
+      const { type, ...payload } = t;
+      created.push(this.#append(type, payload, this.#transformTarget(t)));
+    }
+    try {
+      await this.rederive('reorder');
+    } catch (err) {
+      for (const op of created) this.#log.clearWhere((o) => o.id === op.id);
+      await this.rederive('reorder');
+      throw new Error(`That script change isn’t valid here: ${err?.message || err}`);
+    }
+  }
+
+  /** The op-target suffix for a transform, matching {@link module:core/merge~opTarget}
+   * so concurrent edits of the same thing collide on merge and disjoint ones don't. */
+  #transformTarget(t) {
+    switch (t.type) {
+      case 'setVariable':
+      case 'computeVar':
+      case 'recodeVar':
+        return `var:${t.name}`;
+      case 'renameVar':
+        return `var:${t.from}`;
+      case 'setCell':
+        return `cell:${t.column}:${t.rid}`;
+      case 'dropVars':
+      case 'keepVars':
+        return 'schema';
+      case 'filterCases':
+        return 'rows';
+      default:
+        return `op:${newOpId()}`;
+    }
   }
 
   /** The stable row id ({@link ROWID_COL}) at a 0-based display offset in the current
@@ -1268,122 +1361,91 @@ export class DataStore {
     return v == null ? null : String(v);
   }
 
-  /** Validate, then swap in a reordered/edited log and re-derive; on any failure
-   * (dependency or SQL) restore the previous log and surface the reason. */
-  async #applyReorder(next, movedOp) {
-    const problem = validateOrder(next);
+  /** Validate a new **order** (a list of this dataset's live step ids), then record it
+   * as a `reorder` op and re-derive; on any failure (dependency or SQL) hard-drop the
+   * reorder op and surface the reason. Order is thus editable state expressed in the
+   * log (the fold applies the latest reorder), not an array mutation. */
+  async #applyReorder(order, what) {
+    const byId = new Map(this.#steps().map((s) => [s.id, s]));
+    const preview = order.map((id) => byId.get(id)).filter(Boolean);
+    const problem = validateOrder(preview);
     if (problem) throw new Error(problem);
-    const prev = this.#log;
-    this.#log = next;
-    this.#redoStack = [];
+    const op = this.#append('reorder', { order }, 'order');
     try {
       await this.rederive('reorder');
     } catch (err) {
-      this.#log = prev;
+      this.#log.clearWhere((o) => o.id === op.id);
       await this.rederive('reorder');
-      const what = typeof movedOp === 'string' ? movedOp : movedOp ? 'move' : 'removal';
       throw new Error(`That ${what} isn’t valid here: ${err?.message || err}`);
     }
   }
 
   /**
-   * Serialise the full reproducible state for the dataset library: every
-   * immutable source (metadata + label, and its Parquet bytes unless
-   * `includeParquet` is false) plus the transform log. With `includeParquet:false`
-   * this is the cheap path for a metadata-only autosave (no source bytes fetched).
+   * Serialise this dataset's reproducible recipe for the **library / bundle** tier:
+   * its FOLDED live steps as *dataset-relative* ops (the target suffix is added back
+   * by {@link DataStore#restoreState}, so the recipe can be re-homed under a fresh
+   * id), with each source op carrying its Parquet bytes (unless `includeParquet` is
+   * false — the cheap metadata-only path). The main **project** save serialises the
+   * whole shared log instead (`ProjectLog.serialize`, Layer 4), not this.
    *
    * @param {Object} [opts]
    * @param {boolean} [opts.includeParquet=true]
-   * @returns {Promise<import('./dataset-store.js').DatasetState>}
+   * @returns {Promise<{ops: object[], rowCount: number, varCount: number}>}
    */
   async exportState({ includeParquet = true } = {}) {
-    const sources = [];
-    for (const op of this.#sourceOps()) {
-      const entry = {
-        id: op.id, // stable merge identity (see core/merge.js); absent on pre-collab saves
-        meta: op.src.meta.map((m) => ({ ...m })),
-        label: op.src.label,
-        combine: op.type === 'load' ? 'base' : op.type,
-      };
-      if (op.author) entry.author = op.author; // authorship (#148) — round-trips source ops
-      if (op.type === 'join') {
-        entry.joinKey = op.joinKey;
-        entry.aliases = op.aliases ?? [];
-        entry.joinType = op.joinType ?? 'left';
+    const ops = [];
+    for (const step of this.#steps()) {
+      const { id, author, type, src, ...rest } = step; // eslint-disable-line no-unused-vars
+      const op = { type, ...rest };
+      if (author) op.author = author; // provenance snapshot, round-trips the recipe
+      if (SOURCE_OPS.has(type)) {
+        op.src = { meta: src.meta.map((m) => ({ ...m })), label: src.label ?? null };
+        if (src.wide) {
+          op.src.wide = true;
+          op.src.rowidBase = src.rowidBase;
+          if (includeParquet) op.src.parquet = await this.#duckdb.readOpfsFile(src.file);
+        } else if (includeParquet) {
+          op.src.parquet = await this.#duckdb.queryToParquet(`SELECT * FROM ${quoteIdent(src.table)}`);
+        }
       }
-      if (op.src.wide) {
-        // Persist the wide source's single Parquet file bytes (read back straight
-        // from OPFS — never materialises the wide table); keep the row-id base.
-        entry.wide = true;
-        entry.rowidBase = op.src.rowidBase;
-        if (includeParquet) entry.parquet = await this.#duckdb.readOpfsFile(op.src.file);
-      } else if (includeParquet) {
-        entry.parquet = await this.#duckdb.queryToParquet(`SELECT * FROM ${quoteIdent(op.src.table)}`);
-      }
-      sources.push(entry);
+      ops.push(op);
     }
-    return {
-      sources,
-      transforms: this.getTransforms(),
-      // The exact interleaving of source ops ('s') and data transforms ('t'), so a
-      // restore replays the log in true order (sequential rederive is order-
-      // sensitive). Omitted-on-old-saves → restore falls back to sources-then-
-      // transforms. `sources`/`transforms` each stay in their own relative order,
-      // so this single tag stream reconstructs the full log.
-      order: this.#log.map((op) => (SOURCE_OPS.has(op.type) ? 's' : 't')),
-      rowCount: this.#rowCount,
-      varCount: this.#variables.length,
-    };
+    return { ops, rowCount: this.#rowCount, varCount: this.#variables.length };
   }
 
   /**
-   * Replace the live dataset with a saved state: recreate each immutable source
-   * from its Parquet and rebuild the operation log, then re-derive. The persisted
-   * shape stays `{sources, transforms}` (so projects/library are unchanged), plus
-   * an `order` tag stream that interleaves them back into the exact log — so a
-   * restore reproduces the in-session order (and the same result on another
-   * machine). Old saves without `order` fall back to source-ops-then-transforms.
+   * Replace the live dataset from a saved recipe ({@link DataStore#exportState}):
+   * clear this dataset's ops from the shared log, drop its DuckDB state, then replay
+   * the recipe — materialising each source from its Parquet and re-homing every op
+   * under THIS dataset's id (fresh op ids/HLC via `#append`). One re-derive at the
+   * end. Used by the library/bundle tier; the project-load path restores the whole
+   * shared log directly (Layer 4).
    *
-   * @param {import('./dataset-store.js').DatasetState & {order?: string[]}} state
+   * @param {{ops?: object[]}} state
    * @returns {Promise<void>}
    */
-  async restoreState({ sources, transforms, order }) {
-    await this.#dropAll();
-    const srcs = Array.isArray(sources) ? sources : [];
-    const txs = Array.isArray(transforms) ? transforms : [];
-
-    // Materialise each source first (a queue), then weave per `order`.
-    const srcOps = [];
-    for (let i = 0; i < srcs.length; i++) {
-      const src = srcs[i];
-      const created = src.wide
-        ? await this.#restoreWideSource(src)
-        : await this.#createSource({ variables: src.meta, parquet: src.parquet, source: src.label });
-      const type = i === 0 ? 'load' : src.combine === 'join' ? 'join' : 'append';
-      const op = type === 'join' ? { type, src: created, joinKey: src.joinKey, aliases: src.aliases ?? [], joinType: src.joinType ?? 'left' } : { type, src: created };
-      if (src.id) op.id = src.id; // preserve merge identity from a collab-era save
-      if (src.author) op.author = src.author; // preserve authorship (#148) across restore
-      srcOps.push(op);
+  async restoreState({ ops } = {}) {
+    await this.#resetDataHard();
+    for (const o of Array.isArray(ops) ? ops : []) {
+      if (SOURCE_OPS.has(o.type)) {
+        const created = o.src.wide
+          ? await this.#restoreWideSource(o.src)
+          : await this.#createSource({ variables: o.src.meta, parquet: o.src.parquet, source: o.src.label });
+        this.#addSourceOp(o.type, created, { joinKey: o.joinKey, aliases: o.aliases, joinType: o.joinType });
+      } else {
+        const { type, author, ...payload } = o; // eslint-disable-line no-unused-vars
+        this.#append(type, payload, this.#transformTarget(o));
+      }
     }
-
-    const log = [];
-    if (Array.isArray(order) && order.length === srcs.length + txs.length) {
-      let si = 0;
-      let ti = 0;
-      for (const tag of order) log.push(tag === 's' ? srcOps[si++] : { ...txs[ti++] });
-    } else {
-      // Backward-compatible fallback: sources first, then transforms.
-      for (const op of srcOps) log.push(op);
-      for (const t of txs) log.push({ ...t });
-    }
-    // Stamp any op lacking a persisted id with a DETERMINISTIC content+index id, so
-    // a project saved before collaboration existed gets the SAME ids on every
-    // machine — a pre-collab shared project stays mergeable. Collab-era saves
-    // already carry ids (preserved above); this touches only legacy ops.
-    log.forEach((op, i) => { if (!op.id) op.id = deterministicOpId(op, i); });
-    this.#log = log;
-    this.#redoStack = [];
     await this.rederive('restore');
+  }
+
+  /** Hard reset for a wholesale restore: remove this dataset's ops from the shared
+   * log outright (not retract — we are replacing the recipe, not merging a delete)
+   * and drop its DuckDB state. */
+  async #resetDataHard() {
+    this.#log.clearWhere(this.#mine);
+    await this.#dropDuckDB();
   }
 
   /**
@@ -1758,7 +1820,7 @@ export class DataStore {
   /** Drop this dataset's DuckDB tables/view (called when it's removed from the
    * workspace). After this the instance must not be used. */
   async dispose() {
-    await this.#dropAll();
+    await this.#dropDuckDB();
   }
 }
 

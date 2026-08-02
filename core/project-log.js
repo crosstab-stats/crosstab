@@ -198,6 +198,45 @@ export class ProjectLog {
   get canUndo() { return this.#ops.length > 0; }
   get canRedo() { return this.#redo.length > 0; }
 
+  /** Whether any active / undone op matches `pred` — scoped undo/redo availability
+   * (e.g. "does THIS dataset have anything to undo?" on the shared log). */
+  canUndoWhere(pred) { return this.#ops.some(pred); }
+  canRedoWhere(pred) { return this.#redo.some(pred); }
+
+  /**
+   * Undo the highest-HLC **active** op matching `pred` (scoped to one tier/dataset on
+   * the shared log), moving it onto the redo stack. Re-fold happens on the next
+   * {@link state}/{@link slice} read. Returns the undone op, or null if none match.
+   * (Solo semantics; the collaborative "whose op may I undo" nuance is deferred, as
+   * for {@link undo}.)
+   */
+  undoWhere(pred) {
+    const matching = orderByHlc(this.#ops.filter(pred));
+    const last = matching[matching.length - 1];
+    if (!last) return null;
+    this.#ops = this.#ops.filter((o) => o.id !== last.id);
+    this.#redo.push(last);
+    return last;
+  }
+
+  /** Re-apply the most-recently-undone op matching `pred`. Returns it, or null. */
+  redoWhere(pred) {
+    for (let i = this.#redo.length - 1; i >= 0; i--) {
+      if (pred(this.#redo[i])) {
+        const [op] = this.#redo.splice(i, 1);
+        this.#ops.push(op);
+        return op;
+      }
+    }
+    return null;
+  }
+
+  /** The undone (redo-stack) ops matching `pred`, in undo order (most-recently-undone
+   * last) — the raw material for a History panel's "future" list. A copy. */
+  undoneOps(pred = () => true) {
+    return this.#redo.filter(pred);
+  }
+
   /** Undo the latest op (highest HLC) onto the redo stack. Re-fold happens on the next
    * {@link state} read. (Collaborative "whose op may I undo" nuance is deferred — for
    * now the newest op wins, matching single-author expectation.) */
