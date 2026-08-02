@@ -28,6 +28,11 @@ import { deriveKey, encryptWithKey, decryptWithKey, isEnveloped, newSalt, DEFAUL
 
 const ROOT = 'projects';
 const CATALOG = 'catalog.json';
+
+/** Source op types — their bytes are written as Parquet sidecars; every other op is a
+ * light transform stored inline in the manifest. Mirrors data-store's SOURCE_OPS. */
+const SOURCE_TYPES = new Set(['load', 'append', 'join']);
+const isSourceOp = (op) => SOURCE_TYPES.has(op?.type);
 const ENC_META = 'crosstab-encryption.json'; // plaintext salt/verifier for the folder
 const MARKER = 'crosstab-project.json'; // plaintext "this folder IS a CrossTab project" + display name
 const VERIFIER = 'crosstab-folder-v1'; // known token, encrypted, to check a passphrase on unlock
@@ -270,27 +275,24 @@ export class ProjectStore {
     const manifest = JSON.parse(await this.#read(this.#file(id, 'project.json')));
     const datasets = [];
     for (const d of manifest.datasets) {
-      const sources = [];
-      for (const s of d.sources) {
-        const bytes = await this.#readBytes(this.#file(id, s.file));
-        sources.push({
-          id: s.id ?? undefined, // stable merge identity (absent on pre-collab saves → restore re-derives it)
-          meta: s.meta,
-          label: s.label ?? null,
-          combine: s.combine ?? 'base',
-          joinKey: s.joinKey,
-          aliases: s.aliases,
-          wide: s.wide ?? false,
-          rowidBase: s.rowidBase,
-          parquet: new Uint8Array(bytes),
-        });
+      // The dataset's recipe: an ordered op list (the shape DataStore.restoreState
+      // consumes). Source ops get their Parquet bytes re-attached from the sidecar;
+      // transform ops are inline.
+      const ops = [];
+      for (const op of d.ops ?? []) {
+        if (isSourceOp(op)) {
+          const bytes = await this.#readBytes(this.#file(id, op.file));
+          const src = { meta: op.src.meta, label: op.src.label ?? null, parquet: new Uint8Array(bytes) };
+          if (op.src.wide) { src.wide = true; src.rowidBase = op.src.rowidBase; }
+          const restored = { type: op.type, src };
+          if (op.author) restored.author = op.author;
+          if (op.type === 'join') { restored.joinKey = op.joinKey; restored.aliases = op.aliases ?? []; restored.joinType = op.joinType ?? 'left'; }
+          ops.push(restored);
+        } else {
+          ops.push(op);
+        }
       }
-      datasets.push({
-        id: d.id,
-        name: d.name,
-        libraryLink: d.libraryLink ?? null,
-        state: { sources, transforms: d.transforms ?? [], order: d.order ?? null },
-      });
+      datasets.push({ id: d.id, name: d.name, libraryLink: d.libraryLink ?? null, state: { ops } });
     }
     return {
       id,
@@ -512,14 +514,18 @@ export class ProjectStore {
     return this.#readRaw(path); // Uint8Array (callers wrap as needed)
   }
 
-  /** Write each dataset's Parquet sources (all datasets, or only those in `only`). */
+  /** Write each dataset's Parquet sources (all datasets, or only those in `only`).
+   * Source ops are numbered in recipe order → `ds<id>_src<n>.parquet`, matching
+   * {@link buildManifest}'s file refs. */
   async #writeSources(id, bundle, only) {
     for (const d of bundle.datasets) {
       if (only && !only.has(d.id)) continue;
-      for (let i = 0; i < d.state.sources.length; i++) {
-        const s = d.state.sources[i];
-        if (!s.parquet) throw new Error(`save: dataset ${d.id} source ${i + 1} has no parquet`);
-        await this.#write(this.#file(id, `ds${d.id}_src${i + 1}.parquet`), s.parquet);
+      let n = 0;
+      for (const op of d.state.ops ?? []) {
+        if (!isSourceOp(op)) continue;
+        n++;
+        if (!op.src?.parquet) throw new Error(`save: dataset ${d.id} source ${n} has no parquet`);
+        await this.#write(this.#file(id, `ds${d.id}_src${n}.parquet`), op.src.parquet);
       }
     }
   }
@@ -538,21 +544,24 @@ export class ProjectStore {
 export function buildManifest({ name, savedAt, bundle }) {
   const datasets = [];
   for (const d of bundle.datasets) {
-    const sources = [];
-    for (let i = 0; i < d.state.sources.length; i++) {
-      const s = d.state.sources[i];
-      const entry = { id: s.id ?? null, meta: s.meta, label: s.label ?? null, combine: s.combine ?? 'base', file: `ds${d.id}_src${i + 1}.parquet` };
-      if (s.combine === 'join') {
-        entry.joinKey = s.joinKey;
-        entry.aliases = s.aliases ?? [];
+    // The dataset's recipe as an ordered op list: source ops carry a Parquet FILE ref
+    // (bytes written separately by #writeSources), transform ops are inline + light.
+    const ops = [];
+    let n = 0;
+    for (const op of d.state.ops ?? []) {
+      if (isSourceOp(op)) {
+        n++;
+        const src = { meta: op.src.meta, label: op.src.label ?? null };
+        if (op.src.wide) { src.wide = true; src.rowidBase = op.src.rowidBase; }
+        const entry = { type: op.type, src, file: `ds${d.id}_src${n}.parquet` };
+        if (op.author) entry.author = op.author;
+        if (op.type === 'join') { entry.joinKey = op.joinKey; entry.aliases = op.aliases ?? []; entry.joinType = op.joinType ?? 'left'; }
+        ops.push(entry);
+      } else {
+        ops.push(op); // transform op — no bytes, store as-is
       }
-      if (s.wide) {
-        entry.wide = true;
-        entry.rowidBase = s.rowidBase;
-      }
-      sources.push(entry);
     }
-    datasets.push({ id: d.id, name: d.name, libraryLink: d.libraryLink ?? null, sources, transforms: d.state.transforms ?? [], order: d.state.order ?? null });
+    datasets.push({ id: d.id, name: d.name, libraryLink: d.libraryLink ?? null, ops });
   }
   return {
     name,

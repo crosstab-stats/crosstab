@@ -1571,7 +1571,7 @@ class ProjectSidebar {
       try {
         const ds = this.datasets.get(it.id);
         const state = ds ? await ds.exportState({ includeParquet: true }) : null;
-        if (state && state.sources && state.sources.length) {
+        if (state && (state.ops ?? []).some((o) => o.type === 'load' || o.type === 'append' || o.type === 'join')) {
           await this.recycle.save({
             name: it.name,
             savedAt: Date.now(),
