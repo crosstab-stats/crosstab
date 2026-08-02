@@ -17,6 +17,7 @@
  */
 
 import { CoreEvents } from './event-bus.js';
+import { newOpId } from './merge.js';
 
 export class PluginActions {
   #loader;
@@ -382,6 +383,11 @@ export class PluginActions {
    * @returns {Promise<boolean>}
    */
   async #execute(e) {
+    // Stable identity for this run + the output it is about to append. Minted here (a
+    // live run has none yet; a replay carries its stored runId), so record() and the
+    // output blocks share ONE id — output is then removed by identity, not position.
+    if (!e.runId) e.runId = newOpId();
+    const outMark = this.#results.getModel ? this.#results.getModel().length : 0;
     this.#bus.emit(CoreEvents.ANALYSIS_STARTED, { plugin: e.pluginId, title: e.label });
     this.#results.beginAnalysis(stripEllipsis(e.label), `${e.pluginName} · ${e.origin}`);
     // Watchdog: if a run goes quiet for a long time it may be a legitimately slow
@@ -418,6 +424,9 @@ export class PluginActions {
       this.#results.endAnalysis();
       this.#bus.emit(CoreEvents.ANALYSIS_FINISHED, { plugin: e.pluginId });
     }
+    // Tag the output this run produced with its runId (only on success — a failed run
+    // isn't recorded, so its error block has no analysis to be removed with).
+    if (ok) this.#results.assignRun?.(outMark, e.runId);
     return ok;
   }
 

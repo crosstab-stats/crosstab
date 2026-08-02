@@ -71,7 +71,10 @@ export class AnalysisLog {
    * Emits the distinct `analysislog:recorded` signal (a NEW run — the undo coordinator
    * tracks it as the latest action) plus the generic `changed`. */
   record(entry) {
-    const payload = { runId: newOpId(), ...structuredClone(entry) };
+    // Reuse the runId the runner already stamped onto this analysis's output blocks
+    // (PluginActions#execute), so the log entry and its output share ONE identity and
+    // output can be removed by id. Mint one only if a caller records without running.
+    const payload = { ...structuredClone(entry), runId: entry.runId ?? newOpId() };
     this.#log.append({ target: `analysis:${payload.runId}`, owner: 'core', type: 'runAnalysis', payload });
     this.#bus?.emit?.('analysislog:recorded', structuredClone(payload));
     this.#changed();

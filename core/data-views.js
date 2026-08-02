@@ -554,6 +554,7 @@ export class HistoryView {
     this.store = store;
     this.onError = opts.onError ?? (() => {});
     this.analysisLog = opts.analysisLog ?? null;
+    this.results = opts.results ?? null; // to drop an analysis's output when its step is deleted
     this.undo = opts.undo ?? null; // undo coordinator — tells us if an analysis is the latest action
     host.classList.add('ct-historyhost');
   }
@@ -724,7 +725,11 @@ export class HistoryView {
 
   #removeAnalysis(idx) {
     try {
+      // Capture the runId BEFORE removing, so we can drop this analysis's output too —
+      // deleting a step from History must not orphan its table/plot in the Output pane.
+      const runId = this.analysisLog?.entries()[idx]?.runId;
       this.analysisLog?.remove(idx);
+      if (runId) this.results?.removeRun?.(runId);
       this.render();
     } catch (err) {
       this.onError(err.message);
@@ -766,6 +771,7 @@ export class HistoryPanel {
   #analysisLog = null;
   #pluginActions = null;
   #undo = null;
+  #results = null;
   #syntax = false;
   #contentEl = null;
   #editorEl = null;
@@ -784,12 +790,13 @@ export class HistoryPanel {
    *   enable the Syntax editor (read/replay the analysis log + rebuild via Run) and
    *   pass the undo coordinator so the timeline can mark a just-run analysis 'current'.
    */
-  constructor(store, bus, { analysisLog = null, pluginActions = null, undo = null } = {}) {
+  constructor(store, bus, { analysisLog = null, pluginActions = null, undo = null, results = null } = {}) {
     this.#store = store;
     this.#bus = bus;
     this.#analysisLog = analysisLog;
     this.#pluginActions = pluginActions;
     this.#undo = undo;
+    this.#results = results;
   }
 
   #build() {
@@ -836,7 +843,7 @@ export class HistoryPanel {
     }
     document.body.append(panel);
     this.#panel = panel;
-    this.#view = new HistoryView(content, this.#store, { onError: (m) => this.#showErr(m), analysisLog: this.#analysisLog, undo: this.#undo });
+    this.#view = new HistoryView(content, this.#store, { onError: (m) => this.#showErr(m), analysisLog: this.#analysisLog, undo: this.#undo, results: this.#results });
   }
 
   /** The Syntax editor: ONE free-form textarea holding the whole script (edit like a
