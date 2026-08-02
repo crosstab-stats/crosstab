@@ -28,13 +28,33 @@ Branch `feat/unified-op-log`; nothing pushed. Backbone headless tests green
 
 ### Layer 5 — merge/transport (NEXT), with a prerequisite
 
-**Prerequisite (do first, single-peer-verifiable):** reshape `project.json` to carry
-`ProjectLog.serialize()` (the WHOLE log — collection + data + analysis tiers, with
-**stable** op ids/hlc/author) + source assets, and make load restore it *preserving
-ids* (not the current per-dataset re-mint). Merge convergence requires two peers to
-share op identity for the data tier; Layer 4's re-mint is fine single-peer, wrong for
-collab. This unifies save with the log and is the last thing standing between "works
-single-peer" and "mergeable".
+**Prerequisite (do FIRST — it's a confirmed single-peer BUG, not just collab prep):**
+reshape `project.json` to carry `ProjectLog.serialize()` (the WHOLE log — collection +
+data + analysis tiers, with **stable** op ids/hlc/author) + source assets, and make
+load restore it *preserving ids* (not the current per-dataset re-mint).
+
+> **BUG that proves it (user, 2026-08-02, via `dumpLog`):** save FOLDS the data tier.
+> Repro: load project → `dumpLog` shows `…, recodeVar:region, recodeVar:gender`. Reorder
+> them in History → `dumpLog` shows a trailing `reorder` op. Save, reload → `dumpLog`
+> shows `…, recodeVar:gender, recodeVar:region` **and the `reorder` op is GONE**. The
+> reorder's *effect* (order) was saved; the *op* was lost.
+>
+> **Root cause:** `project-sync.#snapshot` → `DataStore.exportState()` → `#steps()` →
+> `foldDataOps()` applies & DROPS `reorder`/`retract` before persisting. The collection
+> tier persists raw ops (`collectionLog`); the data tier folds. Asymmetry = the bug.
+>
+> **Fix:** the project save/load path must persist & restore the **raw** log verbatim
+> (all tiers), stable ids preserved — NOT the folded recipe. Keep `exportState`'s folded
+> `{ops}` recipe ONLY for the library/bundle re-home path (where re-mint is correct);
+> add a raw whole-log path for project save/load. Touches: `project-sync.#snapshot`,
+> `project-store` (save/load/buildManifest/writeSources), `dataset-manager.loadBundle`,
+> and a DataStore raw-export + source-materialize seam (source bytes keyed by source-op
+> id; strip the peer-local table name from the persisted op, rematerialise on load).
+> Verify with the exact repro above + `dumpLog` before/after reload.
+
+Merge convergence requires two peers to share op identity for the data tier; Layer 4's
+re-mint is fine single-peer, wrong for collab. This unifies save with the log and is the
+last thing standing between "works single-peer" and "mergeable".
 
 Then: delete `collab-sync.mergeManifests`/`datasetToOps`/`opsToDataset`; rewrite
 `folder-sync` (decideSync/syncFolderProject) + `project-sync` (live + gap-fill) onto
