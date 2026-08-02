@@ -112,6 +112,43 @@ test('merge: concurrent edits to the SAME dataset surface a conflict (never sile
   assert.equal(r.conflicts[0].target, 'coll/ds:1');
 });
 
+test('slice: one dataset\'s data ops are read back in HLC order, isolated from other tiers', () => {
+  const { log, tick } = peer(1000);
+  log.append(addDs(5, 'wide')); // collection tier
+  tick(1100); const load = log.append({ target: 'ds:5/source', owner: 'core', type: 'load', payload: { seq: 1 } });
+  tick(1200); const recode = log.append({ target: 'ds:5/var:income', owner: 'core', type: 'recodeVar', payload: {} });
+  tick(1150); const other = log.append({ target: 'ds:9/source', owner: 'core', type: 'load', payload: {} }); // a different dataset
+  const mine = log.slice((o) => o.target.startsWith('ds:5/'));
+  assert.deepEqual(mine.map((o) => o.id), [load.id, recode.id], 'only ds:5 ops, in HLC order');
+  assert.ok(!mine.includes(other));
+  assert.equal(log.slice((o) => o.target.startsWith('coll/')).length, 1);
+});
+
+test('serialize/restore: the whole log round-trips and the clock stays monotonic', () => {
+  const a = peer(1000);
+  a.log.append(addDs(1, 'a'));
+  a.tick(1100); a.log.append({ target: 'ds:1/var:x', owner: 'core', type: 'computeVar', payload: { name: 'x' } });
+  const wire = a.log.serialize();
+  // A fresh peer restores from the wire form → identical projection state.
+  const b = peer(1); // deliberately-behind clock: restore must advance it past the saved ops
+  b.log.restore(wire);
+  assert.deepEqual(b.log.ops().map((o) => o.id), wire.map((o) => o.id), 'ops round-trip in order');
+  assert.deepEqual(b.log.state('collection'), [{ id: 1, name: 'a' }]);
+  // b's next local op sorts AFTER everything restored (clock advanced past saved HLCs).
+  const next = b.log.append(addDs(2, 'b'));
+  const maxSaved = Math.max(...wire.map((o) => o.hlc.wall));
+  assert.ok(next.hlc.wall >= maxSaved, 'restored clock did not regress');
+});
+
+test('serialize is HLC-ordered regardless of append/receive interleaving', () => {
+  const a = peer(1000);
+  const o1 = a.log.append(addDs(1, 'a'));
+  const b = peer(1000);
+  b.tick(1050); const o2 = b.log.append(addDs(2, 'b'));
+  a.log.receiveOps([o2]); // arrives after o1 but has a later HLC → sorts after
+  assert.deepEqual(a.log.serialize().map((o) => o.id), [o1.id, o2.id]);
+});
+
 test('undo/redo walk the log by HLC; a fresh op discards the redo branch', () => {
   const { log, tick } = peer(1000);
   log.append(addDs(1, 'a'));

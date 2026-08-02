@@ -63,6 +63,43 @@ export class ProjectLog {
   }
 
   /**
+   * The active ops matching `pred`, in canonical HLC order — the slice a
+   * projection folds (e.g. one dataset's `ds:<id>/…` ops, or one tier's). A copy;
+   * safe to hold. This is how {@link DataStore} reads its own history without a
+   * private log: it pulls `slice(o => o.target.startsWith('ds:5/'))` and replays.
+   * @param {(op: import('./op-log.js').Op) => boolean} pred
+   * @returns {import('./op-log.js').Op[]}
+   */
+  slice(pred) {
+    return orderByHlc(this.#ops.filter(pred));
+  }
+
+  /**
+   * Serialise the log for persistence: the active ops in canonical HLC order. The
+   * clock is deliberately NOT stored alongside — {@link restore} advances it past
+   * every op via {@link receiveOps}, which is monotonic (see hlc.js), so a reloaded
+   * project's next local op always sorts after everything saved. The redo stack is
+   * session-only (standard undo semantics) and is not persisted.
+   * @returns {import('./op-log.js').Op[]}
+   */
+  serialize() {
+    return this.ops();
+  }
+
+  /**
+   * Replace the whole log with a persisted / rebuilt op set (from {@link serialize},
+   * a bundle, or a merge result being loaded fresh). Clears the log + redo, then
+   * folds the ops in via {@link receiveOps} so the clock advances past all of them.
+   * @param {import('./op-log.js').Op[]} ops
+   * @returns {this}
+   */
+  restore(ops) {
+    this.reset();
+    this.receiveOps(ops);
+    return this;
+  }
+
+  /**
    * Append a **local** operation: stamp a fresh HLC + id + author, add it, and return
    * it. `reads` declares the targets it depends on (the causal DAG); default none.
    * @param {{target:string, owner:string, type:string, payload?:object, reads?:string[]}} body

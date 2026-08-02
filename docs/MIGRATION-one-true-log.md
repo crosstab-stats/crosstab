@@ -17,6 +17,26 @@ HLC order), replays them to build the DuckDB view + metadata (today's `rederive`
 its mutators *append to the ProjectLog* instead of a local `#log`. Undo/redo/rewind/
 reorder become log operations. "Dataset logs derive from the one log" — literally.
 
+## Two refinements the plan glossed (locked while building Layer 1→2)
+
+Discovered by reading `data-store.js` end-to-end against `ProjectLog`'s HLC ordering.
+Both follow directly from "everything persistent is an op" + §10 "deletion is an
+explicit merged op" — neither is a new principle, just its consequence.
+
+- **Deletion of a pipeline step = an explicit `retract` op (tombstone), never a
+  physical removal.** Forced by correctness: `sharedAncestor` derives the merge base
+  from the shared op-id *intersection*, so a physically-removed op drops out of the
+  ancestor and then reads as the peer's *addition* on merge — it silently returns.
+  That is the delete-inference bug class. So `removeOp`/History-delete append a
+  `retract{payload:{opId}}`; the fold skips retracted ops; the retract propagates as a
+  normal add-wins addition. (Solo Ctrl-Z undo stays physical-to-redo — the deferred
+  "collaborative undo" nuance already noted in ProjectLog.)
+- **User-editable pipeline order = an explicit `reorder` op.** Order is HLC-derived by
+  default; `moveOp`/`collectImports`/`replaceTransforms` append a `reorder{payload:
+  {order:[opId,…]}}`; the fold applies the latest one (ops not listed fall back to HLC
+  order). Concurrent reorders merge as normal ops (three-way surfaces the conflict).
+  Keeps the do-file editor log-native instead of mutating HLC.
+
 ## Target architecture
 
 - **One log.** `ProjectLog` = the ordered op stream. Tiers by `owner`/`target`:
