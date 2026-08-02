@@ -557,6 +557,7 @@ export class ProjectSync {
     const analysisLog = this.#getAnalysisLog ? this.#getAnalysisLog() : undefined;
     return {
       activeId: this.#datasets.activeId, activePlugins, workspaces, output, analysisLog, datasets,
+      collectionLog: this.#datasets.collectionOps(), // unit 6 — real collection ops (membership merges on these)
       collabId: this.#collabId, collabSecret: this.#collabSecret, // #148 — persist the live-room identity
     };
   }
@@ -1322,7 +1323,11 @@ export class ProjectSync {
           const refs = this.#liveExchange?.requestMissing(manifest);
           debug('live', 'gap-fill requesting', { missing, refs: refs?.length });
         }
-        if (datasets.length) await this.#datasets.loadBundle({ activeId: manifest.activeId, datasets });
+        // Pass the merged collection log so live membership (incl. a co-author's
+        // removeDataset) applies from real ops, not inferred. add/delete change the
+        // dataset set → this rebuild path runs; a rename-only change hits the
+        // tabular-unchanged fast-path above and lands on next save (minor follow-up).
+        if (datasets.length) await this.#datasets.loadBundle({ activeId: manifest.activeId, datasets, collectionLog: manifest.collectionLog });
       }
       this.#applyWorkspaces?.(manifest.workspaces || {});
       this.#applyOutput?.(manifest.output || []);

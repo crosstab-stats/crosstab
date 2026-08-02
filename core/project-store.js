@@ -300,6 +300,8 @@ export class ProjectStore {
         activePlugins: Array.isArray(manifest.activePlugins) ? manifest.activePlugins : null,
         workspaces: manifest.workspaces && typeof manifest.workspaces === 'object' ? manifest.workspaces : null,
         output: Array.isArray(manifest.output) ? manifest.output : null,
+        analysisLog: Array.isArray(manifest.analysisLog) ? manifest.analysisLog : null,
+        collectionLog: Array.isArray(manifest.collectionLog) ? manifest.collectionLog : null,
         collabId: manifest.collabId ?? null,
         collabSecret: manifest.collabSecret ?? null,
         datasets,
@@ -559,6 +561,11 @@ export function buildManifest({ name, savedAt, bundle }) {
     activePlugins: Array.isArray(bundle.activePlugins) ? bundle.activePlugins : null,
     workspaces: bundle.workspaces && typeof bundle.workspaces === 'object' ? bundle.workspaces : null,
     output: Array.isArray(bundle.output) ? bundle.output : null,
+    // The recorded analyses (script). Previously dropped here → analyses didn't survive
+    // save/reload (output persisted, but the log for re-run/undo/merge didn't). Now kept.
+    analysisLog: Array.isArray(bundle.analysisLog) ? bundle.analysisLog : null,
+    // The dataset-collection op-log (unit 6): membership merges on these real ops.
+    collectionLog: Array.isArray(bundle.collectionLog) ? bundle.collectionLog : null,
     // Collaboration identity (#143): carried in the manifest so it rides folder sync —
     // both peers derive the same signaling room + secret. Minted by the app on save.
     collabId: bundle.collabId ?? null,

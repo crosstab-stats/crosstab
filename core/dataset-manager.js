@@ -92,6 +92,13 @@ export class DatasetManager {
     return this.#log.state('collection');
   }
 
+  /** The raw collection op-log (add/rename/remove ops), persisted in the project bundle
+   * so the merge (unit 6) reconciles membership from REAL ops — both peers converge, and
+   * a removeDataset propagates instead of being inferred from absence. */
+  collectionOps() {
+    return this.#log.ops().filter((o) => COLLECTION.match(o));
+  }
+
   // --- collection ------------------------------------------------------------
 
   /** The active {@link DataStore}. */
@@ -289,20 +296,25 @@ export class DatasetManager {
    *
    * @param {{activeId: number, datasets: Array<{id: number, name: string, state: object}>}} bundle
    */
-  async loadBundle({ datasets, activeId }) {
+  async loadBundle({ datasets, activeId, collectionLog }) {
     for (const ds of this.#datasets.values()) await ds.dispose();
     this.#datasets.clear();
     this.#activeId = null;
-    // Rebuild the collection tier of the log from the bundle. Deterministic ids
-    // (`coll-add-<datasetId>`) and a fixed base clock keep it identical across loads
-    // and machines. Clear only THIS tier — the log is shared with other projections
-    // (e.g. analysis), which their own load path restores. (Unit 6 will persist/merge
-    // the log directly and drop this reconstruction; today the transport merge still
-    // runs on the datasets[] snapshot.)
+    // Rebuild the collection tier of the log. Clear only THIS tier — the log is shared
+    // with other projections (e.g. analysis), whose own load path restores them.
     this.#log.clearWhere(COLLECTION.match);
-    this.#log.receiveOps(
-      (datasets ?? []).map((d, i) => makeOp(collAdd(d.id, d.name), { id: `coll-add-${d.id}`, hlc: { wall: 0, counter: i }, author: { authorId: 'restore' } })),
-    );
+    if (Array.isArray(collectionLog) && collectionLog.length) {
+      // Unit 6: the REAL persisted/merged collection ops (with their ids + HLC), so
+      // membership — including deletes — comes straight from the log and both peers
+      // converge. This retires the deterministic reconstruction below.
+      this.#log.receiveOps(collectionLog);
+    } else {
+      // Back-compat (pre-unit-6 saves / a fresh blank project): rebuild the tier from
+      // datasets[] with deterministic ids so it's identical across loads and machines.
+      this.#log.receiveOps(
+        (datasets ?? []).map((d, i) => makeOp(collAdd(d.id, d.name), { id: `coll-add-${d.id}`, hlc: { wall: 0, counter: i }, author: { authorId: 'restore' } })),
+      );
+    }
     // Recreate with the SAVED ids so a project's Parquet files (named by dataset
     // id) map back consistently across save/load.
     for (const d of datasets) {
