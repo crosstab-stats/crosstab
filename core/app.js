@@ -810,7 +810,22 @@ export async function boot(mounts) {
   // `dataStore` kept as an alias to the manager (it delegates to the active
   // dataset) so console pokes / older references keep working. Exposed before the
   // launcher so the launcher (and dev tooling) can use the engine.
-  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, recycle, library, projects, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager, codecs, analysisLog, pluginActions, undoCoordinator };
+  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, recycle, library, projects, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager, codecs, analysisLog, pluginActions, undoCoordinator, projectLog };
+  /**
+   * Console debugging: dump the FULL one true log — every op across all tiers
+   * (collection, data, analysis), including the `retract`/`reorder` tombstones and
+   * undone ops that the folded History view hides. `crosstab.dumpLog()` for
+   * everything; `crosstab.dumpLog('ds:5')` (or any substring) to filter by target —
+   * built for tracing merge issues (#148 Layer 5). Returns the rows too, so it's
+   * useful even when console.table is truncated.
+   */
+  engine.dumpLog = (targetFilter) => {
+    const rows = projectLog.dump().filter((r) => !targetFilter || r.target.includes(targetFilter));
+    try { console.table(rows); } catch { /* console.table unavailable */ }
+    const active = rows.filter((r) => r.state === 'active').length;
+    console.log(`[crosstab] ${rows.length} ops — ${active} active, ${rows.length - active} undone${targetFilter ? ` (filter: ${targetFilter})` : ''}`);
+    return rows;
+  };
   // eslint-disable-next-line no-undef
   globalThis.crosstab = engine;
 

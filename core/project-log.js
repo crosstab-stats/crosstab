@@ -14,7 +14,7 @@
  */
 
 import { resolveMerger } from './merge.js';
-import { HLC } from './hlc.js';
+import { HLC, hlcEncode } from './hlc.js';
 import { makeOp, orderByHlc, sharedAncestor, unresolvedReads, opIds } from './op-log.js';
 
 /**
@@ -124,6 +124,33 @@ export class ProjectLog {
       this.#hlc.receive(op.hlc);
       if (!have.has(op.id)) { this.#ops.push(op); have.add(op.id); }
     }
+  }
+
+  /**
+   * Debug view of the **whole** log: every active op (in HLC order) followed by every
+   * undone (redo-stack) op, flattened to plain rows for console inspection. Unlike a
+   * projection's folded state (or `DataStore.getHistory`), this shows what the fold
+   * hides — `retract`/`reorder` tombstones, undone ops, and every tier at once — with
+   * the routing fields that matter for merge debugging (target/owner/hlc/author).
+   * Not for persistence (use {@link serialize}); built to trace merge issues.
+   * @returns {Array<{state:string, hlc:string, target:string, owner:string, type:string, author:string, payload:string, reads:string, id:string}>}
+   */
+  dump() {
+    const row = (o, state) => ({
+      state,
+      hlc: hlcEncode(o.hlc),
+      target: o.target,
+      owner: o.owner,
+      type: o.type,
+      author: o.author?.initials ?? o.author?.authorId ?? '',
+      payload: o.payload ? JSON.stringify(o.payload).slice(0, 120) : '',
+      reads: (o.reads ?? []).join(',') || '',
+      id: o.id,
+    });
+    return [
+      ...this.ops().map((o) => row(o, 'active')),
+      ...this.#redo.map((o) => row(o, 'undone')),
+    ];
   }
 
   /** The derived state of a registered projection (folds its ops in HLC order). */

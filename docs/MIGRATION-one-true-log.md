@@ -6,6 +6,55 @@ representations. Any bug that survives should be a *new-code* bug, not an old/ne
 interaction. Save-breaking is allowed (pre-release). Rollback = discard/reset the
 branch if it doesn't converge; that's an accepted outcome.
 
+## Progress (updated 2026-08-02)
+
+Branch `feat/unified-op-log`; nothing pushed. Backbone headless tests green
+(171 pass, 4 skipped = folder-sync's mergeManifests tests, pending Layer 5).
+
+- [x] **Layer 1 — ProjectLog final** (`70cc844`). serialize/restore, target `slice`,
+      scoped undo (`undoWhere`/`redoWhere`/`undoneOps`). + `dump()` for debugging.
+- [x] **Layer 2a — pure `foldDataOps`** (`0252a2b`). retract + reorder resolution, tested.
+- [x] **Layer 2b — DataStore is a fold of the one log** (`6347b95`). No private `#log`;
+      mutators append `ds:<id>/…` ops; deletion=`retract`, reorder=`reorder`; scoped
+      undo; exportState/restoreState → op-recipe `{ops}`.
+- [x] **Layer 3 — DatasetManager injects the one log** (`15b0e17`). collection + data
+      tiers share it; remove() drops orphaned data ops; loadBundle clears both tiers.
+- [x] **Layer 4 — persistence writes/reads the op-recipe** (`84e658f`). Single-peer
+      create/edit/save/load round-trips on the log. app.js recycle gate updated.
+- [x] **Browser-verified single-peer** (user + agent, 2026-08-02): recode ×2, reorder,
+      rename, save/reload, load-from-loader (correct History order); delete-middle-step
+      (retract), undo-of-retract, moveOp, real DuckDB data all correct. Decisions in
+      [the explicit-ops memory] endorsed by the user.
+
+### Layer 5 — merge/transport (NEXT), with a prerequisite
+
+**Prerequisite (do first, single-peer-verifiable):** reshape `project.json` to carry
+`ProjectLog.serialize()` (the WHOLE log — collection + data + analysis tiers, with
+**stable** op ids/hlc/author) + source assets, and make load restore it *preserving
+ids* (not the current per-dataset re-mint). Merge convergence requires two peers to
+share op identity for the data tier; Layer 4's re-mint is fine single-peer, wrong for
+collab. This unifies save with the log and is the last thing standing between "works
+single-peer" and "mergeable".
+
+Then: delete `collab-sync.mergeManifests`/`datasetToOps`/`opsToDataset`; rewrite
+`folder-sync` (decideSync/syncFolderProject) + `project-sync` (live + gap-fill) onto
+`ProjectLog.merge` (op-exchange, no per-peer base, no delete-inference, no dispose-all);
+delete `project-store.readBase`/`writeBase`. Un-skip + rewrite the folder-sync tests.
+**Verify with two-window testing** (the user's domain).
+
+### Layer 6 — remaining consumers still on the old shape
+
+`library.js` + `dataset-store.js` (building-block library), `project-bundle.js`
+(`.crosstab` export/import), `gap-fill.js`. All off the single-peer boot path; migrate
+to the op-recipe / asset model.
+
+### Debugging aid
+
+`crosstab.dumpLog([targetFilter])` in the console dumps the full one true log — every
+active op (HLC order) + every undone/redo op, with state/target/owner/type/hlc/author/
+payload. Shows the retract/reorder tombstones and undone ops that the folded History
+view hides — built for tracing Layer 5 merge issues.
+
 ## The load-bearing decision (locked)
 
 **A `DataStore` no longer owns a private op-log.** There is ONE `ProjectLog` per
