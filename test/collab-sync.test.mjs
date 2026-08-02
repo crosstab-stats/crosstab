@@ -143,6 +143,55 @@ test('mergeManifests: delete loses to a concurrent edit (no silent data loss)', 
   assert.deepEqual(ds2.transforms.map((t) => t.id), ['r1']); // the edit is preserved
 });
 
+// --- unit 6: collection-log merge (membership decided by real add/remove/rename ops) ---
+
+const collOp = (id, type, dsId, name, wall = 1) => ({
+  id, hlc: { wall, counter: 0 }, target: `coll/ds:${dsId}`, owner: 'core', type, reads: [],
+  payload: name !== undefined ? { id: dsId, name } : { id: dsId },
+});
+
+test('mergeManifests (collection-log): a removeDataset op propagates the delete', () => {
+  const both = [ds(1, [source('s1', 'a', ['x'])], []), ds(2, [source('s2', 'b', ['y'])], [])];
+  const baseColl = [collOp('a1', 'addDataset', 1, 'A'), collOp('a2', 'addDataset', 2, 'B')];
+  const base = { ...manifest({ datasets: both }), collectionLog: baseColl };
+  // mine deletes ds2 via a REAL removeDataset op; theirs is unchanged.
+  const mine = { ...manifest({ datasets: [ds(1, [source('s1', 'a', ['x'])], [])] }), collectionLog: [...baseColl, collOp('r1', 'removeDataset', 2, undefined, 5)] };
+  const theirs = { ...manifest({ datasets: both }), collectionLog: baseColl };
+  const { manifest: out, conflicts } = mergeManifests(base, mine, theirs, buildMergers([]));
+  assert.equal(conflicts.length, 0);
+  assert.deepEqual(out.datasets.map((d) => d.id), [1], 'ds2 removed via the op, not resurrected');
+  assert.ok(Array.isArray(out.collectionLog), 'merged collection log rides along for persistence/propagation');
+});
+
+test('mergeManifests (collection-log): an addDataset op unions new datasets', () => {
+  const baseColl = [collOp('a1', 'addDataset', 1, 'A')];
+  const base = { ...manifest({ datasets: [ds(1, [source('s1', 'a', ['x'])], [])] }), collectionLog: baseColl };
+  const mine = {
+    ...manifest({ datasets: [ds(1, [source('s1', 'a', ['x'])], []), ds(2, [source('s2', 'b', ['y'])], [])] }),
+    collectionLog: [...baseColl, collOp('a2', 'addDataset', 2, 'B', 5)],
+  };
+  const out = mergeManifests(base, mine, base, buildMergers([])).manifest;
+  assert.deepEqual(out.datasets.map((d) => d.id).sort(), [1, 2]);
+});
+
+test('mergeManifests (collection-log): a renameDataset op updates the name (log is source of truth)', () => {
+  const dsl = [ds(1, [source('s1', 'a', ['x'])], [])];
+  const baseColl = [collOp('a1', 'addDataset', 1, 'A')];
+  const base = { ...manifest({ datasets: dsl }), collectionLog: baseColl };
+  const mine = { ...manifest({ datasets: dsl }), collectionLog: [...baseColl, collOp('rn', 'renameDataset', 1, 'Renamed', 5)] };
+  const out = mergeManifests(base, mine, base, buildMergers([])).manifest;
+  assert.equal(out.datasets.find((d) => d.id === 1).name, 'Renamed');
+});
+
+test('mergeManifests: without a collectionLog, the legacy delete-inference path still runs', () => {
+  const both = [ds(1, [source('s1', 'a', ['x'])], []), ds(2, [source('s2', 'b', ['y'])], [])];
+  const base = manifest({ datasets: both });
+  const mine = manifest({ datasets: [ds(1, [source('s1', 'a', ['x'])], [])] });
+  const out = mergeManifests(base, mine, manifest({ datasets: both }), buildMergers([])).manifest;
+  assert.deepEqual(out.datasets.map((d) => d.id), [1]); // legacy path unchanged
+  assert.equal(out.collectionLog, undefined);
+});
+
 test('mergeManifests: CAQDAS codebooks from two coders union (Dedoose case, via buildMergers)', () => {
   const plugins = [{ id: 'builtin-caqdas', manifest: { workspaces: [{ id: 'caqdas-coding', merge: { via: 'mergeState' } }] }, module: { mergeState: caqdasMerge } }];
   const cb = (codes) => ({ version: 1, textColumn: 't', labelColumn: null, codes, segments: [] });
