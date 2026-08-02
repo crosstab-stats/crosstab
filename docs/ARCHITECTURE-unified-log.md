@@ -257,8 +257,19 @@ was designed for this; both pay off here — the compounding return.
 5b. **Output pane keyed by analysis `runId`** — output blocks are tagged with the run
    that produced them; History-delete and undo remove output BY ID (precise for
    middle-deletes), not by fragile position. Found while testing unit 5.
-6. **Point merge at the real log**; retire `datasetToOps`/`buildManifest`-as-truth,
-   `project.base.json`, `#lastManifest`, `deterministicOpId`.
+6. **Point merge at the real log** — DONE for the collection tier.
+   - 6a: `mergeManifests` decides membership from a three-way merge of the collection
+     op-log (removeDataset propagates as a real op; add/rename too). Headless-tested.
+   - 6b: the real collection log is threaded through `#snapshot → buildManifest →
+     ProjectStore.load → loadBundle` + the live-apply path, retiring the deterministic
+     reconstruction and (for new saves) the delete-inference hack. Also fixed a
+     pre-existing bug: `buildManifest` dropped `analysisLog` (analyses didn't survive
+     save/reload). Single-window verified; two-window live/folder delete propagation is
+     user-driven. Minor follow-up: a rename-only change applies on next save, not
+     instantly live (hits the tabular-unchanged fast path).
+   - Still deferred to later units: the DATA tier (System 1 per-dataset logs) still
+     merges via `datasetToOps` reconstruction (faithful); `project.base.json`/
+     `#lastManifest`/`deterministicOpId` retire once all tiers are on the log.
 7. **Content-addressed assets**; unify gap-fill.
 8. **Checkpoint** (non-destructive), then **Seal** (destructive + Tier A/B/C merge).
 9. **Fold in System 3 (plugin data)** — `apply(op)` API; migrate both builtins;
