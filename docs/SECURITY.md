@@ -1,9 +1,15 @@
 # CrossTab security model
 
-CrossTab is a **local-first, client-only** application: there is no server, no
-shared backend, and no other users' data on the device. Everything runs in the
-browser (WebR/R-WASM + DuckDB-WASM), and persistence is local (OPFS / IndexedDB /
-localStorage). That shape determines what is and isn't a meaningful threat.
+CrossTab is a **local-first, client-only** application: there is no server we run
+and no backend that holds data. Everything runs in the browser (WebR/R-WASM +
+DuckDB-WASM), and persistence is local (OPFS / IndexedDB / localStorage). That
+shape determines what is and isn't a meaningful threat.
+
+The one place data leaves the device is **live collaboration (#148)** — an opt-in,
+off-by-default peer-to-peer mode where two browsers co-author a project directly.
+It adds no backend (rendezvous is over public brokers; the data is peer-to-peer),
+but it *is* a real network surface, so it has its own section below
+(*"Live collaboration — the P2P networking surface"*).
 
 ## What we defend against
 
@@ -163,6 +169,72 @@ gets it (that is the one that renders); its hidden compute frame stays strict.
   neither is a new exfiltration surface. Everything that bounds *reach* —
   `connect-src 'none'`, opaque origin, the broker allowlist — is unchanged.
 
+## Live collaboration — the P2P networking surface (#148, on the #143 merge kernel)
+
+Collaboration is **opt-in and off by default**. When two people co-author a project,
+CrossTab opens a **peer-to-peer** channel directly between their browsers (WebRTC,
+brokered by Trystero over public MQTT relays). There is still **no server we run and
+no backend that holds data** — rendezvous uses public brokers, and the project data
+travels peer-to-peer, never through them.
+
+**Confidentiality in transit — end-to-end by construction.**
+
+- The data channel (the op-log *and* transferred Parquet) rides WebRTC's **DTLS**,
+  which is mandatory in the spec — there is no unencrypted mode to fall into. Because
+  no server sits in the data path, the two browsers are the only endpoints, so DTLS
+  here *is* end-to-end.
+- Signaling (the SDP offer/answer, which carries the DTLS fingerprints and ICE
+  candidates) is **AES-256-GCM encrypted** by Trystero under the room secret
+  (`key = SHA-256(secret:appId:roomId)`, `core/live-sync.js` → Trystero `crypto.js`).
+  So the public broker sees only ciphertext SDP, and — because GCM authenticates — a
+  party without the secret cannot forge or tamper with the fingerprints to
+  man-in-the-middle the handshake.
+
+**The room secret is the capability.** There are no accounts and no auth (consistent
+with the serverless model). Whoever holds a project's invite secret can join its room
+and **read and write** that project. Membership *is* the trust decision — the analogue
+of "activation" for plugins: you invite a collaborator by sharing the secret and
+thereby trust them with that one project. Consequences, on record:
+
+- Share invite links only over a channel you trust; **the link is the key.**
+- The secret is **carried inside the exported bundle** (collab identity is
+  transport-agnostic, so a flash-drive / OPFS copy can rejoin the same room) — which
+  means **the bundle is also the key.** Exports are encrypted by default (#144), which
+  is what protects that embedded secret at rest.
+
+**Received edits are trusted (co-authors can change your data).** A peer's ops apply
+to your local project — recodes, deletions, new datasets. That is the feature, not a
+leak: you joined a shared document. Two integrity properties bound it, and neither
+over-claims:
+
+- Transferred base-data bytes are **SHA-256-verified** against the sender's advertised
+  hash before they are stored (`core/gap-fill.js`). This catches corruption/tampering
+  *in transit* — **not** a malicious sender: a peer with the secret can send
+  valid-but-wrong bytes, which is the membership-trust decision again.
+- Genuine conflicts are **never silently resolved** — the merge surfaces them to a
+  human (`showConflictDialog`); only clean, non-overlapping edits auto-merge.
+
+**Identity is self-asserted.** The names / initials / colours on presence chips and
+authorship stamps are chosen locally and are **spoofable**. They support awareness and
+inter-coder attribution (κ/α needs *consistent* labels, not *verified* ones) — not
+authentication. Attribution is advisory, not forensic.
+
+### Accepted residual risks (collaboration)
+
+- **Signaling metadata to the broker.** The public MQTT broker learns that peers
+  rendezvous on a (hashed) room topic, plus timing and the WebSocket connection (hence
+  approximate IP). It **cannot** read the SDP or any project data. An institution can
+  point at its own broker (`setRelayUrls`) to narrow even this. Accepted.
+- **Peer IP exposure.** WebRTC reveals each peer's IP address to the other (inherent to
+  P2P) unless all traffic is forced through a relay. A privacy consideration for the
+  collaborators, not a data-confidentiality gap. Accepted.
+- **No infrastructure, including no TURN.** Default is public STUN (address discovery
+  only — nothing we host). Two peers behind symmetric NATs may be unable to connect
+  without a **relay the user/institution supplies** (`setTurnConfig`); with none
+  reachable, the session simply fails to connect, and the UI must say so (detected ≠
+  connectable). Even a relayed session stays DTLS-encrypted end-to-end — the TURN
+  operator forwards ciphertext it cannot read. Accepted.
+
 ## Accepted residual risks (won't fix)
 
 These are real gaps we have consciously chosen **not** to close, because the
@@ -213,9 +285,17 @@ warrants for a local single-user tool. Recorded so the trade-off is deliberate.
     (BitLocker / FileVault / LUKS) protects *all* app data uniformly, keyed off-disk
     (TPM/login), with zero app cost and no fight with DuckDB. This is the correct at-rest
     control; app-level encryption on top is largely redundant for the stolen-laptop threat.
-  - *Planned optional mitigation* for the FDE-gap (no-FDE machines, shared computers) and
-    the off-machine export case: **opt-in passphrase encryption for local storage,
-    default-on (opt-*out*) for exports**, reusing the collaboration crypto kernel (same
-    KDF/AES envelope). Real, because keyed by a user secret; non-taxing, because scoped to
-    who asks for it. Tracked as TODO #144 (incl. the unresolved OOM-vs-encryption
-    interaction). **Accepted as the default posture; the opt-in is the mitigation.**
+  - *Optional mitigation — now shipped (#144)* for the FDE-gap (no-FDE machines, shared
+    computers) and the off-machine export case: **opt-in passphrase encryption for local
+    OPFS storage, default-on (opt-*out*) for exports**, built on the same crypto kernel
+    (`core/crypto-envelope.js`: PBKDF2-HMAC-SHA256 → AES-256-GCM, native WebCrypto, key
+    derived per session from the passphrase, never persisted). Real, because keyed by a
+    user secret; non-taxing, because scoped to who asks for it. Each OPFS project has its
+    **own** passphrase (the shared-lab case); the catalog stays plaintext because it spans
+    projects with different keys; `File ▸ Protect this project… / Remove protection…` set
+    or clear it in place for both OPFS and folder projects. **What it does *not* change:**
+    it protects the powered-off / offline / backup copy, never a live session (malware
+    running as the user reads the decrypted data regardless), and DuckDB's direct-OPFS
+    streaming read still can't run against ciphertext — so the multi-GB path stays on the
+    plaintext/FDE posture. **The opt-in is the mitigation; OS full-disk encryption remains
+    the primary recommended control.**
