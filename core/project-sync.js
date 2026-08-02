@@ -33,6 +33,24 @@ const DEBOUNCE_MS = 800;
 /** Bus event: the current project's name/binding changed (drives the sidebar header). */
 export const PROJECT_CHANGED = 'project:changed';
 
+// Gap-fill chunks carry raw Parquet bytes (a Uint8Array). Trystero's action channel
+// only transmits binary when the WHOLE payload is a TypedArray; a Uint8Array nested
+// inside a plain object gets JSON-serialised to a numeric-keyed object and arrives
+// corrupt (the SHA-256 check then rejects it, so a new dataset silently never lands).
+// So base64 the bytes across the wire — the SourceExchange stays binary end-to-end.
+function bytesToB64(bytes) {
+  let bin = '';
+  const CH = 0x8000; // fromCharCode.apply chokes on huge spreads; walk it in windows
+  for (let i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  return btoa(bin);
+}
+function b64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
 export class ProjectSync {
   #store;
   #datasets;
@@ -1199,10 +1217,15 @@ export class ProjectSync {
         return this.#liveSourceBytes.get(ref.id) ?? null;
       },
       storeSource: async (ref, bytes) => { this.#liveSourceBytes.set(ref.id ?? ref.key, bytes); },
-      send: (m, to) => session.sendOps(m, to),
-      onReceived: ({ ok }) => { if (ok && this.#liveLastManifest) void this.#applyLiveManifest(this.#liveLastManifest); },
+      // Base64 the chunk bytes going out (see bytesToB64) so Trystero doesn't mangle them.
+      send: (m, to) => session.sendOps(m.t === 'src-chunk' ? { ...m, bytes: bytesToB64(m.bytes) } : m, to),
+      onReceived: ({ ok, key }) => { debug('live', 'gap-fill received', { key, ok }); if (ok && this.#liveLastManifest) void this.#applyLiveManifest(this.#liveLastManifest); },
     });
-    session.onOps((m, peer) => { void this.#liveExchange?.receive(m, peer); });
+    // Decode chunk bytes back to a Uint8Array before the exchange reassembles them.
+    session.onOps((m, peer) => {
+      const msg = m?.t === 'src-chunk' && typeof m.bytes === 'string' ? { ...m, bytes: b64ToBytes(m.bytes) } : m;
+      void this.#liveExchange?.receive(msg, peer);
+    });
     await this.#refreshHeld(); // seed the exchange with the source ids I already hold
     this.#liveDoc.hello();
     this.#emitProject();
@@ -1296,7 +1319,8 @@ export class ProjectSync {
           // A co-author added data we don't hold yet — request the bytes; onReceived
           // re-applies this manifest once they arrive (#148 6c gap-fill).
           this.#liveLastManifest = manifest;
-          this.#liveExchange?.requestMissing(manifest);
+          const refs = this.#liveExchange?.requestMissing(manifest);
+          debug('live', 'gap-fill requesting', { missing, refs: refs?.length });
         }
         if (datasets.length) await this.#datasets.loadBundle({ activeId: manifest.activeId, datasets });
       }

@@ -78,6 +78,44 @@ test('full round-trip: a peer fetches a missing source, verified and stored', as
   assert.deepEqual(peers.A.received, [{ key: 'op-b', ok: true, dsId: 2, file: 'ds2_src1.parquet' }]);
 });
 
+// Trystero's action channel only transmits binary when the WHOLE payload is a
+// TypedArray; a Uint8Array nested in a plain object gets JSON-serialised (to a
+// numeric-keyed object) and arrives corrupt. project-sync base64s the chunk bytes at
+// the transport boundary to survive that. These two tests pin the hazard + the fix.
+const jsonClone = (m) => JSON.parse(JSON.stringify(m)); // what a JSON transport does to a message
+const b64 = (bytes) => Buffer.from(bytes).toString('base64');
+const unb64 = (s) => new Uint8Array(Buffer.from(s, 'base64'));
+
+test('raw nested bytes are corrupted by a JSON transport (the bug)', async () => {
+  const A = new SourceExchange({
+    held: new Set(), readSource: async () => null,
+    storeSource: async () => {}, send: () => {},
+    onReceived: (ev) => { A.__last = ev; },
+  });
+  const good = new Uint8Array([1, 2, 3, 4]);
+  const hash = await sha256hex(good);
+  const msg = { t: 'src-chunk', key: 'op-x', dsId: 1, file: 'f.parquet', seq: 0, total: 1, hash, bytes: good };
+  await A.receive(jsonClone(msg), 'B');   // as it would arrive over a JSON channel
+  assert.equal(A.__last.ok, false);       // Uint8Array → {0,1,2,3} → integrity fails
+});
+
+test('a base64 adapter (project-sync wiring) survives the JSON transport', async () => {
+  const stored = [];
+  const A = new SourceExchange({
+    held: new Set(), readSource: async () => null,
+    storeSource: async (ref, bytes) => stored.push([ref.file, [...bytes]]),
+    send: () => {}, onReceived: (ev) => { A.__last = ev; },
+  });
+  const good = new Uint8Array([1, 2, 3, 4]);
+  const hash = await sha256hex(good);
+  // Sender wraps → JSON transport → receiver unwraps (mirrors project-sync send/onOps).
+  const wire = jsonClone({ t: 'src-chunk', key: 'op-x', dsId: 1, file: 'f.parquet', seq: 0, total: 1, hash, bytes: b64(good) });
+  const decoded = wire.t === 'src-chunk' && typeof wire.bytes === 'string' ? { ...wire, bytes: unb64(wire.bytes) } : wire;
+  await A.receive(decoded, 'B');
+  assert.equal(A.__last.ok, true);
+  assert.deepEqual(stored, [['f.parquet', [1, 2, 3, 4]]]); // exact bytes land
+});
+
 test('a holder that declines (consent/size gate) sends nothing', async () => {
   const q = [];
   const B = new SourceExchange({
