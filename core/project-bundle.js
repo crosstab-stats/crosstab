@@ -78,6 +78,11 @@ export async function exportProjectBundle({ datasets, projectName, plugins = [],
       origin: p.origin,
       ...(p.url ? { url: p.url } : {}),
     })),
+    // The dataset-collection op-log (unit 6) travels with the bundle so every window
+    // that opens it shares ONE collection identity. Without it, an importer would
+    // RECONSTRUCT different op-ids than the exporter kept, and the merge would then see
+    // the same dataset's add/remove as rival independent ops (a spurious conflict).
+    collectionLog: datasets.collectionOps ? datasets.collectionOps() : null,
     // Collab identity (#148) — travels with the bundle so a copy imported to OPFS on
     // another machine (flash-drive hand-off) meets the origin in the SAME room.
     // Collaboration is transport-agnostic: whoever holds the bundle is a collaborator
@@ -131,6 +136,11 @@ export function importProjectBundle(buf) {
     name: manifest.name || 'Imported project',
     bundle: {
       activeId, datasets, activePlugins: plugins.map((p) => p.id).filter(Boolean),
+      // Restore the real collection op-log so the imported copy shares collection
+      // identity with the exporter (and every other importer) — the merge then works on
+      // the same ops, no spurious add/remove conflict. Absent on pre-unit-6 bundles →
+      // loadBundle reconstructs deterministically (still consistent between importers).
+      collectionLog: Array.isArray(manifest.collectionLog) ? manifest.collectionLog : null,
       // Preserve the collab identity so the imported copy shares a room with the origin (#148).
       collabId: manifest.collabId ?? null, collabSecret: manifest.collabSecret ?? null,
     },
