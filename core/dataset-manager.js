@@ -27,29 +27,69 @@
 
 import { CoreEvents } from './event-bus.js';
 import { DataStore } from './data-store.js';
+import { ProjectLog } from './project-log.js';
+import { makeOp } from './op-log.js';
+import { currentAuthor } from './user-identity.js';
 
 /** Bus event: the set of datasets or the active one changed (drives the switcher). */
 export const DATASETS_CHANGED = 'datasets:changed';
+
+/** The dataset-COLLECTION projection (unified log, System 2): folds add/rename/remove
+ * ops into the ordered `[{id, name}]` membership. This — not the instance Map — is the
+ * source of truth for which datasets exist, their names, and their order. The Map
+ * (`#datasets`) is just the live-instance store keyed by these ids. See
+ * docs/ARCHITECTURE-unified-log.md §7. Which dataset is *active* is view state, NOT an
+ * op (the same call the DataStore already makes for variable selection). */
+const COLLECTION = {
+  key: 'collection',
+  match: (op) => op.owner === 'core' && typeof op.target === 'string' && op.target.startsWith('coll/'),
+  fold: (ops) => {
+    const names = new Map();
+    for (const op of ops) {
+      if (op.type === 'addDataset') names.set(op.payload.id, op.payload.name);
+      else if (op.type === 'renameDataset') { if (names.has(op.payload.id)) names.set(op.payload.id, op.payload.name); }
+      else if (op.type === 'removeDataset') names.delete(op.payload.id);
+    }
+    return [...names.entries()].map(([id, name]) => ({ id, name }));
+  },
+};
+
+const collAdd = (id, name) => ({ target: `coll/ds:${id}`, owner: 'core', type: 'addDataset', payload: { id, name } });
+const collRename = (id, name) => ({ target: `coll/ds:${id}`, owner: 'core', type: 'renameDataset', payload: { id, name } });
+const collRemove = (id) => ({ target: `coll/ds:${id}`, owner: 'core', type: 'removeDataset', payload: { id } });
 
 export class DatasetManager {
   /** @type {import('./event-bus.js').EventBus} */
   #bus;
   /** @type {import('./duckdb-manager.js').DuckDBManager} */
   #duckdb;
-  /** id → DataStore. @type {Map<number, DataStore>} */
+  /** id → DataStore (the live-instance store; membership is owned by {@link #log}).
+   * @type {Map<number, DataStore>} */
   #datasets = new Map();
-  /** Active dataset id. */
+  /** Active dataset id — VIEW STATE, not a logged op. */
   #activeId = null;
   /** Monotonic dataset id. */
   #nextId = 1;
+  /** The project's unified op log; here it carries the dataset-collection tier. Later
+   * units register more projections (analysis, plugin) on the SAME log. @type {ProjectLog} */
+  #log;
 
   /**
    * @param {import('./event-bus.js').EventBus} bus
    * @param {import('./duckdb-manager.js').DuckDBManager} duckdb
+   * @param {ProjectLog} [projectLog]  the shared project log (default: a fresh one).
    */
-  constructor(bus, duckdb) {
+  constructor(bus, duckdb, projectLog) {
     this.#bus = bus;
     this.#duckdb = duckdb;
+    this.#log = projectLog ?? new ProjectLog({ author: currentAuthor });
+    this.#log.register(COLLECTION);
+  }
+
+  /** The ordered collection membership from the log — the source of truth for which
+   * datasets exist, their order, and their names. */
+  #collection() {
+    return this.#log.state('collection');
   }
 
   // --- collection ------------------------------------------------------------
@@ -64,9 +104,9 @@ export class DatasetManager {
     return this.#activeId;
   }
 
-  /** All open datasets (live {@link DataStore}s), in id order. */
+  /** All open datasets (live {@link DataStore}s), in the collection's order. */
   all() {
-    return [...this.#datasets.values()];
+    return this.#collection().map((c) => this.#datasets.get(c.id)).filter(Boolean);
   }
 
   /** A specific open dataset by id, or undefined. */
@@ -80,15 +120,19 @@ export class DatasetManager {
     this.#bus.emit(DATASETS_CHANGED, this.list());
   }
 
-  /** Summaries for the dataset switcher. */
+  /** Summaries for the dataset switcher, in collection order. Name comes from the
+   * collection projection (its source of truth); row count/link from the live instance. */
   list() {
-    return [...this.#datasets.values()].map((ds) => ({
-      id: ds.id,
-      name: ds.name,
-      rowCount: ds.rowCount,
-      active: ds.id === this.#activeId,
-      libraryLink: ds.libraryLink ?? null,
-    }));
+    return this.#collection().map((c) => {
+      const ds = this.#datasets.get(c.id);
+      return {
+        id: c.id,
+        name: c.name,
+        rowCount: ds?.rowCount ?? 0,
+        active: c.id === this.#activeId,
+        libraryLink: ds?.libraryLink ?? null,
+      };
+    });
   }
 
   /**
@@ -102,6 +146,7 @@ export class DatasetManager {
     const id = this.#nextId++;
     const ds = new DataStore(this.#bus, this.#duckdb, { id, name });
     this.#datasets.set(id, ds);
+    this.#log.append(collAdd(id, name)); // membership is recorded, not just held in the Map
     if (activate || this.#activeId === null) this.#activeId = id;
     this.#bus.emit(DATASETS_CHANGED, this.list());
     return ds;
@@ -114,11 +159,13 @@ export class DatasetManager {
     this.#emitActive('switch');
   }
 
-  /** Rename a dataset (updates the switcher). */
+  /** Rename a dataset (updates the switcher). The op is the source of truth; `ds.name`
+   * is kept in sync as the synchronous display cache many callers read. */
   rename(id, name) {
     const ds = this.#datasets.get(id);
     if (!ds) return;
     ds.name = name;
+    this.#log.append(collRename(id, name));
     this.#bus.emit(DATASETS_CHANGED, this.list());
   }
 
@@ -131,6 +178,7 @@ export class DatasetManager {
     if (!ds) return;
     await ds.dispose();
     this.#datasets.delete(id);
+    this.#log.append(collRemove(id)); // deletion is a recorded op — not just absence
     if (this.#datasets.size === 0) {
       // Start fresh: a single empty dataset, ready to import into.
       this.#activeId = null;
@@ -224,6 +272,7 @@ export class DatasetManager {
     const id = this.#nextId++;
     const ds = new DataStore(this.#bus, this.#duckdb, { id, name });
     this.#datasets.set(id, ds);
+    this.#log.append(collAdd(id, name)); // recycle-bin restore is a real add to the collection
     await ds.restoreState(state);
     if (activate || this.#activeId === null) {
       this.#activeId = id;
@@ -244,6 +293,14 @@ export class DatasetManager {
     for (const ds of this.#datasets.values()) await ds.dispose();
     this.#datasets.clear();
     this.#activeId = null;
+    // Rebuild the collection tier of the log from the bundle. Deterministic ids
+    // (`coll-add-<datasetId>`) and a fixed base clock keep it identical across loads
+    // and machines. (Unit 6 will persist/merge the log directly and drop this
+    // reconstruction; today the transport merge still runs on the datasets[] snapshot.)
+    this.#log.reset();
+    this.#log.receiveOps(
+      (datasets ?? []).map((d, i) => makeOp(collAdd(d.id, d.name), { id: `coll-add-${d.id}`, hlc: { wall: 0, counter: i }, author: { authorId: 'restore' } })),
+    );
     // Recreate with the SAVED ids so a project's Parquet files (named by dataset
     // id) map back consistently across save/load.
     for (const d of datasets) {

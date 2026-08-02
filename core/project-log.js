@@ -143,6 +143,13 @@ export class ProjectLog {
     this.#redo = [];
   }
 
+  /** Empty the log (both active and redo). Used when replacing the whole project
+   * (e.g. loading a different bundle). */
+  reset() {
+    this.#ops = [];
+    this.#redo = [];
+  }
+
   get canUndo() { return this.#ops.length > 0; }
   get canRedo() { return this.#redo.length > 0; }
 
