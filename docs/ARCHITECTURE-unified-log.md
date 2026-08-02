@@ -154,6 +154,32 @@ We design clean and carry **zero migration weight**:
   *derived* summary projection (for the catalog / room id), never as truth.
 - **Drop `project.base.json` and the in-memory `#lastManifest`** — see §10.
 
+## 9a. Dataset identity vs. content addressing (decision)
+
+A dataset's **id is a stable, opaque identity**, minted random at creation
+(`newDatasetId`, ~48-bit int) — NOT derived from its content. Content addressing lives
+one layer down, on the **source bytes** (unit 7, `asset:<sha>`). The two are kept
+separate on purpose:
+
+- **The id is assigned before content exists.** `add()` creates the dataset — and its
+  DuckDB view/table + Parquet file names (`ct_view_<id>`, `ds<id>_src1.parquet`) — before
+  data is loaded. There's nothing to hash yet; a content-hash id would force a
+  create-load-rehash-rename dance.
+- **The id must be stable across edits.** Recode/compute/append change content but not
+  identity; the id names DuckDB tables, files, and the `coll/ds:<id>` op target. Hashing
+  content would change the id on every edit and break every reference.
+- **Content hashing wouldn't dedup independent imports anyway.** Two imports of "the
+  same" data rarely produce byte-identical Parquet (encoder, row order, metadata) → the
+  hashes differ. Content addressing dedups *identical bytes* (a shared bundle/source),
+  which is real and useful; it does not dedup *logically similar* imports.
+
+So: **id = random stable identity; source bytes = content-addressed asset (unit 7).**
+Two peers importing byte-identical sources get two datasets sharing one deduped asset
+(gap-fill skips an already-held hash). Deduping *independent same-source imports* is a
+**provenance** concern (match on import URL/params, then offer to merge) — a future UX
+item, not an id property. Random-id collision is negligible at 2^48; a readable
+name-slug prefix could be added for debuggability without changing any of this.
+
 ## 10. Merge
 
 One pass, dispatched by owner:
@@ -270,6 +296,22 @@ was designed for this; both pay off here — the compounding return.
    - Still deferred to later units: the DATA tier (System 1 per-dataset logs) still
      merges via `datasetToOps` reconstruction (faithful); `project.base.json`/
      `#lastManifest`/`deterministicOpId` retire once all tiers are on the log.
+   - 6-fixes (from two-window testing): dataset ids are now globally-unique random
+     (concurrent imports no longer collide); the collection merge ancestor is the
+     shared op-id history not the per-peer base (a pre-co-authoring add is no longer
+     misread as the other side's delete); gap-fill bytes are copied before the DuckDB
+     transfer (no detached-buffer data loss); the `.crosstab` bundle carries the
+     collection log (shared identity across importers).
+6c. **Incremental live apply — NEXT (partly built).** The recurring bug class: every
+   live merge apply calls `loadBundle`, which DISPOSES ALL datasets and rebuilds from
+   scratch. That is destructive (a mid-rebuild throw wipes data), wasteful (re-parses
+   all Parquet each tick), and racy (a concurrent apply's dispose vs. another's snapshot
+   → "table does not exist"). Serialization + defensive drop mitigated it; the durable
+   fix is to apply only the DELTA — keep unchanged datasets' DuckDB tables in place, add
+   new, dispose removed, rebuild only changed. `planDatasetApply(current, incoming)`
+   (pure, headless-tested) computes that delta; wiring it into `#applyLiveManifest`
+   (replacing the blanket `loadBundle`) is the remaining step and needs a two-window
+   retest.
 7. **Content-addressed assets**; unify gap-fill.
 8. **Checkpoint** (non-destructive), then **Seal** (destructive + Tier A/B/C merge).
 9. **Fold in System 3 (plugin data)** — `apply(op)` API; migrate both builtins;
