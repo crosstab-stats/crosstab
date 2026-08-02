@@ -979,7 +979,17 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       editing (recodes/coding) needs no transfer.
     - Then wire the **"start co-authoring with X" offer** (auto-offer on peer-appear) →
       `attachLiveDoc` on the presence session → local change publishes, merged applies (6a),
-      conflicts → `showConflictDialog`. Needs a two-window live test. **Next major build.**
+      conflicts → `showConflictDialog`. **DONE + wired.**
+    - **LANDED ON MAIN 2026-08-01** pending wider device/lab testing. Two-window
+      verification found + fixed: self-echo presence, the co-author-button "bounce"
+      (emitProject→PROJECT_CHANGED→stopLive recursion), phantom conflicts on sequential
+      edits + inverted conflict labels, MQTT broker spam, conflict-dialog auto-dismiss on
+      remote resolve, **gap-fill chunk bytes mangled by Trystero's JSON action encoding
+      (base64 fix)**, and **dataset deletion not propagating (add-wins → proper three-way
+      delete)**.
+    - **Known edges still open** (not blockers): (a) delete-vs-concurrent-edit keeps the
+      data with no user prompt (no silent loss, but no choice); (b) deleting the *last*
+      remaining dataset doesn't propagate live (empty-project apply path is guarded).
   - [ ] **~~In-project chat~~ — DEFERRED / maybe never.** Disproportionate scope
     (persistence, history, retention, notifications) for uncertain value when teams already
     have Slack/Teams; and it's the *unanchored* opposite of a memo. If ever, rescope to
