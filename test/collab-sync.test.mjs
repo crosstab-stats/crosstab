@@ -112,6 +112,37 @@ test('mergeManifests: a dataset added on one side is kept (add-wins, never drop 
   assert.deepEqual(out.datasets.map((d) => d.id).sort(), [1, 2]);
 });
 
+test('mergeManifests: a dataset deleted on one side (unchanged on the other) is dropped', () => {
+  // base has both; mine deleted ds2; theirs still holds an untouched ds2 → delete wins
+  // (previously it resurrected from theirs — the reported live co-authoring bug).
+  const both = [ds(1, [source('s1', 'a', ['x'])], []), ds(2, [source('s2', 'b', ['y'])], [])];
+  const base = manifest({ datasets: both });
+  const mine = manifest({ datasets: [ds(1, [source('s1', 'a', ['x'])], [])] });
+  const theirs = manifest({ datasets: both });
+  const { manifest: out, conflicts } = mergeManifests(base, mine, theirs, buildMergers([]));
+  assert.equal(conflicts.length, 0);
+  assert.deepEqual(out.datasets.map((d) => d.id), [1]); // ds2 stays deleted on both peers
+});
+
+test('mergeManifests: delete is symmetric regardless of which slot deleted it', () => {
+  const both = [ds(1, [source('s1', 'a', ['x'])], []), ds(2, [source('s2', 'b', ['y'])], [])];
+  const base = manifest({ datasets: both });
+  // theirs deleted ds2 this time (the deleter is in the "theirs" slot).
+  const out = mergeManifests(base, manifest({ datasets: both }), manifest({ datasets: [ds(1, [source('s1', 'a', ['x'])], [])] }), buildMergers([])).manifest;
+  assert.deepEqual(out.datasets.map((d) => d.id), [1]);
+});
+
+test('mergeManifests: delete loses to a concurrent edit (no silent data loss)', () => {
+  // mine deletes ds2; theirs recoded a var in ds2 → keep it rather than lose the edit.
+  const base = manifest({ datasets: [ds(1, [source('s1', 'a', ['x'])], []), ds(2, [source('s2', 'b', ['y'])], [])] });
+  const mine = manifest({ datasets: [ds(1, [source('s1', 'a', ['x'])], [])] });
+  const theirs = manifest({ datasets: [ds(1, [source('s1', 'a', ['x'])], []), ds(2, [source('s2', 'b', ['y'])], [recode('r1', 'y', 'A')])] });
+  const out = mergeManifests(base, mine, theirs, buildMergers([])).manifest;
+  const ds2 = out.datasets.find((d) => d.id === 2);
+  assert.ok(ds2, 'edited dataset survives the concurrent delete');
+  assert.deepEqual(ds2.transforms.map((t) => t.id), ['r1']); // the edit is preserved
+});
+
 test('mergeManifests: CAQDAS codebooks from two coders union (Dedoose case, via buildMergers)', () => {
   const plugins = [{ id: 'builtin-caqdas', manifest: { workspaces: [{ id: 'caqdas-coding', merge: { via: 'mergeState' } }] }, module: { mergeState: caqdasMerge } }];
   const cb = (codes) => ({ version: 1, textColumn: 't', labelColumn: null, codes, segments: [] });
