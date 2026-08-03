@@ -20,6 +20,10 @@ import { sharedAncestor, orderByHlc, liveOps } from './op-log.js';
 
 const isCore = (op) => op.owner === 'core';
 const isWs = (op) => typeof op?.target === 'string' && op.target.startsWith('ws:');
+/** The workspace id embedded in a `ws:<owner>\0<wsId>\0<slot>\0<dsKey>` target — the key
+ * the merge dispatches on (all builtins share the `builtin` owner token, so owner alone
+ * can't pick the merger; the wsId does, matching {@link module:core/builtin-mergers}). */
+const wsIdOf = (target) => String(target).slice(3).split('\0')[1];
 
 /**
  * Fold one plugin owner's `ws:` ops into per-leaf `{value, label}` keyed by target
@@ -105,7 +109,10 @@ export function mergeProjects(mine, theirs, mergers = {}, resolutions = null) {
       if (!m || !t) continue; // add-wins single side (the union already kept its op)
       if (stableStringify(m.value) === stableStringify(t.value)) continue; // equal → nothing to do
       const av = ancLeaves.get(key)?.value ?? null;
-      const r = resolveMerger(mergers[owner], { resolutions, scope: key })(av, m.value, t.value, owner);
+      // Dispatch by workspace id (the leaf's wsId), NOT the shared owner token — that's
+      // what maps to the plugin's declared merger (e.g. caqdas-coding → mergeState).
+      const decl = mergers[wsIdOf(key)] ?? mergers[owner];
+      const r = resolveMerger(decl, { resolutions, scope: key })(av, m.value, t.value, owner);
       conflicts.push(...(r.conflicts ?? []).map((c) => ({ owner, ...c })));
       // Deterministic merge op: same id + hlc on both peers ⇒ converges, never oscillates.
       const payload = { value: r.resolved, label: m.label ?? t.label ?? null };
@@ -178,11 +185,12 @@ export function buildMergers(plugins) {
     for (const ws of wss) {
       const decl = ws?.merge;
       if (!decl) continue;
+      // Key by WORKSPACE id (what mergeProjects dispatches on), not plugin id.
       if (decl.via) {
         const fn = p.module?.[decl.via];
-        if (typeof fn === 'function') mergers[p.id] = { merge: fn, ...(decl.keyFn ? { keyFn: decl.keyFn } : {}) };
+        if (typeof fn === 'function') mergers[ws.id] = { merge: fn, ...(decl.keyFn ? { keyFn: decl.keyFn } : {}) };
       } else if (decl.strategy) {
-        mergers[p.id] = { strategy: decl.strategy, ...(decl.keyFn ? { keyFn: decl.keyFn } : {}) };
+        mergers[ws.id] = { strategy: decl.strategy, ...(decl.keyFn ? { keyFn: decl.keyFn } : {}) };
       }
     }
   }

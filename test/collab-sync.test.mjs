@@ -26,9 +26,9 @@ test('buildMergers resolves strategy and via→exported-fn from loaded plugins',
   ];
   const m = buildMergers(plugins);
   assert.deepEqual(m.core, { strategy: 'three-way' });
-  assert.equal(typeof m['builtin-caqdas'].merge, 'function');
-  assert.deepEqual(m['builtin-spatial'], { strategy: 'lww' });
-  assert.equal(m['no-merge'], undefined);
+  assert.equal(typeof m['caqdas-coding'].merge, 'function'); // keyed by workspace id
+  assert.deepEqual(m['spatial-map'], { strategy: 'lww' });
+  assert.equal(m['w'], undefined); // no-merge plugin's workspace declares no merger
 });
 
 test('disjoint recodes on the same dataset auto-merge (union by id)', () => {
