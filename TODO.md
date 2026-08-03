@@ -10,6 +10,128 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
+- [ ] **#149 — One-true-log stability gate (post-#148 fresh-eyes audit). BLOCKS ALL
+      NEW FEATURES.** A full cross-model review of the #148 migration (done with a
+      different model as proofreader) found the gaps below. Several are silent data
+      corruption; nothing new ships until this list is cleared. Grouped by severity.
+      The test for "done": every user-data change is an appended op (or is
+      *deliberately* declared scalar/out-of-log and merges sanely), and no feature
+      path physically removes durable ops.
+
+  **A. Edits that escape the log / merge-safety violations**
+
+  - [ ] **A1 (serious): `analysisLog.clear()` physically deletes durable ops
+        mid-session** (`app.js` DATA_CHANGED `reason:'replace'` handler →
+        `analysis-log.js clear()` = `clearWhere`). (a) Merge resurrection: a peer
+        still holding the `runAnalysis` ops re-contributes them on the next sync
+        (absent-from-ancestor reads as *their addition* — the delete-inference class
+        #148 exists to kill). (b) Overbroad trigger: `reason:'replace'` also fires
+        from `createWithData` (bootstrap/derived datasets), `extractColumns`, and the
+        remove-last-dataset reset — creating a derived dataset silently wipes the
+        analysis script. Fix: express the clear as `removeAnalysis` ops (or a
+        tier-scoped retract), and scope the trigger to a genuine base replace of the
+        dataset the analyses ran against.
+  - [ ] **A2 (serious): `library.pullLatest` rewrites a live dataset's history
+        outside the log** (`library.js` → `restoreState` → `#resetDataHard` →
+        `clearWhere(#mine)` + re-minted op ids on an established, possibly-synced
+        slice). Next merge: the peer's copies of the dropped ops union back in
+        *alongside* the re-minted duplicates → doubled pipeline. (`#add` and
+        recycle-restore are safe — fresh dataset id, empty slice.) Fix: express a
+        pull as ops (retract the old slice + append the new recipe), or fork to a
+        fresh dataset id.
+  - [ ] **A3: project NAME is user data with no op.** Rename lives only in
+        `#binding.name` / `store.rename`; merge takes `name: mine ?? theirs`
+        (`collab-sync.js`) and `contentSig` ignores it (`folder-sync.js`), so a
+        peer's rename never propagates and is silently reverted by our next save.
+        Same family as the fixed move-to-folder rename bug. Decide: name as an op,
+        or name as a properly-merged scalar (LWW by savedAt).
+  - [ ] **A4 (serious for qual): recycle-bin round-trip loses workspace/coding
+        state.** Restore mints a NEW dataset id (`addFromState`), but `ws:` leaves
+        are keyed by the OLD dsId → a deleted-then-restored coded dataset comes back
+        with its CAQDAS coding silently gone (orphaned in the log). Related:
+        `WorkspaceStore.dropDataset` has NO callers — removed datasets' ws leaves
+        linger live forever. Fix: re-home ws leaves on restore (or restore under the
+        original id), and decide dropDataset's fate.
+  - [ ] **A5: media assets (`asset:` refs) are outside the model entirely** — not in
+        the project save, bundle, folder sync, or live gap-fill. A shared project's
+        media is just missing on the peer, with no transport story (known #139
+        scope, but now the one class of referenced project data outside the log).
+  - [ ] **A6 (minor): `exportState` preserves `author` ("round-trips the recipe")
+        but `restoreState` discards it** — provenance lost on every library/recycle
+        round-trip, contradicting the docstring.
+
+  **B. Bugs introduced/exposed by the rewrite**
+
+  - [ ] **B1 (serious): undo past a replace-import bricks the dataset.**
+        `#resetData` retracts the old steps (good) but `#dropDuckDB` physically
+        drops their tables/bytes; the retracts are still undoable. Import-replace →
+        Ctrl+Z ×2 appends `undo{retract(S1)}`, reviving a byte-less source →
+        `rederive` throws, and keeps throwing; `rawExport` then persists the revived
+        source byte-less (data loss on save). Old code cleared the log on replace so
+        undo couldn't reach back; tombstones newly expose this. Fix options: make
+        replace-generated retracts non-undoable, or keep dropped bytes until a
+        compaction/save boundary.
+  - [ ] **B2 (serious, silent wrong data): row-id collision after reload with
+        retract gaps.** `rawRestore` restarts `#sourceSeq` at 0 while restored
+        Parquet keeps row ids baked from the ORIGINAL seq; nothing advances the seq
+        past restored bases. Repro: replace-import in session 1 (live source at rid
+        base 2e9, seq-1 retracted) → save → reload (restored as seq 1) → append a
+        file (seq 2 → base 2e9 again) → duplicate `__ct_rid` across the UNION; a
+        `setCell` CASE then edits TWO rows. Retract gaps used to be rare; #148 makes
+        them routine (every replace). Fix: restore `#sourceSeq`/rid base to
+        max(existing baked bases)+1.
+  - [ ] **B3 (serious): a failed `rawRestore` in `loadBundle` drops a dataset's ops
+        from the next save.** `receiveOps` runs only after ALL sources materialise;
+        a mid-restore throw is caught, the dataset dropped, and its data ops never
+        enter the in-memory log (membership survives). The next OPFS save (blind
+        overwrite, no merge) writes a manifest permanently missing them. The live-P2P
+        byte-less path (waiting on gap-fill) sits in the same window. Fix: receive
+        the raw envelopes into the log even when materialisation fails (byte-less),
+        so saves keep them.
+  - [ ] **B4: deterministic workspace merge-op ids can violate op immutability**
+        (`collab-sync.js` — id = hash(target+payload) only). If a later merge of the
+        same leaf resolves to a previously-emitted value (reachable via
+        delete-and-redo cycles under add-wins), the same id re-emits with a HIGHER
+        hlc → duplicate id/different hlc; `receiveOps` dedups to the old low-hlc
+        copy, so the leaf's LWW fold can pick a newer ordinary write instead of the
+        merge result — peers disagree while `manifestsEqual` (id-set) says in-sync.
+        Fix: mix the contributing op-id set into the deterministic id.
+  - [ ] **B5: identical concurrent intents surface phantom conflicts.**
+        `threeWayLog`'s add/add target pass flags two peers both undoing (or both
+        retracting) the SAME op as a conflict ("both added undo differently"),
+        though any resolution yields the same outcome; likewise an `undo` vs a
+        content edit on one target reads confusingly. Fix: exempt structural ops
+        whose `payload.opId` matches (converging intent ≠ conflict); review conflict
+        labels for structural ops.
+
+  **C. Hygiene / decisions**
+
+  - [ ] **C1: live-P2P applied peer ops never mark `#dirty`** — they live only in
+        memory until our next local edit; a crash loses them locally (peer still has
+        them). Decide: mark dirty on apply (persist peer work) vs current behaviour.
+  - [ ] **C2: op-id-keyed Parquet sidecars are never pruned** (retracted sources,
+        deleted datasets — `orphanDataOps` strips the `file` ref but the file stays)
+        → unbounded OPFS/folder growth. Add a sweep at save time.
+  - [ ] **C3: `countDatasets` (project-store) ignores liveness** — an undone
+        `addDataset` still counts in the catalog. Cosmetic; use the liveness fold.
+  - [ ] **C4: merger dispatch is by bare wsId** (`mergers[wsIdOf(key)] ??
+        mergers[owner]`) — a third-party plugin naming its workspace `caqdas-coding`
+        gets CAQDAS's merger run on its (owner-isolated) blob. Tab squatting is
+        guarded; merge dispatch isn't. Key the lookup by (owner, wsId).
+  - [ ] **C5: delete dead `WorkspaceStore.import()` + `migrateWorkspaceBlob`** —
+        import is cache-only and would bypass the log if anything ever called it
+        again. Remove so no future path resurrects the pre-log write.
+  - [ ] **C6: `updateVariable`/`setCell` lack the discard-on-failed-rederive
+        rollback** the other mutators have (`#addDerivedVar`) — a throwing rederive
+        there leaves a poisoned op that breaks every later fold. Low risk (TRY_CAST
+        paths) but make the guard uniform.
+  - [ ] **C7 (decision): post-merge Undo semantics.** Edit ▸ Undo targets the
+        highest-HLC op in the active dataset's slice regardless of author — right
+        after a sync, Ctrl+Z undoes the COLLABORATOR's newest edit (and the undo
+        marker syncs back to them). Coherent under shared history, but users read
+        Undo as "undo MY last action." Decide and document (option: scope undo to
+        ops by this author).
+
 - [x] **Workspace ownership model → "read the world, write your own" (#145) — DONE.**
       *Decision (committed):* **activation = full trust**, so we stop pretending
       plugin workspace state is confidential. A dataset is already world-readable to
