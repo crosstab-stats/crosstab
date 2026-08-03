@@ -698,10 +698,7 @@ export class ProjectSync {
         this.#timer = null;
       }
       try {
-        await this.#datasets.loadBundle({
-          activeId: 1,
-          datasets: [{ id: 1, name: 'Dataset 1', state: { sources: [], transforms: [] } }],
-        });
+        await this.#datasets.loadBundle({ log: [] }); // empty log ⇒ one fresh blank dataset
         this.#applyWorkspaces?.([]);
         this.#applyOutput?.([]);
         this.#applyAnalysisLog?.([]);
@@ -1223,8 +1220,8 @@ export class ProjectSync {
     this.#liveExchange = new SourceExchange({
       held,
       readSource: async (ref) => {
-        const snap = await this.#snapshot(true);
-        for (const d of snap.datasets) for (const s of d.state.sources) if (s.id === ref.id && s.parquet) return s.parquet;
+        const snap = await this.#snapshot(true); // my log WITH source bytes
+        for (const op of snap.log) if (op.id === ref.id && op.payload?.src?.parquet) return op.payload.src.parquet;
         return this.#liveSourceBytes.get(ref.id) ?? null;
       },
       storeSource: async (ref, bytes) => { this.#liveSourceBytes.set(ref.id ?? ref.key, bytes); },
@@ -1248,7 +1245,7 @@ export class ProjectSync {
     if (!this.#liveExchange) return;
     try {
       const snap = await this.#snapshot(true);
-      for (const d of snap.datasets) for (const s of d.state.sources) if (s.id) this.#liveExchange.held.add(s.id);
+      for (const op of snap.log) if (['load', 'append', 'join'].includes(op.type) && op.payload?.src?.parquet) this.#liveExchange.held.add(op.id);
     } catch { /* best effort */ }
   }
 
@@ -1308,40 +1305,32 @@ export class ProjectSync {
   }
 
   async #applyMergedManifestLive(manifest) {
-    debug('live', 'applyMerged', { datasets: (manifest?.datasets || []).length });
+    const mergedLog = manifest?.log || [];
+    debug('live', 'applyMerged', { ops: mergedLog.length });
     this.#loading = true; // suppress autosave + echo-publish during apply
     try {
-      const mine = await this.#snapshot(true);
-      const sig = (dss) => JSON.stringify((dss || []).map((d) => ({
-        id: d.id,
-        s: (d.sources || d.state?.sources || []).map((x) => x.id),
-        t: d.transforms ?? d.state?.transforms ?? [],
-      })));
-      const tabularUnchanged = sig(mine.datasets) === sig(manifest.datasets);
-      if (!tabularUnchanged) {
-        const localParquet = new Map();
-        for (const d of mine.datasets) for (const s of d.state.sources) if (s.id && s.parquet) localParquet.set(s.id, s.parquet);
+      const SRC = (op) => op.type === 'load' || op.type === 'append' || op.type === 'join';
+      const isDsOrColl = (op) => op.owner === 'core' && typeof op.target === 'string' && (op.target.startsWith('ds:') || op.target.startsWith('coll/'));
+      // My current log WITH source bytes (fresh — safe to hand to DuckDB).
+      const snap = await this.#snapshot(true);
+      const localParquet = new Map();
+      for (const op of snap.log) if (SRC(op) && op.payload?.src?.parquet) localParquet.set(op.id, op.payload.src.parquet);
+
+      // Fast path: if the data + collection tiers are unchanged (the common coding-only
+      // case), skip the DuckDB rebuild entirely and just apply the workspace/analysis tiers.
+      const dsSig = (log) => JSON.stringify(log.filter(isDsOrColl).map((o) => o.id).sort());
+      if (dsSig(snap.log) !== dsSig(mergedLog)) {
+        // Attach source bytes to the merged log — from local (shared base) or a COPY of a
+        // co-author's streamed bytes (#148 6c). The copy matters: DuckDB's registerFileBuffer
+        // TRANSFERS (detaches) the ArrayBuffer, so we must not hand over the retained cache.
         let missing = 0;
-        const datasets = [];
-        for (const d of manifest.datasets || []) {
-          const sources = [];
-          let complete = true;
-          for (const s of d.sources || []) {
-            // Reuse local Parquet (fresh from this snapshot — safe to hand off), or a
-            // COPY of the bytes a co-author streamed us (#148 6c). The copy is essential:
-            // DuckDB's registerFileBuffer TRANSFERS the ArrayBuffer to its worker
-            // (detaching it), so handing over the retained #liveSourceBytes buffer would
-            // detach our cached copy — and the next re-apply would throw "ArrayBuffer …
-            // already detached", aborting loadBundle mid-rebuild and wiping data.
-            const held = s.id ? this.#liveSourceBytes.get(s.id) : null;
-            const parquet = (s.id ? localParquet.get(s.id) : null) ?? (held ? held.slice() : null);
-            if (!parquet) { missing++; complete = false; continue; } // still lacking → request below
-            sources.push({ id: s.id, meta: s.meta, label: s.label ?? null, combine: s.combine ?? 'base', joinKey: s.joinKey, aliases: s.aliases, wide: s.wide ?? false, rowidBase: s.rowidBase, parquet });
-          }
-          // Only materialise a dataset once ALL its sources are present; an incomplete
-          // one waits for gap-fill (it re-applies via onReceived when the bytes land).
-          if (complete) datasets.push({ id: d.id, name: d.name, libraryLink: d.libraryLink ?? null, state: { sources, transforms: d.transforms ?? [], order: d.order ?? null } });
-        }
+        const log = mergedLog.map((op) => {
+          if (!SRC(op) || !op.payload?.src?.file) return op;
+          const held = this.#liveSourceBytes.get(op.id);
+          const parquet = localParquet.get(op.id) ?? (held ? held.slice() : null);
+          if (!parquet) { missing++; return op; } // byte-less → loadBundle drops this dataset until gap-fill lands
+          return { ...op, payload: { ...op.payload, src: { ...op.payload.src, parquet } } };
+        });
         if (missing) {
           // A co-author added data we don't hold yet — request the bytes; onReceived
           // re-applies this manifest once they arrive (#148 6c gap-fill).
@@ -1349,13 +1338,10 @@ export class ProjectSync {
           const refs = this.#liveExchange?.requestMissing(manifest);
           debug('live', 'gap-fill requesting', { missing, refs: refs?.length });
         }
-        // Pass the merged collection log so live membership (incl. a co-author's
-        // removeDataset) applies from real ops, not inferred. add/delete change the
-        // dataset set → this rebuild path runs; a rename-only change hits the
-        // tabular-unchanged fast-path above and lands on next save (minor follow-up).
-        if (datasets.length) await this.#datasets.loadBundle({ activeId: manifest.activeId, datasets, collectionLog: manifest.collectionLog });
+        await this.#datasets.loadBundle({ log, activeId: manifest.activeId, datasetMeta: manifest.datasetMeta });
       }
-      await this.#applyWorkspaces?.((manifest.log || []).filter((o) => typeof o.target === "string" && o.target.startsWith("ws:")), { refresh: true }); // peer sync → refresh in place
+      this.#applyAnalysisLog?.(mergedLog.filter((o) => typeof o.target === 'string' && o.target.startsWith('analysis:')));
+      await this.#applyWorkspaces?.(mergedLog.filter((o) => typeof o.target === 'string' && o.target.startsWith('ws:')), { refresh: true }); // refresh in place
       this.#applyOutput?.(manifest.output || []);
     } catch (err) {
       console.error('[live] apply failed', err);

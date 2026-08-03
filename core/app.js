@@ -653,7 +653,8 @@ export async function boot(mounts) {
         // can be missing — match by manifest id against what's installed here.
         const have = new Set(plugins.list().map((p) => p.id).filter(Boolean));
         const missing = (recorded || []).filter((p) => !p.builtin && p.id && !have.has(p.id));
-        results.api.appendText(`Opened project bundle **${name}** — ${bundle.datasets.length} dataset(s).`);
+        const dsCount = (bundle.log || []).filter((o) => o.type === 'addDataset').length;
+        results.api.appendText(`Opened project bundle **${name}** — ${dsCount} dataset(s).`);
         if (missing.length) showMissingPluginsDialog(missing);
       } catch (err) {
         results.api.appendError(`Open project bundle failed: ${err.message}`);

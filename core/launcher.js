@@ -85,10 +85,7 @@ export class Launcher {
       // sources, so no DuckDB table is created and there are 0 variables (matches
       // File ▸ New project). setDataset with empty columns can't be used — DuckDB
       // rejects a 0-column table — which is why the old path seeded a phantom `v1`.
-      await this.#datasets.loadBundle({
-        activeId: 1,
-        datasets: [{ id: 1, name: 'Dataset 1', state: { sources: [], transforms: [] } }],
-      });
+      await this.#datasets.loadBundle({ log: [] }); // empty log ⇒ one fresh blank dataset
       return;
     }
     await this.#datasets.setDataset(dataset);

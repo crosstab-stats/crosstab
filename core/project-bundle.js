@@ -95,12 +95,15 @@ export async function exportProjectBundle({ datasets, projectName, plugins = [],
 }
 
 /**
- * Read a `.crosstab` bundle into a dataset bundle ready for
- * {@link DatasetManager#loadBundle}. The Parquet is the working (derived) data, so
- * it loads as a single base source carrying the schema meta; the transform log is
- * preserved in the file as a record but NOT replayed (the data is already derived).
+ * Read a `.crosstab` bundle into a bundle ready for {@link DatasetManager#loadBundle} —
+ * the flat one-true-log shape (#148). A `.crosstab` is a portable SNAPSHOT (the derived
+ * Parquet + schema, tool-agnostic), not the internal op-log, so import synthesises a
+ * fresh log: one `addDataset` + one `load` (carrying the derived Parquet + schema meta)
+ * per dataset. The transform log travels in the file as a record but is NOT replayed (the
+ * data is already derived). Synthetic op ids are DETERMINISTIC (keyed by dataset id) so
+ * two people importing the same bundle produce the identical log — mergeable.
  * @param {Uint8Array} buf
- * @returns {{name: string, bundle: {activeId: any, datasets: Array<object>}}}
+ * @returns {{name: string, bundle: {activeId: any, log: object[]}, plugins: object[]}}
  */
 export function importProjectBundle(buf) {
   const files = readZip(buf);
@@ -110,39 +113,39 @@ export function importProjectBundle(buf) {
   const manifest = JSON.parse(dec.decode(mf));
   if (manifest.format !== FORMAT) throw new Error('Unrecognised bundle format.');
 
-  const datasets = [];
+  const op = (id, counter, target, type, payload) => ({ id, hlc: { wall: 0, counter }, target, owner: 'core', type, payload, reads: [] });
+  // Collection tier: prefer the exporter's real ops (shared collection identity); else
+  // synthesise deterministic addDataset ops so every importer converges on the same log.
+  const haveColl = Array.isArray(manifest.collectionLog) && manifest.collectionLog.length;
+  const log = haveColl ? [...manifest.collectionLog] : [];
   let activeId = null;
+  let i = 0;
   for (const d of manifest.datasets || []) {
+    if (activeId === null) activeId = d.id;
+    if (!haveColl) log.push(op(`bundle-add-${d.id}`, i, `coll/ds:${d.id}`, 'addDataset', { id: d.id, name: d.name }));
     const schemaRaw = d.schema ? byName.get(d.schema) : null;
     const meta = schemaRaw ? JSON.parse(dec.decode(schemaRaw)) : [];
     const parquet = d.file ? byName.get(d.file) : null;
-    const sources = parquet && parquet.byteLength
-      ? [{ meta, label: d.name, combine: 'base', parquet }]
-      : [];
-    datasets.push({
-      id: d.id,
-      name: d.name,
-      libraryLink: null,
-      state: { sources, transforms: [], order: sources.length ? ['s'] : [] },
-    });
-    if (activeId === null) activeId = d.id;
+    if (parquet && parquet.byteLength) {
+      // One base `load` op carrying the derived data + schema (the shape rawRestore
+      // materialises). File ref left off → rawExport keys a fresh sidecar on the op id.
+      log.push(op(`bundle-load-${d.id}`, i, `ds:${d.id}/source:bundle-${d.id}`, 'load', { src: { meta, label: d.name, parquet } }));
+    }
+    i++;
   }
-  if (!datasets.length) throw new Error('Bundle has no datasets.');
-  // The recorded plugin set (#102): `activePlugins` (ids) restores the analyses on
-  // open like a saved project; `plugins` (full descriptors) lets the caller warn
-  // about any that aren't installed here.
+  if (activeId === null) throw new Error('Bundle has no datasets.');
+  // The recorded plugin set (#102): `activePlugins` (ids) restores analyses on open;
+  // `plugins` (full descriptors) lets the caller warn about any not installed here.
   const plugins = Array.isArray(manifest.plugins) ? manifest.plugins : [];
   return {
     name: manifest.name || 'Imported project',
     bundle: {
-      activeId, datasets, activePlugins: plugins.map((p) => p.id).filter(Boolean),
-      // Restore the real collection op-log so the imported copy shares collection
-      // identity with the exporter (and every other importer) — the merge then works on
-      // the same ops, no spurious add/remove conflict. Absent on pre-unit-6 bundles →
-      // loadBundle reconstructs deterministically (still consistent between importers).
-      collectionLog: Array.isArray(manifest.collectionLog) ? manifest.collectionLog : null,
+      activeId,
+      log,
+      activePlugins: plugins.map((p) => p.id).filter(Boolean),
       // Preserve the collab identity so the imported copy shares a room with the origin (#148).
-      collabId: manifest.collabId ?? null, collabSecret: manifest.collabSecret ?? null,
+      collabId: manifest.collabId ?? null,
+      collabSecret: manifest.collabSecret ?? null,
     },
     plugins,
   };
