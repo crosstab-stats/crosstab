@@ -25,6 +25,7 @@
 
 import { OpfsDriver, FsaFolderDriver } from './storage-driver.js';
 import { deriveKey, encryptWithKey, decryptWithKey, isEnveloped, newSalt, DEFAULT_ITERATIONS } from './crypto-envelope.js';
+import { liveOps } from './op-log.js';
 
 const ROOT = 'projects';
 const CATALOG = 'catalog.json';
@@ -48,13 +49,16 @@ const VERIFIER = 'crosstab-folder-v1'; // known token, encrypted, to check a pas
  * stands in wherever the id-centric API needs one. */
 export const FOLDER_PROJECT_ID = '.';
 
-/** Live dataset count folded from the flat log's collection ops (add − remove) — the
- * catalog summary the launcher shows without loading the whole project. */
+/** Live dataset count folded from the flat log's collection ops — the catalog summary
+ * the launcher shows without loading the whole project. Goes through the shared liveness
+ * fold, so an UNDONE `addDataset` doesn't count (#149 C3); `removeDataset` (binned) and
+ * `purgeDataset` both take one out. Mirrors DatasetManager's COLLECTION projection —
+ * they must agree, or the launcher advertises a dataset count the project doesn't have. */
 function countDatasets(manifest) {
   const ids = new Set();
-  for (const op of manifest?.log ?? []) {
+  for (const op of liveOps(manifest?.log ?? [])) {
     if (op.type === 'addDataset') ids.add(op.payload?.id);
-    else if (op.type === 'removeDataset') ids.delete(op.payload?.id);
+    else if (op.type === 'removeDataset' || op.type === 'purgeDataset') ids.delete(op.payload?.id);
   }
   return ids.size;
 }

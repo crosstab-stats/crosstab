@@ -24,6 +24,9 @@ const isWs = (op) => typeof op?.target === 'string' && op.target.startsWith('ws:
  * the merge dispatches on (all builtins share the `builtin` owner token, so owner alone
  * can't pick the merger; the wsId does, matching {@link module:core/builtin-mergers}). */
 const wsIdOf = (target) => String(target).slice(3).split('\0')[1];
+/** Merger registry key for one plugin's workspace — owner-qualified so two plugins can
+ * use the same workspace id without inheriting each other's merge strategy (#149 C4). */
+export const mergerKey = (owner, wsId) => `${owner}\u0000${wsId}`;
 
 /**
  * Fold one plugin owner's `ws:` ops into per-leaf `{value, label}` keyed by target
@@ -111,7 +114,11 @@ export function mergeProjects(mine, theirs, mergers = {}, resolutions = null) {
       const av = ancLeaves.get(key)?.value ?? null;
       // Dispatch by workspace id (the leaf's wsId), NOT the shared owner token — that's
       // what maps to the plugin's declared merger (e.g. caqdas-coding → mergeState).
-      const decl = mergers[wsIdOf(key)] ?? mergers[owner];
+      // Keyed by (owner, wsId) first: a third-party plugin naming its workspace
+      // `caqdas-coding` must NOT get CAQDAS's merger run on its own blob (#149 C4).
+      // The bare-wsId lookup stays as a fallback for mergers registered before the
+      // owner was part of the key.
+      const decl = mergers[mergerKey(owner, wsIdOf(key))] ?? mergers[wsIdOf(key)] ?? mergers[owner];
       const r = resolveMerger(decl, { resolutions, scope: key })(av, m.value, t.value, owner);
       conflicts.push(...(r.conflicts ?? []).map((c) => ({ owner, ...c })));
       // Deterministic merge op: same id + hlc on both peers ⇒ converges, never oscillates.
@@ -188,9 +195,15 @@ export function buildMergers(plugins) {
       // Key by WORKSPACE id (what mergeProjects dispatches on), not plugin id.
       if (decl.via) {
         const fn = p.module?.[decl.via];
-        if (typeof fn === 'function') mergers[ws.id] = { merge: fn, ...(decl.keyFn ? { keyFn: decl.keyFn } : {}) };
+        if (typeof fn === 'function') {
+          const m = { merge: fn, ...(decl.keyFn ? { keyFn: decl.keyFn } : {}) };
+          mergers[ws.id] = m;
+          mergers[mergerKey(p.id, ws.id)] = m; // owner-qualified (#149 C4)
+        }
       } else if (decl.strategy) {
-        mergers[ws.id] = { strategy: decl.strategy, ...(decl.keyFn ? { keyFn: decl.keyFn } : {}) };
+        const m = { strategy: decl.strategy, ...(decl.keyFn ? { keyFn: decl.keyFn } : {}) };
+        mergers[ws.id] = m;
+        mergers[mergerKey(p.id, ws.id)] = m; // owner-qualified (#149 C4)
       }
     }
   }

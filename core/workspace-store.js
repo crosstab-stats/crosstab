@@ -266,64 +266,11 @@ export class WorkspaceStore {
     }
   }
 
-  /** Snapshot for the project save.
-   * Shape: `{ __wsv: 4, ws: { owner: { wsId: { slotId: { dsKey: value } } } }, labels }`. */
-  export() {
-    const ws = {};
-    for (const [owner, byWs] of this.#states) {
-      const o = {};
-      for (const [wsId, bySlot] of byWs) {
-        const s = {};
-        for (const [slotId, perDs] of bySlot) {
-          const d = {};
-          for (const [dk, value] of perDs) d[dk] = structuredClone(value);
-          s[slotId] = d;
-        }
-        o[wsId] = s;
-      }
-      ws[owner] = o;
-    }
-    const labels = this.#labels.size ? Object.fromEntries(this.#labels) : undefined;
-    return { __wsv: 4, ws, labels };
-  }
-
-  /** Replace the store from a project's saved blob. Accepts v4; older shapes must
-   * be migrated via {@link migrateWorkspaceBlob} first. */
-  import(obj) {
-    this.#states.clear();
-    this.#labels.clear();
-    const ws = obj && obj.__wsv === 4 ? obj.ws : null;
-    if (!ws || typeof ws !== 'object') return;
-    for (const owner of Object.keys(ws)) {
-      const byWs = new Map();
-      const o = ws[owner] || {};
-      for (const wsId of Object.keys(o)) {
-        const bySlot = new Map();
-        const slots = o[wsId] || {};
-        for (const slotId of Object.keys(slots)) {
-          const perDs = new Map();
-          const d = slots[slotId] || {};
-          for (const dk of Object.keys(d)) perDs.set(dk, d[dk]);
-          bySlot.set(slotId, perDs);
-        }
-        byWs.set(wsId, bySlot);
-      }
-      this.#states.set(owner, byWs);
-    }
-    if (obj.labels && typeof obj.labels === 'object') {
-      for (const [k, v] of Object.entries(obj.labels)) {
-        if (typeof v === 'string') this.#labels.set(k, v);
-      }
-    }
-  }
-
-  /** Wipe the workspace tier — the fold cache AND the `ws:` ops on the shared log (a
-   * project switch / fresh project). Lifecycle only. */
-  clear() {
-    this.#states.clear();
-    this.#labels.clear();
-    this.#log?.clearWhere(isWorkspaceOp);
-  }
+  // NOTE: `export()` / `import()` and the module-level `migrateWorkspaceBlob` are GONE
+  // (#149 C5). They were the pre-#148 blob format: a whole-tier snapshot written
+  // straight into the cache, bypassing the log. Once the `ws:` tier moved onto the one
+  // true log they had no callers, and leaving them meant some future path could
+  // reintroduce a write the log never sees. Save/load go through ops() / restoreOps().
 }
 
 /**
@@ -339,71 +286,4 @@ export function ownerToken(plugin) {
   const i = qid.indexOf(':');
   if (i > 0) return `ns:${qid.slice(0, i)}`;
   return plugin.origin ? `origin:${plugin.origin}` : `plugin:${qid}`;
-}
-
-/**
- * Migrate a saved workspace blob to the v4 slot-aware shape. A v4 blob passes
- * through. Older shapes are lifted best-effort:
- *
- *  - **v3** `{ __wsv: 3, ws: { owner: { wsId: { dsKey: value } } } }` — each
- *    (wsId, dsKey) gets wrapped under the `_default` slot.
- *  - **v2** `{ __wsv: 2, ws: { wsId: { dsKey: value } } }` — each wsId goes
- *    under its resolved owner + `_default` slot.
- *  - **legacy flat** `{ wsId: value }` — attached to `targetDatasetId` under
- *    its resolved owner + `_default` slot.
- *
- * @param {any} obj - The saved workspace section.
- * @param {{targetDatasetId?: string|number|null, resolveOwner?: (wsId: string) => (string|null)}} [opts]
- * @returns {{__wsv: 4, ws: object, labels?: object}}
- */
-export function migrateWorkspaceBlob(obj, opts = {}) {
-  const { targetDatasetId = null, resolveOwner } = opts;
-  if (obj && obj.__wsv === 4) return obj;
-
-  // First lift to v3 shape (the old migration path handles v2 + legacy).
-  let v3;
-  if (obj && obj.__wsv === 3) {
-    v3 = obj;
-  } else {
-    const ownerOf = (wsId) => (resolveOwner && resolveOwner(wsId)) || `legacy:${wsId}`;
-    const out = {};
-    const put = (owner, wsId, perDs) => {
-      if (!out[owner]) out[owner] = {};
-      out[owner][wsId] = perDs;
-    };
-    if (obj && obj.__wsv === 2 && obj.ws && typeof obj.ws === 'object') {
-      for (const wsId of Object.keys(obj.ws)) put(ownerOf(wsId), wsId, obj.ws[wsId] || {});
-    } else if (obj && typeof obj === 'object') {
-      const key = targetDatasetId == null || targetDatasetId === '' ? NO_DS : String(targetDatasetId);
-      for (const wsId of Object.keys(obj)) put(ownerOf(wsId), wsId, { [key]: obj[wsId] });
-    }
-    v3 = { __wsv: 3, ws: out };
-  }
-
-  // Now lift v3 → v4: wrap each (wsId → { dsKey: value }) under _default slot.
-  const ws4 = {};
-  const v3ws = v3.ws || {};
-  for (const owner of Object.keys(v3ws)) {
-    ws4[owner] = {};
-    for (const wsId of Object.keys(v3ws[owner] || {})) {
-      ws4[owner][wsId] = { [DEFAULT_SLOT]: v3ws[owner][wsId] || {} };
-    }
-  }
-
-  // Migrate labels: v3 labels had 3-part keys "owner\0wsId\0dsKey" → inject _default slot.
-  let labels;
-  if (v3.labels && typeof v3.labels === 'object') {
-    labels = {};
-    for (const [k, v] of Object.entries(v3.labels)) {
-      if (typeof v !== 'string') continue;
-      const parts = k.split('\0');
-      if (parts.length === 3) {
-        labels[`${parts[0]}\0${parts[1]}\0${DEFAULT_SLOT}\0${parts[2]}`] = v;
-      } else {
-        labels[k] = v;
-      }
-    }
-  }
-
-  return { __wsv: 4, ws: ws4, labels };
 }

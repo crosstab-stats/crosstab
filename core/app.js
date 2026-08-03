@@ -45,7 +45,7 @@ import { installDialogKeybindings } from './dialog-keys.js';
 import { Launcher } from './launcher.js';
 import { OfflineManager } from './offline.js';
 import { exportProjectBundle, importProjectBundle, pickBundleFile, downloadBlob, slug } from './project-bundle.js';
-import { WorkspaceStore, migrateWorkspaceBlob, ownerToken } from './workspace-store.js';
+import { WorkspaceStore, ownerToken } from './workspace-store.js';
 import { WorkspaceManager } from './workspace-manager.js';
 import { PluginPackageStore } from './plugin-package-store.js';
 import { MediaStore, createMediaService } from './media-store.js';

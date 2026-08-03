@@ -1040,8 +1040,25 @@ export class DataStore {
     // retype-to-numeric cast is applied in the derived view (see rederive), so the
     // source column is untouched and the change is reversible via undo(). A fresh
     // edit discards any redo branch (standard undo/redo semantics).
-    this.#append('setVariable', { name, patch }, `var:${name}`);
-    await this.rederive('transform');
+    await this.#appendGuarded('setVariable', { name, patch }, `var:${name}`);
+  }
+
+  /**
+   * Append a transform op and re-derive, hard-dropping the op if the re-derive fails —
+   * the rollback the derived-variable path already had, made uniform (#149 C6). Without
+   * it a throwing op stays in the log and every LATER fold throws on it too, so one bad
+   * edit bricks the dataset rather than just failing. {@link ProjectLog#discardLocal} is
+   * sanctioned here because the op was appended microseconds ago and was never durable.
+   */
+  async #appendGuarded(type, payload, targetSuffix, reads = []) {
+    const op = this.#append(type, payload, targetSuffix, reads);
+    try {
+      await this.rederive('transform');
+    } catch (err) {
+      this.#log.discardLocal(op.id);
+      await this.rederive('transform');
+      throw err;
+    }
   }
 
   /**
@@ -1067,7 +1084,7 @@ export class DataStore {
   async setCell(rid, column, value, displayRow = 0) {
     if (!this.#byName.has(column)) throw new Error(`setCell: unknown variable "${column}"`);
     if (rid == null || !/^\d+$/.test(String(rid))) throw new Error('setCell: invalid row id');
-    this.#append(
+    await this.#appendGuarded(
       'setCell',
       {
         rid: String(rid),
@@ -1077,7 +1094,6 @@ export class DataStore {
       },
       `cell:${column}:${String(rid)}`,
     );
-    await this.rederive('transform');
   }
 
 

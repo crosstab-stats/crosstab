@@ -217,19 +217,28 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         DuckDB for the session (that's what makes its undo work) — bounded, but the
         same save-time sweep is the natural place to reclaim it earlier if a
         repeated-reimport session ever proves heavy.
-  - [ ] **C3: `countDatasets` (project-store) ignores liveness** — an undone
-        `addDataset` still counts in the catalog. Cosmetic; use the liveness fold.
-  - [ ] **C4: merger dispatch is by bare wsId** (`mergers[wsIdOf(key)] ??
-        mergers[owner]`) — a third-party plugin naming its workspace `caqdas-coding`
-        gets CAQDAS's merger run on its (owner-isolated) blob. Tab squatting is
-        guarded; merge dispatch isn't. Key the lookup by (owner, wsId).
-  - [ ] **C5: delete dead `WorkspaceStore.import()` + `migrateWorkspaceBlob`** —
-        import is cache-only and would bypass the log if anything ever called it
-        again. Remove so no future path resurrects the pre-log write.
-  - [ ] **C6: `updateVariable`/`setCell` lack the discard-on-failed-rederive
-        rollback** the other mutators have (`#addDerivedVar`) — a throwing rederive
-        there leaves a poisoned op that breaks every later fold. Low risk (TRY_CAST
-        paths) but make the guard uniform.
+  - [x] **C3: `countDatasets` ignored liveness — DONE.** The launcher's catalog
+        summary counted add − remove straight off the raw log, so an UNDONE
+        `addDataset` still counted. Now folds through `liveOps` and treats
+        `purgeDataset` as a removal too, matching DatasetManager's COLLECTION
+        projection — they have to agree or the launcher advertises datasets the
+        project doesn't have.
+  - [x] **C4: merger dispatch was keyed by a bare workspace id — DONE.** A
+        third-party plugin naming its workspace `caqdas-coding` got CAQDAS's merger
+        run on its own (owner-isolated) blob. Mergers are now registered and looked up
+        under an owner-qualified key (`mergerKey(owner, wsId)`), with the bare-wsId
+        lookup kept as a fallback so nothing registered the old way breaks.
+  - [x] **C5: dead pre-log workspace blob path deleted — DONE.**
+        `WorkspaceStore.export()`/`import()` and `migrateWorkspaceBlob` were the
+        pre-#148 format: a whole-tier snapshot written straight into the cache,
+        bypassing the log. No callers since the `ws:` tier moved onto the log, so they
+        were only a loaded gun for a future path to reintroduce a write the log never
+        sees. Gone; save/load go through `ops()` / `restoreOps()`.
+  - [x] **C6: `updateVariable`/`setCell` lacked the discard-on-failed-rederive
+        rollback — DONE.** Both now go through a shared `#appendGuarded`, so a
+        throwing re-derive hard-drops the just-appended op and re-derives clean
+        instead of leaving a poisoned op that breaks every LATER fold. Low-risk paths
+        (TRY_CAST), but the guard is now uniform across every transform mutator.
   - [ ] **C7 (decision): post-merge Undo semantics.** Edit ▸ Undo targets the
         highest-HLC op in the active dataset's slice regardless of author — right
         after a sync, Ctrl+Z undoes the COLLABORATOR's newest edit (and the undo
