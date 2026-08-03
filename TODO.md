@@ -1,3 +1,15 @@
+  - [x] **A8: destructive replace-import — CLOSED by removing "Replace" entirely.**
+        *Decision:* a dataset can be created, deleted, and have rows/columns added or
+        removed — but NOT wholesale cleared and refilled. The import dialog's `Replace`
+        is gone; in its place `Swap in (old one goes to the bin)` imports into a NEW
+        dataset that **inherits the outgoing dataset's name**, then bins the old one —
+        after the import succeeds, so a failed import never costs data you still have.
+        Same one-click gesture, none of the machinery: nothing is superseded within a
+        dataset, so there is no generation to bin (A8a) and nothing is stranded (A7).
+        The old dataset keeps its rows, its id, and its coding, and is restorable for
+        free. NOTE: the engine's `loadDataset({mode:'replace'})` remains — it is how any
+        *empty* dataset gets filled, and `restoreState`/`pullLatest` rely on `load` as
+        the replace barrier (B1). Only the destructive user-facing option is gone.
 # CrossTab — TODO
 
 Single source of truth for pending work. The README narrates *status*; this file
@@ -103,16 +115,12 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         only the *recorded* authorship carries through), threaded via `#append`/
         `#addSourceOp`. Verified: restoring a block authored by "RS" keeps RS on every
         replayed step while a new local step is still attributed to the local user.
-  - [ ] **A7 (serious for qual): replacing the data under a CODED dataset leaves the
-        codebook attached to rows that no longer exist.** `ws:` leaves are keyed by
-        dataset id, and a replace-import keeps the id — so the CAQDAS segments (which
-        anchor on `__ct_rid`) survive the replace pointing at row ids from data that
-        is gone. They neither re-anchor nor announce themselves; the coding pane just
-        shows segments that resolve to nothing. Decide the semantics — re-anchor
-        where the ids still exist, mark the codebook stale and prompt, or snapshot it
-        alongside the replaced data (see A8) — then implement. Related to A4 but the
-        opposite direction: A4 was coding losing its dataset, this is a dataset
-        losing its coding's meaning.
+  - [x] **A7: stale codebook after an in-place replace — CLOSED, won't happen.**
+        A replace kept the dataset id while destroying the rows under it, so a CAQDAS
+        codebook stayed attached with segments anchored to `__ct_rid` values that no
+        longer existed. *Resolved by removing the cause:* there is no in-place replace
+        of a live dataset any more (see A8). The old rows stay in a real dataset, so its
+        coding stays valid.
   - [ ] **A8: a destructive replace-import has no DURABLE recovery, and the recycle
         bin it should use is a parallel store outside the log.** Two halves:
         *(a) The cliff.* Since B1 a replace is undoable — the barrier lifts and the
@@ -247,6 +255,17 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         already exists for undoing a specific action further back. Documented rather
         than changed.
 
+
+- [ ] **#151 — Re-home tool: repoint what referenced dataset A at dataset B.** With
+      in-place replace gone (#149 A8), the "here's a corrected version of my data"
+      workflow is: import as a new dataset, bin the old. What doesn't follow
+      automatically is everything keyed to the OLD dataset id — CAQDAS coding, analysis
+      runs (`datasetId` on each entry), `libraryLink`, and anything a plugin keyed
+      itself. Build a tool that lists those references and offers to move them, with the
+      honest caveats: coding segments anchor on `__ct_rid`, so they can only re-home
+      where the row ids still match (a re-exported file usually re-bakes them) — offer
+      match-by-key as the fallback; analyses just need their `datasetId` repointed and a
+      re-run. Until it exists, the user re-does that work by hand.
 
 - [ ] **#150 — Generalise the asset store beyond "media" (owner-tagged, plugin-
       enumerable). AFTER the #149 bugfix gate.** #149 A5 moved asset BYTES into the

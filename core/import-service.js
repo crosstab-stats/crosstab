@@ -352,14 +352,23 @@ export class ImportService {
     if (!mode) return; // cancelled
     if (mode === 'join') {
       await this.#importJoin(spec, files[0], id);
-    } else if (mode === 'new') {
-      // Import into a brand-new dataset in this project — the current one is left
-      // untouched. Create + activate an empty dataset, then load as a replace into it.
+    } else if (mode === 'new' || mode === 'swap') {
+      // Import into a brand-new dataset in this project. `new` leaves the current one
+      // alone; `swap` inherits its name and bins it afterwards (#149 A7/A8a) — the
+      // honest form of the old in-place "replace", which destroyed the rows under a
+      // still-live dataset id.
+      const outgoing = mode === 'swap' ? this.#data.activeId : null;
+      const outgoingName = outgoing != null ? (this.#data.list().find((d) => d.id === outgoing)?.name ?? null) : null;
       // An importer that names its collection (media → "Images") wins over the
       // single-file basename, which would misname a media dataset after one photo.
-      const name = spec.datasetName ?? (files.length === 1 ? baseName(files[0].name) : 'Imported data');
+      const name = outgoingName
+        ?? spec.datasetName
+        ?? (files.length === 1 ? baseName(files[0].name) : 'Imported data');
       this.#data.add(name, { activate: true });
       await this.#importFiles(spec, files, 'replace', id);
+      // Bin the outgoing dataset only after the import lands, so a failed import never
+      // costs the user the data they still have.
+      if (outgoing != null) await this.#data.remove(outgoing);
     } else {
       await this.#importFiles(spec, files, mode, id);
     }
@@ -803,9 +812,13 @@ export class ImportService {
       if (ok) this.#emitFinished(id, 1);
       return;
     }
-    if (mode === 'new') {
-      // New dataset in this project; load as a replace into the fresh active one.
-      this.#data.add(dataset.source || id || 'Imported data', { activate: true });
+    let outgoing = null;
+    if (mode === 'new' || mode === 'swap') {
+      // New dataset in this project; load as a replace into the fresh (empty) one.
+      // `swap` additionally inherits the outgoing dataset's name and bins it (#149 A7).
+      if (mode === 'swap') outgoing = this.#data.activeId;
+      const outgoingName = outgoing != null ? (this.#data.list().find((d) => d.id === outgoing)?.name ?? null) : null;
+      this.#data.add(outgoingName || dataset.source || id || 'Imported data', { activate: true });
       mode = 'replace';
     }
     // A clean single-source replace stays untagged; an append carries provenance
@@ -818,6 +831,8 @@ export class ImportService {
       console.error('[import]', err);
       return;
     }
+    // Only once the new data is in: bin the dataset it replaced.
+    if (outgoing != null) await this.#data.remove(outgoing);
     this.#emitFinished(id, 1);
   }
 
@@ -972,13 +987,20 @@ function escapeText(s) {
 
 /**
  * Ask how an import should combine with the loaded data. Resolves to
- * `'replace'`, `'append'`, `'join'`, or `null` (cancelled). `'join'` is only
- * offered when `canJoin` (a single incoming dataset — joining a batch is
- * ambiguous).
+ * `'swap'`, `'append'`, `'join'`, `'new'`, or `null` (cancelled). `'join'` is only
+ * offered when `canJoin` (a single incoming dataset — joining a batch is ambiguous).
+ *
+ * There is deliberately **no in-place replace** (#149 A7/A8a). Clearing a live dataset
+ * and refilling it kept the dataset's id while destroying the rows underneath it, which
+ * stranded everything keyed to that id — a CAQDAS codebook stayed attached with its
+ * segments anchored to `__ct_rid` values that no longer existed, and the outgoing data
+ * had no durable recovery. `'swap'` gives the same one-click gesture honestly: import
+ * into a NEW dataset that inherits the old one's name, then bin the old one (recoverable,
+ * and its coding stays valid because its rows still exist).
  *
  * @param {number} fileCount
  * @param {boolean} [canJoin=false]
- * @returns {Promise<'replace'|'append'|'join'|'new'|null>}
+ * @returns {Promise<'swap'|'append'|'join'|'new'|null>}
  */
 function askMode(fileCount, canJoin = false) {
   const noun = fileCount > 1 ? `${fileCount} files` : 'this file';
@@ -993,10 +1015,11 @@ function askMode(fileCount, canJoin = false) {
         <h2 class="ct-dialog__title">Import ${fileCount > 1 ? `${fileCount} files` : 'data'}</h2>
         <p class="ct-dialog__hint">A dataset is already loaded. Open ${noun} as a new
           dataset in this project, add it to the current one (stack rows), join it on a
-          key (add columns), or replace what's loaded?</p>
+          key (add columns), or swap it in for what's loaded (the current dataset keeps
+          its data and moves to the bin, where you can restore it)?</p>
         <menu class="ct-dialog__buttons">
           <button value="cancel" type="submit">Cancel</button>
-          <button value="replace" type="submit">Replace</button>
+          <button value="swap" type="submit">Swap in (old one goes to the bin)</button>
           ${joinBtn}
           <button value="new" type="submit">New dataset</button>
           <button value="append" type="submit" class="ct-dialog__primary">Add rows</button>
@@ -1005,7 +1028,7 @@ function askMode(fileCount, canJoin = false) {
     dialog.addEventListener('close', () => {
       const v = dialog.returnValue;
       dialog.remove();
-      resolve(['append', 'replace', 'join', 'new'].includes(v) ? v : null);
+      resolve(['append', 'swap', 'join', 'new'].includes(v) ? v : null);
     });
     document.body.append(dialog);
     dialog.showModal();
