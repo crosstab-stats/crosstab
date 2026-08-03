@@ -119,6 +119,18 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         same file get different ids. If cross-machine blocks should ever work, ids need
         to be content- or origin-derived and blocks need an export/import path. Belongs
         with [[first-class-plugin-data]] and #150.
+        *Related, measured:* adding a block **instantiates** it — `library.#add` creates a
+        real dataset and `restoreState`s the block's Parquet into the project — so the
+        link is pure provenance (`{id, version, baseLen}`), never a data reference. A
+        project with two native datasets plus one from a block holds three Parquet
+        sidecars of its own, and the block's bytes exist twice on the machine (library +
+        project) before any export. That's the honest cost of the template model, and it
+        is *why* dropping the link on export is harmless: the recipient already has the
+        data as an ordinary dataset. The library COULD be content-addressed to dedupe
+        instantiations (as media now is), but that would make projects non-self-contained
+        — directly against what A5/A8 established. Self-containment wins; recorded so the
+        trade-off is a decision, not an oversight. It also fits the design that upgrading
+        a project to a newer block version is deliberately opt-in (`pullLatest`).
 
   **B. Bugs introduced/exposed by the rewrite**
 
