@@ -69,6 +69,42 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - [ ] **A6 (minor): `exportState` preserves `author` ("round-trips the recipe")
         but `restoreState` discards it** — provenance lost on every library/recycle
         round-trip, contradicting the docstring.
+  - [ ] **A7 (serious for qual): replacing the data under a CODED dataset leaves the
+        codebook attached to rows that no longer exist.** `ws:` leaves are keyed by
+        dataset id, and a replace-import keeps the id — so the CAQDAS segments (which
+        anchor on `__ct_rid`) survive the replace pointing at row ids from data that
+        is gone. They neither re-anchor nor announce themselves; the coding pane just
+        shows segments that resolve to nothing. Decide the semantics — re-anchor
+        where the ids still exist, mark the codebook stale and prompt, or snapshot it
+        alongside the replaced data (see A8) — then implement. Related to A4 but the
+        opposite direction: A4 was coding losing its dataset, this is a dataset
+        losing its coding's meaning.
+  - [ ] **A8: a destructive replace-import has no DURABLE recovery, and the recycle
+        bin it should use is a parallel store outside the log.** Two halves:
+        *(a) The cliff.* Since B1 a replace is undoable — the barrier lifts and the
+        prior pipeline returns — but only in-session: `#pruneDeadSources` keeps one
+        generation, and `rawExport` writes no Parquet for a superseded source, so
+        after a reload undo yields the old pipeline as a shell (`missingSources`, 0
+        rows). The *ops* are safe forever; only the bytes go. A menu option shouldn't
+        have an invisible irreversible edge — bin the outgoing data first, then load
+        the new data under the same dataset id/name.
+        *(b) Why that's not a one-line change: the bin isn't a status flag.* It is a
+        **second physical copy in a separate OPFS root** (`/recycle`, sibling of
+        `/projects`), written by `DatasetStore.save` as its own `manifest.json` +
+        `source_N.parquet` per source, associated to the project only by a
+        `projectScope` string in the bin's own catalog. So a binned dataset does not
+        travel with the project (bundle export, folder sync, live peers never see
+        it), doesn't survive moving the project to another machine, collides across
+        unsaved projects (scope `'unsaved'`), and is capped at 20 per project.
+        Meanwhile the log ALREADY expresses deletion properly — `removeDataset` is an
+        op, the data ops are kept as orphans, and the op-id-keyed sidecars are never
+        pruned (C2), so the project usually still holds the bytes; `orphanDataOps`
+        merely strips the `file` ref. Proposal: make **binned/live a derived state of
+        the one true log** — stop stripping `file` for non-live sources, keep the
+        sidecar, and let the bin list be a projection over `removeDataset` ops with
+        bytes retained. Then restore moves no bytes, replace-binning is nearly free,
+        the bin travels with the project and merges, and *purge* becomes the real
+        sidecar sweep C2 asks for. Retire the `/recycle` DatasetStore instance.
 
   **B. Bugs introduced/exposed by the rewrite**
 
