@@ -357,10 +357,10 @@ export async function boot(mounts) {
     bus,
   });
   const datasetStore = new DatasetStore();
-  // Per-project recycle bin (#115): a deleted dataset is snapshotted here before
-  // its tables are dropped, so it can be restored. Same proven OPFS machinery as
-  // the library, rooted in a separate directory.
-  const recycle = new DatasetStore('recycle');
+  // NOTE: the recycle bin used to be a second DatasetStore rooted at OPFS `recycle/` —
+  // a full byte-for-byte copy of every deleted dataset, in a store that couldn't follow
+  // the project into a bundle, a folder, or a peer. It is now a projection over the
+  // project's own log (#149 A8); nothing is copied and there is no second store.
 
   // The service bundle the plugin broker dispatches against. `data`/`results`/
   // `menus`/`ui` expose only their published `api` slices, never the full class
@@ -678,7 +678,7 @@ export async function boot(mounts) {
   // The sidebar project manager (active project + datasets, other projects,
   // building blocks). Created here, after the services it drives exist.
   new ProjectSidebar(mounts.sidebar, {
-    datasets, projects, library, bus, recycle,
+    datasets, projects, library, bus,
     workspaceStore,
     pluginList: () => (plugins ? plugins.list() : []),
   });
@@ -822,7 +822,7 @@ export async function boot(mounts) {
   // `dataStore` kept as an alias to the manager (it delegates to the active
   // dataset) so console pokes / older references keep working. Exposed before the
   // launcher so the launcher (and dev tooling) can use the engine.
-  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, recycle, library, projects, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager, codecs, analysisLog, pluginActions, undoCoordinator, projectLog };
+  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, projects, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager, codecs, analysisLog, pluginActions, undoCoordinator, projectLog };
   /**
    * Console debugging: dump the FULL one true log — every op across all tiers
    * (collection, data, analysis), including the `retract`/`reorder` tombstones and
@@ -1322,12 +1322,11 @@ class ProjectSidebar {
    * @param {import('./library.js').DatasetLibrary} deps.library
    * @param {EventBus} deps.bus
    */
-  constructor(host, { datasets, projects, library, bus, recycle, workspaceStore, pluginList }) {
+  constructor(host, { datasets, projects, library, bus, workspaceStore, pluginList }) {
     this.host = host;
     this.datasets = datasets;
     this.projects = projects;
     this.library = library;
-    this.recycle = recycle ?? null;
     this.wsStore = workspaceStore ?? null;
     this.pluginList = pluginList ?? (() => []);
     this.projectName = null;
@@ -1366,31 +1365,9 @@ class ProjectSidebar {
     } catch {
       /* OPFS unavailable */
     }
-    let binned = [];
-    try {
-      if (this.recycle) {
-        const scope = this.#projectScope();
-        const all = await this.recycle.list();
-        // A dataset deleted before the project was saved is scoped 'unsaved'. Once
-        // the project has an id (autosave creates one), claim those entries onto it
-        // so the bin follows the project rather than leaking into others.
-        if (scope !== 'unsaved') {
-          for (const e of all) {
-            if (e.projectScope === 'unsaved') {
-              try {
-                await this.recycle.retag(e.id, { projectScope: scope });
-                e.projectScope = scope;
-              } catch {
-                /* best effort */
-              }
-            }
-          }
-        }
-        binned = all.filter((e) => e.projectScope === scope);
-      }
-    } catch {
-      /* OPFS unavailable */
-    }
+    // The bin is a projection over the project's own log — no store to read, no scope
+    // to reconcile, and it follows the project everywhere the project goes (#149 A8).
+    const binned = this.datasets.binnedList();
     if (token !== this.#token) return; // superseded by a newer render
 
     // Block id → current version, so a linked dataset can show "update available".
@@ -1581,96 +1558,54 @@ class ProjectSidebar {
     return li;
   }
 
-  // --- recycle bin (#115) ----------------------------------------------------
+  // --- recycle bin (#115, re-based on the one true log in #149 A8) ------------
+  // Deleting is a status change, not a copy: the dataset's ops and Parquet sidecars stay
+  // in the project and a `removeDataset` op records it. So the bin travels with the
+  // project, merges, survives a reload, and costs nothing to enter or leave.
 
-  /** The recycle scope key for the active project (a stable string; 'unsaved' for
-   * a project that has never been saved, so its deletions are still recoverable). */
-  #projectScope() {
-    return String(this.projects.activeId ?? 'unsaved');
-  }
-
-  /** Snapshot a dataset into the recycle bin, then remove it. The snapshot never
-   * blocks the delete: a snapshot failure is logged and the delete proceeds (we
-   * don't trap the user with an undeletable dataset). Empty datasets (no sources)
-   * aren't binned — there's nothing to recover. */
+  /** Move a dataset to the bin. Its workspace blobs (CAQDAS coding, …) are deliberately
+   * left in place — deletion is recoverable and the restore re-attaches to them; they're
+   * tombstoned only on a permanent purge. */
   async #deleteDataset(it) {
-    if (this.recycle) {
-      try {
-        const ds = this.datasets.get(it.id);
-        const state = ds ? await ds.exportState({ includeParquet: true }) : null;
-        if (state && (state.ops ?? []).some((o) => o.type === 'load' || o.type === 'append' || o.type === 'join')) {
-          await this.recycle.save({
-            name: it.name,
-            savedAt: Date.now(),
-            state,
-            // The dataset's OWN id, carried in the browse index so a restore can put it
-            // back under that id — which is what re-attaches its workspace/coding state,
-            // keyed by dataset id, instead of orphaning it (#149 A4).
-            extra: { projectScope: this.#projectScope(), datasetId: it.id },
-          });
-          await this.#capRecycle();
-        }
-      } catch (err) {
-        console.error('[recycle] snapshot failed; deleting anyway', err);
-      }
-    }
-    // NOTE: the dataset's workspace blobs (CAQDAS coding, …) are deliberately left in
-    // place — deletion is recoverable, and the restore above re-attaches to them. They
-    // are tombstoned only on a permanent purge (#purgeRecycle).
     await this.datasets.remove(it.id);
+    await this.#capRecycle();
   }
 
-  /** Keep at most `cap` binned datasets per project; evict the oldest beyond it so
-   * the bin can't grow without bound. */
+  /** Keep at most `cap` binned datasets; purge the oldest beyond it so the bin (and the
+   * project's retained bytes) can't grow without bound. */
   async #capRecycle(cap = 20) {
     try {
-      const scope = this.#projectScope();
-      const mine = (await this.recycle.list())
-        .filter((e) => e.projectScope === scope)
-        .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
-      for (const e of mine.slice(cap)) await this.recycle.delete(e.id);
+      const mine = this.datasets.binnedList().sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0));
+      for (const e of mine.slice(cap)) await this.#purgeEntry(e);
     } catch {
       /* best effort */
     }
   }
 
-  /** Restore a binned dataset back into the project, then drop it from the bin. It comes
-   * back under its ORIGINAL dataset id, so its workspace/coding state re-attaches by
-   * itself; only if that id is somehow taken do we mint a new one and move the leaves. */
+  /** Restore a binned dataset — an appended op and a Map move; no bytes are touched. It
+   * returns under its original id, so its workspace/coding state re-attaches by itself. */
   async #restoreDataset(e) {
     try {
-      const snap = await this.recycle.load(e.id);
-      const oldId = e.datasetId ?? null;
-      const { id, reusedId } = await this.datasets.restoreDeleted({
-        id: oldId,
-        name: snap.name,
-        state: snap.state,
-        activate: true,
-      });
-      if (!reusedId && oldId != null && this.wsStore) {
-        const moved = this.wsStore.rehomeDataset(oldId, id);
-        if (moved) console.warn(`[recycle] restored under a new id; re-homed ${moved} workspace blob(s)`);
-      }
-      await this.recycle.delete(e.id);
+      await this.datasets.restoreDeleted({ id: e.id, activate: true });
       this.render();
     } catch (err) {
       console.error('[recycle] restore failed', err);
-      alert('Could not restore that dataset — its saved copy may be corrupt.');
+      alert('Could not restore that dataset.');
     }
   }
 
-  /** Permanently remove a binned dataset (after confirmation). This is the point of no
-   * return, so it's also where the dataset's workspace blobs are finally tombstoned —
-   * only when the entry belongs to the project that's actually open (its leaves live in
-   * that project's log) and no live dataset has since claimed the id. */
+  /** The point of no return: drop the data and tombstone the dataset's workspace blobs.
+   * Shared by the explicit purge and the bin cap. */
+  async #purgeEntry(e) {
+    if (this.wsStore && !this.datasets.get(e.id)) this.wsStore.dropDataset(e.id);
+    await this.datasets.purge(e.id);
+  }
+
+  /** Permanently remove a binned dataset (after confirmation). */
   async #purgeRecycle(e) {
     if (!confirm(`Permanently delete "${e.name}"? This can't be undone.`)) return;
     try {
-      const dsId = e.datasetId ?? null;
-      if (dsId != null && this.wsStore && e.projectScope === this.#projectScope() && !this.datasets.get(dsId)) {
-        this.wsStore.dropDataset(dsId);
-      }
-      await this.recycle.delete(e.id);
+      await this.#purgeEntry(e);
     } catch (err) {
       console.error('[recycle] purge failed', err);
     }
@@ -1686,7 +1621,7 @@ class ProjectSidebar {
       const li = document.createElement('li');
       li.className = 'proj__ds proj__ds--trash';
       const name = el('span', e.name, 'proj__ds-name');
-      name.title = `Deleted ${new Date(e.savedAt).toLocaleString()} · ${(e.rowCount || 0).toLocaleString()} rows`;
+      name.title = `Deleted ${new Date(e.deletedAt).toLocaleString()} · ${(e.rowCount || 0).toLocaleString()} rows`;
       name.style.color = '#8a94a0';
       li.append(name);
       li.append(el('span', (e.rowCount || 0).toLocaleString(), 'proj__ds-rows'));

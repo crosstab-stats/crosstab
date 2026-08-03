@@ -88,7 +88,20 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         rows). The *ops* are safe forever; only the bytes go. A menu option shouldn't
         have an invisible irreversible edge — bin the outgoing data first, then load
         the new data under the same dataset id/name.
-        *(b) Why that's not a one-line change: the bin isn't a status flag.* It is a
+        **Status: (b) DONE — the bin is now a projection over the log.** Deleting moves
+        the DataStore to `#binned` and appends `removeDataset`; nothing is copied, the
+        DuckDB tables stay up, and restore is an appended `addDataset` plus a Map move.
+        The `BIN` fold is the whole index (deletion time comes from the op's HLC wall
+        clock), `binnedStores()` serialise through the normal save path so the bin is
+        durable *inside the project*, `loadBundle` rebuilds binned datasets exactly like
+        live ones, and `purgeDataset` is the point of no return. The `/recycle`
+        DatasetStore instance is gone, along with `addFromState`, `rehomeDataset`, the
+        `projectScope` retag dance, and the `replaceHistory` escape hatch A4 needed.
+        **(a) still open**: a replace-import should bin the outgoing data — now cheap,
+        since binning costs nothing. **Not yet done**: the sidecar sweep (C2) that
+        should delete a purged dataset's Parquet files, and media (A5) still lives in
+        its own OPFS root.
+        *Why (b) wasn't a one-line change: the bin wasn't a status flag.* It was a
         **second physical copy in a separate OPFS root** (`/recycle`, sibling of
         `/projects`), written by `DatasetStore.save` as its own `manifest.json` +
         `source_N.parquet` per source, associated to the project only by a

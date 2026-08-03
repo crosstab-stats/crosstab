@@ -1613,19 +1613,10 @@ export class DataStore {
    * shared log directly (Layer 4).
    *
    * @param {{ops?: object[]}} state
-   * @param {object} [opts]
-   * @param {boolean} [opts.replaceHistory=true] - When false, this dataset's existing
-   *   ops are LEFT in the log and the recipe is appended alongside them. Use it when
-   *   those ops may still exist on a peer (a recycle-bin restore replays over the
-   *   deleted dataset's orphaned ops): physically dropping them would take them out of
-   *   the shared-id ancestor, so the peer's copies would read as additions and come
-   *   back. The recipe opens with a `load`, which is the replace barrier, so the old
-   *   ops stay dead on every peer without anyone removing anything.
    * @returns {Promise<void>}
    */
-  async restoreState({ ops } = {}, { replaceHistory = true } = {}) {
-    if (replaceHistory) await this.#resetDataHard();
-    else await this.#dropDuckDB();
+  async restoreState({ ops } = {}) {
+    await this.#resetDataHard();
     for (const o of Array.isArray(ops) ? ops : []) {
       if (SOURCE_OPS.has(o.type)) {
         const created = o.src.wide

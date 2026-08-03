@@ -48,9 +48,44 @@ const COLLECTION = {
     for (const op of liveOps(ops)) { // undone add/rename/remove are hidden by the liveness fold
       if (op.type === 'addDataset') names.set(op.payload.id, op.payload.name);
       else if (op.type === 'renameDataset') { if (names.has(op.payload.id)) names.set(op.payload.id, op.payload.name); }
-      else if (op.type === 'removeDataset') names.delete(op.payload.id);
+      else if (op.type === 'removeDataset' || op.type === 'purgeDataset') names.delete(op.payload.id);
     }
     return [...names.entries()].map(([id, name]) => ({ id, name }));
+  },
+};
+
+/**
+ * The RECYCLE-BIN projection: datasets with a `removeDataset` op and no `purgeDataset`
+ * after it. Deletion is a **status change in the log**, not a copy into another store —
+ * the dataset's ops (and its Parquet sidecars) stay exactly where they were, and this
+ * fold is the whole index of what's recoverable. `purgeDataset` is the point of no
+ * return: it drops the entry here, and the save sweep is then free to delete the bytes.
+ *
+ * The deletion timestamp comes from the op's own HLC wall clock — no separate field to
+ * keep in step, and it merges with the op.
+ */
+const BIN = {
+  key: 'bin',
+  match: COLLECTION.match,
+  fold: (ops) => {
+    const names = new Map(); // id → current name while live
+    const binned = new Map(); // id → {id, name, deletedAt}
+    for (const op of liveOps(ops)) {
+      const id = op.payload?.id;
+      if (op.type === 'addDataset') { names.set(id, op.payload.name); binned.delete(id); }
+      else if (op.type === 'renameDataset') {
+        if (names.has(id)) names.set(id, op.payload.name);
+        const b = binned.get(id);
+        if (b) b.name = op.payload.name; // renamed while binned (rare, but the log allows it)
+      } else if (op.type === 'removeDataset') {
+        if (names.has(id)) binned.set(id, { id, name: names.get(id), deletedAt: op.hlc?.wall ?? 0 });
+        names.delete(id);
+      } else if (op.type === 'purgeDataset') {
+        binned.delete(id);
+        names.delete(id);
+      }
+    }
+    return [...binned.values()];
   },
 };
 
@@ -69,6 +104,7 @@ function newDatasetId() {
 const collAdd = (id, name) => ({ target: `coll/ds:${id}`, owner: 'core', type: 'addDataset', payload: { id, name } });
 const collRename = (id, name) => ({ target: `coll/ds:${id}`, owner: 'core', type: 'renameDataset', payload: { id, name } });
 const collRemove = (id) => ({ target: `coll/ds:${id}`, owner: 'core', type: 'removeDataset', payload: { id } });
+const collPurge = (id) => ({ target: `coll/ds:${id}`, owner: 'core', type: 'purgeDataset', payload: { id } });
 
 export class DatasetManager {
   /** @type {import('./event-bus.js').EventBus} */
@@ -78,6 +114,13 @@ export class DatasetManager {
   /** id → DataStore (the live-instance store; membership is owned by {@link #log}).
    * @type {Map<number, DataStore>} */
   #datasets = new Map();
+  /** id → DataStore for datasets in the RECYCLE BIN. Deleting moves the instance here
+   * and appends a `removeDataset` op; nothing is copied and its DuckDB tables stay put,
+   * so a restore is instant and costs no bytes. Membership here mirrors the {@link BIN}
+   * projection — the log is the index, this Map is just the live instances (exactly as
+   * `#datasets` is for the collection). Emptied by `purge` (the real delete).
+   * @type {Map<number, DataStore>} */
+  #binned = new Map();
   /** Active dataset id — VIEW STATE, not a logged op. */
   #activeId = null;
   /** The project's unified op log; here it carries the dataset-collection tier. Later
@@ -94,6 +137,7 @@ export class DatasetManager {
     this.#duckdb = duckdb;
     this.#log = projectLog ?? new ProjectLog({ author: currentAuthor });
     this.#log.register(COLLECTION);
+    this.#log.register(BIN);
   }
 
   /** The ordered collection membership from the log — the source of truth for which
@@ -117,7 +161,10 @@ export class DatasetManager {
    * peer-local table name / any bytes are stripped from source ops — the envelope
    * (id/hlc/author/target) is what matters for audit + merge. */
   orphanDataOps() {
-    const live = new Set([...this.#datasets.keys()].map((id) => String(id)));
+    // "Orphaned" now means PURGED: a binned dataset is still held (its ops and bytes are
+    // serialised by its own retained DataStore), so only a permanently-purged one lands
+    // here — envelope kept for audit + merge, bytes stripped.
+    const live = new Set([...this.#datasets.keys(), ...this.#binned.keys()].map((id) => String(id)));
     const dsId = (op) => { const m = /^ds:([^/]+)\//.exec(op.target); return m ? m[1] : null; };
     return this.#log
       .ops()
@@ -209,23 +256,39 @@ export class DatasetManager {
     this.#bus.emit(DATASETS_CHANGED, this.list());
   }
 
-  /** Remove a dataset, dropping its DuckDB tables. Removing the **last** dataset
-   * isn't forbidden — it resets the project to a fresh empty dataset (the
-   * "clear the clutter and start fresh" gesture), so there's always an active
-   * dataset. Otherwise, if the removed one was active, another becomes active. */
+  /**
+   * Move a dataset to the recycle bin. This is a **status change, not a teardown**: the
+   * DataStore instance (and every DuckDB table behind it) moves to `#binned`, and a
+   * `removeDataset` op records the change. Nothing is copied anywhere, so a restore is
+   * instant and free — the bin is a view of the log, not a second store (#149 A8).
+   *
+   * The log KEEPS the dataset's data ops. The `removeDataset` op is the authoritative
+   * deletion signal; a physical drop would break the audit trail AND resurrect the ops
+   * on merge, since an op absent from the shared-id ancestor reads as the peer's
+   * ADDITION (the delete-inference class #148 exists to kill).
+   *
+   * Removing the **last** dataset isn't forbidden — it resets the project to a fresh
+   * empty dataset (the "clear the clutter and start fresh" gesture), so there's always
+   * an active one. Otherwise, if the removed one was active, another becomes active.
+   */
   async remove(id) {
     const ds = this.#datasets.get(id);
     if (!ds) return;
-    await ds.dispose(); // drop the DuckDB tables (its source ops become byte-less)
+    // An empty dataset has nothing to recover, so it's removed AND purged in one go —
+    // otherwise every "clear the clutter" gesture would leave a blank bin entry.
+    const recoverable = ds.getHistory().applied.length > 0;
     this.#datasets.delete(id);
-    this.#log.append(collRemove(id)); // deletion is a recorded op — not just absence
-    // The one true log KEEPS the removed dataset's data ops (do NOT physically drop
-    // them): the collRemove is the authoritative deletion signal, and a physical drop
-    // would (a) break the audit trail and (b) resurrect the ops on merge — an op absent
-    // from the shared-id ancestor reads as the peer's ADDITION (the delete-inference bug
-    // class this migration exists to kill). The ops are now orphaned (their dataset is
-    // gone from the collection projection, so no live DataStore folds them) but stay in
-    // the log, and are persisted via {@link DatasetManager#orphanDataOps}.
+    this.#log.append(collRemove(id));
+    if (recoverable) {
+      this.#binned.set(id, ds); // tables intact — restore costs nothing
+    } else {
+      await ds.dispose();
+      this.#log.append(collPurge(id));
+    }
+    // Tell the save path this dataset's bytes must be durable now: it is no longer in
+    // the live set, so an incremental save would otherwise never write its sidecars,
+    // and a delete before the first full save would lose them.
+    this.#bus.emit(CoreEvents.DATA_CHANGED, { datasetId: id, rowCount: 0, variables: [], reason: 'binned' });
     if (this.#datasets.size === 0) {
       // Start fresh: a single empty dataset, ready to import into.
       this.#activeId = null;
@@ -306,64 +369,68 @@ export class DatasetManager {
     this.touch(); // refresh the sidebar (the target's row count changed)
   }
 
-  /**
-   * Add a single dataset reconstructed from a saved {@link DataStore} state (the
-   * inverse of {@link DataStore#exportState}). Used to **restore a dataset from the
-   * recycle bin** (#115) without disturbing the other open datasets. Gets a fresh
-   * id (so its DuckDB tables don't collide with the live set) and becomes active.
-   *
-   * @param {{name: string, state: object, activate?: boolean}} entry
-   * @returns {Promise<number>} the new dataset id.
-   */
-  /**
-   * Restore a deleted dataset from its recycle-bin snapshot, **under its original id**.
-   * Reusing the id is what makes the restore whole: everything else keyed by dataset id
-   * — workspace/CAQDAS coding leaves above all — points at it again with no re-homing
-   * (#149 A4, where a new id silently orphaned a coded dataset's entire codebook).
-   *
-   * Merge-safety detail: {@link DatasetManager#remove} deliberately leaves the deleted
-   * dataset's data ops in the log (orphaned), so the replay is appended *alongside*
-   * them rather than replacing them — `replaceHistory: false`. Physically clearing them
-   * would drop them out of the shared-id ancestor and a peer that still holds them
-   * would re-contribute them as an addition, doubling the pipeline. They stay dead
-   * because the restored recipe opens with a `load`, and a `load` is the replace
-   * barrier ({@link foldDataOps}) — on every peer, not just this one.
-   *
-   * If the original id is somehow live (it shouldn't be — it was removed), a fresh one
-   * is minted; the caller is told so it can move the workspace leaves across.
-   *
-   * @param {{id?: number, name?: string, state?: object, activate?: boolean}} entry
-   * @returns {Promise<{id: number, reusedId: boolean}>}
-   */
-  async restoreDeleted({ id, name = 'Restored dataset', state, activate = true }) {
-    const reusedId = id != null && !this.#datasets.has(id);
-    const useId = reusedId ? id : newDatasetId();
-    const ds = new DataStore(this.#bus, this.#duckdb, { id: useId, name, log: this.#log });
-    this.#datasets.set(useId, ds);
-    this.#log.append(collAdd(useId, name)); // re-joining the collection is a real op
-    await ds.restoreState(state, { replaceHistory: !reusedId });
-    if (activate || this.#activeId === null) {
-      this.#activeId = useId;
-      this.#emitActive('switch');
-    } else {
-      this.#bus.emit(DATASETS_CHANGED, this.list());
-    }
-    return { id: useId, reusedId };
+  /** What's in the recycle bin: the {@link BIN} projection (the index) joined to the
+   * retained instances for a row count. Synchronous — there is no separate store to
+   * await, because the bin IS the log. */
+  binnedList() {
+    return this.#log.state('bin').map((b) => ({
+      id: b.id,
+      name: b.name,
+      deletedAt: b.deletedAt,
+      rowCount: this.#binned.get(b.id)?.rowCount ?? 0,
+    }));
   }
 
-  async addFromState({ name = 'Restored dataset', state, activate = true }) {
-    const id = newDatasetId();
-    const ds = new DataStore(this.#bus, this.#duckdb, { id, name, log: this.#log });
+  /** The retained (binned) DataStores. The save path serialises these alongside the
+   * live ones, so a deleted dataset's ops AND its Parquet sidecars survive a reload —
+   * which is what makes the bin durable without a second copy of anything. */
+  binnedStores() {
+    return [...this.#binned.values()];
+  }
+
+  /**
+   * Bring a dataset back from the bin: an appended `addDataset` and a move between two
+   * Maps. **No bytes are read, written, or copied** — the instance and its DuckDB
+   * tables were never torn down. It returns under its original id, so everything keyed
+   * by dataset id (workspace/CAQDAS coding above all — #149 A4) re-attaches by itself.
+   *
+   * @param {{id: number, activate?: boolean}} entry
+   * @returns {Promise<{id: number}>}
+   */
+  async restoreDeleted({ id, activate = true }) {
+    const ds = this.#binned.get(id);
+    if (!ds) throw new Error('That dataset is no longer in the bin.');
+    const entry = this.#log.state('bin').find((b) => String(b.id) === String(id));
+    this.#binned.delete(id);
     this.#datasets.set(id, ds);
-    this.#log.append(collAdd(id, name)); // recycle-bin restore is a real add to the collection
-    await ds.restoreState(state);
+    this.#log.append(collAdd(id, entry?.name ?? ds.name));
     if (activate || this.#activeId === null) {
       this.#activeId = id;
       this.#emitActive('switch');
     } else {
       this.#bus.emit(DATASETS_CHANGED, this.list());
     }
-    return id;
+    return { id };
+  }
+
+  /**
+   * Permanently destroy a binned dataset: drop its DuckDB state and append
+   * `purgeDataset` — the point of no return, and the signal that stops the save path
+   * writing its sidecars (so the sweep can delete them). Its op envelopes stay in the
+   * log, byte-less via {@link DatasetManager#orphanDataOps}, so the audit trail and
+   * merge identity survive; only the data is gone.
+   *
+   * @param {number} id
+   */
+  async purge(id) {
+    const ds = this.#binned.get(id);
+    if (ds) {
+      await ds.dispose();
+      this.#binned.delete(id);
+    }
+    this.#log.append(collPurge(id));
+    this.#bus.emit(CoreEvents.DATA_CHANGED, { datasetId: id, rowCount: 0, variables: [], reason: 'purged' });
+    this.#bus.emit(DATASETS_CHANGED, this.list());
   }
 
   /**
@@ -379,7 +446,9 @@ export class DatasetManager {
    */
   async loadBundle({ log = [], activeId, datasetMeta = {} }) {
     for (const ds of this.#datasets.values()) await ds.dispose();
+    for (const ds of this.#binned.values()) await ds.dispose();
     this.#datasets.clear();
+    this.#binned.clear();
     this.#activeId = null;
     // Clear only the tiers this manager owns (collection + data); analysis/workspace are
     // cleared+restored by their own subsystems on the shared log.
@@ -393,7 +462,8 @@ export class DatasetManager {
     // Membership first (ids + names + order + removes), straight from the real ops.
     this.#log.receiveOps(collOps);
     const members = this.#collection(); // folded [{id, name}] in order
-    const liveIds = new Set(members.map((m) => String(m.id)));
+    const binMembers = this.#log.state('bin'); // deleted-but-recoverable, same fold family
+    const heldIds = new Set([...members, ...binMembers].map((m) => String(m.id)));
     // Group each dataset's ops (with source bytes attached) by its id.
     const byId = new Map();
     for (const o of dsOps) {
@@ -402,11 +472,15 @@ export class DatasetManager {
       if (!byId.has(k)) byId.set(k, []);
       byId.get(k).push(o);
     }
-    // Reconstruct each live dataset with its SAVED id (source sidecars are op-id keyed).
-    for (const { id, name } of members) {
+    // Reconstruct each held dataset with its SAVED id (source sidecars are op-id keyed).
+    // Binned ones are rebuilt exactly like live ones — same ops, same bytes, same tables
+    // — they just land in `#binned`, because "deleted" is a status in the log and not a
+    // different kind of storage. That's what makes a restore after a reload free too.
+    for (const { id, name } of [...members, ...binMembers]) {
+      const into = binMembers.some((b) => b.id === id) ? this.#binned : this.#datasets;
       const ds = new DataStore(this.#bus, this.#duckdb, { id, name, log: this.#log });
       ds.libraryLink = datasetMeta?.[id]?.libraryLink ?? datasetMeta?.[String(id)]?.libraryLink ?? null;
-      this.#datasets.set(id, ds);
+      into.set(id, ds);
       try {
         await ds.rawRestore(byId.get(String(id)) ?? []); // materialise sources + fold, ids preserved
       } catch (err) {
@@ -414,13 +488,13 @@ export class DatasetManager {
         // must NOT linger with no tables — drop it; it stays in the collection membership
         // and re-materialises on the next apply once its bytes arrive.
         console.error('[dataset] restore failed; dropping until its data arrives:', id, err);
-        this.#datasets.delete(id);
+        into.delete(id);
         try { await ds.dispose(); } catch { /* best-effort */ }
       }
     }
-    // Orphaned data ops (a removed dataset's superseded steps) — keep them in the log for
-    // audit + merge-safety; no live DataStore folds them.
-    const orphan = dsOps.filter((o) => !liveIds.has(dsIdOf(o)));
+    // Ops of PURGED datasets — keep them in the log for audit + merge-safety; nothing
+    // folds them (their bytes are gone by the user's explicit choice).
+    const orphan = dsOps.filter((o) => !heldIds.has(dsIdOf(o)));
     if (orphan.length) this.#log.receiveOps(orphan);
     // A project always has at least one dataset (a fresh/blank load has an empty log).
     if (this.#datasets.size === 0) this.add('Dataset 1', { activate: true });

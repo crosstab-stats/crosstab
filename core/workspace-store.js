@@ -244,46 +244,12 @@ export class WorkspaceStore {
     this.#clearWsMaps(owner, wsId);
   }
 
-  /**
-   * Copy every workspace blob keyed to `oldId` onto `newId` — used when a deleted
-   * dataset comes back from the recycle bin under a different id (the original was
-   * somehow taken). Leaves are keyed by dataset id, so without this a restored coded
-   * dataset returns with its CAQDAS coding silently gone (#149 A4). The normal restore
-   * path reuses the original id and needs none of this.
-   *
-   * Log-native: each re-homed leaf is an ordinary `setWorkspace` append under the new
-   * key, so it merges like any other write. The old leaves are left alone (the caller
-   * decides whether the old dataset is really gone).
-   *
-   * @param {number|string} oldId @param {number|string} newId
-   * @returns {number} how many leaves were re-homed.
-   */
-  rehomeDataset(oldId, newId) {
-    const from = this.#dsKey(oldId);
-    const to = this.#dsKey(newId);
-    if (from === to) return 0;
-    const moves = [];
-    for (const [owner, byWs] of this.#states) {
-      for (const [wsId, bySlot] of byWs) {
-        for (const [slotId, perDs] of bySlot) {
-          if (perDs.has(from)) moves.push([owner, wsId, slotId, perDs.get(from)]);
-        }
-      }
-    }
-    for (const [owner, wsId, slotId, value] of moves) {
-      const label = this.#labels.get(this.#labelKey(owner, wsId, slotId, from)) ?? null;
-      this.#log?.append({ target: wsTarget(owner, wsId, slotId, to), owner, type: 'setWorkspace', payload: { value, label } });
-      this.#applyLeaf(owner, wsId, slotId, to, value, label);
-    }
-    return moves.length;
-  }
-
   /** Drop every workspace's blob for a dataset that's been removed (across all owners/slots).
    * Appends a tombstone per affected leaf so the removal propagates on merge.
    *
-   * NOT called when a dataset is deleted — deletion is recoverable from the recycle bin,
-   * and the restore re-attaches to these very leaves (#149 A4). It is called when the
-   * user *permanently* purges a binned dataset, which is the point of no return. */
+   * NOT called when a dataset is deleted — deletion is recoverable, and the restore
+   * re-attaches to these very leaves under the same dataset id (#149 A4). It is called
+   * only on a *permanent purge*, which is the point of no return. */
   dropDataset(dsId) {
     const dk = this.#dsKey(dsId);
     const hits = [];

@@ -369,7 +369,9 @@ export class ProjectSync {
     // A source-changing op means that dataset's Parquet must be rewritten. With the
     // universal log, undo/redo/rewind can also add or drop a source op, so they
     // mark sources dirty too (keeps the saved Parquet set in step with the log).
-    if (summary && ['load', 'replace', 'append', 'join', 'restore', 'undo', 'redo', 'rewind'].includes(summary.reason)) {
+    // `binned` is here so a dataset deleted before the project's first full save still
+    // gets its Parquet written — it leaves the live set, so nothing else would mark it.
+    if (summary && ['load', 'replace', 'append', 'join', 'restore', 'undo', 'redo', 'rewind', 'binned'].includes(summary.reason)) {
       if (summary.datasetId != null) this.#sourcesDirty.add(summary.datasetId);
     }
     if (this.#binding) {
@@ -554,12 +556,16 @@ export class ProjectSync {
     // ops. buildManifest persists this verbatim as `manifest.log`; merge unions it by id.
     const log = [...this.#datasets.collectionOps()];
     const datasetMeta = {};
-    for (const ds of this.#datasets.all()) {
+    // Live datasets AND binned ones. A deleted dataset is retained, not copied to some
+    // other store (#149 A8), so it serialises through exactly the same path — its ops
+    // and its op-id-keyed Parquet sidecars just stay in the project. Purging is what
+    // finally takes it out of this list.
+    for (const ds of [...this.#datasets.all(), ...this.#datasets.binnedStores()]) {
       const { ops } = await ds.rawExport({ includeParquet: all || dirty.has(ds.id) });
       log.push(...ops);
       datasetMeta[ds.id] = { libraryLink: ds.libraryLink ?? null };
     }
-    log.push(...this.#datasets.orphanDataOps()); // deleted datasets' ops stay in the log
+    log.push(...this.#datasets.orphanDataOps()); // purged datasets' ops stay in the log
     const analysisLog = this.#getAnalysisLog ? this.#getAnalysisLog() : null; // raw analysis ops
     if (Array.isArray(analysisLog)) log.push(...analysisLog);
     const wsOps = this.#getWorkspaceOps ? this.#getWorkspaceOps() : null; // ws: tier ops (#148)
