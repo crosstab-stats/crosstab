@@ -127,7 +127,17 @@ export function mergeProjects(mine, theirs, mergers = {}, resolutions = null) {
       const lm = latestHlc(mo);
       const lt = latestHlc(to);
       const hlc = { wall: Math.max(lm.wall, lt.wall), counter: Math.max(lm.counter, lt.counter) + 1 };
-      const id = deterministicOpId({ target: key, owner, type: 'setWorkspace', payload }, key);
+      // The id must be derived from the INPUTS as well as the output (#149 B4). Hashing
+      // only (target + resolved value) meant a later merge that happened to resolve to a
+      // previously-emitted value re-minted the SAME id with a HIGHER hlc — reachable via
+      // delete-and-redo under add-wins. `receiveOps` dedups by id, so the newer copy was
+      // silently dropped and the leaf's LWW fold could then pick an ordinary write over
+      // the merge result, leaving peers genuinely out of step while `manifestsEqual`
+      // (an id-set comparison) reported them in sync. The contributing op ids are the
+      // same SET on both peers (only the operand order differs), so sorting keeps it
+      // deterministic.
+      const contributors = [...new Set([...mo, ...to].filter((o) => o.target === key).map((o) => o.id))].sort();
+      const id = deterministicOpId({ target: key, owner, type: 'setWorkspace', payload, reads: contributors }, key);
       merged.push({ id, hlc, target: key, owner, type: 'setWorkspace', reads: [], payload });
     }
   }

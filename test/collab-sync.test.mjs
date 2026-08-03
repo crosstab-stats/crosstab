@@ -7,6 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildMergers, mergeProjects, planDatasetApply } from '../core/collab-sync.js';
+import { deterministicOpId } from '../core/merge.js';
 import { mergeState as caqdasMerge } from '../plugins/builtin-caqdas/index.js';
 
 const NUL = String.fromCharCode(0); // ws-target separator (matches workspace-store)
@@ -108,4 +109,53 @@ test('planDatasetApply: a changed op set → REBUILD only that dataset', () => {
   assert.deepEqual(plan.add, [3]);
   assert.deepEqual(plan.keep, [2]);
   assert.deepEqual(plan.remove, []);
+});
+
+// --- #149 B4: a merge op's id must depend on its INPUTS, not just its output ------
+// Hashing only (target + resolved value) let a later merge that happened to resolve to
+// a previously-emitted value re-mint the SAME id with a HIGHER hlc. receiveOps dedups by
+// id, so the newer copy was dropped and the leaf's fold could then pick an ordinary
+// write over the merge result — peers genuinely out of step while manifestsEqual (an
+// id-set comparison) reported them in sync.
+
+test('deterministicOpId changes when the contributing ops change (B4)', () => {
+  const body = { target: 'ws:leaf', owner: 'p', type: 'setWorkspace', payload: { value: { a: 1 }, label: null } };
+  const a = deterministicOpId({ ...body, reads: ['op-1', 'op-2'] }, body.target);
+  const b = deterministicOpId({ ...body, reads: ['op-1', 'op-3'] }, body.target);
+  const again = deterministicOpId({ ...body, reads: ['op-1', 'op-2'] }, body.target);
+  assert.notEqual(a, b, 'different contributors must not collide on one id');
+  assert.equal(a, again, 'same contributors + same value = same id (still deterministic)');
+});
+
+test('re-running the same workspace merge mints the same op id (B4)', () => {
+  const NUL = String.fromCharCode(0);
+  const leaf = ['ws:builtin-caqdas', 'caqdas-coding', '_default', '1'].join(NUL);
+  const cb = (codes) => ({ version: 1, textColumn: 't', labelColumn: null, codes, segments: [] });
+  const op = (id, codes, wall) => ({
+    id, hlc: { wall, counter: 0 }, target: leaf, owner: 'builtin-caqdas',
+    type: 'setWorkspace', reads: [], payload: { value: cb(codes), label: null },
+  });
+  const shared = op('wbase', [{ id: 'c1', name: 'anx' }], 1);
+  const M = (o) => ({
+    name: 'P', savedAt: 1, activeId: 1, activePlugins: ['builtin-caqdas'],
+    output: null, datasetMeta: null, collabId: null, log: [shared, o],
+  });
+  const A = M(op('wa', [{ id: 'c1', name: 'anx' }, { id: 'c2', name: 'coping' }], 3));
+  const B = M(op('wb', [{ id: 'c1', name: 'anx' }, { id: 'c3', name: 'stigma' }], 3));
+  const plugins = [{
+    id: 'builtin-caqdas',
+    manifest: { workspaces: [{ id: 'caqdas-coding', merge: { via: 'mergeState' } }] },
+    module: { mergeState: caqdasMerge },
+  }];
+  const emitted = (m) => m.manifest.log
+    .filter((o) => o.target === leaf && !['wbase', 'wa', 'wb'].includes(o.id))
+    .map((o) => o.id);
+  // Re-running the SAME merge must mint the same id — that's what stops a merge op
+  // oscillating between syncs. (Cross-peer identity comes from the canonical operand
+  // order the transports impose before calling in; mergeProjects itself is not
+  // operand-symmetric, because the merged VALUE isn't — see live-protocol.test.mjs.)
+  const once = emitted(mergeProjects(A, B, buildMergers(plugins)));
+  const twice = emitted(mergeProjects(A, B, buildMergers(plugins)));
+  assert.equal(once.length, 1, 'one merge op for the diverged leaf');
+  assert.deepEqual(once, twice, 're-running the same merge must not mint a new id');
 });

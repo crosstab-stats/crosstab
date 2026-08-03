@@ -189,21 +189,25 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         `missingSources: [{label: 'A'}]`, keeps all three steps applied, and after a
         further edit the re-saved manifest still carries every op. The live-P2P
         byte-less window (ops ahead of their gap-filled bytes) rides the same path.
-  - [ ] **B4: deterministic workspace merge-op ids can violate op immutability**
-        (`collab-sync.js` — id = hash(target+payload) only). If a later merge of the
-        same leaf resolves to a previously-emitted value (reachable via
-        delete-and-redo cycles under add-wins), the same id re-emits with a HIGHER
-        hlc → duplicate id/different hlc; `receiveOps` dedups to the old low-hlc
-        copy, so the leaf's LWW fold can pick a newer ordinary write instead of the
-        merge result — peers disagree while `manifestsEqual` (id-set) says in-sync.
-        Fix: mix the contributing op-id set into the deterministic id.
-  - [ ] **B5: identical concurrent intents surface phantom conflicts.**
-        `threeWayLog`'s add/add target pass flags two peers both undoing (or both
-        retracting) the SAME op as a conflict ("both added undo differently"),
-        though any resolution yields the same outcome; likewise an `undo` vs a
-        content edit on one target reads confusingly. Fix: exempt structural ops
-        whose `payload.opId` matches (converging intent ≠ conflict); review conflict
-        labels for structural ops.
+  - [x] **B4: deterministic workspace merge-op ids could violate op immutability —
+        DONE.** The id hashed only (target + resolved value), so a later merge that
+        resolved to a previously-emitted value re-minted the SAME id with a HIGHER hlc
+        — reachable via delete-and-redo cycles under add-wins. `receiveOps` dedups by
+        id, so the newer copy was dropped and the leaf's fold could then pick an
+        ordinary write over the merge result: peers genuinely out of step while
+        `manifestsEqual` (an id-set comparison) reported them in sync. *Fixed:* the
+        contributing op-id set (sorted, so operand order can't matter) is mixed into
+        the hash. Covered by a unit test on `deterministicOpId` plus a re-run
+        determinism test.
+  - [x] **B5: identical concurrent intents surfaced phantom conflicts — DONE.**
+        `threeWayLog`'s add/add target pass flagged two peers both undoing (or both
+        retracting) the SAME op as a conflict, though every resolution yields the
+        identical outcome. *Fixed:* an exemption for `undo`/`redo`/`retract` ops whose
+        `payload.opId` matches. Deliberately EXCLUDES `reorder` — rival orderings are a
+        real disagreement, and a reorder names no single op. Four tests pin it,
+        including two negative controls (undoing *different* ops on one target, and
+        rival reorders, both still conflict); verified load-bearing by disabling the
+        guard and watching exactly the two positive cases fail.
 
   **C. Hygiene / decisions**
 

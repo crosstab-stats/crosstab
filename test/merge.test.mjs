@@ -377,3 +377,56 @@ test('mergeProject: a plugin custom merge() function is envelope-wrapped and tag
   assert.equal(r.blobs['x-plugin'].value.n, 3); // 0 + 1 + 2
   assert.equal(r.conflicts.length, 0);
 });
+
+// --- #149 B5: converging structural intent is not a conflict ---------------------
+// Two peers who both undo (or both retract) the SAME op have not disagreed: every
+// resolution yields the same outcome, so surfacing a conflict is pure noise.
+// NOTE: these use the real ENVELOPE shape (an explicit `target`). Flat recipe-shaped
+// ops fall through opTarget to a unique `op:<id>`, so they never collide in the
+// add/add pass and could not exercise this at all.
+
+const env = (id, target, type, extra = {}) => ({ id, target, type, ...extra });
+
+test('both peers undoing the same op is convergence, not a conflict (B5)', () => {
+  const base = env('r1', 'ds:1/var:income', 'recodeVar', { name: 'income', rules: 'orig' });
+  const r = threeWayLog(
+    [base],
+    [base, env('um', 'ds:1/var:income', 'undo', { payload: { opId: 'r1' } })],
+    [base, env('ut', 'ds:1/var:income', 'undo', { payload: { opId: 'r1' } })],
+  );
+  assert.equal(r.conflicts.length, 0, 'identical intent must not surface a conflict');
+  assert.deepEqual(r.resolved.map((o) => o.id).sort(), ['r1', 'um', 'ut']);
+});
+
+test('both peers retracting the same op is convergence too (B5)', () => {
+  const base = env('c1', 'ds:1/var:bmi', 'computeVar', { name: 'bmi' });
+  const r = threeWayLog(
+    [base],
+    [base, env('rm', 'ds:1/op:c1', 'retract', { payload: { opId: 'c1' } })],
+    [base, env('rt', 'ds:1/op:c1', 'retract', { payload: { opId: 'c1' } })],
+  );
+  assert.equal(r.conflicts.length, 0);
+  assert.deepEqual(r.resolved.map((o) => o.id).sort(), ['c1', 'rm', 'rt']);
+});
+
+test('B5 exemption is narrow: undoing DIFFERENT ops on one target still conflicts', () => {
+  const a = env('a1', 'ds:1/var:income', 'recodeVar', { name: 'income', rules: 'A' });
+  const b = env('b1', 'ds:1/var:income', 'recodeVar', { name: 'income', rules: 'B' });
+  const r = threeWayLog(
+    [a, b],
+    [a, b, env('um', 'ds:1/var:income', 'undo', { payload: { opId: 'a1' } })],
+    [a, b, env('ut', 'ds:1/var:income', 'undo', { payload: { opId: 'b1' } })], // a DIFFERENT op
+  );
+  assert.equal(r.conflicts.length, 1, 'undoing different ops is a real disagreement');
+});
+
+test('B5 exemption does not cover reorder — rival orderings still conflict', () => {
+  const a = env('a1', 'ds:1/source:s1', 'load');
+  const b = env('b1', 'ds:1/var:x', 'computeVar', { name: 'x' });
+  const r = threeWayLog(
+    [a, b],
+    [a, b, env('rm', 'ds:1/order', 'reorder', { payload: { order: ['a1', 'b1'] } })],
+    [a, b, env('rt', 'ds:1/order', 'reorder', { payload: { order: ['b1', 'a1'] } })],
+  );
+  assert.ok(r.conflicts.length >= 1, 'rival orderings must still surface');
+});

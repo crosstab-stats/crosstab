@@ -133,6 +133,16 @@ export function newOpId() {
  * @param {object} op
  * @returns {string}
  */
+/**
+ * Structural op types whose *intent* is fully described by the op they name, so two
+ * peers emitting the same one is convergence, not conflict (#149 B5): both undoing op X,
+ * or both retracting it, agree completely. Deliberately EXCLUDES `reorder` — two
+ * different orders of the same list is a real disagreement, and a reorder names no
+ * single op anyway. Mirrors op-log's STRUCTURAL_OPS minus `reorder`; kept local because
+ * this module is the dependency-free kernel (op-log imports IT, not the other way).
+ */
+const CONVERGENT_STRUCTURAL = new Set(['undo', 'redo', 'retract']);
+
 export function opTarget(op) {
   if (op.target) return op.target;
   switch (op.type) {
@@ -314,6 +324,13 @@ export function threeWayLog(ancestor, mine, theirs, owner = 'core', opts = {}) {
   for (const mo of addedMine) {
     const to = theirTargets.get(opTarget(mo));
     if (!to || to.id === mo.id) continue;
+    // CONVERGING INTENT IS NOT A CONFLICT (#149 B5). Two peers who both undo — or both
+    // retract — the SAME op have not disagreed about anything: every resolution
+    // (mine/theirs/both) yields the identical outcome, so asking the user to pick is
+    // pure noise. Structural ops naming the same target op are therefore kept, both of
+    // them, exactly as the union already did.
+    if (CONVERGENT_STRUCTURAL.has(mo.type) && mo.type === to.type
+        && mo.payload?.opId != null && mo.payload.opId === to.payload?.opId) continue;
     const key = ckey(owner, scope, opTarget(mo), 'add/add', `${mo.id}+${to.id}`);
     const choice = resolutions?.[key];
     if (choice === 'mine') chosen.delete(to.id);
