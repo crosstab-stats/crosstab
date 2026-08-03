@@ -566,6 +566,7 @@ export class ProjectSync {
     return {
       activeId: this.#datasets.activeId, activePlugins, workspaces, output, analysisLog, datasets,
       collectionLog: this.#datasets.collectionOps(), // unit 6 — real collection ops (membership merges on these)
+      orphanDataOps: this.#datasets.orphanDataOps(), // #148 — a deleted dataset's ops stay in the one true log
       collabId: this.#collabId, collabSecret: this.#collabSecret, // #148 — persist the live-room identity
     };
   }

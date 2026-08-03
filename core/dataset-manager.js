@@ -109,6 +109,29 @@ export class DatasetManager {
     return this.#log.ops().filter((o) => COLLECTION.match(o));
   }
 
+  /** Raw data-tier ops (`ds:<id>/…`) whose dataset is **no longer live** — a deleted
+   * dataset's superseded pipeline steps. The one true log keeps these (see
+   * {@link DatasetManager#remove}); this exposes them so the project save path persists
+   * them alongside the live datasets' ops. They're never re-materialised into a
+   * DataStore (the collection projection excludes the removed dataset), so the
+   * peer-local table name / any bytes are stripped from source ops — the envelope
+   * (id/hlc/author/target) is what matters for audit + merge. */
+  orphanDataOps() {
+    const live = new Set([...this.#datasets.keys()].map((id) => String(id)));
+    const dsId = (op) => { const m = /^ds:([^/]+)\//.exec(op.target); return m ? m[1] : null; };
+    return this.#log
+      .ops()
+      .filter((op) => op.owner === 'core' && typeof op.target === 'string' && op.target.startsWith('ds:'))
+      .filter((op) => { const id = dsId(op); return id != null && !live.has(id); })
+      .map((op) => {
+        if (['load', 'append', 'join'].includes(op.type) && op.payload?.src) {
+          const { table, parquet, file, ...src } = op.payload.src; // eslint-disable-line no-unused-vars
+          return { ...op, payload: { ...op.payload, src } };
+        }
+        return op;
+      });
+  }
+
   // --- collection ------------------------------------------------------------
 
   /** The active {@link DataStore}. */
@@ -193,13 +216,16 @@ export class DatasetManager {
   async remove(id) {
     const ds = this.#datasets.get(id);
     if (!ds) return;
-    await ds.dispose();
+    await ds.dispose(); // drop the DuckDB tables (its source ops become byte-less)
     this.#datasets.delete(id);
     this.#log.append(collRemove(id)); // deletion is a recorded op — not just absence
-    // The dataset is gone from the collection; hard-drop its now-orphaned data ops so
-    // the log doesn't carry dead pipeline steps (the collRemove is the authoritative
-    // deletion signal that propagates on merge).
-    this.#log.clearWhere((op) => op.owner === 'core' && typeof op.target === 'string' && op.target.startsWith(`ds:${id}/`));
+    // The one true log KEEPS the removed dataset's data ops (do NOT physically drop
+    // them): the collRemove is the authoritative deletion signal, and a physical drop
+    // would (a) break the audit trail and (b) resurrect the ops on merge — an op absent
+    // from the shared-id ancestor reads as the peer's ADDITION (the delete-inference bug
+    // class this migration exists to kill). The ops are now orphaned (their dataset is
+    // gone from the collection projection, so no live DataStore folds them) but stay in
+    // the log, and are persisted via {@link DatasetManager#orphanDataOps}.
     if (this.#datasets.size === 0) {
       // Start fresh: a single empty dataset, ready to import into.
       this.#activeId = null;
@@ -310,7 +336,7 @@ export class DatasetManager {
    *
    * @param {{activeId: number, datasets: Array<{id: number, name: string, state: object}>}} bundle
    */
-  async loadBundle({ datasets, activeId, collectionLog }) {
+  async loadBundle({ datasets, activeId, collectionLog, orphanDataOps }) {
     for (const ds of this.#datasets.values()) await ds.dispose();
     this.#datasets.clear();
     this.#activeId = null;
@@ -359,6 +385,10 @@ export class DatasetManager {
         try { await ds.dispose(); } catch { /* best-effort */ }
       }
     }
+    // Re-attach the orphaned data ops of previously-removed datasets (see
+    // {@link DatasetManager#orphanDataOps}): the one true log keeps them for audit +
+    // merge-safety even though no live DataStore folds them. receiveOps preserves ids.
+    if (Array.isArray(orphanDataOps) && orphanDataOps.length) this.#log.receiveOps(orphanDataOps);
     this.#activeId = this.#datasets.has(activeId)
       ? activeId
       : (this.#datasets.keys().next().value ?? null);

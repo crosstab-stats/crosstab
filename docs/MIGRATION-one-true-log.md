@@ -53,6 +53,26 @@ retracted (byte-less) source persists as a bare envelope and is skipped on resto
 > saved but the *op* was lost (and ids were re-minted on load). The collection tier
 > already persisted raw; the asymmetry was the bug.
 
+**Dataset deletion keeps the ops (one-true-log fix, 2026-08-02).** `DatasetManager.remove`
+used to `clearWhere` the deleted dataset's `ds:<id>/…` ops — a physical drop that broke
+the audit trail AND would resurrect them on merge (an op absent from the shared-id
+ancestor reads as the peer's addition — the delete-inference class). Now `remove` keeps
+them: `collRemove` is the deletion signal, and the ops become **orphaned** (no live
+DataStore folds them). `DatasetManager.orphanDataOps()` exposes them (peer-local table +
+bytes stripped); `#snapshot`/`buildManifest`/`load` persist them as `manifest.orphanDataOps`
+and `loadBundle` `receiveOps` them back (ids preserved). Browser-verified: demo + second
+dataset → delete demo → `dumpLog` keeps the demo's `load` op (orphan) + `removeDataset`;
+survives save→reload→load with the original op id.
+
+**Layer 6 straggler fixed — `dataset-store.js` + `library.js` on the op recipe.** The
+`exportState → {ops}` change (Layer 2) had left the building-block/recycle store on the
+old `{sources, transforms}` shape, so `DatasetStore.#saveImpl` threw
+`state.sources.length` of undefined on every dataset delete (the recycle snapshot) and on
+every library save. Both now speak the folded op recipe (source ops → `source_<n>.parquet`
+sidecars, transforms inline); `library.js` computes the linked-overlay `baseLen` from the
+op list and its pull path re-homes `{ops}`. Browser-verified: delete no longer errors, the
+recycle bin captures + restores (30 rows), no console error.
+
 **Two follow-ups this left (not blockers for merge):**
 - **`analysis` tier still folds + re-mints** (`AnalysisLog.toJSON`→`state('analysis')`,
   `load`→deterministic ids). No reorder there yet so it's invisible single-peer, but for
@@ -71,6 +91,20 @@ Then: delete `collab-sync.mergeManifests`/`datasetToOps`/`opsToDataset`; rewrite
 `ProjectLog.merge` (op-exchange, no per-peer base, no delete-inference, no dispose-all);
 delete `project-store.readBase`/`writeBase`. Un-skip + rewrite the folder-sync tests.
 **Verify with two-window testing** (the user's domain).
+
+> DELETE-NOTE (superseded): the "hard-drop orphaned data ops" line under §Demolish
+> `dataset-manager.js` is now WRONG — deletion keeps the ops (see the deletion fix above).
+
+> Note: the live gap-fill paths (`project-sync` ~1226/1250/1322) still iterate
+> `d.state.sources` — now `undefined` under the op-recipe snapshot. Only reachable while
+> co-authoring (not single-peer), so it's inert today; fix it as part of this rewrite.
+
+### Layer 6 — remaining consumers still on the old shape
+
+**DONE:** `library.js` + `dataset-store.js` are now on the folded op recipe (see the
+deletion/recycle fix above). **Remaining:** `project-bundle.js` (`.crosstab`
+export/import) and `gap-fill.js` — still on the old shape; migrate to the op-recipe /
+asset model.
 
 ### Layer 6 — remaining consumers still on the old shape
 

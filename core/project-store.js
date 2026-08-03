@@ -304,6 +304,7 @@ export class ProjectStore {
         output: Array.isArray(manifest.output) ? manifest.output : null,
         analysisLog: Array.isArray(manifest.analysisLog) ? manifest.analysisLog : null,
         collectionLog: Array.isArray(manifest.collectionLog) ? manifest.collectionLog : null,
+        orphanDataOps: Array.isArray(manifest.orphanDataOps) ? manifest.orphanDataOps : null,
         collabId: manifest.collabId ?? null,
         collabSecret: manifest.collabSecret ?? null,
         datasets,
@@ -577,6 +578,9 @@ export function buildManifest({ name, savedAt, bundle }) {
     analysisLog: Array.isArray(bundle.analysisLog) ? bundle.analysisLog : null,
     // The dataset-collection op-log (unit 6): membership merges on these real ops.
     collectionLog: Array.isArray(bundle.collectionLog) ? bundle.collectionLog : null,
+    // Deleted datasets' orphaned data ops (#148): the one true log keeps every change,
+    // even ones later superseded by a removeDataset — audit + merge-safety. No bytes.
+    orphanDataOps: Array.isArray(bundle.orphanDataOps) ? bundle.orphanDataOps : null,
     // Collaboration identity (#143): carried in the manifest so it rides folder sync —
     // both peers derive the same signaling room + secret. Minted by the app on save.
     collabId: bundle.collabId ?? null,
