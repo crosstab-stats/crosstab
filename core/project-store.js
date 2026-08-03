@@ -41,6 +41,17 @@ const VERIFIER = 'crosstab-folder-v1'; // known token, encrypted, to check a pas
  * stands in wherever the id-centric API needs one. */
 export const FOLDER_PROJECT_ID = '.';
 
+/** Live dataset count folded from the flat log's collection ops (add − remove) — the
+ * catalog summary the launcher shows without loading the whole project. */
+function countDatasets(manifest) {
+  const ids = new Set();
+  for (const op of manifest?.log ?? []) {
+    if (op.type === 'addDataset') ids.add(op.payload?.id);
+    else if (op.type === 'removeDataset') ids.delete(op.payload?.id);
+  }
+  return ids.size;
+}
+
 const te = new TextEncoder();
 const b64 = (bytes) => btoa(String.fromCharCode(...bytes));
 const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
@@ -193,7 +204,7 @@ export class ProjectStore {
     // Flat (folder) mode: exactly one project, derived from its manifest (no catalog).
     if (this.#flat) {
       const m = await this.readManifest(FOLDER_PROJECT_ID);
-      return m ? [{ id: FOLDER_PROJECT_ID, name: m.name, savedAt: m.savedAt, datasetCount: (m.datasets ?? []).length, activePlugins: m.activePlugins ?? null }] : [];
+      return m ? [{ id: FOLDER_PROJECT_ID, name: m.name, savedAt: m.savedAt, datasetCount: countDatasets(m), activePlugins: m.activePlugins ?? null }] : [];
     }
     const release = await this.#acquire();
     try {
@@ -255,7 +266,7 @@ export class ProjectStore {
       const cat = await this.#readCatalog();
       // The summary carries activePlugins too, so the launcher's rail can seed its
       // picker from a project without loading the whole bundle.
-      const summary = { id, name, savedAt, datasetCount: manifest.datasets.length, activePlugins: manifest.activePlugins };
+      const summary = { id, name, savedAt, datasetCount: countDatasets(manifest), activePlugins: manifest.activePlugins };
       const idx = cat.entries.findIndex((e) => e.id === id);
       if (idx >= 0) cat.entries[idx] = summary;
       else cat.entries.push(summary);
@@ -273,27 +284,22 @@ export class ProjectStore {
    */
   async load(id) {
     const manifest = JSON.parse(await this.#read(this.#file(id, 'project.json')));
-    const datasets = [];
-    for (const d of manifest.datasets) {
-      // The dataset's RAW log slice (the shape DataStore.rawRestore consumes): full op
-      // envelopes with stable id/hlc/target preserved, including retract/reorder ops.
-      // Source ops get their Parquet bytes re-attached to payload.src from the sidecar;
-      // transform/structural ops are inline verbatim.
-      const ops = [];
-      for (const op of d.ops ?? []) {
-        // A LIVE source op carries `payload.src.file` (a byte sidecar keyed by op id) —
-        // re-attach its Parquet. A byte-less source op is a retracted source: keep it
-        // verbatim (the fold drops it) with no bytes to read. Non-source ops pass through.
-        if (isSourceOp(op) && op.payload?.src?.file) {
-          const bytes = await this.#readBytes(this.#file(id, op.payload.src.file));
-          const src = { ...op.payload.src, parquet: new Uint8Array(bytes) };
-          ops.push({ ...op, payload: { ...op.payload, src } });
-        } else {
-          ops.push(op);
-        }
+    // The single flat one-true-log (every tier). Re-attach each LIVE source op's Parquet
+    // from its op-id-keyed sidecar; byte-less (retracted) source ops and every other op
+    // pass through verbatim with their stable id/hlc/target intact.
+    const log = [];
+    for (const op of manifest.log ?? []) {
+      if (isSourceOp(op) && op.payload?.src?.file) {
+        const bytes = await this.#readBytes(this.#file(id, op.payload.src.file));
+        const src = { ...op.payload.src, parquet: new Uint8Array(bytes) };
+        log.push({ ...op, payload: { ...op.payload, src } });
+      } else {
+        log.push(op);
       }
-      datasets.push({ id: d.id, name: d.name, libraryLink: d.libraryLink ?? null, state: { ops } });
     }
+    // The analysis tier's ops, split out for the analysis subsystem's own restore (it
+    // shares the same shared log; loadBundle handles the collection + data tiers).
+    const analysisLog = log.filter((o) => o.owner === 'core' && typeof o.target === 'string' && o.target.startsWith('analysis:'));
     return {
       id,
       name: manifest.name,
@@ -302,12 +308,11 @@ export class ProjectStore {
         activePlugins: Array.isArray(manifest.activePlugins) ? manifest.activePlugins : null,
         workspaces: manifest.workspaces && typeof manifest.workspaces === 'object' ? manifest.workspaces : null,
         output: Array.isArray(manifest.output) ? manifest.output : null,
-        analysisLog: Array.isArray(manifest.analysisLog) ? manifest.analysisLog : null,
-        collectionLog: Array.isArray(manifest.collectionLog) ? manifest.collectionLog : null,
-        orphanDataOps: Array.isArray(manifest.orphanDataOps) ? manifest.orphanDataOps : null,
+        datasetMeta: manifest.datasetMeta && typeof manifest.datasetMeta === 'object' ? manifest.datasetMeta : null,
         collabId: manifest.collabId ?? null,
         collabSecret: manifest.collabSecret ?? null,
-        datasets,
+        analysisLog,
+        log,
       },
     };
   }
@@ -369,7 +374,7 @@ export class ProjectStore {
     const release = await this.#acquire();
     try {
       const cat = await this.#readCatalog();
-      const summary = { id, name: manifest.name, savedAt: manifest.savedAt, datasetCount: (manifest.datasets ?? []).length, activePlugins: manifest.activePlugins ?? null };
+      const summary = { id, name: manifest.name, savedAt: manifest.savedAt, datasetCount: countDatasets(manifest), activePlugins: manifest.activePlugins ?? null };
       const idx = cat.entries.findIndex((e) => e.id === id);
       if (idx >= 0) cat.entries[idx] = summary;
       else cat.entries.push(summary);
@@ -519,15 +524,15 @@ export class ProjectStore {
    * Source ops are numbered in recipe order → `ds<id>_src<n>.parquet`, matching
    * {@link buildManifest}'s file refs. */
   async #writeSources(id, bundle, only) {
-    for (const d of bundle.datasets) {
-      if (only && !only.has(d.id)) continue;
-      for (const op of d.state.ops ?? []) {
-        if (!isSourceOp(op)) continue;
-        const { file, parquet } = op.payload?.src ?? {};
-        if (!file) continue; // retracted (byte-less) source — nothing to write
-        if (!parquet) throw new Error(`save: dataset ${d.id} source ${file} has no parquet`);
-        await this.#write(this.#file(id, file), parquet);
-      }
+    const dsIdOf = (op) => { const m = /^ds:([^/]+)\//.exec(op.target); return m ? m[1] : null; };
+    for (const op of bundle.log ?? []) {
+      if (!isSourceOp(op)) continue;
+      const { file, parquet } = op.payload?.src ?? {};
+      if (!file) continue; // retracted (byte-less) source — nothing to write
+      // `only` (dirty dataset ids): skip sources of datasets that didn't change.
+      if (only) { const k = dsIdOf(op); if (k == null || !only.has(Number(k))) continue; }
+      if (!parquet) throw new Error(`save: source ${file} has no parquet`);
+      await this.#write(this.#file(id, file), parquet);
     }
   }
 }
@@ -543,48 +548,35 @@ export class ProjectStore {
  * @returns {object} the manifest
  */
 export function buildManifest({ name, savedAt, bundle }) {
-  const datasets = [];
-  for (const d of bundle.datasets) {
-    // The dataset's RAW log slice: full op envelopes (stable id/hlc/target/owner/author),
-    // including retract/reorder structural ops, so the one true log round-trips verbatim.
-    // Source ops carry a Parquet FILE ref instead of bytes (written separately by
-    // #writeSources); the peer-local DuckDB table name is already stripped by rawExport.
-    const ops = [];
-    for (const op of d.state.ops ?? []) {
-      if (isSourceOp(op)) {
-        const s = op.payload.src;
-        // Keep the byte sidecar's op-id-keyed `file` ref; drop the Parquet bytes and the
-        // peer-local table (rawExport already omitted the table). A byte-less (retracted)
-        // source has no `file` and is persisted as a bare envelope.
-        const src = { meta: s.meta, label: s.label ?? null };
-        if (s.wide) { src.wide = true; src.rowidBase = s.rowidBase; }
-        if (s.file) src.file = s.file;
-        ops.push({ ...op, payload: { ...op.payload, src } });
-      } else {
-        ops.push(op); // transform / retract / reorder op — no bytes, store as-is
-      }
+  // The single flat one-true-log (every tier: collection + data + analysis, and — once
+  // migrated — workspace). Each op keeps its stable id/hlc/target/owner/author so the log
+  // round-trips verbatim and merges by op identity. Source ops carry an op-id-keyed
+  // Parquet FILE ref instead of bytes (written separately by #writeSources); the
+  // peer-local DuckDB table name is already stripped by rawExport.
+  const log = (bundle.log ?? []).map((op) => {
+    if (isSourceOp(op) && op.payload?.src) {
+      const s = op.payload.src;
+      const src = { meta: s.meta, label: s.label ?? null };
+      if (s.wide) { src.wide = true; src.rowidBase = s.rowidBase; }
+      if (s.file) src.file = s.file; // byte-less (retracted) sources have none
+      return { ...op, payload: { ...op.payload, src } };
     }
-    datasets.push({ id: d.id, name: d.name, libraryLink: d.libraryLink ?? null, ops });
-  }
+    return op;
+  });
   return {
     name,
     savedAt,
     activeId: bundle.activeId,
     activePlugins: Array.isArray(bundle.activePlugins) ? bundle.activePlugins : null,
+    // Workspace blobs — still a field this step; step 3 moves them onto the log too.
     workspaces: bundle.workspaces && typeof bundle.workspaces === 'object' ? bundle.workspaces : null,
     output: Array.isArray(bundle.output) ? bundle.output : null,
-    // The recorded analyses (script). Previously dropped here → analyses didn't survive
-    // save/reload (output persisted, but the log for re-run/undo/merge didn't). Now kept.
-    analysisLog: Array.isArray(bundle.analysisLog) ? bundle.analysisLog : null,
-    // The dataset-collection op-log (unit 6): membership merges on these real ops.
-    collectionLog: Array.isArray(bundle.collectionLog) ? bundle.collectionLog : null,
-    // Deleted datasets' orphaned data ops (#148): the one true log keeps every change,
-    // even ones later superseded by a removeDataset — audit + merge-safety. No bytes.
-    orphanDataOps: Array.isArray(bundle.orphanDataOps) ? bundle.orphanDataOps : null,
-    // Collaboration identity (#143): carried in the manifest so it rides folder sync —
-    // both peers derive the same signaling room + secret. Minted by the app on save.
+    // Per-dataset non-log state (the library link). Names/order/membership are ops.
+    datasetMeta: bundle.datasetMeta && typeof bundle.datasetMeta === 'object' ? bundle.datasetMeta : null,
+    // Collaboration identity (#143): rides the manifest so both peers derive the same
+    // signaling room + secret. Minted by the app on save.
     collabId: bundle.collabId ?? null,
     collabSecret: bundle.collabSecret ?? null,
-    datasets,
+    log,
   };
 }

@@ -99,6 +99,47 @@ delete `project-store.readBase`/`writeBase`. Un-skip + rewrite the folder-sync t
 > `d.state.sources` — now `undefined` under the op-recipe snapshot. Only reachable while
 > co-authoring (not single-peer), so it's inert today; fix it as part of this rewrite.
 
+### Layer 5+ — FULL transport/plugin migration (user-confirmed 2026-08-02)
+
+Two decisions locked by the user: **(1) go all the way** — move the plugin/workspace
+tier onto the op log too and **fully delete the base** (`readBase`/`writeBase`/
+`project.base.json`); **(2) single serialized log on disk** — `project.json` stores one
+flat `manifest.log = ProjectLog.serialize()` (every tier) + op-id-keyed
+`src_<opid>.parquet` sidecars + the non-log scalars (`activeId`, `activePlugins`,
+`output`, `collabId/Secret`, `datasetMeta:{<id>:{libraryLink}}`). No `datasets[]`,
+`collectionLog`, `orphanDataOps`, `analysisLog`, or `workspaces` fields — they're all
+just ops in the one log.
+
+Why the base can only go after the plugin tier moves: the op-merge derives the common
+ancestor from the shared op-id intersection (`sharedAncestor`) — no base needed — but the
+workspace **blobs** (CAQDAS codebook) are still three-way-merged and need an ancestor,
+which the base supplies. So workspace-on-log is a prerequisite for base deletion.
+
+**Sequence (commit + spot-check each; full two-window test only at the very end):**
+1. **Flat `manifest.log` persistence + load routing.** `#snapshot` assembles the flat
+   log from the pieces (collectionOps + each DataStore.rawExport + orphanDataOps +
+   analysis toJSON); `project-store` save/load/#writeSources speak `manifest.log` +
+   op-id sidecars; load routes the log to each subsystem (scoped `clearWhere` +
+   `receiveOps` per tier, then DataStores materialise their source bytes). Single-peer
+   verifiable. (workspaces stay a field this step.)
+2. **Core merge → `ProjectLog.merge`.** Delete `datasetToOps`/`opsToDataset`/
+   `mergeManifests`; `mergeProjects` merges the flat core log via `ProjectLog.merge`
+   (per-owner, `sharedAncestor`), no base, no delete-inference.
+3. **Workspace/plugin tier onto the log.** Leaf writes become `ws:<owner>/<key>`
+   `setWorkspace` ops; the projection folds latest-per-leaf → the bundle. Plugin-owner
+   merge: fold each side's ws ops → blob, `sharedAncestor`(ws ops) → ancestor blob, run
+   the plugin's existing blob merger (keeps the CAQDAS contract), emit merged leaves as
+   ops. Retire `flattenWorkspaces`/`unflattenWorkspaces`.
+4. **Delete the base** (`readBase`/`writeBase`/`project.base.json` + `#lastManifest`).
+5. **Transports on the log** — `folder-sync` (op-exchange, incremental `planDatasetApply`,
+   no dispose-all), `project-sync` live + gap-fill (fix `d.state.sources`; bytes by
+   op-id/sha), `live-sync`/`live-protocol`.
+6. **`project-bundle.js`** (`.crosstab`) → flat log.
+7. **Tests** — un-skip/rewrite folder-sync; add flat-log + ws-op-merge tests.
+8. **Two-window verification** (the user's domain) — incl. CAQDAS codebook merge.
+
+Status: encapsulation + analysis-tier done (committed). Step 1 in progress.
+
 ### Layer 6 — remaining consumers still on the old shape
 
 **DONE:** `library.js` + `dataset-store.js` are now on the folded op recipe (see the

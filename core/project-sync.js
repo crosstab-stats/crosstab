@@ -540,14 +540,20 @@ export class ProjectSync {
 
   async #snapshot(all, dirty = new Set()) {
     this.#ensureCollab(); // every saved project carries a collab identity (transport-agnostic)
-    const datasets = [];
+    // Assemble the flat one-true-log from every tier — collection ops, then each live
+    // dataset's raw slice (source ops carrying their Parquet bytes for #writeSources to
+    // strip → op-id sidecars), then a deleted dataset's orphaned ops, then the analysis
+    // ops. buildManifest persists this verbatim as `manifest.log`; merge unions it by id.
+    const log = [...this.#datasets.collectionOps()];
+    const datasetMeta = {};
     for (const ds of this.#datasets.all()) {
-      // The project save path serialises each dataset's RAW log slice (the one true
-      // log — retract/reorder ops preserved, ids stable), NOT the folded recipe that
-      // exportState builds for the library/bundle re-home tier (#148 save-folds bug).
-      const state = await ds.rawExport({ includeParquet: all || dirty.has(ds.id) });
-      datasets.push({ id: ds.id, name: ds.name, libraryLink: ds.libraryLink ?? null, state });
+      const { ops } = await ds.rawExport({ includeParquet: all || dirty.has(ds.id) });
+      log.push(...ops);
+      datasetMeta[ds.id] = { libraryLink: ds.libraryLink ?? null };
     }
+    log.push(...this.#datasets.orphanDataOps()); // deleted datasets' ops stay in the log
+    const analysisLog = this.#getAnalysisLog ? this.#getAnalysisLog() : null; // raw analysis ops
+    if (Array.isArray(analysisLog)) log.push(...analysisLog);
     // Record the active plugin set alongside the data, so reopening restores the
     // analyses too. Null when the feature isn't wired (keeps old saves untouched).
     // Carry forward any recorded plugins this install can't resolve (not installed
@@ -562,11 +568,8 @@ export class ProjectSync {
     }
     const workspaces = this.#getWorkspaces ? this.#getWorkspaces() : undefined;
     const output = this.#getOutput ? this.#getOutput() : undefined;
-    const analysisLog = this.#getAnalysisLog ? this.#getAnalysisLog() : undefined;
     return {
-      activeId: this.#datasets.activeId, activePlugins, workspaces, output, analysisLog, datasets,
-      collectionLog: this.#datasets.collectionOps(), // unit 6 — real collection ops (membership merges on these)
-      orphanDataOps: this.#datasets.orphanDataOps(), // #148 — a deleted dataset's ops stay in the one true log
+      log, activeId: this.#datasets.activeId, activePlugins, workspaces, output, datasetMeta,
       collabId: this.#collabId, collabSecret: this.#collabSecret, // #148 — persist the live-room identity
     };
   }
@@ -579,10 +582,7 @@ export class ProjectSync {
     if (this.#folderMode) this.#detachFolder(); // a fresh project is OPFS, not the folder's
     this.#loading = true;
     try {
-      await this.#datasets.loadBundle({
-        activeId: 1,
-        datasets: [{ id: 1, name: 'Dataset 1', state: { sources: [], transforms: [] } }],
-      });
+      await this.#datasets.loadBundle({ log: [] }); // empty log ⇒ one fresh blank dataset
       this.#applyWorkspaces?.({}); // a fresh project has no workspace state
       this.#applyOutput?.([]); // …and no output (clears stale output on switch)
       this.#applyAnalysisLog?.([]); // …and no recorded analyses (script)
