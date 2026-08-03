@@ -561,7 +561,7 @@ export async function boot(mounts) {
   // Host store for plugin workspace state (#93). Persists per-project, keyed per
   // (owner, workspace id, dataset) (#145); opaque to the host. Empty until a
   // workspace plugin writes.
-  const workspaceStore = new WorkspaceStore({ bus });
+  const workspaceStore = new WorkspaceStore({ bus, log: projectLog });
   const projects = new ProjectSync({
     projectStore: new ProjectStore(),
     datasets,
@@ -587,17 +587,11 @@ export async function boot(mounts) {
     // the new project's blobs, force-remount any live workspace tabs so they re-read
     // their state — a plugin active in both the old and new project stays mounted, so
     // reconcile() alone wouldn't refresh it and it would keep showing stale data.
-    getWorkspaces: () => workspaceStore.export(),
-    applyWorkspaces: (obj) => {
-      // Migrate an older saved blob to the v3 owner-nested shape (#145). Legacy flat
-      // (pre-#139) blobs are best-effort attached to the active dataset (old row-ids
-      // collided across datasets, so a clean split is impossible — never destructive);
-      // v2 blobs are wrapped under the owner of the plugin that declares each wsId.
-      const resolveOwner = (wsId) => {
-        const p = plugins && plugins.list().find((x) => (x.workspaces || []).some((w) => w.id === wsId));
-        return p ? ownerToken(p) : null;
-      };
-      workspaceStore.import(migrateWorkspaceBlob(obj, { targetDatasetId: datasets.activeId, resolveOwner }));
+    // Workspaces are now the `ws:` tier of the one true log (#148): save carries their
+    // ops in manifest.log; load routes them here. The store folds them into its cache.
+    getWorkspaceOps: () => workspaceStore.ops(),
+    applyWorkspaces: (ops) => {
+      workspaceStore.restoreOps(Array.isArray(ops) ? ops : []); // ws ops from manifest.log
       if (workspaceManager && plugins) void workspaceManager.remountActive(plugins.list());
     },
     // …and the Output tab's results, so reopening shows them (and switching

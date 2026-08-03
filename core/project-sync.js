@@ -65,10 +65,10 @@ export class ProjectSync {
   /** (keys: string[]) => Promise : drive the active plugin set to a project's
    * saved list when opening it. */
   #applyActivePlugins;
-  /** () => object : snapshot all plugin workspace blobs to persist with the
-   * project (#93). Null ⇒ feature unavailable. */
-  #getWorkspaces;
-  /** (obj) => void : restore a project's workspace blobs on open. */
+  /** () => object[] : the workspace tier's ops (the `ws:` slice of the log), folded into
+   * `manifest.log` on save (#148). Null ⇒ feature unavailable. */
+  #getWorkspaceOps;
+  /** (ops) => void : restore the workspace tier from its ops on open. */
   #applyWorkspaces;
   /** () => object[] : snapshot the Output tab's result model (#103). */
   #getOutput;
@@ -170,7 +170,7 @@ export class ProjectSync {
    * @param {(keys: string[]) => Promise<void>} [deps.applyActivePlugins] - Restore
    *   a project's saved plugin set on open.
    */
-  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaces, applyWorkspaces, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, pluginIdentities, getMergers }) {
+  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, pluginIdentities, getMergers }) {
     this.#store = projectStore;
     this.#datasets = datasets;
     this.#ui = ui;
@@ -180,7 +180,7 @@ export class ProjectSync {
     this.#statusEl = statusEl;
     this.#getActivePlugins = getActivePlugins ?? null;
     this.#applyActivePlugins = applyActivePlugins ?? null;
-    this.#getWorkspaces = getWorkspaces ?? null;
+    this.#getWorkspaceOps = getWorkspaceOps ?? null;
     this.#applyWorkspaces = applyWorkspaces ?? null;
     this.#getOutput = getOutput ?? null;
     this.#applyOutput = applyOutput ?? null;
@@ -554,6 +554,8 @@ export class ProjectSync {
     log.push(...this.#datasets.orphanDataOps()); // deleted datasets' ops stay in the log
     const analysisLog = this.#getAnalysisLog ? this.#getAnalysisLog() : null; // raw analysis ops
     if (Array.isArray(analysisLog)) log.push(...analysisLog);
+    const wsOps = this.#getWorkspaceOps ? this.#getWorkspaceOps() : null; // ws: tier ops (#148)
+    if (Array.isArray(wsOps)) log.push(...wsOps);
     // Record the active plugin set alongside the data, so reopening restores the
     // analyses too. Null when the feature isn't wired (keeps old saves untouched).
     // Carry forward any recorded plugins this install can't resolve (not installed
@@ -566,10 +568,9 @@ export class ProjectSync {
       const extra = [...this.#unresolvedPlugins, ...this.#keptPlugins];
       if (extra.length) activePlugins = [...new Set([...activePlugins, ...extra])];
     }
-    const workspaces = this.#getWorkspaces ? this.#getWorkspaces() : undefined;
     const output = this.#getOutput ? this.#getOutput() : undefined;
     return {
-      log, activeId: this.#datasets.activeId, activePlugins, workspaces, output, datasetMeta,
+      log, activeId: this.#datasets.activeId, activePlugins, output, datasetMeta,
       collabId: this.#collabId, collabSecret: this.#collabSecret, // #148 — persist the live-room identity
     };
   }
@@ -583,7 +584,7 @@ export class ProjectSync {
     this.#loading = true;
     try {
       await this.#datasets.loadBundle({ log: [] }); // empty log ⇒ one fresh blank dataset
-      this.#applyWorkspaces?.({}); // a fresh project has no workspace state
+      this.#applyWorkspaces?.([]); // a fresh project has no workspace state
       this.#applyOutput?.([]); // …and no output (clears stale output on switch)
       this.#applyAnalysisLog?.([]); // …and no recorded analyses (script)
     } finally {
@@ -657,7 +658,7 @@ export class ProjectSync {
       await this.#datasets.loadBundle(bundle);
       // Restore plugin workspace blobs BEFORE plugins load, so a workspace's
       // mount() sees its saved state via state.get(). Absent ⇒ empty.
-      this.#applyWorkspaces?.(bundle.workspaces || {});
+      this.#applyWorkspaces?.(bundle.workspaceOps || []);
       this.#applyOutput?.(bundle.output || []); // restore the Output tab (or clear)
       this.#applyAnalysisLog?.(bundle.analysisLog || []); // restore the script's analysis steps
       // Restore the project's analysis set (unless the caller already applied one,
@@ -701,7 +702,7 @@ export class ProjectSync {
           activeId: 1,
           datasets: [{ id: 1, name: 'Dataset 1', state: { sources: [], transforms: [] } }],
         });
-        this.#applyWorkspaces?.({});
+        this.#applyWorkspaces?.([]);
         this.#applyOutput?.([]);
         this.#applyAnalysisLog?.([]);
       } catch (e2) {
@@ -734,7 +735,7 @@ export class ProjectSync {
       this.#setStatus('error');
       throw err;
     }
-    this.#applyWorkspaces?.(bundle.workspaces || {});
+    this.#applyWorkspaces?.(bundle.workspaceOps || []);
     this.#applyOutput?.(bundle.output || []);
     this.#applyAnalysisLog?.(bundle.analysisLog || []);
     // Restore the bundle's recorded analysis set (#102), so opening a shared bundle
@@ -1157,7 +1158,7 @@ export class ProjectSync {
     try {
       const { bundle } = await this.#store.load(id);
       await this.#datasets.loadBundle(bundle);
-      this.#applyWorkspaces?.(bundle.workspaces || {});
+      this.#applyWorkspaces?.(bundle.workspaceOps || []);
       this.#applyOutput?.(bundle.output || []);
       this.#applyAnalysisLog?.(bundle.analysisLog || []);
       this.#lastManifest = manifest;
@@ -1354,7 +1355,7 @@ export class ProjectSync {
         // tabular-unchanged fast-path above and lands on next save (minor follow-up).
         if (datasets.length) await this.#datasets.loadBundle({ activeId: manifest.activeId, datasets, collectionLog: manifest.collectionLog });
       }
-      this.#applyWorkspaces?.(manifest.workspaces || {});
+      this.#applyWorkspaces?.((manifest.log || []).filter((o) => typeof o.target === "string" && o.target.startsWith("ws:")));
       this.#applyOutput?.(manifest.output || []);
     } catch (err) {
       console.error('[live] apply failed', err);

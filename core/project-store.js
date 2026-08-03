@@ -297,21 +297,22 @@ export class ProjectStore {
         log.push(op);
       }
     }
-    // The analysis tier's ops, split out for the analysis subsystem's own restore (it
-    // shares the same shared log; loadBundle handles the collection + data tiers).
+    // Split out each subsystem's tier for its own restore (all share the one log:
+    // loadBundle handles collection + data; these two restore analysis + workspace).
     const analysisLog = log.filter((o) => o.owner === 'core' && typeof o.target === 'string' && o.target.startsWith('analysis:'));
+    const workspaceOps = log.filter((o) => typeof o.target === 'string' && o.target.startsWith('ws:'));
     return {
       id,
       name: manifest.name,
       bundle: {
         activeId: manifest.activeId,
         activePlugins: Array.isArray(manifest.activePlugins) ? manifest.activePlugins : null,
-        workspaces: manifest.workspaces && typeof manifest.workspaces === 'object' ? manifest.workspaces : null,
         output: Array.isArray(manifest.output) ? manifest.output : null,
         datasetMeta: manifest.datasetMeta && typeof manifest.datasetMeta === 'object' ? manifest.datasetMeta : null,
         collabId: manifest.collabId ?? null,
         collabSecret: manifest.collabSecret ?? null,
         analysisLog,
+        workspaceOps,
         log,
       },
     };
@@ -568,8 +569,6 @@ export function buildManifest({ name, savedAt, bundle }) {
     savedAt,
     activeId: bundle.activeId,
     activePlugins: Array.isArray(bundle.activePlugins) ? bundle.activePlugins : null,
-    // Workspace blobs — still a field this step; step 3 moves them onto the log too.
-    workspaces: bundle.workspaces && typeof bundle.workspaces === 'object' ? bundle.workspaces : null,
     output: Array.isArray(bundle.output) ? bundle.output : null,
     // Per-dataset non-log state (the library link). Names/order/membership are ops.
     datasetMeta: bundle.datasetMeta && typeof bundle.datasetMeta === 'object' ? bundle.datasetMeta : null,
