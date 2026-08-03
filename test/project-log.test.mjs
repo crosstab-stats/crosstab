@@ -7,15 +7,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ProjectLog } from '../core/project-log.js';
+import { liveOps } from '../core/op-log.js';
 import { HLC } from '../core/hlc.js';
 
 // A stand-in projection: the dataset COLLECTION (System 2). Ops target `coll/ds:<id>`.
+// Mirrors the real fold: run the shared liveness fold first, so undone ops are hidden.
 const collection = {
   key: 'collection',
   match: (op) => op.owner === 'core' && op.target.startsWith('coll/'),
   fold: (ops) => {
     const names = new Map();
-    for (const op of ops) {
+    for (const op of liveOps(ops)) {
       if (op.type === 'addDataset') names.set(op.payload.id, op.payload.name);
       else if (op.type === 'renameDataset') { if (names.has(op.payload.id)) names.set(op.payload.id, op.payload.name); }
       else if (op.type === 'removeDataset') names.delete(op.payload.id);
@@ -149,43 +151,49 @@ test('serialize is HLC-ordered regardless of append/receive interleaving', () =>
   assert.deepEqual(a.log.serialize().map((o) => o.id), [o1.id, o2.id]);
 });
 
-test('scoped undo/redo: undoWhere targets one tier on the shared log, leaving others', () => {
+test('scoped undo/redo: undoWhere appends an undo op for one tier, leaving others', () => {
   // The DataStore relies on this to undo ONLY its own dataset's ops on the one log.
   const { log, tick } = peer(1000);
   const ds5 = (o) => o.target.startsWith('ds:5/');
+  const live = (pred) => liveOps(log.slice(pred)).map((o) => o.id);
   log.append(addDs(5, 'wide'));                                                  // collection tier
   tick(1100); const a = log.append({ target: 'ds:5/var:x', owner: 'core', type: 'computeVar', payload: { name: 'x' } });
   tick(1200); const b = log.append({ target: 'ds:5/var:y', owner: 'core', type: 'computeVar', payload: { name: 'y' } });
   assert.equal(log.canUndoWhere(ds5), true);
-  const undone = log.undoWhere(ds5);
-  assert.equal(undone.id, b.id, 'undid the highest-HLC ds:5 op');
-  assert.deepEqual(log.slice(ds5).map((o) => o.id), [a.id], 'only a remains live in the slice');
+  const undo = log.undoWhere(ds5);
+  assert.equal(undo.type, 'undo', 'undo is an APPENDED op, not a removal');
+  assert.equal(undo.payload.opId, b.id, 'it undoes the highest-HLC ds:5 op');
+  assert.deepEqual(live(ds5), [a.id], 'only a remains live in the slice (b hidden by the undo op)');
   assert.deepEqual(log.state('collection'), [{ id: 5, name: 'wide' }], 'the collection tier is untouched');
   assert.deepEqual(log.undoneOps(ds5).map((o) => o.id), [b.id]);
-  // redoWhere re-applies it
-  assert.equal(log.redoWhere(ds5).id, b.id);
-  assert.deepEqual(log.slice(ds5).map((o) => o.id), [a.id, b.id]);
+  // redoWhere appends a redo op that re-shows b
+  const redo = log.redoWhere(ds5);
+  assert.equal(redo.type, 'redo');
+  assert.equal(redo.payload.opId, b.id);
+  assert.deepEqual(live(ds5), [a.id, b.id]);
 });
 
-test('clearWhere hard-drops matching ops from both active and redo (rollback of an invalid op)', () => {
+test('discardLocal drops a just-appended invalid op (failed-append rollback)', () => {
   const { log } = peer(1000);
   const a = log.append({ target: 'ds:5/rows', owner: 'core', type: 'filterCases', payload: { expr: 'bad(' } });
-  log.clearWhere((o) => o.id === a.id); // as DataStore does when a transform's SQL fails
+  log.discardLocal(a.id); // as DataStore does when a transform's SQL fails to rederive
   assert.equal(log.slice((o) => o.target.startsWith('ds:5/')).length, 0);
   assert.equal(log.canUndo, false);
 });
 
-test('undo/redo walk the log by HLC; a fresh op discards the redo branch', () => {
+test('undo/redo are append-only; a fresh op does NOT discard the redo branch', () => {
   const { log, tick } = peer(1000);
   log.append(addDs(1, 'a'));
   tick(1100); log.append(addDs(2, 'b'));
   assert.equal(log.canUndo, true);
-  log.undo();
-  assert.deepEqual(log.state('collection').map((d) => d.id), [1]); // newest op undone
-  log.redo();
+  log.undo(); // appends undo{b}
+  assert.deepEqual(log.state('collection').map((d) => d.id), [1]); // newest op hidden
+  log.redo(); // appends redo{b}
   assert.deepEqual(log.state('collection').map((d) => d.id), [1, 2]);
-  log.undo();
+  log.undo(); // hide b again
   tick(1200); log.append(addDs(3, 'c')); // fresh op after undo
-  assert.equal(log.canRedo, false, 'redo branch discarded');
-  assert.deepEqual(log.state('collection').map((d) => d.id), [1, 3]);
+  assert.equal(log.canRedo, true, 'undone op stays redoable — no hidden branch discard (one true log)');
+  assert.deepEqual(log.state('collection').map((d) => d.id), [1, 3]); // b still hidden
+  log.redo(); // b comes back
+  assert.deepEqual(log.state('collection').map((d) => d.id), [1, 2, 3]);
 });

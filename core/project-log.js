@@ -14,8 +14,8 @@
  */
 
 import { resolveMerger } from './merge.js';
-import { HLC, hlcEncode } from './hlc.js';
-import { makeOp, orderByHlc, sharedAncestor, unresolvedReads, opIds } from './op-log.js';
+import { HLC, hlcEncode, hlcCompare } from './hlc.js';
+import { makeOp, orderByHlc, sharedAncestor, unresolvedReads, opIds, appliedState } from './op-log.js';
 
 /**
  * @typedef {Object} Projection
@@ -47,13 +47,16 @@ import { makeOp, orderByHlc, sharedAncestor, unresolvedReads, opIds } from './op
  *   layer — NOT to any editing/feature path. (`clearWhere` in particular is a tier
  *   *replace* during load/reload, never a way to "delete some ops" mid-edit.)
  *
- * `#ops`/`#redo` are private; the tiers above are the entire mutation surface.
+ * `#ops` is private; the tiers above are the entire mutation surface. There is **no
+ * redo stack** — undo/redo are ordinary appended ops (`undo`/`redo`, payload `{opId}`),
+ * so undo state persists and merges like everything else (an undone op is hidden by the
+ * liveness fold, never removed). See {@link module:core/op-log~liveOps}.
  */
 export class ProjectLog {
-  /** @type {import('./op-log.js').Op[]} active ops (unordered internally; ordered on read). */
+  /** @type {import('./op-log.js').Op[]} every op ever appended (ordered on read). Undo is
+   * an appended `undo` op, not a removal — the log only grows (Seal is the deliberate,
+   * rare exception). */
   #ops = [];
-  /** @type {import('./op-log.js').Op[]} undone ops (redo stack), most-recently-undone last. */
-  #redo = [];
   /** @type {HLC} */
   #hlc;
   /** @type {() => object} */
@@ -133,7 +136,6 @@ export class ProjectLog {
   append(body) {
     const op = makeOp(body, { hlc: this.#hlc.tick(), author: this.#author() });
     this.#ops.push(op);
-    this.#redo = []; // a new action discards the redo branch (standard undo semantics)
     return op;
   }
 
@@ -144,7 +146,7 @@ export class ProjectLog {
    * @param {import('./op-log.js').Op[]} ops
    */
   receiveOps(ops) {
-    const have = new Set([...opIds(this.#ops), ...opIds(this.#redo)]);
+    const have = opIds(this.#ops);
     for (const op of ops ?? []) {
       this.#hlc.receive(op.hlc);
       if (!have.has(op.id)) { this.#ops.push(op); have.add(op.id); }
@@ -161,8 +163,21 @@ export class ProjectLog {
    * @returns {Array<{state:string, hlc:string, target:string, owner:string, type:string, author:string, payload:string, reads:string, id:string}>}
    */
   dump() {
-    const row = (o, state) => ({
-      state,
+    const ordered = this.ops();
+    const applied = appliedState(ordered);
+    // Which content ops an applied retract has dropped (for the state column).
+    const retracted = new Set();
+    for (const o of ordered) if (o.type === 'retract' && applied(o.id) && o.payload?.opId != null) retracted.add(o.payload.opId);
+    const stateOf = (o) => {
+      if (o.type === 'undo' || o.type === 'redo' || o.type === 'retract' || o.type === 'reorder') {
+        return applied(o.id) ? o.type : `${o.type}(undone)`;
+      }
+      if (!applied(o.id)) return 'undone';
+      if (retracted.has(o.id)) return 'retracted';
+      return 'active';
+    };
+    return ordered.map((o) => ({
+      state: stateOf(o),
       hlc: hlcEncode(o.hlc),
       target: o.target,
       owner: o.owner,
@@ -171,11 +186,7 @@ export class ProjectLog {
       payload: o.payload ? JSON.stringify(o.payload).slice(0, 120) : '',
       reads: (o.reads ?? []).join(',') || '',
       id: o.id,
-    });
-    return [
-      ...this.ops().map((o) => row(o, 'active')),
-      ...this.#redo.map((o) => row(o, 'undone')),
-    ];
+    }));
   }
 
   /** The derived state of a registered projection (folds its ops in HLC order). */
@@ -226,27 +237,23 @@ export class ProjectLog {
     return { ops: merged, conflicts, dangling: unresolvedReads(merged, { base }) };
   }
 
-  /** Commit a merged op set (from {@link merge}) as the new log; clears redo. */
+  /** Commit a merged op set (from {@link merge}) as the new log. */
   adopt(ops) {
     this.#ops = [...(ops ?? [])];
-    this.#redo = [];
   }
 
-  /** Empty the log (both active and redo). Used when replacing the whole project
-   * (e.g. loading a different bundle). */
+  /** Empty the log. Used when replacing the whole project (e.g. loading a bundle). */
   reset() {
     this.#ops = [];
-    this.#redo = [];
   }
 
-  /** **Lifecycle only.** Drop every op (active + redo) matching `pred` — a tier
-   * *replace* during load/reload (e.g. rebuild the dataset collection while leaving the
-   * analysis tier alone). NOT an editing primitive: to delete a durable op during normal
-   * work, append a `retract` (physical removal is merge-unsafe). To roll back a failed
-   * *just-appended* local op, use {@link ProjectLog#discardLocal}. */
+  /** **Lifecycle only.** Drop every op matching `pred` — a tier *replace* during
+   * load/reload (e.g. rebuild the dataset collection while leaving the analysis tier
+   * alone). NOT an editing primitive: to delete a durable op during normal work, append a
+   * `retract` (physical removal is merge-unsafe). To roll back a failed *just-appended*
+   * local op, use {@link ProjectLog#discardLocal}; to reversibly hide one, {@link ProjectLog#undoWhere}. */
   clearWhere(pred) {
     this.#ops = this.#ops.filter((o) => !pred(o));
-    this.#redo = this.#redo.filter((o) => !pred(o));
   }
 
   /**
@@ -254,75 +261,87 @@ export class ProjectLog {
    * durable — the only sanctioned physical removal of a specific op by feature code.
    * Use it when an {@link ProjectLog#append} you just made turns out invalid (e.g. it
    * generated SQL that won't run) and must vanish as if never attempted. It is NOT a way
-   * to edit established history: to remove a durable/shared op, append a `retract`
-   * (physical removal is merge-unsafe — a dropped op resurrects from a peer that still
-   * has it). Removes the op from both the active log and the redo stack.
+   * to edit established history: to remove a durable/shared op append a `retract`, and to
+   * reversibly hide one use {@link ProjectLog#undoWhere} (both merge-safe; a physical
+   * drop of a durable op resurrects from a peer that still has it).
    * @param {string} opId
    */
   discardLocal(opId) {
     this.#ops = this.#ops.filter((o) => o.id !== opId);
-    this.#redo = this.#redo.filter((o) => o.id !== opId);
   }
 
-  get canUndo() { return this.#ops.length > 0; }
-  get canRedo() { return this.#redo.length > 0; }
+  // --- undo / redo: append-only, no redo stack -------------------------------
+  // Undo/redo are ordinary ops (`undo`/`redo`, payload {opId}) targeted at the undone
+  // op's OWN target, so the liveness fold ({@link module:core/op-log~liveOps}) sees them
+  // in the same slice and hides/shows the op. State derives entirely from the log — no op
+  // is ever moved or removed — so undo state persists on save and merges like any op.
 
-  /** Whether any active / undone op matches `pred` — scoped undo/redo availability
-   * (e.g. "does THIS dataset have anything to undo?" on the shared log). */
-  canUndoWhere(pred) { return this.#ops.some(pred); }
-  canRedoWhere(pred) { return this.#redo.some(pred); }
+  /** Ops matching `pred` that are undoable now: content/structural ops (never undo/redo
+   * markers) currently applied (shown), in HLC order — the highest is the "latest action". */
+  #undoable(pred) {
+    const ordered = orderByHlc(this.#ops);
+    const applied = appliedState(ordered);
+    return ordered.filter(
+      (o) => pred(o) && o.type !== 'undo' && o.type !== 'redo' && applied(o.id),
+    );
+  }
+
+  /** Ops matching `pred` currently hidden by an undo (redoable), each with the undo
+   * marker that hid it — sorted oldest-undo first (the newest is the next redo target). */
+  #redoable(pred) {
+    const latest = new Map();
+    for (const m of orderByHlc(this.#ops)) {
+      if ((m.type === 'undo' || m.type === 'redo') && m.payload?.opId != null) latest.set(m.payload.opId, m);
+    }
+    const byId = new Map(this.#ops.map((o) => [o.id, o]));
+    const out = [];
+    for (const [opId, m] of latest) {
+      if (m.type !== 'undo') continue;
+      const op = byId.get(opId);
+      if (op && op.type !== 'undo' && op.type !== 'redo' && pred(op)) out.push({ op, marker: m });
+    }
+    return out.sort((a, b) => hlcCompare(a.marker.hlc, b.marker.hlc) || (a.marker.id < b.marker.id ? -1 : 1));
+  }
+
+  get canUndo() { return this.canUndoWhere(() => true); }
+  get canRedo() { return this.canRedoWhere(() => true); }
+
+  /** Whether anything matching `pred` can be undone / redone (scoped availability on the
+   * shared log — e.g. "does THIS dataset have anything to undo?"). */
+  canUndoWhere(pred) { return this.#undoable(pred).length > 0; }
+  canRedoWhere(pred) { return this.#redoable(pred).length > 0; }
 
   /**
-   * Undo the highest-HLC **active** op matching `pred` (scoped to one tier/dataset on
-   * the shared log), moving it onto the redo stack. Re-fold happens on the next
-   * {@link state}/{@link slice} read. Returns the undone op, or null if none match.
-   * (Solo semantics; the collaborative "whose op may I undo" nuance is deferred, as
-   * for {@link undo}.)
+   * Undo the latest applied op matching `pred` (scoped to one tier/dataset) by
+   * **appending** an `undo{opId}` op targeted at that op — the fold then hides it. Re-fold
+   * happens on the next {@link state}/{@link slice} read. Returns the appended undo op, or
+   * null if there is nothing to undo.
    */
   undoWhere(pred) {
-    const matching = orderByHlc(this.#ops.filter(pred));
-    const last = matching[matching.length - 1];
+    const cands = this.#undoable(pred);
+    const last = cands[cands.length - 1];
     if (!last) return null;
-    this.#ops = this.#ops.filter((o) => o.id !== last.id);
-    this.#redo.push(last);
-    return last;
+    return this.append({ target: last.target, owner: last.owner, type: 'undo', payload: { opId: last.id } });
   }
 
-  /** Re-apply the most-recently-undone op matching `pred`. Returns it, or null. */
+  /** Redo the most-recently-undone op matching `pred` by **appending** a `redo{opId}` op.
+   * Returns the appended redo op, or null. */
   redoWhere(pred) {
-    for (let i = this.#redo.length - 1; i >= 0; i--) {
-      if (pred(this.#redo[i])) {
-        const [op] = this.#redo.splice(i, 1);
-        this.#ops.push(op);
-        return op;
-      }
-    }
-    return null;
+    const cands = this.#redoable(pred);
+    const top = cands[cands.length - 1]; // newest undo = next to redo
+    if (!top) return null;
+    return this.append({ target: top.op.target, owner: top.op.owner, type: 'redo', payload: { opId: top.op.id } });
   }
 
-  /** The undone (redo-stack) ops matching `pred`, in undo order (most-recently-undone
-   * last) — the raw material for a History panel's "future" list. A copy. */
+  /** The currently-undone content ops matching `pred`, oldest-undo first — a History
+   * panel's "future" list (reverse it for newest-first, the redo order). */
   undoneOps(pred = () => true) {
-    return this.#redo.filter(pred);
+    return this.#redoable(pred).map((e) => e.op);
   }
 
-  /** Undo the latest op (highest HLC) onto the redo stack. Re-fold happens on the next
-   * {@link state} read. (Collaborative "whose op may I undo" nuance is deferred — for
-   * now the newest op wins, matching single-author expectation.) */
-  undo() {
-    if (!this.#ops.length) return null;
-    const ordered = orderByHlc(this.#ops);
-    const last = ordered[ordered.length - 1];
-    this.#ops = this.#ops.filter((o) => o.id !== last.id);
-    this.#redo.push(last);
-    return last;
-  }
+  /** Undo the latest applied op anywhere (appends an `undo` op). */
+  undo() { return this.undoWhere(() => true); }
 
-  /** Re-apply the most recently undone op. */
-  redo() {
-    if (!this.#redo.length) return null;
-    const op = this.#redo.pop();
-    this.#ops.push(op);
-    return op;
-  }
+  /** Redo the most-recently-undone op anywhere (appends a `redo` op). */
+  redo() { return this.redoWhere(() => true); }
 }

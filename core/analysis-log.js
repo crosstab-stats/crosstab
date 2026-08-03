@@ -33,6 +33,7 @@
  */
 
 import { newOpId } from './merge.js';
+import { liveOps } from './op-log.js';
 import { ProjectLog } from './project-log.js';
 
 /** The analysis-run projection: folds runAnalysis/removeAnalysis ops into the ordered
@@ -42,7 +43,7 @@ const ANALYSIS = {
   match: (op) => op.owner === 'core' && typeof op.target === 'string' && op.target.startsWith('analysis:'),
   fold: (ops) => {
     const runs = new Map();
-    for (const op of ops) {
+    for (const op of liveOps(ops)) { // undone run/remove ops are hidden by the liveness fold
       if (op.type === 'runAnalysis') runs.set(op.payload.runId, op.payload);
       else if (op.type === 'removeAnalysis') runs.delete(op.payload.runId);
     }

@@ -28,6 +28,7 @@
 import { CoreEvents } from './event-bus.js';
 import { DataStore } from './data-store.js';
 import { ProjectLog } from './project-log.js';
+import { liveOps } from './op-log.js';
 import { currentAuthor } from './user-identity.js';
 
 /** Bus event: the set of datasets or the active one changed (drives the switcher). */
@@ -44,7 +45,7 @@ const COLLECTION = {
   match: (op) => op.owner === 'core' && typeof op.target === 'string' && op.target.startsWith('coll/'),
   fold: (ops) => {
     const names = new Map();
-    for (const op of ops) {
+    for (const op of liveOps(ops)) { // undone add/rename/remove are hidden by the liveness fold
       if (op.type === 'addDataset') names.set(op.payload.id, op.payload.name);
       else if (op.type === 'renameDataset') { if (names.has(op.payload.id)) names.set(op.payload.id, op.payload.name); }
       else if (op.type === 'removeDataset') names.delete(op.payload.id);

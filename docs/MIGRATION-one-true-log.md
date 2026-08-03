@@ -115,7 +115,23 @@ ancestor from the shared op-id intersection (`sharedAncestor`) — no base neede
 workspace **blobs** (CAQDAS codebook) are still three-way-merged and need an ancestor,
 which the base supplies. So workspace-on-log is a prerequisite for base deletion.
 
+**Undo/redo are append-only ops too (user, 2026-08-02 — corrects an earlier wrong
+call).** Undo/redo must NOT mutate the log (move ops in/out of a `#redo` stack) — that's
+the same surgery flaw as `remove()`. They append `undo{opId}`/`redo{opId}` ops (targeted
+at the undone op's own target so the fold sees them in-slice, like `retract`). This also
+fixes a real bug: `serialize()` never persisted `#redo`, so **undone actions were silently
+dropped on save** and undo state never merged. Model: an op's applied-state = its latest
+`undo`/`redo` marker (undo→hidden, redo/none→shown); a content op is live iff applied AND
+no *applied* `retract` targets it; reorder = latest *applied* reorder. Non-recursive
+(undo/redo markers are never themselves undone). `ProjectLog` drops `#redo`;
+`discardLocal` stays (failed-never-durable append ≠ undo). New action does NOT clear the
+redo branch (undone ops stay redoable — the "spammy log is fine" stance). Shared liveness
+helper in `op-log.js` used by every fold (data/collection/analysis). **This lands BEFORE
+the merge work** so merge treats undo/redo as ordinary mergeable ops.
+
 **Sequence (commit + spot-check each; full two-window test only at the very end):**
+0. **Undo/redo → append-only ops** (see above) — `op-log.js` liveness helper; `ProjectLog`
+   loses `#redo`; `data-fold`/collection/analysis folds honour undo/redo markers.
 1. **Flat `manifest.log` persistence + load routing.** `#snapshot` assembles the flat
    log from the pieces (collectionOps + each DataStore.rawExport + orphanDataOps +
    analysis toJSON); `project-store` save/load/#writeSources speak `manifest.log` +

@@ -92,6 +92,61 @@ export function orderByHlc(ops) {
 }
 
 /**
+ * Structural / control op types — they never appear as *content* in a projection's
+ * fold; they express **liveness and order** over the content ops:
+ *  - `undo`/`redo` (payload `{opId}`) — reversible hide/show of an op (append-only
+ *    undo — the log is never mutated to undo; see docs/MIGRATION-one-true-log.md).
+ *  - `retract` (payload `{opId}`) — a deliberate, merge-safe deletion (a tombstone).
+ *  - `reorder` (payload `{order:[opId,…]}`) — user-chosen order over the content ops.
+ */
+export const STRUCTURAL_OPS = new Set(['undo', 'redo', 'retract', 'reorder']);
+
+/**
+ * The **applied-state** query for a log: `applied(opId)` is false iff the op's latest
+ * (highest-HLC) `undo`/`redo` marker is an `undo`. Every op is applied by default;
+ * `undo{opId}` hides it, a later `redo{opId}` shows it again. Non-recursive: undo/redo
+ * markers are themselves never undone (undo targets the next applied op; redo re-shows
+ * the most-recently-undone one), so a single latest-marker-wins pass is exact.
+ *
+ * **Assumes `ops` is already HLC-ordered** (as {@link ProjectLog#slice}/`state` and
+ * every projection fold provide) — it does NOT re-sort, so callers holding an unordered
+ * set must {@link orderByHlc} first.
+ *
+ * @param {Op[]} ops  in HLC order
+ * @returns {(opId: string) => boolean}
+ */
+export function appliedState(ops) {
+  const latest = new Map(); // opId → 'undo' | 'redo' (last-in-order wins ⇒ highest HLC)
+  for (const op of ops ?? []) {
+    if ((op.type === 'undo' || op.type === 'redo') && op.payload?.opId != null) {
+      latest.set(op.payload.opId, op.type);
+    }
+  }
+  return (opId) => latest.get(opId) !== 'undo';
+}
+
+/**
+ * The **live content ops** of a log, in the input's (HLC) order: every non-structural op
+ * that is currently *applied* (not net-undone) and not dropped by an *applied* `retract`.
+ * This is the shared liveness fold every projection runs before its own interpretation
+ * (collection membership, analysis list, the data pipeline). Reorder is NOT applied here
+ * (it's data-tier-specific — see {@link module:core/data-fold}); this only resolves
+ * undo/redo/retract. Pure. **Assumes `ops` is already HLC-ordered** (see {@link appliedState}).
+ *
+ * @param {Op[]} ops  in HLC order
+ * @returns {Op[]}
+ */
+export function liveOps(ops) {
+  const list = ops ?? [];
+  const applied = appliedState(list);
+  const retracted = new Set();
+  for (const op of list) {
+    if (op.type === 'retract' && applied(op.id) && op.payload?.opId != null) retracted.add(op.payload.opId);
+  }
+  return list.filter((op) => !STRUCTURAL_OPS.has(op.type) && applied(op.id) && !retracted.has(op.id));
+}
+
+/**
  * Validate a **specific order** against the `reads[]` causal constraint: every op must
  * appear after the ops that write the targets it reads. A read is satisfied by an
  * earlier op whose `target` matches exactly, or by a target present in `base` (state
