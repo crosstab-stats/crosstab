@@ -166,12 +166,17 @@ Status (2026-08-02) — the full migration is landed through the transport layer
   `project.base.json` deleted, `mergeManifests`/`datasetToOps`/`opsToDataset` deleted.
   Convergence, CAQDAS union, conflict-resolution, and fixpoint all covered by headless tests.
 
-**Remaining (deferred, both noted in code + here):**
-- **`project-bundle.js` (`.crosstab`)** still on the old `{sources,transforms}` shape —
-  export/import breaks until migrated to the flat log. Not needed for the two-window test.
-- **Live P2P gap-fill** (`project-sync` ~1226–1322, `gap-fill.js`) still reads the old
-  bundle shape — inert unless *live* co-authoring is started; folder sync (the two-window
-  path) needs no gap-fill (the OS mirrors Parquet by op-id-keyed sidecar).
+**Remaining — DONE (2026-08-02):** every old-shape consumer is now on the flat log.
+- **`project-bundle.js` (`.crosstab`)** import builds the flat log (one addDataset + one
+  `load` per dataset, deterministic ids); export stays a portable snapshot.
+- **Live P2P gap-fill** (`gap-fill.js` `sourceRefs`, `project-sync` readSource/
+  `#refreshHeld`/`#applyMergedManifestLive`) rewritten on the flat log. Still needs a
+  two-peer (signaling) run to verify end-to-end; folder sync is the verified path.
+- Blank-load stragglers (`launcher`, `project-sync` recovery) use `loadBundle({log:[]})`.
+
+No code remains on the `datasets[].{sources,transforms}` shape. `exportState`/
+`restoreState` + `dataset-store`/`library` intentionally keep the FOLDED op-recipe (the
+library/recycle re-home tier — re-mint under a fresh id is correct there).
 
 **Two-window test = the user's run** (needs a real picked folder / gesture, which
 automation can't drive). Procedure: two windows → *File ▸ Move project to a folder…* (A)

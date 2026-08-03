@@ -11,9 +11,9 @@
  *     catalog.json                 — the browse index (one summary per project)
  *     crosstab-encryption.json     — plaintext salt/verifier (only when encrypted)
  *     <projectId>/
- *       project.json               — { name, savedAt, activeId, datasets: [...] }
- *       project.base.json          — the sync common-ancestor snapshot (#143)
- *       ds<dsId>_src<n>.parquet     — each dataset's immutable sources, flat
+ *       project.json               — { name, savedAt, activeId, log:[…ops], … } (#148:
+ *                                    ONE flat op-log spanning every tier; no base sidecar)
+ *       src_<opId>.parquet          — each source op's immutable bytes, keyed by op id
  *
  * Bytes live behind a swappable {@link StorageDriver} (OPFS by default, or a picked
  * folder mirrored to OneDrive/Dropbox — {@link ProjectStore#useDirectory}), so the
@@ -520,7 +520,7 @@ export class ProjectStore {
 /**
  * Build the `project.json` **manifest** (metadata + transform logs + Parquet file
  * refs, no bytes) from an in-memory bundle — the exact shape {@link ProjectStore#save}
- * writes and {@link module:core/collab-sync~mergeManifests} merges. Pure, so it also
+ * writes and {@link module:core/collab-sync~mergeProjects} merges. Pure, so it also
  * produces "my" manifest for a folder sync without touching disk. File refs follow
  * `ds<id>_src<n>.parquet` (matching {@link ProjectStore#writeSourcesOnly}).
  *
