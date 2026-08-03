@@ -33,6 +33,12 @@
 const ROOT = 'datasets';
 const CATALOG = 'catalog.json';
 
+/** Source op types — their bytes are written as Parquet sidecars; every other op is a
+ * light transform stored inline in the manifest. Mirrors data-store's SOURCE_OPS and
+ * the folded recipe {@link module:core/data-store~DataStore#exportState} produces. */
+const SOURCE_TYPES = new Set(['load', 'append', 'join']);
+const isSourceOp = (op) => SOURCE_TYPES.has(op?.type);
+
 /**
  * @typedef {Object} SourceState
  * @property {import('./data-store.js').VariableMeta[]} meta - The source's as-imported metadata.
@@ -152,29 +158,31 @@ export class DatasetStore {
     const existing = cat.entries.find((e) => e.id === id);
     const version = existing ? (existing.version || 1) + 1 : 1;
 
-    const sources = [];
-    for (let i = 0; i < state.sources.length; i++) {
-      const s = state.sources[i];
-      const file = `source_${i + 1}.parquet`;
-      if (writeSources) {
-        if (!s.parquet) throw new Error(`save: source ${i + 1} has no parquet bytes`);
-        await this.#write(dir, file, s.parquet);
+    // The dataset's FOLDED reproducible recipe as an ordered op list (the shape
+    // {@link module:core/data-store~DataStore#exportState} produces): source ops carry a
+    // Parquet FILE ref (bytes written separately), transform ops are inline + light.
+    const ops = [];
+    let n = 0;
+    for (const op of state.ops ?? []) {
+      if (isSourceOp(op)) {
+        n++;
+        const file = `source_${n}.parquet`;
+        if (writeSources) {
+          if (!op.src?.parquet) throw new Error(`save: source ${n} has no parquet bytes`);
+          await this.#write(dir, file, op.src.parquet);
+        }
+        const src = { meta: op.src.meta, label: op.src.label ?? null };
+        if (op.src.wide) { src.wide = true; src.rowidBase = op.src.rowidBase; }
+        const entry = { type: op.type, src, file };
+        if (op.author) entry.author = op.author;
+        if (op.type === 'join') { entry.joinKey = op.joinKey; entry.aliases = op.aliases ?? []; entry.joinType = op.joinType ?? 'left'; }
+        ops.push(entry);
+      } else {
+        ops.push(op); // transform op — no bytes, store as-is
       }
-      const entry = { meta: s.meta, label: s.label ?? null, file, combine: s.combine ?? 'base' };
-      if (s.combine === 'join') {
-        entry.joinKey = s.joinKey;
-        entry.aliases = s.aliases ?? [];
-      }
-      // Wide source: `file` is read_parquet-backed (not a table); flag it so restore
-      // re-registers it instead of loading it into a table.
-      if (s.wide) {
-        entry.wide = true;
-        entry.rowidBase = s.rowidBase;
-      }
-      sources.push(entry);
     }
 
-    const manifest = { name, savedAt, version, sources, transforms: state.transforms ?? [], order: state.order ?? null };
+    const manifest = { name, savedAt, version, ops };
     await this.#write(dir, 'manifest.json', JSON.stringify(manifest));
 
     const summary = {
@@ -184,7 +192,7 @@ export class DatasetStore {
       version,
       rowCount: state.rowCount ?? 0,
       varCount: state.varCount ?? 0,
-      sourceCount: state.sources.length,
+      sourceCount: n,
       // Caller-supplied catalog fields (e.g. the recycle bin's projectId + deletedAt),
       // carried verbatim into the browse index so list() can filter on them.
       ...(extra && typeof extra === 'object' ? extra : {}),
@@ -206,26 +214,28 @@ export class DatasetStore {
     const root = await this.#root();
     const dir = await root.getDirectoryHandle(id);
     const manifest = JSON.parse(await this.#read(dir, 'manifest.json'));
-    const sources = [];
-    for (const s of manifest.sources) {
-      const buf = await this.#readBytes(dir, s.file);
-      sources.push({
-        meta: s.meta,
-        label: s.label ?? null,
-        combine: s.combine ?? 'base',
-        joinKey: s.joinKey,
-        aliases: s.aliases,
-        wide: s.wide ?? false,
-        rowidBase: s.rowidBase,
-        parquet: new Uint8Array(buf),
-      });
+    // The folded op recipe (the shape DataStore.restoreState consumes): source ops get
+    // their Parquet re-attached from the sidecar; transform ops are inline.
+    const ops = [];
+    for (const op of manifest.ops ?? []) {
+      if (isSourceOp(op)) {
+        const buf = await this.#readBytes(dir, op.file);
+        const src = { meta: op.src.meta, label: op.src.label ?? null, parquet: new Uint8Array(buf) };
+        if (op.src.wide) { src.wide = true; src.rowidBase = op.src.rowidBase; }
+        const restored = { type: op.type, src };
+        if (op.author) restored.author = op.author;
+        if (op.type === 'join') { restored.joinKey = op.joinKey; restored.aliases = op.aliases ?? []; restored.joinType = op.joinType ?? 'left'; }
+        ops.push(restored);
+      } else {
+        ops.push(op);
+      }
     }
     return {
       id,
       name: manifest.name,
       savedAt: manifest.savedAt,
       version: manifest.version ?? 1,
-      state: { sources, transforms: manifest.transforms ?? [], order: manifest.order ?? null },
+      state: { ops },
     };
   }
 
