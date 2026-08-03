@@ -20,8 +20,10 @@
 import { makeZip, readZip } from './zip.js';
 
 const FORMAT = 'crosstab-project';
-const FORMAT_VERSION = 1;
+const FORMAT_VERSION = 2; // v2 carries the raw op log (faithful clone); v1 was a derived snapshot
 const dec = new TextDecoder();
+const SOURCE_TYPES = new Set(['load', 'append', 'join']);
+const isSourceOp = (op) => SOURCE_TYPES.has(op?.type);
 
 /**
  * Build a `.crosstab` bundle Blob from the open datasets.
@@ -33,8 +35,24 @@ const dec = new TextDecoder();
  *   analyses (and be warned about any they don't have — #102).
  * @returns {Promise<Blob>}
  */
-export async function exportProjectBundle({ datasets, projectName, plugins = [], collab = null }) {
+export async function exportProjectBundle({ datasets, bundle = null, projectName, plugins = [], collab = null }) {
   const entries = [];
+  // --- faithful-clone tier (#148): the raw op log + raw source bytes. This is what a
+  // re-open / co-authoring hand-off restores VERBATIM (same op ids + baked row ids), so
+  // two peers sharing a bundle can converge — a derived snapshot can't (fresh row ids).
+  // Source bytes go to `sources/<opId>.parquet`; the log keeps an op-id file ref.
+  const log = (bundle?.log ?? []).map((op) => {
+    if (isSourceOp(op) && op.payload?.src?.parquet) {
+      const { parquet, ...src } = op.payload.src;
+      const file = src.file || `src_${op.id}.parquet`;
+      src.file = file;
+      entries.push({ name: `sources/${file}`, data: parquet });
+      return { ...op, payload: { ...op.payload, src } };
+    }
+    return op;
+  });
+  // --- open/tool-agnostic tier: derived data + schema + transforms per dataset, so the
+  // work is readable WITHOUT CrossTab (Parquet/JSON). Kept alongside the clone tier.
   const index = [];
   const used = new Set();
   for (const ds of datasets.all()) {
@@ -66,6 +84,12 @@ export async function exportProjectBundle({ datasets, projectName, plugins = [],
     name: projectName || 'Untitled project',
     exportedAt: new Date().toISOString(),
     generator: 'CrossTab',
+    // The faithful clone: the whole flat op-log (bytes stripped → sources/ sidecars) +
+    // the active pointer + per-dataset non-log state. Import restores this verbatim.
+    activeId: bundle?.activeId ?? (index[0]?.id ?? null),
+    log,
+    datasetMeta: bundle?.datasetMeta ?? null,
+    // The human/external index (derived data files) — for reading without CrossTab.
     datasets: index,
     // The active analysis/plugin set, so opening the bundle restores the same
     // analyses — and warns about any the recipient doesn't have (#102). Built-ins
@@ -78,11 +102,7 @@ export async function exportProjectBundle({ datasets, projectName, plugins = [],
       origin: p.origin,
       ...(p.url ? { url: p.url } : {}),
     })),
-    // The dataset-collection op-log (unit 6) travels with the bundle so every window
-    // that opens it shares ONE collection identity. Without it, an importer would
-    // RECONSTRUCT different op-ids than the exporter kept, and the merge would then see
-    // the same dataset's add/remove as rival independent ops (a spurious conflict).
-    collectionLog: datasets.collectionOps ? datasets.collectionOps() : null,
+    // (Collection ops now ride in `log` above — no separate collectionLog field.)
     // Collab identity (#148) — travels with the bundle so a copy imported to OPFS on
     // another machine (flash-drive hand-off) meets the origin in the SAME room.
     // Collaboration is transport-agnostic: whoever holds the bundle is a collaborator
@@ -97,11 +117,11 @@ export async function exportProjectBundle({ datasets, projectName, plugins = [],
 /**
  * Read a `.crosstab` bundle into a bundle ready for {@link DatasetManager#loadBundle} —
  * the flat one-true-log shape (#148). A `.crosstab` is a portable SNAPSHOT (the derived
- * Parquet + schema, tool-agnostic), not the internal op-log, so import synthesises a
- * fresh log: one `addDataset` + one `load` (carrying the derived Parquet + schema meta)
- * per dataset. The transform log travels in the file as a record but is NOT replayed (the
- * data is already derived). Synthetic op ids are DETERMINISTIC (keyed by dataset id) so
- * two people importing the same bundle produce the identical log — mergeable.
+ * A **v2** bundle carries the raw op log (`manifest.log`) — import restores it VERBATIM
+ * (re-attaching each source op's `sources/<opId>.parquet`), a FAITHFUL CLONE with the
+ * same op ids + baked row ids, so a hand-off can then co-author. A **v1** bundle (a
+ * derived snapshot, no log) is imported the old way: one deterministic `addDataset` +
+ * `load` per dataset from the derived Parquet (transforms are a record, not replayed).
  * @param {Uint8Array} buf
  * @returns {{name: string, bundle: {activeId: any, log: object[]}, plugins: object[]}}
  */
@@ -112,37 +132,46 @@ export function importProjectBundle(buf) {
   if (!mf) throw new Error('Not a CrossTab bundle (no manifest.json).');
   const manifest = JSON.parse(dec.decode(mf));
   if (manifest.format !== FORMAT) throw new Error('Unrecognised bundle format.');
-
-  const op = (id, counter, target, type, payload) => ({ id, hlc: { wall: 0, counter }, target, owner: 'core', type, payload, reads: [] });
-  // Collection tier: prefer the exporter's real ops (shared collection identity); else
-  // synthesise deterministic addDataset ops so every importer converges on the same log.
-  const haveColl = Array.isArray(manifest.collectionLog) && manifest.collectionLog.length;
-  const log = haveColl ? [...manifest.collectionLog] : [];
-  let activeId = null;
-  let i = 0;
-  for (const d of manifest.datasets || []) {
-    if (activeId === null) activeId = d.id;
-    if (!haveColl) log.push(op(`bundle-add-${d.id}`, i, `coll/ds:${d.id}`, 'addDataset', { id: d.id, name: d.name }));
-    const schemaRaw = d.schema ? byName.get(d.schema) : null;
-    const meta = schemaRaw ? JSON.parse(dec.decode(schemaRaw)) : [];
-    const parquet = d.file ? byName.get(d.file) : null;
-    if (parquet && parquet.byteLength) {
-      // One base `load` op carrying the derived data + schema (the shape rawRestore
-      // materialises). File ref left off → rawExport keys a fresh sidecar on the op id.
-      log.push(op(`bundle-load-${d.id}`, i, `ds:${d.id}/source:bundle-${d.id}`, 'load', { src: { meta, label: d.name, parquet } }));
-    }
-    i++;
-  }
-  if (activeId === null) throw new Error('Bundle has no datasets.');
-  // The recorded plugin set (#102): `activePlugins` (ids) restores analyses on open;
-  // `plugins` (full descriptors) lets the caller warn about any not installed here.
   const plugins = Array.isArray(manifest.plugins) ? manifest.plugins : [];
+
+  let log;
+  let activeId = manifest.activeId ?? null;
+  if (Array.isArray(manifest.log)) {
+    // v2 — faithful clone: restore the raw log verbatim, re-attaching source bytes from
+    // sources/<opId>.parquet so op ids AND row ids match the exporter (co-author-ready).
+    log = manifest.log.map((op) => {
+      if (isSourceOp(op) && op.payload?.src?.file) {
+        const bytes = byName.get(`sources/${op.payload.src.file}`);
+        if (bytes) return { ...op, payload: { ...op.payload, src: { ...op.payload.src, parquet: bytes } } };
+      }
+      return op;
+    });
+    if (activeId == null) { const add = log.find((o) => o.type === 'addDataset'); activeId = add?.payload?.id ?? null; }
+  } else {
+    // v1 — a derived snapshot: synthesise one addDataset + load per dataset. Deterministic
+    // ids (keyed by dataset id) so two importers of the SAME v1 bundle still converge.
+    const op = (id, counter, target, type, payload) => ({ id, hlc: { wall: 0, counter }, target, owner: 'core', type, payload, reads: [] });
+    const haveColl = Array.isArray(manifest.collectionLog) && manifest.collectionLog.length;
+    log = haveColl ? [...manifest.collectionLog] : [];
+    let i = 0;
+    for (const d of manifest.datasets || []) {
+      if (activeId == null) activeId = d.id;
+      if (!haveColl) log.push(op(`bundle-add-${d.id}`, i, `coll/ds:${d.id}`, 'addDataset', { id: d.id, name: d.name }));
+      const schemaRaw = d.schema ? byName.get(d.schema) : null;
+      const meta = schemaRaw ? JSON.parse(dec.decode(schemaRaw)) : [];
+      const parquet = d.file ? byName.get(d.file) : null;
+      if (parquet && parquet.byteLength) log.push(op(`bundle-load-${d.id}`, i, `ds:${d.id}/source:bundle-${d.id}`, 'load', { src: { meta, label: d.name, parquet } }));
+      i++;
+    }
+  }
+  if (activeId == null) throw new Error('Bundle has no datasets.');
   return {
     name: manifest.name || 'Imported project',
     bundle: {
       activeId,
       log,
       activePlugins: plugins.map((p) => p.id).filter(Boolean),
+      datasetMeta: manifest.datasetMeta ?? null,
       // Preserve the collab identity so the imported copy shares a room with the origin (#148).
       collabId: manifest.collabId ?? null,
       collabSecret: manifest.collabSecret ?? null,

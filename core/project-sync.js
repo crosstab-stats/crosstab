@@ -538,6 +538,14 @@ export class ProjectSync {
     return this.#ensureCollab();
   }
 
+  /** The full current-state snapshot (flat one-true-log + source bytes + scalars) — the
+   * same shape `#save` persists. Public so the `.crosstab` exporter can write a FAITHFUL
+   * clone (raw log, preserving op ids + row ids) rather than a lossy re-synthesised
+   * snapshot, so a bundle hand-off can then co-author (shared op/row identity). */
+  async exportSnapshot() {
+    return this.#snapshot(true);
+  }
+
   async #snapshot(all, dirty = new Set()) {
     this.#ensureCollab(); // every saved project carries a collab identity (transport-agnostic)
     // Assemble the flat one-true-log from every tier — collection ops, then each live

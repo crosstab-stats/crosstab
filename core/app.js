@@ -624,12 +624,17 @@ export async function boot(mounts) {
     order: 6,
     command: async () => {
       try {
-        const name = projects.activeName || 'crosstab-project';
+        // Name the bundle after the project; fall back to the active dataset's name (so
+        // an unsaved/unnamed project still exports something meaningful) before the
+        // generic placeholder. The name rides in the manifest so the recipient agrees.
+        const name = projects.activeName || datasets.active?.name || 'crosstab-project';
         // Record the active analysis/plugin set so a recipient restores the same
         // analyses (and is warned about any they don't have — #102).
         const activePlugins = plugins.list().filter((p) => p.activated);
         const collab = projects.collabIdentity?.(); // #148 — bundle carries the room identity
-        const blob = await exportProjectBundle({ datasets, projectName: name, plugins: activePlugins, collab });
+        // The faithful-clone snapshot (raw log + source bytes) — so a hand-off can co-author.
+        const snapshot = await projects.exportSnapshot();
+        const blob = await exportProjectBundle({ datasets, bundle: snapshot, projectName: name, plugins: activePlugins, collab });
         downloadBlob(blob, `${slug(name) || 'crosstab-project'}.crosstab`);
         results.api.appendText(`Exported **${name}** as a .crosstab bundle (${(blob.size / 1048576).toFixed(1)} MB).`);
       } catch (err) {
