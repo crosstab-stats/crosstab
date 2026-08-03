@@ -181,7 +181,13 @@ export class DatasetLibrary {
       const local = cur.slice(Math.min(baseLen, cur.length)); // edits made after linking
       const blockOps = loaded.state.ops || []; // the block's sources + base transforms
       // Re-home the block's recipe with the dataset's local transforms re-applied on top.
-      await ds.restoreState({ ops: [...blockOps, ...local] });
+      // APPENDED, never swapped in (#149 A2): this dataset is established and its ops may
+      // already sit on a collaborator's copy, so physically dropping them would take them
+      // out of the shared-id ancestor and the next merge would read the peer's copies as
+      // additions — the old pipeline returning alongside the pulled one. The recipe opens
+      // with a `load`, which is the replace barrier, so the superseded ops fold away on
+      // every peer without being removed from anyone's log.
+      await ds.restoreState({ ops: [...blockOps, ...local] }, { replaceHistory: false });
       ds.libraryLink = { id, version: loaded.version, baseLen: transformCount(blockOps) };
       this.#data.touch?.();
       this.#results.appendText(

@@ -1630,10 +1630,22 @@ export class DataStore {
    * shared log directly (Layer 4).
    *
    * @param {{ops?: object[]}} state
+   * @param {object} [opts]
+   * @param {boolean} [opts.replaceHistory=true] - When false, this dataset's existing
+   *   ops are LEFT in the log and the recipe is appended alongside them. Use it whenever
+   *   the slice being replaced may already exist on a peer (a library pull onto an
+   *   established dataset — #149 A2): physically dropping those ops takes them out of
+   *   the shared-id ancestor, so the peer's copies read as *additions* on the next merge
+   *   and the old pipeline comes back alongside the re-minted one. Appending is safe
+   *   because a recipe opens with a `load`, and a `load` is the replace barrier
+   *   ({@link foldDataOps}) — the superseded ops stay dead on every peer without anyone
+   *   removing anything. Only pass true for a slice that is provably local (a
+   *   brand-new dataset).
    * @returns {Promise<void>}
    */
-  async restoreState({ ops } = {}) {
-    await this.#resetDataHard();
+  async restoreState({ ops } = {}, { replaceHistory = true } = {}) {
+    if (!replaceHistory) await this.#dropDuckDB();
+    else await this.#resetDataHard();
     for (const o of Array.isArray(ops) ? ops : []) {
       if (SOURCE_OPS.has(o.type)) {
         const created = o.src.wide

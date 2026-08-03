@@ -34,14 +34,18 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         `project-sync` marks sources dirty on `load` too (else a first import's
         Parquet never gets written), and `undo-coordinator` resets on `switch`
         (project open / new project) rather than relying on the seed's `replace`.
-  - [ ] **A2 (serious): `library.pullLatest` rewrites a live dataset's history
-        outside the log** (`library.js` → `restoreState` → `#resetDataHard` →
-        `clearWhere(#mine)` + re-minted op ids on an established, possibly-synced
-        slice). Next merge: the peer's copies of the dropped ops union back in
-        *alongside* the re-minted duplicates → doubled pipeline. (`#add` and
-        recycle-restore are safe — fresh dataset id, empty slice.) Fix: express a
-        pull as ops (retract the old slice + append the new recipe), or fork to a
-        fresh dataset id.
+  - [x] **A2 (serious): `library.pullLatest` rewrote a live dataset's history outside
+        the log — DONE.** The pull ran `restoreState` → `#resetDataHard` →
+        `clearWhere(#mine)`, physically dropping an established (possibly already
+        synced) slice and re-minting the ops. On the next merge the peer's copies of
+        the dropped ops read as *their additions* and unioned back in alongside the
+        re-minted duplicates — a doubled pipeline, the delete-inference class again.
+        *Fixed:* the pull now APPENDS (`replaceHistory: false`). Nothing is removed
+        from anyone's log; the recipe opens with a `load`, and B1's replace barrier
+        folds the superseded ops away identically on every peer. Verified: after a
+        pull every pre-pull op id is still present, only the new pipeline is live, the
+        data is v2 and the local transform is re-applied on top. (`#add` was always
+        safe — a fresh dataset has an empty slice.)
   - [ ] **A3: project NAME is user data with no op.** Rename lives only in
         `#binding.name` / `store.rename`; merge takes `name: mine ?? theirs`
         (`collab-sync.js`) and `contentSig` ignores it (`folder-sync.js`), so a
