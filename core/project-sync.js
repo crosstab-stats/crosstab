@@ -1372,7 +1372,8 @@ export class ProjectSync {
       // Fast path: if the data + collection tiers are unchanged (the common coding-only
       // case), skip the DuckDB rebuild entirely and just apply the workspace/analysis tiers.
       const dsSig = (log) => JSON.stringify(log.filter(isDsOrColl).map((o) => o.id).sort());
-      if (dsSig(snap.log) !== dsSig(mergedLog)) {
+      const dataChanged = dsSig(snap.log) !== dsSig(mergedLog);
+      if (dataChanged) {
         // Attach source bytes to the merged log — from local (shared base) or a COPY of a
         // co-author's streamed bytes (#148 6c). The copy matters: DuckDB's registerFileBuffer
         // TRANSFERS (detaches) the ArrayBuffer, so we must not hand over the retained cache.
@@ -1397,11 +1398,34 @@ export class ProjectSync {
       await this.#applyWorkspaces?.(mergedLog.filter((o) => typeof o.target === 'string' && o.target.startsWith('ws:')), { refresh: true }); // refresh in place
       this.#applyAssetOps?.(assetOpsOf(mergedLog));
       this.#applyOutput?.(manifest.output || []);
+      this.#persistPeerWork(dataChanged); // a co-author's work is work (#149 C1)
     } catch (err) {
       console.error('[live] apply failed', err);
     } finally {
       this.#loading = false;
     }
+  }
+
+  /**
+   * Mark work that arrived from a co-author as needing a save (#149 C1).
+   *
+   * Applied peer ops used to live in memory until our OWN next edit, so a crash, a
+   * closed tab or a power cut lost them locally — the whole point of co-authoring is
+   * that everyone's work counts, and "it's still on their machine" is not persistence.
+   *
+   * Deliberately NOT routed through `#onChange`: that would also fire
+   * `#scheduleLivePublish`, echoing the state we just received straight back at the
+   * peer. This takes only the persistence half. When the data tier changed we also mark
+   * every live dataset's sources dirty, or the incremental save would write a manifest
+   * referencing `src_<opId>.parquet` sidecars that were never written for a peer's new
+   * dataset.
+   *
+   * @param {boolean} dataChanged  whether the data/collection tier was rebuilt.
+   */
+  #persistPeerWork(dataChanged) {
+    this.#dirty = true;
+    if (dataChanged) for (const ds of this.#datasets.all()) this.#sourcesDirty.add(ds.id);
+    if (this.#binding) this.#schedule();
   }
 
   #startPoll() {

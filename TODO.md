@@ -94,9 +94,13 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         contained, bigger), **keep the link** (small, recipient must have the block,
         and say so), or **unlink** (take the data, drop the association). Decide the
         default per path; a silent choice is the wrong answer for all three.
-  - [ ] **A6 (minor): `exportState` preserves `author` ("round-trips the recipe")
-        but `restoreState` discards it** — provenance lost on every library/recycle
-        round-trip, contradicting the docstring.
+  - [x] **A6: `restoreState` discarded the recipe's `author` — DONE.** `exportState`
+        preserved it precisely so a library/recycle round-trip would keep provenance,
+        and the restore then reassigned every step to whoever ran it. `ProjectLog.append`
+        now accepts an optional `body.author` (the op is still ours — fresh id + HLC —
+        only the *recorded* authorship carries through), threaded via `#append`/
+        `#addSourceOp`. Verified: restoring a block authored by "RS" keeps RS on every
+        replayed step while a new local step is still attributed to the local user.
   - [ ] **A7 (serious for qual): replacing the data under a CODED dataset leaves the
         codebook attached to rows that no longer exist.** `ws:` leaves are keyed by
         dataset id, and a replace-import keeps the id — so the CAQDAS segments (which
@@ -211,9 +215,17 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
   **C. Hygiene / decisions**
 
-  - [ ] **C1: live-P2P applied peer ops never mark `#dirty`** — they live only in
-        memory until our next local edit; a crash loses them locally (peer still has
-        them). Decide: mark dirty on apply (persist peer work) vs current behaviour.
+  - [x] **C1: live-P2P applied peer ops never marked `#dirty` — DONE.** *Decision:
+        peer work is work.* Applied ops lived in memory until our OWN next edit, so a
+        crash, a closed tab or a power cut lost a co-author's contribution locally —
+        "it's still on their machine" isn't persistence. `#persistPeerWork` now marks
+        the project dirty and schedules a save on every successful live apply.
+        Deliberately NOT routed through `#onChange`, which would also fire
+        `#scheduleLivePublish` and echo the just-received state back at the peer — this
+        takes only the persistence half. When the data tier was rebuilt it also marks
+        every live dataset's sources dirty, or the incremental save would write a
+        manifest referencing `src_<opId>.parquet` sidecars never written for a peer's
+        new dataset.
   - [ ] **C2: op-id-keyed Parquet sidecars are never pruned** (retracted sources,
         deleted datasets — `orphanDataOps` strips the `file` ref but the file stays)
         → unbounded OPFS/folder growth. Add a sweep at save time. *Related, from the

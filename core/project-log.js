@@ -130,11 +130,18 @@ export class ProjectLog {
   /**
    * Append a **local** operation: stamp a fresh HLC + id + author, add it, and return
    * it. `reads` declares the targets it depends on (the causal DAG); default none.
-   * @param {{target:string, owner:string, type:string, payload?:object, reads?:string[]}} body
+   *
+   * `body.author` overrides the stamped author — for REPLAYING a recipe whose steps
+   * someone else wrote (a library block, a restored dataset), so provenance survives the
+   * round-trip instead of being reassigned to whoever happened to run the restore
+   * (#149 A6). It is not a way to write ops as another user: the op is still ours (fresh
+   * id + HLC), only the recorded authorship is carried through.
+   *
+   * @param {{target:string, owner:string, type:string, payload?:object, reads?:string[], author?:object}} body
    * @returns {import('./op-log.js').Op}
    */
   append(body) {
-    const op = makeOp(body, { hlc: this.#hlc.tick(), author: this.#author() });
+    const op = makeOp(body, { hlc: this.#hlc.tick(), author: body.author ?? this.#author() });
     this.#ops.push(op);
     return op;
   }

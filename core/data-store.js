@@ -259,8 +259,10 @@ export class DataStore {
    * collide and disjoint ones auto-merge.
    * @returns {import('./op-log.js').Op}
    */
-  #append(type, payload, targetSuffix, reads = []) {
-    return this.#log.append({ target: this.#prefix + targetSuffix, owner: 'core', type, payload, reads });
+  #append(type, payload, targetSuffix, reads = [], author) {
+    const body = { target: this.#prefix + targetSuffix, owner: 'core', type, payload, reads };
+    if (author) body.author = author; // replaying someone else's recipe step (#149 A6)
+    return this.#log.append(body);
   }
 
   /** Retract (log-native delete) a data op of this dataset by id — the fold then
@@ -347,14 +349,14 @@ export class DataStore {
    * content-addressed asset (and the table name to a peer-local map) is Layer 4/7.
    * @returns {import('./op-log.js').Op}
    */
-  #addSourceOp(type, src, { joinKey, aliases, joinType } = {}) {
+  #addSourceOp(type, src, { joinKey, aliases, joinType, author } = {}) {
     const payload = { src };
     if (type === 'join') {
       payload.joinKey = joinKey;
       payload.aliases = aliases ?? [];
       payload.joinType = joinType ?? 'left';
     }
-    return this.#append(type, payload, `source:${newOpId()}`);
+    return this.#append(type, payload, `source:${newOpId()}`, [], author);
   }
 
   /**
@@ -1667,10 +1669,13 @@ export class DataStore {
         const created = o.src.wide
           ? await this.#restoreWideSource(o.src)
           : await this.#createSource({ variables: o.src.meta, parquet: o.src.parquet, source: o.src.label });
-        this.#addSourceOp(o.type, created, { joinKey: o.joinKey, aliases: o.aliases, joinType: o.joinType });
+        this.#addSourceOp(o.type, created, { joinKey: o.joinKey, aliases: o.aliases, joinType: o.joinType, author: o.author });
       } else {
-        const { type, author, ...payload } = o; // eslint-disable-line no-unused-vars
-        this.#append(type, payload, this.#transformTarget(o));
+        // Carry the recipe's recorded author through (#149 A6) — exportState preserves
+        // it precisely so a library/recycle round-trip doesn't reassign every step to
+        // whoever ran the restore.
+        const { type, author, ...payload } = o;
+        this.#append(type, payload, this.#transformTarget(o), [], author);
       }
     }
     await this.rederive('restore');
