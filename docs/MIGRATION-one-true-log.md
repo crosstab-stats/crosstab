@@ -154,10 +154,28 @@ the merge work** so merge treats undo/redo as ordinary mergeable ops.
 7. **Tests** — un-skip/rewrite folder-sync; add flat-log + ws-op-merge tests.
 8. **Two-window verification** (the user's domain) — incl. CAQDAS codebook merge.
 
-Status: encapsulation + analysis-tier done; **Step 0 (undo/redo → append-only ops) DONE
-+ browser-verified** (undo now persists across reload — fixed a real drop-on-save bug);
-**Step 1 (flat `manifest.log` + load routing) DONE + browser-verified single-peer** (all
-committed). Step 2 (core merge → `ProjectLog.merge`) next.
+Status (2026-08-02) — the full migration is landed through the transport layer:
+- **Step 0** undo/redo → append-only ops — DONE + browser-verified (undo persists across
+  reload, fixing a real drop-on-save bug).
+- **Step 1** flat `manifest.log` + load routing — DONE + browser-verified single-peer.
+- **Step A** workspace/plugin tier onto the log (`setWorkspace` ops, write-through fold
+  cache) — DONE + browser-verified (a codebook blob round-trips as a `ws:` op).
+- **Steps B–C** merge + transports on op identity — DONE, headless-green (161 pass, 0
+  skip): `mergeProjects` (core three-way + ws blob-merge with deterministic result ops),
+  `folder-sync`/`live-protocol` rewritten base-free, `readBase`/`writeBase`/
+  `project.base.json` deleted, `mergeManifests`/`datasetToOps`/`opsToDataset` deleted.
+  Convergence, CAQDAS union, conflict-resolution, and fixpoint all covered by headless tests.
+
+**Remaining (deferred, both noted in code + here):**
+- **`project-bundle.js` (`.crosstab`)** still on the old `{sources,transforms}` shape —
+  export/import breaks until migrated to the flat log. Not needed for the two-window test.
+- **Live P2P gap-fill** (`project-sync` ~1226–1322, `gap-fill.js`) still reads the old
+  bundle shape — inert unless *live* co-authoring is started; folder sync (the two-window
+  path) needs no gap-fill (the OS mirrors Parquet by op-id-keyed sidecar).
+
+**Two-window test = the user's run** (needs a real picked folder / gesture, which
+automation can't drive). Procedure: two windows → *File ▸ Move project to a folder…* (A)
+then *Open project from a folder…* on the same folder (B); edit on both; the poll merges.
 
 ### Layer 6 — remaining consumers still on the old shape
 
