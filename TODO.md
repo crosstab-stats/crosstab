@@ -170,14 +170,21 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         now returns the base actually in the table (read back off a restored source
         via `min(__ct_rid)`), and every source-materialising path feeds it to
         `#noteRowidBase`, which advances `#sourceSeq` past it.
-  - [ ] **B3 (serious): a failed `rawRestore` in `loadBundle` drops a dataset's ops
-        from the next save.** `receiveOps` runs only after ALL sources materialise;
-        a mid-restore throw is caught, the dataset dropped, and its data ops never
-        enter the in-memory log (membership survives). The next OPFS save (blind
-        overwrite, no merge) writes a manifest permanently missing them. The live-P2P
-        byte-less path (waiting on gap-fill) sits in the same window. Fix: receive
-        the raw envelopes into the log even when materialisation fails (byte-less),
-        so saves keep them.
+  - [x] **B3 (serious): a failed `rawRestore` dropped a dataset's ops from the next
+        save — DONE.** `receiveOps` ran only after ALL sources materialised, so one
+        unreadable Parquet threw, the dataset was dropped, and its data ops never
+        reached the in-memory log — while its collection membership survived. The next
+        save is a blind overwrite, not a merge, so it wrote a manifest permanently
+        missing that dataset's entire history. *Fixed:* materialisation is now guarded
+        **per source op** — a failure lands the envelope byte-less (bytes stripped,
+        `file` ref kept so it can heal) instead of aborting, and `receiveOps` always
+        runs before the re-derive, so the history is durable even if the re-derive
+        itself throws. B1's `missingSources` tolerance does the rest: the pipeline
+        replays without the dead source and names it. Verified by corrupting a
+        `src_<opId>.parquet` on disk and reopening: the dataset stays, reports
+        `missingSources: [{label: 'A'}]`, keeps all three steps applied, and after a
+        further edit the re-saved manifest still carries every op. The live-P2P
+        byte-less window (ops ahead of their gap-filled bytes) rides the same path.
   - [ ] **B4: deterministic workspace merge-op ids can violate op immutability**
         (`collab-sync.js` — id = hash(target+payload) only). If a later merge of the
         same leaf resolves to a previously-emitted value (reachable via

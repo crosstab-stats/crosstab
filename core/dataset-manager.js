@@ -484,9 +484,11 @@ export class DatasetManager {
       try {
         await ds.rawRestore(byId.get(String(id)) ?? []); // materialise sources + fold, ids preserved
       } catch (err) {
-        // A dataset whose sources didn't materialise (e.g. gap-fill bytes not yet here)
-        // must NOT linger with no tables — drop it; it stays in the collection membership
-        // and re-materialises on the next apply once its bytes arrive.
+        // Last resort only: rawRestore now survives a source that won't materialise
+        // (it lands byte-less and rederive skips it — #149 B3), so reaching here means
+        // something worse. Drop the instance; the dataset stays in the collection
+        // membership and re-materialises on the next apply once its bytes arrive. Its
+        // OPS are already in the log by this point, so the next save can't lose them.
         console.error('[dataset] restore failed; dropping until its data arrives:', id, err);
         into.delete(id);
         try { await ds.dispose(); } catch { /* best-effort */ }

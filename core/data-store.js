@@ -1586,21 +1586,38 @@ export class DataStore {
   async rawRestore(ops) {
     await this.#resetDataHard();
     const restored = [];
+    const failed = [];
     for (const op of Array.isArray(ops) ? ops : []) {
-      // A byte-less source op is a RETRACTED source (its bytes were dropped at save —
-      // see rawExport); keep its envelope verbatim (the fold drops it) but don't try to
-      // materialise a table it has no Parquet for.
+      // A byte-less source op is one the fold had already dropped (superseded by a
+      // replace, retracted, or purged) — its bytes weren't saved. Keep the envelope
+      // verbatim; don't try to materialise a table it has no Parquet for.
       if (SOURCE_OPS.has(op.type) && op.payload.src?.parquet) {
         const s = op.payload.src;
-        const created = s.wide
-          ? await this.#restoreWideSource(s)
-          : await this.#createSource({ variables: s.meta, parquet: s.parquet, source: s.label });
-        restored.push({ ...op, payload: { ...op.payload, src: created } });
+        try {
+          const created = s.wide
+            ? await this.#restoreWideSource(s)
+            : await this.#createSource({ variables: s.meta, parquet: s.parquet, source: s.label });
+          restored.push({ ...op, payload: { ...op.payload, src: created } });
+          continue;
+        } catch (err) {
+          // NEVER drop the envelope because its bytes wouldn't materialise (#149 B3).
+          // The ops are this dataset's history; if they don't reach the log, the next
+          // save — a blind overwrite, not a merge — writes a manifest permanently
+          // missing them, and the work is gone for good. Land it byte-less instead:
+          // rederive skips an unmaterialised source and reports it on `missingSources`,
+          // so the loss is visible and recoverable (re-open, gap-fill) rather than
+          // silent and permanent.
+          const { parquet, table, file, ...src } = s; // eslint-disable-line no-unused-vars
+          restored.push({ ...op, payload: { ...op.payload, src } });
+          failed.push({ id: op.id, label: s.label ?? null, error: String(err?.message || err) });
+        }
       } else {
         restored.push(op);
       }
     }
+    // Ops first, always — even if the re-derive below throws, the history is durable.
     this.#log.receiveOps(restored);
+    if (failed.length) console.error(`[dataset ${this.#id}] ${failed.length} source(s) failed to materialise; kept byte-less`, failed);
     await this.rederive('restore');
   }
 
