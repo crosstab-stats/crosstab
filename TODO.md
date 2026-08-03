@@ -226,6 +226,41 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         Undo as "undo MY last action." Decide and document (option: scope undo to
         ops by this author).
 
+- [ ] **#150 — Generalise the asset store beyond "media" (owner-tagged, plugin-
+      enumerable). AFTER the #149 bugfix gate.** #149 A5 moved asset BYTES into the
+      project and made the index a log tier, and the byte path is already generic:
+      `media.load`/`media.put` are dispatched to **any** activated plugin with no
+      gating (`plugin-broker.js`), and the `media: true` manifest flag only widens the
+      sandbox CSP so an iframe can *render* a blob — it does not gate storage. A
+      spatial plugin can already store a shapefile under the default `strict` cage,
+      because reading a Blob's bytes isn't subject to CSP. What is NOT generic:
+
+  - [ ] **Vocabulary.** `MediaStore`, `services.media`, a `medium` metadata field, a
+        CSP capability named `media`. A boundary shapefile is not media. The on-disk
+        directory and the op types already say `asset`; only the JS-facing names are
+        inconsistent. Renaming is a **plugin API break** — batch it with the rest.
+  - [ ] **No owner tag.** Assets are one flat content-addressed pool, unlike workspace
+        blobs which are owner-namespaced for exactly this reason. Dedup across plugins
+        is a genuine feature and must survive, so the owner belongs on the *reference*
+        (who points at it), not on the bytes.
+  - [ ] **Plugins can't enumerate.** `list()`/`missing()` are host-side; the broker
+        exposes only `load`/`put`. A plugin managing reusable boundary sets needs to
+        list its own assets.
+  - [ ] **No reference tracking → no GC.** `removeAsset` is manual and nothing knows
+        who still points at an asset. CAQDAS puts refs in a dataset string column;
+        spatial would put them in a workspace blob; nothing scans either, so a deleted
+        boundary set leaks its bytes.
+
+      **Design together with [[first-class-plugin-data]]** (reusable boundary sets as
+      building blocks) — an owner-namespaced, enumerable asset store is most of what
+      that item needs, so designing them separately would mean doing it twice.
+
+      *Sequencing (checked):* none of this blocks a #149 item. The one real contact
+      point is **C2's sweep** — key it on the LOG (delete files no live op references),
+      which is owner-agnostic and stays correct after #150 adds ownership. The other
+      contact is cosmetic: A5's remaining gap-fill work calls `MediaStore.missing()`,
+      so a later rename touches it, which is churn rather than rework.
+
 - [x] **Workspace ownership model → "read the world, write your own" (#145) — DONE.**
       *Decision (committed):* **activation = full trust**, so we stop pretending
       plugin workspace state is confidential. A dataset is already world-readable to
