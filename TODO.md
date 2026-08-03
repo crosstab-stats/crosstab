@@ -96,70 +96,29 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         **Still open:** live-P2P gap-fill for assets (`MediaStore.missing()` is the
         hook), and a one-time cleanup of the now-stale `media-assets/` and `recycle/`
         OPFS roots left over from the old stores.
-  - [ ] **A9: every project-EXPORT path must ask what to do about linked building
-        blocks.** The library (`datasets/` root) stays deliberately cross-project —
-        blocks are meant to be reused — so a dataset carrying a `libraryLink` is the
-        one legitimate reference out of the project. That's fine while the project
-        stays on this machine and a data-loss trap the moment it leaves: export a
-        bundle, sync to a folder, or hand off to a peer and the link points at a
-        block the recipient hasn't got. Every export path (`.crosstab` bundle,
-        folder-backed project, live co-authoring hand-off) should detect linked
-        datasets and prompt: **embed** the block's data into the export (self-
-        contained, bigger), **keep the link** (small, recipient must have the block,
-        and say so), or **unlink** (take the data, drop the association). Decide the
-        default per path; a silent choice is the wrong answer for all three.
-  - [x] **A6: `restoreState` discarded the recipe's `author` — DONE.** `exportState`
-        preserved it precisely so a library/recycle round-trip would keep provenance,
-        and the restore then reassigned every step to whoever ran it. `ProjectLog.append`
-        now accepts an optional `body.author` (the op is still ours — fresh id + HLC —
-        only the *recorded* authorship carries through), threaded via `#append`/
-        `#addSourceOp`. Verified: restoring a block authored by "RS" keeps RS on every
-        replayed step while a new local step is still attributed to the local user.
-  - [x] **A7: stale codebook after an in-place replace — CLOSED, won't happen.**
-        A replace kept the dataset id while destroying the rows under it, so a CAQDAS
-        codebook stayed attached with segments anchored to `__ct_rid` values that no
-        longer existed. *Resolved by removing the cause:* there is no in-place replace
-        of a live dataset any more (see A8). The old rows stay in a real dataset, so its
-        coding stays valid.
-  - [ ] **A8: a destructive replace-import has no DURABLE recovery, and the recycle
-        bin it should use is a parallel store outside the log.** Two halves:
-        *(a) The cliff.* Since B1 a replace is undoable — the barrier lifts and the
-        prior pipeline returns — but only in-session: `#pruneDeadSources` keeps one
-        generation, and `rawExport` writes no Parquet for a superseded source, so
-        after a reload undo yields the old pipeline as a shell (`missingSources`, 0
-        rows). The *ops* are safe forever; only the bytes go. A menu option shouldn't
-        have an invisible irreversible edge — bin the outgoing data first, then load
-        the new data under the same dataset id/name.
-        **Status: (b) DONE — the bin is now a projection over the log.** Deleting moves
-        the DataStore to `#binned` and appends `removeDataset`; nothing is copied, the
-        DuckDB tables stay up, and restore is an appended `addDataset` plus a Map move.
-        The `BIN` fold is the whole index (deletion time comes from the op's HLC wall
-        clock), `binnedStores()` serialise through the normal save path so the bin is
-        durable *inside the project*, `loadBundle` rebuilds binned datasets exactly like
-        live ones, and `purgeDataset` is the point of no return. The `/recycle`
-        DatasetStore instance is gone, along with `addFromState`, `rehomeDataset`, the
-        `projectScope` retag dance, and the `replaceHistory` escape hatch A4 needed.
-        **(a) still open**: a replace-import should bin the outgoing data — now cheap,
-        since binning costs nothing. **Not yet done**: the sidecar sweep (C2) that
-        should delete a purged dataset's Parquet files, and media (A5) still lives in
-        its own OPFS root.
-        *Why (b) wasn't a one-line change: the bin wasn't a status flag.* It was a
-        **second physical copy in a separate OPFS root** (`/recycle`, sibling of
-        `/projects`), written by `DatasetStore.save` as its own `manifest.json` +
-        `source_N.parquet` per source, associated to the project only by a
-        `projectScope` string in the bin's own catalog. So a binned dataset does not
-        travel with the project (bundle export, folder sync, live peers never see
-        it), doesn't survive moving the project to another machine, collides across
-        unsaved projects (scope `'unsaved'`), and is capped at 20 per project.
-        Meanwhile the log ALREADY expresses deletion properly — `removeDataset` is an
-        op, the data ops are kept as orphans, and the op-id-keyed sidecars are never
-        pruned (C2), so the project usually still holds the bytes; `orphanDataOps`
-        merely strips the `file` ref. Proposal: make **binned/live a derived state of
-        the one true log** — stop stripping `file` for non-live sources, keep the
-        sidecar, and let the bin list be a projection over `removeDataset` ops with
-        bytes retained. Then restore moves no bytes, replace-binning is nearly free,
-        the bin travels with the project and merges, and *purge* becomes the real
-        sidecar sweep C2 asks for. Retire the `/recycle` DatasetStore instance.
+  - [x] **A9: project export now asks about linked building blocks — DONE (bundle
+        path).** *Finding that reshaped it:* the three options in the original plan
+        (embed / keep link / unlink) collapse to two, because a bundle already carries
+        every dataset's own sources — the DATA travels either way, so there is no
+        embed-vs-reference size trade-off. All that's at stake is the `libraryLink`
+        badge and its Pull-update button. *And that link is local by construction:* a
+        block's id is a `crypto.randomUUID()` minted on whichever machine first saved
+        it, and there is **no mechanism to share a block between machines at all**, so a
+        recipient's library will never hold that id — not even if they independently
+        imported the identical file. Keeping the link is only useful for a copy coming
+        back to the same machine. So: `.crosstab` export detects linked datasets and
+        asks Keep / **Drop (default)**, saying plainly that the link won't resolve for
+        anyone else. Drop nulls `libraryLink` in the exported `datasetMeta`.
+  - [ ] **A9b: the same prompt for the folder + live paths.** A folder-backed project
+        and a live hand-off leak the same dangling link, but they're *continuously*
+        synced — a one-shot modal is the wrong shape. Wants a project-level setting
+        ("share links to my building blocks: no") rather than a prompt per save.
+  - [ ] **A9c (design): building-block ids aren't portable.** The deeper issue A9
+        surfaced. Blocks are addressable only by a locally-minted random UUID, so a
+        shared block is *impossible*, not merely unsupported — two people who import the
+        same file get different ids. If cross-machine blocks should ever work, ids need
+        to be content- or origin-derived and blocks need an export/import path. Belongs
+        with [[first-class-plugin-data]] and #150.
 
   **B. Bugs introduced/exposed by the rewrite**
 

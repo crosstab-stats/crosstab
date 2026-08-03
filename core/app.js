@@ -52,6 +52,54 @@ import { MediaStore, createMediaService } from './media-store.js';
 import { makeZip, readZipEntries } from './zip.js';
 
 /**
+ * Ask what to do about datasets linked to a **building block** when a project leaves
+ * this machine (#149 A9).
+ *
+ * The choice is narrower than it first looks, and worth stating plainly in the dialog:
+ * a bundle always carries every dataset's own sources, so the DATA travels either way —
+ * there is no "embed vs reference" size trade-off. All that's at stake is the
+ * `libraryLink` badge and its Pull-update button.
+ *
+ * And that link is local by construction. A block's id is a `crypto.randomUUID()` minted
+ * on whichever machine first saved it, and there is no mechanism to share a block
+ * between machines at all, so a recipient's library will not contain that id — not even
+ * if they independently imported the identical file. Keeping the link is therefore only
+ * useful for a copy coming back to THIS machine (an archive you re-import yourself).
+ *
+ * @param {string[]} names  linked dataset names, for the prompt.
+ * @returns {Promise<boolean|null>} true = keep links, false = drop them, null = cancel.
+ */
+function askLinkedBlocks(names) {
+  const list = names.length === 1 ? `“${names[0]}”` : `${names.length} datasets`;
+  return new Promise((resolve) => {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'ct-dialog';
+    dialog.innerHTML = `
+      <form method="dialog" class="ct-dialog__form">
+        <h2 class="ct-dialog__title">Linked building blocks</h2>
+        <p class="ct-dialog__hint">${list} ${names.length === 1 ? 'is' : 'are'} linked to a
+          building block in your library. The data is included in the export either way —
+          this only affects the “linked” badge and its update button.</p>
+        <p class="ct-dialog__hint">Building blocks live on one machine, so the link
+          <strong>won’t resolve for anyone else</strong>. Keep it only if this copy is
+          coming back to this computer.</p>
+        <menu class="ct-dialog__buttons">
+          <button value="cancel" type="submit">Cancel</button>
+          <button value="keep" type="submit">Keep the links</button>
+          <button value="drop" type="submit" class="ct-dialog__primary">Drop the links</button>
+        </menu>
+      </form>`;
+    dialog.addEventListener('close', () => {
+      const v = dialog.returnValue;
+      dialog.remove();
+      resolve(v === 'drop' ? false : v === 'keep' ? true : null);
+    });
+    document.body.append(dialog);
+    dialog.showModal();
+  });
+}
+
+/**
  * URLs of the built-in plugins to load at startup. These load through the exact
  * same sandboxed-iframe path as any third-party plugin (see loader.js) — there
  * is no privileged loader. Adding a built-in analysis is just adding an entry
@@ -659,6 +707,23 @@ export async function boot(mounts) {
         for (const a of await mediaStore.list({ present: true })) {
           const got = await mediaStore.get(a.id);
           if (got?.bytes) assets.push({ id: a.id, bytes: got.bytes });
+        }
+        // Linked building blocks (#149 A9). A block's id is a random UUID minted on the
+        // machine that first saved it, and there is no way to share a block between
+        // machines at all — so a `libraryLink` is meaningless to anyone but its author,
+        // and stale even for them once the block is gone. The DATA is in the bundle
+        // either way (the faithful-clone tier carries every dataset's sources), so this
+        // is purely about whether the recipient sees a dangling "linked to v3" badge and
+        // a Pull-update button that can't work. Default: drop it.
+        const linked = datasets.all().filter((d) => d.libraryLink);
+        if (linked.length) {
+          const keep = await askLinkedBlocks(linked.map((d) => d.name));
+          if (keep === null) return; // cancelled
+          if (!keep) {
+            snapshot.datasetMeta = Object.fromEntries(
+              Object.entries(snapshot.datasetMeta ?? {}).map(([k, v]) => [k, { ...v, libraryLink: null }]),
+            );
+          }
         }
         const blob = await exportProjectBundle({ datasets, bundle: snapshot, projectName: name, plugins: activePlugins, collab, assets });
         downloadBlob(blob, `${slug(name) || 'crosstab-project'}.crosstab`);
