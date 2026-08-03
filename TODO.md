@@ -62,24 +62,31 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
   **B. Bugs introduced/exposed by the rewrite**
 
-  - [ ] **B1 (serious): undo past a replace-import bricks the dataset.**
-        `#resetData` retracts the old steps (good) but `#dropDuckDB` physically
-        drops their tables/bytes; the retracts are still undoable. Import-replace →
-        Ctrl+Z ×2 appends `undo{retract(S1)}`, reviving a byte-less source →
-        `rederive` throws, and keeps throwing; `rawExport` then persists the revived
-        source byte-less (data loss on save). Old code cleared the log on replace so
-        undo couldn't reach back; tombstones newly expose this. Fix options: make
-        replace-generated retracts non-undoable, or keep dropped bytes until a
-        compaction/save boundary.
-  - [ ] **B2 (serious, silent wrong data): row-id collision after reload with
-        retract gaps.** `rawRestore` restarts `#sourceSeq` at 0 while restored
-        Parquet keeps row ids baked from the ORIGINAL seq; nothing advances the seq
-        past restored bases. Repro: replace-import in session 1 (live source at rid
-        base 2e9, seq-1 retracted) → save → reload (restored as seq 1) → append a
-        file (seq 2 → base 2e9 again) → duplicate `__ct_rid` across the UNION; a
-        `setCell` CASE then edits TWO rows. Retract gaps used to be rare; #148 makes
-        them routine (every replace). Fix: restore `#sourceSeq`/rid base to
-        max(existing baked bases)+1.
+  - [x] **B1 (serious): undo past a replace-import bricks the dataset — DONE.**
+        `#resetData` retracted the old steps but `#dropDuckDB` physically dropped
+        their bytes, and the retracts stayed undoable: import-replace → Ctrl+Z ×2
+        revived a byte-less source, `rederive` threw, and kept throwing.
+        *Fixed by deriving the reset instead of logging it.* A `load` already
+        restarts the projection, so `foldDataOps` now treats the last live `load` as
+        a **replace barrier** and drops what precedes it (fixed by HLC order, so a
+        reorder moves steps but never resurrects them). A replace therefore appends
+        no ops at all — nothing is retracted, so one undo of the `load` lifts the
+        barrier and the whole previous pipeline returns. `#pruneDeadSources` frees
+        only what is *already* behind a barrier, so exactly one generation stays
+        materialised for that undo. And `rederive` now **skips** a source op whose
+        bytes this peer lacks (reporting it on `missingSources`) instead of throwing
+        — a durable op can no longer poison every later fold. That last part is also
+        the landing pad for B3 and for live gap-fill's byte-less window.
+  - [x] **B2 (serious, silent wrong data): row-id collision after reload — DONE.**
+        Restores restarted `#sourceSeq` at 0 while restored Parquet kept row ids
+        baked from the ORIGINAL seq, so with a gap in the log (routine after #148 —
+        every replace leaves a byte-less source that consumes no seq on restore) the
+        next appended file was handed a live range: duplicate `__ct_rid` across the
+        UNION, and a `setCell` CASE editing TWO rows. Verified in-browser both ways
+        (fix off → 2 rows changed by one edit; fix on → 1). *Fixed:* `#ensureRowId`
+        now returns the base actually in the table (read back off a restored source
+        via `min(__ct_rid)`), and every source-materialising path feeds it to
+        `#noteRowidBase`, which advances `#sourceSeq` past it.
   - [ ] **B3 (serious): a failed `rawRestore` in `loadBundle` drops a dataset's ops
         from the next save.** `receiveOps` runs only after ALL sources materialise;
         a mid-restore throw is caught, the dataset dropped, and its data ops never
@@ -111,7 +118,11 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         them). Decide: mark dirty on apply (persist peer work) vs current behaviour.
   - [ ] **C2: op-id-keyed Parquet sidecars are never pruned** (retracted sources,
         deleted datasets — `orphanDataOps` strips the `file` ref but the file stays)
-        → unbounded OPFS/folder growth. Add a sweep at save time.
+        → unbounded OPFS/folder growth. Add a sweep at save time. *Related, from the
+        B1 fix:* a replace now keeps one superseded generation materialised in
+        DuckDB for the session (that's what makes its undo work) — bounded, but the
+        same save-time sweep is the natural place to reclaim it earlier if a
+        repeated-reimport session ever proves heavy.
   - [ ] **C3: `countDatasets` (project-store) ignores liveness** — an undone
         `addDataset` still counts in the catalog. Cosmetic; use the liveness fold.
   - [ ] **C4: merger dispatch is by bare wsId** (`mergers[wsIdOf(key)] ??

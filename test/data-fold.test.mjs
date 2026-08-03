@@ -6,7 +6,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { foldDataOps, liveStepIds } from '../core/data-fold.js';
+import { foldDataOps, liveStepIds, barrierDroppedIds } from '../core/data-fold.js';
 
 // A minimal op (already HLC-ordered by the caller; order here = array order).
 const op = (id, type, payload = {}) => ({ id, type, payload });
@@ -81,4 +81,74 @@ test('retract of a reordered step: gone from the result even though the reorder 
 test('empty / nullish input', () => {
   assert.deepEqual(foldDataOps([]), []);
   assert.deepEqual(foldDataOps(undefined), []);
+  assert.deepEqual(barrierDroppedIds(undefined), []);
+});
+
+// --- the replace barrier (#149 B1) -----------------------------------------------
+// A `load` restarts the projection, so everything before it is dead. Deriving that
+// from the load itself (instead of retracting the prior steps at import time) makes a
+// replace-import ONE undoable action, which is what stopped Ctrl+Z bricking a dataset.
+
+test('a later load supersedes everything before it (replace barrier)', () => {
+  const ops = [
+    op('s1', 'load'),
+    op('t1', 'computeVar', { name: 'bmi' }),
+    op('s2', 'load'), // replace-import
+  ];
+  assert.deepEqual(liveStepIds(ops), ['s2']);
+  assert.deepEqual(barrierDroppedIds(ops), ['s1', 't1']);
+});
+
+test('undoing the replacing load brings the whole previous pipeline back', () => {
+  const ops = [
+    op('s1', 'load'),
+    op('t1', 'computeVar', { name: 'bmi' }),
+    op('s2', 'load'),
+    op('u', 'undo', { opId: 's2' }), // ONE Ctrl+Z
+  ];
+  assert.deepEqual(liveStepIds(ops), ['s1', 't1']);
+  assert.deepEqual(barrierDroppedIds(ops), []); // nothing is behind a barrier now
+});
+
+test('steps after the replacing load survive it; appends/joins are not barriers', () => {
+  const ops = [
+    op('s1', 'load'),
+    op('t1', 'computeVar'),
+    op('s2', 'load'),
+    op('s3', 'append'),
+    op('t2', 'recodeVar'),
+    op('s4', 'join'),
+  ];
+  assert.deepEqual(liveStepIds(ops), ['s2', 's3', 't2', 's4']);
+});
+
+test('the barrier is fixed by HLC order — a reorder cannot revive a superseded step', () => {
+  const ops = [
+    op('s1', 'load'),
+    op('t1', 'computeVar'),
+    op('s2', 'load'),
+    op('ro', 'reorder', { order: ['s1', 't1', 's2'] }), // names the dead ops explicitly
+  ];
+  assert.deepEqual(liveStepIds(ops), ['s2']); // reorder moves things; it never resurrects them
+});
+
+test('an undone load is not a barrier (only live ops bound the replay)', () => {
+  const ops = [
+    op('s1', 'load'),
+    op('t1', 'computeVar'),
+    op('s2', 'load'),
+    op('u', 'undo', { opId: 's2' }),
+    op('r', 'redo', { opId: 's2' }), // …and back again
+  ];
+  assert.deepEqual(liveStepIds(ops), ['s2']);
+});
+
+test('a retracted load stops acting as a barrier', () => {
+  const ops = [
+    op('s1', 'load'),
+    op('t1', 'computeVar'),
+    op('s2', 'load'),
+    op('r', 'retract', { opId: 's2' }),
+  ];
+  assert.deepEqual(liveStepIds(ops), ['s1', 't1']);
 });

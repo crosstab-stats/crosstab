@@ -46,7 +46,7 @@
 import { CoreEvents } from './event-bus.js';
 import { quoteIdent } from './duckdb-manager.js';
 import { newOpId } from './merge.js';
-import { foldDataOps, flattenStep } from './data-fold.js';
+import { foldDataOps, flattenStep, barrierDroppedIds } from './data-fold.js';
 import { ProjectLog } from './project-log.js';
 
 /** Column auto-added when stacking files, tagging each row with its origin so a
@@ -159,7 +159,9 @@ export class DataStore {
   #log;
 
   /** Monotonic source-table counter (never reused), so an undone source op leaves
-   * no naming/row-id collision for a later one. Also the row-id namespace. */
+   * no naming/row-id collision for a later one. Also the row-id namespace. Restarts at
+   * 0 on a fresh instance, so every restore path pushes it back past the ids already
+   * baked into the sources it materialises — see {@link DataStore#noteRowidBase}. */
   #sourceSeq = 0;
 
   /** Every source table this dataset has materialised, for reliable cleanup
@@ -169,6 +171,13 @@ export class DataStore {
   /** Every registered OPFS Parquet file backing a wide source, for the same
    * reliable cleanup — these are files, not tables. @type {Set<string>} */
   #wideFiles = new Set();
+
+  /** DERIVED: source ops the last {@link DataStore#rederive} had to skip because this
+   * peer holds no bytes for them (undone past a released generation, restored without
+   * them, or awaiting gap-fill). Surfaced on the DATA_CHANGED summary so the UI can say
+   * the view is incomplete rather than silently showing short data.
+   * @type {Array<{id: string, label: string|null}>} */
+  #missingSources = [];
 
   /**
    * DERIVED: variable metadata in display order — the synchronous cache the UI
@@ -309,7 +318,7 @@ export class DataStore {
    */
   async loadDataset({ variables, columns, parquet, mode = 'replace', source, joinKey, aliases, joinType }) {
     const combine = this.#hasData() && (mode === 'append' || mode === 'join') ? mode : 'replace';
-    if (combine === 'replace') await this.#resetData(); // retract prior steps + drop tables
+    if (combine === 'replace') await this.#pruneDeadSources(); // the new `load` IS the reset
     const src = await this.#createSource({ variables, columns, parquet, source });
     this.#addSourceOp(combine === 'replace' ? 'load' : combine === 'join' ? 'join' : 'append', src, {
       joinKey,
@@ -336,13 +345,36 @@ export class DataStore {
     return this.#append(type, payload, `source:${newOpId()}`);
   }
 
-  /** Reset the dataset for a `replace`: retract every live step (so the reset
-   * survives a merge — deletion is an explicit op) and drop this dataset's DuckDB
-   * tables/files. The shared log is otherwise untouched (other datasets, other tiers).
+  /**
+   * Free the DuckDB state of sources the fold has already dropped — everything behind
+   * the *current* replace barrier ({@link barrierDroppedIds}). Called just before a new
+   * `replace` import, which is what makes the retention bounded: the generation being
+   * replaced right now stays materialised (so one Ctrl+Z genuinely brings it back —
+   * undoing the new `load` lifts the barrier), while the generation before it, which
+   * only a second undo could reach, is released.
+   *
+   * A replace therefore appends **no** ops at all: the new `load` *is* the reset (see
+   * {@link foldDataOps}). Nothing is retracted, so nothing has to be un-retracted, and
+   * there is no merge-unsafe physical removal.
+   *
+   * Bytes freed here are gone for the session; if a deep undo chain does revive such a
+   * source, {@link DataStore#rederive} reports it as missing instead of throwing.
    */
-  async #resetData() {
-    for (const step of this.#steps()) this.#retract(step.id);
-    await this.#dropDuckDB();
+  async #pruneDeadSources() {
+    const dropped = new Set(barrierDroppedIds(this.#dataSlice()));
+    if (!dropped.size) return;
+    for (const op of this.#dataSlice()) {
+      if (!dropped.has(op.id) || !SOURCE_OPS.has(op.type)) continue;
+      const src = op.payload?.src;
+      if (!src) continue;
+      if (src.wide) {
+        if (src.file && this.#wideFiles.delete(src.file)) {
+          try { await this.#duckdb.dropRegisteredFile(src.file, { removeFromOpfs: true }); } catch { /* best-effort */ }
+        }
+      } else if (src.table && this.#sourceTables.delete(src.table)) {
+        await this.#duckdb.query(`DROP TABLE IF EXISTS ${quoteIdent(src.table)}`);
+      }
+    }
   }
 
   /**
@@ -356,7 +388,7 @@ export class DataStore {
    * @param {{selectSql: string, variables: VariableMeta[], source?: string}} arg
    */
   async loadFromSql({ selectSql, variables, source }) {
-    await this.#resetData();
+    await this.#pruneDeadSources();
     const src = await this.#createSourceFromSql(selectSql, variables, source);
     this.#addSourceOp('load', src);
     await this.rederive('replace');
@@ -416,7 +448,7 @@ export class DataStore {
    */
   async loadStreaming({ mode = 'replace', source, ingest }) {
     const combine = this.#hasData() && mode === 'append' ? 'append' : 'replace';
-    if (combine === 'replace') await this.#resetData();
+    if (combine === 'replace') await this.#pruneDeadSources();
 
     const seq = ++this.#sourceSeq;
     const table = `${this.#sourcePrefix}${seq}`;
@@ -500,7 +532,7 @@ export class DataStore {
       throw new Error('loadWide: variables (the file catalog) are required');
     }
     const combine = this.#hasData() && mode === 'append' ? 'append' : 'replace';
-    if (combine === 'replace') await this.#resetData();
+    if (combine === 'replace') await this.#pruneDeadSources();
 
     const seq = ++this.#sourceSeq;
     const base = seq * ROWID_STRIDE;
@@ -633,7 +665,7 @@ export class DataStore {
       await this.#duckdb.replaceTable(table, coerced);
     }
     this.#sourceTables.add(table);
-    await this.#ensureRowId(table, seq);
+    this.#noteRowidBase(await this.#ensureRowId(table, seq));
     return { table, meta: variables.map((m) => ({ ...m })), label: source ?? null };
   }
 
@@ -651,7 +683,7 @@ export class DataStore {
     const table = `${this.#sourcePrefix}${seq}`;
     await this.#duckdb.query(`CREATE OR REPLACE TABLE ${quoteIdent(table)} AS ${selectSql}`);
     this.#sourceTables.add(table);
-    await this.#ensureRowId(table, seq);
+    this.#noteRowidBase(await this.#ensureRowId(table, seq));
     return { table, meta: variables.map((m) => ({ ...m })), label: source ?? null };
   }
 
@@ -663,10 +695,12 @@ export class DataStore {
     const file = `${this.#sourcePrefix}${seq}.parquet`;
     await this.#duckdb.registerParquetFile(file, src.parquet);
     this.#wideFiles.add(file);
+    const rowidBase = src.rowidBase ?? seq * ROWID_STRIDE;
+    this.#noteRowidBase(rowidBase); // the saved base may be ahead of a restart-from-0 seq
     return {
       wide: true,
       file,
-      rowidBase: src.rowidBase ?? seq * ROWID_STRIDE,
+      rowidBase,
       meta: src.meta.map((m) => ({ ...m })),
       label: src.label ?? null,
     };
@@ -680,11 +714,21 @@ export class DataStore {
    *
    * @param {string} table - The source table name.
    * @param {number} seq - The source's sequence number (namespaces the id range).
+   * @returns {Promise<number>} The row-id base actually in the table — `seq *
+   *   ROWID_STRIDE` when freshly baked, or the *original* base read back off a
+   *   restored source, which is what {@link DataStore#noteRowidBase} needs.
    */
   async #ensureRowId(table, seq) {
     const desc = await this.#duckdb.query(`DESCRIBE ${quoteIdent(table)}`);
     for (let i = 0; i < desc.numRows; i++) {
-      if (String(desc.get(i).column_name) === ROWID_COL) return; // restored — keep it
+      if (String(desc.get(i).column_name) === ROWID_COL) {
+        // Restored — keep the persisted ids and report the namespace they were baked
+        // in. Row numbers start at 1, so `min` is always base + 1: floor-dividing it
+        // by the stride recovers the base exactly.
+        const t = await this.#duckdb.query(`SELECT min(${quoteIdent(ROWID_COL)}) AS m FROM ${quoteIdent(table)}`);
+        const min = t.numRows ? Number(t.get(0).m ?? 0) : 0;
+        return Math.floor(min / ROWID_STRIDE) * ROWID_STRIDE;
+      }
     }
     const base = seq * ROWID_STRIDE;
     await this.#duckdb.query(
@@ -692,12 +736,30 @@ export class DataStore {
         `CAST(${base} AS BIGINT) + CAST(row_number() OVER () AS BIGINT) AS ${quoteIdent(ROWID_COL)} ` +
         `FROM ${quoteIdent(table)}`,
     );
+    return base;
+  }
+
+  /**
+   * Record that a source occupies the row-id namespace starting at `base`, advancing
+   * `#sourceSeq` past it so no later source is handed the same range.
+   *
+   * This is what keeps row ids unique across a reload. A restored source keeps the ids
+   * baked into its Parquet — assigned from the sequence number it had in the session
+   * that created it — while `#sourceSeq` restarts at 0. When the log has gaps (a source
+   * superseded by a replace is persisted byte-less and never re-materialises, so it
+   * consumes no sequence number on restore), the counter falls *behind* the baked ids,
+   * and the next appended file collides with a restored one: two rows share a
+   * `__ct_rid`, and a `setCell` on either silently edits both.
+   */
+  #noteRowidBase(base) {
+    const seq = Math.floor(Number(base) / ROWID_STRIDE);
+    if (Number.isFinite(seq) && seq > this.#sourceSeq) this.#sourceSeq = seq;
   }
 
   /** Drop this dataset's DuckDB state — the working view, every source table, and
    * every registered chunk file it ever materialised (including ones left by
-   * undone/retracted ops). Peer-local cleanup only; the shared log is untouched (a
-   * `replace` retracts its ops via {@link DataStore#resetData}). */
+   * undone/retracted ops). Wholesale teardown — dispose or a hard restore; a `replace`
+   * uses the bounded {@link DataStore#pruneDeadSources} instead so undo still works. */
   async #dropDuckDB() {
     await this.#duckdb.query(`DROP VIEW IF EXISTS ${quoteIdent(this.#view)}`);
     for (const table of this.#sourceTables) {
@@ -730,8 +792,21 @@ export class DataStore {
     // added after it get NULL for it, via UNION ALL BY NAME). This guarantees the
     // engine's result matches running the log as a script.
     const log = this.#steps();
+    // A source op whose bytes this peer doesn't hold is SKIPPED, not fatal: it can be
+    // one a deep undo revived after its bytes were released (#pruneDeadSources), one
+    // restored from a save that no longer carries them, or one that arrived from a peer
+    // ahead of its Parquet (live gap-fill). Replaying it would throw on a table that
+    // isn't there and — because the failing op is already durable — every later rederive
+    // would throw too, bricking the dataset. Skipping degrades instead: the pipeline
+    // replays without it and the gap is reported on the DATA_CHANGED summary.
+    const missing = [];
+    const usable = log.filter((o) => {
+      if (!SOURCE_OPS.has(o.type) || this.#hasSourceBytes(o.src)) return true;
+      missing.push({ id: o.id, label: o.src?.label ?? null });
+      return false;
+    });
     // source_file provenance appears once there's >1 stacked source (load+append).
-    const multiStacked = log.filter((o) => o.type === 'load' || o.type === 'append').length > 1;
+    const multiStacked = usable.filter((o) => o.type === 'load' || o.type === 'append').length > 1;
 
     /** @type {Map<string, VariableMeta>} */
     const byName = new Map();
@@ -743,8 +818,11 @@ export class DataStore {
       }
     };
 
-    for (const op of log) {
-      if (op.type === 'load') {
+    for (const op of usable) {
+      // Nothing to build on yet (the base source was skipped): a transform has no
+      // relation to wrap and a join has nothing to join onto, so they drop out too.
+      if (sql === null && op.type !== 'load' && op.type !== 'append') continue;
+      if (op.type === 'load' || (op.type === 'append' && sql === null)) {
         byName.clear();
         for (const m of op.src.meta) if (!byName.has(m.name)) byName.set(m.name, { ...m });
         addSourceFile();
@@ -868,7 +946,19 @@ export class DataStore {
     }
 
     this.#selected = this.#selected.filter((n) => this.#byName.has(n));
+    this.#missingSources = missing;
+    if (missing.length) {
+      console.warn(`DataStore ${this.#id}: ${missing.length} source op(s) have no data on this peer and were skipped`, missing);
+    }
     this.#bus.emit(CoreEvents.DATA_CHANGED, this.#snapshotSummary(reason));
+  }
+
+  /** Are this source op's bytes materialised on THIS peer? (A source op can outlive
+   * its bytes — released by {@link DataStore#pruneDeadSources}, dropped at save, or not
+   * yet gap-filled from a peer.) */
+  #hasSourceBytes(src) {
+    if (!src) return false;
+    return src.wide ? !!src.file && this.#wideFiles.has(src.file) : !!src.table && this.#sourceTables.has(src.table);
   }
 
   /** One immutable source's SELECT: its columns (numeric-typed → cast to DOUBLE),
@@ -1431,10 +1521,11 @@ export class DataStore {
    * @returns {Promise<{ops: object[]}>}
    */
   async rawExport({ includeParquet = true } = {}) {
-    // Only LIVE source ops have a materialised DuckDB table / OPFS file to export. A
-    // RETRACTED source (e.g. one replaced by a re-import) had its bytes dropped by the
-    // reset, so its `table` is gone — reading it would throw. Its op envelope is still
-    // persisted (audit + merge), just byte-less; the fold drops it on reload anyway.
+    // Only LIVE source ops have bytes worth exporting. A dead one — retracted, undone,
+    // or behind a replace barrier — may still be materialised (a replace keeps the
+    // generation it superseded so Ctrl+Z can bring it back) but it is not part of the
+    // saved data: its op envelope is persisted byte-less, for audit + merge, and the
+    // fold drops it on reload anyway.
     const liveSrcIds = new Set(this.#steps().filter((s) => SOURCE_OPS.has(s.type)).map((s) => s.id));
     const ops = [];
     for (const op of this.#dataSlice()) {
@@ -1898,8 +1989,15 @@ export class DataStore {
       datasetId: this.#id,
       rowCount: this.#rowCount,
       variables: this.#variables.map((v) => v.name),
+      missingSources: this.#missingSources.map((m) => ({ ...m })),
       reason,
     };
+  }
+
+  /** Source ops skipped by the last re-derive for want of bytes on this peer — empty
+   * in the normal case. See {@link DataStore#rederive}. */
+  get missingSources() {
+    return this.#missingSources.map((m) => ({ ...m }));
   }
 
   /** Drop this dataset's DuckDB tables/view (called when it's removed from the

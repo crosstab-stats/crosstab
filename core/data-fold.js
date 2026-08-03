@@ -23,6 +23,15 @@
  *    shared {@link liveOps}/{@link appliedState} helper). An undone step is dropped from
  *    the replay; a redone one returns; an undone `retract`/`reorder` loses its effect.
  *
+ * On top of those it applies one **derived** rule, the *replace barrier*: a `load` op
+ * means "start over from this source" (rederive's `load` branch clears the variable map
+ * and begins a fresh SELECT), so every step ordered before the last live `load` is
+ * already dead and is dropped here. Deriving that from the `load` itself — rather than
+ * retracting the prior steps at import time, as the first cut of #148 did — is what makes
+ * a replace-import a *single* undoable action: one `undo` of the `load` lifts the barrier
+ * and the whole previous pipeline comes back. (Retracting instead left N undoable
+ * tombstones whose individual undos revived steps in states that could not be replayed.)
+ *
  * Kept pure and DuckDB-free so the ordering — the genuinely new, merge-sensitive
  * logic — is headlessly testable (see test/data-fold.test.mjs). The SQL replay of the
  * returned steps stays in data-store.js.
@@ -36,10 +45,40 @@ export function flattenStep(op) {
   return { id: op.id, author: op.author, type: op.type, ...(op.payload ?? {}) };
 }
 
+/** The live content ops in HLC order, split at the **replace barrier**: `kept` are the
+ * ops from the last live `load` onward, `dropped` are the ones it superseded.
+ *
+ * Deliberately computed on HLC (append) order, NOT on the reordered replay order, so
+ * that liveness is *stable under reorder*: dragging the new import above an older step
+ * in the History editor changes the order, never what exists. (It also keeps the split
+ * identical on every peer without depending on a reorder op having merged yet.) */
+function splitAtBarrier(raw) {
+  const live = liveOps(raw); // undo/redo/retract → the live content steps
+  let at = 0;
+  for (let i = live.length - 1; i > 0; i--) if (live[i].type === 'load') { at = i; break; }
+  return { kept: at ? live.slice(at) : live, dropped: at ? live.slice(0, at) : [] };
+}
+
+/** Apply the latest APPLIED `reorder` (an undone one has no effect) to a live list. */
+function applyReorder(raw, live) {
+  const applied = appliedState(raw);
+  let latestOrder = null;
+  for (const op of raw) {
+    if (op.type === 'reorder' && applied(op.id) && Array.isArray(op.payload?.order)) latestOrder = op.payload.order; // HLC-ordered ⇒ last applied wins
+  }
+  if (!latestOrder) return live;
+  const pos = new Map(latestOrder.map((id, i) => [id, i]));
+  const at = (op) => (pos.has(op.id) ? pos.get(op.id) : Number.POSITIVE_INFINITY);
+  // Array#sort is stable, so ops absent from the reorder (both at Infinity) keep
+  // their incoming HLC order, landing after the explicitly-ordered ones.
+  return [...live].sort((a, b) => at(a) - at(b));
+}
+
 /**
  * Resolve a dataset's raw op slice (HLC-ordered, from `ProjectLog.slice`) into the
  * ordered list of **live data steps** to replay. Retracted ops are dropped;
- * structural ops are consumed; the latest `reorder` (if any) sets the order.
+ * structural ops are consumed; the latest `reorder` (if any) sets the order; and
+ * everything before the last `load` (the replace barrier) is dropped.
  *
  * Each returned step is flattened for the replay switch: `{id, author, type,
  * ...payload}` — so the existing rederive code reads `step.src`, `step.name`,
@@ -50,25 +89,20 @@ export function flattenStep(op) {
  */
 export function foldDataOps(ops) {
   const raw = ops ?? [];
-  // Undo/redo/retract → the live content steps (shared liveness fold).
-  const live = liveOps(raw);
-  // The latest APPLIED reorder sets the order (an undone reorder has no effect).
-  const applied = appliedState(raw);
-  let latestOrder = null;
-  for (const op of raw) {
-    if (op.type === 'reorder' && applied(op.id) && Array.isArray(op.payload?.order)) latestOrder = op.payload.order; // HLC-ordered ⇒ last applied wins
-  }
+  return applyReorder(raw, splitAtBarrier(raw).kept).map(flattenStep);
+}
 
-  let ordered = live;
-  if (latestOrder) {
-    const pos = new Map(latestOrder.map((id, i) => [id, i]));
-    const at = (op) => (pos.has(op.id) ? pos.get(op.id) : Number.POSITIVE_INFINITY);
-    // Array#sort is stable, so ops absent from the reorder (both at Infinity) keep
-    // their incoming HLC order, landing after the explicitly-ordered ones.
-    ordered = [...live].sort((a, b) => at(a) - at(b));
-  }
-
-  return ordered.map(flattenStep);
+/**
+ * The op ids dropped by the **replace barrier** alone — live, un-retracted steps that
+ * a later `load` superseded. These are the ops whose materialised bytes a caller may
+ * safely free: unlike an *undone* op (which a redo must be able to bring back), a
+ * barrier-dropped op can only return if the `load` above it is undone.
+ *
+ * @param {import('./op-log.js').Op[]} ops
+ * @returns {string[]}
+ */
+export function barrierDroppedIds(ops) {
+  return splitAtBarrier(ops ?? []).dropped.map((o) => o.id);
 }
 
 /**
