@@ -1157,7 +1157,7 @@ export class ProjectSync {
     try {
       const { bundle } = await this.#store.load(id);
       await this.#datasets.loadBundle(bundle);
-      this.#applyWorkspaces?.(bundle.workspaceOps || []);
+      await this.#applyWorkspaces?.(bundle.workspaceOps || [], { refresh: true }); // peer sync → refresh in place, don't remount
       this.#applyOutput?.(bundle.output || []);
       this.#applyAnalysisLog?.(bundle.analysisLog || []);
       this.#lastManifest = manifest;
@@ -1354,7 +1354,7 @@ export class ProjectSync {
         // tabular-unchanged fast-path above and lands on next save (minor follow-up).
         if (datasets.length) await this.#datasets.loadBundle({ activeId: manifest.activeId, datasets, collectionLog: manifest.collectionLog });
       }
-      this.#applyWorkspaces?.((manifest.log || []).filter((o) => typeof o.target === "string" && o.target.startsWith("ws:")));
+      await this.#applyWorkspaces?.((manifest.log || []).filter((o) => typeof o.target === "string" && o.target.startsWith("ws:")), { refresh: true }); // peer sync → refresh in place
       this.#applyOutput?.(manifest.output || []);
     } catch (err) {
       console.error('[live] apply failed', err);

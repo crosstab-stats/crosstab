@@ -590,9 +590,20 @@ export async function boot(mounts) {
     // Workspaces are now the `ws:` tier of the one true log (#148): save carries their
     // ops in manifest.log; load routes them here. The store folds them into its cache.
     getWorkspaceOps: () => workspaceStore.ops(),
-    applyWorkspaces: (ops) => {
-      workspaceStore.restoreOps(Array.isArray(ops) ? ops : []); // ws ops from manifest.log
-      if (workspaceManager && plugins) void workspaceManager.remountActive(plugins.list());
+    applyWorkspaces: async (ops, { refresh = false } = {}) => {
+      workspaceStore.restoreOps(Array.isArray(ops) ? ops : []); // ws ops from manifest.log (runs sync, before any await)
+      if (!workspaceManager || !plugins) return;
+      if (refresh) {
+        // A PEER's change (folder/live sync): refresh mounted workspaces IN PLACE via
+        // their onRefresh hook — never tear down + remount, because a remount re-runs the
+        // sandbox handshake, which times out on a backgrounded window (the "workspace
+        // crashed on the other peer" two-window bug). Fall back to remount only if a
+        // mounted workspace lacks onRefresh.
+        const ok = await workspaceManager.notifyWorkspaceRefresh();
+        if (!ok) await workspaceManager.remountActive(plugins.list());
+      } else {
+        await workspaceManager.remountActive(plugins.list()); // project open/switch → different project's blobs
+      }
     },
     // …and the Output tab's results, so reopening shows them (and switching
     // projects clears/reloads output instead of leaving the previous one's).
