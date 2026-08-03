@@ -24,6 +24,31 @@ import { makeOp, orderByHlc, sharedAncestor, unresolvedReads, opIds } from './op
  * @property {(ops: import('./op-log.js').Op[]) => *} fold      Pure replay → derived state.
  */
 
+/**
+ * ## API tiers (encapsulation contract)
+ *
+ * The log is the project's single source of truth, so **who may mutate it, and how, is
+ * deliberately restricted** — a bug that reaches in and edits ops directly is the worst
+ * kind (silent corruption, broken audit trail, merge divergence). The methods split into
+ * three tiers:
+ *
+ * - **Feature (the only writes ordinary code makes):** {@link ProjectLog#append}. Every
+ *   domain change — including *deletion* (append a `retract`/`removeDataset`) and
+ *   *reorder* (append a `reorder`) — is an appended op. Feature code never removes or
+ *   rewrites ops; it appends new ones the fold interprets.
+ * - **History navigation:** {@link ProjectLog#undo}/{@link ProjectLog#redo} and their
+ *   scoped `*Where` forms, plus {@link ProjectLog#discardLocal} (roll back a *just-made*
+ *   local append that failed validation, before it was ever durable). These mutate, but
+ *   only the tail the user/appender just created.
+ * - **Lifecycle (rare, restricted to new/save/load/merge/sync):**
+ *   {@link ProjectLog#reset}, {@link ProjectLog#clearWhere}, {@link ProjectLog#restore},
+ *   {@link ProjectLog#serialize}, {@link ProjectLog#receiveOps}, {@link ProjectLog#adopt}.
+ *   These replace or bulk-clear whole tiers and belong to the persistence/transport
+ *   layer — NOT to any editing/feature path. (`clearWhere` in particular is a tier
+ *   *replace* during load/reload, never a way to "delete some ops" mid-edit.)
+ *
+ * `#ops`/`#redo` are private; the tiers above are the entire mutation surface.
+ */
 export class ProjectLog {
   /** @type {import('./op-log.js').Op[]} active ops (unordered internally; ordered on read). */
   #ops = [];
@@ -214,12 +239,29 @@ export class ProjectLog {
     this.#redo = [];
   }
 
-  /** Drop every op (active + redo) matching `pred` — clears ONE tier/projection of a
-   * shared log without disturbing the others (e.g. reload the dataset collection while
-   * leaving the analysis tier alone). */
+  /** **Lifecycle only.** Drop every op (active + redo) matching `pred` — a tier
+   * *replace* during load/reload (e.g. rebuild the dataset collection while leaving the
+   * analysis tier alone). NOT an editing primitive: to delete a durable op during normal
+   * work, append a `retract` (physical removal is merge-unsafe). To roll back a failed
+   * *just-appended* local op, use {@link ProjectLog#discardLocal}. */
   clearWhere(pred) {
     this.#ops = this.#ops.filter((o) => !pred(o));
     this.#redo = this.#redo.filter((o) => !pred(o));
+  }
+
+  /**
+   * Roll back a **just-appended local op that failed validation** before it became
+   * durable — the only sanctioned physical removal of a specific op by feature code.
+   * Use it when an {@link ProjectLog#append} you just made turns out invalid (e.g. it
+   * generated SQL that won't run) and must vanish as if never attempted. It is NOT a way
+   * to edit established history: to remove a durable/shared op, append a `retract`
+   * (physical removal is merge-unsafe — a dropped op resurrects from a peer that still
+   * has it). Removes the op from both the active log and the redo stack.
+   * @param {string} opId
+   */
+  discardLocal(opId) {
+    this.#ops = this.#ops.filter((o) => o.id !== opId);
+    this.#redo = this.#redo.filter((o) => o.id !== opId);
   }
 
   get canUndo() { return this.#ops.length > 0; }

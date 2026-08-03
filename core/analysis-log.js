@@ -33,7 +33,6 @@
  */
 
 import { newOpId } from './merge.js';
-import { makeOp } from './op-log.js';
 import { ProjectLog } from './project-log.js';
 
 /** The analysis-run projection: folds runAnalysis/removeAnalysis ops into the ordered
@@ -123,25 +122,20 @@ export class AnalysisLog {
     this.#changed();
   }
 
-  /** Serialise for the project bundle (entries carry their `runId`). */
+  /** Serialise for the project bundle: the tier's **raw** ops (runAnalysis/removeAnalysis
+   * envelopes in HLC order, stable ids/hlc/author preserved) — the one true log, not the
+   * folded entry list. This lets deletions (removeAnalysis) and identity survive a
+   * save/reload and a merge, exactly like the data and collection tiers. */
   toJSON() {
-    return this.#log.state('analysis').map((e) => structuredClone(e));
+    return this.#log.slice(ANALYSIS.match);
   }
 
-  /** Restore from a serialised array (project load). Clears this tier then rebuilds it
-   * with deterministic ids/clock so it's identical across loads. Does NOT replay — the
-   * caller decides when to re-execute. Entries saved before unit 5 lack a `runId`; one
-   * is minted deterministically from the index. */
-  load(arr) {
+  /** Restore from a serialised op array (project load): clear this tier, then fold the
+   * raw ops back in **preserving their ids** (via receiveOps) so identity is stable for
+   * merge. Does NOT replay — the caller decides when to re-execute. */
+  load(ops) {
     this.#log.clearWhere(ANALYSIS.match);
-    const ops = (Array.isArray(arr) ? arr : []).map((e, i) => {
-      const runId = e?.runId ?? `run-restore-${i}`;
-      return makeOp(
-        { target: `analysis:${runId}`, owner: 'core', type: 'runAnalysis', payload: { ...e, runId } },
-        { id: `an-${runId}`, hlc: { wall: 0, counter: i }, author: { authorId: 'restore' } },
-      );
-    });
-    this.#log.receiveOps(ops);
+    this.#log.receiveOps(Array.isArray(ops) ? ops : []);
     this.#changed();
   }
 

@@ -1098,7 +1098,7 @@ export class DataStore {
     try {
       await this.rederive('transform');
     } catch (err) {
-      this.#log.clearWhere((o) => o.id === op.id);
+      this.#log.discardLocal(op.id);
       await this.rederive('transform');
       throw new Error(err?.message || String(err));
     }
@@ -1248,7 +1248,7 @@ export class DataStore {
     try {
       await this.rederive('reorder');
     } catch (err) {
-      this.#log.clearWhere((o) => o.id === op.id);
+      this.#log.discardLocal(op.id);
       await this.rederive('reorder');
       throw new Error(`That removal isn’t valid here: ${err?.message || err}`);
     }
@@ -1322,7 +1322,7 @@ export class DataStore {
     try {
       await this.rederive('reorder');
     } catch (err) {
-      for (const op of created) this.#log.clearWhere((o) => o.id === op.id);
+      for (const op of created) this.#log.discardLocal(op.id);
       await this.rederive('reorder');
       throw new Error(`That script change isn’t valid here: ${err?.message || err}`);
     }
@@ -1374,7 +1374,7 @@ export class DataStore {
     try {
       await this.rederive('reorder');
     } catch (err) {
-      this.#log.clearWhere((o) => o.id === op.id);
+      this.#log.discardLocal(op.id);
       await this.rederive('reorder');
       throw new Error(`That ${what} isn’t valid here: ${err?.message || err}`);
     }
