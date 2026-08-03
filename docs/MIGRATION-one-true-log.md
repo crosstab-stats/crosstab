@@ -154,9 +154,10 @@ the merge work** so merge treats undo/redo as ordinary mergeable ops.
 7. **Tests** — un-skip/rewrite folder-sync; add flat-log + ws-op-merge tests.
 8. **Two-window verification** (the user's domain) — incl. CAQDAS codebook merge.
 
-Status: encapsulation + analysis-tier done; **Step 1 (flat `manifest.log` + load
-routing) DONE + browser-verified single-peer** (all committed). Step 2 (core merge →
-`ProjectLog.merge`) next.
+Status: encapsulation + analysis-tier done; **Step 0 (undo/redo → append-only ops) DONE
++ browser-verified** (undo now persists across reload — fixed a real drop-on-save bug);
+**Step 1 (flat `manifest.log` + load routing) DONE + browser-verified single-peer** (all
+committed). Step 2 (core merge → `ProjectLog.merge`) next.
 
 ### Layer 6 — remaining consumers still on the old shape
 
