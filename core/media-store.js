@@ -1,6 +1,7 @@
 /**
  * @file media-store.js
- * Content-addressed OPFS store for qualitative MEDIA assets (#139).
+ * Content-addressed store for qualitative MEDIA assets (#139), living **inside the
+ * project** (#149 A5).
  *
  * Qualitative coding of audio / image / video keeps the media OUT of the dataset —
  * a multi-GB video does not belong in a Parquet cell. The dataset holds only a
@@ -11,10 +12,16 @@
  *   - it is the exact primitive the collaboration base-data index (#143, "share this
  *     file!") and at-rest encryption (#144) are designed to build on.
  *
- * Two files per asset in one flat directory: `<id>.bin` (the bytes) and `<id>.json`
- * (`{type, name, size}`). Deliberately **no shared mutable catalog** — that is the
- * hydrate-before-mount clobber class of bug the workspace store hit; here every asset
- * is self-describing and {@link MediaStore#list} just scans the directory.
+ * The bytes are one file per asset in the project's own `assets/` directory, written
+ * through {@link ProjectStore} — so media is encrypted with the project when the project
+ * is protected, lands in a synced folder with it, and travels wherever the project goes.
+ * It used to live in a separate OPFS root, which meant a shared project's media simply
+ * wasn't there for the recipient.
+ *
+ * The **metadata is an op** (`addAsset`, target `asset:<id>`), not a sidecar file: the
+ * log is the index, so it merges, undoes, and travels like everything else, and there is
+ * no catalog to fall out of step with the bytes. Nothing is copied anywhere — the id is
+ * the content hash, so re-importing the same file writes it once.
  *
  * The store is host-only. A plugin never touches it: it asks `app.media.load(ref)`
  * and gets back an opaque {@link Blob}, so the sandbox stays walled off from the
@@ -22,7 +29,27 @@
  * injected by core/plugin-sandbox.js).
  */
 
-const ROOT = 'media-assets';
+import { liveOps } from './op-log.js';
+
+/** Bus event: the media-asset tier changed (an asset was added or forgotten), so the
+ * project is dirty and should autosave. */
+export const MEDIA_CHANGED = 'media:changed';
+
+/** The media-asset projection: `addAsset` ops folded to `[{id, type, name, size, ...}]`.
+ * The whole index of what the project references; whether the BYTES are here is asked
+ * separately (a peer can hold the ref before the file arrives). */
+export const ASSETS = {
+  key: 'assets',
+  match: (op) => op.owner === 'core' && typeof op.target === 'string' && op.target.startsWith('asset:'),
+  fold: (ops) => {
+    const out = new Map();
+    for (const op of liveOps(ops)) {
+      if (op.type === 'addAsset') out.set(op.payload.id, { ...op.payload });
+      else if (op.type === 'removeAsset') out.delete(op.payload.id);
+    }
+    return [...out.values()];
+  },
+};
 
 /** Files up to this size get a full SHA-256 content id (read at once — cheap here);
  * larger files are streamed and fingerprinted instead, so a multi-GB movie never has
@@ -30,9 +57,79 @@ const ROOT = 'media-assets';
 const FULL_HASH_MAX = 256 * 1024 * 1024; // 256 MB
 
 export class MediaStore {
-  /** @returns {boolean} Whether OPFS is available in this browser. */
+  /** @type {import('./project-store.js').ProjectStore|null} */
+  #store = null;
+  /** @type {import('./project-log.js').ProjectLog|null} */
+  #log = null;
+  /** () => current project id, or null when the project has never been saved. */
+  #projectId = () => null;
+  /** async () => project id, creating the "Untitled project" if there isn't one yet, so
+   * an asset always has a project to live in. */
+  #ensureProject = async () => null;
+  /** @type {import('./event-bus.js').EventBus|null} */
+  #bus = null;
+
+  constructor(deps) {
+    if (deps) this.attach(deps);
+  }
+
+  /**
+   * Point the store at the project tier. Separate from the constructor only because the
+   * media service is published to plugins before `ProjectSync` is built; the store is
+   * inert (and `available` is false) until this runs.
+   *
+   * @param {{store?: import('./project-store.js').ProjectStore,
+   *          log?: import('./project-log.js').ProjectLog,
+   *          projectId?: () => string|null,
+   *          ensureProject?: () => Promise<string|null>}} deps
+   */
+  attach({ store, log, bus, projectId, ensureProject } = {}) {
+    this.#store = store ?? this.#store;
+    this.#bus = bus ?? this.#bus;
+    if (log && log !== this.#log) {
+      this.#log = log;
+      this.#log.register(ASSETS);
+    }
+    if (projectId) this.#projectId = projectId;
+    if (ensureProject) this.#ensureProject = ensureProject;
+  }
+
+  /** @returns {boolean} Whether media can be stored at all (a project store is wired). */
   get available() {
-    return typeof navigator !== 'undefined' && !!navigator.storage?.getDirectory;
+    return !!this.#store;
+  }
+
+  /** This project's `asset:` ops — the tier the project save carries in manifest.log. */
+  ops() {
+    return this.#log ? this.#log.slice(ASSETS.match) : [];
+  }
+
+  /** Replace the asset tier on project load/switch: drop the current `asset:` ops and
+   * receive the saved ones (ids preserved, so they merge). The BYTES are not touched —
+   * they already sit in the project directory this is loading from. */
+  restoreOps(ops) {
+    if (!this.#log) return;
+    this.#log.clearWhere(ASSETS.match);
+    this.#log.receiveOps(Array.isArray(ops) ? ops : []);
+  }
+
+  /** Metadata for one asset, from the log. Null if the project doesn't reference it. */
+  meta(id) {
+    return (this.#log?.state('assets') ?? []).find((a) => a.id === id) ?? null;
+  }
+
+  /** Record the asset in the log — the index. Content-addressed, so re-importing the
+   * same file appends a fresh op that folds to the same entry. */
+  #record(info) {
+    this.#log?.append({ target: `asset:${info.id}`, owner: 'core', type: 'addAsset', payload: { ...info } });
+    this.#changed();
+  }
+
+  /** Tell the project an asset op landed, so it autosaves. Appending to the log doesn't
+   * emit anything by itself, and without this the manifest would be written from a
+   * snapshot taken before the asset existed — bytes on disk, no index. */
+  #changed() {
+    this.#bus?.emit?.(MEDIA_CHANGED, {});
   }
 
   /**
@@ -47,11 +144,12 @@ export class MediaStore {
   async put(bytes, meta = {}) {
     const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
     const id = await sha256hex(data);
-    const root = await this.#root(true);
-    await this.#write(root, id + '.bin', data);
-    const info = { type: 'application/octet-stream', name: '', ...meta, size: data.byteLength };
-    await this.#write(root, id + '.json', new TextEncoder().encode(JSON.stringify(info)));
-    return { id, ...info };
+    const info = { id, type: 'application/octet-stream', name: '', ...meta, size: data.byteLength };
+    const pid = await this.#ensureProject();
+    if (pid == null) throw new Error('media.put: no project to store the asset in');
+    await this.#store.writeAsset(pid, id, new Blob([data], { type: info.type }));
+    this.#record(info);
+    return info;
   }
 
   /**
@@ -73,23 +171,18 @@ export class MediaStore {
    */
   async putFile(file, meta = {}) {
     const id = await this.#idForFile(file);
-    const root = await this.#root(true);
-    const fh = await root.getFileHandle(id + '.bin', { create: true });
-    try {
-      // pipeTo streams the File chunk-by-chunk into OPFS and closes the writable.
-      await file.stream().pipeTo(await fh.createWritable());
-    } catch (e) {
-      try { await root.removeEntry(id + '.bin'); } catch { /* nothing partial to clean */ }
-      throw e;
-    }
+    const pid = await this.#ensureProject();
+    if (pid == null) throw new Error('media.put: no project to store the asset in');
+    await this.#store.writeAsset(pid, id, file); // streamed by the driver, never buffered
     const info = {
+      id,
       type: file.type || 'application/octet-stream',
       name: file.name || '',
       ...meta,
       size: file.size,
     };
-    await this.#write(root, id + '.json', new TextEncoder().encode(JSON.stringify(info)));
-    return { id, ...info };
+    this.#record(info);
+    return info;
   }
 
   /** Content id for a File: full SHA-256 when small enough to read at once, else a
@@ -111,93 +204,63 @@ export class MediaStore {
   }
 
   /**
-   * Read an asset's bytes + metadata, or null if absent (e.g. cleared OPFS, or an
-   * id a collaborator has referenced but not yet shared).
+   * Read an asset's bytes + metadata, or null if absent (e.g. a ref a collaborator
+   * shared before the file itself arrived).
    * @param {string} id
    * @returns {Promise<{bytes: Uint8Array, type: string, name: string, size: number}|null>}
    */
   async get(id) {
-    try {
-      const root = await this.#root();
-      const bin = await root.getFileHandle(safe(id) + '.bin');
-      const bytes = new Uint8Array(await (await bin.getFile()).arrayBuffer());
-      let meta = {};
-      try {
-        const mh = await root.getFileHandle(safe(id) + '.json');
-        meta = JSON.parse(await (await mh.getFile()).text());
-      } catch {
-        /* metadata sidecar missing — fall back to a generic blob */
-      }
-      // Spread the sidecar so probed fields (medium/duration/width/height) come
-      // through; type/name defaulted, size authoritative from the bytes.
-      return { type: 'application/octet-stream', name: '', ...meta, bytes, size: bytes.byteLength };
-    } catch {
-      return null;
-    }
+    const blob = await this.getBlob(id);
+    if (!blob) return null;
+    const meta = this.meta(id) ?? {};
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    return { type: 'application/octet-stream', name: '', ...meta, bytes, size: bytes.byteLength };
   }
 
-  /** Read an asset as a correctly-typed Blob, for handing to a plugin / a media
-   * element. Null if the asset isn't present. */
+  /** Read an asset as a correctly-typed Blob, for handing to a plugin / a media element.
+   * Nothing is materialised on the way for an unprotected project (the project file's own
+   * handle IS the Blob), so a `<video>` streams straight off disk. Null if the bytes
+   * aren't here. */
   async getBlob(id) {
-    const a = await this.get(id);
-    return a ? new Blob([a.bytes], { type: a.type }) : null;
+    const pid = this.#projectId();
+    if (!this.#store || pid == null) return null;
+    return this.#store.readAsset(pid, id, this.meta(id)?.type);
   }
 
-  /** @returns {Promise<boolean>} Whether the asset's bytes are present locally. */
+  /** @returns {Promise<boolean>} Whether the asset's bytes are present in this project. */
   async has(id) {
-    try {
-      const root = await this.#root();
-      await root.getFileHandle(safe(id) + '.bin');
-      return true;
-    } catch {
-      return false;
-    }
+    const pid = this.#projectId();
+    if (!this.#store || pid == null) return false;
+    return this.#store.hasAsset(pid, id);
   }
 
-  /** Forget an asset's bytes + metadata. Best-effort. */
+  /** Forget an asset: a `removeAsset` op (the index) plus its bytes. */
   async delete(id) {
-    const root = await this.#root().catch(() => null);
-    if (!root) return;
-    for (const suffix of ['.bin', '.json']) {
-      try { await root.removeEntry(safe(id) + suffix); } catch { /* already gone */ }
-    }
+    const pid = this.#projectId();
+    this.#log?.append({ target: `asset:${id}`, owner: 'core', type: 'removeAsset', payload: { id } });
+    this.#changed();
+    if (this.#store && pid != null) await this.#store.removeAsset(pid, id);
   }
 
-  /** List stored assets (`{id, type, name, size}`) by scanning the directory — no
-   * catalog to fall out of sync with the bytes. */
-  async list() {
-    const out = [];
-    try {
-      const root = await this.#root();
-      for await (const [entryName, handle] of root.entries()) {
-        if (handle.kind !== 'file' || !entryName.endsWith('.json')) continue;
-        try {
-          const meta = JSON.parse(await (await handle.getFile()).text());
-          out.push({ id: entryName.slice(0, -'.json'.length), ...meta });
-        } catch {
-          /* skip a corrupt sidecar */
-        }
-      }
-    } catch {
-      /* no store yet */
-    }
-    return out;
+  /** The project's assets, from the log — the index, whether or not the bytes are here
+   * yet. `list({present: true})` intersects that with what's actually on disk. */
+  async list({ present = false } = {}) {
+    const all = this.#log?.state('assets') ?? [];
+    if (!present) return all;
+    const pid = this.#projectId();
+    if (!this.#store || pid == null) return [];
+    const held = new Set(await this.#store.listAssets(pid));
+    return all.filter((a) => held.has(a.id));
   }
 
-  /** @returns {Promise<FileSystemDirectoryHandle>} */
-  async #root(create = false) {
-    const opfs = await navigator.storage.getDirectory();
-    return opfs.getDirectoryHandle(ROOT, { create });
-  }
-
-  async #write(dir, filename, data) {
-    const fh = await dir.getFileHandle(filename, { create: true });
-    const w = await fh.createWritable();
-    try {
-      await w.write(data);
-    } finally {
-      await w.close();
-    }
+  /** Asset ids the log references but this project has no bytes for — the gap a hand-off
+   * or a peer transfer has to fill. */
+  async missing() {
+    const refs = (this.#log?.state('assets') ?? []).map((a) => a.id);
+    const pid = this.#projectId();
+    if (!this.#store || pid == null) return refs;
+    const held = new Set(await this.#store.listAssets(pid));
+    return refs.filter((id) => !held.has(id));
   }
 }
 

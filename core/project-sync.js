@@ -16,6 +16,7 @@
 
 import { CoreEvents } from './event-bus.js';
 import { DATASETS_CHANGED } from './dataset-manager.js';
+import { MEDIA_CHANGED } from './media-store.js';
 import { ProjectStore, FOLDER_PROJECT_ID, buildManifest } from './project-store.js';
 import { attachLiveDoc } from './live-sync.js';
 import { SourceExchange } from './gap-fill.js';
@@ -51,6 +52,11 @@ function b64ToBytes(b64) {
   return out;
 }
 
+/** The media-asset tier of a flat one-true-log — used where a bundle arrives as just
+ * `log` (a `.crosstab` import, a merge result) rather than pre-split by ProjectStore. */
+const assetOpsOf = (log) =>
+  (log ?? []).filter((o) => o.owner === 'core' && typeof o.target === 'string' && o.target.startsWith('asset:'));
+
 export class ProjectSync {
   #store;
   #datasets;
@@ -68,6 +74,9 @@ export class ProjectSync {
   /** () => object[] : the workspace tier's ops (the `ws:` slice of the log), folded into
    * `manifest.log` on save (#148). Null ⇒ feature unavailable. */
   #getWorkspaceOps;
+  /** () => the media-asset tier's ops, and the restore hook (#149 A5). */
+  #getAssetOps;
+  #applyAssetOps;
   /** (ops) => void : restore the workspace tier from its ops on open. */
   #applyWorkspaces;
   /** () => object[] : snapshot the Output tab's result model (#103). */
@@ -170,7 +179,7 @@ export class ProjectSync {
    * @param {(keys: string[]) => Promise<void>} [deps.applyActivePlugins] - Restore
    *   a project's saved plugin set on open.
    */
-  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, pluginIdentities, getMergers }) {
+  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getAssetOps, applyAssetOps, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, pluginIdentities, getMergers }) {
     this.#store = projectStore;
     this.#datasets = datasets;
     this.#ui = ui;
@@ -182,6 +191,8 @@ export class ProjectSync {
     this.#applyActivePlugins = applyActivePlugins ?? null;
     this.#getWorkspaceOps = getWorkspaceOps ?? null;
     this.#applyWorkspaces = applyWorkspaces ?? null;
+    this.#getAssetOps = getAssetOps ?? null;
+    this.#applyAssetOps = applyAssetOps ?? null;
     this.#getOutput = getOutput ?? null;
     this.#applyOutput = applyOutput ?? null;
     this.#getAnalysisLog = getAnalysisLog ?? null;
@@ -267,6 +278,7 @@ export class ProjectSync {
     this.#bus.on(DATASETS_CHANGED, () => this.#onChange(null));
     this.#bus.on(CoreEvents.PLUGINS_CHANGED, () => this.#onPluginsChanged());
     this.#bus.on(CoreEvents.WORKSPACE_CHANGED, () => this.#onChange(null));
+    this.#bus.on(MEDIA_CHANGED, () => this.#onChange(null)); // an asset landed (#149 A5)
     this.#bus.on('output:written', () => this.#onChange(null));
     this.#bus.on('output:cleared', () => this.#onChange(null)); // persist a user "Clear output"
     this.#setStatus();
@@ -388,7 +400,8 @@ export class ProjectSync {
       return;
     }
     this.#creating = true;
-    void this.#autoCreate();
+    this.#creation = this.#autoCreate();
+    void this.#creation;
   }
 
   /** Enable auto-creating an Untitled project on the next change. Called once the
@@ -418,6 +431,26 @@ export class ProjectSync {
       this.#armed = prevArmed;
     }
   }
+
+  /**
+   * The current project id, creating the autosaving "Untitled project" first if there
+   * isn't one. Media needs this: an asset's bytes live in the project directory, so a
+   * file dropped into a never-saved project has to bring the project into existence
+   * before it has anywhere to go (#149 A5). Concurrent callers share one creation.
+   * @returns {Promise<string|null>}
+   */
+  async ensureProject() {
+    if (this.#binding) return this.#binding.id;
+    if (!this.#creating) {
+      this.#creating = true;
+      this.#creation = this.#autoCreate();
+    }
+    try { await this.#creation; } catch { /* surfaced by the save path */ }
+    return this.#binding?.id ?? null;
+  }
+
+  /** In-flight #autoCreate, so ensureProject can await a creation already under way. */
+  #creation = null;
 
   async #autoCreate() {
     try {
@@ -570,6 +603,8 @@ export class ProjectSync {
     if (Array.isArray(analysisLog)) log.push(...analysisLog);
     const wsOps = this.#getWorkspaceOps ? this.#getWorkspaceOps() : null; // ws: tier ops (#148)
     if (Array.isArray(wsOps)) log.push(...wsOps);
+    const assetOps = this.#getAssetOps ? this.#getAssetOps() : null; // asset: tier ops (#149 A5)
+    if (Array.isArray(assetOps)) log.push(...assetOps);
     // Record the active plugin set alongside the data, so reopening restores the
     // analyses too. Null when the feature isn't wired (keeps old saves untouched).
     // Carry forward any recorded plugins this install can't resolve (not installed
@@ -599,6 +634,7 @@ export class ProjectSync {
     try {
       await this.#datasets.loadBundle({ log: [] }); // empty log ⇒ one fresh blank dataset
       this.#applyWorkspaces?.([]); // a fresh project has no workspace state
+      this.#applyAssetOps?.([]);
       this.#applyOutput?.([]); // …and no output (clears stale output on switch)
       this.#applyAnalysisLog?.([]); // …and no recorded analyses (script)
     } finally {
@@ -673,6 +709,7 @@ export class ProjectSync {
       // Restore plugin workspace blobs BEFORE plugins load, so a workspace's
       // mount() sees its saved state via state.get(). Absent ⇒ empty.
       this.#applyWorkspaces?.(bundle.workspaceOps || []);
+      this.#applyAssetOps?.(bundle.assetOps || assetOpsOf(bundle.log));
       this.#applyOutput?.(bundle.output || []); // restore the Output tab (or clear)
       this.#applyAnalysisLog?.(bundle.analysisLog || []); // restore the script's analysis steps
       // Restore the project's analysis set (unless the caller already applied one,
@@ -714,6 +751,7 @@ export class ProjectSync {
       try {
         await this.#datasets.loadBundle({ log: [] }); // empty log ⇒ one fresh blank dataset
         this.#applyWorkspaces?.([]);
+        this.#applyAssetOps?.([]);
         this.#applyOutput?.([]);
         this.#applyAnalysisLog?.([]);
       } catch (e2) {
@@ -1170,6 +1208,7 @@ export class ProjectSync {
       const { bundle } = await this.#store.load(id);
       await this.#datasets.loadBundle(bundle);
       await this.#applyWorkspaces?.(bundle.workspaceOps || [], { refresh: true }); // peer sync → refresh in place, don't remount
+      this.#applyAssetOps?.(bundle.assetOps || assetOpsOf(bundle.log));
       this.#applyOutput?.(bundle.output || []);
       this.#applyAnalysisLog?.(bundle.analysisLog || []);
       this.#lastManifest = manifest;
@@ -1356,6 +1395,7 @@ export class ProjectSync {
       }
       this.#applyAnalysisLog?.(mergedLog.filter((o) => typeof o.target === 'string' && o.target.startsWith('analysis:')));
       await this.#applyWorkspaces?.(mergedLog.filter((o) => typeof o.target === 'string' && o.target.startsWith('ws:')), { refresh: true }); // refresh in place
+      this.#applyAssetOps?.(assetOpsOf(mergedLog));
       this.#applyOutput?.(manifest.output || []);
     } catch (err) {
       console.error('[live] apply failed', err);

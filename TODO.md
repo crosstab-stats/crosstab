@@ -62,10 +62,34 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         now runs on *permanent purge*, guarded to the project that's actually open.
         Added `rehomeDataset(old,new)` as the log-native fallback for the
         should-never-happen case where the original id is taken.
-  - [ ] **A5: media assets (`asset:` refs) are outside the model entirely** — not in
-        the project save, bundle, folder sync, or live gap-fill. A shared project's
-        media is just missing on the peer, with no transport story (known #139
-        scope, but now the one class of referenced project data outside the log).
+  - [x] **A5: media assets are now INSIDE the project — DONE (bar gap-fill).** They
+        lived in their own OPFS root (`media-assets/`) with a `.json` metadata sidecar
+        per asset, so a shared project's audio/video/images simply weren't there for
+        the recipient. Now: bytes go to the project's own `assets/<id>.bin` through
+        `ProjectStore` (so at-rest encryption, folder mode and the project layout all
+        apply for free), and the metadata is an **op** — `addAsset`/`removeAsset` on
+        target `asset:<id>` — folded by the new `ASSETS` projection, so the index
+        merges, undoes and travels like every other tier. Writes stream through the
+        driver (`writeStream`), and an unprotected read hands back the file handle's
+        own Blob, so a multi-GB movie is never materialised in either direction; a
+        *protected* project buffers, deliberately, rather than storing media in the
+        clear. `.crosstab` carries `assets/<id>.bin` + the ops. Adding media to a
+        never-saved project creates the project first (`ProjectSync.ensureProject`).
+        **Still open:** live-P2P gap-fill for assets (`MediaStore.missing()` is the
+        hook), and a one-time cleanup of the now-stale `media-assets/` and `recycle/`
+        OPFS roots left over from the old stores.
+  - [ ] **A9: every project-EXPORT path must ask what to do about linked building
+        blocks.** The library (`datasets/` root) stays deliberately cross-project —
+        blocks are meant to be reused — so a dataset carrying a `libraryLink` is the
+        one legitimate reference out of the project. That's fine while the project
+        stays on this machine and a data-loss trap the moment it leaves: export a
+        bundle, sync to a folder, or hand off to a peer and the link points at a
+        block the recipient hasn't got. Every export path (`.crosstab` bundle,
+        folder-backed project, live co-authoring hand-off) should detect linked
+        datasets and prompt: **embed** the block's data into the export (self-
+        contained, bigger), **keep the link** (small, recipient must have the block,
+        and say so), or **unlink** (take the data, drop the association). Decide the
+        default per path; a silent choice is the wrong answer for all three.
   - [ ] **A6 (minor): `exportState` preserves `author` ("round-trips the recipe")
         but `restoreState` discards it** — provenance lost on every library/recycle
         round-trip, contradicting the docstring.

@@ -399,11 +399,14 @@ export async function boot(mounts) {
   // so the broker sees it. Codecs are registered from manifests via pluginActions.
   const codecs = new CodecService({ importers, exporters, loader, results: results.api });
   services.codec = codecs.serviceApi;
-  // Media assets (#139): qualitative audio/image/video live in a content-addressed
-  // OPFS store; the dataset holds only `asset:<id>` refs, never the bytes. The
-  // `media.load(ref) -> Blob` service is the ONLY door a (media-CSP) plugin has to
-  // them — it never sees the store, a handle, or the filesystem. Added post-loader
-  // like `codec`; plugins load post-boot, so the broker sees it.
+  // Media assets (#139): qualitative audio/image/video are content-addressed and live
+  // INSIDE the project (#149 A5) — bytes in its `assets/` directory, metadata as
+  // `addAsset` ops in the same log as everything else — so they're encrypted with the
+  // project, land in a synced folder with it, and travel with a bundle. The dataset
+  // holds only `asset:<id>` refs. The `media.load(ref) -> Blob` service is the ONLY door
+  // a (media-CSP) plugin has to them — it never sees the store, a handle, or the
+  // filesystem. Wired below, once `projects` exists; the broker sees it because plugins
+  // load post-boot.
   const mediaStore = new MediaStore();
   services.media = createMediaService(mediaStore);
   // ZIP for plugins (#139): surface the host's zip module so an archive-format
@@ -563,8 +566,9 @@ export async function boot(mounts) {
   // (owner, workspace id, dataset) (#145); opaque to the host. Empty until a
   // workspace plugin writes.
   const workspaceStore = new WorkspaceStore({ bus, log: projectLog });
+  const projectStoreForProjects = new ProjectStore();
   const projects = new ProjectSync({
-    projectStore: new ProjectStore(),
+    projectStore: projectStoreForProjects,
     datasets,
     ui,
     menus,
@@ -590,6 +594,8 @@ export async function boot(mounts) {
     // reconcile() alone wouldn't refresh it and it would keep showing stale data.
     // Workspaces are now the `ws:` tier of the one true log (#148): save carries their
     // ops in manifest.log; load routes them here. The store folds them into its cache.
+    getAssetOps: () => mediaStore.ops(),
+    applyAssetOps: (ops) => mediaStore.restoreOps(ops),
     getWorkspaceOps: () => workspaceStore.ops(),
     applyWorkspaces: async (ops, { refresh = false } = {}) => {
       workspaceStore.restoreOps(Array.isArray(ops) ? ops : []); // ws ops from manifest.log (runs sync, before any await)
@@ -613,6 +619,17 @@ export async function boot(mounts) {
     getAnalysisLog: () => analysisLog.toJSON(),
     applyAnalysisLog: (entries) => analysisLog.load(entries),
   });
+  // Now that the project exists, point the media store at it: bytes go into the
+  // project's own `assets/` dir through the same ProjectStore (so encryption, folder
+  // mode and the project layout all apply for free), and the index lives in the shared
+  // log. A file dropped into a never-saved project brings the project into being first.
+  mediaStore.attach({
+    store: projectStoreForProjects,
+    log: projectLog,
+    bus,
+    projectId: () => projects.activeId,
+    ensureProject: () => projects.ensureProject(),
+  });
   projects.activate();
 
   // File ▸ Export project bundle — the open, self-describing .crosstab archive
@@ -635,7 +652,14 @@ export async function boot(mounts) {
         const collab = projects.collabIdentity?.(); // #148 — bundle carries the room identity
         // The faithful-clone snapshot (raw log + source bytes) — so a hand-off can co-author.
         const snapshot = await projects.exportSnapshot();
-        const blob = await exportProjectBundle({ datasets, bundle: snapshot, projectName: name, plugins: activePlugins, collab });
+        // Carry the project's media with it — a bundle whose `asset:` refs resolve to
+        // nothing on the other machine isn't a hand-off (#149 A5).
+        const assets = [];
+        for (const a of await mediaStore.list({ present: true })) {
+          const got = await mediaStore.get(a.id);
+          if (got?.bytes) assets.push({ id: a.id, bytes: got.bytes });
+        }
+        const blob = await exportProjectBundle({ datasets, bundle: snapshot, projectName: name, plugins: activePlugins, collab, assets });
         downloadBlob(blob, `${slug(name) || 'crosstab-project'}.crosstab`);
         results.api.appendText(`Exported **${name}** as a .crosstab bundle (${(blob.size / 1048576).toFixed(1)} MB).`);
       } catch (err) {
@@ -652,8 +676,13 @@ export async function boot(mounts) {
       const file = await pickBundleFile();
       if (!file) return;
       try {
-        const { name, bundle, plugins: recorded } = importProjectBundle(new Uint8Array(await file.arrayBuffer()));
+        const { name, bundle, plugins: recorded, assets } = importProjectBundle(new Uint8Array(await file.arrayBuffer()));
         await projects.openBundle({ name, bundle });
+        // Land the media into the NEW project's own assets/ dir. After openBundle so the
+        // project exists; the `addAsset` ops came in with the log.
+        for (const a of assets ?? []) {
+          try { await mediaStore.put(a.bytes, mediaStore.meta(a.id) ?? {}); } catch (e) { console.warn('[media] import failed', a.id, e); }
+        }
         // Warn about analyses/plugins the bundle used but this install doesn't have
         // (#102). Built-ins always present; only non-built-ins (URL/file/authored)
         // can be missing — match by manifest id against what's installed here.
@@ -822,7 +851,7 @@ export async function boot(mounts) {
   // `dataStore` kept as an alias to the manager (it delegates to the active
   // dataset) so console pokes / older references keep working. Exposed before the
   // launcher so the launcher (and dev tooling) can use the engine.
-  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, projects, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager, codecs, analysisLog, pluginActions, undoCoordinator, projectLog };
+  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, projects, mediaStore, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager, codecs, analysisLog, pluginActions, undoCoordinator, projectLog };
   /**
    * Console debugging: dump the FULL one true log — every op across all tiers
    * (collection, data, analysis), including the `retract`/`reorder` tombstones and

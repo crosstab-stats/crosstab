@@ -100,6 +100,56 @@ class HandleDriver {
     }
   }
 
+  /**
+   * Write a Blob/File by **streaming** it — same atomic temp-then-rename as
+   * {@link HandleDriver#write}, but the bytes never sit in RAM as one buffer. This is
+   * the media path: a multi-GB movie must reach the project without being materialised
+   * (and without hitting the browser's single-blob read wall).
+   * @param {string} path @param {Blob} blob
+   */
+  async writeStream(path, blob) {
+    const parts = segs(path);
+    const name = parts.pop();
+    const dir = await this.#dirOf(parts, true);
+    const tmp = `${name}.tmp`;
+    const tfh = await dir.getFileHandle(tmp, { create: true });
+    try {
+      await blob.stream().pipeTo(await tfh.createWritable());
+    } catch (err) {
+      try { await dir.removeEntry(tmp); } catch { /* nothing partial to clean */ }
+      throw err;
+    }
+    if (typeof tfh.move === 'function') {
+      try {
+        await tfh.move(name);
+      } catch (err) {
+        try { await dir.removeEntry(tmp); } catch { /* best effort */ }
+        throw err;
+      }
+    } else {
+      const fh = await dir.getFileHandle(name, { create: true });
+      const w = await fh.createWritable();
+      try { await (await dir.getFileHandle(tmp)).getFile().then((f) => f.stream().pipeTo(w)); } finally { /* w closed by pipeTo */ }
+      try { await dir.removeEntry(tmp); } catch { /* best effort */ }
+    }
+  }
+
+  /**
+   * Read a file as a **Blob** without materialising it — the handle's `File` IS a Blob,
+   * so a media element can stream from it and a slice reads only what it needs.
+   * @param {string} path @returns {Promise<File|null>}
+   */
+  async readBlob(path) {
+    const parts = segs(path);
+    const name = parts.pop();
+    try {
+      const dir = await this.#dirOf(parts, false);
+      return await (await dir.getFileHandle(name)).getFile();
+    } catch {
+      return null;
+    }
+  }
+
   async remove(path) {
     const parts = segs(path);
     const name = parts.pop();

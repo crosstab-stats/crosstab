@@ -29,6 +29,13 @@ import { deriveKey, encryptWithKey, decryptWithKey, isEnveloped, newSalt, DEFAUL
 const ROOT = 'projects';
 const CATALOG = 'catalog.json';
 
+/** Subdirectory holding media asset bytes inside a project (`assets/<id>.bin`). */
+const ASSET_DIR = 'assets';
+
+/** Asset ids are content hashes (lowercase hex); strip anything else so a crafted ref
+ * can never escape the project directory. */
+const safeAssetId = (id) => String(id).replace(/[^a-f0-9]/gi, '');
+
 /** Source op types — their bytes are written as Parquet sidecars; every other op is a
  * light transform stored inline in the manifest. Mirrors data-store's SOURCE_OPS. */
 const SOURCE_TYPES = new Set(['load', 'append', 'join']);
@@ -301,6 +308,7 @@ export class ProjectStore {
     // loadBundle handles collection + data; these two restore analysis + workspace).
     const analysisLog = log.filter((o) => o.owner === 'core' && typeof o.target === 'string' && o.target.startsWith('analysis:'));
     const workspaceOps = log.filter((o) => typeof o.target === 'string' && o.target.startsWith('ws:'));
+    const assetOps = log.filter((o) => o.owner === 'core' && typeof o.target === 'string' && o.target.startsWith('asset:'));
     return {
       id,
       name: manifest.name,
@@ -313,6 +321,7 @@ export class ProjectStore {
         collabSecret: manifest.collabSecret ?? null,
         analysisLog,
         workspaceOps,
+        assetOps,
         log,
       },
     };
@@ -435,6 +444,65 @@ export class ProjectStore {
     } catch {
       return false;
     }
+  }
+
+  // --- media assets (#149 A5) -------------------------------------------------
+  // Media lives IN the project, beside the source Parquet, under `assets/<id>.bin`.
+  // It used to sit in its own OPFS root, which meant a project's media couldn't travel
+  // with it — not into a bundle, a synced folder, or a peer. Bytes are content-addressed
+  // by the caller (the id IS the hash), and the metadata is an op in the log, so there
+  // is no catalog and no metadata sidecar to fall out of step.
+
+  /** Path of one asset's bytes inside the project. */
+  #assetFile(id, assetId) {
+    return this.#file(id, `${ASSET_DIR}/${safeAssetId(assetId)}.bin`);
+  }
+
+  /**
+   * Store an asset's bytes. Streams the Blob straight through when the project is
+   * unprotected, so a multi-GB movie never sits in RAM. A **protected** project falls
+   * back to a buffered write, because the at-rest envelope encrypts a whole byte array
+   * — correctness over memory; the alternative is silently storing media in the clear.
+   * @param {string} id project id @param {string} assetId @param {Blob} blob
+   */
+  async writeAsset(id, assetId, blob) {
+    const path = this.#assetFile(id, assetId);
+    if (this.#key) await this.#write(path, new Uint8Array(await blob.arrayBuffer()));
+    else await this.#driver.writeStream(path, blob);
+  }
+
+  /**
+   * Read an asset's bytes as a Blob, or null. Unprotected projects hand back the
+   * handle's own File (nothing is copied — a `<video>` can stream from it); a protected
+   * project must decrypt, so it materialises.
+   * @param {string} id project id @param {string} assetId @param {string} [type] MIME type
+   * @returns {Promise<Blob|null>}
+   */
+  async readAsset(id, assetId, type) {
+    const path = this.#assetFile(id, assetId);
+    if (this.#key) {
+      const bytes = await this.#readRaw(path);
+      return bytes ? new Blob([bytes], { type: type || 'application/octet-stream' }) : null;
+    }
+    const file = await this.#driver.readBlob(path);
+    if (!file) return null;
+    return type ? file.slice(0, file.size, type) : file;
+  }
+
+  /** Whether an asset's bytes are present in this project. */
+  async hasAsset(id, assetId) {
+    return (await this.#driver.readBlob(this.#assetFile(id, assetId))) != null;
+  }
+
+  /** Forget an asset's bytes (the purge/sweep path). */
+  async removeAsset(id, assetId) {
+    await this.#driver.remove(this.#assetFile(id, assetId));
+  }
+
+  /** Asset ids whose bytes are present in this project — the sweep's "what's on disk". */
+  async listAssets(id) {
+    const names = await this.#driver.list(this.#path(id, ASSET_DIR));
+    return names.filter((n) => n.endsWith('.bin')).map((n) => n.slice(0, -'.bin'.length));
   }
 
   // --- internals -------------------------------------------------------------

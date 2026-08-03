@@ -35,8 +35,14 @@ const isSourceOp = (op) => SOURCE_TYPES.has(op?.type);
  *   analyses (and be warned about any they don't have — #102).
  * @returns {Promise<Blob>}
  */
-export async function exportProjectBundle({ datasets, bundle = null, projectName, plugins = [], collab = null }) {
+export async function exportProjectBundle({ datasets, bundle = null, projectName, plugins = [], collab = null, assets = [] }) {
   const entries = [];
+  // --- media assets (#149 A5): the bytes the log's `addAsset` ops reference. Without
+  // these a shared project's audio/video/images are simply missing for the recipient —
+  // the refs resolve to nothing. Content-addressed, so the file name IS the id.
+  for (const a of assets) {
+    if (a?.id && a.bytes) entries.push({ name: `assets/${a.id}.bin`, data: a.bytes });
+  }
   // --- faithful-clone tier (#148): the raw op log + raw source bytes. This is what a
   // re-open / co-authoring hand-off restores VERBATIM (same op ids + baked row ids), so
   // two peers sharing a bundle can converge — a derived snapshot can't (fresh row ids).
@@ -177,6 +183,11 @@ export function importProjectBundle(buf) {
       collabSecret: manifest.collabSecret ?? null,
     },
     plugins,
+    // Media bytes for the log's `addAsset` ops (#149 A5). The importer writes these into
+    // the NEW project's `assets/` dir; the ids are content hashes, so they carry over.
+    assets: files
+      .filter((f) => f.name.startsWith('assets/') && f.name.endsWith('.bin'))
+      .map((f) => ({ id: f.name.slice('assets/'.length, -'.bin'.length), bytes: f.data })),
   };
 }
 
