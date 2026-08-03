@@ -7,10 +7,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { planDatasetApply } from '../core/collab-sync.js';
 
-// manifest shape
-const md = (id, srcIds = ['s1'], transforms = []) => ({ id, sources: srcIds.map((s) => ({ id: s })), transforms });
-// live-snapshot shape
-const ld = (id, srcIds = ['s1'], transforms = []) => ({ id, state: { sources: srcIds.map((s) => ({ id: s })), transforms } });
+// On the one true log, a dataset's signature is the id SET of its ops (its ds:<id>/…
+// slice). Both "current" and "incoming" are the same {id, ops} shape now.
+const md = (id, srcIds = ['s1'], transforms = []) => ({ id, ops: [...srcIds, ...transforms.map((t) => t.id)].map((x) => ({ id: x })) });
+const ld = md;
 
 test('unchanged datasets are KEPT (their DuckDB tables stay put)', () => {
   const cur = [ld(1), ld(2)];

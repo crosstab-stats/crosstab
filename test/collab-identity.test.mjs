@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ensureCollabIdentity, roomFor, inviteLinkFor, parseInviteLink, deriveRoomId } from '../core/live-invite.js';
 import { buildManifest } from '../core/project-store.js';
-import { mergeManifests, buildMergers } from '../core/collab-sync.js';
+import { mergeProjects, buildMergers } from '../core/collab-sync.js';
 
 const bundle = (extra = {}) => ({ activeId: 1, activePlugins: null, workspaces: null, output: null, datasets: [{ id: 1, name: 'ds1', libraryLink: null, state: { sources: [{ id: 's1', meta: [{ name: 'x' }], label: 'f', combine: 'base' }], transforms: [], order: ['s'] } }], ...extra });
 
@@ -58,6 +58,6 @@ test('merge preserves collab identity (never drops the room/secret)', () => {
   const withId = buildManifest({ name: 'P', savedAt: 1, bundle: bundle({ collabId: id.collabId, collabSecret: id.collabSecret }) });
   const withoutId = buildManifest({ name: 'P', savedAt: 2, bundle: bundle() }); // a peer that hasn't got it yet
   // Whichever side holds the identity, the merge keeps it (propagates to the other).
-  assert.equal(mergeManifests(null, withId, withoutId, buildMergers([])).manifest.collabId, id.collabId);
-  assert.equal(mergeManifests(null, withoutId, withId, buildMergers([])).manifest.collabSecret, id.collabSecret);
+  assert.equal(mergeProjects(withId, withoutId, buildMergers([])).manifest.collabId, id.collabId);
+  assert.equal(mergeProjects(withoutId, withId, buildMergers([])).manifest.collabSecret, id.collabSecret);
 });

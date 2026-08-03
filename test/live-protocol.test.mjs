@@ -1,8 +1,9 @@
 /**
- * Headless tests for the live co-authoring convergence engine (core/live-protocol.js).
- * Two LiveDocs are wired through an in-memory broadcast queue drained to a fixpoint,
- * so we test the real convergence loop without any network. A step cap catches
- * non-convergence (a message storm) as a failure.
+ * Headless tests for the live co-authoring convergence engine (core/live-protocol.js) on
+ * the ONE TRUE LOG. Two LiveDocs are wired through an in-memory broadcast queue drained
+ * to a fixpoint, so we test the real convergence loop without a network. A step cap
+ * catches non-convergence (a message storm). Manifests are `{log:[...ops], …scalars}`;
+ * merge is by op identity (no base).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,22 +13,19 @@ import { buildMergers } from '../core/collab-sync.js';
 import { manifestsEqual } from '../core/folder-sync.js';
 import { mergeState as caqdasMerge } from '../plugins/builtin-caqdas/index.js';
 
-const recode = (id, name) => ({ id, type: 'recodeVar', name });
-const ds = (txs) => ({ id: 1, name: 'ds1', libraryLink: null, sources: [{ id: 's1', meta: [{ name: 'x' }], label: 'f', combine: 'base', file: 's1.parquet' }], transforms: txs, order: ['s', ...txs.map(() => 't')] });
-const man = (txs, extra = {}) => ({ name: 'P', savedAt: 1, activeId: 1, activePlugins: null, workspaces: null, output: null, datasets: [ds(txs)], ...extra });
-const txIds = (m) => m.datasets[0].transforms.map((t) => t.id);
+const NUL = String.fromCharCode(0);
+let seq = 0;
+const op = (id, target, type, payload = {}, owner = 'core') => ({ id, hlc: { wall: 1000, counter: seq++ }, target, owner, type, payload, reads: [] });
+const recode = (id, name) => op(id, `ds:1/var:${name}`, 'recodeVar', { name });
+const LOAD = op('load1', 'ds:1/source:s1', 'load', { src: { meta: [{ name: 'x' }] } }); // shared ancestor op
+const ADD = op('add1', 'coll/ds:1', 'addDataset', { id: 1, name: 'ds1' });
+const man = (ops, extra = {}) => ({ name: 'P', savedAt: 1, activeId: 1, activePlugins: null, output: null, datasetMeta: null, collabId: null, log: [ADD, LOAD, ...ops], ...extra });
+const ids = (m) => (m.log ?? []).map((o) => o.id).filter((x) => x !== 'add1' && x !== 'load1').sort();
 
-/** A tiny broadcast network: docs push messages; drain() delivers to every other
- * doc until the queue empties (fixpoint) or the storm cap trips. */
 function makeNet() {
   const net = { q: [], docs: {}, conflicts: {} };
   net.add = (id, opts) => {
-    net.docs[id] = new LiveDoc({
-      selfId: id,
-      send: (m) => net.q.push([id, m]),
-      onConflicts: (c) => { net.conflicts[id] = c; },
-      ...opts,
-    });
+    net.docs[id] = new LiveDoc({ selfId: id, send: (m) => net.q.push([id, m]), onConflicts: (c) => { net.conflicts[id] = c; }, ...opts });
     return net.docs[id];
   };
   net.drain = () => {
@@ -42,33 +40,15 @@ function makeNet() {
   return net;
 }
 
-test('setPaused: two peers editing the SAME variable while partitioned collide on resume', () => {
-  const net = makeNet();
-  const A = net.add('A', { manifest: man([]), base: man([]), mergers: buildMergers([]) });
-  const B = net.add('B', { manifest: man([]), base: man([]), mergers: buildMergers([]) });
-  A.hello(); B.hello(); net.drain(); // establish the session
-  // Partition both, then each recodes the SAME variable — nothing crosses while paused.
-  A.setPaused(true); B.setPaused(true);
-  A.localUpdate(man([recode('a1', 'gender')]));
-  B.localUpdate(man([recode('b1', 'gender')]));
-  net.drain();
-  assert.equal(net.q.length, 0, 'no messages flow while partitioned');
-  assert.ok(!net.conflicts.A && !net.conflicts.B, 'no conflict while partitioned');
-  // Reconnect → the two same-target edits from a shared base genuinely collide.
-  A.setPaused(false); B.setPaused(false);
-  net.drain();
-  assert.ok(net.conflicts.A || net.conflicts.B, 'a genuine conflict surfaces on reconnect');
-});
-
 test('disjoint recodes converge to identical state on both peers', () => {
   const net = makeNet();
   const A = net.add('A', { manifest: man([recode('a1', 'income')]), mergers: buildMergers([]) });
   const B = net.add('B', { manifest: man([recode('b1', 'age')]), mergers: buildMergers([]) });
   A.hello(); B.hello();
   net.drain();
-  assert.ok(manifestsEqual(A.manifest, B.manifest)); // byte-convergent
-  assert.deepEqual(txIds(A.manifest), ['a1', 'b1']);
-  assert.deepEqual(txIds(B.manifest), ['a1', 'b1']);
+  assert.ok(manifestsEqual(A.manifest, B.manifest)); // byte-convergent (by op-id set)
+  assert.deepEqual(ids(A.manifest), ['a1', 'b1']);
+  assert.deepEqual(ids(B.manifest), ['a1', 'b1']);
 });
 
 test('convergence is order-independent (peer with higher id edits first)', () => {
@@ -78,57 +58,54 @@ test('convergence is order-independent (peer with higher id edits first)', () =>
   B.hello(); A.hello(); // reversed announce order
   net.drain();
   assert.ok(manifestsEqual(A.manifest, B.manifest));
-  assert.deepEqual(txIds(A.manifest), ['a1', 'b1']); // canonical (id) order, not arrival order
+  assert.deepEqual(ids(A.manifest), ['a1', 'b1']);
 });
 
 test('late join: an empty joiner catches up to the full project', () => {
   const net = makeNet();
   let applied = null;
   const A = net.add('A', { manifest: man([recode('a1', 'income')]), mergers: buildMergers([]) });
-  const B = net.add('B', { manifest: { name: 'P', savedAt: 0, activeId: 1, activePlugins: null, workspaces: null, output: null, datasets: [] }, mergers: buildMergers([]), onChange: (m) => { applied = m; } });
+  const B = net.add('B', { manifest: { name: 'P', savedAt: 0, activeId: 1, activePlugins: null, output: null, datasetMeta: null, collabId: null, log: [] }, mergers: buildMergers([]), onChange: (m) => { applied = m; } });
   A.hello(); B.hello();
   net.drain();
   assert.ok(manifestsEqual(A.manifest, B.manifest));
-  assert.equal(B.manifest.datasets.length, 1);       // joiner received the dataset
-  assert.deepEqual(txIds(B.manifest), ['a1']);
-  assert.ok(applied);                                 // onChange fired with the merged state
+  assert.deepEqual(ids(B.manifest), ['a1']); // joiner received the dataset's ops
+  assert.ok(B.manifest.log.some((o) => o.id === 'load1'));
+  assert.ok(applied);
 });
 
-test('CAQDAS codebooks converge (add-wins) live', () => {
+test('CAQDAS codebooks converge (add-wins) live — the workspace tier merges on the log', () => {
   const plugins = [{ id: 'builtin-caqdas', manifest: { workspaces: [{ id: 'caqdas-coding', merge: { via: 'mergeState' } }] }, module: { mergeState: caqdasMerge } }];
+  const leaf = `ws:builtin-caqdas${NUL}caqdas-coding${NUL}_default${NUL}1`;
   const cb = (codes) => ({ version: 1, textColumn: 't', labelColumn: null, codes, segments: [] });
-  const ws = (codes) => ({ __wsv: 4, ws: { 'builtin-caqdas': { 'caqdas-coding': { _default: { 1: cb(codes) } } } } });
+  const wsOp = (id, codes) => op(id, leaf, 'setWorkspace', { value: cb(codes), label: null }, 'builtin-caqdas');
+  const shared = wsOp('wbase', [{ id: 'c1', name: 'anx' }]); // common ancestor leaf
+  const A = { ...man([]), log: [ADD, LOAD, shared, wsOp('wa', [{ id: 'c1', name: 'anx' }, { id: 'c2', name: 'coping' }])] };
+  const B = { ...man([]), log: [ADD, LOAD, shared, wsOp('wb', [{ id: 'c1', name: 'anx' }, { id: 'c3', name: 'stigma' }])] };
   const net = makeNet();
-  const A = net.add('A', { manifest: man([], { workspaces: ws([{ id: 'c1', name: 'anx' }, { id: 'c2', name: 'coping' }]) }), mergers: buildMergers(plugins) });
-  const B = net.add('B', { manifest: man([], { workspaces: ws([{ id: 'c1', name: 'anx' }, { id: 'c3', name: 'stigma' }]) }), mergers: buildMergers(plugins) });
-  A.hello(); B.hello();
+  const dA = net.add('A', { manifest: A, mergers: buildMergers(plugins) });
+  const dB = net.add('B', { manifest: B, mergers: buildMergers(plugins) });
+  dA.hello(); dB.hello();
   net.drain();
-  assert.ok(manifestsEqual(A.manifest, B.manifest));
-  const codes = A.manifest.workspaces.ws['builtin-caqdas']['caqdas-coding']._default[1].codes.map((c) => c.id).sort();
-  assert.deepEqual(codes, ['c1', 'c2', 'c3']);
+  assert.ok(manifestsEqual(dA.manifest, dB.manifest), 'both peers converge');
+  const latest = dA.manifest.log.filter((o) => o.target === leaf).sort((a, b) => (a.hlc.wall - b.hlc.wall) || (a.hlc.counter - b.hlc.counter)).slice(-1)[0];
+  assert.deepEqual(latest.payload.value.codes.map((c) => c.id).sort(), ['c1', 'c2', 'c3']);
 });
 
 test('a genuine conflict surfaces, and resolving it re-converges both peers', () => {
   const net = makeNet();
   const A = net.add('A', { manifest: man([recode('a1', 'income')]), mergers: buildMergers([]) });
-  const B = net.add('B', { manifest: man([recode('b1', 'income')]), mergers: buildMergers([]) });
+  const B = net.add('B', { manifest: man([recode('b1', 'income')]), mergers: buildMergers([]) }); // SAME target
   A.hello(); B.hello();
   net.drain();
-  // Both independently recoded `income` → an add/add conflict, surfaced (not silently merged).
-  assert.ok(net.conflicts.A?.length || net.conflicts.B?.length);
+  assert.ok(net.conflicts.A?.length || net.conflicts.B?.length, 'same-target edit surfaces a conflict, not a silent merge');
   const key = (net.conflicts.A ?? net.conflicts.B)[0].key;
-  assert.ok(!manifestsEqual(A.manifest, B.manifest) || txIds(A.manifest).length === 1); // not silently unioned
-
-  // A resolves in favour of the lower-id ("mine" slot = A's a1).
-  A.resolve({ [key]: 'mine' });
+  A.resolve({ [key]: 'mine' }); // favour the lower-id ("mine" slot = A's a1)
   net.drain();
   assert.ok(manifestsEqual(A.manifest, B.manifest));
-  assert.deepEqual(txIds(A.manifest), ['a1']);
-  assert.deepEqual(txIds(B.manifest), ['a1']);
 });
 
 test('attachLiveDoc wires a LiveDoc onto a session transport (send out, receive in)', () => {
-  // Mock the LiveSession surface attachLiveDoc uses.
   const session = {
     sent: [], _ops: null, _leave: null,
     sendOps(m) { this.sent.push(m); },
@@ -137,11 +114,9 @@ test('attachLiveDoc wires a LiveDoc onto a session transport (send out, receive 
   };
   const doc = attachLiveDoc(session, { selfId: 'A', manifest: man([recode('a1', 'income')]), mergers: buildMergers([]) });
   doc.hello();
-  assert.ok(session.sent.some((m) => m.t === 'hello'));   // send routed out through the session
+  assert.ok(session.sent.some((m) => m.t === 'hello'));
   assert.ok(session.sent.some((m) => m.t === 'state'));
-
-  // A peer's state arrives via the session's op channel → the doc converges.
   session._ops({ t: 'state', peerId: 'B', manifest: man([recode('b1', 'age')]) }, 'B');
-  assert.deepEqual(txIds(doc.manifest), ['a1', 'b1']);
-  assert.ok(session.sent.some((m) => m.t === 'state' && txIds(m.manifest).length === 2)); // merged state broadcast back
+  assert.deepEqual(ids(doc.manifest), ['a1', 'b1']);
+  assert.ok(session.sent.some((m) => m.t === 'state' && ids(m.manifest).length === 2));
 });

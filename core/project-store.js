@@ -337,30 +337,9 @@ export class ProjectStore {
   }
 
   /**
-   * The **common-ancestor** snapshot for merge (#143): the last manifest this client
-   * successfully synced, stored as a `project.base.json` sidecar in the bundle. A
-   * three-way merge diffs *my* current manifest and *their* on-disk manifest against
-   * this base. After a successful sync, the merged manifest becomes the new base.
-   * @param {string} id
-   * @returns {Promise<object|null>}
-   */
-  async readBase(id) {
-    try {
-      return JSON.parse(await this.#read(this.#file(id, 'project.base.json')));
-    } catch {
-      return null;
-    }
-  }
-
-  /** Record the common-ancestor snapshot (see {@link ProjectStore#readBase}). */
-  async writeBase(id, manifest) {
-    await this.#write(this.#file(id, 'project.base.json'), JSON.stringify(manifest));
-  }
-
-  /**
-   * Write a **merged** manifest straight to `project.json` (folder-sync, #143) —
-   * the result of a three-way merge, whose dataset `file` refs point at Parquet the
-   * OS sync client has already mirrored from both sides (so no bytes to write here).
+   * Write a **merged** manifest straight to `project.json` (folder-sync) — the result
+   * of an op-union merge, whose source `file` refs point at Parquet the OS sync client
+   * has already mirrored from both sides (op-id-keyed, so no collision + no bytes here).
    * The driver's `write` is atomic (temp + rename), so a peer polling `project.json`
    * mid-write never reads a torn file. Refreshes the catalog so `list()` stays in step.
    * @param {string} id

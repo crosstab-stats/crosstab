@@ -1137,15 +1137,14 @@ export class ProjectSync {
       id: this.#binding.id,
       name: this.#binding.name,
       bundle,
-      base: this.#lastManifest, // MY per-peer ancestor (not a shared disk file) — see folder-sync
-      mergers: this.#mergers(), // core + active builtin plugin mergers (#148 6b) — merges CAQDAS coding across peers
-
+      // No base: the merge derives the common ancestor from the shared op-id set (#148).
+      mergers: this.#mergers(), // core + active builtin plugin mergers — merges CAQDAS coding across peers
       resolveConflicts: (conflicts) => showConflictDialog(conflicts),
       applyMerged: (id, manifest) => this.#applyMergedManifest(id, manifest),
       now: Date.now(),
     });
-    // Record the written manifest as my new ancestor (drives the poll's change
-    // detection and the next merge). applyMerged already set it when it reloaded.
+    // Record the written manifest as my poll baseline (a cheap "did the peer write?"
+    // detector — NOT a merge ancestor anymore). applyMerged already set it on reload.
     if (result.action !== 'cancelled' && result.manifest) this.#lastManifest = result.manifest;
     return result;
   }
