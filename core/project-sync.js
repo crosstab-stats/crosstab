@@ -934,8 +934,9 @@ export class ProjectSync {
       // the manifest to collaborators, so opening the shared folder joins the same room.
       const ident = ensureCollabIdentity({ collabId: this.#collabId, collabSecret: this.#collabSecret });
       this.#collabId = ident.collabId; this.#collabSecret = ident.collabSecret;
+      const projectName = this.activeName || 'My project'; // capture BEFORE unbinding — activeName reads #binding
       this.#binding = null; // a brand-new entry, living in the folder now
-      await this.#fullSave(null, this.activeName || 'My project'); // snapshot now carries collab id/secret
+      await this.#fullSave(null, projectName); // snapshot now carries collab id/secret
       this.#folderMode = true;
       this.#lastManifest = await this.#store.readManifest(this.#binding.id);
       this.#activeFolderId = await rememberFolder(handle, { name: this.#binding.name, savedAt: Date.now() });

@@ -755,7 +755,13 @@ async function checkForUpdates(btn, elBuild) {
     // catalog index) — keep in sync with plugin-manager.js LS_CATALOG.
     try { localStorage.removeItem('crosstab.plugins.catalog'); } catch { /* ignore */ }
     btn.textContent = 'Reloading…';
-    setTimeout(() => window.location.reload(), 350);
+    // Strip the one-shot `?launch=` deep link before reloading: it's a bypass that
+    // auto-applies a preset (e.g. demo-qual) and skips the launcher, so keeping it in the
+    // URL would re-fire on the update reload and dump the user back into the demo instead
+    // of the launcher they just used. replace() so the cleaned URL doesn't add history.
+    const u = new URL(window.location.href);
+    u.searchParams.delete('launch');
+    setTimeout(() => window.location.replace(u.toString()), 350);
   } catch {
     restore('Check failed — try again');
   }
