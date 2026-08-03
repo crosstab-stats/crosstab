@@ -622,6 +622,7 @@ export class ResultsPane {
     this.#pendingSection = null;
     for (const item of model) {
       if (!item || !item.kind) continue;
+      const runMark = this.#model.length; // preserve runId ownership across the rebuild (unit 5b)
       if (item.kind === 'section') {
         this.#currentSection = this.#createSection({ title: item.title || '', attribution: item.attribution || null, ts: item.ts });
       } else if (item.kind === 'table') {
@@ -693,6 +694,9 @@ export class ResultsPane {
         this.#place(block);
         this.#model.push({ kind: 'error', message: item.message || '' });
       }
+      // Re-stamp the block(s) this item produced with its analysis runId, so by-id
+      // removal keeps working after any rebuild (save/reload, a sibling's removeRun).
+      if (item.runId) for (let j = runMark; j < this.#model.length; j++) this.#model[j].runId = item.runId;
     }
     // A divider at the BOTTOM of the restored output: everything above it is from
     // the last save; results you run this session append below it, so live work is
@@ -710,11 +714,32 @@ export class ResultsPane {
   }
 
   /** Drop output blocks from index `n` onward and re-render — used by undo to remove
-   * a just-run analysis's output (no "restored" divider). */
+   * a just-run analysis's output (no "restored" divider). Legacy fallback for entries
+   * with no `runId`; prefer {@link ResultsPane#removeRun}. */
   truncateTo(n) {
     if (!Number.isFinite(n) || n < 0) return;
     if (n >= this.#model.length) return;
     this.restoreModel(this.#model.slice(0, n), { divider: false });
+  }
+
+  /** Tag every output block from `fromIndex` to the end with the analysis `runId` that
+   * produced it — so its output can later be removed by IDENTITY (undo / history-delete)
+   * instead of by fragile position (see docs/ARCHITECTURE-unified-log.md, unit 5b). Only
+   * stamps blocks that aren't already owned, so it never steals an earlier run's output. */
+  assignRun(fromIndex, runId) {
+    if (!runId || !Number.isFinite(fromIndex)) return;
+    for (let i = Math.max(0, fromIndex); i < this.#model.length; i++) {
+      if (this.#model[i].runId == null) this.#model[i].runId = runId;
+    }
+  }
+
+  /** Remove exactly the output blocks produced by analysis `runId` and re-render (no
+   * "restored" divider). Precise by-id removal: a MIDDLE analysis's output goes without
+   * disturbing later analyses' output — the thing positional `truncateTo` can't do. */
+  removeRun(runId) {
+    if (!runId) return;
+    const kept = this.#model.filter((b) => b.runId !== runId);
+    if (kept.length !== this.#model.length) this.restoreModel(kept, { divider: false });
   }
 
   /** The canonical results stylesheet, so an HTML export can reproduce the look

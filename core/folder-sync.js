@@ -1,44 +1,38 @@
 /**
  * @file folder-sync.js
- * The folder-backed sync loop (#143) — the orchestration on top of the tested
- * merge brain ({@link module:core/collab-sync}) and the folder-aware
- * {@link ProjectStore}.
+ * The folder-backed sync loop (#143/#148) — orchestration on top of the op-log merge
+ * ({@link module:core/collab-sync~mergeProjects}) and the folder-aware {@link ProjectStore}.
  *
- * A folder-backed project is one `projects/<id>/` bundle inside a picked folder the
- * OS sync client (OneDrive/Dropbox/iCloud/local) mirrors between machines. Two
- * people therefore write the *same* `project.json`. This module reconciles that:
+ * A folder-backed project is one `project.json` (a flat op-log) inside a picked folder
+ * the OS sync client (OneDrive/Dropbox/iCloud/local) mirrors between machines. Two
+ * people therefore write the SAME file. This reconciles that by **op union**:
  *
- *   read theirs (project.json) + base (project.base.json) + mine (this app's state)
- *   → decide → write the result → record it as the new base.
+ *   read theirs (project.json) → land my Parquet → merge(mine, theirs) → write the result.
  *
- * The **base** is this client's common-ancestor snapshot: the last manifest it
- * agreed on. Diffing mine and theirs against it is what turns "two files that
- * differ" into "these specific edits, merged" — the git-style three-way merge, with
- * genuine collisions surfaced (never a silent wrong merge).
- *
- * `decideSync` is pure (headlessly testable); `syncOnce` adds the store I/O. The
- * picker/permission/polling that decide *when* to call `syncOnce` sit above.
+ * There is **no base** (`project.base.json` is gone): the merge derives the common
+ * ancestor from the shared op-id set, so a peer that syncs last never mis-reads a peer's
+ * op as a deletion. `decideSync` is pure (headlessly testable); `syncFolderProject` adds
+ * the store I/O. The picker/permission/polling that decide *when* to sync sit above.
  */
 
-import { mergeManifests } from './collab-sync.js';
+import { mergeProjects } from './collab-sync.js';
 import { stableStringify } from './merge.js';
+import { opIds } from './op-log.js';
 import { buildManifest } from './project-store.js';
 
-/** Content signature of a manifest, ignoring fields that change without being a
- * real edit: `savedAt` (stamped every write) and `output` (regenerable analysis
- * results). Two manifests with the same signature are the same *work*.
- *
- * The `JSON.parse(JSON.stringify(...))` canonicalisation is load-bearing: an
- * in-memory manifest can carry `undefined`-valued keys (e.g. a non-join source's
- * `joinKey: undefined`) that a JSON round-trip **drops**. Without normalising, an
- * in-memory manifest would never signature-match the same manifest read back from
- * disk — so a poll would see a phantom "peer wrote" every tick and rewrite forever
- * (a self-inflicted write storm). Canonicalising both sides the way disk does makes
- * the comparison symmetric. */
+/** Content signature of a manifest — its DURABLE work, ignoring fields that change
+ * without being a real edit: `savedAt` (stamped every write), `output` (regenerable
+ * analysis pixels), and `activeId` (per-peer view state). The log is compared by its
+ * op-id SET (order-independent), so two peers that converged on the same ops match even
+ * if a re-sort left the arrays differently ordered. */
 function contentSig(m) {
   if (!m || typeof m !== 'object') return null;
-  const { savedAt, output, ...rest } = JSON.parse(JSON.stringify(m));
-  return stableStringify(rest);
+  return stableStringify({
+    log: [...opIds(m.log ?? [])].sort(),
+    activePlugins: Array.isArray(m.activePlugins) ? [...m.activePlugins].sort() : null,
+    datasetMeta: m.datasetMeta ?? null,
+    collabId: m.collabId ?? null,
+  });
 }
 
 /** Whether two manifests represent the same work (see {@link contentSig}). */
@@ -47,138 +41,96 @@ export function manifestsEqual(a, b) {
 }
 
 /**
- * Decide what a sync should do, given the common-ancestor `base`, this client's
- * current manifest `mine`, and the on-disk manifest `theirs`. Pure — no I/O.
+ * Decide what a sync should do given this client's current manifest `mine` and the
+ * on-disk `theirs`. Pure — no I/O, no base.
  *
- *  - **seed** — nothing on disk yet: write mine, it becomes the base.
- *  - **in-sync** — disk already equals mine: nothing to do.
- *  - **push** — disk still equals the base (only *I* changed): write mine.
- *  - **merge** — disk advanced past the base (a peer wrote): three-way merge
- *    `(base, mine, theirs)`, surfacing any conflicts.
+ *  - **seed** — nothing on disk yet: write mine.
+ *  - **in-sync** — same work already: nothing to do.
+ *  - **merge** — otherwise: op-union merge (mine, theirs), surfacing any conflicts.
  *
- * With no base (first sync into a folder that already holds a project), `theirs` is
- * used as the ancestor — conservative: it keeps their work and layers mine on top,
- * rather than inventing divergence.
+ * Operand order is canonicalised (lower content signature fills the "mine" slot on both
+ * sides) so BOTH peers compute the byte-identical merged log — otherwise two idle
+ * windows would poll-write forever.
  *
- * @param {object|null} base
  * @param {object} mine
  * @param {object|null} theirs
- * @param {Record<string, object>} mergers  from `buildMergers` (see collab-sync)
- * @param {object|null} [resolutions]  user conflict choices (see the conflict UI);
- *   pass them back to re-run a merge to a clean result.
- * @returns {{action: 'seed'|'in-sync'|'push'|'merge', manifest: object, conflicts: object[]}}
+ * @param {Record<string, object>} mergers  from `buildMergers`
+ * @param {object|null} [resolutions]  user conflict choices (re-run to a clean result)
+ * @returns {{action: 'seed'|'in-sync'|'merge', manifest: object, conflicts: object[]}}
  */
-export function decideSync(base, mine, theirs, mergers = {}, resolutions = null) {
+export function decideSync(mine, theirs, mergers = {}, resolutions = null) {
   if (!theirs) return { action: 'seed', manifest: mine, conflicts: [] };
   if (manifestsEqual(theirs, mine)) return { action: 'in-sync', manifest: theirs, conflicts: [] };
-  if (base && manifestsEqual(theirs, base)) return { action: 'push', manifest: mine, conflicts: [] };
-  const ancestor = base ?? theirs;
-  // Canonicalise operand order so BOTH peers compute the IDENTICAL merge. Otherwise
-  // each orders its own added ops first (threeWayLog: ancestor, then mine-adds, then
-  // theirs-adds), yielding logically-equal but differently-ordered manifests that
-  // never `manifestsEqual` — so two idle windows poll-write forever. Lower content
-  // signature fills the "mine" slot on both sides (same trick as the live LiveDoc).
   const [lo, hi] = contentSig(mine) <= contentSig(theirs) ? [mine, theirs] : [theirs, mine];
-  const { manifest, conflicts } = mergeManifests(ancestor, lo, hi, mergers, resolutions);
+  const { manifest, conflicts } = mergeProjects(lo, hi, mergers, resolutions);
   return { action: 'merge', manifest, conflicts };
 }
 
 /**
- * Run one sync pass against the folder-backed store: read theirs, decide against the
- * caller's `base`, write the outcome. Returns the decision (with the written manifest
- * + conflicts).
- *
- * **`base` is PER-PEER** — the caller's own last-synced manifest — NOT a shared disk
- * file. A single shared `project.base.json` is wrong for multiple peers: whoever
- * syncs last advances it, and the other peer then reads `theirs == base` and
- * concludes "only I changed", re-pushing its stale state and clobbering the peer's
- * edit. Each peer must remember its own common ancestor (the last manifest it
- * reconciled with the folder) and pass it here.
+ * Run one sync pass against the folder-backed store: read theirs, decide, write the
+ * outcome. Returns the decision (with the written manifest + conflicts).
  *
  * @param {object} arg
  * @param {import('./project-store.js').ProjectStore} arg.store  a folder-backed store
- * @param {string} arg.id       project id
+ * @param {string} arg.id
  * @param {object} arg.mine     this client's current manifest
- * @param {object|null} [arg.base]  this peer's last-synced manifest (its ancestor)
  * @param {Record<string, object>} [arg.mergers]
- * @param {object|null} [arg.resolutions]  user conflict choices — pass on a *second*
- *   call (after the conflict UI) to write a resolved merge. Absent + unresolved
- *   conflicts ⇒ nothing is written; the caller resolves then calls again.
+ * @param {object|null} [arg.resolutions]
  * @param {number} [arg.now]
  * @returns {Promise<{action: string, manifest: object, conflicts: object[]}>}
  */
-export async function syncOnce({ store, id, mine, base = null, mergers = {}, resolutions = null, now }) {
+export async function syncOnce({ store, id, mine, mergers = {}, resolutions = null, now }) {
   const theirs = await store.readManifest(id);
-  const decision = decideSync(base, mine, theirs, mergers, resolutions);
-
+  const decision = decideSync(mine, theirs, mergers, resolutions);
   if (decision.action === 'in-sync') return decision;
-
-  // A merge with conflicts and no resolutions yet: don't write a half-decided
-  // manifest — hand the conflicts back so the host can surface them, then call
-  // again with `resolutions` to write the clean result.
   if (decision.action === 'merge' && decision.conflicts.length && !resolutions) {
     return { action: 'conflicts', manifest: decision.manifest, conflicts: decision.conflicts };
   }
-
   const stamped = { ...decision.manifest, savedAt: now ?? Date.now() };
   await store.writeManifest(id, stamped);
   return { ...decision, manifest: stamped };
 }
 
 /**
- * The full folder-sync pass for the live app: land my Parquet, build my manifest,
- * merge against the peer + base, resolve any conflicts, write the result, and — if a
- * peer contributed changes — hand the merged manifest back so the caller reloads it
- * into the app. This is what a folder-backed save/poll calls; it's the merge-aware
- * replacement for a blind `store.save` (two clients share one `project.json`, so a
- * plain overwrite would clobber the peer).
+ * The full folder-sync pass for the live app: land my Parquet, build my manifest, merge
+ * against the peer (op union — no base), resolve conflicts, write the result, and — if a
+ * peer contributed ops — hand the merged manifest back so the caller reloads it.
  *
- * Ordering matters: read the peer **before** writing anything, then land my Parquet
- * (so merged file-refs resolve), then own `project.json` via the merge.
- *
- * **`base` is PER-PEER** (see {@link syncOnce}) — the caller's own last-synced
- * manifest, NOT a shared disk file. The caller must set its ancestor to the returned
- * `manifest` after each successful sync.
+ * Ordering: read the peer BEFORE writing anything, then land my Parquet (op-id-keyed
+ * sidecars, so a merged source op's file ref resolves), then own `project.json`.
  *
  * @param {object} arg
  * @param {import('./project-store.js').ProjectStore} arg.store  folder-backed store
  * @param {string} arg.id
  * @param {string} arg.name
  * @param {object} arg.bundle    this app's current bundle (from the project snapshot)
- * @param {object|null} [arg.base]  this peer's last-synced manifest (its ancestor)
  * @param {Record<string, object>} [arg.mergers]  from `buildMergers`
- * @param {(conflicts: object[]) => Promise<object|null>} [arg.resolveConflicts]  show
- *   the conflict UI and return a resolutions map, or null to cancel the sync.
- * @param {(id: string, manifest: object) => Promise<void>} [arg.applyMerged]  reload
- *   the merged project into the app (called only when a peer actually contributed).
+ * @param {(conflicts: object[]) => Promise<object|null>} [arg.resolveConflicts]
+ * @param {(id: string, manifest: object) => Promise<void>} [arg.applyMerged]
  * @param {Set<number>} [arg.dirty]  dataset ids whose Parquet changed (omit = all).
  * @param {number} [arg.now]
  * @returns {Promise<{action: string, manifest: object, conflicts: object[], changed: boolean}>}
  */
-export async function syncFolderProject({ store, id, name, bundle, base = null, mergers = {}, resolveConflicts, applyMerged, dirty, now }) {
+export async function syncFolderProject({ store, id, name, bundle, mergers = {}, resolveConflicts, applyMerged, dirty, now }) {
   const savedAt = now ?? Date.now();
-  // 1. Read the peer BEFORE writing anything.
-  const theirs = await store.readManifest(id);
-  // 2. Land my Parquet so a merged manifest's file refs resolve.
-  await store.writeSourcesOnly(id, bundle, dirty);
-  // 3. My manifest (pure — same builder save() uses).
-  const mine = buildManifest({ name, savedAt, bundle });
+  const theirs = await store.readManifest(id); // 1. read the peer first
+  await store.writeSourcesOnly(id, bundle, dirty); // 2. land my Parquet
+  const mine = buildManifest({ name, savedAt, bundle }); // 3. my manifest (pure)
 
-  // 4. Decide against MY per-peer ancestor; resolve conflicts if any. `surfaced` is
-  //    what the user was asked about, reported back even after resolution.
-  let decision = decideSync(base, mine, theirs, mergers);
+  // 4. Decide; resolve conflicts if any (report what was surfaced even after resolution).
+  let decision = decideSync(mine, theirs, mergers);
   const surfaced = decision.conflicts;
   if (decision.action === 'merge' && decision.conflicts.length) {
     const resolutions = resolveConflicts ? await resolveConflicts(decision.conflicts) : null;
     if (resolutions == null) return { action: 'cancelled', conflicts: surfaced, changed: false, manifest: null };
-    decision = decideSync(base, mine, theirs, mergers, resolutions);
+    decision = decideSync(mine, theirs, mergers, resolutions);
   }
 
-  // 5. Write the outcome. The caller records `manifest` as its new per-peer ancestor.
+  // 5. Write the outcome.
   const merged = { ...decision.manifest, savedAt };
   await store.writeManifest(id, merged);
 
-  // 6. If a peer contributed (the result isn't just my own manifest), reload it.
+  // 6. If a peer contributed ops (the result isn't just my own work), reload it.
   const changed = decision.action === 'merge' && !manifestsEqual(merged, mine);
   if (changed && applyMerged) await applyMerged(id, merged);
   return { action: decision.action, conflicts: surfaced, changed, manifest: merged };

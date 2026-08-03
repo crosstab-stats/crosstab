@@ -19,7 +19,8 @@ import { UiService } from './ui-service.js';
 import { ImportService } from './import-service.js';
 import { ExportService } from './export-service.js';
 import { installPassphraseUI } from './passphrase-ui.js';
-import { installIdentityChip, getIdentity, onIdentityChange } from './user-identity.js';
+import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } from './user-identity.js';
+import { ProjectLog } from './project-log.js';
 import { LivePresence } from './live-presence.js';
 import { mergersFor } from './builtin-mergers.js';
 import { OutputExportService } from './output-export.js';
@@ -317,10 +318,14 @@ export async function boot(mounts) {
   // --- core services ---------------------------------------------------------
   const bus = new EventBus();
   const duckdb = new DuckDBManager();
+  // The project's single unified operation log (docs/ARCHITECTURE-unified-log.md).
+  // Shared across the tiers that fold from it — the dataset collection and the
+  // analysis-run list today; more to come. Created once here, injected into each.
+  const projectLog = new ProjectLog({ author: currentAuthor });
   // `datasets` owns the open datasets and presents the active one through the
   // same surface a single DataStore used to (it delegates). Everything that used
   // to hold "the dataset" now holds the manager.
-  const datasets = new DatasetManager(bus, duckdb);
+  const datasets = new DatasetManager(bus, duckdb, projectLog);
   // Create the first (empty) dataset up front so there's always an active dataset
   // for the UI to render against; its data is loaded below.
   // Neutral seed name; the launcher renames the active dataset to match the chosen
@@ -420,7 +425,7 @@ export async function boot(mounts) {
   // the plugin's named function. The PluginManager calls wire/unwire on load/unload.
   // Ordered, replayable record of analyses run (the analysis half of the script,
   // #132). Data ops already replay via the data-store log; this covers analyses.
-  const analysisLog = new AnalysisLog(bus);
+  const analysisLog = new AnalysisLog(bus, projectLog);
   // Replacing the base dataset (a fresh demo/blank load, an import-replace, a new
   // project) starts a new analysis context — the prior analyses ran against data
   // that's now gone, so clear them. (Transforms/reorders/appends keep their
@@ -503,7 +508,7 @@ export async function boot(mounts) {
   // beside Undo/Redo. Distinct from the Data/Variables/Output tabs (inputs &
   // outputs); History is what you did. Click a step to rewind live, reorder with
   // ▲▼, or remove with ✕.
-  const historyPanel = new HistoryPanel(datasets, bus, { analysisLog, pluginActions, undo: undoCoordinator });
+  const historyPanel = new HistoryPanel(datasets, bus, { analysisLog, pluginActions, undo: undoCoordinator, results });
   menus.register({
     id: 'core:history',
     path: ['Edit'],
@@ -556,7 +561,7 @@ export async function boot(mounts) {
   // Host store for plugin workspace state (#93). Persists per-project, keyed per
   // (owner, workspace id, dataset) (#145); opaque to the host. Empty until a
   // workspace plugin writes.
-  const workspaceStore = new WorkspaceStore({ bus });
+  const workspaceStore = new WorkspaceStore({ bus, log: projectLog });
   const projects = new ProjectSync({
     projectStore: new ProjectStore(),
     datasets,
@@ -582,18 +587,23 @@ export async function boot(mounts) {
     // the new project's blobs, force-remount any live workspace tabs so they re-read
     // their state — a plugin active in both the old and new project stays mounted, so
     // reconcile() alone wouldn't refresh it and it would keep showing stale data.
-    getWorkspaces: () => workspaceStore.export(),
-    applyWorkspaces: (obj) => {
-      // Migrate an older saved blob to the v3 owner-nested shape (#145). Legacy flat
-      // (pre-#139) blobs are best-effort attached to the active dataset (old row-ids
-      // collided across datasets, so a clean split is impossible — never destructive);
-      // v2 blobs are wrapped under the owner of the plugin that declares each wsId.
-      const resolveOwner = (wsId) => {
-        const p = plugins && plugins.list().find((x) => (x.workspaces || []).some((w) => w.id === wsId));
-        return p ? ownerToken(p) : null;
-      };
-      workspaceStore.import(migrateWorkspaceBlob(obj, { targetDatasetId: datasets.activeId, resolveOwner }));
-      if (workspaceManager && plugins) void workspaceManager.remountActive(plugins.list());
+    // Workspaces are now the `ws:` tier of the one true log (#148): save carries their
+    // ops in manifest.log; load routes them here. The store folds them into its cache.
+    getWorkspaceOps: () => workspaceStore.ops(),
+    applyWorkspaces: async (ops, { refresh = false } = {}) => {
+      workspaceStore.restoreOps(Array.isArray(ops) ? ops : []); // ws ops from manifest.log (runs sync, before any await)
+      if (!workspaceManager || !plugins) return;
+      if (refresh) {
+        // A PEER's change (folder/live sync): refresh mounted workspaces IN PLACE via
+        // their onRefresh hook — never tear down + remount, because a remount re-runs the
+        // sandbox handshake, which times out on a backgrounded window (the "workspace
+        // crashed on the other peer" two-window bug). Fall back to remount only if a
+        // mounted workspace lacks onRefresh.
+        const ok = await workspaceManager.notifyWorkspaceRefresh();
+        if (!ok) await workspaceManager.remountActive(plugins.list());
+      } else {
+        await workspaceManager.remountActive(plugins.list()); // project open/switch → different project's blobs
+      }
     },
     // …and the Output tab's results, so reopening shows them (and switching
     // projects clears/reloads output instead of leaving the previous one's).
@@ -614,12 +624,17 @@ export async function boot(mounts) {
     order: 6,
     command: async () => {
       try {
-        const name = projects.activeName || 'crosstab-project';
+        // Name the bundle after the project; fall back to the active dataset's name (so
+        // an unsaved/unnamed project still exports something meaningful) before the
+        // generic placeholder. The name rides in the manifest so the recipient agrees.
+        const name = projects.activeName || datasets.active?.name || 'crosstab-project';
         // Record the active analysis/plugin set so a recipient restores the same
         // analyses (and is warned about any they don't have — #102).
         const activePlugins = plugins.list().filter((p) => p.activated);
         const collab = projects.collabIdentity?.(); // #148 — bundle carries the room identity
-        const blob = await exportProjectBundle({ datasets, projectName: name, plugins: activePlugins, collab });
+        // The faithful-clone snapshot (raw log + source bytes) — so a hand-off can co-author.
+        const snapshot = await projects.exportSnapshot();
+        const blob = await exportProjectBundle({ datasets, bundle: snapshot, projectName: name, plugins: activePlugins, collab });
         downloadBlob(blob, `${slug(name) || 'crosstab-project'}.crosstab`);
         results.api.appendText(`Exported **${name}** as a .crosstab bundle (${(blob.size / 1048576).toFixed(1)} MB).`);
       } catch (err) {
@@ -643,7 +658,8 @@ export async function boot(mounts) {
         // can be missing — match by manifest id against what's installed here.
         const have = new Set(plugins.list().map((p) => p.id).filter(Boolean));
         const missing = (recorded || []).filter((p) => !p.builtin && p.id && !have.has(p.id));
-        results.api.appendText(`Opened project bundle **${name}** — ${bundle.datasets.length} dataset(s).`);
+        const dsCount = (bundle.log || []).filter((o) => o.type === 'addDataset').length;
+        results.api.appendText(`Opened project bundle **${name}** — ${dsCount} dataset(s).`);
         if (missing.length) showMissingPluginsDialog(missing);
       } catch (err) {
         results.api.appendError(`Open project bundle failed: ${err.message}`);
@@ -805,7 +821,22 @@ export async function boot(mounts) {
   // `dataStore` kept as an alias to the manager (it delegates to the active
   // dataset) so console pokes / older references keep working. Exposed before the
   // launcher so the launcher (and dev tooling) can use the engine.
-  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, recycle, library, projects, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager, codecs, analysisLog, pluginActions, undoCoordinator };
+  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, recycle, library, projects, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager, codecs, analysisLog, pluginActions, undoCoordinator, projectLog };
+  /**
+   * Console debugging: dump the FULL one true log — every op across all tiers
+   * (collection, data, analysis), including the `retract`/`reorder` tombstones and
+   * undone ops that the folded History view hides. `crosstab.dumpLog()` for
+   * everything; `crosstab.dumpLog('ds:5')` (or any substring) to filter by target —
+   * built for tracing merge issues (#148 Layer 5). Returns the rows too, so it's
+   * useful even when console.table is truncated.
+   */
+  engine.dumpLog = (targetFilter) => {
+    const rows = projectLog.dump().filter((r) => !targetFilter || r.target.includes(targetFilter));
+    try { console.table(rows); } catch { /* console.table unavailable */ }
+    const active = rows.filter((r) => r.state === 'active').length;
+    console.log(`[crosstab] ${rows.length} ops — ${active} active, ${rows.length - active} undone${targetFilter ? ` (filter: ${targetFilter})` : ''}`);
+    return rows;
+  };
   // eslint-disable-next-line no-undef
   globalThis.crosstab = engine;
 
@@ -1566,7 +1597,7 @@ class ProjectSidebar {
       try {
         const ds = this.datasets.get(it.id);
         const state = ds ? await ds.exportState({ includeParquet: true }) : null;
-        if (state && state.sources && state.sources.length) {
+        if (state && (state.ops ?? []).some((o) => o.type === 'load' || o.type === 'append' || o.type === 'join')) {
           await this.recycle.save({
             name: it.name,
             savedAt: Date.now(),

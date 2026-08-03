@@ -34,7 +34,7 @@
  *    proof / base-advancement for large rooms is deferred (the core case is two).
  */
 
-import { mergeManifests } from './collab-sync.js';
+import { mergeProjects } from './collab-sync.js';
 import { manifestsEqual } from './folder-sync.js';
 import { debug } from './debug.js';
 
@@ -55,7 +55,6 @@ import { debug } from './debug.js';
 export class LiveDoc {
   #selfId;
   #mergers;
-  #base;
   #mine;
   #peers = new Map(); // peerId → their latest manifest
   #send;
@@ -68,10 +67,9 @@ export class LiveDoc {
   #paused = false; // a simulated/real network partition: buffer both directions
   #active = new Set(); // peers actually co-authoring (we've heard a hello/state from them)
 
-  constructor({ selfId, manifest, base = null, mergers = {}, send, onChange, onConflicts, onPeers, onResolved }) {
+  constructor({ selfId, manifest, mergers = {}, send, onChange, onConflicts, onPeers, onResolved }) {
     this.#selfId = selfId;
     this.#mine = manifest;
-    this.#base = base;
     this.#mergers = mergers;
     this.#send = send;
     this.#onChange = onChange;
@@ -175,7 +173,7 @@ export class LiveDoc {
       const iAmLower = this.#selfId < pid;
       const lower = iAmLower ? this.#mine : theirs;
       const higher = iAmLower ? theirs : this.#mine;
-      const { manifest: merged, conflicts } = mergeManifests(this.#base, lower, higher, this.#mergers, this.#resolutions);
+      const { manifest: merged, conflicts } = mergeProjects(lower, higher, this.#mergers, this.#resolutions);
       const changed = !manifestsEqual(merged, this.#mine);
       debug('live', 'converge', { peer: pid, iAmLower, conflicts: conflicts.length, changed });
 
@@ -187,10 +185,9 @@ export class LiveDoc {
         this.#onConflicts(iAmLower ? conflicts : conflicts.map(swapConflict));
         continue; // hold until resolve() supplies choices
       }
-      // NB: #base stays the session-start snapshot on purpose — a FIXED shared base is
-      // what makes the canonical-order merge converge to byte-identical state on both
-      // peers. (The false-conflict-on-sequential-edits bug is fixed in threeWayLog's
-      // target pass instead, by excluding ops both sides already share.)
+      // No base: mergeProjects derives the common ancestor from the shared op-id set,
+      // so the canonical-order merge converges to byte-identical state and reaches a
+      // fixpoint (re-merging merged↔merged returns it unchanged — every op is shared).
       if (changed) {
         this.#mine = merged;
         this.#onChange?.(merged);

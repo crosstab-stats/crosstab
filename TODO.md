@@ -335,6 +335,28 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 > decision (#9 — vendor-from-own-origin at deploy, no hash babysitting), and shell
 > PWA precache already shipped (#92).
 
+- [ ] **Make `"plugin sandbox did not become ready in time"` impossible (after #148).**
+      This mount-handshake timeout has haunted the project for a long time — kill the
+      whole error *class*, don't just retry it. Root cause: `WorkspaceManager.#handshake`
+      / `PluginBroker.whenReady` race a wall-clock `setTimeout` against the sandbox iframe
+      posting `ready`, but a **backgrounded/occluded window throttles `setTimeout` and
+      pauses rendering** (Chrome Native Window Occlusion — see [[local-testing-setup]]),
+      so the ready signal misses its window and the mount "fails" even though nothing is
+      actually wrong. It bit hardest in two-window co-authoring, where the non-focused
+      peer's workspace remounted on every sync (that specific trigger is now gone — sync
+      refreshes in place via `onRefresh`, #148 — but the *timeout* itself must stop being
+      reachable). Directions (pick what holds up): (a) don't fail on a timeout at all —
+      **wait for readiness as an event, retry with backoff indefinitely, and (re)start the
+      handshake on `visibilitychange`→visible** so an occluded tab simply mounts when it's
+      next shown; (b) make readiness not depend on a throttled timer (the ready ping is a
+      `postMessage`, which is NOT throttled — so the failure is purely the host-side
+      timeout giving up; a message-driven wait with no hard deadline may be enough); (c)
+      surface a calm "waiting for this tab to come to the foreground" state instead of a
+      scary "failed to mount" error + retry overlay. Acceptance: a workspace never shows a
+      mount-failure overlay due to being in the background; it mounts (or resumes) cleanly
+      once visible. Touches `core/workspace-manager.js`, `core/plugin-broker.js`, maybe
+      `core/plugin-sandbox.js`.
+
 - [x] **Replace the HTML sanitiser with DOMPurify — DEFERRED (won't vendor).**
       *Decision:* keep the hand-rolled allowlist (`core/sanitize-html.js`); do **not**
       adopt DOMPurify. Rationale: adopting it means **vendoring a security library**

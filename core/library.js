@@ -18,6 +18,12 @@
  * sidebar's Building Blocks zone re-renders on this. */
 export const LIBRARY_CHANGED = 'library:changed';
 
+/** The library's linked-dataset overlay boundary is the count of **transform** ops in a
+ * recipe (the block's base transforms; a linked dataset's *local* edits are the ops
+ * beyond it). Source ops (load/append/join) don't count. Works on the op recipe
+ * {@link module:core/data-store~DataStore#exportState} / {@link DatasetStore#load} produce. */
+const transformCount = (ops) => (Array.isArray(ops) ? ops.filter((o) => !['load', 'append', 'join'].includes(o.type)).length : 0);
+
 export class DatasetLibrary {
   #store;
   #data;
@@ -104,7 +110,7 @@ export class DatasetLibrary {
       );
       // The whole current state is now the block, so there's no local overlay:
       // baseLen = all transforms.
-      ds.libraryLink = { id, version, baseLen: (state.transforms || []).length };
+      ds.libraryLink = { id, version, baseLen: transformCount(state.ops) };
       this.#bus?.emit(LIBRARY_CHANGED);
       this.#results.appendText(
         existing ? `Updated **${name}** in the library (v${version}).` : `Saved **${name}** to the library (v${version}).`,
@@ -131,7 +137,7 @@ export class DatasetLibrary {
         { name: ds.name, savedAt: Date.now(), state },
         { writeSources: true },
       );
-      ds.libraryLink = { id, version, baseLen: (state.transforms || []).length };
+      ds.libraryLink = { id, version, baseLen: transformCount(state.ops) };
       this.#bus?.emit(LIBRARY_CHANGED);
       this.#data.touch?.(); // refresh the sidebar's "linked" badge
       this.#results.appendText(`Promoted **${ds.name}** to a building block (v${version}).`);
@@ -170,12 +176,13 @@ export class DatasetLibrary {
     if (!ds?.libraryLink) return;
     const { id, baseLen = 0 } = ds.libraryLink;
     try {
-      const loaded = await this.#store.load(id); // { name, version, state:{sources, transforms} }
+      const loaded = await this.#store.load(id); // { name, version, state:{ops} }
       const cur = ds.getTransforms();
       const local = cur.slice(Math.min(baseLen, cur.length)); // edits made after linking
-      const base = loaded.state.transforms || [];
-      await ds.restoreState({ sources: loaded.state.sources, transforms: [...base, ...local] });
-      ds.libraryLink = { id, version: loaded.version, baseLen: base.length };
+      const blockOps = loaded.state.ops || []; // the block's sources + base transforms
+      // Re-home the block's recipe with the dataset's local transforms re-applied on top.
+      await ds.restoreState({ ops: [...blockOps, ...local] });
+      ds.libraryLink = { id, version: loaded.version, baseLen: transformCount(blockOps) };
       this.#data.touch?.();
       this.#results.appendText(
         `Pulled **${ds.name}** to v${loaded.version}` +
@@ -207,7 +214,7 @@ export class DatasetLibrary {
       const ds = this.#data.add(name, { activate: true });
       await ds.restoreState(state);
       // Linked @ this version; the block's transforms are the base, no overlay yet.
-      ds.libraryLink = { id, version, baseLen: (state.transforms || []).length };
+      ds.libraryLink = { id, version, baseLen: transformCount(state.ops) };
       this.#data.touch?.(); // refresh the "linked" badge
     } catch (err) {
       console.error('[library] add failed', err);

@@ -1,0 +1,302 @@
+# Full migration to the one true log — demolition plan (no shims)
+
+**Mandate:** migrate the whole engine to a single project op-log, top to bottom.
+**Delete** the old snapshot-diff world outright — no shims, no back-compat, no dual
+representations. Any bug that survives should be a *new-code* bug, not an old/new
+interaction. Save-breaking is allowed (pre-release). Rollback = discard/reset the
+branch if it doesn't converge; that's an accepted outcome.
+
+## Progress (updated 2026-08-02)
+
+Branch `feat/unified-op-log`; nothing pushed. Backbone headless tests green
+(171 pass, 4 skipped = folder-sync's mergeManifests tests, pending Layer 5).
+
+- [x] **Layer 1 — ProjectLog final** (`70cc844`). serialize/restore, target `slice`,
+      scoped undo (`undoWhere`/`redoWhere`/`undoneOps`). + `dump()` for debugging.
+- [x] **Layer 2a — pure `foldDataOps`** (`0252a2b`). retract + reorder resolution, tested.
+- [x] **Layer 2b — DataStore is a fold of the one log** (`6347b95`). No private `#log`;
+      mutators append `ds:<id>/…` ops; deletion=`retract`, reorder=`reorder`; scoped
+      undo; exportState/restoreState → op-recipe `{ops}`.
+- [x] **Layer 3 — DatasetManager injects the one log** (`15b0e17`). collection + data
+      tiers share it; remove() drops orphaned data ops; loadBundle clears both tiers.
+- [x] **Layer 4 — persistence writes/reads the op-recipe** (`84e658f`). Single-peer
+      create/edit/save/load round-trips on the log. app.js recycle gate updated.
+- [x] **Browser-verified single-peer** (user + agent, 2026-08-02): recode ×2, reorder,
+      rename, save/reload, load-from-loader (correct History order); delete-middle-step
+      (retract), undo-of-retract, moveOp, real DuckDB data all correct. Decisions in
+      [the explicit-ops memory] endorsed by the user.
+
+### Layer 5 — merge/transport (NEXT)
+
+**Prerequisite — DONE (`data`-tier raw round-trip):** the project save/load path now
+persists & restores each dataset's **raw** log slice (full op envelopes, stable
+ids/hlc/author, including `retract`/`reorder`) instead of the folded recipe. Source
+bytes are Parquet sidecars **keyed by source-op id** (`src_<opid>.parquet`); the
+peer-local DuckDB table name is stripped on save and re-materialised on load; a
+retracted (byte-less) source persists as a bare envelope and is skipped on restore.
+
+- Seam: `DataStore.rawExport`/`rawRestore` (project save/load) vs the pre-existing
+  `exportState`/`restoreState` (kept ONLY for the library/bundle re-home path, where
+  re-mint under a fresh id is correct). `loadBundle` branches on op shape (raw envelope
+  `hlc`/`target` → `rawRestore`; folded recipe → `restoreState`).
+- Touched: `data-store.js`, `project-store.js` (load/buildManifest/#writeSources),
+  `dataset-manager.loadBundle`, `project-sync.#snapshot`.
+- **Browser-verified (2026-08-02)** with the user's exact repro: two transforms →
+  reorder → autosave → reload → load: `dumpLog` shows the `reorder` op **retained** with
+  its **original id**, and History shows the reordered order. Also verified a `replace`
+  (re-import) whose retracted source is byte-less: saves without throwing, restores with
+  correct live data (the retracted source skipped).
+
+> **The bug this fixed (user, 2026-08-02, via `dumpLog`):** save FOLDED the data tier —
+> `project-sync.#snapshot` → `DataStore.exportState()` → `#steps()` → `foldDataOps()`
+> applied & DROPPED `reorder`/`retract` before persisting, so a reorder's *effect* was
+> saved but the *op* was lost (and ids were re-minted on load). The collection tier
+> already persisted raw; the asymmetry was the bug.
+
+**Dataset deletion keeps the ops (one-true-log fix, 2026-08-02).** `DatasetManager.remove`
+used to `clearWhere` the deleted dataset's `ds:<id>/…` ops — a physical drop that broke
+the audit trail AND would resurrect them on merge (an op absent from the shared-id
+ancestor reads as the peer's addition — the delete-inference class). Now `remove` keeps
+them: `collRemove` is the deletion signal, and the ops become **orphaned** (no live
+DataStore folds them). `DatasetManager.orphanDataOps()` exposes them (peer-local table +
+bytes stripped); `#snapshot`/`buildManifest`/`load` persist them as `manifest.orphanDataOps`
+and `loadBundle` `receiveOps` them back (ids preserved). Browser-verified: demo + second
+dataset → delete demo → `dumpLog` keeps the demo's `load` op (orphan) + `removeDataset`;
+survives save→reload→load with the original op id.
+
+**Layer 6 straggler fixed — `dataset-store.js` + `library.js` on the op recipe.** The
+`exportState → {ops}` change (Layer 2) had left the building-block/recycle store on the
+old `{sources, transforms}` shape, so `DatasetStore.#saveImpl` threw
+`state.sources.length` of undefined on every dataset delete (the recycle snapshot) and on
+every library save. Both now speak the folded op recipe (source ops → `source_<n>.parquet`
+sidecars, transforms inline); `library.js` computes the linked-overlay `baseLen` from the
+op list and its pull path re-homes `{ops}`. Browser-verified: delete no longer errors, the
+recycle bin captures + restores (30 rows), no console error.
+
+**Two follow-ups this left (not blockers for merge):**
+- **`analysis` tier still folds + re-mints** (`AnalysisLog.toJSON`→`state('analysis')`,
+  `load`→deterministic ids). No reorder there yet so it's invisible single-peer, but for
+  merge it needs the same raw round-trip (`slice(ANALYSIS.match)` / `receiveOps`). Do it
+  as part of the transport rewrite (its blast radius is the entries-vs-ops shape).
+- **Orphan sidecars**: op-id-keyed `src_<opid>.parquet` files from a since-retracted
+  source are no longer overwritten (old positional `ds<id>_src<n>` self-reused names).
+  Minor storage leak; a GC/Seal-time sweep, not urgent.
+
+Merge convergence requires two peers to share op identity for the data tier; Layer 4's
+re-mint was fine single-peer, wrong for collab. The data tier now round-trips with
+identity — the last thing standing between "works single-peer" and "mergeable".
+
+Then: delete `collab-sync.mergeManifests`/`datasetToOps`/`opsToDataset`; rewrite
+`folder-sync` (decideSync/syncFolderProject) + `project-sync` (live + gap-fill) onto
+`ProjectLog.merge` (op-exchange, no per-peer base, no delete-inference, no dispose-all);
+delete `project-store.readBase`/`writeBase`. Un-skip + rewrite the folder-sync tests.
+**Verify with two-window testing** (the user's domain).
+
+> DELETE-NOTE (superseded): the "hard-drop orphaned data ops" line under §Demolish
+> `dataset-manager.js` is now WRONG — deletion keeps the ops (see the deletion fix above).
+
+> Note: the live gap-fill paths (`project-sync` ~1226/1250/1322) still iterate
+> `d.state.sources` — now `undefined` under the op-recipe snapshot. Only reachable while
+> co-authoring (not single-peer), so it's inert today; fix it as part of this rewrite.
+
+### Layer 5+ — FULL transport/plugin migration (user-confirmed 2026-08-02)
+
+Two decisions locked by the user: **(1) go all the way** — move the plugin/workspace
+tier onto the op log too and **fully delete the base** (`readBase`/`writeBase`/
+`project.base.json`); **(2) single serialized log on disk** — `project.json` stores one
+flat `manifest.log = ProjectLog.serialize()` (every tier) + op-id-keyed
+`src_<opid>.parquet` sidecars + the non-log scalars (`activeId`, `activePlugins`,
+`output`, `collabId/Secret`, `datasetMeta:{<id>:{libraryLink}}`). No `datasets[]`,
+`collectionLog`, `orphanDataOps`, `analysisLog`, or `workspaces` fields — they're all
+just ops in the one log.
+
+Why the base can only go after the plugin tier moves: the op-merge derives the common
+ancestor from the shared op-id intersection (`sharedAncestor`) — no base needed — but the
+workspace **blobs** (CAQDAS codebook) are still three-way-merged and need an ancestor,
+which the base supplies. So workspace-on-log is a prerequisite for base deletion.
+
+**Undo/redo are append-only ops too (user, 2026-08-02 — corrects an earlier wrong
+call).** Undo/redo must NOT mutate the log (move ops in/out of a `#redo` stack) — that's
+the same surgery flaw as `remove()`. They append `undo{opId}`/`redo{opId}` ops (targeted
+at the undone op's own target so the fold sees them in-slice, like `retract`). This also
+fixes a real bug: `serialize()` never persisted `#redo`, so **undone actions were silently
+dropped on save** and undo state never merged. Model: an op's applied-state = its latest
+`undo`/`redo` marker (undo→hidden, redo/none→shown); a content op is live iff applied AND
+no *applied* `retract` targets it; reorder = latest *applied* reorder. Non-recursive
+(undo/redo markers are never themselves undone). `ProjectLog` drops `#redo`;
+`discardLocal` stays (failed-never-durable append ≠ undo). New action does NOT clear the
+redo branch (undone ops stay redoable — the "spammy log is fine" stance). Shared liveness
+helper in `op-log.js` used by every fold (data/collection/analysis). **This lands BEFORE
+the merge work** so merge treats undo/redo as ordinary mergeable ops.
+
+**Sequence (commit + spot-check each; full two-window test only at the very end):**
+0. **Undo/redo → append-only ops** (see above) — `op-log.js` liveness helper; `ProjectLog`
+   loses `#redo`; `data-fold`/collection/analysis folds honour undo/redo markers.
+1. **Flat `manifest.log` persistence + load routing.** `#snapshot` assembles the flat
+   log from the pieces (collectionOps + each DataStore.rawExport + orphanDataOps +
+   analysis toJSON); `project-store` save/load/#writeSources speak `manifest.log` +
+   op-id sidecars; load routes the log to each subsystem (scoped `clearWhere` +
+   `receiveOps` per tier, then DataStores materialise their source bytes). Single-peer
+   verifiable. (workspaces stay a field this step.)
+2. **Core merge → `ProjectLog.merge`.** Delete `datasetToOps`/`opsToDataset`/
+   `mergeManifests`; `mergeProjects` merges the flat core log via `ProjectLog.merge`
+   (per-owner, `sharedAncestor`), no base, no delete-inference.
+3. **Workspace/plugin tier onto the log.** Leaf writes become `ws:<owner>/<key>`
+   `setWorkspace` ops; the projection folds latest-per-leaf → the bundle. Plugin-owner
+   merge: fold each side's ws ops → blob, `sharedAncestor`(ws ops) → ancestor blob, run
+   the plugin's existing blob merger (keeps the CAQDAS contract), emit merged leaves as
+   ops. Retire `flattenWorkspaces`/`unflattenWorkspaces`.
+4. **Delete the base** (`readBase`/`writeBase`/`project.base.json` + `#lastManifest`).
+5. **Transports on the log** — `folder-sync` (op-exchange, incremental `planDatasetApply`,
+   no dispose-all), `project-sync` live + gap-fill (fix `d.state.sources`; bytes by
+   op-id/sha), `live-sync`/`live-protocol`.
+6. **`project-bundle.js`** (`.crosstab`) → flat log.
+7. **Tests** — un-skip/rewrite folder-sync; add flat-log + ws-op-merge tests.
+8. **Two-window verification** (the user's domain) — incl. CAQDAS codebook merge.
+
+Status (2026-08-02) — the full migration is landed through the transport layer:
+- **Step 0** undo/redo → append-only ops — DONE + browser-verified (undo persists across
+  reload, fixing a real drop-on-save bug).
+- **Step 1** flat `manifest.log` + load routing — DONE + browser-verified single-peer.
+- **Step A** workspace/plugin tier onto the log (`setWorkspace` ops, write-through fold
+  cache) — DONE + browser-verified (a codebook blob round-trips as a `ws:` op).
+- **Steps B–C** merge + transports on op identity — DONE, headless-green (161 pass, 0
+  skip): `mergeProjects` (core three-way + ws blob-merge with deterministic result ops),
+  `folder-sync`/`live-protocol` rewritten base-free, `readBase`/`writeBase`/
+  `project.base.json` deleted, `mergeManifests`/`datasetToOps`/`opsToDataset` deleted.
+  Convergence, CAQDAS union, conflict-resolution, and fixpoint all covered by headless tests.
+
+**Remaining — DONE (2026-08-02):** every old-shape consumer is now on the flat log.
+- **`project-bundle.js` (`.crosstab`)** import builds the flat log (one addDataset + one
+  `load` per dataset, deterministic ids); export stays a portable snapshot.
+- **Live P2P gap-fill** (`gap-fill.js` `sourceRefs`, `project-sync` readSource/
+  `#refreshHeld`/`#applyMergedManifestLive`) rewritten on the flat log. Still needs a
+  two-peer (signaling) run to verify end-to-end; folder sync is the verified path.
+- Blank-load stragglers (`launcher`, `project-sync` recovery) use `loadBundle({log:[]})`.
+
+No code remains on the `datasets[].{sources,transforms}` shape. `exportState`/
+`restoreState` + `dataset-store`/`library` intentionally keep the FOLDED op-recipe (the
+library/recycle re-home tier — re-mint under a fresh id is correct there).
+
+**Two-window test = the user's run** (needs a real picked folder / gesture, which
+automation can't drive). Procedure: two windows → *File ▸ Move project to a folder…* (A)
+then *Open project from a folder…* on the same folder (B); edit on both; the poll merges.
+
+### Layer 6 — remaining consumers still on the old shape
+
+**DONE:** `library.js` + `dataset-store.js` are now on the folded op recipe (see the
+deletion/recycle fix above). **Remaining:** `project-bundle.js` (`.crosstab`
+export/import) and `gap-fill.js` — still on the old shape; migrate to the op-recipe /
+asset model.
+
+### Layer 6 — remaining consumers still on the old shape
+
+`library.js` + `dataset-store.js` (building-block library), `project-bundle.js`
+(`.crosstab` export/import), `gap-fill.js`. All off the single-peer boot path; migrate
+to the op-recipe / asset model.
+
+### Debugging aid
+
+`crosstab.dumpLog([targetFilter])` in the console dumps the full one true log — every
+active op (HLC order) + every undone/redo op, with state/target/owner/type/hlc/author/
+payload. Shows the retract/reorder tombstones and undone ops that the folded History
+view hides — built for tracing Layer 5 merge issues.
+
+## The load-bearing decision (locked)
+
+**A `DataStore` no longer owns a private op-log.** There is ONE `ProjectLog` per
+project holding *every* op. A dataset's data ops (`load`/`append`/`join`/`recodeVar`/
+`computeVar`/`setCell`/`setVariable`/`filterCases`/`dropVars`/`keepVars`/`renameVar`)
+live in that one log, each tagged `target: "ds:<id>/…"`, `owner: "core"`. `DataStore`
+becomes a **fold**: it reads its slice of the log (ops whose target is `ds:<id>/…`, in
+HLC order), replays them to build the DuckDB view + metadata (today's `rederive`), and
+its mutators *append to the ProjectLog* instead of a local `#log`. Undo/redo/rewind/
+reorder become log operations. "Dataset logs derive from the one log" — literally.
+
+## Two refinements the plan glossed (locked while building Layer 1→2)
+
+Discovered by reading `data-store.js` end-to-end against `ProjectLog`'s HLC ordering.
+Both follow directly from "everything persistent is an op" + §10 "deletion is an
+explicit merged op" — neither is a new principle, just its consequence.
+
+- **Deletion of a pipeline step = an explicit `retract` op (tombstone), never a
+  physical removal.** Forced by correctness: `sharedAncestor` derives the merge base
+  from the shared op-id *intersection*, so a physically-removed op drops out of the
+  ancestor and then reads as the peer's *addition* on merge — it silently returns.
+  That is the delete-inference bug class. So `removeOp`/History-delete append a
+  `retract{payload:{opId}}`; the fold skips retracted ops; the retract propagates as a
+  normal add-wins addition. (Solo Ctrl-Z undo stays physical-to-redo — the deferred
+  "collaborative undo" nuance already noted in ProjectLog.)
+- **User-editable pipeline order = an explicit `reorder` op.** Order is HLC-derived by
+  default; `moveOp`/`collectImports`/`replaceTransforms` append a `reorder{payload:
+  {order:[opId,…]}}`; the fold applies the latest one (ops not listed fall back to HLC
+  order). Concurrent reorders merge as normal ops (three-way surfaces the conflict).
+  Keeps the do-file editor log-native instead of mutating HLC.
+
+## Target architecture
+
+- **One log.** `ProjectLog` = the ordered op stream. Tiers by `owner`/`target`:
+  collection (`coll/ds:<id>`), dataset data (`ds:<id>/…`), analysis (`analysis:<id>`),
+  plugin workspace (`ws:<owner>/…`, later). `setActive`/selection stay **view state**.
+- **State = projections/folds.** collection → membership; each dataset → its DuckDB
+  view; analysis → Output pane. All derived, never stored as truth.
+- **Merge = `ProjectLog.merge`** — op-union by id, ancestor = shared op-id history,
+  per-owner strategy, genuine same-target conflicts surfaced. **No diffing, no
+  per-peer base, no delete-inference.** A dataset is gone only via an explicit
+  `removeDataset` op. Version skew = "missing some of their ops," never data loss.
+- **Persistence = the log + content-addressed assets.** `project.json` = the serialized
+  op-log + metadata; source bytes = `asset:<sha>` files. No `datasets[]` snapshot as
+  truth. The old "manifest" survives only as an optional *derived* catalog summary.
+- **Transports feed the log.** folder-sync / live-protocol exchange ops (or a log the
+  other side merges), converge via `ProjectLog.merge`, and re-fold affected
+  projections **incrementally** (`planDatasetApply`) — never dispose-all-rebuild.
+
+## Demolish (delete these — do not preserve)
+
+- `collab-sync.js`: `mergeManifests`, `datasetToOps`, `opsToDataset` — the entire
+  snapshot-merge + reconstruction. (Keep `flatten/unflattenWorkspaces` + `buildMergers`
+  until the plugin tier moves; then revisit.)
+- `project-store.js`: `buildManifest`-as-truth, `readBase`/`writeBase`, the
+  `datasets[]`-snapshot save/load. Rewrite `save`/`load` to (de)serialize the log +
+  assets.
+- `folder-sync.js`: `decideSync`/`syncFolderProject` snapshot logic + per-peer base.
+  Rewrite as op-exchange + `ProjectLog.merge`. `manifestsEqual`/`contentSig` → op-set
+  compare.
+- `project-sync.js`: per-peer `#lastManifest` ancestor, `#applyMergedManifestLive`'s
+  dispose-all `loadBundle`, the delete-inference fallback path. Rewrite `#snapshot`/
+  apply/merge onto the log.
+- `data-store.js`: the private `#log` as source of truth (becomes a slice of the
+  ProjectLog); `deterministicOpId` legacy path; `exportState`/`restoreState`'s
+  `{sources, transforms, order}` shape (the log IS the shape now).
+- `dataset-manager.js`: `loadBundle`'s reconstruction fallback + the `collectionLog`
+  round-tripping shim.
+- The delete-inference legacy branch, everywhere.
+
+## Rebuild — strict dependency order (commit each layer; each must pass headless tests)
+
+1. **`ProjectLog` final form** — holds all tiers; op envelope for data ops; serialize/
+   deserialize the whole log; `merge` is the sole merge. Extend tests.
+2. **`DataStore` as a fold of the log** — the biggest surgery. It appends data ops to
+   the injected ProjectLog (targeted `ds:<id>/…`) and folds its slice in `rederive`.
+   Undo/redo/history become log ops. Delete the private `#log`-as-truth + export/restore
+   shape.
+3. **`DatasetManager`** — collection + data tiers both on the one log; drop the
+   reconstruction shim.
+4. **Persistence (`project-store`)** — save/load the log + content-addressed assets;
+   delete `buildManifest`-as-truth + base sidecar. (Pulls unit 7 forward — assets are
+   now load-bearing.)
+5. **Merge/transport (`collab-sync` delete, `folder-sync`, `live-protocol`,
+   `project-sync`)** — everything converges via `ProjectLog.merge` on ops; incremental
+   fold on apply; delete per-peer base + delete-inference + dispose-all.
+6. **Analysis + gap-fill** — analysis already a projection; gap-fill → fetch missing
+   `asset:<sha>` by hash.
+7. **Tests** — rewrite the suite around the log; delete tests for demolished code.
+8. **Browser verification** — single-window first, then the user's two-window run.
+
+## Verification & rollback
+
+- Headless tests are the backbone at every layer; a layer isn't "done" until green.
+- The app will NOT run end-to-end until ~layer 5 — expected with a no-shim rewrite.
+- If the rewrite doesn't converge (correctness or budget), `git reset` the branch to
+  the pre-migration commit (`303efb3`-era) — an accepted outcome, and we'll have
+  learned the shape.

@@ -65,10 +65,10 @@ export class ProjectSync {
   /** (keys: string[]) => Promise : drive the active plugin set to a project's
    * saved list when opening it. */
   #applyActivePlugins;
-  /** () => object : snapshot all plugin workspace blobs to persist with the
-   * project (#93). Null ⇒ feature unavailable. */
-  #getWorkspaces;
-  /** (obj) => void : restore a project's workspace blobs on open. */
+  /** () => object[] : the workspace tier's ops (the `ws:` slice of the log), folded into
+   * `manifest.log` on save (#148). Null ⇒ feature unavailable. */
+  #getWorkspaceOps;
+  /** (ops) => void : restore the workspace tier from its ops on open. */
   #applyWorkspaces;
   /** () => object[] : snapshot the Output tab's result model (#103). */
   #getOutput;
@@ -95,6 +95,11 @@ export class ProjectSync {
   #liveSourceBytes = new Map();
   #liveLastManifest = null;
   #coauthorPeers = 0; // peers actually co-authoring (drives "waiting" vs "co-authoring")
+  /** Serialises merge applies. Each apply snapshots then disposes+rebuilds DuckDB
+   * tables; two overlapping applies (a merge tick + a gap-fill re-apply, both fired
+   * un-awaited) would race — one drops a table the other is exporting. Chained here so
+   * they run strictly one-at-a-time. */
+  #applyChain = Promise.resolve();
   #conflictAbort = null; // aborts an open conflict dialog when a peer resolves it first
   /** Plugin identifiers recorded in the open project that AREN'T installed here —
    * carried forward verbatim on every save so the association survives until the
@@ -165,7 +170,7 @@ export class ProjectSync {
    * @param {(keys: string[]) => Promise<void>} [deps.applyActivePlugins] - Restore
    *   a project's saved plugin set on open.
    */
-  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaces, applyWorkspaces, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, pluginIdentities, getMergers }) {
+  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, pluginIdentities, getMergers }) {
     this.#store = projectStore;
     this.#datasets = datasets;
     this.#ui = ui;
@@ -175,7 +180,7 @@ export class ProjectSync {
     this.#statusEl = statusEl;
     this.#getActivePlugins = getActivePlugins ?? null;
     this.#applyActivePlugins = applyActivePlugins ?? null;
-    this.#getWorkspaces = getWorkspaces ?? null;
+    this.#getWorkspaceOps = getWorkspaceOps ?? null;
     this.#applyWorkspaces = applyWorkspaces ?? null;
     this.#getOutput = getOutput ?? null;
     this.#applyOutput = applyOutput ?? null;
@@ -533,13 +538,32 @@ export class ProjectSync {
     return this.#ensureCollab();
   }
 
+  /** The full current-state snapshot (flat one-true-log + source bytes + scalars) — the
+   * same shape `#save` persists. Public so the `.crosstab` exporter can write a FAITHFUL
+   * clone (raw log, preserving op ids + row ids) rather than a lossy re-synthesised
+   * snapshot, so a bundle hand-off can then co-author (shared op/row identity). */
+  async exportSnapshot() {
+    return this.#snapshot(true);
+  }
+
   async #snapshot(all, dirty = new Set()) {
     this.#ensureCollab(); // every saved project carries a collab identity (transport-agnostic)
-    const datasets = [];
+    // Assemble the flat one-true-log from every tier — collection ops, then each live
+    // dataset's raw slice (source ops carrying their Parquet bytes for #writeSources to
+    // strip → op-id sidecars), then a deleted dataset's orphaned ops, then the analysis
+    // ops. buildManifest persists this verbatim as `manifest.log`; merge unions it by id.
+    const log = [...this.#datasets.collectionOps()];
+    const datasetMeta = {};
     for (const ds of this.#datasets.all()) {
-      const state = await ds.exportState({ includeParquet: all || dirty.has(ds.id) });
-      datasets.push({ id: ds.id, name: ds.name, libraryLink: ds.libraryLink ?? null, state });
+      const { ops } = await ds.rawExport({ includeParquet: all || dirty.has(ds.id) });
+      log.push(...ops);
+      datasetMeta[ds.id] = { libraryLink: ds.libraryLink ?? null };
     }
+    log.push(...this.#datasets.orphanDataOps()); // deleted datasets' ops stay in the log
+    const analysisLog = this.#getAnalysisLog ? this.#getAnalysisLog() : null; // raw analysis ops
+    if (Array.isArray(analysisLog)) log.push(...analysisLog);
+    const wsOps = this.#getWorkspaceOps ? this.#getWorkspaceOps() : null; // ws: tier ops (#148)
+    if (Array.isArray(wsOps)) log.push(...wsOps);
     // Record the active plugin set alongside the data, so reopening restores the
     // analyses too. Null when the feature isn't wired (keeps old saves untouched).
     // Carry forward any recorded plugins this install can't resolve (not installed
@@ -552,11 +576,9 @@ export class ProjectSync {
       const extra = [...this.#unresolvedPlugins, ...this.#keptPlugins];
       if (extra.length) activePlugins = [...new Set([...activePlugins, ...extra])];
     }
-    const workspaces = this.#getWorkspaces ? this.#getWorkspaces() : undefined;
     const output = this.#getOutput ? this.#getOutput() : undefined;
-    const analysisLog = this.#getAnalysisLog ? this.#getAnalysisLog() : undefined;
     return {
-      activeId: this.#datasets.activeId, activePlugins, workspaces, output, analysisLog, datasets,
+      log, activeId: this.#datasets.activeId, activePlugins, output, datasetMeta,
       collabId: this.#collabId, collabSecret: this.#collabSecret, // #148 — persist the live-room identity
     };
   }
@@ -569,11 +591,8 @@ export class ProjectSync {
     if (this.#folderMode) this.#detachFolder(); // a fresh project is OPFS, not the folder's
     this.#loading = true;
     try {
-      await this.#datasets.loadBundle({
-        activeId: 1,
-        datasets: [{ id: 1, name: 'Dataset 1', state: { sources: [], transforms: [] } }],
-      });
-      this.#applyWorkspaces?.({}); // a fresh project has no workspace state
+      await this.#datasets.loadBundle({ log: [] }); // empty log ⇒ one fresh blank dataset
+      this.#applyWorkspaces?.([]); // a fresh project has no workspace state
       this.#applyOutput?.([]); // …and no output (clears stale output on switch)
       this.#applyAnalysisLog?.([]); // …and no recorded analyses (script)
     } finally {
@@ -647,7 +666,7 @@ export class ProjectSync {
       await this.#datasets.loadBundle(bundle);
       // Restore plugin workspace blobs BEFORE plugins load, so a workspace's
       // mount() sees its saved state via state.get(). Absent ⇒ empty.
-      this.#applyWorkspaces?.(bundle.workspaces || {});
+      this.#applyWorkspaces?.(bundle.workspaceOps || []);
       this.#applyOutput?.(bundle.output || []); // restore the Output tab (or clear)
       this.#applyAnalysisLog?.(bundle.analysisLog || []); // restore the script's analysis steps
       // Restore the project's analysis set (unless the caller already applied one,
@@ -687,11 +706,8 @@ export class ProjectSync {
         this.#timer = null;
       }
       try {
-        await this.#datasets.loadBundle({
-          activeId: 1,
-          datasets: [{ id: 1, name: 'Dataset 1', state: { sources: [], transforms: [] } }],
-        });
-        this.#applyWorkspaces?.({});
+        await this.#datasets.loadBundle({ log: [] }); // empty log ⇒ one fresh blank dataset
+        this.#applyWorkspaces?.([]);
         this.#applyOutput?.([]);
         this.#applyAnalysisLog?.([]);
       } catch (e2) {
@@ -724,7 +740,7 @@ export class ProjectSync {
       this.#setStatus('error');
       throw err;
     }
-    this.#applyWorkspaces?.(bundle.workspaces || {});
+    this.#applyWorkspaces?.(bundle.workspaceOps || []);
     this.#applyOutput?.(bundle.output || []);
     this.#applyAnalysisLog?.(bundle.analysisLog || []);
     // Restore the bundle's recorded analysis set (#102), so opening a shared bundle
@@ -923,8 +939,9 @@ export class ProjectSync {
       // the manifest to collaborators, so opening the shared folder joins the same room.
       const ident = ensureCollabIdentity({ collabId: this.#collabId, collabSecret: this.#collabSecret });
       this.#collabId = ident.collabId; this.#collabSecret = ident.collabSecret;
+      const projectName = this.activeName || 'My project'; // capture BEFORE unbinding — activeName reads #binding
       this.#binding = null; // a brand-new entry, living in the folder now
-      await this.#fullSave(null, this.activeName || 'My project'); // snapshot now carries collab id/secret
+      await this.#fullSave(null, projectName); // snapshot now carries collab id/secret
       this.#folderMode = true;
       this.#lastManifest = await this.#store.readManifest(this.#binding.id);
       this.#activeFolderId = await rememberFolder(handle, { name: this.#binding.name, savedAt: Date.now() });
@@ -1126,15 +1143,14 @@ export class ProjectSync {
       id: this.#binding.id,
       name: this.#binding.name,
       bundle,
-      base: this.#lastManifest, // MY per-peer ancestor (not a shared disk file) — see folder-sync
-      mergers: this.#mergers(), // core + active builtin plugin mergers (#148 6b) — merges CAQDAS coding across peers
-
+      // No base: the merge derives the common ancestor from the shared op-id set (#148).
+      mergers: this.#mergers(), // core + active builtin plugin mergers — merges CAQDAS coding across peers
       resolveConflicts: (conflicts) => showConflictDialog(conflicts),
       applyMerged: (id, manifest) => this.#applyMergedManifest(id, manifest),
       now: Date.now(),
     });
-    // Record the written manifest as my new ancestor (drives the poll's change
-    // detection and the next merge). applyMerged already set it when it reloaded.
+    // Record the written manifest as my poll baseline (a cheap "did the peer write?"
+    // detector — NOT a merge ancestor anymore). applyMerged already set it on reload.
     if (result.action !== 'cancelled' && result.manifest) this.#lastManifest = result.manifest;
     return result;
   }
@@ -1147,7 +1163,7 @@ export class ProjectSync {
     try {
       const { bundle } = await this.#store.load(id);
       await this.#datasets.loadBundle(bundle);
-      this.#applyWorkspaces?.(bundle.workspaces || {});
+      await this.#applyWorkspaces?.(bundle.workspaceOps || [], { refresh: true }); // peer sync → refresh in place, don't remount
       this.#applyOutput?.(bundle.output || []);
       this.#applyAnalysisLog?.(bundle.analysisLog || []);
       this.#lastManifest = manifest;
@@ -1212,8 +1228,8 @@ export class ProjectSync {
     this.#liveExchange = new SourceExchange({
       held,
       readSource: async (ref) => {
-        const snap = await this.#snapshot(true);
-        for (const d of snap.datasets) for (const s of d.state.sources) if (s.id === ref.id && s.parquet) return s.parquet;
+        const snap = await this.#snapshot(true); // my log WITH source bytes
+        for (const op of snap.log) if (op.id === ref.id && op.payload?.src?.parquet) return op.payload.src.parquet;
         return this.#liveSourceBytes.get(ref.id) ?? null;
       },
       storeSource: async (ref, bytes) => { this.#liveSourceBytes.set(ref.id ?? ref.key, bytes); },
@@ -1237,7 +1253,7 @@ export class ProjectSync {
     if (!this.#liveExchange) return;
     try {
       const snap = await this.#snapshot(true);
-      for (const d of snap.datasets) for (const s of d.state.sources) if (s.id) this.#liveExchange.held.add(s.id);
+      for (const op of snap.log) if (['load', 'append', 'join'].includes(op.type) && op.payload?.src?.parquet) this.#liveExchange.held.add(op.id);
     } catch { /* best effort */ }
   }
 
@@ -1286,35 +1302,43 @@ export class ProjectSync {
    * byte gap-fill (#148 6c). Skips the (expensive) dataset reload when the tabular
    * structure is unchanged (the common coding-only case), applying just the blobs.
    */
-  async #applyLiveManifest(manifest) {
-    debug('live', 'applyMerged', { datasets: (manifest?.datasets || []).length });
+  /** Public entry: serialise applies through {@link #applyChain} so a merge apply and a
+   * gap-fill re-apply never overlap on DuckDB (which caused "table does not exist" when
+   * one apply's dispose raced the other's snapshot). */
+  #applyLiveManifest(manifest) {
+    this.#applyChain = this.#applyChain
+      .then(() => this.#applyMergedManifestLive(manifest))
+      .catch((err) => console.error('[live] apply failed', err));
+    return this.#applyChain;
+  }
+
+  async #applyMergedManifestLive(manifest) {
+    const mergedLog = manifest?.log || [];
+    debug('live', 'applyMerged', { ops: mergedLog.length });
     this.#loading = true; // suppress autosave + echo-publish during apply
     try {
-      const mine = await this.#snapshot(true);
-      const sig = (dss) => JSON.stringify((dss || []).map((d) => ({
-        id: d.id,
-        s: (d.sources || d.state?.sources || []).map((x) => x.id),
-        t: d.transforms ?? d.state?.transforms ?? [],
-      })));
-      const tabularUnchanged = sig(mine.datasets) === sig(manifest.datasets);
-      if (!tabularUnchanged) {
-        const localParquet = new Map();
-        for (const d of mine.datasets) for (const s of d.state.sources) if (s.id && s.parquet) localParquet.set(s.id, s.parquet);
+      const SRC = (op) => op.type === 'load' || op.type === 'append' || op.type === 'join';
+      const isDsOrColl = (op) => op.owner === 'core' && typeof op.target === 'string' && (op.target.startsWith('ds:') || op.target.startsWith('coll/'));
+      // My current log WITH source bytes (fresh — safe to hand to DuckDB).
+      const snap = await this.#snapshot(true);
+      const localParquet = new Map();
+      for (const op of snap.log) if (SRC(op) && op.payload?.src?.parquet) localParquet.set(op.id, op.payload.src.parquet);
+
+      // Fast path: if the data + collection tiers are unchanged (the common coding-only
+      // case), skip the DuckDB rebuild entirely and just apply the workspace/analysis tiers.
+      const dsSig = (log) => JSON.stringify(log.filter(isDsOrColl).map((o) => o.id).sort());
+      if (dsSig(snap.log) !== dsSig(mergedLog)) {
+        // Attach source bytes to the merged log — from local (shared base) or a COPY of a
+        // co-author's streamed bytes (#148 6c). The copy matters: DuckDB's registerFileBuffer
+        // TRANSFERS (detaches) the ArrayBuffer, so we must not hand over the retained cache.
         let missing = 0;
-        const datasets = [];
-        for (const d of manifest.datasets || []) {
-          const sources = [];
-          let complete = true;
-          for (const s of d.sources || []) {
-            // Reuse local Parquet, or bytes a co-author already streamed us (#148 6c).
-            const parquet = (s.id ? localParquet.get(s.id) : null) ?? (s.id ? this.#liveSourceBytes.get(s.id) : null);
-            if (!parquet) { missing++; complete = false; continue; } // still lacking → request below
-            sources.push({ id: s.id, meta: s.meta, label: s.label ?? null, combine: s.combine ?? 'base', joinKey: s.joinKey, aliases: s.aliases, wide: s.wide ?? false, rowidBase: s.rowidBase, parquet });
-          }
-          // Only materialise a dataset once ALL its sources are present; an incomplete
-          // one waits for gap-fill (it re-applies via onReceived when the bytes land).
-          if (complete) datasets.push({ id: d.id, name: d.name, libraryLink: d.libraryLink ?? null, state: { sources, transforms: d.transforms ?? [], order: d.order ?? null } });
-        }
+        const log = mergedLog.map((op) => {
+          if (!SRC(op) || !op.payload?.src?.file) return op;
+          const held = this.#liveSourceBytes.get(op.id);
+          const parquet = localParquet.get(op.id) ?? (held ? held.slice() : null);
+          if (!parquet) { missing++; return op; } // byte-less → loadBundle drops this dataset until gap-fill lands
+          return { ...op, payload: { ...op.payload, src: { ...op.payload.src, parquet } } };
+        });
         if (missing) {
           // A co-author added data we don't hold yet — request the bytes; onReceived
           // re-applies this manifest once they arrive (#148 6c gap-fill).
@@ -1322,9 +1346,10 @@ export class ProjectSync {
           const refs = this.#liveExchange?.requestMissing(manifest);
           debug('live', 'gap-fill requesting', { missing, refs: refs?.length });
         }
-        if (datasets.length) await this.#datasets.loadBundle({ activeId: manifest.activeId, datasets });
+        await this.#datasets.loadBundle({ log, activeId: manifest.activeId, datasetMeta: manifest.datasetMeta });
       }
-      this.#applyWorkspaces?.(manifest.workspaces || {});
+      this.#applyAnalysisLog?.(mergedLog.filter((o) => typeof o.target === 'string' && o.target.startsWith('analysis:')));
+      await this.#applyWorkspaces?.(mergedLog.filter((o) => typeof o.target === 'string' && o.target.startsWith('ws:')), { refresh: true }); // refresh in place
       this.#applyOutput?.(manifest.output || []);
     } catch (err) {
       console.error('[live] apply failed', err);

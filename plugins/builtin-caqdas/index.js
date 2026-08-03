@@ -1658,6 +1658,16 @@ export const workspace = {
     if (workspace._onDsChanged) await workspace._onDsChanged();
     if (app.debug) console.debug('[caqdas] onDatasetChanged OK');
   },
+
+  // A collaborator's coding arrived (folder/live sync merged the codebook) — re-read the
+  // now-merged state and re-render IN PLACE. Critical for co-authoring: the host must NOT
+  // tear down + remount this iframe on a peer's change (a remount re-runs the sandbox
+  // handshake, which times out when the window is backgrounded — the "workspace crashed"
+  // two-window bug). Reuses the dataset-change reload (re-reads app.state.get()).
+  async onRefresh(app) {
+    if (app.debug) console.debug('[caqdas] onRefresh');
+    if (workspace._onDsChanged) await workspace._onDsChanged();
+  },
 };
 
 /** A compact English stop-word list for the word cloud. Deliberately small — the

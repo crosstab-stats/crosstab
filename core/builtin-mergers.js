@@ -19,25 +19,27 @@
 
 import { mergeState as caqdasMergeState } from '../plugins/builtin-caqdas/index.js';
 
-/** Builtin id → its merge declaration (kernel-ready): a `merge` fn (composite blob,
- * e.g. CAQDAS codes/segments/memos add-wins) or a built-in `strategy`. Mirrors what
- * each plugin's `manifest.workspaces[].merge` declares. */
+/** Builtin plugin id → its workspaces' merge declarations, keyed by **workspace id**
+ * (the granularity the merge dispatches at — one plugin can own several workspaces with
+ * different mergers). Mirrors each plugin's `manifest.workspaces[].{id, merge}`. */
 const BUILTIN_MERGERS = {
-  'builtin-caqdas': { merge: caqdasMergeState }, // composite: codes + segments + memos
-  'builtin-spatial': { strategy: 'lww' }, // per-slot last-writer-wins
+  'builtin-caqdas': { 'caqdas-coding': { merge: caqdasMergeState } }, // composite: codes + segments + memos
+  'builtin-spatial': { 'spatial-map': { strategy: 'lww' }, 'spatial-link': { strategy: 'lww' } }, // per-slot LWW
 };
 
 /**
  * Assemble the merger map for a sync: core (always three-way) plus any ACTIVE builtin
- * plugins whose mergers the host can run. Shape matches what `mergeManifests`/
- * `mergeProject` expect (`owner → { merge } | { strategy }`).
- * @param {string[]} activeIds  ids of currently-active plugins (e.g. from plugins.list())
+ * plugins' mergers, keyed by **workspace id** — the key {@link module:core/collab-sync~mergeProjects}
+ * looks up per workspace leaf (a leaf's target carries its wsId; all builtins share the
+ * `builtin` owner token, so owner alone can't pick the right merger). Third-party plugin
+ * blobs still need the sandbox bridge (deferred) → they fall back to the safe default.
+ * @param {string[]} activeIds  ids of currently-active plugins (from plugins.list())
  * @returns {Record<string, object>}
  */
 export function mergersFor(activeIds) {
   const mergers = { core: { strategy: 'three-way' } };
   for (const id of activeIds || []) {
-    if (BUILTIN_MERGERS[id]) mergers[id] = BUILTIN_MERGERS[id];
+    if (BUILTIN_MERGERS[id]) Object.assign(mergers, BUILTIN_MERGERS[id]); // spread wsId → decl
   }
   return mergers;
 }

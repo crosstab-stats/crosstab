@@ -36,11 +36,17 @@ export function refKey(ref) {
   return ref.id ?? `${ref.dsId}:${ref.file}`;
 }
 
-/** Every source across a manifest's datasets, as `{ dsId, file, id, srcIndex }`. */
+/** Every materialisable source in a manifest's flat op-log, as `{ dsId, file, id }`.
+ * Identity is the source op's id (stable across peers); byte-less (retracted) sources
+ * have no `file` and are skipped (nothing to fetch). */
 export function sourceRefs(manifest) {
   const out = [];
-  for (const d of manifest?.datasets ?? []) {
-    (d.sources ?? []).forEach((s, i) => out.push({ dsId: d.id, file: s.file, id: s.id ?? null, srcIndex: i }));
+  for (const op of manifest?.log ?? []) {
+    if (op.type !== 'load' && op.type !== 'append' && op.type !== 'join') continue;
+    const file = op.payload?.src?.file;
+    if (!file) continue;
+    const m = /^ds:([^/]+)\//.exec(op.target || '');
+    out.push({ dsId: m ? m[1] : null, file, id: op.id });
   }
   return out;
 }

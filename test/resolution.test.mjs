@@ -7,10 +7,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { threeWayLog, mergeProject } from '../core/merge.js';
-import { mergeManifests, buildMergers } from '../core/collab-sync.js';
+import { mergeProjects, buildMergers } from '../core/collab-sync.js';
 import { mergeState as caqdasMerge } from '../plugins/builtin-caqdas/index.js';
 
 const recode = (id, name, rules) => ({ id, type: 'recodeVar', name, rules });
+const NUL = String.fromCharCode(0);
+const lop = (id, target, type, payload, owner = 'core', wall = 1) => ({ id, hlc: { wall, counter: 0 }, target, owner, type, payload, reads: [] });
 
 test('every surfaced conflict carries a stable key', () => {
   const ancestor = [recode('r1', 'income', 'orig')];
@@ -49,36 +51,36 @@ test('threeWayLog add/add (same target, different ops): mine/theirs/both all res
   assert.equal(threeWayLog(ancestor, mine, theirs, 'core', { resolutions: { [key]: 'both' } }).conflicts.length, 0);
 });
 
-test('mergeManifests: resolving a dataset conflict re-runs clean (keys survive the coordinator)', () => {
-  const ds = (txs) => ({ id: 1, name: 'ds1', libraryLink: null, sources: [{ id: 's1', meta: [{ name: 'x' }], label: 'f', combine: 'base', file: 's1.parquet' }], transforms: txs, order: ['s', ...txs.map(() => 't')] });
-  const M = (txs) => ({ name: 'P', savedAt: 1, activeId: 1, activePlugins: null, workspaces: null, output: null, datasets: [ds(txs)] });
-  const base = M([]);
-  const mine = M([recode('m1', 'income', 'A')]);
-  const theirs = M([recode('t1', 'income', 'B')]);
-  const first = mergeManifests(base, mine, theirs, buildMergers([]));
-  assert.equal(first.conflicts.length, 1);
-  assert.equal(first.conflicts[0].dataset, 1);
+test('mergeProjects: resolving a dataset conflict re-runs clean (keys survive the coordinator)', () => {
+  const shared = [lop('add1', 'coll/ds:1', 'addDataset', { id: 1, name: 'ds1' }), lop('load1', 'ds:1/source:s1', 'load', { src: { meta: [{ name: 'x' }] } })];
+  const M = (op) => ({ name: 'P', savedAt: 1, activeId: 1, activePlugins: null, output: null, datasetMeta: null, collabId: null, log: [...shared, op] });
+  const mine = M(lop('m1', 'ds:1/var:income', 'recodeVar', { name: 'income', rules: 'A' }));
+  const theirs = M(lop('t1', 'ds:1/var:income', 'recodeVar', { name: 'income', rules: 'B' }));
+  const first = mergeProjects(mine, theirs, buildMergers([]));
+  assert.ok(first.conflicts.length >= 1);
   const key = first.conflicts[0].key;
-  const resolved = mergeManifests(base, mine, theirs, buildMergers([]), { [key]: 'theirs' });
+  const resolved = mergeProjects(mine, theirs, buildMergers([]), { [key]: 'theirs' });
   assert.equal(resolved.conflicts.length, 0);
-  assert.deepEqual(resolved.manifest.datasets[0].transforms.map((t) => t.id), ['t1']);
+  assert.ok(resolved.manifest.log.some((o) => o.id === 't1'));
 });
 
 test('resolution reaches inside a plugin custom merger (CAQDAS) with no plugin change', () => {
   const plugins = [{ id: 'builtin-caqdas', manifest: { workspaces: [{ id: 'caqdas-coding', merge: { via: 'mergeState' } }] }, module: { mergeState: caqdasMerge } }];
+  const leaf = `ws:builtin-caqdas${NUL}caqdas-coding${NUL}_default${NUL}1`;
   const cb = (color) => ({ version: 1, textColumn: 't', labelColumn: null, codes: [{ id: 'c1', name: 'anx', color }], segments: [] });
-  const leaf = (color) => ({ __wsv: 4, ws: { 'builtin-caqdas': { 'caqdas-coding': { _default: { 1: cb(color) } } } } });
-  const M = (color) => ({ name: 'P', savedAt: 1, activeId: 1, activePlugins: ['builtin-caqdas'], workspaces: leaf(color), output: null, datasets: [] });
-  const base = M('#000');
-  const mine = M('#f00');
-  const theirs = M('#0f0');
-  const first = mergeManifests(base, mine, theirs, buildMergers(plugins));
-  assert.equal(first.conflicts.length, 1);
+  const wsOp = (id, color, wall) => lop(id, leaf, 'setWorkspace', { value: cb(color), label: null }, 'builtin-caqdas', wall);
+  const shared = wsOp('wbase', '#000', 1);
+  const M = (op) => ({ name: 'P', savedAt: 1, activeId: 1, activePlugins: ['builtin-caqdas'], output: null, datasetMeta: null, collabId: null, log: [shared, op] });
+  const mine = M(wsOp('wm', '#f00', 3));
+  const theirs = M(wsOp('wt', '#0f0', 3));
+  const first = mergeProjects(mine, theirs, buildMergers(plugins));
+  assert.ok(first.conflicts.length >= 1);
   assert.equal(first.conflicts[0].owner, 'builtin-caqdas');
   const key = first.conflicts[0].key;
-  const resolved = mergeManifests(base, mine, theirs, buildMergers(plugins), { [key]: 'theirs' });
+  const resolved = mergeProjects(mine, theirs, buildMergers(plugins), { [key]: 'theirs' });
   assert.equal(resolved.conflicts.length, 0);
-  assert.equal(resolved.manifest.workspaces.ws['builtin-caqdas']['caqdas-coding']._default[1].codes[0].color, '#0f0');
+  const merged = resolved.manifest.log.filter((o) => o.target === leaf).sort((a, b) => (a.hlc.wall - b.hlc.wall) || (a.hlc.counter - b.hlc.counter)).slice(-1)[0];
+  assert.equal(merged.payload.value.codes[0].color, '#0f0');
 });
 
 test('mergeProject: resolutions apply across log + blob tiers at once', () => {

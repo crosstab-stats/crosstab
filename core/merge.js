@@ -124,10 +124,17 @@ export function newOpId() {
  * The **target** an op edits — the key used to detect two sides editing "the same
  * thing" independently. Two ops with the same target from different sides are a
  * semantic collision to surface; disjoint targets auto-merge.
+ *
+ * A unified-log op carries its target **explicitly** (`op.target`, see
+ * docs/ARCHITECTURE-unified-log.md §3), and that is authoritative — the host owns the
+ * address, and it covers op types (collection, analysis, plugin) this kernel doesn't
+ * know. Only legacy dataset ops with no `target` field fall back to the type-derived
+ * targets below.
  * @param {object} op
  * @returns {string}
  */
 export function opTarget(op) {
+  if (op.target) return op.target;
   switch (op.type) {
     case 'setVariable':
     case 'recodeVar':

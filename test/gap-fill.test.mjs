@@ -7,12 +7,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { refKey, sourceRefs, missingSources, chunk, reassemble, sha256hex, SourceExchange } from '../core/gap-fill.js';
 
-const src = (id, file) => ({ id, file, meta: [{ name: 'x' }], label: 'f', combine: 'base' });
-const manifest = (datasets) => ({ name: 'P', savedAt: 1, activeId: datasets[0].id, datasets });
-const ds = (id, sources) => ({ id, name: `ds${id}`, sources, transforms: [], order: sources.map(() => 's') });
+// A source op in the flat one-true-log (the shape sourceRefs now reads).
+const loadOp = (id, dsId, file) => ({ id, hlc: { wall: 0, counter: 0 }, target: `ds:${dsId}/source:${id}`, owner: 'core', type: 'load', payload: { src: { meta: [{ name: 'x' }], label: 'f', file } }, reads: [] });
+const manifest = (ops) => ({ name: 'P', savedAt: 1, activeId: 1, log: ops });
 
 test('sourceRefs / missingSources detect what a peer lacks', () => {
-  const m = manifest([ds(1, [src('op-a', 'ds1_src1.parquet')]), ds(2, [src('op-b', 'ds2_src1.parquet')])]);
+  const m = manifest([loadOp('op-a', 1, 'src_op-a.parquet'), loadOp('op-b', 2, 'src_op-b.parquet')]);
   assert.deepEqual(sourceRefs(m).map(refKey), ['op-a', 'op-b']);
   assert.deepEqual(missingSources(m, new Set(['op-a'])).map(refKey), ['op-b']); // has a, needs b
   assert.deepEqual(missingSources(m, new Set(['op-a', 'op-b'])), []);           // has both
@@ -64,7 +64,7 @@ function wire(a, b) {
 
 test('full round-trip: a peer fetches a missing source, verified and stored', async () => {
   const payload = new Uint8Array(500).map((_, i) => (i * 7) % 256); // > chunkSize (64) → multi-chunk
-  const m = manifest([ds(1, [src('op-a', 'ds1_src1.parquet')]), ds(2, [src('op-b', 'ds2_src1.parquet')])]);
+  const m = manifest([loadOp('op-a', 1, 'src_op-a.parquet'), loadOp('op-b', 2, 'src_op-b.parquet')]);
   // A has op-a and needs op-b; B has op-b.
   const { peers, drain } = wire(
     { held: ['op-a'], bytes: { 'op-a': new Uint8Array([9]) } },
@@ -75,7 +75,7 @@ test('full round-trip: a peer fetches a missing source, verified and stored', as
   await drain();
   assert.ok(peers.A.ex.held.has('op-b'));                     // now held
   assert.deepEqual([...peers.A.store.get('op-b')], [...payload]); // exact bytes stored
-  assert.deepEqual(peers.A.received, [{ key: 'op-b', ok: true, dsId: 2, file: 'ds2_src1.parquet' }]);
+  assert.deepEqual(peers.A.received, [{ key: 'op-b', ok: true, dsId: '2', file: 'src_op-b.parquet' }]);
 });
 
 // Trystero's action channel only transmits binary when the WHOLE payload is a

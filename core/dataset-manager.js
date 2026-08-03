@@ -27,29 +27,109 @@
 
 import { CoreEvents } from './event-bus.js';
 import { DataStore } from './data-store.js';
+import { ProjectLog } from './project-log.js';
+import { liveOps } from './op-log.js';
+import { currentAuthor } from './user-identity.js';
 
 /** Bus event: the set of datasets or the active one changed (drives the switcher). */
 export const DATASETS_CHANGED = 'datasets:changed';
+
+/** The dataset-COLLECTION projection (unified log, System 2): folds add/rename/remove
+ * ops into the ordered `[{id, name}]` membership. This — not the instance Map — is the
+ * source of truth for which datasets exist, their names, and their order. The Map
+ * (`#datasets`) is just the live-instance store keyed by these ids. See
+ * docs/ARCHITECTURE-unified-log.md §7. Which dataset is *active* is view state, NOT an
+ * op (the same call the DataStore already makes for variable selection). */
+const COLLECTION = {
+  key: 'collection',
+  match: (op) => op.owner === 'core' && typeof op.target === 'string' && op.target.startsWith('coll/'),
+  fold: (ops) => {
+    const names = new Map();
+    for (const op of liveOps(ops)) { // undone add/rename/remove are hidden by the liveness fold
+      if (op.type === 'addDataset') names.set(op.payload.id, op.payload.name);
+      else if (op.type === 'renameDataset') { if (names.has(op.payload.id)) names.set(op.payload.id, op.payload.name); }
+      else if (op.type === 'removeDataset') names.delete(op.payload.id);
+    }
+    return [...names.entries()].map(([id, name]) => ({ id, name }));
+  },
+};
+
+/** A globally-unique id for a NEW dataset. Random (~48 bits), NOT a shared local
+ * counter — two peers creating datasets concurrently (offline, or live from the same
+ * bundle) must never mint the same id, or their DuckDB tables / Parquet files collide
+ * AND the merge sees the two different datasets as rival `addDataset(coll/ds:<id>)` ops
+ * (a false "both added" conflict). Kept a plain integer < 2^53 so it stays a valid
+ * DuckDB identifier suffix and JSON number — no id-type churn across the app. Starts at
+ * 2, leaving 0/1 for the reserved blank-project dataset. */
+function newDatasetId() {
+  const r = crypto.getRandomValues(new Uint32Array(2));
+  return (r[0] % 0x1000000) * 0x1000000 + (r[1] % 0x1000000) + 2;
+}
+
+const collAdd = (id, name) => ({ target: `coll/ds:${id}`, owner: 'core', type: 'addDataset', payload: { id, name } });
+const collRename = (id, name) => ({ target: `coll/ds:${id}`, owner: 'core', type: 'renameDataset', payload: { id, name } });
+const collRemove = (id) => ({ target: `coll/ds:${id}`, owner: 'core', type: 'removeDataset', payload: { id } });
 
 export class DatasetManager {
   /** @type {import('./event-bus.js').EventBus} */
   #bus;
   /** @type {import('./duckdb-manager.js').DuckDBManager} */
   #duckdb;
-  /** id → DataStore. @type {Map<number, DataStore>} */
+  /** id → DataStore (the live-instance store; membership is owned by {@link #log}).
+   * @type {Map<number, DataStore>} */
   #datasets = new Map();
-  /** Active dataset id. */
+  /** Active dataset id — VIEW STATE, not a logged op. */
   #activeId = null;
-  /** Monotonic dataset id. */
-  #nextId = 1;
+  /** The project's unified op log; here it carries the dataset-collection tier. Later
+   * units register more projections (analysis, plugin) on the SAME log. @type {ProjectLog} */
+  #log;
 
   /**
    * @param {import('./event-bus.js').EventBus} bus
    * @param {import('./duckdb-manager.js').DuckDBManager} duckdb
+   * @param {ProjectLog} [projectLog]  the shared project log (default: a fresh one).
    */
-  constructor(bus, duckdb) {
+  constructor(bus, duckdb, projectLog) {
     this.#bus = bus;
     this.#duckdb = duckdb;
+    this.#log = projectLog ?? new ProjectLog({ author: currentAuthor });
+    this.#log.register(COLLECTION);
+  }
+
+  /** The ordered collection membership from the log — the source of truth for which
+   * datasets exist, their order, and their names. */
+  #collection() {
+    return this.#log.state('collection');
+  }
+
+  /** The raw collection op-log (add/rename/remove ops), persisted in the project bundle
+   * so the merge (unit 6) reconciles membership from REAL ops — both peers converge, and
+   * a removeDataset propagates instead of being inferred from absence. */
+  collectionOps() {
+    return this.#log.ops().filter((o) => COLLECTION.match(o));
+  }
+
+  /** Raw data-tier ops (`ds:<id>/…`) whose dataset is **no longer live** — a deleted
+   * dataset's superseded pipeline steps. The one true log keeps these (see
+   * {@link DatasetManager#remove}); this exposes them so the project save path persists
+   * them alongside the live datasets' ops. They're never re-materialised into a
+   * DataStore (the collection projection excludes the removed dataset), so the
+   * peer-local table name / any bytes are stripped from source ops — the envelope
+   * (id/hlc/author/target) is what matters for audit + merge. */
+  orphanDataOps() {
+    const live = new Set([...this.#datasets.keys()].map((id) => String(id)));
+    const dsId = (op) => { const m = /^ds:([^/]+)\//.exec(op.target); return m ? m[1] : null; };
+    return this.#log
+      .ops()
+      .filter((op) => op.owner === 'core' && typeof op.target === 'string' && op.target.startsWith('ds:'))
+      .filter((op) => { const id = dsId(op); return id != null && !live.has(id); })
+      .map((op) => {
+        if (['load', 'append', 'join'].includes(op.type) && op.payload?.src) {
+          const { table, parquet, file, ...src } = op.payload.src; // eslint-disable-line no-unused-vars
+          return { ...op, payload: { ...op.payload, src } };
+        }
+        return op;
+      });
   }
 
   // --- collection ------------------------------------------------------------
@@ -64,9 +144,9 @@ export class DatasetManager {
     return this.#activeId;
   }
 
-  /** All open datasets (live {@link DataStore}s), in id order. */
+  /** All open datasets (live {@link DataStore}s), in the collection's order. */
   all() {
-    return [...this.#datasets.values()];
+    return this.#collection().map((c) => this.#datasets.get(c.id)).filter(Boolean);
   }
 
   /** A specific open dataset by id, or undefined. */
@@ -80,15 +160,19 @@ export class DatasetManager {
     this.#bus.emit(DATASETS_CHANGED, this.list());
   }
 
-  /** Summaries for the dataset switcher. */
+  /** Summaries for the dataset switcher, in collection order. Name comes from the
+   * collection projection (its source of truth); row count/link from the live instance. */
   list() {
-    return [...this.#datasets.values()].map((ds) => ({
-      id: ds.id,
-      name: ds.name,
-      rowCount: ds.rowCount,
-      active: ds.id === this.#activeId,
-      libraryLink: ds.libraryLink ?? null,
-    }));
+    return this.#collection().map((c) => {
+      const ds = this.#datasets.get(c.id);
+      return {
+        id: c.id,
+        name: c.name,
+        rowCount: ds?.rowCount ?? 0,
+        active: c.id === this.#activeId,
+        libraryLink: ds?.libraryLink ?? null,
+      };
+    });
   }
 
   /**
@@ -99,9 +183,10 @@ export class DatasetManager {
    * @returns {DataStore}
    */
   add(name = 'Dataset', { activate = false } = {}) {
-    const id = this.#nextId++;
-    const ds = new DataStore(this.#bus, this.#duckdb, { id, name });
+    const id = newDatasetId();
+    const ds = new DataStore(this.#bus, this.#duckdb, { id, name, log: this.#log });
     this.#datasets.set(id, ds);
+    this.#log.append(collAdd(id, name)); // membership is recorded, not just held in the Map
     if (activate || this.#activeId === null) this.#activeId = id;
     this.#bus.emit(DATASETS_CHANGED, this.list());
     return ds;
@@ -114,11 +199,13 @@ export class DatasetManager {
     this.#emitActive('switch');
   }
 
-  /** Rename a dataset (updates the switcher). */
+  /** Rename a dataset (updates the switcher). The op is the source of truth; `ds.name`
+   * is kept in sync as the synchronous display cache many callers read. */
   rename(id, name) {
     const ds = this.#datasets.get(id);
     if (!ds) return;
     ds.name = name;
+    this.#log.append(collRename(id, name));
     this.#bus.emit(DATASETS_CHANGED, this.list());
   }
 
@@ -129,8 +216,16 @@ export class DatasetManager {
   async remove(id) {
     const ds = this.#datasets.get(id);
     if (!ds) return;
-    await ds.dispose();
+    await ds.dispose(); // drop the DuckDB tables (its source ops become byte-less)
     this.#datasets.delete(id);
+    this.#log.append(collRemove(id)); // deletion is a recorded op — not just absence
+    // The one true log KEEPS the removed dataset's data ops (do NOT physically drop
+    // them): the collRemove is the authoritative deletion signal, and a physical drop
+    // would (a) break the audit trail and (b) resurrect the ops on merge — an op absent
+    // from the shared-id ancestor reads as the peer's ADDITION (the delete-inference bug
+    // class this migration exists to kill). The ops are now orphaned (their dataset is
+    // gone from the collection projection, so no live DataStore folds them) but stay in
+    // the log, and are persisted via {@link DatasetManager#orphanDataOps}.
     if (this.#datasets.size === 0) {
       // Start fresh: a single empty dataset, ready to import into.
       this.#activeId = null;
@@ -221,9 +316,10 @@ export class DatasetManager {
    * @returns {Promise<number>} the new dataset id.
    */
   async addFromState({ name = 'Restored dataset', state, activate = true }) {
-    const id = this.#nextId++;
-    const ds = new DataStore(this.#bus, this.#duckdb, { id, name });
+    const id = newDatasetId();
+    const ds = new DataStore(this.#bus, this.#duckdb, { id, name, log: this.#log });
     this.#datasets.set(id, ds);
+    this.#log.append(collAdd(id, name)); // recycle-bin restore is a real add to the collection
     await ds.restoreState(state);
     if (activate || this.#activeId === null) {
       this.#activeId = id;
@@ -235,25 +331,63 @@ export class DatasetManager {
   }
 
   /**
-   * Replace the entire working set with a saved project bundle: dispose the open
-   * datasets, recreate each from the bundle, and restore the active one.
+   * Replace the collection + data tiers from the **flat one-true-log** (the single
+   * `manifest.log`, filtered to this manager's tiers by the caller or here): dispose the
+   * open datasets, receive the collection ops (membership), then reconstruct each live
+   * dataset by materialising its source bytes + folding its slice. Orphaned data ops (a
+   * deleted dataset's superseded steps) are kept in the log for audit + merge-safety but
+   * never re-materialised. Other tiers (analysis, workspace) are restored by their own
+   * subsystems from the same shared log. An empty log yields one fresh blank dataset.
    *
-   * @param {{activeId: number, datasets: Array<{id: number, name: string, state: object}>}} bundle
+   * @param {{log?: object[], activeId?: number, datasetMeta?: Record<string, {libraryLink?: object}>}} bundle
    */
-  async loadBundle({ datasets, activeId }) {
+  async loadBundle({ log = [], activeId, datasetMeta = {} }) {
     for (const ds of this.#datasets.values()) await ds.dispose();
     this.#datasets.clear();
     this.#activeId = null;
-    // Recreate with the SAVED ids so a project's Parquet files (named by dataset
-    // id) map back consistently across save/load.
-    for (const d of datasets) {
-      const ds = new DataStore(this.#bus, this.#duckdb, { id: d.id, name: d.name });
-      ds.libraryLink = d.libraryLink ?? null;
-      this.#datasets.set(d.id, ds);
-      await ds.restoreState(d.state);
+    // Clear only the tiers this manager owns (collection + data); analysis/workspace are
+    // cleared+restored by their own subsystems on the shared log.
+    this.#log.clearWhere(
+      (op) => COLLECTION.match(op) || (op.owner === 'core' && typeof op.target === 'string' && op.target.startsWith('ds:')),
+    );
+    const isDs = (o) => o.owner === 'core' && typeof o.target === 'string' && o.target.startsWith('ds:');
+    const dsIdOf = (o) => { const m = /^ds:([^/]+)\//.exec(o.target); return m ? m[1] : null; };
+    const collOps = log.filter((o) => COLLECTION.match(o));
+    const dsOps = log.filter(isDs);
+    // Membership first (ids + names + order + removes), straight from the real ops.
+    this.#log.receiveOps(collOps);
+    const members = this.#collection(); // folded [{id, name}] in order
+    const liveIds = new Set(members.map((m) => String(m.id)));
+    // Group each dataset's ops (with source bytes attached) by its id.
+    const byId = new Map();
+    for (const o of dsOps) {
+      const k = dsIdOf(o);
+      if (k == null) continue;
+      if (!byId.has(k)) byId.set(k, []);
+      byId.get(k).push(o);
     }
-    const maxId = datasets.reduce((m, d) => Math.max(m, Number(d.id) || 0), 0);
-    this.#nextId = Math.max(this.#nextId, maxId + 1);
+    // Reconstruct each live dataset with its SAVED id (source sidecars are op-id keyed).
+    for (const { id, name } of members) {
+      const ds = new DataStore(this.#bus, this.#duckdb, { id, name, log: this.#log });
+      ds.libraryLink = datasetMeta?.[id]?.libraryLink ?? datasetMeta?.[String(id)]?.libraryLink ?? null;
+      this.#datasets.set(id, ds);
+      try {
+        await ds.rawRestore(byId.get(String(id)) ?? []); // materialise sources + fold, ids preserved
+      } catch (err) {
+        // A dataset whose sources didn't materialise (e.g. gap-fill bytes not yet here)
+        // must NOT linger with no tables — drop it; it stays in the collection membership
+        // and re-materialises on the next apply once its bytes arrive.
+        console.error('[dataset] restore failed; dropping until its data arrives:', id, err);
+        this.#datasets.delete(id);
+        try { await ds.dispose(); } catch { /* best-effort */ }
+      }
+    }
+    // Orphaned data ops (a removed dataset's superseded steps) — keep them in the log for
+    // audit + merge-safety; no live DataStore folds them.
+    const orphan = dsOps.filter((o) => !liveIds.has(dsIdOf(o)));
+    if (orphan.length) this.#log.receiveOps(orphan);
+    // A project always has at least one dataset (a fresh/blank load has an empty log).
+    if (this.#datasets.size === 0) this.add('Dataset 1', { activate: true });
     this.#activeId = this.#datasets.has(activeId)
       ? activeId
       : (this.#datasets.keys().next().value ?? null);

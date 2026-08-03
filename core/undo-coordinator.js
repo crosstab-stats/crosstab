@@ -73,8 +73,10 @@ export class UndoCoordinator {
       if (n > 0) {
         const entry = this.#analysisLog.entries()[n - 1];
         this.#analysisLog.remove(n - 1); // drop the step (timeline re-renders)
-        const mark = Number.isFinite(entry?.outputMark) ? entry.outputMark : null;
-        if (mark != null) this.#results.truncateTo?.(mark); // drop its output blocks
+        // Drop its output by identity (runId), not position — precise and reorder-proof.
+        // Fall back to the old positional truncate for pre-unit-5b entries with no runId.
+        if (entry?.runId) this.#results.removeRun?.(entry.runId);
+        else if (Number.isFinite(entry?.outputMark)) this.#results.truncateTo?.(entry.outputMark);
         this.#redo.push({ kind: 'analysis', entry });
       }
       return;

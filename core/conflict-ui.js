@@ -3,7 +3,7 @@
  * The host conflict-resolution modal (#143) — the visible half of the "never a
  * silent wrong merge" guarantee.
  *
- * When a sync detects genuine collisions, `mergeManifests` returns a `conflicts[]`
+ * When a sync detects genuine collisions, `mergeProjects` returns a `conflicts[]`
  * list (each with a stable `key`, a human `label`, the two sides' values, and the
  * `options` offered). This module renders them as "keep yours / keep theirs / keep
  * both" choices and returns a `resolutions` map (`key → choice`) — which fed back
@@ -54,7 +54,7 @@ const OPTION_LABEL = { mine: 'Keep yours', theirs: 'Keep theirs', both: 'Keep bo
  * embedded and unit-tested directly. Every conflict defaults to `mine` so a
  * `getResolutions()` call is always complete, even if the user skips some.
  *
- * @param {object[]} conflicts  from `mergeManifests` / `mergeProject`
+ * @param {object[]} conflicts  from `mergeProjects` / `mergeProject`
  * @returns {{element: HTMLElement, getResolutions: () => Record<string,string>}}
  */
 export function buildConflictForm(conflicts) {
