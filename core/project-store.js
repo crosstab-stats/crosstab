@@ -264,6 +264,7 @@ export class ProjectStore {
     await this.#writeSources(id, bundle, writeSourcesFor);
     const manifest = buildManifest({ name, savedAt, bundle });
     await this.#write(this.#file(id, 'project.json'), JSON.stringify(manifest));
+    await this.#sweep(id, manifest); // drop bytes nothing in the log points at (#149 C2)
 
     if (this.#flat) {
       // Folder = project: a plaintext marker makes the folder self-describing (and
@@ -447,6 +448,40 @@ export class ProjectStore {
       return (await this.#driver.read(name)) != null;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Delete byte files this project no longer references — a purged dataset's Parquet
+   * sidecars and any asset whose `addAsset` op is gone (#149 C2). Without it the project
+   * only ever grew: `orphanDataOps` stripped a source op's `file` ref but nothing removed
+   * the file, so every purged dataset and every replaced import left its bytes behind
+   * forever.
+   *
+   * Keyed on the **manifest we just wrote**, not on ownership or any side table: a file
+   * survives iff some op in the saved log names it. That's the whole rule, it can't drift
+   * from what a load will actually read, and it stays correct when #150 adds asset
+   * ownership. Runs after the manifest is durable, so a crash mid-sweep loses only
+   * garbage — never a file the manifest still points at.
+   *
+   * Best-effort throughout: a sweep failure must never fail a save.
+   */
+  async #sweep(id, manifest) {
+    try {
+      const keep = new Set();
+      for (const op of manifest.log ?? []) {
+        if (isSourceOp(op) && op.payload?.src?.file) keep.add(op.payload.src.file);
+        else if (op.type === 'addAsset' && op.payload?.id) keep.add(`${ASSET_DIR}/${safeAssetId(op.payload.id)}.bin`);
+      }
+      for (const name of await this.#driver.list(this.#flat ? '' : `${ROOT}/${id}`)) {
+        if (!name.startsWith('src_') || !name.endsWith('.parquet')) continue;
+        if (!keep.has(name)) await this.#driver.remove(this.#file(id, name));
+      }
+      for (const assetId of await this.listAssets(id)) {
+        if (!keep.has(`${ASSET_DIR}/${safeAssetId(assetId)}.bin`)) await this.removeAsset(id, assetId);
+      }
+    } catch (err) {
+      console.warn('[project] sweep skipped', err);
     }
   }
 

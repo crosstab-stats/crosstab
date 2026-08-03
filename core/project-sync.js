@@ -21,6 +21,7 @@ import { ProjectStore, FOLDER_PROJECT_ID, buildManifest } from './project-store.
 import { attachLiveDoc } from './live-sync.js';
 import { SourceExchange } from './gap-fill.js';
 import { debug } from './debug.js';
+import { liveOps } from './op-log.js';
 import { rememberFolder, listFolders, forgetFolder, ensureReadWrite } from './folder-handle.js';
 import { passphraseFor, shouldEncrypt, PASSPHRASE_ABORT } from './at-rest.js';
 import { syncFolderProject, manifestsEqual } from './folder-sync.js';
@@ -54,6 +55,26 @@ function b64ToBytes(b64) {
 
 /** The media-asset tier of a flat one-true-log — used where a bundle arrives as just
  * `log` (a `.crosstab` import, a merge result) rather than pre-split by ProjectStore. */
+/** The project-METADATA projection: the name, folded from `setProjectName` ops (#149
+ * A3). The name is user data, and it was the one piece that lived only in
+ * `#binding.name` — merge took `mine ?? theirs` and contentSig ignored it, so a
+ * co-author's rename never propagated and our next save silently reverted it (the same
+ * family as the move-to-folder rename bug). As an op it merges, carries its author, and
+ * travels like everything else. */
+export const PROJECT_META = {
+  key: 'projectMeta',
+  match: (op) => op.owner === 'core' && op.target === 'project/name',
+  fold: (ops) => {
+    let name = null;
+    for (const op of liveOps(ops)) if (op.type === 'setProjectName') name = op.payload?.name ?? null;
+    return { name };
+  },
+};
+
+/** The project-metadata tier of a flat log (a `.crosstab` import, a merge result). */
+const metaOpsOf = (log) =>
+  (log ?? []).filter((o) => o.owner === 'core' && o.target === 'project/name');
+
 const assetOpsOf = (log) =>
   (log ?? []).filter((o) => o.owner === 'core' && typeof o.target === 'string' && o.target.startsWith('asset:'));
 
@@ -75,6 +96,8 @@ export class ProjectSync {
    * `manifest.log` on save (#148). Null ⇒ feature unavailable. */
   #getWorkspaceOps;
   /** () => the media-asset tier's ops, and the restore hook (#149 A5). */
+  /** The shared project log — this tier owns the project's own metadata (#149 A3). */
+  #log = null;
   #getAssetOps;
   #applyAssetOps;
   /** (ops) => void : restore the workspace tier from its ops on open. */
@@ -179,7 +202,7 @@ export class ProjectSync {
    * @param {(keys: string[]) => Promise<void>} [deps.applyActivePlugins] - Restore
    *   a project's saved plugin set on open.
    */
-  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getAssetOps, applyAssetOps, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, pluginIdentities, getMergers }) {
+  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getAssetOps, applyAssetOps, projectLog, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, pluginIdentities, getMergers }) {
     this.#store = projectStore;
     this.#datasets = datasets;
     this.#ui = ui;
@@ -191,6 +214,8 @@ export class ProjectSync {
     this.#applyActivePlugins = applyActivePlugins ?? null;
     this.#getWorkspaceOps = getWorkspaceOps ?? null;
     this.#applyWorkspaces = applyWorkspaces ?? null;
+    this.#log = projectLog ?? null;
+    this.#log?.register(PROJECT_META);
     this.#getAssetOps = getAssetOps ?? null;
     this.#applyAssetOps = applyAssetOps ?? null;
     this.#getOutput = getOutput ?? null;
@@ -453,6 +478,7 @@ export class ProjectSync {
   #creation = null;
 
   async #autoCreate() {
+    this.#recordName('Untitled project');
     try {
       await this.#fullSave(null, 'Untitled project');
     } finally {
@@ -605,6 +631,7 @@ export class ProjectSync {
     if (Array.isArray(wsOps)) log.push(...wsOps);
     const assetOps = this.#getAssetOps ? this.#getAssetOps() : null; // asset: tier ops (#149 A5)
     if (Array.isArray(assetOps)) log.push(...assetOps);
+    if (this.#log) log.push(...this.#log.slice(PROJECT_META.match)); // project/name (#149 A3)
     // Record the active plugin set alongside the data, so reopening restores the
     // analyses too. Null when the feature isn't wired (keeps old saves untouched).
     // Carry forward any recorded plugins this install can't resolve (not installed
@@ -710,6 +737,8 @@ export class ProjectSync {
       // mount() sees its saved state via state.get(). Absent ⇒ empty.
       this.#applyWorkspaces?.(bundle.workspaceOps || []);
       this.#applyAssetOps?.(bundle.assetOps || assetOpsOf(bundle.log));
+    this.#applyNameOps(bundle.log);
+      this.#applyNameOps(bundle.log);
       this.#applyOutput?.(bundle.output || []); // restore the Output tab (or clear)
       this.#applyAnalysisLog?.(bundle.analysisLog || []); // restore the script's analysis steps
       // Restore the project's analysis set (unless the caller already applied one,
@@ -1209,6 +1238,7 @@ export class ProjectSync {
       await this.#datasets.loadBundle(bundle);
       await this.#applyWorkspaces?.(bundle.workspaceOps || [], { refresh: true }); // peer sync → refresh in place, don't remount
       this.#applyAssetOps?.(bundle.assetOps || assetOpsOf(bundle.log));
+      this.#applyNameOps(bundle.log);
       this.#applyOutput?.(bundle.output || []);
       this.#applyAnalysisLog?.(bundle.analysisLog || []);
       this.#lastManifest = manifest;
@@ -1397,6 +1427,7 @@ export class ProjectSync {
       this.#applyAnalysisLog?.(mergedLog.filter((o) => typeof o.target === 'string' && o.target.startsWith('analysis:')));
       await this.#applyWorkspaces?.(mergedLog.filter((o) => typeof o.target === 'string' && o.target.startsWith('ws:')), { refresh: true }); // refresh in place
       this.#applyAssetOps?.(assetOpsOf(mergedLog));
+      this.#applyNameOps(mergedLog); // a co-author's rename lands here (#149 A3)
       this.#applyOutput?.(manifest.output || []);
       this.#persistPeerWork(dataChanged); // a co-author's work is work (#149 C1)
     } catch (err) {
@@ -1422,6 +1453,30 @@ export class ProjectSync {
    *
    * @param {boolean} dataChanged  whether the data/collection tier was rebuilt.
    */
+  /** Record the project name as an op. Idempotent — skipped when the folded name
+   * already matches, so a save/load round-trip doesn't append duplicates. */
+  #recordName(name) {
+    if (!this.#log || !name) return;
+    if (this.#log.state('projectMeta')?.name === name) return;
+    this.#log.append({ target: 'project/name', owner: 'core', type: 'setProjectName', payload: { name } });
+  }
+
+  /** Replace the project-metadata tier from a loaded/merged log, then adopt the folded
+   * name as the display name. The op WINS over `manifest.name`: it's the merged value,
+   * so this is how a co-author's rename actually lands. */
+  #applyNameOps(log) {
+    if (!this.#log) return null;
+    this.#log.clearWhere(PROJECT_META.match);
+    this.#log.receiveOps(metaOpsOf(log));
+    const folded = this.#log.state('projectMeta')?.name ?? null;
+    if (folded && this.#binding && this.#binding.name !== folded) {
+      this.#binding.name = folded;
+      this.#dirty = true; // the catalog/manifest still says the old name — re-save
+      this.#emitProject();
+    }
+    return folded;
+  }
+
   #persistPeerWork(dataChanged) {
     this.#dirty = true;
     if (dataChanged) for (const ds of this.#datasets.all()) this.#sourcesDirty.add(ds.id);
@@ -1531,6 +1586,11 @@ export class ProjectSync {
     try {
       if (id === this.#binding?.id) {
         this.#binding.name = name;
+        this.#recordName(name); // the rename is an op, so it merges and propagates (#149 A3)
+        // `store.rename` only patches `manifest.name` in place; the appended op needs a
+        // real save or it never reaches disk (the log would reload without the rename).
+        this.#dirty = true;
+        this.#schedule();
         await this.#store.rename(id, name);
         this.#emitProject();
         this.#setStatus('saved');

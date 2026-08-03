@@ -594,6 +594,7 @@ export async function boot(mounts) {
     // reconcile() alone wouldn't refresh it and it would keep showing stale data.
     // Workspaces are now the `ws:` tier of the one true log (#148): save carries their
     // ops in manifest.log; load routes them here. The store folds them into its cache.
+    projectLog,
     getAssetOps: () => mediaStore.ops(),
     applyAssetOps: (ops) => mediaStore.restoreOps(ops),
     getWorkspaceOps: () => workspaceStore.ops(),

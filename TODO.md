@@ -46,12 +46,14 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         pull every pre-pull op id is still present, only the new pipeline is live, the
         data is v2 and the local transform is re-applied on top. (`#add` was always
         safe — a fresh dataset has an empty slice.)
-  - [ ] **A3: project NAME is user data with no op.** Rename lives only in
-        `#binding.name` / `store.rename`; merge takes `name: mine ?? theirs`
-        (`collab-sync.js`) and `contentSig` ignores it (`folder-sync.js`), so a
-        peer's rename never propagates and is silently reverted by our next save.
-        Same family as the fixed move-to-folder rename bug. Decide: name as an op,
-        or name as a properly-merged scalar (LWW by savedAt).
+  - [x] **A3: project NAME is user data and is now an op — DONE.** *Decision: name as
+        an op, not a merged scalar* — it's user data, and with `author` on every op it
+        answers "who named this project that?". `setProjectName` on target
+        `project/name`, folded by the `PROJECT_META` projection, carried in
+        `manifest.log`, applied on every load/merge path, and the folded value WINS over
+        `manifest.name` so a co-author's rename actually lands. Gotcha found in
+        testing: `store.rename` only patches `manifest.name` in place, so the rename now
+        also marks dirty + schedules a real save, or the op never reached disk.
   - [x] **A4 (serious for qual): recycle-bin round-trip lost workspace/coding
         state — DONE.** Restore minted a NEW dataset id, but `ws:` leaves are keyed
         by dataset id, so a deleted-then-restored coded dataset came back with its
@@ -226,41 +228,25 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         every live dataset's sources dirty, or the incremental save would write a
         manifest referencing `src_<opId>.parquet` sidecars never written for a peer's
         new dataset.
-  - [ ] **C2: op-id-keyed Parquet sidecars are never pruned** (retracted sources,
-        deleted datasets — `orphanDataOps` strips the `file` ref but the file stays)
-        → unbounded OPFS/folder growth. Add a sweep at save time. *Related, from the
-        B1 fix:* a replace now keeps one superseded generation materialised in
-        DuckDB for the session (that's what makes its undo work) — bounded, but the
-        same save-time sweep is the natural place to reclaim it earlier if a
-        repeated-reimport session ever proves heavy.
-  - [x] **C3: `countDatasets` ignored liveness — DONE.** The launcher's catalog
-        summary counted add − remove straight off the raw log, so an UNDONE
-        `addDataset` still counted. Now folds through `liveOps` and treats
-        `purgeDataset` as a removal too, matching DatasetManager's COLLECTION
-        projection — they have to agree or the launcher advertises datasets the
-        project doesn't have.
-  - [x] **C4: merger dispatch was keyed by a bare workspace id — DONE.** A
-        third-party plugin naming its workspace `caqdas-coding` got CAQDAS's merger
-        run on its own (owner-isolated) blob. Mergers are now registered and looked up
-        under an owner-qualified key (`mergerKey(owner, wsId)`), with the bare-wsId
-        lookup kept as a fallback so nothing registered the old way breaks.
-  - [x] **C5: dead pre-log workspace blob path deleted — DONE.**
-        `WorkspaceStore.export()`/`import()` and `migrateWorkspaceBlob` were the
-        pre-#148 format: a whole-tier snapshot written straight into the cache,
-        bypassing the log. No callers since the `ws:` tier moved onto the log, so they
-        were only a loaded gun for a future path to reintroduce a write the log never
-        sees. Gone; save/load go through `ops()` / `restoreOps()`.
-  - [x] **C6: `updateVariable`/`setCell` lacked the discard-on-failed-rederive
-        rollback — DONE.** Both now go through a shared `#appendGuarded`, so a
-        throwing re-derive hard-drops the just-appended op and re-derives clean
-        instead of leaving a poisoned op that breaks every LATER fold. Low-risk paths
-        (TRY_CAST), but the guard is now uniform across every transform mutator.
-  - [ ] **C7 (decision): post-merge Undo semantics.** Edit ▸ Undo targets the
-        highest-HLC op in the active dataset's slice regardless of author — right
-        after a sync, Ctrl+Z undoes the COLLABORATOR's newest edit (and the undo
-        marker syncs back to them). Coherent under shared history, but users read
-        Undo as "undo MY last action." Decide and document (option: scope undo to
-        ops by this author).
+  - [x] **C2: byte files were never pruned — DONE.** A purged dataset's Parquet and
+        every replaced import's sidecar stayed on disk forever (`orphanDataOps` stripped
+        the `file` ref; nothing removed the file). `ProjectStore.#sweep` now runs after
+        each save, keyed on **the manifest just written**: a file survives iff some op in
+        the saved log names it. That rule can't drift from what a load will read, covers
+        source sidecars and media assets alike, and stays correct when #150 adds asset
+        ownership — and when A8a starts binning replaced generations, their ops will name
+        their files, so the sweep keeps them with no change. Runs after the manifest is
+        durable, so a crash mid-sweep loses only garbage; best-effort, never fails a save.
+        Verified: after a replace-import the superseded generation's sidecar is gone and
+        only the live one remains.
+  - [x] **C7 (decision): post-merge Undo semantics — DECIDED, no code change.**
+        Edit ▸ Undo targets the highest-HLC live op in the active dataset regardless of
+        author, so right after a sync Ctrl+Z can undo a COLLABORATOR's newest edit (and
+        the marker syncs back). *Decision: keep it.* Either rule disappoints someone;
+        this one is simple, matches "the log is shared history", and the History panel
+        already exists for undoing a specific action further back. Documented rather
+        than changed.
+
 
 - [ ] **#150 — Generalise the asset store beyond "media" (owner-tagged, plugin-
       enumerable). AFTER the #149 bugfix gate.** #149 A5 moved asset BYTES into the
