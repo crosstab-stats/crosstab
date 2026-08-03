@@ -20,17 +20,20 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
   **A. Edits that escape the log / merge-safety violations**
 
-  - [ ] **A1 (serious): `analysisLog.clear()` physically deletes durable ops
-        mid-session** (`app.js` DATA_CHANGED `reason:'replace'` handler →
-        `analysis-log.js clear()` = `clearWhere`). (a) Merge resurrection: a peer
-        still holding the `runAnalysis` ops re-contributes them on the next sync
-        (absent-from-ancestor reads as *their addition* — the delete-inference class
-        #148 exists to kill). (b) Overbroad trigger: `reason:'replace'` also fires
-        from `createWithData` (bootstrap/derived datasets), `extractColumns`, and the
-        remove-last-dataset reset — creating a derived dataset silently wipes the
-        analysis script. Fix: express the clear as `removeAnalysis` ops (or a
-        tier-scoped retract), and scope the trigger to a genuine base replace of the
-        dataset the analyses ran against.
+  - [x] **A1 (serious): `analysisLog.clear()` physically deleted durable ops
+        mid-session — DONE.** Both halves fixed. (a) *Merge resurrection:* `clear()`
+        now appends a `removeAnalysis` op per live run instead of `clearWhere`, so
+        the deletion propagates rather than dropping the runs out of the shared-id
+        ancestor for a peer to re-contribute. (b) *Overbroad trigger:* `replace` is
+        now emitted only when a load actually **destroyed existing data** — filling a
+        fresh dataset (`createWithData`, `extractColumns`, seeding a blank) reports
+        the new `load` reason — and the clear is scoped to the replaced dataset via
+        `clearFor(datasetId)`, with `datasetId` stamped on each entry by
+        `PluginActions`. Entries predating the field are left alone rather than
+        guessed at. Downstream consumers of the reason were updated with it:
+        `project-sync` marks sources dirty on `load` too (else a first import's
+        Parquet never gets written), and `undo-coordinator` resets on `switch`
+        (project open / new project) rather than relying on the seed's `replace`.
   - [ ] **A2 (serious): `library.pullLatest` rewrites a live dataset's history
         outside the log** (`library.js` → `restoreState` → `#resetDataHard` →
         `clearWhere(#mine)` + re-minted op ids on an established, possibly-synced
@@ -45,13 +48,20 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         peer's rename never propagates and is silently reverted by our next save.
         Same family as the fixed move-to-folder rename bug. Decide: name as an op,
         or name as a properly-merged scalar (LWW by savedAt).
-  - [ ] **A4 (serious for qual): recycle-bin round-trip loses workspace/coding
-        state.** Restore mints a NEW dataset id (`addFromState`), but `ws:` leaves
-        are keyed by the OLD dsId → a deleted-then-restored coded dataset comes back
-        with its CAQDAS coding silently gone (orphaned in the log). Related:
-        `WorkspaceStore.dropDataset` has NO callers — removed datasets' ws leaves
-        linger live forever. Fix: re-home ws leaves on restore (or restore under the
-        original id), and decide dropDataset's fate.
+  - [x] **A4 (serious for qual): recycle-bin round-trip lost workspace/coding
+        state — DONE.** Restore minted a NEW dataset id, but `ws:` leaves are keyed
+        by dataset id, so a deleted-then-restored coded dataset came back with its
+        CAQDAS codebook silently gone. *Fixed by restoring under the ORIGINAL id*
+        (`DatasetManager.restoreDeleted`; the bin entry now carries `datasetId` in
+        its catalog record) — the leaves re-attach with nothing to re-home. The
+        replay is appended *alongside* the deleted dataset's orphaned ops rather than
+        clearing them (`restoreState(..., {replaceHistory:false})`): physically
+        dropping them is the A2 resurrection pattern, and the B1 replace barrier
+        already keeps them dead on every peer. `WorkspaceStore.dropDataset`'s fate
+        decided: **delete no longer calls it** (deletion must stay recoverable) — it
+        now runs on *permanent purge*, guarded to the project that's actually open.
+        Added `rehomeDataset(old,new)` as the log-native fallback for the
+        should-never-happen case where the original id is taken.
   - [ ] **A5: media assets (`asset:` refs) are outside the model entirely** — not in
         the project save, bundle, folder sync, or live gap-fill. A shared project's
         media is just missing on the peer, with no transport story (known #139

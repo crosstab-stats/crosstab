@@ -365,6 +365,9 @@ export class PluginActions {
       // reflects the data AS OF this point (e.g. before a later filter), not the
       // final dataset — the order shown is the order computed.
       at: this.#dataStore?.getTransforms?.().length ?? 0,
+      // Which dataset this ran against, so a destructive re-import of THAT dataset
+      // clears only its own analyses (#149 A1) instead of every analysis in the project.
+      datasetId: this.#dataStore?.activeId ?? null,
       // Output position before this run, so undo can remove exactly this analysis's
       // output blocks (the tail it's about to append).
       outputMark: this.#results.getModel ? this.#results.getModel().length : 0,
@@ -453,6 +456,9 @@ export class PluginActions {
       specs: [],
       inputs,
       at: this.#dataStore?.getTransforms?.().length ?? 0,
+      // Which dataset this ran against, so a destructive re-import of THAT dataset
+      // clears only its own analyses (#149 A1) instead of every analysis in the project.
+      datasetId: this.#dataStore?.activeId ?? null,
       outputMark: this.#results.getModel ? this.#results.getModel().length : 0,
     };
     const ok = await this.#execute(entry);
@@ -506,6 +512,9 @@ export class PluginActions {
       keepMissing: !!t.item.keepMissing,
       inputs: gathered,
       at: this.#dataStore?.getTransforms?.().length ?? 0,
+      // Which dataset this ran against, so a destructive re-import of THAT dataset
+      // clears only its own analyses (#149 A1) instead of every analysis in the project.
+      datasetId: this.#dataStore?.activeId ?? null,
       outputMark: this.#results.getModel ? this.#results.getModel().length : 0,
     };
     const ok = await this.#execute(entry);

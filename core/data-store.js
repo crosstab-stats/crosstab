@@ -317,7 +317,8 @@ export class DataStore {
    * @returns {Promise<void>}
    */
   async loadDataset({ variables, columns, parquet, mode = 'replace', source, joinKey, aliases, joinType }) {
-    const combine = this.#hasData() && (mode === 'append' || mode === 'join') ? mode : 'replace';
+    const had = this.#hasData();
+    const combine = had && (mode === 'append' || mode === 'join') ? mode : 'replace';
     if (combine === 'replace') await this.#pruneDeadSources(); // the new `load` IS the reset
     const src = await this.#createSource({ variables, columns, parquet, source });
     this.#addSourceOp(combine === 'replace' ? 'load' : combine === 'join' ? 'join' : 'append', src, {
@@ -325,7 +326,18 @@ export class DataStore {
       aliases,
       joinType,
     });
-    await this.rederive(combine === 'replace' ? 'replace' : combine);
+    await this.rederive(this.#loadReason(combine, had));
+  }
+
+  /** The DATA_CHANGED reason for a source load. A `replace` that *destroyed* existing
+   * data reports `replace`; a first load into an empty dataset reports `load`, because
+   * nothing was swapped out from under anything. Listeners that react destructively to
+   * a replace (clearing the analyses that ran against the old data) must not fire for
+   * a dataset being filled for the first time — creating a derived/extracted dataset,
+   * or seeding a blank one, goes through the same `replace` code path. */
+  #loadReason(combine, hadData) {
+    if (combine !== 'replace') return combine;
+    return hadData ? 'replace' : 'load';
   }
 
   /**
@@ -388,10 +400,11 @@ export class DataStore {
    * @param {{selectSql: string, variables: VariableMeta[], source?: string}} arg
    */
   async loadFromSql({ selectSql, variables, source }) {
+    const had = this.#hasData();
     await this.#pruneDeadSources();
     const src = await this.#createSourceFromSql(selectSql, variables, source);
     this.#addSourceOp('load', src);
-    await this.rederive('replace');
+    await this.rederive(this.#loadReason('replace', had));
   }
 
   /**
@@ -447,7 +460,8 @@ export class DataStore {
    * @returns {Promise<void>}
    */
   async loadStreaming({ mode = 'replace', source, ingest }) {
-    const combine = this.#hasData() && mode === 'append' ? 'append' : 'replace';
+    const had = this.#hasData();
+    const combine = had && mode === 'append' ? 'append' : 'replace';
     if (combine === 'replace') await this.#pruneDeadSources();
 
     const seq = ++this.#sourceSeq;
@@ -497,7 +511,7 @@ export class DataStore {
     // Row id already baked into the table by the ingest CTAS (no #ensureRowId).
     const src = { table, meta: meta.map((m) => ({ ...m })), label: source ?? null };
     this.#addSourceOp(combine === 'replace' ? 'load' : 'append', src);
-    await this.rederive(combine);
+    await this.rederive(this.#loadReason(combine, had));
   }
 
   /**
@@ -531,7 +545,8 @@ export class DataStore {
     if (!Array.isArray(variables) || variables.length === 0) {
       throw new Error('loadWide: variables (the file catalog) are required');
     }
-    const combine = this.#hasData() && mode === 'append' ? 'append' : 'replace';
+    const had = this.#hasData();
+    const combine = had && mode === 'append' ? 'append' : 'replace';
     if (combine === 'replace') await this.#pruneDeadSources();
 
     const seq = ++this.#sourceSeq;
@@ -599,7 +614,7 @@ export class DataStore {
       label: source ?? null,
     };
     this.#addSourceOp(combine === 'replace' ? 'load' : 'append', src);
-    await this.rederive(combine);
+    await this.rederive(this.#loadReason(combine, had));
   }
 
   /** Whether any data is loaded (the log has a source op). */
@@ -1598,10 +1613,19 @@ export class DataStore {
    * shared log directly (Layer 4).
    *
    * @param {{ops?: object[]}} state
+   * @param {object} [opts]
+   * @param {boolean} [opts.replaceHistory=true] - When false, this dataset's existing
+   *   ops are LEFT in the log and the recipe is appended alongside them. Use it when
+   *   those ops may still exist on a peer (a recycle-bin restore replays over the
+   *   deleted dataset's orphaned ops): physically dropping them would take them out of
+   *   the shared-id ancestor, so the peer's copies would read as additions and come
+   *   back. The recipe opens with a `load`, which is the replace barrier, so the old
+   *   ops stay dead on every peer without anyone removing anything.
    * @returns {Promise<void>}
    */
-  async restoreState({ ops } = {}) {
-    await this.#resetDataHard();
+  async restoreState({ ops } = {}, { replaceHistory = true } = {}) {
+    if (replaceHistory) await this.#resetDataHard();
+    else await this.#dropDuckDB();
     for (const o of Array.isArray(ops) ? ops : []) {
       if (SOURCE_OPS.has(o.type)) {
         const created = o.src.wide

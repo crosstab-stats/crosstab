@@ -315,6 +315,42 @@ export class DatasetManager {
    * @param {{name: string, state: object, activate?: boolean}} entry
    * @returns {Promise<number>} the new dataset id.
    */
+  /**
+   * Restore a deleted dataset from its recycle-bin snapshot, **under its original id**.
+   * Reusing the id is what makes the restore whole: everything else keyed by dataset id
+   * — workspace/CAQDAS coding leaves above all — points at it again with no re-homing
+   * (#149 A4, where a new id silently orphaned a coded dataset's entire codebook).
+   *
+   * Merge-safety detail: {@link DatasetManager#remove} deliberately leaves the deleted
+   * dataset's data ops in the log (orphaned), so the replay is appended *alongside*
+   * them rather than replacing them — `replaceHistory: false`. Physically clearing them
+   * would drop them out of the shared-id ancestor and a peer that still holds them
+   * would re-contribute them as an addition, doubling the pipeline. They stay dead
+   * because the restored recipe opens with a `load`, and a `load` is the replace
+   * barrier ({@link foldDataOps}) — on every peer, not just this one.
+   *
+   * If the original id is somehow live (it shouldn't be — it was removed), a fresh one
+   * is minted; the caller is told so it can move the workspace leaves across.
+   *
+   * @param {{id?: number, name?: string, state?: object, activate?: boolean}} entry
+   * @returns {Promise<{id: number, reusedId: boolean}>}
+   */
+  async restoreDeleted({ id, name = 'Restored dataset', state, activate = true }) {
+    const reusedId = id != null && !this.#datasets.has(id);
+    const useId = reusedId ? id : newDatasetId();
+    const ds = new DataStore(this.#bus, this.#duckdb, { id: useId, name, log: this.#log });
+    this.#datasets.set(useId, ds);
+    this.#log.append(collAdd(useId, name)); // re-joining the collection is a real op
+    await ds.restoreState(state, { replaceHistory: !reusedId });
+    if (activate || this.#activeId === null) {
+      this.#activeId = useId;
+      this.#emitActive('switch');
+    } else {
+      this.#bus.emit(DATASETS_CHANGED, this.list());
+    }
+    return { id: useId, reusedId };
+  }
+
   async addFromState({ name = 'Restored dataset', state, activate = true }) {
     const id = newDatasetId();
     const ds = new DataStore(this.#bus, this.#duckdb, { id, name, log: this.#log });

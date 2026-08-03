@@ -30,6 +30,8 @@
  * @property {string} run        - the plugin's exported function name to invoke.
  * @property {Array<object>} specs - the item's declared `inputs` (to re-bind R inputs on replay).
  * @property {object} inputs     - the gathered input values (the replayable params).
+ * @property {number|string} [datasetId] - the dataset this run analysed, so a
+ *   destructive re-import of that dataset clears only its own analyses.
  */
 
 import { newOpId } from './merge.js';
@@ -115,12 +117,37 @@ export class AnalysisLog {
     // no-op rather than silently corrupting HLC order. Unused in the app today.
   }
 
-  /** Remove every analysis (a fresh project / cleared output) — clears only this tier
-   * of the shared log. */
-  clear() {
-    if (!this.#log.state('analysis').length) return;
-    this.#log.clearWhere(ANALYSIS.match);
+  /**
+   * Remove every live analysis by **appending a `removeAnalysis` op for each** — the
+   * log-native deletion. It is deliberately NOT `clearWhere`: physically dropping the
+   * runs takes them out of the shared-id ancestor, so on the next merge a peer that
+   * still holds them reads them as *their* addition and every cleared analysis comes
+   * back (the delete-inference class #148 exists to kill). Appending the removals makes
+   * the clear propagate instead.
+   *
+   * @param {(entry: object) => boolean} [pred] - Limit the clear to matching runs.
+   */
+  clear(pred) {
+    const runs = this.#log.state('analysis').filter((e) => (pred ? pred(e) : true));
+    if (!runs.length) return;
+    for (const { runId } of runs) {
+      this.#log.append({ target: `analysis:${runId}`, owner: 'core', type: 'removeAnalysis', payload: { runId } });
+    }
     this.#changed();
+  }
+
+  /**
+   * Clear only the analyses that ran against one dataset — what a destructive
+   * re-import of THAT dataset invalidates. Runs recorded before `datasetId` was tracked
+   * carry none, and are left alone rather than guessed at: a stale entry the user can
+   * re-run is a far smaller harm than silently deleting analyses of a dataset that was
+   * never touched.
+   *
+   * @param {number|string} datasetId
+   */
+  clearFor(datasetId) {
+    if (datasetId == null) return;
+    this.clear((e) => e.datasetId != null && String(e.datasetId) === String(datasetId));
   }
 
   /** Serialise for the project bundle: the tier's **raw** ops (runAnalysis/removeAnalysis

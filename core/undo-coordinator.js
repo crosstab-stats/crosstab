@@ -14,7 +14,9 @@
  *
  * It never mutates data directly (data goes through `datasets.undo/redo`), so a
  * desync in an exotic flow degrades to a mis-routed (but safe) undo, never data loss.
- * New-dataset loads (`replace`) reset both stacks.
+ * A destructive re-import (`replace`) or a change of which dataset is in view
+ * (`switch` — a dataset switch, a project open, a new project) resets both stacks:
+ * neither the data undo nor the analysis undo carries across that boundary.
  */
 
 import { CoreEvents } from './event-bus.js';
@@ -40,7 +42,10 @@ export class UndoCoordinator {
 
     bus.on(CoreEvents.DATA_CHANGED, (s) => {
       const r = s && s.reason;
-      if (r === 'replace') { this.#undo = []; this.#redo = []; } // new dataset → fresh history
+      // `switch` covers project open / new project too — loadBundle ends on it. Note
+      // `load` (a fresh dataset being filled) is deliberately NOT here: creating a
+      // derived dataset shouldn't silently change what Ctrl+Z targets (#149 A1).
+      if (r === 'replace' || r === 'switch') { this.#undo = []; this.#redo = []; }
       else if (NEW_DATA_REASONS.has(r)) { this.#undo.push({ kind: 'data' }); this.#redo = []; }
     });
     bus.on('analysislog:recorded', (entry) => {

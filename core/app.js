@@ -426,13 +426,14 @@ export async function boot(mounts) {
   // Ordered, replayable record of analyses run (the analysis half of the script,
   // #132). Data ops already replay via the data-store log; this covers analyses.
   const analysisLog = new AnalysisLog(bus, projectLog);
-  // Replacing the base dataset (a fresh demo/blank load, an import-replace, a new
-  // project) starts a new analysis context — the prior analyses ran against data
-  // that's now gone, so clear them. (Transforms/reorders/appends keep their
-  // analyses; only a `replace` swaps the base out from under them. Project open
-  // fires `restore`, then sets the saved log, so it's unaffected.)
+  // A destructive re-import swaps the base data out from under the analyses that ran
+  // on it, so those analyses are cleared. Two things keep that narrow (#149 A1):
+  // `replace` now fires only when the load actually destroyed existing data (filling a
+  // fresh dataset — a derived/extracted one, or a blank being seeded — reports `load`),
+  // and the clear is scoped to the dataset that was replaced, not the whole project.
+  // Transforms/reorders/appends keep their analyses; project open fires `restore`.
   bus.on(CoreEvents.DATA_CHANGED, (summary) => {
-    if (summary && summary.reason === 'replace') analysisLog.clear();
+    if (summary && summary.reason === 'replace') analysisLog.clearFor(summary.datasetId);
   });
   const pluginActions = new PluginActions({
     loader,
@@ -1602,7 +1603,10 @@ class ProjectSidebar {
             name: it.name,
             savedAt: Date.now(),
             state,
-            extra: { projectScope: this.#projectScope() },
+            // The dataset's OWN id, carried in the browse index so a restore can put it
+            // back under that id — which is what re-attaches its workspace/coding state,
+            // keyed by dataset id, instead of orphaning it (#149 A4).
+            extra: { projectScope: this.#projectScope(), datasetId: it.id },
           });
           await this.#capRecycle();
         }
@@ -1610,6 +1614,9 @@ class ProjectSidebar {
         console.error('[recycle] snapshot failed; deleting anyway', err);
       }
     }
+    // NOTE: the dataset's workspace blobs (CAQDAS coding, …) are deliberately left in
+    // place — deletion is recoverable, and the restore above re-attaches to them. They
+    // are tombstoned only on a permanent purge (#purgeRecycle).
     await this.datasets.remove(it.id);
   }
 
@@ -1627,11 +1634,23 @@ class ProjectSidebar {
     }
   }
 
-  /** Restore a binned dataset back into the project, then drop it from the bin. */
+  /** Restore a binned dataset back into the project, then drop it from the bin. It comes
+   * back under its ORIGINAL dataset id, so its workspace/coding state re-attaches by
+   * itself; only if that id is somehow taken do we mint a new one and move the leaves. */
   async #restoreDataset(e) {
     try {
       const snap = await this.recycle.load(e.id);
-      await this.datasets.addFromState({ name: snap.name, state: snap.state, activate: true });
+      const oldId = e.datasetId ?? null;
+      const { id, reusedId } = await this.datasets.restoreDeleted({
+        id: oldId,
+        name: snap.name,
+        state: snap.state,
+        activate: true,
+      });
+      if (!reusedId && oldId != null && this.wsStore) {
+        const moved = this.wsStore.rehomeDataset(oldId, id);
+        if (moved) console.warn(`[recycle] restored under a new id; re-homed ${moved} workspace blob(s)`);
+      }
       await this.recycle.delete(e.id);
       this.render();
     } catch (err) {
@@ -1640,10 +1659,17 @@ class ProjectSidebar {
     }
   }
 
-  /** Permanently remove a binned dataset (after confirmation). */
+  /** Permanently remove a binned dataset (after confirmation). This is the point of no
+   * return, so it's also where the dataset's workspace blobs are finally tombstoned —
+   * only when the entry belongs to the project that's actually open (its leaves live in
+   * that project's log) and no live dataset has since claimed the id. */
   async #purgeRecycle(e) {
     if (!confirm(`Permanently delete "${e.name}"? This can't be undone.`)) return;
     try {
+      const dsId = e.datasetId ?? null;
+      if (dsId != null && this.wsStore && e.projectScope === this.#projectScope() && !this.datasets.get(dsId)) {
+        this.wsStore.dropDataset(dsId);
+      }
       await this.recycle.delete(e.id);
     } catch (err) {
       console.error('[recycle] purge failed', err);
