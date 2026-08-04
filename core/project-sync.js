@@ -53,6 +53,41 @@ function b64ToBytes(b64) {
   return out;
 }
 
+/** The ops that introduce Parquet-backed data. */
+export function isSourceOp(op) {
+  return op?.type === 'load' || op?.type === 'append' || op?.type === 'join';
+}
+
+/**
+ * Does applying `mergedLog` require rebuilding the data tier, or can the (expensive)
+ * DuckDB reload be skipped and only the workspace/analysis tiers applied?
+ *
+ * Two independent reasons to rebuild, and missing the second one cost a peer its rows:
+ *
+ *  1. **The log's shape moved** — a dataset or collection op appeared or vanished. This
+ *     is the everyday case, and comparing op ids is enough to see it.
+ *  2. **Bytes we were waiting for arrived.** Gap-fill does not touch the log at all: the
+ *     op already described the dataset perfectly, only its Parquet was late. So the
+ *     re-apply that gap-fill fires to consume those bytes sees a log identical to the one
+ *     it applied byte-less a moment earlier. Judged on shape alone it is a no-op — and
+ *     the bytes sit in the cache forever while the peer displays the dataset's name and
+ *     nothing else, permanently.
+ *
+ * @param {object[]} localLog     my current log (byte-less is fine — only ids are read)
+ * @param {object[]} mergedLog    the log about to be applied
+ * @param {Iterable<string>} [awaitingBytes]  source op ids the last apply had no bytes for
+ * @param {{has: (id: string) => boolean}} [heldBytes]  bytes received since (a Map/Set)
+ */
+export function needsDataRebuild({ localLog = [], mergedLog = [], awaitingBytes = [], heldBytes = null } = {}) {
+  const isDsOrColl = (op) => op.owner === 'core' && typeof op.target === 'string'
+    && (op.target.startsWith('ds:') || op.target.startsWith('coll/'));
+  const sig = (log) => JSON.stringify(log.filter(isDsOrColl).map((o) => o.id).sort());
+  if (sig(localLog) !== sig(mergedLog)) return true;
+  if (!heldBytes) return false;
+  for (const id of awaitingBytes) if (heldBytes.has(id)) return true;
+  return false;
+}
+
 /** The media-asset tier of a flat one-true-log — used where a bundle arrives as just
  * `log` (a `.crosstab` import, a merge result) rather than pre-split by ProjectStore. */
 /** The project-METADATA projection: the name, folded from `setProjectName` ops (#149
@@ -139,6 +174,14 @@ export class ProjectSync {
   #liveExchange = null;
   #liveSourceBytes = new Map();
   #liveLastManifest = null;
+  /** Source op ids the last apply wanted but had no bytes for. The rebuild fast-path
+   * keys off the op-log's SHAPE, which gap-fill never changes — the arriving bytes are
+   * exactly the thing the log already described. Without this the re-apply that
+   * gap-fill fires to consume them would take the fast path and drop them. */
+  #liveMissingBytes = new Set();
+  /** In-flight byte snapshot shared across one gap-fill serve burst (see the source
+   * exchange's `read`). @type {Promise<object>|null} */
+  #servingSnapshot = null;
   #coauthorPeers = 0; // peers actually co-authoring (drives "waiting" vs "co-authoring")
   /** Serialises merge applies. Each apply snapshots then disposes+rebuilds DuckDB
    * tables; two overlapping applies (a merge tick + a gap-fill re-apply, both fired
@@ -1352,6 +1395,8 @@ export class ProjectSync {
     // manifest a later arrival would have re-applied.
     this.#liveSourceBytes = new Map();
     this.#liveLastManifest = null;
+    this.#liveMissingBytes = new Set();
+    this.#servingSnapshot = null;
     this.#initGapFill(session);
 
     this.#liveDoc = attachLiveDoc(session, {
@@ -1387,7 +1432,17 @@ export class ProjectSync {
       refsOf: sourceRefs,
       held,
       read: async (ref) => {
-        const snap = await this.#snapshot(true); // my log WITH source bytes
+        // #snapshot(true) exports EVERY dataset through DuckDB, so calling it once per
+        // requested ref made serving N sources cost N full-project exports. A peer asks
+        // for all its gaps in one `need`, and the exchange serves them in a tight await
+        // loop, so one shared in-flight snapshot covers the whole burst. The cache is
+        // released on the next macrotask — after the loop's awaits (microtasks) drain —
+        // which keeps the staleness window to a single serve pass.
+        if (!this.#servingSnapshot) {
+          this.#servingSnapshot = this.#snapshot(true); // my log WITH source bytes
+          setTimeout(() => { this.#servingSnapshot = null; }, 0);
+        }
+        const snap = await this.#servingSnapshot;
         for (const op of snap.log) if (op.id === ref.id && op.payload?.src?.parquet) return op.payload.src.parquet;
         return this.#liveSourceBytes.get(ref.id) ?? null;
       },
@@ -1456,6 +1511,8 @@ export class ProjectSync {
     this.#liveAssetExchange = null;
     this.#liveSourceBytes = new Map();
     this.#liveLastManifest = null;
+    this.#liveMissingBytes = new Set();
+    this.#servingSnapshot = null;
     this.#coauthorPeers = 0;
     this.#conflictAbort?.abort(); // close any open conflict dialog when co-authoring ends
     this.#conflictAbort = null;
@@ -1507,15 +1564,18 @@ export class ProjectSync {
     debug('live', 'applyMerged', { ops: mergedLog.length });
     this.#loading = true; // suppress autosave + echo-publish during apply
     try {
-      const SRC = (op) => op.type === 'load' || op.type === 'append' || op.type === 'join';
-      const isDsOrColl = (op) => op.owner === 'core' && typeof op.target === 'string' && (op.target.startsWith('ds:') || op.target.startsWith('coll/'));
-      // Decide whether the data tier moved BEFORE touching bytes. The signature is op
-      // ids, which a byte-less snapshot carries just as well — and exporting every
-      // dataset to Parquet merely to compare ids meant a one-word memo re-exported the
-      // whole project through DuckDB on every keystroke-scale update.
-      const dsSig = (log) => JSON.stringify(log.filter(isDsOrColl).map((o) => o.id).sort());
+      const SRC = isSourceOp;
+      // Decide whether to rebuild BEFORE touching bytes — the decision needs op ids, which
+      // a byte-less snapshot carries just as well, and exporting every dataset to Parquet
+      // merely to compare ids meant a one-word memo re-exported the whole project through
+      // DuckDB on every keystroke-scale update.
       const cheap = await this.#snapshot(false);
-      const dataChanged = dsSig(cheap.log) !== dsSig(mergedLog);
+      const dataChanged = needsDataRebuild({
+        localLog: cheap.log,
+        mergedLog,
+        awaitingBytes: this.#liveMissingBytes,
+        heldBytes: this.#liveSourceBytes,
+      });
       if (dataChanged) {
         // Only now pay for bytes: my current log WITH sources (fresh — safe for DuckDB).
         const snap = await this.#snapshot(true);
@@ -1524,20 +1584,21 @@ export class ProjectSync {
         // Attach source bytes to the merged log — from local (shared base) or a COPY of a
         // co-author's streamed bytes (#148 6c). The copy matters: DuckDB's registerFileBuffer
         // TRANSFERS (detaches) the ArrayBuffer, so we must not hand over the retained cache.
-        let missing = 0;
+        const stillMissing = new Set();
         const log = mergedLog.map((op) => {
           if (!SRC(op) || !op.payload?.src?.file) return op;
           const held = this.#liveSourceBytes.get(op.id);
           const parquet = localParquet.get(op.id) ?? (held ? held.slice() : null);
-          if (!parquet) { missing++; return op; } // byte-less → loadBundle drops this dataset until gap-fill lands
+          if (!parquet) { stillMissing.add(op.id); return op; } // byte-less → loadBundle drops this dataset until gap-fill lands
           return { ...op, payload: { ...op.payload, src: { ...op.payload.src, parquet } } };
         });
-        if (missing) {
+        this.#liveMissingBytes = stillMissing; // what a later gap-fill arrival must un-block
+        if (stillMissing.size) {
           // A co-author added data we don't hold yet — request the bytes; onReceived
           // re-applies this manifest once they arrive (#148 6c gap-fill).
           this.#liveLastManifest = manifest;
           const refs = this.#liveExchange?.requestMissing(manifest);
-          debug('live', 'gap-fill requesting', { missing, refs: refs?.length });
+          debug('live', 'gap-fill requesting', { missing: stillMissing.size, refs: refs?.length });
         }
         await this.#datasets.loadBundle({ log, activeId: manifest.activeId, datasetMeta: manifest.datasetMeta });
       }
