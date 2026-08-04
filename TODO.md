@@ -22,6 +22,54 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
+- [ ] **#158 — CrossTab must tolerate having NO project open.** Today it cannot, so it
+      fakes one: the launcher, and an invite joiner, each stand up a blank project with
+      an empty dataset before anything real has happened. That fake is indistinguishable
+      from a genuinely empty project, and every bug in this class is something treating
+      it as real.
+
+      Three so far, all in one session:
+
+      - the joiner's empty `dataset1` arriving in the host's project (#156). I looked
+        straight at this and wrote "untidy but harmless" in `joinByInvite`'s doc comment.
+      - the joiner seeding 60 plugin opinions with the newest clock in the room, so
+        accepting an invitation silently reconfigured the HOST's plugin set (#157).
+      - and both of my fixes were GUARDS whose entire job is to undo the effects of a
+        project that should never have been created. That is the tell.
+
+      **"Start blank" is a real project** — one empty dataset, saveable, syncable, exactly
+      as now. Sitting at the launcher, or waiting to be let into a room, is *not*. No
+      datasets, no log, no binding: nothing to save, nothing to publish, no plugin
+      opinions to assert.
+
+      The prize is that **joining becomes ADOPT, not MERGE.** A joiner holds nothing, so
+      it takes the peer's project whole — no ancestor, no colliding registers, no phantom
+      dataset, no seeded plugin set. The bug class disappears instead of being guarded.
+
+      Cheaper than it looks: `DatasetManager.active` already returns `undefined` and
+      `activeId` is already `number|null`; only ~5 places in core dereference
+      `datasets.active`; `#binding` is already null while unsaved and the save/publish
+      paths already guard on it. What forces a project into being is four CALLERS, not a
+      structural assumption — `launcher.js:95` (blank/default fall-through),
+      `launcher.js:215` (Start blank — correct, keep), `project-sync.js` `joinByInvite`,
+      and `app.js`'s delete-project fallback.
+
+      Layers:
+
+      - [ ] **L1 — represent it.** An explicit "no project" state on ProjectSync (not
+            merely `#binding === null`, which an unsaved-but-real project also has), and
+            make the save/publish/seed paths key off THAT rather than each guarding
+            separately. Every existing guard that exists only to neutralise a phantom
+            project should end up deleted, not rewritten.
+      - [ ] **L2 — stop creating one.** Launcher shows with no project behind it; the
+            invite joiner enters the room holding nothing.
+      - [ ] **L3 — adopt on first manifest.** A peer's manifest received while holding no
+            project MATERIALISES the project rather than merging into one. Delete
+            `joinByInvite`'s tier-clearing and `#seedPluginState`'s co-authoring guard —
+            both become unreachable.
+      - [ ] **L4 — the UI tolerates it.** Sidebar empty state; analysis menu items
+            disabled with no dataset (today they would run against nothing).
+
 - [x] **#157 — Plugin activation belongs on the one true log.** DONE. The active plugin set
       is the last real piece of user state living OUTSIDE the log: `activePlugins`, a
       scalar array snapshot from a live read of the plugin manager at save time, merged
