@@ -523,6 +523,104 @@ export async function boot(mounts) {
   services.memos = createMemoService(memoStore);
 
   /**
+   * A memo control on an analysis's output section (#152 Layer 2's headline case:
+   * "why did I run this?"). The anchor is `analysis:<runId>` — an op-log target, so no
+   * new addressing was needed — and the note therefore survives the output being
+   * regenerated, which is the whole point: output is derived and disposable, the
+   * reasoning behind it is not.
+   */
+  const decorateRunSection = (section, runId) => {
+    const anchor = { kind: ANCHOR_KINDS.ANALYSIS, target: `analysis:${runId}` };
+    const existing = section.querySelector('.results-section__memos');
+    if (existing) existing.remove();
+    const wrap = document.createElement('div');
+    wrap.className = 'results-section__memos';
+    wrap.style.cssText = 'margin:2px 0 8px;font-size:12px;';
+
+    const render = () => {
+      wrap.replaceChildren();
+      for (const m of memoStore.list(anchor)) {
+        const line = document.createElement('div');
+        line.style.cssText = 'color:#4a5560;padding:2px 0 2px 10px;border-left:2px solid #c8d0d8;margin:2px 0;';
+        const who = m.author?.initials ? `${m.author.initials}: ` : '';
+        line.textContent = `${who}${m.text}`;
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.textContent = '✕';
+        del.title = 'Delete this memo';
+        del.style.cssText = 'margin-left:6px;border:0;background:none;color:#8a94a0;cursor:pointer;';
+        del.addEventListener('click', () => { memoStore.remove(m.id); render(); });
+        line.append(del);
+        wrap.append(line);
+      }
+      const add = document.createElement('button');
+      add.type = 'button';
+      add.textContent = memoStore.countFor(anchor) ? '＋ memo' : '💬 Add a memo';
+      add.title = 'Record why this analysis was run, or what to make of it';
+      add.style.cssText = 'border:0;background:none;color:#5a6570;cursor:pointer;padding:2px 0;font-size:12px;';
+      add.addEventListener('click', () => {
+        const input = document.createElement('input');
+        input.placeholder = 'Why this analysis, caveats, what you noticed…';
+        input.style.cssText = 'width:100%;max-width:520px;font-size:12px;padding:3px 5px;';
+        let done = false;
+        const finish = (commit) => {
+          if (done) return;
+          done = true;
+          if (commit && input.value.trim()) memoStore.add(anchor, input.value);
+          render();
+        };
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+          else if (e.key === 'Escape') finish(false);
+        });
+        input.addEventListener('blur', () => finish(true));
+        add.replaceWith(input);
+        input.focus();
+      });
+      wrap.append(add);
+    };
+    render();
+    const attr = section.querySelector('.results-section__attr');
+    if (attr) attr.insertAdjacentElement('afterend', wrap);
+    else section.querySelector('.results-section__title')?.insertAdjacentElement('afterend', wrap);
+  };
+  results.onRunSection?.(decorateRunSection);
+
+  /**
+   * Does a memo's anchor still resolve? (#152 D4)
+   *
+   * A memo outlives the thing it was written about, on purpose: deleting a dataset is
+   * recoverable, but the note explaining WHY it was dropped is often the only record
+   * that it happened. So instead of sweeping them, orphans are surfaced.
+   *
+   * Binned counts as existing — the anchor is recoverable, so the memo is not orphaned,
+   * it is merely attached to something in the bin. Only a purge orphans it.
+   */
+  const memoAnchorExists = (anchor) => {
+    const t = String(anchor?.target ?? '');
+    if (!t) return false;
+    if (t.startsWith('project/')) return true;
+    if (t.startsWith('ds:')) {
+      const id = t.slice(3);
+      const live = datasets.list().some((d) => String(d.id) === id);
+      const binned = datasets.binnedList().some((d) => String(d.id) === id);
+      return live || binned;
+    }
+    if (t.startsWith('analysis:')) {
+      const runId = t.slice('analysis:'.length);
+      return analysisLog.entries().some((e) => e.runId === runId);
+    }
+    if (t.startsWith('item:')) {
+      const [owner, collection, id] = parseItemTarget(t);
+      if (!owner || !collection || !id) return false;
+      return !!itemStore.get(owner, collection, id)
+        || itemStore.binned(owner, collection).some((r) => r.id === id);
+    }
+    return true; // an anchor kind the host doesn't know about is not evidence of absence
+  };
+  const orphanedMemos = () => memoStore.orphans(memoAnchorExists);
+
+  /**
    * Plugin actions as History rows (#152). The host cannot read a record's schema, so the
    * wording comes from the collection DECLARATION — its label, and which field carries a
    * display name. That is the same declaration the sidebar and the asset refcount read;
@@ -899,7 +997,7 @@ export async function boot(mounts) {
   // building blocks). Created here, after the services it drives exist.
   new ProjectSidebar(mounts.sidebar, {
     datasets, projects, library, bus,
-    workspaceStore, itemStore, assetStore, sweepAssets, memoStore,
+    workspaceStore, itemStore, assetStore, sweepAssets, memoStore, orphanedMemos,
     pluginList: () => (plugins ? plugins.list() : []),
   });
 
@@ -1583,7 +1681,7 @@ class ProjectSidebar {
    * @param {import('./library.js').DatasetLibrary} deps.library
    * @param {EventBus} deps.bus
    */
-  constructor(host, { datasets, projects, library, bus, workspaceStore, itemStore, assetStore, sweepAssets, memoStore, pluginList }) {
+  constructor(host, { datasets, projects, library, bus, workspaceStore, itemStore, assetStore, sweepAssets, memoStore, orphanedMemos, pluginList }) {
     this.host = host;
     this.datasets = datasets;
     this.projects = projects;
@@ -1593,6 +1691,7 @@ class ProjectSidebar {
     this.assetStore = assetStore ?? null;
     this.sweepAssets = sweepAssets ?? null;
     this.memoStore = memoStore ?? null;
+    this.orphanedMemos = orphanedMemos ?? null;
     /** Asset tally for the inventory line, refreshed each render (async, so it is read
      * from a field rather than awaited mid-DOM-build). @type {{count:number,bytes:number}|null} */
     this.#assets = null;
@@ -1720,6 +1819,29 @@ class ProjectSidebar {
         frag.append(blobList);
       }
     }
+    const orphans = this.orphanedMemos?.() ?? [];
+    if (orphans.length) {
+      frag.append(el('div', 'Notes with no home', 'proj__sub'));
+      const ul = document.createElement('ul');
+      ul.className = 'proj__datasets';
+      for (const m of orphans) {
+        const li = document.createElement('li');
+        li.className = 'proj__blob';
+        const txt = m.text.length > 40 ? `${m.text.slice(0, 39)}…` : m.text;
+        const name = el('span', txt, 'proj__blob-name');
+        name.title = `The ${m.anchor?.kind ?? 'thing'} this note was written about is gone. `
+          + 'Kept because the note is often the only record of why.';
+        name.style.opacity = '0.75';
+        li.append(name);
+        li.append(iconBtn('✕', 'Delete this note', (e) => {
+          e.stopPropagation();
+          this.memoStore.remove(m.id);
+        }, 'proj__ds-x'));
+        ul.append(li);
+      }
+      frag.append(ul);
+    }
+
     const assetSection = this.#assetsSection(this.#assets);
     if (assetSection) frag.append(assetSection);
 
@@ -1769,9 +1891,15 @@ class ProjectSidebar {
     // Scope is filtered HERE rather than via list({dsId}), which deliberately includes
     // project-scoped records for every dataset — right for a plugin reading its own
     // state, wrong for an inventory that must show each record exactly once.
-    const recs = all.filter((r) => (dsId == null
+    let recs = all.filter((r) => (dsId == null
       ? r.scope?.dsId == null
       : String(r.scope?.dsId) === String(dsId)));
+    // Orphaned memos get their own section, so keep them out of this one — the same note
+    // listed twice reads as two notes.
+    if (decl.owner === 'core' && decl.id === 'memos' && this.orphanedMemos) {
+      const orphaned = new Set(this.orphanedMemos().map((m) => m.id));
+      recs = recs.filter((r) => !orphaned.has(r.id));
+    }
     if (!recs.length) return null;
 
     const frag = document.createDocumentFragment();

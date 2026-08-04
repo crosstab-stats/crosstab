@@ -213,6 +213,10 @@ export class ResultsPane {
   /** Plot handle → its SVG holder element, for {@link ResultsPane#updatePlot}. */
   #plots = new Map();
 
+  /** Host hook called once a run's id is known: `(sectionEl, runId) => void` (#152).
+   * The pane stays ignorant of memos — it just says "this DOM section is that run". */
+  #decorateRun = null;
+
   /** Next plot handle id. */
   #nextPlotId = 1;
 
@@ -711,6 +715,19 @@ export class ResultsPane {
         'text-align:center;font-size:12px;color:#7a8590;font-style:italic;margin:16px 12px 4px;padding-top:10px;border-top:1px dashed #c8d0d8;';
       this.#content.append(div);
     }
+    // Re-attach run identity to the rebuilt DOM (#152). Sections are recreated from the
+    // model, so dataset.runId and any host-injected control are lost on every restore —
+    // which would silently strip the memo button from all reopened output. Section
+    // elements appear in the same order as their model entries, so they pair up.
+    const sections = [...this.#content.querySelectorAll('.results-section')];
+    let si = 0;
+    for (const b of this.#model) {
+      if (b.kind !== 'section') continue;
+      const elx = sections[si++];
+      if (!elx || !b.runId) continue;
+      elx.dataset.runId = b.runId;
+      try { this.#decorateRun?.(elx, b.runId); } catch { /* keep restoring */ }
+    }
   }
 
   /** Drop output blocks from index `n` onward and re-render — used by undo to remove
@@ -730,6 +747,31 @@ export class ResultsPane {
     if (!runId || !Number.isFinite(fromIndex)) return;
     for (let i = Math.max(0, fromIndex); i < this.#model.length; i++) {
       if (this.#model[i].runId == null) this.#model[i].runId = runId;
+    }
+    // The run's identity only exists NOW — the section was built before the analysis
+    // finished. This is the first moment anything can be anchored to it (#152).
+    const section = this.#lastAnchor;
+    if (section && section.classList?.contains('results-section')) {
+      section.dataset.runId = runId;
+      try { this.#decorateRun?.(section, runId); } catch (e) { console.warn('[results] decorate failed', e); }
+    }
+  }
+
+  /** Register the run-section decorator (see {@link ResultsPane##decorateRun}). */
+  onRunSection(fn) {
+    this.#decorateRun = typeof fn === 'function' ? fn : null;
+    return this;
+  }
+
+  /** Re-run the decorator over every section already on screen — needed after a
+   * restore, which rebuilds the DOM from the model and loses the injected controls. */
+  redecorateRuns() {
+    if (!this.#decorateRun) return;
+    for (const section of this.#content.querySelectorAll('.results-section')) {
+      const runId = section.dataset.runId;
+      if (runId) {
+        try { this.#decorateRun(section, runId); } catch { /* keep going */ }
+      }
     }
   }
 
