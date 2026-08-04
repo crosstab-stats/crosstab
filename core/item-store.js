@@ -41,6 +41,12 @@
  *  - **`removeItem`** tombstones the record. A later `putItem` resurrects it — deletion
  *    is an ordinary op competing on HLC order, not a terminal state. This follows the
  *    project's explicit-ops rule: deletion is a *recorded act*, never an absence.
+ *  - **`purgeItem`** is the point of no return, the same distinction datasets draw
+ *    between the bin and a permanent delete (#149 A4). A tombstoned record is BINNED —
+ *    still folded (flagged), still counting as a reference so its asset bytes survive —
+ *    and only a purge stops both. That symmetry is the point: a record is the
+ *    user-meaningful object the way a dataset is, and an asset is its sidecar the way a
+ *    Parquet file is, so the record is what gets binned and the bytes follow it.
  *  - `undo` / `retract` are handled upstream by {@link liveOps}, so an undone put simply
  *    isn't folded. That is how plugin actions become undoable at all.
  *
@@ -105,14 +111,18 @@ export function foldItems(ops, { includeRemoved = false } = {}) {
   /** @type {Map<string, Map<string, Map<string, object>>>} */
   const byOwner = new Map();
   const removed = new Set();
+  const purged = new Set();
 
   for (const op of liveOps(ops ?? [])) {
-    if (op.type !== 'putItem' && op.type !== 'removeItem') continue;
+    if (op.type !== 'putItem' && op.type !== 'removeItem' && op.type !== 'purgeItem') continue;
     const [owner, collection, id] = parseItemTarget(op.target);
     if (!owner || !collection || !id) continue; // malformed address — ignore, never throw mid-fold
 
     if (op.type === 'removeItem') { removed.add(op.target); continue; }
+    if (op.type === 'purgeItem') { purged.add(op.target); removed.delete(op.target); continue; }
     removed.delete(op.target); // a later put resurrects
+    purged.delete(op.target);  // …even after a purge: ops are append-only, and the log
+                               // decides by order, not by any state being terminal
 
     let byColl = byOwner.get(owner);
     if (!byColl) { byColl = new Map(); byOwner.set(owner, byColl); }
@@ -141,6 +151,12 @@ export function foldItems(ops, { includeRemoved = false } = {}) {
     if (!byId?.has(id)) continue;
     if (includeRemoved) byId.get(id).removed = true;
     else byId.delete(id);
+  }
+  // Purged records are gone from every view, bin included — that is what makes purge
+  // different from remove, and what finally frees the assets they referenced.
+  for (const t of purged) {
+    const [owner, collection, id] = parseItemTarget(t);
+    byOwner.get(owner)?.get(collection)?.delete(id);
   }
   return byOwner;
 }
@@ -260,10 +276,50 @@ export class ItemStore {
    * are returned for every dataset.
    * @returns {object[]}
    */
-  list(owner, collection, { dsId } = {}) {
-    const all = [...(this.#cache.get(owner)?.get(collection)?.values() ?? [])].filter((r) => !r.removed);
+  list(owner, collection, { dsId, includeRemoved = false } = {}) {
+    const all = [...(this.#cache.get(owner)?.get(collection)?.values() ?? [])]
+      .filter((r) => includeRemoved || !r.removed);
     if (dsId === undefined) return all;
     return all.filter((r) => r.scope?.dsId == null || String(r.scope.dsId) === String(dsId));
+  }
+
+  /**
+   * Records currently in the bin — removed, but recoverable.
+   *
+   * A record is the user-meaningful object, the way a dataset is; the asset bytes it
+   * references are its sidecar, the way a Parquet file is. So a removed record keeps its
+   * bytes until it is PURGED, and {@link restore} brings both back together. Restoring an
+   * asset on its own would be meaningless — you would have the bytes and nothing pointing
+   * at them.
+   */
+  binned(owner, collection) {
+    if (owner === undefined) {
+      const out = [];
+      for (const byColl of this.#cache.values()) {
+        for (const byId of byColl.values()) for (const r of byId.values()) if (r.removed) out.push(r);
+      }
+      return out;
+    }
+    return [...(this.#cache.get(owner)?.get(collection)?.values() ?? [])].filter((r) => r.removed);
+  }
+
+  /** Bring a binned record back. Resurrection is already the fold's semantics — a put
+   * over a tombstone restores the fields it does not mention — so this is an empty put. */
+  restore(owner, collection, id) {
+    const rec = this.#cache.get(owner)?.get(collection)?.get(id);
+    if (!rec?.removed) return null;
+    return this.put(owner, collection, id, {});
+  }
+
+  /** Forget a binned record permanently: the point of no return, after which the assets
+   * it referenced are no longer counted and become reclaimable. */
+  purge(owner, collection, id) {
+    const byId = this.#cache.get(owner)?.get(collection);
+    const rec = byId?.get(id);
+    if (!rec) return;
+    this.#log?.append({ target: itemTarget(owner, collection, id), owner, type: 'purgeItem', payload: {} });
+    byId.delete(id);
+    this.#bus?.emit(CoreEvents.ITEMS_CHANGED, { owner, collection, id });
   }
 
   /** Collection names this owner holds records in. */

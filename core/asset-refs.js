@@ -116,6 +116,12 @@ export async function findOrphans(indexIds, sources) {
 export function itemRefSources(itemStore, decls) {
   return (decls ?? []).map((d) => ({
     name: `item:${d.owner}/${d.collection}.${d.field}`,
-    ids: () => itemStore.list(d.owner, d.collection).map((rec) => rec.fields?.[d.field]),
+    // `includeRemoved` is load-bearing: a BINNED record still counts as a reference, so
+    // its asset bytes survive until the record is purged — exactly as a binned dataset
+    // keeps its Parquet sidecars (#149 A4). Counting only live records would let a sweep
+    // delete the geometry behind a layer sitting in the bin, and restoring it would
+    // hand the user an empty map.
+    ids: () => itemStore.list(d.owner, d.collection, { includeRemoved: true })
+      .map((rec) => rec.fields?.[d.field]),
   }));
 }

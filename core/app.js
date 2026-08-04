@@ -1572,7 +1572,8 @@ class ProjectSidebar {
 
     this.host.replaceChildren();
     this.host.append(this.#projectZone(blockVer));
-    if (binned.length) this.host.append(this.#recycleZone(binned));
+    const binnedItems = this.itemStore?.binned() ?? [];
+    if (binned.length || binnedItems.length) this.host.append(this.#recycleZone(binned, binnedItems));
     this.host.append(this.#projectsZone(otherProjects, folderProjects));
     this.host.append(this.#blocksZone(blocks));
   }
@@ -1987,11 +1988,45 @@ class ProjectSidebar {
     this.render();
   }
 
-  #recycleZone(binned) {
+  /**
+   * One binned item record: restore, or purge permanently.
+   *
+   * Records share the dataset bin rather than getting their own zone, because they are the
+   * same KIND of thing — the user-meaningful object, as opposed to the bytes behind it. A
+   * dataset keeps its Parquet sidecars while binned; a record keeps its assets, and only a
+   * purge releases either. Without this the asymmetry the user spotted was real: datasets
+   * were recoverable and a plugin's map layer simply vanished.
+   */
+  #binnedItemRow(rec, decl) {
+    const li = document.createElement('li');
+    li.className = 'proj__blob';
+    const label = decl ? recordLabel(decl, rec) : rec.id;
+    const name = el('span', label, 'proj__blob-name');
+    name.title = `${decl?.label ?? rec.collection} — deleted, still recoverable`;
+    li.append(name);
+    li.append(iconBtn('⤺', 'Restore', (e) => {
+      e.stopPropagation();
+      this.itemStore.restore(rec.owner, rec.collection, rec.id);
+    }, 'proj__ds-x'));
+    li.append(iconBtn('✕', 'Delete permanently', (e) => {
+      e.stopPropagation();
+      if (!confirm(`Permanently delete "${label}"? This can't be undone, and any stored files only it used become reclaimable.`)) return;
+      this.itemStore.purge(rec.owner, rec.collection, rec.id);
+    }, 'proj__ds-x'));
+    return li;
+  }
+
+  #recycleZone(binned, binnedItems = []) {
     const frag = document.createDocumentFragment();
     frag.append(el('div', 'Recently deleted', 'proj__sub proj__sub--zone'));
     const list = document.createElement('ul');
     list.className = 'proj__datasets';
+    if (binnedItems.length) {
+      // Fall back through the declaration map so a record whose collection is declared
+      // `sidebar: none` still gets a human label once it is in the bin.
+      const byKey = new Map(this.#collectionDecls().map((d) => [`${d.owner}/${d.id}`, d]));
+      for (const rec of binnedItems) list.append(this.#binnedItemRow(rec, byKey.get(`${rec.owner}/${rec.collection}`)));
+    }
     for (const e of binned) {
       const li = document.createElement('li');
       li.className = 'proj__ds proj__ds--trash';

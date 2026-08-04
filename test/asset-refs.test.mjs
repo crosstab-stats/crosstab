@@ -120,7 +120,10 @@ test('itemRefSources counts refs held in a declared item field', async () => {
   assert.deepEqual(orphans, [C]);
 });
 
-test('removing the last item holding a ref makes its asset an orphan', async () => {
+test('a BINNED record still pins its asset — only a purge frees it', async () => {
+  // The dataset parallel: binning a dataset keeps its Parquet sidecars, because the bin
+  // is recoverable. A boundary set in the bin must likewise keep its geometry, or
+  // restoring it would hand back an empty map.
   const log = new ProjectLog({ hlc: new HLC({ now: () => 1000 }) });
   const items = new ItemStore({ log });
   items.put('builtin', 'boundarySets', 'b1', { assetId: `asset:${A}` });
@@ -128,7 +131,24 @@ test('removing the last item holding a ref makes its asset an orphan', async () 
 
   assert.deepEqual((await findOrphans([A], sources)).orphans, []);
   items.remove('builtin', 'boundarySets', 'b1');
-  assert.deepEqual((await findOrphans([A], sources)).orphans, [A]);
+  assert.deepEqual((await findOrphans([A], sources)).orphans, [], 'binned, so still pinned');
+  items.purge('builtin', 'boundarySets', 'b1');
+  assert.deepEqual((await findOrphans([A], sources)).orphans, [A], 'purged — now reclaimable');
+});
+
+test('restoring a binned record brings its asset reference back with it', async () => {
+  const log = new ProjectLog({ hlc: new HLC({ now: () => 1000 }) });
+  const items = new ItemStore({ log });
+  items.put('builtin', 'boundarySets', 'b1', { fileName: 'wards.geojson', assetId: `asset:${A}` });
+  items.remove('builtin', 'boundarySets', 'b1');
+  assert.equal(items.get('builtin', 'boundarySets', 'b1'), null);
+  assert.deepEqual(items.binned('builtin', 'boundarySets').map((r) => r.id), ['b1']);
+
+  items.restore('builtin', 'boundarySets', 'b1');
+  const back = items.get('builtin', 'boundarySets', 'b1');
+  assert.equal(back.fields.fileName, 'wards.geojson');
+  assert.equal(back.fields.assetId, `asset:${A}`);
+  assert.deepEqual(items.binned('builtin', 'boundarySets'), []);
 });
 
 test('two items sharing one asset keep it alive until BOTH go (dedup survives GC)', async () => {
@@ -140,9 +160,9 @@ test('two items sharing one asset keep it alive until BOTH go (dedup survives GC
   items.put('builtin', 'boundarySets', 'b2', { assetId: `asset:${A}` });
   const sources = itemRefSources(items, [{ owner: 'builtin', collection: 'boundarySets', field: 'assetId' }]);
 
-  items.remove('builtin', 'boundarySets', 'b1');
+  items.purge('builtin', 'boundarySets', 'b1');
   assert.deepEqual((await findOrphans([A], sources)).orphans, [], 'still referenced by b2');
-  items.remove('builtin', 'boundarySets', 'b2');
+  items.purge('builtin', 'boundarySets', 'b2');
   assert.deepEqual((await findOrphans([A], sources)).orphans, [A]);
 });
 
