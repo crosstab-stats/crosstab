@@ -35,23 +35,23 @@ export const manifest = {
     '  • region / value / boundary / keyprop — choropleth: region key, value to shade, a GeoJSON file, and its matching property.',
   disciplines: ['Environmental Studies', 'Public Policy & Administration', 'Sociology', 'Economics', 'Public Health', 'Ethnic Studies'],
   rPackages: ['sf', 'spdep', 'spatialreg', 'svglite'],
+  // Item collections this plugin owns (#152 Layer 5). Top-level, because a collection is
+  // addressed by (owner, collection) with no workspace in the key. Declaring it is what
+  // lets the host title it in the sidebar, offer rename, and — critically — COUNT the
+  // asset refs, without which deleting a boundary set would leak its geometry bytes.
+  // Load-bearing, not documentation: an undeclared collection makes the sweep abstain.
+  collections: [{
+    id: 'boundarySets',
+    label: 'Map layers',
+    labelField: 'fileName',
+    sidebar: 'list',
+    assetRefs: ['assetId'],
+  }],
   workspaces: [
     {
       id: 'spatial-map',
       title: 'Map',
       scope: 'project',
-      // Boundary sets are ITEM records, not slots (#152 Layer 5). Declaring the
-      // collection is what lets the host title it in the sidebar, offer rename, and —
-      // critically — COUNT the asset refs, without which deleting a set would leak its
-      // geometry bytes forever. An undeclared collection now makes the asset sweep
-      // abstain, so this is load-bearing, not documentation.
-      collections: [{
-        id: 'boundarySets',
-        label: 'Map layers',
-        labelField: 'fileName',
-        sidebar: 'list',
-        assetRefs: ['assetId'],
-      }],
       // Collaboration merge: boundary sets are now item records, which union by id —
       // add-wins across peers for free, and per-FIELD last-writer-wins on a genuine
       // concurrent edit. The geometry itself never merges at all: it is content-addressed

@@ -37,7 +37,7 @@ const LS_WEB = 'crosstab.plugins.web';
 /** Bump when the catalog shape OR built-in manifests' metadata change, so a
  * stale persisted catalog (e.g. missing newly-declared `disciplines`) is dropped
  * and re-probed on next load. */
-const CATALOG_VERSION = 16; // 16: `howto` authored for all 60 built-ins (#135); 15: `howto` field (#135); 14: builtin-plots scatter+pie → data-driven charts (#131); 13: trends → chart; 12: re-added ReadStat codec (#130); 11: `version` (#91); 10: `codecs` (#98)
+const CATALOG_VERSION = 17; // 17: `collections` — item-collection declarations (#152); 16: `howto` authored for all 60 built-ins (#135); 15: `howto` field (#135); 14: builtin-plots scatter+pie → data-driven charts (#131); 13: trends → chart; 12: re-added ReadStat codec (#130); 11: `version` (#91); 10: `codecs` (#98)
 
 export class PluginManager {
   /** @type {import('./loader.js').PluginLoader} */
@@ -271,6 +271,12 @@ export class PluginManager {
           verbs: Array.isArray(w.verbs) ? w.verbs : [],
         }))
         : [],
+      // Item collections the plugin declares (#152): [{id, label, labelField, sidebar,
+      // assetRefs}]. TOP-LEVEL, not per-workspace — a collection is keyed by (owner,
+      // collection) with no workspace in the address, so a plugin owns its collections
+      // even if two of its workspaces both write to one. Recorded verbatim; the host
+      // normalises and validates in core/collections.js.
+      collections: Array.isArray(manifest.collections) ? manifest.collections : [],
       // Media-render capability (#139): a workspace that codes audio/image/video. The
       // workspace manager mounts it in the media-CSP sandbox so it can render media.
       media: manifest.media === true,
@@ -795,6 +801,7 @@ export class PluginManager {
         rPackages: cat?.rPackages ?? [],
         menu: cat?.menu ?? [],
         workspaces: cat?.workspaces ?? [],
+        collections: cat?.collections ?? [],
         media: cat?.media ?? false,
         codecs: cat?.codecs ?? [],
         url: e.url ?? null, // entry source URL (for the workspace manager to fetch)
