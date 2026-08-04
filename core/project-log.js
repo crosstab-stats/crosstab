@@ -315,6 +315,23 @@ export class ProjectLog {
 
   /** Whether anything matching `pred` can be undone / redone (scoped availability on the
    * shared log — e.g. "does THIS dataset have anything to undo?"). */
+  /**
+   * The op an {@link ProjectLog#undoWhere} would target — the newest applied op matching
+   * `pred`, or null. Exposed so a coordinator can compare candidates ACROSS tiers by HLC
+   * and undo whichever action was genuinely most recent, rather than guessing from a
+   * per-tier stack (#152 D5 / the #149 C7 decision).
+   */
+  topUndoable(pred = () => true) {
+    const c = this.#undoable(pred);
+    return c.length ? c[c.length - 1] : null;
+  }
+
+  /** The op a {@link ProjectLog#redoWhere} would target — the most recently undone op. */
+  topRedoable(pred = () => true) {
+    const c = this.#redoable(pred);
+    return c.length ? c[c.length - 1].op : null;
+  }
+
   canUndoWhere(pred) { return this.#undoable(pred).length > 0; }
   canRedoWhere(pred) { return this.#redoable(pred).length > 0; }
 

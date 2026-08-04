@@ -379,6 +379,14 @@ export async function boot(mounts) {
   // same surface a single DataStore used to (it delegates). Everything that used
   // to hold "the dataset" now holds the manager.
   const datasets = new DatasetManager(bus, duckdb, projectLog);
+  const itemStore = new ItemStore({ log: projectLog, bus });
+  // Memos (#152 Layer 2): anchored notes, host-owned so a note written in the coding
+  // workspace and one written on an analysis are the SAME record in the same collection.
+  // Scope follows the anchor, so a note about a dataset nests under it in the sidebar.
+  const memoStore = new MemoStore({
+    items: itemStore,
+    scopeFor: (a) => (a?.target?.startsWith('ds:') ? a.target.slice(3) : null),
+  });
   // Create the first (empty) dataset up front so there's always an active dataset
   // for the UI to render against; its data is loaded below.
   // Neutral seed name; the launcher renames the active dataset to match the chosen
@@ -511,12 +519,22 @@ export async function boot(mounts) {
 
   // One Undo/Redo across BOTH data ops and analysis runs: when the most recent
   // action is an analysis, Undo removes that analysis + its output (not a data op).
+  services.memos = createMemoService(memoStore);
+
   const undoCoordinator = new UndoCoordinator({
     datasets,
     analysisLog,
     results,
     pluginActions,
     bus,
+    // Undo now orders by HLC across every tier rather than by a private stack (#152),
+    // so it needs the log itself, the item fold, and a way to tell a live workspace to
+    // re-read — a coding tab holds its own in-memory copy, so refolding is not enough.
+    projectLog,
+    itemStore,
+    onItemsChanged: async () => {
+      try { await workspaceManager?.notifyWorkspaceRefresh?.(); } catch { /* not mounted */ }
+    },
   });
 
   // --- shell wiring ----------------------------------------------------------
@@ -623,15 +641,6 @@ export async function boot(mounts) {
   // the workspace blob above. Plugins write them through `app.items`; core memos live
   // here too. Because the fields are host-visible, asset references inside them can be
   // COUNTED, which is what makes garbage collection possible at all (#150).
-  const itemStore = new ItemStore({ log: projectLog, bus });
-  // Memos (#152 Layer 2): anchored notes, host-owned so a note written in the coding
-  // workspace and one written on an analysis are the SAME record in the same collection.
-  // Scope follows the anchor, so a note about a dataset nests under it in the sidebar.
-  const memoStore = new MemoStore({
-    items: itemStore,
-    scopeFor: (a) => (a?.target?.startsWith('ds:') ? a.target.slice(3) : null),
-  });
-  services.memos = createMemoService(memoStore);
 
   /**
    * Every place an `asset:` reference can live (#152 Layer 5). Reference counting is
