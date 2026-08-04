@@ -259,6 +259,13 @@
       /* editable data cells (double-click to edit → sparse override transform) */
       .grid td.cell { cursor: cell; }
       .grid td.cell:hover { background: #f0f6fc; }
+      /* A cell carrying memos (#152) — a corner triangle, the spreadsheet convention.
+         Always visible: a note nobody can see is a note nobody re-reads. */
+      .grid td.has-memo { position: relative; }
+      .grid td.has-memo::after {
+        content: ""; position: absolute; top: 0; right: 0;
+        border-top: 7px solid #c2410c; border-left: 7px solid transparent;
+      }
       .cell-edit {
         width: 100%; box-sizing: border-box; font: inherit;
         border: 1px solid var(--accent); border-radius: 3px; padding: 1px 4px; margin: -2px 0;

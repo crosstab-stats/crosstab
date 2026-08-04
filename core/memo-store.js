@@ -22,9 +22,13 @@
  * No new addressing scheme was needed; that is the payoff of #148 giving everything a
  * target in the first place.
  *
- * The anchor is structured rather than a bare string because not everything addressable
- * IS a target: a spreadsheet cell is a row id plus a column name, which no op writes
- * (#152 D3). So `{kind, target, ref?}` — `ref` carries the sub-address when there is one.
+ * The anchor is `{kind, target, ref?}`. `ref` exists for a sub-address the target cannot
+ * express, but note the case that motivated it turned out NOT to need it: a spreadsheet
+ * cell IS an op target, `ds:<id>/cell:<column>:<rid>`, because that is what `setCell`
+ * writes. So a cell memo anchors to a real address, and — importantly — the address is
+ * valid whether or not anything was ever written there. Annotating a value you have not
+ * edited and annotating your edit of it are the same thread, which is the right answer:
+ * "this number looks wrong" and "so I changed it" belong together.
  *
  * ## Orphans
  *
@@ -40,6 +44,25 @@ import { newItemId } from './item-store.js';
 /** The collection memos live in, owned by core. See CORE_COLLECTIONS in collections.js. */
 export const MEMO_COLLECTION = 'memos';
 const OWNER = 'core';
+
+/** The address of a dataset CELL — byte-identical to what {@link DataStore#setCell}
+ * writes, so a note about a value and a note about changing it share one anchor. Keyed by
+ * the row's STABLE id, not its position, so the note follows the row through sorts,
+ * appends and reorders. */
+export const cellTarget = (dsId, column, rid) => `ds:${dsId}/cell:${column}:${rid}`;
+
+/** The address of a VARIABLE — what `setVariable` writes. */
+export const variableTarget = (dsId, name) => `ds:${dsId}/var:${name}`;
+
+/** The dataset id an anchor belongs to, or null — `ds:3` and `ds:3/cell:age:1` alike.
+ * Used to scope a memo so it nests under its dataset in the sidebar. */
+export const datasetOfTarget = (target) => {
+  const t = String(target ?? '');
+  if (!t.startsWith('ds:')) return null;
+  const rest = t.slice(3);
+  const slash = rest.indexOf('/');
+  return slash === -1 ? rest : rest.slice(0, slash);
+};
 
 /** Anchor kinds the host understands well enough to resolve a label for. */
 export const ANCHOR_KINDS = Object.freeze({

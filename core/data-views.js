@@ -48,9 +48,12 @@ const TRANSFORM_TYPES = new Set(['setVariable', 'setCell', 'computeVar', 'recode
  */
 export class DataView {
   /** @param {HTMLElement} host - The view panel. @param {import('./data-store.js').DataStore} store */
-  constructor(host, store) {
+  constructor(host, store, opts = {}) {
     this.host = host;
     this.store = store;
+    /** Cell annotation (#152). `memos` is the host store; absent ⇒ the grid renders
+     * exactly as before, so the data view has no hard dependency on the feature. */
+    this.memos = opts.memos ?? null;
     this.metas = [];
     this.filter = ''; // column-header filter text
     this.token = 0; // guards against stale async windows
@@ -313,11 +316,113 @@ export class DataView {
       // factor's *code*, not its label).
       if (row.__rid != null) {
         td.addEventListener('dblclick', () => this.#editCell(td, num - 1, row.__rid, m, v));
+        // Right-click to annotate. A separate gesture from double-click-to-edit on
+        // purpose: you must be able to note "this value looks wrong" WITHOUT entering
+        // edit mode on a value you mean to leave alone.
+        if (this.memos) this.#attachCellMemo(td, m.name, row.__rid);
       }
       tr.append(td);
     }
     if (rightW > 0) tr.append(hspacer('td', rightW));
     return tr;
+  }
+
+  /** The anchor for one cell — the same target `setCell` writes (see memo-store.js). */
+  #cellAnchor(column, rid) {
+    return { kind: 'cell', target: `ds:${this.store.activeId ?? this.store.id}/cell:${column}:${rid}` };
+  }
+
+  /** Mark a cell that carries notes, and open its thread on right-click. The marker is
+   * always visible: a note nobody can see is a note nobody re-reads, which defeats the
+   * point of keeping an audit trail at all. */
+  #attachCellMemo(td, column, rid) {
+    const anchor = this.#cellAnchor(column, rid);
+    this.#applyMemoMark(td, anchor);
+    td.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.#cellMenu(e, td, anchor, column, rid);
+    });
+  }
+
+  /** Show (or clear) the corner mark + tooltip for one cell. Updated in PLACE rather
+   * than by re-rendering: the grid is windowed and virtualised, so redrawing it to show
+   * one triangle would be both wasteful and liable to scroll away from the cell you just
+   * annotated. (DataView has no render() at all — the first version of this called one.) */
+  #applyMemoMark(td, anchor) {
+    const notes = this.memos.list(anchor);
+    td.classList.toggle('has-memo', notes.length > 0);
+    if (notes.length) {
+      td.title = notes.map((m) => `${m.author?.initials ? `${m.author.initials}: ` : ''}${m.text}`).join('\n');
+    } else {
+      td.removeAttribute('title');
+    }
+  }
+
+  /** A tiny context menu: existing notes, then add. Closes on any outside click. */
+  #cellMenu(e, td, anchor, column, rid) {
+    document.querySelector('.cellmenu')?.remove();
+    const menu = el('div', null, 'cellmenu');
+    menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;z-index:9999;`
+      + 'background:#fff;border:1px solid #c8d0d8;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.18);'
+      + 'font-size:12px;min-width:220px;max-width:340px;padding:4px 0;';
+    const close = () => { menu.remove(); document.removeEventListener('mousedown', onDoc, true); };
+    const onDoc = (ev) => { if (!menu.contains(ev.target)) close(); };
+
+    const head = el('div', `${column} · row id ${rid}`, null);
+    head.style.cssText = 'padding:4px 10px;color:#8a94a0;border-bottom:1px solid #e4e9ee;';
+    menu.append(head);
+
+    for (const m of this.memos.list(anchor)) {
+      const line = document.createElement('div');
+      line.style.cssText = 'padding:4px 10px;display:flex;gap:6px;align-items:flex-start;';
+      const txt = el('span', `${m.author?.initials ? `${m.author.initials}: ` : ''}${m.text}`, null);
+      txt.style.cssText = 'flex:1;color:#33404d;';
+      const del = el('button', '✕', null);
+      del.type = 'button';
+      del.title = 'Delete this memo';
+      del.style.cssText = 'border:0;background:none;color:#8a94a0;cursor:pointer;';
+      del.addEventListener('click', () => { this.memos.remove(m.id); close(); this.#applyMemoMark(td, anchor); });
+      line.append(txt, del);
+      menu.append(line);
+    }
+
+    const add = el('button', this.memos.countFor(anchor) ? '＋ Add another memo' : '💬 Add memo…', null);
+    add.type = 'button';
+    add.style.cssText = 'display:block;width:100%;text-align:left;padding:6px 10px;border:0;background:none;cursor:pointer;color:#2b6cb0;';
+    add.addEventListener('click', () => {
+      add.replaceWith(this.#memoInput(anchor, close, td));
+    });
+    menu.append(add);
+
+    document.body.append(menu);
+    document.addEventListener('mousedown', onDoc, true);
+    // Keep it on screen when right-clicking near the bottom/right edge.
+    const r = menu.getBoundingClientRect();
+    if (r.bottom > innerHeight) menu.style.top = `${Math.max(4, innerHeight - r.height - 4)}px`;
+    if (r.right > innerWidth) menu.style.left = `${Math.max(4, innerWidth - r.width - 4)}px`;
+  }
+
+  #memoInput(anchor, close, td) {
+    const input = document.createElement('input');
+    input.placeholder = 'What did you notice?';
+    input.style.cssText = 'width:calc(100% - 20px);margin:4px 10px;font-size:12px;padding:3px 5px;';
+    let done = false;
+    const finish = (commit) => {
+      if (done) return;
+      done = true;
+      if (commit && input.value.trim()) this.memos.add(anchor, input.value);
+      close();
+      this.#applyMemoMark(td, anchor);
+    };
+    input.addEventListener('keydown', (ev) => {
+      ev.stopPropagation();
+      if (ev.key === 'Enter') { ev.preventDefault(); finish(true); }
+      else if (ev.key === 'Escape') finish(false);
+    });
+    input.addEventListener('blur', () => finish(true));
+    queueMicrotask(() => input.focus());
+    return input;
   }
 
   /**

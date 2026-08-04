@@ -22,7 +22,7 @@ import { installPassphraseUI } from './passphrase-ui.js';
 import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } from './user-identity.js';
 import { ProjectLog } from './project-log.js';
 import { ItemStore, newItemId, isItemOp, parseItemTarget } from './item-store.js';
-import { MemoStore, createMemoService, ANCHOR_KINDS } from './memo-store.js';
+import { MemoStore, createMemoService, ANCHOR_KINDS, datasetOfTarget } from './memo-store.js';
 import { findOrphans, itemRefSources, refsIn } from './asset-refs.js';
 import { declaredCollections, assetRefDecls, undeclaredItemsGuard, CORE_COLLECTIONS,
          sidebarCollections, recordLabel } from './collections.js';
@@ -386,7 +386,9 @@ export async function boot(mounts) {
   // Scope follows the anchor, so a note about a dataset nests under it in the sidebar.
   const memoStore = new MemoStore({
     items: itemStore,
-    scopeFor: (a) => (a?.target?.startsWith('ds:') ? a.target.slice(3) : null),
+    // Parse the dataset out properly: a cell anchor is `ds:3/cell:age:1000000001`, so a
+    // bare slice(3) would have produced a nonsense id and scoped the memo nowhere.
+    scopeFor: (a) => datasetOfTarget(a?.target),
   });
   // Create the first (empty) dataset up front so there's always an active dataset
   // for the UI to render against; its data is loaded below.
@@ -601,7 +603,10 @@ export async function boot(mounts) {
     if (!t) return false;
     if (t.startsWith('project/')) return true;
     if (t.startsWith('ds:')) {
-      const id = t.slice(3);
+      // Covers the dataset itself AND everything addressed inside it (cells, variables).
+      // A cell anchor resolves as long as its DATASET is around: the target is an address,
+      // not a record of an event, so a note on a value nobody has edited is still at home.
+      const id = datasetOfTarget(t);
       const live = datasets.list().some((d) => String(d.id) === id);
       const binned = datasets.binnedList().some((d) => String(d.id) === id);
       return live || binned;
@@ -688,7 +693,7 @@ export async function boot(mounts) {
   // `workspaceTabs` is the runtime add/remove-tab surface plugin workspaces use.
   let workspaceTabs = null;
   if (mounts.viewData && mounts.viewVars && mounts.tabs) {
-    const dataView = new DataView(mounts.viewData, datasets);
+    const dataView = new DataView(mounts.viewData, datasets, { memos: memoStore });
     const variableView = new VariableView(mounts.viewVars, datasets);
     // R Console tab: a live REPL on the persistent WebR session (host feature).
     const rConsole = mounts.viewConsole ? new RConsole(mounts.viewConsole, { webr, store: datasets }) : null;
