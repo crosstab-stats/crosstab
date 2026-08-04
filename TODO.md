@@ -105,6 +105,12 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       - [x] **L3 — project open/save.** Reconcile the manager from the fold on open;
             migrate a legacy `activePlugins` scalar on first open; drop the scalar from
             new manifests (keep reading it for old saves).
+      - DECIDED (user, 2026-08-04): the FULL declaration stays. A project stating its
+            opinion of every installed plugin (~60 ops at first save) is not a wart —
+            it is what lets a late joiner arrive with the right tools enabled. Log
+            verbosity is not clutter when nothing renders the log: History reads the
+            data/analysis/item tiers and undo enumerates the same three, so `plugin:`
+            ops are invisible outside debugging. Do NOT trim this to deviations-only.
       - [x] **L4 — delete the workarounds.** `adoptPlugins` / `activateAlso` /
             `unionArr(activePlugins)` all go: the ops merge by themselves. The
             blocked-analysis notice survives, narrowed to its real case — a plugin that

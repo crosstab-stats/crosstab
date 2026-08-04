@@ -138,3 +138,15 @@ test('…while a genuine same-target collision in another tier still asks', () =
   const { conflicts } = threeWayLog([], mine, theirs, 'core');
   assert.equal(conflicts.length, 1, 'two rival recodes of one variable is a real question');
 });
+
+test('the tier is invisible to undo and History, and must stay that way', () => {
+  // The project's plugin declaration is deliberately FULL — ~60 ops at a first save —
+  // which is only tolerable because nothing renders it. Undo walks three tiers by
+  // prefix (ds: / item: / analysis:) and History reads the same three; `plugin:` is
+  // none of them. If that ever changed, Ctrl+Z after opening a project would rewind a
+  // plugin instead of the user's work, sixty times over.
+  const target = pluginTarget('./plugins/x/index.js');
+  for (const prefix of ['ds:', 'item:', 'analysis:', 'ws:', 'coll/', 'asset:']) {
+    assert.equal(target.startsWith(prefix), false, `plugin ops must not read as ${prefix}`);
+  }
+});

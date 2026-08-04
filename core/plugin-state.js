@@ -24,13 +24,29 @@
  *  - **Off is a fact, not an absence.** A deactivation is a positive op with a clock, so
  *    it beats an earlier activation from either peer.
  *  - **Merge is the ordinary op-union.** No `unionArr`, no per-field policy.
- *  - **It is undoable and it shows in History**, like every other op.
+ *  - **It is invisible to the user, deliberately.** The History panel reads the data,
+ *    analysis and item tiers; the undo coordinator enumerates the same three. Neither
+ *    knows about this one, so a project's plugin declaration never becomes UI clutter and
+ *    Ctrl+Z after a first save cannot rewind a plugin instead of your work. (I previously
+ *    documented the opposite — "undoable and shows in History, like every other op". It
+ *    is neither, and being neither is correct: on-the-log and in-your-face are separate
+ *    questions, and this tier answers only the first.)
  *  - **Absence still means nothing.** A plugin with no ops is simply unspoken-for, which
  *    is what lets a project stay silent about plugins it never used.
  *
  * Identity is the manager's `key` (the load descriptor — a built-in URL or a user entry),
  * not the plugin id, because that is what activation acts on and what survives a plugin
  * that fails to load and therefore has no id yet.
+ *
+ * ## The full declaration is the point
+ *
+ * A project states its opinion of EVERY installed plugin, not just the ones it deviates
+ * on — roughly sixty ops at a project's first save. That looked like a wart to me and
+ * was the origin of two bugs, so I proposed trimming it. The user's call (2026-08-04)
+ * was to keep it: an explicit declaration of the tools a project needs is exactly what
+ * lets a late joiner arrive equipped to do useful work, and log verbosity is not clutter
+ * when nothing renders the log. Same principle as #148 — a spammy full log beats
+ * compaction, because absence can never be told apart from silence.
  */
 
 import { liveOps } from './op-log.js';
