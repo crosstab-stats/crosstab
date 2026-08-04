@@ -40,12 +40,24 @@ export const manifest = {
       id: 'spatial-map',
       title: 'Map',
       scope: 'project',
-      // Collaboration merge (#143): each boundary set lives in its own SLOT, so
-      // the SET of slots merges add-wins for free (the host unions slot keys — a
-      // slot loaded on either side survives), and each slot's GeoJSON bytes are
-      // ATOMIC (you don't line-merge polygons), so per-slot bytes are LWW. Net
-      // effect: "add-wins slots + last-writer-wins bytes".
-      merge: { strategy: 'lww' },
+      // Boundary sets are ITEM records, not slots (#152 Layer 5). Declaring the
+      // collection is what lets the host title it in the sidebar, offer rename, and —
+      // critically — COUNT the asset refs, without which deleting a set would leak its
+      // geometry bytes forever. An undeclared collection now makes the asset sweep
+      // abstain, so this is load-bearing, not documentation.
+      collections: [{
+        id: 'boundarySets',
+        label: 'Map layers',
+        labelField: 'fileName',
+        sidebar: 'list',
+        assetRefs: ['assetId'],
+      }],
+      // Collaboration merge: boundary sets are now item records, which union by id —
+      // add-wins across peers for free, and per-FIELD last-writer-wins on a genuine
+      // concurrent edit. The geometry itself never merges at all: it is content-addressed
+      // asset bytes referenced by id, so two peers loading the same file converge on one
+      // asset rather than fighting over polygons. No blob merger applies to this
+      // workspace any more.
       verbs: [
         { id: 'load-boundaries', label: 'Load boundaries…', run: 'loadBoundaries', category: 'toolbar', needsFile: { extensions: ['.geojson', '.json'] } },
         { id: 'shade-by-variable', label: 'Shade by variable…', run: 'shadeByVariable', category: 'toolbar' },
@@ -341,7 +353,7 @@ export const workspace = {
     _ws = {
       features: [], regionKeys: [], pathEls: [],
       keyProp: null, dataColumn: null, shadeColumn: null,
-      selected: new Set(), fileName: null, activeSlot: null,
+      selected: new Set(), fileName: null, activeSetId: null, activeAssetId: null,
       svgEl: null, listEl: null, statusEl: null, root,
     };
 
@@ -402,25 +414,23 @@ export const workspace = {
     listPane.append(listHeader, listBody);
     root.append(mapPane, listPane);
 
-    // Restore from slots: load the last slot's boundary set.
-    const slots = await app.state.list();
-    if (slots.length) {
-      await wsLoadFromSlots(app, slots);
-    }
+    // Restore from the boundary-set registry (#152).
+    const sets = await app.items.list('boundarySets');
+    if (sets.length) await wsLoadFromSets(app, sets);
   },
 
   async onRefresh(app) {
     if (!_ws) return;
-    const slots = await app.state.list();
-    if (!slots.length) return;
-    await wsLoadFromSlots(app, slots);
+    const sets = await app.items.list('boundarySets');
+    if (!sets.length) return;
+    await wsLoadFromSets(app, sets);
   },
 
   async onDatasetChanged(app) {
     const _d = app.debug ? (...a) => console.debug('[spatial]', ...a) : () => {};
-    _d('onDatasetChanged — features:', _ws?.features?.length, 'slot:', _ws?.activeSlot);
-    if (!_ws?.features.length || !_ws.activeSlot) { _d('early-exit (no features or slot)'); return; }
-    const link = await app.state.read('spatial-link', _ws.activeSlot);
+    _d('onDatasetChanged — features:', _ws?.features?.length, 'slot:', _ws?.activeSetId);
+    if (!_ws?.features.length || !_ws.activeSetId) { _d('early-exit (no features or slot)'); return; }
+    const link = await app.state.read('spatial-link', _ws.activeSetId);
     _ws.dataColumn = link?.dataColumn || null;
     _ws.shadeColumn = link?.shadeColumn || null;
     _ws.selected = new Set(link?.selected || []);
@@ -466,10 +476,14 @@ export async function loadBoundaries(app, opts) {
   } catch (e) {
     return { ok: false, message: `Invalid GeoJSON: ${e.message}` };
   }
+  // A file load always MINTS a set. Without clearing these, wsApplyBoundaries would see
+  // a live activeSetId and update the previously-loaded set in place — renaming it to the
+  // new file and never storing the new geometry.
+  _ws.activeSetId = null;
+  _ws.activeAssetId = null;
   const result = await wsApplyBoundaries(app, geojson, file.name, null, null, { prompt: true });
   if (result?.ok) {
-    const slots = await app.state.list();
-    wsRebuildSetLinks(app, slots);
+    wsRebuildSetLinks(app, await app.items.list('boundarySets'));
   }
   return result;
 }
@@ -521,14 +535,11 @@ export async function importBoundaries(app, opts) {
   const dataColumn = colPick[0];
 
   const fileName = opts?.name ?? raw.name ?? 'boundaries';
-  const slotId = fileName;
   try {
-    await app.state.write('spatial-map', {
-      keyProp, fileName, features,
-    }, null, slotId);
+    const setId = await wsStoreBoundarySet(app, features, keyProp, fileName);
     await app.state.write('spatial-link', {
       dataColumn, shadeColumn: null, selected: [],
-    }, null, slotId);
+    }, null, setId);
   } catch (e) {
     return { ok: false, message: `Failed to save boundaries: ${e.message}` };
   }
@@ -590,8 +601,14 @@ async function wsApplyBoundaries(app, geojson, fileName, presetKeyProp, presetDa
   _ws.features = validFeatures;
   _ws.keyProp = keyProp;
   _ws.fileName = fileName;
-  _ws.activeSlot = fileName;
   _ws.regionKeys = validFeatures.map((f) => String(f.properties?.[keyProp] ?? ''));
+  // A set loaded from a FILE has no registry entry yet — create it (which stores the
+  // geometry as an asset). A set restored from the registry already has both, and
+  // activeSetId was set by the caller.
+  if (!_ws.activeSetId) {
+    _ws.activeSetId = await wsStoreBoundarySet(app, validFeatures, keyProp, fileName);
+    _ws.activeAssetId = (await app.items.list('boundarySets')).find((x) => x.id === _ws.activeSetId)?.fields?.assetId ?? null;
+  }
 
   wsRenderMap();
   wsRenderList();
@@ -697,16 +714,18 @@ export async function clearBoundaries(app) {
   if (!_ws) return { ok: false, message: 'Workspace not mounted.' };
   _ws.features = []; _ws.regionKeys = []; _ws.pathEls = [];
   _ws.keyProp = null; _ws.dataColumn = null; _ws.shadeColumn = null; _ws.selected.clear();
-  _ws.activeSlot = null;
+  _ws.activeSetId = null;
   _ws.svgEl.innerHTML = '';
   _ws.listEl.innerHTML = '';
   _ws.statusEl.textContent = 'Load a GeoJSON boundary file to begin.';
   const old = _ws.root.querySelector('.set-links');
   if (old) old.remove();
-  const slots = await app.state.list();
-  for (const s of slots) {
-    await app.state.delete(s.slotId);
-    await app.state.write('spatial-link', null, null, s.slotId);
+  // Remove the registry entries and their linkage. The geometry ASSETS are left alone
+  // on purpose: they are content-addressed and may be shared with another set or another
+  // project, so they are freed by the reference-counted sweep, never by a direct delete.
+  for (const set of await app.items.list('boundarySets')) {
+    await app.items.remove('boundarySets', set.id);
+    await app.state.write('spatial-link', null, null, set.id);
   }
   return { ok: true };
 }
@@ -854,59 +873,96 @@ async function wsApplyShading(app) {
     `${_ws.fileName} — shaded by ${_ws.shadeColumn} (${means.size} matched of ${_ws.regionKeys.length} regions).`;
 }
 
-function wsRebuildSetLinks(app, slots) {
+function wsRebuildSetLinks(app, sets) {
   if (!_ws) return;
   const old = _ws.root.querySelector('.set-links');
   if (old) old.remove();
-  if (slots.length < 2) return;
+  if (sets.length < 2) return;
   const links = el('div', 'set-links');
   links.textContent = 'Switch boundaries: ';
-  for (let i = 0; i < slots.length; i++) {
+  for (let i = 0; i < sets.length; i++) {
     if (i > 0) links.append(document.createTextNode(' · '));
-    const s = slots[i];
+    const s = sets[i];
     const a = document.createElement('a');
-    a.textContent = s.label || s.slotId;
+    a.textContent = s.fields?.fileName || s.id;
     a.addEventListener('click', async () => {
-      const data = await app.state.get(s.slotId);
-      if (!data?.features) return;
-      const link = await app.state.read('spatial-link', s.slotId);
-      const fc = { type: 'FeatureCollection', features: data.features };
-      await wsApplyBoundaries(app, fc, data.fileName || s.slotId, data.keyProp, link?.dataColumn);
+      const features = await wsReadGeometry(app, s.fields?.assetId);
+      if (!features) return;
+      const link = await app.state.read('spatial-link', s.id);
+      _ws.activeSetId = s.id;
+      _ws.activeAssetId = s.fields?.assetId ?? null;
+      const fc = { type: 'FeatureCollection', features };
+      await wsApplyBoundaries(app, fc, s.fields?.fileName || s.id, s.fields?.keyProp, link?.dataColumn);
     });
     links.append(a);
   }
   _ws.statusEl.insertAdjacentElement('beforebegin', links);
 }
 
-async function wsLoadFromSlots(app, slots) {
-  if (!slots.length) return;
-  const last = slots[slots.length - 1];
-  const data = await app.state.get(last.slotId);
-  if (!data?.features) return;
-  const link = await app.state.read('spatial-link', last.slotId);
-  const fc = { type: 'FeatureCollection', features: data.features };
-  _ws.selected = new Set(link?.selected || []);
-  _ws.shadeColumn = link?.shadeColumn || null;
-  await wsApplyBoundaries(app, fc, data.fileName || last.slotId, data.keyProp, link?.dataColumn);
-  wsRebuildSetLinks(app, slots);
+/** Read a boundary set's geometry from the asset store. The bytes live OUTSIDE the op
+ * log (#152 Layer 5) — inlining a multi-megabyte FeatureCollection in a `setWorkspace`
+ * payload meant every project.json, every bundle and every re-save carried a fresh copy
+ * of it. Returns null when the asset is absent (a peer may hold the ref before the file
+ * arrives). */
+async function wsReadGeometry(app, assetRef) {
+  if (!assetRef) return null;
+  try {
+    const blob = await app.assets.load(assetRef);
+    if (!blob) return null;
+    const fc = JSON.parse(await blob.text());
+    const features = Array.isArray(fc?.features) ? fc.features : null;
+    return features?.length ? features : null;
+  } catch {
+    return null;
+  }
 }
 
+/** Store geometry as an asset and register the set as an item record. Returns the record
+ * id, which also keys the set's per-dataset linkage blob. */
+async function wsStoreBoundarySet(app, features, keyProp, fileName) {
+  const bytes = new TextEncoder().encode(JSON.stringify({ type: 'FeatureCollection', features }));
+  const { ref } = await app.assets.put(new Blob([bytes], { type: 'application/geo+json' }), {
+    name: fileName,
+    type: 'application/geo+json',
+  });
+  const setId = await app.items.put('boundarySets', null, { fileName, keyProp, assetId: ref });
+  return setId;
+}
+
+async function wsLoadFromSets(app, sets) {
+  if (!sets.length) return;
+  const last = sets[sets.length - 1];
+  const features = await wsReadGeometry(app, last.fields?.assetId);
+  if (!features) return;
+  const link = await app.state.read('spatial-link', last.id);
+  _ws.selected = new Set(link?.selected || []);
+  _ws.shadeColumn = link?.shadeColumn || null;
+  _ws.activeSetId = last.id;
+  _ws.activeAssetId = last.fields?.assetId ?? null;
+  await wsApplyBoundaries(app, { type: 'FeatureCollection', features }, last.fields?.fileName || last.id, last.fields?.keyProp, link?.dataColumn);
+  wsRebuildSetLinks(app, sets);
+}
+
+/** Persist the registry entry + linkage. Geometry is deliberately NOT written here: it
+ * is immutable content-addressed bytes stored once when the set is loaded, so re-saving
+ * on every pan/select would have been the log bloat this layer exists to remove. */
 async function wsSaveState(app) {
-  if (!_ws.activeSlot) return;
-  await app.state.set({
-    keyProp: _ws.keyProp, fileName: _ws.fileName,
-    features: _ws.features,
-  }, { slot: _ws.activeSlot, label: _ws.fileName });
+  if (!_ws.activeSetId) return;
+  await app.items.put('boundarySets', _ws.activeSetId, {
+    fileName: _ws.fileName,
+    keyProp: _ws.keyProp,
+    ...(_ws.activeAssetId ? { assetId: _ws.activeAssetId } : {}),
+  });
   await wsSaveLinkage(app);
 }
 
 async function wsSaveLinkage(app) {
-  if (!_ws.activeSlot) return;
+  if (!_ws.activeSetId) return;
   await app.state.write('spatial-link', {
     dataColumn: _ws.dataColumn,
     shadeColumn: _ws.shadeColumn,
     selected: [..._ws.selected],
-  }, null, _ws.activeSlot);
+  }, null, _ws.activeSetId);
 }
 
 // --- GeoJSON → SVG projection ------------------------------------------------
