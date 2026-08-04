@@ -18,6 +18,7 @@
 import { PluginBroker } from './plugin-broker.js';
 import { sandboxBlobUrl } from './plugin-sandbox.js';
 import { ownerToken, DEFAULT_SLOT, NO_DS } from './workspace-store.js';
+import { newItemId } from './item-store.js';
 import { debug } from './debug.js';
 
 const API_VERSION = '1';
@@ -25,6 +26,9 @@ const API_VERSION = '1';
 export class WorkspaceManager {
   #tabs;
   #store;
+  /** The item tier (#152) — the granular counterpart to the blob store above.
+   * @type {import('./item-store.js').ItemStore|null} */
+  #items = null;
   #services;
   #activeDatasetId;
   #onError;
@@ -43,9 +47,10 @@ export class WorkspaceManager {
    * @param {Object} deps.services - The host service bundle (data/results/webr/ui/web).
    * @param {(err: Error) => void} [deps.onError]
    */
-  constructor({ tabs, store, services, activeDatasetId, onError }) {
+  constructor({ tabs, store, items, services, activeDatasetId, onError }) {
     this.#tabs = tabs;
     this.#store = store;
+    this.#items = items ?? null;
     this.#services = services;
     // Which dataset a mount is bound to (coding state is per-dataset, #139). Read at
     // mount; a dataset switch re-mounts (see app.js), binding to the new one.
@@ -235,6 +240,51 @@ export class WorkspaceManager {
           if (reserved) throw new Error(`Workspace id "${ws.id}" is reserved by a built-in plugin.`);
           if (!slotId) return;
           this.#store.set(owner, ws.id, slotId, entry.dsId, null);
+        },
+      },
+      // Item records (#152). Same authority model as the blob store: `owner` is derived
+      // from the plugin HERE and never accepted from the sandbox, so a plugin can only
+      // ever write its own records. Scope is host-enforced from the workspace's declared
+      // scope, exactly as the blob path does, so the plugin doesn't have to care.
+      items: {
+        put: (collection, id, fields) => {
+          if (reserved) throw new Error(`Workspace id "${ws.id}" is reserved by a built-in plugin.`);
+          if (!this.#items || !collection) return null;
+          const itemId = id || newItemId();
+          this.#items.put(owner, String(collection), itemId, fields ?? {}, {
+            scope: { wsId: ws.id, dsId: entry.dsId === NO_DS ? null : entry.dsId },
+          });
+          return itemId;
+        },
+        remove: (collection, id) => {
+          if (reserved) throw new Error(`Workspace id "${ws.id}" is reserved by a built-in plugin.`);
+          if (!this.#items || !collection || !id) return;
+          this.#items.remove(owner, String(collection), String(id));
+        },
+        list: (collection) => {
+          if (reserved || !this.#items || !collection) return [];
+          const dsKey = entry.dsId === NO_DS ? undefined : entry.dsId;
+          return this.#items.list(owner, String(collection), { dsId: dsKey })
+            .map((r) => ({ id: r.id, fields: r.fields, author: r.author ?? null }));
+        },
+      },
+      // `assets.load`/`put` come from the host bundle unchanged; `list` is scoped to the
+      // refs held in THIS plugin's own item records (manifest.assetRefs), so a shared,
+      // deduped byte pool never becomes a way to enumerate someone else's files.
+      assets: {
+        ...(this.#services.assets ?? {}),
+        list: () => {
+          if (!this.#items || !this.#services.assets?.listRefs) return [];
+          const decls = Array.isArray(plugin.assetRefs) ? plugin.assetRefs : [];
+          const refs = [];
+          for (const d of decls) {
+            if (!d?.collection || !d?.field) continue;
+            for (const rec of this.#items.list(owner, d.collection)) {
+              const v = rec.fields?.[d.field];
+              if (v) refs.push(v);
+            }
+          }
+          return this.#services.assets.listRefs(refs);
         },
       },
     };

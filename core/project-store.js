@@ -314,6 +314,7 @@ export class ProjectStore {
     const analysisLog = log.filter((o) => o.owner === 'core' && typeof o.target === 'string' && o.target.startsWith('analysis:'));
     const workspaceOps = log.filter((o) => typeof o.target === 'string' && o.target.startsWith('ws:'));
     const assetOps = log.filter((o) => o.owner === 'core' && typeof o.target === 'string' && o.target.startsWith('asset:'));
+    const itemOps = log.filter((o) => typeof o.target === 'string' && o.target.startsWith('item:')); // #152
     return {
       id,
       name: manifest.name,
@@ -327,6 +328,7 @@ export class ProjectStore {
         analysisLog,
         workspaceOps,
         assetOps,
+        itemOps,
         log,
       },
     };

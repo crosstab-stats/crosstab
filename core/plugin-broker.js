@@ -127,6 +127,13 @@ export class PluginBroker {
       this.#dispatch['state.list'] = () => services.workspace.listSlots();
       this.#dispatch['state.delete'] = (slotId) => services.workspace.deleteSlot(slotId);
     }
+    // Item records (#152): the granular sibling of `state.*`. The plugin names a
+    // collection and a record id; the host owns owner/scope and the fold.
+    if (services.items) {
+      this.#dispatch['items.put'] = (collection, id, fields) => services.items.put(collection, id, fields);
+      this.#dispatch['items.remove'] = (collection, id) => services.items.remove(collection, id);
+      this.#dispatch['items.list'] = (collection) => services.items.list(collection);
+    }
     // Codec plugins (#98): the streaming format-codec surface — random source-byte
     // access + streaming ingest on read, output-byte emit on write, and
     // host-allowlisted dependency loading. Live only during a codec invocation.
@@ -144,6 +151,7 @@ export class PluginBroker {
     if (services.assets) {
       this.#dispatch['assets.load'] = (ref) => services.assets.load(ref);
       this.#dispatch['assets.put'] = (file, meta) => services.assets.put(file, meta);
+      if (services.assets.list) this.#dispatch['assets.list'] = () => services.assets.list();
     }
     // ZIP for archive-format plugins (#139): build/read a ZIP host-side.
     if (services.zip) {

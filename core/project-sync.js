@@ -78,6 +78,11 @@ const metaOpsOf = (log) =>
 const assetOpsOf = (log) =>
   (log ?? []).filter((o) => o.owner === 'core' && typeof o.target === 'string' && o.target.startsWith('asset:'));
 
+/** The item tier of a flat log (#152). Owner-agnostic: unlike `asset:`, item records are
+ * owned by whoever wrote them (core or a plugin), and the tier is addressed by prefix. */
+const itemOpsOf = (log) =>
+  (log ?? []).filter((o) => typeof o.target === 'string' && o.target.startsWith('item:'));
+
 export class ProjectSync {
   #store;
   #datasets;
@@ -100,6 +105,9 @@ export class ProjectSync {
   #log = null;
   #getAssetOps;
   #applyAssetOps;
+  /** () => the item tier's ops, and the restore hook (#152 Layer 1). */
+  #getItemOps;
+  #applyItemOps;
   /** (ops) => void : restore the workspace tier from its ops on open. */
   #applyWorkspaces;
   /** () => object[] : snapshot the Output tab's result model (#103). */
@@ -202,7 +210,7 @@ export class ProjectSync {
    * @param {(keys: string[]) => Promise<void>} [deps.applyActivePlugins] - Restore
    *   a project's saved plugin set on open.
    */
-  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getAssetOps, applyAssetOps, projectLog, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, pluginIdentities, getMergers }) {
+  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getAssetOps, applyAssetOps, getItemOps, applyItemOps, projectLog, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, pluginIdentities, getMergers }) {
     this.#store = projectStore;
     this.#datasets = datasets;
     this.#ui = ui;
@@ -218,6 +226,8 @@ export class ProjectSync {
     this.#log?.register(PROJECT_META);
     this.#getAssetOps = getAssetOps ?? null;
     this.#applyAssetOps = applyAssetOps ?? null;
+    this.#getItemOps = getItemOps ?? null;
+    this.#applyItemOps = applyItemOps ?? null;
     this.#getOutput = getOutput ?? null;
     this.#applyOutput = applyOutput ?? null;
     this.#getAnalysisLog = getAnalysisLog ?? null;
@@ -631,6 +641,8 @@ export class ProjectSync {
     if (Array.isArray(wsOps)) log.push(...wsOps);
     const assetOps = this.#getAssetOps ? this.#getAssetOps() : null; // asset: tier ops (#149 A5)
     if (Array.isArray(assetOps)) log.push(...assetOps);
+    const itemOps = this.#getItemOps ? this.#getItemOps() : null; // item: tier ops (#152)
+    if (Array.isArray(itemOps)) log.push(...itemOps);
     if (this.#log) log.push(...this.#log.slice(PROJECT_META.match)); // project/name (#149 A3)
     // Record the active plugin set alongside the data, so reopening restores the
     // analyses too. Null when the feature isn't wired (keeps old saves untouched).
@@ -662,6 +674,7 @@ export class ProjectSync {
       await this.#datasets.loadBundle({ log: [] }); // empty log ⇒ one fresh blank dataset
       this.#applyWorkspaces?.([]); // a fresh project has no workspace state
       this.#applyAssetOps?.([]);
+      this.#applyItemOps?.([]);
       this.#applyOutput?.([]); // …and no output (clears stale output on switch)
       this.#applyAnalysisLog?.([]); // …and no recorded analyses (script)
     } finally {
@@ -737,7 +750,7 @@ export class ProjectSync {
       // mount() sees its saved state via state.get(). Absent ⇒ empty.
       this.#applyWorkspaces?.(bundle.workspaceOps || []);
       this.#applyAssetOps?.(bundle.assetOps || assetOpsOf(bundle.log));
-    this.#applyNameOps(bundle.log);
+      this.#applyItemOps?.(bundle.itemOps || itemOpsOf(bundle.log));
       this.#applyNameOps(bundle.log);
       this.#applyOutput?.(bundle.output || []); // restore the Output tab (or clear)
       this.#applyAnalysisLog?.(bundle.analysisLog || []); // restore the script's analysis steps
@@ -781,6 +794,7 @@ export class ProjectSync {
         await this.#datasets.loadBundle({ log: [] }); // empty log ⇒ one fresh blank dataset
         this.#applyWorkspaces?.([]);
         this.#applyAssetOps?.([]);
+        this.#applyItemOps?.([]);
         this.#applyOutput?.([]);
         this.#applyAnalysisLog?.([]);
       } catch (e2) {
@@ -1238,6 +1252,7 @@ export class ProjectSync {
       await this.#datasets.loadBundle(bundle);
       await this.#applyWorkspaces?.(bundle.workspaceOps || [], { refresh: true }); // peer sync → refresh in place, don't remount
       this.#applyAssetOps?.(bundle.assetOps || assetOpsOf(bundle.log));
+      this.#applyItemOps?.(bundle.itemOps || itemOpsOf(bundle.log));
       this.#applyNameOps(bundle.log);
       this.#applyOutput?.(bundle.output || []);
       this.#applyAnalysisLog?.(bundle.analysisLog || []);
@@ -1427,6 +1442,7 @@ export class ProjectSync {
       this.#applyAnalysisLog?.(mergedLog.filter((o) => typeof o.target === 'string' && o.target.startsWith('analysis:')));
       await this.#applyWorkspaces?.(mergedLog.filter((o) => typeof o.target === 'string' && o.target.startsWith('ws:')), { refresh: true }); // refresh in place
       this.#applyAssetOps?.(assetOpsOf(mergedLog));
+      this.#applyItemOps?.(itemOpsOf(mergedLog)); // #152: peers' item records land here
       this.#applyNameOps(mergedLog); // a co-author's rename lands here (#149 A3)
       this.#applyOutput?.(manifest.output || []);
       this.#persistPeerWork(dataChanged); // a co-author's work is work (#149 C1)

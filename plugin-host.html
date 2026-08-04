@@ -208,6 +208,10 @@
             // host-held File into the store and returns its ref (importer sink). The host
             // owns the bytes; the plugin only ever holds a ref or a Blob.
             assets: makeNamespace('assets', ['load', 'put', 'list']),
+            // Item records (#152): fine-grained state with real identity — undoable,
+            // mergeable per record, and host-visible enough that a declared asset-ref
+            // field can be reference-counted. `state.*` remains for config/atomic blobs.
+            items: makeNamespace('items', ['put', 'remove', 'list']),
             // ZIP for archive-format plugins (#139): make(entries)->bytes, read(bytes).
             zip: makeNamespace('zip', ['make', 'read']),
             // Cross-plugin discovery + invocation (#147): list active plugins and

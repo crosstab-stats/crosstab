@@ -21,6 +21,8 @@ import { ExportService } from './export-service.js';
 import { installPassphraseUI } from './passphrase-ui.js';
 import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } from './user-identity.js';
 import { ProjectLog } from './project-log.js';
+import { ItemStore } from './item-store.js';
+import { findOrphans, itemRefSources, refsIn } from './asset-refs.js';
 import { LivePresence } from './live-presence.js';
 import { mergersFor } from './builtin-mergers.js';
 import { OutputExportService } from './output-export.js';
@@ -614,6 +616,70 @@ export async function boot(mounts) {
   // (owner, workspace id, dataset) (#145); opaque to the host. Empty until a
   // workspace plugin writes.
   const workspaceStore = new WorkspaceStore({ bus, log: projectLog });
+  // Item tier (#152): fine-grained, host-folded records — the granular counterpart to
+  // the workspace blob above. Plugins write them through `app.items`; core memos live
+  // here too. Because the fields are host-visible, asset references inside them can be
+  // COUNTED, which is what makes garbage collection possible at all (#150).
+  const itemStore = new ItemStore({ log: projectLog, bus });
+
+  /**
+   * Every place an `asset:` reference can live (#152 Layer 5). Reference counting is
+   * only as safe as this list is COMPLETE — a source that is missing makes the sweep
+   * think an asset is garbage — so the two scanners are deliberately broad:
+   *
+   *  1. **Item fields** a plugin declared as holding refs (`manifest.assetRefs`). The
+   *     host cannot read the plugin's schema, but a declared field name is enough.
+   *  2. **Dataset cells**, scanned without any declaration — every string column of
+   *     every dataset, INCLUDING binned ones. Binned is not purged (#149 A4), so a
+   *     deleted dataset's coding is restorable and its media must stay alive. Scanning
+   *     everything is slower than a declared-column list but cannot be out of date,
+   *     and a sweep is a rare explicit act.
+   *
+   * A scanner that throws makes `findOrphans` abstain entirely rather than sweep on
+   * partial knowledge — see core/asset-refs.js.
+   */
+  const assetRefSources = () => {
+    const decls = [];
+    for (const p of plugins?.list() ?? []) {
+      if (!Array.isArray(p.assetRefs)) continue;
+      const owner = ownerToken(p);
+      for (const d of p.assetRefs) {
+        if (d?.collection && d?.field) decls.push({ owner, collection: d.collection, field: d.field });
+      }
+    }
+    const sources = itemRefSources(itemStore, decls);
+    const scanStore = (store, label) => ({
+      name: `dataset:${label}`,
+      ids: async () => {
+        const cols = await store.getColumns();
+        const out = [];
+        for (const values of Object.values(cols)) {
+          if (!Array.isArray(values)) continue; // Float64Array ⇒ numeric, can't hold a ref
+          for (const v of values) out.push(...refsIn(v));
+        }
+        return out;
+      },
+    });
+    for (const ds of datasets.all()) sources.push(scanStore(ds, ds.id));
+    for (const ds of datasets.binnedStores()) sources.push(scanStore(ds, `${ds.id} (binned)`));
+    return sources;
+  };
+
+  /**
+   * Delete asset bytes nothing points at any more. Returns what it did — including the
+   * abstain case, which must be reported rather than silently treated as "nothing to do".
+   * @param {{dryRun?: boolean}} [opts]
+   */
+  const sweepAssets = async ({ dryRun = false } = {}) => {
+    const index = (await assetStore.list()).map((a) => a.id);
+    const { orphans, incomplete } = await findOrphans(index, assetRefSources());
+    if (incomplete.length) {
+      console.warn('[assets] sweep abstained — these sources could not be read:', incomplete);
+      return { swept: [], abstained: true, incomplete };
+    }
+    if (!dryRun) for (const id of orphans) await assetStore.delete(id);
+    return { swept: orphans, abstained: false, incomplete: [] };
+  };
   const projectStoreForProjects = new ProjectStore();
   const projects = new ProjectSync({
     projectStore: projectStoreForProjects,
@@ -645,6 +711,8 @@ export async function boot(mounts) {
     projectLog,
     getAssetOps: () => assetStore.ops(),
     applyAssetOps: (ops) => assetStore.restoreOps(ops),
+    getItemOps: () => itemStore.ops(),
+    applyItemOps: (ops) => itemStore.restoreOps(ops),
     getWorkspaceOps: () => workspaceStore.ops(),
     applyWorkspaces: async (ops, { refresh = false } = {}) => {
       workspaceStore.restoreOps(Array.isArray(ops) ? ops : []); // ws ops from manifest.log (runs sync, before any await)
@@ -774,7 +842,7 @@ export async function boot(mounts) {
   // building blocks). Created here, after the services it drives exist.
   new ProjectSidebar(mounts.sidebar, {
     datasets, projects, library, bus,
-    workspaceStore,
+    workspaceStore, itemStore,
     pluginList: () => (plugins ? plugins.list() : []),
   });
 
@@ -851,6 +919,7 @@ export async function boot(mounts) {
     workspaceManager = new WorkspaceManager({
       tabs: workspaceTabs,
       store: workspaceStore,
+      items: itemStore,
       services,
       activeDatasetId: () => datasets.activeId, // coding state is per-dataset (#139)
     });
@@ -917,7 +986,7 @@ export async function boot(mounts) {
   // `dataStore` kept as an alias to the manager (it delegates to the active
   // dataset) so console pokes / older references keep working. Exposed before the
   // launcher so the launcher (and dev tooling) can use the engine.
-  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, projects, assetStore, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager, codecs, analysisLog, pluginActions, undoCoordinator, projectLog };
+  const engine = { bus, datasets, itemStore, assetRefSources, sweepAssets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, projects, assetStore, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager, codecs, analysisLog, pluginActions, undoCoordinator, projectLog };
   /**
    * Console debugging: dump the FULL one true log — every op across all tiers
    * (collection, data, analysis), including the `retract`/`reorder` tombstones and
@@ -1417,12 +1486,13 @@ class ProjectSidebar {
    * @param {import('./library.js').DatasetLibrary} deps.library
    * @param {EventBus} deps.bus
    */
-  constructor(host, { datasets, projects, library, bus, workspaceStore, pluginList }) {
+  constructor(host, { datasets, projects, library, bus, workspaceStore, itemStore, pluginList }) {
     this.host = host;
     this.datasets = datasets;
     this.projects = projects;
     this.library = library;
     this.wsStore = workspaceStore ?? null;
+    this.itemStore = itemStore ?? null;
     this.pluginList = pluginList ?? (() => []);
     this.projectName = null;
     bus.on(DATASETS_CHANGED, () => this.render());
@@ -1692,7 +1762,10 @@ class ProjectSidebar {
   /** The point of no return: drop the data and tombstone the dataset's workspace blobs.
    * Shared by the explicit purge and the bin cap. */
   async #purgeEntry(e) {
-    if (this.wsStore && !this.datasets.get(e.id)) this.wsStore.dropDataset(e.id);
+    if (!this.datasets.get(e.id)) {
+      this.wsStore?.dropDataset(e.id);
+      this.itemStore?.dropDataset(e.id); // #152: the dataset's item records go too
+    }
     await this.datasets.purge(e.id);
   }
 

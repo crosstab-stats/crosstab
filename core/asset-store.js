@@ -295,6 +295,21 @@ export function createAssetService(store) {
       const info = await store.putFile(file, meta || {});
       return { ...info, ref: `asset:${info.id}` };
     },
+    /**
+     * Metadata for a set of refs — the enumeration half of #150's third bullet. The
+     * caller supplies the refs it already knows it holds (the host derives them from
+     * the caller's own item records), so this never leaks another plugin's assets even
+     * though the byte pool is deduped and shared.
+     */
+    listRefs(refs) {
+      const out = [];
+      for (const r of refs ?? []) {
+        const id = String(r ?? '').replace(/^asset:/, '');
+        const meta = store.meta(id);
+        if (meta) out.push({ ...meta, ref: `asset:${id}` });
+      }
+      return out;
+    },
   };
 }
 
