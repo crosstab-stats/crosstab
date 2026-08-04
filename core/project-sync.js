@@ -158,6 +158,10 @@ export class ProjectSync {
   #getAnalysisLog;
   /** (entries) => void : restore (or clear) the analysis log on open/switch. */
   #applyAnalysisLog;
+  /** Regenerate output for analyses that arrived from a co-author (#156). */
+  #materializeAnalyses;
+  /** Serialises materialisation so two peer runs never interleave in the pane. */
+  #materializeChain = Promise.resolve();
   /** () => string[] : every installed plugin's identifiers (key + manifest id), so
    * a recorded plugin can be told apart from one this install simply doesn't have. */
   #pluginIdentities;
@@ -263,7 +267,7 @@ export class ProjectSync {
    * @param {(keys: string[]) => Promise<void>} [deps.applyActivePlugins] - Restore
    *   a project's saved plugin set on open.
    */
-  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getAssetOps, applyAssetOps, assetBytes, getItemOps, applyItemOps, projectLog, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, pluginIdentities, getMergers }) {
+  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getAssetOps, applyAssetOps, assetBytes, getItemOps, applyItemOps, projectLog, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, materializeAnalyses, pluginIdentities, getMergers }) {
     this.#store = projectStore;
     this.#datasets = datasets;
     this.#ui = ui;
@@ -286,6 +290,7 @@ export class ProjectSync {
     this.#applyOutput = applyOutput ?? null;
     this.#getAnalysisLog = getAnalysisLog ?? null;
     this.#applyAnalysisLog = applyAnalysisLog ?? null;
+    this.#materializeAnalyses = materializeAnalyses ?? null;
     this.#pluginIdentities = pluginIdentities ?? null;
     this.#getMergers = getMergers ?? null;
   }
@@ -1370,7 +1375,11 @@ export class ProjectSync {
    * hash-verified.
    */
   async #currentManifest() {
-    return buildManifest({ name: this.#binding?.name ?? 'Live project', savedAt: Date.now(), bundle: await this.#snapshot(false) });
+    const bundle = await this.#snapshot(false);
+    // Strip `output` too. It is never applied on receipt (see #applyMergedManifestLive),
+    // so every chart's SVG was being serialised onto the wire on every publish — a
+    // keystroke-scale edit re-shipping the whole Output pane — purely to be discarded.
+    return buildManifest({ name: this.#binding?.name ?? 'Live project', savedAt: Date.now(), bundle: { ...bundle, output: undefined } });
   }
 
   /**
@@ -1629,19 +1638,30 @@ export class ProjectSync {
         debug('live', 'adopted collab identity from invite host');
       }
       this.#applyNameOps(mergedLog); // a co-author's rename lands here (#149 A3)
-      // NOT applyOutput. The Output pane is LOCAL, per-peer state — it shows the results
-      // *you* ran. Applying the merged manifest's output replaced one peer's pane with
-      // the other's, because mergeProjects resolves `output` as "mine" and is NOT
-      // operand-symmetric: the transport imposes a canonical operand order, so whichever
-      // peer happens to fill the "mine" slot wins and BOTH then apply that. The symptom
-      // was A's invite link being replaced by B's "waiting to join" message.
-      // Output is regenerable and belongs to whoever ran it; the analysis LOG is the part
-      // that is genuinely shared, and that is applied above.
+      // Still NOT applyOutput — the merged manifest's `output` array is never applied.
+      // mergeProjects resolves `output` as "mine" and is NOT operand-symmetric: the
+      // transport imposes a canonical operand order, so whichever peer fills the "mine"
+      // slot wins and BOTH then apply that, wholesale. The symptom was A's invite link
+      // being replaced by B's "waiting to join" message.
+      //
+      // The pixels are regenerated, never merged (the rule ARCHITECTURE-unified-log.md
+      // §7 sets out): the analysis LOG is the shared truth, and each peer materialises
+      // its own pane from it. `#materializeAnalyses` below is that materialisation —
+      // without it a co-author's run showed in History and nowhere else.
       this.#persistPeerWork(dataChanged); // a co-author's work is work (#149 C1)
     } catch (err) {
       console.error('[live] apply failed', err);
     } finally {
       this.#loading = false;
+    }
+    // Deliberately AFTER the apply, un-awaited and on its own chain. Replaying an
+    // analysis can take as long as the analysis takes (the runner's own watchdog waits
+    // 45s before it will even comment), and holding the apply chain — or `#loading` —
+    // open that long would stall every merge behind one slow regression.
+    if (this.#materializeAnalyses) {
+      this.#materializeChain = this.#materializeChain
+        .then(() => this.#materializeAnalyses())
+        .catch((err) => console.error('[live] materialise failed', err));
     }
   }
 

@@ -911,6 +911,39 @@ export async function boot(mounts) {
     if (!dryRun) for (const id of orphans) await assetStore.delete(id);
     return { swept: orphans, abstained: false, incomplete: [] };
   };
+  /**
+   * Regenerate the Output pane for analyses that arrived from a co-author (#156).
+   *
+   * The analysis LOG is shared; the pane is not. That is the right split — output is a
+   * projection, and merging two panes wholesale was what replaced one peer's messages
+   * with the other's. But it left the other half unbuilt: a co-author's run appeared in
+   * History, marked current, with nothing to show for it.
+   *
+   * So each peer materialises its own pixels from the shared log, exactly as reopening a
+   * project or running the script editor does. Replay is idempotent and does not
+   * re-record, so this cannot echo back around the room.
+   *
+   * Failures are remembered, not retried. `#execute` already reports a failed run into
+   * the pane, and a plugin the co-author has and we don't will fail identically on every
+   * subsequent merge — which would turn one missing plugin into an error per keystroke.
+   *
+   * The attempted set is never cleared and needs no project scoping: a runId is an op id,
+   * unique across projects, and reopening a project restores its saved output, so
+   * everything already rendered is seen as rendered.
+   */
+  const materializedRuns = new Set();
+  const materializeMissingAnalyses = async () => {
+    const rendered = new Set(results.getModel().map((b) => b.runId).filter(Boolean));
+    const pending = analysisLog.entries().filter((e) => e.runId && !rendered.has(e.runId) && !materializedRuns.has(e.runId));
+    if (!pending.length) return;
+    debug('live', 'materialising peer analyses', { count: pending.length });
+    for (const entry of pending) {
+      materializedRuns.add(entry.runId);
+      // eslint-disable-next-line no-await-in-loop -- analyses must run in order
+      await pluginActions.replay(entry);
+    }
+  };
+
   const projectStoreForProjects = new ProjectStore();
   const projects = new ProjectSync({
     projectStore: projectStoreForProjects,
@@ -980,6 +1013,7 @@ export async function boot(mounts) {
     applyOutput: (model) => results.restoreModel(model),
     getAnalysisLog: () => analysisLog.toJSON(),
     applyAnalysisLog: (entries) => analysisLog.load(entries),
+    materializeAnalyses: () => materializeMissingAnalyses(),
   });
   // Now that the project exists, point the media store at it: bytes go into the
   // project's own `assets/` dir through the same ProjectStore (so encryption, folder
