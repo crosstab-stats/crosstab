@@ -655,7 +655,15 @@ export async function boot(mounts) {
       if (ds != null && String(ds) !== String(activeDs)) continue;
       const decl = decls.get(`${owner}\u0000${collection}`);
       const noun = (decl?.label ?? collection).replace(/s$/, '');
-      const label = decl?.labelField ? op.payload?.fields?.[decl.labelField] : null;
+      // A removeItem op carries no fields, so read the label off the RECORD instead —
+      // it is in the bin, not destroyed. Without this a deletion reads "Removed memo"
+      // with no indication of WHICH, which is the one line in the audit trail where
+      // knowing what went is the entire point.
+      const rec = itemStore.get(owner, collection, id)
+        ?? itemStore.binned(owner, collection).find((r) => r.id === id);
+      const label = decl?.labelField
+        ? (op.payload?.fields?.[decl.labelField] ?? rec?.fields?.[decl.labelField])
+        : null;
       const named = typeof label === 'string' && label.trim() ? ` “${label.length > 32 ? `${label.slice(0, 31)}…` : label}”` : '';
       const first = !seen.has(op.target);
       seen.add(op.target);
@@ -664,9 +672,13 @@ export async function boot(mounts) {
         id: op.id,
         hlc: op.hlc,
         group, // the collection's own label — the heading is built from these
+        // purgeItem must be named explicitly: without it a permanent delete fell through
+        // to the else and reported itself as an EDIT — the audit trail describing the one
+        // irreversible act as the most routine one.
         title: op.type === 'removeItem' ? `Removed ${noun.toLowerCase()}${named}`
-          : first ? `Added ${noun.toLowerCase()}${named}`
-            : `Edited ${noun.toLowerCase()}${named}`,
+          : op.type === 'purgeItem' ? `Deleted ${noun.toLowerCase()}${named} permanently`
+            : first ? `Added ${noun.toLowerCase()}${named}`
+              : `Edited ${noun.toLowerCase()}${named}`,
         // Always name the collection, and add the author when there is one. The label
         // used to be DROPPED whenever an author existed, which is how a core-owned memo
         // ended up with nothing identifying it but a heading that called it a plugin.
