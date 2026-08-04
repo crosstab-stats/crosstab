@@ -13,6 +13,8 @@ import {
   assetRefDecls,
   sidebarCollections,
   recordLabel,
+  undeclaredItemsGuard,
+  CORE_COLLECTIONS,
 } from '../core/collections.js';
 
 const ownerOf = (p) => (p.builtin ? 'builtin' : `plugin:${p.id}`);
@@ -93,6 +95,48 @@ test('sidebarCollections keeps list and count, drops none', () => {
     ],
   }], ownerOf);
   assert.deepEqual(sidebarCollections(decls).map((d) => d.id), ['boundarySets', 'codes']);
+});
+
+// --- the undeclared-collection guard ----------------------------------------
+// Found by browser-testing the real app: the abstain rule catches a scanner that THROWS,
+// but not a declaration nobody wrote. Without this guard, a plugin author who stores an
+// asset ref in an item field and forgets to declare it gets those bytes swept.
+
+test('guard passes when every collection holding records is declared', () => {
+  const decls = declaredCollections([{ id: 'p', builtin: true, collections: [{ id: 'boundarySets' }] }], ownerOf);
+  const guard = undeclaredItemsGuard([{ owner: 'builtin', collection: 'boundarySets' }], decls);
+  assert.deepEqual([...guard.ids()], []);
+});
+
+test('guard THROWS on an undeclared collection, so the sweep abstains', () => {
+  const decls = declaredCollections([{ id: 'p', builtin: true, collections: [{ id: 'boundarySets' }] }], ownerOf);
+  const guard = undeclaredItemsGuard([{ owner: 'builtin', collection: 'secretStash' }], decls);
+  assert.throws(() => guard.ids(), /no manifest declaration.*builtin\/secretStash/);
+});
+
+test('guard is owner-aware: a declaration by one owner does not cover another', () => {
+  const decls = declaredCollections([{ id: 'a', builtin: true, collections: [{ id: 'notes' }] }], ownerOf);
+  const guard = undeclaredItemsGuard([{ owner: 'plugin:b', collection: 'notes' }], decls);
+  assert.throws(() => guard.ids(), /plugin:b\/notes/);
+});
+
+test('guard reports every undeclared collection at once, deduped and sorted', () => {
+  const guard = undeclaredItemsGuard([
+    { owner: 'builtin', collection: 'zebra' },
+    { owner: 'builtin', collection: 'apple' },
+    { owner: 'builtin', collection: 'zebra' },
+  ], []);
+  assert.throws(() => guard.ids(), /builtin\/apple, builtin\/zebra/);
+});
+
+test('CORE_COLLECTIONS covers core-owned records, so core never trips its own guard', () => {
+  // Core has no manifest; without its own declaration list every sweep would abstain.
+  const guard = undeclaredItemsGuard([{ owner: 'core', collection: 'memos' }], CORE_COLLECTIONS);
+  assert.deepEqual([...guard.ids()], []);
+});
+
+test('an empty item tier never trips the guard', () => {
+  assert.deepEqual([...undeclaredItemsGuard([], []).ids()], []);
 });
 
 test('recordLabel prefers the declared field and falls back to the id', () => {

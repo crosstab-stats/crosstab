@@ -100,6 +100,49 @@ export function sidebarCollections(decls) {
   return (decls ?? []).filter((d) => d.sidebar === 'list' || d.sidebar === 'count');
 }
 
+/**
+ * Collections **core itself** owns. Core has no manifest, so without this its records
+ * look undeclared to {@link undeclaredItemsGuard} and every sweep would abstain.
+ */
+export const CORE_COLLECTIONS = [
+  { id: 'memos', label: 'Memos', sidebar: 'none' }, // sidebar/labelField settled in Layer 2
+].map((c) => ({ ...normalizeCollection(c), owner: 'core', pluginId: null }));
+
+/**
+ * A guard source that **fails** when the item tier holds records from an (owner,
+ * collection) no declaration covers.
+ *
+ * Found by browser-testing the real thing: the abstain rule protects against a scanner
+ * that throws, but NOT against a declaration that was never written. A plugin author who
+ * stores `asset:` refs in an item field and forgets `collections[].assetRefs` would have
+ * had those bytes silently swept — the exact unrecoverable failure the abstain rule
+ * exists to prevent, reached by a different road.
+ *
+ * Deliberately coarse: it fires on any undeclared collection, not just ones that look
+ * like they hold refs, because "looks like a ref" is a guess and the cost of guessing
+ * wrong is a user's only copy of their data.
+ *
+ * @param {Array<{owner: string, collection: string}>} records  from ItemStore#all()
+ * @param {Array<{owner: string, id: string}>} decls
+ * @returns {import('./asset-refs.js').RefSource}
+ */
+export function undeclaredItemsGuard(records, decls) {
+  return {
+    name: 'undeclared-collections',
+    ids: () => {
+      const covered = new Set((decls ?? []).map((d) => `${d.owner}\u0000${d.id}`));
+      const missing = new Set();
+      for (const r of records ?? []) {
+        if (!covered.has(`${r.owner}\u0000${r.collection}`)) missing.add(`${r.owner}/${r.collection}`);
+      }
+      if (missing.size) {
+        throw new Error(`item collections with no manifest declaration: ${[...missing].sort().join(', ')}`);
+      }
+      return [];
+    },
+  };
+}
+
 /** A record's display name: its declared label field, else its id. */
 export function recordLabel(decl, record) {
   const v = decl?.labelField ? record?.fields?.[decl.labelField] : null;

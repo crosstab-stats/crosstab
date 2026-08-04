@@ -23,7 +23,7 @@ import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } fro
 import { ProjectLog } from './project-log.js';
 import { ItemStore } from './item-store.js';
 import { findOrphans, itemRefSources, refsIn } from './asset-refs.js';
-import { declaredCollections, assetRefDecls } from './collections.js';
+import { declaredCollections, assetRefDecls, undeclaredItemsGuard, CORE_COLLECTIONS } from './collections.js';
 import { LivePresence } from './live-presence.js';
 import { mergersFor } from './builtin-mergers.js';
 import { OutputExportService } from './output-export.js';
@@ -640,8 +640,12 @@ export async function boot(mounts) {
    * partial knowledge — see core/asset-refs.js.
    */
   const assetRefSources = () => {
-    const decls = assetRefDecls(declaredCollections(plugins?.list() ?? [], ownerToken));
-    const sources = itemRefSources(itemStore, decls);
+    const declared = [...CORE_COLLECTIONS, ...declaredCollections(plugins?.list() ?? [], ownerToken)];
+    const sources = itemRefSources(itemStore, assetRefDecls(declared));
+    // Refuse to sweep while ANY item collection is undeclared: the abstain rule catches a
+    // scanner that throws, but a declaration nobody wrote would otherwise look exactly
+    // like "nothing references this" (found by browser-testing, #152).
+    sources.push(undeclaredItemsGuard(itemStore.all(), declared));
     const scanStore = (store, label) => ({
       name: `dataset:${label}`,
       ids: async () => {

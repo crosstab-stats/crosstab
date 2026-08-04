@@ -314,6 +314,12 @@ export class ProjectSync {
     this.#bus.on(CoreEvents.PLUGINS_CHANGED, () => this.#onPluginsChanged());
     this.#bus.on(CoreEvents.WORKSPACE_CHANGED, () => this.#onChange(null));
     this.#bus.on(ASSETS_CHANGED, () => this.#onChange(null)); // an asset landed (#149 A5)
+    // An item record landed (#152). Appending to the log emits nothing by itself, so
+    // without this the manifest is written from a snapshot taken before the record
+    // existed — the record lives in memory and is gone on reload. Same failure the asset
+    // tier hit in #149 A5; verified in-browser before the fix (item ops absent from
+    // project.json) and after (present, no manual nudge).
+    this.#bus.on(CoreEvents.ITEMS_CHANGED, () => this.#onChange(null));
     this.#bus.on('output:written', () => this.#onChange(null));
     this.#bus.on('output:cleared', () => this.#onChange(null)); // persist a user "Clear output"
     this.#setStatus();
