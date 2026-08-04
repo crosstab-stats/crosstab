@@ -22,9 +22,26 @@ const ownerOf = (p) => (p.builtin ? 'builtin' : `plugin:${p.id}`);
 test('a full declaration normalises unchanged', () => {
   const full = {
     id: 'boundarySets', label: 'Map layers', labelField: 'fileName',
-    summaryField: 'featureCount', sidebar: 'list', assetRefs: ['assetId'],
+    summaryField: 'featureCount', sidebar: 'list', assetRefs: ['assetId'], portable: true,
   };
   assert.deepEqual(normalizeCollection(full), full);
+});
+
+test('portable is opt-in and strictly boolean', () => {
+  // Whether a record means anything OUTSIDE its project is knowable only to the
+  // collection's author, so the host must not infer it. Default false: being listed in
+  // the sidebar and being reusable elsewhere are different questions, and conflating them
+  // is what briefly made memos draggable to the library.
+  assert.equal(normalizeCollection({ id: 'x' }).portable, false);
+  assert.equal(normalizeCollection({ id: 'x', portable: 'yes' }).portable, false);
+  assert.equal(normalizeCollection({ id: 'x', portable: 1 }).portable, false);
+  assert.equal(normalizeCollection({ id: 'x', portable: true }).portable, true);
+});
+
+test('core memos are NOT portable — an anchor does not survive the move', () => {
+  const memos = CORE_COLLECTIONS.find((c) => c.id === 'memos');
+  assert.equal(memos.sidebar, 'list', 'listed…');
+  assert.equal(memos.portable, false, '…but not reusable elsewhere');
 });
 
 test('summaryField defaults to null and rejects junk', () => {

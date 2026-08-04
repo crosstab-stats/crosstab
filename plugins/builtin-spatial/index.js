@@ -45,6 +45,9 @@ export const manifest = {
     label: 'Map layers',
     labelField: 'fileName',
     summaryField: 'featureCount', // shown where a dataset shows its row count (#153)
+    // Boundaries are the reusable-across-projects case that motivated all of this: the
+    // same districts applied to polling data from different survey companies.
+    portable: true,
     sidebar: 'list',
     assetRefs: ['assetId'],
   }],

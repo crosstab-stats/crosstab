@@ -37,6 +37,12 @@
  *   every record, a summary line, or not at all. Defaults to `none` so a collection is
  *   never surfaced by accident — visibility is a deliberate choice by its author.
  * @property {string[]} [assetRefs] Fields holding `asset:` refs, for reference counting.
+ * @property {boolean} [portable=false] May a record be saved to the building-block
+ *   library and reused in other projects? **Opt-in**, because meaningfulness outside its
+ *   project is a property only the collection's author knows. A map layer travels; a memo
+ *   does not — its anchor points at something in the project it was written in, so a copy
+ *   elsewhere is a note about nothing. Nothing about a record's SHAPE reveals which it is,
+ *   so the host cannot infer it (#153).
  */
 
 /** Presentation modes, in increasing order of how much room a collection takes. */
@@ -57,6 +63,7 @@ export function normalizeCollection(raw) {
     label: typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim() : id,
     labelField: typeof raw.labelField === 'string' && raw.labelField ? raw.labelField : null,
     summaryField: typeof raw.summaryField === 'string' && raw.summaryField ? raw.summaryField : null,
+    portable: raw.portable === true,
     sidebar,
     assetRefs: Array.isArray(raw.assetRefs) ? raw.assetRefs.filter((f) => typeof f === 'string' && f) : [],
   };
@@ -108,6 +115,8 @@ export function sidebarCollections(decls) {
  * look undeclared to {@link undeclaredItemsGuard} and every sweep would abstain.
  */
 export const CORE_COLLECTIONS = [
+  // Deliberately NOT portable: a memo's anchor points into the project it was written
+  // in, so a copy in another project would annotate nothing.
   { id: 'memos', label: 'Memos', labelField: 'text', sidebar: 'list' },
 ].map((c) => ({ ...normalizeCollection(c), owner: 'core', pluginId: null }));
 

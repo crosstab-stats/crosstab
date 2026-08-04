@@ -2023,10 +2023,14 @@ class ProjectSidebar {
       // picking a map layer does not deselect the dataset you are analysing.
       active: !!this.selection?.isActive(decl.owner, decl.id, rec.id),
       onOpen: this.selection ? () => this.selection.set(decl.owner, decl.id, rec.id) : null,
-      // Portability was the last thing separating a record from a dataset (#153): a
-      // dataset could leave the project and be reused, a map layer could not — which is
-      // exactly the use case that started first-class-plugin-data.
-      drag: { kind: 'record', id: `${decl.owner}\u0000${decl.id}\u0000${rec.id}` },
+      // Portability is DECLARED, not inferred (#153). It was briefly unconditional,
+      // which quietly made memos draggable to the library — a note whose anchor points
+      // into the project it was written in. Being listed as a row and being meaningful
+      // in another project are different questions, and only the collection's author
+      // can answer the second.
+      drag: decl.portable
+        ? { kind: 'record', id: `${decl.owner}\u0000${decl.id}\u0000${rec.id}` }
+        : null,
       summary: summary == null ? null : String(summary),
       onRename: field ? (v) => { if (v) this.itemStore.put(decl.owner, decl.id, rec.id, { [field]: v }); } : null,
       onDelete: () => this.itemStore.remove(decl.owner, decl.id, rec.id),
