@@ -266,12 +266,110 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       **Design together with [[first-class-plugin-data]]** (reusable boundary sets as
       building blocks) — an owner-namespaced, enumerable asset store is most of what
       that item needs, so designing them separately would mean doing it twice.
+      **→ Now Layer 5 of #152**, which is where the fourth bullet (reference tracking →
+      GC) becomes solvable at all: refs have to be host-visible before anything can count
+      them, and that's what #152's item tier does.
 
       *Sequencing (checked):* none of this blocks a #149 item. The one real contact
       point is **C2's sweep** — key it on the LOG (delete files no live op references),
       which is owner-agnostic and stays correct after #150 adds ownership. The other
       contact is cosmetic: A5's remaining gap-fill work calls `MediaStore.missing()`,
       so a later rename touches it, which is churn rather than rework.
+
+- [ ] **#152 — Plugin data on the one true log: items, universal memos, undoable plugin
+      actions.** Consolidates three items tracked separately that are one lift: "Undoable
+      plugin actions" (below), the deferred generalisation of memos (#148 step 3), and the
+      tail of [[first-class-plugin-data]] + #150. All three are the same sentence said
+      three ways: **a plugin's state is an opaque blob, so the host cannot identify,
+      order, undo, merge, display, reference, or annotate anything inside it.**
+
+      **What is already true (don't rebuild it).** #148 put the `ws:` tier ON the log:
+      every workspace write is a `setWorkspace` op (`workspace-store.js:155`) that
+      persists, exports, and merges. #146 gave blobs 4-D identity `(owner, wsId, slotId,
+      dsId)` + sidebar management. #145 built verb dispatch. What's missing is *granularity*
+      — the op's payload is the ENTIRE blob, so the log records "the coding workspace
+      changed", never "KC added a memo on segment s1".
+
+      **The finding that changes the cost estimate.** The objection recorded under
+      "Undoable plugin actions" — *"the op-log is currently a tabular pipeline (`rederive`
+      replays it into DuckDB); plugin ops would need to be replayable no-ops on the data
+      side, i.e. the log stops being purely tabular"* — was written **before #148 and is
+      now obsolete**. `DataStore` folds only its own slice (`#mine = owner === 'core' &&
+      target.startsWith('ds:<id>/')`, `data-store.js:240`), and the log already carries
+      four non-tabular tiers (`ws:`, `analysis:`, `asset:`, `project/name`). Plugin ops
+      need **no `rederive` changes at all**. The stated cost of the decided option is gone.
+
+  - **DESIGN — "collections + config", host-folded.** The host can't fold a schema it
+    doesn't know, so the instinct is to have plugins ship a `fold`. Don't. Checked against
+    the only real client: CAQDAS state is exactly **3 id-keyed collections** (`codes`,
+    `segments`, `memos`) plus **2 LWW config scalars** (`textColumn`, `labelColumn`) and
+    one transient (`pendingImport`) — `builtin-caqdas/index.js:1842-1904`. Spatial is the
+    same shape (boundary sets per slot + viewport config). So the host defines the *model*,
+    not the schema: a workspace's state is **named collections of id-keyed items** the host
+    folds generically, plus a config blob that stays LWW.
+    - Ops: `putItem {collection, id, fields}` / `removeItem {collection, id}` on target
+      `ws:<owner>\0<wsId>\0<slot>\0<dsKey>\0<collection>\0<itemId>`; `setWorkspace` stays
+      for config/singleton state.
+    - **Merge becomes op-union** — no plugin merger. `mergeState`'s hand-rolled
+      `addWinsSet` over three collections IS what op-union does for free, and
+      `builtin-mergers.js`'s CAQDAS entry largely evaporates. Third-party plugins get
+      correct merge instead of today's fall-back-to-conflict.
+    - **Undo works generically** — retract a `putItem`. No plugin cooperation needed.
+    - **History display works generically** — the host knows an item was added, by whom,
+      and can render it without understanding what a "segment" is.
+    - Fine granularity kills the 300ms debounced whole-blob rewrite
+      (`builtin-caqdas/index.js:280`). Per [[one-true-log-explicit-ops]] a spammy log is
+      the goal; only keystroke-level text editing coalesces (commit on blur/idle).
+  - **Universal memos fall out of it.** A memo stops being a CAQDAS array and becomes a
+    host-level collection whose anchor is **an op-log target string** — which is already
+    the universal addressing scheme of the whole system. That yields, with no new
+    addressing work: memo on a dataset (`ds:<id>`), on an analysis run
+    (`analysis:<runId>` — "why did I run this", the audit-trail case), on a variable, on a
+    plugin item (`…\0segments\0<id>` — today's CAQDAS memo), and on an op itself.
+  - **#150 gets its refcount for free.** "No reference tracking → no GC" is unsolvable
+    while refs hide in blobs. Once refs live in host-visible item fields (declared in the
+    manifest), the host can scan them, and asset GC becomes the same log-keyed sweep as
+    #149 C2. This is why #150 says design them together — confirmed, not assumed.
+  - **Also unblocks:** `#146`'s remaining "building-block eligibility" (a slot's content
+    becomes a log slice, so promoting one is a slice-and-copy), and the κ/α analysis
+    (#148 step 4) which wants per-coder segments as queryable records rather than blob rows.
+
+  - **Open decisions (need the user before Layer 1):**
+    - **D1 — host-owned collection model vs plugin-supplied fold.** *Recommend collections*
+      (above). The cost is that a plugin whose state isn't id-keyed collections must keep
+      using the blob; the benefit is merge/undo/history/GC all become host-generic.
+    - **D2 — keep the opaque blob path?** *Recommend yes*, explicitly, for config and
+      viewport state. Not everything wants identity, and forcing it produces fake ids.
+    - **D3 — memo anchor shape.** A cell (`__ct_rid` + column) isn't an op target.
+      *Recommend* a structured anchor `{kind, target, ref?}` rather than a bare string.
+    - **D4 — orphaned memos.** When the anchor is binned/purged, does the memo die?
+      *Recommend* memos survive, show as orphaned, and re-attach on restore (consistent
+      with #149 A4: deletion is recoverable, purge is the point of no return).
+    - **D5 — undo scope.** *Recommend* extending the C7 decision (#149) — one timeline,
+      undo targets the highest live HLC regardless of tier — rather than a focus-scoped
+      Ctrl-Z. `UndoCoordinator`'s data/analysis split then collapses instead of gaining a
+      third case.
+
+  - [ ] **Layer 1 — the item tier (host-only, nothing uses it).** `putItem`/`removeItem`
+        ops, generic fold, an `ItemStore` keyed `(owner, wsId, slotId, dsKey, collection,
+        itemId)`, projection registered on `ProjectLog`. Headless tests: fold, undo,
+        concurrent add-wins, delete-vs-edit. No UI, no plugin API, no migration.
+  - [ ] **Layer 2 — universal memos, host-side.** A `memos` collection on the item tier +
+        core UI on the two anchors the host already owns: a dataset (sidebar) and an
+        analysis output block. Ships user-visible value with no plugin involved, and proves
+        the tier. Validate the schema against CAQDAS's known memo shape on paper first —
+        anchored, flat, chronological, author-stamped — so Layer 3 doesn't re-cut it.
+  - [ ] **Layer 3 — CAQDAS migrates onto it.** codes/segments/memos become collections;
+        the v4 blob one-time folds into items; `mergeState`'s add-wins deleted; CAQDAS
+        memos become host memos. **The riskiest step** — the migration must be lossless and
+        the QDPX round-trip must survive it. Undo + History for qualitative work land here.
+  - [ ] **Layer 4 — plugin API.** Broker RPCs (`state.put`/`state.remove`/`state.items`),
+        manifest declaration of collections + which fields are asset refs, `app.memos.*`.
+        Spatial as the second client — structurally unlike CAQDAS, so it validates the
+        abstraction the same way it did for verbs.
+  - [ ] **Layer 5 — #150 asset generalisation.** media→asset rename (a plugin API break,
+        so batch it here), owner on the reference, `app.assets.list()`, and refcount GC
+        scanning declared ref fields.
 
 - [x] **Workspace ownership model → "read the world, write your own" (#145) — DONE.**
       *Decision (committed):* **activation = full trust**, so we stop pretending
@@ -409,10 +507,14 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - **Migration:** v3 → v4 lifts all existing blobs under `_default` slot; labels
     get a 4-part key. v2/legacy migrations chain through.
   - [ ] **Building-block eligibility** — a slot can be saved as a reusable
-    building block (pending building-block contract expansion).
+    building block (pending building-block contract expansion). *Waits on #152: once a
+    slot's content is item ops, promoting one is a log slice rather than a blob copy.*
 
 - [ ] **Undoable plugin actions — let plugins add actions to the history where
-      appropriate.** Today the core transform op-log (`data-store.js #log`) is fully
+      appropriate. → FOLDED INTO #152**, which carries the design and the phasing; the
+      history below is the decision record. NOTE the cost stated at the end of the DECIDED
+      bullet is **obsolete post-#148** — see #152.
+      Today the core transform op-log (`data-store.js #log`) is fully
       undoable/redoable, but **plugin actions are not** — e.g. CAQDAS "mark this
       passage with a code" writes straight to the workspace blob via a debounced
       `app.state.set()` (`builtin-caqdas` ~L245), so it never enters the undo stack.
@@ -1209,6 +1311,8 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       the persisted blob (3 KC-stamped, anchored memos; deletion persisted). Overflow fixed.
       **NOTE:** notes (like ALL CAQDAS actions) persist via the workspace blob, so they are
       NOT covered by core Edit▸Undo — the pre-existing "plugins add actions to the log" gap.
+      **→ #152 fixes this** and generalises memos beyond CAQDAS (anchor becomes any op-log
+      target, so a memo can sit on a dataset, a variable, or an analysis run).
   - **4. Inter-coder reliability analysis (κ / α) — MOVED.** This is an *analysis*
     feature, not a collab one, so it lives in **"## More analyses"** below (the stats
     backlog). The collab foundation it needs — per-coder attribution + distinct per-coder
