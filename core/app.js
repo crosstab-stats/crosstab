@@ -23,6 +23,7 @@ import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } fro
 import { ProjectLog } from './project-log.js';
 import { ItemStore } from './item-store.js';
 import { findOrphans, itemRefSources, refsIn } from './asset-refs.js';
+import { declaredCollections, assetRefDecls } from './collections.js';
 import { LivePresence } from './live-presence.js';
 import { mergersFor } from './builtin-mergers.js';
 import { OutputExportService } from './output-export.js';
@@ -627,8 +628,8 @@ export async function boot(mounts) {
    * only as safe as this list is COMPLETE — a source that is missing makes the sweep
    * think an asset is garbage — so the two scanners are deliberately broad:
    *
-   *  1. **Item fields** a plugin declared as holding refs (`manifest.assetRefs`). The
-   *     host cannot read the plugin's schema, but a declared field name is enough.
+   *  1. **Item fields** a plugin declared as holding refs (`manifest.collections[]`
+   *     `.assetRefs`). The host cannot read the schema, but a field NAME is enough.
    *  2. **Dataset cells**, scanned without any declaration — every string column of
    *     every dataset, INCLUDING binned ones. Binned is not purged (#149 A4), so a
    *     deleted dataset's coding is restorable and its media must stay alive. Scanning
@@ -639,14 +640,7 @@ export async function boot(mounts) {
    * partial knowledge — see core/asset-refs.js.
    */
   const assetRefSources = () => {
-    const decls = [];
-    for (const p of plugins?.list() ?? []) {
-      if (!Array.isArray(p.assetRefs)) continue;
-      const owner = ownerToken(p);
-      for (const d of p.assetRefs) {
-        if (d?.collection && d?.field) decls.push({ owner, collection: d.collection, field: d.field });
-      }
-    }
+    const decls = assetRefDecls(declaredCollections(plugins?.list() ?? [], ownerToken));
     const sources = itemRefSources(itemStore, decls);
     const scanStore = (store, label) => ({
       name: `dataset:${label}`,

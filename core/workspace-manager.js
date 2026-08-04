@@ -19,6 +19,7 @@ import { PluginBroker } from './plugin-broker.js';
 import { sandboxBlobUrl } from './plugin-sandbox.js';
 import { ownerToken, DEFAULT_SLOT, NO_DS } from './workspace-store.js';
 import { newItemId } from './item-store.js';
+import { declaredCollections, assetRefDecls } from './collections.js';
 import { debug } from './debug.js';
 
 const API_VERSION = '1';
@@ -275,10 +276,8 @@ export class WorkspaceManager {
         ...(this.#services.assets ?? {}),
         list: () => {
           if (!this.#items || !this.#services.assets?.listRefs) return [];
-          const decls = Array.isArray(plugin.assetRefs) ? plugin.assetRefs : [];
           const refs = [];
-          for (const d of decls) {
-            if (!d?.collection || !d?.field) continue;
+          for (const d of assetRefDecls(declaredCollections([plugin], () => owner))) {
             for (const rec of this.#items.list(owner, d.collection)) {
               const v = rec.fields?.[d.field];
               if (v) refs.push(v);

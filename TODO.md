@@ -431,6 +431,33 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   All headless; NOTHING browser-verified yet — the tier is inert until a client writes to
   it, which is the right moment to check persistence before there is data to lose.
 
+  - **DESIGN (user, 2026-08-03) — THE SIDEBAR IS THE PROJECT'S INVENTORY.** The steer that
+    reframes the "Map layers" question: map layers (and media libraries, and anything else
+    a project holds) should sit in the sidebar *like datasets do*. The objection to plugin
+    data living only inside the plugin was never about convenience — it was **loss of user
+    visibility that "this project has data here."** So the fix is not to port one hardcoded
+    section; it is to render the project's contents **generically** from the host's own
+    registries, with no per-plugin special-casing. This is only possible post-#152: before
+    the item and asset tiers the host could not enumerate plugin content at all, which is
+    precisely why it was invisible.
+    - **Consequence 1 — the manifest declaration I already shipped is the wrong shape.**
+      `assetRefs: [{collection, field}]` was built for refcounting alone. A generic sidebar
+      also needs a human LABEL for the collection and which field carries a record's
+      display name (else the heading reads "boundarySets" and rename is impossible). One
+      declaration should describe the collection:
+      `collections: [{ id, label, labelField, sidebar, assetRefs: [field] }]`.
+      Nothing depends on the old shape yet — change it before anything does.
+    - **Consequence 2 — enumerate vs count.** Boundary sets are a handful, memos dozens,
+      but CAQDAS segments run to thousands and would drown the sidebar. So `sidebar` is
+      `'list'` (each record, renameable/deletable), `'count'` (one summary line, "Codes ·
+      23"), or `'none'`. Proposed: boundary sets + memos `list`; codes + segments `count`.
+    - **Consequence 3 — assets earn a section**, and refcounting is what makes it worth
+      having: "Media · 14 files · 1.2 GB", plus "3 files nothing references" with a sweep
+      action. That question was unanswerable before `findOrphans`.
+    - Dataset-scoped collections nest under their dataset (as workspace blobs do today);
+      project-scoped ones get their own section. Not new UX — the existing shape, made
+      general.
+
   - [ ] **Spatial migration (the Layer 5 client) — design settled, not yet built.**
         `boundarySets` items `{keyProp, fileName, assetId}` replace the per-set
         `spatial-map` SLOTS; geometry bytes move to the asset store; `spatial-link` stays
