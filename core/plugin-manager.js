@@ -653,9 +653,13 @@ export class PluginManager {
    * @param {{record?: boolean}} [opts]
    */
   async setEnabled(key, enabled, { record = true } = {}) {
-    // Only when it actually changes what the project says — a toggle back to where the
-    // log already stands is not news.
-    if (record && this.#log && foldPluginOpinions(this.#log.slice(isPluginOp)).get(key) !== enabled) {
+    // Only when a project is OPEN (#158) and it actually changes what that project says.
+    // Toggling a plugin at the launcher is a global preference — there is no project for
+    // it to be a decision about, and recording it anyway conjured one into existence
+    // (autosaved, named "Untitled project") out of a preference change.
+    const projectOpen = this.#project ? !!this.#project.hasProject : false;
+    if (record && this.#log && projectOpen
+        && foldPluginOpinions(this.#log.slice(isPluginOp)).get(key) !== enabled) {
       this.#log.append({
         target: pluginTarget(key), owner: 'core',
         type: enabled ? 'activatePlugin' : 'deactivatePlugin', payload: { key },

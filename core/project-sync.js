@@ -224,6 +224,25 @@ export class ProjectSync {
    * that derive the live signaling room. Minted for folder projects (they're the
    * shareable ones) and carried in the manifest so both peers compute the same room.
    * Null for a plain OPFS project (not shared). */
+  /**
+   * Is a project OPEN? (#158)
+   *
+   * Distinct from `#binding !== null`, which only says whether a project has been
+   * *saved*: an unsaved "Untitled project" is very much open. This is the third state
+   * the engine never had — nothing open at all — and its absence is why the launcher and
+   * an invite joiner each had to fake one.
+   *
+   * A faked project is indistinguishable from a real empty one, and everything that
+   * treats it as real does damage: its blank dataset merged into a co-author's project,
+   * and its plugin set — asserted with the newest clock in the room — silently
+   * reconfigured the host's. Both were patched with guards; the guards go away because
+   * the state they were guarding against no longer occurs.
+   *
+   * While closed there is nothing to save, nothing to publish, and no opinion to
+   * assert. "Start blank" is NOT this state: it opens a real project that happens to be
+   * empty.
+   */
+  #open = false;
   #collabId = null;
   #collabSecret = null;
   /** Room joined from an invite LINK (#156), before any peer manifest has arrived.
@@ -410,12 +429,11 @@ export class ProjectSync {
    * project exists; by the first save the answer has settled.
    */
   #seedPluginState() {
-    if (!this.#log || !this.#getPluginStates) return;
-    // Never while co-authoring. Seeding ASSERTS a whole plugin set, with fresh stamps
-    // that beat everything already in the shared log — so a peer filling a gap would
-    // impose its own set on everyone else, and a joiner (whose blank landing-pad project
-    // starts with no opinions at all) would do it to the person who invited them. In a
-    // shared project the set is whatever the log says; you don't unilaterally restate it.
+    if (!this.#log || !this.#getPluginStates || !this.#open) return;
+    // Never while co-authoring: seeding ASSERTS a whole set with fresh stamps that beat
+    // everything already in the shared log, so one peer filling a gap would impose its
+    // set on everyone else. (The joiner case this also covered is gone — a joiner now
+    // holds no project at all until the host's arrives, so it has nothing to assert.)
     if (this.#liveDoc) return;
     const states = this.#getPluginStates() || [];
     if (!states.length) return;
@@ -476,6 +494,56 @@ export class ProjectSync {
   }
 
   /** Broadcast the current project name so the sidebar header can show it. */
+  /** Whether a project is open (#158). False at the launcher and while waiting to be
+   * let into a co-authoring room — both of which used to fake an empty project. */
+  get hasProject() {
+    return this.#open;
+  }
+
+  /**
+   * Declare that a project is coming into being (#158) — the launcher picking a source,
+   * an importer landing a file. Purely the state flag: the caller supplies the contents.
+   *
+   * Separate from {@link newProject} because the launcher's demo paths load their data
+   * themselves and must not have it cleared out from under them a moment later.
+   */
+  beginProject() {
+    this.#open = true;
+  }
+
+  /**
+   * Close the project: no datasets, no log, no binding — the launcher state.
+   *
+   * Deliberately NOT `newProject()`. That opens an empty project, which is a different
+   * thing and the confusion this whole task exists to end.
+   */
+  async closeProject() {
+    await this.#settle();
+    if (this.#folderMode) this.#detachFolder();
+    this.#loading = true;
+    try {
+      await this.#datasets.loadBundle({ log: [], empty: true });
+      this.#applyItemOps?.([]);
+      this.#applyAssetOps?.([]);
+      this.#applyWorkspaces?.([]);
+      this.#applyOutput?.([]);
+      this.#applyAnalysisLog?.([]);
+      this.#log?.reset();
+      this.#binding = null;
+      this.#collabId = null;
+      this.#collabSecret = null;
+      this.#unresolvedPlugins = [];
+      this.#keptPlugins.clear();
+      this.#sourcesDirty.clear();
+      this.#dirty = false;
+      this.#open = false;
+    } finally {
+      this.#loading = false;
+    }
+    this.#setStatus();
+    this.#emitProject();
+  }
+
   #emitProject() {
     this.#bus.emit(PROJECT_CHANGED, { name: this.#binding?.name ?? null });
   }
@@ -540,6 +608,7 @@ export class ProjectSync {
         const bundle = await this.#snapshot(true); // all sources
         return this.#store.save({ id, name, savedAt: Date.now(), bundle });
       });
+      this.#open = true;
       this.#binding = { id: savedId, name };
       this.#sourcesDirty.clear();
       this.#dirty = false;
@@ -559,13 +628,24 @@ export class ProjectSync {
    * (and the launcher applies sets before any binding exists), so unbound = ignore;
    * the set is captured by activatedKeys() at the next real save / on open anyway. */
   #onPluginsChanged() {
-    if (this.#loading || !this.#binding) return;
+    if (this.#loading || !this.#open || !this.#binding) return;
     this.#dirty = true;
     this.#schedule();
   }
 
   #onChange(summary) {
     if (this.#loading) return;
+    // Nothing is open — but a change ARRIVING is exactly how a project begins (an
+    // import, a demo load, a peer's first manifest). `#armed` already gated this so the
+    // boot seed wouldn't spawn one; now the state it was standing in for is explicit.
+    if (!this.#open) {
+      // …but only if there is actually something there. An import creates its dataset
+      // BEFORE announcing the change, so a real beginning always has one; a bare signal
+      // with nothing behind it is noise, and treating it as a project start is how the
+      // launcher ends up sitting on an autosaved "Untitled project" nobody asked for.
+      if (!this.#armed || this.#datasets.activeId == null) return;
+      this.#open = true;
+    }
     this.#dirty = true;
     this.#scheduleLivePublish(); // stream this edit to live co-authors (#148 step 6), if any
     // A source-changing op means that dataset's Parquet must be rewritten. With the
@@ -830,6 +910,7 @@ export class ProjectSync {
   /** Start a fresh project: one empty dataset, unbound. */
   async newProject() {
     await this.#settle();
+    this.#open = true; // "start blank" opens a REAL project that happens to be empty
     if (this.#folderMode) this.#detachFolder(); // a fresh project is OPFS, not the folder's
     this.#loading = true;
     try {
@@ -939,6 +1020,7 @@ export class ProjectSync {
       // forget them (they reactivate once the plugin is added — #102).
       this.#unresolvedPlugins = this.#computeUnresolved(bundle.activePlugins);
       this.#keptPlugins.clear(); // reopened project reactivates its set fresh (#118)
+      this.#open = true;
       this.#binding = { id, name };
       this.#sourcesDirty.clear();
       this.#dirty = false;
@@ -987,6 +1069,7 @@ export class ProjectSync {
    */
   async openBundle({ name, bundle }) {
     await this.#settle();
+    this.#open = true; // an imported bundle IS a project
     if (this.#folderMode) this.#detachFolder(); // an imported bundle is a fresh OPFS project
     this.#setStatus('loading');
     this.#loading = true;
@@ -1461,6 +1544,11 @@ export class ProjectSync {
    * hash-verified.
    */
   async #currentManifest() {
+    // Nothing open ⇒ no manifest. This is what makes joining an ADOPTION: the merge sees
+    // one side with a project and one with literally nothing, so there is no ancestor to
+    // reconcile, no register to collide on, and no phantom dataset to union in. It falls
+    // out of the state rather than being special-cased anywhere.
+    if (!this.#open) return null;
     const bundle = await this.#snapshot(false);
     // Strip `output` too. It is never applied on receipt (see #applyMergedManifestLive),
     // so every chart's SVG was being serialised onto the wire on every publish — a
@@ -1624,7 +1712,7 @@ export class ProjectSync {
 
   /** Debounced: publish the local project state to co-authors after an edit settles. */
   #scheduleLivePublish() {
-    if (!this.#liveDoc || this.#loading) return;
+    if (!this.#liveDoc || this.#loading || !this.#open) return; // nothing open ⇒ nothing to say
     if (this.#livePublishTimer) clearTimeout(this.#livePublishTimer);
     this.#livePublishTimer = setTimeout(async () => {
       this.#livePublishTimer = null;
@@ -1657,6 +1745,13 @@ export class ProjectSync {
   async #applyMergedManifestLive(manifest) {
     const mergedLog = manifest?.log || [];
     debug('live', 'applyMerged', { ops: mergedLog.length });
+    // Adoption (#158): a peer's project arriving while we hold none IS the project. No
+    // merge happened to get here — `#currentManifest` returned null, so the merge had
+    // one operand — and from this point the ordinary apply path materialises it.
+    if (!this.#open && mergedLog.length) {
+      this.#open = true;
+      debug('live', 'adopted a co-author project from nothing');
+    }
     this.#loading = true; // suppress autosave + echo-publish during apply
     try {
       const SRC = isSourceOp;
@@ -1926,19 +2021,19 @@ export class ProjectSync {
    * and asset bytes via gap-fill (#148 6c, #155) — arrives from the peer. That is why a
    * live peer must be present; a link alone is an address, not a copy.
    *
-   * A blank project is created first so there is somewhere for the incoming manifest to
-   * land. Its own empty dataset merges in alongside the shared ones, which is untidy but
-   * harmless; deleting it automatically would risk removing something the user meant to
-   * keep in the case where they joined from a project they had already started.
+   * The joiner opens NO project (#158). It used to stand up a blank one "so there is
+   * somewhere for the manifest to land", and I wrote that its empty dataset merging into
+   * the host's project was "untidy but harmless". It was neither: that dataset was
+   * reported as a mystery "Dataset 1" appearing in the host's sidebar, and the same
+   * phantom project also asserted a full plugin set with the newest clock in the room,
+   * silently reconfiguring the host's plugins.
+   *
+   * Holding nothing is what makes this an ADOPTION rather than a merge — there is no
+   * ancestor to reconcile and no local state to leak. The project arrives whole.
    */
   async joinByInvite({ roomId, secret }) {
     if (!roomId || !secret) throw new Error('joinByInvite: the link is missing its room or key');
-    await this.newProject();
-    // The blank project is somewhere for the incoming manifest to land, not a project
-    // with views. Drop any plugin opinions it inherited (#157): a joiner has never seen
-    // this project and has nothing to say about which plugins it uses, and saying it
-    // anyway — with the newest clock in the room — would overwrite the host's set.
-    this.#log?.clearWhere(isPluginOp);
+    await this.closeProject();
     this.#inviteRoom = { roomId, secret };
     this.#setStatus();
     this.#emitProject();
@@ -2084,6 +2179,10 @@ export class ProjectSync {
     else if (state === 'error') text = `Project: ${name ?? ''} — save failed`;
     else if (this.#binding) text = `Project: ${this.#binding.name} — saved ✓`;
     else if (typeof state === 'string' && state !== 'saved') text = state;
+    // "Unsaved project" is a project that hasn't been saved yet. With none open at all
+    // there is nothing to be unsaved (#158) — saying otherwise is the old conflation in
+    // the one place the user can actually see it.
+    else if (!this.#open) text = 'No project open';
     else text = 'Unsaved project';
     this.#statusEl.textContent = text;
   }

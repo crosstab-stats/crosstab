@@ -22,7 +22,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
-- [ ] **#158 — CrossTab must tolerate having NO project open.** Today it cannot, so it
+- [x] **#158 — CrossTab must tolerate having NO project open.** DONE. Today it cannot, so it
       fakes one: the launcher, and an invite joiner, each stand up a blank project with
       an empty dataset before anything real has happened. That fake is indistinguishable
       from a genuinely empty project, and every bug in this class is something treating
@@ -56,18 +56,18 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
       Layers:
 
-      - [ ] **L1 — represent it.** An explicit "no project" state on ProjectSync (not
+      - [x] **L1 — represent it.** An explicit "no project" state on ProjectSync (not
             merely `#binding === null`, which an unsaved-but-real project also has), and
             make the save/publish/seed paths key off THAT rather than each guarding
             separately. Every existing guard that exists only to neutralise a phantom
             project should end up deleted, not rewritten.
-      - [ ] **L2 — stop creating one.** Launcher shows with no project behind it; the
+      - [x] **L2 — stop creating one.** Launcher shows with no project behind it; the
             invite joiner enters the room holding nothing.
-      - [ ] **L3 — adopt on first manifest.** A peer's manifest received while holding no
+      - [x] **L3 — adopt on first manifest.** A peer's manifest received while holding no
             project MATERIALISES the project rather than merging into one. Delete
             `joinByInvite`'s tier-clearing and `#seedPluginState`'s co-authoring guard —
             both become unreachable.
-      - [ ] **L4 — the UI tolerates it.** Sidebar empty state; analysis menu items
+      - [x] **L4 — the UI tolerates it.** Sidebar empty state; analysis menu items
             disabled with no dataset (today they would run against nothing).
 
 - [x] **#157 — Plugin activation belongs on the one true log.** DONE. The active plugin set

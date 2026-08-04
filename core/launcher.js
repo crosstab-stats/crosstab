@@ -83,6 +83,12 @@ export class Launcher {
    * dataset to match — setDataset swaps the data but not the name, so without this
    * a "Start blank" session inherits the boot seed's name. */
   async #loadSource(key) {
+    // Picking a source is the moment a project BEGINS (#158). Until now the engine had
+    // no way to say "nothing is open", so a project existed from boot and this method
+    // merely filled it; the launcher's own screen was therefore sitting on top of a real
+    // (if empty) project the user had not asked for. Declaring it here is what lets the
+    // launcher — and a peer-join — hold nothing until there is something to hold.
+    this.#projects?.beginProject?.();
     let dataset, name;
     if (key === 'demo-quant') { dataset = makeDemoDataset(); name = 'Demo data'; }
     else if (key === 'demo-qual') { dataset = makeQualDemoDataset(); name = 'Qualitative demo'; }

@@ -444,7 +444,7 @@ export class DatasetManager {
    *
    * @param {{log?: object[], activeId?: number, datasetMeta?: Record<string, {libraryLink?: object}>}} bundle
    */
-  async loadBundle({ log = [], activeId, datasetMeta = {} }) {
+  async loadBundle({ log = [], activeId, datasetMeta = {}, empty = false }) {
     for (const ds of this.#datasets.values()) await ds.dispose();
     for (const ds of this.#binned.values()) await ds.dispose();
     this.#datasets.clear();
@@ -498,8 +498,12 @@ export class DatasetManager {
     // folds them (their bytes are gone by the user's explicit choice).
     const orphan = dsOps.filter((o) => !heldIds.has(dsIdOf(o)));
     if (orphan.length) this.#log.receiveOps(orphan);
-    // A project always has at least one dataset (a fresh/blank load has an empty log).
-    if (this.#datasets.size === 0) this.add('Dataset 1', { activate: true });
+    // An OPEN project always has at least one dataset, so a blank load gets one — but
+    // `empty` says no project is open at all (#158), and then there is nothing to make a
+    // dataset for. The difference is not cosmetic: `add` appends a real collection op,
+    // and that op is what used to travel from a joiner's landing-pad project into the
+    // host's, arriving as a mystery "Dataset 1" nobody created.
+    if (!empty && this.#datasets.size === 0) this.add('Dataset 1', { activate: true });
     this.#activeId = this.#datasets.has(activeId)
       ? activeId
       : (this.#datasets.keys().next().value ?? null);
@@ -532,17 +536,31 @@ export class DatasetManager {
   set binding(v) {
     if (this.active) this.active.binding = v;
   }
+  /**
+   * The dataset every `load*` lands in, creating one if the project has none (#158).
+   *
+   * There used to be a dataset from app boot, so these delegates could assume `active`.
+   * That boot dataset is gone — it was the phantom "Dataset 1" that travelled into a
+   * co-author's project — so the first load into a fresh project makes its own. This is
+   * the honest place for it: loading data is precisely when a dataset is needed, whereas
+   * creating one at boot asserted that a project existed before the user had chosen
+   * anything.
+   */
+  #target() {
+    return this.active ?? this.add('Dataset 1', { activate: true }); // `add` returns the store
+  }
+
   setDataset(d) {
-    return this.active.setDataset(d);
+    return this.#target().setDataset(d);
   }
   loadDataset(d) {
-    return this.active.loadDataset(d);
+    return this.#target().loadDataset(d);
   }
   loadStreaming(o) {
-    return this.active.loadStreaming(o);
+    return this.#target().loadStreaming(o);
   }
   loadWide(o) {
-    return this.active.loadWide(o);
+    return this.#target().loadWide(o);
   }
   getDataFrame(o) {
     return this.active.getDataFrame(o);

@@ -174,3 +174,29 @@ test('re-running the same workspace merge mints the same op id (B4)', () => {
   assert.equal(once.length, 1, 'one merge op for the diverged leaf');
   assert.deepEqual(once, twice, 're-running the same merge must not mint a new id');
 });
+
+// --- #158: joining is ADOPTION, not a merge ----------------------------------
+test('a peer holding NO project adopts the other side whole', () => {
+  // The joiner used to stand up a blank project so the manifest had "somewhere to
+  // land". Its empty dataset then merged in as a mystery "Dataset 1" in the host's
+  // sidebar, and its plugin set — asserted with the newest clock in the room —
+  // reconfigured the host's. Holding nothing removes the operand entirely: there is no
+  // ancestor to reconcile and nothing local to leak.
+  const hostLog = [
+    { id: 'op-1', hlc: { wall: 1, counter: 0 }, owner: 'core', target: 'coll/ds:7', type: 'addDataset', payload: { id: 7, name: 'Field notes' }, reads: [] },
+    { id: 'op-2', hlc: { wall: 2, counter: 0 }, owner: 'core', target: 'plugin:./p/caqdas.js', type: 'activatePlugin', payload: { key: './p/caqdas.js' }, reads: [] },
+  ];
+  const { manifest, conflicts } = mergeProjects(null, { log: hostLog }, {}, null);
+  assert.deepEqual(conflicts, [], 'nothing to disagree about — one side has no project');
+  assert.deepEqual(manifest.log.map((o) => o.id), ['op-1', 'op-2'], 'the host project arrives whole');
+  assert.equal(manifest.log.filter((o) => o.type === 'addDataset').length, 1, 'no phantom dataset');
+});
+
+test('…and it is symmetric: the side WITH the project keeps it intact', () => {
+  const mineLog = [
+    { id: 'op-1', hlc: { wall: 1, counter: 0 }, owner: 'core', target: 'coll/ds:7', type: 'addDataset', payload: { id: 7, name: 'Field notes' }, reads: [] },
+  ];
+  const { manifest, conflicts } = mergeProjects({ log: mineLog }, null, {}, null);
+  assert.deepEqual(conflicts, []);
+  assert.deepEqual(manifest.log.map((o) => o.id), ['op-1']);
+});

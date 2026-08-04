@@ -415,11 +415,12 @@ export async function boot(mounts) {
     // bare slice(3) would have produced a nonsense id and scoped the memo nowhere.
     scopeFor: (a) => datasetOfTarget(a?.target),
   });
-  // Create the first (empty) dataset up front so there's always an active dataset
-  // for the UI to render against; its data is loaded below.
-  // Neutral seed name; the launcher renames the active dataset to match the chosen
-  // source ('Demo data', 'Qualitative demo', or 'Dataset 1' for blank).
-  datasets.add('Dataset 1', { activate: true });
+  // NO dataset is created at boot (#158). This line used to exist so "there's always an
+  // active dataset for the UI to render against" — a convenience that made a project the
+  // engine's only representable state, and the launcher and an invite joiner then had to
+  // fake one. Its `addDataset` op is literally the phantom "Dataset 1" that turned up in
+  // a co-author's sidebar. The UI renders an empty state instead; a project makes its
+  // own first dataset when one is actually opened.
   const webr = new WebRManager(
     {
       bus,
@@ -2040,6 +2041,18 @@ class ProjectSidebar {
 
   #projectZone(blockVer) {
     const frag = document.createDocumentFragment();
+    // With no project open (#158) the zone is a prompt, not a project with a blank name:
+    // no rename, no delete, no "+ Add dataset" for a project that doesn't exist.
+    if (this.projects && !this.projects.hasProject) {
+      const empty = el('div', '', 'proj__empty');
+      empty.append(el('div', 'No project open', 'proj__name'));
+      const hint = el('div', 'Open one from the list below, or start a new one from the CrossTab menu.', 'proj__hint');
+      hint.style.cssText = 'font-size:12px; color:#7a8288; margin-top:4px;';
+      empty.append(hint);
+      const frag0 = document.createDocumentFragment();
+      frag0.append(empty);
+      return frag0;
+    }
     const head = document.createElement('div');
     head.className = 'proj__head';
     const name = el('span', this.projectName || 'Unsaved project', 'proj__name');

@@ -348,6 +348,13 @@ export class PluginActions {
    * script). A cancelled input or a failed run is NOT recorded. */
   async #run(manifest, originLabel, item) {
     const specs = Array.isArray(item.inputs) ? item.inputs : [];
+    // No project open (#158) — say so instead of opening a variable picker with nothing
+    // in it. An analysis needs data by definition; the honest answer is which step is
+    // missing, not an empty dialog followed by an empty result.
+    if (specs.some((sp) => sp?.kind === 'variables') && !this.#dataStore?.active) {
+      this.#results.appendError(`${item.label}: open or start a project first — there's no data to analyse.`);
+      return;
+    }
     const gathered = await gatherInputs(this.#ui, specs, item);
     if (gathered === null) return; // a required input was cancelled
 
