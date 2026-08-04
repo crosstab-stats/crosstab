@@ -116,6 +116,11 @@
       }
       .proj__ds:hover { background: #f0f3f6; }
       .proj__ds--active { background: #e6f0fa; border-color: var(--accent); }
+      /* Genuine subordination — a record that really does belong to the dataset above it
+         (CAQDAS coding). Indented with a rule, but the SAME row treatment: it is a
+         relationship, not a lower class of thing (#153). Project-scoped records are peers
+         of the datasets and are not nested at all. */
+      .proj__ds--nested { margin-left: 14px; border-left: 2px solid var(--line); border-radius: 0 6px 6px 0; }
       .proj__ds-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
       .proj__ds-rows { font: 12px ui-monospace, Menlo, monospace; color: #7a8590; }
       /* row action icons (✎ rename, ✕ remove) — visible, darken on hover */

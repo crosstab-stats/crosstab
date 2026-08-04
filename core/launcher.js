@@ -123,6 +123,7 @@ export class Launcher {
             fileName: b.fileName,
             keyProp: b.keyProp,
             assetId: `asset:${info.id}`,
+            featureCount: b.features.length, // the sidebar summary (#153)
           }, { scope: { wsId: 'spatial-map', dsId: null } });
           if (b.dataColumn && dsId != null && this.#workspaceStore) {
             this.#workspaceStore.set('builtin', 'spatial-link', setId, dsId, {

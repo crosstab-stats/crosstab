@@ -44,6 +44,7 @@ export const manifest = {
     id: 'boundarySets',
     label: 'Map layers',
     labelField: 'fileName',
+    summaryField: 'featureCount', // shown where a dataset shows its row count (#153)
     sidebar: 'list',
     assetRefs: ['assetId'],
   }],
@@ -925,7 +926,9 @@ async function wsStoreBoundarySet(app, features, keyProp, fileName) {
     name: fileName,
     type: 'application/geo+json',
   });
-  const setId = await app.items.put('boundarySets', null, { fileName, keyProp, assetId: ref });
+  const setId = await app.items.put('boundarySets', null, {
+    fileName, keyProp, assetId: ref, featureCount: features.length,
+  });
   return setId;
 }
 
@@ -951,6 +954,7 @@ async function wsSaveState(app) {
   await app.items.put('boundarySets', _ws.activeSetId, {
     fileName: _ws.fileName,
     keyProp: _ws.keyProp,
+    featureCount: _ws.features.length,
     ...(_ws.activeAssetId ? { assetId: _ws.activeAssetId } : {}),
   });
   await wsSaveLinkage(app);

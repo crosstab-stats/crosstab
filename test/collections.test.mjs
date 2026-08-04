@@ -20,10 +20,19 @@ import {
 const ownerOf = (p) => (p.builtin ? 'builtin' : `plugin:${p.id}`);
 
 test('a full declaration normalises unchanged', () => {
-  assert.deepEqual(
-    normalizeCollection({ id: 'boundarySets', label: 'Map layers', labelField: 'fileName', sidebar: 'list', assetRefs: ['assetId'] }),
-    { id: 'boundarySets', label: 'Map layers', labelField: 'fileName', sidebar: 'list', assetRefs: ['assetId'] },
-  );
+  const full = {
+    id: 'boundarySets', label: 'Map layers', labelField: 'fileName',
+    summaryField: 'featureCount', sidebar: 'list', assetRefs: ['assetId'],
+  };
+  assert.deepEqual(normalizeCollection(full), full);
+});
+
+test('summaryField defaults to null and rejects junk', () => {
+  // It names the field shown where a dataset shows its row count (#153 D3), so a
+  // non-string must not reach the renderer.
+  assert.equal(normalizeCollection({ id: 'x' }).summaryField, null);
+  assert.equal(normalizeCollection({ id: 'x', summaryField: 7 }).summaryField, null);
+  assert.equal(normalizeCollection({ id: 'x', summaryField: 'featureCount' }).summaryField, 'featureCount');
 });
 
 test('label defaults to the id, so a heading is never blank', () => {

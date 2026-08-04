@@ -21,7 +21,7 @@ import { ExportService } from './export-service.js';
 import { installPassphraseUI } from './passphrase-ui.js';
 import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } from './user-identity.js';
 import { ProjectLog } from './project-log.js';
-import { ItemStore, newItemId, isItemOp, parseItemTarget } from './item-store.js';
+import { ItemStore, newItemId, isItemOp, parseItemTarget, itemTarget } from './item-store.js';
 import { MemoStore, createMemoService, ANCHOR_KINDS, datasetOfTarget } from './memo-store.js';
 import { findOrphans, itemRefSources, refsIn } from './asset-refs.js';
 import { declaredCollections, assetRefDecls, undeclaredItemsGuard, CORE_COLLECTIONS,
@@ -1945,42 +1945,39 @@ class ProjectSidebar {
     }
     const ul = document.createElement('ul');
     ul.className = 'proj__datasets';
-    for (const rec of recs) ul.append(this.#recordRow(decl, rec));
+    // Indent only when the record genuinely belongs to the dataset above it. A
+    // project-scoped record (a map layer) is a PEER of the datasets, and indenting it was
+    // drawing it as the child of nothing.
+    for (const rec of recs) ul.append(this.#recordRow(decl, rec, dsId != null));
     frag.append(ul);
     return frag;
   }
 
   /** One item record: its label, inline rename (when a labelField is declared), delete. */
-  #recordRow(decl, rec) {
-    const li = document.createElement('li');
-    li.className = 'proj__blob';
-    const text = recordLabel(decl, rec);
-    // A label may be free text (a memo body), so truncate for the row and keep the full
-    // value for the tooltip and for the rename editor.
-    const shown = text.length > 42 ? text.slice(0, 41).trimEnd() + '…' : text;
-    const name = el('span', shown, 'proj__blob-name');
-    // One composed tooltip: which collection this is (the row itself carries no heading
-    // when nested under a dataset), the full text if it was truncated, and the rename
-    // affordance. Set once — assigning .title in two places silently loses the first.
-    name.title = [decl.label, shown === text ? null : text, decl.labelField ? 'Double-click to rename' : null]
-      .filter(Boolean).join(' — ');
-    li.append(name);
-
-    if (decl.labelField) {
-      const doRename = (e) => {
-        e?.stopPropagation();
-        this.#inlineRename(li, name, text, (v) => {
-          if (v) this.itemStore.put(decl.owner, decl.id, rec.id, { [decl.labelField]: v });
-        });
-      };
-      name.addEventListener('dblclick', doRename);
-      li.append(iconBtn('✎', 'Rename', doRename, 'proj__ds-x'));
-    }
-    li.append(iconBtn('✕', 'Delete', (e) => {
-      e.stopPropagation();
-      this.itemStore.remove(decl.owner, decl.id, rec.id);
-    }, 'proj__ds-x'));
-    return li;
+  #recordRow(decl, rec, nested = false) {
+    // Rename needs a field to write into. `labelField` when declared, else `name` if the
+    // record happens to carry one — which covers most real collections without the host
+    // inventing a field. When there is genuinely nothing to write, rename is absent, and
+    // that absence is intrinsic rather than a second-class-citizen decision.
+    const field = decl.labelField ?? (typeof rec.fields?.name === 'string' ? 'name' : null);
+    const summary = decl.summaryField ? rec.fields?.[decl.summaryField] : null;
+    return this.#contentRow({
+      name: recordLabel(decl, rec),
+      title: [decl.label, field ? 'Double-click to rename' : null].filter(Boolean).join(' — '),
+      nested,
+      summary: summary == null ? null : String(summary),
+      onRename: field ? (v) => { if (v) this.itemStore.put(decl.owner, decl.id, rec.id, { [field]: v }); } : null,
+      onDelete: () => this.itemStore.remove(decl.owner, decl.id, rec.id),
+      deleteTitle: 'Remove from project',
+      // Records are annotatable for the same reason datasets are: they have a target.
+      // Withholding it was an oversight, not a decision (#153). The exception is memos
+      // themselves — #148 settled that memos are FLAT rather than threaded, so offering
+      // to annotate an annotation would quietly reintroduce the nesting that decision
+      // rejected.
+      memoAnchor: decl.owner === 'core' && decl.id === 'memos'
+        ? null
+        : { kind: 'item', target: itemTarget(decl.owner, decl.id, rec.id) },
+    });
   }
 
   /**
@@ -2052,58 +2049,95 @@ class ProjectSidebar {
     return btn;
   }
 
-  #datasetRow(it, count, blockVer, hidden) {
+  /**
+   * ONE row for every piece of project content — a dataset, a plugin record, a building
+   * block (#153).
+   *
+   * Before this, records were drawn by a separate builder that gave them a smaller font,
+   * grey text and a 24px indent. That styling encoded "subordinate to the dataset above",
+   * which was true when all plugin data was a dataset side-car and is false now: a map
+   * layer is project-scoped and a peer of the datasets, not a child of one. The visual
+   * difference was carrying a claim about ownership that had stopped being true.
+   *
+   * Sharing the builder also makes the user's actual requirement structural rather than
+   * maintained by hand — *however items in a project are displayed should match how items
+   * in building blocks are displayed* — and turns flat-vs-grouped into one switch applied
+   * to both, instead of a commitment.
+   *
+   * Genuine subordination still exists (CAQDAS coding really does belong to its dataset),
+   * so `nested` indents the row while keeping its treatment identical.
+   */
+  #contentRow({
+    name, title, nested = false, active = false, badge = null, summary = null,
+    onOpen = null, onRename = null, onDelete = null, deleteTitle = 'Remove',
+    memoAnchor = null, drag = null,
+  }) {
     const li = document.createElement('li');
-    li.className = 'proj__ds' + (it.active ? ' proj__ds--active' : '');
-    li.draggable = true;
-    li.addEventListener('dragstart', (e) => this.#startDrag(e, 'dataset', it.id));
-    li.addEventListener('dragend', () => (this.#drag = null));
-    li.addEventListener('click', () => {
-      if (!it.active) this.datasets.setActive(it.id);
-    });
+    li.className = 'proj__ds'
+      + (active ? ' proj__ds--active' : '')
+      + (nested ? ' proj__ds--nested' : '');
+    if (drag) {
+      li.draggable = true;
+      li.addEventListener('dragstart', (e) => this.#startDrag(e, drag.kind, drag.id));
+      li.addEventListener('dragend', () => (this.#drag = null));
+    }
+    if (onOpen) li.addEventListener('click', onOpen);
+    else li.style.cursor = 'default';
 
-    const name = el('span', it.name, 'proj__ds-name');
-    name.title = 'Double-click to rename · drag to Building Blocks';
-    name.addEventListener('dblclick', (e) => {
-      e.stopPropagation();
-      this.#inlineRename(li, name, it.name, (v) => this.datasets.rename(it.id, v), 'proj__ds-rows');
-    });
-    li.append(name);
+    const shown = name.length > 44 ? `${name.slice(0, 43).trimEnd()}…` : name;
+    const nameEl = el('span', shown, 'proj__ds-name');
+    if (title || shown !== name) nameEl.title = [shown === name ? null : name, title].filter(Boolean).join(' — ');
+    if (onRename) {
+      nameEl.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        this.#inlineRename(li, nameEl, name, onRename);
+      });
+    }
+    li.append(nameEl);
 
+    if (badge) {
+      const b = el('span', badge.text, badge.onClick ? 'proj__ds-update' : 'proj__ds-link');
+      if (badge.title) b.title = badge.title;
+      if (badge.onClick) b.addEventListener('click', (e) => { e.stopPropagation(); badge.onClick(); });
+      li.append(b);
+    }
+    if (summary != null && summary !== '') li.append(el('span', String(summary), 'proj__ds-rows'));
+
+    if (onRename) {
+      li.append(iconBtn('✎', 'Rename', (e) => {
+        e.stopPropagation();
+        this.#inlineRename(li, nameEl, name, onRename);
+      }, 'proj__ds-x'));
+    }
+    if (onDelete) {
+      li.append(iconBtn('✕', deleteTitle, (e) => { e.stopPropagation(); onDelete(); }, 'proj__ds-x'));
+    }
+    if (memoAnchor && this.memoStore) li.append(this.#memoButton(li, memoAnchor));
+    return li;
+  }
+
+  #datasetRow(it, count, blockVer, hidden) {
+    let badge = null;
     if (it.libraryLink) {
       const linkedV = it.libraryLink.version;
       const latest = blockVer?.get(it.libraryLink.id);
-      if (latest != null && latest > linkedV) {
-        // The block has a newer version — offer to pull it in.
-        const upd = iconBtn(`↑v${latest}`, `Update from v${linkedV} to v${latest}`, (e) => {
-          e.stopPropagation();
-          void this.library.pullLatest(it.id);
-        }, 'proj__ds-update');
-        li.append(upd);
-      } else {
-        const badge = el('span', `v${linkedV}`, 'proj__ds-link');
-        badge.title = 'Linked to a building block';
-        li.append(badge);
-      }
+      badge = latest != null && latest > linkedV
+        ? { text: `↑v${latest}`, title: `Update from v${linkedV} to v${latest}`, onClick: () => void this.library.pullLatest(it.id) }
+        : { text: `v${linkedV}`, title: 'Linked to a building block' };
     }
-    li.append(el('span', it.rowCount.toLocaleString(), 'proj__ds-rows'));
-
-    const edit = iconBtn('✎', 'Rename dataset', (e) => {
-      e.stopPropagation();
-      this.#inlineRename(li, name, it.name, (v) => this.datasets.rename(it.id, v));
-    }, 'proj__ds-x');
-    const x = iconBtn(
-      '✕',
-      count <= 1 ? 'Remove — resets to a fresh empty dataset' : 'Remove from project',
-      (e) => {
-        e.stopPropagation();
-        void this.#deleteDataset(it);
-      },
-      'proj__ds-x',
-    );
-    li.append(edit, x);
-
-    li.append(this.#memoButton(li, { kind: 'dataset', target: `ds:${it.id}` }));
+    const li = this.#contentRow({
+      name: it.name,
+      title: 'Double-click to rename · drag to Building Blocks',
+      active: it.active,
+      badge,
+      summary: it.rowCount.toLocaleString(),
+      onOpen: () => { if (!it.active) this.datasets.setActive(it.id); },
+      onRename: (v) => this.datasets.rename(it.id, v),
+      onDelete: () => void this.#deleteDataset(it),
+      deleteTitle: count <= 1 ? 'Remove — resets to a fresh empty dataset' : 'Remove from project',
+      memoAnchor: { kind: 'dataset', target: `ds:${it.id}` },
+      drag: { kind: 'dataset', id: it.id },
+    });
 
     const frag = document.createDocumentFragment();
     frag.append(li);
@@ -2147,6 +2181,21 @@ class ProjectSidebar {
     return map;
   }
 
+  /**
+   * A workspace BLOB line. Deliberately still the subdued `.proj__blob` style rather than
+   * the shared content row (#153).
+   *
+   * This is not the old second-class treatment surviving by accident — the audit changed
+   * what these rows contain. Before #152 a blob WAS the coding, which is why it was
+   * listed; now the coding is item records and the blob holds only config (which column
+   * holds the documents, a per-dataset layer linkage). Config is not content: you do not
+   * name it, reuse it, annotate it, or promote it to a building block. Giving it a row
+   * equal to a dataset would overstate it.
+   *
+   * OPEN (#153): whether these should appear at all now. The visibility they used to
+   * provide — "this dataset has plugin data" — is now carried by the item counts
+   * ("Codes · 23"), so they may be pure noise. Left visible until that is confirmed.
+   */
   #blobRow(blob, dsId, wsTitles) {
     const li = document.createElement('li');
     li.className = 'proj__blob';
@@ -2407,22 +2456,18 @@ class ProjectSidebar {
     if (blocks.length === 0) {
       list.append(el('li', 'Drag a dataset here to save it as a reusable block.', 'proj__empty'));
     }
+    // Blocks go through the SAME builder as project content, which is the user's actual
+    // requirement: however an item looks in a project is how it looks in the library.
     for (const b of blocks) {
-      const li = document.createElement('li');
-      li.className = 'proj__ds';
-      li.draggable = true;
-      li.title = 'Click to add to the current project · drag onto Datasets';
-      li.addEventListener('dragstart', (e) => this.#startDrag(e, 'block', b.id));
-      li.addEventListener('dragend', () => (this.#drag = null));
-      li.addEventListener('click', () => void this.library.addBlockToProject(b.id));
-      li.append(el('span', b.name, 'proj__ds-name'));
-      li.append(el('span', `v${b.version ?? 1}`, 'proj__ds-link'));
-      const del = iconBtn('✕', 'Delete building block', (e) => {
-        e.stopPropagation();
-        void this.library.deleteBlock(b.id);
-      }, 'proj__ds-x');
-      li.append(del);
-      list.append(li);
+      list.append(this.#contentRow({
+        name: b.name,
+        title: 'Click to add to the current project · drag onto Datasets',
+        badge: { text: `v${b.version ?? 1}`, title: 'Block version' },
+        onOpen: () => void this.library.addBlockToProject(b.id),
+        onDelete: () => void this.library.deleteBlock(b.id),
+        deleteTitle: 'Delete building block',
+        drag: { kind: 'block', id: b.id },
+      }));
     }
     frag.append(list);
     return frag;

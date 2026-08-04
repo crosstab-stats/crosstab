@@ -31,6 +31,8 @@
  * @property {string} [label]       Human heading ("Map layers"). Defaults to `id`.
  * @property {string} [labelField]  Field holding a record's display name. Without it a
  *   record shows as its id and cannot be renamed generically.
+ * @property {string} [summaryField] Field shown where a dataset shows its row count — a
+ *   bare value, so "11" reads the same way "60" does on a dataset (#153 D3).
  * @property {'list'|'count'|'none'} [sidebar='none']  How it appears in the inventory:
  *   every record, a summary line, or not at all. Defaults to `none` so a collection is
  *   never surfaced by accident — visibility is a deliberate choice by its author.
@@ -54,6 +56,7 @@ export function normalizeCollection(raw) {
     id,
     label: typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim() : id,
     labelField: typeof raw.labelField === 'string' && raw.labelField ? raw.labelField : null,
+    summaryField: typeof raw.summaryField === 'string' && raw.summaryField ? raw.summaryField : null,
     sidebar,
     assetRefs: Array.isArray(raw.assetRefs) ? raw.assetRefs.filter((f) => typeof f === 'string' && f) : [],
   };
