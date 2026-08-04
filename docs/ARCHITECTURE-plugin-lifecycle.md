@@ -148,3 +148,27 @@ Each stage is independently shippable and independently verifiable.
 
 Stage 1 alone may resolve the reported bug; stages 2–4 are what make it *stay* fixed,
 because after them a hang is always either reported or genuinely infinite.
+
+## 6. Built — outcomes
+
+All stages built and verified in Chrome against the running app.
+
+| measurement | before | after |
+|---|---|---|
+| CAQDAS workspace mount | 3 × 20 s attempts, then failed | **505 ms** |
+| full 60-plugin re-probe + boot | the condition that broke mounts | **513 ms** |
+| workspace mount straight after that sweep | — | **414 ms** |
+| single manifest probe | — | **24 ms** |
+| console errors on a clean run | 5 mount failures | **0** |
+
+**Stage 5b (lazy probe) was deliberately NOT built.** The measurement says a full sweep
+costs ~1.4 s; it only looked catastrophic because every probe was racing the 15 s revoke.
+Building lazy probing would have been speculative complexity chasing a cost that the real
+fix removed. Measure, then decide.
+
+**Plugins needed no migration.** The protocol changes are host↔guest only — ,
+, ,  are all handled in . Plugin modules see
+the same  surface and the same hook names (, ,
+), so  and  were verified unchanged rather
+than ported. Keeping the plugin-facing contract stable through an internal rewrite is the
+point of having the envelope in the first place.

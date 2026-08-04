@@ -37,6 +37,7 @@
  */
 
 import { debug } from './debug.js';
+import { PendingCalls } from './plugin-lifecycle.js';
 import { currentAuthor } from './user-identity.js';
 
 /** Bumped on any breaking change to the wire protocol above. */
@@ -60,6 +61,14 @@ export class PluginBroker {
 
   /** Resolvers for the load handshake. */
   #ready = deferred();
+  /** Outstanding host→guest calls, keyed by request id (#154). Replaces a single
+   * `#lifecycleAck` slot, where two hooks in flight meant the first never resolved. */
+  #calls = new PendingCalls();
+  /** Latest guest progress + liveness, for the ADVISORY ui only. Never fails anything. */
+  #progress = { step: 'created', detail: null, at: 0 };
+  #lastAlive = 0;
+  /** Called on progress/alive/crashed so a surface can update its state machine. */
+  #onSignal = null;
   #manifestReady = deferred();
   #activated = deferred();
 
@@ -84,7 +93,6 @@ export class PluginBroker {
   #workspaceMounted = deferred();
 
   /** Deferred for an in-flight lifecycle hook (datasetChanged / deactivate). */
-  #lifecycleAck = null;
 
   /** Host-stamped output attribution ("Name · origin") for this plugin, applied to
    * its workspace-driven results so they're traceable like menu analyses. */
@@ -197,8 +205,30 @@ export class PluginBroker {
    * rejects if it doesn't signal ready in time — so a stuck/dropped sandbox
    * handshake fails fast (and the loader can retry) instead of hanging forever.
    * @param {number} [ms=20000] */
-  whenReady(ms = 20000) {
-    return withTimeout(this.#ready.promise, ms, 'plugin sandbox did not become ready in time');
+  /**
+   * Resolves when the guest runtime signals ready. **No deadline** (#154): a slow boot is
+   * not a failure, and the old 20 s cap is what reported busy boots as crashes. This
+   * settles when the guest says ready, when an explicit failure arrives, or when the
+   * broker is disposed — never on a clock.
+   */
+  whenReady() {
+    return this.#ready.promise;
+  }
+
+  /** Subscribe to guest progress / liveness / crash signals (#154). */
+  onSignal(fn) {
+    this.#onSignal = typeof fn === 'function' ? fn : null;
+    return this;
+  }
+
+  /** Latest progress the guest reported, and how long since its last heartbeat. Feeds
+   * the advisory UI, which may only change wording. */
+  status() {
+    return {
+      step: this.#progress.step,
+      detail: this.#progress.detail,
+      lastAliveMs: this.#lastAlive ? Date.now() - this.#lastAlive : null,
+    };
   }
 
   /**
@@ -215,11 +245,7 @@ export class PluginBroker {
     // {t:'manifest'} would otherwise leave this broker (and its live sandbox)
     // attached forever — a capability leak on the probe path especially, where
     // nothing else tears it down until the manifest resolves. Mirrors whenReady().
-    return withTimeout(
-      this.#manifestReady.promise,
-      20000,
-      'plugin did not return a manifest in time',
-    );
+    return this.#manifestReady.promise;
   }
 
   /**
@@ -232,9 +258,9 @@ export class PluginBroker {
    * @returns {Promise<any>} The function's return value.
    */
   invoke(fn, args = []) {
-    this.#invokePending = deferred();
-    this.#post({ t: 'invoke', fn, args });
-    return this.#invokePending.promise;
+    const { rid, promise } = this.#calls.open('invoke');
+    this.#post({ t: 'invoke', fn, args, rid });
+    return promise;
   }
 
   /** Bind the host-gathered inputs for the in-flight action (auto-injected into
@@ -286,9 +312,9 @@ export class PluginBroker {
    * @param {object} [plugin] - Identity for makeApp if not already built.
    */
   sendDatasetChanged(plugin) {
-    this.#lifecycleAck = deferred();
-    this.#post({ t: 'datasetChanged', plugin });
-    return this.#lifecycleAck.promise;
+    const { rid, promise } = this.#calls.open('datasetChanged');
+    this.#post({ t: 'datasetChanged', plugin, rid });
+    return promise;
   }
 
   /**
@@ -298,9 +324,9 @@ export class PluginBroker {
    * place — avoiding a full iframe teardown/remount.
    */
   sendWorkspaceRefresh() {
-    this.#lifecycleAck = deferred();
-    this.#post({ t: 'workspaceRefresh' });
-    return this.#lifecycleAck.promise;
+    const { rid, promise } = this.#calls.open('workspaceRefresh');
+    this.#post({ t: 'workspaceRefresh', rid });
+    return promise;
   }
 
   /** Push notification: the set of active plugins changed — workspace plugins that
@@ -314,13 +340,18 @@ export class PluginBroker {
    * flush unsaved state. Resolves when the hook returns (or times out).
    * @param {object} [plugin] - Identity for makeApp if not already built.
    */
+  /**
+   * Ask the plugin to flush before teardown. **Awaited with no deadline** (#154 stage 6).
+   *
+   * It used to race a 500 ms timer, so a plugin with real work to flush was silently
+   * abandoned and the frame torn down under it — the write simply vanished. A flush is
+   * the last chance a plugin has to save anything; hurrying it is how data is lost. The
+   * caller decides when to give up, and only a person may cancel.
+   */
   sendDeactivate(plugin) {
-    this.#lifecycleAck = deferred();
-    this.#post({ t: 'deactivate', plugin });
-    return Promise.race([
-      this.#lifecycleAck.promise,
-      new Promise((r) => setTimeout(r, 500)),
-    ]);
+    const { rid, promise } = this.#calls.open('deactivate');
+    this.#post({ t: 'deactivate', plugin, rid });
+    return promise;
   }
 
   /**
@@ -330,6 +361,10 @@ export class PluginBroker {
    */
   dispose() {
     window.removeEventListener('message', this.#listener);
+    // Every outstanding call ends HERE rather than on a clock (#154): disposal is a real
+    // event, a deadline is a guess. Without this a caller awaiting a torn-down frame
+    // would hang forever, which is exactly why timeouts existed.
+    this.#calls.rejectAll(new Error('plugin surface disposed'));
     for (const dispose of this.#handles.values()) {
       try {
         dispose();
@@ -373,6 +408,24 @@ export class PluginBroker {
       case 'ready':
         this.#ready.resolve();
         break;
+      // ---- #154 signals: the reason deadlines are gone --------------------------
+      case 'progress':
+        this.#progress = { step: msg.step, detail: msg.detail ?? null, at: Date.now() };
+        this.#lastAlive = Date.now();
+        this.#onSignal?.({ kind: 'progress', step: msg.step, detail: msg.detail ?? null });
+        break;
+      case 'alive':
+        this.#lastAlive = Date.now();
+        this.#onSignal?.({ kind: 'alive', step: msg.step });
+        break;
+      case 'crashed':
+        // An explicit death. This is what a timeout was standing in for, and unlike a
+        // timeout it can say WHERE and WHY. Rejects everything outstanding so no caller
+        // is left hanging on a frame that is already gone.
+        this.#ready.reject?.(new Error(msg.message || 'plugin crashed'));
+        this.#calls.rejectAll(new Error(`plugin crashed during ${msg.step}: ${msg.message}`));
+        this.#onSignal?.({ kind: 'crashed', step: msg.step, message: msg.message, stack: msg.stack });
+        break;
       case 'manifest':
         if (msg.ok) this.#manifestReady.resolve(msg.manifest);
         else this.#manifestReady.reject(new Error(msg.error || 'plugin import failed'));
@@ -385,21 +438,17 @@ export class PluginBroker {
         if (msg.ok) this.#workspaceMounted.resolve();
         else this.#workspaceMounted.reject(new Error(msg.error || 'workspace mount failed'));
         break;
-      case 'lifecycleAck': {
+      case 'lifecycleAck':
         debug('broker', `lifecycleAck: ${msg.hook} ok=${msg.ok}`, msg.error || '');
-        const lc = this.#lifecycleAck;
-        this.#lifecycleAck = null;
-        if (lc) { if (msg.ok) lc.resolve(); else lc.reject(new Error(msg.error || 'lifecycle hook failed')); }
+        // Settled BY ID (#154). Previously one shared slot held the pending deferred, so
+        // a second hook overwrote the first and it never resolved — reachable with a
+        // dataset switch during a workspace refresh. `ok:false` here means "no such hook",
+        // which is a normal answer, not a failure: resolve it.
+        this.#calls.settle(msg.rid, { ok: true, value: { hook: msg.hook, handled: !!msg.ok, error: msg.error || null } });
         break;
-      }
-      case 'invoked': {
-        const p = this.#invokePending;
-        this.#invokePending = null;
-        if (!p) break;
-        if (msg.ok) p.resolve(msg.value);
-        else p.reject(new Error(msg.error || 'plugin function failed'));
+      case 'invoked':
+        this.#calls.settle(msg.rid, { ok: msg.ok, value: msg.value, error: msg.error || 'plugin function failed' });
         break;
-      }
       case 'call':
         this.#handleCall(msg);
         break;

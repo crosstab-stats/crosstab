@@ -20,7 +20,7 @@
  */
 
 import { PluginBroker } from './plugin-broker.js';
-import { sandboxBlobUrl } from './plugin-sandbox.js';
+import { attachSandbox } from './plugin-sandbox.js';
 
 /**
  * API contract version the engine implements. A plugin declares the version it
@@ -338,8 +338,9 @@ export class PluginLoader {
     // So the probe broker gets deny-all stubs: every `app.*` call throws.
     const broker = new PluginBroker({ iframe, services: probeServices(), onError: () => {} });
     this.#sandboxContainer.append(iframe);
-    iframe.src = await sandboxBlobUrl('strict');
+    const { loaded } = await attachSandbox(iframe, 'strict');
     try {
+      await loaded;
       await broker.whenReady();
       const manifest = await broker.sendLoad(code);
       if (!manifest || typeof manifest.id !== 'string') {
@@ -380,10 +381,14 @@ export class PluginLoader {
     // posts {t:'ready'} once wired up. blob: (not the host URL) so it works offline —
     // see plugin-sandbox.js.
     this.#sandboxContainer.append(iframe);
-    iframe.src = await sandboxBlobUrl(capability);
+    // The blob URL now lives exactly as long as the frame loading it (#154 stage 1);
+    // it used to self-destruct on a 15 s timer, which could revoke a slow frame's
+    // source mid-load and guarantee the failure the deadline then reported.
+    const { loaded } = await attachSandbox(iframe, capability);
 
     try {
-      await broker.whenReady();
+      await loaded;             // the frame's own load/error — not a clock
+      await broker.whenReady(); // …and the guest's own ready signal
       const manifest = await broker.sendLoad(code);
 
       if (!manifest || typeof manifest.id !== 'string') {

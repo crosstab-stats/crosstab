@@ -234,6 +234,35 @@
 
         // --- message handling --------------------------------------------------
 
+        // ---- #154: make silence impossible ---------------------------------
+        // The old handshake used deadlines because a guest that died mid-boot said
+        // nothing, so the host could only infer failure from elapsed time — which
+        // cannot tell a broken frame from a slow one. These handlers turn every death
+        // into a MESSAGE, which is what lets the host stop guessing and wait patiently.
+        let currentStep = 'booting';
+        // Reply to a specific request. rid-keyed so two hooks in flight cannot be
+        // confused for each other — the host keeps a Map<rid, deferred>, not one slot.
+        const reply = (m, o) => post({ ...o, rid: (m && m.rid) || null });
+        const setStep = (step, detail) => {
+          currentStep = step;
+          post({ t: 'progress', step: step, detail: detail || null });
+        };
+        window.addEventListener('error', (e) => {
+          post({ t: 'crashed', step: currentStep,
+                 message: String((e && e.message) || 'uncaught error'),
+                 stack: String((e && e.error && e.error.stack) || '') });
+        });
+        window.addEventListener('unhandledrejection', (e) => {
+          const r = e && e.reason;
+          post({ t: 'crashed', step: currentStep,
+                 message: String((r && r.message) || r || 'unhandled rejection'),
+                 stack: String((r && r.stack) || '') });
+        });
+        // Liveness. The cage DOCUMENT stays responsive while the plugin's own code is
+        // busy, so a heartbeat distinguishes "working hard" from "wedged" without any
+        // deadline. It is advisory only — a missed beat never fails anything.
+        setInterval(() => { post({ t: 'alive', step: currentStep }); }, 2000);
+
         window.addEventListener('message', async (event) => {
           if (event.source !== parentWin) return; // only trust the host
           const msg = event.data;
@@ -241,7 +270,8 @@
 
           switch (msg.t) {
             case 'load':
-              await importPlugin(msg.code);
+              setStep('loading');
+              await importPlugin(msg.code, msg.rid);
               break;
 
             case 'activate':
@@ -251,9 +281,9 @@
                 // them via 'invoke' (run/parse/export named functions).
                 if (msg.debug) debugEnabled = true;
                 app = makeApp(msg.plugin);
-                post({ t: 'activated', ok: true });
+                reply(msg, { t: 'activated', ok: true });
               } catch (err) {
-                post({ t: 'activated', ok: false, error: String(err && err.message || err) });
+                reply(msg, { t: 'activated', ok: false, error: String(err && err.message || err) });
               }
               break;
 
@@ -267,9 +297,9 @@
                   throw new Error('plugin declares a workspace but exports no `workspace.mount(app, root)`');
                 }
                 await ws.mount(app, document.body, msg.workspace || {});
-                post({ t: 'workspaceMounted', ok: true });
+                reply(msg, { t: 'workspaceMounted', ok: true });
               } catch (err) {
-                post({ t: 'workspaceMounted', ok: false, error: String(err && err.message || err) });
+                reply(msg, { t: 'workspaceMounted', ok: false, error: String(err && err.message || err) });
               }
               break;
 
@@ -284,14 +314,14 @@
                   if (!app) app = makeApp(msg.plugin || {});
                   if (debugEnabled) console.debug('[plugin-host] datasetChanged → calling hook');
                   await wsHook.onDatasetChanged(app);
-                  post({ t: 'lifecycleAck', hook: 'datasetChanged', ok: true });
+                  reply(msg, { t: 'lifecycleAck', hook: 'datasetChanged', ok: true });
                 } else {
                   if (debugEnabled) console.debug('[plugin-host] datasetChanged → no hook, ack false');
-                  post({ t: 'lifecycleAck', hook: 'datasetChanged', ok: false });
+                  reply(msg, { t: 'lifecycleAck', hook: 'datasetChanged', ok: false });
                 }
               } catch (err) {
                 if (debugEnabled) console.debug('[plugin-host] datasetChanged → threw:', err && err.message);
-                post({ t: 'lifecycleAck', hook: 'datasetChanged', ok: false, error: String(err && err.message || err) });
+                reply(msg, { t: 'lifecycleAck', hook: 'datasetChanged', ok: false, error: String(err && err.message || err) });
               }
               break;
 
@@ -304,12 +334,12 @@
                 if (wsRefresh && typeof wsRefresh.onRefresh === 'function') {
                   if (!app) app = makeApp(msg.plugin || {});
                   await wsRefresh.onRefresh(app);
-                  post({ t: 'lifecycleAck', hook: 'workspaceRefresh', ok: true });
+                  reply(msg, { t: 'lifecycleAck', hook: 'workspaceRefresh', ok: true });
                 } else {
-                  post({ t: 'lifecycleAck', hook: 'workspaceRefresh', ok: false });
+                  reply(msg, { t: 'lifecycleAck', hook: 'workspaceRefresh', ok: false });
                 }
               } catch (err) {
-                post({ t: 'lifecycleAck', hook: 'workspaceRefresh', ok: false, error: String(err && err.message || err) });
+                reply(msg, { t: 'lifecycleAck', hook: 'workspaceRefresh', ok: false, error: String(err && err.message || err) });
               }
               break;
 
@@ -321,9 +351,9 @@
                   if (!app) app = makeApp(msg.plugin || {});
                   await wsDeact.onDeactivate(app);
                 }
-                post({ t: 'lifecycleAck', hook: 'deactivate', ok: true });
+                reply(msg, { t: 'lifecycleAck', hook: 'deactivate', ok: true });
               } catch (err) {
-                post({ t: 'lifecycleAck', hook: 'deactivate', ok: false, error: String(err && err.message || err) });
+                reply(msg, { t: 'lifecycleAck', hook: 'deactivate', ok: false, error: String(err && err.message || err) });
               }
               break;
 
@@ -341,9 +371,9 @@
                 const value = await fn(app, ...(msg.args || []));
                 // Return value is plain data (a dataset, bytes, or nothing) — post
                 // it directly; structured clone handles it (or throws if it can't).
-                post({ t: 'invoked', ok: true, value });
+                reply(msg, { t: 'invoked', ok: true, value });
               } catch (err) {
-                post({ t: 'invoked', ok: false, error: String(err && err.message || err) });
+                reply(msg, { t: 'invoked', ok: false, error: String(err && err.message || err) });
               }
               break;
 
@@ -374,7 +404,7 @@
         });
 
         /** Import the plugin source from a blob URL and report its manifest. */
-        async function importPlugin(code) {
+        async function importPlugin(code, rid) {
           let url;
           try {
             const blob = new Blob([code], { type: 'text/javascript' });
@@ -397,9 +427,9 @@
                 'plugin must export `manifest` with a declarative section (menu/imports/exports/outputExports/workspaces)',
               );
             }
-            post({ t: 'manifest', ok: true, manifest: pluginModule.manifest });
+            post({ t: 'manifest', ok: true, manifest: pluginModule.manifest, rid: rid || null });
           } catch (err) {
-            post({ t: 'manifest', ok: false, error: String(err && err.message || err) });
+            post({ t: 'manifest', ok: false, error: String(err && err.message || err), rid: rid || null });
           } finally {
             if (url) URL.revokeObjectURL(url);
           }

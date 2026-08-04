@@ -16,7 +16,8 @@
  */
 
 import { PluginBroker } from './plugin-broker.js';
-import { sandboxBlobUrl } from './plugin-sandbox.js';
+import { attachSandbox } from './plugin-sandbox.js';
+import { Lifecycle, advisory } from './plugin-lifecycle.js';
 import { ownerToken, DEFAULT_SLOT, NO_DS } from './workspace-store.js';
 import { newItemId } from './item-store.js';
 import { declaredCollections, assetRefDecls } from './collections.js';
@@ -149,43 +150,75 @@ export class WorkspaceManager {
     // it feel like a crash. Removed on success; swapped for a retry prompt on failure.
     const overlay = makeOverlay();
     pane.append(overlay);
-    this.#tabs.addTab({ view, title, pane });
 
-    // Reserve the slot before the async handshake so a concurrent reconcile can't
+    // Reserve the slot before anything async so a concurrent reconcile can't
     // double-mount; KEEP it even if the handshake fails (the tab stays, showing a
-    // retry overlay) so a transient sandbox timeout never silently deletes a
-    // workspace and its unsaved-looking state.
-    const entry = { view, iframe, broker: null, pluginId: plugin.id, pane, ws, plugin, dsId: null };
+    // retry prompt) so a stumble never silently deletes a workspace.
+    const entry = {
+      view, iframe, broker: null, pluginId: plugin.id, pane, ws, plugin, dsId: null,
+      overlay, lc: null, startedAt: 0, advisoryTimer: null,
+    };
     this.#mounted.set(ws.id, entry);
 
-    void this.#mountWithRetry(entry, overlay, ws.id);
+    // LAZY (#154 stage 5): the handshake starts when the tab is first shown, not at
+    // reconcile. Mounting every workspace at boot meant N sandbox documents racing to
+    // load while DuckDB and WebR warmed — self-inflicted contention that the old
+    // deadlines then reported as failure.
+    this.#tabs.addTab({ view, title, pane, onShow: () => this.#ensureStarted(ws.id) });
   }
 
-  static #RETRY_TIMEOUTS = [20_000, 40_000, 60_000];
+  /** Begin (or resume) a workspace's handshake. Idempotent — showing a tab repeatedly
+   * must not start a second one. */
+  #ensureStarted(id) {
+    const entry = this.#mounted.get(id);
+    if (!entry || entry.lc) return;
+    void this.#start(entry, id);
+  }
 
-  async #mountWithRetry(entry, overlay, id, attempt = 0) {
-    const timeouts = WorkspaceManager.#RETRY_TIMEOUTS;
-    const ms = timeouts[Math.min(attempt, timeouts.length - 1)];
+  /**
+   * Run the handshake, reporting rather than timing out (#154).
+   *
+   * There is no retry ladder and no deadline. A surface fails ONLY when something says
+   * it failed — the frame's own `error`, an explicit `crashed` from the guest, or a
+   * rejected step. Slowness changes the overlay's wording and nothing else, because a
+   * plugin may legitimately take minutes, or hours, if that is what the analysis needs.
+   */
+  async #start(entry, id) {
+    const lc = new Lifecycle({ onChange: () => this.#paint(entry) });
+    entry.lc = lc;
+    entry.startedAt = Date.now();
+    // The ONE timer in the whole envelope. It may only re-word the overlay.
+    entry.advisoryTimer = setInterval(() => this.#paint(entry), 2_000);
+    this.#paint(entry);
     try {
-      await this.#handshake(entry, ms);
-      debug('ws-mgr', `${id}: handshake OK`);
-      overlay.remove();
+      await this.#handshake(entry, lc);
+      lc.advance('live');
+      debug('ws-mgr', `${id}: live`);
+      this.#stopAdvisory(entry);
+      entry.overlay?.remove();
     } catch (e) {
-      debug('ws-mgr', `${id}: handshake FAILED (attempt ${attempt}) —`, e.message);
-      if (attempt < timeouts.length - 1) {
-        try { entry.broker?.dispose(); } catch { /* ignore */ }
-        try { entry.iframe?.remove(); } catch { /* ignore */ }
-        const iframe = makeIframe(entry.ws.title || entry.ws.id);
-        entry.iframe = iframe;
-        entry.broker = null;
-        entry.pane.insertBefore(iframe, overlay);
-        updateOverlayMessage(overlay, `Retrying (${attempt + 1}/${timeouts.length - 1})…`);
-        await this.#mountWithRetry(entry, overlay, id, attempt + 1);
-      } else {
-        showRetryOverlay(overlay, () => void this.#retry(id));
-        this.#onError(new Error(`workspace "${id}" failed to mount: ${e.message}`));
-      }
+      // An explicit failure — never a clock.
+      lc.fail(lc.step, e.message);
+      this.#stopAdvisory(entry);
+      showRetryOverlay(entry.overlay, () => void this.#retry(id), `${entry.ws.title || id}: ${e.message}`);
+      this.#onError(new Error(`workspace "${id}" failed to start: ${e.message}`));
     }
+  }
+
+  #stopAdvisory(entry) {
+    if (entry.advisoryTimer) { clearInterval(entry.advisoryTimer); entry.advisoryTimer = null; }
+  }
+
+  /** Update the overlay from the lifecycle + the guest's own progress/heartbeat. */
+  #paint(entry) {
+    if (!entry.overlay || !entry.lc || entry.lc.isFailed) return;
+    const status = entry.broker?.status?.() ?? { lastAliveMs: null };
+    const a = advisory({
+      step: entry.lc.step,
+      elapsedMs: Date.now() - entry.startedAt,
+      lastAliveMs: status.lastAliveMs,
+    });
+    updateOverlayMessage(entry.overlay, a.message, a.level !== 'ok' ? () => void this.#retry(entry.ws.id) : null);
   }
 
   /** User-initiated restart: flush the workspace's state via deactivate, then
@@ -203,7 +236,7 @@ export class WorkspaceManager {
    * the caller, which shows a retry overlay rather than tearing the tab down).
    * @param {object} entry
    * @param {number} [readyMs=20000] - Timeout for the sandbox ready signal. */
-  async #handshake(entry, readyMs = 20000) {
+  async #handshake(entry, lc) {
     const { plugin, ws, iframe } = entry;
     const title = ws.title || ws.id;
     // Ownership token: the plugin's namespace (built-ins share one; URL/file plugins
@@ -325,10 +358,20 @@ export class WorkspaceManager {
     // render host-provided <audio>/<img>/<video>; everything else stays strict. This
     // is the ONLY frame that renders — the loader's hidden compute frame never does,
     // so media capability lives here, not there (least privilege, #139).
-    iframe.src = await sandboxBlobUrl(plugin.media ? 'media' : 'strict');
-    await broker.whenReady(readyMs);
+    // Guest signals feed the lifecycle: progress advances it, a crash fails it with a
+    // reason. This is what replaced the deadline.
+    broker.onSignal((sig) => {
+      if (sig.kind === 'crashed') lc.fail(lc.step, `${sig.step}: ${sig.message}`);
+      else this.#paint(entry);
+    });
+
+    const { loaded } = await attachSandbox(iframe, plugin.media ? 'media' : 'strict');
+    await loaded;              // the FRAME says it loaded — or errors
+    lc.advance('caged');
+    await broker.whenReady();  // the GUEST says its runtime is up — no deadline
     const source = await fetchSource(plugin.url);
     const manifest = await broker.sendLoad(source);
+    lc.advance('loaded');
     const identity = {
       id: manifest.id,
       name: manifest.name,
@@ -336,7 +379,9 @@ export class WorkspaceManager {
       apiVersion: API_VERSION,
     };
     await broker.sendActivate(identity);
+    lc.advance('activated');
     await broker.sendMountWorkspace(identity, { id: ws.id, title });
+    lc.advance('mounted');
   }
 
   /** Re-run a failed/timed-out mount in place: dispose the dead broker + iframe,
@@ -354,7 +399,12 @@ export class WorkspaceManager {
     entry.broker = null;
     const overlay = makeOverlay();
     entry.pane.append(iframe, overlay);
-    await this.#mountWithRetry(entry, overlay, id);
+    entry.overlay = overlay;
+    // A retry is a USER action, so it starts a fresh lifecycle rather than resuming a
+    // failed one — the only sanctioned way a surface leaves the failed state (#154).
+    this.#stopAdvisory(entry);
+    entry.lc = null;
+    await this.#start(entry, id);
   }
 
   /**
@@ -376,15 +426,18 @@ export class WorkspaceManager {
     // onDatasetChanged reads the correct (new) dataset's blob.
     let allHandled = true;
     for (const [id, entry] of this.#mounted) {
+      // Not started yet (lazy mount, #154 stage 5) — nothing to notify, and nothing
+      // wrong. It will read the current dataset when the user opens it.
+      if (!entry.lc) { debug('ws-mgr', `${id}: SKIP (not started)`); continue; }
       if (!entry.broker) { debug('ws-mgr', `${id}: SKIP (no broker)`); allHandled = false; continue; }
       const scope = entry.ws?.scope || 'dataset';
       if (scope === 'dataset') entry.dsId = activeDsId;
       debug('ws-mgr', `${id}: sending hook (scope=${scope}, dsId=${entry.dsId})`);
       try {
-        await Promise.race([
-          entry.broker.sendDatasetChanged(),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000)),
-        ]);
+        // No race (#154). The hook settles when the guest answers, when it crashes, or
+        // when the broker is disposed. A plugin that takes a while to re-read its state
+        // is not misbehaving, and cutting it off mid-hook was how state got half-applied.
+        await entry.broker.sendDatasetChanged();
         debug('ws-mgr', `${id}: hook OK`);
       } catch (err) {
         debug('ws-mgr', `${id}: hook FAILED —`, err.message);
@@ -408,6 +461,7 @@ export class WorkspaceManager {
     if (!this.#mounted.size) return true;
     debug('ws-mgr', 'notifyWorkspaceRefresh — mounted:', [...this.#mounted.keys()]);
     for (const [, entry] of this.#mounted) {
+      if (!entry.lc) continue;        // not started yet — it will read fresh state on open
       if (!entry.broker) return false;
       try {
         await entry.broker.sendWorkspaceRefresh();
@@ -438,7 +492,13 @@ export class WorkspaceManager {
     if (!entry) return;
     debug('ws-mgr', `teardown ${id}`);
     this.#mounted.delete(id);
+    this.#stopAdvisory(entry);
+    entry.lc?.dispose();
     try {
+      // Let the plugin flush, with NO deadline (#154 stage 6). This used to race a
+      // 500 ms timer, so a plugin with real work to save was cut off and its write
+      // vanished. The frame is only destroyed after the flush answers — or after the
+      // broker rejects it, which happens on a crash or an explicit dispose.
       if (entry.broker) await entry.broker.sendDeactivate().catch(() => {});
       entry.broker?.dispose();
     } catch (err) {
@@ -493,19 +553,44 @@ function makeOverlay() {
 }
 
 /** Update the text line in a loading overlay (used for retry progress). */
-function updateOverlayMessage(overlay, text) {
+/**
+ * Update the loading overlay's wording, and optionally offer a retry BESIDE it (#154).
+ *
+ * The offer is not a failure. A slow workspace stays loading, keeps its spinner, and
+ * simply gains a "Retry" the user may ignore — because taking a long time is not the
+ * same as being broken, and only a person may decide to give up.
+ */
+function updateOverlayMessage(overlay, text, onRetry = null) {
   const msg = overlay.querySelector('.ws-overlay-msg');
   if (msg) msg.textContent = text;
+  const existing = overlay.querySelector('.ws-overlay-retry');
+  if (!onRetry) { existing?.remove(); return; }
+  if (existing) return; // already offered — don't rebuild it every tick
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'ws-overlay-retry';
+  btn.textContent = 'Retry';
+  btn.title = 'Restart this workspace. It may still finish on its own.';
+  btn.style.cssText =
+    'margin-top:4px;padding:5px 12px;border:1px solid #c8d0d8;border-radius:6px;'
+    + 'background:#fff;cursor:pointer;font:inherit;font-size:13px;';
+  btn.addEventListener('click', onRetry);
+  overlay.append(btn);
 }
 
 /** Convert a loading overlay into a failure prompt with a "Reload" button. Keeps
  * the tab and the stored state intact — the user can retry without losing data. */
-function showRetryOverlay(overlay, onRetry) {
+function showRetryOverlay(overlay, onRetry, reason = '') {
+  if (!overlay) return;
   overlay.replaceChildren();
   const msg = document.createElement('div');
   msg.style.cssText = 'max-width:440px;text-align:center;line-height:1.5;padding:0 16px;';
-  msg.textContent =
-    'This workspace didn’t finish loading (the sandbox timed out). Your saved data is safe — reload to try again.';
+  // Say what actually happened. The old wording blamed "the sandbox timed out" for
+  // every failure, which after #154 is never the reason — a surface now fails only when
+  // something reports a cause, so show it.
+  msg.textContent = reason
+    ? `This workspace stopped: ${reason}. Your saved data is safe — reload to try again.`
+    : 'This workspace stopped before it finished loading. Your saved data is safe — reload to try again.';
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.textContent = 'Reload workspace';

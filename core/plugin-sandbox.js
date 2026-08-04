@@ -24,6 +24,22 @@
  * content, so a plugin gets exactly the capability its manifest declares (least
  * privilege — a plain analysis plugin never gains WASM or media) and a *future*
  * capability is one row in {@link HOST_CSP}, not a whole copied sandbox document.
+ *
+ * ## Measured properties of this cage (#154)
+ *
+ * Verified in Chrome against the running app, because the lifecycle design depends on
+ * them and assuming would have produced the wrong architecture:
+ *
+ *  - The frames are genuinely **opaque-origin**: the host gets `SecurityError` touching
+ *    `contentWindow.location`.
+ *  - They run **out of process**. A guest burning 2 500 ms of CPU left the host ticking
+ *    with a 109 ms maximum gap — so a plugin that takes minutes, or hours, does not block
+ *    the host UI. Isolation and off-main-thread execution come from the same choice.
+ *  - A **Worker cannot be created inside the cage**: an opaque origin's
+ *    `createObjectURL` yields `blob:null/…`, which is not fetchable, so `new Worker()`
+ *    constructs and then fails to load. `worker-src blob:` does not change this — the URL
+ *    is the blocker, not the policy. (The `codec` capability's `worker-src` therefore
+ *    only helps a worker created from a URL the sandbox can actually fetch.)
  */
 
 /** The runtime document, resolved relative to /core (works from any page path). */
@@ -44,16 +60,9 @@ export const HOST_CSP = Object.freeze({
 
 let templatePromise = null;
 
-/**
- * A fresh blob: URL of the sandbox document for the given capability. The template
- * HTML is fetched once (through the SW, so it's cached and offline-safe) and reused;
- * each call returns a NEW object URL, revoked shortly after (the iframe loads it in
- * milliseconds).
- *
- * @param {'strict'|'codec'|'media'} [capability]
- * @returns {Promise<string>}
- */
-export async function sandboxBlobUrl(capability = 'strict') {
+/** The sandbox document for a capability, as an HTML string. Fetched once (through the
+ * SW, so it's cached and offline-safe) and reused. */
+async function sandboxHtml(capability) {
   const csp = HOST_CSP[capability] || HOST_CSP.strict;
   if (!templatePromise) {
     templatePromise = fetch(HOST_URL)
@@ -69,8 +78,52 @@ export async function sandboxBlobUrl(capability = 'strict') {
   const template = await templatePromise;
   // `replace(string, string)` swaps only the FIRST literal occurrence (the meta
   // content); the CSP strings contain no `$`, so no replacement-pattern surprises.
-  const html = csp === STRICT_CSP ? template : template.replace(STRICT_CSP, csp);
+  return csp === STRICT_CSP ? template : template.replace(STRICT_CSP, csp);
+}
+
+/**
+ * Point an iframe at a fresh sandbox document and report what the FRAME does about it
+ * (#154 stage 1).
+ *
+ * ## Why this replaced `sandboxBlobUrl`
+ *
+ * The old helper returned a URL and revoked it on a **15-second timer**, while the mount
+ * handshake allowed 20/40/60 s. So a frame that had not finished loading within 15 s had
+ * its source revoked out from under it and could never succeed — and the longer retries
+ * were futile, because every attempt died at the same 15 s. A busy boot did not time out;
+ * it was aborted. The URL now lives exactly as long as the frame that is loading it.
+ *
+ * It also returns the frame's own load/error signals. Those are the first two entries in
+ * the envelope's failure table: a deadline is not needed to notice that a document failed
+ * to load, because the platform says so.
+ *
+ * @param {HTMLIFrameElement} iframe
+ * @param {'strict'|'codec'|'media'} [capability]
+ * @returns {Promise<{loaded: Promise<void>, release: () => void}>}
+ *   `loaded` settles on the frame's own `load`/`error`; `release` revokes early (dispose).
+ */
+export async function attachSandbox(iframe, capability = 'strict') {
+  const html = await sandboxHtml(capability);
   const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
-  setTimeout(() => URL.revokeObjectURL(url), 15000);
-  return url;
+
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    URL.revokeObjectURL(url);
+  };
+
+  const loaded = new Promise((resolve, reject) => {
+    const onLoad = () => { cleanup(); release(); resolve(); };
+    const onError = () => { cleanup(); release(); reject(new Error('sandbox document failed to load')); };
+    const cleanup = () => {
+      iframe.removeEventListener('load', onLoad);
+      iframe.removeEventListener('error', onError);
+    };
+    iframe.addEventListener('load', onLoad, { once: true });
+    iframe.addEventListener('error', onError, { once: true });
+  });
+
+  iframe.src = url;
+  return { loaded, release };
 }
