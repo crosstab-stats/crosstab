@@ -1574,7 +1574,16 @@ export class DataStore {
           // retracted source interleaved in the log never shifts another's file, and a
           // future merge can find a source's bytes by op identity.
           src.file = `src_${op.id}.parquet`;
-          if (includeParquet) {
+          // A source can be LIVE without being MATERIALISED here: a co-author's op
+          // arrives over the wire ahead of its bytes, so we hold the envelope and no
+          // table (#149 B3's byte-less window, now reachable in live sync). Exporting it
+          // used to run `SELECT * FROM "undefined"`, which threw and took the whole
+          // caller down with it — on a peer that meant EVERY live apply after the first
+          // failed, so no further edits landed and gap-fill's re-apply died too.
+          // Export it byte-less instead: the envelope still merges and still names the
+          // sidecar, and whoever does hold the bytes can serve them.
+          const materialised = s.wide ? !!s.file : !!s.table;
+          if (includeParquet && materialised) {
             src.parquet = s.wide
               ? await this.#duckdb.readOpfsFile(s.file)
               : await this.#duckdb.queryToParquet(`SELECT * FROM ${quoteIdent(s.table)}`);

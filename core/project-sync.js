@@ -1509,16 +1509,18 @@ export class ProjectSync {
     try {
       const SRC = (op) => op.type === 'load' || op.type === 'append' || op.type === 'join';
       const isDsOrColl = (op) => op.owner === 'core' && typeof op.target === 'string' && (op.target.startsWith('ds:') || op.target.startsWith('coll/'));
-      // My current log WITH source bytes (fresh — safe to hand to DuckDB).
-      const snap = await this.#snapshot(true);
-      const localParquet = new Map();
-      for (const op of snap.log) if (SRC(op) && op.payload?.src?.parquet) localParquet.set(op.id, op.payload.src.parquet);
-
-      // Fast path: if the data + collection tiers are unchanged (the common coding-only
-      // case), skip the DuckDB rebuild entirely and just apply the workspace/analysis tiers.
+      // Decide whether the data tier moved BEFORE touching bytes. The signature is op
+      // ids, which a byte-less snapshot carries just as well — and exporting every
+      // dataset to Parquet merely to compare ids meant a one-word memo re-exported the
+      // whole project through DuckDB on every keystroke-scale update.
       const dsSig = (log) => JSON.stringify(log.filter(isDsOrColl).map((o) => o.id).sort());
-      const dataChanged = dsSig(snap.log) !== dsSig(mergedLog);
+      const cheap = await this.#snapshot(false);
+      const dataChanged = dsSig(cheap.log) !== dsSig(mergedLog);
       if (dataChanged) {
+        // Only now pay for bytes: my current log WITH sources (fresh — safe for DuckDB).
+        const snap = await this.#snapshot(true);
+        const localParquet = new Map();
+        for (const op of snap.log) if (SRC(op) && op.payload?.src?.parquet) localParquet.set(op.id, op.payload.src.parquet);
         // Attach source bytes to the merged log — from local (shared base) or a COPY of a
         // co-author's streamed bytes (#148 6c). The copy matters: DuckDB's registerFileBuffer
         // TRANSFERS (detaches) the ArrayBuffer, so we must not hand over the retained cache.
