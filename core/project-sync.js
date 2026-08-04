@@ -1311,8 +1311,23 @@ export class ProjectSync {
 
   /** The current project as a wire manifest (Parquet stripped to file refs — the
    * receiver reuses its own local bytes; see {@link #applyLiveManifest}). */
+  /**
+   * The manifest published to peers. **Without Parquet bytes** — that is what gap-fill
+   * is for (#148 6c).
+   *
+   * It used to be `#snapshot(true)`, i.e. every dataset's full Parquet inlined into every
+   * live update. Two things wrong with that. It is enormous — a real dataset would blow
+   * past the data channel's message limit on every keystroke-scale edit. And it does not
+   * even survive the wire: Trystero JSON-serialises the payload, and a Uint8Array nested
+   * in a plain object comes out the other side as `{"0":31,"1":139,…}` (the same defect
+   * the gap-fill chunks are base64-encoded to avoid). So the receiver saw a source op
+   * carrying a `parquet` that was neither usable nor absent.
+   *
+   * Bytes travel by the one path built to carry them, chunked, base64-safe and
+   * hash-verified.
+   */
   async #currentManifest() {
-    return buildManifest({ name: this.#binding?.name ?? 'Live project', savedAt: Date.now(), bundle: await this.#snapshot(true) });
+    return buildManifest({ name: this.#binding?.name ?? 'Live project', savedAt: Date.now(), bundle: await this.#snapshot(false) });
   }
 
   /**
@@ -1327,6 +1342,18 @@ export class ProjectSync {
     const manifest = await this.#currentManifest();
     this.#liveSession = session;
     this.#coauthorPeers = 0;
+
+    // Build the gap-fill exchanges BEFORE attaching the doc. attachLiveDoc can deliver a
+    // peer's manifest immediately — which is exactly what happens to an invite joiner —
+    // and the apply path reaches for `#liveExchange` to request the bytes it lacks. Built
+    // afterwards, that reach was an optional-chain onto null: no request was ever sent,
+    // and the joiner sat with dataset NAMES and no rows, waiting for bytes nobody had
+    // been asked for. `#liveLastManifest` was reset here too, discarding the very
+    // manifest a later arrival would have re-applied.
+    this.#liveSourceBytes = new Map();
+    this.#liveLastManifest = null;
+    this.#initGapFill(session);
+
     this.#liveDoc = attachLiveDoc(session, {
       selfId: session.selfId,
       manifest,
@@ -1344,10 +1371,16 @@ export class ProjectSync {
       onResolved: () => { this.#conflictAbort?.abort(); this.#conflictAbort = null; }, // peer resolved → close my stale dialog
       onPeers: (n) => { this.#coauthorPeers = n; this.#emitProject(); }, // "waiting" → "co-authoring"
     });
+    await this.#refreshHeld(); // seed both exchanges with what I already hold
+    this.#liveDoc.hello();
+    this.#emitProject();
+  }
+
+  /** Wire the byte-transfer exchanges onto the session. Called BEFORE the doc is
+   * attached, so a manifest arriving on connect finds them ready (#156 follow-up). */
+  #initGapFill(session) {
     // Base-data gap-fill (#148 6c): serve the sources I hold to a peer that lacks them,
     // and fetch any I lack. Rides the SAME ops channel; LiveDoc ignores need/src-chunk.
-    this.#liveSourceBytes = new Map();
-    this.#liveLastManifest = null;
     const held = new Set();
     this.#liveExchange = new BlobExchange({
       kind: 'source',
@@ -1394,9 +1427,6 @@ export class ProjectSync {
       void this.#liveExchange?.receive(msg, peer);
       void this.#liveAssetExchange?.receive(msg, peer);
     });
-    await this.#refreshHeld(); // seed both exchanges with what I already hold
-    this.#liveDoc.hello();
-    this.#emitProject();
   }
 
   /** Refresh the gap-fill "held" set from my current sources (so I can serve them, and
@@ -1536,7 +1566,14 @@ export class ProjectSync {
         debug('live', 'adopted collab identity from invite host');
       }
       this.#applyNameOps(mergedLog); // a co-author's rename lands here (#149 A3)
-      this.#applyOutput?.(manifest.output || []);
+      // NOT applyOutput. The Output pane is LOCAL, per-peer state — it shows the results
+      // *you* ran. Applying the merged manifest's output replaced one peer's pane with
+      // the other's, because mergeProjects resolves `output` as "mine" and is NOT
+      // operand-symmetric: the transport imposes a canonical operand order, so whichever
+      // peer happens to fill the "mine" slot wins and BOTH then apply that. The symptom
+      // was A's invite link being replaced by B's "waiting to join" message.
+      // Output is regenerable and belongs to whoever ran it; the analysis LOG is the part
+      // that is genuinely shared, and that is applied above.
       this.#persistPeerWork(dataChanged); // a co-author's work is work (#149 C1)
     } catch (err) {
       console.error('[live] apply failed', err);
@@ -1690,8 +1727,12 @@ export class ProjectSync {
    */
   async inviteLink() {
     if (!this.#collabId || !this.#collabSecret) return null;
+    // Strip the query string as well as the fragment: the host's own `?launch=demo-quant`
+    // (or any other local state) has no business travelling to a recipient, who is
+    // joining a project rather than replaying how the sender happened to open theirs.
+    const base = `${location.origin}${location.pathname}`;
     return inviteLinkFor({
-      baseUrl: location.href.split('#')[0],
+      baseUrl: base,
       manifest: { collabId: this.#collabId, collabSecret: this.#collabSecret },
     });
   }
