@@ -303,10 +303,18 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     doesn't know, so the instinct is to have plugins ship a `fold`. Don't. Checked against
     the only real client: CAQDAS state is exactly **3 id-keyed collections** (`codes`,
     `segments`, `memos`) plus **2 LWW config scalars** (`textColumn`, `labelColumn`) and
-    one transient (`pendingImport`) — `builtin-caqdas/index.js:1842-1904`. Spatial is the
-    same shape (boundary sets per slot + viewport config). So the host defines the *model*,
-    not the schema: a workspace's state is **named collections of id-keyed items** the host
-    folds generically, plus a config blob that stays LWW.
+    one transient (`pendingImport`) — `builtin-caqdas/index.js:1842-1904`. So the host
+    defines the *model*, not the schema: a workspace's state is **named collections of
+    id-keyed items** the host folds generically, plus a config blob that stays LWW.
+    - **Spatial is deliberately NOT this shape, and that's the useful part.** Checked
+      (`builtin-spatial/index.js:41-62, 523-535`): `spatial-map` is project-scoped with
+      **one slot per boundary set** (slot id = file name), each slot holding
+      `{keyProp, fileName, features}`; `spatial-link` is dataset-scoped config
+      (`{dataColumn, shadeColumn, selected}`). Both declare `merge: {strategy:'lww'}` for a
+      reasoned cause: *"you don't line-merge polygons"* — geometry is atomic, and slot-set
+      add-wins already comes free from the host unioning slot keys. Spatial is therefore
+      the **negative control**: it proves D2 (the blob path must survive) rather than
+      exercising collections. Do not migrate its geometry to items.
     - Ops: `putItem {collection, id, fields}` / `removeItem {collection, id}` on target
       `ws:<owner>\0<wsId>\0<slot>\0<dsKey>\0<collection>\0<itemId>`; `setWorkspace` stays
       for config/singleton state.
@@ -330,6 +338,21 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     while refs hide in blobs. Once refs live in host-visible item fields (declared in the
     manifest), the host can scan them, and asset GC becomes the same log-keyed sweep as
     #149 C2. This is why #150 says design them together — confirmed, not assumed.
+  - **Spatial is what makes #150 urgent rather than tidy — a NEW finding.** Spatial stores
+    the entire GeoJSON `features` array *inline* in the workspace value
+    (`index.js:526-528`), and since #148 a workspace value is an **op payload**. So a
+    boundary set's full geometry is inlined in the one true log, serialised into
+    `project.json`, carried in every bundle, and **copied again on every re-write of that
+    slot** — with no size guard, and no compaction (by design: [[one-true-log-explicit-ops]]
+    endorses a spammy log, but that was about op *count*, not megabytes per op). The
+    plugin uses the asset store nowhere (zero `app.media` calls). GeoJSON bytes are exactly
+    an asset: opaque, content-addressable, dedup-worthy. Moving them is what turns a
+    boundary set into the reusable building block [[first-class-plugin-data]] has wanted
+    since the start, and it is the concrete driver for Layer 5.
+    - Spatial's honest item shape is thin: a `boundarySets` **registry** collection
+      (`{id, keyProp, fileName, assetId}`), geometry in the asset store. The registry gets
+      identity/undo/merge; the bytes stay atomic. That's collections and blobs each doing
+      the job they're good at.
   - **Also unblocks:** `#146`'s remaining "building-block eligibility" (a slot's content
     becomes a log slice, so promoting one is a slice-and-copy), and the κ/α analysis
     (#148 step 4) which wants per-coder segments as queryable records rather than blob rows.
@@ -365,11 +388,16 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         the QDPX round-trip must survive it. Undo + History for qualitative work land here.
   - [ ] **Layer 4 — plugin API.** Broker RPCs (`state.put`/`state.remove`/`state.items`),
         manifest declaration of collections + which fields are asset refs, `app.memos.*`.
-        Spatial as the second client — structurally unlike CAQDAS, so it validates the
-        abstraction the same way it did for verbs.
-  - [ ] **Layer 5 — #150 asset generalisation.** media→asset rename (a plugin API break,
-        so batch it here), owner on the reference, `app.assets.list()`, and refcount GC
-        scanning declared ref fields.
+        **Second-client check:** the collections model's two clients are host memos
+        (Layer 2) and CAQDAS (Layer 3) — spatial does NOT exercise it. Two clients where
+        one is host-owned is thinner validation than the verb interface got, so treat the
+        API as provisional until a genuine third arrives, and don't freeze it early.
+  - [ ] **Layer 5 — #150 asset generalisation + spatial as its client.** media→asset
+        rename (a plugin API break, so batch it here), owner on the reference,
+        `app.assets.list()`, refcount GC scanning declared ref fields — then move spatial's
+        GeoJSON out of the op payload into assets, leaving a `boundarySets` registry. This
+        layer stands alone: it needs Layer 1's item tier for the registry, but nothing from
+        Layers 2–4, so it can be pulled forward if log bloat starts to bite.
 
 - [x] **Workspace ownership model → "read the world, write your own" (#145) — DONE.**
       *Decision (committed):* **activation = full trust**, so we stop pretending
