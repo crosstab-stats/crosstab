@@ -28,7 +28,7 @@ import { syncFolderProject, manifestsEqual } from './folder-sync.js';
 import { showConflictDialog } from './conflict-ui.js';
 import { shortcutFiles } from './folder-shortcut.js';
 import { showEncryptionSettings } from './encryption-settings.js';
-import { ensureCollabIdentity, roomFor } from './live-invite.js';
+import { ensureCollabIdentity, roomFor, inviteLinkFor } from './live-invite.js';
 
 const DEBOUNCE_MS = 800;
 
@@ -174,6 +174,11 @@ export class ProjectSync {
    * Null for a plain OPFS project (not shared). */
   #collabId = null;
   #collabSecret = null;
+  /** Room joined from an invite LINK (#156), before any peer manifest has arrived.
+   * A link carries the DERIVED room id, not the project uuid, so the joiner cannot
+   * compute the room itself until it receives the owner's collab identity over the
+   * wire. Until then this override is the only way in. @type {{roomId,secret}|null} */
+  #inviteRoom = null;
   /** Last project manifest we wrote/saw in the folder — lets the poll detect a
    * peer's write cheaply (readManifest + compare) without a full merge each tick. */
   #lastManifest = null;
@@ -1517,6 +1522,19 @@ export class ProjectSync {
       this.#applyItemOps?.(itemOpsOf(mergedLog)); // #152: peers' item records land here
       // Last, so a workspace refreshing in place sees the merged records, not the old ones.
       await this.#applyWorkspaces?.(mergedLog.filter((o) => typeof o.target === 'string' && o.target.startsWith('ws:')), { refresh: true });
+      // An invite joiner has no collab identity of its own — it entered using the room
+      // id baked into the link. The owner's manifest carries the real identity, so adopt
+      // it once, and the joiner can derive the same room itself on every later load
+      // (#156). Never overwrite an identity we already have: that would move an existing
+      // project into someone else's room.
+      if (!this.#collabId && manifest?.collabId && manifest?.collabSecret) {
+        this.#collabId = manifest.collabId;
+        this.#collabSecret = manifest.collabSecret;
+        this.#inviteRoom = null; // we can compute it now
+        this.#dirty = true;
+        this.#schedule();
+        debug('live', 'adopted collab identity from invite host');
+      }
       this.#applyNameOps(mergedLog); // a co-author's rename lands here (#149 A3)
       this.#applyOutput?.(manifest.output || []);
       this.#persistPeerWork(dataChanged); // a co-author's work is work (#149 C1)
@@ -1655,7 +1673,49 @@ export class ProjectSync {
    * collab identity (a non-shared OPFS project). Both folder peers derive the same
    * room from the manifest — the entry point for presence + live co-authoring (#148). */
   async activeRoom() {
+    // An invite join has a room before it has an identity — see #inviteRoom.
+    if (this.#inviteRoom) return this.#inviteRoom;
     return roomFor({ collabId: this.#collabId, collabSecret: this.#collabSecret });
+  }
+
+  /**
+   * A shareable invite link for the active project (#156), or null if it has no collab
+   * identity yet. The room id and secret ride in the URL **fragment**, which browsers
+   * never send to a server — so the link is safe to paste into an email in the sense
+   * that no intermediary *server* sees the key.
+   *
+   * It is NOT safe in the sense that anyone holding the link can join: the link IS the
+   * credential. That is the intended trade (it is what makes "just email a link" work),
+   * and the caller should say so plainly when handing it over.
+   */
+  async inviteLink() {
+    if (!this.#collabId || !this.#collabSecret) return null;
+    return inviteLinkFor({
+      baseUrl: location.href.split('#')[0],
+      manifest: { collabId: this.#collabId, collabSecret: this.#collabSecret },
+    });
+  }
+
+  /**
+   * Join a project from an invite link, starting from nothing (#156).
+   *
+   * The joiner holds no data at all: no bundle, no shared folder. It enters the room
+   * with the link's credentials, and everything — the op log, then the Parquet sources
+   * and asset bytes via gap-fill (#148 6c, #155) — arrives from the peer. That is why a
+   * live peer must be present; a link alone is an address, not a copy.
+   *
+   * A blank project is created first so there is somewhere for the incoming manifest to
+   * land. Its own empty dataset merges in alongside the shared ones, which is untidy but
+   * harmless; deleting it automatically would risk removing something the user meant to
+   * keep in the case where they joined from a project they had already started.
+   */
+  async joinByInvite({ roomId, secret }) {
+    if (!roomId || !secret) throw new Error('joinByInvite: the link is missing its room or key');
+    await this.newProject();
+    this.#inviteRoom = { roomId, secret };
+    this.#setStatus();
+    this.#emitProject();
+    return this.#inviteRoom;
   }
 
   /** Rename the *active* project. If it has never been saved (no binding), this

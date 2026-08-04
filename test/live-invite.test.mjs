@@ -6,7 +6,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { deriveRoomId, newInviteSecret, createInviteLink, parseInviteLink } from '../core/live-invite.js';
+import { deriveRoomId, newInviteSecret, createInviteLink, parseInviteLink, inviteLinkFor, roomFor } from '../core/live-invite.js';
 import { buildIceServers, DEFAULT_ICE } from '../core/live-sync.js';
 
 test('deriveRoomId is deterministic, opaque, and namespaced', async () => {
@@ -61,4 +61,62 @@ test('buildIceServers: accepts multiple TURN servers and skips malformed entries
     { urls: 'turns:b.edu:5349' },            // TLS TURN, no creds
   ]);
   assert.deepEqual(servers.map((s) => s.urls), [DEFAULT_ICE[0].urls, 'turn:a.edu:3478', 'turns:b.edu:5349']);
+});
+
+// --- link → join round-trip (#156) ------------------------------------------
+// The "email a link" path: a recipient with no bundle, no folder, and no prior contact
+// joins from a blank slate. These pin the properties that make that safe and workable.
+
+test('a link round-trips to the SAME room the owner is in', async () => {
+  const collabId = crypto.randomUUID();
+  const secret = newInviteSecret();
+  const link = await inviteLinkFor({ baseUrl: 'https://example.org/crosstab/', manifest: { collabId, collabSecret: secret } });
+  const parsed = parseInviteLink(link);
+  const owner = await roomFor({ collabId, collabSecret: secret });
+  assert.equal(parsed.roomId, owner.roomId, 'joiner and owner derive the same room');
+  assert.equal(parsed.secret, owner.secret);
+});
+
+test('the credentials live in the FRAGMENT, never the query string', async () => {
+  // Fragments are not sent to servers. That is the whole reason a link is emailable
+  // without handing the key to every hop in between.
+  const link = await inviteLinkFor({
+    baseUrl: 'https://example.org/crosstab/index.html',
+    manifest: { collabId: crypto.randomUUID(), collabSecret: newInviteSecret() },
+  });
+  const u = new URL(link);
+  assert.equal(u.search, '', 'nothing in the query string');
+  assert.match(u.hash, /^#collab=/);
+  assert.ok(u.hash.includes('k='), 'the key is in the fragment');
+});
+
+test('a link does NOT leak the project uuid — only its hash', async () => {
+  // The room id is SHA-256(ns ‖ uuid). A recipient can enter the room without ever
+  // learning the project's identity, and the broker sees only an opaque topic.
+  const collabId = crypto.randomUUID();
+  const link = await inviteLinkFor({ baseUrl: 'https://x.test/', manifest: { collabId, collabSecret: newInviteSecret() } });
+  assert.ok(!link.includes(collabId), 'the uuid itself never appears in the link');
+});
+
+test('a stale or malformed link parses to null rather than throwing', () => {
+  assert.equal(parseInviteLink('https://x.test/'), null);
+  assert.equal(parseInviteLink('https://x.test/#collab='), null);
+  assert.equal(parseInviteLink('https://x.test/#collab=r=only'), null, 'room without key is not joinable');
+  assert.equal(parseInviteLink('not a url at all'), null);
+});
+
+test('two projects never share a room', async () => {
+  const a = await roomFor({ collabId: crypto.randomUUID(), collabSecret: newInviteSecret() });
+  const b = await roomFor({ collabId: crypto.randomUUID(), collabSecret: newInviteSecret() });
+  assert.notEqual(a.roomId, b.roomId);
+});
+
+test('rotating the secret keeps the address — collaborators are not stranded', async () => {
+  // Addressing and confidentiality are deliberately orthogonal: folding the key into
+  // the topic would mean changing the key moves the room.
+  const collabId = crypto.randomUUID();
+  const before = await roomFor({ collabId, collabSecret: newInviteSecret() });
+  const after = await roomFor({ collabId, collabSecret: newInviteSecret() });
+  assert.equal(before.roomId, after.roomId);
+  assert.notEqual(before.secret, after.secret);
 });

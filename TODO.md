@@ -436,6 +436,37 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       byte-identical on arrival, geometry parsing back to 11 and 3 features. A real
       two-window test is the remaining check.
 
+- [x] **#156 — Join by LINK — DONE.** Previously every route into a shared project
+      required moving DATA first: a synced folder, or emailing a whole `.crosstab`. There
+      was no way to just send a link and let someone join from nothing.
+      The pure half already existed (`live-invite.js`: `deriveRoomId`, `createInviteLink`,
+      `parseInviteLink`) and was tested — but `inviteLinkFor`/`parseInviteLink` were wired
+      **nowhere**. This is the wiring.
+      **Produce:** File ▸ *Copy invite link…* — needs a saved project, since the collab
+      identity is minted on save and an unsaved project has no room to point at.
+      **Consume:** an invite fragment at boot skips the launcher entirely (a recipient has
+      no data and no choice to make), creates a blank project, joins the room, and
+      elevates straight to co-authoring — presence alone would leave them watching an
+      empty project with the data one step away. The credential is stripped from the
+      address bar once used.
+      **Identity adoption:** a link carries the DERIVED room id, not the project uuid, so
+      a joiner cannot compute the room itself. It uses the link's room for the session,
+      then adopts `collabId`/`collabSecret` from the first peer manifest — after which it
+      re-derives the room on its own on every later load. Never overwrites an identity we
+      already have, which would move an existing project into someone else's room.
+      **Security, stated plainly:** the room id and key ride in the URL **fragment**, so
+      no server sees them — but the link IS the credential, and anyone holding it can
+      join. The UI says so. The link never contains the project uuid, only its hash.
+      **Verified:** 6 new tests (13 in live-invite) covering round-trip, fragment-only
+      credentials, uuid non-leakage, malformed links, room uniqueness, and that rotating
+      the secret keeps the address so collaborators are not stranded. In-browser: link
+      built, menu item present, parsed room matches the live room; opening the link
+      skipped the launcher, stripped the credential from the URL, created a blank project,
+      and joined the correct room live.
+      **Known scruffiness:** the joiner's own empty `Dataset 1` merges in alongside the
+      shared data. Harmless; auto-removing it would risk deleting real work in the case
+      where someone joins from a project they had already started.
+
 - [ ] **#151 — Re-home tool: repoint what referenced dataset A at dataset B.** With
       in-place replace gone (#149 A8), the "here's a corrected version of my data"
       workflow is: import as a new dataset, bin the old. What doesn't follow

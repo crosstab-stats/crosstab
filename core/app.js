@@ -24,6 +24,7 @@ import { ProjectLog } from './project-log.js';
 import { ItemStore, newItemId, isItemOp, parseItemTarget, itemTarget } from './item-store.js';
 import { MemoStore, createMemoService, ANCHOR_KINDS, datasetOfTarget } from './memo-store.js';
 import { SelectionStore, createSelectionService, SELECTION_CHANGED } from './selection.js';
+import { parseInviteLink } from './live-invite.js';
 import { findOrphans, itemRefSources, refsIn } from './asset-refs.js';
 import { declaredCollections, assetRefDecls, undeclaredItemsGuard, CORE_COLLECTIONS,
          sidebarCollections, recordLabel } from './collections.js';
@@ -996,6 +997,39 @@ export async function boot(mounts) {
   // File ▸ Export project bundle — the open, self-describing .crosstab archive
   // (Parquet data + JSON schema + transform log). Host-owned (reads all datasets),
   // not a plugin. Import is a follow-up.
+  // Invite a collaborator by link (#156). The only entry to a shared project that
+  // needs no data transfer up front: the recipient joins an empty CrossTab and the
+  // project arrives over the wire (op log, then Parquet + assets via gap-fill).
+  menus.register({
+    id: 'core:invite-link',
+    path: ['File'],
+    label: 'Copy invite link…',
+    order: 12,
+    command: async () => {
+      try {
+        // A room only exists once the project has a collab identity, which is minted on
+        // save — so an unsaved project genuinely has nowhere to invite anyone to.
+        const link = await projects.inviteLink();
+        if (!link) {
+          results.appendError('Save the project first — an invite link needs a room to point at.');
+          return;
+        }
+        let copied = false;
+        try { await navigator.clipboard.writeText(link); copied = true; } catch { /* no permission */ }
+        results.appendText(
+          `**Invite link${copied ? ' (copied to clipboard)' : ''}**\n\n\`${link}\`\n\n`
+          + 'Anyone who opens this joins the project — the link IS the key, so treat it '
+          + 'like a password. The room id and key sit in the URL fragment, which browsers '
+          + 'never send to a server.\n\n'
+          + '**You must be online and co-authoring when they open it** — they start from '
+          + 'nothing, and every byte comes from you.',
+        );
+      } catch (err) {
+        results.appendError(`Could not build an invite link: ${err.message}`);
+      }
+    },
+  });
+
   menus.register({
     id: 'core:export-bundle',
     path: ['File'],
@@ -1289,11 +1323,37 @@ export async function boot(mounts) {
   engine.launcher = launcher;
   const launchFlag = new URLSearchParams(location.search).get('launch');
   let bypassed = false;
-  if (launchFlag === 'open-folder') {
+
+  // An invite link (#156) short-circuits the launcher entirely: the recipient has no
+  // data and no choices to make, so showing them a "pick a data source" screen would be
+  // asking a question with one answer. Join the room and let the project arrive.
+  const invite = parseInviteLink(location.href);
+  if (invite) {
+    try {
+      await projects.joinByInvite(invite);
+      // Clear the credential out of the address bar once used. It stays in history, so
+      // this is tidiness rather than security — but a shared screen showing the key in
+      // the URL for the rest of the session is a needless leak.
+      history.replaceState(null, '', location.href.split('#')[0]);
+      bypassed = true;
+      results.appendText(
+        '**Joining a shared project…**\n\nWaiting for the person who sent the link. '
+        + 'Everything — the data, and any media or map layers — arrives from them, so '
+        + 'they need to be online with the project open and co-authoring turned on.',
+      );
+      // The live UI is wired further down, so the actual join happens there. Flagging
+      // it rather than reaching forward keeps one owner for presence/session lifecycle.
+      engine.pendingInviteJoin = true;
+    } catch (err) {
+      results.appendError(`That invite link didn't work: ${err.message}`);
+    }
+  }
+
+  if (!bypassed && launchFlag === 'open-folder') {
     // The double-click shortcuts we drop into a folder project (#143) deep-link
     // here: show a focused "Open shared folder" landing instead of the full picker.
     try { await launcher.openFolderLanding(); bypassed = true; } catch (err) { console.warn('Open-folder landing failed', err); }
-  } else if (launchFlag) {
+  } else if (!bypassed && launchFlag) {
     try {
       // `?launch=` accepts a preset (start-blank/demo-quant/demo-qual) or, failing
       // that, a saved project name — opening it (data + its plugins) headless.
@@ -1456,6 +1516,27 @@ export async function boot(mounts) {
     onIdentityChange(() => { render(); void maybeAutoLive(); });
     render();
     void maybeAutoLive(); // the project open at boot
+
+    // An invite joiner (#156) goes live unconditionally — the auto-live SETTING is about
+    // volunteering your presence in your own projects, and someone who just followed an
+    // invite has already opted in by clicking it. They also elevate straight to
+    // co-authoring: with nothing local, presence alone would leave them watching an
+    // empty project while the data sat one step away.
+    if (engine.pendingInviteJoin) {
+      engine.pendingInviteJoin = false;
+      void (async () => {
+        try {
+          if (!(await startLive())) {
+            engine.results?.appendError?.('Could not open the invite room.');
+            return;
+          }
+          if (presence.session) await projects.startCoauthoring(presence.session);
+          render();
+        } catch (err) {
+          engine.results?.appendError?.(`Could not join the shared project: ${err.message}`);
+        }
+      })();
+    }
   }
 
   // Boot done: from the next change on, an unsaved session auto-starts an
