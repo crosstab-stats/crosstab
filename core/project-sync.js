@@ -411,6 +411,12 @@ export class ProjectSync {
    */
   #seedPluginState() {
     if (!this.#log || !this.#getPluginStates) return;
+    // Never while co-authoring. Seeding ASSERTS a whole plugin set, with fresh stamps
+    // that beat everything already in the shared log — so a peer filling a gap would
+    // impose its own set on everyone else, and a joiner (whose blank landing-pad project
+    // starts with no opinions at all) would do it to the person who invited them. In a
+    // shared project the set is whatever the log says; you don't unilaterally restate it.
+    if (this.#liveDoc) return;
     const states = this.#getPluginStates() || [];
     if (!states.length) return;
     const opinions = foldPluginOpinions(this.#log.slice(isPluginOp));
@@ -1928,6 +1934,11 @@ export class ProjectSync {
   async joinByInvite({ roomId, secret }) {
     if (!roomId || !secret) throw new Error('joinByInvite: the link is missing its room or key');
     await this.newProject();
+    // The blank project is somewhere for the incoming manifest to land, not a project
+    // with views. Drop any plugin opinions it inherited (#157): a joiner has never seen
+    // this project and has nothing to say about which plugins it uses, and saying it
+    // anyway — with the newest clock in the room — would overwrite the host's set.
+    this.#log?.clearWhere(isPluginOp);
     this.#inviteRoom = { roomId, secret };
     this.#setStatus();
     this.#emitProject();

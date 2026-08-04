@@ -113,3 +113,28 @@ test('the projection folds the tier out of a mixed log', () => {
   assert.equal(PLUGIN_STATE.key, 'plugins');
   assert.deepEqual([...PLUGIN_STATE.fold(mixed.filter(PLUGIN_STATE.match))], ['a']);
 });
+
+// --- merge behaviour (#157 regression) ---------------------------------------
+// Two peers each recording their own plugin set collided on EVERY plugin: the
+// target-collision pass treats two independently-added ops on one target as rival
+// additions. For a register that is wrong — the clock already decides.
+const { threeWayLog } = await import('../core/merge.js');
+
+test('REGRESSION: two peers writing the same plugin target is not a conflict', () => {
+  const mine = [{ ...on('spatial'), id: 'op-mine', hlc: 'hlc-0001' }];
+  const theirs = [{ ...off('spatial'), id: 'op-theirs', hlc: 'hlc-0002' }];
+  const { conflicts, resolved } = threeWayLog([], mine, theirs, 'core');
+  assert.deepEqual(conflicts, [], 'no dialog — every answer here yields the same state');
+  assert.equal(resolved.length, 2, 'both ops survive; the fold picks by HLC');
+  assert.deepEqual([...foldPluginState(resolved.sort((a, b) => (a.hlc < b.hlc ? -1 : 1)))], [],
+    'the later deactivation stands');
+});
+
+test('…while a genuine same-target collision in another tier still asks', () => {
+  // The exemption must be narrow: it is about registers, not about silencing the
+  // dialog. An op that CONTRIBUTES to its target still surfaces.
+  const mine = [{ id: 'op-a', hlc: 'hlc-0001', owner: 'core', target: 'ds:1/var:income', type: 'recodeVariable', payload: {} }];
+  const theirs = [{ id: 'op-b', hlc: 'hlc-0002', owner: 'core', target: 'ds:1/var:income', type: 'recodeVariable', payload: {} }];
+  const { conflicts } = threeWayLog([], mine, theirs, 'core');
+  assert.equal(conflicts.length, 1, 'two rival recodes of one variable is a real question');
+});

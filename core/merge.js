@@ -143,6 +143,24 @@ export function newOpId() {
  */
 const CONVERGENT_STRUCTURAL = new Set(['undo', 'redo', 'retract']);
 
+/**
+ * Op types that write a **register**: a target whose fold is simply "the latest value",
+ * resolved by HLC. Two peers writing the same register is the normal case, not a
+ * collision — they have not made rival additions to a collection, they have each set a
+ * value, and the clock already says which one stands. Every resolution the dialog could
+ * offer produces the same visible outcome, so asking is pure noise.
+ *
+ * Concretely (#157): plugin activation lives at `plugin:<key>`, one target per plugin,
+ * shared by every peer by construction. Without this exemption, two co-authors who had
+ * each recorded their own plugin set collided on EVERY plugin at once — sixty dialogs,
+ * none of which had a meaningful answer.
+ *
+ * The bar for adding a type here is strict: its projection must be last-writer-wins over
+ * the whole target, with no per-op content that could be lost. An op that CONTRIBUTES to
+ * its target (a coding, a dataset row) does not qualify — losing one there loses work.
+ */
+const LWW_REGISTER = new Set(['activatePlugin', 'deactivatePlugin']);
+
 export function opTarget(op) {
   if (op.target) return op.target;
   switch (op.type) {
@@ -331,6 +349,8 @@ export function threeWayLog(ancestor, mine, theirs, owner = 'core', opts = {}) {
     // them, exactly as the union already did.
     if (CONVERGENT_STRUCTURAL.has(mo.type) && mo.type === to.type
         && mo.payload?.opId != null && mo.payload.opId === to.payload?.opId) continue;
+    // A register write is decided by the clock, not by the user (see LWW_REGISTER).
+    if (LWW_REGISTER.has(mo.type) && LWW_REGISTER.has(to.type)) continue;
     const key = ckey(owner, scope, opTarget(mo), 'add/add', `${mo.id}+${to.id}`);
     const choice = resolutions?.[key];
     if (choice === 'mine') chosen.delete(to.id);
