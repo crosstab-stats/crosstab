@@ -180,7 +180,13 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
             blocked-analysis notice survives, narrowed to its real case — a plugin that
             genuinely isn't installed here, which is a human decision, not a merge rule.
 
-- [ ] **#149 — One-true-log stability gate (post-#148 fresh-eyes audit). BLOCKS ALL
+- [ ] **#149 — GATE LIFTED (2026-08-04). 14/16 done; the 2 left are not bugs.**
+      A9b wants a project-level setting, not a fix, and A9c is a design note re-homed to
+      [[first-class-plugin-data]] / #150. Every correctness and data-corruption item is
+      closed and evidenced, and #152–#158 shipped on top of this foundation with live
+      two-window co-authoring verified. Treat the "blocks all new features" line below as
+      historical.
+      **One-true-log stability gate (post-#148 fresh-eyes audit). ORIGINALLY BLOCKED ALL
       NEW FEATURES.** A full cross-model review of the #148 migration (done with a
       different model as proofreader) found the gaps below. Several are silent data
       corruption; nothing new ships until this list is cleared. Grouped by severity.
@@ -387,7 +393,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         than changed.
 
 
-- [ ] **#153 — Converge plugin data and datasets into ONE notion of project content.**
+- [x] **#153 — DONE.** Converge plugin data and datasets into ONE notion of project content.
       Raised by the user looking at the shipped sidebar: Map Layers sit in their own
       section, styled as indented grey children, while datasets are bold boxed rows — and
       if building blocks are to be one list, the sidebar would then carry two areas with
@@ -478,7 +484,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         "building-block contract expansion" #146 parked, and #152 already supplies every
         piece it needs.
 
-- [ ] **#154 — Workspace plugin lifecycle: audit + rebuild ("sandbox did not become
+- [x] **#154 — DONE.** Workspace plugin lifecycle: audit + rebuild ("sandbox did not become
       ready in time").** Full trace of the lifecycle before touching the symptom, per the
       user. Files: `plugin-manager.js` (catalogue), `loader.js` (compute frame + probe),
       `plugin-sandbox.js` (the cage), `plugin-broker.js` (protocol), `plugin-host.html`
@@ -636,7 +642,10 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       match-by-key as the fallback; analyses just need their `datasetId` repointed and a
       re-run. Until it exists, the user re-does that work by hand.
 
-- [ ] **#150 — Generalise the asset store beyond "media" (owner-tagged, plugin-
+- [ ] **#150 — MOSTLY SUPERSEDED by #152 Layer 5** (`c8c4f3a`, `f55496d`): the rename,
+      owner-scoped `app.assets.list()`, and refcounting with the abstain rule all landed
+      there. What remains here is the vocabulary sweep, nothing structural.
+      Generalise the asset store beyond "media" (owner-tagged, plugin-
       enumerable). AFTER the #149 bugfix gate.** #149 A5 moved asset BYTES into the
       project and made the index a log tier, and the byte path is already generic:
       `media.load`/`media.put` are dispatched to **any** activated plugin with no
@@ -674,7 +683,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       contact is cosmetic: A5's remaining gap-fill work calls `MediaStore.missing()`,
       so a later rename touches it, which is churn rather than rework.
 
-- [ ] **#152 — Plugin data on the one true log: items, universal memos, undoable plugin
+- [x] **#152 — DONE.** Plugin data on the one true log: items, universal memos, undoable plugin
       actions.** Consolidates three items tracked separately that are one lift: "Undoable
       plugin actions" (below), the deferred generalisation of memos (#148 step 3), and the
       tail of [[first-class-plugin-data]] + #150. All three are the same sentence said
@@ -820,7 +829,13 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         (Layer 2) and CAQDAS (Layer 3) — spatial does NOT exercise it. Two clients where
         one is host-owned is thinner validation than the verb interface got, so treat the
         API as provisional until a genuine third arrives, and don't freeze it early.
-  **STATUS (2026-08-03).** Layer 1 DONE (`core/item-store.js`, 23 tests). Layer 4 DONE
+  **FINAL (2026-08-04): all layers shipped and browser-verified.** The sub-boxes below
+  were never re-ticked as each landed — see `5744d70`, `33b957a`, `ea0e54d`, `f46b4ca`,
+  `044d0a5`, `09b4131`, `c8c4f3a`, `f55496d`. Two entries in that list are not tasks and
+  will never be checked: the SEMANTIC CHANGE note is a recorded trade-off, and "sidebar
+  rows interactive?" is an explicitly deferred question.
+
+  **STATUS (2026-08-03, superseded by the line above).** Layer 1 DONE (`core/item-store.js`, 23 tests). Layer 4 DONE
   early — pulled forward because spatial cannot write a registry without it
   (`app.items.*`, owner-scoped `app.assets.list()`, broker + plugin-host namespaces).
   Layer 5 infrastructure DONE: media→asset rename, `core/asset-refs.js` refcounting with
@@ -1228,7 +1243,8 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 > decision (#9 — vendor-from-own-origin at deploy, no hash babysitting), and shell
 > PWA precache already shipped (#92).
 
-- [ ] **Make `"plugin sandbox did not become ready in time"` impossible (after #148).**
+- [x] **SUPERSEDED BY #154 (`d32fd48`)** — the lifecycle envelope removed every mount deadline; the only remaining timer is UI advisory and cannot fail a plugin. Kept for the root-cause analysis.
+      **Make `"plugin sandbox did not become ready in time"` impossible (after #148).**
       This mount-handshake timeout has haunted the project for a long time — kill the
       whole error *class*, don't just retry it. Root cause: `WorkspaceManager.#handshake`
       / `PluginBroker.whenReady` race a wall-clock `setTimeout` against the sandbox iframe
