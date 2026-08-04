@@ -23,6 +23,7 @@ import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } fro
 import { ProjectLog } from './project-log.js';
 import { ItemStore, newItemId, isItemOp, parseItemTarget, itemTarget } from './item-store.js';
 import { MemoStore, createMemoService, ANCHOR_KINDS, datasetOfTarget } from './memo-store.js';
+import { SelectionStore, createSelectionService, SELECTION_CHANGED } from './selection.js';
 import { findOrphans, itemRefSources, refsIn } from './asset-refs.js';
 import { declaredCollections, assetRefDecls, undeclaredItemsGuard, CORE_COLLECTIONS,
          sidebarCollections, recordLabel } from './collections.js';
@@ -400,6 +401,10 @@ export async function boot(mounts) {
    */
   let projectEpoch = 0;
   const currentEpoch = () => projectEpoch;
+
+  // What the user has selected, per kind (#153 D2). Not one global slot: an active
+  // dataset and an active map layer coexist, because they answer different questions.
+  const selection = new SelectionStore({ bus });
   // Memos (#152 Layer 2): anchored notes, host-owned so a note written in the coding
   // workspace and one written on an analysis are the SAME record in the same collection.
   // Scope follows the anchor, so a note about a dataset nests under it in the sidebar.
@@ -542,6 +547,23 @@ export async function boot(mounts) {
   // One Undo/Redo across BOTH data ops and analysis runs: when the most recent
   // action is an analysis, Undo removes that analysis + its output (not a data op).
   services.memos = createMemoService(memoStore);
+  // Read-only for plugins: a plugin REACTS to what the user selected, it does not decide
+  // it. Scoped to the caller's own owner like every other plugin surface.
+  // Named `selectionRead` and keyed by plugin id, matching workspaceRead / itemsRead:
+  // the binder that knows WHICH plugin is asking lives in workspace-manager (per mount)
+  // and loader (per compute frame), not in the broker, which does not know.
+  services.selectionRead = createSelectionService(
+    selection,
+    (pluginId) => {
+      const p = plugins ? plugins.list().find((x) => x.id === pluginId) : null;
+      return p ? ownerToken(p) : 'unknown';
+    },
+    () => datasets.activeId,
+  );
+  // Selecting a record is a change the workspace showing that kind needs to see. Reuse
+  // the existing refresh hook rather than inventing a second notification path — a
+  // workspace already knows how to re-read its state and re-render in place.
+  bus.on(SELECTION_CHANGED, () => { void workspaceManager?.notifyWorkspaceRefresh?.(); });
 
   /**
    * A memo control on an analysis's output section (#152 Layer 2's headline case:
@@ -925,7 +947,7 @@ export async function boot(mounts) {
       // write from the outgoing project's mounts is already stale. A `refresh` is the
       // same project (peer sync / merge), so the epoch must NOT move — the live mounts
       // are legitimate and would be locked out.
-      if (!refresh) projectEpoch += 1;
+      if (!refresh) { projectEpoch += 1; selection.clear(); }
       workspaceStore.restoreOps(Array.isArray(ops) ? ops : []); // ws ops from manifest.log (runs sync, before any await)
       if (!workspaceManager || !plugins) return;
       if (refresh) {
@@ -1053,7 +1075,7 @@ export async function boot(mounts) {
   // building blocks). Created here, after the services it drives exist.
   new ProjectSidebar(mounts.sidebar, {
     datasets, projects, library, bus,
-    workspaceStore, itemStore, assetStore, sweepAssets, memoStore, orphanedMemos,
+    workspaceStore, itemStore, assetStore, sweepAssets, memoStore, orphanedMemos, selection,
     pluginList: () => (plugins ? plugins.list() : []),
   });
 
@@ -1738,7 +1760,7 @@ class ProjectSidebar {
    * @param {import('./library.js').DatasetLibrary} deps.library
    * @param {EventBus} deps.bus
    */
-  constructor(host, { datasets, projects, library, bus, workspaceStore, itemStore, assetStore, sweepAssets, memoStore, orphanedMemos, pluginList }) {
+  constructor(host, { datasets, projects, library, bus, workspaceStore, itemStore, assetStore, sweepAssets, memoStore, orphanedMemos, selection, pluginList }) {
     this.host = host;
     this.datasets = datasets;
     this.projects = projects;
@@ -1749,6 +1771,7 @@ class ProjectSidebar {
     this.sweepAssets = sweepAssets ?? null;
     this.memoStore = memoStore ?? null;
     this.orphanedMemos = orphanedMemos ?? null;
+    this.selection = selection ?? null;
     /** Asset tally for the inventory line, refreshed each render (async, so it is read
      * from a field rather than awaited mid-DOM-build). @type {{count:number,bytes:number}|null} */
     this.#assets = null;
@@ -1756,6 +1779,7 @@ class ProjectSidebar {
     this.projectName = null;
     bus.on(DATASETS_CHANGED, () => this.render());
     bus.on(CoreEvents.ITEMS_CHANGED, () => this.render()); // the inventory covers items too (#152)
+    bus.on(SELECTION_CHANGED, () => this.render()); // …and which of them is selected (#153)
     bus.on(ASSETS_CHANGED, () => this.render()); // …and stored files, however they change
     bus.on(CoreEvents.DATA_CHANGED, () => this.render());
     bus.on(LIBRARY_CHANGED, () => this.render());
@@ -1991,6 +2015,11 @@ class ProjectSidebar {
       name: recordLabel(decl, rec),
       title: [decl.label, field ? 'Double-click to rename' : null].filter(Boolean).join(' — '),
       nested,
+      // Clicking a record selects it FOR ITS KIND, which is what clicking a dataset has
+      // always meant. Selections coexist rather than displace each other (#153 D2), so
+      // picking a map layer does not deselect the dataset you are analysing.
+      active: !!this.selection?.isActive(decl.owner, decl.id, rec.id),
+      onOpen: this.selection ? () => this.selection.set(decl.owner, decl.id, rec.id) : null,
       summary: summary == null ? null : String(summary),
       onRename: field ? (v) => { if (v) this.itemStore.put(decl.owner, decl.id, rec.id, { [field]: v }); } : null,
       onDelete: () => this.itemStore.remove(decl.owner, decl.id, rec.id),

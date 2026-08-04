@@ -318,6 +318,18 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         "building-block contract expansion" #146 parked, and #152 already supplies every
         piece it needs.
 
+- [ ] **Wire the `onDeactivate` lifecycle hook (#153).** The space-verb design specifies
+      it ("plugin deactivating, flush unsaved state before teardown") and `builtin-spatial`
+      implements it — but the host NEVER SENDS it. `PluginBroker` has only
+      `sendDatasetChanged` and `sendWorkspaceRefresh`, so the hook is dead code that reads
+      as functional. Found while hunting the project-leak bug (#153): it was the first
+      suspect and turned out never to run.
+      **When wiring it, mind the epoch guard.** A flush during teardown is exactly the
+      write that leak was about, so the host must send `onDeactivate` and let the plugin
+      flush *before* the project boundary is crossed — while its epoch is still current —
+      not after. Sending it during a project switch teardown would produce a flush that
+      the guard correctly drops, i.e. a hook that appears wired but silently does nothing.
+
 - [ ] **#151 — Re-home tool: repoint what referenced dataset A at dataset B.** With
       in-place replace gone (#149 A8), the "here's a corrected version of my data"
       workflow is: import as a new dataset, bin the old. What doesn't follow

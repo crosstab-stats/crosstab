@@ -286,6 +286,11 @@ export class WorkspaceManager {
             .map((r) => ({ id: r.id, fields: r.fields, author: r.author ?? null }));
         },
       },
+      // The selection, bound to this plugin so it reads its OWN collections (#153).
+      selection: {
+        get: (collection) => this.#services.selectionRead?.get(plugin.id, collection) ?? null,
+        dataset: () => this.#services.selectionRead?.dataset() ?? null,
+      },
       // `assets.load`/`put` come from the host bundle unchanged; `list` is scoped to the
       // refs held in THIS plugin's own item records (manifest.assetRefs), so a shared,
       // deduped byte pool never becomes a way to enumerate someone else's files.

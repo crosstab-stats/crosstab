@@ -136,6 +136,12 @@ export class PluginBroker {
       this.#dispatch['memos.setText'] = (id, text) => services.memos.setText(id, text);
       this.#dispatch['memos.remove'] = (id) => services.memos.remove(id);
     }
+    // What the user has selected, per kind (#153). Read-only: a plugin reacts to the
+    // selection, it does not set it.
+    if (services.selection) {
+      this.#dispatch['selection.get'] = (collection) => services.selection.get(collection);
+      this.#dispatch['selection.dataset'] = () => services.selection.dataset();
+    }
     // Item records (#152): the granular sibling of `state.*`. The plugin names a
     // collection and a record id; the host owns owner/scope and the fold.
     if (services.items) {

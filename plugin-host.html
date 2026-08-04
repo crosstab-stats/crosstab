@@ -215,6 +215,10 @@
             // Anchored notes (#152). Host-owned: `add({kind, target, ref?}, text)` writes
             // into the project's single memo collection, not a per-plugin one.
             memos: makeNamespace('memos', ['add', 'list', 'setText', 'remove']),
+            // What the user has selected, per kind (#153). `get(collection)` returns the
+            // selected record id from THIS plugin's collection; `dataset()` the active
+            // dataset. Read-only — react to it, don't set it.
+            selection: makeNamespace('selection', ['get', 'dataset']),
             // ZIP for archive-format plugins (#139): make(entries)->bytes, read(bytes).
             zip: makeNamespace('zip', ['make', 'read']),
             // Cross-plugin discovery + invocation (#147): list active plugins and

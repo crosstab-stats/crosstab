@@ -485,7 +485,11 @@ export class PluginLoader {
       put: (collection, id, fields) => this.#services.itemsWrite?.(ctx.id, collection, id, fields) ?? null,
       remove: (collection, id) => this.#services.itemsRemove?.(ctx.id, collection, id),
     };
-    return Object.freeze({ ...this.#services, web, stateRead, stateWrite, items });
+    const selection = {
+      get: (collection) => this.#services.selectionRead?.get(ctx.id, collection) ?? null,
+      dataset: () => this.#services.selectionRead?.dataset() ?? null,
+    };
+    return Object.freeze({ ...this.#services, web, stateRead, stateWrite, items, selection });
   }
 
   /**

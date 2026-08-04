@@ -424,7 +424,14 @@ export const workspace = {
     if (!_ws) return;
     const sets = await app.items.list('boundarySets');
     if (!sets.length) return;
-    await wsLoadFromSets(app, sets);
+    // Honour the host's selection (#153): clicking a layer in the sidebar switches the
+    // map, the same way clicking a dataset switches what an analysis runs against. If
+    // the selected layer is already displayed there is nothing to do — a refresh fires
+    // for reasons other than selection, and reloading would throw away the current view.
+    const selected = await app.selection.get('boundarySets');
+    if (selected && selected === _ws.activeSetId) return;
+    const wanted = selected ? sets.find((s) => s.id === selected) : null;
+    await wsLoadFromSets(app, wanted ? [wanted] : sets);
   },
 
   async onDatasetChanged(app) {
