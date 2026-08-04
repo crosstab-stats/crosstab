@@ -22,6 +22,45 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
+- [ ] **#157 — Plugin activation belongs on the one true log.** The active plugin set
+      is the last real piece of user state living OUTSIDE the log: `activePlugins`, a
+      scalar array snapshot from a live read of the plugin manager at save time, merged
+      between peers by set UNION (`collab-sync.js`), with the actual truth kept in
+      `localStorage` (`crosstab.plugins.disabled`) — which is global to the install, not
+      per-project.
+
+      The union has no way to say "off". It only grows, so a deactivation cannot
+      propagate: a co-author who still has the plugin on re-adds it on every merge, and
+      the peer who switched it off watches it come back. Chasing that with a policy
+      (explicit-off-wins / adopt-only-what's-in-use) is patching over a missing tier —
+      the log already knows how to answer "which of these two happened later".
+
+      This is the same defect the project NAME had (#149 A3): state beside the log,
+      merged by a scalar rule, so one peer's change never reached the other and the next
+      save quietly reverted it. Same fix.
+
+      Layers (unit-test each in isolation; don't test migrated against unmigrated):
+
+      - [x] **L1 — the tier.** `core/plugin-state.js`: target `plugin:<key>`, types
+            `activatePlugin`/`deactivatePlugin`, fold = last-writer-wins per plugin in
+            HLC order. Plus `foldPluginOpinions` (on / off / *never mentioned* — only a
+            recorded `false` may switch anything off), `pluginOpsFor` (emits only where
+            state actually differs, so a project open cannot spam the log), and
+            `migrateLegacyActivePlugins` (activations ONLY — the old array said nothing
+            about what it omitted, and inferring "off" from an absence is the exact
+            inference this tier exists to stop). 12 tests.
+      - [ ] **L2 — PluginManager writes ops.** `setEnabled`/`applyActivatedSet` append to
+            the log; `activatedKeys()` reads the fold. Decide what `LS_DISABLED` keeps:
+            proposal is the no-project-open default only, since "which plugins are
+            active" is project state and "which are installed" is install state.
+      - [ ] **L3 — project open/save.** Reconcile the manager from the fold on open;
+            migrate a legacy `activePlugins` scalar on first open; drop the scalar from
+            new manifests (keep reading it for old saves).
+      - [ ] **L4 — delete the workarounds.** `adoptPlugins` / `activateAlso` /
+            `unionArr(activePlugins)` all go: the ops merge by themselves. The
+            blocked-analysis notice survives, narrowed to its real case — a plugin that
+            genuinely isn't installed here, which is a human decision, not a merge rule.
+
 - [ ] **#149 — One-true-log stability gate (post-#148 fresh-eyes audit). BLOCKS ALL
       NEW FEATURES.** A full cross-model review of the #148 migration (done with a
       different model as proofreader) found the gaps below. Several are silent data
