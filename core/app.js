@@ -642,21 +642,35 @@ export async function boot(mounts) {
     const ops = liveOps(projectLog.slice(isItemOp));
     const seen = new Set();
     const rows = [];
+    const activeDs = datasets.activeId;
     for (const op of ops) {
       const [owner, collection, id] = parseItemTarget(op.target);
+      // History is per-dataset, so show only records belonging to the dataset in view,
+      // plus project-scoped ones (a boundary set, a project note). Scope lives on the
+      // RECORD rather than on every op, since a later partial put may omit it.
+      const scope = itemStore.get(owner, collection, id)?.scope
+        ?? itemStore.binned(owner, collection).find((r) => r.id === id)?.scope
+        ?? op.payload?.scope ?? null;
+      const ds = scope?.dsId;
+      if (ds != null && String(ds) !== String(activeDs)) continue;
       const decl = decls.get(`${owner}\u0000${collection}`);
       const noun = (decl?.label ?? collection).replace(/s$/, '');
       const label = decl?.labelField ? op.payload?.fields?.[decl.labelField] : null;
       const named = typeof label === 'string' && label.trim() ? ` “${label.length > 32 ? `${label.slice(0, 31)}…` : label}”` : '';
       const first = !seen.has(op.target);
       seen.add(op.target);
+      const group = decl?.label ?? collection;
       rows.push({
         id: op.id,
         hlc: op.hlc,
+        group, // the collection's own label — the heading is built from these
         title: op.type === 'removeItem' ? `Removed ${noun.toLowerCase()}${named}`
           : first ? `Added ${noun.toLowerCase()}${named}`
             : `Edited ${noun.toLowerCase()}${named}`,
-        detail: op.author?.initials ? `by ${op.author.initials}` : (decl?.label ?? collection),
+        // Always name the collection, and add the author when there is one. The label
+        // used to be DROPPED whenever an author existed, which is how a core-owned memo
+        // ended up with nothing identifying it but a heading that called it a plugin.
+        detail: op.author?.initials ? `${group} · by ${op.author.initials}` : group,
         who: op.author?.initials ?? null,
       });
       void id;

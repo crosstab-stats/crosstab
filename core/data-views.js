@@ -745,14 +745,21 @@ export class HistoryView {
       ol.append(this.#step({ n, marker: n, title: d.title, detail: d.detail, state: 'future' }));
     });
 
-    // Plugin actions (#152): coding, boundary sets, memos. They carry an HLC but no
-    // position in the DATA pipeline, so rather than invent one they are listed after the
-    // data steps in the order they happened. Wording comes from each collection's own
-    // declaration, so the host describes records it cannot otherwise read.
+    // Records: memos, coding, boundary sets (#152). They are listed after the data
+    // steps, in the order they happened, and deliberately NOT interleaved: a memo is not
+    // a step in the data pipeline, and rewinding to step 2 does not un-write it. Showing
+    // them as their own chronological group is the truthful shape, not a compromise.
+    //
+    // The heading is assembled from the collections actually present rather than being a
+    // fixed word. It said "Plugin actions", which was wrong for the commonest case — a
+    // memo is owned by CORE, and memos being host-owned is the whole point of #152 L2.
+    // Naming the group after its contents cannot make that mistake.
     const itemRows = this.itemHistory ? this.itemHistory() : [];
     if (itemRows.length) {
+      const groups = [...new Set(itemRows.map((r) => r.group).filter(Boolean))];
       const sub = el('li', null, 'history__step history__step--applied');
-      sub.append(el('span', 'Plugin actions', 'history__body'));
+      sub.append(el('span', groups.join(' · ') || 'Records', 'history__body'));
+      sub.title = 'Not steps in the data pipeline — rewinding the data does not undo these';
       sub.style.opacity = '0.7';
       ol.append(sub);
       itemRows.forEach((r, i) => {
