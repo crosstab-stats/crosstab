@@ -22,6 +22,34 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
+- [ ] **#159 — R Console should default to the same clean data a plugin gets.** The
+      plugin contract strips each bound variable's designated missing codes to `NA` at
+      injection, so an analysis never recodes user-missing values itself; a plugin opts
+      out per menu item with `keepMissing: true` (`loader.js` `MenuItem`, applied in
+      `webr-manager.js#run` via `!keepMissing`).
+
+      The R Console does not. `consoleBind` binds raw values, and `loader.js` says so
+      outright: *"The Data grid and the raw r-console path are never stripped
+      regardless."* Meanwhile `r-console.js`'s own header says it *"mirrors the plugin
+      data contract on purpose"* and that *"code you get working here copy/pastes
+      straight into a plugin's `run`"*. Both cannot be true, and the console is one of
+      the two places we tell plugin authors to prototype — so today they debug against
+      raw missing codes and then ship code that receives `NA`s.
+
+      Add an **"Include missing values"** checkbox by the variable picker, **unchecked by
+      default** so the console's default matches the plugin default. Checked = today's
+      behaviour, and the natural way to prototype an analysis that reports its own
+      valid/missing breakdown (the `keepMissing: true` case, e.g. Frequencies).
+
+      Implementation: `consoleBind(columns, multiple)` gains a `keepMissing` flag and
+      routes through the same central strip `#run` uses — one code path, so the two
+      cannot drift again. Toggling it re-binds `vars` (the picker already re-binds on
+      change). The info line should say which it is, since "vars — a data.frame (age,
+      income)" currently gives no clue whether -99 is still in there.
+
+      Also worth deciding while in here: **Run R script** (`bindGlobalFrame`, binds the
+      active dataset as `data`) has the same divergence and no picker at all.
+
 - [x] **#158 — CrossTab must tolerate having NO project open.** DONE. Today it cannot, so it
       fakes one: the launcher, and an invite joiner, each stand up a blank project with
       an empty dataset before anything real has happened. That fake is indistinguishable
