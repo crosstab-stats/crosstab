@@ -318,17 +318,83 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         "building-block contract expansion" #146 parked, and #152 already supplies every
         piece it needs.
 
-- [ ] **Wire the `onDeactivate` lifecycle hook (#153).** The space-verb design specifies
-      it ("plugin deactivating, flush unsaved state before teardown") and `builtin-spatial`
-      implements it — but the host NEVER SENDS it. `PluginBroker` has only
-      `sendDatasetChanged` and `sendWorkspaceRefresh`, so the hook is dead code that reads
-      as functional. Found while hunting the project-leak bug (#153): it was the first
-      suspect and turned out never to run.
-      **When wiring it, mind the epoch guard.** A flush during teardown is exactly the
-      write that leak was about, so the host must send `onDeactivate` and let the plugin
-      flush *before* the project boundary is crossed — while its epoch is still current —
-      not after. Sending it during a project switch teardown would produce a flush that
-      the guard correctly drops, i.e. a hook that appears wired but silently does nothing.
+- [ ] **#154 — Workspace plugin lifecycle: audit + rebuild ("sandbox did not become
+      ready in time").** Full trace of the lifecycle before touching the symptom, per the
+      user. Files: `plugin-manager.js` (catalogue), `loader.js` (compute frame + probe),
+      `plugin-sandbox.js` (the cage), `plugin-broker.js` (protocol), `plugin-host.html`
+      (guest), `workspace-manager.js` (tabs + mount).
+
+  **THE LIFECYCLE AS BUILT**
+
+  1. **Catalogue (source read #1).** On a `CATALOG_VERSION` bump or a new plugin,
+     `PluginManager` probes every entry: `loader.#probe` spins a **throwaway sandbox
+     iframe per plugin**, imports the source with deny-all service stubs, reads
+     `manifest`, and discards the frame. **Sequential** (`await` in a loop) over ~60
+     built-ins. Only whitelisted manifest fields are kept (`menu`, `workspaces`,
+     `collections`, `codecs`, `media`, …) — anything not whitelisted is invisible to the
+     host forever after, which is how `collections` was silently missing (#152).
+  2. **Activation (source read #2).** `loader.activate` makes a *hidden compute* iframe,
+     `iframe.src = await sandboxBlobUrl('strict')`, `whenReady()` (20 s, **no retry**),
+     `sendLoad(source)`, `sendActivate`. The source is fetched and parsed AGAIN — the
+     probe's parse is thrown away with its frame.
+  3. **Workspace mount (source read #3).** `reconcile` → `#mount` per declared workspace:
+     builds a pane + toolbar + iframe + overlay, `tabs.addTab` (which appends the pane
+     **`hidden`**), then fires `void #mountWithRetry` — deliberately not awaited.
+     `#handshake` then: `src = await sandboxBlobUrl(cap)` → `whenReady(ms)` →
+     `fetchSource` → `sendLoad` → `sendActivate` → `sendMountWorkspace`. Retry ladder
+     `[20 s, 40 s, 60 s]`, each attempt discarding the iframe and building a fresh one.
+     A third read+parse of the same source, in a third frame.
+  4. **Mid-life.** `notifyDatasetChanged` → guest `onDatasetChanged` (5 s race);
+     `notifyWorkspaceRefresh` → `onRefresh`; `sendPluginsChanged` push. All ack via one
+     `#lifecycleAck` deferred — **a single slot**, so two overlapping hooks clobber it.
+  5. **Teardown.** `#restart` → `sendDeactivate` → `#retry`. Deactivation/project switch →
+     `#teardown` → `sendDeactivate().catch(()=>{})` → `broker.dispose()` → `iframe.remove()`
+     → `tabs.removeTab`.
+
+  **FINDINGS**
+
+  - **F1 (root cause candidate) — the sandbox URL outlives its usefulness by design, and
+    dies before the handshake can finish.** `sandboxBlobUrl` does
+    `setTimeout(() => URL.revokeObjectURL(url), 15000)`. The ready timeouts are
+    **20 s / 40 s / 60 s**. So a frame that has not loaded within 15 s has its SOURCE
+    revoked out from under it and can never become ready — and the longer retries are
+    therefore useless: every attempt still dies at 15 s. On a busy boot this is not a
+    timeout, it is a self-inflicted abort. Fix: revoke on the iframe's `load`, or on
+    broker dispose — never on a wall clock.
+  - **F2 — every workspace mounts eagerly, hidden.** `addTab` appends the pane with
+    `hidden = true`, and `reconcile` mounts every active workspace plugin at boot
+    regardless of which tab is shown. So N sandboxes race to load, hidden and
+    deprioritised, while DuckDB and WebR are warming. `addTab` already accepts an
+    `onShow` hook — mounting lazily on first view is available and unused.
+  - **F3 — I bumped `CATALOG_VERSION` to 17 today (#152).** Every existing install
+    therefore re-probes ~60 built-ins on next load, each a fresh sandbox frame, which is
+    exactly the condition F1 punishes. Plausibly why this got louder right now.
+  - **F4 — `sendDeactivate` races a 500 ms timeout** (`Promise.race`). A flush slower
+    than that is silently abandoned, and the host proceeds to tear the frame down. Also
+    interacts with #153's epoch guard: a flush must land BEFORE the project boundary
+    advances, or the guard correctly drops it and the hook looks wired while doing
+    nothing. (NOTE: the hook IS wired — an earlier claim in this file that the host never
+    sends it was wrong; `plugin-broker.sendDeactivate` → guest `case 'deactivate'`.)
+  - **F5 — one `#lifecycleAck` slot for all hooks.** `sendDatasetChanged`,
+    `sendWorkspaceRefresh` and `sendDeactivate` each overwrite `this.#lifecycleAck`. Two
+    in flight and the first never resolves. Reachable: a dataset switch during a refresh.
+  - **F6 — mount is fire-and-forget.** `void this.#mountWithRetry(...)`, so `reconcile`
+    resolves before any workspace is usable and nothing can await "workspaces ready".
+  - **F7 — the same source is fetched and parsed up to three times** (probe, compute
+    frame, each workspace mount + each retry), in separate frames, with no sharing.
+
+  **DIRECTION (to design before building)**
+
+  - Tie sandbox URL lifetime to the frame, not to a timer. This alone may fix the symptom.
+  - Mount lazily on first tab view; keep eager mount only where a workspace must run
+    unseen (none known today).
+  - One explicit handshake state machine per mount — `idle → booting → loading →
+    activating → mounted → failed` — so retry, teardown and refresh cannot interleave,
+    replacing flags spread across `#mounted`, the overlay and the broker.
+  - Per-hook ack keyed by hook name, not one slot.
+  - Deactivate: real budget, awaited, and sequenced before the epoch advances.
+  - Consider caching the probe manifest so activation does not re-parse; and reusing one
+    frame per plugin rather than one per surface.
 
 - [ ] **#151 — Re-home tool: repoint what referenced dataset A at dataset B.** With
       in-place replace gone (#149 A8), the "here's a corrected version of my data"
