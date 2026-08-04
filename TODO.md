@@ -284,18 +284,34 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   add/remove/rename/reorder ops under `coll/ds:<id>`, records are put/remove under
   `item:…`. The convergence is a real structural symmetry, not a coat of paint.
 
-  - [ ] **Decisions needed before building:**
-    - **D1 — one Building Blocks list with a kind badge, or separate sections?**
-      *Recommend one list*: they are both "things you reuse across projects", and two lists
-      re-creates the split this item exists to remove.
-    - **D2 — does the host model "active record" per collection?** *Recommend yes* (it
-      settles row interactivity), but it needs a plugin-facing signal — a declared
-      `onActivate` verb, or a host event the workspace reacts to.
-    - **D3 — what does a record contribute as a summary?** Datasets show a row count.
-      Recommend an optional `summaryField` (or a declared formatter) on the collection, so
-      "11 regions" / "2.0 MB" can sit where the row count does.
-    - **D4 — does demoting datasets cost anything?** Believed no: they keep every
-      affordance and gain only shared vocabulary. Confirm before relying on it.
+  - **DECIDED (user, 2026-08-04):**
+    - **D1 — Building Blocks vs the project list: SHARED RENDERER.** The user's constraint
+      is not "flat" or "grouped" but *"however items in a project are displayed should
+      match how items in building blocks are displayed"* — and one flat Building Blocks
+      list is acceptable **only if the active project is also one flat list**. Type
+      separation (possibly collapsible) has value but is more code and may never be needed.
+      **So the answer is to make the row and section renderers SHARED between the two
+      areas.** Then flat-vs-grouped stops being a commitment: it is one switch applied to
+      both, consistency is structural rather than maintained by hand, and adding groups
+      later is cheap instead of a second rewrite. Start flat-with-kind-badge (least code);
+      revisit only if a real project gets noisy.
+    - **D2 — selection is NOT globally unique.** Superseding the earlier "active record"
+      framing: selecting the ZIP-code boundary layer AND survey2 *at the same time* is a
+      real workflow (run frequencies on survey2 filtered to a ZIP). So the host models one
+      active item **per kind**, and the actives coexist as a selection SET. This is what
+      makes cross-plugin flows composable (#147) — spatial reads the active layer, the
+      analysis reads the active dataset, neither has to ask the other.
+      *Still open:* multi-select WITHIN one kind (two layers at once). Spatial's own tab
+      has a single active layer, so nothing needs it yet — do not build it speculatively.
+    - **D3 — summary field: yes.** An optional declared summary so a record can show
+      "11 regions" where a dataset shows its row count.
+    - **D4 — the host owns active state; plugins READ it.** Spatial should react (switch
+      the displayed layer); CAQDAS may reasonably ignore it. Opt-in, so a plugin that does
+      not care needs no code.
+
+  - **Assets are not content items.** "Stored files" is a byte tally, not a row in the
+    list: an asset is the *bytes behind* a content item, not a thing you name, reuse or
+    annotate. It stays a summary line with the reclaim action, outside the unified list.
 
   - [ ] **Then:** records block = item ops + the assets their declared `assetRefs` point
         at, instantiated on add (ids re-minted, per #149 A9c). That is the
