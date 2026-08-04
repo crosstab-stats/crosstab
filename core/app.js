@@ -48,7 +48,7 @@ import { exportProjectBundle, importProjectBundle, pickBundleFile, downloadBlob,
 import { WorkspaceStore, ownerToken } from './workspace-store.js';
 import { WorkspaceManager } from './workspace-manager.js';
 import { PluginPackageStore } from './plugin-package-store.js';
-import { MediaStore, createMediaService } from './media-store.js';
+import { AssetStore, createAssetService } from './asset-store.js';
 import { makeZip, readZipEntries } from './zip.js';
 
 /**
@@ -451,12 +451,12 @@ export async function boot(mounts) {
   // INSIDE the project (#149 A5) — bytes in its `assets/` directory, metadata as
   // `addAsset` ops in the same log as everything else — so they're encrypted with the
   // project, land in a synced folder with it, and travel with a bundle. The dataset
-  // holds only `asset:<id>` refs. The `media.load(ref) -> Blob` service is the ONLY door
+  // holds only `asset:<id>` refs. The `assets.load(ref) -> Blob` service is the ONLY door
   // a (media-CSP) plugin has to them — it never sees the store, a handle, or the
   // filesystem. Wired below, once `projects` exists; the broker sees it because plugins
   // load post-boot.
-  const mediaStore = new MediaStore();
-  services.media = createMediaService(mediaStore);
+  const assetStore = new AssetStore();
+  services.assets = createAssetService(assetStore);
   // ZIP for plugins (#139): surface the host's zip module so an archive-format
   // exporter/importer (e.g. REFI-QDA .qdpx) can build/read a ZIP without bundling its
   // own lib or being host-owned. Pure computation on bytes the plugin already holds —
@@ -467,7 +467,7 @@ export async function boot(mounts) {
   };
   // Media importers are per-medium plugins (builtin-image/audio/video-import, #139):
   // they probe in their own media-CSP sandbox and stream bytes into the store via the
-  // `media.put` sink above — no privileged host importer.
+  // `assets.put` sink above — no privileged host importer.
   // SPSS/Stata/SAS (ReadStat) is a sandboxed codec plugin again (#130) — see the codec
   // plugin list above; it runs on the codec sandbox's main thread (ASYNCIFY, no worker).
 
@@ -643,8 +643,8 @@ export async function boot(mounts) {
     // Workspaces are now the `ws:` tier of the one true log (#148): save carries their
     // ops in manifest.log; load routes them here. The store folds them into its cache.
     projectLog,
-    getAssetOps: () => mediaStore.ops(),
-    applyAssetOps: (ops) => mediaStore.restoreOps(ops),
+    getAssetOps: () => assetStore.ops(),
+    applyAssetOps: (ops) => assetStore.restoreOps(ops),
     getWorkspaceOps: () => workspaceStore.ops(),
     applyWorkspaces: async (ops, { refresh = false } = {}) => {
       workspaceStore.restoreOps(Array.isArray(ops) ? ops : []); // ws ops from manifest.log (runs sync, before any await)
@@ -672,7 +672,7 @@ export async function boot(mounts) {
   // project's own `assets/` dir through the same ProjectStore (so encryption, folder
   // mode and the project layout all apply for free), and the index lives in the shared
   // log. A file dropped into a never-saved project brings the project into being first.
-  mediaStore.attach({
+  assetStore.attach({
     store: projectStoreForProjects,
     log: projectLog,
     bus,
@@ -704,8 +704,8 @@ export async function boot(mounts) {
         // Carry the project's media with it — a bundle whose `asset:` refs resolve to
         // nothing on the other machine isn't a hand-off (#149 A5).
         const assets = [];
-        for (const a of await mediaStore.list({ present: true })) {
-          const got = await mediaStore.get(a.id);
+        for (const a of await assetStore.list({ present: true })) {
+          const got = await assetStore.get(a.id);
           if (got?.bytes) assets.push({ id: a.id, bytes: got.bytes });
         }
         // Linked building blocks (#149 A9). A block's id is a random UUID minted on the
@@ -747,7 +747,7 @@ export async function boot(mounts) {
         // Land the media into the NEW project's own assets/ dir. After openBundle so the
         // project exists; the `addAsset` ops came in with the log.
         for (const a of assets ?? []) {
-          try { await mediaStore.put(a.bytes, mediaStore.meta(a.id) ?? {}); } catch (e) { console.warn('[media] import failed', a.id, e); }
+          try { await assetStore.put(a.bytes, assetStore.meta(a.id) ?? {}); } catch (e) { console.warn('[assets] import failed', a.id, e); }
         }
         // Warn about analyses/plugins the bundle used but this install doesn't have
         // (#102). Built-ins always present; only non-built-ins (URL/file/authored)
@@ -917,7 +917,7 @@ export async function boot(mounts) {
   // `dataStore` kept as an alias to the manager (it delegates to the active
   // dataset) so console pokes / older references keep working. Exposed before the
   // launcher so the launcher (and dev tooling) can use the engine.
-  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, projects, mediaStore, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager, codecs, analysisLog, pluginActions, undoCoordinator, projectLog };
+  const engine = { bus, datasets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, projects, assetStore, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager, codecs, analysisLog, pluginActions, undoCoordinator, projectLog };
   /**
    * Console debugging: dump the FULL one true log — every op across all tiers
    * (collection, data, analysis), including the `retract`/`reorder` tombstones and

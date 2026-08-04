@@ -567,7 +567,7 @@ export const workspace = {
     // The image analogue of the text coder: the selector is a 2-D region (normalised
     // 0..1 so it survives any display size) instead of a character span. Everything
     // else — codebook, retrieve, memos, frequencies, export — is shared. The media is
-    // never inlined in the dataset; the host hands us a Blob via app.media.load and we
+    // never inlined in the dataset; the host hands us a Blob via app.assets.load and we
     // render it from an in-realm blob: URL (allowed by the media-CSP sandbox).
     async function renderMedia(doc) {
       textPane.textContent = '';
@@ -577,7 +577,7 @@ export const workspace = {
       textPane.append(loading);
       const token = ++mediaLoadToken;
       let blob = null;
-      try { blob = await app.media.load(doc.refs[0]); } catch { blob = null; }
+      try { blob = await app.assets.load(doc.refs[0]); } catch { blob = null; }
       if (token !== mediaLoadToken) return; // a newer doc switch superseded this load
       if (mediaObjectUrl) { URL.revokeObjectURL(mediaObjectUrl); mediaObjectUrl = null; }
       textPane.textContent = '';
@@ -2126,7 +2126,7 @@ export async function exportQdpx(app) {
       continue;
     }
 
-    const blob = await app.media.load(refs[0]);
+    const blob = await app.assets.load(refs[0]);
     if (!blob) continue;
     const bytes = new Uint8Array(await blob.arrayBuffer());
     const medium = String(blob.type || '').split('/')[0];
@@ -2303,7 +2303,7 @@ export async function parseQdpx(app, { name, file }) {
 /** Store an imported media file, returning its asset ref. */
 async function putImportedMedia(app, bytes, path, name) {
   const blob = new Blob([bytes], { type: mimeForPath(path) });
-  const info = await app.media.put(blob, { name, type: blob.type });
+  const info = await app.assets.put(blob, { name, type: blob.type });
   return info && info.ref;
 }
 
@@ -2354,19 +2354,19 @@ export async function parseTextFile(_app, { name, file }) {
 
 export async function parseImageFile(app, { name, file }) {
   const dims = await probeMedia(file, 'image');
-  const { ref } = await app.media.put(file, { type: file.type || '', name, medium: 'image', ...dims });
+  const { ref } = await app.assets.put(file, { type: file.type || '', name, medium: 'image', ...dims });
   return importMediaRow({ name, ref, medium: 'image', size: file.size, dims });
 }
 
 export async function parseAudioFile(app, { name, file }) {
   const dims = await probeMedia(file, 'audio');
-  const { ref } = await app.media.put(file, { type: file.type || '', name, medium: 'audio', ...dims });
+  const { ref } = await app.assets.put(file, { type: file.type || '', name, medium: 'audio', ...dims });
   return importMediaRow({ name, ref, medium: 'audio', size: file.size, dims });
 }
 
 export async function parseVideoFile(app, { name, file }) {
   const dims = await probeMedia(file, 'video');
-  const { ref } = await app.media.put(file, { type: file.type || '', name, medium: 'video', ...dims });
+  const { ref } = await app.assets.put(file, { type: file.type || '', name, medium: 'video', ...dims });
   return importMediaRow({ name, ref, medium: 'video', size: file.size, dims });
 }
 

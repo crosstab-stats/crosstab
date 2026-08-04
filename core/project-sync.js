@@ -16,7 +16,7 @@
 
 import { CoreEvents } from './event-bus.js';
 import { DATASETS_CHANGED } from './dataset-manager.js';
-import { MEDIA_CHANGED } from './media-store.js';
+import { ASSETS_CHANGED } from './asset-store.js';
 import { ProjectStore, FOLDER_PROJECT_ID, buildManifest } from './project-store.js';
 import { attachLiveDoc } from './live-sync.js';
 import { SourceExchange } from './gap-fill.js';
@@ -303,7 +303,7 @@ export class ProjectSync {
     this.#bus.on(DATASETS_CHANGED, () => this.#onChange(null));
     this.#bus.on(CoreEvents.PLUGINS_CHANGED, () => this.#onPluginsChanged());
     this.#bus.on(CoreEvents.WORKSPACE_CHANGED, () => this.#onChange(null));
-    this.#bus.on(MEDIA_CHANGED, () => this.#onChange(null)); // an asset landed (#149 A5)
+    this.#bus.on(ASSETS_CHANGED, () => this.#onChange(null)); // an asset landed (#149 A5)
     this.#bus.on('output:written', () => this.#onChange(null));
     this.#bus.on('output:cleared', () => this.#onChange(null)); // persist a user "Clear output"
     this.#setStatus();

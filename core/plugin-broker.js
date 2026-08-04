@@ -141,9 +141,9 @@ export class PluginBroker {
     }
     // Media plugins (#139): resolve a media ref to an opaque Blob. The host owns the
     // asset store; the plugin only ever gets bytes back, never a handle or a path.
-    if (services.media) {
-      this.#dispatch['media.load'] = (ref) => services.media.load(ref);
-      this.#dispatch['media.put'] = (file, meta) => services.media.put(file, meta);
+    if (services.assets) {
+      this.#dispatch['assets.load'] = (ref) => services.assets.load(ref);
+      this.#dispatch['assets.put'] = (file, meta) => services.assets.put(file, meta);
     }
     // ZIP for archive-format plugins (#139): build/read a ZIP host-side.
     if (services.zip) {

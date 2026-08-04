@@ -1,7 +1,7 @@
 /**
- * @file media-store.js
- * Content-addressed store for qualitative MEDIA assets (#139), living **inside the
- * project** (#149 A5).
+ * @file asset-store.js
+ * Content-addressed store for opaque ASSET bytes, living **inside the project**
+ * (#139 media, #149 A5, generalised in #152 Layer 5).
  *
  * Qualitative coding of audio / image / video keeps the media OUT of the dataset —
  * a multi-GB video does not belong in a Parquet cell. The dataset holds only a
@@ -23,7 +23,7 @@
  * no catalog to fall out of step with the bytes. Nothing is copied anywhere — the id is
  * the content hash, so re-importing the same file writes it once.
  *
- * The store is host-only. A plugin never touches it: it asks `app.media.load(ref)`
+ * The store is host-only. A plugin never touches it: it asks `app.assets.load(ref)`
  * and gets back an opaque {@link Blob}, so the sandbox stays walled off from the
  * filesystem (see the media service in app.js and the `media-src blob:` CSP variant
  * injected by core/plugin-sandbox.js).
@@ -33,7 +33,7 @@ import { liveOps } from './op-log.js';
 
 /** Bus event: the media-asset tier changed (an asset was added or forgotten), so the
  * project is dirty and should autosave. */
-export const MEDIA_CHANGED = 'media:changed';
+export const ASSETS_CHANGED = 'assets:changed';
 
 /** The media-asset projection: `addAsset` ops folded to `[{id, type, name, size, ...}]`.
  * The whole index of what the project references; whether the BYTES are here is asked
@@ -56,7 +56,7 @@ export const ASSETS = {
  * to sit in RAM to be hashed. */
 const FULL_HASH_MAX = 256 * 1024 * 1024; // 256 MB
 
-export class MediaStore {
+export class AssetStore {
   /** @type {import('./project-store.js').ProjectStore|null} */
   #store = null;
   /** @type {import('./project-log.js').ProjectLog|null} */
@@ -129,7 +129,7 @@ export class MediaStore {
    * emit anything by itself, and without this the manifest would be written from a
    * snapshot taken before the asset existed — bytes on disk, no index. */
   #changed() {
-    this.#bus?.emit?.(MEDIA_CHANGED, {});
+    this.#bus?.emit?.(ASSETS_CHANGED, {});
   }
 
   /**
@@ -146,7 +146,7 @@ export class MediaStore {
     const id = await sha256hex(data);
     const info = { id, type: 'application/octet-stream', name: '', ...meta, size: data.byteLength };
     const pid = await this.#ensureProject();
-    if (pid == null) throw new Error('media.put: no project to store the asset in');
+    if (pid == null) throw new Error('assets.put: no project to store the asset in');
     await this.#store.writeAsset(pid, id, new Blob([data], { type: info.type }));
     this.#record(info);
     return info;
@@ -155,7 +155,7 @@ export class MediaStore {
   /**
    * Store a **File by streaming** it to OPFS — memory-bounded, so a multi-GB movie
    * doesn't OOM (and it dodges the browser's ~2 GB single-blob read wall, since no
-   * single read is large). This is the sink an importer plugin drives via `media.put`;
+   * single read is large). This is the sink an importer plugin drives via `assets.put`;
    * the plugin hands over the host-held File *by reference* (no byte copy across the
    * sandbox), and the heavy I/O happens here.
    *
@@ -172,7 +172,7 @@ export class MediaStore {
   async putFile(file, meta = {}) {
     const id = await this.#idForFile(file);
     const pid = await this.#ensureProject();
-    if (pid == null) throw new Error('media.put: no project to store the asset in');
+    if (pid == null) throw new Error('assets.put: no project to store the asset in');
     await this.#store.writeAsset(pid, id, file); // streamed by the driver, never buffered
     const info = {
       id,
@@ -265,33 +265,33 @@ export class MediaStore {
 }
 
 /**
- * The host-side media resolver handed to plugins as `app.media`. It is the ONLY
+ * The host-side asset resolver handed to plugins as `app.assets`. It is the ONLY
  * door a sandboxed plugin has to media bytes: it returns an opaque Blob and never
  * exposes the store, a handle, or the filesystem. Resolution is **local only** —
  * `asset:` refs read the content-addressed store; `data:` refs are decoded inline
  * (the embed / test path). Anything else is rejected so a ref can never reach the
  * network (the URL fetcher is deliberately deferred — #143/B).
  *
- * @param {MediaStore} store
+ * @param {AssetStore} store
  * @returns {{ load: (ref: string) => Promise<Blob|null> }}
  */
-export function createMediaService(store) {
+export function createAssetService(store) {
   return {
     async load(ref) {
       const s = String(ref ?? '');
       if (s.startsWith('asset:')) return store.getBlob(s.slice('asset:'.length));
       if (s.startsWith('data:')) return dataUriToBlob(s);
-      throw new Error('media.load: only asset: and data: references are supported (remote URLs are not fetched)');
+      throw new Error('assets.load: only asset: and data: references are supported (remote URLs are not fetched)');
     },
     /**
      * The write sink an importer plugin drives (#139): stream a host-held File into the
      * store and return its `asset:<id>` ref. The File crosses from the sandbox by
-     * reference (no byte copy), and {@link MediaStore#putFile} streams it to OPFS, so
+     * reference (no byte copy), and {@link AssetStore#putFile} streams it to OPFS, so
      * even a multi-GB movie is memory-bounded. Returns the ref plus the resolved
      * metadata (id/size/type) for the importer to put in its dataset row.
      */
     async put(file, meta) {
-      if (!(file instanceof Blob)) throw new Error('media.put: expected a File/Blob');
+      if (!(file instanceof Blob)) throw new Error('assets.put: expected a File/Blob');
       const info = await store.putFile(file, meta || {});
       return { ...info, ref: `asset:${info.id}` };
     },
@@ -301,7 +301,7 @@ export function createMediaService(store) {
 /** Decode a `data:` URI to a typed Blob (base64 or percent-encoded). */
 export function dataUriToBlob(uri) {
   const m = /^data:([^;,]*)((?:;[^,]*)*)?,(.*)$/s.exec(String(uri));
-  if (!m) throw new Error('media.load: malformed data: URI');
+  if (!m) throw new Error('assets.load: malformed data: URI');
   const type = m[1] || 'text/plain';
   const isB64 = /;base64/i.test(m[2] || '');
   const raw = m[3];
