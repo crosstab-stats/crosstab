@@ -16,7 +16,6 @@ import {
   lww,
   mergeProject,
 } from '../core/merge.js';
-import { mergeState as caqdasMerge } from '../plugins/builtin-caqdas/index.js';
 
 /** The helper bundle the host hands a plugin's custom merge() (see resolveMerger). */
 const HELPERS = { threeWayLog, addWinsSet, lww, stableStringify };
@@ -216,59 +215,6 @@ test('mergeProject dispatches per owner and aggregates conflicts across tiers', 
 
 const seg = (doc, codeId, start, end, text) => ({ doc, codeId, start, end, text });
 
-test('CAQDAS: two coders on the same transcripts merge cleanly (the Dedoose case)', () => {
-  // Ancestor: one code, one coded passage.
-  const ancestor = {
-    version: 1, textColumn: 'transcript', labelColumn: null,
-    codes: [{ id: 'c1', name: 'anxiety', color: '#ffd166', group: '', memo: '' }],
-    segments: [seg('r1', 'c1', 0, 10, 'I felt so')],
-  };
-  // Coder A: adds a code and codes a new passage under the existing code.
-  const mine = {
-    ...ancestor,
-    codes: [...ancestor.codes, { id: 'c2', name: 'coping', color: '#8ecae6', group: '', memo: '' }],
-    segments: [...ancestor.segments, seg('r2', 'c1', 5, 20, 'worried about')],
-  };
-  // Coder B: adds a different code and codes a different passage.
-  const theirs = {
-    ...ancestor,
-    codes: [...ancestor.codes, { id: 'c3', name: 'stigma', color: '#a7c957', group: '', memo: '' }],
-    segments: [...ancestor.segments, seg('r3', 'c1', 0, 8, 'people judge')],
-  };
-  const r = caqdasMerge({ ancestor, mine, theirs, helpers: HELPERS });
-  assert.equal(r.conflicts.length, 0);
-  assert.deepEqual(r.resolved.codes.map((c) => c.id).sort(), ['c1', 'c2', 'c3']);
-  assert.equal(r.resolved.segments.length, 3); // ancestor's + one from each coder
-});
-
-test('CAQDAS: coding the SAME passage under the same code converges (no duplicate)', () => {
-  const ancestor = { version: 1, textColumn: 't', labelColumn: null, codes: [{ id: 'c1', name: 'x' }], segments: [] };
-  const same = seg('r1', 'c1', 3, 9, 'the same');
-  const r = caqdasMerge({ ancestor, mine: { ...ancestor, segments: [same] }, theirs: { ...ancestor, segments: [{ ...same }] }, helpers: HELPERS });
-  assert.equal(r.conflicts.length, 0);
-  assert.equal(r.resolved.segments.length, 1); // converged, not duplicated
-});
-
-test('CAQDAS: same code recoloured two ways surfaces an edit/edit conflict', () => {
-  const ancestor = { version: 1, textColumn: 't', labelColumn: null, codes: [{ id: 'c1', name: 'anxiety', color: '#000' }], segments: [] };
-  const r = caqdasMerge({
-    ancestor,
-    mine: { ...ancestor, codes: [{ id: 'c1', name: 'anxiety', color: '#f00' }] },
-    theirs: { ...ancestor, codes: [{ id: 'c1', name: 'anxiety', color: '#0f0' }] },
-    helpers: HELPERS,
-  });
-  assert.equal(r.conflicts.length, 1);
-  assert.equal(r.conflicts[0].owner, 'builtin-caqdas');
-});
-
-test('CAQDAS: renaming a code loses to a keep? no — add-wins keeps a one-side edit', () => {
-  // One coder renames c1; the other leaves it. The rename is taken, no conflict.
-  const ancestor = { version: 1, textColumn: 't', labelColumn: null, codes: [{ id: 'c1', name: 'anx' }], segments: [] };
-  const r = caqdasMerge({ ancestor, mine: { ...ancestor, codes: [{ id: 'c1', name: 'anxiety' }] }, theirs: ancestor, helpers: HELPERS });
-  assert.equal(r.conflicts.length, 0);
-  assert.equal(r.resolved.codes[0].name, 'anxiety');
-});
-
 test('spatial: add-wins slots + LWW bytes via mergeProject (real per-slot blob keys)', () => {
   // Each boundary set is its own blob key (owner tag → builtin-spatial → strategy lww).
   const slot = (name, ver) => ({ fileName: name, keyProp: 'GEOID', geojson: `FC:${name}:${ver}` });
@@ -292,74 +238,16 @@ test('spatial: add-wins slots + LWW bytes via mergeProject (real per-slot blob k
   assert.equal(r.conflicts.length, 0);
 });
 
-test('full project merge: core log + CAQDAS custom merger resolved via manifest `via`', () => {
-  // Simulate what the transport does: read manifest.merge.via → the module export.
-  const mergers = {
-    core: { strategy: 'three-way' },
-    'builtin-caqdas': { merge: caqdasMerge }, // resolved from { via: 'mergeState' }
-  };
-  const base = { id: 'load1', type: 'load', src: { label: 'interviews', meta: [] } };
-  const cb = (codes, segments) => ({ version: 1, textColumn: 't', labelColumn: null, codes, segments });
-  const ancestor = { log: [base], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: cb([{ id: 'c1', name: 'anx' }], []) } } };
-  const mine = { log: [base, { id: 'm1', type: 'recodeVar', name: 'age' }], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: cb([{ id: 'c1', name: 'anx' }, { id: 'c2', name: 'coping' }], []) } } };
-  const theirs = { log: [base, { id: 't1', type: 'recodeVar', name: 'income' }], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: cb([{ id: 'c1', name: 'anx' }, { id: 'c3', name: 'stigma' }], []) } } };
-  const r = mergeProject({ ancestor, mine, theirs, mergers });
-  assert.equal(r.conflicts.length, 0);
-  assert.deepEqual(r.log.map((o) => o.id), ['load1', 'm1', 't1']); // disjoint recodes merged
-  assert.deepEqual(r.blobs['builtin-caqdas'].value.codes.map((c) => c.id).sort(), ['c1', 'c2', 'c3']); // codebook unioned
-});
-
-test('CAQDAS merge: two coders coding the SAME passage stay DISTINCT (per-coder ids)', () => {
-  // The whole point of authorship (#148): inter-coder reliability must see that BOTH
-  // coders coded a passage, so identical-span codings with different ids do NOT collapse.
-  const mergers = { core: { strategy: 'three-way' }, 'builtin-caqdas': { merge: caqdasMerge } };
-  const cb = (segments) => ({ version: 1, textColumn: 't', labelColumn: null, codes: [{ id: 'c1', name: 'anx' }], segments });
-  const seg = (id, who) => ({ id, doc: 'r1', codeId: 'c1', start: 10, end: 50, text: 'x', author: { authorId: who, initials: who.toUpperCase() } });
-  const ancestor = { log: [], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: cb([]) } } };
-  const mine = { log: [], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: cb([seg('s-jane', 'jane')]) } } };
-  const theirs = { log: [], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: cb([seg('s-bob', 'bob')]) } } };
-  const r = mergeProject({ ancestor, mine, theirs, mergers });
-  const segs = r.blobs['builtin-caqdas'].value.segments;
-  assert.equal(segs.length, 2, "both coders' identical-span codings survive");
-  assert.deepEqual(segs.map((s) => s.author.initials).sort(), ['BOB', 'JANE']);
-  assert.equal(r.conflicts.length, 0);
-});
-
-test('CAQDAS merge: legacy id-less identical codings still collapse (content-key fallback)', () => {
-  const mergers = { core: { strategy: 'three-way' }, 'builtin-caqdas': { merge: caqdasMerge } };
-  const cb = (segments) => ({ version: 1, textColumn: 't', labelColumn: null, codes: [{ id: 'c1', name: 'anx' }], segments });
-  const legacy = { doc: 'r1', codeId: 'c1', start: 10, end: 50, text: 'x' }; // pre-#148, no id
-  const ancestor = { log: [], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: cb([]) } } };
-  const mine = { log: [], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: cb([{ ...legacy }]) } } };
-  const theirs = { log: [], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: cb([{ ...legacy }]) } } };
-  const r = mergeProject({ ancestor, mine, theirs, mergers });
-  assert.equal(r.blobs['builtin-caqdas'].value.segments.length, 1, 'id-less identical codings dedupe by content');
-});
-
-test('CAQDAS merge: two people annotating the SAME coding — both memos survive (office-hours case)', () => {
-  // Memos are a separate add-wins collection anchored by id, so faculty + student can
-  // both comment on the same coding without one clobbering the other (#148 step 3).
-  const mergers = { core: { strategy: 'three-way' }, 'builtin-caqdas': { merge: caqdasMerge } };
-  const blob = (memos) => ({ version: 1, textColumn: 't', labelColumn: null, codes: [{ id: 'c1', name: 'anx' }], segments: [{ id: 's1', doc: 'r1', codeId: 'c1', start: 10, end: 50, text: 'x' }], memos });
-  const memo = (id, who) => ({ id, anchorKind: 'segment', anchorId: 's1', text: `note ${who}`, author: { authorId: who, initials: who.toUpperCase() }, createdAt: 1 });
-  const ancestor = { log: [], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: blob([]) } } };
-  const mine = { log: [], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: blob([memo('n-jane', 'jane')]) } } };
-  const theirs = { log: [], blobs: { 'builtin-caqdas': { owner: 'builtin-caqdas', value: blob([memo('n-bob', 'bob')]) } } };
-  const r = mergeProject({ ancestor, mine, theirs, mergers });
-  const memos = r.blobs['builtin-caqdas'].value.memos;
-  assert.equal(memos.length, 2, 'both annotations on the same coding survive');
-  assert.deepEqual(memos.map((n) => n.author.initials).sort(), ['BOB', 'JANE']);
-  assert.equal(r.conflicts.length, 0);
-});
-
 test('mergersFor assembles core + ACTIVE builtin mergers (3rd-party deferred to the bridge)', async () => {
   const { mergersFor } = await import('../core/builtin-mergers.js');
   assert.deepEqual(Object.keys(mergersFor([])), ['core']); // core-only when nothing active
   const m = mergersFor(['builtin-caqdas', 'builtin-spatial', 'some-3rd-party']);
-  // Keyed by WORKSPACE id (what mergeProjects dispatches on), not plugin id.
-  assert.equal(typeof m['caqdas-coding'].merge, 'function', 'CAQDAS coding merger wired');
-  assert.deepEqual(m['spatial-map'], { strategy: 'lww' });
+  // Keyed by WORKSPACE id (what mergeProjects dispatches on), not plugin id. Both
+  // builtins are now plain LWW config blobs: their real state moved to item records,
+  // which merge by op-union with no declared merger at all (#152 L3/L5).
+  assert.deepEqual(m['caqdas-coding'], { strategy: 'lww' });
   assert.deepEqual(m['spatial-link'], { strategy: 'lww' });
+  assert.ok(!('spatial-map' in m), 'boundary geometry is item records + assets now, not a blob');
   assert.ok(!('some-3rd-party' in m), '3rd-party blob not host-mergeable yet (needs the sandbox bridge)');
 });
 

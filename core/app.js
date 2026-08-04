@@ -21,7 +21,7 @@ import { ExportService } from './export-service.js';
 import { installPassphraseUI } from './passphrase-ui.js';
 import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } from './user-identity.js';
 import { ProjectLog } from './project-log.js';
-import { ItemStore } from './item-store.js';
+import { ItemStore, newItemId } from './item-store.js';
 import { MemoStore, createMemoService, ANCHOR_KINDS } from './memo-store.js';
 import { findOrphans, itemRefSources, refsIn } from './asset-refs.js';
 import { declaredCollections, assetRefDecls, undeclaredItemsGuard, CORE_COLLECTIONS,
@@ -907,6 +907,31 @@ export async function boot(mounts) {
     const effectiveDsId = scope === 'project' ? null : (dsId ?? datasets.activeId);
     debug('app', `workspaceWrite ${wsId} slot=${slotId} scope=${scope} dsId=${effectiveDsId}`);
     workspaceStore.set(ownerToken(p), wsId, slotId || '_default', effectiveDsId, value);
+  };
+
+  // Item read/write from a plugin's COMPUTE frame (#152) — the sibling of
+  // workspaceRead/Write above, for the same reason: an exporter (caqdas's REFI-QDA
+  // export) runs outside the workspace mount, where the per-mount `items` service does
+  // not exist, yet it needs the codings. Owner is resolved from the calling plugin
+  // exactly as the workspace path does, so a plugin still only ever reaches its own
+  // records — the context changes, the authority rule does not.
+  services.itemsRead = (pluginId, collection) => {
+    const p = plugins ? plugins.list().find((x) => x.id === pluginId) : null;
+    if (!p || !collection) return [];
+    return itemStore.list(ownerToken(p), String(collection))
+      .map((r) => ({ id: r.id, fields: r.fields, author: r.author ?? null }));
+  };
+  services.itemsWrite = (pluginId, collection, id, fields) => {
+    const p = plugins ? plugins.list().find((x) => x.id === pluginId) : null;
+    if (!p || !collection) return null;
+    const itemId = id || newItemId();
+    itemStore.put(ownerToken(p), String(collection), itemId, fields ?? {});
+    return itemId;
+  };
+  services.itemsRemove = (pluginId, collection, id) => {
+    const p = plugins ? plugins.list().find((x) => x.id === pluginId) : null;
+    if (!p || !collection || !id) return;
+    itemStore.remove(ownerToken(p), String(collection), String(id));
   };
 
   // Cross-plugin discovery (#147): plugins call `app.plugins.list()` to see what

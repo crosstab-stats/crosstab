@@ -478,7 +478,14 @@ export class PluginLoader {
     // workspaces (for a dataset it chooses, or the active one).
     const stateRead = (wsId, slotId) => this.#services.workspaceRead?.(ctx.id, wsId, slotId) ?? null;
     const stateWrite = (wsId, value, dsId, slotId) => this.#services.workspaceWrite?.(ctx.id, wsId, value, dsId, slotId);
-    return Object.freeze({ ...this.#services, web, stateRead, stateWrite });
+    // The same binding for item records (#152), so a verb running here — an exporter,
+    // an importer — reaches the plugin's own records without a workspace mount.
+    const items = {
+      list: (collection) => this.#services.itemsRead?.(ctx.id, collection) ?? [],
+      put: (collection, id, fields) => this.#services.itemsWrite?.(ctx.id, collection, id, fields) ?? null,
+      remove: (collection, id) => this.#services.itemsRemove?.(ctx.id, collection, id),
+    };
+    return Object.freeze({ ...this.#services, web, stateRead, stateWrite, items });
   }
 
   /**

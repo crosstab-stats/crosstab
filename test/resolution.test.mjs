@@ -8,7 +8,22 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { threeWayLog, mergeProject } from '../core/merge.js';
 import { mergeProjects, buildMergers } from '../core/collab-sync.js';
-import { mergeState as caqdasMerge } from '../plugins/builtin-caqdas/index.js';
+
+// A stand-in plugin merger. These tests exercise the TRANSPORT — that a custom blob
+// merger is reached, that its merge op is deterministic, that peers converge — not any
+// particular plugin. CAQDAS used to supply the example, but after #152 its codebook is
+// item records with no custom merger, so the example is synthesised here instead. Same
+// add-wins shape CAQDAS's used to have.
+const codebookMerge = ({ ancestor, mine, theirs, helpers }) => {
+  const r = helpers.addWinsSet(ancestor?.codes ?? [], mine?.codes ?? [], theirs?.codes ?? [], (c) => c.id, 'x-coding');
+  return { resolved: { ...(mine ?? {}), codes: r.resolved }, conflicts: r.conflicts };
+};
+const CODING_PLUGINS = [{
+  id: 'x-coding',
+  manifest: { workspaces: [{ id: 'x-codebook', merge: { via: 'mergeCodebook' } }] },
+  module: { mergeCodebook: codebookMerge },
+}];
+
 
 const recode = (id, name, rules) => ({ id, type: 'recodeVar', name, rules });
 const NUL = String.fromCharCode(0);
@@ -64,18 +79,18 @@ test('mergeProjects: resolving a dataset conflict re-runs clean (keys survive th
   assert.ok(resolved.manifest.log.some((o) => o.id === 't1'));
 });
 
-test('resolution reaches inside a plugin custom merger (CAQDAS) with no plugin change', () => {
-  const plugins = [{ id: 'builtin-caqdas', manifest: { workspaces: [{ id: 'caqdas-coding', merge: { via: 'mergeState' } }] }, module: { mergeState: caqdasMerge } }];
-  const leaf = `ws:builtin-caqdas${NUL}caqdas-coding${NUL}_default${NUL}1`;
+test('resolution reaches inside a plugin custom merger (a synthetic one) with no plugin change', () => {
+  const plugins = CODING_PLUGINS;
+  const leaf = `ws:x-coding${NUL}x-codebook${NUL}_default${NUL}1`;
   const cb = (color) => ({ version: 1, textColumn: 't', labelColumn: null, codes: [{ id: 'c1', name: 'anx', color }], segments: [] });
-  const wsOp = (id, color, wall) => lop(id, leaf, 'setWorkspace', { value: cb(color), label: null }, 'builtin-caqdas', wall);
+  const wsOp = (id, color, wall) => lop(id, leaf, 'setWorkspace', { value: cb(color), label: null }, 'x-coding', wall);
   const shared = wsOp('wbase', '#000', 1);
-  const M = (op) => ({ name: 'P', savedAt: 1, activeId: 1, activePlugins: ['builtin-caqdas'], output: null, datasetMeta: null, collabId: null, log: [shared, op] });
+  const M = (op) => ({ name: 'P', savedAt: 1, activeId: 1, activePlugins: ['x-coding'], output: null, datasetMeta: null, collabId: null, log: [shared, op] });
   const mine = M(wsOp('wm', '#f00', 3));
   const theirs = M(wsOp('wt', '#0f0', 3));
   const first = mergeProjects(mine, theirs, buildMergers(plugins));
   assert.ok(first.conflicts.length >= 1);
-  assert.equal(first.conflicts[0].owner, 'builtin-caqdas');
+  assert.equal(first.conflicts[0].owner, 'x-coding');
   const key = first.conflicts[0].key;
   const resolved = mergeProjects(mine, theirs, buildMergers(plugins), { [key]: 'theirs' });
   assert.equal(resolved.conflicts.length, 0);

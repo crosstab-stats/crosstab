@@ -458,6 +458,22 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       project-scoped ones get their own section. Not new UX — the existing shape, made
       general.
 
+  - [ ] **SEMANTIC CHANGE to weigh (#152 L3) — same-field concurrent edits stopped
+        surfacing a conflict.** The old CAQDAS blob merger raised an `edit/edit` conflict
+        when two coders set the SAME field of one code differently (classically: recoloured
+        it two ways) and asked the user to choose. Item records resolve per FIELD by HLC
+        instead, so the later write wins silently.
+        *Why it was still the right trade:* the blob merger's conflict dialog resolved by
+        DISCARDING one side wholesale, so two coders editing *different* fields of one code
+        lost one of the edits. Per-field merge keeps both, which is strictly less lossy and
+        the far more common case. What is genuinely lost is **visibility** when they collide
+        on the same field — and a field holds one value, so something must give either way.
+        *If we want it back:* route item ops through `threeWayLog` rather than the per-owner
+        union in `collab-sync.mergeProjects` — but that reinstates whole-record
+        discard-one-side, so it needs a conflict shape that is per-field, not per-op. Don't
+        do it without that. Covered by a test in `test/caqdas-merge.test.mjs` that pins the
+        current behaviour deliberately.
+
   - [ ] **DEFERRED (user, 2026-08-03) — are sidebar inventory rows interactive?** Map-layer
         rows render in the sidebar but aren't clickable; spatial switches layers with its
         own control inside its tab, which still works. Open question for after the

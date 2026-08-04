@@ -11,7 +11,22 @@ import { LiveDoc } from '../core/live-protocol.js';
 import { attachLiveDoc } from '../core/live-sync.js';
 import { buildMergers } from '../core/collab-sync.js';
 import { manifestsEqual } from '../core/folder-sync.js';
-import { mergeState as caqdasMerge } from '../plugins/builtin-caqdas/index.js';
+
+// A stand-in plugin merger. These tests exercise the TRANSPORT — that a custom blob
+// merger is reached, that its merge op is deterministic, that peers converge — not any
+// particular plugin. CAQDAS used to supply the example, but after #152 its codebook is
+// item records with no custom merger, so the example is synthesised here instead. Same
+// add-wins shape CAQDAS's used to have.
+const codebookMerge = ({ ancestor, mine, theirs, helpers }) => {
+  const r = helpers.addWinsSet(ancestor?.codes ?? [], mine?.codes ?? [], theirs?.codes ?? [], (c) => c.id, 'x-coding');
+  return { resolved: { ...(mine ?? {}), codes: r.resolved }, conflicts: r.conflicts };
+};
+const CODING_PLUGINS = [{
+  id: 'x-coding',
+  manifest: { workspaces: [{ id: 'x-codebook', merge: { via: 'mergeCodebook' } }] },
+  module: { mergeCodebook: codebookMerge },
+}];
+
 
 const NUL = String.fromCharCode(0);
 let seq = 0;
@@ -74,11 +89,11 @@ test('late join: an empty joiner catches up to the full project', () => {
   assert.ok(applied);
 });
 
-test('CAQDAS codebooks converge (add-wins) live — the workspace tier merges on the log', () => {
-  const plugins = [{ id: 'builtin-caqdas', manifest: { workspaces: [{ id: 'caqdas-coding', merge: { via: 'mergeState' } }] }, module: { mergeState: caqdasMerge } }];
-  const leaf = `ws:builtin-caqdas${NUL}caqdas-coding${NUL}_default${NUL}1`;
+test('a plugin codebook converge (add-wins) live — the workspace tier merges on the log', () => {
+  const plugins = CODING_PLUGINS;
+  const leaf = `ws:x-coding${NUL}x-codebook${NUL}_default${NUL}1`;
   const cb = (codes) => ({ version: 1, textColumn: 't', labelColumn: null, codes, segments: [] });
-  const wsOp = (id, codes) => op(id, leaf, 'setWorkspace', { value: cb(codes), label: null }, 'builtin-caqdas');
+  const wsOp = (id, codes) => op(id, leaf, 'setWorkspace', { value: cb(codes), label: null }, 'x-coding');
   const shared = wsOp('wbase', [{ id: 'c1', name: 'anx' }]); // common ancestor leaf
   const A = { ...man([]), log: [ADD, LOAD, shared, wsOp('wa', [{ id: 'c1', name: 'anx' }, { id: 'c2', name: 'coping' }])] };
   const B = { ...man([]), log: [ADD, LOAD, shared, wsOp('wb', [{ id: 'c1', name: 'anx' }, { id: 'c3', name: 'stigma' }])] };

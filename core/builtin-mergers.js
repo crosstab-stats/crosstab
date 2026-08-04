@@ -5,26 +5,27 @@
  * app, for BOTH transports (folder sync + live co-authoring).
  *
  * Why this exists: the merge kernel dispatches each workspace blob to its owner's
- * declared merger (`manifest.merge`), but a `via: 'fnName'` declaration needs the
- * plugin *module* to resolve the name to a live function — and the app never had the
- * modules host-side (plugins run sandboxed), so `#folderSave` fell back to `{core}`
- * only and coding never merged. Builtins are trusted, in-repo, and their mergers are
- * PURE functions (no DOM/app access), so the host can import them directly — no
- * sandbox bridge needed. Third-party plugin blobs still need that bridge (deferred);
- * until then they fall back to the kernel's safe default (surface a conflict).
+ * declared merger (`manifest.merge`), and a `via: 'fnName'` declaration needs the plugin
+ * *module* host-side to resolve the name — which the app does not have, since plugins run
+ * sandboxed. Builtins are trusted and in-repo, so the host can register theirs directly.
  *
- * NOTE the deliberate core→plugin import: it's confined to this one file and pulls
- * only pure merge logic (the plugin module has no top-level side effects).
+ * Much smaller than it was. After #152 the builtins' real state lives in item records,
+ * which merge by op-union with no declared merger at all; what is left here is the
+ * handful of genuinely blob-shaped config values. The core→plugin import that used to
+ * pull CAQDAS's merge function is gone with it.
  */
-
-import { mergeState as caqdasMergeState } from '../plugins/builtin-caqdas/index.js';
 
 /** Builtin plugin id → its workspaces' merge declarations, keyed by **workspace id**
  * (the granularity the merge dispatches at — one plugin can own several workspaces with
  * different mergers). Mirrors each plugin's `manifest.workspaces[].{id, merge}`. */
 const BUILTIN_MERGERS = {
-  'builtin-caqdas': { 'caqdas-coding': { merge: caqdasMergeState } }, // composite: codes + segments + memos
-  'builtin-spatial': { 'spatial-map': { strategy: 'lww' }, 'spatial-link': { strategy: 'lww' } }, // per-slot LWW
+  // Both are now plain config blobs. CAQDAS's composite merger is gone: codes, segments
+  // and memos became item records and host memos (#152 L3), which merge by op-union in
+  // the kernel, so the only blob left is which columns hold the documents and labels.
+  // Spatial's map blob is gone entirely — boundary sets are records too — leaving its
+  // per-dataset linkage config.
+  'builtin-caqdas': { 'caqdas-coding': { strategy: 'lww' } },
+  'builtin-spatial': { 'spatial-link': { strategy: 'lww' } },
 };
 
 /**

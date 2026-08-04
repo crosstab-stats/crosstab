@@ -8,7 +8,22 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildMergers, mergeProjects, planDatasetApply } from '../core/collab-sync.js';
 import { deterministicOpId } from '../core/merge.js';
-import { mergeState as caqdasMerge } from '../plugins/builtin-caqdas/index.js';
+
+// A stand-in plugin merger. These tests exercise the TRANSPORT — that a custom blob
+// merger is reached, that its merge op is deterministic, that peers converge — not any
+// particular plugin. CAQDAS used to supply the example, but after #152 its codebook is
+// item records with no custom merger, so the example is synthesised here instead. Same
+// add-wins shape CAQDAS's used to have.
+const codebookMerge = ({ ancestor, mine, theirs, helpers }) => {
+  const r = helpers.addWinsSet(ancestor?.codes ?? [], mine?.codes ?? [], theirs?.codes ?? [], (c) => c.id, 'x-coding');
+  return { resolved: { ...(mine ?? {}), codes: r.resolved }, conflicts: r.conflicts };
+};
+const CODING_PLUGINS = [{
+  id: 'x-coding',
+  manifest: { workspaces: [{ id: 'x-codebook', merge: { via: 'mergeCodebook' } }] },
+  module: { mergeCodebook: codebookMerge },
+}];
+
 
 const NUL = String.fromCharCode(0); // ws-target separator (matches workspace-store)
 const op = (id, target, type, payload = {}, owner = 'core', wall = 1) => ({ id, hlc: { wall, counter: 0 }, target, owner, type, payload, reads: [] });
@@ -17,11 +32,11 @@ const addDs = (id, name) => op(`add${id}`, `coll/ds:${id}`, 'addDataset', { id, 
 const loadDs = (id) => op(`load${id}`, `ds:${id}/source:s${id}`, 'load', { src: { meta: [{ name: 'x' }] } });
 const man = (log, extra = {}) => ({ name: 'P', savedAt: 1, activeId: 1, activePlugins: null, output: null, datasetMeta: null, collabId: null, log, ...extra });
 const logIds = (m) => m.log.map((o) => o.id).sort();
-const caqdasLeaf = `ws:builtin-caqdas${NUL}caqdas-coding${NUL}_default${NUL}1`;
+const caqdasLeaf = `ws:x-coding${NUL}x-codebook${NUL}_default${NUL}1`;
 
 test('buildMergers resolves strategy and via→exported-fn from loaded plugins', () => {
   const plugins = [
-    { id: 'builtin-caqdas', manifest: { workspaces: [{ id: 'caqdas-coding', merge: { via: 'mergeState' } }] }, module: { mergeState: caqdasMerge } },
+    { id: 'x-coding', manifest: { workspaces: [{ id: 'caqdas-coding', merge: { via: 'mergeState' } }] }, module: { mergeState: codebookMerge } },
     { id: 'builtin-spatial', manifest: { workspaces: [{ id: 'spatial-map', merge: { strategy: 'lww' } }] } },
     { id: 'no-merge', manifest: { workspaces: [{ id: 'w' }] } },
   ];
@@ -66,10 +81,10 @@ test('a removeDataset op propagates as a real op (no delete-inference)', () => {
   assert.ok(logIds(out).includes('rm2'), 'the removeDataset op rides the merged log → the delete propagates');
 });
 
-test('CAQDAS codebooks from two coders union via the deterministic merge op', () => {
-  const plugins = [{ id: 'builtin-caqdas', manifest: { workspaces: [{ id: 'caqdas-coding', merge: { via: 'mergeState' } }] }, module: { mergeState: caqdasMerge } }];
+test('a plugin codebook from two coders union via the deterministic merge op', () => {
+  const plugins = CODING_PLUGINS;
   const cb = (codes) => ({ version: 1, textColumn: 't', labelColumn: null, codes, segments: [] });
-  const wsOp = (id, codes, wall) => op(id, caqdasLeaf, 'setWorkspace', { value: cb(codes), label: null }, 'builtin-caqdas', wall);
+  const wsOp = (id, codes, wall) => op(id, caqdasLeaf, 'setWorkspace', { value: cb(codes), label: null }, 'x-coding', wall);
   const shared = [addDs(1, 'ds1'), loadDs(1), wsOp('wbase', [{ id: 'c1', name: 'anx' }], 1)];
   const mine = man([...shared, wsOp('wa', [{ id: 'c1', name: 'anx' }, { id: 'c2', name: 'coping' }], 3)]);
   const theirs = man([...shared, wsOp('wb', [{ id: 'c1', name: 'anx' }, { id: 'c3', name: 'stigma' }], 3)]);
@@ -85,9 +100,9 @@ test('the ws merge op is DETERMINISTIC — same operands ⇒ same op id (converg
   // with the IDENTICAL operands; (2) mergeProjects is then a pure function, so both
   // synthesise the byte-identical merge op (same id) → the union dedups it and it enters
   // the shared ancestor, so re-merging is a fixpoint (no oscillation).
-  const plugins = [{ id: 'builtin-caqdas', manifest: { workspaces: [{ id: 'caqdas-coding', merge: { via: 'mergeState' } }] }, module: { mergeState: caqdasMerge } }];
+  const plugins = CODING_PLUGINS;
   const cb = (codes) => ({ version: 1, textColumn: 't', labelColumn: null, codes, segments: [] });
-  const wsOp = (id, codes, wall) => op(id, caqdasLeaf, 'setWorkspace', { value: cb(codes), label: null }, 'builtin-caqdas', wall);
+  const wsOp = (id, codes, wall) => op(id, caqdasLeaf, 'setWorkspace', { value: cb(codes), label: null }, 'x-coding', wall);
   const shared = [wsOp('wbase', [{ id: 'c1' }], 1)];
   const lo = man([...shared, wsOp('wa', [{ id: 'c1' }, { id: 'c2' }], 3)]);
   const hi = man([...shared, wsOp('wb', [{ id: 'c1' }, { id: 'c3' }], 3)]);
@@ -129,23 +144,23 @@ test('deterministicOpId changes when the contributing ops change (B4)', () => {
 
 test('re-running the same workspace merge mints the same op id (B4)', () => {
   const NUL = String.fromCharCode(0);
-  const leaf = ['ws:builtin-caqdas', 'caqdas-coding', '_default', '1'].join(NUL);
+  const leaf = ['ws:x-coding', 'x-codebook', '_default', '1'].join(NUL);
   const cb = (codes) => ({ version: 1, textColumn: 't', labelColumn: null, codes, segments: [] });
   const op = (id, codes, wall) => ({
-    id, hlc: { wall, counter: 0 }, target: leaf, owner: 'builtin-caqdas',
+    id, hlc: { wall, counter: 0 }, target: leaf, owner: 'x-coding',
     type: 'setWorkspace', reads: [], payload: { value: cb(codes), label: null },
   });
   const shared = op('wbase', [{ id: 'c1', name: 'anx' }], 1);
   const M = (o) => ({
-    name: 'P', savedAt: 1, activeId: 1, activePlugins: ['builtin-caqdas'],
+    name: 'P', savedAt: 1, activeId: 1, activePlugins: ['x-coding'],
     output: null, datasetMeta: null, collabId: null, log: [shared, o],
   });
   const A = M(op('wa', [{ id: 'c1', name: 'anx' }, { id: 'c2', name: 'coping' }], 3));
   const B = M(op('wb', [{ id: 'c1', name: 'anx' }, { id: 'c3', name: 'stigma' }], 3));
   const plugins = [{
-    id: 'builtin-caqdas',
+    id: 'x-coding',
     manifest: { workspaces: [{ id: 'caqdas-coding', merge: { via: 'mergeState' } }] },
-    module: { mergeState: caqdasMerge },
+    module: { mergeState: codebookMerge },
   }];
   const emitted = (m) => m.manifest.log
     .filter((o) => o.target === leaf && !['wbase', 'wa', 'wb'].includes(o.id))

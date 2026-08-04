@@ -72,6 +72,18 @@ export const manifest = {
       parse: 'parseVideoFile',
     },
   ],
+  // Item collections this plugin owns (#152 Layer 3). Codes and segments used to live
+  // inside one opaque state blob, so the log recorded "the coding workspace changed" and
+  // nothing finer: no per-coding undo, nothing in History, and merge that needed a
+  // hand-written add-wins function. As records they get all three for free.
+  //
+  // `sidebar: 'count'` rather than 'list' — a project can hold thousands of segments, and
+  // the inventory's job is to show that data EXISTS here, which a count does without
+  // drowning the panel.
+  collections: [
+    { id: 'codes', label: 'Codes', labelField: 'name', sidebar: 'count' },
+    { id: 'segments', label: 'Codings', sidebar: 'count' },
+  ],
   workspaces: [{
     id: 'caqdas-coding',
     title: 'Coding',
@@ -232,8 +244,7 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 export const workspace = {
   async mount(app, root) {
     // --- state ---------------------------------------------------------------
-    const raw = await app.state.get();
-    const state = normalize(raw);
+    const state = await loadState(app);
     // Who's coding (#148): stamp each code/segment THIS user creates with an identity
     // snapshot, so a team can run inter-coder reliability (κ/α). Self-asserted; the
     // authorId is always present even before a name is set. Imported codings (resolved
@@ -279,7 +290,7 @@ export const workspace = {
     let saveTimer = null;
     const save = () => {
       if (saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => app.state.set(state), 300);
+      saveTimer = setTimeout(() => { void syncState(app, state); }, 300);
     };
 
     // --- shell ---------------------------------------------------------------
@@ -1626,8 +1637,9 @@ export const workspace = {
     // a full state reload without tearing down the iframe.
     workspace._onDsChanged = async () => {
       if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-      const fresh = normalize(await app.state.get());
+      const fresh = await loadState(app);
       Object.assign(state, fresh);
+      resetPersisted(state);
       docs = [];
       activeRid = null;
       activeCodeId = null;
@@ -1819,22 +1831,20 @@ function themedCloudSvg(themes, W, H) {
 
 /** Coerce a loaded/empty blob into the working shape. */
 /**
- * Collaboration merge for the CAQDAS coding blob (#143). The blob is a *composite*
- * of independent collections that each merge differently, so this is a custom
- * merger (declared `merge: { via: 'mergeState' }`) rather than one built-in
- * strategy — exactly the case the "owner defines merge" design exists for.
+ * Collaboration merge for the CAQDAS **config blob** (#143, narrowed by #152 Layer 3).
  *
- *  - **codes** — add-wins by stable code id (two coders' new codes both survive;
- *    a concurrent delete loses to a keep); same code edited two ways → surfaced.
- *  - **segments** — add-wins by the passage's natural key `doc|codeId|span`, so
- *    two people coding the *same* passage under the same code converge, and coding
- *    *different* passages both stick. Coded segments have no stored id, and this is
- *    the right identity anyway (it makes re-coding the same span idempotent).
- *  - **config** (text/label column) — last-writer-wins, conflict if truly divergent.
+ * Codes, segments and memos are no longer here. They are item records and host memos,
+ * which merge by op-UNION in the kernel: disjoint records union automatically, and a
+ * concurrent edit to one record resolves per FIELD by HLC. The hand-written add-wins
+ * pass this function used to run was reimplementing, less well, what op identity gives
+ * for free — two coders on the same passage stay distinct because their codings are
+ * separate records, and two annotations on one coding both survive because they are
+ * separate memos. Neither property needs a custom merger any more.
  *
- * Pure: receives the merge helpers, imports nothing (headlessly testable). Writes
- * only this plugin's own blob — the integrity envelope (#145/#146) that makes a
- * plugin-defined merger safe.
+ * What is left is genuinely blob-shaped: which column holds the documents and which
+ * holds their labels. Config, no identity worth addressing, last-writer-wins (#152 D2).
+ *
+ * Pure: receives the merge helpers, imports nothing (headlessly testable).
  *
  * @param {{ancestor:object, mine:object, theirs:object, helpers:object}} arg
  * @returns {{resolved:object, conflicts:object[]}}
@@ -1845,21 +1855,6 @@ export function mergeState({ ancestor, mine, theirs, helpers }) {
   const t = normalize(theirs);
   const OWNER = 'builtin-caqdas';
   const conflicts = [];
-
-  const codes = helpers.addWinsSet(a.codes, m.codes, t.codes, (c) => c.id, OWNER);
-  // Prefer the stable per-application id (#148): each coder's coding is its own record,
-  // so two coders on the same passage stay DISTINCT (inter-coder reliability needs to
-  // see both). Legacy/imported segments have no id → fall back to the content key.
-  const segKey = (s) =>
-    s.id ||
-    `${s.doc}|${s.codeId}|${s.start ?? ''}|${s.end ?? ''}|${s.tStart ?? ''}|${s.tEnd ?? ''}|${s.region ? helpers.stableStringify(s.region) : ''}`;
-  const segments = helpers.addWinsSet(a.segments, m.segments, t.segments, segKey, OWNER);
-  // Memos/annotations (#148 step 3) are their OWN add-wins collection keyed by memo id,
-  // each referencing its anchor (a segment or code) by id — so two people annotating the
-  // SAME coding produce two distinct records that BOTH survive (the office-hours case),
-  // rather than one clobbering the other if memos were nested inside the segment.
-  const memos = helpers.addWinsSet(a.memos, m.memos, t.memos, (n) => n.id, OWNER);
-  conflicts.push(...codes.conflicts, ...segments.conflicts, ...memos.conflicts);
 
   const cfg = (key) => {
     const r = helpers.lww(a[key], { value: m[key] }, { value: t[key] }, OWNER, key);
@@ -1872,12 +1867,135 @@ export function mergeState({ ancestor, mine, theirs, helpers }) {
       version: 1,
       textColumn: cfg('textColumn'),
       labelColumn: cfg('labelColumn'),
-      codes: codes.resolved,
-      segments: segments.resolved,
-      memos: memos.resolved,
     },
     conflicts,
   };
+}
+
+// =====================================================================
+// Item-backed persistence (#152 Layer 3)
+// =====================================================================
+//
+// The in-memory `state` shape is unchanged — a hundred call sites read
+// `state.codes` / `state.segments` / `state.memos` and none of them had to move. What
+// changed is the boundary: load builds that shape from item records, and save DIFFS it
+// back to per-record ops instead of overwriting one blob.
+//
+// Diffing rather than rewriting each call site is a deliberate trade. It keeps the change
+// contained to two functions, and it still produces the granularity that matters: apply a
+// code and the log gets one `putItem` for that coding, not a fresh copy of the entire
+// codebook. Coarse enough that a 300 ms burst of edits coalesces, fine enough that undo
+// and History have something meaningful to point at.
+//
+// `textColumn` / `labelColumn` stay in the workspace BLOB. They are config, they have no
+// identity worth addressing, and the blob path exists precisely for that (#152 D2).
+
+/** Shadow of what is currently persisted, so save can diff. Per mount. */
+let persisted = { codes: new Map(), segments: new Map(), memos: new Map() };
+
+const clone = (v) => JSON.parse(JSON.stringify(v));
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+/** Rebuild the diff shadow after a load, so the next save writes only real changes. */
+function resetPersisted(state) {
+  persisted = {
+    codes: new Map((state.codes ?? []).map((c) => [c.id, clone(c)])),
+    segments: new Map((state.segments ?? []).map((x) => [x.id, clone(x)])),
+    memos: new Map((state.memos ?? []).map((m) => [m.id, clone(m)])),
+  };
+}
+
+/** A CAQDAS memo's anchor as a host memo anchor: the item target of the code or
+ * segment it hangs on. This is why memos could move to the host without inventing an
+ * addressing scheme — an anchored note points at a target, and records have targets. */
+function memoAnchor(anchorKind, anchorId) {
+  const collection = anchorKind === 'code' ? 'codes' : 'segments';
+  return { kind: 'item', target: `item:builtin\u0000${collection}\u0000${anchorId}`, ref: anchorKind };
+}
+
+/** Is this host memo one of ours? (anchored to a code or segment record) */
+const isOurMemo = (m) => typeof m?.anchor?.target === 'string'
+  && m.anchor.target.startsWith('item:builtin\u0000')
+  && (m.anchor.target.includes('\u0000codes\u0000') || m.anchor.target.includes('\u0000segments\u0000'));
+
+/** The anchor id + kind a host memo refers to, in the shape the UI expects. */
+function memoBack(m) {
+  const parts = String(m.anchor.target).split('\u0000');
+  return {
+    id: m.id,
+    anchorKind: parts[1] === 'codes' ? 'code' : 'segment',
+    anchorId: parts[2],
+    text: m.text,
+    ...(m.author ? { author: m.author } : {}),
+    createdAt: m.createdAt || 0,
+  };
+}
+
+/** Build the working state from the host's records + the config blob. */
+async function loadState(app) {
+  const cfg = normalize(await app.state.get());
+  let codes = [];
+  let segments = [];
+  let memos = [];
+  try {
+    codes = (await app.items.list('codes')).map((r) => ({ id: r.id, ...r.fields }));
+    segments = (await app.items.list('segments')).map((r) => ({ id: r.id, ...r.fields }));
+  } catch (e) {
+    console.warn('[caqdas] item load failed', e);
+  }
+  try {
+    memos = (await app.memos.list()).filter(isOurMemo).map(memoBack);
+  } catch (e) {
+    console.warn('[caqdas] memo load failed', e);
+  }
+  const state = {
+    ...cfg,
+    codes,
+    segments,
+    memos,
+  };
+  resetPersisted(state);
+  return state;
+}
+
+/** Write whatever actually changed: one op per changed record, plus the config blob. */
+async function syncState(app, state) {
+  // Config (small, identity-free) stays a blob — but strip the collections out of it so
+  // the same data never lives in two places.
+  const { codes, segments, memos, ...cfg } = state;
+  await app.state.set(cfg);
+
+  for (const [collection, arr] of [['codes', codes ?? []], ['segments', segments ?? []]]) {
+    const now = new Map(arr.filter((x) => x && x.id).map((x) => [x.id, x]));
+    for (const [id, val] of now) {
+      const prev = persisted[collection].get(id);
+      if (prev && same(prev, val)) continue;
+      const { id: _drop, ...fields } = val;
+      await app.items.put(collection, id, fields);
+    }
+    for (const id of persisted[collection].keys()) {
+      if (!now.has(id)) await app.items.remove(collection, id);
+    }
+    persisted[collection] = new Map([...now].map(([k, v]) => [k, clone(v)]));
+  }
+
+  // Memos go to the HOST collection, not one of ours (#152 Layer 2): a note written on a
+  // coding and one written on an analysis must be the same kind of record.
+  const nowMemos = new Map((memos ?? []).filter((m) => m && m.id).map((m) => [m.id, m]));
+  for (const [id, m] of nowMemos) {
+    const prev = persisted.memos.get(id);
+    if (!prev) {
+      // Newly composed in the UI: mint it host-side and adopt the id it gives back.
+      const newId = await app.memos.add(memoAnchor(m.anchorKind, m.anchorId), m.text);
+      if (newId) m.id = newId;
+    } else if (prev.text !== m.text) {
+      await app.memos.setText(id, m.text);
+    }
+  }
+  for (const id of persisted.memos.keys()) {
+    if (!nowMemos.has(id)) await app.memos.remove(id);
+  }
+  persisted.memos = new Map([...nowMemos].map(([, v]) => [v.id, clone(v)]));
 }
 
 function normalize(raw) {
@@ -1886,17 +2004,12 @@ function normalize(raw) {
     version: 1,
     textColumn: typeof s.textColumn === 'string' ? s.textColumn : null,
     labelColumn: typeof s.labelColumn === 'string' ? s.labelColumn : null,
-    codes: Array.isArray(s.codes)
-      ? s.codes.filter((c) => c && c.id).map((c) => ({ ...c, group: typeof c.group === 'string' ? c.group : '', memo: typeof c.memo === 'string' ? c.memo : '' }))
-      : [],
-    segments: Array.isArray(s.segments)
-      ? s.segments.filter((x) => x && x.doc && x.codeId).map((x) => ({ ...x, memo: typeof x.memo === 'string' ? x.memo : '' }))
-      : [],
-    // Memos/annotations (#148 step 3): first-class records anchored to a segment/code by
-    // id. Keep only well-formed ones (id + anchorId + text) so the add-wins merge has a key.
-    memos: Array.isArray(s.memos)
-      ? s.memos.filter((n) => n && n.id && n.anchorId && typeof n.text === 'string').map((n) => ({ ...n }))
-      : [],
+    // Codes, segments and memos are no longer part of this blob — they are item records
+    // and host memos (#152 Layer 3). Defaults keep the working shape intact for callers
+    // that build a state object without loading one.
+    codes: [],
+    segments: [],
+    memos: [],
     // A just-imported QDPX project stashes codings keyed by row index here; the mount
     // resolves them to row-ids once docs are loaded, then clears it (#139).
     ...(s.pendingImport && typeof s.pendingImport === 'object' ? { pendingImport: s.pendingImport } : {}),
@@ -2087,7 +2200,14 @@ function setSelectionRange(container, lo, hi) {
 const TIME_SCALE = 1000; // seconds → the unit QDPX begin/end expect (ms). See caveat above.
 
 export async function exportQdpx(app) {
-  const state = normalize(await app.state.read('caqdas-coding'));
+  // Runs in the compute frame, so `app.items` here is the plugin-id-bound binding from
+  // core/loader.js rather than a workspace mount's (#152).
+  const cfg = normalize(await app.state.read('caqdas-coding'));
+  const state = {
+    ...cfg,
+    codes: (await app.items.list('codes')).map((r) => ({ id: r.id, ...r.fields })),
+    segments: (await app.items.list('segments')).map((r) => ({ id: r.id, ...r.fields })),
+  };
   if (!state.textColumn) throw new Error('Open the Coding tab and pick a documents column before exporting.');
   if (!state.segments.length) throw new Error('Nothing to export yet — code some passages first.');
 
