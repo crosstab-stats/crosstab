@@ -22,6 +22,42 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
+- [ ] **#160 — the R scratchpad and the recorded R lane share one global env.** Two
+      holes found while confirming what R work reaches the log. The split itself is
+      right and already built:
+
+      - **R Console — not logged, correctly.** It only reads (`getVariableMeta` for the
+        picker, `consoleBind` to bind `vars`); nothing it does changes what the project
+        is. Logging it would record keystrokes, not state — and the console is where
+        half-formed code gets pasted, so it would also push a stream of broken
+        experiments into the project's permanent record and into a co-author's.
+      - **Run R script — logged, correctly.** A host action in the analysis log carrying
+        the script text (`pluginActions.runHost`), so it shows in History, persists, and
+        re-runs on replay. It has to be: it appends Output and can create a dataset, and
+        an unlogged version would leave a project holding data whose provenance is
+        "someone ran something once".
+
+      The line is not scratchpad-vs-tool, it is **does this change what the project
+      is**. Both sides of that line are already on the right side of it. But:
+
+      - [ ] **A. The imported dataset has no link to the script that produced it.**
+            `offerImport` calls `datasets.createWithData(...)`, which records an ordinary
+            `addDataset` + `load` with Parquet bytes. The analysis log separately records
+            that a script ran. Nothing connects them, so a replay rebuilds the dataset
+            from stored bytes rather than from the code — and the provenance chain breaks
+            at exactly the point where R data crosses into CrossTab, which is the one
+            place it matters most. The load op should name the run that produced it.
+      - [ ] **B. The ephemeral lane is not isolated from the recorded one.** Console and
+            Run R script both use `webr.evalConsole` against the SAME persistent global
+            env. So a recorded, "replayable" script can quietly depend on a helper you
+            defined in the console: it replays fine on your machine and differently (or
+            not at all) on a co-author's, with no error to point at. An unlogged lane
+            cannot share mutable state with a logged one and still call the logged one
+            reproducible. Either give the console its own env, or make Run R script
+            evaluate in a fresh child env and say so in the docs. Note the console's
+            "clear" already resets the shared workspace — today that can pull the rug
+            out from under a script step.
+
 - [ ] **#159 — R Console should default to the same clean data a plugin gets.** The
       plugin contract strips each bound variable's designated missing codes to `NA` at
       injection, so an analysis never recodes user-missing values itself; a plugin opts
