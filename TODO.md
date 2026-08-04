@@ -361,6 +361,31 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     - **D1 — host-owned collection model vs plugin-supplied fold.** *Recommend collections*
       (above). The cost is that a plugin whose state isn't id-keyed collections must keep
       using the blob; the benefit is merge/undo/history/GC all become host-generic.
+      **Argued, after the spatial correction raised "doesn't that divergence justify a
+      fold?" — no, and spatial is the evidence against:**
+      1. Spatial's shape is already served by a mechanism we have (slot-set add-wins +
+         per-slot LWW bytes). A fold would give it nothing it lacks. The divergence shows
+         **two mechanisms already span both clients**; the escape hatch for an exotic
+         third-party shape is the blob path spatial already uses, so a fold would be a
+         *third* mechanism covering a gap neither client demonstrates.
+      2. A fold buys less than it looks like. Merge, undo, history and GC are functions of
+         **op identity and shape**, not of folded state — op-union, retract-and-refold, an
+         action label, and field-level ref visibility respectively. A fold hands back
+         derived state and leaves all four unsolved. What unlocks them is *declared
+         structure* (a manifest), not executable code across the sandbox boundary.
+      3. **Decisive: a fold only runs when the plugin is activated.** The host would hold
+         ops it can never interpret alone. Storage survives (we persist ops, not state) and
+         so does merge-by-union — but asset ref-scanning, the History panel, memo anchors
+         onto plugin items, the conflict dialog's "what changed", and building-block
+         promotion all degrade to "activate that plugin first". `workspace-store.js:29-31`
+         promises the opposite (preserve-on-missing-plugin), and today's merge degrades
+         only to conflict-surfacing, never to unreadable.
+      **The one case that would genuinely force a fold:** state derived by a non-trivial
+      function of ordered ops — character-level co-editing of a memo body instead of LWW on
+      the whole string. If we ever want that, the right shape is a **host-provided shared-
+      text type** plugins opt into, not a per-plugin fold: a CRDT has to be correct, and
+      three plugin authors shipping three of them is three chances to be wrong. Reopen D1
+      only with a concrete client neither collections nor blob can serve.
     - **D2 — keep the opaque blob path?** *Recommend yes*, explicitly, for config and
       viewport state. Not everything wants identity, and forcing it produces fake ids.
     - **D3 — memo anchor shape.** A cell (`__ct_rid` + column) isn't an op target.
