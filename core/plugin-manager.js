@@ -23,6 +23,7 @@
  * removes its menu items immediately.
  */
 
+import { foldPluginOpinions, isPluginOp, pluginTarget } from './plugin-state.js';
 import { PluginActions } from './plugin-actions.js';
 import { CoreEvents } from './event-bus.js';
 import { packPlugin, unpackPlugin, looksLikeZip } from './plugin-package.js';
@@ -51,6 +52,8 @@ export class PluginManager {
 
   /** Disabled plugin keys (persisted). @type {Set<string>} */
   #disabled;
+  /** @type {import('./project-log.js').ProjectLog|null} */
+  #log;
   /** key → {id, name, category, keywords} learned when a plugin loads (persisted),
    * so disabled/unloaded plugins still show details in the dialog. @type {Object} */
   #catalog;
@@ -109,8 +112,13 @@ export class PluginManager {
    *   project's plugin-association controls, to keep or drop a plugin on deactivation (#118).
    * @param {import('./plugin-package-store.js').PluginPackageStore} [deps.packageStore]
    *   - Durable OPFS store for added `.ctplugin` package bytes (#119).
+   * @param {import('./project-log.js').ProjectLog} [deps.projectLog] - Where activation
+   *   DECISIONS are recorded (#157). Which plugins are active is project state; which
+   *   are installed is install state. localStorage keeps the latter, plus the current
+   *   set as the next boot's default; the log is what merges, undoes and travels.
    */
-  constructor({ loader, urls, menus, results, actions, bus, projectReferences, workspaceStore, project, packageStore }) {
+  constructor({ loader, urls, menus, results, actions, bus, projectReferences, workspaceStore, project, packageStore, projectLog }) {
+    this.#log = projectLog ?? null;
     this.#loader = loader;
     this.#urls = urls;
     this.#menus = menus;
@@ -631,8 +639,33 @@ export class PluginManager {
     writeJSON(LS_CATALOG, this.#catalog);
   }
 
-  /** Turn a plugin on/off — persists and applies live (load / unload). */
-  async setEnabled(key, enabled) {
+  /**
+   * Turn a plugin on/off — applies live (load / unload) and persists.
+   *
+   * `record` separates the DECISION from the mechanism (#157). A user toggling the
+   * dialog is deciding, and that belongs on the project's log where it can merge, be
+   * undone, and reach a co-author. Boot applying the saved default, or a project open
+   * carrying out what it already recorded, is not deciding — writing an op for it would
+   * put an entry per plugin per session on the log and make every open look like an edit.
+   *
+   * @param {string} key
+   * @param {boolean} enabled
+   * @param {{record?: boolean}} [opts]
+   */
+  async setEnabled(key, enabled, { record = true } = {}) {
+    // Only when it actually changes what the project says — a toggle back to where the
+    // log already stands is not news.
+    if (record && this.#log && foldPluginOpinions(this.#log.slice(isPluginOp)).get(key) !== enabled) {
+      this.#log.append({
+        target: pluginTarget(key), owner: 'core',
+        type: enabled ? 'activatePlugin' : 'deactivatePlugin', payload: { key },
+      });
+    }
+    return this.#applyEnabled(key, enabled);
+  }
+
+  /** The mechanism half of {@link setEnabled}: load/unload + the persisted default. */
+  async #applyEnabled(key, enabled) {
     if (enabled) {
       this.#disabled.delete(key);
       writeJSON(LS_DISABLED, [...this.#disabled]);
@@ -783,34 +816,41 @@ export class PluginManager {
       else if (!w && p.enabled) toDeactivate.push(p.key);
     }
     // Deactivations are cheap (dispose) and rare at launch — do them first, in order.
-    for (const key of toDeactivate) await this.setEnabled(key, false);
+    for (const key of toDeactivate) await this.#applyEnabled(key, false);
     // Activations are the slow part (cached fetch + sandbox handshake + module import
     // + activate). Run them with a concurrency cap instead of one-at-a-time, which cut
     // launch from ~N sequential handshakes to ~N/cap waves — a big win offline (#120).
-    await this.#runPool(toActivate, (key) => this.setEnabled(key, true));
+    await this.#runPool(toActivate, (key) => this.#applyEnabled(key, true));
   }
 
   /**
-   * Activate every plugin in `keys` that is installed here and currently off. Never
-   * deactivates anything, which is what separates it from {@link applyActivatedSet}.
+   * Bring the live plugin set in line with what the PROJECT says (#157).
    *
-   * For co-authoring (#156). Opening a project applies its recorded plugin set exactly —
-   * right there, because the project IS the context. A live session has two contexts at
-   * once, so "exactly" is not available: applying one peer's set would switch off the
-   * other's plugins mid-session, and each peer publishing its own set would make them
-   * fight. Growing toward the union converges and cannot oscillate.
+   * Takes opinions, not a set, and that difference is the whole reason the tier exists:
+   * a plugin the project has never mentioned is left exactly as it is. Only a recorded
+   * `false` switches anything off. {@link applyActivatedSet} cannot express that — an
+   * absence there means "off", which is the inference that made a deactivation
+   * unpropagatable in the first place.
    *
-   * Only plugins already installed here. A peer cannot cause code to be fetched.
+   * Records nothing: carrying out the project's state is not a new decision about it.
    *
-   * @returns {Promise<string[]>} the keys actually activated
+   * @param {Map<string, boolean>} opinions  from `foldPluginOpinions`
+   * @returns {Promise<string[]>} keys whose live state actually changed
    */
-  async activateAlso(keys) {
-    const want = new Set(keys || []);
-    const todo = this.list()
-      .filter((p) => !p.activated && (want.has(p.key) || (p.id && want.has(p.id))))
-      .map((p) => p.key);
-    if (todo.length) await this.#runPool(todo, (key) => this.setEnabled(key, true));
-    return todo;
+  async applyProjectPlugins(opinions) {
+    if (!(opinions instanceof Map) || !opinions.size) return [];
+    const list = this.list();
+    const byKey = new Map(list.map((p) => [p.key, p]));
+    const byId = new Map(list.filter((p) => p.id).map((p) => [p.id, p]));
+    const todo = [];
+    for (const [key, want] of opinions) {
+      const p = byKey.get(key) ?? byId.get(key); // ids appear in migrated legacy sets
+      if (!p || p.activated === want) continue; // not installed here, or already right
+      todo.push([p.key, want]);
+    }
+    for (const [key, want] of todo) if (!want) await this.#applyEnabled(key, false);
+    await this.#runPool(todo.filter(([, w]) => w).map(([k]) => k), (key) => this.#applyEnabled(key, true));
+    return todo.map(([k]) => k);
   }
 
   /** All known plugins for the dialog, with state + origin. */

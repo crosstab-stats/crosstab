@@ -25,6 +25,7 @@ import { liveOps } from './op-log.js';
 import { rememberFolder, listFolders, forgetFolder, ensureReadWrite } from './folder-handle.js';
 import { passphraseFor, shouldEncrypt, PASSPHRASE_ABORT } from './at-rest.js';
 import { syncFolderProject, manifestsEqual } from './folder-sync.js';
+import { PLUGIN_STATE, pluginOpsOf, isPluginOp, pluginTarget, foldPluginOpinions, migrateLegacyActivePlugins } from './plugin-state.js';
 import { showConflictDialog } from './conflict-ui.js';
 import { shortcutFiles } from './folder-shortcut.js';
 import { showEncryptionSettings } from './encryption-settings.js';
@@ -160,8 +161,10 @@ export class ProjectSync {
   #applyAnalysisLog;
   /** Regenerate output for analyses that arrived from a co-author (#156). */
   #materializeAnalyses;
-  /** Union-activate the merged plugin set (#156). */
-  #adoptPlugins;
+  /** Reconcile the live plugin set from the log's `plugin:` tier (#157). */
+  #applyProjectPlugins;
+  /** `[{key, activated}]` for every INSTALLED plugin — the seed's raw material (#157). */
+  #getPluginStates;
   /** Serialises materialisation so two peer runs never interleave in the pane. */
   #materializeChain = Promise.resolve();
   /** () => string[] : every installed plugin's identifiers (key + manifest id), so
@@ -266,10 +269,13 @@ export class ProjectSync {
    * @param {HTMLElement} deps.statusEl
    * @param {() => (string[]|null)} [deps.getActivePlugins] - Snapshot the active
    *   plugin keys to persist with the project (null ⇒ don't record).
+   * @param {(opinions: Map<string, boolean>) => Promise<void>} [deps.applyProjectPlugins] -
+   *   Reconcile the live plugin set from the log's `plugin:` tier (#157). Replaces the
+   *   old set-apply, which could not express "the project says this one is OFF".
    * @param {(keys: string[]) => Promise<void>} [deps.applyActivePlugins] - Restore
    *   a project's saved plugin set on open.
    */
-  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getAssetOps, applyAssetOps, assetBytes, getItemOps, applyItemOps, projectLog, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, materializeAnalyses, adoptPlugins, pluginIdentities, getMergers }) {
+  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getAssetOps, applyAssetOps, assetBytes, getItemOps, applyItemOps, projectLog, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, materializeAnalyses, applyProjectPlugins, getPluginStates, pluginIdentities, getMergers }) {
     this.#store = projectStore;
     this.#datasets = datasets;
     this.#ui = ui;
@@ -283,6 +289,7 @@ export class ProjectSync {
     this.#applyWorkspaces = applyWorkspaces ?? null;
     this.#log = projectLog ?? null;
     this.#log?.register(PROJECT_META);
+    this.#log?.register(PLUGIN_STATE); // #157: activation is project state, on the log
     this.#getAssetOps = getAssetOps ?? null;
     this.#applyAssetOps = applyAssetOps ?? null;
     this.#assetBytes = assetBytes ?? null;
@@ -293,7 +300,8 @@ export class ProjectSync {
     this.#getAnalysisLog = getAnalysisLog ?? null;
     this.#applyAnalysisLog = applyAnalysisLog ?? null;
     this.#materializeAnalyses = materializeAnalyses ?? null;
-    this.#adoptPlugins = adoptPlugins ?? null;
+    this.#applyProjectPlugins = applyProjectPlugins ?? null;
+    this.#getPluginStates = getPluginStates ?? null;
     this.#pluginIdentities = pluginIdentities ?? null;
     this.#getMergers = getMergers ?? null;
   }
@@ -345,6 +353,79 @@ export class ProjectSync {
   /** The recorded plugin identifiers this install can't resolve to an installed
    * plugin (matched by key OR manifest id) — the ones to carry forward on save so
    * the association isn't lost (#102). */
+  /**
+   * Reconcile the live plugin set from the log, migrating a legacy scalar on the way
+   * (#157). Returns the opinions applied.
+   *
+   * Order matters: migrate FIRST, then fold, so a legacy project's implied activations
+   * are in the log before anything reads it — and so the very next save carries ops
+   * rather than the scalar. `migrateLegacyActivePlugins` defers to any op already
+   * present, so a project that has been through this once is untouched by its own
+   * stale scalar.
+   */
+  async #applyPluginState(bundle, { migrate = true, receive = true } = {}) {
+    if (!this.#log || !this.#applyProjectPlugins) return new Map();
+    // The ops live in the saved manifest's log; put them back before folding, exactly as
+    // the name tier does. Without this the fold reads whatever the PREVIOUS project left
+    // in memory — the opened project's own record of itself never arrives.
+    if (receive) {
+      this.#log.clearWhere(isPluginOp);
+      this.#log.receiveOps(pluginOpsOf(bundle?.log));
+    }
+    if (migrate && Array.isArray(bundle?.activePlugins) && bundle.activePlugins.length) {
+      const opinions = foldPluginOpinions(this.#log.slice(isPluginOp));
+      const ops = migrateLegacyActivePlugins(bundle.activePlugins, opinions, (x) => x);
+      for (const op of ops) this.#log.append(op);
+      if (ops.length) debug('project', 'migrated legacy activePlugins to ops', { count: ops.length });
+    }
+    const opinions = foldPluginOpinions(this.#log.slice(isPluginOp));
+    if (opinions.size) {
+      try {
+        await this.#applyProjectPlugins(opinions);
+      } catch (err) {
+        console.warn('[project] applying the project plugin set failed', err);
+      }
+    }
+    return opinions;
+  }
+
+  /**
+   * Record an opinion for every installed plugin the project has not yet spoken about
+   * (#157) — its state at this moment, on or off.
+   *
+   * Activated plugins are project state, so a project has to be able to say what its set
+   * IS, not merely how it deviates from whatever the last project left switched on. That
+   * needs explicit "off" as much as explicit "on": with activations alone, opening a
+   * project that never used the spatial plugin would leave spatial running because the
+   * previous project had turned it on and this one never contradicted it.
+   *
+   * Fills GAPS rather than running once. An earlier version bailed the moment the log
+   * held any plugin op at all, which meant toggling one plugin before the project's
+   * first save silenced the whole statement — the project then recorded that single
+   * deviation and nothing else. Gap-filling is idempotent, survives that order, and
+   * gives a plugin installed later an opinion at the next snapshot instead of leaving it
+   * permanently unspoken-for.
+   *
+   * At snapshot rather than at creation because the launcher picks the set AFTER the
+   * project exists; by the first save the answer has settled.
+   */
+  #seedPluginState() {
+    if (!this.#log || !this.#getPluginStates) return;
+    const states = this.#getPluginStates() || [];
+    if (!states.length) return;
+    const opinions = foldPluginOpinions(this.#log.slice(isPluginOp));
+    let n = 0;
+    for (const { key, activated } of states) {
+      if (!key || opinions.has(key)) continue; // already spoken for — say nothing
+      this.#log.append({
+        target: pluginTarget(key), owner: 'core',
+        type: activated ? 'activatePlugin' : 'deactivatePlugin', payload: { key },
+      });
+      n++;
+    }
+    if (n) debug('project', 'recorded plugin state for the project', { count: n });
+  }
+
   #computeUnresolved(recorded) {
     if (!Array.isArray(recorded) || !recorded.length) return [];
     const have = new Set(this.#pluginIdentities ? this.#pluginIdentities() : []);
@@ -687,6 +768,7 @@ export class ProjectSync {
 
   async #snapshot(all, dirty = new Set()) {
     this.#ensureCollab(); // every saved project carries a collab identity (transport-agnostic)
+    this.#seedPluginState(); // #157: a project states its plugin set once, then records changes
     // Assemble the flat one-true-log from every tier — collection ops, then each live
     // dataset's raw slice (source ops carrying their Parquet bytes for #writeSources to
     // strip → op-id sidecars), then a deleted dataset's orphaned ops, then the analysis
@@ -712,10 +794,16 @@ export class ProjectSync {
     const itemOps = this.#getItemOps ? this.#getItemOps() : null; // item: tier ops (#152)
     if (Array.isArray(itemOps)) log.push(...itemOps);
     if (this.#log) log.push(...this.#log.slice(PROJECT_META.match)); // project/name (#149 A3)
+    if (this.#log) log.push(...this.#log.slice(isPluginOp)); // plugin activation (#157)
     // Record the active plugin set alongside the data, so reopening restores the
     // analyses too. Null when the feature isn't wired (keeps old saves untouched).
     // Carry forward any recorded plugins this install can't resolve (not installed
     // here) so the association survives until the plugin is added (#102).
+    // Which plugins are active now rides the `plugin:` tier of the log (#157), so it
+    // merges, undoes and travels like every other decision. The scalar below is kept
+    // only as a compatibility shim for readers older than the tier — written, never read
+    // back by this version (a legacy save's scalar is migrated to ops on open, and the
+    // ops are authoritative from then on).
     let activePlugins = this.#getActivePlugins ? this.#getActivePlugins() : null;
     if (activePlugins) {
       // Carry forward plugins not in the live active set but still associated with
@@ -836,16 +924,11 @@ export class ProjectSync {
       this.#applyNameOps(bundle.log);
       this.#applyOutput?.(bundle.output || []); // restore the Output tab (or clear)
       this.#applyAnalysisLog?.(bundle.analysisLog || []); // restore the script's analysis steps
-      // Restore the project's analysis set (unless the caller already applied one,
-      // e.g. the launcher). Only when the save recorded it — old saves leave the
-      // current plugins as-is.
-      if (applyPlugins && Array.isArray(bundle.activePlugins) && this.#applyActivePlugins) {
-        try {
-          await this.#applyActivePlugins(bundle.activePlugins);
-        } catch (err) {
-          console.warn('[project] restoring plugin set failed', err);
-        }
-      }
+      // Restore the project's plugin set from its `plugin:` ops (unless the caller
+      // already applied one, e.g. the launcher), migrating a legacy scalar first (#157).
+      // A plugin the project has never mentioned is left alone — only a recorded `false`
+      // switches anything off.
+      if (applyPlugins) await this.#applyPluginState(bundle);
       // Remember any recorded plugins not installed here, so a later save doesn't
       // forget them (they reactivate once the plugin is added — #102).
       this.#unresolvedPlugins = this.#computeUnresolved(bundle.activePlugins);
@@ -914,16 +997,10 @@ export class ProjectSync {
     this.#applyWorkspaces?.(bundle.workspaceOps || []); // last — remounts read the above
     this.#applyOutput?.(bundle.output || []);
     this.#applyAnalysisLog?.(bundle.analysisLog || []);
-    // Restore the bundle's recorded analysis set (#102), so opening a shared bundle
-    // brings back the same analyses. applyActivatedSet skips any the recipient doesn't
-    // have (those are surfaced to the user by the import handler's warning dialog).
-    if (Array.isArray(bundle.activePlugins) && this.#applyActivePlugins) {
-      try {
-        await this.#applyActivePlugins(bundle.activePlugins);
-      } catch (err) {
-        console.warn('[project] restoring bundle plugin set failed', err);
-      }
-    }
+    // Restore the bundle's recorded plugin set (#102), so opening a shared bundle brings
+    // back the same analyses. Plugins the recipient doesn't have are skipped (the import
+    // handler's warning dialog surfaces those).
+    await this.#applyPluginState(bundle);
     // Carry forward bundle plugins not installed here (the import handler also warns
     // about them) so they're remembered, not dropped, on the project's first save.
     this.#unresolvedPlugins = this.#computeUnresolved(bundle.activePlugins);
@@ -1641,13 +1718,12 @@ export class ProjectSync {
         debug('live', 'adopted collab identity from invite host');
       }
       this.#applyNameOps(mergedLog); // a co-author's rename lands here (#149 A3)
-      // Plugins the merged set names that aren't installed HERE. Recorded so our own
+      // Plugins the merged log turns ON that aren't installed HERE. Recorded so our own
       // save keeps the association (#102) instead of quietly dropping the co-author's
       // half of the project's tooling.
-      if (Array.isArray(manifest?.activePlugins)) {
-        const unresolved = this.#computeUnresolved(manifest.activePlugins);
-        if (unresolved.length) this.#unresolvedPlugins = [...new Set([...this.#unresolvedPlugins, ...unresolved])];
-      }
+      const wantedByPeers = [...foldPluginOpinions(pluginOpsOf(mergedLog))].filter(([, on]) => on).map(([k]) => k);
+      const unresolved = this.#computeUnresolved(wantedByPeers);
+      if (unresolved.length) this.#unresolvedPlugins = [...new Set([...this.#unresolvedPlugins, ...unresolved])];
       // Still NOT applyOutput — the merged manifest's `output` array is never applied.
       // mergeProjects resolves `output` as "mine" and is NOT operand-symmetric: the
       // transport imposes a canonical operand order, so whichever peer fills the "mine"
@@ -1668,14 +1744,14 @@ export class ProjectSync {
     // analysis can take as long as the analysis takes (the runner's own watchdog waits
     // 45s before it will even comment), and holding the apply chain — or `#loading` —
     // open that long would stall every merge behind one slow regression.
-    if (this.#materializeAnalyses || this.#adoptPlugins) {
+    if (this.#materializeAnalyses || this.#applyProjectPlugins) {
       this.#materializeChain = this.#materializeChain
-        // Plugin set FIRST: the merge already unions `activePlugins` (collab-sync.js),
-        // it was simply never applied anywhere — opening a project restores its set, a
-        // live session did nothing at all. So a co-author's analysis reached a peer that
-        // had the plugin installed and switched off, purely because nothing ever turned
-        // it on. Activate-only, so this can never switch off the other peer's tools.
-        .then(() => (this.#adoptPlugins ? this.#adoptPlugins(manifest?.activePlugins) : null))
+        // Plugin set FIRST, so a plugin a co-author switched on is ready by the time its
+        // analysis replays. Nothing special happens here any more: the `plugin:` ops
+        // arrived in the merged log with everything else, and the fold is the answer.
+        // The union-adoption this replaces existed only because activation was a scalar
+        // outside the log, and it could not express "off" at all (#157).
+        .then(() => this.#applyPluginState({ log: mergedLog }, { migrate: false }))
         .then(() => this.#materializeAnalyses?.())
         .catch((err) => console.error('[live] materialise failed', err));
     }

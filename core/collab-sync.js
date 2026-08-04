@@ -50,11 +50,6 @@ function foldWsLeaves(ops) {
   return leaves;
 }
 
-const unionArr = (a, b) => {
-  const s = new Set([...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])]);
-  return s.size ? [...s] : null;
-};
-
 /**
  * Three-way merge two divergent project manifests (each `{log, …scalars}`) from their
  * common ancestor — the shared op-id history, no separate base.
@@ -69,7 +64,7 @@ const unionArr = (a, b) => {
  *    The merged value is emitted as a **deterministic** `setWorkspace` op (id + hlc a
  *    pure function of the inputs), so both peers produce the identical op → the union
  *    dedups it → convergence, and it can't oscillate (it re-enters the shared ancestor).
- *  - **Scalars** — `activeId` mine; `activePlugins` unioned; `output` regenerable (mine);
+ *  - **Scalars** — `activeId` mine; `output` regenerable (mine);
  *    `datasetMeta` merged (mine wins per key); collab identity kept.
  *
  * @param {object|null} mine
@@ -146,7 +141,13 @@ export function mergeProjects(mine, theirs, mergers = {}, resolutions = null) {
     name: mine?.name ?? theirs?.name,
     savedAt: mine?.savedAt ?? theirs?.savedAt,
     activeId: mine?.activeId ?? theirs?.activeId,
-    activePlugins: unionArr(mine?.activePlugins, theirs?.activePlugins),
+    // `activePlugins` is NOT merged here any more (#157). It moved onto the log as
+    // `plugin:` ops, so it merges by op-union + HLC like everything else — which is the
+    // only way "off" can win. A union of two sets can only grow, so a deactivation could
+    // never propagate: whichever peer still had the plugin on re-added it every merge.
+    // The scalar is still written by savers for backward compatibility and carried
+    // through here untouched; nothing reads it back.
+    activePlugins: mine?.activePlugins ?? theirs?.activePlugins ?? null,
     output: Array.isArray(mine?.output) ? mine.output : (theirs?.output ?? null), // regenerable
     datasetMeta: { ...(theirs?.datasetMeta ?? {}), ...(mine?.datasetMeta ?? {}) }, // mine wins per key
     collabId: mine?.collabId ?? theirs?.collabId ?? null,

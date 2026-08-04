@@ -22,7 +22,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
-- [ ] **#157 — Plugin activation belongs on the one true log.** The active plugin set
+- [x] **#157 — Plugin activation belongs on the one true log.** DONE. The active plugin set
       is the last real piece of user state living OUTSIDE the log: `activePlugins`, a
       scalar array snapshot from a live read of the plugin manager at save time, merged
       between peers by set UNION (`collab-sync.js`), with the actual truth kept in
@@ -49,14 +49,15 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
             `migrateLegacyActivePlugins` (activations ONLY — the old array said nothing
             about what it omitted, and inferring "off" from an absence is the exact
             inference this tier exists to stop). 12 tests.
-      - [ ] **L2 — PluginManager writes ops.** `setEnabled`/`applyActivatedSet` append to
+      - [x] **L2 — PluginManager writes ops.** `setEnabled`/`applyActivatedSet` append to
             the log; `activatedKeys()` reads the fold. Decide what `LS_DISABLED` keeps:
-            proposal is the no-project-open default only, since "which plugins are
-            active" is project state and "which are installed" is install state.
-      - [ ] **L3 — project open/save.** Reconcile the manager from the fold on open;
+            DECIDED (user): activated = project state, installed = global. localStorage
+            keeps the installed set + the current state as the next boot's default;
+            the log is authoritative for the open project.
+      - [x] **L3 — project open/save.** Reconcile the manager from the fold on open;
             migrate a legacy `activePlugins` scalar on first open; drop the scalar from
             new manifests (keep reading it for old saves).
-      - [ ] **L4 — delete the workarounds.** `adoptPlugins` / `activateAlso` /
+      - [x] **L4 — delete the workarounds.** `adoptPlugins` / `activateAlso` /
             `unionArr(activePlugins)` all go: the ops merge by themselves. The
             blocked-analysis notice survives, narrowed to its real case — a plugin that
             genuinely isn't installed here, which is a human decision, not a merge rule.

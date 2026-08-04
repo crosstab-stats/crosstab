@@ -1075,10 +1075,11 @@ export async function boot(mounts) {
     getAnalysisLog: () => analysisLog.toJSON(),
     applyAnalysisLog: (entries) => analysisLog.load(entries),
     materializeAnalyses: () => materializeMissingAnalyses(),
-    adoptPlugins: async (keys) => {
-      if (!plugins || !Array.isArray(keys) || !keys.length) return;
-      const on = await plugins.activateAlso(keys);
-      if (on.length) debug('live', 'activated for a co-author', on);
+    getPluginStates: () => (plugins ? plugins.list().map((p) => ({ key: p.key, activated: !!p.activated })) : []),
+    applyProjectPlugins: async (opinions) => {
+      if (!plugins) return;
+      const changed = await plugins.applyProjectPlugins(opinions);
+      if (changed.length) debug('project', 'plugin set reconciled from the log', changed);
     },
   });
   // Now that the project exists, point the media store at it: bytes go into the
@@ -1235,6 +1236,7 @@ export async function boot(mounts) {
   // and exposes Edit ▸ Plugins…; the launcher drives activation through it.
   plugins = new PluginManager({
     loader,
+    projectLog, // activation DECISIONS are ops on the project's log (#157)
     urls: BUILTIN_PLUGINS,
     menus,
     results: results.api,
