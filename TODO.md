@@ -227,6 +227,81 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         than changed.
 
 
+- [ ] **#153 — Converge plugin data and datasets into ONE notion of project content.**
+      Raised by the user looking at the shipped sidebar: Map Layers sit in their own
+      section, styled as indented grey children, while datasets are bold boxed rows — and
+      if building blocks are to be one list, the sidebar would then carry two areas with
+      different organising schemes. The framing to design against (user): **promote
+      third-party data UP to first-class, and demote host-owned datasets DOWN**, and see
+      where they meet.
+
+  **AUDIT — every way a record differs from a dataset today** (read off `#datasetRow`,
+  `#recordRow`, and the `.proj__ds` / `.proj__blob` rules in index.html):
+
+  | dimension | dataset | record (map layer) | intrinsic? |
+  |---|---|---|---|
+  | visual weight | bold, boxed, 13px | indented 24px, grey, 12px | **no** |
+  | click to activate | yes (`--active`) | none | **partly** — see below |
+  | drag to library | yes | no | **no** — the block contract is dataset-shaped |
+  | rename | always | only with `labelField` | **no** — an authoring gap |
+  | metadata shown | row count | none | **no** — records could declare a summary |
+  | library link badge / pull update | yes | no | **no** — follows portability |
+  | memo affordance | yes (💬) | **none** | **no** — a record has a target already |
+  | delete → bin, restore, purge | yes | yes | — same |
+  | History rows, undo/redo | yes | yes | — same |
+
+  So of nine dimensions, **one** is arguably intrinsic and the rest are accidents of
+  plugin data having grown up as a dataset side-car.
+
+  **The one real asymmetry: activation.** "The active dataset" is a genuine global mode —
+  analyses run against it. A map layer has no host-level equivalent… except spatial
+  plainly HAS an active layer, it just manages it privately inside its own tab. So this is
+  not a difference in kind; it is a concept the host declines to model. Modelling it
+  ("active record, per collection") also answers the deferred question of whether sidebar
+  rows should be clickable: **yes, and clicking means exactly what it means for a
+  dataset.** That is a principled answer rather than an invented interaction.
+
+  **Specific bug this audit found:** project-scoped records render at TOP level
+  (`app.js:1837` passes `dsId = null`) but reuse `.proj__blob`, which has
+  `padding-left: 24px`. Map layers are peers of datasets being drawn as children of
+  nothing. Dataset-SCOPED records (CAQDAS coding) genuinely are subordinate and should
+  stay nested; project-scoped ones should not be indented at all.
+
+  **Where the two directions meet — "content items".** The project holds content items,
+  each with: identity, a name, a kind, an optional summary line, lifecycle
+  (bin/restore/purge), a memo anchor, and portability to the library. A **dataset** is a
+  content item whose kind additionally supports activation and the tabular pipeline; a
+  **map layer** is a content item of kind `boundarySets`. One row treatment, one set of
+  affordances, kind conveyed by its section heading rather than by making some rows look
+  second-class.
+
+  **Deliberately NOT converging: storage.** A dataset owns a DuckDB table and a transform
+  pipeline; a boundary set is bytes plus fields. That difference is real and the tiers
+  stay separate. What converges is the MODEL and the presentation — naming, lifecycle,
+  visibility, annotation, portability — none of which has any business differing.
+
+  Worth noting the collection tier already mirrors the item tier: datasets are
+  add/remove/rename/reorder ops under `coll/ds:<id>`, records are put/remove under
+  `item:…`. The convergence is a real structural symmetry, not a coat of paint.
+
+  - [ ] **Decisions needed before building:**
+    - **D1 — one Building Blocks list with a kind badge, or separate sections?**
+      *Recommend one list*: they are both "things you reuse across projects", and two lists
+      re-creates the split this item exists to remove.
+    - **D2 — does the host model "active record" per collection?** *Recommend yes* (it
+      settles row interactivity), but it needs a plugin-facing signal — a declared
+      `onActivate` verb, or a host event the workspace reacts to.
+    - **D3 — what does a record contribute as a summary?** Datasets show a row count.
+      Recommend an optional `summaryField` (or a declared formatter) on the collection, so
+      "11 regions" / "2.0 MB" can sit where the row count does.
+    - **D4 — does demoting datasets cost anything?** Believed no: they keep every
+      affordance and gain only shared vocabulary. Confirm before relying on it.
+
+  - [ ] **Then:** records block = item ops + the assets their declared `assetRefs` point
+        at, instantiated on add (ids re-minted, per #149 A9c). That is the
+        "building-block contract expansion" #146 parked, and #152 already supplies every
+        piece it needs.
+
 - [ ] **#151 — Re-home tool: repoint what referenced dataset A at dataset B.** With
       in-place replace gone (#149 A8), the "here's a corrected version of my data"
       workflow is: import as a new dataset, bin the old. What doesn't follow
