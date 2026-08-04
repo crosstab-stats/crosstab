@@ -21,7 +21,7 @@ import { ExportService } from './export-service.js';
 import { installPassphraseUI } from './passphrase-ui.js';
 import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } from './user-identity.js';
 import { ProjectLog } from './project-log.js';
-import { ItemStore, newItemId } from './item-store.js';
+import { ItemStore, newItemId, isItemOp, parseItemTarget } from './item-store.js';
 import { MemoStore, createMemoService, ANCHOR_KINDS } from './memo-store.js';
 import { findOrphans, itemRefSources, refsIn } from './asset-refs.js';
 import { declaredCollections, assetRefDecls, undeclaredItemsGuard, CORE_COLLECTIONS,
@@ -51,6 +51,7 @@ import { Launcher } from './launcher.js';
 import { OfflineManager } from './offline.js';
 import { exportProjectBundle, importProjectBundle, pickBundleFile, downloadBlob, slug } from './project-bundle.js';
 import { WorkspaceStore, ownerToken } from './workspace-store.js';
+import { liveOps } from './op-log.js';
 import { WorkspaceManager } from './workspace-manager.js';
 import { PluginPackageStore } from './plugin-package-store.js';
 import { AssetStore, createAssetService, ASSETS_CHANGED } from './asset-store.js';
@@ -521,6 +522,45 @@ export async function boot(mounts) {
   // action is an analysis, Undo removes that analysis + its output (not a data op).
   services.memos = createMemoService(memoStore);
 
+  /**
+   * Plugin actions as History rows (#152). The host cannot read a record's schema, so the
+   * wording comes from the collection DECLARATION — its label, and which field carries a
+   * display name. That is the same declaration the sidebar and the asset refcount read;
+   * a plugin describes its records once and every host surface can talk about them.
+   *
+   * Returns rows oldest-first with their HLC, so the panel can place them in time against
+   * the data steps rather than guessing.
+   */
+  const itemHistory = () => {
+    const decls = new Map(
+      [...CORE_COLLECTIONS, ...declaredCollections(plugins?.list() ?? [], ownerToken)]
+        .map((d) => [`${d.owner}\u0000${d.id}`, d]),
+    );
+    const ops = liveOps(projectLog.slice(isItemOp));
+    const seen = new Set();
+    const rows = [];
+    for (const op of ops) {
+      const [owner, collection, id] = parseItemTarget(op.target);
+      const decl = decls.get(`${owner}\u0000${collection}`);
+      const noun = (decl?.label ?? collection).replace(/s$/, '');
+      const label = decl?.labelField ? op.payload?.fields?.[decl.labelField] : null;
+      const named = typeof label === 'string' && label.trim() ? ` “${label.length > 32 ? `${label.slice(0, 31)}…` : label}”` : '';
+      const first = !seen.has(op.target);
+      seen.add(op.target);
+      rows.push({
+        id: op.id,
+        hlc: op.hlc,
+        title: op.type === 'removeItem' ? `Removed ${noun.toLowerCase()}${named}`
+          : first ? `Added ${noun.toLowerCase()}${named}`
+            : `Edited ${noun.toLowerCase()}${named}`,
+        detail: op.author?.initials ? `by ${op.author.initials}` : (decl?.label ?? collection),
+        who: op.author?.initials ?? null,
+      });
+      void id;
+    }
+    return rows;
+  };
+
   const undoCoordinator = new UndoCoordinator({
     datasets,
     analysisLog,
@@ -583,7 +623,7 @@ export async function boot(mounts) {
   // beside Undo/Redo. Distinct from the Data/Variables/Output tabs (inputs &
   // outputs); History is what you did. Click a step to rewind live, reorder with
   // ▲▼, or remove with ✕.
-  const historyPanel = new HistoryPanel(datasets, bus, { analysisLog, pluginActions, undo: undoCoordinator, results });
+  const historyPanel = new HistoryPanel(datasets, bus, { analysisLog, pluginActions, undo: undoCoordinator, results, itemHistory });
   menus.register({
     id: 'core:history',
     path: ['Edit'],

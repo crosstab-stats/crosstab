@@ -109,6 +109,12 @@ export class UndoCoordinator {
     return this.#top()?.kind === 'analysis';
   }
 
+  /** True when the most recent action is a plugin record — so History can mark THAT row
+   * 'current' and Undo visibly targets what the user just did. */
+  lastActionIsItem() {
+    return this.#top()?.kind === 'item';
+  }
+
   async undo() {
     const top = this.#top();
     if (!top) {

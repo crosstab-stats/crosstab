@@ -556,6 +556,7 @@ export class HistoryView {
     this.analysisLog = opts.analysisLog ?? null;
     this.results = opts.results ?? null; // to drop an analysis's output when its step is deleted
     this.undo = opts.undo ?? null; // undo coordinator — tells us if an analysis is the latest action
+    this.itemHistory = opts.itemHistory ?? null; // plugin-action rows (#152)
     host.classList.add('ct-historyhost');
   }
 
@@ -581,6 +582,10 @@ export class HistoryView {
     // data op (so Undo visibly targets the analysis). The latest run is the last
     // entry in the log (highest idx).
     const analysisIsCurrent = !!this.undo?.lastActionIsAnalysis?.() && analyses.length > 0;
+    // A plugin action can also be the most recent thing that happened (#152), in which
+    // case NEITHER the last data step nor an analysis is 'current' — otherwise two rows
+    // claim it and Undo appears to target the wrong one.
+    const itemIsCurrent = !!this.undo?.lastActionIsItem?.();
     const currentAnalysisIdx = analyses.length - 1;
     const emitAnalyses = (k) => {
       for (const { e, idx } of byAt.get(k) || [])
@@ -596,7 +601,7 @@ export class HistoryView {
         marker: '○',
         title: 'Start',
         detail: 'empty — before any data',
-        state: applied.length === 0 && !analysisIsCurrent ? 'current' : 'applied',
+        state: applied.length === 0 && !analysisIsCurrent && !itemIsCurrent ? 'current' : 'applied',
       }),
     );
 
@@ -616,7 +621,7 @@ export class HistoryView {
           marker: n,
           title: d.title,
           detail: d.detail,
-          state: n === applied.length && !analysisIsCurrent ? 'current' : 'applied',
+          state: n === applied.length && !analysisIsCurrent && !itemIsCurrent ? 'current' : 'applied',
           index: i,
           canUp: i >= 2,
           canDown: i >= 1 && i < applied.length - 1,
@@ -635,8 +640,29 @@ export class HistoryView {
       ol.append(this.#step({ n, marker: n, title: d.title, detail: d.detail, state: 'future' }));
     });
 
+    // Plugin actions (#152): coding, boundary sets, memos. They carry an HLC but no
+    // position in the DATA pipeline, so rather than invent one they are listed after the
+    // data steps in the order they happened. Wording comes from each collection's own
+    // declaration, so the host describes records it cannot otherwise read.
+    const itemRows = this.itemHistory ? this.itemHistory() : [];
+    if (itemRows.length) {
+      const sub = el('li', null, 'history__step history__step--applied');
+      sub.append(el('span', 'Plugin actions', 'history__body'));
+      sub.style.opacity = '0.7';
+      ol.append(sub);
+      itemRows.forEach((r, i) => {
+        ol.append(this.#step({
+          n: '',
+          marker: '◆',
+          title: r.title,
+          detail: r.detail,
+          state: i === itemRows.length - 1 && itemIsCurrent ? 'current' : 'applied',
+        }));
+      });
+    }
+
     this.host.replaceChildren(ol);
-    if (applied.length === 0 && future.length === 0) {
+    if (applied.length === 0 && future.length === 0 && itemRows.length === 0) {
       this.host.append(
         el(
           'p',
@@ -782,6 +808,8 @@ export class HistoryPanel {
   #dirty = false; // true once the user types — guards navigation from discarding the draft
   #dirtyHint = null;
   #syntaxBtn = null;
+  /** () => plugin-action rows for the timeline (#152). */
+  #itemHistory = null;
 
   /**
    * @param {import('./data-store.js').DataStore} store
@@ -790,13 +818,14 @@ export class HistoryPanel {
    *   enable the Syntax editor (read/replay the analysis log + rebuild via Run) and
    *   pass the undo coordinator so the timeline can mark a just-run analysis 'current'.
    */
-  constructor(store, bus, { analysisLog = null, pluginActions = null, undo = null, results = null } = {}) {
+  constructor(store, bus, { analysisLog = null, pluginActions = null, undo = null, results = null, itemHistory = null } = {}) {
     this.#store = store;
     this.#bus = bus;
     this.#analysisLog = analysisLog;
     this.#pluginActions = pluginActions;
     this.#undo = undo;
     this.#results = results;
+    this.#itemHistory = itemHistory;
   }
 
   #build() {
@@ -843,7 +872,7 @@ export class HistoryPanel {
     }
     document.body.append(panel);
     this.#panel = panel;
-    this.#view = new HistoryView(content, this.#store, { onError: (m) => this.#showErr(m), analysisLog: this.#analysisLog, undo: this.#undo, results: this.#results });
+    this.#view = new HistoryView(content, this.#store, { onError: (m) => this.#showErr(m), analysisLog: this.#analysisLog, undo: this.#undo, results: this.#results, itemHistory: this.#itemHistory });
   }
 
   /** The Syntax editor: ONE free-form textarea holding the whole script (edit like a
@@ -1158,7 +1187,13 @@ export class HistoryPanel {
     const offLog = this.#bus.on('analysislog:changed', () => {
       if (!this.#syntax) this.#view.render();
     });
-    this.#off = () => { offData?.(); offLog?.(); };
+    // …and when a plugin record is written, undone or redone (#152). Without this the
+    // timeline shows a coding that Undo has already removed — the data was right and only
+    // the panel was stale, which is the most confusing way for it to be wrong.
+    const offItems = this.#bus.on(CoreEvents.ITEMS_CHANGED, () => {
+      if (!this.#syntax) this.#view.render();
+    });
+    this.#off = () => { offData?.(); offLog?.(); offItems?.(); };
     this.#escHandler = (e) => {
       if (e.key === 'Escape') this.close();
     };
