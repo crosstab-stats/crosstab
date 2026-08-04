@@ -160,6 +160,8 @@ export class ProjectSync {
   #applyAnalysisLog;
   /** Regenerate output for analyses that arrived from a co-author (#156). */
   #materializeAnalyses;
+  /** Union-activate the merged plugin set (#156). */
+  #adoptPlugins;
   /** Serialises materialisation so two peer runs never interleave in the pane. */
   #materializeChain = Promise.resolve();
   /** () => string[] : every installed plugin's identifiers (key + manifest id), so
@@ -267,7 +269,7 @@ export class ProjectSync {
    * @param {(keys: string[]) => Promise<void>} [deps.applyActivePlugins] - Restore
    *   a project's saved plugin set on open.
    */
-  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getAssetOps, applyAssetOps, assetBytes, getItemOps, applyItemOps, projectLog, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, materializeAnalyses, pluginIdentities, getMergers }) {
+  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getAssetOps, applyAssetOps, assetBytes, getItemOps, applyItemOps, projectLog, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, materializeAnalyses, adoptPlugins, pluginIdentities, getMergers }) {
     this.#store = projectStore;
     this.#datasets = datasets;
     this.#ui = ui;
@@ -291,6 +293,7 @@ export class ProjectSync {
     this.#getAnalysisLog = getAnalysisLog ?? null;
     this.#applyAnalysisLog = applyAnalysisLog ?? null;
     this.#materializeAnalyses = materializeAnalyses ?? null;
+    this.#adoptPlugins = adoptPlugins ?? null;
     this.#pluginIdentities = pluginIdentities ?? null;
     this.#getMergers = getMergers ?? null;
   }
@@ -1638,6 +1641,13 @@ export class ProjectSync {
         debug('live', 'adopted collab identity from invite host');
       }
       this.#applyNameOps(mergedLog); // a co-author's rename lands here (#149 A3)
+      // Plugins the merged set names that aren't installed HERE. Recorded so our own
+      // save keeps the association (#102) instead of quietly dropping the co-author's
+      // half of the project's tooling.
+      if (Array.isArray(manifest?.activePlugins)) {
+        const unresolved = this.#computeUnresolved(manifest.activePlugins);
+        if (unresolved.length) this.#unresolvedPlugins = [...new Set([...this.#unresolvedPlugins, ...unresolved])];
+      }
       // Still NOT applyOutput — the merged manifest's `output` array is never applied.
       // mergeProjects resolves `output` as "mine" and is NOT operand-symmetric: the
       // transport imposes a canonical operand order, so whichever peer fills the "mine"
@@ -1658,9 +1668,15 @@ export class ProjectSync {
     // analysis can take as long as the analysis takes (the runner's own watchdog waits
     // 45s before it will even comment), and holding the apply chain — or `#loading` —
     // open that long would stall every merge behind one slow regression.
-    if (this.#materializeAnalyses) {
+    if (this.#materializeAnalyses || this.#adoptPlugins) {
       this.#materializeChain = this.#materializeChain
-        .then(() => this.#materializeAnalyses())
+        // Plugin set FIRST: the merge already unions `activePlugins` (collab-sync.js),
+        // it was simply never applied anywhere — opening a project restores its set, a
+        // live session did nothing at all. So a co-author's analysis reached a peer that
+        // had the plugin installed and switched off, purely because nothing ever turned
+        // it on. Activate-only, so this can never switch off the other peer's tools.
+        .then(() => (this.#adoptPlugins ? this.#adoptPlugins(manifest?.activePlugins) : null))
+        .then(() => this.#materializeAnalyses?.())
         .catch((err) => console.error('[live] materialise failed', err));
     }
   }

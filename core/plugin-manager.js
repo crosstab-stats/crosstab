@@ -790,6 +790,29 @@ export class PluginManager {
     await this.#runPool(toActivate, (key) => this.setEnabled(key, true));
   }
 
+  /**
+   * Activate every plugin in `keys` that is installed here and currently off. Never
+   * deactivates anything, which is what separates it from {@link applyActivatedSet}.
+   *
+   * For co-authoring (#156). Opening a project applies its recorded plugin set exactly —
+   * right there, because the project IS the context. A live session has two contexts at
+   * once, so "exactly" is not available: applying one peer's set would switch off the
+   * other's plugins mid-session, and each peer publishing its own set would make them
+   * fight. Growing toward the union converges and cannot oscillate.
+   *
+   * Only plugins already installed here. A peer cannot cause code to be fetched.
+   *
+   * @returns {Promise<string[]>} the keys actually activated
+   */
+  async activateAlso(keys) {
+    const want = new Set(keys || []);
+    const todo = this.list()
+      .filter((p) => !p.activated && (want.has(p.key) || (p.id && want.has(p.id))))
+      .map((p) => p.key);
+    if (todo.length) await this.#runPool(todo, (key) => this.setEnabled(key, true));
+    return todo;
+  }
+
   /** All known plugins for the dialog, with state + origin. */
   list() {
     const activated = new Set(this.#loader.list().map((m) => m.id));

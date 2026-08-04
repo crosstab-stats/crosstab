@@ -1075,6 +1075,11 @@ export async function boot(mounts) {
     getAnalysisLog: () => analysisLog.toJSON(),
     applyAnalysisLog: (entries) => analysisLog.load(entries),
     materializeAnalyses: () => materializeMissingAnalyses(),
+    adoptPlugins: async (keys) => {
+      if (!plugins || !Array.isArray(keys) || !keys.length) return;
+      const on = await plugins.activateAlso(keys);
+      if (on.length) debug('live', 'activated for a co-author', on);
+    },
   });
   // Now that the project exists, point the media store at it: bytes go into the
   // project's own `assets/` dir through the same ProjectStore (so encryption, folder
