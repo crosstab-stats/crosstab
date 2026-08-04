@@ -74,6 +74,20 @@ const RESULTS_STYLES = `
     padding: 8px 12px; color: #7a201a; white-space: pre-wrap;
     font-family: ui-monospace, Menlo, monospace; font-size: 12px;
   }
+  /* An unmet condition the user can actually DO something about — amber, not red,
+     because nothing is broken; something is merely missing. */
+  .results-blocked {
+    border-left: 3px solid #d68910; background: #fdf8ef;
+    padding: 10px 12px; color: #6b4b09; font-size: 13px;
+  }
+  .results-blocked__msg { margin: 0 0 8px; white-space: pre-wrap; }
+  .results-blocked__btn {
+    font: inherit; font-size: 12px; padding: 4px 10px;
+    background: #fff; border: 1px solid #b9770e; color: #8a5a0b;
+    border-radius: 6px; cursor: pointer;
+  }
+  .results-blocked__btn:hover { background: #fdf1dd; }
+  .results-blocked__btn[disabled] { opacity: .6; cursor: default; }
   svg { width: 100%; max-width: 720px; height: auto; display: block; }
   /* A plot lives in a user-resizable box (drag the lower-right grip). Default ~
      svglite's 7×4.5in (672×432px) so the first render is pixel-true; min() keeps
@@ -587,6 +601,54 @@ export class ResultsPane {
     // outside an analysis — imports, transforms, plugin loads — otherwise land on
     // a tab the user isn't looking at).
     this.#bus?.emit?.('output:error');
+  }
+
+  /**
+   * Append a block for something the user can FIX, with a button that fixes it.
+   *
+   * Distinct from {@link ResultsPane#appendError} because the two say different things.
+   * An error is a report: this run failed, here is why. This is an offer: this run has
+   * not happened yet, here is the one thing standing in the way, press here. The case
+   * that motivated it (#156) is a co-author's analysis arriving for a plugin this peer
+   * has not activated — a dead-end red message would have been a poor answer to "why is
+   * there a step in my History with nothing under it".
+   *
+   * The button is live DOM only. On restore the model rebuilds as plain text, exactly as
+   * a restored plot loses its `onRedraw` — the callback belonged to a session that has
+   * ended, and a button that silently does nothing is worse than no button.
+   *
+   * @param {string} message      plain text (not HTML — this is never a formatting hook)
+   * @param {object} [action]
+   * @param {string} [action.label]     button text; omitted ⇒ no button
+   * @param {() => any} [action.onClick] runs on click; the button disables while it runs
+   * @param {string} [action.runId]     the analysis this notice stands in for, so
+   *   {@link ResultsPane#removeRun} takes it down when the run finally happens. Passed
+   *   directly rather than via `assignRun`, which also stamps the last SECTION — and a
+   *   notice opens no section of its own, so that would have re-labelled someone else's.
+   */
+  appendNotice(message, { label, onClick, runId } = {}) {
+    const block = this.#makeBlock();
+    block.className = 'results-block results-blocked';
+    const p = document.createElement('p');
+    p.className = 'results-blocked__msg';
+    p.textContent = String(message ?? '');
+    block.append(p);
+    if (label && typeof onClick === 'function') {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'results-blocked__btn';
+      btn.textContent = label;
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try { await onClick(); } finally { btn.disabled = false; }
+      });
+      block.append(btn);
+    }
+    this.#place(block);
+    // Persisted as text: the words survive a save, the button does not. Escaped via the
+    // DOM node we just built rather than a hand-rolled escaper.
+    this.#model.push({ kind: 'text', html: p.outerHTML, notice: true, ...(runId ? { runId } : {}) });
+    this.#bus?.emit?.('output:written');
   }
 
   /** Remove all output and reset to the empty state. */

@@ -924,14 +924,41 @@ export async function boot(mounts) {
    * re-record, so this cannot echo back around the room.
    *
    * Failures are remembered, not retried. `#execute` already reports a failed run into
-   * the pane, and a plugin the co-author has and we don't will fail identically on every
-   * subsequent merge — which would turn one missing plugin into an error per keystroke.
+   * the pane, and the same failure would otherwise repeat on every subsequent merge —
+   * one bad run becoming an error block per keystroke.
    *
    * The attempted set is never cleared and needs no project scoping: a runId is an op id,
    * unique across projects, and reopening a project restores its saved output, so
    * everything already rendered is seen as rendered.
    */
   const materializedRuns = new Set();
+  /** Runs we declined to replay because the plugin isn't here — retried when that
+   * changes. runId → entry. @type {Map<string, object>} */
+  const blockedRuns = new Map();
+
+  /**
+   * Can this peer actually run a co-author's analysis? Three different answers, and the
+   * difference matters because two of them are things the user can fix in one click.
+   * @returns {{ok:true}|{ok:false, reason:'inactive'|'missing', key?:string, name:string}}
+   */
+  const analysisAvailability = (entry) => {
+    if (entry.host) return { ok: true }; // a host action — no plugin involved
+    if (loader.list().some((m) => m.id === entry.pluginId)) return { ok: true };
+    const known = plugins.list().find((p) => p.id === entry.pluginId);
+    if (known) return { ok: false, reason: 'inactive', key: known.key, name: known.name || entry.pluginName };
+    return { ok: false, reason: 'missing', name: entry.pluginName || entry.pluginId };
+  };
+
+  /** Re-attempt blocked runs, clearing the notices that stood in for them. */
+  const retryBlocked = async (entries) => {
+    for (const entry of entries) {
+      blockedRuns.delete(entry.runId);
+      materializedRuns.delete(entry.runId);
+      results.removeRun(entry.runId); // take down the notice; the run replaces it
+    }
+    await materializeMissingAnalyses();
+  };
+
   const materializeMissingAnalyses = async () => {
     const rendered = new Set(results.getModel().map((b) => b.runId).filter(Boolean));
     const pending = analysisLog.entries().filter((e) => e.runId && !rendered.has(e.runId) && !materializedRuns.has(e.runId));
@@ -939,10 +966,44 @@ export async function boot(mounts) {
     debug('live', 'materialising peer analyses', { count: pending.length });
     for (const entry of pending) {
       materializedRuns.add(entry.runId);
-      // eslint-disable-next-line no-await-in-loop -- analyses must run in order
-      await pluginActions.replay(entry);
+      const avail = analysisAvailability(entry);
+      if (avail.ok) {
+        // eslint-disable-next-line no-await-in-loop -- analyses must run in order
+        await pluginActions.replay(entry);
+        continue;
+      }
+      // Not a failure — an unmet condition, and the user is one click from meeting it.
+      // Left as a bare error this read as "something is broken"; what it actually means
+      // is "your co-author ran something you have turned off".
+      blockedRuns.set(entry.runId, entry);
+      if (avail.reason === 'inactive') {
+        results.appendNotice(
+          `“${entry.label}” was run by a co-author using the ${avail.name} plugin, which isn't active here. `
+          + 'Activate it to see the results.',
+          {
+            label: `Activate ${avail.name} and run`,
+            runId: entry.runId,
+            onClick: async () => { await plugins.setEnabled(avail.key, true); await retryBlocked([entry]); },
+          },
+        );
+      } else {
+        results.appendNotice(
+          `“${entry.label}” was run by a co-author using the ${avail.name} plugin, which isn't installed here. `
+          + 'Install it and this will fill in on its own.',
+          { label: 'Open plugin manager…', runId: entry.runId, onClick: () => plugins.openDialog() },
+        );
+      }
     }
   };
+
+  // A plugin arriving or being switched on is the event those notices are waiting for,
+  // so they clear themselves — the manager dialog is a shortcut, not the only route, and
+  // someone who installs a plugin for their own reasons shouldn't have to find the
+  // notice and press it.
+  bus.on(CoreEvents.PLUGINS_CHANGED, () => {
+    const ready = [...blockedRuns.values()].filter((e) => analysisAvailability(e).ok);
+    if (ready.length) void retryBlocked(ready);
+  });
 
   const projectStoreForProjects = new ProjectStore();
   const projects = new ProjectSync({

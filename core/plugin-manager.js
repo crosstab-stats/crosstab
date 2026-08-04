@@ -179,6 +179,13 @@ export class PluginManager {
     });
   }
 
+  /** Open the plugin manager dialog. Same thing Edit ▸ Plugins… does, exposed so
+   * anything that hits a "you don't have that plugin" wall can offer the way out
+   * rather than just naming it (#156). */
+  openDialog() {
+    this.#showDialog();
+  }
+
   /** Give the manager a handle on the creator (for Create / Edit actions). */
   attachCreator(creator) {
     this.#creator = creator;
