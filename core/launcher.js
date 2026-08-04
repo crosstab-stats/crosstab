@@ -15,6 +15,7 @@
  */
 
 import { makeDemoDataset, makeQualDemoDataset, makeSpatialDemoDataset } from './demo-data.js';
+import { newItemId } from './item-store.js';
 
 /** Curated-core analysis plugins, pre-selected on a fresh "Start blank". */
 const CORE_IDS = new Set([
@@ -40,7 +41,7 @@ const PRESETS = {
 const LS_SEEN = 'crosstab.launcher.seen';
 
 export class Launcher {
-  #plugins; #datasets; #bus; #projects; #offline; #workspaceStore;
+  #plugins; #datasets; #bus; #projects; #offline; #workspaceStore; #itemStore; #assetStore;
   #root = null;
   /** Selected plugin keys (the checked set). @type {Set<string>} */
   #selected = new Set();
@@ -61,15 +62,21 @@ export class Launcher {
    * @param {import('./offline.js').OfflineManager} [deps.offline] - Enables the
    *   "Make available offline" control in the About panel.
    * @param {import('./workspace-store.js').WorkspaceStore} [deps.workspaceStore] -
-   *   Pre-seeds workspace state for demo sources (e.g. spatial boundaries).
+   *   Pre-seeds workspace state for demo sources (e.g. a boundary set's dataset linkage).
+   * @param {import('./item-store.js').ItemStore} [deps.itemStore] - Pre-seeds item
+   *   records for demo sources (#152).
+   * @param {import('./asset-store.js').AssetStore} [deps.assetStore] - Stores demo
+   *   geometry as asset bytes, the same way a loaded file is stored.
    */
-  constructor({ plugins, datasets, bus, projects, offline, workspaceStore }) {
+  constructor({ plugins, datasets, bus, projects, offline, workspaceStore, itemStore, assetStore }) {
     this.#plugins = plugins;
     this.#datasets = datasets;
     this.#bus = bus;
     this.#projects = projects ?? null;
     this.#offline = offline ?? null;
     this.#workspaceStore = workspaceStore ?? null;
+    this.#itemStore = itemStore ?? null;
+    this.#assetStore = assetStore ?? null;
   }
 
   /** Load a data source by key (also used by the URL bypass) and name the active
@@ -94,21 +101,38 @@ export class Launcher {
     } catch {
       /* naming is best-effort */
     }
-    if (dataset.boundaries && this.#workspaceStore) {
+    // Seed demo boundaries through EXACTLY the path a loaded file takes (#152 Layer 5):
+    // geometry into the asset store, a boundarySets item record holding the ref. Writing
+    // the old `spatial-map` blob here was the last unmigrated producer of that shape —
+    // it left demo projects showing a stale "Plugin data" section alongside the real
+    // "Map layers" one, which is precisely the old-beside-new state this migration is
+    // meant to eliminate.
+    //
+    // NOTE this brings a project into being (assets need somewhere to live), where the
+    // blob write did not. Deliberate: the map layers ARE content the project holds, and
+    // the sidebar now presents them as such. `loadingSeed` still disarms autosave, so
+    // loading a demo does not churn saves.
+    if (dataset.boundaries?.length && this.#itemStore && this.#assetStore) {
       const dsId = this.#datasets.activeId;
       for (const b of dataset.boundaries) {
-        const slotId = b.fileName || `boundary-${Date.now()}`;
-        this.#workspaceStore.set('builtin', 'spatial-map', slotId, null, {
-          keyProp: b.keyProp,
-          fileName: b.fileName,
-          features: b.features,
-        }, { label: b.fileName });
-        if (b.dataColumn && dsId != null) {
-          this.#workspaceStore.set('builtin', 'spatial-link', slotId, dsId, {
-            dataColumn: b.dataColumn,
-            shadeColumn: null,
-            selected: [],
-          });
+        try {
+          const bytes = new TextEncoder().encode(JSON.stringify({ type: 'FeatureCollection', features: b.features }));
+          const info = await this.#assetStore.put(bytes, { name: b.fileName, type: 'application/geo+json' });
+          const setId = newItemId();
+          this.#itemStore.put('builtin', 'boundarySets', setId, {
+            fileName: b.fileName,
+            keyProp: b.keyProp,
+            assetId: `asset:${info.id}`,
+          }, { scope: { wsId: 'spatial-map', dsId: null } });
+          if (b.dataColumn && dsId != null && this.#workspaceStore) {
+            this.#workspaceStore.set('builtin', 'spatial-link', setId, dsId, {
+              dataColumn: b.dataColumn,
+              shadeColumn: null,
+              selected: [],
+            });
+          }
+        } catch (e) {
+          console.warn('[launcher] boundary seed failed', b.fileName, e);
         }
       }
     }
