@@ -458,6 +458,14 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       project-scoped ones get their own section. Not new UX — the existing shape, made
       general.
 
+  - [ ] **DEFERRED (user, 2026-08-03) — are sidebar inventory rows interactive?** Map-layer
+        rows render in the sidebar but aren't clickable; spatial switches layers with its
+        own control inside its tab, which still works. Open question for after the
+        migration: should an inventory row be clickable at all, and if so does the host
+        define the behaviour or offer a **handle the owning plugin may react to** (a
+        declared `onActivate` verb) — with "not interactive" a legitimate answer. Don't
+        guess the interaction while the storage layer is still moving.
+
   - [ ] **Spatial migration (the Layer 5 client) — design settled, not yet built.**
         `boundarySets` items `{keyProp, fileName, assetId}` replace the per-set
         `spatial-map` SLOTS; geometry bytes move to the asset store; `spatial-link` stays

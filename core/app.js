@@ -52,7 +52,7 @@ import { exportProjectBundle, importProjectBundle, pickBundleFile, downloadBlob,
 import { WorkspaceStore, ownerToken } from './workspace-store.js';
 import { WorkspaceManager } from './workspace-manager.js';
 import { PluginPackageStore } from './plugin-package-store.js';
-import { AssetStore, createAssetService } from './asset-store.js';
+import { AssetStore, createAssetService, ASSETS_CHANGED } from './asset-store.js';
 import { makeZip, readZipEntries } from './zip.js';
 
 /**
@@ -841,7 +841,7 @@ export async function boot(mounts) {
   // building blocks). Created here, after the services it drives exist.
   new ProjectSidebar(mounts.sidebar, {
     datasets, projects, library, bus,
-    workspaceStore, itemStore, assetStore,
+    workspaceStore, itemStore, assetStore, sweepAssets,
     pluginList: () => (plugins ? plugins.list() : []),
   });
 
@@ -1487,6 +1487,8 @@ function fmtBytes(n) {
 class ProjectSidebar {
   /** @type {{count:number,bytes:number}|null} */
   #assets = null;
+  /** asset id → byte size, so a reclaim can report how much it frees. @type {Map<string,number>} */
+  #assetBytes = new Map();
   #token = 0;
   #drag = null; // { kind: 'dataset'|'block', id }
 
@@ -1498,7 +1500,7 @@ class ProjectSidebar {
    * @param {import('./library.js').DatasetLibrary} deps.library
    * @param {EventBus} deps.bus
    */
-  constructor(host, { datasets, projects, library, bus, workspaceStore, itemStore, assetStore, pluginList }) {
+  constructor(host, { datasets, projects, library, bus, workspaceStore, itemStore, assetStore, sweepAssets, pluginList }) {
     this.host = host;
     this.datasets = datasets;
     this.projects = projects;
@@ -1506,6 +1508,7 @@ class ProjectSidebar {
     this.wsStore = workspaceStore ?? null;
     this.itemStore = itemStore ?? null;
     this.assetStore = assetStore ?? null;
+    this.sweepAssets = sweepAssets ?? null;
     /** Asset tally for the inventory line, refreshed each render (async, so it is read
      * from a field rather than awaited mid-DOM-build). @type {{count:number,bytes:number}|null} */
     this.#assets = null;
@@ -1513,6 +1516,7 @@ class ProjectSidebar {
     this.projectName = null;
     bus.on(DATASETS_CHANGED, () => this.render());
     bus.on(CoreEvents.ITEMS_CHANGED, () => this.render()); // the inventory covers items too (#152)
+    bus.on(ASSETS_CHANGED, () => this.render()); // …and stored files, however they change
     bus.on(CoreEvents.DATA_CHANGED, () => this.render());
     bus.on(LIBRARY_CHANGED, () => this.render());
     bus.on(CoreEvents.WORKSPACE_CHANGED, () => this.render());
@@ -1551,6 +1555,7 @@ class ProjectSidebar {
     // DOM build below stays synchronous.
     try {
       const assets = (await this.assetStore?.list()) ?? [];
+      this.#assetBytes = new Map(assets.map((a) => [a.id, Number(a.size) || 0]));
       this.#assets = assets.length
         ? { count: assets.length, bytes: assets.reduce((t, a) => t + (Number(a.size) || 0), 0) }
         : null;
@@ -1744,10 +1749,61 @@ class ProjectSidebar {
     const ul = document.createElement('ul');
     ul.className = 'proj__datasets';
     const li = el('li', `${assets.count} file${assets.count === 1 ? '' : 's'} · ${fmtBytes(assets.bytes)}`, 'proj__blob');
-    li.title = 'Media and other assets stored inside this project';
+    li.title = 'Media, geometry and other bytes stored inside this project';
     ul.append(li);
     frag.append(ul);
+    if (this.sweepAssets) frag.append(this.#reclaimButton());
     return frag;
+  }
+
+  /**
+   * Reclaim stored files nothing references any more.
+   *
+   * Why this is a button and not automatic: assets are content-addressed and SHARED, so
+   * removing the last boundary set that used one does not mean the bytes are dead — the
+   * same file may back another set, or a dataset column. Deleting on clear would have to
+   * guess; refcounting can only answer the question by scanning every dataset, which is
+   * far too expensive to run on each sidebar render. So it is an explicit act, like
+   * emptying a bin — which is also how the user reached for it ("are they in the bin?").
+   *
+   * Deliberately unavailable when the sweep abstains: that state is reported, never
+   * silently rendered as "nothing to reclaim" (see core/asset-refs.js).
+   */
+  #reclaimButton() {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'proj__add';
+    btn.textContent = 'Reclaim unused files';
+    btn.title = 'Delete stored files that nothing in this project points at any more';
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        const check = await this.sweepAssets({ dryRun: true });
+        if (check.abstained) {
+          alert(
+            'Cannot reclaim safely right now — some references could not be read, '
+            + 'so a file that is still in use might look unused:\n\n'
+            + check.incomplete.map((i) => `• ${i.name}: ${i.error}`).join('\n'),
+          );
+          return;
+        }
+        if (!check.swept.length) {
+          alert('Nothing to reclaim — every stored file is still referenced.');
+          return;
+        }
+        const freed = check.swept.reduce((t, id) => t + (this.#assetBytes?.get(id) ?? 0), 0);
+        const n = check.swept.length;
+        if (!confirm(`Delete ${n} unused file${n === 1 ? '' : 's'}${freed ? ` (${fmtBytes(freed)})` : ''}? This can't be undone.`)) return;
+        await this.sweepAssets();
+        await this.render();
+      } catch (e) {
+        console.error('[assets] reclaim failed', e);
+        alert(`Reclaim failed: ${e.message}`);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+    return btn;
   }
 
   #datasetRow(it, count, blockVer, hidden) {
