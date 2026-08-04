@@ -5,7 +5,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { refKey, sourceRefs, missingSources, chunk, reassemble, sha256hex, SourceExchange } from '../core/gap-fill.js';
+import { refKey, sourceRefs, missingSources, assetRefs, missingAssets, chunk, reassemble, sha256hex, BlobExchange } from '../core/gap-fill.js';
 
 // A source op in the flat one-true-log (the shape sourceRefs now reads).
 const loadOp = (id, dsId, file) => ({ id, hlc: { wall: 0, counter: 0 }, target: `ds:${dsId}/source:${id}`, owner: 'core', type: 'load', payload: { src: { meta: [{ name: 'x' }], label: 'f', file } }, reads: [] });
@@ -32,16 +32,16 @@ test('sha256hex is stable and content-sensitive', async () => {
   assert.notEqual(await sha256hex(a), await sha256hex(new Uint8Array([1, 2, 4])));
 });
 
-/** Wire two SourceExchanges through a drained broadcast queue. */
+/** Wire two BlobExchanges through a drained broadcast queue. */
 function wire(a, b) {
   const q = [];
   const peers = {};
   const mk = (id, held, bytesById) => {
     const store = new Map();
-    const ex = new SourceExchange({
+    const ex = new BlobExchange({
       held: new Set(held),
-      readSource: async (ref) => bytesById[refKey(ref)] ?? null,
-      storeSource: async (ref, bytes) => { store.set(refKey(ref), bytes); },
+      kind: 'source', refsOf: sourceRefs, read: async (ref) => bytesById[refKey(ref)] ?? null,
+      store: async (ref, bytes) => { store.set(refKey(ref), bytes); },
       send: (m, to) => q.push([id, m, to]),
       onReceived: (ev) => { (peers[id].received ||= []).push(ev); },
       chunkSize: 64,
@@ -75,7 +75,7 @@ test('full round-trip: a peer fetches a missing source, verified and stored', as
   await drain();
   assert.ok(peers.A.ex.held.has('op-b'));                     // now held
   assert.deepEqual([...peers.A.store.get('op-b')], [...payload]); // exact bytes stored
-  assert.deepEqual(peers.A.received, [{ key: 'op-b', ok: true, dsId: '2', file: 'src_op-b.parquet' }]);
+  assert.deepEqual(peers.A.received, [{ kind: 'source', key: 'op-b', ok: true, ref: { dsId: '2', file: 'src_op-b.parquet', id: 'op-b' } }]);
 });
 
 // Trystero's action channel only transmits binary when the WHOLE payload is a
@@ -87,30 +87,30 @@ const b64 = (bytes) => Buffer.from(bytes).toString('base64');
 const unb64 = (s) => new Uint8Array(Buffer.from(s, 'base64'));
 
 test('raw nested bytes are corrupted by a JSON transport (the bug)', async () => {
-  const A = new SourceExchange({
-    held: new Set(), readSource: async () => null,
-    storeSource: async () => {}, send: () => {},
+  const A = new BlobExchange({
+    kind: 'source', refsOf: sourceRefs, held: new Set(), read: async () => null,
+    store: async () => {}, send: () => {},
     onReceived: (ev) => { A.__last = ev; },
   });
   const good = new Uint8Array([1, 2, 3, 4]);
   const hash = await sha256hex(good);
-  const msg = { t: 'src-chunk', key: 'op-x', dsId: 1, file: 'f.parquet', seq: 0, total: 1, hash, bytes: good };
+  const msg = { t: 'gap-chunk', kind: 'source', key: 'op-x', dsId: 1, file: 'f.parquet', seq: 0, total: 1, hash, bytes: good };
   await A.receive(jsonClone(msg), 'B');   // as it would arrive over a JSON channel
   assert.equal(A.__last.ok, false);       // Uint8Array → {0,1,2,3} → integrity fails
 });
 
 test('a base64 adapter (project-sync wiring) survives the JSON transport', async () => {
   const stored = [];
-  const A = new SourceExchange({
-    held: new Set(), readSource: async () => null,
-    storeSource: async (ref, bytes) => stored.push([ref.file, [...bytes]]),
+  const A = new BlobExchange({
+    kind: 'source', refsOf: sourceRefs, held: new Set(), read: async () => null,
+    store: async (ref, bytes) => stored.push([ref.file ?? ref.id, [...bytes]]),
     send: () => {}, onReceived: (ev) => { A.__last = ev; },
   });
   const good = new Uint8Array([1, 2, 3, 4]);
   const hash = await sha256hex(good);
   // Sender wraps → JSON transport → receiver unwraps (mirrors project-sync send/onOps).
-  const wire = jsonClone({ t: 'src-chunk', key: 'op-x', dsId: 1, file: 'f.parquet', seq: 0, total: 1, hash, bytes: b64(good) });
-  const decoded = wire.t === 'src-chunk' && typeof wire.bytes === 'string' ? { ...wire, bytes: unb64(wire.bytes) } : wire;
+  const wire = jsonClone({ t: 'gap-chunk', kind: 'source', key: 'op-x', ref: { id: 'op-x', dsId: 1, file: 'f.parquet' }, seq: 0, total: 1, hash, bytes: b64(good) });
+  const decoded = wire.t === 'gap-chunk' && typeof wire.bytes === 'string' ? { ...wire, bytes: unb64(wire.bytes) } : wire;
   await A.receive(decoded, 'B');
   assert.equal(A.__last.ok, true);
   assert.deepEqual(stored, [['f.parquet', [1, 2, 3, 4]]]); // exact bytes land
@@ -118,10 +118,10 @@ test('a base64 adapter (project-sync wiring) survives the JSON transport', async
 
 test('a holder that declines (consent/size gate) sends nothing', async () => {
   const q = [];
-  const B = new SourceExchange({
+  const B = new BlobExchange({
     held: new Set(['op-b']),
-    readSource: async () => new Uint8Array([1, 2, 3]),
-    storeSource: async () => {},
+    kind: 'source', refsOf: sourceRefs, read: async () => new Uint8Array([1, 2, 3]),
+    store: async () => {},
     send: (m) => q.push(m),
     allowSend: () => false, // decline (e.g. 3 GB over a field link)
   });
@@ -131,17 +131,105 @@ test('a holder that declines (consent/size gate) sends nothing', async () => {
 
 test('integrity failure is rejected, not stored', async () => {
   const stored = [];
-  const A = new SourceExchange({
-    held: new Set(), readSource: async () => null,
-    storeSource: async (ref) => stored.push(refKey(ref)),
+  const A = new BlobExchange({
+    kind: 'source', refsOf: sourceRefs, held: new Set(), read: async () => null,
+    store: async (ref) => stored.push(refKey(ref)),
     send: () => {},
     onReceived: (ev) => { A.__last = ev; },
   });
   const good = new Uint8Array([1, 2, 3, 4]);
   const hash = await sha256hex(good);
   // Deliver a single chunk whose bytes don't match the advertised hash.
-  await A.receive({ t: 'src-chunk', key: 'op-x', dsId: 1, file: 'f.parquet', seq: 0, total: 1, hash, bytes: new Uint8Array([9, 9, 9, 9]) }, 'B');
+  await A.receive({ t: 'gap-chunk', kind: 'source', key: 'op-x', dsId: 1, file: 'f.parquet', seq: 0, total: 1, hash, bytes: new Uint8Array([9, 9, 9, 9]) }, 'B');
   assert.deepEqual(stored, []);          // not stored
   assert.equal(A.__last.ok, false);      // reported as failed
   assert.ok(!A.held.has('op-x'));
+});
+
+// --- assets (#155) -----------------------------------------------------------
+// The gap #152 opened: spatial geometry used to live in the workspace blob, which rides
+// inside manifest.log and therefore reached peers for free. Moving it to an asset meant a
+// co-authored map layer arrived with a valid assetId and nothing behind it.
+
+const assetManifest = (ops) => ({ log: ops });
+
+test('assetRefs reads addAsset ops and honours removeAsset', () => {
+  const m = assetManifest([
+    { type: 'addAsset', payload: { id: 'aaa', name: 'counties.geojson', type: 'application/geo+json' } },
+    { type: 'addAsset', payload: { id: 'bbb', name: 'clip.wav', type: 'audio/wav' } },
+    { type: 'removeAsset', payload: { id: 'bbb' } },
+    { type: 'load', payload: { src: { file: 'src_1.parquet' } }, target: 'ds:1/source:op-1', id: 'op-1' },
+  ]);
+  assert.deepEqual(assetRefs(m).map((r) => r.id), ['aaa'], 'a dropped asset is not fetched');
+});
+
+test('assetRefs dedupes — re-importing identical bytes appends another addAsset', () => {
+  const m = assetManifest([
+    { type: 'addAsset', payload: { id: 'aaa', name: 'x' } },
+    { type: 'addAsset', payload: { id: 'aaa', name: 'x again' } },
+  ]);
+  assert.equal(assetRefs(m).length, 1);
+});
+
+test('missingAssets is what a peer lacks', () => {
+  const m = assetManifest([
+    { type: 'addAsset', payload: { id: 'aaa' } },
+    { type: 'addAsset', payload: { id: 'bbb' } },
+  ]);
+  assert.deepEqual(missingAssets(m, new Set(['aaa'])).map((r) => r.id), ['bbb']);
+});
+
+test('an asset ROUND-TRIPS between peers, verified by content hash', async () => {
+  // An asset's id IS its sha256, so identity and integrity are the same value.
+  const bytes = new Uint8Array([7, 7, 9, 9, 1, 2, 3]);
+  const id = await sha256hex(bytes);
+  const m = assetManifest([{ type: 'addAsset', payload: { id, name: 'wards.geojson' } }]);
+
+  const q = [];
+  const peers = {};
+  const mk = (name, has) => {
+    const store = new Map();
+    const ex = new BlobExchange({
+      kind: 'asset',
+      refsOf: assetRefs,
+      held: new Set(has ? [id] : []),
+      read: async (ref) => (ref.id === id && has ? bytes : null),
+      store: async (ref, b) => { store.set(ref.id, b); },
+      send: (msg, to) => q.push([name, msg, to]),
+      onReceived: (ev) => { (peers[name].got ||= []).push(ev); },
+      chunkSize: 3, // force multi-chunk
+    });
+    peers[name] = { ex, store, got: [] };
+  };
+  mk('holder', true);
+  mk('joiner', false);
+
+  const missing = peers.joiner.ex.requestMissing(m);
+  assert.deepEqual(missing.map((r) => r.id), [id]);
+  let steps = 0;
+  while (q.length) {
+    if (++steps > 500) throw new Error('asset gap-fill did not settle');
+    const [from, msg, to] = q.shift();
+    for (const [n, p] of Object.entries(peers)) if (n !== from && (!to || to === n)) await p.ex.receive(msg, from);
+  }
+  assert.deepEqual([...peers.joiner.store.get(id)], [...bytes], 'exact bytes landed');
+  assert.ok(peers.joiner.ex.held.has(id));
+  assert.equal(peers.joiner.got[0].kind, 'asset');
+});
+
+test('the two exchanges IGNORE each other on a shared channel', async () => {
+  // Both ride the same ops channel. Without the kind discriminator the asset exchange
+  // would answer the source exchange's `need` and try to ingest its chunks.
+  const served = [];
+  const assets = new BlobExchange({
+    kind: 'asset', refsOf: assetRefs, held: new Set(['aaa']),
+    read: async () => { served.push('asset-read'); return new Uint8Array([1]); },
+    store: async () => {}, send: () => {},
+  });
+  // A SOURCE request must not reach the asset exchange's reader.
+  await assets.receive({ t: 'need', kind: 'source', refs: [{ id: 'aaa' }] }, 'peer');
+  assert.deepEqual(served, [], 'asset exchange ignored a source request');
+  // …and its own kind does reach it.
+  await assets.receive({ t: 'need', kind: 'asset', refs: [{ id: 'aaa' }] }, 'peer');
+  assert.deepEqual(served, ['asset-read']);
 });

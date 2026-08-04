@@ -19,7 +19,7 @@ import { DATASETS_CHANGED } from './dataset-manager.js';
 import { ASSETS_CHANGED } from './asset-store.js';
 import { ProjectStore, FOLDER_PROJECT_ID, buildManifest } from './project-store.js';
 import { attachLiveDoc } from './live-sync.js';
-import { SourceExchange } from './gap-fill.js';
+import { BlobExchange, sourceRefs, assetRefs } from './gap-fill.js';
 import { debug } from './debug.js';
 import { liveOps } from './op-log.js';
 import { rememberFolder, listFolders, forgetFolder, ensureReadWrite } from './folder-handle.js';
@@ -105,6 +105,11 @@ export class ProjectSync {
   #log = null;
   #getAssetOps;
   #applyAssetOps;
+  /** Byte-level access to the asset store, for live gap-fill (#155).
+   * `{ held(), read(id), store(id, bytes, meta) }`. */
+  #assetBytes = null;
+  /** The live ASSET exchange (the sibling of #liveExchange, which carries Parquet). */
+  #liveAssetExchange = null;
   /** () => the item tier's ops, and the restore hook (#152 Layer 1). */
   #getItemOps;
   #applyItemOps;
@@ -210,7 +215,7 @@ export class ProjectSync {
    * @param {(keys: string[]) => Promise<void>} [deps.applyActivePlugins] - Restore
    *   a project's saved plugin set on open.
    */
-  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getAssetOps, applyAssetOps, getItemOps, applyItemOps, projectLog, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, pluginIdentities, getMergers }) {
+  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getAssetOps, applyAssetOps, assetBytes, getItemOps, applyItemOps, projectLog, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, pluginIdentities, getMergers }) {
     this.#store = projectStore;
     this.#datasets = datasets;
     this.#ui = ui;
@@ -226,6 +231,7 @@ export class ProjectSync {
     this.#log?.register(PROJECT_META);
     this.#getAssetOps = getAssetOps ?? null;
     this.#applyAssetOps = applyAssetOps ?? null;
+    this.#assetBytes = assetBytes ?? null;
     this.#getItemOps = getItemOps ?? null;
     this.#applyItemOps = applyItemOps ?? null;
     this.#getOutput = getOutput ?? null;
@@ -1338,24 +1344,52 @@ export class ProjectSync {
     this.#liveSourceBytes = new Map();
     this.#liveLastManifest = null;
     const held = new Set();
-    this.#liveExchange = new SourceExchange({
+    this.#liveExchange = new BlobExchange({
+      kind: 'source',
+      refsOf: sourceRefs,
       held,
-      readSource: async (ref) => {
+      read: async (ref) => {
         const snap = await this.#snapshot(true); // my log WITH source bytes
         for (const op of snap.log) if (op.id === ref.id && op.payload?.src?.parquet) return op.payload.src.parquet;
         return this.#liveSourceBytes.get(ref.id) ?? null;
       },
-      storeSource: async (ref, bytes) => { this.#liveSourceBytes.set(ref.id ?? ref.key, bytes); },
+      store: async (ref, bytes) => { this.#liveSourceBytes.set(ref.id ?? ref.key, bytes); },
       // Base64 the chunk bytes going out (see bytesToB64) so Trystero doesn't mangle them.
-      send: (m, to) => session.sendOps(m.t === 'src-chunk' ? { ...m, bytes: bytesToB64(m.bytes) } : m, to),
+      send: (m, to) => session.sendOps(m.t === 'gap-chunk' ? { ...m, bytes: bytesToB64(m.bytes) } : m, to),
       onReceived: ({ ok, key }) => { debug('live', 'gap-fill received', { key, ok }); if (ok && this.#liveLastManifest) void this.#applyLiveManifest(this.#liveLastManifest); },
     });
-    // Decode chunk bytes back to a Uint8Array before the exchange reassembles them.
-    session.onOps((m, peer) => {
-      const msg = m?.t === 'src-chunk' && typeof m.bytes === 'string' ? { ...m, bytes: b64ToBytes(m.bytes) } : m;
-      void this.#liveExchange?.receive(msg, peer);
+
+    // ASSET gap-fill (#155). A second exchange on the SAME channel, discriminated by
+    // `kind`. It exists because #152 moved spatial geometry out of the workspace blob —
+    // which travels inside manifest.log — into a content-addressed asset, which does not.
+    // Without this a co-authored map layer reaches the peer as a record with a valid
+    // assetId and no bytes behind it, and CAQDAS media never arrived at all.
+    //
+    // Assets are the easier half: the id IS the sha256, so the transfer-time integrity
+    // check and the identity check are the same comparison.
+    this.#liveAssetExchange = new BlobExchange({
+      kind: 'asset',
+      refsOf: assetRefs,
+      held: new Set(),
+      read: async (ref) => (this.#assetBytes ? this.#assetBytes.read(ref.id) : null),
+      store: async (ref, bytes) => { await this.#assetBytes?.store(ref.id, bytes, { name: ref.name, type: ref.type }); },
+      send: (m, to) => session.sendOps(m.t === 'gap-chunk' ? { ...m, bytes: bytesToB64(m.bytes) } : m, to),
+      onReceived: ({ ok, key }) => {
+        debug('live', 'asset gap-fill received', { key, ok });
+        // A workspace showing that asset needs to re-read it — the record was already
+        // there, only the bytes were missing.
+        if (ok) void this.#applyWorkspaces?.([], { refresh: true });
+      },
     });
-    await this.#refreshHeld(); // seed the exchange with the source ids I already hold
+
+    // Decode chunk bytes back to a Uint8Array, then offer the message to BOTH exchanges;
+    // each ignores the other's kind.
+    session.onOps((m, peer) => {
+      const msg = m?.t === 'gap-chunk' && typeof m.bytes === 'string' ? { ...m, bytes: b64ToBytes(m.bytes) } : m;
+      void this.#liveExchange?.receive(msg, peer);
+      void this.#liveAssetExchange?.receive(msg, peer);
+    });
+    await this.#refreshHeld(); // seed both exchanges with what I already hold
     this.#liveDoc.hello();
     this.#emitProject();
   }
@@ -1368,6 +1402,13 @@ export class ProjectSync {
       const snap = await this.#snapshot(true);
       for (const op of snap.log) if (['load', 'append', 'join'].includes(op.type) && op.payload?.src?.parquet) this.#liveExchange.held.add(op.id);
     } catch { /* best effort */ }
+    // Assets I actually hold BYTES for — the index alone is not enough, since a peer can
+    // hold the ref long before the file arrives (#155).
+    try {
+      if (this.#assetBytes && this.#liveAssetExchange) {
+        for (const id of await this.#assetBytes.held()) this.#liveAssetExchange.held.add(id);
+      }
+    } catch { /* best effort */ }
   }
 
   /** Stop co-authoring (the presence layer owns leaving the room). */
@@ -1377,6 +1418,7 @@ export class ProjectSync {
     this.#liveDoc = null;
     this.#liveSession = null;
     this.#liveExchange = null;
+    this.#liveAssetExchange = null;
     this.#liveSourceBytes = new Map();
     this.#liveLastManifest = null;
     this.#coauthorPeers = 0;
@@ -1464,6 +1506,14 @@ export class ProjectSync {
       }
       this.#applyAnalysisLog?.(mergedLog.filter((o) => typeof o.target === 'string' && o.target.startsWith('analysis:')));
       this.#applyAssetOps?.(assetOpsOf(mergedLog));
+      // Ask for any asset BYTES this manifest references that we don't hold (#155).
+      // Unconditional, unlike the source request above: a peer can add a map layer or a
+      // recording without touching the datasets, so "no missing sources" says nothing
+      // about assets. requestMissing is a no-op when there is no gap.
+      if (this.#liveAssetExchange) {
+        const want = this.#liveAssetExchange.requestMissing(manifest);
+        if (want.length) debug('live', 'asset gap-fill requesting', { count: want.length });
+      }
       this.#applyItemOps?.(itemOpsOf(mergedLog)); // #152: peers' item records land here
       // Last, so a workspace refreshing in place sees the merged records, not the old ones.
       await this.#applyWorkspaces?.(mergedLog.filter((o) => typeof o.target === 'string' && o.target.startsWith('ws:')), { refresh: true });

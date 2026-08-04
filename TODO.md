@@ -93,7 +93,9 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         *protected* project buffers, deliberately, rather than storing media in the
         clear. `.crosstab` carries `assets/<id>.bin` + the ops. Adding media to a
         never-saved project creates the project first (`ProjectSync.ensureProject`).
-        **Still open:** live-P2P gap-fill for assets (`MediaStore.missing()` is the
+        **DONE (#155):** live-P2P gap-fill for assets — see below. The rest of this note
+        is the original state.
+        **Was open:** live-P2P gap-fill for assets (`MediaStore.missing()` is the
         hook), and a one-time cleanup of the now-stale `media-assets/` and `recycle/`
         OPFS roots left over from the old stores.
   - [x] **A9: project export now asks about linked building blocks — DONE (bundle
@@ -411,6 +413,28 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - Deactivate: real budget, awaited, and sequenced before the epoch advances.
   - Consider caching the probe manifest so activation does not re-parse; and reusing one
     frame per plugin rather than one per surface.
+
+- [x] **#155 — Live-P2P gap-fill for ASSETS — DONE.** Assets never crossed the wire: only
+      Parquet sources did. Bundle export and folder sync always carried them (bytes are in
+      the file / the shared directory); **live co-authoring did not**, since only the
+      manifest crosses.
+      **This was a regression I introduced in #152.** Spatial geometry used to live in the
+      `setWorkspace` blob, which rides inside `manifest.log` and therefore reached peers
+      for free. Layer 5 moved it into a content-addressed asset — so a co-authored map
+      layer arrived as a record with a valid `assetId` and nothing behind it. CAQDAS media
+      had never transferred at all.
+      **Built:** `SourceExchange` generalised to `BlobExchange` (one implementation of the
+      request→chunk→verify→store round-trip rather than two copies of the integrity
+      logic), discriminated by `kind` because both exchanges ride the same ops channel and
+      would otherwise answer each other. `assetRefs`/`missingAssets` honour `removeAsset`
+      so a peer never fetches bytes the project dropped.
+      **Assets are the easier half:** an asset id IS its sha256, so the transfer-time
+      integrity check and the identity check are the same comparison — verified against
+      real data (`idIsContentHash: true`).
+      **Verified** headlessly (13 gap-fill tests) and in-browser with a simulated peer
+      pair over the real base64/JSON wire encoding: both boundary assets requested,
+      byte-identical on arrival, geometry parsing back to 11 and 3 features. A real
+      two-window test is the remaining check.
 
 - [ ] **#151 — Re-home tool: repoint what referenced dataset A at dataset B.** With
       in-place replace gone (#149 A8), the "here's a corrected version of my data"

@@ -1,6 +1,6 @@
 /**
  * @file gap-fill.js
- * Base-data gap-fill for collaboration (#143) — when a merged manifest references a
+ * Byte gap-fill for collaboration (#143, generalised to assets in #155) — when a merged manifest references a
  * Parquet **source** a peer doesn't hold (the other peer created that dataset), fetch
  * the bytes over the channel. The op-log's first ops are `load`/`append`/`join`
  * pointing at immutable sources; a joiner replaying a merged log hits a source it
@@ -51,6 +51,38 @@ export function sourceRefs(manifest) {
   return out;
 }
 
+/**
+ * Every ASSET a manifest references, as `{ id, name, type }` (#155).
+ *
+ * Assets are the second thing a peer can lack, and the reason this module stopped being
+ * source-only: #152 moved spatial geometry out of the workspace blob and into a
+ * content-addressed asset. The blob travelled inside `manifest.log`, so a peer used to
+ * receive the geometry for free; an asset ref does not carry its bytes, so a co-authored
+ * map layer arrived with a valid `assetId` and nothing behind it.
+ *
+ * Easier than sources in one important way: an asset's id **is** its SHA-256, so identity
+ * and integrity are the same value — there is nothing to reconcile between them.
+ *
+ * `removeAsset` ops are honoured so a peer never fetches bytes the project has dropped.
+ */
+export function assetRefs(manifest) {
+  const seen = new Map();
+  const removed = new Set();
+  for (const op of manifest?.log ?? []) {
+    if (op.type === 'removeAsset' && op.payload?.id) removed.add(op.payload.id);
+    else if (op.type === 'addAsset' && op.payload?.id) {
+      seen.set(op.payload.id, { id: op.payload.id, name: op.payload.name ?? '', type: op.payload.type ?? '' });
+    }
+  }
+  return [...seen.values()].filter((r) => !removed.has(r.id));
+}
+
+/** The asset refs a peer lacks, given the ids it holds. */
+export function missingAssets(manifest, held) {
+  const have = held instanceof Set ? held : new Set(held);
+  return assetRefs(manifest).filter((r) => !have.has(r.id));
+}
+
 /** The source refs a peer lacks, given the keys it holds. */
 export function missingSources(manifest, held) {
   const have = held instanceof Set ? held : new Set(held);
@@ -80,36 +112,54 @@ export async function sha256hex(bytes) {
 }
 
 /**
- * Drives base-data transfer over a channel. One per peer; both sides run one.
+ * Drives transfer of one KIND of byte payload over a channel. One per peer per kind;
+ * both sides run one of each.
+ *
+ * Was `SourceExchange`, Parquet-only. Generalised (#155) because assets need exactly the
+ * same request → chunk → verify → store round-trip, and duplicating it would have meant
+ * two copies of the integrity logic — the part you least want drifting.
+ *
+ * **`kind` is not decoration.** Both exchanges ride the same ops channel, so without it
+ * the asset exchange would answer the source exchange's `need` and try to ingest its
+ * chunks. Every message carries its kind and each instance ignores the others'.
  *
  * @param {object} opts
- * @param {Set<string>} opts.held          keys of sources this peer already has (mutated as it receives)
- * @param {(ref) => Promise<Uint8Array|null>} opts.readSource   read a held source's bytes (or null)
- * @param {(ref, bytes) => Promise<void>} opts.storeSource      persist a received source
- * @param {(msg, toPeerId?) => void} opts.send                  send a protocol message
- * @param {(ev) => void} [opts.onReceived]  `{ key, ok, dsId?, file? }` when a source arrives (or fails integrity)
- * @param {(ref, size) => boolean} [opts.allowSend]  consent/size gate for sending (default: allow)
+ * @param {string} opts.kind               'source' | 'asset' — channel discriminator
+ * @param {(manifest) => object[]} opts.refsOf   the refs of this kind a manifest needs
+ * @param {Set<string>} opts.held          keys this peer already has (mutated as it receives)
+ * @param {(ref) => Promise<Uint8Array|null>} opts.read   read a held payload's bytes (or null)
+ * @param {(ref, bytes) => Promise<void>} opts.store      persist a received payload
+ * @param {(msg, toPeerId?) => void} opts.send            send a protocol message
+ * @param {(ev) => void} [opts.onReceived]  `{ key, ok, … }` when one arrives (or fails integrity)
+ * @param {(ref, size) => boolean} [opts.allowSend]  consent/size gate (default: allow)
  * @param {number} [opts.chunkSize]
  */
-export class SourceExchange {
+export class BlobExchange {
+  #kind;
+  #refsOf;
   #held;
-  #readSource;
-  #storeSource;
+  #read;
+  #store;
   #send;
   #onReceived;
   #allowSend;
   #chunkSize;
   #incoming = new Map(); // key → { total, hash, chunks: [] }
 
-  constructor({ held, readSource, storeSource, send, onReceived, allowSend, chunkSize = DEFAULT_CHUNK }) {
+  constructor({ kind, refsOf, held, read, store, send, onReceived, allowSend, chunkSize = DEFAULT_CHUNK }) {
+    if (!kind) throw new Error('BlobExchange: kind is required (two exchanges share one channel)');
+    this.#kind = kind;
+    this.#refsOf = refsOf ?? sourceRefs;
     this.#held = held instanceof Set ? held : new Set(held);
-    this.#readSource = readSource;
-    this.#storeSource = storeSource;
+    this.#read = read;
+    this.#store = store;
     this.#send = send;
     this.#onReceived = onReceived;
     this.#allowSend = allowSend;
     this.#chunkSize = chunkSize;
   }
+
+  get kind() { return this.#kind; }
 
   get held() {
     return this.#held;
@@ -118,29 +168,31 @@ export class SourceExchange {
   /** Ask peers for any sources this manifest needs that we don't hold. Returns the
    * missing refs (empty ⇒ nothing to fetch). */
   requestMissing(manifest) {
-    const missing = missingSources(manifest, this.#held);
-    if (missing.length) this.#send({ t: 'need', refs: missing.map((r) => ({ id: r.id, dsId: r.dsId, file: r.file })) });
+    const have = this.#held;
+    const missing = this.#refsOf(manifest).filter((r) => !have.has(refKey(r)));
+    if (missing.length) this.#send({ t: 'need', kind: this.#kind, refs: missing });
     return missing;
   }
 
-  /** Handle an inbound gap-fill message (ignore anything else). */
+  /** Handle an inbound gap-fill message. Anything of another kind — or not gap-fill at
+   * all — is ignored, which is what lets both exchanges share one channel. */
   async receive(msg, from) {
-    if (!msg) return;
+    if (!msg || (msg.kind && msg.kind !== this.#kind)) return;
     if (msg.t === 'need') { await this.#serve(msg.refs, from); return; }
-    if (msg.t === 'src-chunk') { await this.#ingest(msg); }
+    if (msg.t === 'gap-chunk') { await this.#ingest(msg); }
   }
 
   async #serve(refs, to) {
     for (const ref of refs ?? []) {
       const key = refKey(ref);
       if (!this.#held.has(key)) continue; // we don't have it either
-      const bytes = await this.#readSource(ref);
+      const bytes = await this.#read(ref);
       if (!bytes) continue;
       if (this.#allowSend && !this.#allowSend(ref, bytes.length)) continue; // declined / too big
       const hash = await sha256hex(bytes);
       const chunks = chunk(bytes, this.#chunkSize);
       for (let seq = 0; seq < chunks.length; seq++) {
-        this.#send({ t: 'src-chunk', key, dsId: ref.dsId, file: ref.file, seq, total: chunks.length, hash, bytes: chunks[seq] }, to);
+        this.#send({ t: 'gap-chunk', kind: this.#kind, key, ref, seq, total: chunks.length, hash, bytes: chunks[seq] }, to);
       }
     }
   }
@@ -154,11 +206,11 @@ export class SourceExchange {
     this.#incoming.delete(msg.key);
     const bytes = reassemble(rec.chunks);
     if ((await sha256hex(bytes)) !== rec.hash) {
-      this.#onReceived?.({ key: msg.key, ok: false }); // integrity failure — do not store
+      this.#onReceived?.({ kind: this.#kind, key: msg.key, ok: false }); // integrity failure — do not store
       return;
     }
-    await this.#storeSource({ id: msg.key, dsId: msg.dsId, file: msg.file }, bytes);
+    await this.#store(msg.ref ?? { id: msg.key }, bytes);
     this.#held.add(msg.key);
-    this.#onReceived?.({ key: msg.key, ok: true, dsId: msg.dsId, file: msg.file });
+    this.#onReceived?.({ kind: this.#kind, key: msg.key, ok: true, ref: msg.ref ?? { id: msg.key } });
   }
 }

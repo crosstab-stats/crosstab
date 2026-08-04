@@ -941,6 +941,14 @@ export async function boot(mounts) {
     projectLog,
     getAssetOps: () => assetStore.ops(),
     applyAssetOps: (ops) => assetStore.restoreOps(ops),
+    // Byte-level access for live asset gap-fill (#155). `held` is what we have BYTES
+    // for, not what the index lists — a peer holds the ref long before the file lands.
+    assetBytes: {
+      held: async () => (await assetStore.list({ present: true })).map((a) => a.id),
+      read: async (id) => (await assetStore.get(id))?.bytes ?? null,
+      // put() re-hashes, and an asset id IS its sha256, so storing verifies identity.
+      store: async (id, bytes, meta) => { await assetStore.put(bytes, meta || {}); },
+    },
     getItemOps: () => itemStore.ops(),
     applyItemOps: (ops) => itemStore.restoreOps(ops),
     getWorkspaceOps: () => workspaceStore.ops(),
