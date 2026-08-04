@@ -47,6 +47,10 @@ export const CoreEvents = Object.freeze({
   /** A plugin workspace wrote its state blob. Lets the project autosave persist
    * the workspace sidecar. Payload: { id } (the workspace id). */
   WORKSPACE_CHANGED: 'workspace:changed',
+  /** An item-tier record was written or removed (#152). Distinct from
+   * WORKSPACE_CHANGED: that's a whole-blob overwrite, this is one record.
+   * Payload: { owner, collection, id }. */
+  ITEMS_CHANGED: 'items:changed',
 });
 
 /**

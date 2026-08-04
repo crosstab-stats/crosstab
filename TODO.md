@@ -398,6 +398,11 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       Ctrl-Z. `UndoCoordinator`'s data/analysis split then collapses instead of gaining a
       third case.
 
+  **ORDER (user, 2026-08-03): 1 → 5 → 2 → 3 → 4.** Layer 5 bumped ahead of the memo work:
+  spatial's inline GeoJSON is a cost being paid today, memos are a feature not yet missed.
+  Save-breaking changes are fine through all of it — dev mode, and the handful of users
+  know it.
+
   - [ ] **Layer 1 — the item tier (host-only, nothing uses it).** `putItem`/`removeItem`
         ops, generic fold, an `ItemStore` keyed `(owner, wsId, slotId, dsKey, collection,
         itemId)`, projection registered on `ProjectLog`. Headless tests: fold, undo,
