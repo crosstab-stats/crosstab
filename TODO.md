@@ -383,7 +383,23 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - **F7 — the same source is fetched and parsed up to three times** (probe, compute
     frame, each workspace mount + each retry), in separate frames, with no sharing.
 
-  **DIRECTION (to design before building)**
+  **DESIGN: `docs/ARCHITECTURE-plugin-lifecycle.md`** — the new envelope, written after
+  MEASURING the platform rather than assuming it. Three findings reshaped it:
+
+  - **Sandboxed opaque-origin iframes already run OUT OF PROCESS.** A guest burning
+    2500 ms of CPU left the host ticking with a 109 ms max gap. A plugin taking 90 seconds
+    — or hours — does not block the UI today. The user asked for threading so the UI stays
+    responsive; that property is already held, by the isolation mechanism, for free.
+  - **A Worker cannot be spawned inside the cage.** An opaque origin makes
+    `blob:null/…` URLs, which are not fetchable, so `new Worker(blob)` constructs and
+    fails to load. `worker-src blob:` does not help — the URL is the blocker, not the
+    policy. So the cage+worker composition is off the table, and unnecessary.
+  - Therefore the rebuild is **reporting and patience**, not concurrency: explicit failure
+    signals for every step, guest-side global error handlers so silence is impossible,
+    rid-keyed acks, progress + heartbeat, and exactly ONE advisory timer that may change
+    wording and nothing else.
+
+  **OLD DIRECTION (superseded, kept for the reasoning)**
 
   - Tie sandbox URL lifetime to the frame, not to a timer. This alone may fix the symptom.
   - Mount lazily on first tab view; keep eager mount only where a workspace must run
