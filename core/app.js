@@ -829,6 +829,9 @@ export async function boot(mounts) {
   // "Save dataset to library" / "Add dataset from library". No autosave here;
   // the project tier (below) owns autosave.
   const library = new DatasetLibrary({
+    items: itemStore,
+    assets: assetStore,
+    collections: () => [...CORE_COLLECTIONS, ...declaredCollections(plugins?.list() ?? [], ownerToken)],
     datasetStore,
     data: datasets,
     ui,
@@ -2020,6 +2023,10 @@ class ProjectSidebar {
       // picking a map layer does not deselect the dataset you are analysing.
       active: !!this.selection?.isActive(decl.owner, decl.id, rec.id),
       onOpen: this.selection ? () => this.selection.set(decl.owner, decl.id, rec.id) : null,
+      // Portability was the last thing separating a record from a dataset (#153): a
+      // dataset could leave the project and be reused, a map layer could not — which is
+      // exactly the use case that started first-class-plugin-data.
+      drag: { kind: 'record', id: `${decl.owner}\u0000${decl.id}\u0000${rec.id}` },
       summary: summary == null ? null : String(summary),
       onRename: field ? (v) => { if (v) this.itemStore.put(decl.owner, decl.id, rec.id, { [field]: v }); } : null,
       onDelete: () => this.itemStore.remove(decl.owner, decl.id, rec.id),
@@ -2508,16 +2515,28 @@ class ProjectSidebar {
     list.className = 'proj__datasets';
     // Drop a dataset here to promote it to a building block (v1).
     this.#dropTarget(list, 'dataset', (id) => this.library.promoteToBlock(id));
+    this.#dropTarget(list, 'record', (key) => {
+      const [owner, collection, recId] = String(key).split('\u0000');
+      if (owner && collection && recId) void this.library.promoteRecordToBlock(owner, collection, recId);
+    });
     if (blocks.length === 0) {
-      list.append(el('li', 'Drag a dataset here to save it as a reusable block.', 'proj__empty'));
+      list.append(el('li', 'Drag a dataset or a map layer here to reuse it across projects.', 'proj__empty'));
     }
     // Blocks go through the SAME builder as project content, which is the user's actual
     // requirement: however an item looks in a project is how it looks in the library.
     for (const b of blocks) {
+      // One list, two kinds — the user's call. The badge is what keeps it readable
+      // without splitting into sections that would then have to be kept in step with the
+      // project list.
+      const kindLabel = b.kind === 'record'
+        ? (this.#collectionDecls().find((d) => d.id === b.collection)?.label ?? b.collection ?? 'Record')
+        : null;
       list.append(this.#contentRow({
         name: b.name,
-        title: 'Click to add to the current project · drag onto Datasets',
-        badge: { text: `v${b.version ?? 1}`, title: 'Block version' },
+        title: kindLabel
+          ? `${kindLabel} · click to add to the current project`
+          : 'Click to add to the current project · drag onto Datasets',
+        badge: { text: kindLabel ? `${kindLabel} · v${b.version ?? 1}` : `v${b.version ?? 1}`, title: 'Block version' },
         onOpen: () => void this.library.addBlockToProject(b.id),
         onDelete: () => void this.library.deleteBlock(b.id),
         deleteTitle: 'Delete building block',

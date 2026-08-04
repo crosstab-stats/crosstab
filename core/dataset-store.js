@@ -64,6 +64,9 @@ const isSourceOp = (op) => SOURCE_TYPES.has(op?.type);
  * @property {number} sourceCount
  */
 
+/** Content ids are hex, but never let a crafted one escape the block directory. */
+const safeAssetName = (id) => String(id).replace(/[^a-z0-9]/gi, '').slice(0, 96);
+
 export class DatasetStore {
   /** Serialises catalog read-modify-write so concurrent saves/deletes can't
    * interleave and orphan/resurrect entries. */
@@ -206,6 +209,63 @@ export class DatasetStore {
   }
 
   /**
+   * Save a **record** block — a plugin's item record plus the asset bytes it references
+   * (#153 step 4). The library's other entries are datasets; this is the second kind, and
+   * the reason #146's "building-block eligibility" was parked pending a contract that
+   * could hold something other than a dataset.
+   *
+   * Versioned identically to a dataset block, and stored in the same catalog so one list
+   * shows both — which is what the user asked for: an item looks the same wherever it is.
+   *
+   * @param {{id?: string, name: string, savedAt: number,
+   *          record: {owner: string, collection: string, fields: object},
+   *          assets?: Array<{id: string, bytes: Uint8Array, type?: string, name?: string}>}} entry
+   * @returns {Promise<{id: string, version: number}>}
+   */
+  async saveRecord({ id, name, savedAt, record, assets = [] }) {
+    const release = await this.#acquire();
+    try {
+      if (navigator.storage?.persist) {
+        try { await navigator.storage.persist(); } catch { /* best effort */ }
+      }
+      const root = await this.#root(true);
+      id = id || crypto.randomUUID();
+      const dir = await root.getDirectoryHandle(id, { create: true });
+      const cat = await this.#readCatalog();
+      const existing = cat.entries.find((e) => e.id === id);
+      const version = existing ? (existing.version || 1) + 1 : 1;
+
+      // Asset bytes ride as sidecars, keyed by their ORIGINAL content id. On add the
+      // bytes are re-stored in the destination project, which — being content-addressed
+      // — mints the same id again, so a block added twice shares one copy.
+      const stored = [];
+      for (const a of assets) {
+        if (!a?.id || !a.bytes) continue;
+        const file = `asset_${safeAssetName(a.id)}.bin`;
+        await this.#write(dir, file, a.bytes);
+        stored.push({ id: a.id, file, type: a.type ?? 'application/octet-stream', name: a.name ?? '' });
+      }
+
+      const manifest = { kind: 'record', name, savedAt, version, record, assets: stored };
+      await this.#write(dir, 'manifest.json', JSON.stringify(manifest));
+
+      const summary = {
+        id, name, savedAt, version,
+        kind: 'record',
+        collection: record?.collection ?? null,
+        assetCount: stored.length,
+      };
+      const idx = cat.entries.findIndex((e) => e.id === id);
+      if (idx >= 0) cat.entries[idx] = summary;
+      else cat.entries.push(summary);
+      await this.#write(root, CATALOG, JSON.stringify(cat));
+      return { id, version };
+    } finally {
+      release();
+    }
+  }
+
+  /**
    * Load an entry, reading its manifest and every source Parquet.
    * @param {string} id
    * @returns {Promise<{id: string, name: string, savedAt: number, state: DatasetState}>}
@@ -214,6 +274,26 @@ export class DatasetStore {
     const root = await this.#root();
     const dir = await root.getDirectoryHandle(id);
     const manifest = JSON.parse(await this.#read(dir, 'manifest.json'));
+    // A record block carries no op recipe — just the record and its asset bytes (#153).
+    if (manifest.kind === 'record') {
+      const assets = [];
+      for (const a of manifest.assets ?? []) {
+        try {
+          assets.push({ ...a, bytes: new Uint8Array(await this.#readBytes(dir, a.file)) });
+        } catch (e) {
+          console.warn('[library] asset missing from block', a.file, e);
+        }
+      }
+      return {
+        id,
+        kind: 'record',
+        name: manifest.name,
+        savedAt: manifest.savedAt,
+        version: manifest.version ?? 1,
+        record: manifest.record,
+        assets,
+      };
+    }
     // The folded op recipe (the shape DataStore.restoreState consumes): source ops get
     // their Parquet re-attached from the sidecar; transform ops are inline.
     const ops = [];

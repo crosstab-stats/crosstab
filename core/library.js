@@ -16,6 +16,8 @@
 
 /** Bus event: the building-block library changed (block saved/deleted) — the
  * sidebar's Building Blocks zone re-renders on this. */
+import { newItemId } from './item-store.js';
+
 export const LIBRARY_CHANGED = 'library:changed';
 
 /** The library's linked-dataset overlay boundary is the count of **transform** ops in a
@@ -41,13 +43,22 @@ export class DatasetLibrary {
    * @param {{appendError: Function, appendText: Function}} deps.results
    * @param {import('./event-bus.js').EventBus} deps.bus
    */
-  constructor({ datasetStore, data, ui, menus, results, bus }) {
+  /** Item tier + asset store + collection declarations, for RECORD blocks (#153 step 4).
+   * Absent ⇒ record promotion is simply unavailable and datasets behave as before. */
+  #items = null;
+  #assets = null;
+  #decls = () => [];
+
+  constructor({ datasetStore, data, ui, menus, results, bus, items, assets, collections }) {
     this.#store = datasetStore;
     this.#data = data;
     this.#ui = ui;
     this.#menus = menus;
     this.#results = results;
     this.#bus = bus;
+    this.#items = items ?? null;
+    this.#assets = assets ?? null;
+    this.#decls = collections ?? (() => []);
   }
 
   /** List building blocks (for the sidebar). */
@@ -147,9 +158,86 @@ export class DatasetLibrary {
     }
   }
 
+  /**
+   * Promote a plugin RECORD to a building block (#153 step 4) — a map layer, say.
+   *
+   * A record block is the record's fields plus the bytes of every asset its declared
+   * `assetRefs` point at. That declaration is what makes this possible at all: the host
+   * cannot read a plugin's schema, but it knows which fields hold refs, so it can gather
+   * exactly the bytes the record needs and nothing else.
+   */
+  async promoteRecordToBlock(owner, collection, recordId) {
+    if (!this.#items || !this.#assets) return;
+    const rec = this.#items.get(owner, collection, recordId);
+    if (!rec) return;
+    const decl = this.#decls().find((d) => d.owner === owner && d.id === collection) ?? null;
+    const name = (decl?.labelField && rec.fields?.[decl.labelField]) || rec.id;
+    try {
+      const assets = [];
+      for (const field of decl?.assetRefs ?? []) {
+        const ref = rec.fields?.[field];
+        if (!ref) continue;
+        const assetId = String(ref).replace(/^asset:/, '');
+        const got = await this.#assets.get(assetId);
+        if (got) assets.push({ id: assetId, bytes: got.bytes, type: got.type, name: got.name });
+        else this.#results.appendError(`"${name}": the file behind ${field} is missing — saved without it.`);
+      }
+      const { version } = await this.#store.saveRecord({
+        name,
+        savedAt: Date.now(),
+        record: { owner, collection, fields: { ...rec.fields } },
+        assets,
+      });
+      this.#bus?.emit(LIBRARY_CHANGED);
+      this.#results.appendText(`Saved **${name}** as a building block (v${version}).`);
+    } catch (err) {
+      console.error('[library] record promote failed', err);
+      this.#results.appendError(`Save to library failed: ${err.message}`);
+    }
+  }
+
+  /**
+   * Add a record block into the current project. INSTANTIATED, not referenced: the
+   * record gets a freshly minted id and the asset bytes are re-stored here, so the copy
+   * is self-contained and nothing dangles if the library entry is later deleted. Same
+   * rule datasets follow (#149 A9c).
+   *
+   * Asset ids are content hashes, so re-storing identical bytes yields the same id and
+   * two projects that add the same block do not duplicate the file.
+   */
+  async #addRecordBlock(block) {
+    if (!this.#items || !this.#assets) return;
+    const { owner, collection, fields } = block.record ?? {};
+    if (!owner || !collection) return;
+    const remapped = { ...fields };
+    for (const a of block.assets ?? []) {
+      try {
+        const info = await this.#assets.put(a.bytes, { type: a.type, name: a.name });
+        // Point every field that referenced the OLD id at the newly stored one.
+        for (const [k, v] of Object.entries(remapped)) {
+          if (typeof v === 'string' && v.replace(/^asset:/, '') === a.id) remapped[k] = `asset:${info.id}`;
+        }
+      } catch (err) {
+        console.error('[library] asset restore failed', err);
+        this.#results.appendError(`Adding "${block.name}": a referenced file could not be stored.`);
+      }
+    }
+    this.#items.put(owner, collection, newItemId(), remapped, { scope: { dsId: null } });
+    this.#results.appendText(`Added **${block.name}** to this project.`);
+  }
+
   /** Add a copy of a building block into the current project, linked to its
    * current version. Public entry point for the sidebar / drag. */
   async addBlockToProject(id) {
+    // Record blocks take their own path — they have no op recipe to replay.
+    try {
+      const probe = await this.#store.load(id);
+      if (probe?.kind === 'record') { await this.#addRecordBlock(probe); this.#bus?.emit(LIBRARY_CHANGED); return; }
+    } catch (err) {
+      console.error('[library] block load failed', err);
+      this.#results.appendError(`Could not open that building block: ${err.message}`);
+      return;
+    }
     await this.#add(id);
   }
 
