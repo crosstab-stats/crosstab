@@ -678,9 +678,16 @@ export class ProjectSync {
     this.#loading = true;
     try {
       await this.#datasets.loadBundle({ log: [] }); // empty log ⇒ one fresh blank dataset
-      this.#applyWorkspaces?.([]); // a fresh project has no workspace state
+      // ORDER MATTERS (#153): state tiers are replaced BEFORE the workspace tier, because
+      // applying workspaces REMOUNTS the workspace plugins, and a plugin reads its records
+      // on mount. Remounting first meant a plugin mounted against the OUTGOING project's
+      // records, loaded them into memory, and wrote them straight back — racing the clear
+      // that came two lines later. Symptom: switching from the spatial demo to another
+      // project kept exactly the ACTIVE map layer, because that is the one wsSaveState
+      // writes. Consumers are re-mounted last, when the state they read is already right.
       this.#applyAssetOps?.([]);
       this.#applyItemOps?.([]);
+      this.#applyWorkspaces?.([]); // a fresh project has no workspace state
       this.#applyOutput?.([]); // …and no output (clears stale output on switch)
       this.#applyAnalysisLog?.([]); // …and no recorded analyses (script)
     } finally {
@@ -754,9 +761,16 @@ export class ProjectSync {
       await this.#datasets.loadBundle(bundle);
       // Restore plugin workspace blobs BEFORE plugins load, so a workspace's
       // mount() sees its saved state via state.get(). Absent ⇒ empty.
-      this.#applyWorkspaces?.(bundle.workspaceOps || []);
+      // ORDER MATTERS (#153): state tiers are replaced BEFORE the workspace tier, because
+      // applying workspaces REMOUNTS the workspace plugins, and a plugin reads its records
+      // on mount. Remounting first meant a plugin mounted against the OUTGOING project's
+      // records, loaded them into memory, and wrote them straight back — racing the clear
+      // that came two lines later. Symptom: switching from the spatial demo to another
+      // project kept exactly the ACTIVE map layer, because that is the one wsSaveState
+      // writes. Consumers are re-mounted last, when the state they read is already right.
       this.#applyAssetOps?.(bundle.assetOps || assetOpsOf(bundle.log));
       this.#applyItemOps?.(bundle.itemOps || itemOpsOf(bundle.log));
+      this.#applyWorkspaces?.(bundle.workspaceOps || []);
       this.#applyNameOps(bundle.log);
       this.#applyOutput?.(bundle.output || []); // restore the Output tab (or clear)
       this.#applyAnalysisLog?.(bundle.analysisLog || []); // restore the script's analysis steps
@@ -798,9 +812,9 @@ export class ProjectSync {
       }
       try {
         await this.#datasets.loadBundle({ log: [] }); // empty log ⇒ one fresh blank dataset
-        this.#applyWorkspaces?.([]);
         this.#applyAssetOps?.([]);
         this.#applyItemOps?.([]);
+        this.#applyWorkspaces?.([]); // last: remounting plugins read the tiers above
         this.#applyOutput?.([]);
         this.#applyAnalysisLog?.([]);
       } catch (e2) {
@@ -833,7 +847,9 @@ export class ProjectSync {
       this.#setStatus('error');
       throw err;
     }
-    this.#applyWorkspaces?.(bundle.workspaceOps || []);
+    this.#applyAssetOps?.(bundle.assetOps || assetOpsOf(bundle.log));
+    this.#applyItemOps?.(bundle.itemOps || itemOpsOf(bundle.log));
+    this.#applyWorkspaces?.(bundle.workspaceOps || []); // last — remounts read the above
     this.#applyOutput?.(bundle.output || []);
     this.#applyAnalysisLog?.(bundle.analysisLog || []);
     // Restore the bundle's recorded analysis set (#102), so opening a shared bundle
@@ -1256,9 +1272,10 @@ export class ProjectSync {
     try {
       const { bundle } = await this.#store.load(id);
       await this.#datasets.loadBundle(bundle);
-      await this.#applyWorkspaces?.(bundle.workspaceOps || [], { refresh: true }); // peer sync → refresh in place, don't remount
       this.#applyAssetOps?.(bundle.assetOps || assetOpsOf(bundle.log));
       this.#applyItemOps?.(bundle.itemOps || itemOpsOf(bundle.log));
+      // Refresh (not remount) in place, and still LAST: onRefresh re-reads the records.
+      await this.#applyWorkspaces?.(bundle.workspaceOps || [], { refresh: true });
       this.#applyNameOps(bundle.log);
       this.#applyOutput?.(bundle.output || []);
       this.#applyAnalysisLog?.(bundle.analysisLog || []);
@@ -1446,9 +1463,10 @@ export class ProjectSync {
         await this.#datasets.loadBundle({ log, activeId: manifest.activeId, datasetMeta: manifest.datasetMeta });
       }
       this.#applyAnalysisLog?.(mergedLog.filter((o) => typeof o.target === 'string' && o.target.startsWith('analysis:')));
-      await this.#applyWorkspaces?.(mergedLog.filter((o) => typeof o.target === 'string' && o.target.startsWith('ws:')), { refresh: true }); // refresh in place
       this.#applyAssetOps?.(assetOpsOf(mergedLog));
       this.#applyItemOps?.(itemOpsOf(mergedLog)); // #152: peers' item records land here
+      // Last, so a workspace refreshing in place sees the merged records, not the old ones.
+      await this.#applyWorkspaces?.(mergedLog.filter((o) => typeof o.target === 'string' && o.target.startsWith('ws:')), { refresh: true });
       this.#applyNameOps(mergedLog); // a co-author's rename lands here (#149 A3)
       this.#applyOutput?.(manifest.output || []);
       this.#persistPeerWork(dataChanged); // a co-author's work is work (#149 C1)

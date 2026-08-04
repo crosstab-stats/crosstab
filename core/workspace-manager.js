@@ -30,6 +30,9 @@ export class WorkspaceManager {
   /** The item tier (#152) — the granular counterpart to the blob store above.
    * @type {import('./item-store.js').ItemStore|null} */
   #items = null;
+  /** () => the current project epoch (#153), for rejecting writes from a mount whose
+   * project has since closed. @type {() => number} */
+  #epoch = () => 0;
   #services;
   #activeDatasetId;
   #onError;
@@ -48,10 +51,11 @@ export class WorkspaceManager {
    * @param {Object} deps.services - The host service bundle (data/results/webr/ui/web).
    * @param {(err: Error) => void} [deps.onError]
    */
-  constructor({ tabs, store, items, services, activeDatasetId, onError }) {
+  constructor({ tabs, store, items, epoch, services, activeDatasetId, onError }) {
     this.#tabs = tabs;
     this.#store = store;
     this.#items = items ?? null;
+    this.#epoch = epoch ?? (() => 0);
     this.#services = services;
     // Which dataset a mount is bound to (coding state is per-dataset, #139). Read at
     // mount; a dataset switch re-mounts (see app.js), binding to the new one.
@@ -210,6 +214,15 @@ export class WorkspaceManager {
     // owner-keyed store already isolates the data either way).
     const owner = ownerToken(plugin);
     const reserved = this.#builtinWsIds.has(ws.id) && !plugin.builtin;
+    // The project this mount belongs to. A write arriving after the project closed is a
+    // straggler from a torn-down mount and must not land in whatever is open now (#153).
+    const mountEpoch = this.#epoch();
+    const stale = (what) => {
+      if (this.#epoch() === mountEpoch) return false;
+      debug('ws-mgr', `dropped ${what} from "${ws.id}": mounted in project epoch `
+        + `${mountEpoch}, now ${this.#epoch()}`);
+      return true;
+    };
     // Bind this mount to the dataset that was active when it opened — coding state is
     // per-(owner, workspace, dataset), so switching datasets (which re-mounts) swaps
     // the blob.
@@ -230,6 +243,7 @@ export class WorkspaceManager {
         },
         setState: (value, opts) => {
           if (reserved) throw new Error(`Workspace id "${ws.id}" is reserved by a built-in plugin.`);
+          if (stale('state.set')) return;
           const slotId = opts?.slot || DEFAULT_SLOT;
           this.#store.set(owner, ws.id, slotId, entry.dsId, value, { label: opts?.label });
         },
@@ -239,6 +253,7 @@ export class WorkspaceManager {
         },
         deleteSlot: (slotId) => {
           if (reserved) throw new Error(`Workspace id "${ws.id}" is reserved by a built-in plugin.`);
+          if (stale('state.delete')) return;
           if (!slotId) return;
           this.#store.set(owner, ws.id, slotId, entry.dsId, null);
         },
@@ -250,6 +265,7 @@ export class WorkspaceManager {
       items: {
         put: (collection, id, fields) => {
           if (reserved) throw new Error(`Workspace id "${ws.id}" is reserved by a built-in plugin.`);
+          if (stale('items.put')) return null;
           if (!this.#items || !collection) return null;
           const itemId = id || newItemId();
           this.#items.put(owner, String(collection), itemId, fields ?? {}, {
@@ -259,6 +275,7 @@ export class WorkspaceManager {
         },
         remove: (collection, id) => {
           if (reserved) throw new Error(`Workspace id "${ws.id}" is reserved by a built-in plugin.`);
+          if (stale('items.remove')) return;
           if (!this.#items || !collection || !id) return;
           this.#items.remove(owner, String(collection), String(id));
         },

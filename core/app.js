@@ -381,6 +381,25 @@ export async function boot(mounts) {
   // to hold "the dataset" now holds the manager.
   const datasets = new DatasetManager(bus, duckdb, projectLog);
   const itemStore = new ItemStore({ log: projectLog, bus });
+
+  /**
+   * Project epoch (#153). Advances every time the project boundary is crossed — a new
+   * project, an open, a switch — i.e. exactly when workspace plugins are re-mounted.
+   *
+   * It exists because a workspace mount OUTLIVES the project it was made in, by however
+   * long its iframe takes to notice. A plugin holds its records in memory and writes them
+   * back on various triggers, so a mount belonging to the CLOSED project could write the
+   * old project's state into the new one. Ordering the tier resets helps but cannot close
+   * it: the write originates in a sandbox, asynchronously, after the host has moved on.
+   *
+   * Symptom that led here: switching away from the spatial demo intermittently kept
+   * exactly the ACTIVE map layer — the one `wsSaveState` writes — in the new project.
+   *
+   * So writes carry the epoch they were mounted under, and a stale one is dropped. This
+   * is a guard, not a policy: legitimate writes from a live mount always match.
+   */
+  let projectEpoch = 0;
+  const currentEpoch = () => projectEpoch;
   // Memos (#152 Layer 2): anchored notes, host-owned so a note written in the coding
   // workspace and one written on an analysis are the SAME record in the same collection.
   // Scope follows the anchor, so a note about a dataset nests under it in the sidebar.
@@ -901,6 +920,12 @@ export async function boot(mounts) {
     applyItemOps: (ops) => itemStore.restoreOps(ops),
     getWorkspaceOps: () => workspaceStore.ops(),
     applyWorkspaces: async (ops, { refresh = false } = {}) => {
+      // A non-refresh apply IS the project boundary: it remounts every workspace. Bump
+      // first, so mounts created below capture the NEW epoch and any still-in-flight
+      // write from the outgoing project's mounts is already stale. A `refresh` is the
+      // same project (peer sync / merge), so the epoch must NOT move — the live mounts
+      // are legitimate and would be locked out.
+      if (!refresh) projectEpoch += 1;
       workspaceStore.restoreOps(Array.isArray(ops) ? ops : []); // ws ops from manifest.log (runs sync, before any await)
       if (!workspaceManager || !plugins) return;
       if (refresh) {
@@ -1131,6 +1156,7 @@ export async function boot(mounts) {
       tabs: workspaceTabs,
       store: workspaceStore,
       items: itemStore,
+      epoch: currentEpoch,
       services,
       activeDatasetId: () => datasets.activeId, // coding state is per-dataset (#139)
     });
