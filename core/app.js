@@ -22,6 +22,7 @@ import { installPassphraseUI } from './passphrase-ui.js';
 import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } from './user-identity.js';
 import { ProjectLog } from './project-log.js';
 import { ItemStore } from './item-store.js';
+import { MemoStore, createMemoService, ANCHOR_KINDS } from './memo-store.js';
 import { findOrphans, itemRefSources, refsIn } from './asset-refs.js';
 import { declaredCollections, assetRefDecls, undeclaredItemsGuard, CORE_COLLECTIONS,
          sidebarCollections, recordLabel } from './collections.js';
@@ -623,6 +624,14 @@ export async function boot(mounts) {
   // here too. Because the fields are host-visible, asset references inside them can be
   // COUNTED, which is what makes garbage collection possible at all (#150).
   const itemStore = new ItemStore({ log: projectLog, bus });
+  // Memos (#152 Layer 2): anchored notes, host-owned so a note written in the coding
+  // workspace and one written on an analysis are the SAME record in the same collection.
+  // Scope follows the anchor, so a note about a dataset nests under it in the sidebar.
+  const memoStore = new MemoStore({
+    items: itemStore,
+    scopeFor: (a) => (a?.target?.startsWith('ds:') ? a.target.slice(3) : null),
+  });
+  services.memos = createMemoService(memoStore);
 
   /**
    * Every place an `asset:` reference can live (#152 Layer 5). Reference counting is
@@ -841,7 +850,7 @@ export async function boot(mounts) {
   // building blocks). Created here, after the services it drives exist.
   new ProjectSidebar(mounts.sidebar, {
     datasets, projects, library, bus,
-    workspaceStore, itemStore, assetStore, sweepAssets,
+    workspaceStore, itemStore, assetStore, sweepAssets, memoStore,
     pluginList: () => (plugins ? plugins.list() : []),
   });
 
@@ -985,7 +994,7 @@ export async function boot(mounts) {
   // `dataStore` kept as an alias to the manager (it delegates to the active
   // dataset) so console pokes / older references keep working. Exposed before the
   // launcher so the launcher (and dev tooling) can use the engine.
-  const engine = { bus, datasets, itemStore, assetRefSources, sweepAssets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, projects, assetStore, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager, codecs, analysisLog, pluginActions, undoCoordinator, projectLog };
+  const engine = { bus, datasets, itemStore, memoStore, assetRefSources, sweepAssets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, projects, assetStore, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager, codecs, analysisLog, pluginActions, undoCoordinator, projectLog };
   /**
    * Console debugging: dump the FULL one true log — every op across all tiers
    * (collection, data, analysis), including the `retract`/`reorder` tombstones and
@@ -1500,7 +1509,7 @@ class ProjectSidebar {
    * @param {import('./library.js').DatasetLibrary} deps.library
    * @param {EventBus} deps.bus
    */
-  constructor(host, { datasets, projects, library, bus, workspaceStore, itemStore, assetStore, sweepAssets, pluginList }) {
+  constructor(host, { datasets, projects, library, bus, workspaceStore, itemStore, assetStore, sweepAssets, memoStore, pluginList }) {
     this.host = host;
     this.datasets = datasets;
     this.projects = projects;
@@ -1509,6 +1518,7 @@ class ProjectSidebar {
     this.itemStore = itemStore ?? null;
     this.assetStore = assetStore ?? null;
     this.sweepAssets = sweepAssets ?? null;
+    this.memoStore = memoStore ?? null;
     /** Asset tally for the inventory line, refreshed each render (async, so it is read
      * from a field rather than awaited mid-DOM-build). @type {{count:number,bytes:number}|null} */
     this.#assets = null;
@@ -1598,7 +1608,9 @@ class ProjectSidebar {
       if (this.projects.activeId) void this.projects.deleteProject(this.projects.activeId);
       else void this.projects.newProject();
     });
-    head.append(name, editBtn, delBtn);
+    head.append(name, editBtn);
+    if (this.memoStore) head.append(this.#memoButton(head, { kind: 'project', target: 'project/name' }));
+    head.append(delBtn);
     frag.append(head);
 
     frag.append(el('div', 'Datasets', 'proj__sub'));
@@ -1858,6 +1870,8 @@ class ProjectSidebar {
     );
     li.append(edit, x);
 
+    li.append(this.#memoButton(li, { kind: 'dataset', target: `ds:${it.id}` }));
+
     const frag = document.createDocumentFragment();
     frag.append(li);
     // Dataset-scoped content nests under its dataset, exactly as workspace blobs already
@@ -2014,6 +2028,51 @@ class ProjectSidebar {
       this.itemStore.purge(rec.owner, rec.collection, rec.id);
     }, 'proj__ds-x'));
     return li;
+  }
+
+  /**
+   * Write a memo against an anchor, inline. Deliberately the same gesture as an inline
+   * rename rather than a modal: a memo is a passing thought about the thing you are
+   * looking at, and a dialog is enough friction to stop people writing them — which
+   * defeats memoing as a practice (the audit trail is only useful if it is kept).
+   *
+   * @param {HTMLElement} row      the row to compose under
+   * @param {{kind: string, target: string, ref?: string}} anchor
+   */
+  #composeMemo(row, anchor) {
+    if (!this.memoStore) return;
+    const holder = document.createElement('li');
+    holder.className = 'proj__blob';
+    const input = document.createElement('input');
+    input.className = 'proj__ds-edit';
+    input.placeholder = 'Memo — why, caveats, what you noticed…';
+    let done = false;
+    const finish = (commit) => {
+      if (done) return;
+      done = true;
+      const v = input.value.trim();
+      if (commit && v) this.memoStore.add(anchor, v);
+      this.render();
+    };
+    input.addEventListener('click', (e) => e.stopPropagation());
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { finish(false); }
+    });
+    input.addEventListener('blur', () => finish(true));
+    holder.append(input);
+    row.insertAdjacentElement('afterend', holder);
+    input.focus();
+  }
+
+  /** The 💬 button that opens {@link #composeMemo}, plus a count when notes exist. */
+  #memoButton(row, anchor) {
+    const n = this.memoStore?.countFor(anchor) ?? 0;
+    return iconBtn(n ? `💬${n}` : '💬', n ? `${n} memo${n === 1 ? '' : 's'} — click to add another` : 'Add a memo', (e) => {
+      e.stopPropagation();
+      this.#composeMemo(row, anchor);
+    }, 'proj__ds-x');
   }
 
   #recycleZone(binned, binnedItems = []) {

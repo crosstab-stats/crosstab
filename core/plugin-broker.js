@@ -127,6 +127,15 @@ export class PluginBroker {
       this.#dispatch['state.list'] = () => services.workspace.listSlots();
       this.#dispatch['state.delete'] = (slotId) => services.workspace.deleteSlot(slotId);
     }
+    // Memos (#152): host-MEDIATED, unlike items. A plugin does not own a memos
+    // collection — it writes into core's, so a note from the coding workspace and one
+    // from the output panel are the same record answerable by one query.
+    if (services.memos) {
+      this.#dispatch['memos.add'] = (anchor, text) => services.memos.add(anchor, text);
+      this.#dispatch['memos.list'] = (anchor) => services.memos.list(anchor);
+      this.#dispatch['memos.setText'] = (id, text) => services.memos.setText(id, text);
+      this.#dispatch['memos.remove'] = (id) => services.memos.remove(id);
+    }
     // Item records (#152): the granular sibling of `state.*`. The plugin names a
     // collection and a record id; the host owns owner/scope and the fold.
     if (services.items) {

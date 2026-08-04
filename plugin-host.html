@@ -212,6 +212,9 @@
             // mergeable per record, and host-visible enough that a declared asset-ref
             // field can be reference-counted. `state.*` remains for config/atomic blobs.
             items: makeNamespace('items', ['put', 'remove', 'list']),
+            // Anchored notes (#152). Host-owned: `add({kind, target, ref?}, text)` writes
+            // into the project's single memo collection, not a per-plugin one.
+            memos: makeNamespace('memos', ['add', 'list', 'setText', 'remove']),
             // ZIP for archive-format plugins (#139): make(entries)->bytes, read(bytes).
             zip: makeNamespace('zip', ['make', 'read']),
             // Cross-plugin discovery + invocation (#147): list active plugins and
