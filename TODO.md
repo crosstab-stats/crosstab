@@ -422,6 +422,27 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         (Layer 2) and CAQDAS (Layer 3) — spatial does NOT exercise it. Two clients where
         one is host-owned is thinner validation than the verb interface got, so treat the
         API as provisional until a genuine third arrives, and don't freeze it early.
+  **STATUS (2026-08-03).** Layer 1 DONE (`core/item-store.js`, 23 tests). Layer 4 DONE
+  early — pulled forward because spatial cannot write a registry without it
+  (`app.items.*`, owner-scoped `app.assets.list()`, broker + plugin-host namespaces).
+  Layer 5 infrastructure DONE: media→asset rename, `core/asset-refs.js` refcounting with
+  the abstain rule (14 tests), item tier wired through save/load/merge/purge, both ref
+  scanners registered. **Remaining: spatial's own migration (5), Layer 2, Layer 3.**
+  All headless; NOTHING browser-verified yet — the tier is inert until a client writes to
+  it, which is the right moment to check persistence before there is data to lose.
+
+  - [ ] **Spatial migration (the Layer 5 client) — design settled, not yet built.**
+        `boundarySets` items `{keyProp, fileName, assetId}` replace the per-set
+        `spatial-map` SLOTS; geometry bytes move to the asset store; `spatial-link` stays
+        a blob (config, dataset-scoped, LWW — correct per D2). Manifest gains
+        `assetRefs: [{collection:'boundarySets', field:'assetId'}]`, which is what lets the
+        host count the refs. Two write paths need it (`loadBoundaries` and the direct
+        `app.state.write('spatial-map', …)` path), plus `wsLoadFromSlots`,
+        `wsRebuildSetLinks`, `wsSaveState` and `clearBoundaries`.
+        **Known regression to handle in the same change:** the sidebar's "Map layers"
+        section lists project-scoped workspace BLOBS (`wsStore.listForDataset(null)`).
+        Once spatial writes items instead, that section goes empty — it has to be ported
+        to list items, or renaming/deleting a boundary set from the sidebar is lost.
   - [ ] **Layer 5 — #150 asset generalisation + spatial as its client.** media→asset
         rename (a plugin API break, so batch it here), owner on the reference,
         `app.assets.list()`, refcount GC scanning declared ref fields — then move spatial's
