@@ -105,7 +105,7 @@ export function sidebarCollections(decls) {
  * look undeclared to {@link undeclaredItemsGuard} and every sweep would abstain.
  */
 export const CORE_COLLECTIONS = [
-  { id: 'memos', label: 'Memos', sidebar: 'none' }, // sidebar/labelField settled in Layer 2
+  { id: 'memos', label: 'Memos', labelField: 'text', sidebar: 'list' },
 ].map((c) => ({ ...normalizeCollection(c), owner: 'core', pluginId: null }));
 
 /**

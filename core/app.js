@@ -23,7 +23,8 @@ import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } fro
 import { ProjectLog } from './project-log.js';
 import { ItemStore } from './item-store.js';
 import { findOrphans, itemRefSources, refsIn } from './asset-refs.js';
-import { declaredCollections, assetRefDecls, undeclaredItemsGuard, CORE_COLLECTIONS } from './collections.js';
+import { declaredCollections, assetRefDecls, undeclaredItemsGuard, CORE_COLLECTIONS,
+         sidebarCollections, recordLabel } from './collections.js';
 import { LivePresence } from './live-presence.js';
 import { mergersFor } from './builtin-mergers.js';
 import { OutputExportService } from './output-export.js';
@@ -840,7 +841,7 @@ export async function boot(mounts) {
   // building blocks). Created here, after the services it drives exist.
   new ProjectSidebar(mounts.sidebar, {
     datasets, projects, library, bus,
-    workspaceStore, itemStore,
+    workspaceStore, itemStore, assetStore,
     pluginList: () => (plugins ? plugins.list() : []),
   });
 
@@ -1472,7 +1473,20 @@ function wireWorkspaceTabs(bus, mounts, { dataView, variableView, results, rCons
  * double-click a name to rename, and ＋ to add a dataset. (Variable selection
  * lives in the grid column headers now, not here.)
  */
+/** Human byte size for the inventory line — one decimal, no dependency. */
+function fmtBytes(n) {
+  const b = Number(n) || 0;
+  if (b < 1024) return `${b} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let v = b / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
+}
+
 class ProjectSidebar {
+  /** @type {{count:number,bytes:number}|null} */
+  #assets = null;
   #token = 0;
   #drag = null; // { kind: 'dataset'|'block', id }
 
@@ -1484,16 +1498,21 @@ class ProjectSidebar {
    * @param {import('./library.js').DatasetLibrary} deps.library
    * @param {EventBus} deps.bus
    */
-  constructor(host, { datasets, projects, library, bus, workspaceStore, itemStore, pluginList }) {
+  constructor(host, { datasets, projects, library, bus, workspaceStore, itemStore, assetStore, pluginList }) {
     this.host = host;
     this.datasets = datasets;
     this.projects = projects;
     this.library = library;
     this.wsStore = workspaceStore ?? null;
     this.itemStore = itemStore ?? null;
+    this.assetStore = assetStore ?? null;
+    /** Asset tally for the inventory line, refreshed each render (async, so it is read
+     * from a field rather than awaited mid-DOM-build). @type {{count:number,bytes:number}|null} */
+    this.#assets = null;
     this.pluginList = pluginList ?? (() => []);
     this.projectName = null;
     bus.on(DATASETS_CHANGED, () => this.render());
+    bus.on(CoreEvents.ITEMS_CHANGED, () => this.render()); // the inventory covers items too (#152)
     bus.on(CoreEvents.DATA_CHANGED, () => this.render());
     bus.on(LIBRARY_CHANGED, () => this.render());
     bus.on(CoreEvents.WORKSPACE_CHANGED, () => this.render());
@@ -1527,6 +1546,16 @@ class ProjectSidebar {
       blocks = await this.library.list();
     } catch {
       /* OPFS unavailable */
+    }
+    // What the project is carrying, for the inventory line. Read here (async) so the
+    // DOM build below stays synchronous.
+    try {
+      const assets = (await this.assetStore?.list()) ?? [];
+      this.#assets = assets.length
+        ? { count: assets.length, bytes: assets.reduce((t, a) => t + (Number(a.size) || 0), 0) }
+        : null;
+    } catch {
+      this.#assets = null; // never let an asset read break the sidebar
     }
     // The bin is a projection over the project's own log — no store to read, no scope
     // to reconcile, and it follows the project everywhere the project goes (#149 A8).
@@ -1577,12 +1606,21 @@ class ProjectSidebar {
     for (const it of items) list.append(this.#datasetRow(it, items.length, blockVer, hidden));
     frag.append(list);
 
-    // Project-scoped workspace blobs (NO_DS) get their own section —
-    // they aren't tied to a dataset and shouldn't appear subordinate to one.
+    // Project-scoped content — item collections first, then workspace blobs. Both get a
+    // section because the sidebar is the project's INVENTORY: the objection to plugin
+    // data was never convenience, it was losing sight of the fact that this project HAS
+    // data here. Headings come from each collection's declaration, so no plugin is
+    // special-cased (the old hardcoded "Map layers" section was exactly that).
+    for (const decl of this.#collectionDecls()) {
+      const section = this.#collectionSection(decl, null);
+      if (!section) continue;
+      frag.append(el('div', decl.label, 'proj__sub'));
+      frag.append(section);
+    }
     if (this.wsStore) {
       const projectBlobs = this.wsStore.listForDataset(null).filter((b) => !hidden.has(b.wsId));
       if (projectBlobs.length) {
-        frag.append(el('div', 'Map layers', 'proj__sub'));
+        frag.append(el('div', 'Plugin data', 'proj__sub'));
         const blobList = document.createElement('ul');
         blobList.className = 'proj__datasets';
         const wsTitles = this.#wsIdTitles();
@@ -1590,6 +1628,8 @@ class ProjectSidebar {
         frag.append(blobList);
       }
     }
+    const assetSection = this.#assetsSection(this.#assets);
+    if (assetSection) frag.append(assetSection);
 
     const add = document.createElement('button');
     add.type = 'button';
@@ -1600,6 +1640,113 @@ class ProjectSidebar {
       this.datasets.add(`Dataset ${this.datasets.list().length + 1}`, { activate: true }),
     );
     frag.append(add);
+    return frag;
+  }
+
+  /**
+   * Every collection the host may show, core's own plus each plugin's (#152).
+   * Rebuilt per render so activating a plugin surfaces its data immediately.
+   */
+  #collectionDecls() {
+    let declared = [];
+    try {
+      declared = declaredCollections(this.pluginList() ?? [], ownerToken);
+    } catch {
+      /* a broken plugin list must not take out the sidebar */
+    }
+    return sidebarCollections([...CORE_COLLECTIONS, ...declared]);
+  }
+
+  /**
+   * One collection's section: a row per record (`sidebar: 'list'`) or a single summary
+   * line (`'count'`). The count mode exists because CAQDAS segments run to thousands and
+   * would drown the sidebar — the point is visibility that "this project has data here",
+   * which a count delivers just as well as a list.
+   *
+   * @param {object} decl
+   * @param {string|number|null} dsId  null ⇒ the project-scoped section
+   */
+  #collectionSection(decl, dsId) {
+    if (!this.itemStore) return null;
+    let all = [];
+    try {
+      all = this.itemStore.list(decl.owner, decl.id);
+    } catch {
+      return null;
+    }
+    // Scope is filtered HERE rather than via list({dsId}), which deliberately includes
+    // project-scoped records for every dataset — right for a plugin reading its own
+    // state, wrong for an inventory that must show each record exactly once.
+    const recs = all.filter((r) => (dsId == null
+      ? r.scope?.dsId == null
+      : String(r.scope?.dsId) === String(dsId)));
+    if (!recs.length) return null;
+
+    const frag = document.createDocumentFragment();
+    if (decl.sidebar === 'count') {
+      const line = el('li', `${decl.label} · ${recs.length}`, 'proj__blob');
+      line.title = `${recs.length} ${decl.label.toLowerCase()} in this project`;
+      const ul = document.createElement('ul');
+      ul.className = 'proj__datasets';
+      ul.append(line);
+      frag.append(ul);
+      return frag;
+    }
+    const ul = document.createElement('ul');
+    ul.className = 'proj__datasets';
+    for (const rec of recs) ul.append(this.#recordRow(decl, rec));
+    frag.append(ul);
+    return frag;
+  }
+
+  /** One item record: its label, inline rename (when a labelField is declared), delete. */
+  #recordRow(decl, rec) {
+    const li = document.createElement('li');
+    li.className = 'proj__blob';
+    const text = recordLabel(decl, rec);
+    // A label may be free text (a memo body), so truncate for the row and keep the full
+    // value for the tooltip and for the rename editor.
+    const shown = text.length > 42 ? text.slice(0, 41).trimEnd() + '…' : text;
+    const name = el('span', shown, 'proj__blob-name');
+    // One composed tooltip: which collection this is (the row itself carries no heading
+    // when nested under a dataset), the full text if it was truncated, and the rename
+    // affordance. Set once — assigning .title in two places silently loses the first.
+    name.title = [decl.label, shown === text ? null : text, decl.labelField ? 'Double-click to rename' : null]
+      .filter(Boolean).join(' — ');
+    li.append(name);
+
+    if (decl.labelField) {
+      const doRename = (e) => {
+        e?.stopPropagation();
+        this.#inlineRename(li, name, text, (v) => {
+          if (v) this.itemStore.put(decl.owner, decl.id, rec.id, { [decl.labelField]: v });
+        });
+      };
+      name.addEventListener('dblclick', doRename);
+      li.append(iconBtn('✎', 'Rename', doRename, 'proj__ds-x'));
+    }
+    li.append(iconBtn('✕', 'Delete', (e) => {
+      e.stopPropagation();
+      this.itemStore.remove(decl.owner, decl.id, rec.id);
+    }, 'proj__ds-x'));
+    return li;
+  }
+
+  /**
+   * The project's stored bytes. Worth a line of its own because it answers "what is this
+   * project actually carrying?" — and, now that references can be counted (#150), it can
+   * also surface bytes nothing points at, which was unanswerable before.
+   */
+  #assetsSection(assets) {
+    if (!assets || !assets.count) return null;
+    const frag = document.createDocumentFragment();
+    frag.append(el('div', 'Stored files', 'proj__sub'));
+    const ul = document.createElement('ul');
+    ul.className = 'proj__datasets';
+    const li = el('li', `${assets.count} file${assets.count === 1 ? '' : 's'} · ${fmtBytes(assets.bytes)}`, 'proj__blob');
+    li.title = 'Media and other assets stored inside this project';
+    ul.append(li);
+    frag.append(ul);
     return frag;
   }
 
@@ -1656,6 +1803,12 @@ class ProjectSidebar {
 
     const frag = document.createDocumentFragment();
     frag.append(li);
+    // Dataset-scoped content nests under its dataset, exactly as workspace blobs already
+    // do — item collections join them rather than getting a separate arrangement (#152).
+    for (const decl of this.#collectionDecls()) {
+      const section = this.#collectionSection(decl, it.id);
+      if (section) frag.append(section);
+    }
     if (this.wsStore) {
       const blobs = this.wsStore.listForDataset(it.id).filter((b) => !hidden?.has(b.wsId));
       if (blobs.length) {
