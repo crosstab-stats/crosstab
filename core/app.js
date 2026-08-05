@@ -135,6 +135,7 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-compare/index.js',
   './plugins/builtin-nonparametric/index.js',
   './plugins/builtin-reliability/index.js',
+  './plugins/builtin-agreement/index.js',
   './plugins/builtin-factor/index.js',
   './plugins/builtin-assumptions/index.js',
   './plugins/builtin-categorical/index.js',

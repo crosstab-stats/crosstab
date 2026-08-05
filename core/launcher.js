@@ -310,10 +310,17 @@ export class Launcher {
             this.#pendingSource = null;
             overlay.querySelectorAll('.ctl__source').forEach((b) => b.classList.toggle('is-active', b === btn));
             if (Array.isArray(p.activePlugins)) {
-              // The project's saved plugin set is authoritative — including the user
-              // having turned a codec OFF. No infra force-add: a plugin is on only if
-              // the project had it on (or the user ticks it here before applying).
-              this.#selected = new Set(p.activePlugins.filter((k) => list.some((x) => x.key === k)));
+              // The project's saved set is authoritative about the plugins it MENTIONS —
+              // including the user having turned a codec off. It says nothing at all
+              // about a plugin that did not exist when it was written, and treating that
+              // silence as "off" is the inference #157 removed everywhere else: a
+              // built-in shipped after this project was last saved would arrive invisible,
+              // with no way for the user to know it was there to look for.
+              const mentioned = new Set(p.activePlugins);
+              const speaksFor = (x) => mentioned.has(x.key) || (x.id && mentioned.has(x.id));
+              this.#selected = new Set(
+                list.filter((x) => (speaksFor(x) ? true : x.activated)).map((x) => x.key),
+              );
               rerender();
             }
           });

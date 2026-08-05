@@ -3003,7 +3003,18 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## More analyses (each is just another plugin)
 
-- [ ] **Inter-coder reliability (Cohen's κ / Krippendorff's α) — CAQDAS analysis (from #148).**
+- [x] **DONE 2026-08-04 — `plugins/builtin-agreement/`.** Percent agreement, Cohen's κ
+      (2 raters, unweighted/equal/squared), Fleiss' κ (3+), Krippendorff's α
+      (nominal/ordinal/interval/ratio), all via `irr`. TWO entry points: rater COLUMNS,
+      and straight off this project's CAQDAS codings using #148's author stamps — the
+      foundation this item was waiting on. Unit model for the codings path is one unit
+      per document × code, stated in the output because it is a judgement, not a fact
+      (character-overlap needs an arbitrary threshold; segment matching needs a rule for
+      "the same" segment). `icr` is BROKEN in WebR — its `cores` default hits
+      `parallel::detectCores()` → NA, same class as the lavaan bug; `irr::kripp.alpha`
+      has no such dependency. Verified against a hand-computed κ (Po=.75, Pe=.34375,
+      κ=.619048) and an independent JS recompute on real columns (both exact).
+      **Original:** Inter-coder reliability (Cohen's κ / Krippendorff's α) — CAQDAS analysis (from #148).**
       The payoff of the collaborator-authorship work: compute agreement between coders and
       surface disagreements for qualitative coding teams (the Dedoose-parity method). The
       **collab foundation is already DONE** (#148): each coder's coding is a distinct,
