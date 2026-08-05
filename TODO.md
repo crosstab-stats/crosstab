@@ -3076,8 +3076,12 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         `ordination` biplot, `survival` Kaplan-Meier (step line).
       - *No-data-model charts (only Layer 1 + maybe a redraw/param control):* `sna`
         network, `spatial` map, `decisions` tree, `timeseries` STL decomposition, `var`
-        IRF (multi-panel), word clouds, `assumptions`/`regression` Q-Q + residual
-        diagnostics.
+        IRF (multi-panel), word clouds (`textanalytics`, `caqdas` themed), 
+        `assumptions`/`regression` Q-Q + residual diagnostics.
+      *Coverage checked 2026-08-04:* every plugin still calling `appendPlot` (16 of them,
+      23 call sites) appears in one of the three groups above — so each remaining chart
+      has a recorded disposition, and "still on the old API" is a deliberate outcome
+      rather than a backlog. Layer 2 is closed; only Layer 3 itself is unbuilt.
     - **Superseded:** the earlier Tier A/B/C "migrate-to-model" matrix. Outliers keep
       their svglite bodies and gain Layer 1 (frame) + optional Layer 3 (declared controls);
       only common charts warranted full Layer 2 model migration — now complete.
