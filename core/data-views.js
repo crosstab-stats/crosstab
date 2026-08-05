@@ -59,6 +59,15 @@ export class DataView {
     this.token = 0; // guards against stale async windows
     this.raf = null;
     this.lastKey = null; // `${startRow}:${startCol}:${filter}` of the rendered block
+    /**
+     * The focused cell, as LOGICAL coordinates — `{row: <0-based>, col: <name>}`.
+     *
+     * Not a DOM node: `tbody.replaceChildren()` runs on every scroll, so any element
+     * reference dies almost immediately. Everything keyboard-related resolves through
+     * these coordinates on each render instead.
+     */
+    this.active = null;
+    this.wantFocus = false; // focus the active cell after the next render
     this.rowCache = null; // { start, end, startCol, endCol, filter, rows } — see FETCH_BUF
 
     // The panel becomes a flex column: a fixed toolbar (column filter + selection
@@ -88,6 +97,12 @@ export class DataView {
     this.scroller.className = 'grid-scroll';
     this.table = document.createElement('table');
     this.table.className = 'grid';
+    // An interactive grid, not a static table. The counts matter specifically because
+    // the grid is VIRTUALISED: only a window of rows and columns is in the DOM, so
+    // without these a screen reader announces the window as the whole table — "row 3
+    // of 12" on a 50,000-row dataset.
+    this.table.setAttribute('role', 'grid');
+    this.table.addEventListener('keydown', (e) => this.#onGridKey(e));
     this.thead = document.createElement('thead');
     this.tbody = document.createElement('tbody');
     this.table.append(this.thead, this.tbody);
@@ -250,6 +265,149 @@ export class DataView {
     const tail = total - endRow;
     if (tail > 0) frag.append(vspacerRow(tail * ROW_H, span));
     this.tbody.replaceChildren(frag);
+
+    this.table.setAttribute('aria-rowcount', String(total + 1)); // +1 for the header
+    this.table.setAttribute('aria-colcount', String(nCols + 1)); // +1 for the gutter
+    this.#applyActiveCell();
+  }
+
+  // --- keyboard grid ---------------------------------------------------------
+
+  /** The cell element for logical coordinates, if it is currently rendered. */
+  #cellAt(row, col) {
+    const scope = row < 0 ? this.thead : this.tbody;
+    return scope.querySelector(`[data-row="${row}"][data-col="${CSS.escape(col)}"]`);
+  }
+
+  /**
+   * Give exactly one cell `tabIndex = 0` so the whole grid is a single tab stop.
+   *
+   * If the active cell has scrolled out of the rendered window there is nothing to
+   * make tabbable, so the active cell follows the viewport to the first rendered
+   * cell. That keeps Tab able to enter the grid at all times, which matters more
+   * than preserving a position the user can no longer see.
+   */
+  #applyActiveCell() {
+    const cols = this.#visibleMetas();
+    if (!cols.length) return;
+    if (!this.active || !cols.some((m) => m.name === this.active.col)) {
+      this.active = { row: 0, col: cols[0].name };
+    }
+    let cell = this.#cellAt(this.active.row, this.active.col);
+    if (!cell) {
+      const first = this.tbody.querySelector('[data-row][data-col]');
+      if (!first) return;
+      this.active = { row: Number(first.dataset.row), col: first.dataset.col };
+      cell = first;
+    }
+    for (const prev of this.table.querySelectorAll('[data-col][tabindex="0"]')) prev.tabIndex = -1;
+    cell.tabIndex = 0;
+    if (this.wantFocus) {
+      this.wantFocus = false;
+      cell.focus({ preventScroll: true });
+    }
+  }
+
+  /** Move the active cell, scrolling it into view and re-rendering to reach it. */
+  async #moveTo(row, col) {
+    const cols = this.#visibleMetas();
+    const total = this.store.rowCount;
+    if (!cols.length || !total) return;
+    const clampedRow = Math.max(-1, Math.min(total - 1, row));
+    const ci = Math.max(0, Math.min(cols.length - 1, cols.findIndex((m) => m.name === col)));
+    this.active = { row: clampedRow, col: cols[ci].name };
+
+    // Scroll so the target is inside the viewport, then render to that position —
+    // directly rather than waiting on the scroll event, because requestAnimationFrame
+    // does not fire in a backgrounded tab and focus would silently never arrive.
+    if (clampedRow >= 0) {
+      const top = clampedRow * ROW_H;
+      const viewH = this.scroller.clientHeight || 400;
+      if (top < this.scroller.scrollTop) this.scroller.scrollTop = top;
+      else if (top + ROW_H > this.scroller.scrollTop + viewH) {
+        this.scroller.scrollTop = top + ROW_H - viewH;
+      }
+    }
+    const left = ci * COL_W;
+    const viewW = this.scroller.clientWidth || 600;
+    if (left < this.scroller.scrollLeft) this.scroller.scrollLeft = left;
+    else if (left + COL_W > this.scroller.scrollLeft + viewW - GUT_W) {
+      this.scroller.scrollLeft = left + COL_W - viewW + GUT_W;
+    }
+
+    this.wantFocus = true;
+    await this.#render(false);
+    this.#applyActiveCell(); // no-op if #render already did it (key unchanged)
+  }
+
+  /**
+   * The grid keyboard model. One tab stop for the whole grid; arrows move within it.
+   *
+   * Editing is reachable from here (Enter / F2) because the mouse can do it via
+   * double-click, and shipping a feature that only works with a mouse is the thing
+   * this whole pass exists to remove.
+   */
+  #onGridKey(e) {
+    if (e.target.tagName === 'INPUT') return; // inline editor owns its own keys
+    const cell = e.target.closest?.('[data-col]');
+    if (!cell) return;
+    const row = Number(cell.dataset.row);
+    const col = cell.dataset.col;
+    const cols = this.#visibleMetas();
+    const ci = cols.findIndex((m) => m.name === col);
+    const total = this.store.rowCount;
+    const page = Math.max(1, Math.floor((this.scroller.clientHeight || 400) / ROW_H) - 1);
+    const go = (r, c) => { e.preventDefault(); void this.#moveTo(r, c); };
+
+    switch (e.key) {
+      case 'ArrowRight': return go(row, cols[Math.min(cols.length - 1, ci + 1)]?.name ?? col);
+      case 'ArrowLeft': return go(row, cols[Math.max(0, ci - 1)]?.name ?? col);
+      case 'ArrowDown': return go(row + 1, col);
+      case 'ArrowUp': return go(row - 1, col); // row 0 -> -1 = the column header
+      case 'PageDown': return go(Math.min(total - 1, row + page), col);
+      case 'PageUp': return go(Math.max(0, row - page), col);
+      case 'Home': return e.ctrlKey ? go(0, cols[0].name) : go(row, cols[0].name);
+      case 'End': return e.ctrlKey
+        ? go(total - 1, cols[cols.length - 1].name)
+        : go(row, cols[cols.length - 1].name);
+      default: break;
+    }
+
+    if (row < 0) {
+      // On a header cell, Space/Enter toggles that column's selection checkbox.
+      if (e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault();
+        cell.querySelector('input[type="checkbox"]')?.click();
+      }
+      return;
+    }
+
+    const rid = cell.dataset.rid;
+    if (rid == null) return; // no stable row id -> not editable or annotatable
+
+    if (e.key === 'Enter' || e.key === 'F2') {
+      e.preventDefault();
+      const meta = cols[ci];
+      this.#editCell(cell, row, Number(rid), meta, this.#rawOf(cell, meta));
+      return;
+    }
+    // Shift+F10 and the Context-menu key are the keyboard equivalents of right-click,
+    // which is how cell memos were reached — and the only way, until now.
+    if ((e.shiftKey && e.key === 'F10') || e.key === 'ContextMenu') {
+      e.preventDefault();
+      if (!this.memos) return;
+      const r = cell.getBoundingClientRect();
+      this.#cellMenu({ preventDefault() {}, clientX: r.left + 8, clientY: r.bottom },
+        cell, this.#cellAnchor(col, Number(rid)), col, Number(rid));
+    }
+  }
+
+  /** The raw (unlabelled) value behind a rendered cell — what the editor edits. */
+  #rawOf(cell, meta) {
+    if (cell.classList.contains('na')) return null;
+    // A factor cell shows its label and carries the code in `title`.
+    if (meta?.type === 'factor' && cell.title) return cell.title;
+    return cell.textContent;
   }
 
   /** A column header with a selection checkbox tied to the variable selection. */
@@ -258,6 +416,11 @@ export class DataView {
     // Without scope a screen reader cannot tie a cell to its column, so every value in
     // the grid is announced bare — the results tables already do this correctly.
     th.scope = 'col';
+    // Part of grid navigation: Up from row 1 lands here, and Space toggles the
+    // column's selection checkbox. Otherwise selecting columns stays mouse-only.
+    th.dataset.col = m.name;
+    th.dataset.row = '-1';
+    th.tabIndex = -1;
     th.title = `${m.name} · ${m.type}${m.measurementLevel ? ` · ${m.measurementLevel}` : ''}`;
     const wrap = document.createElement('label');
     wrap.className = 'colhead';
@@ -306,6 +469,8 @@ export class DataView {
     const rowHead = el('th', String(num), 'rownum');
     rowHead.scope = 'row';
     tr.append(rowHead);
+    tr.setAttribute('role', 'row');
+    tr.setAttribute('aria-rowindex', String(num + 1)); // +1: the header is row 1
     if (leftW > 0) tr.append(hspacer('td', leftW));
     for (const m of winMetas) {
       const v = row[m.name];
@@ -322,7 +487,13 @@ export class DataView {
       // row's stable id (`row.__rid`), so the edit survives appends/reordering.
       // Non-destructive, undoable, shows in History. Edits the raw value (a
       // factor's *code*, not its label).
+      td.setAttribute('role', 'gridcell');
+      td.setAttribute('aria-colindex', String(this.#visibleMetas().findIndex((x) => x.name === m.name) + 2));
+      td.dataset.row = String(num - 1);
+      td.dataset.col = m.name;
+      td.tabIndex = -1; // roving: exactly one cell is tabbable (see #applyActiveCell)
       if (row.__rid != null) {
+        td.dataset.rid = String(row.__rid);
         td.addEventListener('dblclick', () => this.#editCell(td, num - 1, row.__rid, m, v));
         // Right-click to annotate. A separate gesture from double-click-to-edit on
         // purpose: you must be able to note "this value looks wrong" WITHOUT entering
