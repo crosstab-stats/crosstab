@@ -63,6 +63,8 @@ export class MenuShell {
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') this.#closeOpenMenu();
     });
+    // The ARIA menubar keyboard model (see #onKeydown).
+    this.#host.addEventListener('keydown', (e) => this.#onKeydown(e));
   }
 
   /**
@@ -103,6 +105,10 @@ export class MenuShell {
     for (const node of topLevel) {
       this.#host.append(this.#renderTopLevel(node));
     }
+    // Roving tabindex: the whole menubar is ONE tab stop, and arrows move within it.
+    // Previously every button — and every item of an open menu, which for Regression
+    // is dozens — sat in the tab sequence, so Tab could not get past the menubar.
+    this.#topButtons().forEach((b, i) => { b.tabIndex = i === 0 ? 0 : -1; });
   }
 
   /**
@@ -163,17 +169,8 @@ export class MenuShell {
       e.stopPropagation();
       const isOpen = !panel.hidden;
       this.#closeOpenMenu();
-      if (!isOpen) {
-        panel.hidden = false;
-        button.setAttribute('aria-expanded', 'true');
-        this.#openMenu = wrapper;
-        // Clamp the panel so a long menu (e.g. Regression) scrolls *within itself*
-        // and never spills past the window bottom. Its top depends on which wrapped
-        // menubar row the button sits on, so measure it live rather than assuming a
-        // fixed offset (the CSS max-height is only a fallback).
-        const top = panel.getBoundingClientRect().top;
-        panel.style.maxHeight = `${Math.max(120, window.innerHeight - top - 8)}px`;
-      }
+      this.#focusTop(button);
+      if (!isOpen) this.#open(wrapper);
     });
 
     wrapper.append(button, panel);
@@ -195,6 +192,7 @@ export class MenuShell {
     el.className = 'menu__item';
     el.textContent = node.label;
     el.setAttribute('role', 'menuitem');
+    el.tabIndex = -1; // reached with arrows, not Tab (see render's roving tabindex)
     el.addEventListener('click', (e) => {
       e.stopPropagation();
       this.#closeOpenMenu();
@@ -225,13 +223,174 @@ export class MenuShell {
     return group;
   }
 
-  #closeOpenMenu() {
+  #closeOpenMenu({ restoreFocus = false } = {}) {
     if (!this.#openMenu) return;
     const panel = this.#openMenu.querySelector('.menu__panel');
     const button = this.#openMenu.querySelector('.menu__button');
     if (panel) panel.hidden = true;
     if (button) button.setAttribute('aria-expanded', 'false');
     this.#openMenu = null;
+    // Escaping out of a menu must put focus back on its button, or focus is lost to
+    // <body> and the keyboard user has to start again from the top of the page.
+    if (restoreFocus && button) this.#focusTop(button);
+  }
+
+  // --- keyboard model --------------------------------------------------------
+
+  /** Top-level menu buttons, in visual order. */
+  #topButtons() {
+    return [...this.#host.querySelectorAll('.menu__button')];
+  }
+
+  /**
+   * The focusable items of a menu, in order.
+   *
+   * Flat on purpose: a "submenu" here renders as a labelled `role="group"` with an
+   * inline flyout rather than a real nested menu, so a DOM-order query already gives
+   * the sequence a reader sees. That is why this needs none of the Right-opens-child /
+   * Left-returns-to-parent machinery the full APG pattern carries.
+   */
+  #menuItems(wrapper) {
+    const panel = wrapper?.querySelector('.menu__panel');
+    return panel ? [...panel.querySelectorAll('.menu__item')].filter((b) => !b.disabled) : [];
+  }
+
+  /** Move the single tab stop to `button` and focus it. */
+  #focusTop(button) {
+    for (const b of this.#topButtons()) b.tabIndex = b === button ? 0 : -1;
+    button?.focus();
+  }
+
+  /**
+   * Open a menu, optionally landing focus on its first or last item.
+   * @param {HTMLElement} wrapper
+   * @param {{focus?: 'first'|'last'|'none'}} [opts]
+   */
+  #open(wrapper, { focus = 'none' } = {}) {
+    const panel = wrapper.querySelector('.menu__panel');
+    const button = wrapper.querySelector('.menu__button');
+    if (!panel || !button) return;
+    if (this.#openMenu && this.#openMenu !== wrapper) this.#closeOpenMenu();
+    panel.hidden = false;
+    button.setAttribute('aria-expanded', 'true');
+    this.#openMenu = wrapper;
+    // Clamp the panel so a long menu (e.g. Regression) scrolls *within itself* and
+    // never spills past the window bottom. Its top depends on which wrapped menubar
+    // row the button sits on, so measure it live rather than assuming a fixed offset
+    // (the CSS max-height is only a fallback).
+    const top = panel.getBoundingClientRect().top;
+    panel.style.maxHeight = `${Math.max(120, window.innerHeight - top - 8)}px`;
+    if (focus === 'none') return;
+    const items = this.#menuItems(wrapper);
+    const target = focus === 'last' ? items[items.length - 1] : items[0];
+    target?.focus();
+  }
+
+  /** Move focus within a list, wrapping at both ends. */
+  #focusAt(list, index) {
+    if (!list.length) return;
+    const el = list[(index + list.length) % list.length];
+    el.focus();
+    // Long menus scroll inside themselves; keep the focused row visible.
+    el.scrollIntoView?.({ block: 'nearest' });
+  }
+
+  /**
+   * Jump to the next entry starting with `char`, from `from` onward and wrapping.
+   * Menus here run to dozens of plugin entries, so first-letter navigation is the
+   * difference between usable and a long press-and-hold on Down.
+   */
+  #typeahead(list, char, from) {
+    const lower = char.toLowerCase();
+    for (let i = 1; i <= list.length; i++) {
+      const el = list[(from + i) % list.length];
+      if ((el.textContent || '').trim().toLowerCase().startsWith(lower)) return el;
+    }
+    return null;
+  }
+
+  /** The ARIA menubar keyboard model, delegated from the menubar element. */
+  #onKeydown(e) {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const target = e.target;
+    const onButton = target.classList?.contains('menu__button');
+    const onItem = target.classList?.contains('menu__item');
+    if (!onButton && !onItem) return;
+
+    const wrapper = target.closest('.menu');
+    const buttons = this.#topButtons();
+    const button = wrapper?.querySelector('.menu__button');
+    const topIndex = buttons.indexOf(button);
+    const items = this.#menuItems(wrapper);
+    const stop = () => { e.preventDefault(); e.stopPropagation(); };
+
+    /** Move to an adjacent top-level menu. From inside a menu, the new one opens. */
+    const moveTop = (delta) => {
+      const next = buttons[(topIndex + delta + buttons.length) % buttons.length];
+      const nextWrapper = next.closest('.menu');
+      const wasOpen = !!this.#openMenu;
+      this.#closeOpenMenu();
+      this.#focusTop(next);
+      // A menu bar with something already open keeps showing menus as you arrow
+      // along it — the behaviour every desktop menu bar has.
+      if (wasOpen) this.#open(nextWrapper, { focus: onItem ? 'first' : 'none' });
+    };
+
+    switch (e.key) {
+      case 'ArrowRight': stop(); moveTop(+1); return;
+      case 'ArrowLeft': stop(); moveTop(-1); return;
+
+      case 'ArrowDown':
+        stop();
+        if (onButton) this.#open(wrapper, { focus: 'first' });
+        else this.#focusAt(items, items.indexOf(target) + 1);
+        return;
+
+      case 'ArrowUp':
+        stop();
+        if (onButton) this.#open(wrapper, { focus: 'last' });
+        else this.#focusAt(items, items.indexOf(target) - 1);
+        return;
+
+      case 'Home':
+        stop();
+        if (onButton) this.#focusTop(buttons[0]);
+        else this.#focusAt(items, 0);
+        return;
+
+      case 'End':
+        stop();
+        if (onButton) this.#focusTop(buttons[buttons.length - 1]);
+        else this.#focusAt(items, items.length - 1);
+        return;
+
+      case 'Enter':
+      case ' ':
+        // Native activation is right for an item; on a closed button, open it.
+        if (onButton && this.#openMenu !== wrapper) { stop(); this.#open(wrapper, { focus: 'first' }); }
+        return;
+
+      case 'Escape':
+        if (this.#openMenu) { stop(); this.#closeOpenMenu({ restoreFocus: true }); }
+        return;
+
+      case 'Tab':
+        // Leave the menubar entirely — but do NOT preventDefault, so Tab still moves.
+        this.#closeOpenMenu();
+        return;
+
+      default: break;
+    }
+
+    if (e.key.length === 1 && /\S/.test(e.key)) {
+      const list = onItem ? items : buttons;
+      const from = list.indexOf(target);
+      const hit = this.#typeahead(list, e.key, from < 0 ? -1 : from);
+      if (!hit) return;
+      stop();
+      if (onItem) hit.focus();
+      else this.#focusTop(hit);
+    }
   }
 }
 
