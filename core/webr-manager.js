@@ -26,6 +26,7 @@
 
 import { CoreEvents } from './event-bus.js';
 import { getAssets } from './assets.js';
+import { debug } from './debug.js';
 
 /** Path in WebR's virtual filesystem where the Parquet injection snapshot is
  * written before R reads it. Overwritten each injecting run. */
@@ -38,6 +39,10 @@ const ENSURE_CONSOLE_ENV =
   + `!is.environment(get(${JSON.stringify(CONSOLE_ENV)}, envir = globalenv()))) `
   + `assign(${JSON.stringify(CONSOLE_ENV)}, new.env(parent = globalenv()), envir = globalenv())
 `;
+
+/** Per-message ceiling for pulling bytes out of WebR. The channel fails somewhere
+ * around 128 MB; 64 MB leaves headroom and costs one extra hop on a 100 MB export. */
+const READ_CHUNK = 64 * 1024 * 1024;
 
 const INJECT_PATH = '/tmp/ct_inject.parquet';
 
@@ -270,14 +275,64 @@ export class WebRManager {
   }
 
   /**
-   * Read a file from WebR's virtual filesystem as bytes — e.g. to pull a Parquet
-   * snapshot an importer wrote in R back out for ingestion.
+   * Read a file from WebR's virtual filesystem as bytes — an exporter pulling back the
+   * `.RData`/`.docx` R just wrote, or an importer collecting a Parquet snapshot.
+   *
+   * **Chunked above ~128 MB.** A single `FS.readFile` moves the whole buffer across the
+   * worker channel in one message, and past roughly 128 MB that transfer fails — so
+   * exporting a large dataset died at the last step, after all the work. R slices the
+   * file to a scratch path and JS stitches the slices, which is the same trick that
+   * proved the 181 MB inbound case; it was described in the TODO and never wired up.
+   *
+   * Transparent to callers: the fast single-hop path is unchanged for ordinary sizes,
+   * and nothing downstream sees a difference beyond getting its bytes.
    *
    * @param {string} path
+   * @param {{chunkSize?: number}} [opts]
    * @returns {Promise<Uint8Array>}
    */
-  readFile(path) {
-    return this.#enqueue(async (webR) => webR.FS.readFile(path), 'readFile');
+  readFile(path, { chunkSize = READ_CHUNK } = {}) {
+    return this.#enqueue(async (webR) => {
+      // Size first, from R — cheap, and it decides whether the channel can take it.
+      let size = -1;
+      try {
+        const n = await webR.evalRString(`as.character(file.info(${rLit(path)})$size)`);
+        size = Number(n);
+      } catch { size = -1; }
+
+      // Small enough (or unknown): one hop, exactly as before.
+      if (!Number.isFinite(size) || size <= chunkSize) return webR.FS.readFile(path);
+
+      // Too big for one transfer. R slices the file to a scratch path, JS reads each
+      // slice through the ordinary channel and stitches them. One chunk exists at a
+      // time and is unlinked immediately, so peak extra memory is one chunk, not a
+      // second copy of the file.
+      debug('webr', 'chunked readFile', { path, size, chunkSize });
+      const out = new Uint8Array(size);
+      const part = `${path}.ctpart`;
+      let offset = 0;
+      try {
+        while (offset < size) {
+          const n = Math.min(chunkSize, size - offset);
+          // `seek` on a fresh connection each time: a long-lived connection across
+          // await points is state we would have to unwind on every error path.
+          await webR.evalRString(
+            `local({ .i <- file(${rLit(path)}, "rb"); on.exit(close(.i));`
+            + ` seek(.i, where = ${offset}, origin = "start");`
+            + ` .b <- readBin(.i, "raw", n = ${n});`
+            + ` writeBin(.b, ${rLit(part)}); "ok" })`,
+          );
+          const slice = await webR.FS.readFile(part);
+          if (!slice || !slice.length) throw new Error(`chunked read stalled at ${offset} of ${size}`);
+          out.set(slice, offset);
+          offset += slice.length;
+        }
+      } finally {
+        try { await webR.evalRString(`{ if (file.exists(${rLit(part)})) unlink(${rLit(part)}); "ok" }`); } catch { /* scratch */ }
+      }
+      if (offset !== size) throw new Error(`chunked read returned ${offset} bytes, expected ${size}`);
+      return out;
+    }, 'readFile');
   }
 
   /**
