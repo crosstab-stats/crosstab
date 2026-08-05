@@ -134,6 +134,12 @@
          of the datasets and are not nested at all. */
       .proj__ds--nested { margin-left: 14px; border-left: 2px solid var(--line); border-radius: 0 6px 6px 0; }
       .proj__ds-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+      /* It is a <button> when the row is actionable; strip the UA chrome so it still
+         reads as the dataset's name rather than a control. */
+      button.proj__ds-name {
+        font: inherit; font-weight: 600; text-align: left; background: none;
+        border: 0; padding: 0; color: inherit; cursor: pointer;
+      }
       .proj__ds-rows { font: 12px ui-monospace, Menlo, monospace; color: #646e77; }
       /* row action icons (✎ rename, ✕ remove) — visible, darken on hover */
       .proj__ds-x { border: 0; background: none; color: #646e77; cursor: pointer; font-size: 12px; padding: 0 3px; border-radius: 4px; }
@@ -312,6 +318,12 @@
       }
       .vargrid code { font: 12px ui-monospace, Menlo, monospace; color: #1a1a1a; }
       .vargrid__row { cursor: pointer; }
+      /* The variable name is a button (keyboard route to the row's editor) but should
+         look exactly like the code text it replaced. */
+      .vargrid__open {
+        font: inherit; background: none; border: 0; padding: 0; margin: 0;
+        color: inherit; cursor: pointer; text-align: left;
+      }
       .vargrid__row:hover { background: #eef5fb; }
 
       /* history / rewind panel */

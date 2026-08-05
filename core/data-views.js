@@ -565,7 +565,7 @@ export class VariableView {
       const tr = document.createElement('tr');
       tr.className = 'vargrid__row';
       tr.title = 'Click to edit';
-      tr.append(elCode('td', m.name));
+      tr.append(openerCellFor(m, () => this.#openEditor(m)));
       tr.append(el('td', m.label || ''));
       tr.append(el('td', m.type));
       tr.append(el('td', m.measurementLevel || ''));
@@ -1550,6 +1550,22 @@ function elWrap(tag, child) {
   const e = document.createElement(tag);
   e.append(child);
   return e;
+}
+
+/** Row-opener cell: the variable name as a real button, so the editor this row
+ * opens on click is reachable without a mouse. */
+function openerCellFor(meta, onOpen) {
+  const td = document.createElement('td');
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'vargrid__open';
+  const code = document.createElement('code');
+  code.textContent = meta.name;
+  btn.append(code);
+  btn.setAttribute('aria-label', `Edit variable ${meta.label ? `${meta.label} (${meta.name})` : meta.name}`);
+  btn.addEventListener('click', (e) => { e.stopPropagation(); onOpen(); });
+  td.append(btn);
+  return td;
 }
 
 function elCode(tag, text) {

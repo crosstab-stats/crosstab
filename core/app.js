@@ -2359,7 +2359,19 @@ class ProjectSidebar {
     else li.style.cursor = 'default';
 
     const shown = name.length > 44 ? `${name.slice(0, 43).trimEnd()}…` : name;
-    const nameEl = el('span', shown, 'proj__ds-name');
+    // A real button when the row does something, so switching the active dataset is
+    // reachable without a mouse — there is no menu item that does it, so a keyboard
+    // user was stuck on whichever dataset happened to be active. The <li> keeps its
+    // own click for the mouse (the whole row stays a target), and this stops
+    // propagation so the action does not fire twice.
+    const nameEl = onOpen
+      ? el('button', shown, 'proj__ds-name')
+      : el('span', shown, 'proj__ds-name');
+    if (onOpen) {
+      nameEl.type = 'button';
+      nameEl.addEventListener('click', (e) => { e.stopPropagation(); onOpen(); });
+      if (active) nameEl.setAttribute('aria-current', 'true');
+    }
     if (title || shown !== name) nameEl.title = [shown === name ? null : name, title].filter(Boolean).join(' — ');
     if (onRename) {
       nameEl.addEventListener('dblclick', (e) => {
@@ -2681,7 +2693,13 @@ class ProjectSidebar {
       li.className = 'proj__ds';
       li.title = 'Open this project';
       li.addEventListener('click', () => void this.projects.openProject(p.id));
-      const name = el('span', p.name, 'proj__ds-name');
+      // These rows bypass #contentRow, so they need the same treatment: the name is
+      // the button, because the <li> already contains rename/delete buttons and
+      // cannot itself become one.
+      const name = el('button', p.name, 'proj__ds-name');
+      name.type = 'button';
+      name.setAttribute('aria-label', `Open project ${p.name}`);
+      name.addEventListener('click', (e) => { e.stopPropagation(); void this.projects.openProject(p.id); });
       name.addEventListener('dblclick', (e) => {
         e.stopPropagation();
         this.#inlineRename(li, name, p.name, (v) => this.projects.renameProject(p.id, v));
@@ -2705,7 +2723,10 @@ class ProjectSidebar {
       li.className = 'proj__ds proj__ds--folder';
       li.title = `Reopen folder project: ${f.name}`;
       li.addEventListener('click', () => void this.projects.reopenFolder(f.handle));
-      const name = el('span', `📁 ${f.name}`, 'proj__ds-name');
+      const name = el('button', `📁 ${f.name}`, 'proj__ds-name');
+      name.type = 'button';
+      name.setAttribute('aria-label', `Reopen folder project ${f.name}`);
+      name.addEventListener('click', (e) => { e.stopPropagation(); void this.projects.reopenFolder(f.handle); });
       const forget = iconBtn('✕', 'Forget this folder (keeps its files)', (e) => {
         e.stopPropagation();
         void this.projects.forgetFolderProject(f.id);
