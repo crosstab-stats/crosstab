@@ -63,6 +63,11 @@ export const manifest = {
     + 'The FIRST phase to appear in session order is treated as the baseline (A); the output states which is which so you can check it.\n'
     + 'Syntax: run builtin-sced.run {"y": "disruptions", "phase": "condition", "caseVar": "child", "session": "session", "direction": "decrease"}\n'
     + 'Syntax: run builtin-sced.graph {"y": "disruptions", "phase": "condition", "caseVar": "child", "session": "session"}\n'
+    + 'Several measures in one panel (e.g. “Saying thank you” + “Eye contact” scored in the same sessions): use '
+    + 'Single-Case Design ▸ Multiple-baseline graph, several measures. It needs LONG format — one row per measure per '
+    + 'session, with a Measure column — which is what lets each panel carry its own measures with nothing to configure. '
+    + 'Each measure gets its own marker (filled circle, open circle, filled triangle, …) so the figure stays readable in print.\n'
+    + 'Syntax: run builtin-sced.graphSeries {"y": "value", "measure": "measure", "phase": "condition", "caseVar": "behaviour", "session": "session"}\n'
     + '  • direction — "increase" (default; improvement means higher scores) | "decrease".\n'
     + '  • Needs no R: the indices are computed in JavaScript and match the R package `scan` (validated in test/sced.test.mjs).',
   menu: [
@@ -98,6 +103,24 @@ export const manifest = {
         { name: 'caseVar', kind: 'variables', label: 'Case (optional)', hint: 'Participant or behaviour — one stacked panel per case, sharing the session axis.', multiple: false, types: ['factor', 'string', 'numeric'], optional: true, unique: true },
         { name: 'session', kind: 'variables', label: 'Session (optional)', hint: 'Measurement occasion. Omit to use the order of the rows within each case.', multiple: false, types: ['numeric'], optional: true, unique: true },
         { name: 'context', kind: 'variables', label: 'Context (optional)', hint: 'The antecedent each behaviour is scored against (e.g. “Newcomer’s arrival”). Printed down the left edge of its panel.', multiple: false, types: ['factor', 'string'], optional: true, unique: true },
+      ],
+    },
+    {
+      // A SEPARATE menu item rather than one more optional input on the graph above.
+      // The two forms want different DATA, not just different options: this one needs
+      // long format (one row per measure per session), and asking for a Measure column
+      // is the whole difference. Both drive the same engine — `graphSeries` is `graph`
+      // with one extra input — so the split costs a manifest entry, not a code path.
+      label: 'Multiple-baseline graph, several measures…',
+      run: 'graphSeries',
+      order: 30,
+      inputs: [
+        { name: 'y', kind: 'variables', label: 'Value', hint: 'The score column. In long format every measure shares one value column.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'measure', kind: 'variables', label: 'Measure', hint: 'Which dependent variable each row records (e.g. “Eye contact”). Each becomes its own marker within the panel.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'phase', kind: 'variables', label: 'Phase', hint: 'Baseline vs intervention. The first value to appear in session order is treated as the baseline.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'caseVar', kind: 'variables', label: 'Case (optional)', hint: 'Participant or behaviour — one stacked panel per case, sharing the session axis.', multiple: false, types: ['factor', 'string', 'numeric'], optional: true, unique: true },
+        { name: 'session', kind: 'variables', label: 'Session (optional)', hint: 'Measurement occasion. Omit to use the order of the rows within each case.', multiple: false, types: ['numeric'], optional: true, unique: true },
+        { name: 'context', kind: 'variables', label: 'Context (optional)', hint: 'The antecedent each behaviour is scored against. Printed down the left edge of its panel.', multiple: false, types: ['factor', 'string'], optional: true, unique: true },
       ],
     },
   ],
@@ -589,17 +612,36 @@ export async function graph(app, inputs) {
   await app.results.appendChart(chartModel(parsed));
 }
 
+/**
+ * The same chart with several measures per panel (long format).
+ *
+ * Identical to {@link graph} apart from the `measure` input, which is what removes the
+ * "which measures go in which panel?" question entirely: a panel simply gets whatever
+ * measures appear in its own rows. That is why the long shape is required rather than
+ * one column per measure — a real figure has some behaviours scored on two measures and
+ * some on one, and wide format would need an assignment step to express it.
+ */
+export async function graphSeries(app, inputs) {
+  if (!inputs.measure) {
+    await app.results.appendError('Single-case design: pick the Measure column — the variable saying which dependent variable each row records.');
+    return;
+  }
+  const parsed = await gather(app, inputs);
+  if (!parsed) return;
+  await app.results.appendChart(chartModel(parsed));
+}
+
 // --- shared plumbing ---------------------------------------------------------
 
 /**
  * Read the variables, drop missing observations, and split into cases and phase runs.
  * Returns null (after reporting) when there is nothing to analyse.
  */
-async function gather(app, { y, phase, caseVar, session, context, direction }) {
+async function gather(app, { y, phase, caseVar, session, context, measure, direction }) {
   if (!y || !phase) return null;
   const decreasing = direction === 'decrease';
   const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
-  const wanted = [y, phase, caseVar, session, context].filter(Boolean);
+  const wanted = [y, phase, caseVar, session, context, measure].filter(Boolean);
   const cols = await app.data.getColumns({ variables: wanted });
 
   const yCol = cols[y] || [];
@@ -608,6 +650,8 @@ async function gather(app, { y, phase, caseVar, session, context, direction }) {
   const sCol = session ? cols[session] || [] : null;
   const ctxCol = context ? cols[context] || [] : null;
   const ctxName = context ? labelMapper(meta, context) : null;
+  const mCol = measure ? cols[measure] || [] : null;
+  const mName = measure ? labelMapper(meta, measure) : null;
 
   const missY = missingSet(meta, y);
   const missP = missingSet(meta, phase);
@@ -633,7 +677,12 @@ async function gather(app, { y, phase, caseVar, session, context, direction }) {
     }
     const entry = byCase.get(ckey);
     const sv = sCol ? Number(sCol[i]) : NaN;
-    entry.rows.push({ x: Number.isFinite(sv) ? sv : entry.rows.length + 1, yv, phase: String(praw ?? '') });
+    entry.rows.push({
+      x: Number.isFinite(sv) ? sv : entry.rows.length + 1,
+      yv,
+      phase: String(praw ?? ''),
+      measure: mCol ? String(mCol[i] ?? '') : null,
+    });
   }
 
   const cases = [];
@@ -674,6 +723,7 @@ async function gather(app, { y, phase, caseVar, session, context, direction }) {
     cases,
     phaseKeys,
     phaseLabelOf: phaseName,
+    measureLabelOf: mName || ((k) => String(k)),
     yLabel: meta.get(y)?.label || y,
     xLabel: session ? (meta.get(session)?.label || session) : 'Session',
     decreasing,
@@ -681,18 +731,33 @@ async function gather(app, { y, phase, caseVar, session, context, direction }) {
 }
 
 /** Build the `sced` chart model from a parsed dataset. */
-function chartModel({ cases, phaseKeys, phaseLabelOf, yLabel, xLabel }) {
+function chartModel({ cases, phaseKeys, phaseLabelOf, measureLabelOf, yLabel, xLabel }) {
   return {
     kind: 'sced',
     title: cases.length > 1 ? `Multiple baseline — ${yLabel}` : `${yLabel} by session`,
     phases: phaseKeys.map((k) => ({ key: k, label: phaseLabelOf(k) })),
     axes: { x: { title: xLabel }, y: { title: yLabel } },
-    panels: cases.map((c) => ({
-      key: c.key,
-      label: c.label,
-      context: c.context || undefined,
-      points: c.rows.map((row) => ({ x: row.x, y: row.yv, phase: row.phase })),
-    })),
+    panels: cases.map((c) => {
+      const pt = (row) => ({ x: row.x, y: row.yv, phase: row.phase });
+      if (!c.rows.some((row) => row.measure)) {
+        return { key: c.key, label: c.label, context: c.context || undefined, points: c.rows.map(pt) };
+      }
+      // Long format: one series per measure PRESENT IN THIS PANEL. Panels legitimately
+      // differ — some behaviours are scored on two measures and some on one — and
+      // deriving the set per panel is what makes that need no configuring.
+      const byMeasure = new Map();
+      for (const row of c.rows) {
+        const k = row.measure || '';
+        if (!byMeasure.has(k)) byMeasure.set(k, []);
+        byMeasure.get(k).push(pt(row));
+      }
+      return {
+        key: c.key,
+        label: c.label,
+        context: c.context || undefined,
+        series: [...byMeasure].map(([k, points]) => ({ key: k, label: measureLabelOf(k), points })),
+      };
+    }),
   };
 }
 

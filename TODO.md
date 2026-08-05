@@ -55,12 +55,26 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       genuinely better, not catching up. Worth remembering when weighing further work
       here: the competition for this figure is manual assembly.
 
-      Still open, in rough value order: **multi-series per panel** (her first figure puts
-      two dependent variables in one panel, filled vs open markers — our model spends the
-      marker on phase, so it structurally cannot draw that figure); and **axis breaks**,
-      the `//` marks. Her caption confirms those mark "passage of time before returning
-      to trial-based teaching" — a DECLARED annotation, not a numeric gap, so they cannot
-      be inferred from session numbers and need an explicit model field. Feeds #140.
+      **Multi-series + grouped controls (2026-08-05, fourth/fifth commits).** A panel may
+      now carry several measures (`panel.series[]`; `panel.points` stays as sugar for one
+      unnamed series, so every existing figure is untouched). Marker carries the MEASURE
+      — filled circle, open circle, filled triangle, … fill alternating before shape so
+      two measures stay distinguishable in black and white — which frees phase to be
+      carried spatially, the encoding swap the published convention makes. Exposed as its
+      own menu item taking a **Measure** column in LONG format; that is what makes "which
+      measures go in which panel" disappear, since a panel simply gets whatever measures
+      appear in its rows (real figures mix 2-measure and 1-measure panels).
+
+      Kept as ONE chart kind, not two, on a measurement: the options panel showed 29
+      visible controls on the simplest SCED chart and **16 of them are the generic
+      title/axis block every kind carries**, so splitting would have duplicated the 16
+      rather than removed them. Fixed where the bloat actually was — chart-controls.js
+      now groups controls into collapsible sections (see test/chart-groups.test.mjs).
+
+      Still open: **axis breaks**, the `//` marks. Her caption confirms those mark
+      "passage of time before returning to trial-based teaching" — a DECLARED annotation,
+      not a numeric gap, so they cannot be inferred from session numbers and need an
+      explicit model field. Feeds #140.
 
       **NOT building (user's call, 2026-08-05): in-panel annotations with arrows**
       ("Praise & TT ➝", "Booster Teaching", "↑TBT"). They can be positioned anywhere on

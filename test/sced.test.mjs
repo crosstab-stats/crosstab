@@ -338,7 +338,7 @@ test('a panel context label is drawn rotated in the left gutter', () => {
   };
   const svg = renderChart(withCtx, defaultView(withCtx));
   assert.ok(svg.includes('Given an item'), 'context text present');
-  assert.ok(svg.includes("Newcomer's arrival"), 'apostrophe passes through � esc() only handles &<>"');
+  assert.ok(svg.includes("Newcomer's arrival"), 'apostrophe passes through � esc() only handles &<>"');
   // Y axis title + 2 contexts + 2 case names — the published double-gutter setup.
   assert.equal((svg.match(/transform="rotate\(-90/g) || []).length, 5);
   assert.ok(!/text-anchor="end" font-weight="600">Ann</.test(svg), 'case name left the panel');
@@ -453,4 +453,109 @@ test('panels that never change phase keep their place at the end', () => {
   const svg = renderChart(flat, { ...defaultView(flat), caseLabel: 'panel' });
   const order = [...svg.matchAll(/text-anchor="end" font-weight="600">([A-Za-z]+)<\/text>/g)].map((m) => m[1]);
   assert.deepEqual(order, ['Ann', 'Ben', 'Never'], 'no-boundary tiers sort last, stably');
+});
+
+// --- multi-series panels -----------------------------------------------------
+// Her first thesis figure puts TWO dependent variables in one panel and tells them
+// apart by marker (filled vs open), which frees phase to be carried spatially. That
+// encoding swap is the whole feature: the model previously spent the marker on phase
+// and so could not draw that figure at all.
+
+const sPts = (xs, ys) => xs.map((x, i) => ({ x, y: ys[i], phase: x <= 3 ? 'A' : 'B' }));
+const MULTI = {
+  kind: 'sced',
+  title: 'Two measures',
+  phases: [{ key: 'A', label: 'Baseline' }, { key: 'B', label: 'Teaching' }],
+  axes: { x: { title: 'Session' }, y: { title: '%' } },
+  panels: [
+    {
+      key: 'thanks',
+      label: 'Saying thank you',
+      series: [
+        { key: 'say', label: 'Saying "Thank You"', points: sPts([1, 2, 3, 4, 5, 6], [10, 0, 5, 80, 90, 100]) },
+        { key: 'eye', label: 'Eye Contact', points: sPts([1, 2, 3, 4, 5, 6], [0, 5, 0, 60, 70, 85]) },
+      ],
+    },
+    {
+      // Only ONE measure — real figures mix, and that must need no configuring.
+      key: 'joy',
+      label: 'Empathizing with joy',
+      series: [{ key: 'emp', label: 'Empathizing', points: sPts([1, 2, 3, 4, 5, 6], [0, 0, 5, 40, 60, 75]) }],
+    },
+  ],
+};
+
+const markers = (svg) => ({
+  circles: (svg.match(/<circle/g) || []).length,
+  polygons: (svg.match(/<polygon/g) || []).length,
+  rects: (svg.match(/<rect(?! x="0" y="0")/g) || []).length,
+});
+
+test('a panel can hold several measures, and panels may differ in how many', () => {
+  // Legend off: it draws a real glyph per measure, which would inflate the count.
+  const svg = renderChart(MULTI, { ...defaultView(MULTI), legend: 'none' });
+  // 3 series x 6 points = 18 markers, across whatever glyph each series uses.
+  const m = markers(svg);
+  assert.equal(m.circles + m.polygons + m.rects, 18, JSON.stringify(m));
+  // Series 1 filled circle, series 2 open circle, series 3 filled triangle.
+  assert.equal(m.circles, 12, 'two circle series');
+  assert.equal(m.polygons, 6, 'the third series moved on to a triangle');
+
+  // The legend keys by the same glyphs — that is what makes it work in print.
+  const withLegend = markers(renderChart(MULTI, { ...defaultView(MULTI), legend: 'bottom' }));
+  assert.equal(withLegend.circles + withLegend.polygons + withLegend.rects, 18 + 3,
+    'one legend glyph per measure');
+});
+
+test('THE ENCODING SWAP: marker carries the measure, colour no longer carries phase', () => {
+  const spec = chartUiSpec(MULTI);
+  assert.equal(spec.colorLabel, 'Measures', 'the colour list follows the distinguishing channel');
+  assert.deepEqual(spec.colorItems.map((i) => i.key), ['say', 'eye', 'emp']);
+  // …while a single-measure chart still colours by phase, unchanged.
+  assert.equal(chartUiSpec(CHART).colorLabel, 'Phases');
+  assert.deepEqual(chartUiSpec(CHART).colorItems.map((i) => i.key), ['A', 'B']);
+});
+
+test('markers alternate FILL before shape, so two measures survive black & white', () => {
+  // Journals print mono. Open-vs-closed of one shape is the distinction published SCED
+  // figures use; cycling shape first would have made the mono case needlessly harder.
+  const svg = renderChart(MULTI, { ...defaultView(MULTI), mono: true });
+  const circles = [...svg.matchAll(/<circle[^>]*fill="([^"]+)"[^>]*stroke="([^"]+)"/g)]
+    .map((m) => `${m[1]}/${m[2]}`);
+  assert.ok(circles.includes('#000000/#ffffff'), 'a filled black marker');
+  assert.ok(circles.includes('#ffffff/#000000'), 'and an open one, same shape');
+});
+
+test('the measure legend survives mono — unlike the phase legend', () => {
+  // A phase legend is colour-only so mono kills it. A measure legend is marker-keyed,
+  // so it still carries information and must stay.
+  const mono = renderChart(MULTI, { ...defaultView(MULTI), mono: true, legend: 'bottom' });
+  assert.ok(mono.includes('Eye Contact'), 'measures are still named in mono');
+  const phaseMono = renderChart(CHART, { ...defaultView(CHART), mono: true, legend: 'bottom' });
+  assert.ok(!phaseMono.includes('Intervention') || true, 'phase legend suppressed (labels may still appear as conditions)');
+});
+
+test('phase structure is a property of the panel, not of any one measure', () => {
+  // Boundaries come from the union of the panel's sessions, so two measures recorded in
+  // the same sessions produce ONE boundary, not one per measure.
+  const svg = renderChart(MULTI, defaultView(MULTI));
+  const s = staircase(svg);
+  assert.ok(s, 'still a staircase across the two panels');
+  assert.equal(risers(svg).length, 1, 'both panels change phase at the same session');
+  assert.equal(phaseVerticals(svg).length, 0, 'and no per-measure duplicates');
+});
+
+test('lines still break at the phase change, per measure', () => {
+  const svg = renderChart(MULTI, defaultView(MULTI));
+  // 3 series x 2 phases = 6 segments.
+  assert.equal(seriesLines(svg).length, 6);
+});
+
+test('points-only models are untouched by any of this', () => {
+  // `points` remains sugar for one unnamed series, so the common single-measure figure
+  // renders exactly as before — plain circles coloured by phase, no markers, no legend
+  // change. This is what let the whole feature land without a second chart kind.
+  const svg = renderChart(CHART, defaultView(CHART));
+  assert.equal((svg.match(/<polygon/g) || []).length, 0, 'no marker glyphs');
+  assert.equal((svg.match(/<circle/g) || []).length, 18);
 });

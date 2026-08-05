@@ -188,7 +188,9 @@ export function chartUiSpec(model) {
   return {
     controls: kd.controls ? kd.controls(model) : [],
     colorItems: kd.colorItems(model),
-    colorLabel: kd.colorLabel || 'Series',
+    // A kind may make this depend on the model — SCED calls it "Phases" or "Measures"
+    // depending on which channel is carrying the distinction.
+    colorLabel: (typeof kd.colorLabel === 'function' ? kd.colorLabel(model) : kd.colorLabel) || 'Series',
     reorderCategories: !!kd.reorderCategories,
     categories: model.categories || [],
   };
@@ -1069,6 +1071,92 @@ function rotatedLabel(cx, cy, lines, { size = 10, fill = '#333', weight } = {}) 
     + `${weight ? ` font-weight="${weight}"` : ''} transform="rotate(-90 ${r(cx)} ${r(cy)})">${spans}</text>`;
 }
 
+/**
+ * Marker vocabulary for multi-series panels, ordered so that **fill alternates before
+ * shape does**: filled circle, open circle, filled triangle, open triangle, …
+ *
+ * That order is the point. Journals print black and white, so a second measure in the
+ * same panel has to be told apart without colour — and open-vs-closed of the same shape
+ * is the distinction published SCED figures actually use. Eight glyphs before anything
+ * repeats, which is more measures than a readable panel holds.
+ */
+const SCED_MARKERS = ['circle', 'circle-open', 'triangle', 'triangle-open',
+  'square', 'square-open', 'diamond', 'diamond-open'];
+
+/** One data marker. Open variants are white-filled with a coloured rim so they stay
+ * legible against a connecting line of the same colour. */
+function markerSvg(shape, cx, cy, rad, color) {
+  const open = shape.endsWith('-open');
+  const base = open ? shape.slice(0, -5) : shape;
+  const fill = open ? '#ffffff' : color;
+  const stroke = open ? color : '#ffffff';
+  const sw = open ? 1.3 : 0.8;
+  const attrs = `fill="${fill}" stroke="${stroke}" stroke-width="${sw}"`;
+  if (base === 'square') {
+    return `<rect x="${r(cx - rad)}" y="${r(cy - rad)}" width="${r(rad * 2)}" height="${r(rad * 2)}" ${attrs}/>`;
+  }
+  if (base === 'triangle') {
+    const h = rad * 1.15;
+    return `<polygon points="${r(cx)},${r(cy - h)} ${r(cx + h)},${r(cy + h * 0.75)} ${r(cx - h)},${r(cy + h * 0.75)}" ${attrs}/>`;
+  }
+  if (base === 'diamond') {
+    const d = rad * 1.25;
+    return `<polygon points="${r(cx)},${r(cy - d)} ${r(cx + d)},${r(cy)} ${r(cx)},${r(cy + d)} ${r(cx - d)},${r(cy)}" ${attrs}/>`;
+  }
+  return `<circle cx="${r(cx)}" cy="${r(cy)}" r="${r(rad)}" ${attrs}/>`;
+}
+
+/**
+ * A panel's series. `panel.points` is sugar for a single unnamed series, so the
+ * single-measure figure — which is most of them — needs no `series` key at all and
+ * renders exactly as it did before this existed.
+ */
+function scedSeriesOf(panel) {
+  if (Array.isArray(panel.series) && panel.series.length) return panel.series;
+  return [{ key: '__one__', label: '', points: panel.points || [] }];
+}
+
+/** Ordered union of series keys across panels; empty when no panel declares any.
+ * Panels legitimately carry different measures — in a real figure some behaviours are
+ * scored on two and some on one — so this is a union, not an intersection. */
+function scedSeriesKeys(model) {
+  const out = [];
+  for (const p of model.panels || []) {
+    for (const s of (Array.isArray(p.series) ? p.series : [])) {
+      if (!out.some((x) => x.key === s.key)) out.push({ key: s.key, label: s.label || s.key });
+    }
+  }
+  return out;
+}
+
+/** Like {@link legendBlock} but keyed by MARKER rather than a colour swatch, so it
+ * still distinguishes the entries when the figure is printed in black and white. */
+function markerLegend(items, place, box) {
+  if (!items.length || place === 'none') return '';
+  const out = [];
+  if (place === 'right') {
+    let ly = box.y1 + 10;
+    const lx = box.x1 + 20;
+    for (const it of items) {
+      out.push(markerSvg(it.shape, lx, ly, 4, it.color));
+      out.push(text(lx + 12, ly + 4, esc(clip(it.label, 24)), { size: 11, fill: '#333' }));
+      ly += 19;
+    }
+  } else {
+    const gap = 18;
+    const widths = items.map((it) => 16 + clip(it.label, 22).length * 6.2 + gap);
+    const total = widths.reduce((a, b) => a + b, 0) - gap;
+    let lx = (box.x0 + box.x1) / 2 - total / 2;
+    const ly = place === 'top' ? box.y1 - 16 : box.y0 + 38;
+    items.forEach((it, i) => {
+      out.push(markerSvg(it.shape, lx + 5, ly - 3, 4, it.color));
+      out.push(text(lx + 15, ly + 1, esc(clip(it.label, 22)), { size: 11, fill: '#333' }));
+      lx += widths[i];
+    });
+  }
+  return out.join('');
+}
+
 /** Consecutive same-phase runs of a panel's points, in session order. */
 function scedRuns(points) {
   const sorted = [...points].filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
@@ -1083,9 +1171,16 @@ function scedRuns(points) {
 }
 
 registerChartKind('sced', {
-  colorLabel: 'Phases',
+  // With more than one measure in a panel the marker has to carry the MEASURE, which
+  // frees phase to be carried spatially by the boundary lines and condition labels —
+  // the encoding swap the published convention makes. So the colour list follows
+  // whichever channel is actually doing the distinguishing.
+  colorLabel: (model) => (scedSeriesKeys(model).length ? 'Measures' : 'Phases'),
   reorderCategories: false,
-  colorItems: (model) => (model.phases || []).map((p) => ({ key: p.key, label: p.label || p.key })),
+  colorItems: (model) => {
+    const series = scedSeriesKeys(model);
+    return series.length ? series : (model.phases || []).map((p) => ({ key: p.key, label: p.label || p.key }));
+  },
   baseView: (model) => ({
     mark: 'both',
     connectAcross: false,
@@ -1183,7 +1278,11 @@ registerChartKind('sced', {
 });
 
 function renderSced(model, view) {
-  let panels = (model.panels || []).filter((p) => p && Array.isArray(p.points) && p.points.length);
+  // A panel carries either `points` or `series` — accept both, or a series-only panel
+  // is silently dropped and the whole figure renders empty.
+  const panelHasData = (p) => p && ((Array.isArray(p.points) && p.points.length)
+    || (Array.isArray(p.series) && p.series.some((s) => (s.points || []).length)));
+  let panels = (model.panels || []).filter(panelHasData);
   if (!panels.length) return errorSvg('SCED chart: no cases with plottable data.');
 
   const phaseList = ordered(model.phases || [], view.seriesOrder);
@@ -1191,7 +1290,19 @@ function renderSced(model, view) {
   const phaseLabel = new Map((model.phases || []).map((p) => [p.key, p.label || p.key]));
   const colorOfPhase = (key) => (view.mono ? '#000000' : colorFor(view, key, phaseOrder.get(key) ?? 0));
 
-  let runsPer = panels.map((p) => scedRuns(p.points));
+  // Series live under the panels; `points` is sugar for one unnamed series.
+  const seriesKeys = scedSeriesKeys(model);
+  const multiSeries = seriesKeys.length > 0;
+  const seriesIndex = new Map(seriesKeys.map((s, i) => [s.key, i]));
+  const colorOfSeries = (key) => (view.mono
+    ? '#000000'
+    : colorFor(view, key, seriesIndex.get(key) ?? 0));
+  const markerOfSeries = (key) => SCED_MARKERS[(seriesIndex.get(key) ?? 0) % SCED_MARKERS.length];
+  /** Every point in a panel, across its series — the phase structure is a property of
+   * the panel's sessions, not of any one measure. */
+  const allPointsOf = (p) => scedSeriesOf(p).flatMap((s) => s.points || []);
+
+  let runsPer = panels.map((p) => scedRuns(allPointsOf(p)));
 
   // Tier order. A multiple-baseline figure is conventionally ordered by WHEN the
   // intervention arrived, earliest at the top — that is what makes the boundaries
@@ -1229,7 +1340,10 @@ function renderSced(model, view) {
   const panelH = Math.max(70, view.panelHeight || 130);
   const gap = 24;              // between a panel's baseline and the next panel's top
   const mTop = chartTitle ? 34 : 14;
-  const showLegend = !view.mono && phaseList.length > 1;
+  // A phase legend is colour-only, so mono kills it (phase is spatial then). A MEASURE
+  // legend survives mono, because the markers still differ — that is the whole reason
+  // measures are encoded by marker rather than colour.
+  const showLegend = multiSeries ? seriesKeys.length > 1 : (!view.mono && phaseList.length > 1);
   const legendRow = view.legend === 'bottom' && showLegend ? 34 : 0;
   const mBottom = 34 + (xTitle ? 18 : 0) + legendRow;
   const legendRight = view.legend === 'right' && showLegend;
@@ -1341,26 +1455,34 @@ function renderSced(model, view) {
       });
     }
 
-    // Series. Lines are drawn per RUN so no segment spans a phase change.
+    // Data. Lines are drawn per RUN so no segment spans a phase change, and each
+    // measure is drawn independently — a panel may carry one measure or several.
     const drawLine = view.mark !== 'points';
     const drawPts = view.mark !== 'line';
-    if (drawLine) {
-      const segments = view.connectAcross
-        ? [runs.flatMap((run) => run.points)]
-        : runs.map((run) => run.points);
-      segments.forEach((seg, si) => {
-        if (seg.length < 2) return;
-        const d = seg.map((p) => `${r(xScale(p.x))},${r(yScale(p.y))}`).join(' ');
-        const stroke = view.connectAcross ? '#555' : colorOfPhase(runs[si].phase);
-        out.push(`<polyline points="${d}" fill="none" stroke="${stroke}" stroke-width="1.6"/>`);
-      });
-    }
-    if (drawPts) {
-      const rad = Math.max(1.5, view.pointSize || 3.5);
-      for (const run of runs) {
-        const fill = colorOfPhase(run.phase);
-        for (const p of run.points) {
-          out.push(`<circle cx="${r(xScale(p.x))}" cy="${r(yScale(p.y))}" r="${rad}" fill="${fill}" stroke="#ffffff" stroke-width="0.8"/>`);
+    const rad = Math.max(1.5, view.pointSize || 3.5);
+    for (const s of scedSeriesOf(panel)) {
+      const sRuns = multiSeries ? scedRuns(s.points || []) : runs;
+      const ink = multiSeries ? colorOfSeries(s.key) : null;
+      if (drawLine) {
+        const segments = view.connectAcross
+          ? [sRuns.flatMap((run) => run.points)]
+          : sRuns.map((run) => run.points);
+        segments.forEach((seg, si) => {
+          if (seg.length < 2) return;
+          const d = seg.map((p) => `${r(xScale(p.x))},${r(yScale(p.y))}`).join(' ');
+          const stroke = ink ?? (view.connectAcross ? '#555' : colorOfPhase(sRuns[si].phase));
+          out.push(`<polyline points="${d}" fill="none" stroke="${stroke}" stroke-width="1.6"/>`);
+        });
+      }
+      if (drawPts) {
+        const shape = multiSeries ? markerOfSeries(s.key) : null;
+        for (const run of sRuns) {
+          const fill = ink ?? colorOfPhase(run.phase);
+          for (const p of run.points) {
+            out.push(shape
+              ? markerSvg(shape, xScale(p.x), yScale(p.y), rad, fill)
+              : `<circle cx="${r(xScale(p.x))}" cy="${r(yScale(p.y))}" r="${rad}" fill="${fill}" stroke="#ffffff" stroke-width="0.8"/>`);
+          }
         }
       }
     }
@@ -1418,8 +1540,15 @@ function renderSced(model, view) {
   }
 
   if (showLegend) {
-    const items = phaseList.map((p, i) => ({ label: p.label || p.key, color: colorFor(view, p.key, i) }));
-    out.push(legendBlock(items, view.legend, { x0: mLeft, x1: W - mRight, y0: lastBaseline + (xTitle ? 18 : 0), y1: mTop + topPad }));
+    const box = { x0: mLeft, x1: W - mRight, y0: lastBaseline + (xTitle ? 18 : 0), y1: mTop + topPad };
+    if (multiSeries) {
+      out.push(markerLegend(seriesKeys.map((s) => ({
+        label: s.label || s.key, color: colorOfSeries(s.key), shape: markerOfSeries(s.key),
+      })), view.legend, box));
+    } else {
+      const items = phaseList.map((p, i) => ({ label: p.label || p.key, color: colorFor(view, p.key, i) }));
+      out.push(legendBlock(items, view.legend, box));
+    }
   }
 
   out.push('</svg>');
