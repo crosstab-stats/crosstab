@@ -22,6 +22,54 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
+- [ ] **SCED — single-case experimental design (multiple-baseline graph + Tau-U/NAP/PND).**
+      Publication-required for early-childhood intervention, special ed, ABA and school
+      psych (What Works Clearinghouse standards). Nothing we have fits: the signature
+      figure is multi-panel, one panel per behaviour on a shared session axis, with
+      STAGGERED phase-change lines (the staircase is the design's whole point).
+
+      **`scan` cannot run in WebR, and it is not patchable.** Diagnosed 2026-08-05,
+      correcting my own earlier "cubature.so is broken" reading, which was wrong twice
+      over:
+
+      - `cubature` loads FINE on its own. So does `Matrix`, so does `rlang`.
+      - The failure is CUMULATIVE. Loading `rlang` first succeeds; loading it late fails,
+        and then the error moves to whichever `.so` is next in line. At the point of
+        failure `getLoadedDLLs()` is at ~20. `scan` pulls MCMCglmm, Matrix, ape, car, gt,
+        knitr, kableExtra, readxl, miniUI, rlang, cli … and blows the ceiling on
+        concurrently-loaded shared objects in this WASM build.
+      - **Not the lavaan situation.** That was a pure-R logic bug (an NA reaching an
+        option check) which R code could intercept. This is a linker limit, and the R
+        library filesystem is READ-ONLY — `writeLines` to a NAMESPACE returns
+        "I/O error" — so we cannot trim scan's Imports or neuter a `useDynLib` either.
+      - An earlier reading that `grid` and `Matrix` were broken was **session
+        degradation**, not real; both are fine in a fresh worker. (The known trap: a
+        long-lived tab with many installs starts failing dyn.load. Always re-check a
+        package-feasibility result in a fresh session.)
+
+      **So: hand-roll the statistics.** NAP, PND, Tau-U and IRD are non-overlap counts —
+      pure arithmetic, no compiled code — and the graph is svglite, which already works
+      (and gains the Layer-1 chart frame for free). This is the [[validate-handrolled-vs-official]]
+      path, and the reference side is now set up: `scan` is installed on local R
+      (`C:/Users/Ryan/R-libs`) and `scripts/validation/sced-reference.R` regenerates the
+      table below. The fixture deliberately OVERLAPS phases — clean separation saturates
+      every statistic at 100 and would let a wrong implementation pass.
+
+      Reference (scan 0.62, R 4.6.0), Ann `A = 5,7,6,8 | B = 7,9,8,11,10`,
+      Ben `A = 4,6,5,7,5 | B = 6,5,9,8`:
+
+      | | Ann | Ben |
+      |---|---|---|
+      | NAP | 90.0 (20 pairs, 18 non-overlaps, 17 pos, 2 ties, p = .031968) | 77.5 (20, 15.5, 14, 3, p = .105451) |
+      | PND | 60 | 50 |
+      | Tau-U (A vs B) | Tau .842105, S 16, D 19, SE .426139, Z 1.976129, p .048140 | Tau .594595, S 11, D 18.5, Z 1.376195 |
+      | Tau-U (A vs B + Trend B) | Tau .688847, Z 2.434447, p .014915 | Tau .450694 |
+      | IRD (both cases) | 0.556 | |
+
+      Build notes: one panel per case sharing an x-axis; phase lines at each case's own
+      phase boundary; no line drawn ACROSS a phase change (broken lines are part of the
+      convention, not a style choice); per-phase condition labels.
+
 - [x] **#160 — DONE (2026-08-04).** (A) an imported frame's `load` op carries `producedBy: {kind:'rscript', runId, frame}`. (B) the console evaluates in its own env whose PARENT is globalenv — it reads what a script produced, nothing it defines reaches a script, and its "clear" no longer wipes script results. **Original:** the R scratchpad and the recorded R lane share one global env. Two
       holes found while confirming what R work reaches the log. The split itself is
       right and already built:
