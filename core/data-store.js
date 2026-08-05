@@ -1839,6 +1839,24 @@ export class DataStore {
   }
 
   /**
+   * Designated missing RANGES for a variable, as `[lo, hi]` pairs.
+   *
+   * SPSS/Stata let a variable declare a range missing — `MISSING VALUES income (LO THRU
+   * 0)` is ordinary practice — and a range is not a list. The importer used to force one
+   * into the other: a span it could not enumerate contributed only its two ENDPOINTS to
+   * `missingValues`, so with `(-999999 THRU 0)` a value of -50 read as a valid income and
+   * went into every mean, correlation and regression as real data. Wrong numbers,
+   * presented as right ones, with nothing on screen to suggest it.
+   */
+  #numericMissingRanges(name) {
+    const mr = this.#byName.get(name)?.missingRanges;
+    if (!Array.isArray(mr)) return [];
+    return mr
+      .map((r) => (Array.isArray(r) ? [Number(r[0]), Number(r[1])] : [Number(r?.lo), Number(r?.hi)]))
+      .filter(([lo, hi]) => Number.isFinite(lo) && Number.isFinite(hi) && hi >= lo);
+  }
+
+  /**
    * Wrap a column's value expression so its designated missing codes become SQL
    * `NULL` (→ R `NA`) when `applyMissing` — the central version of the
    * `x[x %in% c(codes)] <- NA` recode ~45 analysis plugins each used to emit
@@ -1851,8 +1869,14 @@ export class DataStore {
   #missingWrap(name, q, value, applyMissing) {
     if (!applyMissing) return value;
     const codes = this.#numericMissing(name);
-    if (!codes.length) return value;
-    return `CASE WHEN TRY_CAST(${q} AS DOUBLE) IN (${codes.join(', ')}) THEN NULL ELSE ${value} END`;
+    const ranges = this.#numericMissingRanges(name);
+    if (!codes.length && !ranges.length) return value;
+    const tests = [];
+    if (codes.length) tests.push(`TRY_CAST(${q} AS DOUBLE) IN (${codes.join(', ')})`);
+    for (const [lo, hi] of ranges) {
+      tests.push(`TRY_CAST(${q} AS DOUBLE) BETWEEN ${lo} AND ${hi}`);
+    }
+    return `CASE WHEN ${tests.join(' OR ')} THEN NULL ELSE ${value} END`;
   }
 
   /**
@@ -2262,7 +2286,10 @@ function joinConditionSql(left, right, s) {
  */
 function applyPatch(meta, patch) {
   if (!meta || !patch) return;
-  for (const key of ['label', 'type', 'measurementLevel', 'valueLabels', 'missingValues']) {
+  // `missingRanges` is here for the same reason as `missingValues`: SPSS/Stata declare
+  // range-style missing (`MISSING VALUES income (LO THRU 0)`), and a range cannot be
+  // flattened into a list without losing everything between its endpoints.
+  for (const key of ['label', 'type', 'measurementLevel', 'valueLabels', 'missingValues', 'missingRanges']) {
     if (!(key in patch)) continue;
     const v = patch[key];
     const empty =

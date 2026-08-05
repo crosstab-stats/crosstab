@@ -170,15 +170,34 @@ function makeContext(Module, keep = null) {
 }
 
 const MAX_MISSING_EXPAND = 1000;
-function expandMissing(pairs) {
-  const out = [];
+/**
+ * Split ReadStat's `[lo, hi]` missing declarations into discrete VALUES and true RANGES.
+ *
+ * A range is not a list, and the old version pretended otherwise: anything it could not
+ * enumerate contributed only its two endpoints to `missingValues`. So SPSS's ordinary
+ * `MISSING VALUES income (-999999 THRU 0)` marked exactly -999999 and 0 as missing and
+ * let every value between them through as real data — wrong means, wrong correlations,
+ * nothing on screen to suggest it.
+ *
+ * Small integer spans still enumerate (a compact list is cheaper to compare and shows
+ * legibly in the Variables view); everything else is now carried as a range and honoured
+ * as one at injection.
+ *
+ * @returns {{values: number[], ranges: Array<[number, number]>}}
+ */
+export function splitMissing(pairs) {
+  const values = [];
+  const ranges = [];
   for (const [lo, hi] of pairs) {
-    if (lo === hi) { out.push(lo); continue; }
-    if (Number.isInteger(lo) && Number.isInteger(hi) && Number.isFinite(lo) && Number.isFinite(hi) && hi - lo <= MAX_MISSING_EXPAND) {
-      for (let v = lo; v <= hi; v++) out.push(v);
-    } else { out.push(lo, hi); }
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) continue;
+    if (lo === hi) { values.push(lo); continue; }
+    if (Number.isInteger(lo) && Number.isInteger(hi) && hi - lo <= MAX_MISSING_EXPAND) {
+      for (let v = lo; v <= hi; v++) values.push(v);
+    } else {
+      ranges.push([lo, hi]);
+    }
   }
-  return out;
+  return { values, ranges };
 }
 
 function finalizeVariables({ rawVars, labelSets, missing }) {
@@ -193,7 +212,11 @@ function finalizeVariables({ rawVars, labelSets, missing }) {
     if (labels && Object.keys(labels).length) { out.type = 'factor'; out.valueLabels = labels; }
     else { out.type = isString ? 'string' : 'numeric'; }
     const miss = missing[v.index];
-    if (miss && miss.length) { const e = expandMissing(miss); if (e.length) out.missingValues = e; }
+    if (miss && miss.length) {
+      const { values, ranges } = splitMissing(miss);
+      if (values.length) out.missingValues = values;
+      if (ranges.length) out.missingRanges = ranges;
+    }
     const ml = MEASURE[v.measure];
     if (ml) out.measurementLevel = ml;
     variables.push(out);
