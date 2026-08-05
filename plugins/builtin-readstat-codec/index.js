@@ -200,13 +200,31 @@ export function splitMissing(pairs) {
   return { values, ranges };
 }
 
+/**
+ * The bare SAS format name a variable's labels are filed under.
+ *
+ * SAS keeps value labels in a companion `.sas7bcat`, filed by FORMAT name, while the
+ * data file records the format the variable uses. ReadStat appends the width and decimal
+ * count to that format (`AGEGRP` → `AGEGRP8.2`, per sas7bdat_read.c), and the catalog
+ * files its sets under the bare name — so the two only meet once the numeric tail is
+ * removed. Leading `$` (character formats) is kept: it is part of the name, not a width.
+ */
+export function sasFormatKey(format) {
+  // One anchored pass: `<digits>?` then `.<digits>?`, both optional, both only at the
+  // END. Two passes got `$REGION12.` wrong — the dot sits BETWEEN the width and the
+  // decimals, so stripping digits first leaves the dot stranded and the width behind it.
+  return String(format ?? '').replace(/(\d+)?(\.\d*)?$/, '');
+}
+
 function finalizeVariables({ rawVars, labelSets, missing }) {
   const variables = [];
   const storageTypes = {};
   for (const v of rawVars) {
     const isString = v.type === TYPE_STRING || v.type === TYPE_STRING_REF;
     storageTypes[v.name] = isString ? 'string' : 'numeric';
-    const labels = labelSets[v.labelSet];
+    // SPSS/Stata name their label set directly; SAS joins through the format name,
+    // whose labels arrive from a separate `.sas7bcat` (see readCatalogInto).
+    const labels = labelSets[v.labelSet] ?? labelSets[sasFormatKey(v.format)];
     const out = { name: v.name };
     if (v.label) out.label = v.label;
     if (labels && Object.keys(labels).length) { out.type = 'factor'; out.valueLabels = labels; }
@@ -224,6 +242,76 @@ function finalizeVariables({ rawVars, labelSets, missing }) {
   return { variables, storageTypes };
 }
 
+/**
+ * Parse a `.sas7bcat` and merge its label sets into `into`.
+ *
+ * A SAS import used to bring back half the story: the data file carries codes and a
+ * format name, and every value label lives in this companion catalog. Without it a
+ * survey imports as bare 1/2/3 where SAS itself shows "Strongly agree" — complete-looking
+ * and much less useful, with nothing to indicate anything was missing.
+ *
+ * Best-effort by design: a catalog that fails to parse must not sink the data import
+ * that already succeeded. The caller reports what happened and keeps the data.
+ */
+async function readCatalogInto(app, file, into) {
+  const Module = await getModule(app);
+  installRead(Module, file);
+  // ONLY the value-label callback: a catalog has no variables and no rows, and leaving
+  // the others wired would let it emit metadata that overwrote the dataset's own.
+  Module.ctMetadata = () => {};
+  Module.ctVariable = () => {};
+  Module.ctMissingRange = () => {};
+  Module.ctValueDouble = () => {};
+  Module.ctValueString = () => {};
+  let sets = 0;
+  Module.ctValueLabel = (set, dval, sval, label) => {
+    const key = String(set ?? '');
+    if (!into[key]) { into[key] = {}; sets++; }
+    into[key][sval ?? dval] = label;
+  };
+  const err = await Module.ccall('ct_parse_catalog', 'number', ['number'], [file.size], { async: true });
+  if (err !== 0) throw readError(Module, err);
+  return sets;
+}
+
+/**
+ * If this SAS file's variables reference formats but carry no labels, offer to attach
+ * the `.sas7bcat` that holds them, and merge what it yields into `labelSets`.
+ *
+ * Only asks when it would help: formats present, labels absent. A SAS file whose
+ * variables have no formats has nothing a catalog could add, and a file that somehow
+ * already has labels is not missing anything — prompting in either case would be
+ * noise attached to every SAS import forever.
+ *
+ * @returns {Promise<{attached: boolean, sets: number, error?: string}>}
+ */
+async function offerCatalog(app, cat, labelSets) {
+  const wantsLabels = cat.variables.some((v) => !v.valueLabels && sasFormatKey(v.__format));
+  if (!wantsLabels) return { attached: false, sets: 0 };
+  if (typeof app.ui?.pickFile !== 'function') return { attached: false, sets: 0 };
+
+  const pick = await app.ui.selectFromList({
+    title: 'Value labels are in a separate file',
+    hint: 'SAS stores value labels in a companion format catalog (.sas7bcat), not in the data '
+      + 'file. Without it this imports as bare codes — 1, 2, 3 — where SAS itself would show '
+      + 'the labels. Attach the catalog now if you have it.',
+    items: [{ value: 'yes', label: 'Choose a .sas7bcat catalog…' }, { value: 'no', label: 'Import codes only' }],
+    multiple: false,
+    okLabel: 'Continue',
+  });
+  if (!pick || pick[0] !== 'yes') return { attached: false, sets: 0 };
+
+  const file = await app.ui.pickFile({ accept: '.sas7bcat', hint: 'SAS format catalog' });
+  if (!file) return { attached: false, sets: 0 };
+  try {
+    const sets = await readCatalogInto(app, file, labelSets);
+    return { attached: true, sets };
+  } catch (err) {
+    // Never sink a data import that already succeeded over a catalog that didn't parse.
+    return { attached: false, sets: 0, error: err?.message || String(err) };
+  }
+}
+
 /** Catalog (dictionary only) — for the wide check + the variable picker. */
 async function catalog(app, file, format) {
   const Module = await getModule(app);
@@ -234,16 +322,26 @@ async function catalog(app, file, format) {
   const err = await Module.ccall('ct_parse', 'number', ['number', 'number', 'number'], [FORMATS[format] ?? 0, file.size, 0], { async: true });
   if (err !== 0) throw readError(Module, err);
   const { variables } = finalizeVariables(ctx);
-  return { rowCount: ctx.meta.rowCount, varCount: ctx.meta.varCount, encoding: ctx.meta.encoding, variables };
+  // `__format` rides along so the caller can tell "references a format, has no labels"
+  // from "has nothing to label" — the difference between a useful prompt and a nag.
+  for (const v of variables) v.__format = ctx.rawVars.find((r) => r.name === v.name)?.format ?? '';
+  return {
+    rowCount: ctx.meta.rowCount, varCount: ctx.meta.varCount, encoding: ctx.meta.encoding,
+    variables, labelSets: ctx.labelSets,
+  };
 }
 
 /** Stream a file's rows into the host ingest as column batches, in order. `keep`
  * restricts to chosen columns. Returns total row count. */
-async function stream(app, file, format, { onVariables, onBatch, variables = null }) {
+async function stream(app, file, format, { onVariables, onBatch, variables = null, labelSets = null }) {
   const Module = await getModule(app);
   installRead(Module, file);
   const keep = Array.isArray(variables) && variables.length ? new Set(variables) : null;
   const ctx = makeContext(Module, keep);
+  // Seed with anything a companion `.sas7bcat` supplied, so the streamed variables carry
+  // their labels on the FIRST delivery — the host builds the dataset from this schema,
+  // and a label arriving later would mean re-typing the column after the fact.
+  if (labelSets) Object.assign(ctx.labelSets, labelSets);
 
   let started = false;
   let names = [];
@@ -300,11 +398,22 @@ export async function readImport(app) {
   const format = formatForName(file.name);
   if (!format) throw new Error(`Unsupported file: ${file.name}`);
   const cat = await catalog(app, file, format);
+  const attach = format === 'sas7bdat' ? await offerCatalog(app, cat, cat.labelSets) : { attached: false };
   const wide = isWide(cat.varCount, cat.rowCount);
   await stream(app, file, format, {
+    labelSets: cat.labelSets,
     onVariables: (variables, storageTypes) => app.codec.begin(variables, storageTypes, { rowCount: cat.rowCount, wide }),
     onBatch: (columns) => app.codec.batch(columns),
   });
+  reportCatalog(app, attach);
+}
+
+/** Say what happened with the catalog — silence would leave the user unable to tell
+ * "no labels in this file" from "the catalog didn't load". */
+function reportCatalog(app, attach) {
+  if (!attach) return;
+  if (attach.error) app.results?.appendError?.(`Value-label catalog could not be read (${attach.error}). The data imported without labels.`);
+  else if (attach.attached) app.results?.appendText?.(`Attached ${attach.sets} value-label set${attach.sets === 1 ? '' : 's'} from the SAS format catalog.`);
 }
 
 export async function readImportPick(app) {
@@ -321,12 +430,15 @@ export async function readImportPick(app) {
     searchPlaceholder: 'Filter by name or label…',
   });
   if (!chosen || !chosen.length) throw new Error('Import cancelled.');
+  const attach = format === 'sas7bdat' ? await offerCatalog(app, cat, cat.labelSets) : { attached: false };
   const wide = isWide(chosen.length, cat.rowCount);
   await stream(app, file, format, {
     variables: chosen,
+    labelSets: cat.labelSets,
     onVariables: (variables, storageTypes) => app.codec.begin(variables, storageTypes, { rowCount: cat.rowCount, wide }),
     onBatch: (columns) => app.codec.batch(columns),
   });
+  reportCatalog(app, attach);
 }
 
 // --- write -------------------------------------------------------------------

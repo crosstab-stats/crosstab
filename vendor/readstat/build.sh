@@ -25,7 +25,7 @@ emcc \
   -sMODULARIZE=1 \
   -sEXPORT_ES6=1 \
   -sENVIRONMENT=web,worker \
-  -sEXPORTED_FUNCTIONS='["_ct_parse","_ct_error_message","_ct_write_begin","_ct_write_batch","_ct_write_end","_malloc","_free"]' \
+  -sEXPORTED_FUNCTIONS='["_ct_parse","_ct_parse_catalog","_ct_error_message","_ct_write_begin","_ct_write_batch","_ct_write_end","_malloc","_free"]' \
   -sEXPORTED_RUNTIME_METHODS='["ccall","cwrap","UTF8ToString","stringToUTF8","stringToNewUTF8","getValue","setValue","HEAPU8"]' \
   -o dist/readstat.mjs
 

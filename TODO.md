@@ -2217,10 +2217,22 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         than collapsing to NA. **Verified in Chrome** with a haven-written `.sav`
         round-trip: value labels render in Frequencies, `-99` recodes to Missing.
     - [x] **Real GSS files — VERIFIED.** Real GSS `.sav` (including large) imported
-          end to end, not just the synthetic round-trip. *Residual (distinct, still
-          open):* SAS value labels need the separate `.sas7bcat` catalog
-          (`read_sas(data, catalog_file)`) — not yet wired; `na_range` (range-style
-          SPSS missing) not yet captured, only discrete `na_values`.
+          end to end, not just the synthetic round-trip. *Residuals — BOTH FIXED 2026-08-04:*
+          **`.sas7bcat`** — SAS keeps value labels out of the data file (a format NAME
+          per variable, labels in a companion catalog), so a SAS import gave bare codes
+          where SAS itself shows labels. Added `ct_parse_catalog` to the ReadStat WASM
+          shim (`readstat_parse_sas7bcat`, value-label handler ONLY — a catalog has no
+          variables or rows, and wiring the others would emit metadata that overwrote the
+          dataset's), rebuilt `vendor/readstat`, and joined the two by format name.
+          ReadStat appends width/decimals to the format (`AGEGRP` → `AGEGRP8.2`) and the
+          catalog files sets under the bare name, so `sasFormatKey` strips the suffix in
+          one anchored pass — two passes got `$REGION12.` wrong, since the dot sits
+          between the width and the decimals. The importer offers the catalog only when
+          it would help (formats present, labels absent), reports what it attached, and
+          treats a catalog that fails to parse as non-fatal. New host-owned
+          `app.ui.pickFile` (a sandbox cannot open a picker). 8 tests.
+          **`na_range`** — see the missing-ranges entry; range-style missing is captured
+          and honoured at injection.
     - [x] **Large-file ceilings (the haven-in-WebR path) — RESOLVED via the ReadStat
           codec.** haven-in-WebR kept OOMing on large files, so the streaming
           **ReadStat codec** (`plugins/builtin-readstat-codec/` — the "compile ReadStat

@@ -591,6 +591,9 @@ function buildDispatch({ data, results, webr, ui, web }) {
     'ui.selectVariables': (opts) => ui.selectVariables(opts),
     'ui.selectFromList': (opts) => ui.selectFromList(opts),
     'ui.showForm': (opts) => ui.showForm(opts),
+    // Returns a File — structured-cloneable, so the plugin gets the bytes by reference
+    // without the host ever exposing a path or the filesystem.
+    'ui.pickFile': (opts) => ui.pickFile(opts),
 
     'web.get': (url) => web.get(url),
 

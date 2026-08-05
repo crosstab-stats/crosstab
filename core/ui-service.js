@@ -336,11 +336,45 @@ export class UiService {
   }
 
   /**
+   * Ask the user for a file and hand the plugin the `File` itself.
+   *
+   * The picker is host-owned because a sandboxed frame cannot open one — and should not:
+   * this way the user's choice is the only thing that crosses the boundary, one file at a
+   * time, with no path and no directory access.
+   *
+   * Added for the SAS companion catalog (#150-adjacent): a `.sas7bdat` records only a
+   * format NAME for each variable and keeps the labels in a separate `.sas7bcat`, so the
+   * importer has to be able to ask for the second half.
+   *
+   * @param {{title?: string, accept?: string, hint?: string}} [opts]
+   * @returns {Promise<File|null>} null if the user cancels
+   */
+  pickFile({ accept = '', hint = '' } = {}) {
+    return new Promise((resolve) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      if (accept) input.accept = accept;
+      input.style.display = 'none';
+      if (hint) input.title = hint;
+      let settled = false;
+      const done = (v) => { if (!settled) { settled = true; input.remove(); resolve(v); } };
+      input.addEventListener('change', () => done(input.files?.[0] ?? null));
+      // `cancel` is not universal; the focus fallback covers browsers without it. Both
+      // are idempotent through `settled`, so a double fire cannot resolve twice.
+      input.addEventListener('cancel', () => done(null));
+      window.addEventListener('focus', () => setTimeout(() => done(input.files?.[0] ?? null), 400), { once: true });
+      document.body.append(input);
+      input.click();
+    });
+  }
+
+  /**
    * The frozen object exposed to plugins as `app.ui`.
    * @returns {Readonly<{
    *   selectVariables: (opts?: SelectVariablesOptions) => Promise<string[]|null>,
    *   selectFromList: (opts?: object) => Promise<string[]|null>,
    *   showForm: (opts?: object) => Promise<Record<string,string>|null>,
+ *   pickFile: (opts?: object) => Promise<File|null>,
    * }>}
    */
   get api() {
@@ -348,6 +382,7 @@ export class UiService {
       selectVariables: (opts) => this.selectVariables(opts),
       selectFromList: (opts) => this.selectFromList(opts),
       showForm: (opts) => this.showForm(opts),
+      pickFile: (opts) => this.pickFile(opts),
     });
   }
 }

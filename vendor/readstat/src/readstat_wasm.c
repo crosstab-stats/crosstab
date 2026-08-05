@@ -160,6 +160,38 @@ int ct_parse(int format, double file_size, int row_limit) {
   return (int)err;
 }
 
+/*
+ * Parse a SAS **format catalog** (`.sas7bcat`) — the other half of a SAS import.
+ *
+ * SAS keeps value labels OUT of the data file: `.sas7bdat` stores a per-variable FORMAT
+ * NAME and the labels themselves live in a companion catalog. Importing only the data
+ * therefore gives bare codes with no labels, however complete the file looks — the same
+ * dataset read in SAS shows "Strongly agree" where we showed 1.
+ *
+ * Only the value-label handler is wired: a catalog has no variables and no rows, and
+ * setting the others would emit a bogus second metadata callback that overwrote the
+ * dataset's own. The label SETS it yields are keyed by format name, which is what the
+ * data file's variables already carry, so the join happens in JS.
+ *
+ * Same IO statics as ct_parse — the caller stages one file at a time.
+ */
+EMSCRIPTEN_KEEPALIVE
+int ct_parse_catalog(double file_size) {
+  g_pos = 0;
+  g_size = (int64_t)file_size;
+
+  readstat_parser_t *p = readstat_parser_init();
+  readstat_set_open_handler(p, io_open);
+  readstat_set_close_handler(p, io_close);
+  readstat_set_seek_handler(p, io_seek);
+  readstat_set_read_handler(p, io_read);
+  readstat_set_value_label_handler(p, value_label_handler);
+
+  readstat_error_t err = readstat_parse_sas7bcat(p, "catalog", NULL);
+  readstat_parser_free(p);
+  return (int)err;
+}
+
 EMSCRIPTEN_KEEPALIVE
 const char *ct_error_message(int code) { return readstat_error_message((readstat_error_t)code); }
 
