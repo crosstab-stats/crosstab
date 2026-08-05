@@ -338,12 +338,38 @@ test('a panel context label is drawn rotated in the left gutter', () => {
   };
   const svg = renderChart(withCtx, defaultView(withCtx));
   assert.ok(svg.includes('Given an item'), 'context text present');
-  assert.ok(svg.includes("Newcomer&#039;s arrival") || svg.includes("Newcomer's arrival"), 'and escaped safely');
-  assert.equal((svg.match(/transform="rotate\(-90/g) || []).length, 3, 'two contexts + the Y axis title');
-  // The gutter must actually be reserved, or the label collides with the tick labels.
-  const plain = renderChart(CHART, defaultView(CHART));
+  assert.ok(svg.includes("Newcomer's arrival"), 'apostrophe passes through � esc() only handles &<>"');
+  // Y axis title + 2 contexts + 2 case names — the published double-gutter setup.
+  assert.equal((svg.match(/transform="rotate\(-90/g) || []).length, 5);
+  assert.ok(!/text-anchor="end" font-weight="600">Ann</.test(svg), 'case name left the panel');
+
+  // The gutters must actually be reserved, or the captions collide with the ticks.
   const xOf = (s) => Number(s.match(/<line x1="([\d.]+)" y1="[\d.]+" x2="\1"/)[1]);
-  assert.ok(xOf(svg) > xOf(plain), 'the plot is pushed right to make room');
+  const noCtx = renderChart(CHART, defaultView(CHART));
+  assert.ok(xOf(svg) > xOf(noCtx), 'the context gutter pushes the plot right');
+  const inPanel = renderChart(withCtx, { ...defaultView(withCtx), caseLabel: 'panel' });
+  assert.ok(xOf(svg) > xOf(inPanel), 'and the case gutter adds a second column');
+});
+
+test('long captions wrap into stacked columns instead of being truncated', () => {
+  // "Acknowledging and Complimenting Others" is 38 chars against a ~130px panel. The
+  // first cut clipped to the panel height and lost most of every real label.
+  const long = {
+    ...CHART,
+    panels: CHART.panels.map((p) => ({
+      ...p, label: 'Acknowledging and Complimenting Others', context: "Newcomer's Arrival",
+    })),
+  };
+  const svg = renderChart(long, defaultView(long));
+  const spans = [...svg.matchAll(/<tspan[^>]*>([^<]*)<\/tspan>/g)].map((m) => m[1]);
+  const caption = spans.filter((x) => x.includes('Acknowledging') || x.includes('Complimenting'));
+  assert.ok(caption.length >= 2, `expected the caption to wrap, got ${JSON.stringify(spans)}`);
+  assert.equal(caption.slice(0, 2).join(' '), 'Acknowledging and Complimenting Others', 'nothing lost in the wrap');
+  assert.ok(!spans.some((x) => x.length > 30), 'no single line runs the full caption');
+  // Wrapping widens the gutter, so a taller panel (more room per line) needs fewer.
+  const tall = renderChart(long, { ...defaultView(long), panelHeight: 300 });
+  const lines = (s) => (s.match(/<tspan/g) || []).length;
+  assert.ok(lines(tall) < lines(svg), 'taller panels fit more per line');
 });
 
 test('Y tick density is adjustable, and defaults to the 0/20/…/100 convention', () => {
@@ -399,17 +425,18 @@ test('THE CONVENTION: tiers are ordered by when the intervention arrives', () =>
       { key: 'theo', label: 'Theo', points: late(5, 6) },
     ],
   };
-  const xs = risers(renderChart(scrambled, defaultView(scrambled)));
+  const inPanel = { ...defaultView(scrambled), caseLabel: 'panel' };
+  const xs = risers(renderChart(scrambled, inPanel));
   assert.equal(xs.length, 4);
   assert.deepEqual(xs, [...xs].sort((a, b) => a - b), 'the staircase must descend left to right');
 
   // …and the panels themselves are reordered, not just the line.
-  const svg = renderChart(scrambled, defaultView(scrambled));
+  const svg = renderChart(scrambled, inPanel);
   const order = [...svg.matchAll(/text-anchor="end" font-weight="600">([A-Za-z]+)<\/text>/g)].map((m) => m[1]);
   assert.deepEqual(order, ['Theo', 'Kelly', 'Brian', 'Andrew'], 'earliest intervention on top');
 
   // Opting out restores the file's own order.
-  const asIs = renderChart(scrambled, { ...defaultView(scrambled), panelOrder: 'model' });
+  const asIs = renderChart(scrambled, { ...inPanel, panelOrder: 'model' });
   const xs2 = risers(asIs);
   assert.deepEqual(xs2, [...xs2].sort((a, b) => b - a), 'data order here happens to be reversed');
 });
@@ -423,7 +450,7 @@ test('panels that never change phase keep their place at the end', () => {
       CHART.panels[0], // Ann, boundary after session 4
     ],
   };
-  const svg = renderChart(flat, defaultView(flat));
+  const svg = renderChart(flat, { ...defaultView(flat), caseLabel: 'panel' });
   const order = [...svg.matchAll(/text-anchor="end" font-weight="600">([A-Za-z]+)<\/text>/g)].map((m) => m[1]);
   assert.deepEqual(order, ['Ann', 'Ben', 'Never'], 'no-boundary tiers sort last, stably');
 });

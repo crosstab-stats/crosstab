@@ -1023,6 +1023,52 @@ function arcPath(cx, cy, rad, startDeg, endDeg) {
  * kinds, a multiple-baseline chart has no natural single-panel size.
  */
 
+/**
+ * Break a caption into at most `maxLines` lines of about `perLine` characters, on word
+ * boundaries. The last line is ellipsised rather than dropped, so an over-long label
+ * degrades to "Acknowledging and Complimenting…" instead of vanishing.
+ */
+function wrapLabel(s, perLine, maxLines) {
+  const words = String(s ?? '').trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const lines = [];
+  let cur = '';
+  for (const w of words) {
+    const next = cur ? `${cur} ${w}` : w;
+    if (next.length <= perLine || !cur) { cur = next; continue; }
+    lines.push(cur);
+    cur = w;
+    if (lines.length === maxLines) break;
+  }
+  if (lines.length < maxLines && cur) lines.push(cur);
+  if (lines.length === maxLines) {
+    // Anything unplaced gets folded into the final line, then ellipsised to fit.
+    const placed = lines.join(' ').length;
+    if (placed < String(s).trim().length) {
+      lines[maxLines - 1] = clip(`${lines[maxLines - 1]}…`, perLine);
+    }
+  }
+  return lines;
+}
+
+/**
+ * A rotated caption of one or more lines, centred on `cy`.
+ *
+ * Under `rotate(-90)` the local +y axis points RIGHT on screen, so successive `dy`
+ * offsets stack the lines side by side as a vertical column of text — which is exactly
+ * how these captions are set in print — rather than wrapping along the reading
+ * direction.
+ */
+function rotatedLabel(cx, cy, lines, { size = 10, fill = '#333', weight } = {}) {
+  if (!lines.length) return '';
+  const step = size * 1.15;
+  const first = -((lines.length - 1) * step) / 2;
+  const spans = lines.map((ln, i) =>
+    `<tspan x="${r(cx)}" dy="${r(i === 0 ? first : step)}">${esc(ln)}</tspan>`).join('');
+  return `<text x="${r(cx)}" y="${r(cy)}" font-size="${size}" fill="${fill}" text-anchor="middle"`
+    + `${weight ? ` font-weight="${weight}"` : ''} transform="rotate(-90 ${r(cx)} ${r(cy)})">${spans}</text>`;
+}
+
 /** Consecutive same-phase runs of a panel's points, in session order. */
 function scedRuns(points) {
   const sorted = [...points].filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
@@ -1053,6 +1099,7 @@ registerChartKind('sced', {
     sharedY: true,
     mono: false,
     panelOrder: 'stagger',
+    caseLabel: (model.panels || []).length > 1 ? 'axis' : 'panel',
     pointSize: 3.5,
     panelHeight: 130,
     yTickCount: 5, // 0/20/…/100 on percentage-of-opportunities data
@@ -1072,6 +1119,12 @@ registerChartKind('sced', {
     {
       id: 'phaseLines', label: 'Phase change lines', type: 'check',
       get: (v) => v.phaseLines !== false, set: (v, x) => { v.phaseLines = x; },
+    },
+    {
+      id: 'caseLabel', label: 'Case label', type: 'select', structural: true,
+      options: [['axis', 'Beside the Y axis'], ['panel', 'Inside the panel'], ['none', 'Hidden']],
+      get: (v) => v.caseLabel || ((model.panels || []).length > 1 ? 'axis' : 'panel'),
+      set: (v, x) => { v.caseLabel = x; },
     },
     {
       id: 'panelOrder', label: 'Panel order', type: 'select', structural: true,
@@ -1183,11 +1236,25 @@ function renderSced(model, view) {
   const mRight = legendRight
     ? Math.min(200, Math.max(70, Math.max(...phaseList.map((p) => (p.label || p.key).length)) * 7 + 28))
     : 20;
-  // A per-panel context label (the antecedent the behaviour is measured against) sits
-  // rotated outside the y axis, so it needs its own gutter to the left of everything.
-  const hasContext = panels.some((p) => p.context);
-  const contextGutter = hasContext ? 20 : 0;
-  const mLeft = 54 + (yTitle ? 18 : 0) + contextGutter;
+  // Row labels. Published SCED figures stack TWO rotated captions to the left of the y
+  // axis — outer: the antecedent the behaviour is scored against ("Newcomer's Arrival"),
+  // inner: the behaviour itself ("Acknowledging and Complimenting Others"). Both need
+  // word wrapping: a panel is ~130px tall and those captions do not fit on one line, so
+  // clipping them to the panel height (the first attempt) truncated every real label.
+  const caseLabelAt = view.caseLabel || (panels.length > 1 ? 'axis' : 'panel');
+  const LAB_SIZE = 10;
+  const labWidth = Math.max(1, Math.floor((panelH - 6) / (LAB_SIZE * 0.56))); // chars per line
+  const contextLines = panels.map((p) => (p.context ? wrapLabel(p.context, labWidth, 3) : []));
+  const caseLines = panels.map((p) => (caseLabelAt === 'axis'
+    ? wrapLabel(p.label || p.key, labWidth, 3) : []));
+  const gutterFor = (lineSets) => {
+    const n = Math.max(0, ...lineSets.map((l) => l.length));
+    return n ? n * (LAB_SIZE * 1.15) + 6 : 0;
+  };
+  const yTitleW = yTitle ? 18 : 0;
+  const contextGutter = gutterFor(contextLines);
+  const caseGutter = gutterFor(caseLines);
+  const mLeft = 54 + yTitleW + contextGutter + caseGutter;
   const topPad = view.phaseLabels === 'none' ? 0 : 14;
   const totalH = mTop + topPad + panels.length * (panelH + gap) - gap + mBottom;
 
@@ -1298,17 +1365,18 @@ function renderSced(model, view) {
       }
     }
 
-    // Case name, inside the panel so it stays with its data when panels are tall.
-    out.push(text(W - mRight - 6, y1 + 13, esc(clip(panel.label || panel.key, 28)),
-      { size: 11.5, anchor: 'end', fill: '#333', weight: 600 }));
-
-    // Row context (the antecedent this behaviour is measured against), rotated in the
-    // left gutter. Published SCED figures carry this because "Offering a Toy" only
-    // means something once you know it was scored on a newcomer's arrival.
-    if (panel.context) {
-      const cy = (y1 + y0) / 2;
-      const cx = mLeft - 46;
-      out.push(`<text x="${r(cx)}" y="${r(cy)}" font-size="10" fill="#333" text-anchor="middle" transform="rotate(-90 ${r(cx)} ${r(cy)})">${esc(clip(panel.context, Math.floor(panelH / 6)))}</text>`);
+    // Row captions. Either stacked as two rotated gutters left of the axis (the
+    // published convention) or the compact in-panel name.
+    const midY = (y1 + y0) / 2;
+    if (contextLines[pi].length) {
+      out.push(rotatedLabel(yTitleW + contextGutter / 2, midY, contextLines[pi]));
+    }
+    if (caseLabelAt === 'axis' && caseLines[pi].length) {
+      out.push(rotatedLabel(yTitleW + contextGutter + caseGutter / 2, midY, caseLines[pi], { weight: 600 }));
+    } else if (caseLabelAt !== 'none' && caseLabelAt !== 'axis') {
+      // Inside the panel so it stays with its data when panels are tall.
+      out.push(text(W - mRight - 6, y1 + 13, esc(clip(panel.label || panel.key, 28)),
+        { size: 11.5, anchor: 'end', fill: '#333', weight: 600 }));
     }
   });
 

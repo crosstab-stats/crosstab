@@ -43,13 +43,30 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       Ordering is a *view* concern (control: "Panel order"), so the log's data order is
       untouched and the user can opt out.
 
-      Still open from that figure, in rough value order: **multi-series per panel**
-      (her first figure puts two dependent variables in one panel, filled vs open
-      markers — my model spends the marker on phase, so it structurally cannot draw it);
-      **axis breaks** — the `//` marks; her note says they mark "passage of time before
-      returning to trial-based teaching", i.e. a DECLARED annotation, not a numeric gap,
-      so they cannot be auto-detected and need a model field; and in-panel annotations
-      with arrows ("Praise & TT ➝", "Booster Teaching", "↑TBT"). Feeds #140.
+      **Row captions (2026-08-05, third commit).** Published figures stack TWO rotated
+      captions left of the y axis (antecedent outer, behaviour inner); we had the
+      behaviour inside the panel, splitting a pair. Added a `caseLabel` control
+      (axis / panel / hidden) and WORD WRAPPING for both gutters — the first version
+      clipped to panel height, which truncated essentially every real caption.
+
+      Also confirmed by the user: the connected staircase is deliberate, and the faculty
+      member currently produces it **by hand** — one image per case, copy/pasted, lines
+      drawn in manually, because Prism will not do it. So this is a place CrossTab is
+      genuinely better, not catching up. Worth remembering when weighing further work
+      here: the competition for this figure is manual assembly.
+
+      Still open, in rough value order: **multi-series per panel** (her first figure puts
+      two dependent variables in one panel, filled vs open markers — our model spends the
+      marker on phase, so it structurally cannot draw that figure); and **axis breaks**,
+      the `//` marks. Her caption confirms those mark "passage of time before returning
+      to trial-based teaching" — a DECLARED annotation, not a numeric gap, so they cannot
+      be inferred from session numbers and need an explicit model field. Feeds #140.
+
+      **NOT building (user's call, 2026-08-05): in-panel annotations with arrows**
+      ("Praise & TT ➝", "Booster Teaching", "↑TBT"). They can be positioned anywhere on
+      the figure, so modelling them well is a small layout engine; a student can drop
+      them in with an image editor afterwards for far less effort. A deliberate
+      non-goal, not an unfinished edge.
 
       Notes for future work: the six-row Tau-U table is per case; IRD is study-level
       (one figure across all cases), as in scan. Cases with >2 phases contribute their
