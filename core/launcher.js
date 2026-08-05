@@ -191,7 +191,8 @@ export class Launcher {
   async openFolderLanding() {
     if (this.#root) return;
     injectStyles();
-    const overlay = el('div', null, 'ctl');
+    const overlay = document.createElement('dialog');
+    overlay.className = 'ctl';
     this.#root = overlay;
     overlay.innerHTML = `
       <div class="ctl__card ctl__card--landing">
@@ -207,6 +208,8 @@ export class Launcher {
         </div>
       </div>`;
     document.body.append(overlay);
+    overlay.showModal(); // focus trap + restore + Escape, from the platform
+    overlay.addEventListener('close', () => this.#close());
     overlay.querySelector('.ctl__openfolder').addEventListener('click', async (e) => {
       const btn = e.currentTarget;
       btn.disabled = true;
@@ -230,11 +233,18 @@ export class Launcher {
    */
   async open({ reopen = false } = {}) {
     if (this.#root) return; // already open
-    const overlay = el('div', null, 'ctl');
+    const overlay = document.createElement('dialog');
+    overlay.className = 'ctl';
     this.#root = overlay;
     injectStyles();
     overlay.innerHTML = SHELL_HTML(reopen);
     document.body.append(overlay);
+    overlay.showModal(); // focus trap + restore + Escape, from the platform
+    overlay.addEventListener('close', () => this.#close());
+    // Escape is only a way OUT when there is a session behind the launcher. On
+    // first load it is the whole app, so refuse the cancel rather than drop the
+    // user into a projectless shell they did not ask for.
+    if (!reopen) overlay.addEventListener('cancel', (e) => e.preventDefault());
     void stampBuild(overlay.querySelector('.ctl__build'));
     const updateBtn = overlay.querySelector('.ctl__update');
     updateBtn?.addEventListener('click', () => void checkForUpdates(updateBtn, overlay.querySelector('.ctl__build')));
@@ -504,9 +514,14 @@ export class Launcher {
   }
 
   #close() {
-    if (this.#onKey) { document.removeEventListener('keydown', this.#onKey); this.#onKey = null; }
-    this.#root?.remove();
+    // Null the root FIRST: `dialog.close()` fires a `close` event wired back to this
+    // method, so without that the teardown would re-enter and double-resolve.
+    const root = this.#root;
     this.#root = null;
+    if (!root) return;
+    if (this.#onKey) { document.removeEventListener('keydown', this.#onKey); this.#onKey = null; }
+    if (root.open) root.close();
+    root.remove();
     this.#pendingSource = null;
     this.#pendingProject = null;
     this.#pendingFolder = null;
@@ -853,8 +868,15 @@ function injectStyles() {
   stylesInjected = true;
   const s = document.createElement('style');
   s.textContent = `
-    .ctl { position: fixed; inset: 0; z-index: 2000; background: rgba(20,28,38,.55);
-      display: flex; align-items: center; justify-content: center; padding: 16px; }
+    /* A <dialog>: the UA supplies the top layer and the scrim, so this only sizes
+       the box. The display property MUST stay off the base rule — a dialog is
+       display:none until open, and an author display here would pin it open forever
+       (same trap as an author display on a hidden-toggled element). */
+    .ctl { position: fixed; inset: 0; z-index: 2000; padding: 16px;
+      width: 100%; height: 100%; max-width: 100%; max-height: 100%;
+      border: 0; background: transparent; overflow: hidden; }
+    .ctl[open] { display: flex; align-items: center; justify-content: center; }
+    .ctl::backdrop { background: rgba(20,28,38,.55); }
     .ctl__card { background: var(--bg, #f7f8fa); width: min(1040px, 96vw); max-height: 94vh;
       border-radius: 14px; box-shadow: 0 24px 70px rgba(0,0,0,.4); display: flex; flex-direction: column; overflow: hidden; }
     .ctl__header { background: var(--bar, #2c3e50); color: var(--bar-fg, #ecf0f1); padding: 18px 24px; text-align: center; }

@@ -524,7 +524,11 @@
         font: inherit; padding: 9px 10px; border: 0; border-radius: 6px;
         background: transparent; cursor: pointer;
       }
-      .ct-fmt__row:hover, .ct-fmt__row:focus-visible { background: #eef5fb; outline: none; }
+      .ct-fmt__row:hover { background: #eef5fb; }
+      /* Was `outline: none` with only the hover background to stand in — #eef5fb on
+         white is 1.10:1, so the focused row was indistinguishable from the rest.
+         Keep the tint, restore a real ring (WCAG 2.4.11 wants 3:1). */
+      .ct-fmt__row:focus-visible { background: #eef5fb; }
       .ct-fmt__name { flex: 0 1 auto; }
       .ct-fmt__ext { margin-left: auto; color: #646e77; font-size: 12px; white-space: nowrap; }
       .ct-fmt__empty { color: #646e77; padding: 16px 4px; }

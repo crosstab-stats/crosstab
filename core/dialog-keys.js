@@ -92,6 +92,38 @@ export function enterTriggersPrimary(dialog) {
  * Install {@link enterTriggersPrimary} for every modal dialog, app-wide, by
  * wrapping `showModal`. Call once at boot. Idempotent.
  */
+/** Sequence for minting unique title ids — dialogs are created and discarded freely. */
+let titleSeq = 0;
+
+/**
+ * Give a dialog an accessible NAME from its own heading.
+ *
+ * `<dialog>` takes no implicit name from a descendant heading, so all 35 of ours were
+ * announced as a bare "dialog" — on open, on focus-return, to NVDA+T, and in the
+ * dialog rotor. Every one already builds an `<h2 class="ct-dialog__title">`, so the
+ * name is right there; it just was not wired up.
+ *
+ * Done here rather than at the 35 call sites because {@link installDialogKeybindings}
+ * already wraps `showModal` app-wide, so this covers every current AND future dialog
+ * with nothing to remember. Naming happens at open time, which also means a dialog
+ * that fills its title in late (format-picker builds an empty `<h2>` and sets the text
+ * afterwards) still gets named correctly.
+ *
+ * @param {HTMLDialogElement} dialog
+ */
+export function nameDialogFromTitle(dialog) {
+  if (!(dialog instanceof HTMLDialogElement)) return;
+  if (dialog.hasAttribute('aria-label') || dialog.hasAttribute('aria-labelledby')) return;
+  const title = dialog.querySelector('.ct-dialog__title');
+  const text = title && title.textContent.trim();
+  if (!text) return;
+  if (!title.id) {
+    titleSeq += 1;
+    title.id = `ct-dialog-title-${titleSeq}`;
+  }
+  dialog.setAttribute('aria-labelledby', title.id);
+}
+
 export function installDialogKeybindings() {
   installEnterTracker();
   const proto = HTMLDialogElement.prototype;
@@ -101,6 +133,7 @@ export function installDialogKeybindings() {
   proto.showModal = function (...args) {
     try {
       enterTriggersPrimary(this);
+      nameDialogFromTitle(this);
     } catch {
       /* never let key-wiring stop a dialog from opening */
     }
