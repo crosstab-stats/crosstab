@@ -22,6 +22,51 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
+- [ ] **Stop sharing — an affirmative "this project is not shared" (user request,
+      2026-08-05).** Today the only way out of collaboration is
+      `projects.stopCoauthoring()` (app.js ~1565), which leaves the *current session's*
+      room. That is "don't go online right now", not "this project is no longer
+      shared" — reopen it and the machinery is armed again.
+
+      **Why leaving the room is not enough.** A project's room is derived, not stored:
+      `collabId` + `collabSecret` live in the manifest and `roomFor(manifest)` hashes
+      them into a room id (live-invite.js). So *anyone holding the manifest computes the
+      same room by themselves* — which is exactly the design goal for a folder synced
+      through Dropbox/Drive, and exactly why "I left the room" shares nothing about
+      intent. Every co-holder can still walk back in.
+
+      **Two separable actions — do not conflate them:**
+      1. **Revoke outstanding links.** Rotate `collabSecret` (and/or `collabId`). Kills
+         every invite URL already sent. Does NOT stop folder co-holders, who receive the
+         new identity on the next folder sync and rejoin transparently.
+      2. **Stop sharing** (the one requested). A persisted, affirmative flag that
+         disables joining AND hosting for this project while it is the active one,
+         independent of whether a collab identity exists. This is the real off switch.
+
+      **Make it an OP, not a manifest scalar.** Same argument that moved plugin
+      activation onto the log (#157): a scalar merged between peers cannot express
+      "off". If A stops sharing and B still has it on, a scalar/union merge silently
+      re-enables it — absence is indistinguishable from "never said". So: a
+      `share:<projectId>`-style target with `enableSharing` / `disableSharing`, folded
+      last-writer-wins by HLC, exactly like the plugin tier. For a folder project the
+      log travels in the folder, so the disable reaches co-holders on the next sync
+      even though the room is refused. See [[one-true-log-explicit-ops]] and
+      [[guard-means-missing-state]] — this is a positive fact about the project, not a
+      guard neutralising a state.
+
+      **Scope boundary, state it in the UI.** This prevents FUTURE joins and severs
+      current connections. It cannot retract what peers already hold — they have the
+      log. Nor can it govern a folder sitting in someone's Dropbox (the user's own
+      framing, and correct). The honest promise is the same shape as at-rest
+      encryption's: it protects what happens next, not what already happened.
+
+      Open questions: does disabling sharing also blank the collab identity (strongest,
+      but then re-enabling mints a new room and every existing link is dead — probably
+      the right default), or keep it so sharing can be resumed with the same room? And
+      should a folder project warn on open that a co-holder disabled sharing, or just
+      quietly refuse?
+
+
 - [x] **SCED — DONE (2026-08-05).** `plugins/builtin-sced` (NAP, PND, Tau-U, IRD) plus a
       `sced` chart kind in core/chart-renderer.js. **Needs no R at all** — the indices are
       non-overlap counts, so they compute in JS: instant, offline, no package download.
