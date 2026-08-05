@@ -196,11 +196,12 @@ test('a single baseline and single intervention point still computes', () => {
   near(pndFor([1], [2]), 100, 1e-12, 'PND');
 });
 
+
 // --- the chart kind ----------------------------------------------------------
-// Pure string rendering, so it tests in Node. What's pinned here are the two SCED
-// DRAWING CONVENTIONS, which are requirements rather than styling: a reader of a
-// multiple-baseline figure infers causation from the staggered boundaries, and a line
-// drawn across a phase change asserts a continuity the design is trying to interrupt.
+// Pure string rendering, so it tests in Node. What's pinned here are the SCED DRAWING
+// CONVENTIONS, which are requirements rather than styling: a reader of a multiple-
+// baseline figure infers causation from the staggered boundaries, and a line drawn
+// across a phase change asserts a continuity the design is trying to interrupt.
 
 const { defaultView, renderChart, chartUiSpec } = await import('../core/chart-renderer.js');
 
@@ -216,33 +217,72 @@ const CHART = {
   ],
 };
 
-/** x positions of the dashed phase-change lines, in document order. */
-const boundaryXs = (svg) => [...svg.matchAll(/<line x1="([\d.]+)"[^>]*stroke-dasharray/g)].map((m) => Number(m[1]));
+// Phase ink is what identifies a boundary, in either style — asserting on the dash
+// pattern is what made these tests fail the day solid became the default.
+const PHASE_INK = '#222222';
+const polylines = (svg) => [...svg.matchAll(/<polyline points="([^"]+)" fill="none" stroke="([^"]+)"/g)]
+  .map((m) => ({ points: m[1].split(' ').map((p) => p.split(',').map(Number)), stroke: m[2] }));
+const seriesLines = (svg) => polylines(svg).filter((p) => p.stroke !== PHASE_INK);
+const staircase = (svg) => polylines(svg).find((p) => p.stroke === PHASE_INK) || null;
+const phaseVerticals = (svg) => [...svg.matchAll(new RegExp(`<line x1="([\\d.]+)"[^>]*stroke="${PHASE_INK}"`, 'g'))]
+  .map((m) => Number(m[1]));
+/** Distinct x positions of the staircase's vertical risers. */
+const risers = (svg) => {
+  const s = staircase(svg);
+  return s ? [...new Set(s.points.map(([x]) => x))] : [];
+};
 
 test('THE CONVENTION: no line is drawn across a phase change', () => {
   const svg = renderChart(CHART, defaultView(CHART));
   // Two cases x two phases = four separate segments, not two continuous ones.
-  assert.equal((svg.match(/<polyline/g) || []).length, 4);
+  assert.equal(seriesLines(svg).length, 4);
   assert.equal((svg.match(/<circle/g) || []).length, 18, 'every observation is drawn');
 });
 
-test('THE CONVENTION: phase boundaries stagger with each case, and sit between sessions', () => {
+test('THE CONVENTION: phase boundaries stagger with each case', () => {
   const svg = renderChart(CHART, defaultView(CHART));
-  const xs = boundaryXs(svg);
-  assert.equal(xs.length, 2, 'one boundary per case');
-  assert.notEqual(xs[0], xs[1], 'Ann changes phase after session 4, Ben after 5 — the staircase');
-  assert.ok(xs[0] < xs[1], 'and in the right direction');
+  const xs = risers(svg);
+  assert.equal(xs.length, 2, 'one riser per case');
+  assert.ok(xs[0] < xs[1], 'Ann changes after session 4, Ben after 5 — the staircase');
+});
+
+test('the staircase is ONE connected path, not a line per panel', () => {
+  // This is the point of it: the rollout has to read as a single sequence, which is
+  // the experimental argument. Independent verticals say nothing about order.
+  const svg = renderChart(CHART, defaultView(CHART));
+  const s = staircase(svg);
+  assert.ok(s, 'a connected phase path exists');
+  assert.equal(phaseVerticals(svg).length, 0, 'and no loose vertical duplicates it');
+  // down, across the gap, down again → at least 4 vertices, monotone in y.
+  assert.ok(s.points.length >= 4, `expected a stepped path, got ${s.points.length} points`);
+  const ys = s.points.map(([, y]) => y);
+  assert.deepEqual(ys, [...ys].sort((a, b) => a - b), 'the path only ever descends');
+});
+
+test('staircase off falls back to an independent vertical per panel', () => {
+  const svg = renderChart(CHART, { ...defaultView(CHART), staircase: false });
+  assert.equal(staircase(svg), null);
+  const xs = phaseVerticals(svg);
+  assert.equal(xs.length, 2);
+  assert.ok(xs[0] < xs[1], 'still staggered, just not joined');
+});
+
+test('phase lines are SOLID by default; dashed is the option', () => {
+  const v = defaultView(CHART);
+  assert.equal(v.phaseLineStyle, 'solid', 'JABA convention is a solid boundary');
+  assert.equal((renderChart(CHART, v).match(/stroke-dasharray/g) || []).length, 0);
+  assert.ok((renderChart(CHART, { ...v, phaseLineStyle: 'dashed' }).match(/stroke-dasharray/g) || []).length > 0);
 });
 
 test('connectAcross is available but off, and joins the phases when asked', () => {
   const v = defaultView(CHART);
   assert.equal(v.connectAcross, false, 'must default off');
-  assert.equal((renderChart(CHART, { ...v, connectAcross: true }).match(/<polyline/g) || []).length, 2);
+  assert.equal(seriesLines(renderChart(CHART, { ...v, connectAcross: true })).length, 2);
 });
 
 test('an ABAB reversal draws all three boundaries with no extra plumbing', () => {
   // Phases are derived as runs of the point sequence, so a withdrawal design needs no
-  // special casing and phase A's second run re-uses its colour.
+  // special casing. One panel means no staircase to connect, so they stay verticals.
   const abab = {
     ...CHART,
     panels: [{
@@ -253,13 +293,74 @@ test('an ABAB reversal draws all three boundaries with no extra plumbing', () =>
     }],
   };
   const svg = renderChart(abab, defaultView(abab));
-  assert.equal(boundaryXs(svg).length, 3);
-  assert.equal((svg.match(/<polyline/g) || []).length, 4, 'one segment per run');
+  assert.equal(phaseVerticals(svg).length, 3);
+  assert.equal(seriesLines(svg).length, 4, 'one segment per run');
+});
+
+test('a reversal INSIDE a staircase keeps its extra boundaries local', () => {
+  // The staircase claims the first boundary of each panel; later ones are still that
+  // panel's own business, so an ABAB case in a multi-case figure draws both kinds.
+  const mixed = {
+    ...CHART,
+    panels: [
+      CHART.panels[0],
+      { key: 'c', label: 'Cass', points: [...pts([1, 2, 3], [2, 3, 2], 'A'), ...pts([4, 5], [7, 8], 'B'), ...pts([6, 7], [3, 2], 'A')] },
+    ],
+  };
+  const svg = renderChart(mixed, defaultView(mixed));
+  assert.ok(staircase(svg), 'first boundaries are connected');
+  assert.equal(phaseVerticals(svg).length, 1, "Cass's second boundary stays a plain vertical");
+});
+
+test('black & white mode drops colour AND the legend that would explain it', () => {
+  // In mono the phases are the same ink, so a colour legend would claim to carry
+  // information it does not. Phase is read off the staircase and condition labels.
+  const svg = renderChart(CHART, { ...defaultView(CHART), mono: true, legend: 'bottom' });
+  const strokes = new Set(seriesLines(svg).map((p) => p.stroke));
+  assert.deepEqual([...strokes], ['#000000'], 'every series line is black');
+  // Every ink in the figure must be achromatic — the real definition of monochrome,
+  // and it catches a palette colour leaking in however it is spelled.
+  for (const hex of new Set([...svg.matchAll(/(?:fill|stroke)="(#[0-9a-fA-F]{3,6})"/g)].map((m) => m[1]))) {
+    const full = hex.length === 4 ? `#${hex[1]}${hex[1]}${hex[2]}${hex[2]}${hex[3]}${hex[3]}` : hex;
+    const [r0, g0, b0] = [1, 3, 5].map((i) => parseInt(full.slice(i, i + 2), 16));
+    assert.ok(r0 === g0 && g0 === b0, `${hex} is not greyscale — a palette colour survived mono`);
+  }
+  const ids = chartUiSpec(CHART).controls;
+  const legend = ids.find((c) => c.id === 'legend');
+  assert.equal(legend.visible({ mono: true }, CHART), false, 'legend control hides in mono');
+  assert.equal(legend.visible({ mono: false }, CHART), true, 'and returns in colour');
+});
+
+test('a panel context label is drawn rotated in the left gutter', () => {
+  const withCtx = {
+    ...CHART,
+    panels: CHART.panels.map((p, i) => ({ ...p, context: i ? "Newcomer's arrival" : 'Given an item' })),
+  };
+  const svg = renderChart(withCtx, defaultView(withCtx));
+  assert.ok(svg.includes('Given an item'), 'context text present');
+  assert.ok(svg.includes("Newcomer&#039;s arrival") || svg.includes("Newcomer's arrival"), 'and escaped safely');
+  assert.equal((svg.match(/transform="rotate\(-90/g) || []).length, 3, 'two contexts + the Y axis title');
+  // The gutter must actually be reserved, or the label collides with the tick labels.
+  const plain = renderChart(CHART, defaultView(CHART));
+  const xOf = (s) => Number(s.match(/<line x1="([\d.]+)" y1="[\d.]+" x2="\1"/)[1]);
+  assert.ok(xOf(svg) > xOf(plain), 'the plot is pushed right to make room');
+});
+
+test('Y tick density is adjustable, and defaults to the 0/20/…/100 convention', () => {
+  const pct = {
+    ...CHART,
+    panels: [{ key: 'a', label: 'A', points: [...pts([1, 2, 3], [0, 50, 20], 'A'), ...pts([4, 5, 6], [80, 100, 90], 'B')] }],
+  };
+  const v = defaultView(pct);
+  assert.equal(v.yTickCount, 5);
+  const labels = (svg) => (svg.match(/text-anchor="end">[\d.]+<\/text>/g) || []).length;
+  assert.equal(labels(renderChart(pct, v)), 6, '0,20,40,60,80,100');
+  assert.ok(labels(renderChart(pct, { ...v, yTickCount: 2 })) < 6, 'fewer when asked');
 });
 
 test('the chart grows a panel per case rather than squeezing a fixed frame', () => {
   const h = (n) => {
-    const m = { ...CHART, panels: CHART.panels.slice(0, 1) };
+    const m = { ...CHART };
     m.panels = Array.from({ length: n }, (_, i) => ({ ...CHART.panels[0], key: `c${i}`, label: `Case ${i}` }));
     return Number(renderChart(m, defaultView(m)).match(/viewBox="0 0 720 ([\d.]+)"/)[1]);
   };
@@ -269,7 +370,8 @@ test('the chart grows a panel per case rather than squeezing a fixed frame', () 
 
 test('the host offers the SCED-specific controls, not just the shared ones', () => {
   const ids = chartUiSpec(CHART).controls.map((c) => c.id);
-  for (const id of ['mark', 'connectAcross', 'phaseLines', 'phaseLabels', 'sharedY', 'panelHeight']) {
+  for (const id of ['mark', 'connectAcross', 'phaseLines', 'staircase', 'phaseLineStyle',
+    'phaseLabels', 'sharedY', 'mono', 'panelHeight', 'yTickCount']) {
     assert.ok(ids.includes(id), `missing host-mediated control: ${id}`);
   }
   assert.deepEqual(chartUiSpec(CHART).colorItems.map((i) => i.key), ['A', 'B'], 'colour is per phase');
@@ -278,4 +380,50 @@ test('the host offers the SCED-specific controls, not just the shared ones', () 
 test('an empty chart reports rather than throwing', () => {
   const empty = { ...CHART, panels: [] };
   assert.match(renderChart(empty, defaultView(empty)), /no cases/i);
+});
+
+test('THE CONVENTION: tiers are ordered by when the intervention arrives', () => {
+  // Real data arrives in whatever order the file had — often alphabetical. Alber-Morgan
+  // sorted by name is Andrew(18), Brian(16), Kelly(11), Theo(5), which draws the
+  // staircase BACKWARDS: correct data, broken convention, and it reads as a bug.
+  const late = (start, n) => [
+    ...pts(Array.from({ length: start - 1 }, (_, i) => i + 1), Array.from({ length: start - 1 }, () => 5), 'A'),
+    ...pts(Array.from({ length: n }, (_, i) => start + i), Array.from({ length: n }, () => 80), 'B'),
+  ];
+  const scrambled = {
+    ...CHART,
+    panels: [
+      { key: 'andrew', label: 'Andrew', points: late(18, 6) },
+      { key: 'brian', label: 'Brian', points: late(16, 6) },
+      { key: 'kelly', label: 'Kelly', points: late(11, 6) },
+      { key: 'theo', label: 'Theo', points: late(5, 6) },
+    ],
+  };
+  const xs = risers(renderChart(scrambled, defaultView(scrambled)));
+  assert.equal(xs.length, 4);
+  assert.deepEqual(xs, [...xs].sort((a, b) => a - b), 'the staircase must descend left to right');
+
+  // …and the panels themselves are reordered, not just the line.
+  const svg = renderChart(scrambled, defaultView(scrambled));
+  const order = [...svg.matchAll(/text-anchor="end" font-weight="600">([A-Za-z]+)<\/text>/g)].map((m) => m[1]);
+  assert.deepEqual(order, ['Theo', 'Kelly', 'Brian', 'Andrew'], 'earliest intervention on top');
+
+  // Opting out restores the file's own order.
+  const asIs = renderChart(scrambled, { ...defaultView(scrambled), panelOrder: 'model' });
+  const xs2 = risers(asIs);
+  assert.deepEqual(xs2, [...xs2].sort((a, b) => b - a), 'data order here happens to be reversed');
+});
+
+test('panels that never change phase keep their place at the end', () => {
+  const flat = {
+    ...CHART,
+    panels: [
+      { key: 'never', label: 'Never', points: pts([1, 2, 3, 4], [1, 2, 1, 2], 'A') },
+      CHART.panels[1], // Ben, boundary after session 5
+      CHART.panels[0], // Ann, boundary after session 4
+    ],
+  };
+  const svg = renderChart(flat, defaultView(flat));
+  const order = [...svg.matchAll(/text-anchor="end" font-weight="600">([A-Za-z]+)<\/text>/g)].map((m) => m[1]);
+  assert.deepEqual(order, ['Ann', 'Ben', 'Never'], 'no-boundary tiers sort last, stably');
 });

@@ -1044,10 +1044,18 @@ registerChartKind('sced', {
     mark: 'both',
     connectAcross: false,
     phaseLines: true,
+    // One connected step-path across the panels, not an independent line per panel.
+    // In a multiple-baseline figure the staircase IS the experimental argument, and
+    // drawing it as one path is what makes the panels read as a single claim.
+    staircase: (model.panels || []).length > 1,
+    phaseLineStyle: 'solid', // JABA convention; dashed is the option, not the default
     phaseLabels: 'top',
     sharedY: true,
+    mono: false,
+    panelOrder: 'stagger',
     pointSize: 3.5,
     panelHeight: 130,
+    yTickCount: 5, // 0/20/…/100 on percentage-of-opportunities data
     legend: (model.phases || []).length > 1 ? 'bottom' : 'none',
     gridlines: false, // SCED figures are conventionally clean; opt in if wanted
   }),
@@ -1064,6 +1072,27 @@ registerChartKind('sced', {
     {
       id: 'phaseLines', label: 'Phase change lines', type: 'check',
       get: (v) => v.phaseLines !== false, set: (v, x) => { v.phaseLines = x; },
+    },
+    {
+      id: 'panelOrder', label: 'Panel order', type: 'select', structural: true,
+      options: [['stagger', 'By phase change (staircase)'], ['model', 'As in the data']],
+      get: (v) => v.panelOrder || 'stagger', set: (v, x) => { v.panelOrder = x; },
+      visible: () => (model.panels || []).length > 1,
+    },
+    {
+      id: 'staircase', label: 'Connect as staircase', type: 'check',
+      get: (v) => !!v.staircase, set: (v, x) => { v.staircase = x; },
+      visible: (v) => v.phaseLines !== false && (model.panels || []).length > 1,
+    },
+    {
+      id: 'phaseLineStyle', label: 'Phase line', type: 'select',
+      options: [['solid', 'Solid'], ['dashed', 'Dashed']],
+      get: (v) => v.phaseLineStyle || 'solid', set: (v, x) => { v.phaseLineStyle = x; },
+      visible: (v) => v.phaseLines !== false,
+    },
+    {
+      id: 'mono', label: 'Black & white (print)', type: 'check', structural: true,
+      get: (v) => !!v.mono, set: (v, x) => { v.mono = x; },
     },
     {
       id: 'phaseLabels', label: 'Condition labels', type: 'select',
@@ -1083,9 +1112,16 @@ registerChartKind('sced', {
       id: 'pointSize', label: 'Point size', type: 'number', min: 1, max: 10, step: 0.5,
       get: (v) => v.pointSize || 3.5, set: (v, x) => { v.pointSize = Number(x) || undefined; },
     },
+    {
+      id: 'yTickCount', label: 'Y tick count', type: 'number', min: 2, max: 11, step: 1,
+      get: (v) => v.yTickCount || 5, set: (v, x) => { v.yTickCount = Number(x) || undefined; },
+    },
     gridlinesControl(),
-    paletteControl(),
-    legendControl(),
+    // In black & white every phase is the same ink, so a palette chooser and a colour
+    // legend would both be lying about carrying information. Phase is read off the
+    // staircase and the condition labels instead — which is the convention's whole point.
+    { ...paletteControl(), visible: (v, m) => !v.mono && (getChartKind(m.kind).colorItems(m).length > 1) },
+    { ...legendControl(), visible: (v, m) => !v.mono && (getChartKind(m.kind).colorItems(m).length > 1) },
     ...titleControls(model),
     ...axisControls('x', model),
     ...axisControls('y', model),
@@ -1094,15 +1130,32 @@ registerChartKind('sced', {
 });
 
 function renderSced(model, view) {
-  const panels = (model.panels || []).filter((p) => p && Array.isArray(p.points) && p.points.length);
+  let panels = (model.panels || []).filter((p) => p && Array.isArray(p.points) && p.points.length);
   if (!panels.length) return errorSvg('SCED chart: no cases with plottable data.');
 
   const phaseList = ordered(model.phases || [], view.seriesOrder);
   const phaseOrder = new Map((model.phases || []).map((p, i) => [p.key, i]));
   const phaseLabel = new Map((model.phases || []).map((p) => [p.key, p.label || p.key]));
-  const colorOfPhase = (key) => colorFor(view, key, phaseOrder.get(key) ?? 0);
+  const colorOfPhase = (key) => (view.mono ? '#000000' : colorFor(view, key, phaseOrder.get(key) ?? 0));
 
-  const runsPer = panels.map((p) => scedRuns(p.points));
+  let runsPer = panels.map((p) => scedRuns(p.points));
+
+  // Tier order. A multiple-baseline figure is conventionally ordered by WHEN the
+  // intervention arrived, earliest at the top — that is what makes the boundaries
+  // descend left-to-right and read as a rollout. Left in data order (often
+  // alphabetical) the same correct data draws a staircase running backwards, which
+  // looks like a mistake and buries the design's argument. Sorting is stable, and
+  // panels that never change phase keep their place at the end.
+  if ((view.panelOrder || 'stagger') === 'stagger') {
+    const firstBoundary = (runs) => (runs.length > 1
+      ? (runs[0].points[runs[0].points.length - 1].x + runs[1].points[0].x) / 2
+      : Infinity);
+    const order = panels.map((p, i) => ({ p, runs: runsPer[i], i, at: firstBoundary(runsPer[i]) }))
+      .sort((a, b) => (a.at - b.at) || (a.i - b.i));
+    panels = order.map((o) => o.p);
+    runsPer = order.map((o) => o.runs);
+  }
+
   const allX = [];
   const allY = [];
   for (const runs of runsPer) for (const run of runs) for (const pt of run.points) { allX.push(pt.x); allY.push(pt.y); }
@@ -1123,13 +1176,18 @@ function renderSced(model, view) {
   const panelH = Math.max(70, view.panelHeight || 130);
   const gap = 24;              // between a panel's baseline and the next panel's top
   const mTop = chartTitle ? 34 : 14;
-  const legendRow = view.legend === 'bottom' && phaseList.length > 1 ? 34 : 0;
+  const showLegend = !view.mono && phaseList.length > 1;
+  const legendRow = view.legend === 'bottom' && showLegend ? 34 : 0;
   const mBottom = 34 + (xTitle ? 18 : 0) + legendRow;
-  const legendRight = view.legend === 'right' && phaseList.length > 1;
+  const legendRight = view.legend === 'right' && showLegend;
   const mRight = legendRight
     ? Math.min(200, Math.max(70, Math.max(...phaseList.map((p) => (p.label || p.key).length)) * 7 + 28))
     : 20;
-  const mLeft = 54 + (yTitle ? 18 : 0);
+  // A per-panel context label (the antecedent the behaviour is measured against) sits
+  // rotated outside the y axis, so it needs its own gutter to the left of everything.
+  const hasContext = panels.some((p) => p.context);
+  const contextGutter = hasContext ? 20 : 0;
+  const mLeft = 54 + (yTitle ? 18 : 0) + contextGutter;
   const topPad = view.phaseLabels === 'none' ? 0 : 14;
   const totalH = mTop + topPad + panels.length * (panelH + gap) - gap + mBottom;
 
@@ -1146,16 +1204,29 @@ function renderSced(model, view) {
   // Shared Y domain (default) — panels are only comparable when the scale is.
   const yMinUser = Number.isFinite(view.yAxisMin);
   const yMaxUser = Number.isFinite(view.yAxisMax);
+  const nyTicks = Math.max(2, view.yTickCount || 5);
   const sharedTicks = niceTicks(yMinUser ? view.yAxisMin : Math.min(...allY),
-    yMaxUser ? view.yAxisMax : Math.max(...allY), 4);
+    yMaxUser ? view.yAxisMax : Math.max(...allY), nyTicks);
+
+  // Phase-line ink. Solid by default (the JABA convention); the boundary is structural
+  // information, so it is drawn darker and heavier than a gridline.
+  const PHASE_INK = '#222222';
+  const PHASE_W = 1.2;
+  const phaseDash = (view.phaseLineStyle || 'solid') === 'dashed' ? ' stroke-dasharray="4 3"' : '';
+  const staircaseOn = view.phaseLines !== false && !!view.staircase && panels.length > 1;
+  /** x of the boundary AFTER run `i` — midway between the adjacent sessions. */
+  const boundaryAt = (runs, i) =>
+    (runs[i].points[runs[i].points.length - 1].x + runs[i + 1].points[0].x) / 2;
+  const panelTop = (pi) => mTop + topPad + pi * (panelH + gap);
+  const panelBottom = (pi) => panelTop(pi) + panelH;
 
   panels.forEach((panel, pi) => {
     const runs = runsPer[pi];
-    const y1 = mTop + topPad + pi * (panelH + gap);   // panel top
+    const y1 = panelTop(pi);                           // panel top
     const y0 = y1 + panelH;                            // panel baseline
     const ys = runs.flatMap((run) => run.points.map((p) => p.y));
     const yticks = view.sharedY === false
-      ? niceTicks(yMinUser ? view.yAxisMin : Math.min(...ys), yMaxUser ? view.yAxisMax : Math.max(...ys), 4)
+      ? niceTicks(yMinUser ? view.yAxisMin : Math.min(...ys), yMaxUser ? view.yAxisMax : Math.max(...ys), nyTicks)
       : sharedTicks;
     const yLo = yticks[0];
     const yHi = yticks[yticks.length - 1];
@@ -1179,12 +1250,13 @@ function renderSced(model, view) {
     }
 
     // Phase-change lines sit BETWEEN the adjacent sessions, not on a data point.
+    // With the staircase on, this panel's FIRST boundary belongs to the connected path
+    // drawn after the loop; any further boundaries (an ABAB reversal) stay local.
     if (view.phaseLines !== false) {
-      for (let i = 0; i < runs.length - 1; i++) {
-        const lastX = runs[i].points[runs[i].points.length - 1].x;
-        const nextX = runs[i + 1].points[0].x;
-        const bx = xScale((lastX + nextX) / 2);
-        out.push(`<line x1="${r(bx)}" y1="${r(y1 - 2)}" x2="${r(bx)}" y2="${r(y0)}" stroke="#555" stroke-width="1" stroke-dasharray="4 3"/>`);
+      const skipFirst = staircaseOn ? 1 : 0;
+      for (let i = skipFirst; i < runs.length - 1; i++) {
+        const bx = xScale(boundaryAt(runs, i));
+        out.push(`<line x1="${r(bx)}" y1="${r(y1 - 2)}" x2="${r(bx)}" y2="${r(y0)}" stroke="${PHASE_INK}" stroke-width="${PHASE_W}"${phaseDash}/>`);
       }
     }
 
@@ -1229,7 +1301,38 @@ function renderSced(model, view) {
     // Case name, inside the panel so it stays with its data when panels are tall.
     out.push(text(W - mRight - 6, y1 + 13, esc(clip(panel.label || panel.key, 28)),
       { size: 11.5, anchor: 'end', fill: '#333', weight: 600 }));
+
+    // Row context (the antecedent this behaviour is measured against), rotated in the
+    // left gutter. Published SCED figures carry this because "Offering a Toy" only
+    // means something once you know it was scored on a newcomer's arrival.
+    if (panel.context) {
+      const cy = (y1 + y0) / 2;
+      const cx = mLeft - 46;
+      out.push(`<text x="${r(cx)}" y="${r(cy)}" font-size="10" fill="#333" text-anchor="middle" transform="rotate(-90 ${r(cx)} ${r(cy)})">${esc(clip(panel.context, Math.floor(panelH / 6)))}</text>`);
+    }
   });
+
+  // The staircase: one connected step-path through every panel's first boundary.
+  // Down through a panel, right across the inter-panel gap, down through the next —
+  // so the rollout reads as a single sequence rather than five unrelated verticals.
+  if (staircaseOn) {
+    const steps = [];
+    panels.forEach((_, pi) => {
+      if (runsPer[pi].length > 1) steps.push({ pi, x: xScale(boundaryAt(runsPer[pi], 0)) });
+    });
+    if (steps.length) {
+      const pts = [];
+      pts.push([steps[0].x, panelTop(steps[0].pi)]);
+      for (let i = 0; i < steps.length; i++) {
+        const last = i === steps.length - 1;
+        // Down through this panel — to its baseline, or into the gap if more follow.
+        const yEnd = last ? panelBottom(steps[i].pi) : panelBottom(steps[i].pi) + gap / 2;
+        pts.push([steps[i].x, yEnd]);
+        if (!last) pts.push([steps[i + 1].x, yEnd]); // across the gap to the next riser
+      }
+      out.push(`<polyline points="${pts.map(([x, y]) => `${r(x)},${r(y)}`).join(' ')}" fill="none" stroke="${PHASE_INK}" stroke-width="${PHASE_W}"${phaseDash}/>`);
+    }
+  }
 
   const lastBaseline = mTop + topPad + panels.length * (panelH + gap) - gap;
   if (xTitle) {
@@ -1246,7 +1349,7 @@ function renderSced(model, view) {
     out.push(`<text x="14" y="${r(my)}" font-size="${s}" fill="#333" text-anchor="middle" transform="rotate(-90 14 ${r(my)})"${w}${it}>${esc(yTitle)}</text>`);
   }
 
-  if (phaseList.length > 1) {
+  if (showLegend) {
     const items = phaseList.map((p, i) => ({ label: p.label || p.key, color: colorFor(view, p.key, i) }));
     out.push(legendBlock(items, view.legend, { x0: mLeft, x1: W - mRight, y0: lastBaseline + (xTitle ? 18 : 0), y1: mTop + topPad }));
   }

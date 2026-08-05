@@ -97,6 +97,7 @@ export const manifest = {
         { name: 'phase', kind: 'variables', label: 'Phase', hint: 'Baseline vs intervention (and any further conditions — an ABAB reversal draws all its phase lines).', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
         { name: 'caseVar', kind: 'variables', label: 'Case (optional)', hint: 'Participant or behaviour — one stacked panel per case, sharing the session axis.', multiple: false, types: ['factor', 'string', 'numeric'], optional: true, unique: true },
         { name: 'session', kind: 'variables', label: 'Session (optional)', hint: 'Measurement occasion. Omit to use the order of the rows within each case.', multiple: false, types: ['numeric'], optional: true, unique: true },
+        { name: 'context', kind: 'variables', label: 'Context (optional)', hint: 'The antecedent each behaviour is scored against (e.g. “Newcomer’s arrival”). Printed down the left edge of its panel.', multiple: false, types: ['factor', 'string'], optional: true, unique: true },
       ],
     },
   ],
@@ -594,17 +595,19 @@ export async function graph(app, inputs) {
  * Read the variables, drop missing observations, and split into cases and phase runs.
  * Returns null (after reporting) when there is nothing to analyse.
  */
-async function gather(app, { y, phase, caseVar, session, direction }) {
+async function gather(app, { y, phase, caseVar, session, context, direction }) {
   if (!y || !phase) return null;
   const decreasing = direction === 'decrease';
   const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
-  const wanted = [y, phase, caseVar, session].filter(Boolean);
+  const wanted = [y, phase, caseVar, session, context].filter(Boolean);
   const cols = await app.data.getColumns({ variables: wanted });
 
   const yCol = cols[y] || [];
   const pCol = cols[phase] || [];
   const cCol = caseVar ? cols[caseVar] || [] : null;
   const sCol = session ? cols[session] || [] : null;
+  const ctxCol = context ? cols[context] || [] : null;
+  const ctxName = context ? labelMapper(meta, context) : null;
 
   const missY = missingSet(meta, y);
   const missP = missingSet(meta, phase);
@@ -620,7 +623,13 @@ async function gather(app, { y, phase, caseVar, session, direction }) {
     if (isBlank(praw) || missP.has(String(praw))) continue;
     const ckey = cCol ? String(cCol[i] ?? '') : '__all__';
     if (!byCase.has(ckey)) {
-      byCase.set(ckey, { key: ckey, label: cCol ? caseName(ckey) : 'All observations', rows: [] });
+      byCase.set(ckey, {
+        key: ckey,
+        label: cCol ? caseName(ckey) : 'All observations',
+        // A case's context is a property of the case, so the first row carries it.
+        context: ctxCol && !isBlank(ctxCol[i]) ? ctxName(String(ctxCol[i])) : '',
+        rows: [],
+      });
     }
     const entry = byCase.get(ckey);
     const sv = sCol ? Number(sCol[i]) : NaN;
@@ -641,6 +650,7 @@ async function gather(app, { y, phase, caseVar, session, direction }) {
     cases.push({
       key: c.key,
       label: c.label,
+      context: c.context,
       rows,
       runs,
       A: runs[0] ? runs[0].values : [],
@@ -680,6 +690,7 @@ function chartModel({ cases, phaseKeys, phaseLabelOf, yLabel, xLabel }) {
     panels: cases.map((c) => ({
       key: c.key,
       label: c.label,
+      context: c.context || undefined,
       points: c.rows.map((row) => ({ x: row.x, y: row.yv, phase: row.phase })),
     })),
   };

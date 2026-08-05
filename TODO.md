@@ -29,6 +29,28 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       tests), and driven end-to-end in the browser on the Ann/Ben fixture — every
       rendered number matched the reference table below.
 
+      **Publication pass (2026-08-05, second commit).** Driven by a real thesis figure
+      the user showed me (early-childhood faculty, 2020, made in Prism). Added:
+      connected **staircase** (one step-path through every panel's first boundary, not N
+      independent verticals — the rollout has to read as one sequence); **solid** phase
+      lines by default (JABA convention, dashed demoted to an option); **black & white
+      print mode** (drops the palette AND the legend, since phase is then carried by the
+      staircase + condition labels); per-panel **context labels** rotated in a left
+      gutter (the antecedent a behaviour is scored against); **Y tick density** control
+      defaulting to the 0/20/…/100 percentage convention; and **tier ordering by
+      intervention onset**, which is the one that actually mattered — real data arrives
+      alphabetical, and Alber-Morgan sorted by name draws the staircase BACKWARDS.
+      Ordering is a *view* concern (control: "Panel order"), so the log's data order is
+      untouched and the user can opt out.
+
+      Still open from that figure, in rough value order: **multi-series per panel**
+      (her first figure puts two dependent variables in one panel, filled vs open
+      markers — my model spends the marker on phase, so it structurally cannot draw it);
+      **axis breaks** — the `//` marks; her note says they mark "passage of time before
+      returning to trial-based teaching", i.e. a DECLARED annotation, not a numeric gap,
+      so they cannot be auto-detected and need a model field; and in-panel annotations
+      with arrows ("Praise & TT ➝", "Booster Teaching", "↑TBT"). Feeds #140.
+
       Notes for future work: the six-row Tau-U table is per case; IRD is study-level
       (one figure across all cases), as in scan. Cases with >2 phases contribute their
       first two runs to the statistics while the graph shows every phase — an ABAB
