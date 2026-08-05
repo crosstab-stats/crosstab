@@ -318,7 +318,7 @@ export class DataStore {
    *   applied on top of normalized-exact matching.
    * @returns {Promise<void>}
    */
-  async loadDataset({ variables, columns, parquet, mode = 'replace', source, joinKey, aliases, joinType }) {
+  async loadDataset({ variables, columns, parquet, mode = 'replace', source, joinKey, aliases, joinType, producedBy }) {
     const had = this.#hasData();
     const combine = had && (mode === 'append' || mode === 'join') ? mode : 'replace';
     if (combine === 'replace') await this.#pruneDeadSources(); // the new `load` IS the reset
@@ -327,6 +327,7 @@ export class DataStore {
       joinKey,
       aliases,
       joinType,
+      producedBy,
     });
     await this.rederive(this.#loadReason(combine, had));
   }

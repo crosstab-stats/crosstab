@@ -29,6 +29,16 @@ import { getAssets } from './assets.js';
 
 /** Path in WebR's virtual filesystem where the Parquet injection snapshot is
  * written before R reads it. Overwritten each injecting run. */
+/** The console's own R environment — a child of globalenv, so it can READ what a
+ * recorded script produced but nothing it defines leaks back the other way (#160). */
+const CONSOLE_ENV = '.crosstab_console';
+/** Idempotent bootstrap, inlined before any use (cheap, and survives a session reset). */
+const ENSURE_CONSOLE_ENV =
+  `if (!exists(${JSON.stringify(CONSOLE_ENV)}, envir = globalenv(), inherits = FALSE) || `
+  + `!is.environment(get(${JSON.stringify(CONSOLE_ENV)}, envir = globalenv()))) `
+  + `assign(${JSON.stringify(CONSOLE_ENV)}, new.env(parent = globalenv()), envir = globalenv())
+`;
+
 const INJECT_PATH = '/tmp/ct_inject.parquet';
 
 /** WebR FS path the R console stages each evaluated line to. */
@@ -404,7 +414,24 @@ export class WebRManager {
    * @param {string} code - One or more R expressions.
    * @returns {Promise<{output: string, error: boolean, images: ImageBitmap[]}>}
    */
-  evalConsole(code) {
+  /**
+   * Evaluate R for the CONSOLE or for a recorded script (#160).
+   *
+   * `scope` is an isolation boundary, not a convenience. Both lanes used to evaluate in
+   * globalenv, so a "replayable" Run R script step could silently depend on a helper the
+   * user had defined in the console — replaying correctly here and differently on a
+   * co-author's machine, with no error to point at. An unlogged scratchpad cannot share
+   * mutable state with a logged lane and still let that lane call itself reproducible.
+   *
+   * The asymmetry is deliberate. The console gets its own environment whose PARENT is
+   * globalenv: it can read everything a script produced (that is the point of poking at
+   * results, and what the reverse-bridge import enumerates), but nothing it defines can
+   * reach a script. The recorded lane stays authoritative; the scratchpad stays private.
+   *
+   * @param {string} code
+   * @param {{scope?: 'console'|'global'}} [opts]
+   */
+  evalConsole(code, { scope = 'console' } = {}) {
     return this.#enqueue(async (webR) => {
       // Run via source(print.eval=TRUE) so visible values auto-print like the R
       // prompt (captureR alone does not echo them). The code is staged to a file
@@ -413,8 +440,11 @@ export class WebRManager {
       await webR.FS.writeFile(CONSOLE_PATH, new TextEncoder().encode(code));
       const shelter = await new webR.Shelter();
       try {
+        const console_ = scope === 'console';
         const capture = await shelter.captureR(
-          `source(${rLit(CONSOLE_PATH)}, echo = FALSE, print.eval = TRUE, max.deparse.length = Inf, local = FALSE)`,
+          (console_ ? ENSURE_CONSOLE_ENV : '')
+          + `source(${rLit(CONSOLE_PATH)}, echo = FALSE, print.eval = TRUE, max.deparse.length = Inf, `
+          + `local = ${console_ ? CONSOLE_ENV : 'FALSE'})`,
           { env: webR.objs.globalEnv, captureGraphics: true },
         );
         const out = capture.output.map((m) => safeStr(m.data)).join('\n');
@@ -441,38 +471,54 @@ export class WebRManager {
    * @param {boolean} multiple - Bind as a data.frame (true) or vector (false).
    * @returns {Promise<{names: string[], multiple: boolean}>}
    */
-  consoleBind(columns, multiple) {
+  consoleBind(columns, multiple, { keepMissing = false } = {}) {
     return this.#enqueue(async (webR) => {
       const G = webR.objs.globalEnv;
       const shelter = await new webR.Shelter();
       try {
         if (!columns || !columns.length) {
-          await shelter.captureR('if (exists("vars", envir = globalenv())) rm("vars", envir = globalenv())', { env: G });
+          await shelter.captureR(
+            `${ENSURE_CONSOLE_ENV}if (exists("vars", envir = ${CONSOLE_ENV}, inherits = FALSE)) rm("vars", envir = ${CONSOLE_ENV})`,
+            { env: G },
+          );
           return { names: [], multiple: false };
         }
+        // `vars` belongs to the console, not to globalenv (#160) — otherwise a recorded
+        // script could pick it up and appear to work because of what the user happened
+        // to have checked in a panel that is not part of the project.
+        const CONSOLE_REF = `get(${JSON.stringify(CONSOLE_ENV)}, envir = globalenv())`;
         const assign = multiple
-          ? 'assign("vars", .d, envir = globalenv())'
-          : 'assign("vars", .d[[1]], envir = globalenv())';
+          ? `assign("vars", .d, envir = ${CONSOLE_REF})`
+          : `assign("vars", .d[[1]], envir = ${CONSOLE_REF})`;
 
         // Prefer the Parquet bridge (native types); fall back to JS arrays.
+        // Fold designated missing codes to NA by DEFAULT — the same treatment a plugin's
+        // bound variables get (#159). This path used to bind raw values, so the console,
+        // which exists partly so plugin authors can prototype, handed out data that
+        // differed from what their code would receive in a plugin. `loader.js` documented
+        // the console as never stripped while `r-console.js` documented it as mirroring
+        // the plugin contract; both could not be true.
+        const applyMissing = !keepMissing;
         if (this.#getInjectionParquet && (await this.#ensureNanoparquet(webR))) {
-          const bytes = await this.#getInjectionParquet({ variables: columns });
+          const bytes = await this.#getInjectionParquet({ variables: columns, applyMissing });
           if (bytes && bytes.byteLength) {
             await webR.FS.writeFile(INJECT_PATH, bytes);
             await shelter.captureR(
-              `local({ .d <- as.data.frame(nanoparquet::read_parquet(${rLit(INJECT_PATH)}), check.names = FALSE); ${assign} })`,
+              ENSURE_CONSOLE_ENV
+              + `local({ .d <- as.data.frame(nanoparquet::read_parquet(${rLit(INJECT_PATH)}), check.names = FALSE); ${assign} })`,
               { env: G },
             );
             return { names: columns, multiple };
           }
         }
-        const rawCols = await this.#getColumns({ variables: columns });
+        const rawCols = await this.#getColumns({ variables: columns, applyMissing });
         const cols = {};
         for (const [k, v] of Object.entries(rawCols)) {
           cols[k] = Array.from(v, (x) => (typeof x === 'number' && Number.isNaN(x) ? null : x));
         }
         await shelter.captureR(
-          `local({ .d <- as.data.frame(.crosstab_data, stringsAsFactors = FALSE, check.names = FALSE); ${assign} })`,
+          ENSURE_CONSOLE_ENV
+          + `local({ .d <- as.data.frame(.crosstab_data, stringsAsFactors = FALSE, check.names = FALSE); ${assign} })`,
           { env: { '.crosstab_data': cols } },
         );
         return { names: columns, multiple };
@@ -492,7 +538,7 @@ export class WebRManager {
    * @param {string[]} columns - Variable names to include as columns.
    * @returns {Promise<{name:string, columns:string[]}>}
    */
-  bindGlobalFrame(name, columns) {
+  bindGlobalFrame(name, columns, { keepMissing = false } = {}) {
     return this.#enqueue(async (webR) => {
       const G = webR.objs.globalEnv;
       const shelter = await new webR.Shelter();
@@ -502,9 +548,14 @@ export class WebRManager {
           return { name, columns: [] };
         }
         const target = `assign(${rLit(name)}, .d, envir = globalenv())`;
+        // Same default as a plugin and as the console (#159): `data` arrives with
+        // designated missing codes already NA. A user script is a plugin rehearsal too,
+        // and having the two disagree is how a script that looks right here returns
+        // different numbers once it is a plugin.
+        const applyMissing = !keepMissing;
         // Prefer the Parquet bridge (native types); fall back to JS arrays.
         if (this.#getInjectionParquet && (await this.#ensureNanoparquet(webR))) {
-          const bytes = await this.#getInjectionParquet({ variables: columns });
+          const bytes = await this.#getInjectionParquet({ variables: columns, applyMissing });
           if (bytes && bytes.byteLength) {
             await webR.FS.writeFile(INJECT_PATH, bytes);
             await shelter.captureR(
@@ -514,7 +565,7 @@ export class WebRManager {
             return { name, columns };
           }
         }
-        const rawCols = await this.#getColumns({ variables: columns });
+        const rawCols = await this.#getColumns({ variables: columns, applyMissing });
         const cols = {};
         for (const [k, v] of Object.entries(rawCols)) {
           cols[k] = Array.from(v, (x) => (typeof x === 'number' && Number.isNaN(x) ? null : x));

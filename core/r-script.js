@@ -47,9 +47,16 @@ export function registerRScriptRunner({ pluginActions, results, webr, datasets }
   pluginActions.registerHost('rscript', async ({ script }) => {
     const meta = (await datasets.getVariableMeta?.()) ?? [];
     const cols = meta.map((m) => m.name);
+    // `data` gets the same treatment a plugin's inputs get: designated missing codes
+    // already folded to NA (#159). A script is a plugin rehearsal, and the two
+    // disagreeing is how code that looks right here returns different numbers later.
     if (cols.length) await webr.bindGlobalFrame('data', cols);
 
-    const res = await webr.evalConsole(String(script ?? ''));
+    // `scope: 'global'` — a recorded script runs in globalenv, NOT the console's
+    // environment (#160). Its results stay visible (the reverse-bridge import
+    // enumerates globalenv), and it cannot pick up a helper the user happened to define
+    // in the console, which would replay here and fail on a co-author's machine.
+    const res = await webr.evalConsole(String(script ?? ''), { scope: 'global' });
     const out = (res.output || '').trim();
     if (out) results.appendText('```\n' + out + '\n```'); // fenced → monospace, whitespace kept
     for (const img of res.images || []) {
@@ -77,15 +84,18 @@ export function runRScript({ pluginActions, webr, datasets }) {
     if (!file) return;
     const script = await file.text();
     const label = `R script: ${file.name}`;
-    await pluginActions.runHost({ host: 'rscript', label, inputs: { script } });
-    await offerImport({ webr, datasets });
+    const { runId } = await pluginActions.runHost({ host: 'rscript', label, inputs: { script } });
+    // Hand the run's identity to the import so the resulting dataset's `load` op names
+    // the script that produced it (#160). Otherwise the log holds bytes with no account
+    // of where they came from, and a replay rebuilds from those bytes rather than the code.
+    await offerImport({ webr, datasets, runId });
   });
   document.body.append(input);
   input.click();
 }
 
 /** After a run, if the script left data frames in R, offer to import one. */
-async function offerImport({ webr, datasets }) {
+async function offerImport({ webr, datasets, runId = null }) {
   let frames = [];
   try {
     const { result } = await webr.run(ENUM_R);
@@ -142,7 +152,10 @@ async function offerImport({ webr, datasets }) {
       const { variables, columns } = frameToDataset(result);
       if (!variables.length) throw new Error('no columns found in that frame');
       const name = (nameInput.value || select.value).trim() || select.value;
-      await datasets.createWithData({ name, variables, columns, activate: true });
+      await datasets.createWithData({
+        name, variables, columns, activate: true,
+        producedBy: runId ? { kind: 'rscript', runId, frame: select.value } : undefined,
+      });
       msg.textContent = `Imported “${name}” as a new dataset.`;
       msg.style.color = '#1a7a3a';
     } catch (err) {

@@ -22,7 +22,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
-- [ ] **#160 — the R scratchpad and the recorded R lane share one global env.** Two
+- [x] **#160 — DONE (2026-08-04).** (A) an imported frame's `load` op carries `producedBy: {kind:'rscript', runId, frame}`. (B) the console evaluates in its own env whose PARENT is globalenv — it reads what a script produced, nothing it defines reaches a script, and its "clear" no longer wipes script results. **Original:** the R scratchpad and the recorded R lane share one global env. Two
       holes found while confirming what R work reaches the log. The split itself is
       right and already built:
 
@@ -40,14 +40,23 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       The line is not scratchpad-vs-tool, it is **does this change what the project
       is**. Both sides of that line are already on the right side of it. But:
 
-      - [ ] **A. The imported dataset has no link to the script that produced it.**
+      - [x] **A. DONE — the `load` op carries `producedBy: {kind:'rscript', runId, frame}`.**
+        `runHost` now returns the runId (it was minting one and discarding it), and
+        `createWithData`/`loadDataset` thread a `producedBy` through to the source op.
+        *Original:* **The imported dataset has no link to the script that produced it.**
             `offerImport` calls `datasets.createWithData(...)`, which records an ordinary
             `addDataset` + `load` with Parquet bytes. The analysis log separately records
             that a script ran. Nothing connects them, so a replay rebuilds the dataset
             from stored bytes rather than from the code — and the provenance chain breaks
             at exactly the point where R data crosses into CrossTab, which is the one
             place it matters most. The load op should name the run that produced it.
-      - [ ] **B. The ephemeral lane is not isolated from the recorded one.** Console and
+      - [x] **B. DONE — the console has its own R environment.** Its PARENT is globalenv,
+        so the asymmetry is deliberate: the console reads everything a script produced
+        (that is the point of poking at results, and what the reverse-bridge import
+        enumerates), and nothing it defines can reach a script. Its "clear" now resets
+        only the console env instead of `rm(list = ls())` in globalenv, which used to
+        wipe a recorded step's results. Verified all four directions in-browser.
+        *Original:* **The ephemeral lane is not isolated from the recorded one.** Console and
             Run R script both use `webr.evalConsole` against the SAME persistent global
             env. So a recorded, "replayable" script can quietly depend on a helper you
             defined in the console: it replays fine on your machine and differently (or
@@ -58,7 +67,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
             "clear" already resets the shared workspace — today that can pull the rug
             out from under a script step.
 
-- [ ] **#159 — R Console should default to the same clean data a plugin gets.** The
+- [x] **#159 — DONE (2026-08-04).** R Console + Run R script default to the plugin's clean data; "include missing values" checkbox for the raw case; info line states which. **Original:** R Console should default to the same clean data a plugin gets. The
       plugin contract strips each bound variable's designated missing codes to `NA` at
       injection, so an analysis never recodes user-missing values itself; a plugin opts
       out per menu item with `keepMissing: true` (`loader.js` `MenuItem`, applied in

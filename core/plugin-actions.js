@@ -470,7 +470,9 @@ export class PluginActions {
     };
     const ok = await this.#execute(entry);
     if (ok) this.#analysisLog?.record(entry);
-    return ok;
+    // The runId, not just success: a host action that PRODUCES data needs to stamp the
+    // data with the run that made it (#160), and `#execute` is where the id is minted.
+    return ok ? { ok, runId: entry.runId } : { ok, runId: null };
   }
 
   /**

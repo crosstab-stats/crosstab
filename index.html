@@ -172,6 +172,13 @@
         flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 12px;
         border-bottom: 1px solid var(--line); background: var(--panel);
       }
+      /* "include missing values" (#159) — sits with the picker because it changes what
+         the picked variables CONTAIN, not how the console behaves. */
+      .rc-keepmissing {
+        flex: none; display: inline-flex; align-items: center; gap: 5px;
+        font-size: 12px; color: #5a6470; white-space: nowrap; cursor: pointer; user-select: none;
+      }
+      .rc-keepmissing input { margin: 0; cursor: pointer; }
       .rc-filter {
         flex: none; width: 140px; font: inherit; font-size: 13px; padding: 4px 8px;
         border: 1px solid var(--line); border-radius: 6px;

@@ -22,6 +22,9 @@ export class RConsole {
   /** Checked variable names (local to the console — independent of the analysis
    * selection, so poking here doesn't change what pickers pre-select). */
   #checked = new Set();
+  /** Bind raw codes instead of NA-folded values (#159). Off = the plugin default. */
+  #keepMissing = false;
+  #keepMissingCb;
   /** Submitted command history for ↑/↓ recall. */
   #history = [];
   #histIdx = -1;
@@ -56,6 +59,9 @@ export class RConsole {
     this.#host.innerHTML = `
       <div class="rc-varsbar">
         <input class="rc-filter" type="search" placeholder="Filter…" aria-label="Filter variables" autocomplete="off">
+        <label class="rc-keepmissing" title="Off (the default) matches what a plugin receives: each variable's designated missing codes are already NA. On gives you the raw codes — what an analysis that reports its own valid/missing breakdown needs.">
+          <input class="rc-keepmissing__cb" type="checkbox"> include missing values
+        </label>
         <div class="rc-vars" role="group" aria-label="Variables to expose in R"></div>
       </div>
       <div class="rc-info">
@@ -77,6 +83,11 @@ export class RConsole {
       this.#renderVars();
     });
     this.#varsInfo = this.#host.querySelector('.rc-vars-info');
+    this.#keepMissingCb = this.#host.querySelector('.rc-keepmissing__cb');
+    this.#keepMissingCb?.addEventListener('change', () => {
+      this.#keepMissing = !!this.#keepMissingCb.checked;
+      void this.#rebind(); // the binding IS the setting — re-read `vars` immediately
+    });
     this.#libsInfo = this.#host.querySelector('.rc-libs-info');
     this.#term = this.#host.querySelector('.rc-term');
     this.#prompt = this.#host.querySelector('.rc-prompt');
@@ -134,7 +145,11 @@ export class RConsole {
     this.#input.value = '';
     this.#grow();
     try {
-      await this.#webr.evalConsole('rm(list = ls())');
+      // Clears the CONSOLE's own environment only (#160). It used to be
+      // `rm(list = ls())` in globalenv, which also wiped whatever a recorded Run R
+      // script step had produced — the scratchpad pulling the rug out from under the
+      // logged lane, which is exactly the coupling the separate env exists to end.
+      await this.#webr.evalConsole('rm(list = ls())', { scope: 'console' });
     } catch {
       /* best effort — clearing the screen still succeeds */
     }
@@ -145,7 +160,7 @@ export class RConsole {
     for (const node of [...this.#term.childNodes]) {
       if (node !== this.#prompt) node.remove();
     }
-    this.#append('Console cleared — R workspace reset.', 'rc-note');
+    this.#append('Console cleared — the console’s R workspace is reset (script results are untouched).', 'rc-note');
     this.#input.focus();
   }
 
@@ -192,17 +207,19 @@ export class RConsole {
     const cols = [...this.#checked];
     const multiple = cols.length > 1;
     try {
-      await this.#webr.consoleBind(cols, multiple);
+      await this.#webr.consoleBind(cols, multiple, { keepMissing: this.#keepMissing });
     } catch (err) {
       this.#append(`Could not expose variables: ${err.message}`, 'rc-err');
       return;
     }
     if (!cols.length) {
       this.#varsInfo.textContent = 'nothing checked';
-    } else if (multiple) {
-      this.#varsInfo.textContent = `vars — a data.frame (${cols.join(', ')})`;
     } else {
-      this.#varsInfo.textContent = `vars — a vector (${cols[0]})`;
+      // Say WHICH data is bound. "vars — a data.frame (age, income)" gave no clue
+      // whether -99 was still in there, which is the whole question this setting answers.
+      const missing = this.#keepMissing ? 'raw codes' : 'missing → NA';
+      const shape = multiple ? `a data.frame (${cols.join(', ')})` : `a vector (${cols[0]})`;
+      this.#varsInfo.textContent = `vars — ${shape} · ${missing}`;
     }
   }
 

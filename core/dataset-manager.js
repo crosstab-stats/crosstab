@@ -312,9 +312,12 @@ export class DatasetManager {
    * @param {Object} dataset - `{ name?, variables, columns?, parquet?, activate? }`
    * @returns {Promise<number>} the new dataset id.
    */
-  async createWithData({ name = 'Derived dataset', variables, columns, parquet, activate = true }) {
+  async createWithData({ name = 'Derived dataset', variables, columns, parquet, activate = true, producedBy }) {
     const ds = this.add(name, { activate: false });
-    await ds.loadDataset({ variables, columns, parquet, mode: 'replace', source: name });
+    // `producedBy` records WHICH run inside this project made the data (#160) — the
+    // reverse bridge from Run R script is the first caller. Without it the log holds
+    // bytes with no account of where they came from.
+    await ds.loadDataset({ variables, columns, parquet, mode: 'replace', source: name, producedBy });
     if (activate) {
       this.#activeId = ds.id;
       this.#emitActive('switch');

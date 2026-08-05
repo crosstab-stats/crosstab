@@ -144,8 +144,13 @@ function probeServices() {
  *   variable's designated `missingValues` to `NA` at injection, so the analysis sees
  *   clean data with no recode of its own. Set `true` to receive the **raw codes**
  *   instead — only for analyses that report missingness themselves (e.g. Frequencies'
- *   valid/missing breakdown). The Data grid and the raw r-console path are never
- *   stripped regardless.
+ *   valid/missing breakdown). The Data grid is never stripped — it shows what is stored.
+ *   The **R Console and Run R script now share this default** (#159): `vars` and `data`
+ *   arrive NA-folded like a plugin's inputs, with an "include missing values" checkbox
+ *   in the console for the `keepMissing: true` case. They used to bind raw values while
+ *   this file claimed the console mirrored the plugin contract — so an author prototyped
+ *   against different data from the one their plugin would receive, which shows up as
+ *   wrong numbers rather than an error.
  *
  * @typedef {Object} InputDecl
  * @property {string} name - Key under which the value is passed in `inputs` and
