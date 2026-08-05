@@ -22,11 +22,32 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
-- [ ] **SCED — single-case experimental design (multiple-baseline graph + Tau-U/NAP/PND).**
-      Publication-required for early-childhood intervention, special ed, ABA and school
-      psych (What Works Clearinghouse standards). Nothing we have fits: the signature
-      figure is multi-panel, one panel per behaviour on a shared session axis, with
-      STAGGERED phase-change lines (the staircase is the design's whole point).
+- [x] **SCED — DONE (2026-08-05).** `plugins/builtin-sced` (NAP, PND, Tau-U, IRD) plus a
+      `sced` chart kind in core/chart-renderer.js. **Needs no R at all** — the indices are
+      non-overlap counts, so they compute in JS: instant, offline, no package download.
+      Validated cell-by-cell against `scan` on desktop R by `test/sced.test.mjs` (21
+      tests), and driven end-to-end in the browser on the Ann/Ben fixture — every
+      rendered number matched the reference table below.
+
+      Notes for future work: the six-row Tau-U table is per case; IRD is study-level
+      (one figure across all cases), as in scan. Cases with >2 phases contribute their
+      first two runs to the statistics while the graph shows every phase — an ABAB
+      reversal draws all three boundaries. Not ported: scan's `Overall_tau_u`
+      meta-analysis across cases, and the `parker`/`tarlow` Tau-U variants (we do
+      `complete` + tau-b, scan's default).
+
+      **Found and fixed en route:** `appendPlot`/`appendChart` pushed their model entry
+      BEFORE `#place`, which is what lazily creates the analysis section — so any
+      analysis whose first output was a figure recorded the figure ABOVE its own heading.
+      Invisible on screen (the DOM nests correctly), wrong in exported reports and
+      reopened projects. Affected every chart-first plugin (trends, scatter, pie, factor
+      scree, correlogram, word frequency), not just this one.
+
+      *Original entry:* Publication-required for early-childhood intervention, special
+      ed, ABA and school psych (What Works Clearinghouse standards). Nothing we have
+      fits: the signature figure is multi-panel, one panel per behaviour on a shared
+      session axis, with STAGGERED phase-change lines (the staircase is the design's
+      whole point).
 
       **`scan` cannot run in WebR, and it is not patchable.** Diagnosed 2026-08-05,
       correcting my own earlier "cubature.so is broken" reading, which was wrong twice
@@ -3076,7 +3097,13 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       `icr` (WebR feasibility probe first, per house style), or hand-roll + validate
       against `irr`. Also decide the unit model (whole-doc code presence vs unitised
       overlap). Driven by faculty running coder-bias meta-analysis. See [[qualitative-first-class]].
-- [ ] **Single-Case Experimental Design (SCED) — NEW GAP (coverage backlog).** The
+- [x] **Single-Case Experimental Design (SCED) — DONE 2026-08-05, see the entry at the
+      top of this file.** Shipped as `builtin-sced` + a `sced` chart kind (multi-panel,
+      staggered boundaries, per-run line segmentation, condition labels — so the
+      "no chart kind fits" blocker below is resolved by adding one, not by svglite).
+      The feasibility probe this entry asked for was run and came back NEGATIVE: `scan`
+      cannot load in WebR, so the statistics are hand-rolled and validated against it on
+      desktop R instead. *Original entry:* The
       **multiple-baseline / ABAB / withdrawal** graphs + non-overlap effect sizes that
       applied-behaviour-analysis, special-ed, early-childhood-intervention and school-
       psychology researchers live on (publication-required under What Works Clearinghouse

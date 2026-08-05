@@ -402,9 +402,14 @@ export class ResultsPane {
       title: typeof opts.title === 'string' ? opts.title : '',
       caption: typeof opts.caption === 'string' ? opts.caption : '',
     };
-    this.#model.push(item);
     const block = this.#buildPlotBlock(item, { onRedraw: opts.onRedraw });
+    // Place BEFORE recording: #place is what lazily creates the analysis section, and
+    // that pushes its own `section` entry. Pushing the plot first put it AHEAD of its
+    // own heading in the model — invisible on screen (the DOM nests correctly) but
+    // wrong everywhere the model is the source of truth: exported reports and reopened
+    // projects showed the figure above the analysis it belongs to.
     this.#place(block);
+    this.#model.push(item);
     this.#bus?.emit?.('output:written');
     return item.id;
   }
@@ -526,9 +531,9 @@ export class ResultsPane {
   appendChart(model) {
     const safeModel = JSON.parse(JSON.stringify(model)); // detach from the plugin's object
     const item = { kind: 'chart', model: safeModel, view: defaultView(safeModel), id: 0, svg: '' };
-    this.#model.push(item);
     const block = this.#buildChartBlock(item);
-    this.#place(block);
+    this.#place(block); // before the push — see appendPlot on why the order matters
+    this.#model.push(item);
     this.#bus?.emit?.('output:written');
     return item.id;
   }
