@@ -49,6 +49,25 @@ export function buildChartControls(item, onChange) {
   });
   wrap.append(toggle, panel);
 
+  /**
+   * Put focus back on the same reorder button after a repaint.
+   *
+   * `paint()` refills the panel with `replaceChildren()`, destroying the button the
+   * user just activated and dropping focus to `<body>` — so moving a series three
+   * places meant Tab-hunting back to the list after every press. The row has moved by
+   * then, so it is found again by series key rather than by index. Scoped to `panel`
+   * because that is the node paint() empties: the list itself is detached by it.
+   */
+  const refocusRow = (key, glyph) => {
+    // Synchronous: paint() has already rebuilt the panel by the time this runs, so
+    // there is nothing to wait for. An earlier version deferred with
+    // requestAnimationFrame, which silently never fires in a backgrounded or occluded
+    // tab — the focus would simply not come back, with no error to notice.
+    const row = panel.querySelector(`.results-chart__srow[data-key="${CSS.escape(key)}"]`);
+    const btn = row && [...row.querySelectorAll('button')].find((b) => b.textContent === glyph);
+    if (btn && !btn.disabled) btn.focus();
+  };
+
   // Which sections the user has open. Seeded on the first paint with the first
   // section only, then owned by the user and preserved across repaints.
   const open = new Set();
@@ -90,7 +109,7 @@ export function buildChartControls(item, onChange) {
       // labels) and a per-phase colour list, and two identically-titled sections is a
       // puzzle rather than a grouping.
       const name = multi ? `Colour & order (${spec.colorLabel})` : 'Colour';
-      into(name, reorderList(items, view.seriesOrder, view, multi, paint, onChange), items.length);
+      into(name, reorderList(items, view.seriesOrder, view, multi, paint, onChange, refocusRow), items.length);
       if (Object.keys(view.colors).length) {
         into(name, textBtn('Reset colours', () => { view.colors = {}; paint(); onChange(); }), 0);
       }
@@ -99,7 +118,7 @@ export function buildChartControls(item, onChange) {
     // 3. Category (x-axis) order — kinds that opt in (categorical).
     if (spec.reorderCategories && (spec.categories || []).length > 1) {
       into('Category order',
-        reorderList(spec.categories, view.categoryOrder, null, true, paint, onChange),
+        reorderList(spec.categories, view.categoryOrder, null, true, paint, onChange, refocusRow),
         spec.categories.length);
     }
 
@@ -192,13 +211,16 @@ function buildControl(ctl, view, changed) {
 
 /** A list of `items` ({key,label}) in `order`, each with optional colour picker
  * (when `viewForColor` is given) and ▲▼ reorder buttons. Mutates `order` in place. */
-function reorderList(items, order, viewForColor, showOrder, paint, onChange) {
+function reorderList(items, order, viewForColor, showOrder, paint, onChange, refocus = () => {}) {
   const by = new Map(items.map((it) => [it.key, it]));
   const list = elem('div', 'results-chart__series');
+
+
   order.forEach((key, idx) => {
     const it = by.get(key);
     if (!it) return;
     const row = elem('div', 'results-chart__srow');
+    row.dataset.key = key; // so focus can be restored to this row after a repaint
 
     if (viewForColor) {
       const color = document.createElement('input');
@@ -217,8 +239,8 @@ function reorderList(items, order, viewForColor, showOrder, paint, onChange) {
 
     if (showOrder) {
       row.append(
-        iconBtn('▲', 'Move up', idx === 0, () => { move(order, idx, -1); paint(); onChange(); }),
-        iconBtn('▼', 'Move down', idx === order.length - 1, () => { move(order, idx, +1); paint(); onChange(); }),
+        iconBtn('▲', 'Move up', idx === 0, () => { move(order, idx, -1); paint(); onChange(); refocus(key, '▲'); }),
+        iconBtn('▼', 'Move down', idx === order.length - 1, () => { move(order, idx, +1); paint(); onChange(); refocus(key, '▼'); }),
       );
     }
     list.append(row);

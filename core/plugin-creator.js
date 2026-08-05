@@ -214,6 +214,8 @@ export class PluginCreator {
       rm.type = 'button';
       rm.className = 'ct-creator__inrm';
       rm.textContent = '✕';
+      rm.setAttribute('aria-label', 'Remove this input');
+      rm.title = 'Remove this input';
       rm.addEventListener('click', () => {
         row.remove();
         updateRHint();

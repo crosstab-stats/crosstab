@@ -1261,6 +1261,9 @@ function showJoinReview({ baseMeta, getBaseColumn, incoming }) {
           const x = document.createElement('button');
           x.type = 'button';
           x.textContent = '✕';
+          // Glyph-only and destructive: without a name this is just "button".
+          x.setAttribute('aria-label', `Remove the match ${a.base} to ${a.incoming}`);
+          x.title = 'Remove this column match';
           x.addEventListener('click', () => {
             aliases.splice(i, 1);
             recompute();

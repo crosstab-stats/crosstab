@@ -174,6 +174,7 @@ export class UiService {
       const search = document.createElement('input');
       search.type = 'search';
       search.placeholder = searchPlaceholder;
+      search.setAttribute('aria-label', searchPlaceholder || 'Filter the list');
       search.style.cssText =
         'width:100%; padding:8px; margin:0 0 8px; border:1px solid var(--line,#ccc);' +
         ' border-radius:6px; font:inherit;';

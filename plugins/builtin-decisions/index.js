@@ -132,7 +132,7 @@ export const workspace = {
         tr.append(inputCell(r.name, 'text', (v) => { r.name = v; save(); }));
         tr.append(inputCell(r.cost, 'number', (v) => { r.cost = v; save(); }, 'num'));
         tr.append(inputCell(r.effect, 'number', (v) => { r.effect = v; save(); }, 'num'));
-        const dtd = el('td'); const del = el('button', 'del'); del.textContent = '✕';
+        const dtd = el('td'); const del = el('button', 'del'); del.textContent = '✕'; del.setAttribute('aria-label', 'Remove this option'); del.title = 'Remove this option';
         del.addEventListener('click', () => { t.rows.splice(i, 1); save(); renderICER(); });
         dtd.append(del); tr.append(dtd); tb.append(tr);
       });
@@ -182,7 +182,7 @@ export const workspace = {
         nameTd.querySelector('input').addEventListener('blur', renderMatrix);
         tr.append(nameTd);
         tr.append(inputCell(c.weight, 'number', (v) => { c.weight = v; save(); }, 'num'));
-        const dtd = el('td'); const del = el('button', 'del'); del.textContent = '✕';
+        const dtd = el('td'); const del = el('button', 'del'); del.textContent = '✕'; del.setAttribute('aria-label', 'Remove this criterion'); del.title = 'Remove this criterion';
         del.addEventListener('click', () => { m.criteria.splice(i, 1); for (const o of m.options) o.scores.splice(i, 1); save(); renderMatrix(); });
         dtd.append(del); tr.append(dtd); ctb.append(tr);
       });
@@ -203,7 +203,7 @@ export const workspace = {
         m.criteria.forEach((c, ci) => {
           tr.append(inputCell(o.scores[ci], 'number', (v) => { o.scores[ci] = v; save(); }, 'num'));
         });
-        const dtd = el('td'); const del = el('button', 'del'); del.textContent = '✕';
+        const dtd = el('td'); const del = el('button', 'del'); del.textContent = '✕'; del.setAttribute('aria-label', 'Remove this option'); del.title = 'Remove this option';
         del.addEventListener('click', () => { m.options.splice(oi, 1); save(); renderMatrix(); });
         dtd.append(del); tr.append(dtd); otb.append(tr);
       });
@@ -249,7 +249,7 @@ export const workspace = {
         const ptd = el('td'); ptd.textContent = String(i); tr.append(ptd);
         tr.append(inputCell(r.cost, 'number', (v) => { r.cost = v; save(); }, 'num'));
         tr.append(inputCell(r.benefit, 'number', (v) => { r.benefit = v; save(); }, 'num'));
-        const dtd = el('td'); const del = el('button', 'del'); del.textContent = '✕';
+        const dtd = el('td'); const del = el('button', 'del'); del.textContent = '✕'; del.setAttribute('aria-label', 'Remove this row'); del.title = 'Remove this row';
         del.addEventListener('click', () => { t.rows.splice(i, 1); save(); renderNPV(); });
         dtd.append(del); tr.append(dtd); tb.append(tr);
       });
@@ -288,7 +288,7 @@ export const workspace = {
         nameTd.querySelector('input').addEventListener('blur', renderEV);
         tr.append(nameTd);
         tr.append(inputCell(s.prob, 'number', (v) => { s.prob = v; save(); }, 'num'));
-        const dtd = el('td'); const del = el('button', 'del'); del.textContent = '✕';
+        const dtd = el('td'); const del = el('button', 'del'); del.textContent = '✕'; del.setAttribute('aria-label', 'Remove this scenario'); del.title = 'Remove this scenario';
         del.addEventListener('click', () => { m.scenarios.splice(i, 1); for (const o of m.options) o.payoffs.splice(i, 1); save(); renderEV(); });
         dtd.append(del); tr.append(dtd); stb.append(tr);
       });
@@ -304,7 +304,7 @@ export const workspace = {
       m.options.forEach((o, oi) => {
         const tr = el('tr'); tr.append(inputCell(o.name, 'text', (v) => { o.name = v; save(); }));
         m.scenarios.forEach((s, si) => { tr.append(inputCell(o.payoffs[si], 'number', (v) => { o.payoffs[si] = v; save(); }, 'num')); });
-        const dtd = el('td'); const del = el('button', 'del'); del.textContent = '✕';
+        const dtd = el('td'); const del = el('button', 'del'); del.textContent = '✕'; del.setAttribute('aria-label', 'Remove this option'); del.title = 'Remove this option';
         del.addEventListener('click', () => { m.options.splice(oi, 1); save(); renderEV(); });
         dtd.append(del); tr.append(dtd); otb.append(tr);
       });
@@ -364,7 +364,7 @@ export const workspace = {
           row.append(addb);
         }
         if (parent) {
-          const del = el('button', 'del'); del.textContent = '✕';
+          const del = el('button', 'del'); del.textContent = '✕'; del.setAttribute('aria-label', 'Remove this branch'); del.title = 'Remove this branch';
           del.addEventListener('click', () => { parent.children.splice(idx, 1); save(); renderTree(); });
           row.append(del);
         }

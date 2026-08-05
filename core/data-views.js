@@ -74,6 +74,8 @@ export class DataView {
     this.filterInput.type = 'search';
     this.filterInput.className = 'grid-filter';
     this.filterInput.placeholder = 'Filter columns…';
+    // A placeholder is a visual affordance, not an accessible name.
+    this.filterInput.setAttribute('aria-label', 'Filter columns');
     this.filterInput.addEventListener('input', () => {
       this.filter = this.filterInput.value;
       this.#applyFilter();
@@ -412,6 +414,7 @@ export class DataView {
   #memoInput(anchor, close, td) {
     const input = document.createElement('input');
     input.placeholder = 'What did you notice?';
+    input.setAttribute('aria-label', 'Memo for this cell');
     input.style.cssText = 'width:calc(100% - 20px);margin:4px 10px;font-size:12px;padding:3px 5px;';
     let done = false;
     const finish = (commit) => {
@@ -440,6 +443,10 @@ export class DataView {
     if (td.querySelector('input')) return; // already editing
     const input = document.createElement('input');
     input.className = 'cell-edit';
+    // Focused programmatically with no name of any kind, this announced as
+    // "edit, blank" — no variable, no row. Say which cell is being edited.
+    input.setAttribute('aria-label',
+      `Edit ${meta?.label || meta?.name || 'value'}, row ${displayRow + 1}`);
     input.value = rawValue === null || rawValue === undefined ? '' : String(rawValue);
     td.replaceChildren(input);
     input.focus();

@@ -962,7 +962,7 @@ export class PluginManager {
       </div>
       <div class="ct-plugins__filters">
         <select class="ct-plugins__discipline" aria-label="Field / discipline"></select>
-        <input type="search" class="ct-plugins__search" placeholder="Search plugins…" autocomplete="off">
+        <input type="search" class="ct-plugins__search" placeholder="Search plugins…" aria-label="Search plugins" autocomplete="off">
       </div>
       <div class="ct-plugins__err" role="alert" hidden></div>
       <div class="ct-plugins"></div>

@@ -272,12 +272,13 @@ function makeRuleRow(onRemove) {
 
   const from = document.createElement('select');
   from.className = 'ct-cr__from';
+  from.setAttribute('aria-label', 'Match by');
   from.innerHTML =
     '<option value="value">value</option><option value="range">range</option><option value="missing">missing</option>';
 
-  const val = inputEl('value', 'ct-cr__val');
-  const lo = inputEl('low', 'ct-cr__lo');
-  const hi = inputEl('high', 'ct-cr__hi');
+  const val = inputEl('value', 'ct-cr__val', 'Old value');
+  const lo = inputEl('low', 'ct-cr__lo', 'Range low');
+  const hi = inputEl('high', 'ct-cr__hi', 'Range high');
   const fromInputs = el('span', null, 'ct-cr__frominputs');
   fromInputs.append(val, lo, el('span', '–', 'ct-cr__dash'), hi);
 
@@ -323,9 +324,10 @@ function makeToControls() {
   const wrap = el('span', null, 'ct-cr__to');
   const kind = document.createElement('select');
   kind.className = 'ct-cr__tokind';
+  kind.setAttribute('aria-label', 'Replace with');
   kind.innerHTML =
     '<option value="value">value</option><option value="copy">copy original</option><option value="sysmis">system-missing</option>';
-  const value = inputEl('new value', 'ct-cr__toval');
+  const value = inputEl('new value', 'ct-cr__toval', 'New value');
   const sync = () => {
     value.hidden = kind.value !== 'value';
   };
@@ -345,12 +347,16 @@ function el(tag, text, className) {
   return e;
 }
 
-function inputEl(placeholder, className) {
+function inputEl(placeholder, className, label) {
   const i = document.createElement('input');
   i.type = 'text';
   i.autocomplete = 'off';
   i.placeholder = placeholder;
   i.className = className;
+  // A placeholder is not an accessible name: it is announced inconsistently and
+  // vanishes on first keystroke. These rows repeat, so the name has to carry which
+  // field it is — see the rule-index pass in makeRuleRow.
+  i.setAttribute('aria-label', label || placeholder);
   return i;
 }
 

@@ -1370,6 +1370,7 @@ export const workspace = {
       const nc = el('div', 'caqdas__newcode');
       const inp = el('input'); inp.placeholder = 'New code…';
       const add = el('button', 'caqdas__btn'); add.textContent = '＋';
+      add.setAttribute('aria-label', 'Add code'); add.title = 'Add code';
       const commit = () => {
         const name = inp.value.trim();
         if (!name) return;
