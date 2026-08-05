@@ -100,3 +100,46 @@ test('SCED stays navigable as the data gets harder', () => {
     'and the section list stays the same five either way');
   assert.deepEqual(groupsOf(one), groupsOf(many));
 });
+
+// --- visual affordance -------------------------------------------------------
+// A control whose effect nobody can see is indistinguishable from a broken one.
+
+const { renderChart } = await import('../core/chart-renderer.js');
+
+/** Relative luminance / contrast ratio, per WCAG 2.x. */
+const luminance = (hex) => {
+  const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+};
+const contrast = (a, b) => {
+  const [l1, l2] = [luminance(a), luminance(b)];
+  return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+};
+
+test('gridlines are dark enough to be seen — the toggle must have a visible effect', () => {
+  // Regression on a real report: at #e6eaee (1.21:1 on white) turning gridlines off
+  // removed them from the SVG but looked identical, so the checkbox read as dead.
+  const model = MODELS.scatter;
+  const on = renderChart(model, { ...defaultView(model), gridlines: true });
+  const strokes = [...on.matchAll(/<line[^>]*stroke="(#[0-9a-f]{6})"[^>]*\/>/gi)].map((m) => m[1]);
+  const gridStroke = strokes.find((s) => contrast(s, '#ffffff') < 3); // the faintest ink
+  assert.ok(gridStroke, 'a gridline stroke exists');
+  const ratio = contrast(gridStroke, '#ffffff');
+  assert.ok(ratio >= 1.5, `gridlines at ${gridStroke} are ${ratio.toFixed(2)}:1 on white — invisible`);
+  assert.ok(ratio <= 2.5, `gridlines at ${gridStroke} are ${ratio.toFixed(2)}:1 — competing with the data`);
+});
+
+test('and toggling them off actually removes them, in every kind', () => {
+  for (const [name, model] of Object.entries(MODELS)) {
+    const v = defaultView(model);
+    const count = (view) => {
+      const svg = renderChart(model, view);
+      return [...svg.matchAll(/<line[^>]*stroke="(#[0-9a-f]{6})"/gi)]
+        .filter((m) => contrast(m[1], '#ffffff') < 2.6).length;
+    };
+    if (name === 'pie') continue; // no axes, so no gridlines to draw
+    assert.ok(count({ ...v, gridlines: true }) > 0, `${name}: gridlines on draws some`);
+    assert.equal(count({ ...v, gridlines: false }), 0, `${name}: gridlines off draws none`);
+  }
+});

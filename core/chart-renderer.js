@@ -386,7 +386,14 @@ const W = 720;
 const H = 460;
 const FONT = 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
 const AXIS = '#555';
-const GRID = '#e6eaee';
+// Gridlines must be VISIBLE or the toggle that controls them reads as broken. The
+// previous #e6eaee measured 1.21:1 against white — about a fifth of WCAG 1.4.11's 3:1
+// for graphical objects — so switching gridlines off changed the SVG (verifiably: 11
+// stroke references to 0) while changing nothing a reader could see. Reported as
+// "gridlines doesn't appear to do anything, in any chart", and that was a fair reading.
+// 3:1 itself would make a reference line compete with the data, so this sits at 1.56:1:
+// unmistakably present, still clearly behind the series.
+const GRID = '#c8d0d9';
 
 function errorSvg(msg) {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 80" font-family="${FONT}"><text x="12" y="44" font-size="13" fill="#b00">${esc(msg)}</text></svg>`;
