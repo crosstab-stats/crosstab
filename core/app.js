@@ -1473,7 +1473,9 @@ export async function boot(mounts) {
   // Click the "CrossTab" brand to reopen the launcher (also the plugin picker).
   const brand = document.querySelector('header .brand');
   if (brand) {
-    brand.style.cursor = 'pointer';
+    // A real <button> in the markup (cursor, focus ring and Enter/Space come free) —
+    // it used to be a <span>, which meant the launcher could not be reopened by
+    // keyboard at all, and this handler is still its only entry point.
     brand.title = 'Open the launcher / plugin picker';
     brand.addEventListener('click', () => void launcher.open({ reopen: true }));
   }

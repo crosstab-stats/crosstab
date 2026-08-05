@@ -53,7 +53,19 @@
         padding: 0 12px;
         min-height: 44px; /* comfortable touch target on iPad */
       }
-      .brand { font-weight: 700; letter-spacing: .04em; }
+      /* A real <button>, not a wordmark: this is the only route back to the launcher.
+         Reset the UA button chrome so it still reads as the brand. */
+      .brand {
+        font: inherit; font-weight: 700; letter-spacing: .04em;
+        background: none; border: 0; padding: 2px 4px; margin: 0 -4px;
+        color: inherit; cursor: pointer; border-radius: 4px;
+      }
+      .brand:hover { background: rgba(255, 255, 255, .1); }
+      /* Global focus indicator. The app had 8 :focus rules in total and several places
+         that removed the outline outright, so keyboard users had little to follow.
+         2px at 3:1+ against both surfaces satisfies WCAG 2.4.11 focus appearance. */
+      :focus-visible { outline: 2px solid #1b6ea8; outline-offset: 2px; }
+      header :focus-visible, .ctl__bar :focus-visible { outline-color: #66aedd; }
       /* Wrap to additional rows when there are many menus, rather than overflowing
          the header (which used to scroll the whole window sideways). min-width:0
          lets it shrink within the header flex row. */
@@ -727,7 +739,7 @@
     </div>
 
     <header>
-      <span class="brand">CrossTab</span>
+      <button type="button" class="brand" aria-label="CrossTab — open the launcher and plugin picker">CrossTab</button>
       <nav class="menubar" id="menubar" aria-label="Main menu"></nav>
     </header>
 
