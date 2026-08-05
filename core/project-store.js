@@ -41,7 +41,9 @@ const safeAssetId = (id) => String(id).replace(/[^a-f0-9]/gi, '');
  * light transform stored inline in the manifest. Mirrors data-store's SOURCE_OPS. */
 const SOURCE_TYPES = new Set(['load', 'append', 'join']);
 const isSourceOp = (op) => SOURCE_TYPES.has(op?.type);
-const ENC_META = 'crosstab-encryption.json'; // plaintext salt/verifier for the folder
+const ENC_META = 'crosstab-encryption.json'; // plaintext salt/verifier/epoch for the folder
+/** A fresh key-epoch id — see {@link ProjectStore#keyStatus}. */
+const newEpoch = () => (globalThis.crypto?.randomUUID?.() ?? String(Math.random()).slice(2));
 const MARKER = 'crosstab-project.json'; // plaintext "this folder IS a CrossTab project" + display name
 const VERIFIER = 'crosstab-folder-v1'; // known token, encrypted, to check a passphrase on unlock
 
@@ -84,6 +86,10 @@ export class ProjectStore {
    * `crosstab-encryption.json` (a salt isn't secret). The catalog is always
    * plaintext (it spans projects, which in OPFS mode can each have a DIFFERENT key). */
   #key = null;
+  /** The `epoch` of the meta this key was derived against (#144). A shared folder's
+   * protection can change under a peer that is already connected; the epoch is how that
+   * peer notices before it writes ciphertext nobody else can read. @type {string|null} */
+  #keyEpoch = null;
 
   /** Which project id {@link #key} belongs to. In nested (OPFS) mode each project
    * can carry its own passphrase, so a save must never encrypt one project's bytes
@@ -167,16 +173,51 @@ export class ProjectStore {
       if (!ok) throw new Error('Wrong passphrase for this project.');
     } else {
       const verifier = b64(await encryptWithKey(key, VERIFIER));
-      await this.#driver.write(metaPath, te.encode(JSON.stringify({ v: 1, salt: b64(salt), iterations, verifier })));
+      // `epoch` identifies THIS keying of the folder (#144). A random id, not a counter:
+      // two peers who rekey concurrently would both write "2", and the whole point is
+      // that any difference must be detectable. Meta written before the epoch existed
+      // reads as null, which compares equal to itself and so never false-alarms.
+      meta = { v: 1, salt: b64(salt), iterations, verifier, epoch: newEpoch() };
+      await this.#driver.write(metaPath, te.encode(JSON.stringify(meta)));
     }
     this.#key = key;
     this.#keyId = id;
+    this.#keyEpoch = meta?.epoch ?? null;
   }
 
   /** Drop the in-memory key (e.g. closing a project, or before switching to another). */
   lock() {
     this.#key = null;
     this.#keyId = null;
+    this.#keyEpoch = null;
+  }
+
+  /**
+   * Is the key we hold still the folder's current one? (#144)
+   *
+   * A shared folder's protection can be changed by whoever owns it — Protect, Remove
+   * protection, or a passphrase change — and every other peer keeps whatever key it
+   * derived when it opened. Writing with that stale key produces files the rest of the
+   * team cannot read, and it happens exactly when the data's confidentiality is what is
+   * being changed. There was no way to notice: the meta is read once, at unlock.
+   *
+   * Cheap enough to call before every folder write — one small plaintext read.
+   *
+   * @returns {Promise<{current: boolean, reason: 'ok'|'rekeyed'|'unprotected'|'protected'}>}
+   */
+  async keyStatus(id = FOLDER_PROJECT_ID) {
+    const raw = await this.#driver.read(this.#metaPath(id));
+    if (!raw) {
+      // Meta gone: the folder was unprotected while we were connected. Our key is now
+      // wrong in the other direction — we would write ciphertext into a plaintext folder.
+      return { current: !this.#key, reason: this.#key ? 'unprotected' : 'ok' };
+    }
+    let meta = null;
+    try { meta = JSON.parse(new TextDecoder().decode(raw)); } catch { return { current: true, reason: 'ok' }; }
+    if (!this.#key) return { current: false, reason: 'protected' }; // protection turned ON under us
+    const epoch = meta?.epoch ?? null;
+    if (epoch === this.#keyEpoch) return { current: true, reason: 'ok' };
+    return { current: false, reason: 'rekeyed' };
   }
 
   /**

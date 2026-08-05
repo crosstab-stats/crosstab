@@ -213,6 +213,8 @@ export class ProjectSync {
   #binding = null;
   /** True while a picked folder (FSA) is the active backend, vs OPFS (#143). */
   #folderMode = false;
+  /** Folder writes halted because its key changed under us (#144). Cleared by reopening. */
+  #folderKeyStale = false;
   /** A dedicated OPFS store for LISTING in-browser projects even while the main store
    * is folder-backed — so the launcher/sidebar list always shows OPFS projects, never
    * the current folder's single project (which is surfaced via the folder registry). */
@@ -1157,6 +1159,7 @@ export class ProjectSync {
 
   /** Revert the store to OPFS after a failed/aborted folder attach. */
   #detachFolder() {
+    this.#folderKeyStale = false; // a fresh attachment re-derives the key
     this.#store.useDirectory(null);
     this.#store.lock();
     this.#folderMode = false;
@@ -1474,6 +1477,7 @@ export class ProjectSync {
    */
   async #folderSave(dirty) {
     if (!this.#binding) return;
+    if (!(await this.#keyStillCurrent())) return; // #144 — never write with a stale key
     const bundle = await this.#snapshot(true, dirty); // include Parquet — syncFolderProject writes sources
     const result = await syncFolderProject({
       store: this.#store,
@@ -1912,6 +1916,51 @@ export class ProjectSync {
     if (this.#binding) this.#schedule();
   }
 
+  /**
+   * Has the folder been re-keyed under us? (#144)
+   *
+   * The owner of a shared folder can Protect it, Remove protection, or change the
+   * passphrase at any time. Every other connected peer keeps the key it derived when it
+   * opened — so its next save re-encrypts with the old key (after an unprotect) or
+   * cannot read the new files (after a protect or rekey). Silent divergence, precisely
+   * when confidentiality is what is changing. Until now the only mitigation was a
+   * sentence in the unprotect confirmation.
+   *
+   * Returns false ⇒ the caller must not touch the folder. We relock, stop polling and
+   * tell the user what happened; reopening the folder re-prompts and re-derives, which
+   * is the one path that always produces a correct key.
+   *
+   * Deliberately stops rather than silently re-prompting mid-save: a save is already in
+   * flight when this fires, and a modal that appears from nowhere while data is being
+   * written is a worse answer than a clear halt.
+   */
+  async #keyStillCurrent() {
+    if (!this.#folderMode || !this.#binding) return true;
+    if (this.#folderKeyStale) return false; // already halted; don't re-announce every tick
+    let status;
+    try { status = await this.#store.keyStatus(this.#binding.id); } catch { return true; } // unreadable meta ⇒ don't block on a guess
+    if (status.current) return true;
+    this.#stopPoll();
+    this.#store.lock();
+    // A dedicated halt, NOT `#folderMode = false`: clearing that flag would send the
+    // next save down the OPFS branch and quietly fork the project into a second copy on
+    // this device. The project stays folder-bound and simply stops writing.
+    this.#folderKeyStale = true;
+    const what = {
+      rekeyed: 'Its passphrase was changed by someone else.',
+      unprotected: 'Its protection was removed by someone else.',
+      protected: 'It was protected by someone else.',
+    }[status.reason] ?? 'Its protection changed.';
+    this.#setStatus(`Folder locked — ${what}`);
+    this.#results.appendError(
+      `This shared folder is no longer using the key you opened it with. ${what} `
+      + 'Saving has stopped so nothing is written that your collaborators could not read. '
+      + 'Re-open the folder (File ▸ Open project from a folder…) to continue — your work so far is still here.',
+    );
+    this.#emitProject();
+    return false;
+  }
+
   #startPoll() {
     this.#stopPoll();
     this.#pollTimer = setInterval(() => void this.#folderPull(), 3000);
@@ -1926,6 +1975,7 @@ export class ProjectSync {
   async #folderPull() {
     if (!this.#folderMode || !this.#binding || this.#saving || this.#loading) return;
     if (typeof document !== 'undefined' && document.hidden) return; // back off when hidden
+    if (!(await this.#keyStillCurrent())) return; // #144 — the poll is also how we notice
     let theirs;
     try { theirs = await this.#store.readManifest(this.#binding.id); } catch { return; }
     if (!theirs || (this.#lastManifest && manifestsEqual(theirs, this.#lastManifest))) return;

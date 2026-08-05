@@ -1961,7 +1961,20 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       protect prompts a new OPFS project at first save when the policy's on;
       `File ▸ Encryption settings…` toggles that policy. Each OPFS project has its OWN
       passphrase (shared-lab case). Verified against real OPFS. See [[at-rest-encryption]].
-  - [ ] **SERIOUS GAP — shared-folder encryption change has no live-peer key coordination.**
+  - [x] **DONE (2026-08-04) — key epoch + write guard.** The meta carries an `epoch`
+      (a random id, not a counter: two peers rekeying concurrently would both write "2",
+      and any difference must be detectable). `ProjectStore.keyStatus()` compares it and
+      distinguishes rekeyed / unprotected / protected; `#keyStillCurrent()` runs before
+      every folder write AND on every poll tick, and on a mismatch it stops the poll,
+      locks the key, halts folder writes and tells the user to reopen the folder. The
+      halt is a dedicated flag, NOT `folderMode = false` — clearing that would divert
+      the next save into OPFS and fork the project into a second local copy. Legacy meta
+      with no epoch reads null on both sides, so an upgrade never false-alarms.
+      7 tests in `test/key-epoch.test.mjs` pin all three directions. STILL OPEN: an
+      in-band rekey message (peers currently recover by reopening, not automatically),
+      and whether unprotect should force-disconnect peers first.
+      **Original analysis:**
+      **SERIOUS GAP — shared-folder encryption change has no live-peer key coordination.**
       Flipping a *shared* folder project's protection (Protect / Remove protection, or a
       passphrase change) only lands cleanly for peers who **reopen** the folder. A peer
       who is **actively connected** keeps their old in-memory key, so their next save
