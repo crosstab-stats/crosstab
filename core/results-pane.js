@@ -185,6 +185,19 @@ const RESULTS_STYLES = `
   .results-chart__num { font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid #d8dee4; border-radius: 5px; background: #fff; width: 90px; }
   .results-chart__text { font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid #d8dee4; border-radius: 5px; background: #fff; flex: 1; min-width: 0; }
   .results-chart__seriesheader { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #7a8590; margin-top: 4px; }
+  /* Collapsible control sections. Only the first is open — see chart-controls.js on
+     why a flat list stopped being viable. */
+  .results-chart__group { border: 1px solid #e6eaee; border-radius: 6px; background: #fff; }
+  .results-chart__group[open] { padding-bottom: 8px; }
+  .results-chart__group > *:not(summary) { margin: 6px 10px 0; }
+  .results-chart__grouphead {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #58616a;
+    padding: 7px 10px; cursor: pointer; user-select: none; list-style: none; font-weight: 600;
+  }
+  .results-chart__grouphead::-webkit-details-marker { display: none; }
+  .results-chart__grouphead::before { content: '▸ '; color: #98a2ac; }
+  .results-chart__group[open] > .results-chart__grouphead::before { content: '▾ '; }
+  .results-chart__grouphead:hover { color: #1b7fc4; }
   .results-chart__series { display: flex; flex-direction: column; gap: 4px; }
   .results-chart__srow { display: flex; align-items: center; gap: 6px; }
   .results-chart__swatch { width: 28px; height: 22px; padding: 0; border: 1px solid #d8dee4; border-radius: 4px; background: none; cursor: pointer; flex: 0 0 auto; }

@@ -11,6 +11,20 @@
  * ({@link chartUiSpec}) — a list of control descriptors plus the colour-item and
  * category-reorder info — and renders whatever it's given. A new chart kind that
  * registers its own controls gets a working panel here with no edits to this file.
+ *
+ * ## Grouping
+ *
+ * Controls are bucketed into collapsible sections by their descriptor's `group`, in
+ * order of first appearance, with only the first section open. This is not decoration:
+ * the SCED kind alone shows **29 controls on the simplest possible chart**, and 16 of
+ * those are the generic title/axis block that every kind carries. A flat list of thirty
+ * widgets is unusable however few of them you actually need, and splitting a chart kind
+ * in two would have duplicated the sixteen rather than removed them — the bloat lives
+ * here, so the fix belongs here.
+ *
+ * Open/closed state is remembered across repaints (`paint()` replaces the panel's
+ * children whenever a `structural` control changes, which would otherwise slam every
+ * section shut mid-edit).
  */
 
 import { chartUiSpec, colorFor } from './chart-renderer.js';
@@ -35,6 +49,11 @@ export function buildChartControls(item, onChange) {
   });
   wrap.append(toggle, panel);
 
+  // Which sections the user has open. Seeded on the first paint with the first
+  // section only, then owned by the user and preserved across repaints.
+  const open = new Set();
+  let seeded = false;
+
   // Rebuild the panel from the kind's UI spec. Re-run on structural changes (a
   // control with structural:true, or any reorder) so dependent controls show/hide
   // and the colour/order lists re-sort.
@@ -42,10 +61,21 @@ export function buildChartControls(item, onChange) {
     panel.replaceChildren();
     const spec = chartUiSpec(model);
 
+    /** group name → {nodes, rows} in order of first appearance. `rows` is the count
+     * shown in the header, which is not the node count: a reorder list is ONE node
+     * holding one row per series. */
+    const groups = new Map();
+    const into = (name, node, rows = 1) => {
+      if (!groups.has(name)) groups.set(name, { nodes: [], rows: 0 });
+      const g = groups.get(name);
+      g.nodes.push(node);
+      g.rows += rows;
+    };
+
     // 1. The kind's declared control widgets (type, stacking, rotation, …).
     for (const ctl of spec.controls) {
       if (ctl.visible && !ctl.visible(view, model)) continue;
-      panel.append(buildControl(ctl, view, () => {
+      into(ctl.group || 'Chart', buildControl(ctl, view, () => {
         if (ctl.structural) paint();
         onChange();
       }));
@@ -55,21 +85,42 @@ export function buildChartControls(item, onChange) {
     const items = spec.colorItems || [];
     const multi = items.length > 1;
     if (items.length) {
-      const header = elem('div', 'results-chart__seriesheader');
-      header.textContent = multi ? `${spec.colorLabel} (colour · order)` : 'Colour';
-      panel.append(header);
-      panel.append(reorderList(items, view.seriesOrder, view, multi, paint, onChange));
+      // Named "Colour & order (Phases)" rather than "Phases", so it cannot collide with
+      // a kind's own section of the same name — SCED has both a Phases section (lines,
+      // labels) and a per-phase colour list, and two identically-titled sections is a
+      // puzzle rather than a grouping.
+      const name = multi ? `Colour & order (${spec.colorLabel})` : 'Colour';
+      into(name, reorderList(items, view.seriesOrder, view, multi, paint, onChange), items.length);
       if (Object.keys(view.colors).length) {
-        panel.append(textBtn('Reset colours', () => { view.colors = {}; paint(); onChange(); }));
+        into(name, textBtn('Reset colours', () => { view.colors = {}; paint(); onChange(); }), 0);
       }
     }
 
     // 3. Category (x-axis) order — kinds that opt in (categorical).
     if (spec.reorderCategories && (spec.categories || []).length > 1) {
-      const header = elem('div', 'results-chart__seriesheader');
-      header.textContent = 'Category order';
-      panel.append(header);
-      panel.append(reorderList(spec.categories, view.categoryOrder, null, true, paint, onChange));
+      into('Category order',
+        reorderList(spec.categories, view.categoryOrder, null, true, paint, onChange),
+        spec.categories.length);
+    }
+
+    if (!seeded) {
+      const first = groups.keys().next();
+      if (!first.done) open.add(first.value);
+      seeded = true;
+    }
+
+    for (const [name, { nodes, rows }] of groups) {
+      const section = document.createElement('details');
+      section.className = 'results-chart__group';
+      section.open = open.has(name);
+      const summary = document.createElement('summary');
+      summary.className = 'results-chart__grouphead';
+      summary.textContent = `${name} (${rows})`;
+      section.append(summary, ...nodes);
+      section.addEventListener('toggle', () => {
+        if (section.open) open.add(name); else open.delete(name);
+      });
+      panel.append(section);
     }
   };
 

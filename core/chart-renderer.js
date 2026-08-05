@@ -216,7 +216,7 @@ function colorItemCount(model) {
 /** Palette chooser — only meaningful when more than one item takes a colour. */
 export function paletteControl() {
   return {
-    id: 'palette', label: 'Palette', type: 'select', structural: true,
+    id: 'palette', label: 'Palette', type: 'select', structural: true, group: 'Style',
     options: () => Object.entries(PALETTES).map(([k, p]) => [k, p.label]),
     get: (v) => v.palette || DEFAULT_PALETTE,
     set: (v, x) => { v.palette = x; },
@@ -227,7 +227,7 @@ export function paletteControl() {
 /** Legend placement — only when more than one item is shown. */
 export function legendControl() {
   return {
-    id: 'legend', label: 'Legend', type: 'select',
+    id: 'legend', label: 'Legend', type: 'select', group: 'Style',
     options: [['right', 'Right'], ['top', 'Top'], ['bottom', 'Bottom'], ['none', 'Hidden']],
     get: (v) => v.legend,
     set: (v, x) => { v.legend = x; },
@@ -238,7 +238,7 @@ export function legendControl() {
 /** Value-labels toggle. */
 export function valueLabelsControl(label = 'Value labels') {
   return {
-    id: 'valueLabels', label, type: 'check',
+    id: 'valueLabels', label, type: 'check', group: 'Labels',
     get: (v) => !!v.valueLabels,
     set: (v, x) => { v.valueLabels = x; },
   };
@@ -247,7 +247,7 @@ export function valueLabelsControl(label = 'Value labels') {
 /** Gridlines toggle. */
 export function gridlinesControl() {
   return {
-    id: 'gridlines', label: 'Gridlines', type: 'check',
+    id: 'gridlines', label: 'Gridlines', type: 'check', group: 'Style',
     get: (v) => v.gridlines !== false,
     set: (v, x) => { v.gridlines = x; },
   };
@@ -261,7 +261,7 @@ function hasRawValues(model) {
 /** Point overlay toggle (only when raw values are available). */
 function pointOverlayControl(model) {
   return {
-    id: 'pointOverlay', label: 'Show data points', type: 'check',
+    id: 'pointOverlay', label: 'Show data points', type: 'check', group: 'Style',
     get: (v) => !!v.pointOverlay,
     set: (v, x) => { v.pointOverlay = x; },
     visible: () => hasRawValues(model),
@@ -271,7 +271,7 @@ function pointOverlayControl(model) {
 /** Error bars selector (only when raw values are available). */
 function errorBarsControl(model) {
   return {
-    id: 'errorBars', label: 'Error bars', type: 'select',
+    id: 'errorBars', label: 'Error bars', type: 'select', group: 'Style',
     options: [['none', 'None'], ['sem', 'SEM'], ['sd', 'SD'], ['ci95', '95% CI']],
     get: (v) => v.errorBars || 'none',
     set: (v, x) => { v.errorBars = x; },
@@ -285,25 +285,25 @@ function errorBarsControl(model) {
 function titleControls(model) {
   return [
     {
-      id: 'titleText', label: 'Title', type: 'text',
+      id: 'titleText', label: 'Title', type: 'text', group: 'Titles & axes',
       placeholder: model.title || '(none)',
       get: (v) => v.titleText ?? '',
       set: (v, x) => { v.titleText = x || undefined; },
     },
     {
-      id: 'titleSize', label: 'Title size', type: 'number', min: 8, max: 28, step: 1,
+      id: 'titleSize', label: 'Title size', type: 'number', min: 8, max: 28, step: 1, group: 'Titles & axes',
       get: (v) => v.titleSize || 15,
       set: (v, x) => { v.titleSize = Number(x) || undefined; },
       visible: (v) => !!(v.titleText || model.title),
     },
     {
-      id: 'titleBold', label: 'Title bold', type: 'check',
+      id: 'titleBold', label: 'Title bold', type: 'check', group: 'Titles & axes',
       get: (v) => v.titleBold !== false,
       set: (v, x) => { v.titleBold = x; },
       visible: (v) => !!(v.titleText || model.title),
     },
     {
-      id: 'titleItalic', label: 'Title italic', type: 'check',
+      id: 'titleItalic', label: 'Title italic', type: 'check', group: 'Titles & axes',
       get: (v) => !!v.titleItalic,
       set: (v, x) => { v.titleItalic = x; },
       visible: (v) => !!(v.titleText || model.title),
@@ -318,36 +318,36 @@ function axisControls(axis, model) {
   const prefix = `${axis}Axis`;
   return [
     {
-      id: `${prefix}Title`, label: `${upper} axis title`, type: 'text',
+      id: `${prefix}Title`, label: `${upper} axis title`, type: 'text', group: 'Titles & axes',
       placeholder: modelTitle || '(none)',
       get: (v) => v[`${prefix}Title`] ?? '',
       set: (v, x) => { v[`${prefix}Title`] = x || undefined; },
     },
     {
-      id: `${prefix}TitleSize`, label: `${upper} title size`, type: 'number', min: 8, max: 22, step: 1,
+      id: `${prefix}TitleSize`, label: `${upper} title size`, type: 'number', min: 8, max: 22, step: 1, group: 'Titles & axes',
       get: (v) => v[`${prefix}TitleSize`] || 12,
       set: (v, x) => { v[`${prefix}TitleSize`] = Number(x) || undefined; },
       visible: (v) => !!(v[`${prefix}Title`] || modelTitle),
     },
     {
-      id: `${prefix}TitleBold`, label: `${upper} title bold`, type: 'check',
+      id: `${prefix}TitleBold`, label: `${upper} title bold`, type: 'check', group: 'Titles & axes',
       get: (v) => !!v[`${prefix}TitleBold`],
       set: (v, x) => { v[`${prefix}TitleBold`] = x; },
       visible: (v) => !!(v[`${prefix}Title`] || modelTitle),
     },
     {
-      id: `${prefix}TitleItalic`, label: `${upper} title italic`, type: 'check',
+      id: `${prefix}TitleItalic`, label: `${upper} title italic`, type: 'check', group: 'Titles & axes',
       get: (v) => !!v[`${prefix}TitleItalic`],
       set: (v, x) => { v[`${prefix}TitleItalic`] = x; },
       visible: (v) => !!(v[`${prefix}Title`] || modelTitle),
     },
     {
-      id: `${prefix}Min`, label: `${upper} axis min`, type: 'number', placeholder: 'auto',
+      id: `${prefix}Min`, label: `${upper} axis min`, type: 'number', placeholder: 'auto', group: 'Titles & axes',
       get: (v) => v[`${prefix}Min`] ?? '',
       set: (v, x) => { v[`${prefix}Min`] = x === '' ? undefined : Number(x); },
     },
     {
-      id: `${prefix}Max`, label: `${upper} axis max`, type: 'number', placeholder: 'auto',
+      id: `${prefix}Max`, label: `${upper} axis max`, type: 'number', placeholder: 'auto', group: 'Titles & axes',
       get: (v) => v[`${prefix}Max`] ?? '',
       set: (v, x) => { v[`${prefix}Max`] = x === '' ? undefined : Number(x); },
     },
@@ -358,19 +358,19 @@ function axisControls(axis, model) {
 function valueLabelFormatControls() {
   return [
     {
-      id: 'valueLabelSize', label: 'Label size', type: 'number', min: 6, max: 18, step: 0.5,
+      id: 'valueLabelSize', label: 'Label size', type: 'number', min: 6, max: 18, step: 0.5, group: 'Labels',
       get: (v) => v.valueLabelSize || 9.5,
       set: (v, x) => { v.valueLabelSize = Number(x) || undefined; },
       visible: (v) => !!v.valueLabels,
     },
     {
-      id: 'valueLabelBold', label: 'Labels bold', type: 'check',
+      id: 'valueLabelBold', label: 'Labels bold', type: 'check', group: 'Labels',
       get: (v) => !!v.valueLabelBold,
       set: (v, x) => { v.valueLabelBold = x; },
       visible: (v) => !!v.valueLabels,
     },
     {
-      id: 'valueLabelItalic', label: 'Labels italic', type: 'check',
+      id: 'valueLabelItalic', label: 'Labels italic', type: 'check', group: 'Labels',
       get: (v) => !!v.valueLabelItalic,
       set: (v, x) => { v.valueLabelItalic = x; },
       visible: (v) => !!v.valueLabels,
@@ -546,12 +546,12 @@ registerChartKind('categorical', {
   }),
   controls: (model) => [
     {
-      id: 'mark', label: 'Type', type: 'select', structural: true,
+      id: 'mark', label: 'Type', type: 'select', structural: true, group: 'Chart',
       options: [['bar', 'Bars'], ['line', 'Lines']],
       get: (v) => v.mark || 'bar', set: (v, x) => { v.mark = x; },
     },
     {
-      id: 'stack', label: 'Stacking', type: 'select',
+      id: 'stack', label: 'Stacking', type: 'select', group: 'Chart',
       options: [['none', 'Grouped'], ['stacked', 'Stacked'], ['percent', '100% stacked']],
       get: (v) => v.stack || 'none', set: (v, x) => { v.stack = x; },
       visible: (v) => v.mark !== 'line' && (model.series || []).length > 1,
@@ -801,10 +801,10 @@ registerChartKind('scatter', {
   }),
   controls: (model) => [
     ...(model.trend
-      ? [{ id: 'trendLine', label: 'Trend line', type: 'check', get: (v) => !!v.trendLine, set: (v, x) => { v.trendLine = x; } }]
+      ? [{ id: 'trendLine', group: 'Chart', label: 'Trend line', type: 'check', get: (v) => !!v.trendLine, set: (v, x) => { v.trendLine = x; } }]
       : []),
     {
-      id: 'pointSize', label: 'Point size', type: 'select',
+      id: 'pointSize', label: 'Point size', type: 'select', group: 'Chart',
       options: [['3', 'Small'], ['4', 'Medium'], ['6', 'Large']],
       get: (v) => String(v.pointSize || 4), set: (v, x) => { v.pointSize = Number(x); },
     },
@@ -931,7 +931,7 @@ registerChartKind('pie', {
   baseView: () => ({ legend: 'right', valueLabels: true, pieRotation: 0 }),
   controls: () => [
     {
-      id: 'pieRotation', label: 'Rotate (°)', type: 'number', min: 0, max: 360, step: 15,
+      id: 'pieRotation', group: 'Chart', label: 'Rotate (°)', type: 'number', min: 0, max: 360, step: 15,
       get: (v) => v.pieRotation || 0, set: (v, x) => { v.pieRotation = ((Number(x) % 360) + 360) % 360; },
     },
     paletteControl(),
@@ -1108,65 +1108,65 @@ registerChartKind('sced', {
   }),
   controls: (model) => [
     {
-      id: 'mark', label: 'Draw', type: 'select', structural: true,
+      id: 'mark', label: 'Draw', type: 'select', structural: true, group: 'Chart',
       options: [['both', 'Points + lines'], ['points', 'Points only'], ['line', 'Lines only']],
       get: (v) => v.mark || 'both', set: (v, x) => { v.mark = x; },
     },
     {
-      id: 'connectAcross', label: 'Connect across phase change', type: 'check',
+      id: 'connectAcross', label: 'Connect across phase change', type: 'check', group: 'Chart',
       get: (v) => !!v.connectAcross, set: (v, x) => { v.connectAcross = x; },
     },
     {
-      id: 'phaseLines', label: 'Phase change lines', type: 'check',
+      id: 'phaseLines', label: 'Phase change lines', type: 'check', group: 'Phases',
       get: (v) => v.phaseLines !== false, set: (v, x) => { v.phaseLines = x; },
     },
     {
-      id: 'caseLabel', label: 'Case label', type: 'select', structural: true,
+      id: 'caseLabel', label: 'Case label', type: 'select', structural: true, group: 'Panels',
       options: [['axis', 'Beside the Y axis'], ['panel', 'Inside the panel'], ['none', 'Hidden']],
       get: (v) => v.caseLabel || ((model.panels || []).length > 1 ? 'axis' : 'panel'),
       set: (v, x) => { v.caseLabel = x; },
     },
     {
-      id: 'panelOrder', label: 'Panel order', type: 'select', structural: true,
+      id: 'panelOrder', label: 'Panel order', type: 'select', structural: true, group: 'Panels',
       options: [['stagger', 'By phase change (staircase)'], ['model', 'As in the data']],
       get: (v) => v.panelOrder || 'stagger', set: (v, x) => { v.panelOrder = x; },
       visible: () => (model.panels || []).length > 1,
     },
     {
-      id: 'staircase', label: 'Connect as staircase', type: 'check',
+      id: 'staircase', label: 'Connect as staircase', type: 'check', group: 'Phases',
       get: (v) => !!v.staircase, set: (v, x) => { v.staircase = x; },
       visible: (v) => v.phaseLines !== false && (model.panels || []).length > 1,
     },
     {
-      id: 'phaseLineStyle', label: 'Phase line', type: 'select',
+      id: 'phaseLineStyle', label: 'Phase line', type: 'select', group: 'Phases',
       options: [['solid', 'Solid'], ['dashed', 'Dashed']],
       get: (v) => v.phaseLineStyle || 'solid', set: (v, x) => { v.phaseLineStyle = x; },
       visible: (v) => v.phaseLines !== false,
     },
     {
-      id: 'mono', label: 'Black & white (print)', type: 'check', structural: true,
+      id: 'mono', label: 'Black & white (print)', type: 'check', structural: true, group: 'Style',
       get: (v) => !!v.mono, set: (v, x) => { v.mono = x; },
     },
     {
-      id: 'phaseLabels', label: 'Condition labels', type: 'select',
+      id: 'phaseLabels', label: 'Condition labels', type: 'select', group: 'Phases',
       options: [['top', 'Top panel only'], ['all', 'Every panel'], ['none', 'Hidden']],
       get: (v) => v.phaseLabels || 'top', set: (v, x) => { v.phaseLabels = x; },
     },
     {
-      id: 'sharedY', label: 'Same Y scale on all panels', type: 'check',
+      id: 'sharedY', label: 'Same Y scale on all panels', type: 'check', group: 'Panels',
       get: (v) => v.sharedY !== false, set: (v, x) => { v.sharedY = x; },
       visible: () => (model.panels || []).length > 1,
     },
     {
-      id: 'panelHeight', label: 'Panel height', type: 'number', min: 70, max: 320, step: 10,
+      id: 'panelHeight', label: 'Panel height', type: 'number', min: 70, max: 320, step: 10, group: 'Panels',
       get: (v) => v.panelHeight || 130, set: (v, x) => { v.panelHeight = Number(x) || undefined; },
     },
     {
-      id: 'pointSize', label: 'Point size', type: 'number', min: 1, max: 10, step: 0.5,
+      id: 'pointSize', label: 'Point size', type: 'number', min: 1, max: 10, step: 0.5, group: 'Style',
       get: (v) => v.pointSize || 3.5, set: (v, x) => { v.pointSize = Number(x) || undefined; },
     },
     {
-      id: 'yTickCount', label: 'Y tick count', type: 'number', min: 2, max: 11, step: 1,
+      id: 'yTickCount', label: 'Y tick count', type: 'number', min: 2, max: 11, step: 1, group: 'Style',
       get: (v) => v.yTickCount || 5, set: (v, x) => { v.yTickCount = Number(x) || undefined; },
     },
     gridlinesControl(),
