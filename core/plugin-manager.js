@@ -33,6 +33,8 @@ const LS_DISABLED = 'crosstab.plugins.disabled';
 const LS_CATALOG = 'crosstab.plugins.catalog';
 const LS_CATALOG_V = 'crosstab.plugins.catalogVersion';
 const LS_USER = 'crosstab.plugins.user';
+/** OPFS filename for a user entry's SOURCE (distinct from a `.ctplugin` package's bytes). */
+const sourceKey = (key) => `src:${key}`;
 const LS_WEB = 'crosstab.plugins.web';
 
 /** Bump when the catalog shape OR built-in manifests' metadata change, so a
@@ -240,9 +242,10 @@ export class PluginManager {
     // them from the stored `.ctplugin` so its declared assets resolve from the bundle
     // (#119). Single-file plugins pass none (null).
     const assets = entry.kind === 'package' ? await this.#loadPackageAssets(entry.key) : null;
+    const source = await this.#readSource(entry);
     const manifest =
-      entry.source != null
-        ? await this.#loader.activateSource(entry.source, entry.name || entry.key, originDesc, assets)
+      source != null
+        ? await this.#loader.activateSource(source, entry.name || entry.key, originDesc, assets)
         : await this.#loader.activate(entry.url, originDesc);
     this.#recordCatalog(entry.key, manifest);
     // Stamp the broker with this plugin's host-tracked attribution so any output it
@@ -329,9 +332,10 @@ export class PluginManager {
     for (const e of todo) {
       try {
         const originDesc = this.#originDescriptor(e);
+        const src = await this.#readSource(e);
         const manifest =
-          e.source != null
-            ? await this.#loader.probeManifestSource(e.source, e.name || e.key, originDesc)
+          src != null
+            ? await this.#loader.probeManifestSource(src, e.name || e.key, originDesc)
             : await this.#loader.probeManifest(e.url, originDesc);
         this.#recordCatalog(e.key, manifest);
       } catch (err) {
@@ -418,8 +422,9 @@ export class PluginManager {
    */
   async #ensureIdAvailable(entry) {
     const originDesc = this.#originDescriptor(entry);
-    const probed = entry.source != null
-      ? await this.#loader.probeManifestSource(entry.source, entry.name || entry.key, originDesc)
+    const entrySrc = await this.#readSource(entry);
+    const probed = entrySrc != null
+      ? await this.#loader.probeManifestSource(entrySrc, entry.name || entry.key, originDesc)
       : await this.#loader.probeManifest(entry.url, originDesc);
     const qid = probed.id;
     const clash = Object.entries(this.#catalog).find(([k, c]) => c?.id === qid && k !== entry.key);
@@ -476,7 +481,8 @@ export class PluginManager {
     const buf = new Uint8Array(await file.arrayBuffer());
     if (looksLikeZip(buf)) return this.#addPackage(buf);
     const source = new TextDecoder().decode(buf);
-    const entry = { key: `local:${crypto.randomUUID()}`, kind: 'file', name: file.name, source };
+    const entry = { key: `local:${crypto.randomUUID()}`, kind: 'file', name: file.name, hasSource: true };
+    await this.#writeSource(entry.key, source); // OPFS, like an authored plugin (#150)
     await this.#ensureIdAvailable(entry); // qualified-id uniqueness (#102)
     const manifest = await this.#activateEntryStrict(entry);
     this.#user.push(entry);
@@ -528,19 +534,60 @@ export class PluginManager {
         }
       }
       entry.name = name;
-      entry.source = source;
     } else {
-      entry = { key: `authored:${crypto.randomUUID()}`, kind: 'authored', name, source };
+      entry = { key: `authored:${crypto.randomUUID()}`, kind: 'authored', name, hasSource: true };
       this.#user.push(entry);
     }
-    writeJSON(LS_USER, this.#user); // persist before load — never lose the work
+    entry.hasSource = true;
+    delete entry.source; // the text lives in OPFS now, never in the index
+    // Source FIRST, and let a failure propagate. The old order wrote a swallowed
+    // localStorage record and then loaded the plugin, so a quota failure produced a
+    // working plugin whose only copy did not exist — discovered on the next reload.
+    await this.#writeSource(entry.key, source);
+    writeJSON(LS_USER, this.#user); // just the index now: key, name, kind
     const manifest = await this.#activateEntryStrict(entry);
     return { key: entry.key, manifest };
   }
 
-  /** The persisted authored/user entry for a key (incl. its source), for editing. */
-  getEntry(key) {
-    return this.#user.find((e) => e.key === key) ?? null;
+  /** The persisted authored/user entry for a key, for editing. Async because the
+   * SOURCE lives in OPFS, not in the entry (#150 tier-1: localStorage silently dropped
+   * it under quota pressure). Returns the entry with `source` hydrated. */
+  async getEntry(key) {
+    const e = this.#user.find((x) => x.key === key) ?? null;
+    if (!e) return null;
+    return { ...e, source: await this.#readSource(e) };
+  }
+
+  /**
+   * A user entry's source text, from OPFS — with a one-time migration of any source
+   * still sitting in the localStorage index.
+   *
+   * Source used to live in the `#user` record itself, which `writeJSON` persisted with a
+   * swallowed try/catch. An authored plugin would load and run perfectly while its only
+   * copy failed to write, and the loss surfaced on the next reload with nothing to
+   * explain it. OPFS is where the projects and the `.ctplugin` packages already live; a
+   * plugin someone WROTE deserves at least the durability of one they downloaded.
+   */
+  async #readSource(entry) {
+    if (!entry) return null;
+    if (entry.source != null) {
+      // Legacy record: move it to OPFS now, then drop it from the index.
+      await this.#writeSource(entry.key, entry.source);
+      const held = entry.source;
+      delete entry.source;
+      writeJSON(LS_USER, this.#user);
+      return held;
+    }
+    if (!entry.hasSource || !this.#packageStore?.available) return null;
+    const bytes = await this.#packageStore.load(sourceKey(entry.key));
+    return bytes ? new TextDecoder().decode(bytes) : null;
+  }
+
+  /** Persist a user entry's source to OPFS. Throws if it cannot be written — the
+   * caller must not report success for work that was not stored. */
+  async #writeSource(key, source) {
+    if (!this.#packageStore?.available) throw new Error('no durable storage available for plugin source');
+    await this.#packageStore.save(sourceKey(key), new TextEncoder().encode(String(source ?? '')));
   }
 
   /** Any plugin's entry — built-in or user — keyed by its load key. */
@@ -554,7 +601,7 @@ export class PluginManager {
   async getSource(key) {
     const e = this.#entryFor(key);
     if (!e) throw new Error('Unknown plugin.');
-    if (e.source != null) return e.source;
+    if (e.hasSource || e.source != null) return this.#readSource(e);
     if (!e.url) throw new Error('No source available for this plugin.');
     const res = await fetch(e.url);
     if (!res.ok) throw new Error(`couldn’t fetch source (HTTP ${res.status})`);
@@ -592,7 +639,7 @@ export class PluginManager {
    * any, else probed from source (cheap; the sandbox just returns the manifest). */
   async #manifestFor(entry, source) {
     const originDesc = this.#originDescriptor(entry);
-    return entry.source != null || entry.kind === 'package'
+    return entry.hasSource || entry.source != null || entry.kind === 'package'
       ? this.#loader.probeManifestSource(source, entry.name || entry.key, originDesc)
       : this.#loader.probeManifest(entry.url, originDesc);
   }
@@ -633,7 +680,10 @@ export class PluginManager {
     delete this.#catalog[key];
     // A package also has bytes in OPFS + a decoded cache — drop both (#119).
     this.#packageCache.delete(key);
-    if (this.#packageStore) await this.#packageStore.delete(key).catch(() => {});
+    if (this.#packageStore) {
+      await this.#packageStore.delete(key).catch(() => {});
+      await this.#packageStore.delete(sourceKey(key)).catch(() => {}); // its source too (#150)
+    }
     writeJSON(LS_USER, this.#user);
     writeJSON(LS_DISABLED, [...this.#disabled]);
     writeJSON(LS_CATALOG, this.#catalog);
@@ -1134,10 +1184,13 @@ export class PluginManager {
       ed.className = 'ct-plugin__edit';
       ed.textContent = '✎';
       ed.title = 'Edit this plugin';
-      ed.addEventListener('click', () => {
+      ed.addEventListener('click', async () => {
         setErr('');
-        const entry = this.getEntry(p.key);
-        if (entry) this.#creator.open({ key: entry.key, name: entry.name, source: entry.source }, refresh);
+        // Async now: the source is read from OPFS rather than carried in the index (#150).
+        const entry = await this.getEntry(p.key).catch(() => null);
+        if (!entry) { setErr('Could not read that plugin’s source.'); return; }
+        if (entry.source == null) { setErr('That plugin’s source is missing from storage — it cannot be edited.'); return; }
+        this.#creator.open({ key: entry.key, name: entry.name, source: entry.source }, refresh);
       });
       right.append(ed);
     }
@@ -1348,11 +1401,24 @@ function readJSON(key, fallback) {
   }
 }
 
+/**
+ * Persist a small record to localStorage. Returns whether it actually landed.
+ *
+ * The return value is not decoration. This same function persists the disabled set (a
+ * preference — losing it is a shrug) AND the `#user` index, which used to carry AUTHORED
+ * PLUGIN SOURCE. A quota failure was swallowed with the comment "choices just won't
+ * persist", so writing a plugin in the in-app creator, saving it, and watching it load
+ * and work told you nothing about whether a single byte had been written. Close the tab
+ * and the work was gone, silently. Source now lives in OPFS (see #sourceStore), and this
+ * reports failure so a caller can say so rather than imply success.
+ */
 function writeJSON(key, value) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    /* storage unavailable / full — choices just won't persist */
+    return true;
+  } catch (err) {
+    console.warn(`[plugins] could not persist ${key}:`, err?.message || err);
+    return false;
   }
 }
 

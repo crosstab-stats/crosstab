@@ -1790,7 +1790,15 @@ export class ProjectSync {
           const refs = this.#liveExchange?.requestMissing(manifest);
           debug('live', 'gap-fill requesting', { missing: stillMissing.size, refs: refs?.length });
         }
-        await this.#datasets.loadBundle({ log, activeId: manifest.activeId, datasetMeta: manifest.datasetMeta });
+        // `empty: true` — on the LIVE path a peer must never invent a dataset the merged
+        // log did not describe (#148 edge b / #158). Without it, a log folding to zero
+        // datasets makes each peer mint its own local "Dataset 1", with its own random id
+        // and its own `addDataset` op, which then propagates back as a dataset nobody
+        // created — the same phantom class #158 removed from boot and from the joiner.
+        // Deleting the last dataset locally still leaves one, because `remove()` appends
+        // a real replacement op that travels; the difference is that the op is authored
+        // once, by the peer that acted, instead of separately by everyone who applies.
+        await this.#datasets.loadBundle({ log, activeId: manifest.activeId, datasetMeta: manifest.datasetMeta, empty: true });
       }
       this.#applyAnalysisLog?.(mergedLog.filter((o) => typeof o.target === 'string' && o.target.startsWith('analysis:')));
       this.#applyAssetOps?.(assetOpsOf(mergedLog));
