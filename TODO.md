@@ -642,7 +642,10 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       match-by-key as the fallback; analyses just need their `datasetId` repointed and a
       re-run. Until it exists, the user re-does that work by hand.
 
-- [ ] **#150 — MOSTLY SUPERSEDED by #152 Layer 5** (`c8c4f3a`, `f55496d`): the rename,
+- [x] **#150 — DONE (2026-08-04).** Three bullets landed in #152 L5; the fourth
+      (enumeration) was only half-wired and is now complete, and the vocabulary rename
+      turned out to be partly a mistake to make — see each bullet.
+      **Originally: MOSTLY SUPERSEDED by #152 Layer 5** (`c8c4f3a`, `f55496d`): the rename,
       owner-scoped `app.assets.list()`, and refcounting with the abstain rule all landed
       there. What remains here is the vocabulary sweep, nothing structural.
       Generalise the asset store beyond "media" (owner-tagged, plugin-
@@ -658,14 +661,28 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         CSP capability named `media`. A boundary shapefile is not media. The on-disk
         directory and the op types already say `asset`; only the JS-facing names are
         inconsistent. Renaming is a **plugin API break** — batch it with the rest.
-  - [ ] **No owner tag.** Assets are one flat content-addressed pool, unlike workspace
+  - [x] **DONE — owner lives on the REFERENCE, not the bytes.** Settled in #152: refs
+        sit in item records, which are owner-scoped by construction, so the deduped byte
+        pool needs no owner and two plugins holding the same file share one copy.
+        *Original:* **No owner tag.** Assets are one flat content-addressed pool, unlike workspace
         blobs which are owner-namespaced for exactly this reason. Dedup across plugins
         is a genuine feature and must survive, so the owner belongs on the *reference*
         (who points at it), not on the bytes.
-  - [ ] **Plugins can't enumerate.** `list()`/`missing()` are host-side; the broker
+  - [x] **DONE (2026-08-04) — `assets.list()` on BOTH frames.** #152 L5 gave the
+        workspace mount an owner-scoped `list()`, implemented inline there, so it never
+        reached a compute-frame plugin: an exporter or importer holding item records
+        could `load` and `put` bytes but not ask what it was holding. Extracted as
+        `scopedAssetList` (core/asset-store.js) and wired into the loader's gated
+        services too. Scoping is a boundary, not a nicety — the pool is
+        content-addressed, so an unscoped list would enumerate other plugins' files;
+        6 tests pin that a shared byte pool is not a shared index.
+        *Original:* **Plugins can't enumerate.** `list()`/`missing()` are host-side; the broker
         exposes only `load`/`put`. A plugin managing reusable boundary sets needs to
         list its own assets.
-  - [ ] **No reference tracking → no GC.** `removeAsset` is manual and nothing knows
+  - [x] **DONE — `core/asset-refs.js` + `sweepAssets`** (#152 L5): refcounting with the
+        abstain rule (any scanner that fails suppresses the whole sweep, because leaking
+        bytes is a bug report and deleting someone's only copy is not).
+        *Original:* **No reference tracking → no GC.** `removeAsset` is manual and nothing knows
         who still points at an asset. CAQDAS puts refs in a dataset string column;
         spatial would put them in a workspace blob; nothing scans either, so a deleted
         boundary set leaks its bytes.

@@ -313,6 +313,41 @@ export function createAssetService(store) {
   };
 }
 
+/**
+ * An `assets.list()` scoped to ONE plugin's own refs (#150, third bullet).
+ *
+ * The byte pool is content-addressed and deduped, so two plugins that hold the same file
+ * hold the same id — which makes a naive `list()` a way to enumerate everyone else's
+ * files. Scoping is therefore not a nicety: the refs come from the caller's OWN item
+ * records, via the `assetRefs` fields its manifest declared, so a plugin sees exactly
+ * what it put there and nothing else.
+ *
+ * Extracted here because it was implemented inline in the workspace mount and so only
+ * ever reached WORKSPACE plugins. A compute-frame plugin — an exporter, an importer, an
+ * analysis holding item records — had `assets.load`/`put` and no way to ask what it was
+ * holding, which is the half of the bullet that was still open.
+ *
+ * @param {object} deps
+ * @param {() => object[]} deps.decls   the caller's own collection declarations
+ * @param {{list: (owner: string, collection: string) => object[]}} deps.items
+ * @param {string} deps.owner           the caller's owner token
+ * @param {{listRefs: (refs: string[]) => object[]}} deps.assets
+ * @returns {() => object[]}
+ */
+export function scopedAssetList({ decls, items, owner, assets }) {
+  return () => {
+    if (!items || !assets?.listRefs) return [];
+    const refs = [];
+    for (const d of decls() ?? []) {
+      for (const rec of items.list(owner, d.collection) ?? []) {
+        const v = rec.fields?.[d.field];
+        if (v) refs.push(v);
+      }
+    }
+    return assets.listRefs(refs);
+  };
+}
+
 /** Decode a `data:` URI to a typed Blob (base64 or percent-encoded). */
 export function dataUriToBlob(uri) {
   const m = /^data:([^;,]*)((?:;[^,]*)*)?,(.*)$/s.exec(String(uri));

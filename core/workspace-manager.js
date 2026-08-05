@@ -21,6 +21,7 @@ import { Lifecycle, advisory } from './plugin-lifecycle.js';
 import { ownerToken, DEFAULT_SLOT, NO_DS } from './workspace-store.js';
 import { newItemId } from './item-store.js';
 import { declaredCollections, assetRefDecls } from './collections.js';
+import { scopedAssetList } from './asset-store.js';
 import { debug } from './debug.js';
 
 const API_VERSION = '1';
@@ -329,17 +330,12 @@ export class WorkspaceManager {
       // deduped byte pool never becomes a way to enumerate someone else's files.
       assets: {
         ...(this.#services.assets ?? {}),
-        list: () => {
-          if (!this.#items || !this.#services.assets?.listRefs) return [];
-          const refs = [];
-          for (const d of assetRefDecls(declaredCollections([plugin], () => owner))) {
-            for (const rec of this.#items.list(owner, d.collection)) {
-              const v = rec.fields?.[d.field];
-              if (v) refs.push(v);
-            }
-          }
-          return this.#services.assets.listRefs(refs);
-        },
+        list: scopedAssetList({
+          decls: () => assetRefDecls(declaredCollections([plugin], () => owner)),
+          items: this.#items,
+          owner,
+          assets: this.#services.assets,
+        }),
       },
     };
     if (this.#services.workspaceRead) {

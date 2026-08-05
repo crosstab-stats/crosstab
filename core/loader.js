@@ -21,6 +21,8 @@
 
 import { PluginBroker } from './plugin-broker.js';
 import { attachSandbox } from './plugin-sandbox.js';
+import { scopedAssetList } from './asset-store.js';
+import { assetRefDecls, declaredCollections } from './collections.js';
 
 /**
  * API contract version the engine implements. A plugin declares the version it
@@ -456,6 +458,12 @@ export class PluginLoader {
    * mid-session block isn't re-prompted); a remembered allow is resolved by the
    * callback without a prompt. `ctx` carries the plugin identity, filled in once
    * the manifest loads (before any `web.get` can fire). */
+  /** This plugin's own collection declarations — the scope for its asset refs. */
+  #collectionsOf(id) {
+    const rec = id ? this.#plugins.get(id) : null;
+    return rec?.manifest ? declaredCollections([rec.manifest], () => id) : [];
+  }
+
   #gatedServices(ctx) {
     const realWeb = this.#services.web;
     const confirmNetwork = this.#confirmNetwork;
@@ -494,7 +502,22 @@ export class PluginLoader {
       get: (collection) => this.#services.selectionRead?.get(ctx.id, collection) ?? null,
       dataset: () => this.#services.selectionRead?.dataset() ?? null,
     };
-    return Object.freeze({ ...this.#services, web, stateRead, stateWrite, items, selection });
+    // `assets.list()`, scoped to this plugin's own refs (#150). It existed only on the
+    // workspace mount, so an exporter or importer holding item records could load and
+    // put bytes but never ask what it was holding. Same scoping either way: the refs
+    // come from the caller's own records, never from the shared, deduped pool.
+    const assets = this.#services.assets
+      ? {
+        ...this.#services.assets,
+        list: scopedAssetList({
+          decls: () => assetRefDecls(this.#collectionsOf(ctx.id)),
+          items: { list: (_owner, collection) => this.#services.itemsRead?.(ctx.id, collection) ?? [] },
+          owner: ctx.id,
+          assets: this.#services.assets,
+        }),
+      }
+      : this.#services.assets;
+    return Object.freeze({ ...this.#services, web, stateRead, stateWrite, items, selection, assets });
   }
 
   /**

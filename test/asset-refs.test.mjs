@@ -179,3 +179,65 @@ test('an undone put stops counting as a reference', async () => {
   items.loadFromLog();
   assert.deepEqual((await findOrphans([A], sources)).orphans, [A]);
 });
+
+// --- #150: owner-scoped enumeration -------------------------------------------
+// The byte pool is content-addressed and deduped, so two plugins holding the same file
+// hold the same id. A naive list() would therefore be a way to read the names of
+// everyone else's files; scoping is a boundary, not a convenience.
+const { scopedAssetList } = await import('../core/asset-store.js');
+
+const fakeAssets = {
+  listRefs: (refs) => refs.map((r) => ({ ref: r, id: String(r).replace(/^asset:/, ''), name: `${r}.bin` })),
+};
+const fakeItems = (records) => ({ list: (owner, collection) => records[`${owner}/${collection}`] ?? [] });
+
+test('a plugin sees the assets its OWN records point at', () => {
+  const list = scopedAssetList({
+    decls: () => [{ owner: 'spatial', collection: 'boundarySets', field: 'assetId' }],
+    items: fakeItems({ 'spatial/boundarySets': [{ id: 'a', fields: { assetId: 'asset:aaa' } }, { id: 'b', fields: { assetId: 'asset:bbb' } }] }),
+    owner: 'spatial',
+    assets: fakeAssets,
+  });
+  assert.deepEqual(list().map((x) => x.id), ['aaa', 'bbb']);
+});
+
+test('…and NOT another plugin\'s, even when the bytes are shared', () => {
+  // caqdas holds the very same asset id — dedup means one copy of the bytes — but it
+  // has no record of it, so it must not appear in caqdas's listing.
+  const records = {
+    'spatial/boundarySets': [{ id: 'a', fields: { assetId: 'asset:shared' } }],
+    'caqdas/documents': [],
+  };
+  const list = scopedAssetList({
+    decls: () => [{ owner: 'caqdas', collection: 'documents', field: 'ref' }],
+    items: fakeItems(records),
+    owner: 'caqdas',
+    assets: fakeAssets,
+  });
+  assert.deepEqual(list(), [], 'a shared byte pool is not a shared index');
+});
+
+test('records with the field empty contribute nothing', () => {
+  const list = scopedAssetList({
+    decls: () => [{ owner: 'p', collection: 'c', field: 'ref' }],
+    items: fakeItems({ 'p/c': [{ id: '1', fields: {} }, { id: '2' }, { id: '3', fields: { ref: 'asset:x' } }] }),
+    owner: 'p',
+    assets: fakeAssets,
+  });
+  assert.deepEqual(list().map((x) => x.id), ['x']);
+});
+
+test('no items or no asset service degrades to empty, never throws', () => {
+  assert.deepEqual(scopedAssetList({ decls: () => [], items: null, owner: 'p', assets: fakeAssets })(), []);
+  assert.deepEqual(scopedAssetList({ decls: () => [], items: fakeItems({}), owner: 'p', assets: null })(), []);
+});
+
+test('a plugin that declares no assetRefs lists nothing', () => {
+  const list = scopedAssetList({
+    decls: () => [],
+    items: fakeItems({ 'p/c': [{ id: '1', fields: { ref: 'asset:x' } }] }),
+    owner: 'p',
+    assets: fakeAssets,
+  });
+  assert.deepEqual(list(), [], 'enumeration follows the DECLARATION, not what happens to be in the records');
+});
