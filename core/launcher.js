@@ -862,7 +862,9 @@ function injectStyles() {
     .ctl__tagline { font-size: 13px; opacity: .85; margin-top: 2px; }
     .ctl__build { font-size: 11px; opacity: .55; margin-top: 4px; font-variant-numeric: tabular-nums; }
     .ctl__update { font: inherit; font-size: 11px; margin-top: 6px; padding: 4px 10px; cursor: pointer;
-      color: var(--accent, #2980b9); background: transparent; border: 1px solid var(--line, #d8dde2);
+      /* Sits on the dark bar (#2c3e50): the accent has to LIGHTEN here to reach 4.5:1,
+         which is why a global darken made this one worse rather than better. */
+      color: #66aedd; background: transparent; border: 1px solid var(--line, #d8dde2);
       border-radius: 6px; min-height: 30px; }
     .ctl__update:hover { background: #eef5fb; }
     .ctl__update:disabled { opacity: .6; cursor: default; }
@@ -871,18 +873,18 @@ function injectStyles() {
     .ctl__about { border-left: 1px solid var(--line, #d8dde2); font-size: 13px; color: #41505e; }
     .ctl__about p { margin: 0 0 10px; }
     .ctl__library { border-right: 1px solid var(--line, #d8dde2); }
-    .ctl__railhead { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #7a8590; margin: 0 0 8px; }
-    .ctl__railnote { font-size: 12px; color: #8a94a0; margin-top: 12px; }
+    .ctl__railhead { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #646e77; margin: 0 0 8px; }
+    .ctl__railnote { font-size: 12px; color: #687381; margin-top: 12px; }
     .ctl__railhead--projects { margin-top: 16px; }
     .ctl__source--project { font-size: 13px; }
     .ctl__projects:empty { display: none; }
     .ctl__source { display: block; width: 100%; text-align: left; font: inherit; font-size: 14px;
       padding: 10px 12px; margin: 0 0 6px; border: 1px solid var(--line, #d8dde2); border-radius: 8px; background: #fff; cursor: pointer; }
     .ctl__source:hover { background: #eef5fb; }
-    .ctl__source.is-active { border-color: var(--accent, #2980b9); background: #e6f0fa; font-weight: 600; }
+    .ctl__source.is-active { border-color: var(--accent, #2572a5); background: #e6f0fa; font-weight: 600; }
     .ctl__center { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 16px; }
     .ctl__centerhead { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; }
-    .ctl__indicator { font-size: 12px; color: #7a8590; flex: none; min-width: 92px; }
+    .ctl__indicator { font-size: 12px; color: #646e77; flex: none; min-width: 92px; }
     .ctl__discipline, .ctl__search { font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--line, #d8dde2); border-radius: 6px; }
     .ctl__search { flex: 1; min-width: 0; }
     .ctl__plugins { flex: 1; overflow-y: auto; border: 1px solid var(--line, #d8dde2); border-radius: 8px; background: #fff; padding: 8px 10px; }
@@ -890,35 +892,35 @@ function injectStyles() {
     .ctl__sectionhead { display: flex; align-items: center; gap: 8px; position: sticky; top: -8px;
       background: #fff; padding: 6px 0 4px; border-bottom: 1px solid var(--line, #d8dde2); margin: 0 0 6px; }
     .ctl__sectiontitle { font-size: 12px; font-weight: 700; color: #41505e; flex: 1; }
-    .ctl__linkbtn { font: inherit; font-size: 12px; background: none; border: 0; color: var(--accent, #2980b9); cursor: pointer; padding: 2px 4px; }
+    .ctl__linkbtn { font: inherit; font-size: 12px; background: none; border: 0; color: var(--accent, #2572a5); cursor: pointer; padding: 2px 4px; }
     .ctl__linkbtn:hover { text-decoration: underline; }
     .ctl__grid { columns: 2; column-gap: 22px; }
     .ctl__catgroup { break-inside: avoid; -webkit-column-break-inside: avoid; display: block; }
-    .ctl__cat { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: #9aa3ab;
+    .ctl__cat { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: #6c7882;
       margin: 6px 0 2px; break-inside: avoid; }
     .ctl__plugin { display: flex; align-items: center; gap: 7px; padding: 3px 2px; font-size: 13.5px; cursor: pointer; break-inside: avoid; }
     .ctl__plugin:hover { background: #f4f8fc; }
     .ctl__pluginname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .ctl__about .ctl__howto { display: block; font: inherit; font-size: 13px; color: var(--accent, #2980b9); background: none; border: 0; cursor: pointer; padding: 0; }
+    .ctl__about .ctl__howto { display: block; font: inherit; font-size: 13px; color: var(--accent, #2572a5); background: none; border: 0; cursor: pointer; padding: 0; }
     .ctl__about .ctl__howto:hover { text-decoration: underline; }
     .ctl__about .ctl__caveats { margin-top: 6px; }
     .ctl__offline { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line, #d8dde2); }
-    .ctl__offlinehint { font-size: 12px; color: #8a94a0; margin: 0 0 8px; }
+    .ctl__offlinehint { font-size: 12px; color: #687381; margin: 0 0 8px; }
     .ctl__offlinebtn { font: inherit; font-size: 13px; padding: 7px 10px; width: 100%; cursor: pointer;
-      border: 1px solid var(--accent, #2980b9); border-radius: 8px; background: #fff; color: var(--accent, #2980b9); }
+      border: 1px solid var(--accent, #2572a5); border-radius: 8px; background: #fff; color: var(--accent, #2572a5); }
     .ctl__offlinebtn:hover { background: #eef5fb; }
     .ctl__offlinebtn:disabled { opacity: .6; cursor: default; }
     .ctl__offlinealt { display: block; width: 100%; margin-top: 6px; font: inherit; font-size: 12px;
-      color: var(--accent, #2980b9); background: none; border: 0; cursor: pointer; padding: 2px 0; text-align: center; }
+      color: var(--accent, #2572a5); background: none; border: 0; cursor: pointer; padding: 2px 0; text-align: center; }
     .ctl__offlinealt:hover { text-decoration: underline; }
     .ctl__offlinealt:disabled { opacity: .6; cursor: default; text-decoration: none; }
-    .ctl__offlineprog { font-size: 12px; color: #7a8590; margin-top: 6px; min-height: 1em; }
+    .ctl__offlineprog { font-size: 12px; color: #646e77; margin-top: 6px; min-height: 1em; }
     .ctl__offlineok { font-size: 13px; color: #2e7d32; margin: 0 0 6px; font-weight: 600; }
-    .ctl__install { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--accent, #2980b9);
+    .ctl__install { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--accent, #2572a5);
       border-radius: 8px; background: #eef5fb; }
     .ctl__installhead { font-size: 12.5px; color: #1f4e6b; line-height: 1.4; }
     .ctl__installwhy { margin-top: 4px; font-size: 12px; color: #41505e; }
-    .ctl__installwhy summary { cursor: pointer; color: var(--accent, #2980b9); width: max-content; }
+    .ctl__installwhy summary { cursor: pointer; color: var(--accent, #2572a5); width: max-content; }
     .ctl__installwhy p { margin: 6px 0 0; line-height: 1.45; }
     .ctl__installhow { color: #5a6570; }
     .ctl__footer { padding: 12px 24px; border-top: 1px solid var(--line, #d8dde2); display: flex; justify-content: flex-end; gap: 10px; background: #fff; }
@@ -926,7 +928,7 @@ function injectStyles() {
       background: #fff; border: 1px solid var(--line, #d8dde2); border-radius: 8px; color: #41505e; }
     .ctl__cancel:hover { background: #eef2f6; }
     .ctl__start { font: inherit; font-size: 15px; font-weight: 600; padding: 10px 28px; border: 0;
-      border-radius: 8px; background: var(--accent, #2980b9); color: #fff; cursor: pointer; }
+      border-radius: 8px; background: var(--accent, #2572a5); color: #fff; cursor: pointer; }
     .ctl__start:hover { background: #1f6391; }
     .ctl__start:disabled { opacity: .6; cursor: default; }
     .ctl__howto-body p { margin: 0 0 10px; line-height: 1.5; }
@@ -934,9 +936,9 @@ function injectStyles() {
     .ctl__landingbody { padding: 28px 30px 30px; display: flex; flex-direction: column; align-items: center;
       text-align: center; gap: 16px; background: var(--bg, #f7f8fa); }
     .ctl__landinglead { margin: 0; font-size: 15px; line-height: 1.5; color: #34414e; }
-    .ctl__landingfine { margin: 0; font-size: 12px; color: #8a94a0; line-height: 1.45; }
+    .ctl__landingfine { margin: 0; font-size: 12px; color: #687381; line-height: 1.45; }
     .ctl__openfolder { font-size: 16px; padding: 12px 32px; }
-    .ctl__link { font: inherit; font-size: 13px; background: none; border: 0; color: var(--accent, #2980b9); cursor: pointer; padding: 2px 4px; }
+    .ctl__link { font: inherit; font-size: 13px; background: none; border: 0; color: var(--accent, #2572a5); cursor: pointer; padding: 2px 4px; }
     .ctl__link:hover { text-decoration: underline; }`;
   document.head.append(s);
 }

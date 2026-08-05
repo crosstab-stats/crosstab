@@ -168,7 +168,7 @@ export class DataView {
       // Distinguish "no data" from "filter matched nothing".
       if (nCols === 0 && this.metas.length > 0) {
         const td = el('td', 'No columns match the filter.');
-        td.style.cssText = 'width:auto;max-width:none;color:#7a8590;';
+        td.style.cssText = 'width:auto;max-width:none;color:#646e77;';
         this.tbody.append(elWrap('tr', td));
       }
       return;
@@ -253,6 +253,9 @@ export class DataView {
   /** A column header with a selection checkbox tied to the variable selection. */
   #headerCell(m, isSelected) {
     const th = document.createElement('th');
+    // Without scope a screen reader cannot tie a cell to its column, so every value in
+    // the grid is announced bare — the results tables already do this correctly.
+    th.scope = 'col';
     th.title = `${m.name} · ${m.type}${m.measurementLevel ? ` · ${m.measurementLevel}` : ''}`;
     const wrap = document.createElement('label');
     wrap.className = 'colhead';
@@ -297,7 +300,10 @@ export class DataView {
 
   #rowEl(num, row, winMetas, leftW, rightW) {
     const tr = document.createElement('tr');
-    tr.append(el('td', String(num), 'rownum'));
+    // The row number is the row's HEADER, not data — it is what identifies the case.
+    const rowHead = el('th', String(num), 'rownum');
+    rowHead.scope = 'row';
+    tr.append(rowHead);
     if (leftW > 0) tr.append(hspacer('td', leftW));
     for (const m of winMetas) {
       const v = row[m.name];
@@ -370,7 +376,7 @@ export class DataView {
     const onDoc = (ev) => { if (!menu.contains(ev.target)) close(); };
 
     const head = el('div', `${column} · row id ${rid}`, null);
-    head.style.cssText = 'padding:4px 10px;color:#8a94a0;border-bottom:1px solid #e4e9ee;';
+    head.style.cssText = 'padding:4px 10px;color:#687381;border-bottom:1px solid #e4e9ee;';
     menu.append(head);
 
     for (const m of this.memos.list(anchor)) {
@@ -381,7 +387,7 @@ export class DataView {
       const del = el('button', '✕', null);
       del.type = 'button';
       del.title = 'Delete this memo';
-      del.style.cssText = 'border:0;background:none;color:#8a94a0;cursor:pointer;';
+      del.style.cssText = 'border:0;background:none;color:#687381;cursor:pointer;';
       del.addEventListener('click', () => { this.memos.remove(m.id); close(); this.#applyMemoMark(td, anchor); });
       line.append(txt, del);
       menu.append(line);
@@ -564,7 +570,7 @@ export class VariableView {
     if (shown.length === 0) {
       const td = el('td', `No variables match “${this.filter.trim()}”.`);
       td.colSpan = 6;
-      td.style.cssText = 'color:#7a8590;';
+      td.style.cssText = 'color:#646e77;';
       frag.append(elWrap('tr', td));
     }
     this.tbody.replaceChildren(frag);
@@ -845,7 +851,7 @@ export class HistoryView {
     const row = el('span', null, 'history__btn');
     row.style.cursor = 'default';
     const mk = el('span', '∑', 'history__marker');
-    mk.style.color = 'var(--accent, #2980b9)';
+    mk.style.color = 'var(--accent, #2572a5)';
     const body = el('span', null, 'history__body');
     body.append(el('span', String(entry.label || 'Analysis').replace(/…\s*$/, ''), 'history__title'));
     const detail = entry.pluginName || '';
@@ -882,6 +888,9 @@ function ctlBtn(glyph, title, disabled, onClick) {
   b.className = 'history__ctlbtn';
   b.textContent = glyph;
   b.title = title;
+  // The glyph is decorative; `title` alone is a weak accessible name (VoiceOver
+  // ignores it in several contexts, and most of these buttons are destructive).
+  b.setAttribute('aria-label', title);
   b.disabled = !!disabled;
   if (!disabled) {
     b.addEventListener('click', (e) => {
@@ -1013,7 +1022,7 @@ export class HistoryPanel {
     const run = el('button', '▶ Run', 'history-panel__action');
     run.type = 'button';
     run.title = 'Rebuild the dataset from this script and re-run the analyses';
-    run.style.cssText = 'background:var(--accent,#2980b9); color:#fff; border-color:var(--accent,#2980b9);';
+    run.style.cssText = 'background:var(--accent,#2572a5); color:#fff; border-color:var(--accent,#2572a5);';
     run.addEventListener('click', () => void this.#runScript());
     const refresh = el('button', '↻ Refresh', 'history-panel__action');
     refresh.type = 'button';
@@ -1191,7 +1200,7 @@ export class HistoryPanel {
         `position:absolute; left:0; right:0; height:${SYN_LINE_H}px; top:${SYN_PAD + i * SYN_LINE_H}px; ` +
         'display:flex; gap:5px; align-items:center; padding:0 6px 0 8px; overflow:hidden; white-space:nowrap;';
       const mk = el('span', info.kind === 'analysis' ? '∑' : info.kind === 'source' ? '🔒' : String(stepNo), 'history__marker');
-      mk.style.cssText = 'flex:0 0 auto; opacity:.7; font-size:11px;' + (info.kind === 'analysis' ? 'color:var(--accent,#2980b9);' : '');
+      mk.style.cssText = 'flex:0 0 auto; opacity:.7; font-size:11px;' + (info.kind === 'analysis' ? 'color:var(--accent,#2572a5);' : '');
       const title = el('span', info.title, 'history__title');
       title.style.cssText = 'overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px;' + (info.kind === 'source' ? 'color:#9aa4ae;' : '');
       marker.append(mk, title);

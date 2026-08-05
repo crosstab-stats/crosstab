@@ -595,7 +595,7 @@ export async function boot(mounts) {
         del.type = 'button';
         del.textContent = '✕';
         del.title = 'Delete this memo';
-        del.style.cssText = 'margin-left:6px;border:0;background:none;color:#8a94a0;cursor:pointer;';
+        del.style.cssText = 'margin-left:6px;border:0;background:none;color:#687381;cursor:pointer;';
         del.addEventListener('click', () => { memoStore.remove(m.id); render(); });
         line.append(del);
         wrap.append(line);
@@ -1508,7 +1508,7 @@ export async function boot(mounts) {
         const chip = document.createElement('span');
         chip.className = 'ct-peerchip';
         chip.textContent = p.initials || '·';
-        chip.style.background = p.color || '#8a94a0';
+        chip.style.background = p.color || '#687381';
         chip.title = p.name || p.initials || 'Someone editing';
         peersEl.append(chip);
       }
@@ -1727,11 +1727,11 @@ function wireConnectivityIndicator(statusEl, offline) {
     if (navigator.onLine) {
       el.hidden = !offlineCapable;
       el.textContent = offlineCapable ? '✓ Offline-ready' : '';
-      el.style.color = '#7a8590';
+      el.style.color = '#646e77';
     } else {
       el.hidden = false;
       el.textContent = offlineCapable ? '✈ Working offline' : '✈ Offline — app only (R engine not cached yet)';
-      el.style.color = offlineCapable ? '#7a8590' : '#b26a00';
+      el.style.color = offlineCapable ? '#646e77' : '#b26a00';
     }
   };
   window.addEventListener('online', paint);
@@ -2049,7 +2049,7 @@ class ProjectSidebar {
       const empty = el('div', '', 'proj__empty');
       empty.append(el('div', 'No project open', 'proj__name'));
       const hint = el('div', 'Open one from the list below, or start a new one from the CrossTab menu.', 'proj__hint');
-      hint.style.cssText = 'font-size:12px; color:#7a8288; margin-top:4px;';
+      hint.style.cssText = 'font-size:12px; color:#6b7378; margin-top:4px;';
       empty.append(hint);
       const frag0 = document.createDocumentFragment();
       frag0.append(empty);
@@ -2645,7 +2645,7 @@ class ProjectSidebar {
       li.className = 'proj__ds proj__ds--trash';
       const name = el('span', e.name, 'proj__ds-name');
       name.title = `Deleted ${new Date(e.deletedAt).toLocaleString()} · ${(e.rowCount || 0).toLocaleString()} rows`;
-      name.style.color = '#8a94a0';
+      name.style.color = '#687381';
       li.append(name);
       li.append(el('span', (e.rowCount || 0).toLocaleString(), 'proj__ds-rows'));
       const restore = iconBtn('↩', 'Restore this dataset', (ev) => {
@@ -2837,6 +2837,9 @@ function iconBtn(glyph, title, onClick, className = 'proj__ds-x') {
   b.className = className;
   b.textContent = glyph;
   b.title = title;
+  // The glyph is decorative; `title` alone is a weak accessible name (VoiceOver
+  // ignores it in several contexts, and most of these buttons are destructive).
+  b.setAttribute('aria-label', title);
   b.addEventListener('click', onClick);
   return b;
 }

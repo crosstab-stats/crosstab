@@ -197,7 +197,7 @@ export class UiService {
         selAll.textContent = 'Select all shown';
         selAll.style.cssText =
           'font:inherit; font-size:13px; background:none; border:none;' +
-          ' color:var(--accent,#2980b9); cursor:pointer; padding:0;';
+          ' color:var(--accent,#2572a5); cursor:pointer; padding:0;';
         selAll.addEventListener('click', () => {
           for (const it of shown) selected.add(it.value);
           render();
@@ -261,7 +261,7 @@ export class UiService {
         }
         if (matches.length > CAP) {
           const li = document.createElement('li');
-          li.style.cssText = 'color:#7a8590; padding:6px;';
+          li.style.cssText = 'color:#646e77; padding:6px;';
           li.textContent = `Showing first ${CAP} of ${matches.length} — refine your filter.`;
           list.append(li);
         }

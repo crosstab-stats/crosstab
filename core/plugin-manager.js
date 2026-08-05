@@ -964,7 +964,7 @@ export class PluginManager {
         <select class="ct-plugins__discipline" aria-label="Field / discipline"></select>
         <input type="search" class="ct-plugins__search" placeholder="Search plugins…" autocomplete="off">
       </div>
-      <div class="ct-plugins__err" hidden></div>
+      <div class="ct-plugins__err" role="alert" hidden></div>
       <div class="ct-plugins"></div>
       <menu class="ct-dialog__buttons"><button value="close" type="submit" class="ct-dialog__primary">Done</button></menu>`;
     const box = form.querySelector('.ct-plugins');

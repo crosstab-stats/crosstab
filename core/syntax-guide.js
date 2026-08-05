@@ -164,7 +164,7 @@ export function openSyntaxGuide({ pluginActions } = {}) {
       const nm = el('strong', r.label || r.run);
       nm.style.fontSize = '13.5px';
       const tag = el('span', r.pluginName);
-      tag.style.cssText = 'font-size:11.5px; color:#7a8590;';
+      tag.style.cssText = 'font-size:11.5px; color:#646e77;';
       h.append(nm, tag);
       card.append(h);
 
@@ -178,13 +178,13 @@ export function openSyntaxGuide({ pluginActions } = {}) {
         card.append(ul);
       } else {
         const none = el('p', 'No inputs — call with {}.');
-        none.style.cssText = 'margin:6px 0 0; font-size:12.5px; color:#7a8590;';
+        none.style.cssText = 'margin:6px 0 0; font-size:12.5px; color:#646e77;';
         card.append(none);
       }
 
       if (r.howto) {
         const ht = el('p', r.howto);
-        ht.style.cssText = 'margin:8px 0 0; font-size:12.5px; line-height:1.5; color:#2a323a; white-space:pre-wrap; border-left:3px solid var(--accent,#2980b9); padding-left:10px;';
+        ht.style.cssText = 'margin:8px 0 0; font-size:12.5px; line-height:1.5; color:#2a323a; white-space:pre-wrap; border-left:3px solid var(--accent,#2572a5); padding-left:10px;';
         card.append(ht);
       }
 
@@ -209,6 +209,6 @@ export function openSyntaxGuide({ pluginActions } = {}) {
 
 function sectionHeading(text) {
   const h = el('h3', text);
-  h.style.cssText = 'margin:18px 0 10px; font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:#7a8590;';
+  h.style.cssText = 'margin:18px 0 10px; font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:#646e77;';
   return h;
 }

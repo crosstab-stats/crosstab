@@ -121,7 +121,7 @@ export class PluginCreator {
           </div>
         </div>
 
-        <div class="ct-creator__status" hidden></div>
+        <div class="ct-creator__status" role="status" aria-live="polite" hidden></div>
         <menu class="ct-dialog__buttons">
           <button value="cancel" type="submit">Cancel</button>
           <button value="save" type="button" class="ct-dialog__primary">Save &amp; load</button>
@@ -470,7 +470,7 @@ export async function run(app, { v }) {
     'library(svglite)\\n' +
     '.dev <- svgstring(width = 7, height = 4.5, pointsize = 11)\\n' +
     'x <- as.numeric(v); x <- x[is.finite(x)]\\n' +
-    'hist(x, col = "#2980b9", border = "white", main = "Histogram", xlab = "")\\n' +
+    'hist(x, col = "#2572a5", border = "white", main = "Histogram", xlab = "")\\n' +
     'dev.off()\\n' +
     '.dev()';
   const { result } = await app.webr.run(rCode);

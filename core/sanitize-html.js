@@ -126,6 +126,25 @@ function cleanChildren(parent) {
 }
 
 /**
+ * `role` and any `aria-*` attribute.
+ *
+ * These were absent from {@link ALLOWED_ATTRS}, which put a hard ceiling on the
+ * accessibility of the **entire output surface**: every fragment a plugin or the
+ * results pane inserts is sanitised, so no plugin could ship an accessible result no
+ * matter how it was written. Two already tried — builtin-textanalytics and
+ * builtin-caqdas both emit `<svg role="img" aria-label="Word cloud">` — and both were
+ * silently stripped down to an unlabelled graphic.
+ *
+ * Safe to allow: they carry no URL, execute nothing, and cannot reach the network. The
+ * one thing they can do is *describe* content, which is the point. Note `id` is still
+ * NOT allowed, so IDREF forms like `aria-labelledby` will not resolve — `aria-label` is
+ * the form to use in sanitised output, and allowing `id` would invite DOM clobbering.
+ */
+function isAccessibilityAttr(name) {
+  return name === 'role' || name.startsWith('aria-');
+}
+
+/**
  * Strip every attribute that is not explicitly allowed (and sanitise `style`).
  * @param {Element} el
  */
@@ -135,7 +154,7 @@ function cleanAttributes(el) {
     const ok =
       name === 'style'
         ? !UNSAFE_STYLE.test(attr.value)
-        : ALLOWED_ATTRS.has(name) && !name.startsWith('on');
+        : (ALLOWED_ATTRS.has(name) || isAccessibilityAttr(name)) && !name.startsWith('on');
     if (!ok) el.removeAttribute(attr.name);
   }
 }

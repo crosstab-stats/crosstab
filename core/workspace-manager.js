@@ -539,7 +539,7 @@ function makeOverlay() {
     'align-items:center;justify-content:center;background:var(--bg,#f7f8fa);color:#5a6470;font:inherit;';
   const spin = document.createElement('div');
   spin.style.cssText =
-    'width:28px;height:28px;border:3px solid #c8d0d8;border-top-color:var(--accent,#2980b9);' +
+    'width:28px;height:28px;border:3px solid #c8d0d8;border-top-color:var(--accent,#2572a5);' +
     'border-radius:50%;animation:ws-spin .8s linear infinite;';
   const msg = document.createElement('div');
   msg.className = 'ws-overlay-msg';
@@ -591,8 +591,8 @@ function showRetryOverlay(overlay, onRetry, reason = '') {
   btn.type = 'button';
   btn.textContent = 'Reload workspace';
   btn.style.cssText =
-    'font:inherit;padding:8px 16px;border-radius:6px;border:1px solid var(--accent,#2980b9);' +
-    'background:var(--accent,#2980b9);color:#fff;cursor:pointer;';
+    'font:inherit;padding:8px 16px;border-radius:6px;border:1px solid var(--accent,#2572a5);' +
+    'background:var(--accent,#2572a5);color:#fff;cursor:pointer;';
   btn.addEventListener('click', () => onRetry());
   overlay.append(msg, btn);
 }

@@ -240,6 +240,9 @@ function iconBtn(glyph, title, disabled, onClick) {
   b.className = 'results-chart__ord';
   b.textContent = glyph;
   b.title = title;
+  // The glyph is decorative; `title` alone is a weak accessible name (VoiceOver
+  // ignores it in several contexts, and most of these buttons are destructive).
+  b.setAttribute('aria-label', title);
   b.disabled = !!disabled;
   b.addEventListener('click', onClick);
   return b;

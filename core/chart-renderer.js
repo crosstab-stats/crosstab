@@ -396,7 +396,9 @@ const AXIS = '#555';
 const GRID = '#c8d0d9';
 
 function errorSvg(msg) {
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 80" font-family="${FONT}"><text x="12" y="44" font-size="13" fill="#b00">${esc(msg)}</text></svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 80" font-family="${FONT}" role="img">`
+    + `<title>${esc(msg)}</title>`
+    + `<text x="12" y="44" font-size="13" fill="#b00">${esc(msg)}</text></svg>`;
 }
 
 function text(x, y, content, { size = 12, anchor = 'start', fill = '#000', weight, italic } = {}) {
@@ -530,14 +532,41 @@ function ordered(items, order) {
   return out;
 }
 
-function svgOpen() {
-  return svgOpenH(H);
+function svgOpen(label) {
+  return svgOpenH(H, label);
 }
 
-/** Open an SVG of a caller-chosen height — for kinds whose height depends on the
- * data (a SCED chart grows a panel per case) rather than the shared {@link H}. */
-function svgOpenH(h) {
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${r(h)}" font-family="${FONT}"><rect x="0" y="0" width="${W}" height="${r(h)}" fill="#ffffff"/>`;
+/**
+ * Open an SVG of a caller-chosen height — for kinds whose height depends on the data
+ * (a SCED chart grows a panel per case) rather than the shared {@link H}.
+ *
+ * `label` becomes `role="img"` plus a `<title>`. Without it a screen reader skips inline
+ * SVG entirely, so every chart in the app — often the primary output of an analysis —
+ * was simply silent. `<title>` is the element to use rather than `aria-label` because it
+ * survives {@link module:core/sanitize-html} on the way into the results pane and is
+ * what SVG's own accessibility mapping expects.
+ */
+function svgOpenH(h, label) {
+  const role = label ? ' role="img"' : '';
+  const title = label ? `<title>${esc(label)}</title>` : '';
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${r(h)}" font-family="${FONT}"${role}>`
+    + title
+    + `<rect x="0" y="0" width="${W}" height="${r(h)}" fill="#ffffff"/>`;
+}
+
+/**
+ * The sentence a screen reader hears in place of the chart. The chart's own title is
+ * the headline; the rest says what KIND of thing it is and how much of it there is,
+ * because "Age vs Income" alone does not tell a non-sighted reader whether they are
+ * missing 3 points or 300.
+ */
+function chartAltText(model, view, extra) {
+  const title = view.titleText || model.title || '';
+  const kind = {
+    scatter: 'Scatter plot', categorical: 'Chart', pie: 'Pie chart',
+    sced: 'Single-case design chart',
+  }[model.kind] || 'Chart';
+  return [title ? `${kind}: ${title}.` : `${kind}.`, extra].filter(Boolean).join(' ');
 }
 
 // =============================================================================
@@ -635,7 +664,7 @@ function renderCategorical(model, view) {
   const plotH = box.y0 - box.y1;
   const yScale = (v) => box.y0 - ((v - yMin) / (yMax - yMin || 1)) * plotH;
 
-  const out = [svgOpen()];
+  const out = [svgOpen(chartAltText(model, view, `${cats.length} categories, ${series.length} series.`))];
   if (chartTitle) out.push(text(W / 2, 20, esc(chartTitle), { size: view.titleSize || 15, weight: view.titleBold !== false ? 600 : 400, italic: !!view.titleItalic, anchor: 'middle', fill: '#222' }));
 
   for (const t of ticks) {
@@ -869,7 +898,7 @@ function renderScatter(model, view) {
   const xScale = (x) => box.x0 + ((x - xMin) / (xMax - xMin || 1)) * (box.x1 - box.x0);
   const yScale = (y) => box.y0 - ((y - yMin) / (yMax - yMin || 1)) * (box.y0 - box.y1);
 
-  const out = [svgOpen()];
+  const out = [svgOpen(chartAltText(model, view, `${pts.length} points.`))];
   if (chartTitle) out.push(text(W / 2, 20, esc(chartTitle), { size: view.titleSize || 15, weight: view.titleBold !== false ? 600 : 400, italic: !!view.titleItalic, anchor: 'middle', fill: '#222' }));
 
   for (const t of yticks) {
@@ -961,7 +990,7 @@ function renderPie(model, view) {
   const cy = mTop + (H - mTop - 24) / 2;
   const radius = Math.min((W - mRight - 24) / 2, (H - mTop - 24) / 2) - 6;
 
-  const out = [svgOpen()];
+  const out = [svgOpen(chartAltText(model, view, `${slices.length} slices.`))];
   if (model.title) out.push(text(W / 2, 22, esc(model.title), { size: 15, weight: 600, anchor: 'middle', fill: '#222' }));
 
   let ang = -90 + (view.pieRotation || 0); // start at top, + rotation, clockwise
@@ -1381,7 +1410,7 @@ function renderSced(model, view) {
 
   const xScale = (x) => mLeft + ((x - xMin) / (xMax - xMin || 1)) * ((W - mRight) - mLeft);
 
-  const out = [svgOpenH(totalH)];
+  const out = [svgOpenH(totalH, chartAltText(model, view, `${panels.length} ${panels.length === 1 ? "case" : "cases"}, ${multiSeries ? seriesKeys.length + " measures" : phaseList.length + " phases"}.`))];
   if (chartTitle) {
     out.push(text(W / 2, 21, esc(chartTitle), {
       size: view.titleSize || 15, weight: view.titleBold !== false ? 600 : 400,

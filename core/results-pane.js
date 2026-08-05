@@ -49,7 +49,7 @@ const RESULTS_STYLES = `
   /* Always-on attribution: which plugin produced this, and its host-tracked
      origin. The plugin can't forge the origin, so output is always traceable. */
   .results-section__attr {
-    font-size: 11px; color: #8a8a8a; margin: -8px 0 12px; letter-spacing: .01em;
+    font-size: 11px; color: #727272; margin: -8px 0 12px; letter-spacing: .01em;
   }
   .results-block { margin: 0 0 16px; overflow-x: auto; }
   /* SPSS-like pivot tables */
@@ -107,8 +107,8 @@ const RESULTS_STYLES = `
   .results-plot__redraw {
     position: absolute; right: 18px; bottom: 4px;
     font: inherit; font-size: 12px; padding: 3px 9px;
-    background: #fff; border: 1px solid var(--accent, #2980b9);
-    color: var(--accent, #2980b9); border-radius: 6px; cursor: pointer;
+    background: #fff; border: 1px solid var(--accent, #2572a5);
+    color: var(--accent, #2572a5); border-radius: 6px; cursor: pointer;
     opacity: 0; transition: opacity .12s;
   }
   .results-plot:hover .results-plot__redraw, .results-plot__redraw:focus { opacity: .95; }
@@ -120,8 +120,8 @@ const RESULTS_STYLES = `
   .results-plot:hover .results-plot__save, .results-plot__save:focus-within { opacity: .95; }
   .results-plot__savebtn {
     font: inherit; font-size: 12px; padding: 3px 9px;
-    background: #fff; border: 1px solid var(--accent, #2980b9);
-    color: var(--accent, #2980b9); border-radius: 6px; cursor: pointer;
+    background: #fff; border: 1px solid var(--accent, #2572a5);
+    color: var(--accent, #2572a5); border-radius: 6px; cursor: pointer;
   }
   /* Layer-1 universal frame: a host-owned editable title above, caption below, any
      chart body (svglite plot OR model chart). Title/caption are host text, never
@@ -137,7 +137,7 @@ const RESULTS_STYLES = `
   }
   .results-plot__title:hover, .results-plot__caption:hover { background: #f2f4f7; }
   .results-plot__title:focus, .results-plot__caption:focus {
-    background: #eef3f8; box-shadow: 0 0 0 1px var(--accent, #2980b9);
+    background: #eef3f8; box-shadow: 0 0 0 1px var(--accent, #2572a5);
   }
   .results-plot__title:empty, .results-plot__caption:empty { min-height: 1em; }
   /* Empty title/caption is invisible until you hover the block (or focus it), so a
@@ -148,7 +148,7 @@ const RESULTS_STYLES = `
   .results-plot__title:focus:empty:before, .results-plot__caption:focus:empty:before {
     content: attr(data-placeholder); color: #b0b7bf; font-weight: 400; font-style: italic;
   }
-  .results-empty { color: #888; font-style: italic; }
+  .results-empty { color: #727272; font-style: italic; }
   /* Data-driven charts (appendChart): a responsive SVG with an options panel and
      save buttons below it (auto height, so the controls aren't clipped like the
      fixed-box .results-plot). */
@@ -170,7 +170,7 @@ const RESULTS_STYLES = `
     font: inherit; font-size: 12px; padding: 3px 9px; margin-top: 6px;
     background: #f5f7f9; border: 1px solid #d8dee4; color: #333; border-radius: 6px; cursor: pointer;
   }
-  .results-chart__opts-toggle.is-open { background: #eef5fb; border-color: var(--accent,#2980b9); color: var(--accent,#2980b9); }
+  .results-chart__opts-toggle.is-open { background: #eef5fb; border-color: var(--accent,#2572a5); color: var(--accent,#2572a5); }
   .results-chart__opts {
     margin-top: 8px; padding: 10px; border: 1px solid #e3e7eb; border-radius: 6px;
     background: #fafbfc; display: flex; flex-direction: column; gap: 8px; max-width: 380px;
@@ -184,7 +184,7 @@ const RESULTS_STYLES = `
   .results-chart__select { font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid #d8dee4; border-radius: 5px; background: #fff; flex: 1; }
   .results-chart__num { font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid #d8dee4; border-radius: 5px; background: #fff; width: 90px; }
   .results-chart__text { font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid #d8dee4; border-radius: 5px; background: #fff; flex: 1; min-width: 0; }
-  .results-chart__seriesheader { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #7a8590; margin-top: 4px; }
+  .results-chart__seriesheader { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #646e77; margin-top: 4px; }
   /* Collapsible control sections. Only the first is open — see chart-controls.js on
      why a flat list stopped being viable. */
   .results-chart__group { border: 1px solid #e6eaee; border-radius: 6px; background: #fff; }
@@ -792,7 +792,7 @@ export class ResultsPane {
       div.dataset.restoreDivider = 'true';
       div.textContent = '↑ above: restored from your last save · new results appear below';
       div.style.cssText =
-        'text-align:center;font-size:12px;color:#7a8590;font-style:italic;margin:16px 12px 4px;padding-top:10px;border-top:1px dashed #c8d0d8;';
+        'text-align:center;font-size:12px;color:#646e77;font-style:italic;margin:16px 12px 4px;padding-top:10px;border-top:1px dashed #c8d0d8;';
       this.#content.append(div);
     }
     // Re-attach run identity to the rebuilt DOM (#152). Sections are recreated from the
