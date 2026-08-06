@@ -8,10 +8,16 @@
  *    chart MODEL to `app.results.appendChart`. The host renders the SVG and the user
  *    can re-order / recolour / re-stack / rotate it live (see core/chart-renderer.js).
  *    No WebR — these read columns via `app.data.getColumns` and compute in JS.
- *  - **R-baked** (histogram, boxplot, bar+error-bars): still drawn in R on an
- *    `svglite` device and handed to `app.results.appendPlot` as a finished SVG —
- *    they need binning / box stats / CI primitives the chart kinds don't model yet.
- *    Each honours `missingValues`, themes to the app blue, and is responsive.
+ *  - **R-baked** (boxplot only, as of 2026-08-05): drawn in R on an `svglite` device
+ *    and handed to `app.results.appendPlot` as a finished SVG. It honours
+ *    `missingValues`, themes to the app blue, and is responsive — but it gets no
+ *    live controls, because a finished picture has nothing left to control.
+ *
+ * This comment used to claim histogram and bar+error-bars were baked too. Both were
+ * migrated and the note was not updated, so it under-reported our own progress for
+ * months. Boxplot is now the LAST baked chart here, and it is baked for no good
+ * reason: it needs five numbers per group and core/chart-renderer.js grew a
+ * `fiveNumber()` helper with the violin work. See the #140 review in TODO.
  *
  * Declarative plugin with **multiple** menu items: the manifest declares one menu
  * entry per chart, each with its own inputs and a named function. (Plots still

@@ -3170,6 +3170,61 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## More analyses (each is just another plugin)
 
+- [ ] **#131 Layer 3 (plugin-defined chart kinds) — TABLED INDEFINITELY (2026-08-05).**
+      Not "later", not "next": tabled until a real need appears. Nobody outside the
+      project wants a chart type, and designing a plugin-facing control API against
+      zero clients is how you get the wrong API.
+
+      Recorded so the reasoning is not re-derived: a chart kind's `render` returns an
+      **SVG string built with core's private helpers** (`svgOpen`, `niceTicks`,
+      `legendBlock`, `colorFor`, …). A sandboxed plugin cannot call those — it would
+      have to receive functions over postMessage (impossible) or reimplement them
+      (defeating the consistency the layer exists for). So "ship us a render function"
+      is not the shape. The two viable shapes, if the need ever arises:
+      1. **Declarative marks** — the plugin describes `{type:'polygon', points, fill}`
+         against a frame core computes. Safe over the wire, but invents a chart grammar.
+      2. **Composition, not extension** — core keeps owning kinds; plugins get richer
+         primitives (series overlays, annotations) on existing ones. Cheaper, less
+         general, covers most real cases. **Preferred if forced to choose.**
+
+      The trigger to revisit is a third-party plugin wanting a chart type. Until then
+      adding a kind to core is a ~200-line, self-contained job (four done that way).
+
+- [ ] **Baked-chart review — the lesson from #140 (2026-08-05).** 21 `appendPlot`
+      call sites across 16 plugins still hand the host a FINISHED SVG, so they get no
+      live controls, no palette, no re-editability. Reviewed to find out why.
+
+      **The dividing line is not difficulty — it is who holds the numbers.**
+
+      - **16 are R-produced** (svglite): Kaplan–Meier, forest plot, impulse-response,
+        GARCH volatility, CA biplot, MDS map, NMDS, two Q–Q plots, residuals-vs-fitted,
+        Lorenz curve, network graph, choropleth, STL decomposition, ARIMA forecast,
+        boxplot. These share a property: the coordinates do not exist until R has fitted
+        something. But that is a DATA-EXTRACTION choice, not a barrier — `survfit`
+        already yields time/surv/lower/upper vectors; we ask R for a picture instead of
+        those numbers.
+      - **5 are produced in JavaScript by the plugin itself** and still baked:
+        builtin-decisions' cost-effectiveness plane, decision tree and workspace
+        preview; builtin-caqdas' word cloud; builtin-textanalytics' word cloud.
+        (builtin-caqdas does not import WebR at all.) These are the tell: **the plugin
+        already holds every number and is hand-drawing SVG anyway.** Nothing
+        architectural stops them participating — there is simply no kind. And TWO
+        plugins independently hand-rolled a word cloud, which is exactly the
+        duplication the kind registry exists to prevent.
+
+      **Rule to apply going forward: ask R for NUMBERS, not pictures.** A plugin should
+      return fitted geometry and let the host draw it. Baking stays legitimate where the
+      geometry is the hard part and is not ours — force-directed network layouts, real
+      map projections, biplot arrow fields.
+
+      Ranked follow-ups, each a self-contained kind:
+      1. **`box`** — five numbers per group; `fiveNumber()` already exists from the
+         violin work. Kills the last baked chart in builtin-plots.
+      2. **`wordcloud`** — two existing clients, both already computing in JS.
+      3. **`steps`** — Kaplan–Meier, and reusable for any step function + CI band.
+      4. **`forest`** — effect + CI + weight per study, plus a summary diamond.
+
+
 > These three were captured during the college tour and lived only in the memory
 > notes, so this section read as complete when it was not (spotted 2026-08-05).
 
