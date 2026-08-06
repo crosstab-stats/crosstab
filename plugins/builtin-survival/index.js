@@ -32,7 +32,7 @@ export const manifest = {
     '  • time — follow-up time until the event or censoring.\n' +
     '  • status — event indicator (1 = event, 0 = censored).\n' +
     '  • group — optional grouping variable (Kaplan–Meier); preds — covariates (Cox).',
-  rPackages: ['survival', 'svglite'],
+  rPackages: ['survival'],
   menu: [
     {
       label: 'Kaplan–Meier & log-rank…',
@@ -57,9 +57,6 @@ export const manifest = {
   ],
 };
 
-const ACCENT = '#2980b9';
-const PALETTE = ['#2980b9', '#e67e22', '#27ae60', '#c0392b', '#8e44ad', '#16a085'];
-
 // --- Kaplan–Meier & log-rank -------------------------------------------------
 
 export async function kaplanMeier(app, { time: timeName, status: statusName, group: groupName }) {
@@ -71,9 +68,14 @@ export async function kaplanMeier(app, { time: timeName, status: statusName, gro
   const meta = metaMap(await app.data.getVariableMeta());
   const hasGroup = !!groupName;
   const rhs = hasGroup ? 'grp' : '1';
-  const cols = PALETTE.slice(0, 6).map((c) => `"${c}"`).join(', ');
+  // Ask R for the CURVE, not a picture of the curve. `survfit` already holds every
+  // number the figure needs (time, surv, lower, upper, n.censor); rendering it to an
+  // svglite device threw that away and handed back pixels, which is why the plot had
+  // no palette, no legend placement and no re-editability. The strata are returned as
+  // one flat set of vectors plus an index, because that is what crosses the WebR
+  // boundary cleanly — a list-of-lists does not survive the flattening.
   const rCode = `
-    suppressMessages({library(survival); library(svglite)})
+    suppressMessages(library(survival))
     ${STATUS01_R}
     .time <- as.numeric(time); .st <- status01(status)
     ${hasGroup ? 'grp <- factor(group)' : ''}
@@ -83,13 +85,10 @@ export async function kaplanMeier(app, { time: timeName, status: statusName, gro
     tb <- summary(sf)$table
     if (is.null(dim(tb))) tb <- t(as.matrix(tb))
     rn <- rownames(tb); if (is.null(rn)) rn <- "Overall"
-    cols_pal <- c(${cols})
-    .ct_dev <- svgstring(width = 7, height = 4.8, pointsize = 11)
-    par(mar = c(4.2, 4.4, 2.2, 1), col.axis = "#555555", col.lab = "#333333", fg = "#999999")
-    plot(sf, col = cols_pal[seq_len(max(1, length(sf$strata)))], lwd = 2, mark.time = TRUE,
-         xlab = "Time", ylab = "Survival probability")
-    ${hasGroup ? 'legend("topright", legend = sub("grp=", "", names(sf$strata)), col = cols_pal, lwd = 2, bty = "n")' : ''}
-    dev.off(); svg <- .ct_dev()
+    stratum <- if (is.null(sf$strata)) rep(1L, length(sf$time)) else rep(seq_along(sf$strata), sf$strata)
+    stratumNames <- if (is.null(sf$strata)) "Overall" else sub("^[^=]*=", "", names(sf$strata))
+    lo <- if (is.null(sf$lower)) rep(NA_real_, length(sf$time)) else sf$lower
+    hi <- if (is.null(sf$upper)) rep(NA_real_, length(sf$time)) else sf$upper
     lr <- NULL
     if (${hasGroup ? 'TRUE' : 'FALSE'} && nlevels(d$grp) > 1) {
       sd <- survdiff(Surv(.time, .st) ~ grp, data = d)
@@ -98,7 +97,9 @@ export async function kaplanMeier(app, { time: timeName, status: statusName, gro
     list(groups = sub("^[^=]*=", "", rn), n = tb[, "records"], events = tb[, "events"],
          median = tb[, "median"], lcl = tb[, "0.95LCL"], ucl = tb[, "0.95UCL"],
          lrChi = if (is.null(lr)) NA_real_ else lr$chi, lrDf = if (is.null(lr)) NA_real_ else lr$df,
-         lrP = if (is.null(lr)) NA_real_ else lr$p, svg = svg)`;
+         lrP = if (is.null(lr)) NA_real_ else lr$p,
+         curveT = sf$time, curveS = sf$surv, curveLo = lo, curveHi = hi,
+         curveCens = sf$n.censor, curveStratum = stratum, curveNames = stratumNames)`;
   const r = flat(await runR(app, rCode));
   const groups = r.strs('groups'), nn = r.nums('n'), ev = r.nums('events'), med = r.nums('median'), lcl = r.nums('lcl'), ucl = r.nums('ucl');
 
@@ -110,8 +111,17 @@ export async function kaplanMeier(app, { time: timeName, status: statusName, gro
     },
     { caption: `Kaplan–Meier — time: ${labelOf(meta.get(timeName), timeName)}` },
   );
-  const svg = r.str1('svg');
-  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg), { title: 'Kaplan–Meier survival' });
+  const curves = kmCurves(r, hasGroup ? (g) => lvl(meta.get(groupName), g) : () => 'Overall');
+  if (curves.length) {
+    await app.results.appendChart({
+      kind: 'steps',
+      title: 'Kaplan–Meier survival',
+      markLabel: 'Censoring marks',
+      axes: { x: { title: labelOf(meta.get(timeName), timeName) }, y: { title: 'Survival probability' } },
+      series: curves,
+      view: { yAxisMin: 0, yAxisMax: 1 },
+    });
+  }
 
   if (Number.isFinite(r.num('lrChi'))) {
     await app.results.appendTable(
@@ -203,16 +213,55 @@ const STATUS01_R = `status01 <- function(v){
   if (length(u) == 2) return(as.integer(vn == u[2]))
   stop("event indicator must be 0/1 (0 = censored, 1 = event)") }`;
 
+/**
+ * Reshape `survfit`'s flat vectors into one step series per stratum.
+ *
+ * Two things R's own `plot.survfit` does implicitly and we now must do explicitly:
+ *
+ *  - **Every curve starts at (0, 1).** `survfit` reports only the times where the
+ *    estimate CHANGES, so its first row is the first event. Start the path there and
+ *    the curve appears to begin partway down, understating survival across the whole
+ *    stretch before the first death.
+ *  - **Censoring times are marks, not steps.** A censored case leaves the risk set
+ *    without changing the estimate, so it earns a tick on the line and no drop.
+ *
+ * @param {*} r flattened R result
+ * @param {(name:string)=>string} labelFor maps a stratum name to a display label
+ */
+function kmCurves(r, labelFor) {
+  const t = r.nums('curveT');
+  const s = r.nums('curveS');
+  const lo = r.nums('curveLo');
+  const hi = r.nums('curveHi');
+  const cens = r.nums('curveCens');
+  const strata = r.nums('curveStratum');
+  const names = r.strs('curveNames');
+  if (!t.length) return [];
+
+  const series = names.map((nm, i) => ({
+    key: `k${i}`,
+    label: labelFor(nm),
+    points: [{ x: 0, y: 1, lo: 1, hi: 1 }],
+    marks: [],
+  }));
+  for (let i = 0; i < t.length; i++) {
+    const sv = series[(strata[i] || 1) - 1];
+    if (!sv || !Number.isFinite(t[i]) || !Number.isFinite(s[i])) continue;
+    sv.points.push({
+      x: t[i],
+      y: s[i],
+      lo: Number.isFinite(lo[i]) ? lo[i] : undefined,
+      hi: Number.isFinite(hi[i]) ? hi[i] : undefined,
+    });
+    if (cens[i] > 0) sv.marks.push({ x: t[i], y: s[i] });
+  }
+  return series.filter((sv) => sv.points.length > 1);
+}
+
 async function runR(app, rCode) {
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   return result;
-}
-
-function cleanSvg(svg) {
-  return String(svg)
-    .replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1')
-    .replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1');
 }
 
 function lvl(meta, code) {

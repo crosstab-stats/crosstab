@@ -28,7 +28,7 @@ export const manifest = {
     '  • precType — "se" (default) | "var".\n' +
     '  • model — "REML" random effects (default) | "FE" fixed/common effect.\n' +
     '  • mods — optional moderators (meta-regression); label — optional study label for the forest plot.',
-  rPackages: ['metafor', 'svglite'],
+  rPackages: ['metafor'],
   menu: [
     {
       label: 'Meta-analysis…',
@@ -52,8 +52,6 @@ export const manifest = {
   ],
 };
 
-const ACCENT = '#2980b9';
-
 export async function metaAnalysis(app, { yi: yiName, prec: precName, precType, model, mods: modNames, label: labelName }) {
   if (!yiName || !precName) {
     await app.results.appendError('Meta-analysis: choose an effect-size column and its precision (SE or variance).');
@@ -70,19 +68,19 @@ export async function metaAnalysis(app, { yi: yiName, prec: precName, precType, 
   }).join('\n');
   const viExpr = precType === 'var' ? 'as.numeric(prec)' : 'as.numeric(prec)^2';
   const rCode = `
-    suppressMessages({library(metafor); library(svglite)})
+    suppressMessages(library(metafor))
     d <- data.frame(.yi = as.numeric(yi), .vi = ${viExpr})
     ${hasLabel ? 'd$.slab <- as.character(label)' : 'd$.slab <- paste("Study", seq_len(nrow(d)))'}
     ${modMk}
     d <- d[is.finite(d$.yi) & is.finite(d$.vi) & d$.vi > 0, , drop = FALSE]
     m <- rma(.yi, .vi, data = d, method = ${rStr(model)}, slab = d$.slab)
-    h <- max(3, 0.35 * nrow(d) + 1.5)
-    .ct_dev <- svgstring(width = 7, height = h, pointsize = 10)
-    par(mar = c(4, 1, 1, 1))
-    forest(m, col = "${ACCENT}", cex = 0.85)
-    dev.off(); svg <- .ct_dev()
+    .crit <- qnorm(0.975)
+    .se <- sqrt(d$.vi)
     out <- list(est = as.numeric(m$b)[1], se = m$se[1], z = m$zval[1], p = m$pval[1], lo = m$ci.lb[1], hi = m$ci.ub[1],
-                QE = m$QE, QEdf = m$k - m$p, QEp = m$QEp, I2 = m$I2, tau2 = m$tau2, k = m$k, svg = svg,
+                QE = m$QE, QEdf = m$k - m$p, QEp = m$QEp, I2 = m$I2, tau2 = m$tau2, k = m$k,
+                fpLab = as.character(d$.slab), fpEst = d$.yi,
+                fpLo = d$.yi - .crit * .se, fpHi = d$.yi + .crit * .se,
+                fpW = as.numeric(weights(m)),
                 hasMods = FALSE)
     ${mods.length ? `
     mr <- rma(.yi, .vi, mods = ~ ${modTok.join(' + ')}, data = d, method = ${rStr(model)})
@@ -114,8 +112,38 @@ export async function metaAnalysis(app, { yi: yiName, prec: precName, precType, 
     },
     { caption: 'Heterogeneity' },
   );
-  const svg = r.str1('svg');
-  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg), { title: 'Forest plot' });
+  const fpLab = r.strs('fpLab');
+  const fpEst = r.nums('fpEst');
+  const fpLo = r.nums('fpLo');
+  const fpHi = r.nums('fpHi');
+  const fpW = r.nums('fpW');
+  if (fpEst.length) {
+    await app.results.appendChart({
+      kind: 'forest',
+      title: 'Forest plot',
+      // The user picked an arbitrary effect-size column, so we cannot know whether it
+      // holds a difference or a log ratio. Null at 0 is right for the former and the
+      // "Log scale" control is there for the latter — guessing would silently mislabel
+      // the reference line, which is the one mark a reader trusts without checking.
+      refLine: 0,
+      valueHeading: 'Effect [95% CI]',
+      axes: { x: { title: labelOf(meta.get(yiName), yiName) } },
+      studies: fpEst.map((est, i) => ({
+        key: `s${i}`,
+        label: fpLab[i] || `Study ${i + 1}`,
+        est,
+        lo: fpLo[i],
+        hi: fpHi[i],
+        weight: fpW[i],
+      })),
+      summary: {
+        label: model === 'FE' ? 'Pooled (fixed effect)' : 'Pooled (random effects)',
+        est: r.num('est'),
+        lo: r.num('lo'),
+        hi: r.num('hi'),
+      },
+    });
+  }
 
   if (r.num('hasMods') === 1 || r.strs('mrTerms').length) {
     const mt = r.strs('mrTerms'), me = r.nums('mrEst'), ms = r.nums('mrSe'), mz = r.nums('mrZ'), mp = r.nums('mrP');
@@ -143,12 +171,6 @@ async function runR(app, rCode) {
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   return result;
-}
-
-function cleanSvg(svg) {
-  return String(svg)
-    .replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1')
-    .replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1');
 }
 
 function metaRegTerm(term, mods, meta) {
