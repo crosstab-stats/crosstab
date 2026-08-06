@@ -3,21 +3,21 @@
  * Built-in plugin: the **Graphs** menu — histogram, scatter (+ trend line),
  * boxplot, pie chart, and a bar chart with error bars.
  *
- * Two rendering paths (#131):
- *  - **Data-driven** (trends, scatter, pie): aggregate in JS, then emit a structured
- *    chart MODEL to `app.results.appendChart`. The host renders the SVG and the user
- *    can re-order / recolour / re-stack / rotate it live (see core/chart-renderer.js).
- *    No WebR — these read columns via `app.data.getColumns` and compute in JS.
- *  - **R-baked** (boxplot only, as of 2026-08-05): drawn in R on an `svglite` device
- *    and handed to `app.results.appendPlot` as a finished SVG. It honours
- *    `missingValues`, themes to the app blue, and is responsive — but it gets no
- *    live controls, because a finished picture has nothing left to control.
+ * **Every chart here is data-driven (#131).** Each aggregates in JS and emits a
+ * structured chart MODEL to `app.results.appendChart`; the host renders the SVG and
+ * the user can re-order, recolour, re-stack and re-title it live (see
+ * core/chart-renderer.js), with the result persisted and still editable after reload.
  *
- * This comment used to claim histogram and bar+error-bars were baked too. Both were
- * migrated and the note was not updated, so it under-reported our own progress for
- * months. Boxplot is now the LAST baked chart here, and it is baked for no good
- * reason: it needs five numbers per group and core/chart-renderer.js grew a
- * `fiveNumber()` helper with the violin work. See the #140 review in TODO.
+ * **This plugin needs no R at all.** Boxplot was the last holdout — it went to an
+ * `svglite` device for a finished picture, which by definition has nothing left to
+ * control — and it moved to the `box` kind on 2026-08-05 once `fiveNumber()` existed.
+ * With it went the whole R harness (`renderPlot`/`drawSvg`/`redrawPlot`) and the
+ * `svglite` dependency, so the Graphs menu now works instantly and offline with no
+ * package download.
+ *
+ * (The header previously claimed histogram and bar+error-bars were R-baked as well.
+ * Both had been migrated long before and nobody updated the note, so it under-reported
+ * our own progress — worth remembering that stale comments mislead in both directions.)
  *
  * Declarative plugin with **multiple** menu items: the manifest declares one menu
  * entry per chart, each with its own inputs and a named function. (Plots still
@@ -29,7 +29,7 @@
 export const manifest = {
   id: 'builtin-plots',
   name: 'Plots',
-  version: '0.7.0',
+  version: '0.8.0',
   apiVersion: '0.1.0',
   category: 'Graphs',
   keywords: ['chart', 'histogram', 'scatter', 'boxplot', 'bar', 'pie', 'plot'],
@@ -46,7 +46,6 @@ export const manifest = {
     '  • trends summary — "percent" (default) | "count" | "mean" (needs y); display — "lines" (default) | "stacked" | "stacked100".\n' +
     '  • other charts: Boxplot — run builtin-plots.boxplot {"y": "income", "g": "region"}; ' +
     'Pie — run builtin-plots.pie {"v": "region"}; Bar+error bars — run builtin-plots.errorBars {"y": "income", "g": "region"}.',
-  rPackages: ['svglite'],
   menu: [
     {
       label: 'Histogram…',
@@ -152,9 +151,6 @@ export const manifest = {
     },
   ],
 };
-
-const ACCENT = '#2980b9';
-
 
 // --- distribution + paired charts (#140) -------------------------------------
 
@@ -431,21 +427,20 @@ export async function trends(app, { x, g, y, summary, display }) {
 
 export async function boxplot(app, { y, g }) {
   if (!y) return;
-  const meta = await metaMap(app);
-  const vars = g ? [y, g] : [y];
-  const title = g ? `${label(meta, y)} by ${label(meta, g)}` : `Boxplot of ${label(meta, y)}`;
-  const code = g
-    ? `
-    ${recodeR([y, g], meta)}
-    yy <- as.numeric(df[[${rlit(y)}]]); gg <- as.factor(df[[${rlit(g)}]])
-    boxplot(yy ~ gg, col = "${ACCENT}33", border = "${ACCENT}",
-            xlab = ${rlit(label(meta, g))}, ylab = ${rlit(label(meta, y))})`
-    : `
-    ${recodeR([y], meta)}
-    yy <- as.numeric(df[[${rlit(y)}]]); yy <- yy[is.finite(yy)]
-    boxplot(yy, col = "${ACCENT}33", border = "${ACCENT}",
-            ylab = ${rlit(label(meta, y))})`;
-  await renderPlot(app, title, code, vars);
+  // Was the last R-baked chart in this plugin: it went to svglite for a picture, which
+  // meant no live controls and no re-editability. A boxplot needs five numbers per
+  // group and nothing more, so it is now a chart model like everything else here.
+  const { groups, yLabel, gLabel } = await groupedValues(app, { y, g });
+  if (!groups.length) {
+    await app.results.appendError('Boxplot: no values to plot after removing missing data.');
+    return;
+  }
+  await app.results.appendChart({
+    kind: 'box',
+    title: gLabel ? `${yLabel} by ${gLabel}` : `Boxplot of ${yLabel}`,
+    axes: { x: { title: gLabel }, y: { title: yLabel } },
+    groups,
+  });
 }
 
 export async function pie(app, { v: name }) {
@@ -515,55 +510,6 @@ export async function errorBars(app, { y, g }) {
   });
 }
 
-// --- shared render harness ---------------------------------------------------
-
-/**
- * Run plotting `code` on an svglite device, capture the SVG, and append it. The
- * plot offers a "Redraw at this size" button that re-runs the recipe at the box's
- * pixel size (the only way to truly re-flow the aspect ratio).
- */
-async function renderPlot(app, title, code, vars) {
-  try {
-    const svg = await drawSvg(app, code, vars, 7, 4.5);
-    let handle;
-    handle = await app.results.appendPlot(svg, {
-      title, // host-owned editable title (Layer 1) — no longer baked into the SVG
-      onRedraw: (wpx, hpx) => void redrawPlot(app, handle, title, code, vars, wpx, hpx),
-    });
-  } catch (err) {
-    await app.results.appendError(`${title} failed: ${err.message}`);
-    console.error(err);
-  }
-}
-
-/** Run the recipe on an svglite device at the given size (inches), return SVG. */
-async function drawSvg(app, code, vars, wIn, hIn) {
-  const R = `
-    library(svglite)
-    .ct_dev <- svgstring(width = ${wIn}, height = ${hIn}, pointsize = 11)
-    par(mar = c(4.2, 4.2, 2.2, 1), col.axis = "#555555", col.lab = "#333333", fg = "#999999")
-    ${code}
-    dev.off()
-    .ct_dev()`;
-  const res = await app.webr.run(R, { injectData: true, variables: vars });
-  const svg = String(Array.isArray(res.result?.values) ? res.result.values[0] : res.result);
-  if (!/<svg[\s>]/i.test(svg)) throw new Error('no SVG was produced');
-  return svg
-    .replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1')
-    .replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1');
-}
-
-/** Re-render the plot at the box's pixel size (px → inches) and swap it in. */
-async function redrawPlot(app, handle, title, code, vars, wpx, hpx) {
-  try {
-    const svg = await drawSvg(app, code, vars, Math.max(2, wpx / 96), Math.max(1.5, hpx / 96));
-    await app.results.updatePlot(handle, svg);
-  } catch (err) {
-    await app.results.appendError(`${title} redraw failed: ${err.message}`);
-    console.error(err);
-  }
-}
-
 // --- tiny helpers ------------------------------------------------------------
 
 /** name → meta map for the current dataset. */
@@ -574,19 +520,6 @@ async function metaMap(app) {
 /** Display label for a variable (its label, falling back to its name). */
 function label(meta, name) {
   return meta.get(name)?.label || name;
-}
-
-/** R lines recoding each variable's user-missing codes to NA (or '' if none). */
-function recodeR(vars, meta) {
-  return vars
-    .map((name) => {
-      const mv = meta.get(name)?.missingValues ?? [];
-      if (!mv.length) return '';
-      const col = `df[[${rlit(name)}]]`;
-      return `${col}[${col} %in% c(${mv.map(rlit).join(', ')})] <- NA`;
-    })
-    .filter(Boolean)
-    .join('\n    ');
 }
 
 /** Set of a variable's user-missing codes (as strings), for filtering in JS. */
@@ -665,8 +598,3 @@ function leastSquares(points) {
   return { slope, intercept, r2 };
 }
 
-/** Render a JS value as an R literal for safe interpolation into R source. */
-function rlit(v) {
-  if (typeof v === 'number' && Number.isFinite(v)) return String(v);
-  return `"${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-}

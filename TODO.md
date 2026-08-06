@@ -3218,6 +3218,37 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       other CAQDAS surface. If a declarative descriptor can express "palette hidden
       because the author supplied colours", it can express most things.
 
+- [ ] **Lift chart kinds out of core into a `builtin-charts` plugin (user's call,
+      2026-08-05).** "Everything is a plugin" — menu-shell.js states there is no
+      privileged path and every built-in menu registers exactly as a third party would.
+      Charts are currently the exception: all kinds live in core/chart-renderer.js and
+      no plugin can add one. A third-party SuperCharts should coexist with ours as
+      equals, which means ours should go through the same door.
+
+      **What stays in core — the chart RUNTIME, not the chart types:**
+      the kind registry, `renderChart`/`defaultView`/`chartUiSpec`, the controls panel,
+      results-pane integration, persistence, PNG/SVG export, `PALETTES`/`colorFor`, and
+      the drawing helpers (`svgOpen`, `niceTicks`, `legendBlock`, `text`, `esc`, `r`,
+      `fmtNum`, `bandFrame`). Same split as menus: the shell is core, the items are not.
+
+      **The one real cost.** Kinds in a sandboxed plugin re-render over a postMessage
+      round-trip. Today core kinds re-render synchronously and instantly. Discrete
+      controls will not notice; dragging a number input will need debouncing. MEASURE
+      before committing — `appendPlot`'s `onRedraw` already round-trips, so the number
+      is obtainable rather than hypothetical. If it proves too slow, the fallback worth
+      considering is a Worker rather than an iframe: a kind is a pure
+      `(model, view) => string` with no DOM and no network, which is ideal Worker
+      material and keeps the isolation.
+
+      **Sequencing, and why this order:** build box / wordcloud / steps / forest as core
+      kinds first, then Layer 3, then lift everything out. **The lift-out IS the
+      acceptance test for Layer 3** — if all twelve kinds can move through the public
+      API, the API is right; if one cannot, that is the API's bug and it surfaces before
+      any third party depends on it. Three already-known stress cases: `sced` needs a
+      variable canvas height (`svgOpenH`), `paired`'s `colorItems(model, view)` takes
+      the view where every other kind takes only the model, and `colorLabel` is
+      sometimes a function of the model. A declarative API must accommodate all three.
+
 - [ ] **Baked-chart review — the lesson from #140 (2026-08-05).** 21 `appendPlot`
       call sites across 16 plugins still hand the host a FINISHED SVG, so they get no
       live controls, no palette, no re-editability. Reviewed to find out why.

@@ -136,3 +136,41 @@ test('all three declare grouped controls, so the panel stays navigable', () => {
     assert.deepEqual(ungrouped, [], `${model.kind} has ungrouped controls: ${ungrouped}`);
   }
 });
+
+// --- box ---------------------------------------------------------------------
+
+const BOX = {
+  kind: 'box', title: 'Income by region',
+  axes: { x: { title: 'Region' }, y: { title: 'Income' } },
+  groups: [
+    grp('n', 'North', [10, 12, 13, 14, 15, 16, 18, 40]), // 40 is beyond q3 + 1.5*IQR
+    grp('s', 'South', [20, 22, 23, 25, 26, 28, 30]),
+  ],
+};
+
+test('box draws a box per group and singles out Tukey outliers', () => {
+  const svg = renderChart(BOX, defaultView(BOX));
+  assert.equal((svg.match(/<rect(?! x="0")/g) || []).length, 2, 'one box per group');
+  assert.equal(count(svg, 'circle'), 1, 'only the outlier is drawn by default');
+});
+
+test('THE HONESTY CONSTRAINT: an outlier is never clipped off the canvas', () => {
+  // The y domain has to cover the outliers, not just the whiskers — a boxplot that
+  // silently drops its own tails stops describing the sample it was given.
+  const svg = renderChart(BOX, defaultView(BOX));
+  const cy = Number(svg.match(/<circle[^>]*cy="([\d.]+)"/)[1]);
+  const height = Number(svg.match(/viewBox="0 0 \d+ ([\d.]+)"/)[1]);
+  assert.ok(cy > 0 && cy < height, `outlier at cy=${cy} is off a ${height}px canvas`);
+});
+
+test('turning on data points keeps the outlier distinguishable', () => {
+  const svg = renderChart(BOX, { ...defaultView(BOX), showPoints: true });
+  assert.equal(count(svg, 'circle'), 15, 'every observation');
+  // The outlier stays hollow (white fill) so it reads as an outlier, not just a point.
+  assert.ok(/<circle[^>]*fill="#ffffff"/.test(svg), 'outlier still marked');
+});
+
+test('the box IS the summary — it does not also draw the shared median marks', () => {
+  // violin/dots draw a median+quartile overlay; on a box that would be drawn twice.
+  assert.equal(defaultView(BOX).summary, 'none');
+});
