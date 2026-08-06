@@ -51,7 +51,15 @@ export function colorFor(view, key, i) {
 /** name → kind definition. @type {Map<string, object>} */
 const KINDS = new Map();
 
-/** Register a chart kind (see file header for the shape). */
+/**
+ * Register a chart kind (see file header for the shape).
+ *
+ * `def.provider` optionally names whatever supplies the kind — a plugin id, for a kind
+ * that did not ship with core. It exists so a chart can say *what to switch on* when it
+ * is reopened somewhere the kind is missing: {@link module:core/results-pane} stamps it
+ * onto the saved item at append time, precisely because by the time the chart is being
+ * restored the registry no longer has the entry to ask.
+ */
 export function registerChartKind(name, def) {
   KINDS.set(name, def);
 }

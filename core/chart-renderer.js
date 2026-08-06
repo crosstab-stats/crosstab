@@ -116,7 +116,8 @@ export {
   renderChart,
   defaultView,
   chartUiSpec,
-  // The registry, for kinds registering themselves.
+  // The registry, for kinds registering themselves — and for the results pane, which
+  // asks whether a saved chart's kind still exists before trying to re-render it.
   registerChartKind,
   getChartKind,
   // Palettes.

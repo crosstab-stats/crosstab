@@ -27,7 +27,7 @@
 
 import { sanitizeHtml } from './sanitize-html.js';
 import { downloadFile } from './export-service.js';
-import { renderChart, defaultView } from './chart-renderer.js';
+import { renderChart, defaultView, getChartKind } from './chart-renderer.js';
 import { buildChartControls } from './chart-controls.js';
 
 /** Canonical stylesheet applied inside the shadow root. Kept inline so the pane
@@ -166,6 +166,14 @@ const RESULTS_STYLES = `
   }
   .results-chart .results-plot__svg svg { width: 100%; height: 100%; display: block; max-width: none; }
   .results-chart .results-plot__save { position: static; opacity: 1; margin-top: 6px; }
+  /* A static chart is a real result, not an error — so this reads as a quiet note, not
+     a warning. #646e77 on #fff measures 5.20:1, past WCAG 1.4.3's 4.5:1 at this size.
+     The left rule is decorative (1.56:1, same as the chart gridlines): it groups the
+     note with the figure, and carries no meaning that the text does not already say. */
+  .results-chart__static-note {
+    margin: 6px 0 0; padding: 4px 0 4px 9px; border-left: 3px solid #c8d0d9;
+    font-size: 12px; line-height: 1.45; color: #646e77; max-width: 672px;
+  }
   .results-chart__opts-toggle {
     font: inherit; font-size: 12px; padding: 3px 9px; margin-top: 6px;
     background: #f5f7f9; border: 1px solid #d8dee4; color: #333; border-radius: 6px; cursor: pointer;
@@ -543,7 +551,17 @@ export class ResultsPane {
    */
   appendChart(model) {
     const safeModel = JSON.parse(JSON.stringify(model)); // detach from the plugin's object
-    const item = { kind: 'chart', model: safeModel, view: defaultView(safeModel), id: 0, svg: '' };
+    const item = {
+      kind: 'chart',
+      model: safeModel,
+      view: defaultView(safeModel),
+      id: 0,
+      svg: '',
+      // Who supplies this kind, recorded NOW because the registry is the only place
+      // that knows and it will not be able to answer on restore — a chart is reopened
+      // precisely when its kind may be missing. Undefined for kinds that ship in core.
+      kindProvider: getChartKind(safeModel.kind)?.provider,
+    };
     const block = this.#buildChartBlock(item);
     this.#place(block); // before the push — see appendPlot on why the order matters
     this.#model.push(item);
@@ -556,6 +574,14 @@ export class ResultsPane {
    * the holder for PNG export and stamps `item.id`/`item.svg`. Shared by
    * {@link ResultsPane#appendChart} and {@link ResultsPane#restoreModel}. */
   #buildChartBlock(item) {
+    // A saved chart whose kind is no longer registered still has its last-rendered SVG
+    // in the project file. Show that rather than re-rendering, which would only produce
+    // "Unsupported chart kind" and throw away a figure we are holding in our hand.
+    // Only on RESTORE (`item.svg` already populated) — a live append of an unknown kind
+    // is a plugin bug and keeps the diagnostic.
+    if (chartNeedsStaticFallback(item, getChartKind)) {
+      return this.#buildStaticChartBlock(item);
+    }
     const block = this.#makeBlock();
     block.classList.add('results-chart');
     const holder = document.createElement('div');
@@ -575,6 +601,50 @@ export class ResultsPane {
     rerender();
 
     block.append(buildChartControls(item, rerender));
+
+    const save = document.createElement('div');
+    save.className = 'results-plot__save';
+    save.append(
+      makeSaveBtn('⬇ SVG', () => savePlotSvg(holder, handle)),
+      makeSaveBtn('⬇ PNG', () => savePlotPng(holder, handle)),
+    );
+    block.append(save);
+    return block;
+  }
+
+  /**
+   * Build a **static** chart block: the figure as saved, with no controls.
+   *
+   * The case this exists for is a project reopened where the chart's kind is not
+   * registered — a kind supplied by a plugin that is switched off, or a project written
+   * by a newer CrossTab. Before this, `restoreModel` re-rendered unconditionally and an
+   * unknown kind produced "Unsupported chart kind", **discarding a perfectly good SVG
+   * that was sitting in the same save file**. Output has to outlive whatever drew it:
+   * that is already true of `appendPlot` figures, and there was no reason for charts to
+   * be the exception.
+   *
+   * Deliberately keeps the SVG/PNG buttons and the `#plots` registration, so the figure
+   * still exports (the DOCX exporter rasterises via `getPlotPng`) and still prints. The
+   * only thing lost is editing, which is exactly what the notice says.
+   */
+  #buildStaticChartBlock(item) {
+    const block = this.#makeBlock();
+    block.classList.add('results-chart', 'results-chart--static');
+
+    const holder = document.createElement('div');
+    holder.className = 'results-plot__svg';
+    // Saved SVG comes from an untrusted project file — same sanitising as appendPlot.
+    holder.innerHTML = sanitizeHtml(item.svg || '');
+    block.append(holder);
+
+    const handle = this.#nextPlotId++;
+    item.id = handle;
+    this.#plots.set(handle, holder);
+
+    const note = document.createElement('p');
+    note.className = 'results-chart__static-note';
+    note.textContent = staticChartNotice(item);
+    block.append(note);
 
     const save = document.createElement('div');
     save.className = 'results-plot__save';
@@ -758,15 +828,21 @@ export class ResultsPane {
         block.append(img);
         this.#place(block);
         this.#model.push({ kind: 'image', src: safe, alt: img.alt });
-      } else if (item.kind === 'chart' && item.model && item.model.kind) {
+      } else if (item.kind === 'chart' && ((item.model && item.model.kind) || item.svg)) {
         // Re-render from the saved model+view so the chart stays fully editable
         // (not a frozen image). Fill any view fields a stale save might lack.
+        //
+        // The saved `svg` is carried through rather than blanked. For a live chart the
+        // first render overwrites it immediately, so nothing changes; for a chart whose
+        // kind is missing it is the whole figure, and blanking it here was how a
+        // reopened project used to lose the picture it had faithfully saved.
         const restored = {
           kind: 'chart',
-          model: item.model,
-          view: { ...defaultView(item.model), ...(item.view || {}) },
+          model: item.model || null,
+          view: item.model ? { ...defaultView(item.model), ...(item.view || {}) } : {},
           id: 0,
-          svg: '',
+          svg: sanitizeHtml(item.svg || ''),
+          kindProvider: typeof item.kindProvider === 'string' ? item.kindProvider : undefined,
         };
         const block = this.#buildChartBlock(restored);
         this.#place(block);
@@ -1072,6 +1148,45 @@ function fmtCellValue(v) {
 }
 
 /** A small hover-revealed plot-save button. */
+/**
+ * Should this chart item be shown as a frozen figure rather than re-rendered?
+ *
+ * Yes exactly when we HAVE a saved picture and CANNOT redraw it. Both halves matter:
+ *
+ *  - Without a saved SVG there is nothing to fall back to, so an unknown kind should
+ *    still produce the "Unsupported chart kind" diagnostic — that is a live append
+ *    from a buggy plugin, not a reopened project, and hiding it would hide the bug.
+ *  - With a registered kind we always re-render, because a live chart is strictly
+ *    better than a frozen one and the saved SVG may be from an older renderer.
+ *
+ * Pure, and takes the registry lookup as an argument, so the rule can be tested
+ * without a DOM (this repo has no DOM test shim and takes no dependencies).
+ *
+ * @param {{svg?:string, model?:{kind?:string}|null}} item
+ * @param {(kind:string)=>object|undefined} lookupKind
+ */
+export function chartNeedsStaticFallback(item, lookupKind) {
+  if (!item || !item.svg) return false;
+  return !(item.model && item.model.kind && lookupKind(item.model.kind));
+}
+
+/**
+ * The one line a static chart shows in place of its controls.
+ *
+ * Names the plugin when the chart recorded one, because "activate something" is not an
+ * instruction. When it did not — a core kind this build no longer has, or a project
+ * from a newer CrossTab — naming the missing kind is the most actionable thing left.
+ */
+export function staticChartNotice(item) {
+  if (item.kindProvider) {
+    return `Showing the saved figure. Activate ${item.kindProvider} to edit this chart.`;
+  }
+  if (item.model && item.model.kind) {
+    return `Showing the saved figure — “${item.model.kind}” charts aren’t available in this version, so the options are switched off.`;
+  }
+  return 'Showing the saved figure — this chart’s data wasn’t saved with it, so it can’t be edited.';
+}
+
 function makeSaveBtn(label, onClick) {
   const b = document.createElement('button');
   b.type = 'button';

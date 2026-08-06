@@ -3296,12 +3296,20 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
       **Two ways forward, if this is wanted:**
 
-      - **(A) Make charts degrade like plots — cheap, ~a day.** Persist the SVG (already
-        happens) and have `restoreModel` paint it when the kind is unregistered,
-        flagging the block as "static — activate X to edit". Charts then survive any
-        provider being absent, and the plugin lift-out stops being destructive. This is
-        worth doing *on its own merits*: today an unknown `model.kind` from a newer
-        CrossTab, or a corrupted save, loses the figure entirely and silently.
+      - **(A) Make charts degrade like plots. DONE 2026-08-06.** `restoreModel` now
+        carries the saved SVG through instead of blanking it, and `#buildStaticChartBlock`
+        paints it with the note "Showing the saved figure. Activate X to edit this
+        chart." when the kind is unregistered. The provider name is stamped onto the
+        item at APPEND time (`kindProvider`, read from the registry) — it has to be,
+        because a chart is reopened precisely when the registry can no longer answer.
+        Static charts keep their SVG/PNG buttons and their `#plots` registration, so
+        both export paths still work; only editing is lost.
+
+        Worth it on its own merits, as predicted: an unknown `model.kind` used to show
+        "Unsupported chart kind" while the figure sat unused in the same file, and a
+        chart that had lost its `model` was dropped without a trace. Verified in Chrome
+        across three save/load cycles — the figure does not erode, the provider name
+        survives, `getPlotPng` still returns bytes.
       - **(B) Kind-as-data — the only version that fully keeps the ethos.** A plugin
         registers a kind as a *declarative* description (control schema + drawing
         program) rather than a function. Because it is data, core can persist the kind
@@ -3309,9 +3317,14 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         was never installed. This is the real answer to "SuperCharts as an equal", and
         it is also a chart grammar — a big design, and one with no client yet.
 
-      **Recommendation: do (A) when it is wanted for its own sake, and hold (B) until a
-      third party actually asks.** The modular split has already banked the part that
-      every path needs, and (A) is the prerequisite for (B) anyway.
+      **Where this leaves it: (A) is done, so the lift-out is no longer destructive —
+      a chart now survives its provider being absent.** What remains before kinds could
+      actually move is Layer 3 itself (declarative control descriptors +
+      `app.charts.registerKind` over the broker), and that is still held for want of a
+      client. (B) — kind-as-data, the definition persisted inside the project so a chart
+      stays *editable* rather than merely visible where the plugin was never installed —
+      remains the only version that fully keeps the ethos, and remains a chart grammar
+      nobody has asked for yet.
 
 - [ ] **Baked-chart review — the lesson from #140 (2026-08-05).** Originally 21
       `appendPlot` call sites across 16 plugins handed the host a FINISHED SVG, so they
