@@ -5,7 +5,6 @@
 import {
   colorFor,
   registerChartKind,
-  getChartKind,
   paletteControl,
   legendControl,
   gridlinesControl,
@@ -383,7 +382,7 @@ function renderSced(model, view) {
 
   const xScale = (x) => mLeft + ((x - xMin) / (xMax - xMin || 1)) * ((W - mRight) - mLeft);
 
-  const out = [svgOpenH(totalH, chartAltText(model, view, `${panels.length} ${panels.length === 1 ? "case" : "cases"}, ${multiSeries ? seriesKeys.length + " measures" : phaseList.length + " phases"}.`))];
+  const out = [svgOpenH(totalH, chartAltText(model, view, `${panels.length} ${panels.length === 1 ? "case" : "cases"}, ${multiSeries ? seriesKeys.length + " measures" : phaseList.length + " phases"}.`, 'Single-case design chart'))];
   if (chartTitle) {
     out.push(text(W / 2, 21, esc(chartTitle), {
       size: view.titleSize || 15, weight: view.titleBold !== false ? 600 : 400,

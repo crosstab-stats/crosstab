@@ -81,7 +81,7 @@ registerChartKind('box', {
     const stats = groups.map((g) => boxWhiskers(g.values.filter(Number.isFinite)));
     // The y domain must cover the OUTLIERS too, or they are drawn off the canvas.
     const allValues = groups.flatMap((g) => g.values.filter(Number.isFinite));
-    const f = bandFrame(model, view, {
+    const f = bandFrame(model, view, { noun: 'Boxplot',
       allValues,
       bands: groups.length,
       legendItems: groups.length > 1 && view.legend !== 'none'

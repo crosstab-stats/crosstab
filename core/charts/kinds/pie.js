@@ -54,7 +54,7 @@ function renderPie(model, view) {
   const cy = mTop + (H - mTop - 24) / 2;
   const radius = Math.min((W - mRight - 24) / 2, (H - mTop - 24) / 2) - 6;
 
-  const out = [svgOpen(chartAltText(model, view, `${slices.length} slices.`))];
+  const out = [svgOpen(chartAltText(model, view, `${slices.length} slices.`, 'Pie chart'))];
   if (model.title) out.push(text(W / 2, 22, esc(model.title), { size: 15, weight: 600, anchor: 'middle', fill: '#222' }));
 
   let ang = -90 + (view.pieRotation || 0); // start at top, + rotation, clockwise

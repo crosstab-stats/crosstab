@@ -133,7 +133,7 @@ function renderCategorical(model, view) {
   const plotH = box.y0 - box.y1;
   const yScale = (v) => box.y0 - ((v - yMin) / (yMax - yMin || 1)) * plotH;
 
-  const out = [svgOpen(chartAltText(model, view, `${cats.length} categories, ${series.length} series.`))];
+  const out = [svgOpen(chartAltText(model, view, `${cats.length} categories, ${series.length} series.`, 'Chart'))];
   if (chartTitle) out.push(text(W / 2, 20, esc(chartTitle), { size: view.titleSize || 15, weight: view.titleBold !== false ? 600 : 400, italic: !!view.titleItalic, anchor: 'middle', fill: '#222' }));
 
   for (const t of ticks) {

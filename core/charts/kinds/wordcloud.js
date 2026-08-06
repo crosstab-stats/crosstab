@@ -137,7 +137,7 @@ registerChartKind('wordcloud', {
     const mTop = title ? 34 : 8;
     const bounds = { x0: 4, x1: W - 4, y0: mTop, y1: H - 6 };
     const out = [svgOpen(chartAltText(model, view,
-      `${plural(words.length, 'word')}${themes.length > 1 ? `, ${plural(themes.length, 'theme')}` : ''}.`))];
+      `${plural(words.length, 'word')}${themes.length > 1 ? `, ${plural(themes.length, 'theme')}` : ''}.`, 'Word cloud'))];
     if (title) {
       out.push(text(W / 2, 21, esc(title), {
         size: view.titleSize || 15, weight: view.titleBold !== false ? 600 : 400,

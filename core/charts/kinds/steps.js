@@ -111,7 +111,7 @@ registerChartKind('steps', {
       ...(view.confidenceBand && Number.isFinite(p.lo) ? [p.lo] : []),
       ...(view.confidenceBand && Number.isFinite(p.hi) ? [p.hi] : []),
     ]));
-    const f = xyFrame(model, view, {
+    const f = xyFrame(model, view, { noun: 'Step chart',
       xValues,
       yValues,
       legendItems: view.legend !== 'none' && series.length > 1

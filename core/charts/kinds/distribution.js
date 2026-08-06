@@ -158,7 +158,7 @@ registerChartKind('violin', {
       .filter((g) => (g.values || []).some(Number.isFinite));
     if (!groups.length) return errorSvg('Violin plot: no numeric values to plot.');
     const allValues = groups.flatMap((g) => g.values.filter(Number.isFinite));
-    const f = bandFrame(model, view, {
+    const f = bandFrame(model, view, { noun: 'Violin plot',
       allValues, bands: groups.length, legendItems: distributionLegend(model, view),
       alt: `${plural(groups.length, 'group')}, ${plural(allValues.length, 'observation')}.`,
     });
@@ -205,7 +205,7 @@ registerChartKind('dots', {
       .filter((g) => (g.values || []).some(Number.isFinite));
     if (!groups.length) return errorSvg('Dot plot: no numeric values to plot.');
     const allValues = groups.flatMap((g) => g.values.filter(Number.isFinite));
-    const f = bandFrame(model, view, {
+    const f = bandFrame(model, view, { noun: 'Dot plot',
       allValues, bands: groups.length, legendItems: distributionLegend(model, view),
       alt: `${plural(groups.length, 'group')}, ${plural(allValues.length, 'observation')}.`,
     });
@@ -261,7 +261,7 @@ registerChartKind('paired', {
       : getChartKind('paired').colorItems(model, view).map((it, i) => ({
         label: it.label, color: colorFor(view, it.key, i),
       }));
-    const f = bandFrame(model, view, { allValues, bands: conds.length, legendItems,
+    const f = bandFrame(model, view, { noun: 'Before-after plot', allValues, bands: conds.length, legendItems,
       alt: `${plural(subjects.length, 'subject')} across ${plural(conds.length, 'condition')}.` });
 
     subjects.forEach((s, si) => {

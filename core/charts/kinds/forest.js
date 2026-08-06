@@ -127,7 +127,7 @@ registerChartKind('forest', {
     const xScale = (v) => box.x0 + ((ax.fwd(v) - xLo) / (xHi - xLo || 1)) * (box.x1 - box.x0);
 
     const out = [svgOpenH(height, chartAltText(model, view,
-      `${plural(rows.length, 'study', 'studies')}${summary ? ', with a pooled summary' : ''}.`))];
+      `${plural(rows.length, 'study', 'studies')}${summary ? ', with a pooled summary' : ''}.`, 'Forest plot'))];
     if (title) {
       out.push(text(W / 2, 21, esc(title), {
         size: view.titleSize || 15, weight: view.titleBold !== false ? 600 : 400,

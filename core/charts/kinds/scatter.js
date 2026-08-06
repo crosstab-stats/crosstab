@@ -107,7 +107,7 @@ function renderScatter(model, view) {
   const xScale = (x) => box.x0 + ((x - xMin) / (xMax - xMin || 1)) * (box.x1 - box.x0);
   const yScale = (y) => box.y0 - ((y - yMin) / (yMax - yMin || 1)) * (box.y0 - box.y1);
 
-  const out = [svgOpen(chartAltText(model, view, `${pts.length} points.`))];
+  const out = [svgOpen(chartAltText(model, view, `${pts.length} points.`, 'Scatter plot'))];
   if (chartTitle) out.push(text(W / 2, 20, esc(chartTitle), { size: view.titleSize || 15, weight: view.titleBold !== false ? 600 : 400, italic: !!view.titleItalic, anchor: 'middle', fill: '#222' }));
 
   for (const t of yticks) {
