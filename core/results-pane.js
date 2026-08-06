@@ -626,6 +626,16 @@ export class ResultsPane {
    * Deliberately keeps the SVG/PNG buttons and the `#plots` registration, so the figure
    * still exports (the DOCX exporter rasterises via `getPlotPng`) and still prints. The
    * only thing lost is editing, which is exactly what the notice says.
+   *
+   * **This is the finished state, not a fallback to be engineered away.** Editability
+   * is a plugin capability, not a property of the output: a chart is editable when the
+   * plugin owning its kind is installed, exactly as a Frequencies table is re-derivable
+   * only when builtin-frequencies is activated. The output stays visible, quotable and
+   * exportable either way; making a *new* one with different settings is what needs the
+   * plugin. A design was floated to persist kind definitions inside the project so
+   * charts would stay editable regardless — rejected, because it would make charts
+   * uniquely more durable than every other plugin output in the app. See
+   * {@link ResultsPane#appendNotice} (#156), which is the same move for the same reason.
    */
   #buildStaticChartBlock(item) {
     const block = this.#makeBlock();

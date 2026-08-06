@@ -3170,8 +3170,15 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## More analyses (each is just another plugin)
 
-- [ ] **#131 Layer 3 — plugin-defined chart kinds. UN-TABLED same day (2026-08-05),
-      because the blocker I recorded was wrong.**
+- [ ] **#131 Layer 3 — plugin-defined chart kinds. DEFERRED again 2026-08-06, this
+      time for the ordinary reason: no client.** Not blocked — the durability objection
+      that made it destructive is fixed (see the lift-out entry), and the design below
+      still stands. Simply nobody outside the project wants a chart type yet, and
+      designing a plugin-facing control API against zero clients is how you get the
+      wrong API. Revisit when someone actually asks.
+
+      **UN-TABLED 2026-08-05, because the blocker I recorded was wrong** — kept below
+      because the reasoning is worth not re-deriving:
 
       I tabled this claiming a kind's `render` returns an SVG string built with core's
       PRIVATE helpers, which a sandboxed plugin can neither receive (functions do not
@@ -3310,21 +3317,38 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         chart that had lost its `model` was dropped without a trace. Verified in Chrome
         across three save/load cycles — the figure does not erode, the provider name
         survives, `getPlotPng` still returns bytes.
-      - **(B) Kind-as-data — the only version that fully keeps the ethos.** A plugin
-        registers a kind as a *declarative* description (control schema + drawing
-        program) rather than a function. Because it is data, core can persist the kind
-        definition **inside the project**, so a chart stays live even where the plugin
-        was never installed. This is the real answer to "SuperCharts as an equal", and
-        it is also a chart grammar — a big design, and one with no client yet.
+      - **(B) Kind-as-data — REJECTED on principle 2026-08-06, not merely deferred.**
+        The idea was that a plugin registers a kind as a *declarative* description, so
+        core could persist the kind definition **inside the project** and a chart would
+        stay editable even where the plugin was never installed.
 
-      **Where this leaves it: (A) is done, so the lift-out is no longer destructive —
-      a chart now survives its provider being absent.** What remains before kinds could
-      actually move is Layer 3 itself (declarative control descriptors +
-      `app.charts.registerKind` over the broker), and that is still held for want of a
-      client. (B) — kind-as-data, the definition persisted inside the project so a chart
-      stays *editable* rather than merely visible where the plugin was never installed —
-      remains the only version that fully keeps the ethos, and remains a chart grammar
-      nobody has asked for yet.
+        The owner's answer settles it: **editability is a plugin capability, not a
+        property of the output.** A chart is editable if the plugin that owns its kind
+        is installed — exactly as a Frequencies table is re-derivable only if
+        builtin-frequencies is activated. The output is a static thing you can still
+        see, reference, export and print; making a *new* one with different settings
+        needs the plugin. Charts are not special.
+
+        So (B) was solving a non-problem. It would have made charts uniquely more
+        durable than every other plugin output in the app — an inconsistency dressed up
+        as a feature, and a chart grammar's worth of machinery to buy it. The precedent
+        was already in the codebase: `appendNotice` (#156) exists because a co-author's
+        analysis arriving for an unactivated plugin should explain itself rather than
+        dead-end. The static-chart note is the same move for the same reason.
+
+      **Where this leaves it (2026-08-06): the DESIGN is settled and the remaining work
+      is deferred for want of a client, not blocked.**
+
+      (A) is done, so the lift-out is no longer destructive. (B) is rejected — see
+      above; charts degrade like every other plugin output and that is correct, not a
+      compromise. What is left is Layer 3 (declarative control descriptors +
+      `app.charts.registerKind` over the broker), **deferred until a real need appears**.
+
+      That is the whole gate now. Nothing architectural stands in the way: the kinds are
+      already self-contained modules over an enumerable runtime API, and a chart already
+      survives its provider being absent. If a third-party SuperCharts ever turns up,
+      the work is Layer 3 plus moving nine files — and the semantics it lands in are
+      already the right ones.
 
 - [ ] **Baked-chart review — the lesson from #140 (2026-08-05).** Originally 21
       `appendPlot` call sites across 16 plugins handed the host a FINISHED SVG, so they
