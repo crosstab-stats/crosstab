@@ -23,7 +23,7 @@
 export const manifest = {
   id: 'builtin-plots',
   name: 'Plots',
-  version: '0.6.0',
+  version: '0.7.0',
   apiVersion: '0.1.0',
   category: 'Graphs',
   keywords: ['chart', 'histogram', 'scatter', 'boxplot', 'bar', 'pie', 'plot'],
@@ -33,6 +33,10 @@ export const manifest = {
     'Syntax: run builtin-plots.histogram {"v": "age"}\n' +
     'Syntax: run builtin-plots.scatter {"x": "age", "y": "income"}\n' +
     'Syntax: run builtin-plots.trends {"x": "year", "g": "bracket", "y": "income", "summary": "percent", "display": "lines"}\n' +
+    'Syntax: run builtin-plots.violin {"y": "score", "g": "dose", "rep": "experiment"}\n' +
+    'Syntax: run builtin-plots.dotplot {"y": "score", "g": "dose"}\n' +
+    'Syntax: run builtin-plots.beforeAfter {"vars": ["pre", "post"], "idVar": "subject"}\n' +
+    '  • violin/dotplot: supply `rep` (a replicate column) to get a SuperPlot — points coloured by replicate with each replicate mean marked.\n' +
     '  • trends summary — "percent" (default) | "count" | "mean" (needs y); display — "lines" (default) | "stacked" | "stacked100".\n' +
     '  • other charts: Boxplot — run builtin-plots.boxplot {"y": "income", "g": "region"}; ' +
     'Pie — run builtin-plots.pie {"v": "region"}; Bar+error bars — run builtin-plots.errorBars {"y": "income", "g": "region"}.',
@@ -111,10 +115,147 @@ export const manifest = {
         { name: 'g', kind: 'variables', label: 'Groups', hint: 'The variable defining the bars to compare.', multiple: false, types: ['factor', 'string'] },
       ],
     },
+    {
+      label: 'Violin plot…',
+      run: 'violin',
+      order: 60,
+      inputs: [
+        { name: 'y', kind: 'variables', label: 'Measure', hint: 'The numeric measure whose distribution shape you want to see.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'g', kind: 'variables', label: 'Groups (optional)', hint: 'A category to draw one violin per group. Omit for a single distribution.', multiple: false, types: ['factor', 'string'], optional: true, unique: true },
+        { name: 'rep', kind: 'variables', label: 'Replicate (optional)', hint: 'Biological/experimental replicate. Supply it to get a SuperPlot: points coloured by replicate, with each replicate’s mean marked.', multiple: false, types: ['factor', 'string', 'numeric'], optional: true, unique: true },
+      ],
+    },
+    {
+      label: 'Dot plot (column scatter)…',
+      run: 'dotplot',
+      order: 70,
+      inputs: [
+        { name: 'y', kind: 'variables', label: 'Measure', hint: 'The numeric measure — every observation is drawn.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'g', kind: 'variables', label: 'Groups (optional)', hint: 'A category to draw one column per group.', multiple: false, types: ['factor', 'string'], optional: true, unique: true },
+        { name: 'rep', kind: 'variables', label: 'Replicate (optional)', hint: 'Biological/experimental replicate. Supply it to get a SuperPlot: points coloured by replicate, with each replicate’s mean marked.', multiple: false, types: ['factor', 'string', 'numeric'], optional: true, unique: true },
+      ],
+    },
+    {
+      label: 'Before-after plot…',
+      run: 'beforeAfter',
+      order: 80,
+      inputs: [
+        { name: 'vars', kind: 'variables', label: 'Conditions', hint: 'Two or more columns measured on the same subjects (e.g. pre and post). One line is drawn per row.', multiple: true, types: ['numeric'] },
+        { name: 'idVar', kind: 'variables', label: 'Subject id (optional)', hint: 'Labels each line. Omit to number the rows.', multiple: false, types: ['factor', 'string', 'numeric'], optional: true, unique: true },
+      ],
+    },
   ],
 };
 
 const ACCENT = '#2980b9';
+
+
+// --- distribution + paired charts (#140) -------------------------------------
+
+/** Group a measure by an optional category, carrying an optional replicate key.
+ * Shared by the violin and dot plots, which differ only in what they draw. */
+async function groupedValues(app, { y, g, rep }) {
+  const meta = await metaMap(app);
+  const cols = await app.data.getColumns({ variables: [y, g, rep].filter(Boolean) });
+  const yCol = cols[y] || [];
+  const gCol = g ? cols[g] || [] : null;
+  const rCol = rep ? cols[rep] || [] : null;
+  const yMiss = missingSet(meta, y);
+  const gMiss = g ? missingSet(meta, g) : new Set();
+  const gName = g ? labelMapper(meta, g) : null;
+  const rName = rep ? labelMapper(meta, rep) : null;
+
+  const byGroup = new Map();
+  for (let i = 0; i < yCol.length; i++) {
+    const v = Number(yCol[i]);
+    if (!Number.isFinite(v) || yMiss.has(String(yCol[i]))) continue;
+    if (gCol && (isBlank(gCol[i]) || gMiss.has(String(gCol[i])))) continue;
+    const key = gCol ? String(gCol[i]) : '__all__';
+    if (!byGroup.has(key)) {
+      byGroup.set(key, { key, label: gCol ? gName(key) : label(meta, y), values: [], reps: [] });
+    }
+    const entry = byGroup.get(key);
+    entry.values.push(v);
+    entry.reps.push(rCol && !isBlank(rCol[i]) ? rName(String(rCol[i])) : null);
+  }
+  const groups = [...byGroup.values()];
+  // Drop the replicate channel entirely when it carries nothing, so the chart does
+  // not offer SuperPlot controls for a figure that has no replicates.
+  if (!rCol) for (const grp of groups) delete grp.reps;
+  return { groups, meta, yLabel: label(meta, y), gLabel: g ? label(meta, g) : '' };
+}
+
+/** Violin plot — distribution shape per group, with optional points/replicates. */
+export async function violin(app, inputs) {
+  const { groups, yLabel, gLabel } = await groupedValues(app, inputs);
+  if (!groups.length) { await app.results.appendError('Violin plot: no values to plot after removing missing data.'); return; }
+  await app.results.appendChart({
+    kind: 'violin',
+    title: gLabel ? `${yLabel} by ${gLabel}` : `Distribution of ${yLabel}`,
+    axes: { x: { title: gLabel }, y: { title: yLabel } },
+    groups,
+  });
+}
+
+/** Dot plot / column scatter — every observation, jittered. */
+export async function dotplot(app, inputs) {
+  const { groups, yLabel, gLabel } = await groupedValues(app, inputs);
+  if (!groups.length) { await app.results.appendError('Dot plot: no values to plot after removing missing data.'); return; }
+  await app.results.appendChart({
+    kind: 'dots',
+    title: gLabel ? `${yLabel} by ${gLabel}` : `${yLabel} by observation`,
+    axes: { x: { title: gLabel }, y: { title: yLabel } },
+    groups,
+  });
+}
+
+/**
+ * Before-after plot — one line per subject across two or more conditions.
+ *
+ * Takes conditions as COLUMNS (wide format), because that is how paired measurements
+ * are almost always stored: pre and post are two variables on one row for the same
+ * person. The row IS the subject, so no id column is required.
+ */
+export async function beforeAfter(app, { vars, idVar }) {
+  const names = Array.isArray(vars) ? vars.filter(Boolean) : [vars].filter(Boolean);
+  if (names.length < 2) {
+    await app.results.appendError('Before-after plot: pick at least two condition columns (e.g. pre and post).');
+    return;
+  }
+  const meta = await metaMap(app);
+  const cols = await app.data.getColumns({ variables: [...names, idVar].filter(Boolean) });
+  const idCol = idVar ? cols[idVar] || [] : null;
+  const idName = idVar ? labelMapper(meta, idVar) : null;
+  const misses = names.map((n) => missingSet(meta, n));
+
+  const subjects = [];
+  const n = (cols[names[0]] || []).length;
+  for (let i = 0; i < n; i++) {
+    const values = names.map((nm, k) => {
+      const raw = (cols[nm] || [])[i];
+      const v = Number(raw);
+      return Number.isFinite(v) && !misses[k].has(String(raw)) ? v : NaN;
+    });
+    // A line needs at least two points to say anything about change.
+    if (values.filter(Number.isFinite).length < 2) continue;
+    subjects.push({
+      key: `s${i}`,
+      label: idCol && !isBlank(idCol[i]) ? idName(String(idCol[i])) : `Row ${i + 1}`,
+      values,
+    });
+  }
+  if (!subjects.length) {
+    await app.results.appendError('Before-after plot: no rows have values in at least two of the chosen conditions.');
+    return;
+  }
+  await app.results.appendChart({
+    kind: 'paired',
+    title: `${label(meta, names[0])} → ${label(meta, names[names.length - 1])}`,
+    axes: { x: { title: '' }, y: { title: label(meta, names[0]) } },
+    conditions: names.map((nm) => ({ key: nm, label: label(meta, nm) })),
+    subjects,
+  });
+}
 
 // --- chart functions ---------------------------------------------------------
 

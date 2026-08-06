@@ -564,7 +564,8 @@ function chartAltText(model, view, extra) {
   const title = view.titleText || model.title || '';
   const kind = {
     scatter: 'Scatter plot', categorical: 'Chart', pie: 'Pie chart',
-    sced: 'Single-case design chart',
+    sced: 'Single-case design chart', violin: 'Violin plot',
+    dots: 'Dot plot', paired: 'Before-after plot',
   }[model.kind] || 'Chart';
   return [title ? `${kind}: ${title}.` : `${kind}.`, extra].filter(Boolean).join(' ');
 }
@@ -1590,3 +1591,418 @@ function renderSced(model, view) {
   out.push('</svg>');
   return out.join('');
 }
+
+// =============================================================================
+// Shared frame for distribution kinds (violin / dots / paired)
+// =============================================================================
+
+/**
+ * The scaffolding every "categories along x, numbers up y" chart needs: margins,
+ * a nice y domain, gridlines, axes, titles. Extracted because violin, dots and
+ * paired are the same picture with a different mark in each band — writing it three
+ * times would have been three chances to drift.
+ *
+ * Returns the open SVG buffer plus the geometry a kind needs to draw into it.
+ */
+function bandFrame(model, view, { allValues, bands, legendItems = [], alt = plural(bands, 'group') + '.' }) {
+  const title = view.titleText || model.title;
+  const xTitle = view.xAxisTitle || model.axes?.x?.title;
+  const yTitle = view.yAxisTitle || model.axes?.y?.title;
+
+  const yMinUser = Number.isFinite(view.yAxisMin);
+  const yMaxUser = Number.isFinite(view.yAxisMax);
+  const lo = yMinUser ? view.yAxisMin : Math.min(...allValues);
+  const hi = yMaxUser ? view.yAxisMax : Math.max(...allValues);
+  const yticks = niceTicks(lo, hi, view.yTickCount || 6);
+  const yLo = yMinUser ? view.yAxisMin : yticks[0];
+  const yHi = yMaxUser ? view.yAxisMax : yticks[yticks.length - 1];
+
+  const showLegend = view.legend !== 'none' && legendItems.length > 1;
+  const mRight = showLegend && view.legend === 'right'
+    ? Math.min(200, Math.max(70, Math.max(...legendItems.map((i) => i.label.length)) * 7 + 28))
+    : 20;
+  const mTop = title ? 34 : 16;
+  const mBottom = 46 + (xTitle ? 16 : 0) + (showLegend && view.legend === 'bottom' ? 26 : 0);
+  const mLeft = 56 + (yTitle ? 16 : 0);
+  const box = { x0: mLeft, x1: W - mRight, y0: H - mBottom, y1: mTop };
+  const yScale = (v) => box.y0 - ((v - yLo) / (yHi - yLo || 1)) * (box.y0 - box.y1);
+  const band = (box.x1 - box.x0) / Math.max(1, bands);
+  const centre = (i) => box.x0 + band * (i + 0.5);
+
+  const out = [svgOpen(chartAltText(model, view, alt))];
+  if (title) {
+    out.push(text(W / 2, 21, esc(title), {
+      size: view.titleSize || 15, weight: view.titleBold !== false ? 600 : 400,
+      italic: !!view.titleItalic, anchor: 'middle', fill: '#222',
+    }));
+  }
+  for (const t of yticks) {
+    if (t < yLo - 1e-9 || t > yHi + 1e-9) continue;
+    const y = yScale(t);
+    if (view.gridlines !== false) {
+      out.push(`<line x1="${r(box.x0)}" y1="${r(y)}" x2="${r(box.x1)}" y2="${r(y)}" stroke="${GRID}" stroke-width="1"/>`);
+    }
+    out.push(`<line x1="${r(box.x0 - 5)}" y1="${r(y)}" x2="${r(box.x0)}" y2="${r(y)}" stroke="${AXIS}" stroke-width="1"/>`);
+    out.push(text(box.x0 - 8, y + 4, fmtNum(t), { size: 11, anchor: 'end', fill: AXIS }));
+  }
+  // Open L-shaped axes: the frame stops at the data, it does not box the plot in.
+  out.push(`<line x1="${r(box.x0)}" y1="${r(box.y1)}" x2="${r(box.x0)}" y2="${r(box.y0)}" stroke="${AXIS}" stroke-width="1"/>`);
+  out.push(`<line x1="${r(box.x0)}" y1="${r(box.y0)}" x2="${r(box.x1)}" y2="${r(box.y0)}" stroke="${AXIS}" stroke-width="1"/>`);
+
+  const close = (labels) => {
+    labels.forEach((lab, i) => {
+      out.push(text(centre(i), box.y0 + 18, esc(clip(lab, Math.max(6, Math.floor(band / 7)))),
+        { size: 11, anchor: 'middle', fill: '#333' }));
+    });
+    if (xTitle) {
+      out.push(text((box.x0 + box.x1) / 2, H - 6, esc(xTitle),
+        { size: view.xAxisTitleSize || 12, anchor: 'middle', fill: '#333' }));
+    }
+    if (yTitle) {
+      const my = (box.y0 + box.y1) / 2;
+      out.push(`<text x="14" y="${r(my)}" font-size="${view.yAxisTitleSize || 12}" fill="#333" text-anchor="middle" transform="rotate(-90 14 ${r(my)})">${esc(yTitle)}</text>`);
+    }
+    if (showLegend) out.push(legendBlock(legendItems, view.legend, box));
+    out.push('</svg>');
+    return out.join('');
+  };
+
+  return { out, box, yScale, band, centre, close, yLo, yHi };
+}
+
+/** "1 group" / "2 groups" — alt text is read aloud, so the plural has to be right. */
+function plural(n, word) {
+  return `${n} ${word}${n === 1 ? '' : 's'}`;
+}
+
+/** Summary statistics a distribution mark draws: median, quartiles, whiskers, mean. */
+function fiveNumber(values) {
+  const v = [...values].sort((a, b) => a - b);
+  const q = (p) => {
+    const idx = (v.length - 1) * p;
+    const lo = Math.floor(idx);
+    const hi = Math.ceil(idx);
+    return lo === hi ? v[lo] : v[lo] + (v[hi] - v[lo]) * (idx - lo);
+  };
+  const mean = v.reduce((a, b) => a + b, 0) / v.length;
+  return { min: v[0], q1: q(0.25), median: q(0.5), q3: q(0.75), max: v[v.length - 1], mean, n: v.length };
+}
+
+/**
+ * Gaussian kernel density on a grid, with Silverman's rule-of-thumb bandwidth.
+ *
+ * Clipped to the observed range rather than extended by a few bandwidths: a violin
+ * that bulges past the largest value it was given is drawing data that does not
+ * exist, which for a plot whose whole job is to show the shape of a small sample is
+ * the wrong kind of lie.
+ */
+function kde(values, steps = 48) {
+  const n = values.length;
+  const { q1, q3, min, max } = fiveNumber(values);
+  const mean = values.reduce((a, b) => a + b, 0) / n;
+  const sd = n > 1 ? Math.sqrt(values.reduce((a, x) => a + (x - mean) ** 2, 0) / (n - 1)) : 0;
+  const spread = Math.min(sd || Infinity, (q3 - q1) / 1.34 || Infinity);
+  const h = (Number.isFinite(spread) && spread > 0 ? spread : Math.max(1e-9, (max - min) || 1) / 4)
+    * 0.9 * Math.pow(n, -0.2);
+  const pts = [];
+  for (let i = 0; i < steps; i++) {
+    const x = min + ((max - min) * i) / (steps - 1 || 1);
+    let d = 0;
+    for (const xi of values) {
+      const u = (x - xi) / h;
+      d += Math.exp(-0.5 * u * u);
+    }
+    pts.push({ x, d: d / (n * h * Math.sqrt(2 * Math.PI)) });
+  }
+  const peak = Math.max(...pts.map((p) => p.d)) || 1;
+  return pts.map((p) => ({ v: p.x, w: p.d / peak })); // w in 0..1
+}
+
+/** Deterministic jitter in [-1, 1], stable across renders (no Math.random). */
+function jitterFor(i, n) {
+  if (n <= 1) return 0;
+  // Golden-ratio low-discrepancy sequence: even spread, no clumping, no RNG.
+  return ((i * 0.6180339887) % 1) * 2 - 1;
+}
+
+/** Replicate keys present across a model's groups, in order of first appearance. */
+function replicateKeys(model) {
+  const out = [];
+  for (const g of model.groups || []) {
+    for (const rep of g.reps || []) if (rep != null && !out.includes(String(rep))) out.push(String(rep));
+  }
+  return out;
+}
+
+/** Controls shared by the two distribution kinds (violin / dots). */
+function distributionControls(model) {
+  const reps = replicateKeys(model);
+  return [
+    {
+      id: 'showPoints', label: 'Show data points', type: 'check', group: 'Chart',
+      get: (v) => v.showPoints !== false, set: (v, x) => { v.showPoints = x; },
+    },
+    {
+      id: 'pointSize', label: 'Point size', type: 'number', min: 1, max: 10, step: 0.5, group: 'Style',
+      get: (v) => v.pointSize || 3, set: (v, x) => { v.pointSize = Number(x) || undefined; },
+      visible: (v) => v.showPoints !== false,
+    },
+    {
+      id: 'summary', label: 'Summary', type: 'select', group: 'Chart',
+      options: [['median', 'Median + quartiles'], ['mean', 'Mean + SD'], ['none', 'None']],
+      get: (v) => v.summary || 'median', set: (v, x) => { v.summary = x; },
+    },
+    {
+      // The SuperPlot convention (Lord et al. 2020): colour points by biological
+      // replicate and mark each replicate's MEAN, so the reader sees that the effect
+      // reproduces across experiments rather than across pooled cells.
+      id: 'replicateMeans', label: 'Replicate means', type: 'check', group: 'Chart',
+      get: (v) => v.replicateMeans !== false, set: (v, x) => { v.replicateMeans = x; },
+      visible: () => reps.length > 1,
+    },
+    { ...gridlinesControl(), group: 'Style' },
+    { ...paletteControl(), group: 'Style' },
+    { ...legendControl(), group: 'Style' },
+    ...titleControls(model),
+    ...axisControls('x', model),
+    ...axisControls('y', model),
+  ];
+}
+
+/** Points + summary marks, shared by violin and dots. */
+function drawDistributionMarks(out, { model, view, groups, centre, yScale, band, colourOf }) {
+  const reps = replicateKeys(model);
+  const rad = Math.max(1.5, view.pointSize || 3);
+  const half = band * 0.32;
+
+  groups.forEach((g, gi) => {
+    const cx = centre(gi);
+    const values = (g.values || []).filter(Number.isFinite);
+    if (!values.length) return;
+
+    if (view.showPoints !== false) {
+      values.forEach((v, i) => {
+        const x = cx + jitterFor(i, values.length) * half * 0.8;
+        const rep = g.reps?.[i] != null ? String(g.reps[i]) : null;
+        const fill = rep && reps.length > 1
+          ? colorFor(view, rep, reps.indexOf(rep))
+          : colourOf(g, gi);
+        out.push(`<circle cx="${r(x)}" cy="${r(yScale(v))}" r="${rad}" fill="${fill}" fill-opacity="0.75" stroke="#ffffff" stroke-width="0.6"/>`);
+      });
+    }
+
+    // Replicate means: one large marker per replicate (the SuperPlot payload).
+    if (reps.length > 1 && view.replicateMeans !== false && g.reps) {
+      const byRep = new Map();
+      values.forEach((v, i) => {
+        const k = String(g.reps[i]);
+        if (!byRep.has(k)) byRep.set(k, []);
+        byRep.get(k).push(v);
+      });
+      for (const [k, vs] of byRep) {
+        const m = vs.reduce((a, b) => a + b, 0) / vs.length;
+        out.push(`<circle cx="${r(cx)}" cy="${r(yScale(m))}" r="${r(rad * 2.1)}" fill="${colorFor(view, k, reps.indexOf(k))}" stroke="#222222" stroke-width="1.2"/>`);
+      }
+    }
+
+    const s = fiveNumber(values);
+    const mode = view.summary || 'median';
+    if (mode === 'none') return;
+    if (mode === 'median') {
+      out.push(`<line x1="${r(cx - half)}" y1="${r(yScale(s.median))}" x2="${r(cx + half)}" y2="${r(yScale(s.median))}" stroke="#222222" stroke-width="2"/>`);
+      for (const q of [s.q1, s.q3]) {
+        out.push(`<line x1="${r(cx - half * 0.55)}" y1="${r(yScale(q))}" x2="${r(cx + half * 0.55)}" y2="${r(yScale(q))}" stroke="#222222" stroke-width="1"/>`);
+      }
+    } else {
+      const sd = Math.sqrt(values.reduce((a, x) => a + (x - s.mean) ** 2, 0) / Math.max(1, values.length - 1));
+      out.push(`<line x1="${r(cx - half)}" y1="${r(yScale(s.mean))}" x2="${r(cx + half)}" y2="${r(yScale(s.mean))}" stroke="#222222" stroke-width="2"/>`);
+      out.push(`<line x1="${r(cx)}" y1="${r(yScale(s.mean - sd))}" x2="${r(cx)}" y2="${r(yScale(s.mean + sd))}" stroke="#222222" stroke-width="1"/>`);
+      for (const e of [s.mean - sd, s.mean + sd]) {
+        out.push(`<line x1="${r(cx - half * 0.4)}" y1="${r(yScale(e))}" x2="${r(cx + half * 0.4)}" y2="${r(yScale(e))}" stroke="#222222" stroke-width="1"/>`);
+      }
+    }
+  });
+}
+
+/** Legend items: replicates when present (SuperPlot), else the groups themselves. */
+function distributionLegend(model, view) {
+  const reps = replicateKeys(model);
+  if (reps.length > 1) return reps.map((k, i) => ({ label: k, color: colorFor(view, k, i) }));
+  const groups = ordered(model.groups || [], view.seriesOrder);
+  return groups.length > 1
+    ? groups.map((g, i) => ({ label: g.label || g.key, color: colorFor(view, g.key, i) }))
+    : [];
+}
+
+// =============================================================================
+// KIND: violin (distribution shape + optional points/replicates)
+// =============================================================================
+
+registerChartKind('violin', {
+  colorLabel: (model) => (replicateKeys(model).length > 1 ? 'Replicates' : 'Groups'),
+  reorderCategories: false,
+  colorItems: (model) => {
+    const reps = replicateKeys(model);
+    return reps.length > 1
+      ? reps.map((k) => ({ key: k, label: k }))
+      : (model.groups || []).map((g) => ({ key: g.key, label: g.label || g.key }));
+  },
+  baseView: (model) => ({
+    showPoints: (model.groups || []).every((g) => (g.values || []).length <= 60),
+    summary: 'median',
+    violinWidth: 0.8,
+    legend: replicateKeys(model).length > 1 ? 'right' : 'none',
+  }),
+  controls: (model) => [
+    {
+      id: 'violinWidth', label: 'Violin width', type: 'number', min: 0.2, max: 1, step: 0.1, group: 'Chart',
+      get: (v) => v.violinWidth ?? 0.8, set: (v, x) => { v.violinWidth = Number(x) || undefined; },
+    },
+    ...distributionControls(model),
+  ],
+  render: (model, view) => {
+    const groups = ordered(model.groups || [], view.seriesOrder)
+      .filter((g) => (g.values || []).some(Number.isFinite));
+    if (!groups.length) return errorSvg('Violin plot: no numeric values to plot.');
+    const allValues = groups.flatMap((g) => g.values.filter(Number.isFinite));
+    const f = bandFrame(model, view, {
+      allValues, bands: groups.length, legendItems: distributionLegend(model, view),
+      alt: `${plural(groups.length, 'group')}, ${plural(allValues.length, 'observation')}.`,
+    });
+    const colourOf = (g, i) => colorFor(view, g.key, i);
+    const half = f.band * 0.32 * ((view.violinWidth ?? 0.8) / 0.8);
+
+    groups.forEach((g, gi) => {
+      const values = g.values.filter(Number.isFinite);
+      const cx = f.centre(gi);
+      if (values.length < 2) return; // a density from one point is meaningless
+      const dens = kde(values);
+      const left = dens.map((p) => `${r(cx - p.w * half)},${r(f.yScale(p.v))}`);
+      const right = dens.slice().reverse().map((p) => `${r(cx + p.w * half)},${r(f.yScale(p.v))}`);
+      f.out.push(`<polygon points="${left.concat(right).join(' ')}" fill="${colourOf(g, gi)}" fill-opacity="0.28" stroke="${colourOf(g, gi)}" stroke-width="1.2"/>`);
+    });
+
+    drawDistributionMarks(f.out, { model, view, groups, centre: f.centre, yScale: f.yScale, band: f.band, colourOf });
+    return f.close(groups.map((g) => g.label || g.key));
+  },
+});
+
+// =============================================================================
+// KIND: dots (column scatter — every observation, jittered)
+// =============================================================================
+
+registerChartKind('dots', {
+  colorLabel: (model) => (replicateKeys(model).length > 1 ? 'Replicates' : 'Groups'),
+  reorderCategories: false,
+  colorItems: (model) => {
+    const reps = replicateKeys(model);
+    return reps.length > 1
+      ? reps.map((k) => ({ key: k, label: k }))
+      : (model.groups || []).map((g) => ({ key: g.key, label: g.label || g.key }));
+  },
+  baseView: (model) => ({
+    showPoints: true,
+    summary: 'median',
+    legend: replicateKeys(model).length > 1 ? 'right' : 'none',
+  }),
+  controls: (model) => distributionControls(model),
+  render: (model, view) => {
+    const groups = ordered(model.groups || [], view.seriesOrder)
+      .filter((g) => (g.values || []).some(Number.isFinite));
+    if (!groups.length) return errorSvg('Dot plot: no numeric values to plot.');
+    const allValues = groups.flatMap((g) => g.values.filter(Number.isFinite));
+    const f = bandFrame(model, view, {
+      allValues, bands: groups.length, legendItems: distributionLegend(model, view),
+      alt: `${plural(groups.length, 'group')}, ${plural(allValues.length, 'observation')}.`,
+    });
+    drawDistributionMarks(f.out, {
+      model, view, groups, centre: f.centre, yScale: f.yScale, band: f.band,
+      colourOf: (g, i) => colorFor(view, g.key, i),
+    });
+    return f.close(groups.map((g) => g.label || g.key));
+  },
+});
+
+// =============================================================================
+// KIND: paired (before-after — one line per subject across conditions)
+// =============================================================================
+
+registerChartKind('paired', {
+  colorLabel: 'Direction',
+  reorderCategories: false,
+  colorItems: (model, view) => {
+    const mode = view?.colourBy || 'direction';
+    if (mode === 'subject') return (model.subjects || []).map((s) => ({ key: s.key, label: s.label || s.key }));
+    return [{ key: '__up__', label: 'Increase' }, { key: '__down__', label: 'Decrease' }];
+  },
+  baseView: () => ({ colourBy: 'direction', showPoints: true, summary: 'mean', legend: 'bottom' }),
+  controls: (model) => [
+    {
+      id: 'colourBy', label: 'Colour lines by', type: 'select', structural: true, group: 'Chart',
+      options: [['direction', 'Direction of change'], ['subject', 'Subject'], ['none', 'One colour']],
+      get: (v) => v.colourBy || 'direction', set: (v, x) => { v.colourBy = x; },
+    },
+    {
+      id: 'showPoints', label: 'Show data points', type: 'check', group: 'Chart',
+      get: (v) => v.showPoints !== false, set: (v, x) => { v.showPoints = x; },
+    },
+    {
+      id: 'summary', label: 'Group summary', type: 'select', group: 'Chart',
+      options: [['mean', 'Mean per condition'], ['none', 'None']],
+      get: (v) => v.summary || 'mean', set: (v, x) => { v.summary = x; },
+    },
+    { ...gridlinesControl(), group: 'Style' },
+    { ...paletteControl(), group: 'Style' },
+    { ...legendControl(), group: 'Style' },
+    ...titleControls(model),
+    ...axisControls('x', model),
+    ...axisControls('y', model),
+  ],
+  render: (model, view) => {
+    const conds = model.conditions || [];
+    const subjects = (model.subjects || []).filter((s) => (s.values || []).some(Number.isFinite));
+    if (conds.length < 2 || !subjects.length) {
+      return errorSvg('Before-after plot: needs at least two conditions and one subject.');
+    }
+    const allValues = subjects.flatMap((s) => s.values.filter(Number.isFinite));
+    const mode = view.colourBy || 'direction';
+    const legendItems = mode === 'none' ? []
+      : getChartKind('paired').colorItems(model, view).map((it, i) => ({
+        label: it.label, color: colorFor(view, it.key, i),
+      }));
+    const f = bandFrame(model, view, { allValues, bands: conds.length, legendItems,
+      alt: `${plural(subjects.length, 'subject')} across ${plural(conds.length, 'condition')}.` });
+
+    subjects.forEach((s, si) => {
+      const pts = s.values.map((v, i) => (Number.isFinite(v) ? { x: f.centre(i), y: f.yScale(v) } : null));
+      const first = s.values.find(Number.isFinite);
+      const last = [...s.values].reverse().find(Number.isFinite);
+      let stroke;
+      if (mode === 'subject') stroke = colorFor(view, s.key, si);
+      else if (mode === 'direction') {
+        const up = (last ?? 0) >= (first ?? 0);
+        stroke = colorFor(view, up ? '__up__' : '__down__', up ? 0 : 1);
+      } else stroke = '#5a6470';
+      const d = pts.filter(Boolean).map((p) => `${r(p.x)},${r(p.y)}`).join(' ');
+      f.out.push(`<polyline points="${d}" fill="none" stroke="${stroke}" stroke-width="1.3" stroke-opacity="0.75"/>`);
+      if (view.showPoints !== false) {
+        for (const p of pts.filter(Boolean)) {
+          f.out.push(`<circle cx="${r(p.x)}" cy="${r(p.y)}" r="3" fill="${stroke}" stroke="#ffffff" stroke-width="0.6"/>`);
+        }
+      }
+    });
+
+    if ((view.summary || 'mean') === 'mean') {
+      conds.forEach((c, ci) => {
+        const vals = subjects.map((s) => s.values[ci]).filter(Number.isFinite);
+        if (!vals.length) return;
+        const m = vals.reduce((a, b) => a + b, 0) / vals.length;
+        const cx = f.centre(ci);
+        const half = f.band * 0.22;
+        f.out.push(`<line x1="${r(cx - half)}" y1="${r(f.yScale(m))}" x2="${r(cx + half)}" y2="${r(f.yScale(m))}" stroke="#222222" stroke-width="2.5"/>`);
+      });
+    }
+
+    return f.close(conds.map((c) => c.label || c.key));
+  },
+});
