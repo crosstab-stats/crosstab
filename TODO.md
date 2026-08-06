@@ -3170,7 +3170,22 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## More analyses (each is just another plugin)
 
-- [ ] **#131 Layer 3 — plugin-defined chart kinds. DEFERRED again 2026-08-06, this
+- [x] **#131 Layer 3 — plugin-defined chart kinds. DONE 2026-08-06.** Charts left core.
+      All eleven kinds live in `plugins/builtin-charts` behind the sandbox, registered
+      through a `charts` manifest section, reachable by a third party on identical
+      terms. Measured cost of the boundary: **0.76 ms per render round-trip**, 0.41 ms
+      per describe — the expense everyone assumed was there is not.
+
+      What made it work, in order: (1) control descriptors became DATA, so they survive
+      structuredClone and visibility resolves host-side; (2) that made a kind's controls
+      a pure function of the model, which collapsed the contract to TWO verbs —
+      `describe(model)` once, `render(model, view)` per change; (3) charts learned to
+      degrade to their saved figure, so switching the plugin off is survivable; (4) the
+      drawing stdlib ships to the sandbox as SOURCE, so there is one copy of it.
+
+      Superseded notes below, kept because the reasoning still explains the shape.
+
+- [ ] ~~**#131 Layer 3 — DEFERRED again 2026-08-06, this~~
       time for the ordinary reason: no client.** Not blocked — the durability objection
       that made it destructive is fixed (see the lift-out entry), and the design below
       still stands. Simply nobody outside the project wants a chart type yet, and
@@ -3336,8 +3351,14 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         analysis arriving for an unactivated plugin should explain itself rather than
         dead-end. The static-chart note is the same move for the same reason.
 
-      **Where this leaves it (2026-08-06): the DESIGN is settled and the remaining work
-      is deferred for want of a client, not blocked.**
+      **DONE 2026-08-06.** Everything below described the plan; it shipped. Core holds
+      the runtime (registry, view state, control engine, drawing stdlib) and
+      `plugins/builtin-charts` holds the eleven kinds. `isDeclarative()` had to learn
+      about `charts` — a chart plugin contributes no menu, importer or workspace, so
+      without that it loaded, catalogued, reported itself activated, and was silently
+      never wired. Only the browser could have caught that.
+
+      **Historic note: the DESIGN was settled and the remaining work deferred**
 
       (A) is done, so the lift-out is no longer destructive. (B) is rejected — see
       above; charts degrade like every other plugin output and that is correct, not a
