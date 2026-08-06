@@ -3170,6 +3170,56 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## More analyses (each is just another plugin)
 
+> These three were captured during the college tour and lived only in the memory
+> notes, so this section read as complete when it was not (spotted 2026-08-05).
+
+- [ ] **#140 — Prism-style charts.** Raised by a behavioural-psych faculty member;
+      GraphPad Prism is the de facto journal-figure standard in biomedical and
+      experimental science, and CrossTab's idiom is SPSS-utilitarian by comparison.
+
+      **The chart-engine toggles it asked for are now DONE** (some before this was
+      written down, some as a side effect of the SCED work): open L-shaped axes,
+      gridline toggle, data-point overlay on bars (`pointOverlayControl`), and the
+      SEM / SD / 95% CI error-bar selector. Also gained since: black & white print
+      mode, and a marker vocabulary that alternates fill before shape.
+
+      **What is left is four new chart KINDS**, each a `registerChartKind` object in
+      core/chart-renderer.js:
+      - **Violin plot** — full distribution shape. Needs a density estimate; decide
+        whether to compute it in JS or lean on R.
+      - **Column scatter / dot plot** — individual values by group, jittered. The
+        renderer already has `jitterOffsets`.
+      - **Before-after (paired) line plot** — one line per subject across two
+        conditions. Closest to the existing `sced` kind in shape.
+      - **SuperPlots** — bars or violins with colour-coded replicates overlaid.
+
+      `ggprism` is a styling reference, not a dependency: the engine renders SVG in JS.
+
+- [ ] **#141 — Mplus parity (latent mixture models).** Gerontology faculty driver.
+      CrossTab already covers roughly 40% of Mplus's territory (SEM/CFA, EFA,
+      multilevel, mediation, survival, mixed ANOVA) but misses the latent-variable
+      mixture models that define its niche.
+
+      - **Latent growth curve modelling — START HERE.** Needs NO new R dependency:
+        lavaan already works, so this is a GUI wrapper in builtin-sem or its own
+        plugin. Best value-per-risk in the whole stats backlog.
+      - **LCA / LPA** — the single biggest reason people buy Mplus. `poLCA` is pure R
+        (no compiled deps) so it is plausibly WebR-feasible, but **run the probe in a
+        FRESH session** before believing either answer — see
+        [[webr-package-feasibility]] for why a long session lies about this.
+      - **Growth mixture models** (`lcmm` / `flexmix`) — feasibility unknown.
+      - Latent transition analysis and Bayesian SEM (`blavaan` needs Stan/JAGS) are
+        almost certainly not WASM-feasible. Do not spend a probe on them.
+
+- [ ] **#142 — Distance sampling — PARKED, possibly out of scope (user's call,
+      2026-08-05).** The `Distance` R package (CRAN, GPL-2+) fits detection functions
+      for line/point transect surveys; anthropology faculty use it alongside Raven.
+      Parked on a SCOPE question rather than a technical one: distance sampling is a
+      field-survey / data-collection method, and CrossTab is not a data collection
+      tool — the downstream statistics (frequency tables, chi-square, ANOVA) are
+      already covered. Decide scope before spending a feasibility probe.
+      https://distancesampling.org/Distance/
+
 - [x] **DONE 2026-08-04 — `plugins/builtin-agreement/`.** Percent agreement, Cohen's κ
       (2 raters, unweighted/equal/squared), Fleiss' κ (3+), Krippendorff's α
       (nominal/ordinal/interval/ratio), all via `irr`. TWO entry points: rater COLUMNS,
