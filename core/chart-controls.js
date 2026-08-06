@@ -27,7 +27,7 @@
  * section shut mid-edit).
  */
 
-import { chartUiSpec, colorFor } from './chart-renderer.js';
+import { chartUiSpec, colorFor, controlValue, setControlValue, controlVisible } from './chart-renderer.js';
 
 /**
  * @param {{model: import('./chart-renderer.js').ChartModel, view: import('./chart-renderer.js').ViewState}} item
@@ -91,11 +91,24 @@ export function buildChartControls(item, onChange) {
       g.rows += rows;
     };
 
+    // Controls that something else's `visibleWhen` points at. Changing one of these has
+    // to repaint, or the dependent control stays on screen after its condition has gone
+    // false — switching "Show data points" off used to leave "Point size" sitting there
+    // until some unrelated structural control happened to force a rebuild.
+    //
+    // Derived, not declared. The old closure form had the same bug and the fix would
+    // have been to hand-mark every such control `structural` and keep remembering to.
+    // Now the dependency is data, so the panel can just read it.
+    const depended = new Set(spec.controls.map((c) => c.visibleWhen?.control).filter(Boolean));
+
     // 1. The kind's declared control widgets (type, stacking, rotation, …).
     for (const ctl of spec.controls) {
-      if (ctl.visible && !ctl.visible(view, model)) continue;
+      // Visibility is resolved against the sibling descriptors, because `visibleWhen`
+      // names another CONTROL and needs that control's declared default to read its
+      // effective value.
+      if (!controlVisible(ctl, view, spec.controls)) continue;
       into(ctl.group || 'Chart', buildControl(ctl, view, () => {
-        if (ctl.structural) paint();
+        if (ctl.structural || depended.has(ctl.id)) paint();
         onChange();
       }));
     }
@@ -147,14 +160,28 @@ export function buildChartControls(item, onChange) {
   return wrap;
 }
 
-/** Build one labelled control widget from a descriptor. */
+/**
+ * Build one labelled control widget from a descriptor.
+ *
+ * The descriptor is plain data — {@link controlValue} and {@link setControlValue} do the
+ * reading and writing, including coercion and range clamping. This file therefore knows
+ * nothing about any chart kind, and a kind that arrives over postMessage renders here
+ * exactly like one that shipped in the box.
+ */
 function buildControl(ctl, view, changed) {
+  if (ctl.type === 'note') {
+    // Inert by construction: a statement, not a widget. Exists so a control that has
+    // been withdrawn can say why instead of leaving an unexplained gap.
+    const row = elem('p', 'results-chart__note');
+    row.textContent = ctl.label;
+    return row;
+  }
   if (ctl.type === 'check') {
     const row = elem('label', 'results-chart__row results-chart__row--check');
     const cb = document.createElement('input');
     cb.type = 'checkbox';
-    cb.checked = !!ctl.get(view);
-    cb.addEventListener('change', () => { ctl.set(view, cb.checked); changed(); });
+    cb.checked = !!controlValue(ctl, view);
+    cb.addEventListener('change', () => { setControlValue(ctl, view, cb.checked); changed(); });
     const span = elem('span', 'results-chart__rowlabel');
     span.textContent = ctl.label;
     row.append(cb, span);
@@ -170,9 +197,15 @@ function buildControl(ctl, view, changed) {
     if (ctl.min != null) inp.min = ctl.min;
     if (ctl.max != null) inp.max = ctl.max;
     if (ctl.step != null) inp.step = ctl.step;
-    inp.value = String(ctl.get(view));
+    inp.value = String(controlValue(ctl, view));
     if (ctl.placeholder) inp.placeholder = ctl.placeholder;
-    inp.addEventListener('change', () => { ctl.set(view, inp.value); inp.value = String(ctl.get(view)); changed(); });
+    inp.addEventListener('change', () => {
+      setControlValue(ctl, view, inp.value);
+      // Write the stored value back: the setter clamps and wraps, so the box must show
+      // what was actually kept rather than what was typed.
+      inp.value = String(controlValue(ctl, view));
+      changed();
+    });
     row.append(span, inp);
     return row;
   }
@@ -183,9 +216,9 @@ function buildControl(ctl, view, changed) {
     const inp = document.createElement('input');
     inp.type = 'text';
     inp.className = 'results-chart__text';
-    inp.value = String(ctl.get(view) ?? '');
+    inp.value = String(controlValue(ctl, view) ?? '');
     if (ctl.placeholder) inp.placeholder = ctl.placeholder;
-    inp.addEventListener('change', () => { ctl.set(view, inp.value); changed(); });
+    inp.addEventListener('change', () => { setControlValue(ctl, view, inp.value); changed(); });
     row.append(span, inp);
     return row;
   }
@@ -195,16 +228,15 @@ function buildControl(ctl, view, changed) {
   span.textContent = ctl.label;
   const sel = document.createElement('select');
   sel.className = 'results-chart__select';
-  const opts = typeof ctl.options === 'function' ? ctl.options() : ctl.options;
-  const cur = String(ctl.get(view));
-  for (const [val, lab] of opts) {
+  const cur = String(controlValue(ctl, view));
+  for (const [val, lab] of ctl.options || []) {
     const o = document.createElement('option');
     o.value = val;
     o.textContent = lab;
     if (val === cur) o.selected = true;
     sel.append(o);
   }
-  sel.addEventListener('change', () => { ctl.set(view, sel.value); changed(); });
+  sel.addEventListener('change', () => { setControlValue(ctl, view, sel.value); changed(); });
   row.append(span, sel);
   return row;
 }

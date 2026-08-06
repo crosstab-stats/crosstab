@@ -56,31 +56,24 @@ registerChartKind('box', {
     notch: false,
     legend: (model.groups || []).length > 1 ? 'none' : 'none',
   }),
-  controls: (model) => [
+  controls: (model) => {
+    const multi = (model.groups || []).length > 1;
+    return [
+    { id: 'showPoints', label: 'Show data points', type: 'check', group: 'Chart', default: false },
+    { id: 'showMean', label: 'Mark the mean', type: 'check', group: 'Chart', default: false },
+    { id: 'boxWidth', label: 'Box width', type: 'number', min: 0.2, max: 1, step: 0.1, group: 'Chart', default: 0.7 },
     {
-      id: 'showPoints', label: 'Show data points', type: 'check', group: 'Chart',
-      get: (v) => !!v.showPoints, set: (v, x) => { v.showPoints = x; },
+      id: 'pointSize', label: 'Point size', type: 'number', min: 1, max: 10, step: 0.5, group: 'Style', default: 3,
+      visibleWhen: { control: 'showPoints', truthy: true },
     },
-    {
-      id: 'showMean', label: 'Mark the mean', type: 'check', group: 'Chart',
-      get: (v) => !!v.showMean, set: (v, x) => { v.showMean = x; },
-    },
-    {
-      id: 'boxWidth', label: 'Box width', type: 'number', min: 0.2, max: 1, step: 0.1, group: 'Chart',
-      get: (v) => v.boxWidth ?? 0.7, set: (v, x) => { v.boxWidth = Number(x) || undefined; },
-    },
-    {
-      id: 'pointSize', label: 'Point size', type: 'number', min: 1, max: 10, step: 0.5, group: 'Style',
-      get: (v) => v.pointSize || 3, set: (v, x) => { v.pointSize = Number(x) || undefined; },
-      visible: (v) => !!v.showPoints,
-    },
-    { ...gridlinesControl(), group: 'Style' },
-    { ...paletteControl(), group: 'Style' },
-    { ...legendControl(), group: 'Style' },
+    gridlinesControl(),
+    paletteControl(multi),
+    legendControl(multi, 'none'),
     ...titleControls(model),
     ...axisControls('x', model),
     ...axisControls('y', model),
-  ],
+    ];
+  },
   render: (model, view) => {
     const groups = ordered(model.groups || [], view.seriesOrder)
       .filter((g) => (g.values || []).some(Number.isFinite));

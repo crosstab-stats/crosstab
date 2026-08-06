@@ -119,7 +119,9 @@ export function chartUiSpec(model) {
   const kd = getChartKind(model.kind);
   if (!kd) return { controls: [], colorItems: [], colorLabel: 'Series', reorderCategories: false, categories: [] };
   return {
-    controls: kd.controls ? kd.controls(model) : [],
+    // `.filter(Boolean)`: a shared builder returns null when its control does not
+    // apply (no palette for a single-colour chart), so kinds can list them flat.
+    controls: (kd.controls ? kd.controls(model) : []).filter(Boolean),
     colorItems: kd.colorItems(model),
     // A kind may make this depend on the model — SCED calls it "Phases" or "Measures"
     // depending on which channel is carrying the distinction.
@@ -140,109 +142,162 @@ function reconcileOrder(wanted, all) {
   return out;
 }
 
-// --- shared control-descriptor builders (any kind can reuse) -----------------
+// --- control descriptors: pure data, and the engine that reads/writes them ----
 
-/** Count of colour items for a model (drives palette/legend visibility). */
-function colorItemCount(model) {
-  const kd = getChartKind(model.kind);
-  return kd ? kd.colorItems(model).length : 0;
+/**
+ * A control descriptor is **data**, not behaviour.
+ *
+ * It used to carry `get(view)` / `set(view, x)` / `visible(view, model)` closures. Every
+ * one of them turned out to be the same three shapes — read `view[key]` with a default,
+ * write `view[key]` with a coercion, and show-if-another-control-is-on — so the closures
+ * were pure data wearing a function costume. Making that literal is what lets a chart
+ * kind live behind a postMessage boundary: a descriptor now survives `structuredClone`,
+ * where a closure could never cross.
+ *
+ * @typedef {Object} ControlDescriptor
+ * @property {string} id - unique within the kind; also the default view key.
+ * @property {string} label
+ * @property {'check'|'number'|'text'|'select'} type
+ * @property {string} [key] - view field to read/write. Defaults to `id`.
+ * @property {*} [default] - the value when the view field is undefined. **This is the
+ *   single source of truth for a control's default** — renderers must agree with it.
+ * @property {[string,string][]} [options] - select only.
+ * @property {'string'|'number'} [valueType] - select only; coerce the chosen value.
+ * @property {number} [min] @property {number} [max] @property {number} [step]
+ * @property {number} [wrap] - number only: values wrap into [0, wrap) instead of clamping.
+ * @property {string} [placeholder]
+ * @property {string} [group] - collapsible section title in the controls panel.
+ * @property {boolean} [structural] - changing it re-lays-out the panel.
+ * @property {{control:string, truthy?:boolean, equals?:*}} [visibleWhen] - show only
+ *   when ANOTHER control's *effective* value matches. Referencing a control rather than
+ *   a raw view key is deliberate: "show the point-size slider when points are on" is one
+ *   statement, but `!!v.showPoints` and `v.showPoints !== false` are two, purely because
+ *   the two kinds default the toggle differently. Naming the control lets the host apply
+ *   that control's own default, so the dependent control does not have to know it.
+ */
+
+/** The effective value of a control: what is stored, else its declared default. */
+export function controlValue(ctl, view) {
+  const raw = view ? view[ctl.key || ctl.id] : undefined;
+  const val = raw === undefined ? ctl.default : raw;
+  if (ctl.type === 'check') return !!val;
+  if (ctl.type === 'select') return String(val ?? '');
+  if (ctl.type === 'number') return val ?? '';
+  return val ?? '';
 }
 
-/** Palette chooser — only meaningful when more than one item takes a colour. */
-export function paletteControl() {
-  return {
+/** Write a raw widget value into the view, coerced and bounded for the control's type. */
+export function setControlValue(ctl, view, raw) {
+  const key = ctl.key || ctl.id;
+  if (ctl.type === 'check') { view[key] = !!raw; return; }
+  if (ctl.type === 'select') { view[key] = ctl.valueType === 'number' ? Number(raw) : raw; return; }
+  if (ctl.type === 'text') { view[key] = raw === '' ? undefined : String(raw); return; }
+  // number: blank clears back to the default, anything unparseable is ignored rather
+  // than stored as NaN (a NaN in the view silently breaks every scale downstream).
+  if (raw === '' || raw == null) { view[key] = undefined; return; }
+  let n = Number(raw);
+  if (!Number.isFinite(n)) { view[key] = undefined; return; }
+  if (Number.isFinite(ctl.wrap) && ctl.wrap > 0) n = ((n % ctl.wrap) + ctl.wrap) % ctl.wrap;
+  else {
+    // Clamp to the declared range. The widget's own min/max only constrain the spinner,
+    // not typing, so "max 10" used to accept 999 and hand it straight to the renderer.
+    if (Number.isFinite(ctl.min)) n = Math.max(ctl.min, n);
+    if (Number.isFinite(ctl.max)) n = Math.min(ctl.max, n);
+  }
+  view[key] = n;
+}
+
+/** Is this control shown, given the view and its sibling descriptors? */
+export function controlVisible(ctl, view, controls) {
+  const w = ctl.visibleWhen;
+  if (!w) return true;
+  const dep = (controls || []).find((c) => c.id === w.control);
+  if (!dep) return true; // a dangling reference should not hide the control silently
+  const val = controlValue(dep, view);
+  if ('equals' in w) return val === w.equals;
+  return w.truthy === false ? !val : !!val;
+}
+
+// --- shared control-descriptor builders (any kind can reuse) -----------------
+//
+// Each returns plain data, or `null` when the control does not apply to this model.
+// chartUiSpec filters the nulls, so a kind can list them unconditionally.
+
+/**
+ * Palette chooser.
+ * @param {boolean} multi - more than one item takes a colour. Passed in rather than
+ *   looked up: the builders used to call `colorItemCount(model)`, which reached back
+ *   into the registry, and a kind living in a plugin has no registry to reach into.
+ *   The kind already knows its own colour items, so it is the right one to answer.
+ */
+export function paletteControl(multi = true) {
+  return multi ? {
     id: 'palette', label: 'Palette', type: 'select', structural: true, group: 'Style',
-    options: () => Object.entries(PALETTES).map(([k, p]) => [k, p.label]),
-    get: (v) => v.palette || DEFAULT_PALETTE,
-    set: (v, x) => { v.palette = x; },
-    visible: (v, m) => colorItemCount(m) > 1,
-  };
+    default: DEFAULT_PALETTE,
+    options: Object.entries(PALETTES).map(([k, p]) => [k, p.label]),
+  } : null;
 }
 
 /** Legend placement — only when more than one item is shown. */
-export function legendControl() {
-  return {
+export function legendControl(multi = true, fallback = 'right') {
+  return multi ? {
     id: 'legend', label: 'Legend', type: 'select', group: 'Style',
+    default: fallback,
     options: [['right', 'Right'], ['top', 'Top'], ['bottom', 'Bottom'], ['none', 'Hidden']],
-    get: (v) => v.legend,
-    set: (v, x) => { v.legend = x; },
-    visible: (v, m) => colorItemCount(m) > 1,
-  };
+  } : null;
 }
 
 /** Value-labels toggle. */
 export function valueLabelsControl(label = 'Value labels') {
-  return {
-    id: 'valueLabels', label, type: 'check', group: 'Labels',
-    get: (v) => !!v.valueLabels,
-    set: (v, x) => { v.valueLabels = x; },
-  };
+  return { id: 'valueLabels', label, type: 'check', group: 'Labels', default: false };
 }
 
 /** Gridlines toggle. */
 export function gridlinesControl() {
-  return {
-    id: 'gridlines', label: 'Gridlines', type: 'check', group: 'Style',
-    get: (v) => v.gridlines !== false,
-    set: (v, x) => { v.gridlines = x; },
-  };
+  return { id: 'gridlines', label: 'Gridlines', type: 'check', group: 'Style', default: true };
 }
 
-/** Whether any series carries raw observations (gates point/error controls). */
+/** Whether any series carries raw observations (gates the point/error-bar controls). */
 export function hasRawValues(model) {
   return (model.series || []).some((s) => s.rawValues && s.rawValues.some((a) => a && a.length));
 }
 
 /** Point overlay toggle (only when raw values are available). */
 export function pointOverlayControl(model) {
-  return {
-    id: 'pointOverlay', label: 'Show data points', type: 'check', group: 'Style',
-    get: (v) => !!v.pointOverlay,
-    set: (v, x) => { v.pointOverlay = x; },
-    visible: () => hasRawValues(model),
-  };
+  return hasRawValues(model)
+    ? { id: 'pointOverlay', label: 'Show data points', type: 'check', group: 'Style', default: false }
+    : null;
 }
 
 /** Error bars selector (only when raw values are available). */
 export function errorBarsControl(model) {
-  return {
-    id: 'errorBars', label: 'Error bars', type: 'select', group: 'Style',
+  return hasRawValues(model) ? {
+    id: 'errorBars', label: 'Error bars', type: 'select', group: 'Style', default: 'none',
     options: [['none', 'None'], ['sem', 'SEM'], ['sd', 'SD'], ['ci95', '95% CI']],
-    get: (v) => v.errorBars || 'none',
-    set: (v, x) => { v.errorBars = x; },
-    visible: () => hasRawValues(model),
-  };
+  } : null;
 }
 
 // --- title / axis / value-label controls -------------------------------------
 
-/** Chart title text + formatting controls. */
+/**
+ * Chart title text + formatting controls.
+ *
+ * The formatting controls only make sense once there IS a title. When the model supplies
+ * one they are always relevant; when it does not, they appear as soon as the user types
+ * one — expressed as `visibleWhen` against the text control rather than as a closure
+ * over `model.title`, so the whole descriptor stays clonable.
+ */
 export function titleControls(model) {
+  const always = !!model.title;
+  const dep = always ? undefined : { control: 'titleText', truthy: true };
   return [
     {
       id: 'titleText', label: 'Title', type: 'text', group: 'Titles & axes',
-      placeholder: model.title || '(none)',
-      get: (v) => v.titleText ?? '',
-      set: (v, x) => { v.titleText = x || undefined; },
+      placeholder: model.title || '(none)', default: '',
     },
-    {
-      id: 'titleSize', label: 'Title size', type: 'number', min: 8, max: 28, step: 1, group: 'Titles & axes',
-      get: (v) => v.titleSize || 15,
-      set: (v, x) => { v.titleSize = Number(x) || undefined; },
-      visible: (v) => !!(v.titleText || model.title),
-    },
-    {
-      id: 'titleBold', label: 'Title bold', type: 'check', group: 'Titles & axes',
-      get: (v) => v.titleBold !== false,
-      set: (v, x) => { v.titleBold = x; },
-      visible: (v) => !!(v.titleText || model.title),
-    },
-    {
-      id: 'titleItalic', label: 'Title italic', type: 'check', group: 'Titles & axes',
-      get: (v) => !!v.titleItalic,
-      set: (v, x) => { v.titleItalic = x; },
-      visible: (v) => !!(v.titleText || model.title),
-    },
+    { id: 'titleSize', label: 'Title size', type: 'number', min: 8, max: 28, step: 1, group: 'Titles & axes', default: 15, visibleWhen: dep },
+    { id: 'titleBold', label: 'Title bold', type: 'check', group: 'Titles & axes', default: true, visibleWhen: dep },
+    { id: 'titleItalic', label: 'Title italic', type: 'check', group: 'Titles & axes', default: false, visibleWhen: dep },
   ];
 }
 
@@ -250,68 +305,32 @@ export function titleControls(model) {
 export function axisControls(axis, model) {
   const upper = axis.toUpperCase();
   const modelTitle = model.axes?.[axis]?.title || '';
-  const prefix = `${axis}Axis`;
+  const p = `${axis}Axis`;
+  const dep = modelTitle ? undefined : { control: `${p}Title`, truthy: true };
   return [
     {
-      id: `${prefix}Title`, label: `${upper} axis title`, type: 'text', group: 'Titles & axes',
-      placeholder: modelTitle || '(none)',
-      get: (v) => v[`${prefix}Title`] ?? '',
-      set: (v, x) => { v[`${prefix}Title`] = x || undefined; },
+      id: `${p}Title`, label: `${upper} axis title`, type: 'text', group: 'Titles & axes',
+      placeholder: modelTitle || '(none)', default: '',
     },
-    {
-      id: `${prefix}TitleSize`, label: `${upper} title size`, type: 'number', min: 8, max: 22, step: 1, group: 'Titles & axes',
-      get: (v) => v[`${prefix}TitleSize`] || 12,
-      set: (v, x) => { v[`${prefix}TitleSize`] = Number(x) || undefined; },
-      visible: (v) => !!(v[`${prefix}Title`] || modelTitle),
-    },
-    {
-      id: `${prefix}TitleBold`, label: `${upper} title bold`, type: 'check', group: 'Titles & axes',
-      get: (v) => !!v[`${prefix}TitleBold`],
-      set: (v, x) => { v[`${prefix}TitleBold`] = x; },
-      visible: (v) => !!(v[`${prefix}Title`] || modelTitle),
-    },
-    {
-      id: `${prefix}TitleItalic`, label: `${upper} title italic`, type: 'check', group: 'Titles & axes',
-      get: (v) => !!v[`${prefix}TitleItalic`],
-      set: (v, x) => { v[`${prefix}TitleItalic`] = x; },
-      visible: (v) => !!(v[`${prefix}Title`] || modelTitle),
-    },
-    {
-      id: `${prefix}Min`, label: `${upper} axis min`, type: 'number', placeholder: 'auto', group: 'Titles & axes',
-      get: (v) => v[`${prefix}Min`] ?? '',
-      set: (v, x) => { v[`${prefix}Min`] = x === '' ? undefined : Number(x); },
-    },
-    {
-      id: `${prefix}Max`, label: `${upper} axis max`, type: 'number', placeholder: 'auto', group: 'Titles & axes',
-      get: (v) => v[`${prefix}Max`] ?? '',
-      set: (v, x) => { v[`${prefix}Max`] = x === '' ? undefined : Number(x); },
-    },
+    { id: `${p}TitleSize`, label: `${upper} title size`, type: 'number', min: 8, max: 22, step: 1, group: 'Titles & axes', default: 12, visibleWhen: dep },
+    { id: `${p}TitleBold`, label: `${upper} title bold`, type: 'check', group: 'Titles & axes', default: false, visibleWhen: dep },
+    { id: `${p}TitleItalic`, label: `${upper} title italic`, type: 'check', group: 'Titles & axes', default: false, visibleWhen: dep },
+    // No default: blank means "auto", and a number here is an explicit override.
+    { id: `${p}Min`, label: `${upper} axis min`, type: 'number', placeholder: 'auto', group: 'Titles & axes' },
+    { id: `${p}Max`, label: `${upper} axis max`, type: 'number', placeholder: 'auto', group: 'Titles & axes' },
   ];
 }
 
 /** Value label formatting controls (size, bold, italic). */
 export function valueLabelFormatControls() {
+  const dep = { control: 'valueLabels', truthy: true };
   return [
-    {
-      id: 'valueLabelSize', label: 'Label size', type: 'number', min: 6, max: 18, step: 0.5, group: 'Labels',
-      get: (v) => v.valueLabelSize || 9.5,
-      set: (v, x) => { v.valueLabelSize = Number(x) || undefined; },
-      visible: (v) => !!v.valueLabels,
-    },
-    {
-      id: 'valueLabelBold', label: 'Labels bold', type: 'check', group: 'Labels',
-      get: (v) => !!v.valueLabelBold,
-      set: (v, x) => { v.valueLabelBold = x; },
-      visible: (v) => !!v.valueLabels,
-    },
-    {
-      id: 'valueLabelItalic', label: 'Labels italic', type: 'check', group: 'Labels',
-      get: (v) => !!v.valueLabelItalic,
-      set: (v, x) => { v.valueLabelItalic = x; },
-      visible: (v) => !!v.valueLabels,
-    },
+    { id: 'valueLabelSize', label: 'Label size', type: 'number', min: 6, max: 18, step: 0.5, group: 'Labels', default: 9.5, visibleWhen: dep },
+    { id: 'valueLabelBold', label: 'Labels bold', type: 'check', group: 'Labels', default: false, visibleWhen: dep },
+    { id: 'valueLabelItalic', label: 'Labels italic', type: 'check', group: 'Labels', default: false, visibleWhen: dep },
   ];
 }
+
 
 // --- shared drawing helpers --------------------------------------------------
 

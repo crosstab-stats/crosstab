@@ -78,30 +78,27 @@ registerChartKind('steps', {
     censorMarks: true,
     lineWidth: 2,
   }),
-  controls: (model) => [
-    {
-      id: 'confidenceBand', label: 'Confidence band', type: 'check', group: 'Chart',
-      get: (v) => !!v.confidenceBand, set: (v, x) => { v.confidenceBand = x; },
-      visible: () => stepsHaveBand(model),
-    },
-    {
-      // The mark means "censored" for survival and something else elsewhere, so the
-      // model names it rather than the kind assuming.
-      id: 'censorMarks', label: model.markLabel || 'Event marks', type: 'check', group: 'Chart',
-      get: (v) => v.censorMarks !== false, set: (v, x) => { v.censorMarks = x; },
-      visible: () => (model.series || []).some((s) => (s.marks || []).length),
-    },
-    {
-      id: 'lineWidth', label: 'Line width', type: 'number', min: 1, max: 5, step: 0.5, group: 'Style',
-      get: (v) => v.lineWidth || 2, set: (v, x) => { v.lineWidth = Number(x) || undefined; },
-    },
-    { ...gridlinesControl(), group: 'Style' },
-    { ...paletteControl(), group: 'Style' },
-    { ...legendControl(), group: 'Style' },
+  controls: (model) => {
+    const multi = (model.series || []).length > 1;
+    const hasMarks = (model.series || []).some((s) => (s.marks || []).length);
+    return [
+    ...(stepsHaveBand(model)
+      ? [{ id: 'confidenceBand', label: 'Confidence band', type: 'check', group: 'Chart', default: true }]
+      : []),
+    // The mark means "censored" for survival and something else elsewhere, so the
+    // model names it rather than the kind assuming.
+    ...(hasMarks
+      ? [{ id: 'censorMarks', label: model.markLabel || 'Event marks', type: 'check', group: 'Chart', default: true }]
+      : []),
+    { id: 'lineWidth', label: 'Line width', type: 'number', min: 1, max: 5, step: 0.5, group: 'Style', default: 2 },
+    gridlinesControl(),
+    paletteControl(multi),
+    legendControl(multi, 'right'),
     ...titleControls(model),
     ...axisControls('x', model),
     ...axisControls('y', model),
-  ],
+    ];
+  },
   render: (model, view) => {
     const series = ordered(model.series || [], view.seriesOrder)
       .map((s) => ({ ...s, points: (s.points || []).filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y)) }))

@@ -103,35 +103,27 @@ registerChartKind('wordcloud', {
     const themed = cloudThemes(model).length > 1;
     const authored = cloudHasAuthorColours(model);
     return [
-      {
+      ...(themed ? [{
         id: 'layout', label: 'Layout', type: 'select', structural: true, group: 'Chart',
+        default: 'clustered',
         options: [['single', 'One cloud'], ['clustered', 'Grouped by theme']],
-        get: (v) => v.layout || 'single', set: (v, x) => { v.layout = x; },
-        visible: () => themed,
-      },
-      {
-        id: 'maxWords', label: 'Max words', type: 'number', min: 10, max: 400, step: 10, group: 'Chart',
-        get: (v) => v.maxWords || 120, set: (v, x) => { v.maxWords = Number(x) || undefined; },
-      },
-      {
-        id: 'minSize', label: 'Smallest text', type: 'number', min: 6, max: 24, step: 1, group: 'Style',
-        get: (v) => v.minSize || 11, set: (v, x) => { v.minSize = Number(x) || undefined; },
-      },
-      {
-        id: 'maxSize', label: 'Largest text', type: 'number', min: 16, max: 90, step: 2, group: 'Style',
-        get: (v) => v.maxSize || 44, set: (v, x) => { v.maxSize = Number(x) || undefined; },
-      },
+      }] : []),
+      { id: 'maxWords', label: 'Max words', type: 'number', min: 10, max: 400, step: 10, group: 'Chart', default: 120 },
+      { id: 'minSize', label: 'Smallest text', type: 'number', min: 6, max: 24, step: 1, group: 'Style', default: 11 },
+      { id: 'maxSize', label: 'Largest text', type: 'number', min: 16, max: 90, step: 2, group: 'Style', default: 44 },
       // Hidden when the caller supplied colours: offering a palette that cannot take
       // effect is worse than offering nothing (see the gridlines lesson — a control
       // with no visible effect reads as broken).
-      { ...paletteControl(), group: 'Style', visible: (v, m) => !cloudHasAuthorColours(m) && cloudThemes(m).length > 1 },
-      { ...legendControl(), group: 'Style', visible: (v, m) => cloudThemes(m).length > 1 },
+      paletteControl(themed && !authored),
+      legendControl(themed, 'none'),
+      // …and say WHY the palette is missing, rather than leaving a hole. This used to
+      // be a permanently-checked checkbox, which was the very sin the comment above
+      // warns about: a control that cannot do anything. `note` is inert by construction.
+      ...(authored
+        ? [{ id: 'authorColours', type: 'note', group: 'Style', label: 'Colours come from the data, so the palette does not apply.' }]
+        : []),
       ...titleControls(model),
-    ].filter(Boolean).concat(authored ? [{
-      id: '__authorColours', label: 'Colours come from the data', type: 'check', group: 'Style',
-      get: () => true, set: () => {},
-      visible: () => true,
-    }] : []);
+    ];
   },
   render: (model, view) => {
     const all = (model.words || []).filter((w) => w && w.word && Number.isFinite(w.count) && w.count > 0);

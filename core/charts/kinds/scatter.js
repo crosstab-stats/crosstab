@@ -44,22 +44,24 @@ registerChartKind('scatter', {
     pointSize: 4,
     legend: model.groups && model.groups.length > 1 ? 'right' : 'none',
   }),
-  controls: (model) => [
+  controls: (model) => {
+    const multi = (model.groups || []).length > 1;
+    return [
     ...(model.trend
-      ? [{ id: 'trendLine', group: 'Chart', label: 'Trend line', type: 'check', get: (v) => !!v.trendLine, set: (v, x) => { v.trendLine = x; } }]
+      ? [{ id: 'trendLine', group: 'Chart', label: 'Trend line', type: 'check', default: false }]
       : []),
     {
-      id: 'pointSize', label: 'Point size', type: 'select', group: 'Chart',
+      id: 'pointSize', label: 'Point size', type: 'select', group: 'Chart', valueType: 'number', default: 4,
       options: [['3', 'Small'], ['4', 'Medium'], ['6', 'Large']],
-      get: (v) => String(v.pointSize || 4), set: (v, x) => { v.pointSize = Number(x); },
     },
     gridlinesControl(),
-    paletteControl(),
-    legendControl(),
+    paletteControl(multi),
+    legendControl(multi, 'right'),
     ...titleControls(model),
     ...axisControls('x', model),
     ...axisControls('y', model),
-  ],
+    ];
+  },
   render: (model, view) => renderScatter(model, view),
 });
 

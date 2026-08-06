@@ -228,79 +228,61 @@ registerChartKind('sced', {
     legend: (model.phases || []).length > 1 ? 'bottom' : 'none',
     gridlines: false, // SCED figures are conventionally clean; opt in if wanted
   }),
-  controls: (model) => [
-    {
-      id: 'mark', label: 'Draw', type: 'select', structural: true, group: 'Chart',
-      options: [['both', 'Points + lines'], ['points', 'Points only'], ['line', 'Lines only']],
-      get: (v) => v.mark || 'both', set: (v, x) => { v.mark = x; },
-    },
-    {
-      id: 'connectAcross', label: 'Connect across phase change', type: 'check', group: 'Chart',
-      get: (v) => !!v.connectAcross, set: (v, x) => { v.connectAcross = x; },
-    },
-    {
-      id: 'phaseLines', label: 'Phase change lines', type: 'check', group: 'Phases',
-      get: (v) => v.phaseLines !== false, set: (v, x) => { v.phaseLines = x; },
-    },
-    {
-      id: 'caseLabel', label: 'Case label', type: 'select', structural: true, group: 'Panels',
-      options: [['axis', 'Beside the Y axis'], ['panel', 'Inside the panel'], ['none', 'Hidden']],
-      get: (v) => v.caseLabel || ((model.panels || []).length > 1 ? 'axis' : 'panel'),
-      set: (v, x) => { v.caseLabel = x; },
-    },
-    {
-      id: 'panelOrder', label: 'Panel order', type: 'select', structural: true, group: 'Panels',
-      options: [['stagger', 'By phase change (staircase)'], ['model', 'As in the data']],
-      get: (v) => v.panelOrder || 'stagger', set: (v, x) => { v.panelOrder = x; },
-      visible: () => (model.panels || []).length > 1,
-    },
-    {
-      id: 'staircase', label: 'Connect as staircase', type: 'check', group: 'Phases',
-      get: (v) => !!v.staircase, set: (v, x) => { v.staircase = x; },
-      visible: (v) => v.phaseLines !== false && (model.panels || []).length > 1,
-    },
-    {
-      id: 'phaseLineStyle', label: 'Phase line', type: 'select', group: 'Phases',
-      options: [['solid', 'Solid'], ['dashed', 'Dashed']],
-      get: (v) => v.phaseLineStyle || 'solid', set: (v, x) => { v.phaseLineStyle = x; },
-      visible: (v) => v.phaseLines !== false,
-    },
-    {
-      id: 'mono', label: 'Black & white (print)', type: 'check', structural: true, group: 'Style',
-      get: (v) => !!v.mono, set: (v, x) => { v.mono = x; },
-    },
-    {
-      id: 'phaseLabels', label: 'Condition labels', type: 'select', group: 'Phases',
-      options: [['top', 'Top panel only'], ['all', 'Every panel'], ['none', 'Hidden']],
-      get: (v) => v.phaseLabels || 'top', set: (v, x) => { v.phaseLabels = x; },
-    },
-    {
-      id: 'sharedY', label: 'Same Y scale on all panels', type: 'check', group: 'Panels',
-      get: (v) => v.sharedY !== false, set: (v, x) => { v.sharedY = x; },
-      visible: () => (model.panels || []).length > 1,
-    },
-    {
-      id: 'panelHeight', label: 'Panel height', type: 'number', min: 70, max: 320, step: 10, group: 'Panels',
-      get: (v) => v.panelHeight || 130, set: (v, x) => { v.panelHeight = Number(x) || undefined; },
-    },
-    {
-      id: 'pointSize', label: 'Point size', type: 'number', min: 1, max: 10, step: 0.5, group: 'Style',
-      get: (v) => v.pointSize || 3.5, set: (v, x) => { v.pointSize = Number(x) || undefined; },
-    },
-    {
-      id: 'yTickCount', label: 'Y tick count', type: 'number', min: 2, max: 11, step: 1, group: 'Style',
-      get: (v) => v.yTickCount || 5, set: (v, x) => { v.yTickCount = Number(x) || undefined; },
-    },
-    gridlinesControl(),
+  controls: (model) => {
+    const panels = (model.panels || []).length;
+    // Mirrors colorItems: measures carry the colour when panels declare any, else phases.
+    const series = scedSeriesKeys(model);
+    const multi = (series.length ? series : (model.phases || [])).length > 1;
     // In black & white every phase is the same ink, so a palette chooser and a colour
     // legend would both be lying about carrying information. Phase is read off the
     // staircase and the condition labels instead — which is the convention's whole point.
-    { ...paletteControl(), visible: (v, m) => !v.mono && (getChartKind(m.kind).colorItems(m).length > 1) },
-    { ...legendControl(), visible: (v, m) => !v.mono && (getChartKind(m.kind).colorItems(m).length > 1) },
+    const notMono = { control: 'mono', truthy: false };
+    return [
+    {
+      id: 'mark', label: 'Draw', type: 'select', structural: true, group: 'Chart', default: 'both',
+      options: [['both', 'Points + lines'], ['points', 'Points only'], ['line', 'Lines only']],
+    },
+    { id: 'connectAcross', label: 'Connect across phase change', type: 'check', group: 'Chart', default: false },
+    { id: 'phaseLines', label: 'Phase change lines', type: 'check', group: 'Phases', default: true },
+    {
+      id: 'caseLabel', label: 'Case label', type: 'select', structural: true, group: 'Panels',
+      // The default depends on the model (one panel wants the label inside it), which
+      // is known here — so it is resolved now rather than carried as a predicate.
+      default: panels > 1 ? 'axis' : 'panel',
+      options: [['axis', 'Beside the Y axis'], ['panel', 'Inside the panel'], ['none', 'Hidden']],
+    },
+    ...(panels > 1 ? [{
+      id: 'panelOrder', label: 'Panel order', type: 'select', structural: true, group: 'Panels', default: 'stagger',
+      options: [['stagger', 'By phase change (staircase)'], ['model', 'As in the data']],
+    }] : []),
+    ...(panels > 1 ? [{
+      id: 'staircase', label: 'Connect as staircase', type: 'check', group: 'Phases', default: false,
+      visibleWhen: { control: 'phaseLines', truthy: true },
+    }] : []),
+    {
+      id: 'phaseLineStyle', label: 'Phase line', type: 'select', group: 'Phases', default: 'solid',
+      options: [['solid', 'Solid'], ['dashed', 'Dashed']],
+      visibleWhen: { control: 'phaseLines', truthy: true },
+    },
+    { id: 'mono', label: 'Black & white (print)', type: 'check', structural: true, group: 'Style', default: false },
+    {
+      id: 'phaseLabels', label: 'Condition labels', type: 'select', group: 'Phases', default: 'top',
+      options: [['top', 'Top panel only'], ['all', 'Every panel'], ['none', 'Hidden']],
+    },
+    ...(panels > 1
+      ? [{ id: 'sharedY', label: 'Same Y scale on all panels', type: 'check', group: 'Panels', default: true }]
+      : []),
+    { id: 'panelHeight', label: 'Panel height', type: 'number', min: 70, max: 320, step: 10, group: 'Panels', default: 130 },
+    { id: 'pointSize', label: 'Point size', type: 'number', min: 1, max: 10, step: 0.5, group: 'Style', default: 3.5 },
+    { id: 'yTickCount', label: 'Y tick count', type: 'number', min: 2, max: 11, step: 1, group: 'Style', default: 5 },
+    gridlinesControl(),
+    multi ? { ...paletteControl(true), visibleWhen: notMono } : null,
+    multi ? { ...legendControl(true, 'right'), visibleWhen: notMono } : null,
     ...titleControls(model),
     ...axisControls('x', model),
     ...axisControls('y', model),
-  ],
+    ];
+  },
   render: (model, view) => renderSced(model, view),
 });
 

@@ -76,24 +76,13 @@ registerChartKind('forest', {
     rowHeight: 22,
   }),
   controls: (model) => [
-    {
-      id: 'logScale', label: 'Log scale (ratio measures)', type: 'check', group: 'Chart', structural: true,
-      get: (v) => !!v.logScale, set: (v, x) => { v.logScale = x; },
-    },
-    {
-      id: 'showValues', label: 'Estimate column', type: 'check', group: 'Labels',
-      get: (v) => v.showValues !== false, set: (v, x) => { v.showValues = x; },
-    },
-    {
-      id: 'showWeights', label: 'Weight column', type: 'check', group: 'Labels',
-      get: (v) => v.showWeights !== false, set: (v, x) => { v.showWeights = x; },
-      visible: () => forestRows(model).some((s) => Number.isFinite(s.weight)),
-    },
-    {
-      id: 'rowHeight', label: 'Row height', type: 'number', min: 14, max: 40, step: 2, group: 'Style',
-      get: (v) => v.rowHeight || 22, set: (v, x) => { v.rowHeight = Number(x) || undefined; },
-    },
-    { ...gridlinesControl(), group: 'Style' },
+    { id: 'logScale', label: 'Log scale (ratio measures)', type: 'check', group: 'Chart', structural: true, default: false },
+    { id: 'showValues', label: 'Estimate column', type: 'check', group: 'Labels', default: true },
+    ...(forestRows(model).some((s) => Number.isFinite(s.weight))
+      ? [{ id: 'showWeights', label: 'Weight column', type: 'check', group: 'Labels', default: true }]
+      : []),
+    { id: 'rowHeight', label: 'Row height', type: 'number', min: 14, max: 40, step: 2, group: 'Style', default: 22 },
+    gridlinesControl(),
     ...titleControls(model),
     ...axisControls('x', model),
   ],

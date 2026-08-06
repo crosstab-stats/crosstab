@@ -29,15 +29,17 @@ registerChartKind('pie', {
   reorderCategories: false,
   colorItems: (model) => (model.slices || []).map((s) => ({ key: s.key, label: s.label || s.key })),
   baseView: () => ({ legend: 'right', valueLabels: true, pieRotation: 0 }),
-  controls: () => [
-    {
-      id: 'pieRotation', group: 'Chart', label: 'Rotate (°)', type: 'number', min: 0, max: 360, step: 15,
-      get: (v) => v.pieRotation || 0, set: (v, x) => { v.pieRotation = ((Number(x) % 360) + 360) % 360; },
-    },
-    paletteControl(),
-    legendControl(),
-    valueLabelsControl('Show %'),
-  ],
+  controls: (model) => {
+    const multi = (model.slices || []).length > 1;
+    return [
+      // `wrap` rather than clamp: 370° is a legitimate way to type 10°, and clamping it
+      // to 360 would silently mean "no rotation" instead.
+      { id: 'pieRotation', group: 'Chart', label: 'Rotate (°)', type: 'number', min: 0, max: 360, step: 15, wrap: 360, default: 0 },
+      paletteControl(multi),
+      legendControl(multi, 'right'),
+      valueLabelsControl('Show %'),
+    ];
+  },
   render: (model, view) => renderPie(model, view),
 });
 

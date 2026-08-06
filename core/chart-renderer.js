@@ -124,6 +124,11 @@ export {
   PALETTES,
   DEFAULT_PALETTE,
   colorFor,
+  // The control-descriptor engine: descriptors are data, so the host reads and writes
+  // them rather than calling closures they no longer carry.
+  controlValue,
+  setControlValue,
+  controlVisible,
   // Shared control descriptors, reusable by any kind.
   paletteControl,
   legendControl,

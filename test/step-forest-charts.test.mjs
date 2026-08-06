@@ -198,8 +198,9 @@ test('forest grows its canvas with the study count', () => {
 
 test('forest weight column hides when no weights were supplied', () => {
   const noW = { ...FOREST, studies: FOREST.studies.map(({ weight, ...s }) => s) };
-  const ctl = chartUiSpec(noW).controls.find((c) => c.id === 'showWeights');
-  assert.equal(ctl.visible({}, noW), false);
+  // Absent, not hidden: no study carries a weight, so the column can never apply here.
+  assert.equal(chartUiSpec(noW).controls.find((c) => c.id === 'showWeights'), undefined);
+  assert.ok(chartUiSpec(FOREST).controls.find((c) => c.id === 'showWeights'), 'present when weights exist');
   assert.ok(!render(noW).includes('Weight'), 'no weight heading without weights');
 });
 

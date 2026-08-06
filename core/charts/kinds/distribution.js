@@ -33,32 +33,31 @@ function replicateKeys(model) {
 /** Controls shared by the two distribution kinds (violin / dots). */
 function distributionControls(model) {
   const reps = replicateKeys(model);
+  // Colour items are the replicates when there are any, else the groups — so that is
+  // what decides whether a palette and legend have anything to say.
+  const multi = reps.length > 1 || (model.groups || []).length > 1;
   return [
+    { id: 'showPoints', label: 'Show data points', type: 'check', group: 'Chart', default: true },
     {
-      id: 'showPoints', label: 'Show data points', type: 'check', group: 'Chart',
-      get: (v) => v.showPoints !== false, set: (v, x) => { v.showPoints = x; },
+      id: 'pointSize', label: 'Point size', type: 'number', min: 1, max: 10, step: 0.5, group: 'Style', default: 3,
+      // Note this is the SAME declaration as the boxplot's point-size dependency, even
+      // though that kind defaults `showPoints` off and this one defaults it on. Naming
+      // the control instead of the view key is what makes the two identical.
+      visibleWhen: { control: 'showPoints', truthy: true },
     },
     {
-      id: 'pointSize', label: 'Point size', type: 'number', min: 1, max: 10, step: 0.5, group: 'Style',
-      get: (v) => v.pointSize || 3, set: (v, x) => { v.pointSize = Number(x) || undefined; },
-      visible: (v) => v.showPoints !== false,
-    },
-    {
-      id: 'summary', label: 'Summary', type: 'select', group: 'Chart',
+      id: 'summary', label: 'Summary', type: 'select', group: 'Chart', default: 'median',
       options: [['median', 'Median + quartiles'], ['mean', 'Mean + SD'], ['none', 'None']],
-      get: (v) => v.summary || 'median', set: (v, x) => { v.summary = x; },
     },
-    {
-      // The SuperPlot convention (Lord et al. 2020): colour points by biological
-      // replicate and mark each replicate's MEAN, so the reader sees that the effect
-      // reproduces across experiments rather than across pooled cells.
-      id: 'replicateMeans', label: 'Replicate means', type: 'check', group: 'Chart',
-      get: (v) => v.replicateMeans !== false, set: (v, x) => { v.replicateMeans = x; },
-      visible: () => reps.length > 1,
-    },
-    { ...gridlinesControl(), group: 'Style' },
-    { ...paletteControl(), group: 'Style' },
-    { ...legendControl(), group: 'Style' },
+    // The SuperPlot convention (Lord et al. 2020): colour points by biological
+    // replicate and mark each replicate's MEAN, so the reader sees that the effect
+    // reproduces across experiments rather than across pooled cells.
+    ...(reps.length > 1
+      ? [{ id: 'replicateMeans', label: 'Replicate means', type: 'check', group: 'Chart', default: true }]
+      : []),
+    gridlinesControl(),
+    paletteControl(multi),
+    legendControl(multi, 'right'),
     ...titleControls(model),
     ...axisControls('x', model),
     ...axisControls('y', model),
@@ -151,10 +150,7 @@ registerChartKind('violin', {
     legend: replicateKeys(model).length > 1 ? 'right' : 'none',
   }),
   controls: (model) => [
-    {
-      id: 'violinWidth', label: 'Violin width', type: 'number', min: 0.2, max: 1, step: 0.1, group: 'Chart',
-      get: (v) => v.violinWidth ?? 0.8, set: (v, x) => { v.violinWidth = Number(x) || undefined; },
-    },
+    { id: 'violinWidth', label: 'Violin width', type: 'number', min: 0.2, max: 1, step: 0.1, group: 'Chart', default: 0.8 },
     ...distributionControls(model),
   ],
   render: (model, view) => {
@@ -238,21 +234,17 @@ registerChartKind('paired', {
   controls: (model) => [
     {
       id: 'colourBy', label: 'Colour lines by', type: 'select', structural: true, group: 'Chart',
+      default: 'direction',
       options: [['direction', 'Direction of change'], ['subject', 'Subject'], ['none', 'One colour']],
-      get: (v) => v.colourBy || 'direction', set: (v, x) => { v.colourBy = x; },
     },
+    { id: 'showPoints', label: 'Show data points', type: 'check', group: 'Chart', default: true },
     {
-      id: 'showPoints', label: 'Show data points', type: 'check', group: 'Chart',
-      get: (v) => v.showPoints !== false, set: (v, x) => { v.showPoints = x; },
-    },
-    {
-      id: 'summary', label: 'Group summary', type: 'select', group: 'Chart',
+      id: 'summary', label: 'Group summary', type: 'select', group: 'Chart', default: 'mean',
       options: [['mean', 'Mean per condition'], ['none', 'None']],
-      get: (v) => v.summary || 'mean', set: (v, x) => { v.summary = x; },
     },
-    { ...gridlinesControl(), group: 'Style' },
-    { ...paletteControl(), group: 'Style' },
-    { ...legendControl(), group: 'Style' },
+    gridlinesControl(),
+    paletteControl(true),
+    legendControl(true, 'none'),
     ...titleControls(model),
     ...axisControls('x', model),
     ...axisControls('y', model),

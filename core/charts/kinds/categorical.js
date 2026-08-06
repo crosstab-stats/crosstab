@@ -47,29 +47,33 @@ registerChartKind('categorical', {
     stack: 'none',
     legend: (model.series || []).length > 1 ? 'right' : 'none',
   }),
-  controls: (model) => [
+  controls: (model) => {
+    const multi = (model.series || []).length > 1;
+    return [
     {
-      id: 'mark', label: 'Type', type: 'select', structural: true, group: 'Chart',
+      id: 'mark', label: 'Type', type: 'select', structural: true, group: 'Chart', default: 'bar',
       options: [['bar', 'Bars'], ['line', 'Lines']],
-      get: (v) => v.mark || 'bar', set: (v, x) => { v.mark = x; },
     },
-    {
-      id: 'stack', label: 'Stacking', type: 'select', group: 'Chart',
+    // Stacking is meaningless for lines and for a single series. The line half is a
+    // view dependency; the single-series half is a fact about the model, so it is
+    // settled here by omitting the control rather than carried as a predicate.
+    ...(multi ? [{
+      id: 'stack', label: 'Stacking', type: 'select', group: 'Chart', default: 'none',
       options: [['none', 'Grouped'], ['stacked', 'Stacked'], ['percent', '100% stacked']],
-      get: (v) => v.stack || 'none', set: (v, x) => { v.stack = x; },
-      visible: (v) => v.mark !== 'line' && (model.series || []).length > 1,
-    },
+      visibleWhen: { control: 'mark', equals: 'bar' },
+    }] : []),
     pointOverlayControl(model),
     errorBarsControl(model),
     gridlinesControl(),
-    paletteControl(),
-    legendControl(),
+    paletteControl(multi),
+    legendControl(multi, 'right'),
     valueLabelsControl(),
     ...valueLabelFormatControls(),
     ...titleControls(model),
     ...axisControls('x', model),
     ...axisControls('y', model),
-  ],
+    ];
+  },
   render: (model, view) => renderCategorical(model, view),
 });
 

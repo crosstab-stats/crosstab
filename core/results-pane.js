@@ -187,6 +187,11 @@ const RESULTS_STYLES = `
      toggle actually shows/hides the panel (it defaults hidden). */
   .results-chart__opts[hidden] { display: none; }
   .results-chart__row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  /* A "note" descriptor: a statement in the panel where a control would be, explaining
+     why the control is absent. Indented to the control column so it reads as part of
+     the group rather than as a heading. #646e77 on #fff is 5.20:1.
+     (No backticks in this comment — the whole stylesheet is a JS template literal.) */
+  .results-chart__note { margin: 2px 0 2px 2px; font-size: 12px; line-height: 1.4; color: #646e77; }
   .results-chart__row--check { gap: 6px; cursor: pointer; }
   .results-chart__rowlabel { color: #555; min-width: 72px; }
   .results-chart__select { font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid #d8dee4; border-radius: 5px; background: #fff; flex: 1; }

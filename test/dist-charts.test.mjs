@@ -210,13 +210,17 @@ test('THE RULE: author colours are data and beat the palette', () => {
   for (const c of ['#8e44ad', '#16a085', '#d35400']) {
     assert.ok(svg.includes(c), `codebook colour ${c} survived`);
   }
+  // The palette control is ABSENT, not merely hidden. Whether author colours exist is a
+  // fact about the model, so the control can never apply to this chart — and a control
+  // that can never be shown should not be in the list at all.
   const spec = chartUiSpec(codedCloud);
-  const palette = spec.controls.find((c) => c.id === 'palette');
-  assert.equal(palette.visible(defaultView(codedCloud), codedCloud), false,
-    'palette control hides rather than offering an override that cannot work');
+  assert.equal(spec.controls.find((c) => c.id === 'palette'), undefined,
+    'palette control is withdrawn rather than offering an override that cannot work');
+  // …and it says why, instead of leaving an unexplained gap.
+  const note = spec.controls.find((c) => c.type === 'note');
+  assert.match(note.label, /Colours come from the data/);
   // Without author colours it comes back.
-  const p2 = chartUiSpec(themedCloud).controls.find((c) => c.id === 'palette');
-  assert.equal(p2.visible(defaultView(themedCloud), themedCloud), true);
+  assert.ok(chartUiSpec(themedCloud).controls.find((c) => c.id === 'palette'));
 });
 
 test('placement is deterministic — a reopened project must not reshuffle', () => {

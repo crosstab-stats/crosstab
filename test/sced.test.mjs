@@ -203,7 +203,7 @@ test('a single baseline and single intervention point still computes', () => {
 // baseline figure infers causation from the staggered boundaries, and a line drawn
 // across a phase change asserts a continuity the design is trying to interrupt.
 
-const { defaultView, renderChart, chartUiSpec } = await import('../core/chart-renderer.js');
+const { defaultView, renderChart, chartUiSpec, controlVisible } = await import('../core/chart-renderer.js');
 
 const pts = (xs, ys, phase) => xs.map((x, i) => ({ x, y: ys[i], phase }));
 const CHART = {
@@ -325,10 +325,12 @@ test('black & white mode drops colour AND the legend that would explain it', () 
     const [r0, g0, b0] = [1, 3, 5].map((i) => parseInt(full.slice(i, i + 2), 16));
     assert.ok(r0 === g0 && g0 === b0, `${hex} is not greyscale — a palette colour survived mono`);
   }
-  const ids = chartUiSpec(CHART).controls;
-  const legend = ids.find((c) => c.id === 'legend');
-  assert.equal(legend.visible({ mono: true }, CHART), false, 'legend control hides in mono');
-  assert.equal(legend.visible({ mono: false }, CHART), true, 'and returns in colour');
+  // Mono is a VIEW setting, so the legend control is present but conditional — and the
+  // condition is declared against the `mono` control rather than the raw view key.
+  const ctls = chartUiSpec(CHART).controls;
+  const legend = ctls.find((c) => c.id === 'legend');
+  assert.equal(controlVisible(legend, { mono: true }, ctls), false, 'legend control hides in mono');
+  assert.equal(controlVisible(legend, { mono: false }, ctls), true, 'and returns in colour');
 });
 
 test('a panel context label is drawn rotated in the left gutter', () => {
