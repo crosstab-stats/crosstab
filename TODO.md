@@ -3170,25 +3170,53 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## More analyses (each is just another plugin)
 
-- [ ] **#131 Layer 3 (plugin-defined chart kinds) — TABLED INDEFINITELY (2026-08-05).**
-      Not "later", not "next": tabled until a real need appears. Nobody outside the
-      project wants a chart type, and designing a plugin-facing control API against
-      zero clients is how you get the wrong API.
+- [ ] **#131 Layer 3 — plugin-defined chart kinds. UN-TABLED same day (2026-08-05),
+      because the blocker I recorded was wrong.**
 
-      Recorded so the reasoning is not re-derived: a chart kind's `render` returns an
-      **SVG string built with core's private helpers** (`svgOpen`, `niceTicks`,
-      `legendBlock`, `colorFor`, …). A sandboxed plugin cannot call those — it would
-      have to receive functions over postMessage (impossible) or reimplement them
-      (defeating the consistency the layer exists for). So "ship us a render function"
-      is not the shape. The two viable shapes, if the need ever arises:
-      1. **Declarative marks** — the plugin describes `{type:'polygon', points, fill}`
-         against a frame core computes. Safe over the wire, but invents a chart grammar.
-      2. **Composition, not extension** — core keeps owning kinds; plugins get richer
-         primitives (series overlays, annotations) on existing ones. Cheaper, less
-         general, covers most real cases. **Preferred if forced to choose.**
+      I tabled this claiming a kind's `render` returns an SVG string built with core's
+      PRIVATE helpers, which a sandboxed plugin can neither receive (functions do not
+      cross postMessage) nor reimplement. Both halves are false:
 
-      The trigger to revisit is a third-party plugin wanting a chart type. Until then
-      adding a kind to core is a ~200-line, self-contained job (four done that way).
+      - **Functions DO cross.** core/plugin-broker.js has a documented callback
+        marshalling layer: the iframe replaces a function with `{__cb:id}`, the broker
+        revives it, and calls post `{t:'cb', cbId}` back. It is not theoretical —
+        `appendPlot(svg, {onRedraw})` uses it in production today, so "host asks the
+        plugin to redraw and swaps in the result" is a SHIPPED loop.
+      - **Plugins do not need core's helpers.** Five charts already render their own SVG
+        in JS (two word clouds, three in builtin-decisions). Drawing was never the gap.
+
+      What is actually missing is small:
+      1. **Declarative control descriptors.** Today they carry `get`/`set` closures, but
+         every single one is `view[key]` with a default (`v.titleSize || 15`,
+         `v.gridlines !== false`, …). Replace with `{id, label, type, options, default,
+         group, visibleWhen}` and the host does the get/set. No new grammar — the
+         descriptors are already pure data pretending to be functions.
+      2. **`app.charts.registerKind({name, controls, colorItems, render})`** on the
+         broker, with `render` marshalled as a callback like `onRedraw`.
+
+      Host keeps: the DOM, the controls, the view state, sanitising, PNG/SVG export.
+      Plugin gets: a model and a view, returns an SVG string. The trust boundary does
+      not move — plugin output is already sanitised and the plugin still never touches
+      the DOM.
+
+      Costs to design for, not blockers:
+      - **A postMessage round-trip per re-render.** Fine for selects and checkboxes;
+        number inputs need debouncing. `onRedraw` already demonstrates it is tolerable.
+      - **A slow or hostile plugin could stall a control.** Needs a timeout + fallback
+        to the last good SVG, which core kinds never require.
+      - **Restore.** `restoreModel` already notes a reopened plot loses its `onRedraw`.
+        Same for a plugin kind whose plugin is not activated — but `item.svg` is
+        persisted, so it degrades to a STATIC picture rather than vanishing. Worth
+        stating in the UI ("activate X to edit this chart"), and it is the same shape as
+        the plugin-activation tier in #157.
+
+      **Sequencing: build the `wordcloud` kind FIRST as the proving ground.** It is the
+      best test of whether the declarative descriptor form is expressive enough — it
+      needs a non-trivial control (`layout: single | clustered`) AND it carries the rule
+      that **some colours are data, not style**: a CAQDAS code's colour comes from the
+      codebook and must beat the palette control, or the cloud stops agreeing with every
+      other CAQDAS surface. If a declarative descriptor can express "palette hidden
+      because the author supplied colours", it can express most things.
 
 - [ ] **Baked-chart review — the lesson from #140 (2026-08-05).** 21 `appendPlot`
       call sites across 16 plugins still hand the host a FINISHED SVG, so they get no
