@@ -48,8 +48,21 @@
         /** The imported plugin module, captured on 'load'. */
         let pluginModule = null;
 
+        /**
+         * Chart kinds this plugin supplies: name -> {altNoun, colorLabel, describe, render}.
+         *
+         * They stay HERE, in the frame. The kind objects hold functions, so they could
+         * never be posted to the host — the host holds only their names and calls back
+         * in with {t:'chartCall'}. That is also why the drawing stdlib is imported here
+         * rather than passed: it is a module full of functions, useless once cloned.
+         */
+        let chartKinds = null;
+
         /** The `app` proxy handed to the plugin, built once on 'activate'. */
         let app = null;
+
+        /** Source text of the host's chart-drawing stdlib, sent with 'load'. */
+        let stdlibSource = null;
 
         /** Debug logging gate — set to true when the host sends `debug: true`
          * in the activate message. Plugins read `app.debug` to gate their own
@@ -271,8 +284,26 @@
           switch (msg.t) {
             case 'load':
               setStep('loading');
+              stdlibSource = msg.stdlib || null;
               await importPlugin(msg.code, msg.rid);
               break;
+
+            case 'chartCall': {
+              // The host asks a kind to describe itself for a model, or to render one.
+              // Both return plain data (a descriptor spec, or an SVG string), which is
+              // the reason the split is two verbs and not "hand us your kind object".
+              try {
+                const kd = chartKinds && chartKinds[msg.kind];
+                if (!kd) throw new Error('no chart kind "' + msg.kind + '"');
+                const fn = kd[msg.op];
+                if (typeof fn !== 'function') throw new Error('chart kind "' + msg.kind + '" has no ' + msg.op + '()');
+                const value = await fn(msg.model, msg.view);
+                reply(msg, { t: 'chartResult', ok: true, value });
+              } catch (err) {
+                reply(msg, { t: 'chartResult', ok: false, error: String((err && err.message) || err) });
+              }
+              break;
+            }
 
             case 'activate':
               try {
@@ -411,6 +442,24 @@
             url = URL.createObjectURL(blob);
             pluginModule = await import(url);
             const m = pluginModule.manifest;
+            // A chart plugin is handed the host's drawing stdlib as a plain namespace.
+            // The host cannot pass a module across postMessage, so it sends the SOURCE
+            // and we import it here, in this realm, next to the plugin that will use it.
+            // One copy of the drawing code, owned by core, reaching every chart plugin —
+            // including third-party ones, which is the whole point.
+            if (m && m.charts && m.charts.via && stdlibSource) {
+              const libUrl = URL.createObjectURL(new Blob([stdlibSource], { type: 'text/javascript' }));
+              try {
+                const lib = await import(libUrl);
+                const factory = pluginModule[m.charts.via];
+                if (typeof factory !== 'function') {
+                  throw new Error('manifest.charts.via names "' + m.charts.via + '", which the plugin does not export');
+                }
+                chartKinds = await factory(lib);
+              } finally {
+                URL.revokeObjectURL(libUrl);
+              }
+            }
             // A plugin declares what it contributes (menu items, importers,
             // exporters) as manifest sections; the named functions they reference
             // are validated per-call at 'invoke'.
@@ -421,10 +470,11 @@
                 Array.isArray(m.exports) ||
                 Array.isArray(m.outputExports) ||
                 Array.isArray(m.workspaces) ||
-                Array.isArray(m.codecs));
+                Array.isArray(m.codecs) ||
+                (m.charts && typeof m.charts.via === 'string'));
             if (!hasDeclarative) {
               throw new Error(
-                'plugin must export `manifest` with a declarative section (menu/imports/exports/outputExports/workspaces)',
+                'plugin must export `manifest` with a declarative section (menu/imports/exports/outputExports/workspaces/codecs/charts)',
               );
             }
             post({ t: 'manifest', ok: true, manifest: pluginModule.manifest, rid: rid || null });

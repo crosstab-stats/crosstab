@@ -95,21 +95,10 @@
  * @property {boolean} [structural] - changing it re-lays-out the controls panel.
  */
 
-// The kind modules are imported for their SIDE EFFECT: each calls registerChartKind at
-// module scope. Adding a chart type is adding a file and a line here — the renderer,
-// the controls panel, persistence and export all pick it up with no further changes.
-//
-// Import order is the order kinds appear in any UI that enumerates the registry, so it
-// is grouped by family rather than alphabetically.
-import './charts/kinds/categorical.js';
-import './charts/kinds/scatter.js';
-import './charts/kinds/pie.js';
-import './charts/kinds/distribution.js';
-import './charts/kinds/box.js';
-import './charts/kinds/steps.js';
-import './charts/kinds/forest.js';
-import './charts/kinds/sced.js';
-import './charts/kinds/wordcloud.js';
+// Core ships NO chart kinds. They live in the builtin-charts plugin and register
+// through `manifest.charts`, exactly as a third-party chart plugin would — see
+// core/plugin-actions.js. This file is the host-side surface only: registry, view
+// state, control engine, and the drawing stdlib the plugin is handed.
 
 export {
   // The async path the APP uses: a kind may live in a plugin, behind postMessage.

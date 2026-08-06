@@ -32,6 +32,28 @@ import { assetRefDecls, declaredCollections } from './collections.js';
  * a different version" badge — no shims, no hard break.
  * @type {string}
  */
+/**
+ * The chart-drawing stdlib's SOURCE, fetched once and cached.
+ *
+ * Handed to every plugin sandbox so a plugin declaring `manifest.charts` can be given
+ * the library as a real module namespace. It has to travel as text: a module cannot be
+ * structured-cloned, and a blob URL minted in this realm is not fetchable from an
+ * opaque-origin frame. Resolved against `import.meta.url` so it follows the app wherever
+ * it is served from, and cached because every plugin load would otherwise re-read it.
+ *
+ * A failure here is not fatal — a plugin with no `charts` section never looks at it, and
+ * one that does gets a clear error from the frame instead of a broken import.
+ */
+let chartStdlibPromise = null;
+function chartStdlibSource() {
+  if (!chartStdlibPromise) {
+    chartStdlibPromise = fetch(new URL('./charts/stdlib.js', import.meta.url))
+      .then((r) => (r.ok ? r.text() : ''))
+      .catch(() => '');
+  }
+  return chartStdlibPromise;
+}
+
 export const API_VERSION = '0.1.0';
 
 // The sandbox document + its per-capability CSP live in one place now
@@ -349,7 +371,7 @@ export class PluginLoader {
     try {
       await loaded;
       await broker.whenReady();
-      const manifest = await broker.sendLoad(code);
+      const manifest = await broker.sendLoad(code, await chartStdlibSource());
       if (!manifest || typeof manifest.id !== 'string') {
         throw new Error(`Plugin at ${label} exported no valid manifest`);
       }
@@ -396,7 +418,7 @@ export class PluginLoader {
     try {
       await loaded;             // the frame's own load/error — not a clock
       await broker.whenReady(); // …and the guest's own ready signal
-      const manifest = await broker.sendLoad(code);
+      const manifest = await broker.sendLoad(code, await chartStdlibSource());
 
       if (!manifest || typeof manifest.id !== 'string') {
         throw new Error(`Plugin at ${label} exported no valid manifest`);
@@ -573,6 +595,21 @@ export class PluginLoader {
     if (!record) throw new Error(`Plugin "${id}" is not loaded`);
     await this.#ensurePackages(record);
     return record.broker.invoke(fn, args);
+  }
+
+  /**
+   * Ask a loaded plugin's chart kind to describe itself for a model, or to render one.
+   * Deliberately NOT routed through {@link Loader#invoke}: that path installs R packages
+   * and calls a manifest-named export with `app`, neither of which a chart kind wants —
+   * a render happens on every control tweak and must stay cheap.
+   *
+   * @param {string} id @param {string} kind
+   * @param {'describe'|'render'} op @param {object} model @param {object} [view]
+   */
+  async chartCall(id, kind, op, model, view) {
+    const record = this.#plugins.get(id);
+    if (!record) throw new Error(`Plugin "${id}" is not loaded`);
+    return record.broker.chartCall(kind, op, model, view);
   }
 
   /**

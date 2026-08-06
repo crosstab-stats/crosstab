@@ -17,6 +17,7 @@
  */
 
 import { CoreEvents } from './event-bus.js';
+import { registerRemoteChartKind, unregisterChartKind } from './chart-renderer.js';
 import { newOpId } from './merge.js';
 
 export class PluginActions {
@@ -78,6 +79,11 @@ export class PluginActions {
     for (const ws of manifest?.workspaces ?? []) {
       if (Array.isArray(ws.verbs) && ws.verbs.length > 0) return true;
     }
+    // A chart plugin contributes no menu, no importer and no workspace — its whole
+    // contribution is the kinds it supplies. Without this it loads, is catalogued, is
+    // reported as activated, and is never wired: the manifest arrives intact and
+    // nothing reads it.
+    if (Array.isArray(manifest?.charts?.kinds) && manifest.charts.kinds.length > 0) return true;
     return false;
   }
 
@@ -104,6 +110,29 @@ export class PluginActions {
       // Index it so the script editor can rebuild a replayable entry from a
       // `run <id>.<fn>` line (it needs the item's label/inputs + plugin name).
       this.#runnable.set(`${id}::${item.run}`, { manifest, item, origin: originLabel });
+    }
+
+    // Chart kinds: a `charts` manifest section names the kinds this plugin supplies
+    // and the exported factory that builds them. The host registers each name against
+    // two calls into the frame — describe(model) and render(model, view) — and owns
+    // everything else: the registry, the view state, the controls panel, persistence,
+    // export. Exactly the menu split: the shell is the host's, the items are not.
+    //
+    // No `app.charts.registerKind()` verb exists, and deliberately so — loader.js is
+    // explicit that the app surface exposes no registration verbs and a plugin can only
+    // do what a manifest section exists for.
+    for (const name of manifest.charts?.kinds ?? []) {
+      registerRemoteChartKind(name, {
+        provider: manifest.name || id,
+        describe: (model) => this.#loader.chartCall(id, name, 'describe', model),
+        render: (model, view) => this.#loader.chartCall(id, name, 'render', model, view),
+      });
+      disposers.push(() => unregisterChartKind(name));
+    }
+    if ((manifest.charts?.kinds ?? []).length) {
+      // Charts already on screen are showing their saved figure because nothing could
+      // draw them. Now something can.
+      this.#bus?.emit?.(CoreEvents.CHART_KINDS_CHANGED);
     }
 
     // Importers/exporters: bridge the declarative named function to each host
@@ -279,6 +308,9 @@ export class PluginActions {
     for (const key of this.#runnable.keys()) {
       if (key.startsWith(`${id}::`)) this.#runnable.delete(key);
     }
+    // A chart kind may have just gone away with it, so any chart of that kind on screen
+    // has to fall back to its saved figure.
+    this.#bus?.emit?.(CoreEvents.CHART_KINDS_CHANGED);
   }
 
   /**

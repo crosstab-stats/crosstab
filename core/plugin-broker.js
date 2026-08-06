@@ -237,10 +237,14 @@ export class PluginBroker {
    * version-check and pre-install packages first).
    *
    * @param {string} code - Plugin entry-module source text.
+   * @param {string} [stdlib] - Source of the host's chart-drawing stdlib, for a plugin
+   *   declaring `manifest.charts`. Sent as TEXT because a module cannot cross
+   *   postMessage and a host-realm blob URL is not fetchable from an opaque-origin
+   *   frame — the frame imports it itself, exactly as it does the plugin's own source.
    * @returns {Promise<import('./loader.js').PluginManifest>}
    */
-  sendLoad(code) {
-    this.#post({ t: 'load', code });
+  sendLoad(code, stdlib) {
+    this.#post({ t: 'load', code, stdlib });
     // Bound the wait: a malicious/broken plugin that imports but never posts
     // {t:'manifest'} would otherwise leave this broker (and its live sandbox)
     // attached forever — a capability leak on the probe path especially, where
@@ -260,6 +264,19 @@ export class PluginBroker {
   invoke(fn, args = []) {
     const { rid, promise } = this.#calls.open('invoke');
     this.#post({ t: 'invoke', fn, args, rid });
+    return promise;
+  }
+
+  /**
+   * Ask one of the plugin's chart kinds to describe itself for a model, or to render
+   * one. Plain data both ways — a descriptor spec, or an SVG string.
+   *
+   * @param {string} kind @param {'describe'|'render'} op
+   * @param {object} model @param {object} [view]
+   */
+  chartCall(kind, op, model, view) {
+    const { rid, promise } = this.#calls.open('chartCall');
+    this.#post({ t: 'chartCall', kind, op, model, view, rid });
     return promise;
   }
 
@@ -448,6 +465,10 @@ export class PluginBroker {
         break;
       case 'invoked':
         this.#calls.settle(msg.rid, { ok: msg.ok, value: msg.value, error: msg.error || 'plugin function failed' });
+        break;
+
+      case 'chartResult':
+        this.#calls.settle(msg.rid, { ok: msg.ok, value: msg.value, error: msg.error || 'chart kind failed' });
         break;
       case 'call':
         this.#handleCall(msg);

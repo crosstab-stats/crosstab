@@ -28,6 +28,7 @@
 import { sanitizeHtml } from './sanitize-html.js';
 import { downloadFile } from './export-service.js';
 import { describeChart, renderChartAsync, viewFromSpec, getChartKind } from './chart-renderer.js';
+import { CoreEvents } from './event-bus.js';
 import { buildChartControls } from './chart-controls.js';
 
 /** Canonical stylesheet applied inside the shadow root. Kept inline so the pane
@@ -302,6 +303,41 @@ export class ResultsPane {
     this.#root.append(this.#content);
 
     this.#renderEmptyState();
+
+    // A chart's kind can arrive or depart while its figure is on screen — the plugin
+    // supplying it was activated, or switched off. Rebuild the affected blocks in place
+    // rather than making the user reload: a chart that has just become editable should
+    // simply become editable.
+    this.#bus?.on?.(CoreEvents.CHART_KINDS_CHANGED, () => this.#refreshCharts());
+  }
+
+  /**
+   * Re-evaluate every chart block against the CURRENT registry.
+   *
+   * Rebuilds only the ones whose liveness actually changed — a static chart whose kind
+   * has appeared, or a live one whose kind has gone. Everything else is left alone, so
+   * a plugin activating does not throw away view state or scroll position across a pane
+   * full of unrelated figures.
+   *
+   * This is the other half of the restore story. `restoreModel` runs before any plugin
+   * is applied (core/project-sync.js:1014 vs :1020) and therefore paints saved SVG;
+   * this is what promotes those blocks once their provider shows up.
+   */
+  #refreshCharts() {
+    for (const item of this.#model) {
+      if (item.kind !== 'chart') continue;
+      const block = this.#plots.get(item.id)?.closest('.results-chart');
+      if (!block) continue;
+      const wasStatic = block.classList.contains('results-chart--static');
+      const nowStatic = chartNeedsStaticFallback(item, getChartKind);
+      if (wasStatic === nowStatic) continue;
+      // Drop the cached spec either way. Going live, it must be fetched from whoever
+      // now owns the kind; going static, it describes a kind that no longer exists and
+      // would be wrong if that plugin came back a different version.
+      item.spec = undefined;
+      this.#plots.delete(item.id);
+      block.replaceWith(this.#buildChartBlock(item));
+    }
   }
 
   /**

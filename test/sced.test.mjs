@@ -203,6 +203,10 @@ test('a single baseline and single intervention point still computes', () => {
 // baseline figure infers causation from the staggered boundaries, and a line drawn
 // across a phase change asserts a continuity the design is trying to interrupt.
 
+// Core ships no chart kinds; the builtin-charts plugin does. Register its real
+// kinds locally so these tests drive the shipping code, not a stub.
+await import('./chart-kinds-harness.mjs');
+
 const { defaultView, renderChart, chartUiSpec, controlVisible } = await import('../core/chart-renderer.js');
 
 const pts = (xs, ys, phase) => xs.map((x, i) => ({ x, y: ys[i], phase }));

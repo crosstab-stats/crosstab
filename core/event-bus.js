@@ -44,6 +44,11 @@ export const CoreEvents = Object.freeze({
    * set was applied. Lets the project autosave re-record its `activePlugins`. No
    * payload. */
   PLUGINS_CHANGED: 'plugins:changed',
+  /** The set of registered chart kinds changed — a plugin supplying one was wired or
+   * unwired. Charts already on screen re-evaluate: a static one whose kind just arrived
+   * becomes live, and a live one whose kind just left falls back to its saved figure.
+   * No payload. */
+  CHART_KINDS_CHANGED: 'charts:kinds-changed',
   /** A plugin workspace wrote its state blob. Lets the project autosave persist
    * the workspace sidecar. Payload: { id } (the workspace id). */
   WORKSPACE_CHANGED: 'workspace:changed',

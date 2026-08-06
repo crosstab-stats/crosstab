@@ -95,6 +95,10 @@ const SHARED_DEFAULTS = {
 
 /** Compute a {@link ChartSpec} from a LOCAL kind definition. Pure. */
 export function chartSpecOf(kd, model) {
+  // A kind may already speak the wire contract — that is the shape the builtin-charts
+  // plugin returns, and tests register those same objects locally so they can be driven
+  // synchronously. Prefer it when present.
+  if (typeof kd.describe === 'function') return kd.describe(model);
   return {
     altNoun: kd.altNoun || 'Chart',
     colorLabel: (typeof kd.colorLabel === 'function' ? kd.colorLabel(model) : kd.colorLabel) || 'Series',

@@ -15,6 +15,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+// Core ships no chart kinds; the builtin-charts plugin does. Register its real
+// kinds locally so these tests drive the shipping code, not a stub.
+await import('./chart-kinds-harness.mjs');
+
 const { chartNeedsStaticFallback, staticChartNotice } = await import('../core/results-pane.js');
 const { getChartKind } = await import('../core/chart-renderer.js');
 

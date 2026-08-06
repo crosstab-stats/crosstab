@@ -130,6 +130,10 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-docx-export/index.js',
   './plugins/builtin-correlation/index.js',
   './plugins/builtin-logistic/index.js',
+  // Charts first: it supplies no menu of its own, but every plugin that draws a figure
+  // needs its kinds registered. Order here is only cosmetic (loads are concurrent), but
+  // it says what depends on what.
+  './plugins/builtin-charts/index.js',
   './plugins/builtin-plots/index.js',
   './plugins/builtin-bootstrap/index.js',
   './plugins/builtin-compare/index.js',

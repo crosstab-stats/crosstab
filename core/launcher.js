@@ -21,6 +21,11 @@ import { newItemId } from './item-store.js';
 const CORE_IDS = new Set([
   'builtin-frequencies', 'builtin-descriptives', 'builtin-crosstabs',
   'builtin-correlation', 'builtin-regression', 'builtin-plots',
+  // Supplies every chart TYPE. Not optional in practice: without it any analysis that
+  // draws a figure produces one that cannot be edited, and reopened projects show their
+  // saved figures rather than live charts. It is in the curated core for the same reason
+  // the importers are default-on — the out-of-the-box path must simply work.
+  'builtin-charts',
 ]);
 /** File-I/O categories that are **default-on in a fresh launch** (so import/export
  * works out of the box) — but NOT forced: nothing re-enables them behind the user's
