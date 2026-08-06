@@ -112,13 +112,22 @@ import './charts/kinds/sced.js';
 import './charts/kinds/wordcloud.js';
 
 export {
-  // Model → SVG, and the view state that drives it.
+  // The async path the APP uses: a kind may live in a plugin, behind postMessage.
+  describeChart,
+  renderChartAsync,
+  viewFromSpec,
+  uiSpecFromSpec,
+  // Model → SVG synchronously. Local kinds only — tests, and anything core still ships.
   renderChart,
   defaultView,
   chartUiSpec,
+  chartSpecOf,
   // The registry, for kinds registering themselves — and for the results pane, which
   // asks whether a saved chart's kind still exists before trying to re-render it.
   registerChartKind,
+  registerRemoteChartKind,
+  unregisterChartKind,
+  chartKindNames,
   getChartKind,
   // Palettes.
   PALETTES,

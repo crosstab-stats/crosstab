@@ -52,16 +52,46 @@ export function colorFor(view, key, i) {
 const KINDS = new Map();
 
 /**
- * Register a chart kind (see file header for the shape).
+ * Register a chart kind that lives in THIS realm (core, or a test harness).
  *
- * `def.provider` optionally names whatever supplies the kind — a plugin id, for a kind
- * that did not ship with core. It exists so a chart can say *what to switch on* when it
- * is reopened somewhere the kind is missing: {@link module:core/results-pane} stamps it
- * onto the saved item at append time, precisely because by the time the chart is being
- * restored the registry no longer has the entry to ask.
+ * `def.provider` optionally names whatever supplies the kind. It exists so a chart can
+ * say *what to switch on* when it is reopened somewhere the kind is missing:
+ * {@link module:core/results-pane} stamps it onto the saved item at append time,
+ * precisely because by the time the chart is being restored the registry can no longer
+ * answer.
  */
 export function registerChartKind(name, def) {
-  KINDS.set(name, def);
+  KINDS.set(name, { ...def, local: true });
+}
+
+/**
+ * Register a chart kind supplied by a **plugin**, which lives behind postMessage.
+ *
+ * Two verbs, and only two, because of what {@link chartSpecOf} guarantees: a kind's
+ * controls and colour items are a pure function of the MODEL, and control *visibility*
+ * is resolved host-side from the descriptors. So the host asks once per model
+ * (`describe`) and then only ever re-renders (`render`) as the view changes.
+ *
+ * Called by the host on the plugin's behalf, driven by `manifest.charts` — never by the
+ * plugin itself. The loader is explicit that the `app` surface exposes no registration
+ * verbs and a plugin can only do what a manifest section exists for.
+ *
+ * @param {string} name
+ * @param {{provider:string, describe:(model:object)=>Promise<object>,
+ *          render:(model:object, view:object)=>Promise<string>}} remote
+ */
+export function registerRemoteChartKind(name, remote) {
+  KINDS.set(name, { ...remote, local: false });
+}
+
+/** Forget a kind — its plugin was deactivated. */
+export function unregisterChartKind(name) {
+  return KINDS.delete(name);
+}
+
+/** Every registered kind name. */
+export function chartKindNames() {
+  return [...KINDS.keys()];
 }
 
 /** The definition for a kind, or undefined if unknown. */
@@ -79,21 +109,66 @@ const SHARED_DEFAULTS = {
 };
 
 /**
- * Build the initial {@link ViewState} for a model: shared defaults, the kind's
+ * Everything the host needs to know about a kind *for one model*, as pure data.
+ *
+ * This is the whole plugin contract. It is deliberately all-clonable: no functions, so
+ * it survives postMessage unchanged whether it was computed here or in a sandbox.
+ *
+ * @typedef {Object} ChartSpec
+ * @property {string} altNoun
+ * @property {string} colorLabel
+ * @property {boolean} reorderCategories
+ * @property {{key:string,label:string}[]} colorItems
+ * @property {ControlDescriptor[]} controls
+ * @property {Object} baseView
+ */
+
+/** Compute a {@link ChartSpec} from a LOCAL kind definition. Pure. */
+export function chartSpecOf(kd, model) {
+  return {
+    altNoun: kd.altNoun || 'Chart',
+    colorLabel: (typeof kd.colorLabel === 'function' ? kd.colorLabel(model) : kd.colorLabel) || 'Series',
+    reorderCategories: !!kd.reorderCategories,
+    colorItems: kd.colorItems ? kd.colorItems(model) : [],
+    // `.filter(Boolean)`: a shared builder returns null when its control does not
+    // apply (no palette for a single-colour chart), so kinds can list them flat.
+    controls: (kd.controls ? kd.controls(model) : []).filter(Boolean),
+    baseView: kd.baseView ? kd.baseView(model) : {},
+  };
+}
+
+/**
+ * Ask whoever owns this kind to describe itself for this model. Resolves to null when
+ * the kind is not registered — the caller shows the saved figure instead.
+ */
+export async function describeChart(model) {
+  const kd = getChartKind(model && model.kind);
+  if (!kd) return null;
+  if (kd.local) return chartSpecOf(kd, model);
+  const spec = await kd.describe(model);
+  return spec ? { ...spec, colorItems: spec.colorItems || [], controls: (spec.controls || []).filter(Boolean) } : null;
+}
+
+/** Render, wherever the kind lives. Resolves to null when the kind is not registered. */
+export async function renderChartAsync(model, view) {
+  const kd = getChartKind(model && model.kind);
+  if (!kd) return null;
+  return kd.local ? kd.render(model, view) : kd.render(model, view);
+}
+
+/**
+ * Build the initial {@link ViewState} from a spec: shared defaults, the kind's
  * `baseView`, then the plugin's `model.view`, with colour-item/category order seeded
  * from the model. Pure — returns a fresh object.
- * @param {ChartModel} model
- * @returns {ViewState}
  */
-export function defaultView(model) {
-  const kd = getChartKind(model.kind);
-  const itemKeys = (kd ? kd.colorItems(model) : []).map((it) => it.key);
+export function viewFromSpec(spec, model) {
+  const itemKeys = ((spec && spec.colorItems) || []).map((it) => it.key);
   const catKeys = (model.categories || []).map((c) => c.key);
   const v = {
     ...SHARED_DEFAULTS,
     seriesOrder: itemKeys,
     categoryOrder: catKeys,
-    ...(kd && kd.baseView ? kd.baseView(model) : {}),
+    ...((spec && spec.baseView) || {}),
     ...(model.view || {}),
   };
   v.seriesOrder = reconcileOrder(v.seriesOrder, itemKeys);
@@ -102,33 +177,35 @@ export function defaultView(model) {
   return v;
 }
 
-/** Render a chart model + view to an `<svg>` string (responsive via viewBox). */
+/** What the controls panel needs: the spec plus the model's own category list. */
+export function uiSpecFromSpec(spec, model) {
+  if (!spec) return { controls: [], colorItems: [], colorLabel: 'Series', reorderCategories: false, categories: [] };
+  return { ...spec, categories: model.categories || [] };
+}
+
+// --- synchronous convenience for LOCAL kinds ---------------------------------
+//
+// The app goes through the async path above, because a kind may live in a plugin. These
+// stay for local kinds — tests, and any kind core still ships — so a pure
+// model-in/SVG-out call does not have to be awaited to be checked.
+
+/** @see viewFromSpec — sync, local kinds only. */
+export function defaultView(model) {
+  const kd = getChartKind(model && model.kind);
+  return viewFromSpec(kd && kd.local ? chartSpecOf(kd, model) : null, model);
+}
+
+/** Render a chart model + view to an `<svg>` string. Sync, local kinds only. */
 export function renderChart(model, view) {
   const kd = getChartKind(model && model.kind);
-  if (!kd) return errorSvg(`Unsupported chart kind: ${esc(model && model.kind)}`);
+  if (!kd || !kd.local) return errorSvg(`Unsupported chart kind: ${esc(model && model.kind)}`);
   return kd.render(model, view);
 }
 
-/**
- * The UI spec a controls panel needs to render itself for this model: the kind's
- * control descriptors plus its colour-item list and category-reorder flag. Keeps
- * chart-controls.js free of any per-kind knowledge.
- * @param {ChartModel} model
- */
+/** @see uiSpecFromSpec — sync, local kinds only. */
 export function chartUiSpec(model) {
-  const kd = getChartKind(model.kind);
-  if (!kd) return { controls: [], colorItems: [], colorLabel: 'Series', reorderCategories: false, categories: [] };
-  return {
-    // `.filter(Boolean)`: a shared builder returns null when its control does not
-    // apply (no palette for a single-colour chart), so kinds can list them flat.
-    controls: (kd.controls ? kd.controls(model) : []).filter(Boolean),
-    colorItems: kd.colorItems(model),
-    // A kind may make this depend on the model — SCED calls it "Phases" or "Measures"
-    // depending on which channel is carrying the distinction.
-    colorLabel: (typeof kd.colorLabel === 'function' ? kd.colorLabel(model) : kd.colorLabel) || 'Series',
-    reorderCategories: !!kd.reorderCategories,
-    categories: model.categories || [],
-  };
+  const kd = getChartKind(model && model.kind);
+  return uiSpecFromSpec(kd && kd.local ? chartSpecOf(kd, model) : null, model);
 }
 
 /** Keep `wanted`'s order for keys that exist, append model keys it missed, drop

@@ -27,7 +27,7 @@
 
 import { sanitizeHtml } from './sanitize-html.js';
 import { downloadFile } from './export-service.js';
-import { renderChart, defaultView, getChartKind } from './chart-renderer.js';
+import { describeChart, renderChartAsync, viewFromSpec, getChartKind } from './chart-renderer.js';
 import { buildChartControls } from './chart-controls.js';
 
 /** Canonical stylesheet applied inside the shadow root. Kept inline so the pane
@@ -554,12 +554,16 @@ export class ResultsPane {
    * @param {import('./chart-renderer.js').ChartModel} model
    * @returns {number} a plot handle (usable with {@link ResultsPane#getPlotPng}).
    */
-  appendChart(model) {
+  async appendChart(model) {
     const safeModel = JSON.parse(JSON.stringify(model)); // detach from the plugin's object
+    // Ask whoever owns the kind to describe itself for this model. One round-trip when
+    // the kind lives in a plugin; immediate when it is local.
+    const spec = await describeChart(safeModel);
     const item = {
       kind: 'chart',
       model: safeModel,
-      view: defaultView(safeModel),
+      view: viewFromSpec(spec, safeModel),
+      spec,
       id: 0,
       svg: '',
       // Who supplies this kind, recorded NOW because the registry is the only place
@@ -597,15 +601,39 @@ export class ResultsPane {
     item.id = handle;
     this.#plots.set(handle, holder);
 
-    const rerender = () => {
-      // renderChart output is host-generated, but model text can come from an
-      // untrusted project on restore — sanitise like every other fragment.
-      item.svg = sanitizeHtml(renderChart(item.model, item.view));
+    // A restored chart arrives with only what the project saved, so its spec has to be
+    // fetched before anything can be drawn or any control built. `appendChart` already
+    // has one, in which case this settles on the first microtask.
+    const ready = (async () => {
+      if (!item.spec) {
+        item.spec = await describeChart(item.model);
+        // Saved view fields win over freshly computed defaults — they are the user's
+        // choices. Everything a stale save is missing is filled in from the spec.
+        item.view = { ...viewFromSpec(item.spec, item.model), ...(item.view || {}) };
+      }
+    })();
+
+    // Renders may cross a postMessage boundary, so they are async and can land out of
+    // order — a user dragging a number input fires several before the first returns.
+    // `seq` keeps only the newest: an older reply arriving late must not repaint over a
+    // newer one, which would leave the figure disagreeing with the controls.
+    let seq = 0;
+    const rerender = async () => {
+      const mine = ++seq;
+      await ready;
+      const svg = await renderChartAsync(item.model, item.view);
+      if (mine !== seq) return;
+      if (svg == null) return; // kind went away mid-session; keep the last good figure
+      // Render output is host-generated for a core kind and plugin-generated for a
+      // plugin one, and model text can come from an untrusted project on restore —
+      // sanitise either way, like every other fragment.
+      item.svg = sanitizeHtml(svg);
       holder.innerHTML = item.svg;
     };
+    // Paint whatever the project saved straight away, so a reopened chart is visible
+    // before its provider has answered — then the live render replaces it.
+    if (item.svg) holder.innerHTML = sanitizeHtml(item.svg);
     rerender();
-
-    block.append(buildChartControls(item, rerender));
 
     const save = document.createElement('div');
     save.className = 'results-plot__save';
@@ -614,6 +642,11 @@ export class ResultsPane {
       makeSaveBtn('⬇ PNG', () => savePlotPng(holder, handle)),
     );
     block.append(save);
+    // Controls need the spec, so they arrive with it — inserted above the save bar
+    // rather than appended, to keep the panel between the figure and the buttons.
+    ready.then(() => {
+      if (item.spec) block.insertBefore(buildChartControls(item, rerender), save);
+    });
     return block;
   }
 
@@ -772,7 +805,15 @@ export class ResultsPane {
    * @returns {Array<object>}
    */
   getModel() {
-    return this.#model.map((m) => ({ ...m }));
+    return this.#model.map((m) => {
+      // `spec` is a runtime cache — the kind's controls and colour items for this model.
+      // It is entirely derivable from the model, so persisting it would put a few KB of
+      // regenerable descriptors into every save and onto the collab wire, which is the
+      // same waste core/project-sync.js already strips `output` to avoid. Worse, a
+      // stale saved spec would out-rank a newer plugin's on reload.
+      const { spec, ...rest } = m;
+      return rest;
+    });
   }
 
   /**
@@ -851,10 +892,16 @@ export class ResultsPane {
         // first render overwrites it immediately, so nothing changes; for a chart whose
         // kind is missing it is the whole figure, and blanking it here was how a
         // reopened project used to lose the picture it had faithfully saved.
+        // Restore stays SYNCHRONOUS and does not ask any plugin anything. It cannot:
+        // core/project-sync.js applies the saved output at :1014 and the project's
+        // plugin set at :1020, so at this moment no chart plugin is activated. The saved
+        // SVG is painted immediately, and #upgradeCharts promotes the block to a live,
+        // editable chart when its provider arrives. That also makes opening a project
+        // with forty figures cheap — nothing is re-rendered up front.
         const restored = {
           kind: 'chart',
           model: item.model || null,
-          view: item.model ? { ...defaultView(item.model), ...(item.view || {}) } : {},
+          view: item.view || {},
           id: 0,
           svg: sanitizeHtml(item.svg || ''),
           kindProvider: typeof item.kindProvider === 'string' ? item.kindProvider : undefined,

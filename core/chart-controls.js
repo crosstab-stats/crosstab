@@ -27,7 +27,7 @@
  * section shut mid-edit).
  */
 
-import { chartUiSpec, colorFor, controlValue, setControlValue, controlVisible } from './chart-renderer.js';
+import { uiSpecFromSpec, colorFor, controlValue, setControlValue, controlVisible } from './chart-renderer.js';
 
 /**
  * @param {{model: import('./chart-renderer.js').ChartModel, view: import('./chart-renderer.js').ViewState}} item
@@ -78,7 +78,12 @@ export function buildChartControls(item, onChange) {
   // and the colour/order lists re-sort.
   const paint = () => {
     panel.replaceChildren();
-    const spec = chartUiSpec(model);
+    // The spec was fetched once, when the block was built — controls are a pure function
+    // of the MODEL, and the model does not change while a chart is on screen. Only the
+    // VIEW changes, and visibility against the view is resolved here from the
+    // descriptors. So a chart kind in a plugin is asked to describe itself exactly once,
+    // however much the user fiddles.
+    const spec = uiSpecFromSpec(item.spec, model);
 
     /** group name → {nodes, rows} in order of first appearance. `rows` is the count
      * shown in the header, which is not the node count: a reorder list is ONE node
