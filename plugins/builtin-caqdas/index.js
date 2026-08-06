@@ -1578,9 +1578,22 @@ export const workspace = {
       const model = buildThemedCloud(state, codeById);
       if (!model.themes.length) { app.results.appendError('No words found in the coded passages (after dropping very short/common words).'); return; }
       await app.results.beginAnalysis('Themed word cloud');
-      const render = (w, h) => themedCloudSvg(model.themes, w, h);
-      let handle;
-      handle = await app.results.appendPlot(render(720, 480), { title: 'Themed word cloud', onRedraw: (w, h) => app.results.updatePlot(handle, render(w, h)) });
+      // A chart MODEL rather than a hand-rolled SVG: the host owns layout (grouped by
+      // theme, or one pooled cloud — a view this never had), sizing and persistence.
+      // The codebook COLOUR travels with each word and beats the palette control,
+      // because in CAQDAS a code's colour is data: it appears on every other surface,
+      // and a cloud that repainted it would silently disagree with all of them.
+      await app.results.appendChart({
+        kind: 'wordcloud',
+        title: 'Themed word cloud',
+        words: model.themes.flatMap((t) => t.words.map((w) => ({
+          word: w.word,
+          count: w.count,
+          theme: t.name,
+          themeName: t.name,
+          color: w.color,
+        }))),
+      });
       await app.results.appendTable(
         { columns: ['Theme', 'Code', 'Word', 'Count'], rows: model.tableRows, rowHeaders: false },
         { caption: `Themed Word Cloud — top ${model.tableRows.length} words across ${model.themes.length} theme(s)` },
@@ -1755,79 +1768,6 @@ function buildThemedCloud(state, codeById) {
   for (const t of themes) for (const w of t.words) all.push([t.name, w.codeName, w.word, String(w.count)]);
   all.sort((a, b) => Number(b[3]) - Number(a[3]));
   return { themes, tableRows: all.slice(0, 40) };
-}
-
-/**
- * Render the themed cloud as SVG. Each theme gets a labelled cell on a grid; its
- * words spiral out from the cell centre with collision avoidance (so they group
- * spatially by theme and never overlap), sized by a global sqrt scale of their
- * per-theme counts and coloured with the codebook colour. Deterministic, so a
- * redraw at the same size is stable.
- */
-function themedCloudSvg(themes, W, H) {
-  const W2 = Math.max(360, Math.round(W));
-  const H2 = Math.max(240, Math.round(H));
-  let fmin = Infinity, fmax = 0;
-  for (const t of themes) for (const w of t.words) { if (w.count < fmin) fmin = w.count; if (w.count > fmax) fmax = w.count; }
-  if (!Number.isFinite(fmin)) fmin = 1;
-  const MINPX = Math.max(10, Math.round(H2 * 0.026));
-  const MAXPX = Math.max(MINPX + 8, Math.round(H2 * 0.12));
-  const sq = (v) => Math.sqrt(Math.max(0, v));
-  const sizeOf = (f) => {
-    const t = fmax > fmin ? (sq(f) - sq(fmin)) / (sq(fmax) - sq(fmin)) : 0.5;
-    return Math.round(MINPX + t * (MAXPX - MINPX));
-  };
-  const T = themes.length;
-  const cols = Math.ceil(Math.sqrt(T));
-  const cellW = W2 / cols;
-  const cellH = H2 / Math.ceil(T / cols);
-  const placed = [];
-  const overlaps = (b) => placed.some((p) => !(b.x1 < p.x0 || b.x0 > p.x1 || b.y1 < p.y0 || b.y0 > p.y1));
-  const parts = [];
-  themes.forEach((theme, ti) => {
-    const col = ti % cols, rowi = Math.floor(ti / cols);
-    const cxc = (col + 0.5) * cellW;
-    const cyc = (rowi + 0.5) * cellH;
-    const labelY = rowi * cellH + 14;
-    parts.push(
-      `<text x="${cxc.toFixed(1)}" y="${labelY.toFixed(1)}" font-size="12" fill="#8a93a0" text-anchor="middle" ` +
-        `font-family="system-ui, sans-serif" style="font-weight:600; text-transform:uppercase; letter-spacing:.05em">` +
-        `${escapeXml(theme.name)}</text>`,
-    );
-    placed.push({ x0: cxc - 64, x1: cxc + 64, y0: labelY - 11, y1: labelY + 4 }); // keep words clear of the label
-    for (const w of theme.words) {
-      const fs = sizeOf(w.count);
-      const halfW = w.word.length * fs * 0.30 + 3;
-      const halfH = fs * 0.62;
-      const step = Math.max(2, fs * 0.22);
-      let fx = cxc, fy = cyc, found = false;
-      for (let sI = 0; sI < 1200; sI++) {
-        const ang = 0.5 * sI;
-        const rad = step * 0.18 * ang;
-        const px = cxc + rad * Math.cos(ang);
-        const py = cyc + rad * Math.sin(ang);
-        const box = { x0: px - halfW, x1: px + halfW, y0: py - halfH, y1: py + halfH };
-        if (box.x0 < 3 || box.x1 > W2 - 3 || box.y0 < 18 || box.y1 > H2 - 3) continue;
-        if (!overlaps(box)) { fx = px; fy = py; placed.push(box); found = true; break; }
-      }
-      if (!found) {
-        fx = Math.min(W2 - halfW - 3, Math.max(halfW + 3, cxc));
-        fy = Math.min(H2 - halfH - 3, Math.max(halfH + 3, cyc));
-        placed.push({ x0: fx - halfW, x1: fx + halfW, y0: fy - halfH, y1: fy + halfH });
-      }
-      const weight = fs >= (MINPX + MAXPX) / 2 ? 600 : 400;
-      parts.push(
-        `<text x="${fx.toFixed(1)}" y="${fy.toFixed(1)}" font-size="${fs}" fill="${w.color}" ` +
-          `text-anchor="middle" dominant-baseline="central" ` +
-          `font-family="system-ui, -apple-system, Segoe UI, sans-serif" style="font-weight:${weight}">` +
-          `<title>${escapeXml(w.word)} — ${escapeXml(theme.name)} (${w.count})</title>${escapeXml(w.word)}</text>`,
-      );
-    }
-  });
-  return (
-    `<svg viewBox="0 0 ${W2} ${H2}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Themed word cloud">` +
-    `<rect x="0" y="0" width="${W2}" height="${H2}" fill="#ffffff"/>${parts.join('')}</svg>`
-  );
 }
 
 /** Coerce a loaded/empty blob into the working shape. */

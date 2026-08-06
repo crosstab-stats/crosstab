@@ -68,10 +68,6 @@ export const manifest = {
           { value: 'spiral', label: 'Pack by frequency (classic spiral)' },
         ] },
         { name: 'themes', kind: 'number', label: 'Colour groups (themes)', hint: 'How many co-occurrence clusters to colour the words by.', default: 5 },
-        { name: 'palette', kind: 'choice', label: 'Colours', hint: 'Which palette to colour the themes with.', default: 'cbsafe', options: [
-          { value: 'cbsafe', label: 'Colourblind-safe (Okabe–Ito)' },
-          { value: 'vivid', label: 'Vivid' },
-        ] },
       ],
     },
     {
@@ -192,7 +188,7 @@ export async function wordFrequency(app, { text, stopwords, topn, minlen }) {
  * meaningful. "Classic spiral" packs purely by frequency from the centre instead;
  * it's also the automatic fallback when there are too few words to position.
  */
-export async function wordCloud(app, { text, topn, minlen, stopwords, layout, themes, palette }) {
+export async function wordCloud(app, { text, topn, minlen, stopwords, layout, themes }) {
   if (!text) {
     await app.results.appendError('Word cloud: choose a text column.');
     return;
@@ -243,14 +239,21 @@ export async function wordCloud(app, { text, topn, minlen, stopwords, layout, th
     return;
   }
   const contextual = layout !== 'spiral' && r.num('ok') === 1;
-  const colours = palette === 'vivid' ? PALETTE_VIVID : PALETTE_CBSAFE;
   const data = { words, freq, x: r.nums('x'), y: r.nums('y'), cl: r.nums('cl').map((v) => Math.round(v)) };
-  const render = (w, h) => buildCloudSvg(data, w, h, contextual, colours);
-
-  let handle;
-  handle = await app.results.appendPlot(render(680, 440), {
+  // Emits a chart MODEL, not a finished picture: the host owns the layout control
+  // (one cloud vs grouped by theme), the palette and the persistence. The two word
+  // clouds in this app used to be separate hand-rolled SVG renderers; they are now the
+  // same `wordcloud` kind, differing only in whether themes carry colour or position.
+  await app.results.appendChart({
+    kind: 'wordcloud',
     title: 'Word cloud',
-    onRedraw: (w, h) => app.results.updatePlot(handle, render(w, h)),
+    words: words.map((w, i) => ({
+      word: w,
+      count: freq[i],
+      // Themes here come from a statistical clustering, and only when the contextual
+      // layout ran — absent that, the words carry no theme and the cloud is one field.
+      ...(contextual && data.cl.length === words.length ? { theme: `c${data.cl[i]}`, themeName: `Theme ${data.cl[i]}` } : {}),
+    })),
   });
 
   // An accessible companion table: the cloud can't be read by a screen reader and
@@ -574,126 +577,10 @@ function parseDict(text) {
 
 // --- helpers -----------------------------------------------------------------
 
-/** Default theme palette: the **Okabe–Ito** qualitative set — designed to stay
- * distinguishable under the common forms of colour-vision deficiency (no relying
- * on a red/green contrast). Okabe–Ito's pale yellow is dropped (too low-contrast
- * as text on white) and a neutral grey added, keeping eight legible hues. */
-const PALETTE_CBSAFE = ['#0072B2', '#D55E00', '#009E73', '#CC79A7', '#E69F00', '#000000', '#666666', '#56B4E9'];
-
-/** Alternative brighter palette (the user can opt into it); NOT colourblind-safe
- * — it pairs a red and a green that some viewers can't tell apart. */
-const PALETTE_VIVID = ['#2980b9', '#27ae60', '#c0392b', '#8e44ad', '#d35400', '#16a085', '#2c3e50', '#c2185b'];
-
 /** Clamp an optional numeric input to an integer in [lo, hi], defaulting if unset. */
 function clampInt(v, dflt, lo, hi) {
   const x = Number.isFinite(v) ? Math.floor(v) : dflt;
   return Math.max(lo, Math.min(hi, x));
-}
-
-/** XML-escape text for safe inclusion in the SVG (also re-sanitised host-side). */
-function escapeXml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-/** Single-hue colour for the no-theme (spiral / too-few-words) case: darker = more
- * frequent, so the visual still encodes frequency beyond size alone. */
-function freqColour(f, fmin, fmax) {
-  const t = fmax > fmin ? (f - fmin) / (fmax - fmin) : 0.5;
-  return `hsl(207, 60%, ${Math.round(62 - t * 42)}%)`;
-}
-
-/**
- * Build the word-cloud SVG. Words are sized by frequency and placed by spiralling
- * out from a target until they no longer overlap any already-placed word — so the
- * cloud is always readable. The target is the word's MDS position (contextual
- * layout) or the canvas centre (spiral layout). Layout is deterministic (no RNG),
- * so a redraw at the same size is stable.
- *
- * @param {{words:string[], freq:number[], x:number[], y:number[], cl:number[]}} data
- * @param {number} W - target canvas width (px)
- * @param {number} H - target canvas height (px)
- * @param {boolean} contextual - true → anchor at MDS coords; false → spiral from centre
- * @param {string[]} palette - theme colours (cycled if there are more themes)
- * @returns {string} an `<svg>` fragment
- */
-function buildCloudSvg(data, W, H, contextual, palette = PALETTE_CBSAFE) {
-  const { words, freq, x, y, cl } = data;
-  const n = words.length;
-  if (!n) return '';
-  const W2 = Math.max(320, Math.round(W));
-  const H2 = Math.max(220, Math.round(H));
-  const MINPX = Math.max(10, Math.round(H2 * 0.028));
-  const MAXPX = Math.max(MINPX + 8, Math.round(H2 * 0.13));
-  const fmin = Math.min(...freq);
-  const fmax = Math.max(...freq);
-  const sq = (v) => Math.sqrt(Math.max(0, v));
-  const sizeOf = (f) => {
-    const t = fmax > fmin ? (sq(f) - sq(fmin)) / (sq(fmax) - sq(fmin)) : 0.5;
-    return Math.round(MINPX + t * (MAXPX - MINPX));
-  };
-
-  // Biggest words first, so the prominent terms claim their target spot.
-  const order = [...Array(n).keys()].sort((a, b) => freq[b] - freq[a]);
-
-  const margin = Math.round(MAXPX * 0.6);
-  const cx0 = W2 / 2;
-  const cy0 = H2 / 2;
-  const tx = new Array(n);
-  const ty = new Array(n);
-  const useCoords = contextual && x.length === n && y.length === n;
-  if (useCoords) {
-    const xmin = Math.min(...x), xmax = Math.max(...x), ymin = Math.min(...y), ymax = Math.max(...y);
-    const sx = xmax > xmin ? (W2 - 2 * margin) / (xmax - xmin) : 0;
-    const sy = ymax > ymin ? (H2 - 2 * margin) / (ymax - ymin) : 0;
-    for (let i = 0; i < n; i++) {
-      tx[i] = xmax > xmin ? margin + (x[i] - xmin) * sx : cx0;
-      ty[i] = ymax > ymin ? margin + (y[i] - ymin) * sy : cy0;
-    }
-  } else {
-    for (let i = 0; i < n; i++) { tx[i] = cx0; ty[i] = cy0; }
-  }
-
-  const placed = []; // axis-aligned bounding boxes already taken
-  const overlaps = (b) => placed.some((p) => !(b.x1 < p.x0 || b.x0 > p.x1 || b.y1 < p.y0 || b.y0 > p.y1));
-  const themed = cl && cl.length === n;
-  const out = [];
-  for (const i of order) {
-    const fs = sizeOf(freq[i]);
-    const halfW = words[i].length * fs * 0.30 + 3; // ~0.6·fs per char (system-ui)
-    const halfH = fs * 0.62;
-    const step = Math.max(2, fs * 0.22);
-    let fx = tx[i], fy = ty[i], found = false;
-    for (let s = 0; s < 1600; s++) {
-      const ang = 0.5 * s;
-      const rad = step * 0.2 * ang;
-      const px = tx[i] + rad * Math.cos(ang);
-      const py = ty[i] + rad * Math.sin(ang);
-      const box = { x0: px - halfW, x1: px + halfW, y0: py - halfH, y1: py + halfH };
-      if (box.x0 < 4 || box.x1 > W2 - 4 || box.y0 < 4 || box.y1 > H2 - 4) continue;
-      if (!overlaps(box)) { fx = px; fy = py; placed.push(box); found = true; break; }
-    }
-    if (!found) {
-      fx = Math.min(W2 - halfW - 4, Math.max(halfW + 4, tx[i]));
-      fy = Math.min(H2 - halfH - 4, Math.max(halfH + 4, ty[i]));
-      placed.push({ x0: fx - halfW, x1: fx + halfW, y0: fy - halfH, y1: fy + halfH });
-    }
-    const colour = themed
-      ? palette[(((cl[i] - 1) % palette.length) + palette.length) % palette.length]
-      : freqColour(freq[i], fmin, fmax);
-    const weight = fs >= (MINPX + MAXPX) / 2 ? 600 : 400;
-    out.push(
-      `<text x="${fx.toFixed(1)}" y="${fy.toFixed(1)}" font-size="${fs}" fill="${colour}" ` +
-        `text-anchor="middle" dominant-baseline="central" ` +
-        `font-family="system-ui, -apple-system, Segoe UI, sans-serif" style="font-weight:${weight}">` +
-        `<title>${escapeXml(words[i])} (${freq[i]})</title>${escapeXml(words[i])}</text>`,
-    );
-  }
-  return (
-    `<svg viewBox="0 0 ${W2} ${H2}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Word cloud">` +
-    `<rect x="0" y="0" width="${W2}" height="${H2}" fill="#ffffff"/>` +
-    out.join('') +
-    `</svg>`
-  );
 }
 
 function cleanSvg(svg) {

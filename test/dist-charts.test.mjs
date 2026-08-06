@@ -174,3 +174,59 @@ test('the box IS the summary — it does not also draw the shared median marks',
   // violin/dots draw a median+quartile overlay; on a box that would be drawn twice.
   assert.equal(defaultView(BOX).summary, 'none');
 });
+
+// --- wordcloud ---------------------------------------------------------------
+// One kind replacing two hand-rolled renderers. The interesting property is not the
+// drawing — it is that a CAQDAS code's colour is DATA and must beat the palette.
+
+const CLOUD_WORDS = ['grief', 'loss', 'memory', 'family', 'support', 'ritual', 'silence', 'hope', 'time'];
+const plainCloud = {
+  kind: 'wordcloud', title: 'Frequent terms',
+  words: CLOUD_WORDS.map((w, i) => ({ word: w, count: 40 - i * 3 })),
+};
+const themedCloud = {
+  kind: 'wordcloud', title: 'Themes',
+  words: CLOUD_WORDS.map((w, i) => ({
+    word: w, count: 40 - i * 3, theme: `t${i % 3}`, themeName: ['Emotion', 'Practice', 'Time'][i % 3],
+  })),
+};
+const codedCloud = {
+  kind: 'wordcloud', title: 'Coded terms',
+  words: themedCloud.words.map((w, i) => ({ ...w, color: ['#8e44ad', '#16a085', '#d35400'][i % 3] })),
+};
+
+test('one kind serves both clouds: themes become colour or position', () => {
+  assert.equal(defaultView(plainCloud).layout, 'single', 'no themes -> one field');
+  assert.equal(defaultView(themedCloud).layout, 'clustered', 'themes -> grouped sub-clouds');
+  // …and each gains the mode it never had.
+  const pooled = renderChart(themedCloud, { ...defaultView(themedCloud), layout: 'single' });
+  assert.ok(count(pooled, 'text') >= CLOUD_WORDS.length, 'themed data still renders pooled');
+});
+
+test('THE RULE: author colours are data and beat the palette', () => {
+  // A code's colour comes from the codebook and appears on every other CAQDAS surface.
+  // If the palette repainted it, the cloud would silently disagree with all of them.
+  const svg = renderChart(codedCloud, defaultView(codedCloud));
+  for (const c of ['#8e44ad', '#16a085', '#d35400']) {
+    assert.ok(svg.includes(c), `codebook colour ${c} survived`);
+  }
+  const spec = chartUiSpec(codedCloud);
+  const palette = spec.controls.find((c) => c.id === 'palette');
+  assert.equal(palette.visible(defaultView(codedCloud), codedCloud), false,
+    'palette control hides rather than offering an override that cannot work');
+  // Without author colours it comes back.
+  const p2 = chartUiSpec(themedCloud).controls.find((c) => c.id === 'palette');
+  assert.equal(p2.visible(defaultView(themedCloud), themedCloud), true);
+});
+
+test('placement is deterministic — a reopened project must not reshuffle', () => {
+  const a = renderChart(themedCloud, defaultView(themedCloud));
+  const b = renderChart(themedCloud, defaultView(themedCloud));
+  assert.equal(a, b);
+});
+
+test('maxWords keeps the biggest words, not an arbitrary slice', () => {
+  const svg = renderChart(plainCloud, { ...defaultView(plainCloud), maxWords: 3 });
+  const shown = [...svg.matchAll(/<\/title>([^<]+)<\/text>/g)].map((m) => m[1]);
+  assert.deepEqual(shown.sort(), ['grief', 'loss', 'memory'].sort(), 'the three highest counts');
+});
