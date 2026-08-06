@@ -3204,11 +3204,19 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         number inputs need debouncing. `onRedraw` already demonstrates it is tolerable.
       - **A slow or hostile plugin could stall a control.** Needs a timeout + fallback
         to the last good SVG, which core kinds never require.
-      - **Restore.** `restoreModel` already notes a reopened plot loses its `onRedraw`.
-        Same for a plugin kind whose plugin is not activated — but `item.svg` is
-        persisted, so it degrades to a STATIC picture rather than vanishing. Worth
-        stating in the UI ("activate X to edit this chart"), and it is the same shape as
-        the plugin-activation tier in #157.
+      - **Restore. THIS ONE IS A BLOCKER, not a cost — I had it wrong (2026-08-05).**
+        I wrote that an unactivated plugin kind "degrades to a STATIC picture rather
+        than vanishing, because `item.svg` is persisted". The first half is false. The
+        SVG *is* persisted (`getModel()` shallow-spreads every field, and
+        core/project-sync.js:1557 complains about exactly that weight going over the
+        wire), but `restoreModel` **throws it away**: core/results-pane.js:761-770
+        rebuilds the item with `svg: ''` and re-renders from the model, and the branch
+        is guarded on `item.model.kind` with no `else`. A chart whose kind is not
+        registered is skipped **silently and entirely**. The fallback I claimed exists
+        in the DATA but not in the CODE.
+
+        See the durability analysis in the lift-out entry below — it is the same finding
+        and it governs both.
 
       **Sequencing: build the `wordcloud` kind FIRST as the proving ground.** It is the
       best test of whether the declarative descriptor form is expressive enough — it
@@ -3249,9 +3257,67 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       the view where every other kind takes only the model, and `colorLabel` is
       sometimes a function of the model. A declarative API must accommodate all three.
 
-- [ ] **Baked-chart review — the lesson from #140 (2026-08-05).** 21 `appendPlot`
-      call sites across 16 plugins still hand the host a FINISHED SVG, so they get no
-      live controls, no palette, no re-editability. Reviewed to find out why.
+      ---
+
+      **STATUS 2026-08-05: the four kinds are done, and step one of the lift-out is
+      done. The plugin step is BLOCKED on output durability, with evidence.**
+
+      Done: `core/chart-renderer.js` (2,795 lines, eleven kinds) is now a barrel over
+      `core/charts/runtime.js` + one module per kind in `core/charts/kinds/`. Kind code
+      moved verbatim. This was prerequisite under every option and it answers the
+      question "what does a kind need from the host?" concretely: the runtime's export
+      list, 13–28 symbols per kind. Runtime.js names no kind outside prose.
+
+      **Why the kinds cannot simply move into a sandboxed plugin.** Three facts, each
+      checked in the code rather than assumed:
+
+      1. **Output restore runs BEFORE plugins are applied.** core/project-sync.js:1014
+         calls `#applyOutput` (the Output tab); :1020 calls `#applyPluginState`. So at
+         the moment every saved chart is rebuilt, no plugin has been activated.
+      2. **`restoreModel` has no static fallback.** core/results-pane.js:761-770 sets
+         `svg: ''` and re-renders from the model; the branch requires
+         `item.model.kind` and has no `else`. An unregistered kind is dropped silently.
+      3. **Built-ins can be switched off, and most are off by default.** The plugin
+         manager guards *removal* on `p.builtin` (:1197) but the enable checkbox is
+         created unconditionally (:1061). The launcher's `#defaultSelection` enables
+         only `CORE_IDS` + `DEFAULT_ON_CATEGORIES`, and `applyActivatedSet` actively
+         disables the complement.
+
+      Together: ship the kinds in `builtin-charts` and **every chart in every project
+      renders blank on load**, permanently so for any user who did not tick that plugin
+      in the launcher. Charts are *output*. Output has to outlive the thing that made
+      it — which is precisely why baked `appendPlot` SVGs survive today and why the
+      HTML exporter can read `it.svg` without re-rendering anything.
+
+      This is a much stronger objection than the one I originally tabled Layer 3 for
+      (that one was about marshalling, and it was wrong). It is not about the trust
+      boundary or the round-trip; it is that durable output must not depend on an
+      optional runtime component.
+
+      **Two ways forward, if this is wanted:**
+
+      - **(A) Make charts degrade like plots — cheap, ~a day.** Persist the SVG (already
+        happens) and have `restoreModel` paint it when the kind is unregistered,
+        flagging the block as "static — activate X to edit". Charts then survive any
+        provider being absent, and the plugin lift-out stops being destructive. This is
+        worth doing *on its own merits*: today an unknown `model.kind` from a newer
+        CrossTab, or a corrupted save, loses the figure entirely and silently.
+      - **(B) Kind-as-data — the only version that fully keeps the ethos.** A plugin
+        registers a kind as a *declarative* description (control schema + drawing
+        program) rather than a function. Because it is data, core can persist the kind
+        definition **inside the project**, so a chart stays live even where the plugin
+        was never installed. This is the real answer to "SuperCharts as an equal", and
+        it is also a chart grammar — a big design, and one with no client yet.
+
+      **Recommendation: do (A) when it is wanted for its own sake, and hold (B) until a
+      third party actually asks.** The modular split has already banked the part that
+      every path needs, and (A) is the prerequisite for (B) anyway.
+
+- [ ] **Baked-chart review — the lesson from #140 (2026-08-05).** Originally 21
+      `appendPlot` call sites across 16 plugins handed the host a FINISHED SVG, so they
+      got no live controls, no palette, no re-editability. Reviewed to find out why.
+      **Now 16 sites** — box, wordcloud (×2), steps and forest have all been migrated,
+      and builtin-plots, builtin-survival and builtin-meta each dropped `svglite`.
 
       **The dividing line is not difficulty — it is who holds the numbers.**
 
@@ -3276,12 +3342,21 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       geometry is the hard part and is not ours — force-directed network layouts, real
       map projections, biplot arrow fields.
 
-      Ranked follow-ups, each a self-contained kind:
-      1. **`box`** — five numbers per group; `fiveNumber()` already exists from the
-         violin work. Kills the last baked chart in builtin-plots.
-      2. **`wordcloud`** — two existing clients, both already computing in JS.
-      3. **`steps`** — Kaplan–Meier, and reusable for any step function + CI band.
-      4. **`forest`** — effect + CI + weight per study, plus a summary diamond.
+      Ranked follow-ups, each a self-contained kind — **all four now DONE**:
+      1. ~~**`box`**~~ — done (04e5a7e); builtin-plots needs no R at all now.
+      2. ~~**`wordcloud`**~~ — done (7c24206); the two hand-rolled clouds became one
+         kind, and it established that **some colours are data, not style**.
+      3. ~~**`steps`**~~ — done (f841b1c); Kaplan–Meier, reusable for any step function
+         + CI band. Validated against local R 4.6.0.
+      4. ~~**`forest`**~~ — done (f841b1c); effect + CI + weight, summary diamond.
+
+      What is left is the genuinely hard residue, and it is the right residue: the 16
+      remaining sites are mostly cases where **the geometry is the hard part and is not
+      ours** — force-directed network layout, map projections, biplot arrow fields,
+      ordination configurations. The exceptions still worth doing are builtin-decisions'
+      three JS-drawn figures (cost-effectiveness plane, decision tree, workspace
+      preview), which already hold every number they need, plus the two Q–Q plots and
+      residuals-vs-fitted, which are just scatter with a reference line.
 
 
 > These three were captured during the college tour and lived only in the memory
