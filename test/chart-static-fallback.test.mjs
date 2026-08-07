@@ -19,40 +19,44 @@ import assert from 'node:assert/strict';
 // kinds locally so these tests drive the shipping code, not a stub.
 await import('./chart-kinds-harness.mjs');
 
-const { chartNeedsStaticFallback, staticChartNotice } = await import('../core/results-pane.js');
+const { chartBlockMode, staticChartNotice, pendingChartNotice } = await import('../core/results-pane.js');
 const { getChartKind } = await import('../core/chart-renderer.js');
 
 const SAVED_SVG = '<svg xmlns="http://www.w3.org/2000/svg"><title>KM</title></svg>';
 
 test('a registered kind always re-renders, even with a saved figure present', () => {
   // A live chart beats a frozen one, and the saved SVG may be from an older renderer.
-  const item = { svg: SAVED_SVG, model: { kind: 'steps' } };
-  assert.equal(chartNeedsStaticFallback(item, getChartKind), false);
+  assert.equal(chartBlockMode({ svg: SAVED_SVG, model: { kind: 'steps' } }, getChartKind), 'live');
 });
 
-test('an unregistered kind WITH a saved figure goes static', () => {
+test('an unregistered kind WITH a saved figure goes frozen', () => {
   const item = { svg: SAVED_SVG, model: { kind: 'radar' }, kindProvider: 'SuperCharts' };
-  assert.equal(chartNeedsStaticFallback(item, getChartKind), true);
+  assert.equal(chartBlockMode(item, getChartKind), 'frozen');
 });
 
-test('an unregistered kind with NO saved figure keeps the diagnostic', () => {
-  // This is a live append from a buggy plugin, not a reopened project. Falling back
-  // silently here would hide the bug; there is nothing to fall back TO anyway.
-  const item = { svg: '', model: { kind: 'radar' } };
-  assert.equal(chartNeedsStaticFallback(item, getChartKind), false);
+test('THE BUG: an unregistered kind with NO saved figure is PENDING, not empty', () => {
+  // Running Plots > Pie with the chart plugin switched off. This used to fall through
+  // to the live path, which returns null and paints nothing — an empty box with two
+  // save buttons that saved nothing. It is not a plugin bug, it is a normal user state.
+  // 'radar' stands in for pie-with-the-plugin-off: the harness registers the real
+  // kinds, so an unregistered name is how we model "that plugin is switched off".
+  assert.equal(chartBlockMode({ svg: '', model: { kind: 'radar' } }, getChartKind), 'pending');
+  assert.equal(chartBlockMode({ model: { kind: 'radar' } }, getChartKind), 'pending');
 });
 
 test('a chart that lost its model but kept its figure still shows the figure', () => {
   // Corrupted or truncated save. Before this, the restore guard required
   // `item.model.kind` and dropped such an item silently — no figure, no message.
-  assert.equal(chartNeedsStaticFallback({ svg: SAVED_SVG, model: null }, getChartKind), true);
-  assert.equal(chartNeedsStaticFallback({ svg: SAVED_SVG }, getChartKind), true);
+  assert.equal(chartBlockMode({ svg: SAVED_SVG, model: null }, getChartKind), 'frozen');
+  assert.equal(chartBlockMode({ svg: SAVED_SVG }, getChartKind), 'frozen');
 });
 
-test('nothing at all is not a static chart', () => {
-  assert.equal(chartNeedsStaticFallback(null, getChartKind), false);
-  assert.equal(chartNeedsStaticFallback({}, getChartKind), false);
-  assert.equal(chartNeedsStaticFallback({ model: { kind: 'steps' } }, getChartKind), false);
+test('an empty item is pending, and a live kind with no svg is still live', () => {
+  assert.equal(chartBlockMode(null, getChartKind), 'pending');
+  assert.equal(chartBlockMode({}, getChartKind), 'pending');
+  // No saved svg yet is the NORMAL case for a freshly appended chart — it must be live,
+  // or every new chart would render as a notice.
+  assert.equal(chartBlockMode({ model: { kind: 'steps' } }, getChartKind), 'live');
 });
 
 test('every registered kind round-trips as live, none as static', () => {
@@ -60,7 +64,7 @@ test('every registered kind round-trips as live, none as static', () => {
   // save — the whole family should be live, so any `true` here is a registry problem.
   for (const kind of ['categorical', 'scatter', 'pie', 'sced', 'violin', 'dots',
     'paired', 'box', 'wordcloud', 'steps', 'forest']) {
-    assert.equal(chartNeedsStaticFallback({ svg: SAVED_SVG, model: { kind } }, getChartKind), false, kind);
+    assert.equal(chartBlockMode({ svg: SAVED_SVG, model: { kind } }, getChartKind), 'live', kind);
   }
 });
 
@@ -97,4 +101,34 @@ test('the notice never blames the user or reads as an error', () => {
     const note = staticChartNotice(item);
     assert.ok(!/error|failed|invalid|corrupt/i.test(note), `alarming wording: ${note}`);
   }
+});
+
+// --- the pending notice ---------------------------------------------------------
+
+test('a pending chart says what is missing and where to fix it', () => {
+  const note = pendingChartNotice({ model: { kind: 'pie' } });
+  assert.match(note, /pie/, 'names the chart type — the one thing we do know');
+  assert.match(note, /Plugins/, 'points at the plugin manager');
+  assert.ok(!/undefined|null/.test(note), `leaked a placeholder: ${note}`);
+});
+
+test('a pending chart names the provider when one was recorded', () => {
+  const note = pendingChartNotice({ model: { kind: 'radar' }, kindProvider: 'SuperCharts' });
+  assert.match(note, /SuperCharts/);
+});
+
+test('pending wording never reads as a failed analysis', () => {
+  // The analysis ran fine. Only the drawing is missing, and the user can switch it on.
+  for (const item of [{ model: { kind: 'pie' } }, { model: null }, { model: { kind: 'x' }, kindProvider: 'P' }]) {
+    const note = pendingChartNotice(item);
+    assert.ok(!/error|failed|invalid|crash/i.test(note), `alarming wording: ${note}`);
+  }
+});
+
+test('core never hardcodes a plugin name it cannot know', () => {
+  // The provider is stamped by reading the registry — but in the pending state the kind
+  // is exactly what is missing from it, so there is nobody to ask. Guessing "Charts"
+  // would also be core naming a plugin that may not be ours.
+  const note = pendingChartNotice({ model: { kind: 'pie' } });
+  assert.ok(!/Chart engine|builtin-charts|Charts/.test(note), `guessed a provider: ${note}`);
 });

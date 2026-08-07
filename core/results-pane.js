@@ -193,6 +193,13 @@ const RESULTS_STYLES = `
      the group rather than as a heading. #646e77 on #fff is 5.20:1.
      (No backticks in this comment — the whole stylesheet is a JS template literal.) */
   .results-chart__note { margin: 2px 0 2px 2px; font-size: 12px; line-height: 1.4; color: #646e77; }
+  /* A chart nothing can draw. Amber like .results-blocked, not red: the analysis ran,
+     something is merely missing and the user can switch it on. */
+  .results-chart--pending {
+    border-left: 3px solid #d68910; background: #fdf8ef;
+    padding: 10px 12px; max-width: 672px; box-sizing: border-box;
+  }
+  .results-chart--pending .results-blocked__msg { margin: 0; color: #6b4b09; font-size: 13px; }
   .results-chart__row--check { gap: 6px; cursor: pointer; }
   .results-chart__rowlabel { color: #555; min-width: 72px; }
   .results-chart__select { font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid #d8dee4; border-radius: 5px; background: #fff; flex: 1; }
@@ -326,11 +333,15 @@ export class ResultsPane {
   #refreshCharts() {
     for (const item of this.#model) {
       if (item.kind !== 'chart') continue;
-      const block = this.#plots.get(item.id)?.closest('.results-chart');
+      // By DOM stamp, not via #plots: a pending block has no holder registered there,
+      // and those are exactly the blocks that most need upgrading.
+      const block = item.id
+        ? this.#content.querySelector(`.results-chart[data-chart-id="${item.id}"]`)
+        : null;
       if (!block) continue;
-      const wasStatic = block.classList.contains('results-chart--static');
-      const nowStatic = chartNeedsStaticFallback(item, getChartKind);
-      if (wasStatic === nowStatic) continue;
+      const was = block.dataset.chartMode || 'live';
+      const now = chartBlockMode(item, getChartKind);
+      if (was === now) continue;
       // Drop the cached spec either way. Going live, it must be fetched from whoever
       // now owns the kind; going static, it describes a kind that no longer exists and
       // would be wrong if that plugin came back a different version.
@@ -501,8 +512,8 @@ export class ResultsPane {
     holder.innerHTML = sanitizeHtml(item.svg || '');
     box.append(holder);
 
-    const handle = this.#nextPlotId++;
-    item.id = handle;
+    const handle = this.#chartHandle(item);
+    block.dataset.chartId = String(handle);
     this.#plots.set(handle, holder);
 
     // If the plot knows how to redraw itself (a plugin callback), offer a button that
@@ -624,17 +635,18 @@ export class ResultsPane {
     // "Unsupported chart kind" and throw away a figure we are holding in our hand.
     // Only on RESTORE (`item.svg` already populated) — a live append of an unknown kind
     // is a plugin bug and keeps the diagnostic.
-    if (chartNeedsStaticFallback(item, getChartKind)) {
-      return this.#buildStaticChartBlock(item);
-    }
+    const mode = chartBlockMode(item, getChartKind);
+    if (mode === 'frozen') return this.#buildStaticChartBlock(item);
+    if (mode === 'pending') return this.#buildPendingChartBlock(item);
     const block = this.#makeBlock();
     block.classList.add('results-chart');
+    block.dataset.chartMode = 'live';
     const holder = document.createElement('div');
     holder.className = 'results-plot__svg';
     block.append(holder);
 
-    const handle = this.#nextPlotId++;
-    item.id = handle;
+    const handle = this.#chartHandle(item);
+    block.dataset.chartId = String(handle);
     this.#plots.set(handle, holder);
 
     // A restored chart arrives with only what the project saved, so its spec has to be
@@ -687,6 +699,49 @@ export class ResultsPane {
   }
 
   /**
+   * Build a **pending** chart block: no figure, and a note saying why.
+   *
+   * Reached when an analysis emits a chart whose kind nothing can draw — most often
+   * because the plugin supplying that chart type is switched off. Before this the block
+   * was rendered empty, with SVG and PNG buttons that had nothing to save: a silent
+   * failure that looked like the analysis had broken.
+   *
+   * No save buttons and no `#plots` registration, deliberately — there is no figure to
+   * export, and registering an empty holder would hand the DOCX exporter a blank.
+   * {@link ResultsPane#refreshCharts} promotes this to a real chart the moment a plugin
+   * supplying the kind activates.
+   */
+  /**
+   * A chart item's stable handle.
+   *
+   * Assigned once and reused across rebuilds. It used to be re-minted on every build,
+   * which churned the id in every save (the only field that differed between two
+   * consecutive saves of an untouched project) and, worse, meant a block could not be
+   * found again after its mode changed.
+   */
+  #chartHandle(item) {
+    if (!item.id) item.id = this.#nextPlotId++;
+    return item.id;
+  }
+
+  #buildPendingChartBlock(item) {
+    const block = this.#makeBlock();
+    block.classList.add('results-chart', 'results-chart--pending');
+    block.dataset.chartMode = 'pending';
+    block.dataset.chartId = String(this.#chartHandle(item));
+    // Explicitly NOT registered in #plots: there is no figure, and handing the DOCX
+    // exporter an empty holder would put a blank image in the report.
+    this.#plots.delete(item.id);
+    // Styled as an unmet condition you can act on, not an error: nothing is broken and
+    // the analysis ran fine — see appendNotice (#156) for the same distinction.
+    const note = document.createElement('p');
+    note.className = 'results-blocked__msg';
+    note.textContent = pendingChartNotice(item);
+    block.append(note);
+    return block;
+  }
+
+  /**
    * Build a **static** chart block: the figure as saved, with no controls.
    *
    * The case this exists for is a project reopened where the chart's kind is not
@@ -714,6 +769,7 @@ export class ResultsPane {
   #buildStaticChartBlock(item) {
     const block = this.#makeBlock();
     block.classList.add('results-chart', 'results-chart--static');
+    block.dataset.chartMode = 'frozen';
 
     const holder = document.createElement('div');
     holder.className = 'results-plot__svg';
@@ -721,8 +777,8 @@ export class ResultsPane {
     holder.innerHTML = sanitizeHtml(item.svg || '');
     block.append(holder);
 
-    const handle = this.#nextPlotId++;
-    item.id = handle;
+    const handle = this.#chartHandle(item);
+    block.dataset.chartId = String(handle);
     this.#plots.set(handle, holder);
 
     const note = document.createElement('p');
@@ -1247,29 +1303,33 @@ function fmtCellValue(v) {
 
 /** A small hover-revealed plot-save button. */
 /**
- * Should this chart item be shown as a frozen figure rather than re-rendered?
+ * Which of the three states a chart block is in.
  *
- * Yes exactly when we HAVE a saved picture and CANNOT redraw it. Both halves matter:
+ *   live    — the kind is registered; draw it and give it controls.
+ *   frozen  — the kind is gone but the project saved a figure; show that, no controls.
+ *   pending — the kind is gone and there is no figure; nothing can be drawn at all.
  *
- *  - Without a saved SVG there is nothing to fall back to, so an unknown kind should
- *    still produce the "Unsupported chart kind" diagnostic — that is a live append
- *    from a buggy plugin, not a reopened project, and hiding it would hide the bug.
- *  - With a registered kind we always re-render, because a live chart is strictly
- *    better than a frozen one and the saved SVG may be from an older renderer.
+ * `pending` is the state this originally missed. The rule was a boolean — "fall back to
+ * the saved SVG?" — which quietly assumed a chart with no saved figure must be a plugin
+ * bug worth surfacing as an error. It is not: running Plots ▸ Pie with the chart plugin
+ * switched off is an ordinary thing a user can do, and it produced an EMPTY BOX with two
+ * save buttons that saved nothing. Worse, `#refreshCharts` compared only live-vs-frozen,
+ * so re-enabling the plugin did not repair it either.
  *
- * Pure, and takes the registry lookup as an argument, so the rule can be tested
- * without a DOM (this repo has no DOM test shim and takes no dependencies).
+ * Pure, and takes the registry lookup as an argument, so the rule can be tested without
+ * a DOM (this repo has no DOM test shim and takes no dependencies).
  *
  * @param {{svg?:string, model?:{kind?:string}|null}} item
  * @param {(kind:string)=>object|undefined} lookupKind
+ * @returns {'live'|'frozen'|'pending'}
  */
-export function chartNeedsStaticFallback(item, lookupKind) {
-  if (!item || !item.svg) return false;
-  return !(item.model && item.model.kind && lookupKind(item.model.kind));
+export function chartBlockMode(item, lookupKind) {
+  if (item && item.model && item.model.kind && lookupKind(item.model.kind)) return 'live';
+  return item && item.svg ? 'frozen' : 'pending';
 }
 
 /**
- * The one line a static chart shows in place of its controls.
+ * The one line a frozen chart shows in place of its controls.
  *
  * Names the plugin when the chart recorded one, because "activate something" is not an
  * instruction. When it did not — a core kind this build no longer has, or a project
@@ -1283,6 +1343,25 @@ export function staticChartNotice(item) {
     return `Showing the saved figure — “${item.model.kind}” charts aren’t available in this version, so the options are switched off.`;
   }
   return 'Showing the saved figure — this chart’s data wasn’t saved with it, so it can’t be edited.';
+}
+
+/**
+ * What a PENDING chart says: there is no figure, and why.
+ *
+ * Deliberately does not name a specific plugin. The provider is normally stamped at
+ * append time by reading the registry — but in this state the kind is precisely what is
+ * missing from the registry, so there is nobody to ask. Naming the chart TYPE and
+ * pointing at the plugin manager is the most that is actually true, and core has no
+ * business hardcoding the name of a plugin that may not be ours.
+ */
+export function pendingChartNotice(item) {
+  const kind = item && item.model && item.model.kind;
+  if (item && item.kindProvider) {
+    return `This figure needs ${item.kindProvider}. Activate it in Edit ▸ Plugins to draw the chart.`;
+  }
+  return kind
+    ? `No active plugin can draw a “${kind}” chart. Enable one in Edit ▸ Plugins and this figure will appear.`
+    : 'This figure has no chart type recorded, so nothing can draw it.';
 }
 
 function makeSaveBtn(label, onClick) {
