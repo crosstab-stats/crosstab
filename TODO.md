@@ -703,7 +703,9 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     therefore useless: every attempt still dies at 15 s. On a busy boot this is not a
     timeout, it is a self-inflicted abort. Fix: revoke on the iframe's `load`, or on
     broker dispose — never on a wall clock.
-  - **F2 — every workspace mounts eagerly, hidden.** `addTab` appends the pane with
+  - **F2 — FIXED (verified 2026-08-07).** `core/workspace-manager.js:168` passes
+    `onShow: () => this.#ensureStarted(ws.id)`, so a workspace starts on first view.
+    Original finding: **every workspace mounts eagerly, hidden.** `addTab` appends the pane with
     `hidden = true`, and `reconcile` mounts every active workspace plugin at boot
     regardless of which tab is shown. So N sandboxes race to load, hidden and
     deprioritised, while DuckDB and WebR are warming. `addTab` already accepts an
@@ -711,18 +713,28 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - **F3 — I bumped `CATALOG_VERSION` to 17 today (#152).** Every existing install
     therefore re-probes ~60 built-ins on next load, each a fresh sandbox frame, which is
     exactly the condition F1 punishes. Plausibly why this got louder right now.
-  - **F4 — `sendDeactivate` races a 500 ms timeout** (`Promise.race`). A flush slower
+  - **F4 — FIXED (verified 2026-08-07).** The deadline is gone; `core/plugin-broker.js`
+    now reads "It used to race a 500 ms timer". Original finding:
+    **`sendDeactivate` races a 500 ms timeout** (`Promise.race`). A flush slower
     than that is silently abandoned, and the host proceeds to tear the frame down. Also
     interacts with #153's epoch guard: a flush must land BEFORE the project boundary
     advances, or the guard correctly drops it and the hook looks wired while doing
     nothing. (NOTE: the hook IS wired — an earlier claim in this file that the host never
     sends it was wrong; `plugin-broker.sendDeactivate` → guest `case 'deactivate'`.)
-  - **F5 — one `#lifecycleAck` slot for all hooks.** `sendDatasetChanged`,
+  - **F5 — FIXED (verified 2026-08-07).** Replaced by rid-keyed `PendingCalls`; the
+    comment at `core/plugin-broker.js:65` records the old single-slot bug in the past
+    tense. Original finding: **one `#lifecycleAck` slot for all hooks.** `sendDatasetChanged`,
     `sendWorkspaceRefresh` and `sendDeactivate` each overwrite `this.#lifecycleAck`. Two
     in flight and the first never resolves. Reachable: a dataset switch during a refresh.
-  - **F6 — mount is fire-and-forget.** `void this.#mountWithRetry(...)`, so `reconcile`
-    resolves before any workspace is usable and nothing can await "workspaces ready".
-  - **F7 — the same source is fetched and parsed up to three times** (probe, compute
+  - **F6 — FIXED (verified 2026-08-07).** No `void this.#mountWithRetry(` call remains
+    anywhere in core. Original finding: **mount is fire-and-forget**, so `reconcile`
+    resolved before any workspace was usable and nothing could await "workspaces ready".
+  - **F7 — STILL OPEN (the only one of F1–F7 without evidence of a fix, checked
+    2026-08-07).** `#readSource` is still called from three separate paths in
+    `core/plugin-manager.js` (activate :245, primeCatalog :335, ensureIdAvailable :425).
+    Whether all three fire for a single load was not established — it needs measuring,
+    not assuming, which is how this audit found everything else.
+    Finding: **the same source is fetched and parsed up to three times** (probe, compute
     frame, each workspace mount + each retry), in separate frames, with no sharing.
 
   **DESIGN: `docs/ARCHITECTURE-plugin-lifecycle.md`** — the new envelope, written after
@@ -803,9 +815,13 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       built, menu item present, parsed room matches the live room; opening the link
       skipped the launcher, stripped the credential from the URL, created a blank project,
       and joined the correct room live.
-      **Known scruffiness:** the joiner's own empty `Dataset 1` merges in alongside the
-      shared data. Harmless; auto-removing it would risk deleting real work in the case
-      where someone joins from a project they had already started.
+      ~~**Known scruffiness:** the joiner's own empty `Dataset 1` merges in alongside the
+      shared data.~~ **RESOLVED by #158** (stale note, corrected 2026-08-07). #158 names
+      this exact case as one of the three bugs in the class it deletes — "the joiner's
+      empty `dataset1` arriving in the host's project (#156)" — and fixes the cause
+      rather than the symptom: the joiner no longer fabricates a project. The note above
+      argued for tolerating it because auto-removal might delete real work; #158's answer
+      is that the phantom should never have been created.
 
 - [ ] **#151 — Re-home tool: repoint what referenced dataset A at dataset B.** With
       in-place replace gone (#149 A8), the "here's a corrected version of my data"
@@ -833,10 +849,11 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       spatial plugin can already store a shapefile under the default `strict` cage,
       because reading a Blob's bytes isn't subject to CSP. What is NOT generic:
 
-  - [ ] **Vocabulary.** `MediaStore`, `services.media`, a `medium` metadata field, a
-        CSP capability named `media`. A boundary shapefile is not media. The on-disk
-        directory and the op types already say `asset`; only the JS-facing names are
-        inconsistent. Renaming is a **plugin API break** — batch it with the rest.
+  - [x] **Vocabulary — DONE (verified 2026-08-07).** `MediaStore` and `services.media`
+        no longer appear anywhere in core. The one survivor is the sandbox **CSP
+        capability** still named `media` (`core/plugin-sandbox.js:58`), and that one is
+        correct as-is: it grants `media-src`/`img-src blob:` for actual audio/video
+        playback, so `media` is what it means. Nothing left to rename.
   - [x] **DONE — owner lives on the REFERENCE, not the bytes.** Settled in #152: refs
         sit in item records, which are owner-scoped by construction, so the deduped byte
         pool needs no owner and two plugins holding the same file share one copy.
@@ -1088,7 +1105,18 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         declared `onActivate` verb) — with "not interactive" a legitimate answer. Don't
         guess the interaction while the storage layer is still moving.
 
-  - [ ] **Spatial migration (the Layer 5 client) — design settled, not yet built.**
+  - [x] **Spatial migration (the Layer 5 client) — DONE (verified 2026-08-07).**
+        `plugins/builtin-spatial/index.js` writes `app.items.put('boundarySets', …)`
+        (:939, :964), not `spatial-map` slots. **And the regression below was handled in
+        the same change**, which is what the note asked for: the sidebar no longer
+        hardcodes "Map layers" — `core/app.js:2101` renders item collections generically
+        from `#collectionDecls()`, with workspace blobs as a separate "Plugin data"
+        section. The comment there says so outright: "no plugin is special-cased (the old
+        hardcoded 'Map layers' section was exactly that)".
+
+        Original entry kept below for the design record.
+
+        **Design settled, since built.**
         `boundarySets` items `{keyProp, fileName, assetId}` replace the per-set
         `spatial-map` SLOTS; geometry bytes move to the asset store; `spatial-link` stays
         a blob (config, dataset-scoped, LWW — correct per D2). Manifest gains
@@ -1540,6 +1568,33 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       importable modules* — this closes exactly that gap. *Build:* a manifest way to
       list the module files, per-file blob creation in `core/loader.js`, and import-map
       injection in `core/plugin-sandbox.js`.
+
+      **CORRECTION 2026-08-07 — the mechanism above cannot work as written.** "The host
+      creates a `blob:` URL per module file" is the fatal step: a blob URL minted in the
+      HOST realm carries the host's origin, and the sandbox is an *opaque* origin, so the
+      frame cannot fetch it. This is the same wall `plugin-host.html` already documents —
+      "a sandboxed opaque-origin document cannot fetch other same-origin files" — and it
+      is exactly why the plugin's own entry source is posted in as TEXT and blob-ified
+      *inside* the frame. Hit again first-hand while shipping the chart stdlib (#131
+      Layer 3a), which had the identical problem and solved it by posting source text.
+
+      **What a working version needs:** the host posts every module's SOURCE with the
+      `load` message; the frame creates the blobs itself (same opaque origin, therefore
+      fetchable); and the import map is injected *in the frame* mapping each relative
+      specifier to its in-frame blob URL, before the entry module is imported. The open
+      risk is that last part — a dynamically-added import map must precede any module
+      resolution, and multiple/late import maps have uneven support (Chrome recent, iPad
+      Safari unverified). **Probe that before building**, or the whole approach collapses
+      a second time.
+
+      **Cheap fallback if the probe fails:** the frame already receives all the source
+      text, so it can rewrite bare relative specifiers to blob URLs before importing.
+      Crude, but it needs no platform feature at all.
+
+      *Cost of not having this, concretely:* `plugins/builtin-charts/index.js` is ~2,100
+      lines holding eleven chart kinds that were nine tidy modules in core an hour
+      earlier. They were concatenated purely because this gap is open — see #131 Layer 3a.
+      That is the first real client for this feature, and it already exists.
 
 ## Deferred features (intentionally not built yet)
 
@@ -2505,8 +2560,11 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     batch, pick variables once for all files" (incremental filtered append covers
     the need); richer type-conflict handling (today `UNION ALL BY NAME` coerces or
     errors — surfaced as an error); value-label conflict policy across years (ties
-    to the recode API). Also the SAS `.sas7bcat` companion-file case is a
-    different "more than one file" still unhandled.
+    to the recode API). ~~Also the SAS `.sas7bcat` companion-file case is a
+    different "more than one file" still unhandled.~~ **Stale — FIXED 2026-08-04**
+    (corrected 2026-08-07): see the "Real GSS files — VERIFIED" entry above, where
+    `.sas7bcat` is listed among the residuals both fixed, via a
+    `readstat_parse_sas7bcat` value-label shim.
 - [~] **Import data from a web page (URL scrape).** Point the app at a URL; it
       fetches and parses tabular data (e.g. HTML `<table>`s) into a new dataset
       for analysis, with an option to save the parsed data locally as CSV (or
@@ -3170,7 +3228,17 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## More analyses (each is just another plugin)
 
-- [x] **#131 Layer 3 — plugin-defined chart kinds. DONE 2026-08-06.** Charts left core.
+- [x] **#131 Layer 3a — plugin-supplied chart KINDS (model-driven). DONE 2026-08-06.**
+
+      *Naming note (2026-08-07): "Layer 3" named two different features and they were
+      being confused for each other — including by me. **3a** (this one) is a plugin
+      supplying a model-driven chart KIND: `describe(model)` + `render(model, view)`,
+      host owns the controls. **3b** (still open, in the Plots section further down) is
+      host-mediated controls for BAKED svglite plots, where the plugin draws its own SVG
+      and declares what can be altered. 3a does nothing for the 16 remaining baked
+      charts; 3b is their story. Disambiguated rather than merged.*
+
+      Charts left core.
       All eleven kinds live in `plugins/builtin-charts` behind the sandbox, registered
       through a `charts` manifest section, reachable by a third party on identical
       terms. Measured cost of the boundary: **0.76 ms per render round-trip**, 0.41 ms
@@ -3185,12 +3253,10 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
       Superseded notes below, kept because the reasoning still explains the shape.
 
-- [ ] ~~**#131 Layer 3 — DEFERRED again 2026-08-06, this~~
-      time for the ordinary reason: no client.** Not blocked — the durability objection
-      that made it destructive is fixed (see the lift-out entry), and the design below
-      still stands. Simply nobody outside the project wants a chart type yet, and
-      designing a plugin-facing control API against zero clients is how you get the
-      wrong API. Revisit when someone actually asks.
+- [x] **#131 Layer 3a — the road to it, kept for the reasoning. SHIPPED 2026-08-06.**
+
+      This entry twice recorded 3a as deferred and was twice overtaken. Left as a record
+      of two wrong blockers, because both were wrong in instructive ways.
 
       **UN-TABLED 2026-08-05, because the blocker I recorded was wrong** — kept below
       because the reasoning is worth not re-deriving:
@@ -3583,7 +3649,11 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       unused. **No further Layer-2 migrations planned** — the remaining charts are either
       fine on the Layer 1 frame or need a new glyph; their optional body-interactivity is
       deferred to Layer 3 (below), not forced into the model.
-    - [ ] **Layer 3 — plugin-declared, host-mediated re-chart.** A plugin draws its own
+    - [ ] **Layer 3b — host-mediated controls for BAKED plots.** *(Distinct from Layer
+      3a, which shipped 2026-08-06: that one is plugin-supplied model-driven KINDS. This
+      is the story for figures whose geometry only R can produce — the 16 remaining
+      `appendPlot` sites — where the picture stays baked but gains controls.)*
+      A plugin draws its own
       SVG (full R power) AND declares the alterations it supports
       (`controls: [{ id, label, type, options }]`); the host renders those controls and
       calls back to re-chart on change (generalises the existing `onRedraw` size-recipe).
