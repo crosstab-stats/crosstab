@@ -1,6 +1,6 @@
 /**
  * @file plugins/builtin-charts/index.js
- * Built-in plugin: **the chart types**. Every data-driven figure CrossTab draws.
+ * Built-in plugin: **the chart engine**. Every data-driven figure CrossTab draws.
  *
  * Charts used to live in core. They do not any more, and the reason is the project's
  * own rule: "everything is a plugin" carries an asterisk only for things that genuinely
@@ -42,17 +42,25 @@
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-charts',
-  name: 'Charts',
+  // "Chart engine", not "Charts". Sitting beside a plugin called "Plots", the two names
+  // were synonyms in English and neither said which was which — the owner reasonably
+  // disabled Plots to test chart behaviour, then could not tell why the options panel
+  // survived. "Engine" says infrastructure, and explains why this one has no menu.
+  name: 'Chart engine',
   version: '0.1.0',
   apiVersion: '0.1.0',
-  category: 'Charts',
+  // Filed under Graphs so it sorts directly above Plots in the plugin manager, where the
+  // pairing is visible rather than something to infer. Category also picks the top-level
+  // MENU, but this plugin contributes no menu items, so none appears.
+  category: 'Graphs',
   keywords: ['chart', 'charts', 'plot', 'graph', 'figure', 'bar', 'line', 'scatter',
     'pie', 'violin', 'boxplot', 'box plot', 'dot plot', 'word cloud', 'forest plot',
     'kaplan-meier', 'survival curve', 'single-case', 'sced'],
   howto:
-    'This plugin supplies the chart TYPES the rest of CrossTab draws with — it has no menu of its own.\n' +
-    'Any analysis that produces a figure (Plots, Survival, Meta-analysis, SCED, Text analytics, CAQDAS…) needs it activated.\n' +
-    'With it switched off, charts already in a project still SHOW — you see the saved figure — but the ⚙ Chart options panel is unavailable, exactly as a Frequencies table stays readable without builtin-frequencies loaded.',
+    'Draws every figure in CrossTab. It has no menu of its own — other plugins compute the numbers and hand them here to be drawn.\n' +
+    'Eight plugins depend on it: Plots, Survival (Kaplan–Meier), Meta-analysis (forest), SCED, Factor, Time series, Text analytics and CAQDAS (word clouds).\n' +
+    'Switch it off and: existing charts still SHOW their saved figure, but the ⚙ Chart options panel goes; and a NEW analysis reports which chart type is missing instead of drawing one.\n' +
+    '  • Same rule as everywhere else — a result stays readable without the plugin that made it; you just cannot make or re-style another one.',
   // The declarative section. `kinds` is the list the host registers by name; `via` is
   // the exported factory that builds them. No app.charts.registerKind() verb exists:
   // the loader is explicit that a plugin can only do what a manifest section allows.
