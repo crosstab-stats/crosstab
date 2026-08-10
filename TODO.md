@@ -823,16 +823,52 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       argued for tolerating it because auto-removal might delete real work; #158's answer
       is that the phantom should never have been created.
 
-- [ ] **#151 — Re-home tool: repoint what referenced dataset A at dataset B.** With
-      in-place replace gone (#149 A8), the "here's a corrected version of my data"
-      workflow is: import as a new dataset, bin the old. What doesn't follow
-      automatically is everything keyed to the OLD dataset id — CAQDAS coding, analysis
-      runs (`datasetId` on each entry), `libraryLink`, and anything a plugin keyed
-      itself. Build a tool that lists those references and offers to move them, with the
-      honest caveats: coding segments anchor on `__ct_rid`, so they can only re-home
-      where the row ids still match (a re-exported file usually re-bakes them) — offer
-      match-by-key as the fallback; analyses just need their `datasetId` repointed and a
-      re-run. Until it exists, the user re-does that work by hand.
+- [~] **#151 — RESCOPED into a codebook manager, and mostly DISSOLVED rather than built
+      (2026-08-10). Shipped; NEEDS HUMAN VERIFICATION.**
+
+      The owner's call: a plain re-home tool was too narrow — what was actually wanted
+      was a codebook manager. Investigating that turned up something better than a tool.
+      **A codebook did not need re-homing; it needed to stop being owned by a dataset.**
+      Codes are now project-scoped item records in named `codebooks`, so a "corrected
+      version of my data" imported as a new dataset simply uses the same codebook. The
+      coupling that created half of #151 is gone rather than worked around.
+
+      Shipped (`da1cda6`, `f69d570`, `e59f897`, `5cb3a88`):
+      - **A QDPX import was silently discarding its entire codebook** — found on the way
+        in. #152 moved codes to item records and `normalize()` began resetting
+        `codes: []`, but `parseQdpx` still wrote them into the blob. Documents arrived;
+        every code was dropped and its codings pointed at ids that no longer existed.
+      - **Per-collection scope** in core (`collections[].scope`). Scope was per-workspace,
+        all-or-nothing; CAQDAS needs codes project-wide and codings per-dataset in the
+        same plugin. Tri-state so an omitted scope still INHERITS — defaulting to
+        'dataset' would have re-scoped every boundary set spatial owns.
+      - **Codebooks** as named, project-scoped objects; the active one remembered per
+        dataset. No migration, and none needed: an unfiltered item listing returns all
+        records, so existing codes appear and are adopted on first open.
+      - **The manager** (⚙ on the codebook panel): the plugin's first real modal, and
+        the first code-management vocabulary of any kind — rename, recolour, retheme,
+        multi-select, merge, bulk delete, switch/create/rename/delete codebooks, and
+        copy/move codes between them.
+      - **Real CSV file import/export**, not a paste box. Export is a compute-frame
+        `export` verb; import has to be a TOOLBAR verb, because only the workspace frame
+        has a writable `items` bridge (compute-frame items are read-only) — the same
+        constraint that forced `parseQdpx` to smuggle codes through a blob.
+
+      **Verification owed.** The manager's UI lives in a sandboxed opaque-origin iframe
+      that nothing outside can drive, so none of the buttons are automatically tested.
+      Confirmed: mounts clean, no console errors, writes zero records on mount (opening
+      the Coding tab and closing it must leave no trace). Wanted from a human: ⚙ → New
+      codebook → paste codes → select two → Merge → Move to the other book, and check the
+      codings followed. Plus a CSV round-trip between two projects.
+
+      **STILL OPEN — the other half of #151, which the codebook work does not touch:**
+      - **Coding SEGMENTS still anchor on `__ct_rid`**, so moving codings from dataset A
+        to B remains unsolved. Only possible where row ids still match (a re-exported
+        file usually re-bakes them); wants match-by-key as the fallback.
+      - **Analysis runs** (`datasetId` per entry) and **`libraryLink`** still need
+        repointing, and nothing lists what references a dataset.
+      A tool for those is a smaller job than the original entry implied, because the
+      codebook — the part with the most work invested in it — no longer needs one.
 
 - [x] **#150 — DONE (2026-08-04).** Three bullets landed in #152 L5; the fourth
       (enumeration) was only half-wired and is now complete, and the vocabulary rename
