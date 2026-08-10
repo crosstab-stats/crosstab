@@ -1626,22 +1626,14 @@ export const workspace = {
      * Rows are in source order, so `docs[row]` is the source that coding belongs to. */
     function resolvePendingImport() {
       const pending = state.pendingImport;
-      if (!pending || !Array.isArray(pending.codings)) { delete state.pendingImport; return; }
-      for (const pc of pending.codings) {
-        const doc = docs[pc.row];
-        if (!doc || !pc.codeId || !pc.data) continue;
-        const memo = typeof pc.memo === 'string' ? pc.memo : '';
-        if (pc.type === 'text') {
-          const start = pc.data.start | 0, end = pc.data.end | 0;
-          const text = doc.kind === 'text' ? String(doc.text || '').slice(start, end) : '';
-          state.segments.push({ doc: doc.rid, codeId: pc.codeId, start, end, text, memo });
-        } else if (pc.type === 'region') {
-          const g = pc.data;
-          state.segments.push({ doc: doc.rid, codeId: pc.codeId, region: { x: round4(g.x), y: round4(g.y), w: round4(g.w), h: round4(g.h) }, text: regionLabel(g), memo });
-        } else if (pc.type === 'time') {
-          state.segments.push({ doc: doc.rid, codeId: pc.codeId, tStart: round3(pc.data.tStart), tEnd: round3(pc.data.tEnd), text: timeLabel(pc.data.tStart, pc.data.tEnd), memo });
-        }
-      }
+      if (!pending) return;
+      const have = new Set(state.codes.map((c) => c.id));
+      const { codes, segments, dropped } = resolveImportedCodings(pending, docs, have);
+      // Codes FIRST: the segments reference them, and `save()` writes both collections
+      // in one pass, so a code has to exist in `state` before its codings do.
+      state.codes.push(...codes);
+      state.segments.push(...segments);
+      if (dropped) console.warn(`[caqdas] ${dropped} imported coding(s) dropped — no matching document or code`);
       delete state.pendingImport;
       save();
     }
@@ -1937,6 +1929,55 @@ async function syncState(app, state) {
     if (!nowMemos.has(id)) await app.memos.remove(id);
   }
   persisted.memos = new Map([...nowMemos].map(([, v]) => [v.id, clone(v)]));
+}
+
+/**
+ * Turn a just-imported QDPX payload into codes + segments, given the loaded documents.
+ *
+ * Pure, and separate from the mount, for two reasons: this is the step that silently
+ * lost every imported code (see `parseQdpx`), and the row-index → row-id mapping it
+ * performs is the sort of thing that should be checkable without standing up an iframe.
+ *
+ * `pending.codings` address documents by ROW INDEX, because at import time no dataset
+ * exists yet and therefore no `__ct_rid` values do either. They are resolved here, at
+ * mount, against the docs actually loaded.
+ *
+ * @param {{codes?:object[], codings?:object[]}} pending
+ * @param {{rid:string, kind:string, text?:string}[]} docs
+ * @param {Set<string>} haveCodeIds ids already present, so a re-run cannot duplicate
+ * @returns {{codes:object[], segments:object[], dropped:number}}
+ */
+export function resolveImportedCodings(pending, docs, haveCodeIds = new Set()) {
+  const out = { codes: [], segments: [], dropped: 0 };
+  if (!pending || typeof pending !== 'object') return out;
+
+  for (const c of Array.isArray(pending.codes) ? pending.codes : []) {
+    if (c && c.id && !haveCodeIds.has(c.id)) out.codes.push(c);
+  }
+  const known = new Set([...haveCodeIds, ...out.codes.map((c) => c.id)]);
+
+  for (const pc of Array.isArray(pending.codings) ? pending.codings : []) {
+    const doc = docs[pc && pc.row];
+    // A coding whose code did not survive is dropped rather than kept as a dangling
+    // reference: a segment pointing at a missing code renders as "(code)" and cannot be
+    // repaired by hand. Counting them makes the loss reportable instead of invisible.
+    if (!doc || !pc.codeId || !pc.data || !known.has(pc.codeId)) { out.dropped++; continue; }
+    const memo = typeof pc.memo === 'string' ? pc.memo : '';
+    if (pc.type === 'text') {
+      const start = pc.data.start | 0;
+      const end = pc.data.end | 0;
+      const text = doc.kind === 'text' ? String(doc.text || '').slice(start, end) : '';
+      out.segments.push({ doc: doc.rid, codeId: pc.codeId, start, end, text, memo });
+    } else if (pc.type === 'region') {
+      const g = pc.data;
+      out.segments.push({ doc: doc.rid, codeId: pc.codeId, region: { x: round4(g.x), y: round4(g.y), w: round4(g.w), h: round4(g.h) }, text: regionLabel(g), memo });
+    } else if (pc.type === 'time') {
+      out.segments.push({ doc: doc.rid, codeId: pc.codeId, tStart: round3(pc.data.tStart), tEnd: round3(pc.data.tEnd), text: timeLabel(pc.data.tStart, pc.data.tEnd), memo });
+    } else {
+      out.dropped++;
+    }
+  }
+  return out;
 }
 
 function normalize(raw) {
@@ -2352,7 +2393,15 @@ export async function parseQdpx(app, { name, file }) {
   // Create the dataset WITHOUT activating, attach the coding blob, THEN switch to it —
   // so the blob is present before the workspace mounts (no race).
   const newId = await app.data.create({ name: projName, variables, columns: { name: names, source: content }, activate: false });
-  const blob = { version: 1, textColumn: 'source', labelColumn: 'name', codes, segments: [], pendingImport: { codings } };
+  // Codes ride inside `pendingImport`, NOT at the top level of the blob.
+  //
+  // #152 moved codes and segments out of the blob into item records, and `normalize()`
+  // now hard-resets `codes: []` on load — so a top-level `codes` here was silently
+  // dropped on the way in, leaving every imported coding pointing at a codeId that no
+  // longer existed. `pendingImport` is the one key `normalize()` passes through intact,
+  // which is exactly what this needs: the mount turns it into real item records once it
+  // is bound to a dataset and can write them with the right scope.
+  const blob = { version: 1, textColumn: 'source', labelColumn: 'name', pendingImport: { codes, codings } };
   await app.state.write('caqdas-coding', blob, newId);
   await app.data.setActive(newId);
   // Self-committing importer (manifest `selfCommit`): we created the dataset +
