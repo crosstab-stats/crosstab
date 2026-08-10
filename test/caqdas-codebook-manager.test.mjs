@@ -145,3 +145,23 @@ test('toHex never returns something <input type=color> will reject', () => {
     assert.match(toHex(junk), /^#[0-9a-f]{6}$/, `${junk} produced an invalid colour`);
   }
 });
+
+// --- the CSV file pair -------------------------------------------------------------
+
+test('an exported CSV re-imports without creating a code called "name"', () => {
+  // The round-trip that matters: export a codebook, hand the file to a colleague, they
+  // import it. Without a header skip the first code in every imported file is "name".
+  const csv = codebookToCsv([{ name: 'Trust', group: 'Relational', color: '#8ecae6' }]);
+  const back = parseCodeList(csv);
+  assert.deepEqual(back.map((c) => c.name), ['Trust']);
+});
+
+test('the header skip is exact, not a guess at the first line', () => {
+  // Only a real three-column header is dropped. A bare list whose first entry happens
+  // to be an ordinary word must survive intact.
+  assert.deepEqual(parseCodeList('name\ntheme').map((c) => c.name), ['name', 'theme']);
+  assert.deepEqual(parseCodeList('Trust\nDelay').map((c) => c.name), ['Trust', 'Delay']);
+  // …including the tab-separated and quoted spellings a spreadsheet emits.
+  assert.deepEqual(parseCodeList('name\ttheme\tcolour\nTrust').map((c) => c.name), ['Trust']);
+  assert.deepEqual(parseCodeList('"name","theme","color"\nTrust').map((c) => c.name), ['Trust']);
+});

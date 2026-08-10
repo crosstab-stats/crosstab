@@ -102,6 +102,14 @@ export const manifest = {
     verbs: [
       { id: 'import-qdpx', label: 'REFI-QDA / QDPX project (.qdpx)…', run: 'parseQdpx', category: 'import', needsFile: { extensions: ['.qdpx'] }, group: 'Qualitative' },
       { id: 'export-qdpx', label: 'REFI-QDA / QDPX project (.qdpx)…', run: 'exportQdpx', category: 'export', group: 'Qualitative' },
+      // A real file pair for the codebook alone, alongside the whole-project QDPX.
+      // Export is a compute-frame verb (it only READS records, which is all the compute
+      // frame can do with items) and lands in the normal export picker. Import has to be
+      // a TOOLBAR verb instead: only the workspace frame gets a writable `items` bridge
+      // — compute-frame items are read-only (core/loader.js) — which is the same reason
+      // `parseQdpx` has to smuggle its codes through a blob.
+      { id: 'export-codebook-csv', label: 'Codebook (.csv)…', run: 'exportCodebookCsv', category: 'export', group: 'Qualitative' },
+      { id: 'import-codebook-csv', label: '⇪ Import codes (.csv)', run: 'importCodebookCsv', category: 'toolbar', needsFile: { extensions: ['.csv', '.txt', '.tsv'] } },
     ],
   }],
 };
@@ -2386,6 +2394,79 @@ async function syncState(app, state) {
 }
 
 /**
+ * Export the ACTIVE codebook as CSV — `name,theme,colour`, the same three columns
+ * {@link parseCodeList} reads back, so a codebook exported from one project imports
+ * cleanly into another.
+ *
+ * Runs in the compute frame, which can only READ item records. That is sufficient here
+ * and is why the matching import cannot live beside it.
+ */
+export async function exportCodebookCsv(app) {
+  const cfg = normalize(await app.state.read('caqdas-coding'));
+  const codes = (await app.items.list('codes')).map((r) => ({ id: r.id, ...r.fields }));
+  const books = (await app.items.list('codebooks')).map((r) => ({ id: r.id, ...r.fields }));
+  // Fall back to every code when no book is selected yet — exporting nothing because a
+  // config blob was missing would look like data loss.
+  const bookId = cfg.codebookId && books.some((b) => b.id === cfg.codebookId) ? cfg.codebookId : null;
+  const mine = bookId ? codes.filter((c) => c.codebookId === bookId) : codes;
+  const name = books.find((b) => b.id === bookId)?.name || 'codebook';
+  return {
+    filename: `${String(name).replace(/[^\w -]+/g, '').trim() || 'codebook'}.csv`,
+    mimeType: 'text/csv',
+    data: new TextEncoder().encode(codebookToCsv(mine)),
+  };
+}
+
+/**
+ * Import codes from a CSV/TSV file into the active codebook.
+ *
+ * A TOOLBAR verb, not an import verb, and that is forced rather than chosen: toolbar
+ * verbs are invoked on the WORKSPACE frame's broker (core/workspace-manager.js), which
+ * is the only place with a writable `items` bridge. It still gets a real file picker via
+ * `needsFile`, so this is a genuine file import and not a paste box.
+ *
+ * Names already in the book are skipped, so re-importing a codebook sheet as it grows
+ * adds only what is new.
+ */
+export async function importCodebookCsv(app, args = {}) {
+  const file = args.__file;
+  if (!file || !file.bytes) return { ok: false, message: 'No file was supplied.' };
+  const text = new TextDecoder().decode(file.bytes);
+
+  const cfg = normalize(await app.state.get());
+  const books = (await app.items.list('codebooks')).map((r) => ({ id: r.id, ...r.fields }));
+  const codes = (await app.items.list('codes')).map((r) => ({ id: r.id, ...r.fields }));
+
+  // Land in the active book, creating one if this project has none yet — the same
+  // bootstrap the mount does, because an import can be the very first thing that happens.
+  let bookId = cfg.codebookId && books.some((b) => b.id === cfg.codebookId) ? cfg.codebookId : books[0]?.id;
+  if (!bookId) {
+    bookId = await app.items.put('codebooks', null, { name: 'Codebook' });
+    await app.state.set({ ...cfg, codebookId: bookId });
+  }
+
+  const mine = codes.filter((c) => c.codebookId === bookId);
+  const existing = new Set(mine.map((c) => String(c.name).toLowerCase()));
+  const parsed = parseCodeList(text, existing);
+  if (!parsed.length) {
+    return { ok: true, message: 'Nothing to import — every code was already in this codebook.' };
+  }
+  for (let i = 0; i < parsed.length; i++) {
+    const pc = parsed[i];
+    await app.items.put('codes', null, {
+      name: pc.name,
+      color: pc.color || PALETTE[(mine.length + i) % PALETTE.length],
+      group: pc.group,
+      memo: '',
+      codebookId: bookId,
+    });
+  }
+  // The mount holds its own copy of state and a diff shadow, so it has to reload or its
+  // next save would treat these as deletions.
+  return { ok: true, refresh: 'workspace', message: `Imported ${parsed.length} code(s).` };
+}
+
+/**
  * Turn a just-imported QDPX payload into codes + segments, given the loaded documents.
  *
  * Pure, and separate from the mount, for two reasons: this is the step that silently
@@ -2484,6 +2565,11 @@ export function parseCodeList(text, existingNames = new Set()) {
   // Strings only. Coercing would turn a stray number into a code named "42" — harmless
   // but surprising, and the only real caller is a textarea's value.
   if (typeof text !== 'string') return out;
+  // A CSV written by `codebookToCsv` starts with its header; skip it so importing an
+  // exported file does not create a code called "name". Matched exactly, so a genuine
+  // code named "name" is only lost if it is also the very first line AND followed by
+  // the other two column titles.
+  text = text.replace(/^\s*"?name"?\s*[,\t]\s*"?theme"?\s*[,\t]\s*"?colou?r"?\s*\r?\n/i, '');
   const seen = new Set(existingNames);
   for (const raw of String(text ?? '').split(/\r?\n/)) {
     const line = raw.trim();
