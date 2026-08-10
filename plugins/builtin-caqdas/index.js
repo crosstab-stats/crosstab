@@ -80,8 +80,15 @@ export const manifest = {
   // `sidebar: 'count'` rather than 'list' — a project can hold thousands of segments, and
   // the inventory's job is to show that data EXISTS here, which a count does without
   // drowning the panel.
+  // Scope is per-collection because this plugin genuinely needs two different ones.
+  // A CODEBOOK is project-wide: the whole point of a coding scheme is that it outlives
+  // and spans the documents it was applied to, and researchers reuse one across studies.
+  // A CODING cannot be — it anchors to a `__ct_rid` row id, which belongs to exactly one
+  // dataset and means nothing in another. The workspace-level `scope` flag can only say
+  // one thing for both, which is why `collections[].scope` exists (see core/collections.js).
   collections: [
-    { id: 'codes', label: 'Codes', labelField: 'name', sidebar: 'count' },
+    { id: 'codebooks', label: 'Codebooks', labelField: 'name', sidebar: 'list', scope: 'project' },
+    { id: 'codes', label: 'Codes', labelField: 'name', sidebar: 'count', scope: 'project' },
     { id: 'segments', label: 'Codings', sidebar: 'count' },
   ],
   workspaces: [{
@@ -101,7 +108,7 @@ export const manifest = {
 
 /** Distinct, readable highlight colours (assigned round-robin to new codes). */
 const PALETTE = ['#ffd166', '#8ecae6', '#a7c957', '#ffadad', '#bdb2ff', '#ffc6ff', '#caffbf', '#fdffb6', '#9bf6ff', '#ffd6a5'];
-const uid = () => 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const uid = (pfx = 'c') => pfx + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const MAX_DOCS = 10000; // v1 cap; virtualise for larger corpora later.
 
 const STYLES = `
@@ -1271,7 +1278,7 @@ export const workspace = {
       const activeIsMedia = !!activeDoc && activeDoc.kind === 'media';
       // Group codes into themes by their `group`; ungrouped fall to the bottom.
       const groups = new Map();
-      for (const code of state.codes) { const g = code.group || ''; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(code); }
+      for (const code of codesInBook(state)) { const g = code.group || ''; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(code); }
       const groupNames = [...groups.keys()].sort((a, b) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)));
       const hasThemes = groupNames.some((g) => g !== '');
       for (const g of groupNames) {
@@ -1374,7 +1381,8 @@ export const workspace = {
       const commit = () => {
         const name = inp.value.trim();
         if (!name) return;
-        state.codes.push(authored({ id: uid(), name, color: PALETTE[state.codes.length % PALETTE.length], group: '', memo: '' }));
+        const mine = codesInBook(state);
+        state.codes.push(authored({ id: uid(), name, color: PALETTE[mine.length % PALETTE.length], group: '', memo: '', codebookId: state.codebookId }));
         inp.value = ''; save(); renderCodes();
       };
       add.addEventListener('click', commit);
@@ -1483,7 +1491,7 @@ export const workspace = {
         else if (span && span.kind === 'time') addTimeSegment(codeId, span.span);
         else addSegment(codeId, span);
       };
-      for (const code of state.codes) {
+      for (const code of codesInBook(state)) {
         const b = el('button');
         const sw = el('span', 'caqdas__sw'); sw.style.backgroundColor = code.color;
         const nm = document.createTextNode(code.name);
@@ -1497,7 +1505,7 @@ export const workspace = {
       const mk = () => {
         const name = inp.value.trim();
         if (!name) return;
-        const code = authored({ id: uid(), name, color: PALETTE[state.codes.length % PALETTE.length], group: '', memo: '' });
+        const code = authored({ id: uid(), name, color: PALETTE[codesInBook(state).length % PALETTE.length], group: '', memo: '', codebookId: state.codebookId });
         state.codes.push(code); choose(code.id);
       };
       inp.addEventListener('click', (e) => e.stopPropagation());
@@ -1542,10 +1550,10 @@ export const workspace = {
     freqBtn.addEventListener('click', async () => {
       const counts = {};
       for (const s of state.segments) counts[s.codeId] = (counts[s.codeId] || 0) + 1;
-      if (!state.codes.length) { app.results.appendError('No codes yet — create some in the Coding tab.'); return; }
+      if (!codesInBook(state).length) { app.results.appendError('No codes yet — create some in the Coding tab.'); return; }
       // Order by theme group (matching the codebook), so the table reads as a
       // themed code summary; show each code's memo when present.
-      const ordered = state.codes.slice().sort((a, b) => (a.group || '~').localeCompare(b.group || '~') || a.name.localeCompare(b.name));
+      const ordered = codesInBook(state).slice().sort((a, b) => (a.group || '~').localeCompare(b.group || '~') || a.name.localeCompare(b.name));
       const rows = ordered.map((c) => [c.group || '—', c.name, counts[c.id] || 0, c.memo || '']);
       // Bracket the output so the host stamps attribution (like a menu analysis).
       await app.results.beginAnalysis('Code frequency');
@@ -1824,7 +1832,7 @@ export function mergeState({ ancestor, mine, theirs, helpers }) {
 // identity worth addressing, and the blob path exists precisely for that (#152 D2).
 
 /** Shadow of what is currently persisted, so save can diff. Per mount. */
-let persisted = { codes: new Map(), segments: new Map(), memos: new Map() };
+let persisted = { codebooks: new Map(), codes: new Map(), segments: new Map(), memos: new Map() };
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -1832,6 +1840,7 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 /** Rebuild the diff shadow after a load, so the next save writes only real changes. */
 function resetPersisted(state) {
   persisted = {
+    codebooks: new Map((state.codebooks ?? []).map((b) => [b.id, clone(b)])),
     codes: new Map((state.codes ?? []).map((c) => [c.id, clone(c)])),
     segments: new Map((state.segments ?? []).map((x) => [x.id, clone(x)])),
     memos: new Map((state.memos ?? []).map((m) => [m.id, clone(m)])),
@@ -1870,7 +1879,9 @@ async function loadState(app) {
   let codes = [];
   let segments = [];
   let memos = [];
+  let codebooks = [];
   try {
+    codebooks = (await app.items.list('codebooks')).map((r) => ({ id: r.id, ...r.fields }));
     codes = (await app.items.list('codes')).map((r) => ({ id: r.id, ...r.fields }));
     segments = (await app.items.list('segments')).map((r) => ({ id: r.id, ...r.fields }));
   } catch (e) {
@@ -1883,11 +1894,19 @@ async function loadState(app) {
   }
   const state = {
     ...cfg,
+    codebooks,
     codes,
     segments,
     memos,
   };
+  // Snapshot what was actually LOADED before bootstrapping, so anything the bootstrap
+  // invents registers as a pending change rather than as already-saved.
   resetPersisted(state);
+  // …then create the default codebook in memory only. Nothing is written here: mounting
+  // a workspace must never write state (the mount-before-hydrate clobber), and a user
+  // who opens the Coding tab and closes it again should leave no trace. The default book
+  // is flushed by the first real save, alongside whatever prompted it.
+  adoptIntoCodebook(state);
   return state;
 }
 
@@ -1895,10 +1914,10 @@ async function loadState(app) {
 async function syncState(app, state) {
   // Config (small, identity-free) stays a blob — but strip the collections out of it so
   // the same data never lives in two places.
-  const { codes, segments, memos, ...cfg } = state;
+  const { codebooks, codes, segments, memos, ...cfg } = state;
   await app.state.set(cfg);
 
-  for (const [collection, arr] of [['codes', codes ?? []], ['segments', segments ?? []]]) {
+  for (const [collection, arr] of [['codebooks', codebooks ?? []], ['codes', codes ?? []], ['segments', segments ?? []]]) {
     const now = new Map(arr.filter((x) => x && x.id).map((x) => [x.id, x]));
     for (const [id, val] of now) {
       const prev = persisted[collection].get(id);
@@ -1980,12 +1999,46 @@ export function resolveImportedCodings(pending, docs, haveCodeIds = new Set()) {
   return out;
 }
 
+/**
+ * Make sure there is a codebook, and that every code belongs to one.
+ *
+ * Runs on load rather than as a migration, which is the whole reason no migration was
+ * needed: codes became project-scoped, so a project's existing codes simply appear in
+ * the project-wide list and get adopted into a default book the first time it opens.
+ * Nothing is rewritten ahead of time and nothing is lost if the feature is never used.
+ *
+ * The active book is remembered per DATASET (it lives in the config blob, which is
+ * dataset-scoped) — so two datasets in one project can be coded against different
+ * schemes, or the same one, and each remembers its own choice.
+ */
+function adoptIntoCodebook(state) {
+  if (!state.codebooks.length) {
+    state.codebooks.push({ id: uid('b'), name: 'Codebook' });
+  }
+  const known = new Set(state.codebooks.map((b) => b.id));
+  if (!state.codebookId || !known.has(state.codebookId)) {
+    state.codebookId = state.codebooks[0].id;
+  }
+  for (const c of state.codes) {
+    if (!c.codebookId || !known.has(c.codebookId)) c.codebookId = state.codebookId;
+  }
+}
+
+/** The codes in the currently-selected codebook — what the coding UI works with. */
+function codesInBook(state) {
+  return state.codes.filter((c) => c.codebookId === state.codebookId);
+}
+
 function normalize(raw) {
   const s = raw && typeof raw === 'object' ? raw : {};
   return {
     version: 1,
     textColumn: typeof s.textColumn === 'string' ? s.textColumn : null,
     labelColumn: typeof s.labelColumn === 'string' ? s.labelColumn : null,
+    // Which codebook THIS dataset is coded against. Config, not content — it is a
+    // per-dataset choice about project-wide data, so it belongs in the blob.
+    codebookId: typeof s.codebookId === 'string' ? s.codebookId : null,
+    codebooks: [],
     // Codes, segments and memos are no longer part of this blob — they are item records
     // and host memos (#152 Layer 3). Defaults keep the working shape intact for callers
     // that build a state object without loading one.

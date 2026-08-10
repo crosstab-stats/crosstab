@@ -23,8 +23,26 @@ test('a full declaration normalises unchanged', () => {
   const full = {
     id: 'boundarySets', label: 'Map layers', labelField: 'fileName',
     summaryField: 'featureCount', sidebar: 'list', assetRefs: ['assetId'], portable: true,
+    scope: 'project',
   };
   assert.deepEqual(normalizeCollection(full), full);
+});
+
+test('scope is tri-state: omitted means INHERIT the workspace, not "dataset"', () => {
+  // The distinction matters. builtin-spatial declares a project-scoped WORKSPACE and its
+  // collections say nothing about scope; defaulting them to 'dataset' would silently
+  // re-scope every boundary set to the active dataset and empty the sidebar.
+  assert.equal(normalizeCollection({ id: 'x' }).scope, null, 'omitted = inherit');
+  assert.equal(normalizeCollection({ id: 'x', scope: 'project' }).scope, 'project');
+  assert.equal(normalizeCollection({ id: 'x', scope: 'dataset' }).scope, 'dataset');
+});
+
+test('a malformed scope is ignored rather than guessed', () => {
+  // Same rule as the rest of this normaliser: a bad manifest costs that plugin the
+  // feature, never the whole sidebar — and guessing here would move people's records.
+  for (const bad of ['Project', 'global', '', 1, true, null, {}]) {
+    assert.equal(normalizeCollection({ id: 'x', scope: bad }).scope, null, String(bad));
+  }
 });
 
 test('portable is opt-in and strictly boolean', () => {

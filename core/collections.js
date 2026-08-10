@@ -37,6 +37,13 @@
  *   every record, a summary line, or not at all. Defaults to `none` so a collection is
  *   never surfaced by accident — visibility is a deliberate choice by its author.
  * @property {string[]} [assetRefs] Fields holding `asset:` refs, for reference counting.
+ * @property {'project'|'dataset'} [scope] Which dataset a record belongs to. Omit to
+ *   INHERIT the workspace's own scope, which is the existing behaviour and right for
+ *   almost everything. Set it only when one collection genuinely differs from its
+ *   siblings: CAQDAS codes are project-wide (a codebook is reused across datasets) while
+ *   its segments are per-dataset (they anchor to `__ct_rid` row ids that belong to one
+ *   dataset and are meaningless in another). Workspace-level scope cannot express that —
+ *   it is all-or-nothing — which is why this exists per collection.
  * @property {boolean} [portable=false] May a record be saved to the building-block
  *   library and reused in other projects? **Opt-in**, because meaningfulness outside its
  *   project is a property only the collection's author knows. A map layer travels; a memo
@@ -64,6 +71,10 @@ export function normalizeCollection(raw) {
     labelField: typeof raw.labelField === 'string' && raw.labelField ? raw.labelField : null,
     summaryField: typeof raw.summaryField === 'string' && raw.summaryField ? raw.summaryField : null,
     portable: raw.portable === true,
+    // null = inherit the workspace's scope. Deliberately tri-state rather than
+    // defaulting to 'dataset': a collection that says nothing must keep behaving exactly
+    // as it did, including inside a project-scoped workspace like builtin-spatial's.
+    scope: raw.scope === 'project' || raw.scope === 'dataset' ? raw.scope : null,
     sidebar,
     assetRefs: Array.isArray(raw.assetRefs) ? raw.assetRefs.filter((f) => typeof f === 'string' && f) : [],
   };

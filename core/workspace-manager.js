@@ -296,14 +296,26 @@ export class WorkspaceManager {
       // from the plugin HERE and never accepted from the sandbox, so a plugin can only
       // ever write its own records. Scope is host-enforced from the workspace's declared
       // scope, exactly as the blob path does, so the plugin doesn't have to care.
+      // Which dataset a COLLECTION's records belong to. Normally the workspace's own
+      // scope, but a collection may override it (`collections[].scope`). CAQDAS is the
+      // case that needs it: codes are project-wide, segments are per-dataset, and the
+      // workspace-level flag can only say one thing for both.
+      collectionDs: (collection) => {
+        const decl = declaredCollections([plugin], () => owner)
+          .find((d) => d.id === String(collection));
+        if (decl?.scope === 'project') return NO_DS;
+        if (decl?.scope === 'dataset') return this.#activeDatasetId();
+        return entry.dsId;
+      },
       items: {
         put: (collection, id, fields) => {
           if (reserved) throw new Error(`Workspace id "${ws.id}" is reserved by a built-in plugin.`);
           if (stale('items.put')) return null;
           if (!this.#items || !collection) return null;
           const itemId = id || newItemId();
+          const ds = services.collectionDs(collection);
           this.#items.put(owner, String(collection), itemId, fields ?? {}, {
-            scope: { wsId: ws.id, dsId: entry.dsId === NO_DS ? null : entry.dsId },
+            scope: { wsId: ws.id, dsId: ds === NO_DS ? null : ds },
           });
           return itemId;
         },
@@ -315,7 +327,8 @@ export class WorkspaceManager {
         },
         list: (collection) => {
           if (reserved || !this.#items || !collection) return [];
-          const dsKey = entry.dsId === NO_DS ? undefined : entry.dsId;
+          const ds = services.collectionDs(collection);
+          const dsKey = ds === NO_DS ? undefined : ds;
           return this.#items.list(owner, String(collection), { dsId: dsKey })
             .map((r) => ({ id: r.id, fields: r.fields, author: r.author ?? null }));
         },
