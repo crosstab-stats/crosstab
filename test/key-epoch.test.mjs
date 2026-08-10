@@ -192,3 +192,52 @@ test('a stale-keyed peer cannot seed over the owner’s project', async () => {
   assert.deepEqual(files.get('project.json'), ownerBytes,
     "the owner's ciphertext is byte-identical — nothing was written over it");
 });
+
+// --- the halt POLICY -----------------------------------------------------------------
+//
+// What `keyStatus` reports is one thing; what the session DOES about it is another, and
+// that half lived untested inside a private method until 2026-08-10. It is
+// safety-critical — it is what stops a peer writing files its collaborators cannot read.
+
+const { keyHaltDecision, UNREADABLE_TOLERANCE } = await import('../core/project-sync.js');
+
+test('a current key just continues', () => {
+  assert.equal(keyHaltDecision({ current: true, reason: 'ok' }).action, 'continue');
+});
+
+test('every definite change halts immediately — no grace period', () => {
+  // These are not ambiguous: the folder demonstrably is not using our key. Waiting would
+  // only widen the window in which we might write something unreadable.
+  for (const reason of ['rekeyed', 'unprotected', 'protected']) {
+    const d = keyHaltDecision({ current: false, reason });
+    assert.equal(d.action, 'halt', reason);
+    assert.match(d.reason, /\w/, 'and says which change it was');
+  }
+});
+
+test('an unreadable meta is TOLERATED at first — a rekey rewrites that file', () => {
+  // Halting on the first glimpse would make every rekey a session-ending event for
+  // every peer, because the owner necessarily rewrites this file mid-operation.
+  for (let n = 0; n < UNREADABLE_TOLERANCE; n++) {
+    assert.equal(keyHaltDecision({ current: false, reason: 'unreadable' }, n).action, 'skip', `run ${n}`);
+  }
+});
+
+test('…but the patience is BOUNDED — silently never saving is its own data loss', () => {
+  const d = keyHaltDecision({ current: false, reason: 'unreadable' }, UNREADABLE_TOLERANCE);
+  assert.equal(d.action, 'halt');
+  assert.match(d.reason, /could not be read/);
+});
+
+test('skipping is not halting — the poll must keep running to notice recovery', () => {
+  const d = keyHaltDecision({ current: false, reason: 'unreadable' }, 1);
+  assert.equal(d.action, 'skip');
+  assert.notEqual(d.action, 'halt');
+});
+
+test('an unrecognised reason halts rather than continuing', () => {
+  // Fail closed on the unknown: this function decides whether it is safe to WRITE.
+  for (const status of [{ current: false, reason: 'something-new' }, { current: false }, {}, null]) {
+    assert.equal(keyHaltDecision(status).action, 'halt', JSON.stringify(status));
+  }
+});

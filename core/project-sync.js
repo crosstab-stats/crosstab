@@ -119,6 +119,40 @@ const assetOpsOf = (log) =>
 const itemOpsOf = (log) =>
   (log ?? []).filter((o) => typeof o.target === 'string' && o.target.startsWith('item:'));
 
+/**
+ * What to do about a folder key that is no longer the folder's — the whole policy, as a
+ * pure function so it can be tested. The behaviour it governs is safety-critical (it is
+ * what stops a peer writing files its collaborators cannot read) and lived untested
+ * inside a private method until 2026-08-10.
+ *
+ * Three outcomes rather than two. "Unreadable" earns its own because it is usually
+ * TRANSIENT: a rekey rewrites the encryption meta and then re-encrypts every file, so a
+ * poll landing mid-write legitimately sees a truncated one. Halting on the first
+ * glimpse would turn every rekey into a session-ending event for every peer. But the
+ * patience has to be bounded — silently never saving is its own kind of data loss — so
+ * it becomes a halt once it persists.
+ *
+ * @param {{current:boolean, reason:string}} status  from ProjectStore#keyStatus
+ * @param {number} unreadableRun  consecutive polls that could not read the meta
+ * @returns {{action:'continue'|'skip'|'halt', reason:string}}
+ */
+export function keyHaltDecision(status, unreadableRun = 0) {
+  if (status?.current) return { action: 'continue', reason: '' };
+  if (status?.reason === 'unreadable' && unreadableRun < UNREADABLE_TOLERANCE) {
+    return { action: 'skip', reason: 'the folder’s protection file could not be read — retrying' };
+  }
+  const reason = {
+    rekeyed: 'Its passphrase was changed by someone else.',
+    unprotected: 'Its protection was removed by someone else.',
+    protected: 'It was protected by someone else.',
+    unreadable: 'Its protection file could not be read.',
+  }[status?.reason] ?? 'Its protection changed.';
+  return { action: 'halt', reason };
+}
+
+/** Consecutive unreadable polls tolerated before halting (~12 s at the 3 s poll). */
+export const UNREADABLE_TOLERANCE = 4;
+
 export class ProjectSync {
   #store;
   #datasets;
@@ -2041,17 +2075,12 @@ export class ProjectSync {
       status = { current: false, reason: 'unreadable' };
     }
     if (status.current) { this.#metaUnreadable = 0; return true; }
+    if (status.reason === 'unreadable') this.#metaUnreadable = (this.#metaUnreadable || 0) + 1;
 
-    // "Unreadable" is usually transient — the owner rewrites this file during a rekey,
-    // and a poll landing mid-write sees a truncated one. So: skip the tick, keep
-    // polling, and only halt if it stays unreadable. Silently never saving would be its
-    // own kind of data loss, so the patience is bounded.
-    if (status.reason === 'unreadable') {
-      this.#metaUnreadable = (this.#metaUnreadable || 0) + 1;
-      if (this.#metaUnreadable < 4) {
-        this.#setStatus('Folder — checking protection…');
-        return false; // no write this tick; the poll keeps running
-      }
+    const decision = keyHaltDecision(status, this.#metaUnreadable);
+    if (decision.action === 'skip') {
+      this.#setStatus('Folder — checking protection…');
+      return false; // no write this tick; the poll keeps running
     }
     this.#stopPoll();
     this.#store.lock();
@@ -2059,12 +2088,7 @@ export class ProjectSync {
     // next save down the OPFS branch and quietly fork the project into a second copy on
     // this device. The project stays folder-bound and simply stops writing.
     this.#folderKeyStale = true;
-    const what = {
-      rekeyed: 'Its passphrase was changed by someone else.',
-      unprotected: 'Its protection was removed by someone else.',
-      protected: 'It was protected by someone else.',
-      unreadable: 'Its protection file could not be read.',
-    }[status.reason] ?? 'Its protection changed.';
+    const what = decision.reason;
     this.#setStatus(`Folder locked — ${what}`);
     this.#results.appendError(
       `This shared folder is no longer using the key you opened it with. ${what} `

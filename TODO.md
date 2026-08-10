@@ -2212,7 +2212,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     have Slack/Teams; and it's the *unanchored* opposite of a memo. If ever, rescope to
     ephemeral live-session-only messages, decided on its own. (Talked through with the user.)
 
-- [~] **Encryption at rest — opt-in for local storage, opt-out for exports (#144).**
+- [x] **Encryption at rest — opt-in for local storage, opt-out for exports (#144). DONE 2026-08-10.**
       **CRYPTO KERNEL + FOLDER AT-REST DONE** (commit 341879e): `core/crypto-envelope.js`
       (PBKDF2-HMAC-SHA256 → AES-256-GCM, native WebCrypto — no vendored lib; master key
       derived once per session from passphrase + per-project public salt, fresh IV per
@@ -2254,7 +2254,20 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       halt is a dedicated flag, NOT `folderMode = false` — clearing that would divert
       the next save into OPFS and fork the project into a second local copy. Legacy meta
       with no epoch reads null on both sides, so an upgrade never false-alarms.
-      7 tests in `test/key-epoch.test.mjs` pin all three directions. **UPDATE 2026-08-10 — mostly closed, and the entry above was already half stale
+      7 tests in `test/key-epoch.test.mjs` pin all three directions. **#144 CLOSED 2026-08-10.** Everything this entry set out to build is shipped:
+      opt-in local protection, default-on export encryption, folder protection, OPFS
+      per-project passphrases, live-peer key coordination, and a one-pass passphrase
+      change. The one item recorded as a design blocker turned out to rest on a false
+      premise (see "passphrase vs OOM-prone data" above — the path it worried about is
+      never used for saved Parquet).
+
+      Small things deliberately left, none of them blocking and none about correctness:
+      - **Recovery from a halt is a manual reopen.** `rekeyPending` and the halt policy
+        now give an in-place re-prompt something to hang off, if it is ever wanted.
+      - **Chunked-Parquet crypto** — see above; it belongs to the project FORMAT, not to
+        this feature.
+
+      **UPDATE 2026-08-10 — the rekey story, and the entry above was already half stale
       when written.** Detection existed: the plaintext meta has carried a random `epoch`
       since #144, `keyStatus()` reports ok / unprotected / protected / rekeyed, and
       `#keyStillCurrent()` checks it on every 3 s poll AND before every folder write. The
@@ -2344,6 +2357,38 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     machine doesn't persist is real. This is *the* reason it can't just mirror the collab
     "storage only sees ciphertext" pattern for free — locally, key-holder == storage-holder
     unless a human supplies the secret.
+  - **Open problem — passphrase vs OOM-prone data. RESOLVED 2026-08-10 by discovering the
+    premise was wrong. Not a blocker, and not really about crypto.**
+
+    The analysis below says at-rest encryption breaks DuckDB's stream-from-OPFS path for
+    large sources. **It does not, because that path is never used for a project's saved
+    Parquet.** Traced end to end:
+    - `ProjectStore#load` reads EVERY source with `#readBytes` and attaches
+      `new Uint8Array(bytes)` to the log — whole file, in JS memory, encrypted or not.
+    - Those bytes reach DuckDB via `registerParquetFile` → `registerFileBuffer`
+      (`core/duckdb-manager.js:502`), i.e. **as a buffer, never a file handle**.
+    - `registerFileHandle` with `BROWSER_FSACCESS` (`duckdb-manager.js:206-230`) is used
+      only for DuckDB's own **ingest scratch parts** (`<table>__part<n>.parquet` in the
+      OPFS root) during import. Encryption never touches those — they are not project
+      files and never go through `ProjectStore#write`.
+
+    So option (b) — "streaming/chunked AES with a DuckDB read path" — would build a
+    streaming decrypt for a reader that never reads encrypted bytes. Option (c)'s
+    scratch-plaintext concern does not arise either.
+
+    What is actually true: **a saved project already materialises all its Parquet in JS
+    memory on load, and always did — that ceiling predates encryption and is a property
+    of the project FORMAT, not of crypto.** Encryption adds roughly a 2× transient peak
+    (ciphertext buffer plus plaintext) during save/load. Worth knowing, not a design
+    fork, and it does not "decide the whole feature's shape" — the shape shipped.
+
+    If multi-GB saved projects ever matter, the thing to change is the load path
+    (stream sources to OPFS and register handles instead of buffering the log), which
+    would benefit unprotected projects equally. Filed as a FORMAT concern, not an
+    encryption one.
+
+    *Original analysis, kept because the options are still the right ones if the format
+    ever changes:*
   - **Open problem — passphrase vs OOM-prone data (the hard part, must design before
     building).** DuckDB reads Parquet **directly from OPFS handles** (`BROWSER_FSACCESS`,
     `core/duckdb-manager.js`) so it can *stream* multi-GB sources without loading them into
