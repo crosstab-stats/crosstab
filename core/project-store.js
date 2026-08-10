@@ -213,7 +213,15 @@ export class ProjectStore {
       return { current: !this.#key, reason: this.#key ? 'unprotected' : 'ok' };
     }
     let meta = null;
-    try { meta = JSON.parse(new TextDecoder().decode(raw)); } catch { return { current: true, reason: 'ok' }; }
+    try {
+      meta = JSON.parse(new TextDecoder().decode(raw));
+    } catch {
+      // A meta that EXISTS but will not parse is not "fine" — it is most likely being
+      // rewritten right now, and a rekey is exactly when that happens (the owner writes
+      // this file, then re-encrypts every other one). Answering "ok" here let a peer
+      // sail past the guard mid-rekey and write with a stale key. Unknown is not ok.
+      return { current: false, reason: 'unreadable' };
+    }
     if (!this.#key) return { current: false, reason: 'protected' }; // protection turned ON under us
     const epoch = meta?.epoch ?? null;
     if (epoch === this.#keyEpoch) return { current: true, reason: 'ok' };
@@ -388,8 +396,15 @@ export class ProjectStore {
   async readManifest(id) {
     try {
       return JSON.parse(await this.#read(this.#file(id, 'project.json')));
-    } catch {
-      return null;
+    } catch (err) {
+      // `null` means ABSENT, and callers act on that: decideSync maps a null peer
+      // manifest to `seed`, i.e. "write mine over the folder". Returning null for a
+      // DECRYPT failure therefore turned "I cannot read this" into "there is nothing
+      // here" — a stale-keyed peer would blindly overwrite the owner's project with its
+      // own, encrypted under a key the owner no longer holds. Absent is null; anything
+      // else is an error the caller must see.
+      if (/^not found:/.test(err?.message || '')) return null;
+      throw err;
     }
   }
 

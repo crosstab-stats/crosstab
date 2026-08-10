@@ -215,6 +215,11 @@ export class ProjectSync {
   #folderMode = false;
   /** Folder writes halted because its key changed under us (#144). Cleared by reopening. */
   #folderKeyStale = false;
+
+  /** Consecutive polls that could not read the folder's encryption meta. A rekey
+   * rewrites that file, so a tick landing mid-write legitimately sees nothing usable;
+   * this rides out the gap rather than halting the session over it. */
+  #metaUnreadable = 0;
   /** A dedicated OPFS store for LISTING in-browser projects even while the main store
    * is folder-backed — so the launcher/sidebar list always shows OPFS projects, never
    * the current folder's single project (which is surfaced via the folder registry). */
@@ -1160,6 +1165,7 @@ export class ProjectSync {
   /** Revert the store to OPFS after a failed/aborted folder attach. */
   #detachFolder() {
     this.#folderKeyStale = false; // a fresh attachment re-derives the key
+    this.#metaUnreadable = 0;
     this.#store.useDirectory(null);
     this.#store.lock();
     this.#folderMode = false;
@@ -1938,8 +1944,27 @@ export class ProjectSync {
     if (!this.#folderMode || !this.#binding) return true;
     if (this.#folderKeyStale) return false; // already halted; don't re-announce every tick
     let status;
-    try { status = await this.#store.keyStatus(this.#binding.id); } catch { return true; } // unreadable meta ⇒ don't block on a guess
-    if (status.current) return true;
+    try {
+      status = await this.#store.keyStatus(this.#binding.id);
+    } catch {
+      // A THROW here used to return true — "don't block on a guess". That guess was the
+      // wrong way round: not knowing whether our key is current is a reason to hold
+      // still, not to write. Treated the same as an unreadable meta below.
+      status = { current: false, reason: 'unreadable' };
+    }
+    if (status.current) { this.#metaUnreadable = 0; return true; }
+
+    // "Unreadable" is usually transient — the owner rewrites this file during a rekey,
+    // and a poll landing mid-write sees a truncated one. So: skip the tick, keep
+    // polling, and only halt if it stays unreadable. Silently never saving would be its
+    // own kind of data loss, so the patience is bounded.
+    if (status.reason === 'unreadable') {
+      this.#metaUnreadable = (this.#metaUnreadable || 0) + 1;
+      if (this.#metaUnreadable < 4) {
+        this.#setStatus('Folder — checking protection…');
+        return false; // no write this tick; the poll keeps running
+      }
+    }
     this.#stopPoll();
     this.#store.lock();
     // A dedicated halt, NOT `#folderMode = false`: clearing that flag would send the
@@ -1950,6 +1975,7 @@ export class ProjectSync {
       rekeyed: 'Its passphrase was changed by someone else.',
       unprotected: 'Its protection was removed by someone else.',
       protected: 'It was protected by someone else.',
+      unreadable: 'Its protection file could not be read.',
     }[status.reason] ?? 'Its protection changed.';
     this.#setStatus(`Folder locked — ${what}`);
     this.#results.appendError(

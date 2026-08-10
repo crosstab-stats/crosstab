@@ -129,3 +129,66 @@ test('meta written before epochs existed does not false-alarm', async () => {
   await peer.unlock('legacy');
   assert.deepEqual(await peer.keyStatus(), { current: true, reason: 'ok' });
 });
+
+// --- failing CLOSED: the rekey window ------------------------------------------------
+//
+// The three tests below cover one concrete data-loss path, found 2026-08-10 while
+// building the live-peer rekey story. A rekey rewrites `crosstab-encryption.json` and
+// then re-encrypts every other file, so a peer polling mid-rewrite can read a truncated
+// meta. Every link in that chain used to fail OPEN:
+//
+//   truncated meta -> keyStatus said "ok"      -> the guard let the write through
+//   -> readManifest could not decrypt          -> returned null, meaning "absent"
+//   -> decideSync mapped null to "seed"        -> peer overwrote the owner's project,
+//                                                 encrypted with the stale key.
+//
+// The owner's data replaced, by a peer, with something the owner cannot open.
+
+test('a meta that exists but will not parse is NOT reported as ok', async () => {
+  const files = new Map();
+  const owner = peerOn(files);
+  await owner.unlock('correct horse', 'p');
+  await owner.save({ id: 'p', name: 'P', savedAt: 1, bundle: { log: [] } });
+
+  // What a poll sees mid-rewrite: the file is there, half-written.
+  files.set('crosstab-encryption.json', new TextEncoder().encode('{"v":1,"sal'));
+  const st = await owner.keyStatus('p');
+  assert.equal(st.current, false, 'unknown must not read as current');
+  assert.equal(st.reason, 'unreadable');
+});
+
+test('readManifest tells ABSENT apart from UNREADABLE', async () => {
+  const files = new Map();
+  const owner = peerOn(files);
+  await owner.unlock('correct horse', 'p');
+  await owner.save({ id: 'p', name: 'P', savedAt: 1, bundle: { log: [] } });
+
+  // Absent → null. This is the one case where seeding is the right answer.
+  const empty = peerOn(new Map());
+  assert.equal(await empty.readManifest('p'), null);
+
+  // Present but not decryptable → throws, so no caller can mistake it for absence.
+  const stale = peerOn(files);
+  await assert.rejects(() => stale.readManifest('p'), /encrypted|decrypt|passphrase/i,
+    'a peer with no key must not be told the project is missing');
+});
+
+test('a stale-keyed peer cannot seed over the owner’s project', async () => {
+  const { syncFolderProject } = await import('../core/folder-sync.js');
+  const files = new Map();
+  const owner = peerOn(files);
+  await owner.unlock('correct horse', 'p');
+  await owner.save({ id: 'p', name: 'Owner project', savedAt: 1, bundle: { log: [] } });
+  const ownerBytes = files.get('project.json');
+
+  // A peer holding no key at all — the same position a rekeyed-out peer is in.
+  const peer = peerOn(files);
+  const res = await syncFolderProject({
+    store: peer, id: 'p', name: 'Peer project', bundle: { log: [] },
+  });
+
+  assert.equal(res.action, 'blocked', 'refused rather than seeding');
+  assert.match(res.reason, /could not be read/);
+  assert.deepEqual(files.get('project.json'), ownerBytes,
+    "the owner's ciphertext is byte-identical — nothing was written over it");
+});

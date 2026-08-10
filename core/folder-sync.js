@@ -113,7 +113,16 @@ export async function syncOnce({ store, id, mine, mergers = {}, resolutions = nu
  */
 export async function syncFolderProject({ store, id, name, bundle, mergers = {}, resolveConflicts, applyMerged, dirty, now }) {
   const savedAt = now ?? Date.now();
-  const theirs = await store.readManifest(id); // 1. read the peer first
+  // 1. Read the peer first. A throw here means the file is THERE and unreadable (a
+  // stale key, or a half-written rewrite) — never seed over that. `readManifest`
+  // returns null only for genuine absence, which is the one case seeding is right for.
+  let theirs;
+  try {
+    theirs = await store.readManifest(id);
+  } catch (err) {
+    return { action: 'blocked', conflicts: [], changed: false, manifest: null,
+      reason: `the folder's project file could not be read (${err?.message || err}) — nothing was written` };
+  }
   await store.writeSourcesOnly(id, bundle, dirty); // 2. land my Parquet
   const mine = buildManifest({ name, savedAt, bundle }); // 3. my manifest (pure)
 
