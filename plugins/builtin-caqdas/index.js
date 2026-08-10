@@ -153,6 +153,36 @@ const STYLES = `
 .caqdas__menu button:hover { background: #eef5fb; }
 .caqdas__menu .row { display: flex; gap: 6px; padding: 6px 4px 2px; border-top: 1px solid #eef0f2; margin-top: 4px; }
 .caqdas__menu .row input { flex: 1; min-width: 0; font: inherit; padding: 5px 8px; border: 1px solid #ccd2d8; border-radius: 6px; }
+/* --- codebook manager: a real modal overlay, this plugin's first ------------------
+   Everything else here is a positioned div dismissed by a document click, which is fine
+   for a six-item menu and hopeless for a panel with a multi-select list, a paste area
+   and a copy-to target. Backdrop + Escape + focus trap, drawn inside the workspace
+   iframe (a plugin cannot reach the host's <dialog>, and allow-scripts denies it
+   window.prompt/alert/confirm — see the file header). */
+.caqdas__scrim { position: fixed; inset: 0; z-index: 40; background: rgba(20,26,32,.42); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.caqdas__mgr { background: #fff; border-radius: 10px; box-shadow: 0 18px 48px rgba(0,0,0,.28); width: min(880px, 100%); max-height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+.caqdas__mgrhead { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid #e6eaee; }
+.caqdas__mgrtitle { font-weight: 700; font-size: 15px; margin-right: auto; }
+.caqdas__mgrbody { display: flex; min-height: 0; flex: 1; }
+.caqdas__mgrside { width: 210px; border-right: 1px solid #e6eaee; padding: 10px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
+.caqdas__mgrmain { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.caqdas__mgrbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 10px 12px; border-bottom: 1px solid #eef0f2; }
+.caqdas__mgrlist { flex: 1; overflow: auto; padding: 4px 0; min-height: 220px; }
+.caqdas__mgrfoot { padding: 10px 14px; border-top: 1px solid #e6eaee; display: flex; gap: 8px; align-items: center; }
+.caqdas__bookbtn { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; border: 1px solid transparent; background: none; font: inherit; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.caqdas__bookbtn:hover { background: #f2f5f8; }
+.caqdas__bookbtn.is-active { background: #eef5fb; border-color: #b7d4ea; font-weight: 600; }
+.caqdas__bookn { margin-left: auto; color: #8b949c; font-size: 11px; font-weight: 400; }
+.caqdas__mgrrow { display: flex; align-items: center; gap: 8px; padding: 5px 12px; }
+.caqdas__mgrrow:hover { background: #f7f9fb; }
+.caqdas__mgrrow input[type=text] { font: inherit; padding: 4px 7px; border: 1px solid #d8dee4; border-radius: 6px; min-width: 0; }
+.caqdas__mgrname { flex: 2 1 0; }
+.caqdas__mgrtheme { flex: 1 1 0; }
+.caqdas__mgrcount { width: 46px; text-align: right; color: #8b949c; font-size: 11px; }
+.caqdas__mgrempty { padding: 28px 14px; text-align: center; color: #7b848c; font-size: 13px; }
+.caqdas__paste { width: 100%; box-sizing: border-box; font: 12px/1.45 ui-monospace, Menlo, monospace; padding: 8px; border: 1px solid #d8dee4; border-radius: 6px; resize: vertical; min-height: 120px; }
+.caqdas__mgrnote { font-size: 12px; color: #646e77; margin: 0 0 8px; line-height: 1.45; }
+.caqdas__sel { color: #646e77; font-size: 12px; margin-right: auto; }
 .caqdas__group { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #9aa3ab; font-weight: 600; margin: 16px 6px 2px; }
 .caqdas__group--none { font-weight: 500; font-style: italic; text-transform: none; letter-spacing: 0; color: #b3bac1; }
 .caqdas__code .caqdas__iconbtn { cursor: pointer; border: 0; background: none; font: inherit; padding: 0 3px; opacity: .4; }
@@ -1264,9 +1294,414 @@ export const workspace = {
       }
     }
 
+    // --- codebook manager ------------------------------------------------------
+    //
+    // Everything a codebook needs that the coding panel deliberately does not carry.
+    // The panel is for CODING — pick a passage, click a code — and it was the only
+    // surface, so the vocabulary stopped at "add" and "delete". You could not rename a
+    // code, change its colour, rename a theme in one place, merge two codes, or move any
+    // of it anywhere. That work belongs behind a button, not permanently on screen next
+    // to the transcript.
+
+    /** Open the manager. Returns nothing; it owns its own teardown. */
+    function openManager() {
+      const scrim = el('div', 'caqdas__scrim');
+      const panel = el('div', 'caqdas__mgr');
+      // The scrim is the modal boundary: a click on it (but not inside the panel)
+      // closes, Escape closes, and focus is trapped until it does.
+      scrim.addEventListener('mousedown', (e) => { if (e.target === scrim) close(); });
+      const onKey = (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); close(); return; }
+        if (e.key !== 'Tab') return;
+        const f = [...panel.querySelectorAll('button, input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+          .filter((n) => !n.disabled && n.offsetParent !== null);
+        if (!f.length) return;
+        const first = f[0];
+        const last = f[f.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      };
+      document.addEventListener('keydown', onKey, true);
+      const restoreTo = document.activeElement;
+      function close() {
+        document.removeEventListener('keydown', onKey, true);
+        scrim.remove();
+        // Everything the manager touched is in `state`; the coding panel re-reads it.
+        renderCodes(); renderDocList(); renderText();
+        try { restoreTo?.focus?.(); } catch { /* gone */ }
+      }
+
+      /** Codes selected for a bulk action, by id. Cleared whenever the book changes. */
+      let picked = new Set();
+
+      const head = el('div', 'caqdas__mgrhead');
+      const title = el('div', 'caqdas__mgrtitle'); title.textContent = 'Codebook manager';
+      const closeBtn = el('button', 'caqdas__btn'); closeBtn.textContent = 'Done';
+      closeBtn.addEventListener('click', close);
+      head.append(title, closeBtn);
+
+      const bodyEl = el('div', 'caqdas__mgrbody');
+      const side = el('div', 'caqdas__mgrside');
+      const main = el('div', 'caqdas__mgrmain');
+      const bar = el('div', 'caqdas__mgrbar');
+      const list = el('div', 'caqdas__mgrlist');
+      const foot = el('div', 'caqdas__mgrfoot');
+      main.append(bar, list, foot);
+      bodyEl.append(side, main);
+      panel.append(head, bodyEl);
+      scrim.append(panel);
+      document.body.append(scrim);
+
+      // --- the codebook list (left) --------------------------------------------
+      function renderBooks() {
+        side.textContent = '';
+        const h = el('div', 'caqdas__group'); h.textContent = 'Codebooks';
+        side.append(h);
+        for (const b of state.codebooks) {
+          const btn = el('button', 'caqdas__bookbtn' + (b.id === state.codebookId ? ' is-active' : ''));
+          const nm = el('span'); nm.textContent = b.name || '(unnamed)';
+          const n = el('span', 'caqdas__bookn');
+          n.textContent = state.codes.filter((c) => c.codebookId === b.id).length;
+          btn.append(nm, n);
+          btn.addEventListener('click', () => {
+            if (b.id === state.codebookId) return;
+            state.codebookId = b.id;
+            picked = new Set();
+            save();
+            renderAll();
+          });
+          side.append(btn);
+        }
+        const add = el('button', 'caqdas__btn');
+        add.textContent = '＋ New codebook';
+        add.style.marginTop = '8px';
+        add.addEventListener('click', () => {
+          const b = { id: uid('b'), name: nextBookName() };
+          state.codebooks.push(b);
+          state.codebookId = b.id;
+          picked = new Set();
+          save();
+          renderAll();
+        });
+        side.append(add);
+      }
+
+      function nextBookName() {
+        const taken = new Set(state.codebooks.map((b) => b.name));
+        for (let i = 2; ; i++) if (!taken.has(`Codebook ${i}`)) return `Codebook ${i}`;
+      }
+
+      // --- the toolbar (above the code list) ------------------------------------
+      function renderBar() {
+        bar.textContent = '';
+        const book = state.codebooks.find((b) => b.id === state.codebookId);
+
+        const nameInp = el('input'); nameInp.type = 'text';
+        nameInp.value = book?.name ?? '';
+        nameInp.title = 'Rename this codebook';
+        nameInp.style.flex = '1 1 160px';
+        nameInp.addEventListener('input', () => { if (book) { book.name = nameInp.value; save(); renderBooks(); } });
+        bar.append(nameInp);
+
+        const del = el('button', 'caqdas__btn');
+        del.textContent = 'Delete codebook';
+        // Never leave codings orphaned: a segment whose code is gone renders as "(code)"
+        // and cannot be repaired. Deleting the last book is refused outright rather than
+        // silently recreating one behind the user.
+        del.disabled = state.codebooks.length < 2;
+        del.title = del.disabled ? 'A project keeps at least one codebook' : 'Delete this codebook and its codes';
+        del.addEventListener('click', () => {
+          const doomed = codesInBook(state).map((c) => c.id);
+          const n = state.segments.filter((sg) => doomed.includes(sg.codeId)).length;
+          if (!confirmInline(del, n
+            ? `Delete “${book?.name}”, its ${doomed.length} code(s) and ${n} coding(s)?`
+            : `Delete “${book?.name}” and its ${doomed.length} code(s)?`)) return;
+          state.codes = state.codes.filter((c) => !doomed.includes(c.id));
+          state.segments = state.segments.filter((sg) => !doomed.includes(sg.codeId));
+          state.codebooks = state.codebooks.filter((b) => b.id !== state.codebookId);
+          state.codebookId = state.codebooks[0].id;
+          picked = new Set();
+          save();
+          renderAll();
+        });
+        bar.append(del);
+
+        const imp = el('button', 'caqdas__btn'); imp.textContent = '⇪ Paste codes…';
+        imp.title = 'Add many codes at once from a pasted list or CSV';
+        imp.addEventListener('click', showPaste);
+        bar.append(imp);
+
+        const exp = el('button', 'caqdas__btn'); exp.textContent = '⇩ Copy as CSV';
+        exp.title = 'Copy this codebook to the clipboard as CSV';
+        exp.addEventListener('click', () => copyCsv(exp));
+        bar.append(exp);
+      }
+
+      // --- the code list (right) -------------------------------------------------
+      function renderList() {
+        list.textContent = '';
+        const mine = codesInBook(state);
+        if (!mine.length) {
+          const e = el('div', 'caqdas__mgrempty');
+          e.textContent = 'No codes in this codebook yet. Add them in the coding panel, or paste a list.';
+          list.append(e);
+          renderFoot();
+          return;
+        }
+        const counts = {};
+        for (const sg of state.segments) counts[sg.codeId] = (counts[sg.codeId] || 0) + 1;
+
+        const hdr = el('div', 'caqdas__mgrrow');
+        const all = el('input'); all.type = 'checkbox';
+        all.checked = mine.every((c) => picked.has(c.id));
+        all.title = 'Select all';
+        all.addEventListener('change', () => {
+          picked = all.checked ? new Set(mine.map((c) => c.id)) : new Set();
+          renderList();
+        });
+        const hn = el('span', 'caqdas__mgrname'); hn.textContent = 'Code';
+        hn.style.color = '#8b949c'; hn.style.fontSize = '11px';
+        const ht = el('span', 'caqdas__mgrtheme'); ht.textContent = 'Theme';
+        ht.style.color = '#8b949c'; ht.style.fontSize = '11px';
+        const hc = el('span', 'caqdas__mgrcount'); hc.textContent = 'Uses';
+        hdr.append(all, el('span'), hn, ht, hc);
+        list.append(hdr);
+
+        for (const code of mine) {
+          const row = el('div', 'caqdas__mgrrow');
+          const cb = el('input'); cb.type = 'checkbox'; cb.checked = picked.has(code.id);
+          cb.addEventListener('change', () => {
+            if (cb.checked) picked.add(code.id); else picked.delete(code.id);
+            renderFoot();
+          });
+          // A colour picker at last — the palette assigned one round-robin at creation
+          // and nothing could ever change it.
+          const col = el('input'); col.type = 'color'; col.value = toHex(code.color);
+          col.title = 'Colour';
+          col.addEventListener('input', () => { code.color = col.value; save(); });
+
+          const nm = el('input', 'caqdas__mgrname'); nm.type = 'text'; nm.value = code.name;
+          nm.title = 'Rename';
+          nm.addEventListener('input', () => { code.name = nm.value; save(); });
+
+          const th = el('input', 'caqdas__mgrtheme'); th.type = 'text'; th.value = code.group || '';
+          th.placeholder = 'theme';
+          th.setAttribute('list', 'caqdas-themes');
+          th.addEventListener('input', () => { code.group = th.value; save(); });
+
+          const ct = el('span', 'caqdas__mgrcount'); ct.textContent = counts[code.id] || 0;
+          row.append(cb, col, nm, th, ct);
+          list.append(row);
+        }
+
+        // Existing themes as suggestions, so a theme is retyped consistently rather
+        // than re-invented with a typo — which used to silently split it in two.
+        const dl = el('datalist'); dl.id = 'caqdas-themes';
+        for (const g of [...new Set(state.codes.map((c) => c.group).filter(Boolean))]) {
+          const o = el('option'); o.value = g; dl.append(o);
+        }
+        list.append(dl);
+        renderFoot();
+      }
+
+      // --- bulk actions (below the list) -----------------------------------------
+      function renderFoot() {
+        foot.textContent = '';
+        const n = picked.size;
+        const lbl = el('span', 'caqdas__sel');
+        lbl.textContent = n ? `${n} selected` : 'Select codes for bulk actions';
+        foot.append(lbl);
+        if (!n) return;
+
+        // Copy / move to another codebook — the thing that had nowhere to go before
+        // codebooks were addressable.
+        const sel = el('select');
+        const none = el('option'); none.value = ''; none.textContent = 'Copy to…'; sel.append(none);
+        for (const b of state.codebooks) {
+          if (b.id === state.codebookId) continue;
+          const o = el('option'); o.value = b.id; o.textContent = b.name; sel.append(o);
+        }
+        const nb = el('option'); nb.value = '__new'; nb.textContent = 'a new codebook…'; sel.append(nb);
+        sel.addEventListener('change', () => { if (sel.value) copyTo(sel.value, false); });
+        foot.append(sel);
+
+        const mv = el('select');
+        const mnone = el('option'); mnone.value = ''; mnone.textContent = 'Move to…'; mv.append(mnone);
+        for (const b of state.codebooks) {
+          if (b.id === state.codebookId) continue;
+          const o = el('option'); o.value = b.id; o.textContent = b.name; mv.append(o);
+        }
+        const mnb = el('option'); mnb.value = '__new'; mnb.textContent = 'a new codebook…'; mv.append(mnb);
+        mv.title = 'Move takes the codings with it — the code keeps its id, so nothing is orphaned.';
+        mv.addEventListener('change', () => { if (mv.value) copyTo(mv.value, true); });
+        foot.append(mv);
+
+        const merge = el('button', 'caqdas__btn');
+        merge.textContent = 'Merge';
+        merge.disabled = n < 2;
+        merge.title = n < 2 ? 'Select two or more codes to merge' : 'Fold the selected codes into the first, keeping every coding';
+        merge.addEventListener('click', mergePicked);
+        foot.append(merge);
+
+        const del = el('button', 'caqdas__btn');
+        del.textContent = 'Delete';
+        del.addEventListener('click', deletePicked);
+        foot.append(del);
+      }
+
+      /**
+       * Copy or move the selected codes into another codebook.
+       *
+       * COPY duplicates them under fresh ids and leaves the codings behind — a copy is a
+       * starting point for other data, and codings belong to the dataset they were made
+       * in. MOVE keeps the ids, so every existing coding follows automatically and
+       * nothing is orphaned.
+       */
+      function copyTo(target, isMove) {
+        let bookId = target;
+        if (target === '__new') {
+          const b = { id: uid('b'), name: nextBookName() };
+          state.codebooks.push(b);
+          bookId = b.id;
+        }
+        const chosen = state.codes.filter((c) => picked.has(c.id));
+        if (isMove) {
+          for (const c of chosen) c.codebookId = bookId;
+        } else {
+          for (const c of chosen) {
+            state.codes.push({ ...c, id: uid(), codebookId: bookId });
+          }
+        }
+        picked = new Set();
+        save();
+        renderAll();
+      }
+
+      /** Fold the selected codes into the first, re-pointing every coding. */
+      function mergePicked() {
+        const chosen = codesInBook(state).filter((c) => picked.has(c.id));
+        if (chosen.length < 2) return;
+        const keep = chosen[0];
+        const gone = chosen.slice(1).map((c) => c.id);
+        // Re-point BEFORE removing, so no segment is ever briefly dangling.
+        for (const sg of state.segments) if (gone.includes(sg.codeId)) sg.codeId = keep.id;
+        state.codes = state.codes.filter((c) => !gone.includes(c.id));
+        picked = new Set([keep.id]);
+        save();
+        renderAll();
+      }
+
+      function deletePicked() {
+        const doomed = [...picked];
+        const n = state.segments.filter((sg) => doomed.includes(sg.codeId)).length;
+        const btn = foot.querySelector('button:last-child');
+        if (!confirmInline(btn, n
+          ? `Delete ${doomed.length} code(s) and ${n} coding(s)?`
+          : `Delete ${doomed.length} code(s)?`)) return;
+        state.codes = state.codes.filter((c) => !doomed.includes(c.id));
+        state.segments = state.segments.filter((sg) => !doomed.includes(sg.codeId));
+        picked = new Set();
+        save();
+        renderAll();
+      }
+
+      // --- paste-in --------------------------------------------------------------
+      function showPaste() {
+        list.textContent = '';
+        foot.textContent = '';
+        const note = el('p', 'caqdas__mgrnote');
+        note.textContent = 'One code per line. Optionally "name, theme, #colour" — a plain list of names works too. '
+          + 'Existing names are skipped, so you can paste the same sheet twice safely.';
+        const ta = el('textarea', 'caqdas__paste');
+        ta.placeholder = 'Trust, Relational, #8ecae6\nDelay, Process\nAmbivalence';
+        const wrap = el('div'); wrap.style.padding = '12px';
+        wrap.append(note, ta);
+        list.append(wrap);
+
+        const cancel = el('button', 'caqdas__btn'); cancel.textContent = 'Cancel';
+        cancel.addEventListener('click', () => renderAll());
+        const go = el('button', 'caqdas__btn'); go.textContent = 'Add codes';
+        go.addEventListener('click', () => {
+          const added = addCodesFromText(state, ta.value);
+          save();
+          renderAll();
+          if (!added) note.textContent = 'Nothing added — every name was already in this codebook.';
+        });
+        const sp = el('span', 'caqdas__sel'); sp.textContent = '';
+        foot.append(sp, cancel, go);
+        ta.focus();
+      }
+
+      async function copyCsv(btn) {
+        const csv = codebookToCsv(codesInBook(state));
+        try {
+          await navigator.clipboard.writeText(csv);
+          flash(btn, 'Copied');
+        } catch {
+          // Clipboard can be refused in a sandboxed frame; fall back to selecting the
+          // text so the user can copy it by hand rather than getting nothing.
+          showText(csv);
+        }
+      }
+
+      function showText(csv) {
+        list.textContent = '';
+        const wrap = el('div'); wrap.style.padding = '12px';
+        const note = el('p', 'caqdas__mgrnote');
+        note.textContent = 'Copy this text (the clipboard was not available).';
+        const ta = el('textarea', 'caqdas__paste'); ta.value = csv; ta.readOnly = true;
+        wrap.append(note, ta);
+        list.append(wrap);
+        ta.select();
+        foot.textContent = '';
+        const back = el('button', 'caqdas__btn'); back.textContent = 'Back';
+        back.addEventListener('click', () => renderAll());
+        foot.append(el('span', 'caqdas__sel'), back);
+      }
+
+      function renderAll() { renderBooks(); renderBar(); renderList(); }
+      renderAll();
+      closeBtn.focus();
+    }
+
+    /** A yes/no in place of `confirm`, which a sandboxed frame does not have. */
+    function confirmInline(anchorEl, message) {
+      // Synchronous confirmation is impossible without `confirm`, so this is deliberately
+      // a plain check the caller can skip: destructive actions here are all undoable by
+      // the host's op log, and blocking the whole panel on a modal-within-a-modal for
+      // every delete would be worse than the risk.
+      const ok = anchorEl?.dataset.armed === '1';
+      if (ok) { delete anchorEl.dataset.armed; return true; }
+      if (anchorEl) {
+        anchorEl.dataset.armed = '1';
+        const was = anchorEl.textContent;
+        anchorEl.textContent = 'Sure?';
+        anchorEl.title = message;
+        setTimeout(() => {
+          if (anchorEl.dataset.armed === '1') { delete anchorEl.dataset.armed; anchorEl.textContent = was; }
+        }, 4000);
+      }
+      return false;
+    }
+
+    function flash(btn, text) {
+      const was = btn.textContent;
+      btn.textContent = text;
+      setTimeout(() => { btn.textContent = was; }, 1200);
+    }
+
     function renderCodes() {
       codePane.textContent = '';
-      const h = el('h3'); h.textContent = 'Codebook'; codePane.append(h);
+      const h = el('h3'); h.textContent = 'Codebook';
+      // The manager lives behind a button, not permanently beside the transcript: the
+      // panel's job is coding, and bulk editing is a different job done occasionally.
+      const mgrBtn = el('button', 'caqdas__btn');
+      mgrBtn.textContent = '⚙';
+      mgrBtn.title = 'Codebook manager — rename, recolour, merge, bulk-add, and move codes between codebooks';
+      mgrBtn.style.cssText = 'float:right; padding:2px 8px;';
+      mgrBtn.addEventListener('click', openManager);
+      h.append(mgrBtn);
+      codePane.append(h);
       const hint = el('div', 'caqdas__hint');
       hint.textContent = 'Select a passage, then click a code to apply it (right-click, or 🖌 to paint). 🔍 lists a code’s segments; ✎ opens its memo + theme group.';
       codePane.append(hint);
@@ -2027,6 +2462,90 @@ function adoptIntoCodebook(state) {
 /** The codes in the currently-selected codebook — what the coding UI works with. */
 function codesInBook(state) {
   return state.codes.filter((c) => c.codebookId === state.codebookId);
+}
+
+/**
+ * Parse a pasted code list. One code per line; `name, theme, #colour` if you have them,
+ * a bare list of names if you do not.
+ *
+ * Deliberately forgiving about the shape and strict about identity: a name that already
+ * exists in the target book is skipped, so pasting the same sheet twice is safe. That
+ * matters because the realistic input is a spreadsheet column someone maintains
+ * elsewhere and re-pastes as it grows.
+ *
+ * Pure, and exported, so the parsing can be tested without a DOM.
+ *
+ * @param {string} text
+ * @param {Set<string>} existingNames lower-cased names already in the book
+ * @returns {{name:string, group:string, color:string|null}[]}
+ */
+export function parseCodeList(text, existingNames = new Set()) {
+  const out = [];
+  // Strings only. Coercing would turn a stray number into a code named "42" — harmless
+  // but surprising, and the only real caller is a textarea's value.
+  if (typeof text !== 'string') return out;
+  const seen = new Set(existingNames);
+  for (const raw of String(text ?? '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    // Split on commas or tabs — a spreadsheet paste arrives tab-separated.
+    const parts = line.split(/\t|,/).map((x) => x.trim());
+    // A quoted first field may itself contain a comma; unwrap it and rejoin if so.
+    let name = parts.shift() ?? '';
+    if (name.startsWith('"') && !name.endsWith('"')) {
+      while (parts.length && !name.endsWith('"')) name += ', ' + parts.shift();
+    }
+    name = name.replace(/^"|"$/g, '').trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;           // already present, or duplicated in the paste
+    seen.add(key);
+    // A colour is whichever remaining field looks like one; everything else is a theme.
+    const colorAt = parts.findIndex((x) => /^#?[0-9a-f]{3}([0-9a-f]{3})?$/i.test(x));
+    const color = colorAt >= 0 ? toHex(parts.splice(colorAt, 1)[0]) : null;
+    const group = (parts.shift() || '').replace(/^"|"$/g, '').trim();
+    out.push({ name, group, color });
+  }
+  return out;
+}
+
+/** Add parsed codes to the active book, assigning palette colours to those without one. */
+export function addCodesFromText(state, text) {
+  const mine = state.codes.filter((c) => c.codebookId === state.codebookId);
+  const existing = new Set(mine.map((c) => String(c.name).toLowerCase()));
+  const parsed = parseCodeList(text, existing);
+  parsed.forEach((pc, i) => {
+    state.codes.push({
+      id: uid(),
+      name: pc.name,
+      color: pc.color || PALETTE[(mine.length + i) % PALETTE.length],
+      group: pc.group,
+      memo: '',
+      codebookId: state.codebookId,
+    });
+  });
+  return parsed.length;
+}
+
+/** A codebook as CSV: the same three columns {@link parseCodeList} reads back. */
+export function codebookToCsv(codes) {
+  const q = (v) => {
+    const t = String(v ?? '');
+    return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+  };
+  const rows = [['name', 'theme', 'colour'].join(',')];
+  for (const c of codes ?? []) rows.push([q(c.name), q(c.group || ''), q(c.color || '')].join(','));
+  return rows.join('\n') + '\n';
+}
+
+/** Coerce any colour-ish string to '#rrggbb' for <input type=color>. */
+export function toHex(c) {
+  const t = String(c ?? '').trim();
+  const m = /^#?([0-9a-f]{3})$/i.exec(t);
+  if (m) return ('#' + m[1].split('').map((ch) => ch + ch).join('')).toLowerCase();
+  const m6 = /^#?([0-9a-f]{6})$/i.exec(t);
+  if (m6) return ('#' + m6[1]).toLowerCase();
+  return '#cccccc';
 }
 
 function normalize(raw) {
