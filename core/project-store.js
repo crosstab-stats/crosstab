@@ -97,6 +97,17 @@ export class ProjectStore {
    * guards on this. Flat mode has one project, so it's always FOLDER_PROJECT_ID. */
   #keyId = null;
 
+  /**
+   * The key the folder was using BEFORE an unfinished rekey, so files not yet rewritten
+   * are still readable. Held only between {@link ProjectStore#changePassphrase} and
+   * {@link ProjectStore#finishRekey}; see `#readRaw` for how it is used and the meta's
+   * `prev` block for how a crash in between is survivable.
+   */
+  #prevKey = null;
+
+  /** Whether the meta still describes a previous keying (an unfinished rekey). */
+  #rekeyPending = false;
+
   /** **Flat, single-project layout** — for folder mode. The picked folder IS the
    * project: files live directly in it (`project.json`, `ds<id>_src<n>.parquet`,
    * `crosstab-encryption.json`, a `crosstab-project.json` marker) with NO `projects/`
@@ -170,7 +181,20 @@ export class ProjectStore {
     if (meta?.verifier) {
       let ok = false;
       try { ok = new TextDecoder().decode(await decryptWithKey(key, unb64(meta.verifier))) === VERIFIER; } catch { ok = false; }
-      if (!ok) throw new Error('Wrong passphrase for this project.');
+      if (!ok) {
+        // A rekey that was interrupted leaves BOTH keyings described. Accept the old
+        // passphrase too, so someone who only knows the previous one is not locked out
+        // of their own folder by a half-finished operation — they can still read
+        // everything, because the not-yet-rewritten files are the ones it opens.
+        const prevOk = meta.prev ? await this.#tryPrev(passphrase, meta, id) : false;
+        if (!prevOk) throw new Error('Wrong passphrase for this project.');
+        return;
+      }
+      // Right passphrase, but a rekey never finished: keep the old key alongside so the
+      // files that were not rewritten still open. It can only be derived from the old
+      // passphrase, which we may not have — `#readRaw` simply fails on those until
+      // `resumeRekey` supplies it.
+      this.#rekeyPending = !!meta.prev;
     } else {
       const verifier = b64(await encryptWithKey(key, VERIFIER));
       // `epoch` identifies THIS keying of the folder (#144). A random id, not a counter:
@@ -185,11 +209,115 @@ export class ProjectStore {
     this.#keyEpoch = meta?.epoch ?? null;
   }
 
+
+  /**
+   * Was the last rekey left unfinished? True between a `changePassphrase` that wrote the
+   * transitional meta and the `finishRekey` that clears it — including across a reload,
+   * because the state lives in the meta's `prev` block, not in memory.
+   */
+  get rekeyPending() { return !!this.#rekeyPending; }
+
+  /** Try `passphrase` against the meta's PREVIOUS keying; adopt it as the live key if
+   * it matches, so a half-rekeyed folder still opens for whoever holds the old secret. */
+  async #tryPrev(passphrase, meta, id) {
+    try {
+      const salt = unb64(meta.prev.salt);
+      const iterations = meta.prev.iterations || DEFAULT_ITERATIONS;
+      const key = await deriveKey(passphrase, salt, iterations);
+      const ok = new TextDecoder().decode(await decryptWithKey(key, unb64(meta.prev.verifier))) === VERIFIER;
+      if (!ok) return false;
+      this.#key = key;
+      this.#keyId = id;
+      this.#keyEpoch = meta.epoch ?? null;
+      this.#rekeyPending = true;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Change a protected project's passphrase in ONE step.
+   *
+   * The reason this exists rather than "unprotect, then protect": that sequence writes
+   * every file back to disk in the CLEAR in between. On a synced folder those plaintext
+   * bytes reach the cloud, and the operation whose entire purpose is to improve
+   * confidentiality briefly destroys it.
+   *
+   * Crash safety is the whole design. The caller rewrites every file after this returns,
+   * which cannot be atomic on any driver we have, so the meta describes BOTH keyings for
+   * the duration:
+   *
+   *   { salt, verifier, epoch, prev: { salt, verifier, iterations } }
+   *
+   * Written BEFORE the rewrite starts, so an interrupted rekey is always recoverable:
+   * files carry a mix of the two keys, and either passphrase opens the folder — `unlock`
+   * accepts both, and `#readRaw` falls back to the old key for anything not yet
+   * rewritten. {@link ProjectStore#finishRekey} drops `prev` once the rewrite lands.
+   *
+   * The epoch changes here, so connected peers detect the rekey through the ordinary
+   * `keyStatus` path with no extra signalling.
+   *
+   * @param {string} oldPass @param {string} newPass @param {string} [id]
+   */
+  async changePassphrase(oldPass, newPass, id = FOLDER_PROJECT_ID) {
+    if (!newPass) throw new Error('changePassphrase: empty new passphrase');
+    const metaPath = this.#metaPath(id);
+    const rawMeta = await this.#driver.read(metaPath);
+    if (!rawMeta) throw new Error('This project isn’t protected — there is no passphrase to change.');
+    let meta;
+    try { meta = JSON.parse(new TextDecoder().decode(rawMeta)); } catch { throw new Error('This project’s encryption settings could not be read.'); }
+
+    // Verify the OLD passphrase against what is on disk rather than trusting the
+    // in-memory key: the person changing it must prove they know the current one.
+    const oldSalt = unb64(meta.salt);
+    const oldIter = meta.iterations || DEFAULT_ITERATIONS;
+    const oldKey = await deriveKey(oldPass, oldSalt, oldIter);
+    let ok = false;
+    try { ok = new TextDecoder().decode(await decryptWithKey(oldKey, unb64(meta.verifier))) === VERIFIER; } catch { ok = false; }
+    if (!ok) throw new Error('That isn’t the current passphrase.');
+
+    const salt = newSalt();
+    const iterations = DEFAULT_ITERATIONS;
+    const key = await deriveKey(newPass, salt, iterations);
+    const verifier = b64(await encryptWithKey(key, VERIFIER));
+    const next = {
+      v: 1, salt: b64(salt), iterations, verifier, epoch: newEpoch(),
+      prev: { salt: meta.salt, iterations: oldIter, verifier: meta.verifier },
+    };
+    await this.#driver.write(metaPath, te.encode(JSON.stringify(next)));
+
+    this.#key = key;
+    this.#prevKey = oldKey;
+    this.#keyId = id;
+    this.#keyEpoch = next.epoch;
+    this.#rekeyPending = true;
+  }
+
+  /**
+   * Drop the transitional `prev` keying once every file has been rewritten under the new
+   * key. Until this runs the old passphrase still opens the folder, which is the point —
+   * so calling it before the rewrite finishes would strand the un-rewritten files.
+   */
+  async finishRekey(id = FOLDER_PROJECT_ID) {
+    const metaPath = this.#metaPath(id);
+    const raw = await this.#driver.read(metaPath);
+    if (!raw) return;
+    let meta;
+    try { meta = JSON.parse(new TextDecoder().decode(raw)); } catch { return; }
+    if (!meta.prev) { this.#prevKey = null; this.#rekeyPending = false; return; }
+    delete meta.prev;
+    await this.#driver.write(metaPath, te.encode(JSON.stringify(meta)));
+    this.#prevKey = null;
+    this.#rekeyPending = false;
+  }
+
   /** Drop the in-memory key (e.g. closing a project, or before switching to another). */
   lock() {
     this.#key = null;
     this.#keyId = null;
     this.#keyEpoch = null;
+    this.#prevKey = null;
   }
 
   /**
@@ -652,7 +780,16 @@ export class ProjectStore {
     if (raw == null) throw new Error(`not found: ${path}`);
     if (isEnveloped(raw)) {
       if (!this.#key) throw new Error('This project is encrypted — unlock it with its passphrase first.');
-      return decryptWithKey(this.#key, raw);
+      try {
+        return await decryptWithKey(this.#key, raw);
+      } catch (err) {
+        // Mid-rekey, some files are still under the old key. Plaintext already coexists
+        // with ciphertext (the envelope is self-describing), so the only unreadable mix
+        // is old-ciphertext beside new — which this closes. Outside a rekey `#prevKey`
+        // is null and the error propagates exactly as before.
+        if (!this.#prevKey) throw err;
+        return decryptWithKey(this.#prevKey, raw);
+      }
     }
     return raw;
   }

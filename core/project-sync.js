@@ -481,7 +481,8 @@ export class ProjectSync {
     // on the CURRENT project (each project has its own). Folder projects are protected
     // via their folder passphrase instead, so these guard against that case.
     this.#menus.register({ id: 'core:proj-protect', path: ['File'], label: 'Protect this project…', order: 8, command: () => void this.protectProject() });
-    this.#menus.register({ id: 'core:proj-unprotect', path: ['File'], label: 'Remove protection…', order: 9, command: () => void this.unprotectProject() });
+    this.#menus.register({ id: 'core:proj-changepass', path: ['File'], label: 'Change passphrase…', order: 9, command: () => void this.changePassphrase() });
+    this.#menus.register({ id: 'core:proj-unprotect', path: ['File'], label: 'Remove protection…', order: 10, command: () => void this.unprotectProject() });
     this.#menus.register({ id: 'core:encryption-settings', path: ['File'], label: 'Encryption settings…', order: 10, command: () => showEncryptionSettings() });
     this.#bus.on(CoreEvents.DATA_CHANGED, (s) => this.#onChange(s));
     this.#bus.on(DATASETS_CHANGED, () => this.#onChange(null));
@@ -1410,6 +1411,61 @@ export class ProjectSync {
         : `🔒 **“${name}” is now protected.** You'll need this passphrase to open it on this device — it isn't stored anywhere and can't be recovered.`);
     } catch (err) {
       this.#results.appendError(`Couldn’t protect the project: ${err.message}`);
+    }
+    this.#emitProject();
+  }
+
+
+  /**
+   * **Change passphrase…** — rekey a protected project in one step (#144).
+   *
+   * The reason this is not just unprotect-then-protect: that sequence rewrites every
+   * file to disk IN THE CLEAR in between, and on a synced folder those plaintext bytes
+   * reach the cloud. An operation meant to improve confidentiality must not destroy it
+   * on the way through.
+   *
+   * The store writes a transitional meta describing BOTH keyings before we rewrite
+   * anything, so an interruption anywhere in the rewrite leaves a folder that either
+   * passphrase still opens. `finishRekey` retires the old one only once every file is
+   * under the new key.
+   */
+  async changePassphrase() {
+    const folder = this.#folderMode || this.#store.folderBacked;
+    await this.#settle();
+    if (!folder && !this.#binding) return;
+    const id = folder ? FOLDER_PROJECT_ID : this.#binding.id;
+    const name = this.#binding?.name ?? 'this project';
+    if (!(await this.#store.hasEncryption(id))) {
+      this.#results.appendError('This project isn’t protected — use “Protect this project…” first.');
+      return;
+    }
+    const current = await passphraseFor('change-current', { name });
+    if (!current) return;
+    const next = await passphraseFor('change-new', { name });
+    if (!next) return;
+
+    try {
+      await this.#store.changePassphrase(current, next, id);
+      // Peers first: the new epoch is already on disk, so they can halt before we spend
+      // the rewrite re-encrypting every file underneath them.
+      if (folder) this.#announceRekey();
+      if (folder) await this.#folderRewrite(name);
+      else await this.#fullSave(id, name);
+      // Only now is every file under the new key, so only now may the old one retire.
+      await this.#store.finishRekey(id);
+      this.#results.appendText?.(
+        `🔑 **“${name}” has a new passphrase.** ${folder
+          ? 'Everyone sharing this folder needs the new one — send it out of band. The old passphrase no longer opens it.'
+          : 'The old passphrase no longer opens it.'} It isn’t stored anywhere and can’t be recovered.`);
+    } catch (err) {
+      // The store refuses before touching anything if the current passphrase is wrong,
+      // so the common failure leaves the project exactly as it was.
+      this.#results.appendError(`Couldn’t change the passphrase: ${err.message}`);
+      if (this.#store.rekeyPending) {
+        this.#results.appendError(
+          'The rekey did not finish. Both the old and the new passphrase still open this '
+          + 'project — try again, and keep the old one until it succeeds.');
+      }
     }
     this.#emitProject();
   }

@@ -17,7 +17,7 @@
 import { setPassphraseProvider, PASSPHRASE_ABORT } from './at-rest.js';
 
 /** Purposes that MEAN "choose a new passphrase" (set + confirm + warning). */
-const SET_PURPOSES = new Set(['export', 'set', 'folder-new', 'local-new', 'enable']);
+const SET_PURPOSES = new Set(['export', 'set', 'folder-new', 'local-new', 'enable', 'change-new']);
 
 /**
  * Show the passphrase dialog. Resolves to the passphrase, or null if cancelled (the
@@ -169,6 +169,21 @@ function copyFor(purpose, opts = {}) {
       return { title: 'Protect this project', message: 'Set a passphrase to encrypt this project’s data on this device. Each project has its own passphrase; it’s required to open the project and is never stored.' };
     case 'enable':
       return { title: 'Encrypt this project', message: 'Set a passphrase. It’s required to open the project on any machine and is never stored.' };
+    // Rekeying asks twice: prove you know the current one, then set the new one. The
+    // first is an ENTER prompt (no confirm field, no "cannot be recovered" warning —
+    // that would be about a passphrase they already have); the second is a SET prompt.
+    case 'change-current':
+      return {
+        title: 'Change passphrase',
+        message: `Enter the CURRENT passphrase for ${opts.name ? `“${opts.name}”` : 'this project'}. Changing it re-encrypts every file in one pass — nothing is ever written unprotected.`,
+        okLabel: 'Continue',
+      };
+    case 'change-new':
+      return {
+        title: 'Set the new passphrase',
+        message: 'The old passphrase stops working once this finishes. Anyone sharing this project needs the new one — send it out of band. It isn’t stored anywhere and can’t be recovered.',
+        okLabel: 'Change passphrase',
+      };
     default:
       return {};
   }
