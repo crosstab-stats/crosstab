@@ -2254,9 +2254,55 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       halt is a dedicated flag, NOT `folderMode = false` — clearing that would divert
       the next save into OPFS and fork the project into a second local copy. Legacy meta
       with no epoch reads null on both sides, so an upgrade never false-alarms.
-      7 tests in `test/key-epoch.test.mjs` pin all three directions. STILL OPEN: an
-      in-band rekey message (peers currently recover by reopening, not automatically),
-      and whether unprotect should force-disconnect peers first.
+      7 tests in `test/key-epoch.test.mjs` pin all three directions. **UPDATE 2026-08-10 — mostly closed, and the entry above was already half stale
+      when written.** Detection existed: the plaintext meta has carried a random `epoch`
+      since #144, `keyStatus()` reports ok / unprotected / protected / rekeyed, and
+      `#keyStillCurrent()` checks it on every 3 s poll AND before every folder write. The
+      claim "there is currently no protocol to tell connected peers" was about the
+      in-band half only.
+
+      **Fixed first: a data-loss path that opened precisely during a rekey** (`d1c562b`).
+      A rekey rewrites `crosstab-encryption.json` and THEN re-encrypts every other file,
+      so a peer polling mid-rewrite legitimately reads a truncated meta. Every link
+      failed OPEN: `keyStatus` answered `ok` on an unparseable meta → the guard passed →
+      `readManifest` could not decrypt and returned `null` → `decideSync` maps a null
+      peer manifest to `seed` → the peer wrote its whole project over the owner's,
+      encrypted with the stale key. Now: an existing-but-unparseable meta is
+      `unreadable`, `readManifest` returns null ONLY for genuine absence and rethrows a
+      decrypt failure, and `syncFolderProject` returns `blocked` rather than seeding over
+      a file it could not read. A test asserts the owner's ciphertext is byte-identical
+      after a keyless peer tries to sync.
+
+      **Then the in-band message.** `{t:'rekey'}` on the existing `ops` channel, sent by
+      protect and unprotect, handled by running the same `#keyStillCurrent()` check
+      immediately. It rides the existing multi-subscriber fan-out — no LiveDoc change, no
+      new Trystero action, no version bump — and a test pins that unknown message types
+      stay inert so the next one is equally cheap.
+
+      Two properties worth keeping in mind:
+      - **It is ADVISORY.** Live co-authoring carries manifests, not ciphertext, and
+        `LiveDoc` is key-unaware, so this cannot hand anyone a key and must not pretend
+        to. Correctness still rests on the on-disk epoch; the message only turns "up to
+        3 s, plus however long the rewrite takes" into "immediately".
+      - **It fires BETWEEN the meta write and the rewrite.** The new epoch is on disk by
+        then, so a peer that checks at once sees the change — and it halts before the
+        owner spends seconds re-encrypting every file underneath it.
+
+      **DECIDED: unprotect does NOT force-disconnect peers.** The halt already prevents
+      the harm, and disconnecting is strictly more disruptive. The risk on unprotect is a
+      peer writing *ciphertext* into a now-plaintext folder, which the halt stops; it is
+      not a confidentiality regression, because a connected peer already held the key.
+      For protect the argument is weaker still: a peer without the new passphrase cannot
+      continue anyway, and halting says so without tearing down the session.
+
+      STILL OPEN, smaller than it was:
+      - **No change-passphrase path.** Rekeying means unprotect-then-protect, which
+        passes through a moment where the folder is plaintext on disk. A real
+        `changePassphrase` would re-derive and rewrite in one step.
+      - **Recovery is still manual** ("re-open the folder"). An in-place re-prompt would
+        be nicer than a reopen, now that the halt is reliable enough to build on.
+      - **The halt itself is untested.** `#keyStillCurrent`'s stop-poll / lock / message
+        behaviour lives in project-sync and has no coverage; only `keyStatus` does.
       **Original analysis:**
       **SERIOUS GAP — shared-folder encryption change has no live-peer key coordination.**
       Flipping a *shared* folder project's protection (Protect / Remove protection, or a

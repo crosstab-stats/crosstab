@@ -135,3 +135,33 @@ test('attachLiveDoc wires a LiveDoc onto a session transport (send out, receive 
   assert.deepEqual(ids(doc.manifest), ['a1', 'b1']);
   assert.ok(session.sent.some((m) => m.t === 'state' && ids(m.manifest).length === 2));
 });
+
+// --- an added control message must not disturb the existing ones ---------------------
+
+test('an unknown message type is inert — LiveDoc ignores it and keeps converging', () => {
+  // The `ops` channel is a multi-subscriber fan-out, so a new control message (#144's
+  // `rekey`) reaches every consumer, not just its own handler. That is only safe while
+  // unknown `t` values fall through harmlessly — this pins that, so adding the next
+  // control message is a one-line change rather than a protocol negotiation.
+  const sent = [];
+  const doc = new LiveDoc({
+    manifest: () => ({ log: [] }),
+    send: (m) => sent.push(m),
+    onMerged: () => {},
+    mergers: {},
+  });
+
+  const before = JSON.stringify(doc.peerManifests ?? {});
+  for (const junk of [
+    { t: 'rekey' },
+    { t: 'rekey', epoch: 'abc' },
+    { t: 'not-a-real-type' },
+    { t: null },
+    {},
+  ]) {
+    assert.doesNotThrow(() => doc.receive(junk, 'peer-1'), `threw on ${JSON.stringify(junk)}`);
+  }
+  assert.equal(JSON.stringify(doc.peerManifests ?? {}), before,
+    'no peer state was invented from a message LiveDoc does not understand');
+  assert.equal(sent.length, 0, 'and nothing was echoed back — no message storm');
+});

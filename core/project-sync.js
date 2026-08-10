@@ -1399,6 +1399,10 @@ export class ProjectSync {
     if (!pass) return; // cancelled — unchanged
     try {
       await this.#store.unlock(pass, id); // mints salt/verifier + key
+      // Announce BETWEEN the meta write and the rewrite. The new epoch is on disk by
+      // now, so a peer that checks immediately sees the change; and it gets to halt
+      // before we spend seconds re-encrypting every file underneath it.
+      if (folder) this.#announceRekey();
       if (folder) await this.#folderRewrite(name);
       else await this.#fullSave(id, name);
       this.#results.appendText?.(folder
@@ -1438,6 +1442,7 @@ export class ProjectSync {
     if (!ok) return;
     try {
       await this.#store.removeEncryption(id); // deletes the meta + drops the key
+      if (folder) this.#announceRekey();
       if (folder) await this.#folderRewrite(name);
       else await this.#fullSave(id, name);
       this.#results.appendText?.(folder
@@ -1671,10 +1676,37 @@ export class ProjectSync {
     // Decode chunk bytes back to a Uint8Array, then offer the message to BOTH exchanges;
     // each ignores the other's kind.
     session.onOps((m, peer) => {
+      // A peer changed the folder's protection. Check now rather than waiting for the
+      // next poll — `#keyStillCurrent` halts us if our key is no longer the folder's.
+      if (m?.t === 'rekey') { void this.#keyStillCurrent(); return; }
       const msg = m?.t === 'gap-chunk' && typeof m.bytes === 'string' ? { ...m, bytes: b64ToBytes(m.bytes) } : m;
       void this.#liveExchange?.receive(msg, peer);
       void this.#liveAssetExchange?.receive(msg, peer);
     });
+  }
+
+
+  /**
+   * Tell connected peers the folder's protection just changed.
+   *
+   * Advisory only, and deliberately so: live co-authoring carries MANIFESTS, not
+   * ciphertext, and `LiveDoc` is entirely key-unaware — so this cannot hand anyone a
+   * key, and must not pretend to. All it does is make peers run the check they would
+   * otherwise run on their next poll, which turns "up to 3 seconds of writing with a
+   * stale key, plus however long the folder rewrite takes" into "immediately".
+   *
+   * Correctness never depends on this message arriving. The on-disk epoch remains the
+   * source of truth and the poll still catches everything; a peer that is offline, or
+   * that misses the broadcast, is exactly as safe as before — just later.
+   */
+  #announceRekey() {
+    if (!this.#liveSession) return;
+    try {
+      this.#liveSession.sendOps({ t: 'rekey' });
+      debug('live', 'announced rekey to peers');
+    } catch (err) {
+      debug('live', 'rekey announce failed (harmless — the poll still catches it)', err?.message);
+    }
   }
 
   /** Refresh the gap-fill "held" set from my current sources (so I can serve them, and
