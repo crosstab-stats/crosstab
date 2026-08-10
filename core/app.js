@@ -1304,7 +1304,15 @@ export async function boot(mounts) {
     const p = plugins ? plugins.list().find((x) => x.id === pluginId) : null;
     if (!p || !collection) return null;
     const itemId = id || newItemId();
-    itemStore.put(ownerToken(p), String(collection), itemId, fields ?? {});
+    // Scope, exactly as the workspace bridge enforces it. This used to pass none at
+    // all, which item-store reads as null-dsId — i.e. visible from EVERY dataset. Right
+    // by luck for a project-scoped collection, silently wrong for a dataset-scoped one:
+    // an importer's records would have leaked across every dataset in the project.
+    // A compute-frame verb has no workspace binding, so "inherit" means the active
+    // dataset, which is the one the user is looking at when they run an import.
+    const decl = declaredCollections([p], () => ownerToken(p)).find((d) => d.id === String(collection));
+    const dsId = decl?.scope === 'project' ? null : datasets.activeId;
+    itemStore.put(ownerToken(p), String(collection), itemId, fields ?? {}, { scope: { dsId } });
     return itemId;
   };
   services.itemsRemove = (pluginId, collection, id) => {

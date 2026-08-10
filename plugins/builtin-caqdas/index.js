@@ -104,14 +104,14 @@ export const manifest = {
     verbs: [
       { id: 'import-qdpx', label: 'REFI-QDA / QDPX project (.qdpx)…', run: 'parseQdpx', category: 'import', needsFile: { extensions: ['.qdpx'] }, group: 'Qualitative' },
       { id: 'export-qdpx', label: 'REFI-QDA / QDPX project (.qdpx)…', run: 'exportQdpx', category: 'export', group: 'Qualitative' },
-      // A real file pair for the codebook alone, alongside the whole-project QDPX.
-      // Export is a compute-frame verb (it only READS records, which is all the compute
-      // frame can do with items) and lands in the normal export picker. Import has to be
-      // a TOOLBAR verb instead: only the workspace frame gets a writable `items` bridge
-      // — compute-frame items are read-only (core/loader.js) — which is the same reason
-      // `parseQdpx` has to smuggle its codes through a blob.
+      // A real file pair for the codebook alone, alongside the whole-project QDPX, and
+      // BOTH in the File menus — an asymmetry here is just confusing (the owner spotted
+      // it immediately: "odd that export lives under File ▸ Export but import is a
+      // button in the workspace"). The compute frame can write item records
+      // (core/loader.js:523 exposes put and remove, not only list), so the import verb
+      // has no reason to live anywhere else.
       { id: 'export-codebook-csv', label: 'Codebook (.csv)…', run: 'exportCodebookCsv', category: 'export', group: 'Qualitative' },
-      { id: 'import-codebook-csv', label: '⇪ Import codes (.csv)', run: 'importCodebookCsv', category: 'toolbar', needsFile: { extensions: ['.csv', '.txt', '.tsv'] } },
+      { id: 'import-codebook-csv', label: 'Codebook (.csv)…', run: 'importCodebookCsv', category: 'import', needsFile: { extensions: ['.csv', '.txt', '.tsv'] }, group: 'Qualitative' },
     ],
   }],
 };
