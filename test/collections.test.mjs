@@ -23,7 +23,7 @@ test('a full declaration normalises unchanged', () => {
   const full = {
     id: 'boundarySets', label: 'Map layers', labelField: 'fileName',
     summaryField: 'featureCount', sidebar: 'list', assetRefs: ['assetId'], portable: true,
-    scope: 'project',
+    scope: 'project', rowRefs: [],
   };
   assert.deepEqual(normalizeCollection(full), full);
 });
@@ -190,4 +190,14 @@ test('recordLabel prefers the declared field and falls back to the id', () => {
   assert.equal(recordLabel(decl, { id: 'it-1', fields: { fileName: '   ' } }), 'it-1');
   // No labelField declared at all — still never blank.
   assert.equal(recordLabel(normalizeCollection({ id: 'x' }), { id: 'it-2', fields: { name: 'ignored' } }), 'it-2');
+});
+
+test('rowRefs is declared, never inferred', () => {
+  // Same rule as assetRefs. A string field holding "1000000003" looks like any other
+  // string, so a host that guessed would corrupt records rather than re-home them.
+  assert.deepEqual(normalizeCollection({ id: 'x' }).rowRefs, [], 'none by default');
+  assert.deepEqual(normalizeCollection({ id: 'x', rowRefs: ['doc'] }).rowRefs, ['doc']);
+  assert.deepEqual(normalizeCollection({ id: 'x', rowRefs: 'doc' }).rowRefs, [], 'a bare string is not a list');
+  assert.deepEqual(normalizeCollection({ id: 'x', rowRefs: ['doc', 7, '', null] }).rowRefs, ['doc'],
+    'junk entries are dropped, the good one survives');
 });

@@ -54,3 +54,11 @@ test('every declared collection is well-formed', () => {
     assert.equal(d.id, raw.id);
   }
 });
+
+test('codings declare their row reference so a re-home can carry them (#151)', () => {
+  // The asymmetry that dissolved half of #151: a CODING points at a `__ct_rid`, a CODE
+  // points at nothing dataset-shaped. So codings need remapping and codes just follow.
+  assert.deepEqual(collOf('segments').rowRefs, ['doc']);
+  assert.equal(collOf('codes').rowRefs, undefined, 'a code references no row');
+  assert.equal(collOf('codebooks').rowRefs, undefined);
+});

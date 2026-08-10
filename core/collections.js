@@ -37,6 +37,11 @@
  *   every record, a summary line, or not at all. Defaults to `none` so a collection is
  *   never surfaced by accident — visibility is a deliberate choice by its author.
  * @property {string[]} [assetRefs] Fields holding `asset:` refs, for reference counting.
+ * @property {string[]} [rowRefs] Fields holding a `__ct_rid` ROW id, so a dataset
+ *   re-home can remap them (#151). Same reason `assetRefs` is declared rather than
+ *   inferred: a string field holding "1000000003" is indistinguishable from any other
+ *   string, and guessing would corrupt records rather than move them. A collection that
+ *   declares none is assumed to reference no rows, so it moves untouched.
  * @property {'project'|'dataset'} [scope] Which dataset a record belongs to. Omit to
  *   INHERIT the workspace's own scope, which is the existing behaviour and right for
  *   almost everything. Set it only when one collection genuinely differs from its
@@ -77,6 +82,7 @@ export function normalizeCollection(raw) {
     scope: raw.scope === 'project' || raw.scope === 'dataset' ? raw.scope : null,
     sidebar,
     assetRefs: Array.isArray(raw.assetRefs) ? raw.assetRefs.filter((f) => typeof f === 'string' && f) : [],
+    rowRefs: Array.isArray(raw.rowRefs) ? raw.rowRefs.filter((f) => typeof f === 'string' && f) : [],
   };
 }
 

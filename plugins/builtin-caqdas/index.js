@@ -89,7 +89,9 @@ export const manifest = {
   collections: [
     { id: 'codebooks', label: 'Codebooks', labelField: 'name', sidebar: 'list', scope: 'project' },
     { id: 'codes', label: 'Codes', labelField: 'name', sidebar: 'count', scope: 'project' },
-    { id: 'segments', label: 'Codings', sidebar: 'count' },
+    // `doc` holds a __ct_rid, so a dataset re-home can carry codings across (#151).
+    // Declared, not inferred — the host cannot tell a row id from any other string.
+    { id: 'segments', label: 'Codings', sidebar: 'count', rowRefs: ['doc'] },
   ],
   workspaces: [{
     id: 'caqdas-coding',
