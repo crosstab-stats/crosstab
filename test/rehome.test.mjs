@@ -10,7 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-const { planRowMap, rehomeRecord, planRehome } = await import('../core/rehome.js');
+const { planRowMap, rehomeRecord, planRehome, gatherRehome, applyRehome } = await import('../core/rehome.js');
 
 // Row ids are `sourceSeq * 1e9 + rowNumber`, so a re-import of the same rows in the
 // same order genuinely produces the same ids.
@@ -177,4 +177,109 @@ test('a collection with no declared rowRefs never strands anything', () => {
   });
   assert.equal(plan.stranded, 0);
   assert.equal(plan.movable, 5);
+});
+
+// --- gathering and applying ------------------------------------------------------------
+
+/** A stand-in item store with the two methods rehome touches. */
+function fakeStore(records) {
+  const rows = records.map((r) => ({ ...r }));
+  return {
+    rows,
+    list(owner, collection, { dsId } = {}) {
+      return rows.filter((r) => r.owner === owner && r.collection === collection
+        && (dsId === undefined || r.scope?.dsId == null || String(r.scope.dsId) === String(dsId)));
+    },
+    put(owner, collection, id, fields, { scope } = {}) {
+      const hit = rows.find((r) => r.owner === owner && r.collection === collection && r.id === id);
+      if (hit) { hit.fields = fields; hit.scope = scope; }
+    },
+  };
+}
+
+const OWNED = [
+  { id: 'segments', owner: 'builtin', rowRefs: ['doc'] },
+  { id: 'codes', owner: 'builtin' },
+];
+
+test('gather picks up records BOUND to the dataset, not ones merely visible from it', () => {
+  // A project-scoped record (null dsId) is visible from every dataset and belongs to
+  // none. Moving it would be meaningless — and this is exactly why the codebook stopped
+  // being part of #151.
+  const store = fakeStore([
+    { owner: 'builtin', collection: 'segments', id: 's1', fields: { doc: rid(1) }, scope: { dsId: 'A' } },
+    { owner: 'builtin', collection: 'segments', id: 's2', fields: { doc: rid(2) }, scope: { dsId: 'B' } },
+    { owner: 'builtin', collection: 'codes', id: 'c1', fields: { name: 'Trust' }, scope: { dsId: null } },
+  ]);
+  const g = gatherRehome({ fromId: 'A', itemStore: store, decls: OWNED });
+  assert.deepEqual(g.items.map((i) => i.id), ['s1'], 'only the record bound to A');
+});
+
+test('gather finds the analyses run against that dataset', () => {
+  const analysisLog = { entries: () => [
+    { runId: 'r1', datasetId: 'A' }, { runId: 'r2', datasetId: 'B' }, { runId: 'r3' },
+  ] };
+  const g = gatherRehome({ fromId: 'A', itemStore: fakeStore([]), decls: OWNED, analysisLog });
+  assert.deepEqual(g.analyses.map((a) => a.runId), ['r1']);
+});
+
+test('apply re-scopes under the SAME id, remapping row references', async () => {
+  // Same id matters: nothing is duplicated, and anything referencing a record by id
+  // still resolves after the move.
+  const store = fakeStore([
+    { owner: 'builtin', collection: 'segments', id: 's1', fields: { doc: rid(1), codeId: 'c1' }, scope: { dsId: 'A' } },
+  ]);
+  const items = gatherRehome({ fromId: 'A', itemStore: store, decls: OWNED }).items;
+  const res = await applyRehome({
+    fromId: 'A', toId: 'B', items, decls: OWNED,
+    rowMap: { map: new Map([[rid(1), rid(9)]]) }, itemStore: store,
+  });
+  assert.equal(res.moved, 1);
+  const rec = store.rows[0];
+  assert.equal(rec.id, 's1', 'same record, not a copy');
+  assert.equal(rec.scope.dsId, 'B');
+  assert.equal(rec.fields.doc, rid(9), 'the row reference followed');
+  assert.equal(rec.fields.codeId, 'c1');
+});
+
+test('a record whose row cannot be mapped is LEFT BEHIND and reported', async () => {
+  const store = fakeStore([
+    { owner: 'builtin', collection: 'segments', id: 's1', fields: { doc: rid(4) }, scope: { dsId: 'A' } },
+  ]);
+  const items = gatherRehome({ fromId: 'A', itemStore: store, decls: OWNED }).items;
+  const res = await applyRehome({
+    fromId: 'A', toId: 'B', items, decls: OWNED,
+    rowMap: { map: new Map() }, itemStore: store,
+  });
+  assert.equal(res.moved, 0);
+  assert.equal(res.stranded.length, 1);
+  assert.equal(store.rows[0].scope.dsId, 'A', 'still on A — not moved to a wrong row');
+});
+
+test('analyses are RE-RUN against B, not relabelled', async () => {
+  // An analysis entry records what was run against A. Restamping it with B's id would
+  // claim results that were never produced; the numbers in the output are A's.
+  const seen = [];
+  const analysisLog = { entries: () => [], clearFor: (id) => seen.push(`cleared:${id}`) };
+  const res = await applyRehome({
+    fromId: 'A', toId: 'B', items: [], decls: OWNED, rowMap: { map: new Map() },
+    itemStore: fakeStore([]), analysisLog,
+    analyses: [{ runId: 'r1', datasetId: 'A', label: 'Frequencies' }],
+    replay: async (e) => { seen.push(`ran:${e.runId}@${e.datasetId}`); },
+  });
+  assert.equal(res.replayed, 1);
+  assert.deepEqual(seen, ['ran:r1@B', 'cleared:A'],
+    're-run against B, and A’s stale entry cleared only after it succeeded');
+});
+
+test('one failing analysis does not abandon the rest', async () => {
+  // A plugin may be deactivated, or B may lack a variable the run needed.
+  const res = await applyRehome({
+    fromId: 'A', toId: 'B', items: [], decls: OWNED, rowMap: { map: new Map() },
+    itemStore: fakeStore([]),
+    analyses: [{ runId: 'r1' }, { runId: 'r2' }, { runId: 'r3' }],
+    replay: async (e) => { if (e.runId === 'r2') throw new Error('plugin gone'); },
+  });
+  assert.equal(res.replayed, 2);
+  assert.equal(res.failed, 1);
 });

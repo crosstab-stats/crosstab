@@ -156,3 +156,77 @@ export function planRehome({ items = [], decls = [], analyses = [], rowMap }) {
     empty: movable === 0 && stranded === 0 && analyses.length === 0,
   };
 }
+
+/**
+ * Everything currently bound to `fromId`, ready to plan against.
+ *
+ * Only records BOUND to that dataset — a project-scoped record (null dsId) is visible
+ * from every dataset and belongs to none, so moving it would be meaningless. This is
+ * why the codebook stopped being part of #151: codes are project-scoped now.
+ *
+ * @param {object} arg
+ * @param {string|number} arg.fromId
+ * @param {{list:Function}} arg.itemStore
+ * @param {Array<{id:string, owner:string, rowRefs?:string[]}>} arg.decls
+ * @param {{entries:Function}} [arg.analysisLog]
+ */
+export function gatherRehome({ fromId, itemStore, decls, analysisLog }) {
+  const key = String(fromId);
+  const items = [];
+  for (const d of decls ?? []) {
+    for (const rec of itemStore.list(d.owner, d.id, { dsId: fromId }) ?? []) {
+      // `list` with a dsId also returns project-scoped records; keep only the bound ones.
+      if (String(rec.scope?.dsId ?? '') !== key) continue;
+      items.push({ owner: d.owner, collection: d.id, id: rec.id, fields: rec.fields });
+    }
+  }
+  const analyses = (analysisLog?.entries?.() ?? [])
+    .filter((e) => e.datasetId != null && String(e.datasetId) === key);
+  return { items, analyses };
+}
+
+/**
+ * Move what can be moved. Returns what actually happened, including what was left.
+ *
+ * Records are re-put under the SAME id with a new scope, so nothing is duplicated and
+ * anything referencing a record by id still resolves. A record whose row reference
+ * cannot be mapped is skipped and reported — never repointed at a row that merely
+ * happens to exist.
+ *
+ * Analyses are NOT relabelled. An analysis entry records what was run against A, and
+ * silently restamping it with B's id would claim results that were never produced.
+ * They are re-RUN against B instead, through the ordinary replay path, so the output in
+ * the pane is genuinely B's.
+ */
+export async function applyRehome({
+  fromId, toId, rowMap, items, decls, analyses = [],
+  itemStore, analysisLog, replay,
+}) {
+  const refsFor = (collection) => decls.find((d) => d.id === collection)?.rowRefs ?? [];
+  const map = rowMap?.map ?? new Map();
+  let moved = 0;
+  const stranded = [];
+
+  for (const rec of items) {
+    const { fields, ok } = rehomeRecord(rec.fields, refsFor(rec.collection), map);
+    if (!ok) { stranded.push(rec); continue; }
+    itemStore.put(rec.owner, rec.collection, rec.id, fields, { scope: { dsId: toId } });
+    moved++;
+  }
+
+  let replayed = 0;
+  let failed = 0;
+  for (const entry of analyses) {
+    try {
+      await replay?.({ ...entry, datasetId: toId });
+      replayed++;
+    } catch {
+      // One analysis failing to re-run must not abandon the rest — a plugin may be
+      // deactivated, or B may simply lack a variable the run needed.
+      failed++;
+    }
+  }
+  if (replayed && analysisLog?.clearFor) analysisLog.clearFor(fromId);
+
+  return { moved, stranded, replayed, failed };
+}
