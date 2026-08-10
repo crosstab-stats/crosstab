@@ -828,6 +828,7 @@ function SHELL_HTML(reopen) {
       <div class="ctl__header">
         <div class="ctl__brand">CrossTab</div>
         <div class="ctl__tagline">Statistics for everyone, every device, everywhere</div>
+        <div class="ctl__prerelease" role="note">⚠ Pre-release software — updates may break your saved projects. Keep your own copies of anything that matters.</div>
         <div class="ctl__build" title="When this deployed build was published (the served files' last-modified time). Useful for confirming a device picked up the latest version.">build: …</div>
         <button type="button" class="ctl__update" title="Re-check the server for a newer version and reload into it. Useful as an installed app (Home Screen), where there's no browser refresh button.">Check for updates</button>
       </div>
@@ -887,6 +888,15 @@ function injectStyles() {
     .ctl__header { background: var(--bar, #2c3e50); color: var(--bar-fg, #ecf0f1); padding: 18px 24px; text-align: center; }
     .ctl__brand { font-size: 26px; font-weight: 800; letter-spacing: .04em; }
     .ctl__tagline { font-size: 13px; opacity: .85; margin-top: 2px; }
+    /* Louder than the tagline, quieter than a modal: the header is the one place every
+       user passes through, and "your data might not survive an update" is a thing they
+       should learn BEFORE committing a term's work, not after. Amber on the dark header
+       rather than red — nothing is broken, it is a statement about the road ahead.
+       #ffd48a on the #2c3e50 header (--bar) measures 7.86:1. */
+    .ctl__prerelease {
+      font-size: 12px; line-height: 1.4; margin-top: 8px; color: #ffd48a;
+      max-width: 62ch; margin-left: auto; margin-right: auto;
+    }
     .ctl__build { font-size: 11px; opacity: .55; margin-top: 4px; font-variant-numeric: tabular-nums; }
     .ctl__update { font: inherit; font-size: 11px; margin-top: 6px; padding: 4px 10px; cursor: pointer;
       /* Sits on the dark bar (#2c3e50): the accent has to LIGHTEN here to reach 4.5:1,
