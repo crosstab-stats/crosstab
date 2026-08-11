@@ -26,6 +26,7 @@ import { MemoStore, createMemoService, ANCHOR_KINDS, datasetOfTarget } from './m
 import { SelectionStore, createSelectionService, SELECTION_CHANGED } from './selection.js';
 import { parseInviteLink } from './live-invite.js';
 import { findOrphans, itemRefSources, refsIn } from './asset-refs.js';
+import { openRehomeDialog } from './rehome-ui.js';
 import { declaredCollections, assetRefDecls, undeclaredItemsGuard, CORE_COLLECTIONS,
          sidebarCollections, recordLabel } from './collections.js';
 import { LivePresence } from './live-presence.js';
@@ -438,7 +439,37 @@ export async function boot(mounts) {
   const results = new ResultsPane(mounts.results, { bus });
   const menus = new MenuShell(mounts.menubar);
   const ui = new UiService(datasets);
-  const importers = new ImportService({ menus, data: datasets, results: results.api, bus, webr });
+  // Offered at a SWAP (the moment coding would otherwise be orphaned) and from the Data
+  // menu (for an import to a NEW dataset, where nothing detaches but the user may still
+  // want the coding moved). Both go through the same dialog (#151).
+  const rehomeDeps = () => ({
+    datasets,
+    itemStore,
+    analysisLog,
+    decls: [...CORE_COLLECTIONS, ...declaredCollections(plugins?.list() ?? [], ownerToken)],
+    replay: (entry) => pluginActions.replay(entry),
+    newId: newItemId,
+  });
+  const offerRehome = async ({ fromId, toId, reason }) => {
+    const res = await openRehomeDialog({ fromId, toId, deps: rehomeDeps(), reason });
+    if (!res || res.nothing) return;
+    const bits = [];
+    if (res.moved) bits.push(`${res.moved} record(s) brought across`);
+    if (res.replayed) bits.push(`${res.replayed} analysis/analyses re-run`);
+    if (res.stranded?.length) bits.push(`${res.stranded.length} left behind (no matching row)`);
+    if (res.failed) bits.push(`${res.failed} analysis/analyses could not be re-run`);
+    if (bits.length) results.api.appendText?.(`**Coding & analyses:** ${bits.join('; ')}.`);
+  };
+
+  const importers = new ImportService({
+    menus, data: datasets, results: results.api, bus, webr,
+    onSwap: ({ fromId, toId }) => offerRehome({
+      fromId,
+      toId,
+      reason: 'The dataset you just replaced had coding or analyses attached. '
+        + 'They are not part of the data, so they did not come across with the import.',
+    }),
+  });
   // SPSS/Stata/SAS (ReadStat) is a sandboxed codec plugin (builtin-readstat-codec, #130),
   // joining this same Import/Export picker via the codec interface like CSV/Parquet.
   const exporters = new ExportService({ menus, data: datasets, results: results.api, bus });
@@ -808,6 +839,21 @@ export async function boot(mounts) {
     label: 'History…',
     order: 30,
     command: () => historyPanel.toggle(),
+  });
+
+  // The reactive half of #151. The swap path offers this automatically, but importing to
+  // a NEW dataset detaches nothing, so nothing prompts — and that is exactly what someone
+  // does when they want to keep the old data as a backup. Same dialog either way.
+  menus.register({
+    id: 'core:rehome',
+    path: ['Edit'],
+    label: 'Move coding & analyses to another dataset…',
+    order: 31,
+    command: () => void offerRehome({
+      fromId: datasets.activeId,
+      reason: 'Coding and analyses belong to the dataset they were made on, not to the '
+        + 'data itself, so they do not follow an import. Bring them across here.',
+    }),
   });
 
   // Transform ▸ Compute variable… / Recode into new variable… — Phase-2 data

@@ -186,7 +186,12 @@ export function gatherRehome({ fromId, itemStore, decls, analysisLog }) {
 }
 
 /**
- * Move what can be moved. Returns what actually happened, including what was left.
+ * Move or COPY what can be moved. Returns what actually happened, including what was left.
+ *
+ * Copy exists because a re-home is not always a replacement. Someone may be splitting a
+ * dataset and needs the original and its codings intact — a reason we cannot predict,
+ * so the safe default is to make destroying the source an explicit choice rather than a
+ * side effect of wanting the codings somewhere else.
  *
  * Records are re-put under the SAME id with a new scope, so nothing is duplicated and
  * anything referencing a record by id still resolves. A record whose row reference
@@ -200,7 +205,7 @@ export function gatherRehome({ fromId, itemStore, decls, analysisLog }) {
  */
 export async function applyRehome({
   fromId, toId, rowMap, items, decls, analyses = [],
-  itemStore, analysisLog, replay,
+  itemStore, analysisLog, replay, mode = 'move', newId,
 }) {
   const refsFor = (collection) => decls.find((d) => d.id === collection)?.rowRefs ?? [];
   const map = rowMap?.map ?? new Map();
@@ -210,7 +215,12 @@ export async function applyRehome({
   for (const rec of items) {
     const { fields, ok } = rehomeRecord(rec.fields, refsFor(rec.collection), map);
     if (!ok) { stranded.push(rec); continue; }
-    itemStore.put(rec.owner, rec.collection, rec.id, fields, { scope: { dsId: toId } });
+    // MOVE keeps the id, COPY mints a new one. The id is not bookkeeping: anchored
+    // memos target `item:<owner> <collection> <id>`, so a move carries a record's
+    // notes with it automatically, while a copy leaves them on the original — which is
+    // right, because the original still exists and the notes were written about it.
+    const id = mode === 'copy' ? (newId?.() ?? `${rec.id}_copy`) : rec.id;
+    itemStore.put(rec.owner, rec.collection, id, fields, { scope: { dsId: toId } });
     moved++;
   }
 
@@ -226,7 +236,9 @@ export async function applyRehome({
       failed++;
     }
   }
-  if (replayed && analysisLog?.clearFor) analysisLog.clearFor(fromId);
+  // Only a MOVE retires the source's analyses. A copy must leave A entirely as it was —
+  // someone splitting a dataset needs both halves intact, and we cannot guess why.
+  if (mode === 'move' && replayed && analysisLog?.clearFor) analysisLog.clearFor(fromId);
 
   return { moved, stranded, replayed, failed };
 }

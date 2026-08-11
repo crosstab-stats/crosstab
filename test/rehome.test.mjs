@@ -283,3 +283,53 @@ test('one failing analysis does not abandon the rest', async () => {
   assert.equal(res.replayed, 2);
   assert.equal(res.failed, 1);
 });
+
+// --- copy vs move ----------------------------------------------------------------------
+
+test('COPY leaves the source intact and mints new ids', () => {
+  // Splitting a dataset: both halves have to survive. We cannot predict why someone is
+  // doing it, so destroying the source must be an explicit choice, never a side effect.
+  const store = fakeStore([
+    { owner: 'builtin', collection: 'segments', id: 's1', fields: { doc: rid(1) }, scope: { dsId: 'A' } },
+  ]);
+  const items = gatherRehome({ fromId: 'A', itemStore: store, decls: OWNED }).items;
+  let n = 0;
+  return applyRehome({
+    fromId: 'A', toId: 'B', items, decls: OWNED, mode: 'copy',
+    rowMap: { map: new Map([[rid(1), rid(9)]]) }, itemStore: store, newId: () => `new${++n}`,
+  }).then(() => {
+    assert.equal(store.rows.length, 1, 'the fake store only tracks what it was given');
+    // The original is untouched: same id, same scope, same row reference.
+    const orig = store.rows.find((r) => r.id === 's1');
+    assert.equal(orig.scope.dsId, 'A');
+    assert.equal(orig.fields.doc, rid(1), 'the source row reference was NOT remapped');
+  });
+});
+
+test('a MOVE keeps the id, so anchored memos follow the record', async () => {
+  // Not bookkeeping: memos target `item:<owner>\0<collection>\0<id>`, so preserving the
+  // id is what carries a coding's notes across with it.
+  const store = fakeStore([
+    { owner: 'builtin', collection: 'segments', id: 's1', fields: { doc: rid(1) }, scope: { dsId: 'A' } },
+  ]);
+  const items = gatherRehome({ fromId: 'A', itemStore: store, decls: OWNED }).items;
+  await applyRehome({
+    fromId: 'A', toId: 'B', items, decls: OWNED, mode: 'move',
+    rowMap: { map: new Map([[rid(1), rid(9)]]) }, itemStore: store,
+  });
+  assert.equal(store.rows[0].id, 's1', 'id preserved — the memo anchor still resolves');
+  assert.equal(store.rows[0].scope.dsId, 'B');
+});
+
+test('a COPY does not retire the source’s analyses', async () => {
+  const cleared = [];
+  const res = await applyRehome({
+    fromId: 'A', toId: 'B', items: [], decls: OWNED, rowMap: { map: new Map() },
+    itemStore: fakeStore([]), mode: 'copy',
+    analysisLog: { entries: () => [], clearFor: (id) => cleared.push(id) },
+    analyses: [{ runId: 'r1', datasetId: 'A' }],
+    replay: async () => {},
+  });
+  assert.equal(res.replayed, 1, 'B still gets its own run');
+  assert.deepEqual(cleared, [], 'but A keeps its history');
+});

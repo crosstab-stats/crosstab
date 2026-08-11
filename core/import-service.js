@@ -114,6 +114,11 @@ export class ImportService {
   /** WebRManager, for host-side staging of large uploads. @type {?import('./webr-manager.js').WebRManager} */
   #webr;
 
+  /** Called after a SWAP lands and BEFORE the outgoing dataset is binned, so anything
+   * attached to it (coding, analyses) can be offered a new home while it still exists
+   * to be read from. `({fromId, toId}) => Promise<void>` (#151). */
+  #onSwap;
+
   /** id → spec. @type {Map<string, ImporterSpec>} */
   #importers = new Map();
 
@@ -136,12 +141,13 @@ export class ImportService {
    * @param {import('./webr-manager.js').WebRManager} [deps.webr] - For staging
    *   large uploads host-side (see the `stage` importer option).
    */
-  constructor({ menus, data, results, bus, webr }) {
+  constructor({ menus, data, results, bus, webr, onSwap }) {
     this.#menus = menus;
     this.#data = data;
     this.#results = results;
     this.#bus = bus;
     this.#webr = webr ?? null;
+    this.#onSwap = onSwap ?? null;
   }
 
   /**
@@ -366,6 +372,19 @@ export class ImportService {
         ?? (files.length === 1 ? baseName(files[0].name) : 'Imported data');
       this.#data.add(name, { activate: true });
       await this.#importFiles(spec, files, 'replace', id);
+      // Offer to bring across whatever was attached to the outgoing dataset — BEFORE it
+      // is binned, while its records and rows can still be read. This is the moment the
+      // work would otherwise be quietly orphaned, which is why the offer belongs here
+      // rather than only behind a menu item somebody has to know to look for (#151).
+      if (outgoing != null && this.#onSwap) {
+        try {
+          await this.#onSwap({ fromId: outgoing, toId: this.#data.activeId });
+        } catch (err) {
+          // An import that succeeded must not be reported as failed because the
+          // follow-up offer stumbled.
+          this.#results?.appendError?.(`Couldn’t move the previous dataset’s coding: ${err.message}`);
+        }
+      }
       // Bin the outgoing dataset only after the import lands, so a failed import never
       // costs the user the data they still have.
       if (outgoing != null) await this.#data.remove(outgoing);
