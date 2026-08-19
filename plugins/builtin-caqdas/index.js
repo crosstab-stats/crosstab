@@ -87,11 +87,42 @@ export const manifest = {
   // dataset and means nothing in another. The workspace-level `scope` flag can only say
   // one thing for both, which is why `collections[].scope` exists (see core/collections.js).
   collections: [
-    { id: 'codebooks', label: 'Codebooks', labelField: 'name', sidebar: 'list', scope: 'project' },
-    { id: 'codes', label: 'Codes', labelField: 'name', sidebar: 'count', scope: 'project' },
+    { id: 'codebooks', label: 'Codebooks', labelField: 'name', sidebar: 'list', scope: 'project', portable: true },
+    // A code is COMPOSED INTO its codebook (#166): it travels with the book into the
+    // library and dies with it, which is what makes a codebook the dictionary it claims
+    // to be rather than a label with a foreign key pointed at it.
+    {
+      id: 'codes',
+      label: 'Codes',
+      labelField: 'name',
+      sidebar: 'count',
+      scope: 'project',
+      parent: { collection: 'codebooks', field: 'codebookId' },
+    },
     // `doc` holds a __ct_rid, so a dataset re-home can carry codings across (#151).
     // Declared, not inferred — the host cannot tell a row id from any other string.
-    { id: 'segments', label: 'Codings', sidebar: 'count', rowRefs: ['doc'] },
+    //
+    // `anchor` holds the region this coding refers to; declaring it is what lets the host
+    // derive the op's `reads[]`, report drift, and re-target on a re-home without ever
+    // reading our schema.
+    //
+    // Deliberately NOT `parent: codes`. A coding DEPENDS ON a code (it dies with it) but
+    // is not part of it, and the difference is not pedantry: a codebook promoted to the
+    // library must never carry codings, because codings are passages of real participant
+    // data and a shared codebook is meant to be handed to other people.
+    //
+    // `onConcurrentEdit: 'surface'` because two coders disagreeing about a boundary is
+    // exactly the case where letting HLC pick a winner silently destroys the other's
+    // judgement — the thing per-coder records exist to prevent.
+    {
+      id: 'segments',
+      label: 'Codings',
+      labelField: 'quote',
+      sidebar: 'count',
+      rowRefs: ['doc'],
+      anchorRefs: ['anchor'],
+      onConcurrentEdit: 'surface',
+    },
   ],
   workspaces: [{
     id: 'caqdas-coding',
@@ -124,6 +155,19 @@ const MAX_DOCS = 10000; // v1 cap; virtualise for larger corpora later.
 const STYLES = `
 :host, body { margin: 0; }
 .caqdas { display: flex; flex-direction: column; height: 100%; min-height: 460px; font: 14px system-ui, sans-serif; color: #1a1a1a; }
+/* Drift reporting (#166): a coding whose anchor no longer lands cleanly. Amber, not
+   red — nothing is broken and nothing was lost, but the user has to know before they
+   trust the highlight. */
+.caqdas__drift { display: flex; align-items: center; gap: 10px; padding: 8px 12px; margin: 0 0 10px;
+  background: #fff4e0; border: 1px solid #e2b877; border-radius: 6px; font-size: 13px; color: #6b4a12; }
+.caqdas__driftmsg { flex: 1; }
+.caqdas__driftrow { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 13px;
+  border-bottom: 1px solid #eee; }
+.caqdas__driftrow .nm { font-weight: 600; }
+.caqdas__driftrow .q { flex: 1; color: #444; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.caqdas__driftrow .why { color: #8a6d3b; font-size: 12px; }
+.caqdas__segtools { display: flex; align-items: center; gap: 6px; padding: 6px 0; }
+.caqdas__segwarn { padding: 4px 0; font-size: 12px; color: #8a6d3b; }
 .caqdas__bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid #e2e6ea; flex-wrap: wrap; }
 .caqdas__bar label { color: #555; }
 .caqdas__bar select, .caqdas__btn { font: inherit; padding: 5px 9px; border: 1px solid #ccd2d8; border-radius: 6px; background: #fff; }
@@ -310,6 +354,13 @@ export const workspace = {
       return r;
     };
     let docs = []; // [{ rid, text }]
+    // The dataset the documents came from. Part of a coding's anchor target, so it is
+    // captured whenever documents load rather than assumed.
+    let dsId = null;
+    // What the last resolution pass found — codings whose anchor no longer lands cleanly.
+    // Shown, never silently fixed (#166 R1).
+    let driftReport = { drifted: 0, orphaned: 0 };
+    let reviewDoc = null; // the document whose drift list is expanded (session-only)
     let activeRid = null;
     let activeCodeId = null; // armed code for "paint mode" (session-only, not saved)
     let retrieveCodeId = null; // when set, the transcript pane shows this code's segments
@@ -515,6 +566,7 @@ export const workspace = {
     async function loadDocs() {
       docs = [];
       activeRid = null;
+      try { dsId = await app.selection.dataset(); } catch { dsId = null; }
       if (!state.textColumn) return;
       const vars = [state.textColumn];
       if (state.labelColumn && state.labelColumn !== state.textColumn) vars.push(state.labelColumn);
@@ -530,6 +582,29 @@ export const workspace = {
           : { rid: String(r.__rid), kind: 'text', text: raw, label };
       });
       activeRid = docs.length ? docs[0].rid : null;
+      await resolveAllDocs();
+    }
+
+    /**
+     * Recompute every coding's span from its anchor, for every loaded document.
+     *
+     * This is the whole point of the anchor design arriving at the surface: positions are
+     * not read from storage, they are re-derived from what each coding QUOTES against the
+     * text as it stands now. Runs whenever documents (re)load — mount, dataset switch,
+     * an import — so a cell edited since the coding was made is caught here rather than
+     * drawn wrongly.
+     *
+     * It writes nothing back. `driftReport` is what the UI shows.
+     */
+    async function resolveAllDocs() {
+      driftReport = { drifted: 0, orphaned: 0 };
+      for (const doc of docs) {
+        const segs = state.segments.filter((x) => x.doc === doc.rid);
+        if (!segs.length) continue;
+        const r = await resolveDocSegments(app, doc, segs);
+        driftReport.drifted += r.drifted;
+        driftReport.orphaned += r.orphaned;
+      }
     }
 
     // --- rendering -----------------------------------------------------------
@@ -557,13 +632,66 @@ export const workspace = {
       });
     }
 
+    /**
+     * Say what the resolver found, at the top of the document it found it in.
+     *
+     * The failure this replaces was silent: edit a transcript and every coding after the
+     * edit point covered different words, confidently, with nothing to indicate it. Even
+     * with no repair offered at all, saying "3 codings no longer match their text" beats
+     * a wrong highlight — a researcher's analysis rests on these.
+     */
+    function renderDriftBanner(doc) {
+      const segs = segsFor(doc.rid).filter(isUnsure);
+      if (!segs.length) return;
+      const lost = segs.filter((x) => !isPlaced(x)).length;
+      const moved = segs.length - lost;
+      const bar = el('div', 'caqdas__drift');
+      const bits = [];
+      if (lost) bits.push(`${lost} coding${lost === 1 ? '' : 's'} no longer match${lost === 1 ? 'es' : ''} this document`);
+      if (moved) bits.push(`${moved} approximate match${moved === 1 ? '' : 'es'}`);
+      bar.append(el('span', `⚠ ${bits.join(' · ')}`, 'caqdas__driftmsg'));
+      const show = el('button', 'caqdas__btn');
+      show.textContent = lost ? 'Review' : 'Details';
+      show.title = 'List the codings whose anchor no longer lands cleanly';
+      show.addEventListener('click', () => { reviewDoc = reviewDoc === doc.rid ? null : doc.rid; renderText(); });
+      bar.append(show);
+      textPane.append(bar);
+      if (reviewDoc !== doc.rid) return;
+      for (const sg of segs) {
+        const row = el('div', 'caqdas__driftrow');
+        const code = codeById(sg.codeId);
+        const sw = el('span', 'caqdas__sw'); sw.style.backgroundColor = code ? code.color : '#ccc';
+        row.append(sw, el('span', code ? code.name : '(code)', 'nm'));
+        row.append(el('span', sg.quote || '', 'q'));
+        row.append(el('span', sg.reason || sg.status, 'why'));
+        // Re-anchoring is a USER action, which is the whole point: the resolver reports,
+        // the human decides. Select the correct passage first, then press this.
+        const fix = el('button', 'caqdas__btn');
+        fix.textContent = 'Re-anchor to selection';
+        fix.title = 'Select the correct passage in the transcript, then click this';
+        fix.addEventListener('click', () => void reanchorToSelection(sg));
+        row.append(fix);
+        const rm = el('button', 'caqdas__segrm'); rm.textContent = '✕';
+        rm.title = 'Remove this coding';
+        rm.addEventListener('click', () => void removeCoding(sg));
+        row.append(rm);
+        textPane.append(row);
+      }
+    }
+
     function renderText() {
       textPane.textContent = '';
       if (retrieveCodeId) { renderRetrieve(); return; }
       const doc = docs.find((d) => d.rid === activeRid);
       if (!doc) { const e = el('div', 'caqdas__empty'); e.textContent = 'Select a document.'; textPane.append(e); return; }
       if (doc.kind === 'media') { void renderMedia(doc); return; }
-      const segs = segsFor(doc.rid).slice().sort((a, b) => a.start - b.start || a.end - b.end);
+      renderDriftBanner(doc);
+      // Only codings whose anchor still LANDS are drawn. An orphan has no position, and
+      // painting it at its last known offsets is precisely the confident-but-wrong
+      // highlight this design exists to remove; it is reported in the banner instead, and
+      // stays fully intact — its code, its quote and its notes — until the user re-anchors
+      // or removes it.
+      const segs = segsFor(doc.rid).filter(isPlaced).slice().sort((a, b) => a.start - b.start || a.end - b.end);
       // Boundary-split the text so overlapping codes still render; each run is
       // coloured by the FIRST covering segment (v1).
       const bounds = new Set([0, doc.text.length]);
@@ -607,15 +735,14 @@ export const workspace = {
         // Delete this coding straight from the list — faster than finding the
         // highlight in the transcript and removing it there. Removes only THIS
         // segment (the code itself stays in the codebook).
-        const rm = el('button', 'caqdas__segrm'); rm.textContent = '✕'; rm.title = 'Remove this coding';
-        rm.addEventListener('click', (e) => {
-          e.stopPropagation();
-          state.segments = state.segments.filter((x) => x !== s);
-          save(); renderText(); renderDocList(); renderCodes(); // renderText re-runs the retrieve list
-        });
+        const rm = el('button', 'caqdas__segrm'); rm.textContent = '✕'; rm.title = 'Remove this coding and its notes';
+        rm.addEventListener('click', (e) => { e.stopPropagation(); void removeCoding(s); });
         rl.append(rm);
         item.append(rl);
-        const tx = el('div'); tx.textContent = s.text; item.append(tx);
+        const tx = el('div'); tx.textContent = s.quote ?? ''; item.append(tx);
+        // A coding whose anchor no longer lands is still listed — it keeps its code and
+        // its notes — but it says so rather than pretending to point somewhere.
+        if (isUnsure(s)) item.append(el('div', `⚠ ${s.reason || s.status}`, 'caqdas__segwarn'));
         item.addEventListener('click', () => { activeRid = s.doc; retrieveCodeId = null; renderDocList(); renderText(); });
         textPane.append(item);
       }
@@ -894,7 +1021,7 @@ export const workspace = {
           return;
         }
         imageSel = rect;
-        if (activeCodeId) addRegionSegment(activeCodeId, imageSel); // paint mode
+        if (activeCodeId) void addRegionSegment(activeCodeId, imageSel); // paint mode
       };
       overlay.addEventListener('pointerup', finish);
       overlay.addEventListener('contextmenu', (e) => {
@@ -903,13 +1030,35 @@ export const workspace = {
       });
     }
 
+    /**
+     * The anchor for a media coding: the same cell target a text coding uses, plus the
+     * ASSET the region was drawn on.
+     *
+     * That last part is the whole difference. Media was the modality assumed safe because
+     * normalised coordinates cannot be moved by a text edit — but a media document is a
+     * cell holding asset *refs*, so the same `setCell` repoints it at different bytes, and
+     * a span at 4:32 stays a perfectly valid coordinate over a completely different
+     * recording. Asset ids are content hashes, so recording one turns that from
+     * undetectable into a single comparison.
+     */
+    const mediaAnchorFor = async (doc, selector) => ({
+      kind: 'cell',
+      target: docTarget(dsId, state.textColumn, doc.rid),
+      ref: await app.anchors.media(selector, doc.refs?.[0] ?? null),
+    });
+
     /** Record a region-coding segment (the 2-D analogue of {@link addSegment}). */
-    function addRegionSegment(codeId, region) {
+    async function addRegionSegment(codeId, region) {
+      const doc = docs.find((d) => d.rid === activeRid);
+      if (!doc) return;
+      const box = { x: round4(region.x), y: round4(region.y), w: round4(region.w), h: round4(region.h) };
       state.segments.push(authored({
         doc: activeRid,
         codeId,
-        region: { x: round4(region.x), y: round4(region.y), w: round4(region.w), h: round4(region.h) },
-        text: regionLabel(region), // a human label so retrieve/export/counts work unchanged
+        region: box,
+        anchor: await mediaAnchorFor(doc, { kind: 'rect', ...box }),
+        quote: regionLabel(region), // a human label so retrieve/export/counts work unchanged
+        status: 'exact',
       }));
       imageSel = null;
       save();
@@ -1007,7 +1156,7 @@ export const workspace = {
           return;
         }
         timeSel = { tStart: lo * dur, tEnd: hi * dur };
-        if (activeCodeId) addTimeSegment(activeCodeId, timeSel); // paint mode
+        if (activeCodeId) void addTimeSegment(activeCodeId, timeSel); // paint mode
       };
       track.addEventListener('pointerup', finish);
       track.addEventListener('contextmenu', (e) => {
@@ -1017,13 +1166,19 @@ export const workspace = {
     }
 
     /** Record a time-range coding segment (the time twin of {@link addRegionSegment}). */
-    function addTimeSegment(codeId, span) {
+    async function addTimeSegment(codeId, span) {
+      const doc = docs.find((d) => d.rid === activeRid);
+      if (!doc) return;
+      const tStart = round3(span.tStart);
+      const tEnd = round3(span.tEnd);
       state.segments.push(authored({
         doc: activeRid,
         codeId,
-        tStart: round3(span.tStart),
-        tEnd: round3(span.tEnd),
-        text: timeLabel(span.tStart, span.tEnd),
+        tStart,
+        tEnd,
+        anchor: await mediaAnchorFor(doc, { kind: 'time-span', tStart, tEnd }),
+        quote: timeLabel(span.tStart, span.tEnd),
+        status: 'exact',
       }));
       timeSel = null;
       save();
@@ -1066,7 +1221,7 @@ export const workspace = {
         }
         selEl?.remove(); selEl = null;
         if (activeTrack) upsertKeyframe(activeTrack, t, rect); // add a keyframe to the active track
-        else { videoSel = rect; if (activeCodeId) createTrack(activeCodeId, rect); } // else stage a new track
+        else { videoSel = rect; if (activeCodeId) void createTrack(activeCodeId, rect); } // else stage a new track
       });
       overlay.addEventListener('contextmenu', (e) => {
         if (!overlay.classList.contains('is-drawing')) return;
@@ -1076,18 +1231,37 @@ export const workspace = {
     }
 
     /** Start a new tracked region for a code at the current time (its first keyframe). */
-    function createTrack(codeId, region) {
+    async function createTrack(codeId, region) {
       const t = round3(currentMediaEl?.currentTime || 0);
+      const doc = docActive();
+      if (!doc) return;
+      const keys = [{ t, x: round4(region.x), y: round4(region.y), w: round4(region.w), h: round4(region.h) }];
       const seg = authored({
         doc: activeRid, codeId,
-        keys: [{ t, x: round4(region.x), y: round4(region.y), w: round4(region.w), h: round4(region.h) }],
-        tStart: t, tEnd: t, text: timeLabel(t, t),
+        keys,
+        tStart: t, tEnd: t,
+        anchor: await mediaAnchorFor(doc, { kind: 'rect-track', keys }),
+        quote: timeLabel(t, t),
+        status: 'exact',
       });
       state.segments.push(seg);
       activeTrack = seg; videoSel = null;
       save();
       refreshLanes(); renderCodes(); renderTrackToolbar();
       drawTrackBoxes(currentVideoOverlay, docActive(), t);
+    }
+
+    /** A tracked region's keyframes ARE its selector, so editing them has to update the
+     * anchor too — otherwise the stored reference slowly diverges from what is drawn, and
+     * the anchor stops describing the coding it belongs to. One place owns both, which is
+     * the field-ownership rule the same design applies to a text quote. */
+    function retrackAnchor(seg) {
+      seg.quote = timeLabel(seg.tStart, seg.tEnd);
+      if (!seg.anchor?.ref) return;
+      seg.anchor = {
+        ...seg.anchor,
+        ref: { ...seg.anchor.ref, selectors: [{ kind: 'rect-track', keys: seg.keys.map((k) => ({ ...k })) }] },
+      };
     }
 
     /** Insert or replace the keyframe at (about) time `t`, keeping keys time-sorted. */
@@ -1097,7 +1271,7 @@ export const workspace = {
       if (i >= 0) seg.keys[i] = key; else seg.keys.push(key);
       seg.keys.sort((a, b) => a.t - b.t);
       seg.tStart = seg.keys[0].t; seg.tEnd = seg.keys[seg.keys.length - 1].t;
-      seg.text = timeLabel(seg.tStart, seg.tEnd);
+      retrackAnchor(seg);
       if (!quiet) {
         save(); refreshLanes(); renderTrackToolbar();
         drawTrackBoxes(currentVideoOverlay, docActive(), currentMediaEl?.currentTime || 0);
@@ -1110,15 +1284,15 @@ export const workspace = {
       const i = seg.keys.findIndex((k) => Math.abs(k.t - t) < 0.25);
       if (i < 0) return;
       seg.keys.splice(i, 1);
-      if (!seg.keys.length) { state.segments = state.segments.filter((s) => s !== seg); activeTrack = null; }
-      else { seg.tStart = seg.keys[0].t; seg.tEnd = seg.keys[seg.keys.length - 1].t; seg.text = timeLabel(seg.tStart, seg.tEnd); }
+      if (!seg.keys.length) { removeSegmentAndNotes(seg); activeTrack = null; }
+      else { seg.tStart = seg.keys[0].t; seg.tEnd = seg.keys[seg.keys.length - 1].t; retrackAnchor(seg); }
       save(); refreshLanes(); renderCodes(); renderTrackToolbar();
       drawTrackBoxes(currentVideoOverlay, docActive(), t);
     }
 
     /** Remove an entire tracked region. */
     function removeTrack(seg) {
-      state.segments = state.segments.filter((s) => s !== seg);
+      removeSegmentAndNotes(seg);
       if (activeTrack === seg) activeTrack = null;
       save(); refreshLanes(); renderCodes(); renderTrackToolbar();
       drawTrackBoxes(currentVideoOverlay, docActive(), currentMediaEl?.currentTime || 0);
@@ -1426,8 +1600,7 @@ export const workspace = {
           if (!confirmInline(del, n
             ? `Delete “${book?.name}”, its ${doomed.length} code(s) and ${n} coding(s)?`
             : `Delete “${book?.name}” and its ${doomed.length} code(s)?`)) return;
-          state.codes = state.codes.filter((c) => !doomed.includes(c.id));
-          state.segments = state.segments.filter((sg) => !doomed.includes(sg.codeId));
+          dropCodes(doomed);
           state.codebooks = state.codebooks.filter((b) => b.id !== state.codebookId);
           state.codebookId = state.codebooks[0].id;
           picked = new Set();
@@ -1608,8 +1781,7 @@ export const workspace = {
         if (!confirmInline(btn, n
           ? `Delete ${doomed.length} code(s) and ${n} coding(s)?`
           : `Delete ${doomed.length} code(s)?`)) return;
-        state.codes = state.codes.filter((c) => !doomed.includes(c.id));
-        state.segments = state.segments.filter((sg) => !doomed.includes(sg.codeId));
+        dropCodes(doomed);
         picked = new Set();
         save();
         renderAll();
@@ -1766,8 +1938,7 @@ export const workspace = {
           x.addEventListener('click', (e) => {
             e.stopPropagation();
             if (activeCodeId === code.id) activeCodeId = null;
-            state.codes = state.codes.filter((c) => c.id !== code.id);
-            state.segments = state.segments.filter((s) => s.codeId !== code.id);
+            dropCodes([code.id]);
             save(); updatePaintUI(); renderAll();
           });
           // The workhorse gesture: apply this code to the current selection. mousedown
@@ -1781,9 +1952,9 @@ export const workspace = {
             // Media doc: apply to the drawn region (the 2-D analogue of a text span).
             const activeDoc = docs.find((d) => d.rid === activeRid);
             if (activeDoc && activeDoc.kind === 'media') {
-              if (imageSel) addRegionSegment(code.id, imageSel);
+              if (imageSel) void addRegionSegment(code.id, imageSel);
               else if (videoSel) createTrack(code.id, videoSel);
-              else if (timeSel) addTimeSegment(code.id, timeSel);
+              else if (timeSel) void addTimeSegment(code.id, timeSel);
               else flashHint(hint);
               return;
             }
@@ -1796,11 +1967,11 @@ export const workspace = {
               (s) => s.doc === activeRid && s.codeId === code.id && s.start <= span.lo && span.hi <= s.end,
             );
             if (enclosing.length) {
-              state.segments = state.segments.filter((s) => !enclosing.includes(s));
+              dropSegments((s) => enclosing.includes(s));
               save(); renderText(); renderDocList(); renderCodes();
               setSelectionRange(textPane, span.lo, span.hi); // keep selection for re-toggling
             } else {
-              addSegment(code.id, span);
+              void addSegment(code.id, span);
             }
           });
           r.append(sw, nm, ct, rb, mb, pb);
@@ -1871,15 +2042,133 @@ export const workspace = {
     // degenerate overlap (a no-op union). Adjacent-but-separate codings (no overlap)
     // are left alone — they may be deliberate, distinct references. Layering a
     // DIFFERENT code over the same text is unaffected (overlap is per-code).
-    const addSegment = (codeId, span, restore = true) => {
+    /**
+     * Build a text coding for a span of the active document: the anchor (what it quotes),
+     * the display quote, and the derived span for this session. One helper so the anchor
+     * and its label are written together and cannot drift apart.
+     */
+    const textCoding = async (codeId, doc, lo, hi) => {
+      const anchor = {
+        kind: 'cell',
+        target: docTarget(dsId, state.textColumn, doc.rid),
+        ref: await app.anchors.text(doc.text ?? '', lo, hi),
+      };
+      return {
+        doc: doc.rid,
+        codeId,
+        anchor,
+        quote: quoteOf(anchor),
+        // Derived for this session; stripped before storage.
+        start: lo,
+        end: hi,
+        status: 'exact',
+      };
+    };
+
+    // --- the edit vocabulary (#166 step 2) -----------------------------------
+    //
+    // Adjusting a coding used to be impossible: the only action was Remove, so fixing a
+    // one-character overshoot cost a delete and a re-mark — and with it the note thread,
+    // because notes anchor to the SEGMENT id. Charging a paragraph of analytic reasoning
+    // for a boundary nudge was the real defect, not the keystrokes.
+    //
+    // These three operations all preserve the segment's id, which is the entire trick.
+    // Notes survive because identity survives; there is no separate mechanism for it.
+
+    // --- cascade (#166 §8) ----------------------------------------------------
+    //
+    // A note DEPENDS ON what it annotates: it cascades on delete, and it never travels.
+    // Every removal path used to be a bare array filter, so notes outlived the codings
+    // and codes they were written about — reachable only through the host's orphan sweep.
+    // These helpers are the one place a removal happens, so the dependency is honoured
+    // whichever gesture triggered it.
+
+    /** Drop the notes anchored to a set of ids. */
+    const dropNotesFor = (ids) => {
+      if (!ids.size) return;
+      state.memos = (state.memos ?? []).filter((n) => !ids.has(n.anchorId));
+    };
+
+    /** Drop every coding matching `pred`, taking its notes with it. */
+    const dropSegments = (pred) => {
+      const going = state.segments.filter(pred);
+      if (!going.length) return 0;
+      dropNotesFor(new Set(going.map((x) => x.id).filter(Boolean)));
+      state.segments = state.segments.filter((x) => !going.includes(x));
+      return going.length;
+    };
+
+    /** Drop codes by id, cascading to their codings and every note on either. */
+    const dropCodes = (ids) => {
+      const doomed = new Set(ids);
+      if (!doomed.size) return;
+      dropSegments((sg) => doomed.has(sg.codeId));
+      dropNotesFor(doomed); // notes written on the CODE itself
+      state.codes = state.codes.filter((c) => !doomed.has(c.id));
+    };
+
+    /** Drop a coding and the notes that annotate it, without re-rendering — for callers
+     * mid-way through their own update. See {@link removeCoding} for the user action. */
+    const removeSegmentAndNotes = (seg) => { dropSegments((x) => x === seg); };
+
+    /** Move a coding to the passage the user has selected. */
+    const reanchorToSelection = async (seg) => {
+      const span = currentSpan();
+      if (!span) {
+        app.results?.appendError?.('Select the correct passage in the transcript first, then re-anchor.');
+        return;
+      }
+      const doc = docs.find((d) => d.rid === seg.doc);
+      if (!doc || doc.kind === 'media') return;
+      const fields = await textCoding(seg.codeId, doc, span.lo, span.hi);
+      // Assign onto the SAME object: same id, same author, same notes.
+      seg.anchor = fields.anchor;
+      seg.quote = fields.quote;
+      seg.start = fields.start;
+      seg.end = fields.end;
+      seg.status = 'exact';
+      seg.reason = null;
+      save();
+      renderText(); renderDocList(); renderCodes();
+    };
+
+    /** Change which code a coding carries, keeping the coding (and its notes) intact. */
+    const recodeSegment = (seg, codeId) => {
+      if (!codeId || codeId === seg.codeId) return;
+      seg.codeId = codeId;
+      save();
+      closeMenu();
+      refreshView();
+    };
+
+    /**
+     * Remove a coding AND the notes anchored to it.
+     *
+     * The old path was a bare array filter, so every note written on that coding outlived
+     * it — reachable only through the host's orphan sweep. A note depends on the coding it
+     * annotates; deleting one without the other leaves a note about nothing.
+     */
+    const removeCoding = async (seg) => {
+      removeSegmentAndNotes(seg);
+      save();
+      closeMenu();
+      refreshView();
+    };
+
+    const addSegment = async (codeId, span, restore = true) => {
       let { lo, hi } = span;
-      const overlaps = (s) => s.doc === activeRid && s.codeId === codeId && s.start < hi && lo < s.end;
+      // Overlap is judged on RESOLVED positions, so a coding whose anchor no longer lands
+      // (orphaned) can neither absorb nor be absorbed. Fusing a passage with something
+      // whose whereabouts are unknown is how two unrelated spans become one coding — the
+      // second-order hazard #164 flagged in this very function.
+      const overlaps = (s) => s.doc === activeRid && s.codeId === codeId && isPlaced(s) && s.start < hi && lo < s.end;
       const hits = state.segments.filter(overlaps);
+      const doc = docs.find((d) => d.rid === activeRid);
+      if (!doc) return;
       if (hits.length) {
         const memos = [];
         for (const s of hits) { lo = Math.min(lo, s.start); hi = Math.max(hi, s.end); if (s.memo) memos.push(s.memo); }
-        const doc = docs.find((d) => d.rid === activeRid);
-        const merged = authored({ doc: activeRid, codeId, start: lo, end: hi, text: doc ? doc.text.slice(lo, hi) : span.text });
+        const merged = authored(await textCoding(codeId, doc, lo, hi));
         if (memos.length) merged.memo = memos.join('\n'); // keep any legacy inline notes
         // Re-anchor annotation notes from the absorbed segments onto the merged one (#148).
         const hitIds = new Set(hits.map((s) => s.id).filter(Boolean));
@@ -1890,7 +2179,7 @@ export const workspace = {
         state.segments.push(merged);
         save();
       } else {
-        state.segments.push(authored({ doc: activeRid, codeId, start: lo, end: hi, text: span.text }));
+        state.segments.push(authored(await textCoding(codeId, doc, lo, hi)));
         save();
       }
       renderText(); renderDocList(); renderCodes();
@@ -1923,7 +2212,7 @@ export const workspace = {
     textPane.addEventListener('pointerup', (e) => {
       if (e.button !== 0 || !activeCodeId) return;
       const span = currentSpan();
-      if (span) addSegment(activeCodeId, span, false); // paint: clear selection, move on
+      if (span) void addSegment(activeCodeId, span, false); // paint: clear selection, move on
     });
 
     function openAssignMenu(span, evt) {
@@ -1931,10 +2220,10 @@ export const workspace = {
       menu = el('div', 'caqdas__menu');
       const choose = (codeId) => {
         closeMenu();
-        if (span && span.kind === 'region') addRegionSegment(codeId, span.region);
+        if (span && span.kind === 'region') void addRegionSegment(codeId, span.region);
         else if (span && span.kind === 'vregion') createTrack(codeId, span.region);
-        else if (span && span.kind === 'time') addTimeSegment(codeId, span.span);
-        else addSegment(codeId, span);
+        else if (span && span.kind === 'time') void addTimeSegment(codeId, span.span);
+        else void addSegment(codeId, span);
       };
       for (const code of codesInBook(state)) {
         const b = el('button');
@@ -1976,13 +2265,34 @@ export const workspace = {
         const head = el('div', 'caqdas__seghead');
         const sw = el('span', 'caqdas__sw'); sw.style.backgroundColor = code ? code.color : '#ccc';
         const nm = el('span', 'nm'); nm.textContent = code ? code.name : '(code)';
-        const rm = el('button', 'caqdas__segrm'); rm.textContent = 'Remove'; rm.title = 'Remove this coding';
-        rm.addEventListener('click', (e) => {
-          e.stopPropagation();
-          state.segments = state.segments.filter((s) => s !== seg);
-          save(); closeMenu(); refreshView();
-        });
+        const rm = el('button', 'caqdas__segrm'); rm.textContent = 'Remove'; rm.title = 'Remove this coding and its notes';
+        rm.addEventListener('click', (e) => { e.stopPropagation(); void removeCoding(seg); });
         head.append(sw, nm, rm); menu.append(head);
+
+        // Adjust, rather than delete-and-redo. Both keep the segment id, so the notes
+        // thread below survives the edit — which is the whole reason these exist.
+        const tools = el('div', 'caqdas__segtools');
+        const move = el('button', 'caqdas__btn');
+        move.textContent = '⇔ Re-anchor to selection';
+        move.title = 'Select the correct passage, then click this — the coding keeps its notes';
+        move.addEventListener('click', (e) => { e.stopPropagation(); void reanchorToSelection(seg); });
+        tools.append(move);
+
+        const swap = el('select');
+        swap.title = 'Change which code this passage carries (keeps its notes)';
+        const none = el('option'); none.value = ''; none.textContent = 'Change code…'; swap.append(none);
+        for (const c of codesInBook(state)) {
+          if (c.id === seg.codeId) continue;
+          const o = el('option'); o.value = c.id; o.textContent = c.name; swap.append(o);
+        }
+        swap.addEventListener('click', (e) => e.stopPropagation());
+        swap.addEventListener('change', () => recodeSegment(seg, swap.value));
+        tools.append(swap);
+        menu.append(tools);
+
+        if (isUnsure(seg)) {
+          menu.append(el('div', `⚠ ${seg.reason || seg.status}`, 'caqdas__segwarn'));
+        }
         menu.append(renderThread('segment', seg, refreshView)); // author-stamped notes thread (#148)
       }
       menu.style.left = Math.round(evt.clientX) + 'px';
@@ -2015,7 +2325,7 @@ export const workspace = {
       const header = state.labelColumn || 'Document';
       const rows = state.segments.map((s) => {
         const c = codeById(s.codeId);
-        return [labelFor[s.doc] ?? '?', c?.group || '—', c?.name ?? '?', s.text, s.memo || ''];
+        return [labelFor[s.doc] ?? '?', c?.group || '—', c?.name ?? '?', s.quote ?? '', s.memo || ''];
       });
       await app.results.beginAnalysis('Coded segments');
       await app.results.appendTable({ columns: [header, 'Theme', 'Code', 'Text', 'Memo'], rows });
@@ -2077,11 +2387,15 @@ export const workspace = {
     /** Resolve a just-imported QDPX project's codings (keyed by row index) into real
      * segments now that docs (with row-ids) are loaded, then clear the marker + save.
      * Rows are in source order, so `docs[row]` is the source that coding belongs to. */
-    function resolvePendingImport() {
+    async function resolvePendingImport() {
       const pending = state.pendingImport;
       if (!pending) return;
       const have = new Set(state.codes.map((c) => c.id));
-      const { codes, segments, dropped } = resolveImportedCodings(pending, docs, have);
+      const { codes, segments, dropped } = await resolveImportedCodings(pending, docs, have, {
+        targetFor: (doc) => docTarget(dsId, state.textColumn, doc.rid),
+        textRef: (text, a, b) => app.anchors.text(text, a, b),
+        mediaRef: (sel, assetId) => app.anchors.media(sel, assetId),
+      });
       // Codes FIRST: the segments reference them, and `save()` writes both collections
       // in one pass, so a code has to exist in `state` before its codings do.
       state.codes.push(...codes);
@@ -2114,13 +2428,13 @@ export const workspace = {
       tracking = false;
       await populateColumns();
       await loadDocs();
-      if (state.pendingImport) resolvePendingImport();
+      if (state.pendingImport) await resolvePendingImport();
       renderAll();
     };
 
     // --- go ------------------------------------------------------------------
     await loadDocs();
-    if (state.pendingImport) resolvePendingImport();
+    if (state.pendingImport) await resolvePendingImport();
     renderAll();
   },
 
@@ -2190,7 +2504,7 @@ function buildThemedCloud(state, codeById) {
     const theme = (code.group && code.group.trim()) || code.name;
     if (!themeMap.has(theme)) { themeMap.set(theme, new Map()); order.push(theme); }
     const wmap = themeMap.get(theme);
-    for (const w of tokenize(s.text || '', 3)) {
+    for (const w of tokenize(s.quote || '', 3)) {
       let rec = wmap.get(w);
       if (!rec) { rec = { count: 0, byCode: {} }; wmap.set(w, rec); }
       rec.count++;
@@ -2287,7 +2601,9 @@ function resetPersisted(state) {
   persisted = {
     codebooks: new Map((state.codebooks ?? []).map((b) => [b.id, clone(b)])),
     codes: new Map((state.codes ?? []).map((c) => [c.id, clone(c)])),
-    segments: new Map((state.segments ?? []).map((x) => [x.id, clone(x)])),
+    // Shadow the STORED shape, not the in-memory one: a segment's span is derived per
+    // session, so shadowing it would make every load look like a pending change.
+    segments: new Map((state.segments ?? []).map((x) => [x.id, clone({ id: x.id, ...persistableSegment(x) })])),
     memos: new Map((state.memos ?? []).map((m) => [m.id, clone(m)])),
   };
 }
@@ -2317,6 +2633,99 @@ function memoBack(m) {
     createdAt: m.createdAt || 0,
   };
 }
+
+// =====================================================================
+// Anchoring (#166)
+// =====================================================================
+//
+// A coding used to say where it sat: `{doc, start, end}`, two integers into a cell's
+// text. Editing that cell moved every coding after the edit point and nothing noticed —
+// the highlight simply covered different words, confidently and silently.
+//
+// It now says what it REFERS TO. `anchor` is a host anchor (core/anchors.js): the cell's
+// op-log target plus selectors describing the region inside it, quote first and position
+// second. The quote is the truth; the position is a cache.
+//
+// `start`/`end` still exist on the in-memory segment, and every render path still reads
+// them — but they are now DERIVED, filled in by {@link resolveDocSegments} from the
+// anchor against the text as it is right now, and never persisted. That is what makes
+// "position is a cache" literal rather than a slogan: the cache lives for the length of a
+// session and is recomputed from the anchor every time the document is loaded.
+//
+// Resolution NEVER writes. It runs on render, and a drifted coding is reported rather
+// than repaired — repairing on read would turn opening the tab into an edit, which is the
+// mount-must-never-write rule this plugin already learned the hard way.
+
+/** Fields that exist only for this session — derived from the anchor, never persisted. */
+const DERIVED = ['start', 'end', 'status', 'reason'];
+
+/** A segment record as it is STORED: the reference, not the position. */
+export function persistableSegment(seg) {
+  const out = {};
+  for (const [k, v] of Object.entries(seg)) {
+    if (k === 'id' || DERIVED.includes(k)) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+/** The label a coding shows in History and the sidebar — its own words, truncated. Kept
+ * beside the anchor and written by the SAME helper, so the two can never disagree about
+ * what the coding says (the field-ownership trap #166 flagged). */
+export function quoteOf(anchor, fallback = '') {
+  const q = (anchor?.ref?.selectors ?? []).find((x) => x.kind === 'text-quote');
+  const text = q?.exact ?? fallback;
+  return text.length > 80 ? `${text.slice(0, 79)}…` : text;
+}
+
+/** The op-log address of the cell a document lives in — byte-identical to what `setCell`
+ * writes, which is what lets the host derive this coding's `reads[]` from it. */
+export function docTarget(dsId, column, rid) {
+  return `ds:${dsId}/cell:${column}:${rid}`;
+}
+
+/**
+ * Resolve every coding on one document against its CURRENT content, writing the derived
+ * span onto each in-memory segment. One host round trip per document, not per coding.
+ *
+ * Returns a summary of what needs the user's attention, so the caller can say so without
+ * walking the segments again.
+ */
+export async function resolveDocSegments(app, doc, segs, ctx) {
+  if (!segs.length) return { drifted: 0, orphaned: 0 };
+  const subject = doc.kind === 'media'
+    ? { kind: 'media', assetId: doc.refs?.[0] ?? null, duration: ctx?.duration }
+    : { kind: 'text', text: doc.text ?? '' };
+  let results;
+  try {
+    // The REF is what resolves — the anchor's target says which cell, its ref says where
+    // inside it. Passing the whole anchor makes every coding unresolvable, silently.
+    results = await app.anchors.resolve(segs.map((s) => s.anchor?.ref ?? null), subject);
+  } catch (e) {
+    console.warn('[caqdas] anchor resolve failed', e);
+    return { drifted: 0, orphaned: 0 };
+  }
+  let drifted = 0;
+  let orphaned = 0;
+  segs.forEach((seg, i) => {
+    const r = results[i] ?? { status: 'unresolvable' };
+    seg.status = r.status;
+    seg.reason = r.reason ?? null;
+    // An orphan has no position at all. Leaving the old numbers would put a highlight
+    // somewhere arbitrary, which is the exact failure this design exists to remove.
+    seg.start = typeof r.start === 'number' ? r.start : null;
+    seg.end = typeof r.end === 'number' ? r.end : null;
+    if (r.status === 'orphaned' || r.status === 'unresolvable') orphaned++;
+    else if (r.status === 'drifted' || r.status === 'ambiguous') drifted++;
+  });
+  return { drifted, orphaned };
+}
+
+/** Is this coding safe to draw where it says it is? */
+const isPlaced = (s) => typeof s.start === 'number' && typeof s.end === 'number';
+
+/** Does this coding want the user told something about it? */
+const isUnsure = (s) => s.status && s.status !== 'exact' && s.status !== 'moved';
 
 /** Build the working state from the host's records + the config blob. */
 async function loadState(app) {
@@ -2355,7 +2764,32 @@ async function loadState(app) {
   return state;
 }
 
-/** Write whatever actually changed: one op per changed record, plus the config blob. */
+/**
+ * The fields that actually changed on one record, or null if nothing did.
+ *
+ * `putItem` shallow-MERGES its fields, so writing only the delta is not a micro-
+ * optimisation — it is what lets two coders edit one coding and both survive. Sending the
+ * whole record (what this used to do) made every field collide, so a boundary adjustment
+ * and a code change on the same coding fought, and HLC order silently discarded one. In
+ * the plugin whose per-coder records exist precisely to stop a coder's work being thrown
+ * away, that was the wrong default.
+ *
+ * A field that has gone away is written as `null` rather than omitted: the merge cannot
+ * tell an absent key from an unmentioned one, so removal has to be said out loud.
+ */
+export function fieldDelta(prev, next) {
+  const delta = {};
+  for (const [k, v] of Object.entries(next)) {
+    if (k === 'id') continue;
+    if (!prev || !same(prev[k], v)) delta[k] = v;
+  }
+  for (const k of Object.keys(prev ?? {})) {
+    if (k !== 'id' && !(k in next)) delta[k] = null;
+  }
+  return Object.keys(delta).length ? delta : null;
+}
+
+/** Write whatever actually changed: one narrow op per changed record, plus the config. */
 async function syncState(app, state) {
   // Config (small, identity-free) stays a blob — but strip the collections out of it so
   // the same data never lives in two places.
@@ -2363,17 +2797,26 @@ async function syncState(app, state) {
   await app.state.set(cfg);
 
   for (const [collection, arr] of [['codebooks', codebooks ?? []], ['codes', codes ?? []], ['segments', segments ?? []]]) {
-    const now = new Map(arr.filter((x) => x && x.id).map((x) => [x.id, x]));
+    // Segments carry derived spans for the session; only the reference is stored.
+    const shape = collection === 'segments'
+      ? (x) => ({ id: x.id, ...persistableSegment(x) })
+      : (x) => x;
+    const now = new Map(arr.filter((x) => x && x.id).map((x) => [x.id, shape(x)]));
     for (const [id, val] of now) {
-      const prev = persisted[collection].get(id);
-      if (prev && same(prev, val)) continue;
-      const { id: _drop, ...fields } = val;
-      await app.items.put(collection, id, fields);
+      const delta = fieldDelta(persisted[collection].get(id), val);
+      if (!delta) continue;
+      await app.items.put(collection, id, delta);
+      // Re-clone only what moved. The old code re-cloned the WHOLE collection on every
+      // save, which is why nudging one boundary cost 106ms across a 25k-coding corpus —
+      // measured, not guessed (scripts/log-stress.mjs).
+      persisted[collection].set(id, clone(val));
     }
-    for (const id of persisted[collection].keys()) {
-      if (!now.has(id)) await app.items.remove(collection, id);
+    for (const id of [...persisted[collection].keys()]) {
+      if (!now.has(id)) {
+        await app.items.remove(collection, id);
+        persisted[collection].delete(id);
+      }
     }
-    persisted[collection] = new Map([...now].map(([k, v]) => [k, clone(v)]));
   }
 
   // Memos go to the HOST collection, not one of ours (#152 Layer 2): a note written on a
@@ -2484,7 +2927,7 @@ export async function importCodebookCsv(app, args = {}) {
  * @param {Set<string>} haveCodeIds ids already present, so a re-run cannot duplicate
  * @returns {{codes:object[], segments:object[], dropped:number}}
  */
-export function resolveImportedCodings(pending, docs, haveCodeIds = new Set()) {
+export async function resolveImportedCodings(pending, docs, haveCodeIds = new Set(), ctx = {}) {
   const out = { codes: [], segments: [], dropped: 0 };
   if (!pending || typeof pending !== 'object') return out;
 
@@ -2500,16 +2943,37 @@ export function resolveImportedCodings(pending, docs, haveCodeIds = new Set()) {
     // repaired by hand. Counting them makes the loss reportable instead of invisible.
     if (!doc || !pc.codeId || !pc.data || !known.has(pc.codeId)) { out.dropped++; continue; }
     const memo = typeof pc.memo === 'string' ? pc.memo : '';
+    // An imported coding arrives as raw offsets into a foreign document, which is exactly
+    // the fragile shape this design replaced. Convert at the boundary: quote the text the
+    // offsets point at NOW, so an import lands as a proper content anchor and inherits
+    // every guarantee a locally-made coding has. Anchors are built from `ctx.anchor` (the
+    // host's builders) when available; without them the coding still imports, carrying a
+    // position-only anchor that reports itself as unverifiable rather than pretending.
+    const target = ctx.targetFor ? ctx.targetFor(doc) : null;
+    const wrap = (ref) => (target && ref ? { kind: 'cell', target, ref } : undefined);
     if (pc.type === 'text') {
       const start = pc.data.start | 0;
       const end = pc.data.end | 0;
-      const text = doc.kind === 'text' ? String(doc.text || '').slice(start, end) : '';
-      out.segments.push({ doc: doc.rid, codeId: pc.codeId, start, end, text, memo });
+      const full = doc.kind === 'text' ? String(doc.text || '') : '';
+      const quote = full.slice(start, end);
+      const ref = ctx.textRef
+        ? await ctx.textRef(full, start, end)
+        : { selectors: [{ kind: 'text-position', start, end }] };
+      out.segments.push({ doc: doc.rid, codeId: pc.codeId, anchor: wrap(ref), quote, memo });
     } else if (pc.type === 'region') {
       const g = pc.data;
-      out.segments.push({ doc: doc.rid, codeId: pc.codeId, region: { x: round4(g.x), y: round4(g.y), w: round4(g.w), h: round4(g.h) }, text: regionLabel(g), memo });
+      const box = { x: round4(g.x), y: round4(g.y), w: round4(g.w), h: round4(g.h) };
+      const ref = ctx.mediaRef
+        ? await ctx.mediaRef({ kind: 'rect', ...box }, doc.refs?.[0] ?? null)
+        : { selectors: [{ kind: 'rect', ...box }] };
+      out.segments.push({ doc: doc.rid, codeId: pc.codeId, region: box, anchor: wrap(ref), quote: regionLabel(g), memo });
     } else if (pc.type === 'time') {
-      out.segments.push({ doc: doc.rid, codeId: pc.codeId, tStart: round3(pc.data.tStart), tEnd: round3(pc.data.tEnd), text: timeLabel(pc.data.tStart, pc.data.tEnd), memo });
+      const tStart = round3(pc.data.tStart);
+      const tEnd = round3(pc.data.tEnd);
+      const ref = ctx.mediaRef
+        ? await ctx.mediaRef({ kind: 'time-span', tStart, tEnd }, doc.refs?.[0] ?? null)
+        : { selectors: [{ kind: 'time-span', tStart, tEnd }] };
+      out.segments.push({ doc: doc.rid, codeId: pc.codeId, tStart, tEnd, anchor: wrap(ref), quote: timeLabel(pc.data.tStart, pc.data.tEnd), memo });
     } else {
       out.dropped++;
     }
@@ -2881,9 +3345,19 @@ export async function exportQdpx(app) {
       // Text document → TextSource + PlainTextSelections.
       const fname = guid + '.txt';
       files.push({ name: 'Sources/' + fname, data: cell });
-      const sels = segs.filter((s) => s.start != null).map((s) =>
-        `<PlainTextSelection guid="${qdpxUuid()}" startPosition="${s.start}" endPosition="${s.end}">${codingXml(s, codeGuid)}</PlainTextSelection>`,
-      );
+      // Positions are derived, not stored (#166), and this runs in the compute frame
+      // where nothing has resolved them yet — so resolve here, against the very text
+      // being written into the archive. That is what keeps the exported offsets true to
+      // the exported document rather than to whatever it said when it was coded.
+      const placed = await app.anchors.resolve(segs.map((x) => x.anchor?.ref ?? null), { kind: 'text', text: cell });
+      const sels = segs.map((x, i) => ({ seg: x, at: placed[i] }))
+        // An unresolvable coding is DROPPED from the export rather than written at a
+        // guessed offset: a QDPX consumed by another tool has no way to see a warning,
+        // so a wrong span there is worse than an absent one.
+        .filter(({ at }) => typeof at?.start === 'number')
+        .map(({ seg, at }) =>
+          `<PlainTextSelection guid="${qdpxUuid()}" startPosition="${at.start}" endPosition="${at.end}">${codingXml(seg, codeGuid)}</PlainTextSelection>`,
+        );
       sourceEls.push(`<TextSource guid="${guid}" name="${xesc(label)}" plainTextPath="internal://${fname}">${sels.join('')}</TextSource>`);
       continue;
     }

@@ -27,8 +27,8 @@ const CODES = [
   { id: 'c_b', name: 'Delay', color: '#E69F00', group: '', memo: '' },
 ];
 
-test('imported codes come back — the whole bug', () => {
-  const { codes } = resolveImportedCodings({ codes: CODES, codings: [] }, DOCS);
+test('imported codes come back — the whole bug', async () => {
+  const { codes } = await resolveImportedCodings({ codes: CODES, codings: [] }, DOCS);
   assert.equal(codes.length, 2);
   assert.deepEqual(codes.map((c) => c.name), ['Trust', 'Delay']);
   // Colour and theme ride along; a codebook that arrives colourless is half a codebook.
@@ -36,20 +36,25 @@ test('imported codes come back — the whole bug', () => {
   assert.equal(codes[0].group, 'Relational');
 });
 
-test('codings resolve row INDEX to row id', () => {
+test('codings resolve row INDEX to row id', async () => {
   // At import time no dataset exists, so no __ct_rid values do either — codings can
   // only address documents positionally until the mount binds them.
-  const { segments } = resolveImportedCodings({
+  const { segments } = await resolveImportedCodings({
     codes: CODES,
     codings: [{ row: 0, codeId: 'c_a', type: 'text', data: { start: 4, end: 9 } }],
   }, DOCS);
   assert.equal(segments.length, 1);
   assert.equal(segments[0].doc, 'r1', 'row 0 became r1');
-  assert.equal(segments[0].text, 'quick', 'the span text is sliced from the document');
+  assert.equal(segments[0].quote, 'quick', 'the span text is sliced from the document');
+  // An import arrives as raw offsets into a foreign document — the fragile shape #166
+  // replaced — so it is converted at the boundary into a position anchor that reports
+  // itself as unverifiable, rather than one that silently claims to be exact.
+  assert.deepEqual(segments[0].anchor?.ref?.selectors ?? segments[0].anchorRefFallback,
+    undefined, 'no host builders passed ⇒ no wrapped anchor');
 });
 
-test('all three selector kinds survive the trip', () => {
-  const { segments } = resolveImportedCodings({
+test('all three selector kinds survive the trip', async () => {
+  const { segments } = await resolveImportedCodings({
     codes: CODES,
     codings: [
       { row: 0, codeId: 'c_a', type: 'text', data: { start: 0, end: 3 } },
@@ -60,13 +65,13 @@ test('all three selector kinds survive the trip', () => {
   assert.equal(segments.length, 3);
   assert.ok(segments[1].region, 'image region kept');
   assert.equal(segments[2].tStart, 1.5, 'time span kept');
-  assert.ok(segments[1].text && segments[2].text, 'each carries a human label for retrieve/export');
+  assert.ok(segments[1].quote && segments[2].quote, 'each carries a human label for retrieve/export');
 });
 
-test('a coding whose code did not survive is DROPPED, not left dangling', () => {
+test('a coding whose code did not survive is DROPPED, not left dangling', async () => {
   // A segment pointing at a missing code renders as "(code)" and cannot be repaired by
   // hand. Better to drop it and say so than to keep a reference that lies.
-  const r = resolveImportedCodings({
+  const r = await resolveImportedCodings({
     codes: CODES,
     codings: [
       { row: 0, codeId: 'c_a', type: 'text', data: { start: 0, end: 3 } },
@@ -78,8 +83,8 @@ test('a coding whose code did not survive is DROPPED, not left dangling', () => 
   assert.ok(r.segments.every((sg) => sg.codeId === 'c_a'));
 });
 
-test('a coding pointing past the end of the documents is dropped', () => {
-  const r = resolveImportedCodings({
+test('a coding pointing past the end of the documents is dropped', async () => {
+  const r = await resolveImportedCodings({
     codes: CODES,
     codings: [{ row: 99, codeId: 'c_a', type: 'text', data: { start: 0, end: 3 } }],
   }, DOCS);
@@ -87,26 +92,26 @@ test('a coding pointing past the end of the documents is dropped', () => {
   assert.equal(r.dropped, 1);
 });
 
-test('re-running cannot duplicate codes that already exist', () => {
+test('re-running cannot duplicate codes that already exist', async () => {
   // resolvePendingImport runs at mount; a remount with the flag still set must not
   // double the codebook.
-  const { codes } = resolveImportedCodings({ codes: CODES, codings: [] }, DOCS, new Set(['c_a']));
+  const { codes } = await resolveImportedCodings({ codes: CODES, codings: [] }, DOCS, new Set(['c_a']));
   assert.deepEqual(codes.map((c) => c.id), ['c_b']);
 });
 
-test('an import with codes but no codings still yields the codebook', () => {
+test('an import with codes but no codings still yields the codebook', async () => {
   // The old guard returned early unless `codings` was an array, so importing a bare
   // codebook threw everything away.
-  const { codes, segments } = resolveImportedCodings({ codes: CODES }, DOCS);
+  const { codes, segments } = await resolveImportedCodings({ codes: CODES }, DOCS);
   assert.equal(codes.length, 2);
   assert.equal(segments.length, 0);
 });
 
-test('junk in, nothing out — never a throw', () => {
+test('junk in, nothing out — never a throw', async () => {
   for (const bad of [null, undefined, {}, { codes: 'nope', codings: 'nope' }, { codings: [null, {}] }]) {
-    assert.doesNotThrow(() => resolveImportedCodings(bad, DOCS));
+    await assert.doesNotReject(() => resolveImportedCodings(bad, DOCS));
   }
-  assert.deepEqual(resolveImportedCodings(null, DOCS), { codes: [], segments: [], dropped: 0 });
+  assert.deepEqual(await resolveImportedCodings(null, DOCS), { codes: [], segments: [], dropped: 0 });
   // A code with no id cannot be referenced by any coding, so it is not a code.
-  assert.deepEqual(resolveImportedCodings({ codes: [{ name: 'x' }] }, DOCS).codes, []);
+  assert.deepEqual((await resolveImportedCodings({ codes: [{ name: 'x' }] }, DOCS)).codes, []);
 });

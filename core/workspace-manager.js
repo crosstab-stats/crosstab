@@ -21,8 +21,30 @@ import { Lifecycle, advisory } from './plugin-lifecycle.js';
 import { ownerToken, DEFAULT_SLOT, NO_DS } from './workspace-store.js';
 import { newItemId } from './item-store.js';
 import { declaredCollections, assetRefDecls } from './collections.js';
+import { textRef, mediaRef, resolveAnchor } from './anchors.js';
 import { scopedAssetList } from './asset-store.js';
 import { debug } from './debug.js';
+
+/**
+ * The op-log targets a record DEPENDS ON, read off its declared anchor fields.
+ *
+ * Declared rather than inferred, for the same reason `assetRefs` and `rowRefs` are: the
+ * host cannot tell an anchor from any other object in an opaque `fields` blob, and
+ * guessing would attach causal edges to the wrong things. A partial update that does not
+ * mention its anchor field contributes nothing here — the edge was already recorded by
+ * the op that wrote the anchor, and re-deriving it from a narrow put would require
+ * reading back state this function deliberately does not have.
+ */
+function anchorTargets(plugin, owner, collection, fields) {
+  const decl = declaredCollections([plugin], () => owner).find((d) => d.id === String(collection));
+  if (!decl?.anchorRefs?.length || !fields) return [];
+  const out = [];
+  for (const field of decl.anchorRefs) {
+    const target = fields[field]?.target;
+    if (typeof target === 'string' && target && !out.includes(target)) out.push(target);
+  }
+  return out;
+}
 
 const API_VERSION = '1';
 
@@ -316,6 +338,13 @@ export class WorkspaceManager {
           const ds = services.collectionDs(collection);
           this.#items.put(owner, String(collection), itemId, fields ?? {}, {
             scope: { wsId: ws.id, dsId: ds === NO_DS ? null : ds },
+            // Causal edges are DERIVED from the collection's declared `anchorRefs`, not
+            // asked of the plugin (#166). A plugin says once, in its manifest, which
+            // fields hold anchors; every record it writes then declares what it depends
+            // on without the plugin thinking about `reads[]` at all. That is what makes
+            // this general rather than a CAQDAS favour — any plugin that anchors into
+            // data gets drift detection on the same terms.
+            reads: anchorTargets(plugin, owner, collection, fields),
           });
           return itemId;
         },
@@ -332,6 +361,16 @@ export class WorkspaceManager {
           return this.#items.list(owner, String(collection), { dsId: dsKey })
             .map((r) => ({ id: r.id, fields: r.fields, author: r.author ?? null }));
         },
+      },
+      // Anchors (#166): build and resolve a reference to a REGION of something the log
+      // addresses. Host-owned deliberately — resolution of the standard selector kinds
+      // must not depend on the plugin being activated, or a deactivated plugin's records
+      // could not be reported as stale. `resolve` takes a BATCH so a workspace renders a
+      // document in one round trip rather than one per coding.
+      anchors: {
+        text: (text, start, end) => textRef(text, start, end),
+        media: (selector, assetId) => mediaRef(selector, assetId),
+        resolve: (refs, subject) => (Array.isArray(refs) ? refs : [refs]).map((r) => resolveAnchor(r, subject)),
       },
       // The selection, bound to this plugin so it reads its OWN collections (#153).
       selection: {

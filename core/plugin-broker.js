@@ -157,6 +157,14 @@ export class PluginBroker {
       this.#dispatch['items.remove'] = (collection, id) => services.items.remove(collection, id);
       this.#dispatch['items.list'] = (collection) => services.items.list(collection);
     }
+    // Anchors (#166): build/resolve a reference to a REGION of an addressed thing.
+    // Pure and host-owned — see the service in workspace-manager for why resolution
+    // must not live in the plugin.
+    if (services.anchors) {
+      this.#dispatch['anchors.text'] = (text, start, end) => services.anchors.text(text, start, end);
+      this.#dispatch['anchors.media'] = (selector, assetId) => services.anchors.media(selector, assetId);
+      this.#dispatch['anchors.resolve'] = (refs, subject) => services.anchors.resolve(refs, subject);
+    }
     // Codec plugins (#98): the streaming format-codec surface — random source-byte
     // access + streaming ingest on read, output-byte emit on write, and
     // host-allowlisted dependency loading. Live only during a codec invocation.
