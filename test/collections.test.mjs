@@ -15,6 +15,9 @@ import {
   recordLabel,
   undeclaredItemsGuard,
   CORE_COLLECTIONS,
+  anchorRefDecls,
+  childrenOf,
+  surfacesConflicts,
 } from '../core/collections.js';
 
 const ownerOf = (p) => (p.builtin ? 'builtin' : `plugin:${p.id}`);
@@ -23,7 +26,7 @@ test('a full declaration normalises unchanged', () => {
   const full = {
     id: 'boundarySets', label: 'Map layers', labelField: 'fileName',
     summaryField: 'featureCount', sidebar: 'list', assetRefs: ['assetId'], portable: true,
-    scope: 'project', rowRefs: [],
+    scope: 'project', rowRefs: [], anchorRefs: [], parent: null, onConcurrentEdit: 'lww',
   };
   assert.deepEqual(normalizeCollection(full), full);
 });
@@ -200,4 +203,67 @@ test('rowRefs is declared, never inferred', () => {
   assert.deepEqual(normalizeCollection({ id: 'x', rowRefs: 'doc' }).rowRefs, [], 'a bare string is not a list');
   assert.deepEqual(normalizeCollection({ id: 'x', rowRefs: ['doc', 7, '', null] }).rowRefs, ['doc'],
     'junk entries are dropped, the good one survives');
+});
+
+// --- anchors, composition, conflict policy (#166) ----------------------------
+
+test('anchorRefs are declared, never inferred — and malformed entries are dropped', () => {
+  const d = normalizeCollection({ id: 'segments', anchorRefs: ['anchor', '', 42, 'other'] });
+  assert.deepEqual(d.anchorRefs, ['anchor', 'other']);
+  assert.deepEqual(normalizeCollection({ id: 'x' }).anchorRefs, []);
+});
+
+test('anchorRefDecls flattens to (owner, collection, field), like assetRefDecls', () => {
+  const decls = [
+    { owner: 'builtin-caqdas', id: 'segments', anchorRefs: ['anchor'] },
+    { owner: 'core', id: 'memos', anchorRefs: [] },
+  ];
+  assert.deepEqual(anchorRefDecls(decls), [
+    { owner: 'builtin-caqdas', collection: 'segments', field: 'anchor' },
+  ]);
+});
+
+test('a parent needs BOTH coordinates — half a declaration is dropped, not half-honoured', () => {
+  assert.deepEqual(
+    normalizeCollection({ id: 'codes', parent: { collection: 'codebooks', field: 'codebookId' } }).parent,
+    { collection: 'codebooks', field: 'codebookId' },
+  );
+  assert.equal(normalizeCollection({ id: 'codes', parent: { collection: 'codebooks' } }).parent, null);
+  assert.equal(normalizeCollection({ id: 'codes', parent: { field: 'codebookId' } }).parent, null);
+  assert.equal(normalizeCollection({ id: 'codes' }).parent, null);
+});
+
+test('childrenOf finds what is COMPOSED into a record, and only within one owner', () => {
+  const decls = [
+    { owner: 'builtin-caqdas', id: 'codes', parent: { collection: 'codebooks', field: 'codebookId' } },
+    { owner: 'builtin-caqdas', id: 'segments', parent: null },
+    { owner: 'other-plugin', id: 'things', parent: { collection: 'codebooks', field: 'codebookId' } },
+  ];
+  const kids = childrenOf(decls, 'builtin-caqdas', 'codebooks');
+  assert.deepEqual(kids.map((d) => d.id), ['codes']);
+  assert.deepEqual(childrenOf(decls, 'builtin-caqdas', 'codes'), []);
+});
+
+test('a dependency (segment → code) is NOT composition — it must never travel', () => {
+  // Declared with no `parent`: segments reference a code but are not part of a codebook.
+  // This is the guard against a shared codebook carrying participant passages with it.
+  const decls = [{ owner: 'builtin-caqdas', id: 'segments', parent: null }];
+  assert.deepEqual(childrenOf(decls, 'builtin-caqdas', 'codes'), []);
+});
+
+test('onConcurrentEdit defaults to lww and only the exact opt-in changes it', () => {
+  assert.equal(normalizeCollection({ id: 'x' }).onConcurrentEdit, 'lww');
+  assert.equal(normalizeCollection({ id: 'x', onConcurrentEdit: 'surface' }).onConcurrentEdit, 'surface');
+  assert.equal(normalizeCollection({ id: 'x', onConcurrentEdit: 'nonsense' }).onConcurrentEdit, 'lww');
+  assert.equal(normalizeCollection({ id: 'x', onConcurrentEdit: true }).onConcurrentEdit, 'lww');
+});
+
+test('surfacesConflicts is per collection, so opting one in leaves the rest on lww', () => {
+  const decls = [
+    { owner: 'builtin-caqdas', id: 'segments', onConcurrentEdit: 'surface' },
+    { owner: 'builtin-spatial', id: 'boundarySets', onConcurrentEdit: 'lww' },
+  ];
+  assert.ok(surfacesConflicts(decls, 'builtin-caqdas', 'segments'));
+  assert.ok(!surfacesConflicts(decls, 'builtin-spatial', 'boundarySets'));
+  assert.ok(!surfacesConflicts(decls, 'builtin-caqdas', 'codes'));
 });

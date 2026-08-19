@@ -55,6 +55,29 @@
  *   does not — its anchor points at something in the project it was written in, so a copy
  *   elsewhere is a note about nothing. Nothing about a record's SHAPE reveals which it is,
  *   so the host cannot infer it (#153).
+ * @property {string[]} [anchorRefs] Fields holding an **anchor** — a reference to a
+ *   *region* of something the log addresses (see core/anchors.js). Declared for the same
+ *   reason as `assetRefs`/`rowRefs`: the host cannot tell an anchor from any other object,
+ *   and guessing would corrupt records rather than resolve them. Knowing where they are
+ *   lets the host declare the op's `reads[]`, report staleness, and re-target on a
+ *   re-home, generically, for any plugin (#166).
+ * @property {{collection: string, field: string}} [parent] This collection's records are
+ *   **composed into** records of `collection`, via the id held in `field`. Composition is
+ *   not the same relation as a mere reference, and conflating them is not a tidiness
+ *   question: children TRAVEL with their parent (a codebook's codes go with it into the
+ *   library) and CASCADE with it (deleting a codebook deletes its codes). A `segment`
+ *   referencing a `code` is a dependency, not a composition — it cascades on delete but
+ *   must never travel, because a shared codebook that carried its codings would carry
+ *   passages of real participant data to whoever it was shared with (#166 §8).
+ * @property {'lww'|'surface'} [onConcurrentEdit='lww'] What happens when two peers edit
+ *   the SAME record concurrently. `lww` — the existing behaviour and the right default —
+ *   lets HLC order decide silently; `builtin-spatial` wants exactly that, because you do
+ *   not prompt someone about a polygon. `surface` routes it to conflict resolution
+ *   instead, for records where a silent discard destroys work that cannot be recovered:
+ *   two coders disagreeing about a passage boundary is the case that motivated it, and
+ *   silently keeping one of them is the failure per-coder records exist to prevent.
+ *   Per collection rather than global, so turning it on for codings does not change
+ *   behaviour for every plugin that was happy with LWW.
  */
 
 /** Presentation modes, in increasing order of how much room a collection takes. */
@@ -83,7 +106,51 @@ export function normalizeCollection(raw) {
     sidebar,
     assetRefs: Array.isArray(raw.assetRefs) ? raw.assetRefs.filter((f) => typeof f === 'string' && f) : [],
     rowRefs: Array.isArray(raw.rowRefs) ? raw.rowRefs.filter((f) => typeof f === 'string' && f) : [],
+    anchorRefs: Array.isArray(raw.anchorRefs) ? raw.anchorRefs.filter((f) => typeof f === 'string' && f) : [],
+    // Both coordinates are required: a parent naming no field cannot be traversed, and a
+    // field naming no collection cannot be resolved. Half a declaration is dropped rather
+    // than half-honoured — a cascade that guessed would delete the wrong records.
+    parent: typeof raw.parent?.collection === 'string' && raw.parent.collection
+      && typeof raw.parent?.field === 'string' && raw.parent.field
+      ? { collection: raw.parent.collection, field: raw.parent.field }
+      : null,
+    onConcurrentEdit: raw.onConcurrentEdit === 'surface' ? 'surface' : 'lww',
   };
+}
+
+/**
+ * The `(owner, collection, field)` triples for anchor fields — the shape
+ * {@link module:core/asset-refs~itemRefSources} uses, so anchors are walkable by the same
+ * machinery that already walks asset refs.
+ * @param {Array<CollectionDecl & {owner: string}>} decls
+ */
+export function anchorRefDecls(decls) {
+  const out = [];
+  for (const d of decls ?? []) {
+    for (const field of d.anchorRefs ?? []) out.push({ owner: d.owner, collection: d.id, field });
+  }
+  return out;
+}
+
+/**
+ * The collections composed INTO `(owner, collection)` — its children, in declaration
+ * order. Answers "what travels with this record, and what dies with it".
+ * @param {Array<CollectionDecl & {owner: string}>} decls
+ * @param {string} owner @param {string} collection
+ * @returns {Array<CollectionDecl & {owner: string}>}
+ */
+export function childrenOf(decls, owner, collection) {
+  return (decls ?? []).filter((d) => d.owner === owner && d.parent?.collection === collection);
+}
+
+/**
+ * Does this collection want a concurrent same-record edit surfaced rather than silently
+ * resolved? Looked up by address so callers deep in a merge need not carry declarations.
+ * @param {Array<CollectionDecl & {owner: string}>} decls
+ * @param {string} owner @param {string} collection
+ */
+export function surfacesConflicts(decls, owner, collection) {
+  return (decls ?? []).some((d) => d.owner === owner && d.id === collection && d.onConcurrentEdit === 'surface');
 }
 
 /**

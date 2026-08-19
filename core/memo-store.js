@@ -30,6 +30,13 @@
  * edited and annotating your edit of it are the same thread, which is the right answer:
  * "this number looks wrong" and "so I changed it" belong together.
  *
+ * **What `ref` turned out to be for (#166).** A *region within* the target: a passage
+ * inside a cell, a span of a recording, a rectangle on an image. A cell is a target; a
+ * sentence in the middle of one is not, and that is exactly the gap this field was held
+ * open for. It now carries an anchor ref from {@link module:core/anchors} — content-first
+ * selectors that survive the text being edited — which is what makes a CAQDAS coding and
+ * a note-on-a-passage the same kind of thing rather than two parallel inventions.
+ *
  * ## Orphans
  *
  * When an anchor is binned the memo SURVIVES and reads as orphaned (#152 D4). Deleting a
@@ -40,6 +47,7 @@
  */
 
 import { newItemId } from './item-store.js';
+import { normalizeRef } from './anchors.js';
 
 /** The collection memos live in, owned by core. See CORE_COLLECTIONS in collections.js. */
 export const MEMO_COLLECTION = 'memos';
@@ -74,20 +82,53 @@ export const ANCHOR_KINDS = Object.freeze({
   CELL: 'cell',
 });
 
-/** Normalise an anchor. Returns null when it names nothing — a memo with no anchor is a
- * different feature (an unanchored note), deliberately not built. */
+/**
+ * Normalise an anchor. Returns null when it names nothing — a memo with no anchor is a
+ * different feature (an unanchored note), deliberately not built.
+ *
+ * `ref` is the **sub-address the target cannot express** — a region *within* the thing
+ * addressed, which is what this field was reserved for from the start (see the header)
+ * and what {@link module:core/anchors} now supplies. It takes two shapes:
+ *
+ *  - a **structured ref** `{selectors:[…], expects?}` — a passage in a cell, a span of a
+ *    recording, a rectangle on an image. Normalised through `normalizeRef`, so a
+ *    malformed selector costs that region its precision rather than the whole memo;
+ *  - a plain **string discriminator**, for a target that needs no region but does need
+ *    telling apart. Kept deliberately: it costs one branch and it is a real use.
+ *
+ * The stringify that used to happen here unconditionally was a trap, not a feature: a
+ * structured ref passed through it became `"[object Object]"`, which made every region on
+ * one target compare EQUAL — silently collapsing distinct notes into one thread with
+ * nothing thrown. Structure has to be understood here before anything is allowed to
+ * write it.
+ */
 export function normalizeAnchor(raw) {
   const kind = typeof raw?.kind === 'string' && raw.kind ? raw.kind : null;
   const target = typeof raw?.target === 'string' && raw.target ? raw.target : null;
   if (!kind || !target) return null;
   const out = { kind, target };
-  if (raw.ref != null) out.ref = String(raw.ref);
+  if (raw.ref != null) {
+    const ref = typeof raw.ref === 'object' ? normalizeRef(raw.ref) : String(raw.ref);
+    if (ref) out.ref = ref;
+  }
   return out;
 }
 
-/** Same thing? Compared on target + ref, never on kind — the kind is a display hint. */
+/** A ref's identity, for comparison. A structured ref is identified by its selectors —
+ * canonicalised so key order cannot make two identical regions look different. */
+function refKey(ref) {
+  if (ref == null) return '';
+  if (typeof ref !== 'object') return String(ref);
+  const sel = (ref.selectors ?? []).map((s) =>
+    Object.keys(s).sort().map((k) => `${k}=${JSON.stringify(s[k])}`).join(','));
+  return `${sel.join('|')}${ref.expects ? `@${ref.expects}` : ''}`;
+}
+
+/** Same thing? Compared on target + ref, never on kind — the kind is a display hint.
+ * Two notes on DIFFERENT regions of one cell are different anchors, which is what makes
+ * per-passage annotation work at all. */
 export function sameAnchor(a, b) {
-  return !!a && !!b && a.target === b.target && String(a.ref ?? '') === String(b.ref ?? '');
+  return !!a && !!b && a.target === b.target && refKey(a.ref) === refKey(b.ref);
 }
 
 export class MemoStore {

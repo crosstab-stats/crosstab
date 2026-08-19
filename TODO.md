@@ -22,6 +22,486 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
+- [ ] **#161 — the launcher's "Start CrossTab" button is superfluous; clicking a
+      source/project should just go (user request, 2026-08-19).** Today the rail
+      buttons (`[data-source]`, saved projects, remembered folders) only set
+      `#pendingSource` / `#pendingProject` / `#pendingFolder` and paint `is-active`;
+      nothing happens until the footer `.ctl__start` click (launcher.js ~288–371,
+      `#start()` ~472). That is a two-gesture commit for a screen whose whole job is
+      "pick the thing you want to open". Clicking **Demo · quantitative** or a saved
+      project should load it and enter the app.
+
+      **What this deletes.** All three `#pending*` fields, the mutual-exclusion
+      highlighting, the "default the source to Blank so Start always works" line
+      (~307), and the `#start()` branch tree — each rail button calls one of three
+      already-written paths directly. The `?launch=` bypass is untouched (it calls
+      `applyPreset`/`openProjectByName`, not the UI).
+
+      **Wrinkle 1 — reopen mode still needs a commit button.** Reopened over a live
+      session the footer button reads *Apply changes*, and a plugin-only change (no
+      source clicked) has **no other way to commit**.
+
+      **Wrinkle 2 — the ordering inverts, and the preset seeding has to change with
+      it.** Right now the sequence is *source → tweak plugins → Start*, and a source
+      click **overwrites** `#selected` with that preset's set (~297–303). If the
+      click also starts, that overwrite silently discards any tweaking done first,
+      and there is no window to tweak after.
+
+      **Likely resolution (sketched 2026-08-19, not yet decided): make the picker
+      LIVE, like the one it duplicates.** `Edit ▸ Plugins…` already applies toggles
+      immediately — "changes are live and saved across sessions", one **Done** button,
+      no Apply and no Cancel (plugin-manager.js ~947–960). The launcher's picker is
+      the odd one out, and both wrinkles are downstream of its deferral, not of the
+      Start button:
+        - live checkboxes leave *Apply changes* with nothing to apply, so the footer
+          keeps only `← Back to project` (which never promised a revert) — Wrinkle 1
+          dissolves;
+        - there is no pending selection left to clobber, so all that needs deciding is
+          what a source click ADDS. Rule: **union, never subtract** — clicking
+          `Demo · spatial` switches the spatial plugin on and takes nothing away. The
+          demo always works and no choice is silently removed. The selection creeps
+          upward across sessions; that is one uncheck to fix, versus destroying intent.
+      This is [[guard-means-missing-state]] read literally: `#pendingSource`,
+      `#pendingProject`, `#pendingFolder` and the deferred `#selected` exist *only* to
+      be committed later. Remove the deferral and all four stop existing.
+
+      **Verify before committing to that:** live toggling activates plugins *before a
+      project exists* — today `applyActivatedSet` runs at Start, after the source is
+      loaded. #158 made "no project open" tolerable so it should hold, but a
+      workspace-declaring plugin (CAQDAS, spatial) mounting against nothing is exactly
+      where it would bite. Check it in the browser early, not late.
+
+      Two things that get *better*, not worse: a remembered folder needs a user
+      gesture for the write-permission re-grant, and a direct click is a cleaner
+      gesture than the deferred Start; and a saved project can then open through its
+      own plugin restore (drop the `applyPlugins:false` + apply-picker-after dance at
+      ~490) since there is no picker edit to preserve. Accident cost is low — a
+      mis-click loads a demo, `loadingSeed` keeps it out of autosave, and the brand
+      click reopens the launcher.
+
+
+- [ ] **#162 — user-defined plugin presets (user request, 2026-08-19).** The picker
+      offers exactly one axis of curation: `Recommended for <discipline>`, pinned from
+      each manifest's self-declared `disciplines` (launcher.js `#renderPlugins` ~385).
+      A researcher doing *qualitative psychology with a regional dimension* needs
+      CAQDAS **and** spatial **and** the usual psych set — a combination no single
+      discipline names, and one they have to rebuild by hand on every fresh launch.
+      Let them save it.
+
+      **UI.** A `Save preset…` link (prompts for a name) plus a preset dropdown that
+      populates with what they've saved. **Not** beside `Select all` / `None`, which
+      is where this was first sketched: that header is rendered per *section*
+      (`#section` ~399), once for `Recommended for X` and again for `All other
+      plugins`, and its select-all is scoped to that section's keys. A preset spans
+      the whole picker, so both controls belong in `.ctl__centerhead` next to the
+      discipline dropdown and the filter box. Also needs rename/delete, and Save over
+      an existing name should offer overwrite rather than silently duplicating.
+
+      **What a preset stores: plugins only — not a data source.** The built-in
+      `PRESETS` (~39) conflate source + plugin set because they back the `?launch=`
+      bypass; a user preset must compose with *any* start choice, so it is a plugin
+      set and nothing else. (Optionally show the built-ins in the same dropdown,
+      read-only, so there is one concept rather than two.)
+
+      **Record ids, not just keys.** Key ≠ id ([[plugin-lifecycle-terms]]); a key is
+      an install-location detail and will not survive a repackage or a reinstall,
+      whereas a manifest id will. Save ids where a plugin has one, key as fallback,
+      and resolve with the id-or-key matcher already written for saved projects
+      (`speaksFor`, ~335).
+
+      **Applying a preset — mind #157's rule.** A preset says what its author *chose*;
+      it is silent about plugins that did not exist when it was saved, and reading
+      that silence as "off" is exactly the inference we removed elsewhere. So: apply
+      the preset's set, union the default-on infra categories (`DEFAULT_ON_CATEGORIES`
+      — the codecs), and **report** rather than swallow anything the preset names that
+      is not installed ("2 plugins in this preset aren't available") — the user picked
+      those deliberately and deserves to know they're missing.
+
+      **Storage: `localStorage`, deliberately not the op log.** Presets are a
+      *person's* working preferences across all their projects, not a fact about any
+      one project, so they are one of the few things that correctly stays off the log
+      ([[one-true-log-explicit-ops]] governs project state; this isn't it). Phase 2:
+      export/import a preset as a small JSON file so a lab lead can hand out "our
+      lab's toolkit" — the same instinct as the shared-folder work, and cheap once the
+      shape exists.
+
+      **The other half of this, easy to miss:** `.ctl__discipline` is a *single*-select
+      (~277–283, `#discipline` a scalar), so the user's own example — psych + qual +
+      spatial — cannot even be *seen* at once; you switch discipline three times and
+      hunt. Presets fix "save it once"; they don't fix building it the first time.
+      Make the discipline control multi-select and pin the union under
+      `Recommended for Psychology, Qualitative, Spatial`. Do it alongside the preset
+      work — together they're the actual feature, and separately each is half of it.
+
+      Open question: should `Edit ▸ Plugins…` share the same preset control? Same
+      selection model, and a mid-session "switch me to my qual toolkit" is plausible.
+
+
+- [ ] **#166 — THE CODING SYSTEM: one defect behind four symptoms (owner call,
+      2026-08-19).** Umbrella design. The owner's read is right and worth stating as the
+      finding: #163 (codebooks aren't portable), #164 (editing a cell moves the coding),
+      #165 (a coding can only be deleted) are not three bugs. They are one design fault
+      seen from three angles, and patching them separately will produce three mechanisms
+      that fight each other — as #164 and #165 already would over the `text` field.
+
+      > **The full design is `docs/ARCHITECTURE-coding-anchors.md`** (written 2026-08-19
+      > after the stress test below). Read that first; what follows is the reasoning that
+      > produced it, kept because the rejected alternatives are the valuable part.
+
+      **The defect: the coding system stores POSITIONS and STRINGS where it needs
+      REFERENCES and OPERATIONS.** Every request the owner made is a reference-integrity
+      requirement wearing a feature's clothes:
+
+      | Asked for | Reference that must survive | Fails today because |
+      |---|---|---|
+      | codings move as data changes | coding → passage | anchor is an absolute offset into mutable text |
+      | codings adjustable | the coding's own identity through an edit | the only edit affordance is delete + re-create |
+      | notes survive | note → coding | edits destroy the coding's identity; deletes orphan the note |
+      | codebooks portable + referenced | code → codebook | the fk is an opaque string the host cannot traverse |
+
+      Fix references and operations once, and all four stop being separate work.
+
+      **What is NOT wrong, checked before designing on it:** segment identity is fine —
+      `authored()` mints a stable `uid()` at creation (index.js:307), and `syncState`
+      already writes one op per *changed record* (2359+), so a put on an existing id is
+      genuinely an edit at the storage layer. The storage API is not the problem. The
+      problem is that the UI has no vocabulary that reaches it: the only thing the
+      interface knows how to do to a coding is remove it from an array.
+
+      ---
+
+      **1. Anchoring: content-first, offsets as a cache.**
+
+      A coding should anchor the way a citation does — by what it quotes, not by where it
+      sat. Store `{exact, prefix, suffix}` (the coded text plus a short window either
+      side) alongside the cached `{start, end}`. Resolve at read time:
+      exact match at the cached offset (certain) → unique exact match elsewhere (moved,
+      re-anchor silently) → exact match disambiguated by prefix/suffix (moved, re-anchor)
+      → fuzzy match above threshold (probable — re-anchor but FLAG for review) → nothing
+      (orphaned: keep the coding, its code and its notes, and surface it for manual
+      re-anchoring). **Never delete a coding to resolve an anchor.**
+
+      **Why content-first beats mapping offsets at edit time**, which is the obvious
+      alternative and the one to consciously reject: a diff-and-remap hook on `setCell`
+      fixes exactly one of the ways text changes. Text also changes by re-import, by a
+      swap-in (#no-inplace-replace), by recode/transform, by a collaboration merge, and by
+      History replay. Edit-time mapping bolts a door and leaves four open; read-time
+      reconciliation is indifferent to how the text moved, which is what "to the extent
+      possible" actually requires. It also needs no host plumbing — the plugin is never
+      told the old cell value, and under this design it does not need to be.
+
+      **Rejected: locking coded documents.** NVivo's historical answer. Our documents are
+      dataset cells and the dataset is editable by design; forbidding a typo fix in a
+      transcript to protect a highlight is a guard standing in for a missing capability
+      ([[guard-means-missing-state]]). We reconcile instead.
+
+      **2. An edit vocabulary — the operations the UI is missing.**
+      `reanchor(segId, span)`, `recode(segId, codeId)`, `setBoundaries(segId, start, end)`
+      — each preserving the segment id. That is the whole of #165, and note what it buys
+      for free: **notes survive because identity survives.** Requirement 3 is not separate
+      work, it is a consequence of doing requirement 2 as editing rather than as
+      re-creation. #164's reconciler and #165's hand correction then call the *same*
+      `reanchor`, which is also what settles who owns the `text`/`exact` field: the anchor
+      layer does, on every path.
+
+      **3. Lifecycle: composition vs dependency (from #163).**
+      Codes *compose into* a codebook — they travel with it and cascade with it. Notes and
+      segments *depend on* what they point at — they cascade on delete but must never
+      travel. Declaring both (`parent` for composition; a dependency for cascade) fixes the
+      orphaned-memo leak found in #165 and makes a codebook portable in #163, with the
+      privacy guard that matters: **a shared codebook must never carry codings**, because
+      codings are passages of real participant data.
+
+      **4. "Portable AND referenced" — a real fork the owner should call.**
+      The library instantiates on add, deliberately ("INSTANTIATED, not referenced",
+      library.js ~199). For a team codebook that may be the wrong default: the point of a
+      shared coding scheme is often that it stays shared. Datasets already have the other
+      model — `libraryLink` with a pinned version — so the precedent exists. Options: copy
+      only (simplest, matches today); link with version pin + explicit "update to v4";
+      or copy-with-provenance (knows where it came from, can diff, never auto-changes).
+      **Open — needs the owner's call before #163 builds the promote path**, since it
+      decides whether a project stores a codebook or a pointer to one.
+
+      ---
+
+      **Sequencing** (each phase useful alone, none blocks on the next):
+      1. **Detect + never lie** — reconcile at read, flag stale/orphaned codings, cascade
+        memo deletion. Ships the safety net; #164 step 1.
+      2. **Edit vocabulary** — reanchor / recode / adjust boundaries, identity-preserving.
+        #165, and it retires the delete-and-re-code workaround.
+      3. **Fingerprint anchors** — `{exact, prefix, suffix}`, confidence tiers, the manual
+        re-anchor UI for what cannot be resolved.
+      4. **Composition + portability** — #163's `parent` declaration, cascade, promote,
+        after the fork in (4) above is settled.
+
+      **Out of scope, noted:** media codings anchor on normalised regions/time, so text
+      edits cannot touch them — they have their own fragility (a replaced asset) and it is
+      not this. Hierarchical codes stay out (see #163). And re-anchoring must keep each
+      coder's segment a DISTINCT record — per-coder records are deliberate (index.js:302)
+      and collapsing them would quietly destroy inter-coder reliability.
+
+      ---
+
+      ### Design review against the log (owner's stress test, 2026-08-19)
+
+      **How it is stored, since the design turns on this.** Codebooks, codes and segments
+      are **item records on the one true log** — `item:<owner>\0<collection>\0<id>`, ops
+      `putItem`/`removeItem`/`purgeItem`, folded host-side (item-store.js). Not a blob and
+      not a DuckDB table. Only the config (label column, active codebook, viewport) stays
+      a `ws:` blob. **But the coded TEXT is neither** — it is a dataset cell, living in
+      DuckDB and re-derived by replaying data ops. So:
+
+      > the coding is a log record, the thing it quotes is a query result, and **nothing
+      > in the system expresses that one depends on the other.**
+
+      That is the fault line, stated exactly. Six findings follow from it; the first three
+      change the design above.
+
+      **F1 (changes the design) — codings must declare `reads[]`, and the address they
+      need already exists.** The log has precisely this mechanism: an op's `reads[]` is the
+      causal constraint, and `unresolvedReads()` surfaces a reader that would land before
+      its writer — explicitly refusing to reorder silently "because that would change
+      meaning" (op-log.js:16–24). Item ops append with **no reads at all**
+      (item-store.js:220). And `setCell` targets **`ds:<id>/cell:<column>:<rid>`**
+      (data-store.js:1097) — which is exactly a coding's anchor: dataset, column, row.
+      A segment op declaring `reads: ['ds:7/cell:transcript:100000003']` gets reordering
+      and merge hazards *surfaced by machinery already written and tested*. This is the
+      highest-value change in the whole design and it costs one field.
+
+      **F2 (corrects the design) — "reconcile at read time" collides with "mount must
+      never write".** The plugin holds a hard rule, learned the hard way: mounting a
+      workspace must never write state, and opening the Coding tab and closing it must
+      leave no trace (loadState, index.js ~2348). Automatic re-anchoring on read would
+      append a `putItem` per drifted segment merely because someone *looked* — filling
+      History with edits nobody made, churning autosave, and in a collab session having
+      every peer write its own repair. **So the resolved span is a VIEW, not a write.**
+      Offsets are a cache recomputed on read and left unpersisted; the log is only written
+      by a user act (adjusting a coding, or an explicit "repair drifted codings"). #164's
+      "make re-anchor an explicit op" therefore applies to *user-initiated* re-anchors
+      only — as written it was wrong. Bonus: view-only reconciliation makes undo of a
+      `setCell` self-healing, because nothing was persisted to unwind.
+
+      **F3 (changes the design) — write NARROW puts; the fold already pays for them.**
+      `putItem` shallow-MERGES its fields, so two peers editing different fields of one
+      record both survive and only a genuine same-field collision is decided by HLC
+      (item-store.js fold semantics). `syncState` throws this away: it writes the **whole
+      record** every time (`const { id: _drop, ...fields } = val`, index.js ~2370). So one
+      coder adjusting a boundary and another changing the code collide on every field and
+      one silently loses — in the plugin that most cares about not silently discarding a
+      coder's work. Every operation in the new vocabulary should put only what it changed.
+
+      **F4 — codings are ANONYMOUS in History.** `itemHistory` builds each row from the
+      collection declaration and its `labelField` (app.js ~742). `segments` declares none,
+      so every row reads "Edited coding" with nothing identifying which — and under this
+      design edits become common, turning the audit trail into noise. Core's own memos set
+      `labelField: 'text'` (collections.js:137) and a segment already carries `text`. One
+      word, and History reads `Edited coding "the nurse said we had to wait"`.
+
+      **F5 — code ORDER is unmodelled, and it is load-bearing.** "Codebook order = layer
+      order" (index.js:843) decides which code's colour wins on overlapping highlights, yet
+      order is only the incidental order records come back in. The item tier has no reorder
+      op. Per [[one-true-log-explicit-ops]] that wants to be explicit — and #163's
+      promote/add round-trip cannot preserve what was never represented.
+
+      **F6 — codings are invisible to the do-file / syntax editor.** `TRANSFORM_TYPES` is
+      data ops only (crosstab-syntax.js:45), and retract/reorder live in the *data* fold.
+      So a user reordering data steps in Syntax mode can change the text under every coding
+      in the project with no representation of the codings anywhere in that timeline. F1's
+      `reads[]` is what lets this be *reported* rather than silently corrupting; whether
+      codings should also appear as syntax lines is a separate, larger question — flag it,
+      do not answer it here.
+
+      **F7 — two coders re-anchoring the same coding resolve silently by HLC.**
+      Plugin-owned items union by id and same-record concurrent edits are decided by HLC
+      without surfacing (item-store.js merge notes). For most plugin data that is right;
+      for a boundary disagreement between two coders it is exactly the silent discard the
+      per-coder-records design was built to prevent. Worth deciding deliberately rather
+      than inheriting.
+
+      **F8 — scale, to measure rather than guess.** Every segment is an op plus a folded
+      record, the plugin holds them all in memory, and `syncState` diffs the whole array on
+      every save. The manifest already anticipates "thousands of segments". Adding
+      re-anchor ops grows the log further. Find the ceiling before a real corpus does.
+
+
+- [ ] **#163 — a codebook should CONTAIN its codes (user request, 2026-08-19).**
+      Raised while poking at #151: a codebook cannot be dragged to Building Blocks, and
+      the reason it cannot is the reason it is worth changing. "It doesn't make much
+      sense for a codebook to not contain the codes — it is, after all, a *code*book.
+      The specific codings on passages aren't part of the codebook, of course, but the
+      codebook itself should be like a dictionary." Correct on every count; the design
+      question is *which kind* of containment.
+
+      **Where it stands.** #151 made a codebook a project-scoped record in `codebooks`
+      (caqdas/index.js:90) carrying essentially one field, `name`. The codes are separate
+      records in `codes`, each pointing back with a plain `codebookId` string
+      (`{id, name, color, group, memo, codebookId}`). A codebook is therefore a *label*
+      with a foreign key aimed at it, and nothing in the host knows the two collections
+      are related.
+
+      **The trap: do NOT fold codes back inside the codebook record.** That is the
+      obvious reading of "contain", and it re-creates exactly what #152 removed — the
+      manifest says so in place (index.js:75–78): codes and segments used to live in one
+      opaque blob, so the log recorded "the coding workspace changed" and nothing finer —
+      no per-code undo, nothing in History, and merge needed a hand-written add-wins
+      function. As records they get all three for free. Put the codes in
+      `codebook.fields.codes[]` and every one of those regresses at once: renaming one
+      code becomes "the codebook changed", and two collaborators renaming two different
+      codes now collide on the whole book. Storage containment buys the dictionary
+      feeling and pays for it in everything #148/#152 were built to get.
+
+      **What is actually missing is a DECLARATION, not a different storage layout.** To
+      the host, `codebookId` is an opaque string in an opaque field — precisely what a
+      `__ct_rid` and an `asset:` ref each were before they got declared. So every
+      operation that treats a codebook as one whole thing is hand-rolled inside the
+      plugin today:
+        - delete a codebook → the manager hand-filters codes *and* segments and fixes up
+          the active book (index.js:1422–1433);
+        - copy/move codes between books → hand-rolled id re-minting (1579–1582);
+        - **promote to a building block → impossible**, because the generic path saves a
+          record's own `fields` plus its declared `assetRefs` (library.js:169). A codebook
+          has neither. Flip `portable: true` today and it silently saves an empty shell —
+          a name and no codes.
+      The pattern is already established twice in `collections.js`: the host cannot read a
+      plugin's schema, so the plugin *declares* which field holds which kind of reference
+      (`assetRefs`, `rowRefs`). The missing third is **composition**.
+
+      **Proposal — `parent` on the child collection:**
+      ```js
+      { id: 'codes', …, parent: { collection: 'codebooks', field: 'codebookId' } }
+      ```
+      Declared child-side, mirroring `assetRefs`/`rowRefs` (declared by whoever holds the
+      field). With it the host can do generically, for any plugin, what CAQDAS now does
+      by hand:
+        - **Promote** — a codebook block is the record + its children + their assets;
+          adding it re-mints child ids and **remaps the fk to the new parent id**, exactly
+          as asset ids are already remapped on add (library.js:212). This is the one that
+          answers the original complaint.
+        - **Cascade delete**, with a true count in the confirm.
+        - **Nest** children under their parent in the sidebar — `#contentRow` already
+          takes a `nested` flag.
+        - Export, counting, and reference-walking stop being bespoke.
+      Codes stay individually-addressed records, so per-code undo, History and add-wins
+      merge all survive. The codebook becomes what the user asked for — one addressable,
+      portable, dictionary-like object that *is* its codes — without paying the blob tax.
+
+      **Keep composition and dependency SEPARATE — this is the sharp edge.** Codes belong
+      to a codebook (composition: travels, cascades). A segment merely *references* a code
+      (dependency: cascades on delete, must NEVER travel). If both were one flat "child"
+      concept, promoting a codebook to a shared building block would carry the codings
+      with it — i.e. the researcher's coded passages of real participant data — into an
+      object whose entire purpose is to be handed to other people. Two guards, belt and
+      braces: only a declared `parent` composes, and a dataset-scoped child never travels
+      into a project-scoped block regardless (`scope`, already per-collection since #151).
+
+      **Migration: none.** The records already carry `codebookId`; this adds a declaration
+      and host behaviour over data that is already shaped correctly. `normalize()`
+      (index.js:2537–2541) already adopts a code with an unknown book into the first one,
+      so orphans are handled before this lands.
+
+      Adjacent, deliberately out of scope: hierarchical/tree codes (NVivo-style parent
+      codes). The `group` field already gives a codebook flat *themes* — sections in the
+      dictionary — and that is enough until someone asks for nesting.
+
+      Ordering note to settle during build: "codebook order = layer order" (index.js:843),
+      so whatever carries code order has to survive a promote/add round-trip.
+
+
+- [ ] **#164 — BUG: editing a coded cell silently moves the coding to the wrong text
+      (user, 2026-08-19).** Apply a code to a passage, then edit that cell in the data
+      grid: the highlight now covers a different span. **Data integrity, not cosmetics —
+      an existing project may already be carrying codings that are quietly wrong, and
+      nothing has ever told the user.**
+
+      **Cause.** A coding is `{doc: rid, codeId, start, end, text, memo}` — raw character
+      offsets into the cell's text (index.js:1882, 1893). A cell edit is a `setCell` op
+      keyed on `rid` + column (data-store.js:1087), so the `doc` anchor survives the edit
+      exactly as designed — but every offset at or after the edit point rots. There is no
+      validation on load, no reconciliation, and the plugin is only told *that* data
+      changed (`onDataChanged`, data-store.js:2054), never what changed, so it cannot
+      diff even if it wanted to.
+
+      **What makes this fixable in-plugin: the repair data is already stored.** Every
+      segment carries `text`, the snapshot of the coded substring at coding time (set on
+      both creation paths and on QDPX import, 2507). So the old cell value is not needed
+      from the store — each coding knows what it is supposed to be sitting on.
+
+      **Fix, in two steps.**
+      1. **Detect and SAY SO (ship first, small).** When rendering a doc, compare
+         `doc.text.slice(start, end)` against the segment's `text`. Mismatch ⇒ the coding
+         is stale. Showing a confidently-wrong highlight is the worst available outcome:
+         the researcher's analysis rests on these, and right now nothing signals that
+         anything moved. Even with no repair at all, saying "3 codings no longer match
+         their text" beats silence.
+      2. **Re-anchor by content.** On mismatch, search the new text for the segment's
+         `text`: exactly one occurrence ⇒ re-anchor to it; several ⇒ take the one nearest
+         the old offset; none ⇒ mark it orphaned and let the user re-point or delete it.
+         Never silently drop a coding.
+
+      **Make a re-anchor an explicit OP, not a silent mutation** ([[one-true-log-explicit-ops]]).
+      Two reasons beyond audit: a repair that is a derived side effect of `setCell` has to
+      be recomputed identically by every peer and by every History replay, and any drift
+      there corrupts differently on each machine. Recording the new offsets outright means
+      the log carries the answer instead of a recipe for re-deriving it.
+
+      **Also check the overlap paths.** Applying a code merges overlapping segments by
+      offset comparison (1876–1893); with rotten offsets that can fuse two unrelated
+      spans into one coding. Whatever detection lands in step 1 should gate those too.
+
+      Not affected: media codings (`doc.kind !== 'text'`), which anchor on time/region
+      rather than character offsets.
+
+      Related but distinct: #151's still-open "codings anchor on `__ct_rid`, so moving
+      them between datasets is unsolved". That is anchoring ACROSS datasets; this is
+      anchoring rotting WITHIN one. Same family, different failure.
+
+
+- [ ] **#165 — a coding can only be REMOVED, never adjusted (user, 2026-08-19).** A
+      coding that overshoots by a character or two cannot be nudged: the only action is
+      delete and re-code. Confirmed — the segment popup offers `Remove` plus a notes
+      thread and nothing else (index.js:1971–1988), and the retrieve list offers a bare ✕
+      (610). There is no boundary editing anywhere in the plugin.
+
+      **The real cost is not the keystrokes — re-coding DESTROYS the analysis attached to
+      the coding.** Notes are anchored to the *segment id* (`renderThread` → `anchorIdOf`,
+      366), so deleting and re-marking starts an empty thread with a new author stamp. For
+      a qualitative researcher the memo on a coding is not metadata about the work, it *is*
+      the work: the reason the passage was called that. Charging a paragraph of reasoning
+      for a one-character boundary fix is the actual defect.
+
+      **Second bug, found on the way in: removing a segment orphans its memos.** The
+      remove path is a bare `state.segments = state.segments.filter(...)` (1980) with no
+      memo cleanup, so every note anchored to that segment outlives it. Ids are minted by
+      `uid()` so nothing is *re*-attached to the wrong thing — it is an accumulation, not
+      a corruption. **Not invisible, though** (corrected after reading app.js): the host
+      already detects orphaned notes and surfaces them —
+      `memoStore.orphans(memoAnchorExists)` (app.js:706, shown at 2172/2249). So the
+      detector exists and only the CASCADE is missing, which makes this smaller than it
+      first looked. Fix the cascade here; keep the detector as the backstop.
+
+      **What "edit a coding" should mean — cheapest useful version first:**
+        - **Re-anchor to the selection** — select the correct span, "move this coding
+          here". Trivially implementable, and fixes a big mis-selection as easily as a
+          small one.
+        - **Change the code** — swap which code a segment carries while keeping its
+          thread. Today that also costs a delete + re-code.
+        - **Nudge / drag the boundaries** — the polished form. Drag handles for the mouse,
+          and a keyboard nudge (character/word) so it is not mouse-only
+          ([[accessibility-baseline]]).
+
+      **Build this together with #164 — they are the same operation from two directions.**
+      #164 needs a re-anchor when a cell edit rots the offsets; this needs one when the
+      human got it wrong. One explicit `reanchor` op serves both
+      ([[one-true-log-explicit-ops]]), and #164's detector can then simply *propose* the
+      correction that this feature applies by hand.
+
+      **Interaction to get right, or the two features fight:** a segment's `text` snapshot
+      must be rewritten whenever boundaries change here, or #164's staleness check
+      immediately flags every hand-adjusted coding as rotten — the repair mechanism would
+      condemn the repairs. `text` is the anchor of record for both; exactly one code path
+      should own writing it.
+
+
 - [ ] **Stop sharing — an affirmative "this project is not shared" (user request,
       2026-08-05).** Today the only way out of collaboration is
       `projects.stopCoauthoring()` (app.js ~1565), which leaves the *current session's*

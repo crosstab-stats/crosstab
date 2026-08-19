@@ -210,14 +210,23 @@ export class ItemStore {
    * @param {string} collection
    * @param {string} id            pass {@link newItemId} for a new record
    * @param {object} fields        opaque to the host
-   * @param {{scope?: {wsId?: string, slotId?: string, dsId?: string|number|null}}} [opts]
+   * @param {{scope?: {wsId?: string, slotId?: string, dsId?: string|number|null},
+   *          reads?: string[]}} [opts]
+   *   `reads` are the targets this record DEPENDS ON — the causal edge the log has always
+   *   supported and the item tier never used (#166). A CAQDAS coding reads the cell whose
+   *   text it quotes: `ds:7/cell:transcript:100000003`, which is byte-identical to what
+   *   `setCell` writes, so the dependency needs no new addressing scheme. Without it the
+   *   log cannot tell that reordering or retracting a data step invalidated a record that
+   *   was reading it, and the corruption is silent.
    * @returns {object} the folded record
    */
-  put(owner, collection, id, fields, { scope } = {}) {
+  put(owner, collection, id, fields, { scope, reads } = {}) {
     const target = itemTarget(owner, collection, id);
     const payload = { fields: fields ?? {} };
     if (scope) payload.scope = scope;
-    const op = this.#log?.append({ target, owner, type: 'putItem', payload });
+    const body = { target, owner, type: 'putItem', payload };
+    if (Array.isArray(reads) && reads.length) body.reads = reads.filter((t) => typeof t === 'string' && t);
+    const op = this.#log?.append(body);
     // Write-through: a local append always carries the highest HLC, so this is equivalent
     // to refolding. (Received ops can sort earlier — those go through loadFromLog.)
     const rec = this.#applyPut(owner, collection, id, payload, op?.author ?? null, target);

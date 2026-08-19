@@ -158,9 +158,15 @@ export function liveOps(ops) {
  * (surface a conflict, reject a reorder, mark the op inert) — this primitive only
  * detects, it never silently repairs.
  *
- * NB: v1 matches read targets to writer targets **exactly**. Prefix/relational
- * matching (e.g. a read of `ds:2/var:income` satisfied by the `load` that created the
- * dataset) is a projection-level refinement layered on later.
+ * **Ancestor matching (#166).** Exact matching alone was unusable for anything that
+ * reads *data* rather than a prior edit. A coding anchored to
+ * `ds:7/cell:transcript:1000003` reads a cell that may never have been individually
+ * written — its value arrived with the dataset's `load` — so under exact matching every
+ * such coding reported as dangling on every merge, and the real signal drowned in the
+ * false ones. A read is therefore also satisfied by a writer at or ABOVE it in the
+ * address path: `ds:7/cell:transcript:1000003` ⊑ `ds:7/cell:transcript` ⊑ `ds:7`, so the
+ * `load` that created the dataset satisfies reads of anything inside it. This is the
+ * refinement the original NB anticipated; anchors are what made it necessary.
  *
  * @param {Op[]} orderedOps  the ops in the order to check
  * @param {{base?: Iterable<string>}} [opts]  targets already available before op[0]
@@ -170,9 +176,116 @@ export function unresolvedReads(orderedOps, { base } = {}) {
   const available = new Set(base ?? []);
   const problems = [];
   for (const op of orderedOps ?? []) {
-    const missing = op.reads.filter((t) => !available.has(t));
+    const missing = op.reads.filter((t) => !isSatisfied(t, available));
     if (missing.length) problems.push({ op, missing });
-    available.add(op.target); // this op now provides its own target to later ops
+    // This op provides its own target AND every address above it: an op that wrote
+    // anything under `ds:7` is proof that `ds:7` exists, which is the question this
+    // function asks. Whether a *later* write invalidated a reader is a different
+    // question — see {@link staleReaders}.
+    for (const t of readAncestors(op.target)) available.add(t);
   }
   return problems;
+}
+
+/**
+ * Every address that would satisfy a read of `target`, from the most specific to the
+ * whole aggregate. `ds:7/cell:notes:3` → [`ds:7/cell:notes:3`, `ds:7/cell:notes`, `ds:7`].
+ * Splitting on both `/` and `:` is what lets a whole-dataset write cover one of its
+ * cells; the aggregate root (`ds:7`) is the coarsest thing anyone can write.
+ */
+export function readAncestors(target) {
+  const t = String(target ?? '');
+  if (!t) return [];
+  const out = [t];
+  const slash = t.indexOf('/');
+  if (slash === -1) return out;
+  const root = t.slice(0, slash);
+  let rest = t.slice(slash + 1);
+  while (rest.includes(':')) {
+    rest = rest.slice(0, rest.lastIndexOf(':'));
+    out.push(`${root}/${rest}`);
+  }
+  out.push(root);
+  return out;
+}
+
+/** Is a read of `target` satisfied by anything already available? */
+function isSatisfied(target, available) {
+  return readAncestors(target).some((t) => available.has(t));
+}
+
+/**
+ * **Drift**: ops whose reads are written AFTER them.
+ *
+ * A different question from {@link unresolvedReads}, and the one that actually matters
+ * for anchored records. "Unresolved" asks *is a writer missing before me* — and once
+ * ancestor matching is in place a dataset's `load` satisfies every read inside it, so a
+ * later edit to one of those cells no longer registers there at all. Drift asks *does
+ * something I depend on change after me*, which is precisely: this coding was made
+ * against text that has since been edited, so its anchor may no longer point where it
+ * did.
+ *
+ * Detection only — the anchor's own resolution decides whether the region actually moved
+ * (a coding earlier in a document is untouched by an edit later in it). This narrows
+ * "everything in the project" to "these records, because of these ops", which is what
+ * makes a staleness check affordable at all.
+ *
+ * **Aggregate writes.** Some ops replace their whole aggregate rather than one leaf — a
+ * `load` is the dataset's replace barrier, so it changes every cell in it, yet its
+ * address (`ds:7/source:<tok>`) is a sibling of the cells rather than an ancestor. No
+ * address-only rule can know that, and guessing from the shape would be exactly the kind
+ * of inference this codebase refuses elsewhere. So the caller declares it:
+ * `isAggregateWrite` promotes such an op to its aggregate root, where the path rule then
+ * does the right thing. Left undeclared, only leaf-level writes are considered — which
+ * under-reports rather than over-reports, the safer direction for a check whose output is
+ * shown to a user.
+ *
+ * @param {Op[]} orderedOps  ops in the order to check
+ * @param {{isReader?: (op: Op) => boolean, isAggregateWrite?: (op: Op) => boolean}} [opts]
+ * @returns {Array<{op: Op, staleReads: string[], writers: Op[]}>}
+ */
+export function staleReaders(orderedOps, { isReader, isAggregateWrite } = {}) {
+  const all = orderedOps ?? [];
+  const list = all.filter((op) => op.reads?.length && (!isReader || isReader(op)));
+  if (!list.length) return [];
+
+  // The address a write effectively lands on, once aggregate replacement is accounted for.
+  const addrOf = (op) => {
+    if (!isAggregateWrite?.(op)) return op.target;
+    const anc = readAncestors(op.target);
+    return anc[anc.length - 1] ?? op.target; // the aggregate root
+  };
+
+  // Index every write by effective address once, rather than rescanning per reader.
+  const writesAt = new Map();
+  all.forEach((op, i) => {
+    const addr = addrOf(op);
+    if (!writesAt.has(addr)) writesAt.set(addr, []);
+    writesAt.get(addr).push({ op, i });
+  });
+  const indexOfOp = new Map(all.map((op, i) => [op.id, i]));
+
+  // A write affects a read when the two addresses are on ONE path: the write is the read,
+  // something inside it, or the whole thing it belongs to. Two sibling cells are not on
+  // one path, which is what keeps a busy dataset from reporting every coding as stale.
+  const onSamePath = (writeAddr, readAddr) =>
+    readAncestors(writeAddr).includes(readAddr) || readAncestors(readAddr).includes(writeAddr);
+
+  const out = [];
+  for (const op of list) {
+    const at = indexOfOp.get(op.id) ?? -1;
+    const staleReads = [];
+    const writers = [];
+    for (const t of op.reads) {
+      for (const [addr, entries] of writesAt) {
+        if (!onSamePath(addr, t)) continue;
+        const after = entries.filter((e) => e.i > at);
+        if (!after.length) continue;
+        if (!staleReads.includes(t)) staleReads.push(t);
+        for (const e of after) if (!writers.includes(e.op)) writers.push(e.op);
+      }
+    }
+    if (staleReads.length) out.push({ op, staleReads, writers });
+  }
+  return out;
 }
