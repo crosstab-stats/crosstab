@@ -17,6 +17,7 @@
 /** Bus event: the building-block library changed (block saved/deleted) — the
  * sidebar's Building Blocks zone re-renders on this. */
 import { newItemId } from './item-store.js';
+import { childrenOf } from './collections.js';
 
 export const LIBRARY_CHANGED = 'library:changed';
 
@@ -170,22 +171,57 @@ export class DatasetLibrary {
     if (!this.#items || !this.#assets) return;
     const rec = this.#items.get(owner, collection, recordId);
     if (!rec) return;
-    const decl = this.#decls().find((d) => d.owner === owner && d.id === collection) ?? null;
+    const decls = this.#decls();
+    const decl = decls.find((d) => d.owner === owner && d.id === collection) ?? null;
     const name = (decl?.labelField && rec.fields?.[decl.labelField]) || rec.id;
     try {
-      const assets = [];
-      for (const field of decl?.assetRefs ?? []) {
-        const ref = rec.fields?.[field];
-        if (!ref) continue;
-        const assetId = String(ref).replace(/^asset:/, '');
-        const got = await this.#assets.get(assetId);
-        if (got) assets.push({ id: assetId, bytes: got.bytes, type: got.type, name: got.name });
-        else this.#results.appendError(`"${name}": the file behind ${field} is missing — saved without it.`);
+      // Everything that COMPOSES into this record travels with it: a codebook without its
+      // codes is a name and nothing else. Composition is declared (`parent`), never
+      // inferred — and a mere dependency is deliberately NOT collected, which is what
+      // stops a shared codebook carrying its codings, i.e. passages of real participant
+      // data, to whoever it is handed to.
+      const kids = childrenOf(decls, owner, collection);
+      const children = [];
+      for (const kid of kids) {
+        for (const child of this.#items.list(owner, kid.id)) {
+          if (String(child.fields?.[kid.parent.field] ?? '') !== String(recordId)) continue;
+          children.push({
+            collection: kid.id,
+            id: child.id,
+            parentField: kid.parent.field,
+            fields: { ...child.fields },
+            assetRefs: kid.assetRefs ?? [],
+          });
+        }
       }
+
+      // Gather the bytes for the parent AND every child, so the block is whole.
+      const assets = [];
+      const seen = new Set();
+      const gather = async (fields, fieldNames, label) => {
+        for (const field of fieldNames ?? []) {
+          const ref = fields?.[field];
+          if (!ref) continue;
+          const assetId = String(ref).replace(/^asset:/, '');
+          if (seen.has(assetId)) continue;
+          seen.add(assetId);
+          const got = await this.#assets.get(assetId);
+          if (got) assets.push({ id: assetId, bytes: got.bytes, type: got.type, name: got.name });
+          else this.#results.appendError(`"${label}": the file behind ${field} is missing — saved without it.`);
+        }
+      };
+      await gather(rec.fields, decl?.assetRefs, name);
+      for (const child of children) await gather(child.fields, child.assetRefs, name);
+
       const { version } = await this.#store.saveRecord({
         name,
         savedAt: Date.now(),
-        record: { owner, collection, fields: { ...rec.fields } },
+        // The record keeps its ID in the block. That identity is what lets a later pull
+        // match this project's copy against the block's, and what lets two projects that
+        // adopted the same block recognise it as shared ancestry rather than duplicating
+        // every record (#166 §13.2).
+        record: { owner, collection, id: recordId, fields: { ...rec.fields } },
+        children,
         assets,
       });
       this.#bus?.emit(LIBRARY_CHANGED);
@@ -197,33 +233,67 @@ export class DatasetLibrary {
   }
 
   /**
-   * Add a record block into the current project. INSTANTIATED, not referenced: the
-   * record gets a freshly minted id and the asset bytes are re-stored here, so the copy
-   * is self-contained and nothing dangles if the library entry is later deleted. Same
-   * rule datasets follow (#149 A9c).
+   * Add a record block into the current project.
+   *
+   * **Ids are preserved, not re-minted (#166).** They used to be re-minted so a copy was
+   * self-contained — but the copy is self-contained either way (the records live in this
+   * project's log; deleting the library entry dangles nothing), and re-minting cost two
+   * things that matter more. A later *pull* had nothing to match my code against the
+   * block's, so an updated codebook could not be merged at all; and two projects that
+   * adopted the same codebook shared no identity, so collaborating later would have
+   * duplicated every code instead of recognising them as common ancestry.
+   *
+   * Adding the same block twice is therefore a no-op rather than a second copy, which is
+   * the right default: adopting one codebook twice should not double it. Wanting a
+   * divergent copy is a *duplicate* action inside the project, not a second add.
    *
    * Asset ids are content hashes, so re-storing identical bytes yields the same id and
    * two projects that add the same block do not duplicate the file.
    */
   async #addRecordBlock(block) {
     if (!this.#items || !this.#assets) return;
-    const { owner, collection, fields } = block.record ?? {};
+    const { owner, collection, fields, id } = block.record ?? {};
     if (!owner || !collection) return;
-    const remapped = { ...fields };
+
+    // Re-store the bytes first, so every record written below points at ids that exist.
+    const idMap = new Map();
     for (const a of block.assets ?? []) {
       try {
         const info = await this.#assets.put(a.bytes, { type: a.type, name: a.name });
-        // Point every field that referenced the OLD id at the newly stored one.
-        for (const [k, v] of Object.entries(remapped)) {
-          if (typeof v === 'string' && v.replace(/^asset:/, '') === a.id) remapped[k] = `asset:${info.id}`;
-        }
+        idMap.set(a.id, info.id);
       } catch (err) {
         console.error('[library] asset restore failed', err);
         this.#results.appendError(`Adding "${block.name}": a referenced file could not be stored.`);
       }
     }
-    this.#items.put(owner, collection, newItemId(), remapped, { scope: { dsId: null } });
-    this.#results.appendText(`Added **${block.name}** to this project.`);
+    const remap = (f) => {
+      const out = { ...f };
+      for (const [k, v] of Object.entries(out)) {
+        if (typeof v !== 'string') continue;
+        const bare = v.replace(/^asset:/, '');
+        if (idMap.has(bare)) out[k] = `asset:${idMap.get(bare)}`;
+      }
+      return out;
+    };
+
+    const parentId = id || newItemId();
+    this.#items.put(owner, collection, parentId, remap(fields), { scope: { dsId: null } });
+
+    // Children COMPOSE into the parent, so they arrive with it — that is the difference
+    // between a codebook and a label with a foreign key pointed at it. Their parent field
+    // is repointed at the id used here, so a block added under a fresh id still hangs
+    // together.
+    let kids = 0;
+    for (const child of block.children ?? []) {
+      if (!child?.collection || !child.id) continue;
+      const f = remap(child.fields ?? {});
+      if (child.parentField) f[child.parentField] = parentId;
+      this.#items.put(owner, String(child.collection), child.id, f, { scope: { dsId: null } });
+      kids++;
+    }
+    this.#results.appendText(
+      `Added **${block.name}** to this project${kids ? ` (${kids} item${kids === 1 ? '' : 's'})` : ''}.`,
+    );
   }
 
   /** Add a copy of a building block into the current project, linked to its

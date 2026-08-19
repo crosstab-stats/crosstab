@@ -1998,7 +1998,7 @@ export const workspace = {
         const name = inp.value.trim();
         if (!name) return;
         const mine = codesInBook(state);
-        state.codes.push(authored({ id: uid(), name, color: PALETTE[mine.length % PALETTE.length], group: '', memo: '', codebookId: state.codebookId }));
+        state.codes.push(authored({ id: uid(), name, color: PALETTE[mine.length % PALETTE.length], group: '', memo: '', codebookId: state.codebookId, sort: nextSortKey(mine) }));
         inp.value = ''; save(); renderCodes();
       };
       add.addEventListener('click', commit);
@@ -2239,7 +2239,8 @@ export const workspace = {
       const mk = () => {
         const name = inp.value.trim();
         if (!name) return;
-        const code = authored({ id: uid(), name, color: PALETTE[codesInBook(state).length % PALETTE.length], group: '', memo: '', codebookId: state.codebookId });
+        const inBook = codesInBook(state);
+        const code = authored({ id: uid(), name, color: PALETTE[inBook.length % PALETTE.length], group: '', memo: '', codebookId: state.codebookId, sort: nextSortKey(inBook) });
         state.codes.push(code); choose(code.id);
       };
       inp.addEventListener('click', (e) => e.stopPropagation());
@@ -3007,8 +3008,53 @@ function adoptIntoCodebook(state) {
 }
 
 /** The codes in the currently-selected codebook — what the coding UI works with. */
+/**
+ * The active codebook's codes, **in codebook order**.
+ *
+ * Order is load-bearing here, not cosmetic: "codebook order = layer order" decides which
+ * code's colour wins where two highlights overlap. It used to be whatever order records
+ * came back in — incidental, unrepresented, and impossible to preserve through a
+ * promote/add round trip.
+ *
+ * Each code now carries a fractional `sort` key. A per-record float is the shape that
+ * suits this log: `putItem` field-merges, so moving one code writes one field on one
+ * record and two peers reordering concurrently both survive, where a whole-list reorder
+ * op would have to be merged wholesale. Codes with no key yet fall to the end in name
+ * order, so an unsorted book still reads sensibly.
+ */
 function codesInBook(state) {
-  return state.codes.filter((c) => c.codebookId === state.codebookId);
+  return state.codes
+    .filter((c) => c.codebookId === state.codebookId)
+    .sort(byCodeOrder);
+}
+
+/** Fractional sort first, then name — a stable, explainable order either way. */
+function byCodeOrder(a, b) {
+  const x = typeof a.sort === 'number' ? a.sort : Number.POSITIVE_INFINITY;
+  const y = typeof b.sort === 'number' ? b.sort : Number.POSITIVE_INFINITY;
+  if (x !== y) return x - y;
+  return String(a.name ?? '').localeCompare(String(b.name ?? ''));
+}
+
+/**
+ * A fractional key placing a code between `before` and `after` (either may be absent,
+ * meaning "the start"/"the end"). Halving the gap is what makes an insert cost ONE
+ * field write rather than renumbering the neighbours — which is the property that lets
+ * two peers insert concurrently without colliding.
+ */
+export function sortKeyBetween(before, after) {
+  const lo = typeof before === 'number' ? before : null;
+  const hi = typeof after === 'number' ? after : null;
+  if (lo == null && hi == null) return 1;
+  if (lo == null) return hi - 1;
+  if (hi == null) return lo + 1;
+  return (lo + hi) / 2;
+}
+
+/** The key for a code appended to the end of `list`. */
+export function nextSortKey(list) {
+  const keys = (list ?? []).map((c) => c.sort).filter((v) => typeof v === 'number');
+  return keys.length ? Math.max(...keys) + 1 : 1;
 }
 
 /**

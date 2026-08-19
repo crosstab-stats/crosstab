@@ -382,9 +382,36 @@ the "keep accepting a string ref" half — and with it, CAQDAS's current
 `ref: anchorKind` caller must move to `kind` in the same change rather than being left
 working by accident.
 
-## 12. Sequencing
+## 12. Sequencing — SHIPPED (2026-08-19)
 
-Each step is useful alone and none blocks the next.
+All four steps are built, with tests. What landed, and the three things worth knowing:
+
+- **`core/anchors.js`** is the primitive: selector normalisation, `resolveAnchor()` with
+  the confidence ladder, and `textRef`/`mediaRef` builders. Pure and exported, so the
+  risky half of this design is covered by `npm test` and only the iframe chrome needs a
+  human.
+- **Core's memo anchor now takes structured refs**, so notes-on-a-passage work; a plain
+  string ref still does.
+- **`anchorRefs` / `parent` / `onConcurrentEdit`** join `assetRefs`/`rowRefs` as things a
+  collection declares once and every generic host behaviour reads.
+- **`reads[]` is DERIVED** from `anchorRefs` in the host's item service — a plugin never
+  writes one. Any plugin that anchors into data gets drift detection on the same terms.
+- **`readAncestors` + `staleReaders`** in op-log, the two pieces §7 says did not exist.
+- **CAQDAS**: anchors on every modality, resolve-at-render with an amber banner,
+  re-anchor/recode, note cascade, narrow writes, fractional code order, QDPX both ways.
+- **Record blocks carry their composed children and keep record ids**, so a codebook is
+  portable and a later pull has identity to match on.
+
+Three honest notes:
+
+1. **The save-cost prediction was wrong** — 1.4×, not ~0. See §13's measurements.
+2. **`resolveAnchor` takes a `ref`, not an anchor.** Passing the whole anchor makes every
+   coding silently `unresolvable`; a test caught it, and it is the kind of mistake this
+   API shape invites. Worth a second look if resolution ever goes quiet.
+3. **Per the owner's call there is no migration**: old codings and old record blocks stop
+   working rather than being carried (§11).
+
+The original plan, for reference. Each step was useful alone and none blocked the next.
 
 1. **Tell the truth** — `resolve()` at render, staleness surfaced, memo cascade on
    delete, `labelField: 'text'` on segments so History says *which* coding.
@@ -535,11 +562,16 @@ a `npm test` assertion (timing tests are flaky and would slow the suite). Run
 1. **Nothing is super-linear.** Flat at ~1.5µs/coding to fold from 2k to 25k. The spammy
    log is not a scaling trap; the explicit-ops decision is vindicated on performance as
    well as on principle.
-2. **The single biggest cost is the one step 2 deletes.** Saving *one boundary nudge*
-   costs 106ms at 25k codings — nearly 3× the whole fold — because `syncState` re-clones
-   every record to rebuild its shadow. That is paid on every debounced save while
-   someone is coding. Replacing it with a narrow put should take that column to ~0, so
-   step 2 is a performance fix as much as a correctness one.
+2. **The single biggest cost is the one step 2 addresses — but not to zero.** Saving
+   *one boundary nudge* cost 106ms at 25k codings, nearly 3× the whole fold, because
+   `syncState` re-cloned every record to rebuild its shadow. **Measured after the
+   rebuild: 103ms → 75ms, about 1.4×.** The prediction above ("should go to ~0") was
+   wrong and is left standing as written: removing the wholesale re-clone removed the
+   *extra* cost, but the O(N) scan remains, because the plugin still diffs its in-memory
+   array on save. Driving it to ~0 needs writes issued at each mutation site rather than
+   derived by diffing — deliberately not done, since it means rewriting ~40 call sites
+   to save 75ms on a 25,000-coding corpus. The correctness half of step 2 (narrow ops, so
+   two coders' edits stop colliding) landed in full and was always the point.
 3. **The real ceiling is bytes, not time: 485 bytes per coding, flat.** A 25,000-coding
    project carries an **11.8 MB** log. Op envelope plus a full author stamp
    (`authorId`/`initials`/`name`/`color`) repeated on every op is most of it. Worth a

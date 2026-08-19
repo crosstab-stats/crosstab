@@ -18,25 +18,32 @@
  *  2. **fold**      — `foldItems` over the item tier. Paid on every load AND every
  *                     workspace refresh, so it is the one a user feels repeatedly.
  *  3. **order**     — `orderByHlc` over the whole log (every `slice()` re-sorts).
- *  4. **diff**      — the plugin's whole-collection save diff. #166 step 2 deletes this;
- *                     the number here is what deleting it is worth.
+ *  4. **save**      — the cost of persisting ONE boundary nudge, measured two ways:
+ *                     `save(old)` is the pre-#166 whole-collection diff (replicated),
+ *                     `save(new)` the per-field delta that shipped (imported).
  *  5. **merge**     — `mergeProjects` over two diverged peers.
  *
  * Plus `serialize()` byte size, which is what a project file actually costs on disk.
  *
  * ## Honesty note
  *
- * (4) REPLICATES `syncState`'s algorithm rather than calling it: that function is not
- * exported from the plugin (it closes over module state). The replication is
- * byte-faithful to the original's `same`/`clone` (JSON round-trip) and its two-pass
- * shape — see `diffLikeSyncState`. If the plugin's version changes, this drifts; it is
- * a baseline, not a regression gate.
+ * `save(old)` REPLICATES the pre-#166 algorithm rather than calling it — that code is
+ * gone. The replication is byte-faithful to the original's `same`/`clone` (JSON round
+ * trip) and its two-pass shape. `save(new)` imports the shipped `fieldDelta`, so it
+ * cannot drift from what runs.
+ *
+ * The measured gain is ~1.4×, NOT the "~0" the design predicted. Removing the wholesale
+ * re-clone removed the extra cost; the O(N) scan remains, because the plugin still diffs
+ * its in-memory array on save. Driving that to ~0 needs writes issued at each mutation
+ * site instead of derived by diffing — deliberately not done, since it means rewriting
+ * ~40 call sites to save 75ms on a 25,000-coding corpus.
  */
 
 import { ProjectLog } from '../core/project-log.js';
 import { HLC } from '../core/hlc.js';
 import { ItemStore, foldItems, isItemOp } from '../core/item-store.js';
 import { mergeProjects } from '../core/collab-sync.js';
+import { fieldDelta } from '../plugins/builtin-caqdas/index.js';
 
 const OWNER = 'builtin-caqdas';
 const SIZES = process.argv.slice(2).map(Number).filter((n) => Number.isFinite(n) && n > 0);
@@ -98,6 +105,24 @@ function diffLikeSyncState(arr, shadow, put) {
   return { shadow: new Map([...now].map(([k, v]) => [k, clone(v)])), writes };
 }
 
+/**
+ * The REPLACEMENT (#166 step 2): a per-field delta, and a shadow that re-clones only the
+ * record that moved. This is the real `syncState` path, imported rather than copied — so
+ * unlike `diffLikeSyncState` above it cannot drift from what ships.
+ */
+function diffNarrow(arr, shadow) {
+  let writes = 0;
+  const now = new Map(arr.filter((x) => x && x.id).map((x) => [x.id, x]));
+  for (const [id, val] of now) {
+    const delta = fieldDelta(shadow.get(id), val);
+    if (!delta) continue;
+    writes++;
+    shadow.set(id, clone(val));
+  }
+  for (const id of [...shadow.keys()]) if (!now.has(id)) { writes++; shadow.delete(id); }
+  return { shadow, writes };
+}
+
 // --- timing ------------------------------------------------------------------
 
 const ms = (t) => `${t.toFixed(1)}ms`;
@@ -112,7 +137,7 @@ const rows = [];
 
 // --- the run -----------------------------------------------------------------
 
-console.log('CrossTab log performance — baseline BEFORE the #166 rebuild');
+console.log('CrossTab log performance — #166 (save(old) is the pre-rebuild algorithm)');
 console.log(`node ${process.version}  ·  ${new Date().toISOString()}\n`);
 
 for (const N of CORPUS) {
@@ -141,6 +166,11 @@ for (const N of CORPUS) {
   const diff = time(() => diffLikeSyncState(live, shadow, () => {}));
   shadow = diff.out.shadow;
 
+  // Same edit, through the shipped path.
+  const narrowShadow = new Map(live.map((v) => [v.id, clone(v)]));
+  live[Math.floor(N / 2)].end += 3;
+  const narrow = time(() => diffNarrow(live, narrowShadow));
+
   // 5. merge — two peers that each coded 5% more after diverging.
   const bytes = Buffer.byteLength(JSON.stringify(peer.log.serialize()));
   const divergeN = Math.max(1, Math.round(N * 0.05));
@@ -168,6 +198,7 @@ for (const N of CORPUS) {
     refold: foldAgain.ms,
     order: order.ms,
     diff: diff.ms,
+    narrow: narrow.ms,
     merge: merge.ms,
     bytes,
     mergedOps: merge.out?.log?.length ?? merge.out?.ops?.length ?? null,
@@ -177,7 +208,8 @@ for (const N of CORPUS) {
     `${String(N).padStart(6)} codings │ ` +
     `append ${ms(append.ms).padStart(9)} │ fold ${ms(fold.ms).padStart(8)} │ ` +
     `refold ${ms(foldAgain.ms).padStart(8)} │ order ${ms(order.ms).padStart(8)} │ ` +
-    `diff ${ms(diff.ms).padStart(8)} │ merge ${ms(merge.ms).padStart(9)} │ log ${KB(bytes).padStart(7)}`,
+    `save(old) ${ms(diff.ms).padStart(8)} │ save(new) ${ms(narrow.ms).padStart(8)} │ ` +
+    `merge ${ms(merge.ms).padStart(9)} │ log ${KB(bytes).padStart(7)}`,
   );
 }
 
@@ -191,7 +223,7 @@ for (const r of rows) {
   console.log(
     `${String(r.N).padStart(6)} │ fold ${per.toFixed(2)}µs/coding │ ` +
     `scaling ${grow.toFixed(2)}× linear │ ` +
-    `diff ${((r.diff / r.N) * 1000).toFixed(2)}µs/coding │ ` +
+    `save ${r.diff.toFixed(1)}→${r.narrow.toFixed(1)}ms (${(r.diff / Math.max(r.narrow, 0.001)).toFixed(1)}× faster) │ ` +
     `${(r.bytes / r.N).toFixed(0)} bytes/coding`,
   );
 }
@@ -199,8 +231,9 @@ for (const r of rows) {
 console.log(`
 Reading this:
   · fold/refold is paid on EVERY load and workspace refresh — the number a user feels.
-  · diff is the cost of saving ONE boundary nudge; #166 step 2 replaces it with a single
-    narrow put, so this column should go to ~0 after the rebuild.
+  · save(old) vs save(new) is the cost of saving ONE boundary nudge: the whole-collection
+    re-clone versus the per-field delta that shipped. Both do the same work; only one
+    re-clones every record in the corpus to do it.
   · scaling >1.0 means super-linear: the corpus is getting more expensive per coding.
   · bytes/coding × your real corpus = the project-file growth to expect.
 `);

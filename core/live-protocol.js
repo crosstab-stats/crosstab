@@ -55,6 +55,8 @@ import { debug } from './debug.js';
 export class LiveDoc {
   #selfId;
   #mergers;
+  /** (owner, collection) => should a concurrent same-record edit be surfaced? (#166) */
+  #surfaces = null;
   #mine;
   #peers = new Map(); // peerId → their latest manifest
   #send;
@@ -67,10 +69,11 @@ export class LiveDoc {
   #paused = false; // a simulated/real network partition: buffer both directions
   #active = new Set(); // peers actually co-authoring (we've heard a hello/state from them)
 
-  constructor({ selfId, manifest, mergers = {}, send, onChange, onConflicts, onPeers, onResolved }) {
+  constructor({ selfId, manifest, mergers = {}, surfaces = null, send, onChange, onConflicts, onPeers, onResolved }) {
     this.#selfId = selfId;
     this.#mine = manifest;
     this.#mergers = mergers;
+    this.#surfaces = surfaces ?? null;
     this.#send = send;
     this.#onChange = onChange;
     this.#onConflicts = onConflicts;
@@ -173,7 +176,7 @@ export class LiveDoc {
       const iAmLower = this.#selfId < pid;
       const lower = iAmLower ? this.#mine : theirs;
       const higher = iAmLower ? theirs : this.#mine;
-      const { manifest: merged, conflicts } = mergeProjects(lower, higher, this.#mergers, this.#resolutions);
+      const { manifest: merged, conflicts } = mergeProjects(lower, higher, this.#mergers, this.#resolutions, { surfaces: this.#surfaces });
       const changed = !manifestsEqual(merged, this.#mine);
       debug('live', 'converge', { peer: pid, iAmLower, conflicts: conflicts.length, changed });
 

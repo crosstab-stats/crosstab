@@ -28,7 +28,7 @@ import { parseInviteLink } from './live-invite.js';
 import { findOrphans, itemRefSources, refsIn } from './asset-refs.js';
 import { openRehomeDialog } from './rehome-ui.js';
 import { declaredCollections, assetRefDecls, undeclaredItemsGuard, CORE_COLLECTIONS,
-         sidebarCollections, recordLabel } from './collections.js';
+         sidebarCollections, recordLabel, surfacesConflicts } from './collections.js';
 import { LivePresence } from './live-presence.js';
 import { mergersFor } from './builtin-mergers.js';
 import { OutputExportService } from './output-export.js';
@@ -1080,6 +1080,13 @@ export async function boot(mounts) {
     // peer's CAQDAS coding / spatial slots actually MERGE (not clobber) across a shared
     // folder — and, later, live. Third-party plugin blobs need the sandbox bridge (todo).
     getMergers: () => mergersFor(plugins ? plugins.list().filter((p) => p.activated).map((p) => p.id).filter(Boolean) : []),
+    // Which collections want a concurrent same-record edit SURFACED rather than decided
+    // silently by HLC (#166). Read from the same declaration every other generic
+    // behaviour reads, so a plugin says it once — and per collection, so opting codings
+    // in leaves spatial's deliberate LWW alone.
+    getSurfaces: () => (owner, collection) => surfacesConflicts(
+      [...CORE_COLLECTIONS, ...declaredCollections(plugins?.list() ?? [], ownerToken)], owner, collection,
+    ),
     // A project also remembers each plugin workspace's state blob. After swapping in
     // the new project's blobs, force-remount any live workspace tabs so they re-read
     // their state — a plugin active in both the old and new project stays mounted, so

@@ -205,6 +205,9 @@ export class ProjectSync {
    * a recorded plugin can be told apart from one this install simply doesn't have. */
   #pluginIdentities;
   #getMergers;
+  /** () => ((owner, collection) => boolean) — collections that want concurrent
+   * same-record edits surfaced rather than silently decided (#166). */
+  #getSurfaces;
   /** Live co-authoring (#148 step 6): a LiveDoc riding the presence session's op
    * channel, or null when not co-authoring. Publishes local edits + applies merged
    * remote state (reusing local Parquet — no disk round-trip). */
@@ -335,7 +338,7 @@ export class ProjectSync {
    * @param {(keys: string[]) => Promise<void>} [deps.applyActivePlugins] - Restore
    *   a project's saved plugin set on open.
    */
-  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getAssetOps, applyAssetOps, assetBytes, getItemOps, applyItemOps, projectLog, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, materializeAnalyses, applyProjectPlugins, getPluginStates, pluginIdentities, getMergers }) {
+  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getAssetOps, applyAssetOps, assetBytes, getItemOps, applyItemOps, projectLog, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, materializeAnalyses, applyProjectPlugins, getPluginStates, pluginIdentities, getMergers, getSurfaces }) {
     this.#store = projectStore;
     this.#datasets = datasets;
     this.#ui = ui;
@@ -364,6 +367,7 @@ export class ProjectSync {
     this.#getPluginStates = getPluginStates ?? null;
     this.#pluginIdentities = pluginIdentities ?? null;
     this.#getMergers = getMergers ?? null;
+    this.#getSurfaces = getSurfaces ?? null;
   }
 
   /** Merger map for a sync (core + active builtin plugins), or core-only if unwired. */
@@ -1587,6 +1591,9 @@ export class ProjectSync {
       bundle,
       // No base: the merge derives the common ancestor from the shared op-id set (#148).
       mergers: this.#mergers(), // core + active builtin plugin mergers — merges CAQDAS coding across peers
+      // Per-collection conflict policy (#166): most item records resolve silently by
+      // HLC, but a collection may ask for a genuine disagreement to be shown instead.
+      surfaces: this.#getSurfaces ? this.#getSurfaces() : null,
       resolveConflicts: (conflicts) => showConflictDialog(conflicts),
       applyMerged: (id, manifest) => this.#applyMergedManifest(id, manifest),
       now: Date.now(),

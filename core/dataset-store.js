@@ -222,7 +222,7 @@ export class DatasetStore {
    *          assets?: Array<{id: string, bytes: Uint8Array, type?: string, name?: string}>}} entry
    * @returns {Promise<{id: string, version: number}>}
    */
-  async saveRecord({ id, name, savedAt, record, assets = [] }) {
+  async saveRecord({ id, name, savedAt, record, children = [], assets = [] }) {
     const release = await this.#acquire();
     try {
       if (navigator.storage?.persist) {
@@ -246,13 +246,18 @@ export class DatasetStore {
         stored.push({ id: a.id, file, type: a.type ?? 'application/octet-stream', name: a.name ?? '' });
       }
 
-      const manifest = { kind: 'record', name, savedAt, version, record, assets: stored };
+      // `children` are the records COMPOSED into this one (#166): a codebook's codes
+      // travel with the codebook, because a codebook without its codes is a name. They
+      // keep their ids, which is what lets a later pull match them against this
+      // project's copies instead of duplicating everything.
+      const manifest = { kind: 'record', name, savedAt, version, record, children, assets: stored };
       await this.#write(dir, 'manifest.json', JSON.stringify(manifest));
 
       const summary = {
         id, name, savedAt, version,
         kind: 'record',
         collection: record?.collection ?? null,
+        childCount: children.length,
         assetCount: stored.length,
       };
       const idx = cat.entries.findIndex((e) => e.id === id);

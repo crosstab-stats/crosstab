@@ -73,7 +73,53 @@ function foldWsLeaves(ops) {
  * @param {object|null} [resolutions]  user conflict choices (re-run to a clean result)
  * @returns {{manifest: object, conflicts: object[]}}
  */
-export function mergeProjects(mine, theirs, mergers = {}, resolutions = null) {
+/** The separator in an `item:` target's coordinates. */
+const NUL = String.fromCharCode(0);
+
+/**
+ * Same-record, same-field writes made concurrently by two peers, for collections that
+ * asked to hear about them.
+ *
+ * "Concurrent" here means neither side saw the other: the op is absent from the shared
+ * ancestor on both sides. A field both peers changed, to different values, from a common
+ * starting point is a real disagreement rather than a sequence of edits.
+ *
+ * @param {object[]} mo @param {object[]} to  one owner's ops from each peer
+ * @param {string} owner
+ * @param {(owner: string, collection: string) => boolean} [surfaces]
+ */
+function concurrentItemConflicts(mo, to, owner, surfaces) {
+  if (typeof surfaces !== 'function') return [];
+  const shared = new Set(sharedAncestor(mo, to).map((o) => o.id));
+  const newOps = (ops) => ops.filter((o) => o.type === 'putItem' && !shared.has(o.id));
+  const fieldsOf = (ops) => {
+    const byTarget = new Map();
+    for (const o of orderByHlc(newOps(ops))) {
+      if (!byTarget.has(o.target)) byTarget.set(o.target, {});
+      Object.assign(byTarget.get(o.target), o.payload?.fields ?? {});
+    }
+    return byTarget;
+  };
+  const mineBy = fieldsOf(mo);
+  const theirsBy = fieldsOf(to);
+  const out = [];
+  for (const [target, mineFields] of mineBy) {
+    const theirFields = theirsBy.get(target);
+    if (!theirFields) continue;
+    const [, collection] = String(target).startsWith('item:')
+      ? String(target).slice('item:'.length).split(NUL)
+      : [];
+    if (!collection || !surfaces(owner, collection)) continue;
+    for (const [field, mineVal] of Object.entries(mineFields)) {
+      if (!(field in theirFields)) continue;
+      if (stableStringify(mineVal) === stableStringify(theirFields[field])) continue;
+      out.push({ owner, scope: target, field, mine: mineVal, theirs: theirFields[field], kind: 'item-field' });
+    }
+  }
+  return out;
+}
+
+export function mergeProjects(mine, theirs, mergers = {}, resolutions = null, opts = {}) {
   const conflicts = [];
   const mineLog = mine?.log ?? [];
   const theirsLog = theirs?.log ?? [];
@@ -96,6 +142,17 @@ export function mergeProjects(mine, theirs, mergers = {}, resolutions = null) {
     const byId = new Map();
     for (const o of [...mo, ...to]) if (!byId.has(o.id)) byId.set(o.id, o);
     merged.push(...byId.values());
+
+    // Item records normally resolve a same-record collision silently by HLC, which is
+    // right for most plugin data — you do not prompt someone about a polygon. But a
+    // collection may declare `onConcurrentEdit: 'surface'`, and then a genuine collision
+    // is reported instead of decided. Two coders disagreeing about where a passage
+    // begins is the case: letting the clock pick a winner destroys one of their
+    // judgements silently, which is precisely what per-coder records exist to prevent.
+    //
+    // The union above still stands — nothing is dropped. This only ADDS a conflict for
+    // the user to settle, so declining to settle it leaves today's behaviour intact.
+    conflicts.push(...concurrentItemConflicts(mo, to, owner, opts.surfaces));
 
     // Blob-merge each leaf both sides diverged on.
     const mineLeaves = foldWsLeaves(mo);

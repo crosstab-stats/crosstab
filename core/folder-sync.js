@@ -58,11 +58,11 @@ export function manifestsEqual(a, b) {
  * @param {object|null} [resolutions]  user conflict choices (re-run to a clean result)
  * @returns {{action: 'seed'|'in-sync'|'merge', manifest: object, conflicts: object[]}}
  */
-export function decideSync(mine, theirs, mergers = {}, resolutions = null) {
+export function decideSync(mine, theirs, mergers = {}, resolutions = null, surfaces = null) {
   if (!theirs) return { action: 'seed', manifest: mine, conflicts: [] };
   if (manifestsEqual(theirs, mine)) return { action: 'in-sync', manifest: theirs, conflicts: [] };
   const [lo, hi] = contentSig(mine) <= contentSig(theirs) ? [mine, theirs] : [theirs, mine];
-  const { manifest, conflicts } = mergeProjects(lo, hi, mergers, resolutions);
+  const { manifest, conflicts } = mergeProjects(lo, hi, mergers, resolutions, { surfaces });
   return { action: 'merge', manifest, conflicts };
 }
 
@@ -79,9 +79,9 @@ export function decideSync(mine, theirs, mergers = {}, resolutions = null) {
  * @param {number} [arg.now]
  * @returns {Promise<{action: string, manifest: object, conflicts: object[]}>}
  */
-export async function syncOnce({ store, id, mine, mergers = {}, resolutions = null, now }) {
+export async function syncOnce({ store, id, mine, mergers = {}, resolutions = null, surfaces = null, now }) {
   const theirs = await store.readManifest(id);
-  const decision = decideSync(mine, theirs, mergers, resolutions);
+  const decision = decideSync(mine, theirs, mergers, resolutions, surfaces);
   if (decision.action === 'in-sync') return decision;
   if (decision.action === 'merge' && decision.conflicts.length && !resolutions) {
     return { action: 'conflicts', manifest: decision.manifest, conflicts: decision.conflicts };
@@ -111,7 +111,7 @@ export async function syncOnce({ store, id, mine, mergers = {}, resolutions = nu
  * @param {number} [arg.now]
  * @returns {Promise<{action: string, manifest: object, conflicts: object[], changed: boolean}>}
  */
-export async function syncFolderProject({ store, id, name, bundle, mergers = {}, resolveConflicts, applyMerged, dirty, now }) {
+export async function syncFolderProject({ store, id, name, bundle, mergers = {}, surfaces = null, resolveConflicts, applyMerged, dirty, now }) {
   const savedAt = now ?? Date.now();
   // 1. Read the peer first. A throw here means the file is THERE and unreadable (a
   // stale key, or a half-written rewrite) — never seed over that. `readManifest`
@@ -127,12 +127,12 @@ export async function syncFolderProject({ store, id, name, bundle, mergers = {},
   const mine = buildManifest({ name, savedAt, bundle }); // 3. my manifest (pure)
 
   // 4. Decide; resolve conflicts if any (report what was surfaced even after resolution).
-  let decision = decideSync(mine, theirs, mergers);
+  let decision = decideSync(mine, theirs, mergers, null, surfaces);
   const surfaced = decision.conflicts;
   if (decision.action === 'merge' && decision.conflicts.length) {
     const resolutions = resolveConflicts ? await resolveConflicts(decision.conflicts) : null;
     if (resolutions == null) return { action: 'cancelled', conflicts: surfaced, changed: false, manifest: null };
-    decision = decideSync(mine, theirs, mergers, resolutions);
+    decision = decideSync(mine, theirs, mergers, resolutions, surfaces);
   }
 
   // 5. Write the outcome.
