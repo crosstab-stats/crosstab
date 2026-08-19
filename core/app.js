@@ -1425,6 +1425,22 @@ export async function boot(mounts) {
         if (!handled) void workspaceManager.remountActive(plugins.list());
       });
     });
+    // A workspace may depend on the CONTENT of the data, not just on which dataset is
+    // active — a CAQDAS coding quotes a cell, so editing that cell changes where every
+    // coding in it lands (#166). The switch gate above deliberately ignores row edits,
+    // which was right when nothing read the text; it left the coding tab showing the old
+    // transcript until the user restarted the plugin (found in real use). Debounced,
+    // because a replay or a bulk transform emits a burst of these and one refresh at the
+    // end is what a workspace actually needs.
+    let dataRefreshTimer = null;
+    bus.on(CoreEvents.DATA_CHANGED, () => {
+      clearTimeout(dataRefreshTimer);
+      dataRefreshTimer = setTimeout(() => {
+        void workspaceManager.notifyWorkspaceRefresh().then((handled) => {
+          if (!handled) void workspaceManager.remountActive(plugins.list());
+        });
+      }, 150);
+    });
   }
   // In-app plugin creator (Edit ▸ Create plugin…, and the manager's "Create new…"):
   // authors a plugin from a template and loads it through the same sandbox.

@@ -627,7 +627,7 @@ export const workspace = {
         const preview = d.kind === 'media' ? '▸ media' : (d.text.slice(0, 40) || '(empty)');
         const t = document.createTextNode(' ' + preview);
         row.append(n, c, t);
-        row.addEventListener('click', () => { activeRid = d.rid; renderDocList(); renderText(); });
+        row.addEventListener('click', () => { activeRid = d.rid; lastSpan = null; renderDocList(); renderText(); });
         docList.append(row);
       });
     }
@@ -2030,6 +2030,27 @@ export const workspace = {
       return { lo, hi, text: doc.text.slice(lo, hi), range };
     };
 
+    /**
+     * The last passage the user actually selected in this document.
+     *
+     * Re-anchoring needs a selection that OUTLIVES a click, and a live selection does not:
+     * you select the correct passage, click the mis-placed highlight to reach its menu,
+     * and the click collapses what you just selected — so the re-anchor button had
+     * nothing to work with (reported from real use). Remembering the last non-empty
+     * selection makes the gesture work in the order a person actually performs it, and
+     * makes the button reachable from the drift list too, where the same click problem
+     * applies.
+     *
+     * Cleared when the document changes: a span means nothing in another transcript.
+     */
+    let lastSpan = null;
+    document.addEventListener('selectionchange', () => {
+      const span = currentSpan();
+      if (span) lastSpan = { ...span, rid: activeRid };
+    });
+    /** The span to re-anchor to: what is selected now, else what was selected last. */
+    const spanForReanchor = () => currentSpan() ?? (lastSpan?.rid === activeRid ? lastSpan : null);
+
     // Record a segment for a span, re-render, and KEEP the passage selected so more
     // codes can be layered onto it (multi-coding — the NVivo/MAXQDA rhythm). The
     // re-render rebuilds the transcript DOM, so the live selection is restored over
@@ -2113,7 +2134,7 @@ export const workspace = {
 
     /** Move a coding to the passage the user has selected. */
     const reanchorToSelection = async (seg) => {
-      const span = currentSpan();
+      const span = spanForReanchor();
       if (!span) {
         app.results?.appendError?.('Select the correct passage in the transcript first, then re-anchor.');
         return;
@@ -2128,6 +2149,7 @@ export const workspace = {
       seg.end = fields.end;
       seg.status = 'exact';
       seg.reason = null;
+      lastSpan = null; // consumed — so a second click cannot silently reuse it
       save();
       renderText(); renderDocList(); renderCodes();
     };
@@ -2411,6 +2433,11 @@ export const workspace = {
     // a full state reload without tearing down the iframe.
     workspace._onDsChanged = async () => {
       if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+      // Which document the user was reading. A reload now happens on every data change,
+      // not only on a dataset switch, so dropping this would throw the reader back to the
+      // first transcript every time they fixed a typo. Restored below only if it still
+      // exists — on a real dataset switch it will not, and the fallback applies.
+      const wasReading = activeRid;
       const fresh = await loadState(app);
       Object.assign(state, fresh);
       resetPersisted(state);
@@ -2429,6 +2456,7 @@ export const workspace = {
       tracking = false;
       await populateColumns();
       await loadDocs();
+      if (wasReading && docs.some((d) => d.rid === wasReading)) activeRid = wasReading;
       if (state.pendingImport) await resolvePendingImport();
       renderAll();
     };

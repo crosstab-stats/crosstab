@@ -67,6 +67,31 @@ const isSourceOp = (op) => SOURCE_TYPES.has(op?.type);
 /** Content ids are hex, but never let a crafted one escape the block directory. */
 const safeAssetName = (id) => String(id).replace(/[^a-z0-9]/gi, '').slice(0, 96);
 
+/**
+ * A stored record-block manifest as the shape callers consume.
+ *
+ * Pure and exported for one specific reason: this mapping was written field by field
+ * inside `load()`, and when `children` was added to the write side nobody added it here —
+ * so every block on disk was complete and every add produced an empty codebook, with
+ * nothing failing anywhere. A hand-rolled projection of a growing shape is exactly the
+ * kind of code that needs a test, and it could not have one while it was inline.
+ *
+ * @param {string} id @param {object} manifest @param {object[]} assets  bytes already read
+ */
+export function recordBlockFromManifest(id, manifest, assets = []) {
+  return {
+    id,
+    kind: 'record',
+    name: manifest?.name ?? '',
+    savedAt: manifest?.savedAt ?? 0,
+    version: manifest?.version ?? 1,
+    record: manifest?.record ?? null,
+    // The records COMPOSED into this one — a codebook's codes travel with the codebook.
+    children: Array.isArray(manifest?.children) ? manifest.children : [],
+    assets,
+  };
+}
+
 export class DatasetStore {
   /** Serialises catalog read-modify-write so concurrent saves/deletes can't
    * interleave and orphan/resurrect entries. */
@@ -289,15 +314,7 @@ export class DatasetStore {
           console.warn('[library] asset missing from block', a.file, e);
         }
       }
-      return {
-        id,
-        kind: 'record',
-        name: manifest.name,
-        savedAt: manifest.savedAt,
-        version: manifest.version ?? 1,
-        record: manifest.record,
-        assets,
-      };
+      return recordBlockFromManifest(id, manifest, assets);
     }
     // The folded op recipe (the shape DataStore.restoreState consumes): source ops get
     // their Parquet re-attached from the sidecar; transform ops are inline.

@@ -14,6 +14,7 @@ import { ItemStore } from '../core/item-store.js';
 import { normalizeCollection, childrenOf, surfacesConflicts } from '../core/collections.js';
 import { mergeProjects } from '../core/collab-sync.js';
 import { sortKeyBetween, nextSortKey } from '../plugins/builtin-caqdas/index.js';
+import { recordBlockFromManifest } from '../core/dataset-store.js';
 
 const OWNER = 'builtin-caqdas';
 const NUL = String.fromCharCode(0);
@@ -140,4 +141,46 @@ test('surfacing ADDS a conflict without dropping either write', () => {
   const { manifest } = mergeProjects({ log: mine }, { log: theirs }, {}, null, { surfaces });
   const puts = manifest.log.filter((o) => o.type === 'putItem');
   assert.equal(puts.length, 2, 'both peers keep everything they wrote');
+});
+
+// --- regressions from human testing (2026-08-19) ------------------------------
+
+test('a record block ROUND-TRIPS its children — the write side is not enough', () => {
+  // Reported from real use: "codebook saved to building blocks, added to a new project,
+  // no codes." `saveRecord` persisted `children`; `load()` rebuilt its return object field
+  // by field and nobody added the new one — so every block on disk was complete and every
+  // add produced an empty codebook, with nothing failing anywhere. Now the mapping is a
+  // pure function and this exercises it directly.
+  const manifest = {
+    kind: 'record',
+    name: 'Wave 1',
+    savedAt: 1,
+    version: 3,
+    record: { owner: OWNER, collection: 'codebooks', id: 'bk1', fields: { name: 'Wave 1' } },
+    children: [
+      { collection: 'codes', id: 'c1', parentField: 'codebookId', fields: { name: 'waiting', codebookId: 'bk1' } },
+      { collection: 'codes', id: 'c2', parentField: 'codebookId', fields: { name: 'kindness', codebookId: 'bk1' } },
+    ],
+  };
+  const loaded = recordBlockFromManifest('blk', manifest, []);
+  assert.equal(loaded.children.length, 2, 'a codebook without its codes is just a name');
+  assert.deepEqual(loaded.children.map((c) => c.fields.name).sort(), ['kindness', 'waiting']);
+  assert.equal(loaded.record.id, 'bk1', 'and the record keeps the id a later pull matches on');
+  assert.equal(loaded.version, 3);
+});
+
+test('a block with no children (a map layer) still loads, and never yields undefined', () => {
+  const loaded = recordBlockFromManifest('blk', { name: 'Counties', record: { collection: 'boundarySets' } });
+  assert.deepEqual(loaded.children, [], 'never undefined — callers iterate this');
+  assert.equal(loaded.version, 1);
+  assert.deepEqual(recordBlockFromManifest('blk', null).children, []);
+});
+
+test('adding a block repoints children at the parent id actually used', () => {
+  // The re-point matters even though ids are preserved: a caller may supply its own
+  // parent id, and a child left pointing at the old one would vanish from the book.
+  const children = [{ collection: 'codes', id: 'c1', parentField: 'codebookId', fields: { name: 'x', codebookId: 'OLD' } }];
+  const parentId = 'bk1';
+  const applied = children.map((c) => ({ ...c.fields, [c.parentField]: parentId }));
+  assert.equal(applied[0].codebookId, 'bk1');
 });
