@@ -402,6 +402,19 @@ All four steps are built, with tests. What landed, and the three things worth kn
 - **Record blocks carry their composed children and keep record ids**, so a codebook is
   portable and a later pull has identity to match on.
 
+**Verified in the browser** (localhost dev server, demo-qual, 2026-08-19), not only in
+node — the tests cover the pure half, so the wiring needed its own check:
+
+| Checked | Result |
+|---|---|
+| `resolveAnchor` through a real `import()` | exact / moved / orphaned / media-swap all correct |
+| **the original bug**: code a passage, then `setCell` text in front of it | coding follows; still covers exactly its own words |
+| the op's derived `reads[]` | `ds:<id>/cell:response:<rid>` — the real cell address |
+| `staleReaders` over the real project log | reports that one coding, names the `setCell` that did it |
+| `unresolvedReads` over the real log | **zero** false-positive dangling reports |
+| switching into the Coding tab | writes **zero** ops — mount-never-writes holds, though resolution now runs on every document load |
+| console | no plugin or anchor errors |
+
 Three honest notes:
 
 1. **The save-cost prediction was wrong** — 1.4×, not ~0. See §13's measurements.
