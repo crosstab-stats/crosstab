@@ -137,8 +137,32 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       selection model, and a mid-session "switch me to my qual toolkit" is plausible.
 
 
-- [ ] **#166 — THE CODING SYSTEM: one defect behind four symptoms (owner call,
-      2026-08-19).** Umbrella design. The owner's read is right and worth stating as the
+- [~] **#166 — THE CODING SYSTEM: one defect behind four symptoms. BUILT (2026-08-19),
+      needs human verification of the UI.** All four steps shipped across three commits
+      (`94764ff`, `b502f26`, `de461e1`); 600/600 tests green, and the wiring was driven in
+      a real browser (see the verification table in the design doc). **#163, #164 and #165
+      are subsumed — they were this.**
+
+      **Owner's call, recorded:** no migration. Old codings and old record blocks stop
+      working rather than being carried; the pre-release banner covers it, and a
+      back-compat path would have been a permanent second route through the most delicate
+      logic in the system.
+
+      **What still wants a human**, since the CAQDAS UI lives in a sandboxed
+      opaque-origin iframe nothing outside can drive: code a passage, edit that cell in
+      the grid, and confirm the amber banner names it; then use *Re-anchor to selection*
+      and check the note thread survived; then *Change code* and check the same. Plus a
+      codebook promoted to Building Blocks and added to a second project — its codes
+      should arrive, its codings must NOT.
+
+      **Deferred, deliberately:** the rolled-up "coding session" marker in Syntax mode
+      (the owner's point that scripting codings does not really make sense stands — that
+      view may want a broader rethink). Nothing depends on it; the log stays fine-grained
+      either way.
+
+      Original design below.
+
+      Umbrella design. The owner's read is right and worth stating as the
       finding: #163 (codebooks aren't portable), #164 (editing a cell moves the coding),
       #165 (a coding can only be deleted) are not three bugs. They are one design fault
       seen from three angles, and patching them separately will produce three mechanisms
