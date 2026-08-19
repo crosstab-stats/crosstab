@@ -80,6 +80,42 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       click reopens the launcher.
 
 
+- [ ] **#167 — project management belongs in the launcher (user, 2026-08-19).** "Having
+      to start a project to delete or rename a saved project seems odd." It is: rename and
+      delete live in the SIDEBAR's other-projects zone (app.js ~2786–2794), which only
+      exists once a project is open. The launcher already lists the same projects
+      (launcher.js ~314) — it has the list and none of the verbs, so managing your
+      projects means first opening one you did not want.
+
+      **This is a follow-on from #158, not a new capability.** Managing projects while
+      none is open was impossible when a project existed from boot; making "no project
+      open" a real state is what makes this a sensible place to put these.
+
+      Wanted on the launcher's Projects rail: **rename**, **delete**, and probably
+      **duplicate** (the natural home for "fork this codebook/project" once #166's
+      copy-on-add lands). Plus a way to see what a project IS before opening it — date,
+      dataset count — since a rail of names is a poor way to find the right one.
+
+      **Do not build a third rendering.** The sidebar rows already bypass the shared
+      `#contentRow` builder (their own comment says why: the `<li>` holds its own
+      rename/delete buttons so it cannot itself be one). A launcher copy would make three
+      places that draw a project row and two that can manage one. Factor the row first,
+      then use it in both — same argument that made items-in-a-project and
+      items-in-a-block share a builder.
+
+      **Two things to get right:**
+      - **`deleteProject` does not confirm** — it deletes and, if the project was active,
+        silently starts a new one (project-sync.js ~2283). On the sidebar that sits behind
+        a small ✕ next to a project you are not in; on a launcher rail, where the rows are
+        big click-to-open targets, an unconfirmed adjacent delete is a trap. Confirm, and
+        say what is being destroyed.
+      - **A folder project's delete means something different.** The launcher lists
+        remembered FOLDER projects beside OPFS ones, but a folder is the user's own
+        directory in Dropbox/OneDrive. "Delete" there must mean *forget this shortcut*,
+        never *erase that folder* — the same honest-scope-boundary the sharing and
+        encryption work draws. Two verbs, worded differently, not one.
+
+
 - [ ] **#162 — user-defined plugin presets (user request, 2026-08-19).** The picker
       offers exactly one axis of curation: `Recommended for <discipline>`, pinned from
       each manifest's self-declared `disciplines` (launcher.js `#renderPlugins` ~385).
