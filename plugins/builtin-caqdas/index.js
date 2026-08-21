@@ -500,6 +500,11 @@ export const workspace = {
     const body = el('div', 'caqdas__body');
     const docList = el('div', 'caqdas__docs');
     const textPane = el('div', 'caqdas__text');
+    // The transcript, INSIDE the pane. Character offsets are derived by WALKING TEXT
+    // NODES, so they are the document's offsets only while the walked container holds
+    // nothing but the document — and the drift banner shares this pane. Null whenever the
+    // pane is showing something that is not a transcript (retrieve list, media, empty).
+    let transcript = null;
     const codePane = el('div', 'caqdas__codes');
     body.append(docList, textPane, codePane);
 
@@ -699,11 +704,14 @@ export const workspace = {
 
     function renderText() {
       textPane.textContent = '';
+      transcript = null;
       if (retrieveCodeId) { renderRetrieve(); return; }
       const doc = docs.find((d) => d.rid === activeRid);
       if (!doc) { const e = el('div', 'caqdas__empty'); e.textContent = 'Select a document.'; textPane.append(e); return; }
       if (doc.kind === 'media') { void renderMedia(doc); return; }
       renderDriftBanner(doc);
+      transcript = el('div', 'caqdas__transcript');
+      textPane.append(transcript);
       // Only codings whose anchor still LANDS are drawn. An orphan has no position, and
       // painting it at its last known offsets is precisely the confident-but-wrong
       // highlight this design exists to remove; it is reported in the banner instead, and
@@ -720,7 +728,7 @@ export const workspace = {
         if (b <= a) continue;
         const slice = doc.text.slice(a, b);
         const covering = segs.filter((s) => s.start <= a && s.end >= b);
-        if (!covering.length) { textPane.append(document.createTextNode(slice)); continue; }
+        if (!covering.length) { transcript.append(document.createTextNode(slice)); continue; }
         const m = el('mark');
         const code = codeById(covering[0].codeId);
         m.style.backgroundColor = code ? code.color : '#eee';
@@ -730,7 +738,7 @@ export const workspace = {
         m.textContent = slice;
         // Click a highlight to open its segment popup (memo + remove per covering code).
         m.addEventListener('click', (e) => { e.stopPropagation(); openSegmentMenu(covering, e); });
-        textPane.append(m);
+        transcript.append(m);
       }
     }
 
@@ -1987,7 +1995,7 @@ export const workspace = {
             if (enclosing.length) {
               dropSegments((s) => enclosing.includes(s));
               save(); renderText(); renderDocList(); renderCodes();
-              setSelectionRange(textPane, span.lo, span.hi); // keep selection for re-toggling
+              setSelectionRange(transcript, span.lo, span.hi); // keep selection for re-toggling
             } else {
               void addSegment(code.id, span);
             }
@@ -2038,14 +2046,19 @@ export const workspace = {
       const sel = document.getSelection();
       if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
       const range = sel.getRangeAt(0);
-      if (!textPane.contains(range.commonAncestorContainer)) return null;
-      const a = offsetWithin(textPane, range.startContainer, range.startOffset);
-      const b = offsetWithin(textPane, range.endContainer, range.endOffset);
+      if (!transcript || !transcript.contains(range.commonAncestorContainer)) return null;
+      const a = offsetWithin(transcript, range.startContainer, range.startOffset);
+      const b = offsetWithin(transcript, range.endContainer, range.endOffset);
       const lo = Math.min(a, b), hi = Math.max(a, b);
       if (hi <= lo) return null;
       const doc = docs.find((d) => d.rid === activeRid);
       if (!doc) return null;
-      return { lo, hi, text: doc.text.slice(lo, hi), range };
+      const text = doc.text.slice(lo, hi);
+      // A span covering no characters cannot anchor anything, and saying so beats writing
+      // it: while offsets were measured against the wrong container they ran past the end
+      // of short documents, and re-anchor wrote a quote of "" without complaint.
+      if (!text) return null;
+      return { lo, hi, text, range };
     };
 
     /**
@@ -2160,6 +2173,13 @@ export const workspace = {
       const doc = docs.find((d) => d.rid === seg.doc);
       if (!doc || doc.kind === 'media') return;
       const fields = await textCoding(seg.codeId, doc, span.lo, span.hi);
+      // `textRef` returns null for a span that covers nothing, and this path OVERWRITES a
+      // coding that already exists — so refuse rather than replace a working anchor with
+      // one that points nowhere. That trade cost a real coding once.
+      if (!fields.anchor?.ref) {
+        app.results?.appendError?.('That passage could not be anchored — the coding was left as it was.');
+        return;
+      }
       // Assign onto the SAME object: same id, same author, same notes.
       seg.anchor = fields.anchor;
       seg.quote = fields.quote;
@@ -2225,7 +2245,7 @@ export const workspace = {
       renderText(); renderDocList(); renderCodes();
       // Pick mode keeps the (possibly grown) passage selected (layer more codes);
       // paint mode clears it so the user moves straight on to the next passage.
-      if (restore) setSelectionRange(textPane, lo, hi);
+      if (restore) setSelectionRange(transcript, lo, hi);
       else document.getSelection()?.removeAllRanges();
     };
 
@@ -3338,7 +3358,12 @@ function hexToRgba(hex, alpha) {
 
 /** Absolute character offset of (node, offset) within `container`'s text — so a
  * selection over highlight spans maps back to the raw document text (the spans
- * wrap exact substrings, so concatenated text === raw text). */
+ * wrap exact substrings, so concatenated text === raw text).
+ *
+ * THE CONTAINER MUST HOLD THE DOCUMENT AND NOTHING ELSE. This walks every text node in
+ * it, so any chrome sharing the element — a banner, a button label — is counted as
+ * document characters and shifts every offset right. Pass the transcript, never the pane
+ * that contains it: that mistake anchored codings past the end of short documents. */
 function offsetWithin(container, node, offset) {
   let total = 0;
   const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
