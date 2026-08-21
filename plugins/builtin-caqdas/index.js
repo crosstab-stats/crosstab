@@ -161,6 +161,8 @@ const STYLES = `
 .caqdas__drift { display: flex; align-items: center; gap: 10px; padding: 8px 12px; margin: 0 0 10px;
   background: #fff4e0; border: 1px solid #e2b877; border-radius: 6px; font-size: 13px; color: #6b4a12; }
 .caqdas__driftmsg { flex: 1; }
+.caqdas__drifthead { font-weight: 600; }
+.caqdas__drifthint { margin-top: 3px; font-size: 12px; }
 .caqdas__driftrow { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 13px;
   border-bottom: 1px solid #eee; }
 .caqdas__driftrow .nm { font-weight: 600; }
@@ -402,7 +404,14 @@ export const workspace = {
       document.head.append(s);
     }
     root.textContent = '';
-    const el = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
+    // (tag, cls, text). The text is set as textContent, never innerHTML: what flows
+    // through here includes code names and quoted participant passages.
+    const el = (tag, cls, text) => {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text != null) e.textContent = text;
+      return e;
+    };
 
     // --- memos / annotation threads (#148 step 3) ----------------------------
     // Flat, chronological, author-stamped notes anchored to a segment or code by id.
@@ -649,7 +658,16 @@ export const workspace = {
       const bits = [];
       if (lost) bits.push(`${lost} coding${lost === 1 ? '' : 's'} no longer match${lost === 1 ? 'es' : ''} this document`);
       if (moved) bits.push(`${moved} approximate match${moved === 1 ? '' : 'es'}`);
-      bar.append(el('span', `⚠ ${bits.join(' · ')}`, 'caqdas__driftmsg'));
+      // A bare count says something is off without answering the only question the
+      // researcher actually has, which is whether to trust the highlight in front of them.
+      const msg = el('span', 'caqdas__driftmsg');
+      msg.append(el('div', 'caqdas__drifthead', `⚠ Coding drift — ${bits.join(' · ')}`));
+      msg.append(el('div', 'caqdas__drifthint', lost && moved
+        ? 'The text these codings quote has changed since they were made.'
+        : lost
+          ? 'Their quoted text is no longer in this document, so nothing is highlighted for them.'
+          : 'The quoted text was edited, so each highlight is the closest match — check it still covers what you meant.'));
+      bar.append(msg);
       const show = el('button', 'caqdas__btn');
       show.textContent = lost ? 'Review' : 'Details';
       show.title = 'List the codings whose anchor no longer lands cleanly';
@@ -661,9 +679,9 @@ export const workspace = {
         const row = el('div', 'caqdas__driftrow');
         const code = codeById(sg.codeId);
         const sw = el('span', 'caqdas__sw'); sw.style.backgroundColor = code ? code.color : '#ccc';
-        row.append(sw, el('span', code ? code.name : '(code)', 'nm'));
-        row.append(el('span', sg.quote || '', 'q'));
-        row.append(el('span', sg.reason || sg.status, 'why'));
+        row.append(sw, el('span', 'nm', code ? code.name : '(code)'));
+        row.append(el('span', 'q', sg.quote || ''));
+        row.append(el('span', 'why', sg.reason || sg.status));
         // Re-anchoring is a USER action, which is the whole point: the resolver reports,
         // the human decides. Select the correct passage first, then press this.
         const fix = el('button', 'caqdas__btn');
@@ -742,7 +760,7 @@ export const workspace = {
         const tx = el('div'); tx.textContent = s.quote ?? ''; item.append(tx);
         // A coding whose anchor no longer lands is still listed — it keeps its code and
         // its notes — but it says so rather than pretending to point somewhere.
-        if (isUnsure(s)) item.append(el('div', `⚠ ${s.reason || s.status}`, 'caqdas__segwarn'));
+        if (isUnsure(s)) item.append(el('div', 'caqdas__segwarn', `⚠ ${s.reason || s.status}`));
         item.addEventListener('click', () => { activeRid = s.doc; retrieveCodeId = null; renderDocList(); renderText(); });
         textPane.append(item);
       }
@@ -2314,7 +2332,7 @@ export const workspace = {
         menu.append(tools);
 
         if (isUnsure(seg)) {
-          menu.append(el('div', `⚠ ${seg.reason || seg.status}`, 'caqdas__segwarn'));
+          menu.append(el('div', 'caqdas__segwarn', `⚠ ${seg.reason || seg.status}`));
         }
         menu.append(renderThread('segment', seg, refreshView)); // author-stamped notes thread (#148)
       }
