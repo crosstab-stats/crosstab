@@ -39,6 +39,33 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       memo list. That is memo RETRIEVAL, a feature with its own vocabulary — nearer the
       codebook manager than this — and nothing here forecloses it.
 
+- [ ] **#169 — the tests cannot reach the plugin UI, and it shows (audit, 2026-08-21).**
+      Five bugs have now come from the one area the suite cannot touch: three in `5cf95cb`
+      (re-anchor with no selection, a promoted codebook arriving empty, cell edits never
+      reaching the plugin) and two on 2026-08-20 (`aa55b65` the drift banner rendering no
+      text at all, `a9db12c` selection offsets measured against the pane).
+
+      `a9db12c` is the one that makes the case: it is **pure arithmetic over text nodes** —
+      walk a container, count characters, compare against the document — with no rendering,
+      no layout and no user input involved. A few dozen lines of DOM stub (element, text
+      node, `createTreeWalker`, `contains`) would have caught it outright, and would also
+      cover `offsetWithin`/`setSelectionRange` round-tripping and the banner's own markup.
+      The repo takes no dependencies, so this means a hand-rolled stub, not jsdom.
+
+      **Owner's call, deliberately not assumed:** whether a stub that must imitate a
+      TreeWalker is worth maintaining, versus continuing to find these by hand. Recorded
+      because five is no longer a coincidence.
+
+- [ ] **#170 — three source files contain stray NUL bytes, and grep silently skips them
+      (audit, 2026-08-21).** `core/rehome.js` had two, in a comment meaning to write the
+      escape `\0`; it was fixed in passing on 2026-08-20. Two remain: `core/codec-service.js`
+      (1) and `plugins/builtin-agreement/index.js` (2).
+
+      The cost is not the bytes, it is that `grep` classes such a file as binary and reports
+      "Binary file … matches" instead of the line — so a search across the codebase quietly
+      skips it. That is how `core/rehome.js` was nearly missed while auditing #151. A
+      one-character fix each; the reason it is worth doing is the searching, not the file.
+
 - [ ] **#161 — the launcher's "Start CrossTab" button is superfluous; clicking a
       source/project should just go (user request, 2026-08-19).** Today the rail
       buttons (`[data-source]`, saved projects, remembered folders) only set
@@ -461,7 +488,10 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       re-anchor ops grows the log further. Find the ceiling before a real corpus does.
 
 
-- [ ] **#163 — a codebook should CONTAIN its codes (user request, 2026-08-19).**
+- [x] **#163 — DONE, as part of #166 (verified 2026-08-21).** A codebook contains its
+      codes by COMPOSITION: `codes` declares `parent: {collection: 'codebooks', field:
+      'codebookId'}` (builtin-caqdas/index.js:100), `childrenOf` traverses it, and a
+      promoted codebook carries them. The design below is what was built.
       Raised while poking at #151: a codebook cannot be dragged to Building Blocks, and
       the reason it cannot is the reason it is worth changing. "It doesn't make much
       sense for a codebook to not contain the codes — it is, after all, a *code*book.
@@ -544,7 +574,11 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       so whatever carries code order has to survive a promote/add round-trip.
 
 
-- [ ] **#164 — BUG: editing a coded cell silently moves the coding to the wrong text
+- [x] **#164 — FIXED by #166's anchor rebuild (verified 2026-08-21).** Codings resolve
+      by what they QUOTE, not by stored offsets, and a coding the resolver is unsure about
+      is reported in the amber drift banner rather than drawn confidently in the wrong
+      place. Original report:
+      **#164 — BUG: editing a coded cell silently moves the coding to the wrong text
       (user, 2026-08-19).** Apply a code to a passage, then edit that cell in the data
       grid: the highlight now covers a different span. **Data integrity, not cosmetics —
       an existing project may already be carrying codings that are quietly wrong, and
@@ -593,7 +627,11 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       WITHIN one. Same family, different failure.
 
 
-- [ ] **#165 — a coding can only be REMOVED, never adjusted (user, 2026-08-19).** A
+- [x] **#165 — DONE in #166 (verified 2026-08-21).** *Re-anchor to selection* and
+      *Change code* both preserve the segment id, so the note thread survives — confirmed
+      in the browser by the owner. The memo-orphaning bug noted below was fixed with the
+      cascade in the same task. Original report:
+      **#165 — a coding can only be REMOVED, never adjusted (user, 2026-08-19).** A
       coding that overshoots by a character or two cannot be nudged: the only action is
       delete and re-code. Confirmed — the segment popup offers `Remove` plus a notes
       thread and nothing else (index.js:1971–1988), and the retrieve list offers a bare ✕
@@ -1284,7 +1322,11 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     list: an asset is the *bytes behind* a content item, not a thing you name, reuse or
     annotate. It stays a summary line with the reclaim action, outside the unified list.
 
-  - [ ] **Then:** records block = item ops + the assets their declared `assetRefs` point
+  - [x] **DONE — `promoteRecordToBlock` (core/library.js).** One correction to the note
+        below: ids are NOT re-minted. #166 reversed that deliberately, so a later pull can
+        match a project's copy against the block's and two projects adopting the same
+        codebook share ancestry instead of duplicating it. Original:
+    **Then:** records block = item ops + the assets their declared `assetRefs` point
         at, instantiated on add (ids re-minted, per #149 A9c). That is the
         "building-block contract expansion" #146 parked, and #152 already supplies every
         piece it needs.
@@ -1708,20 +1750,20 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   Save-breaking changes are fine through all of it — dev mode, and the handful of users
   know it.
 
-  - [ ] **Layer 1 — the item tier (host-only, nothing uses it).** `putItem`/`removeItem`
+  - [x] **DONE (`ItemStore` + the item tier ship in core.) — Layer 1 — the item tier (host-only, nothing uses it).** `putItem`/`removeItem`
         ops, generic fold, an `ItemStore` keyed `(owner, wsId, slotId, dsKey, collection,
         itemId)`, projection registered on `ProjectLog`. Headless tests: fold, undo,
         concurrent add-wins, delete-vs-edit. No UI, no plugin API, no migration.
-  - [ ] **Layer 2 — universal memos, host-side.** A `memos` collection on the item tier +
+  - [x] **DONE (host memos ship; counted in the sidebar since #168.) — Layer 2 — universal memos, host-side.** A `memos` collection on the item tier +
         core UI on the two anchors the host already owns: a dataset (sidebar) and an
         analysis output block. Ships user-visible value with no plugin involved, and proves
         the tier. Validate the schema against CAQDAS's known memo shape on paper first —
         anchored, flat, chronological, author-stamped — so Layer 3 doesn't re-cut it.
-  - [ ] **Layer 3 — CAQDAS migrates onto it.** codes/segments/memos become collections;
+  - [x] **DONE (CAQDAS runs on collections.) — Layer 3 — CAQDAS migrates onto it.** codes/segments/memos become collections;
         the v4 blob one-time folds into items; `mergeState`'s add-wins deleted; CAQDAS
         memos become host memos. **The riskiest step** — the migration must be lossless and
         the QDPX round-trip must survive it. Undo + History for qualitative work land here.
-  - [ ] **Layer 4 — plugin API.** Broker RPCs (`state.put`/`state.remove`/`state.items`),
+  - [x] **DONE (`app.items` + manifest `collections` are the live API.) — Layer 4 — plugin API.** Broker RPCs (`state.put`/`state.remove`/`state.items`),
         manifest declaration of collections + which fields are asset refs, `app.memos.*`.
         **Second-client check:** the collections model's two clients are host memos
         (Layer 2) and CAQDAS (Layer 3) — spatial does NOT exercise it. Two clients where
@@ -1769,7 +1811,13 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       project-scoped ones get their own section. Not new UX — the existing shape, made
       general.
 
-  - [ ] **SEMANTIC CHANGE to weigh (#152 L3) — same-field concurrent edits stopped
+  - [x] **ANSWERED by #166 (verified 2026-08-21).** The note below says the visibility
+        could only come back with "a conflict shape that is per-field, not per-op. Don't do
+        it without that." That is what `onConcurrentEdit: 'surface'` is: a per-collection
+        opt-in resolved per field, so a collision is SURFACED while edits to different
+        fields of one record still both survive (`de461e1`; four tests in
+        `composition.test.mjs`). CAQDAS codings opt in; everything else stays on LWW.
+        **SEMANTIC CHANGE to weigh (#152 L3) — same-field concurrent edits stopped
         surfacing a conflict.** The old CAQDAS blob merger raised an `edit/edit` conflict
         when two coders set the SAME field of one code differently (classically: recoloured
         it two ways) and asked the user to choose. Item records resolve per FIELD by HLC
@@ -1816,7 +1864,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         section lists project-scoped workspace BLOBS (`wsStore.listForDataset(null)`).
         Once spatial writes items instead, that section goes empty — it has to be ported
         to list items, or renaming/deleting a boundary set from the sidebar is lost.
-  - [ ] **Layer 5 — #150 asset generalisation + spatial as its client.** media→asset
+  - [x] **DONE (landed as #150; see that entry.) — Layer 5 — #150 asset generalisation + spatial as its client.** media→asset
         rename (a plugin API break, so batch it here), owner on the reference,
         `app.assets.list()`, refcount GC scanning declared ref fields — then move spatial's
         GeoJSON out of the op payload into assets, leaving a `boundarySets` registry. This
@@ -1958,11 +2006,18 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     `app.state.list()`, `app.state.delete(slotId)`.
   - **Migration:** v3 → v4 lifts all existing blobs under `_default` slot; labels
     get a 4-part key. v2/legacy migrations chain through.
-  - [ ] **Building-block eligibility** — a slot can be saved as a reusable
-    building block (pending building-block contract expansion). *Waits on #152: once a
-    slot's content is item ops, promoting one is a log slice rather than a blob copy.*
+  - [ ] **Building-block eligibility — UNBLOCKED (2026-08-21), not built.** A slot can be
+    saved as a reusable building block. The stated blocker is gone: #152 shipped, and
+    `promoteRecordToBlock` already promotes a RECORD with its declared children and their
+    assets. What is still missing is the same gap the "first-class plugin data" note
+    describes — a workspace SLOT is a blob, so it has no children to gather and nothing to
+    promote. Reusable boundary sets remain the concrete driver.
+    *Original: waits on #152: once a slot's content is item ops, promoting one is a log
+    slice rather than a blob copy.*
 
-- [ ] **Undoable plugin actions — let plugins add actions to the history where
+- [x] **DONE — folded into #152, which shipped.** Plugin writes are ops on the one true
+      log, so they undo and appear in History like any transform. Decision record below.
+      **Undoable plugin actions — let plugins add actions to the history where
       appropriate. → FOLDED INTO #152**, which carries the design and the phasing; the
       history below is the decision record. NOTE the cost stated at the end of the DECIDED
       bullet is **obsolete post-#148** — see #152.
@@ -2286,13 +2341,21 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Deferred features (intentionally not built yet)
 
-- [ ] **Online collaboration — async (folder-backed) + live (P2P) (#143).**
+- [~] **Online collaboration — async (folder-backed) + live (P2P) (#143). BOTH
+      TRANSPORTS SHIP** (verified 2026-08-21): folder-backed projects (`folder-sync.js`),
+      live P2P (`live-sync.js`, `live-presence.js`, `live-protocol.js`), invite links
+      (#156), asset gap-fill (#155). **What is left:** graph mode so iPads can join (below,
+      `showDirectoryPicker` is desktop-only), and the separate "Stop sharing" item near the
+      top of this file. Original:
+      **Online collaboration — async (folder-backed) + live (P2P) (#143).**
       Recurring faculty ask; keeps coming back. Two features people picture as
       separate — "put my project in a OneDrive folder" and "two of us edit at
       once" — are really *one* build wearing two hats. **The load-bearing piece is
       neither OneDrive nor WebRTC; it's making the op-log mergeable.** Live-sync and
       folder-sync are just two *transports* over that foundation.
-  - **The foundation — a mergeable op-log (the real project). [~] STARTED** —
+  - **The foundation — a mergeable op-log (the real project). [x] DONE** — landed on main
+    as #148's one-true-log migration; the branch note below is historical.
+    **[~] STARTED (historical)** —
     `core/merge.js` + op identity in `core/data-store.js` shipped on branch
     `feat/collab-merge-kernel`, 13 headless tests (`npm test`). Done so far:
     (1) every `#log` op carries a **stable id** (deterministic content+index id for
@@ -2797,7 +2860,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     feature, not a collab one, so it lives in **"## More analyses"** below (the stats
     backlog). The collab foundation it needs — per-coder attribution + distinct per-coder
     segments — is DONE here (steps 2–3); the κ/α computation is the analysis-side work.
-  - [~] **5. Presence chips in the top bar. BUILT (awaiting 2-window verify).** Live editors shown by initials/colour. Cheap
+  - [x] **5. Presence chips in the top bar. DONE — two-window verified during #156.** Live editors shown by initials/colour. Cheap
     add-on, but coupled to **live P2P** (`core/presence.js` broadcasts peers) — lands WITH
     the live co-authoring chunk, not before. The self-chip built in step 1 is its seed.
     - **DESIGN (user, 2026) — collaboration is TRANSPORT-AGNOSTIC.** Do NOT assume OPFS
@@ -2816,12 +2879,15 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       DATA streaming.
     - [x] **5a. Collab identity minted+persisted for folder projects** (roomFor now works)
       — to be GENERALISED to all projects per the transport-agnostic design above.
-    - [~] **5b. Go-live toggle + peer chips** — `core/live-presence.js` (LiveSession +
+    - [x] **5b. Go-live toggle + peer chips — DONE (two-window verified during #156)** — `core/live-presence.js` (LiveSession +
       PresenceRoom) + header UI; explicit opt-in; identity-beacon only. Solo-verified
       (hidden for OPFS, wired, no errors); needs a two-window test on a shared folder to
       confirm peers actually see each other's chips. This is also the first live-P2P
       session wired — the handshake the future **live data co-authoring** layer reuses.
-  - [~] **6. Live DATA co-authoring — WIRED end-to-end (6a+6b+6c); awaiting a two-window test.** — the layer the "start co-authoring" prompt launches.**
+  - [x] **6. Live DATA co-authoring — DONE. The two-window test happened in #156** and
+    earned its keep: it found three co-authoring bugs (`330a3b8`) plus a gap-fill bug
+    (`6f66025`), all fixed. #156's join-by-link path elevates a recipient straight to
+    co-authoring, which is this layer end to end. Body below is the original plan.** — the layer the "start co-authoring" prompt launches.**
     Presence (step 5) is *awareness only*. The convergence **ENGINE is done + proven
     headlessly** — `core/live-protocol.js` `LiveDoc` (canonical-peerId ordering → byte
     convergence) + `attachLiveDoc`, with tests covering disjoint recodes, order-independence,
@@ -3196,7 +3262,16 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         download, worker architecture) — the deferral is scope/effort, not feasibility.
         See the Whisper feasibility notes under #139 above.
 
-- [~] **File import — as a plugin extension point.** Importers register via the
+- [~] **File import — as a plugin extension point. THE FILE HALF IS NOW THE CODEC
+      INTERFACE** (#98/#130; verified 2026-08-21). `builtin-csv-codec` says it plainly:
+      it "replaces the separate builtin-csv-import and builtin-csv-export one-shot plugins
+      with a single read+write codec". Neither plugin named in the sub-items below exists
+      any more, and no plugin calls `app.importers` for a file format. What `importers`
+      still carries is the **`web`** source kind — FRED and Wikipedia declare one — so the
+      extension point is alive for fetch-your-own-bytes importers and superseded for files.
+      Also stale below: "delete the temporary core/demo-data.js seed" — demo data became a
+      launcher choice rather than a placeholder. Original:
+      **File import — as a plugin extension point.** Importers register via the
       public `app.importers.register({ label, extensions, parse })`; the engine
       (`core/import-service.js`) owns the File ▸ Import menu, the picker, and the
       commit (`DataStore.loadDataset`), and hands the chosen file's bytes to the
@@ -3780,7 +3855,15 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     that list); rich Markdown→Word (notes currently flatten to plain paragraphs);
     table-aware pagination via **Paged.js** for the PDF path; per-table CSV/HTML of
     an individual result table (overlaps with data export below).
-- [~] **Export data (exporter extension point).** Symmetric with import: a plugin
+- [~] **Export data (exporter extension point). LARGELY SUPERSEDED, same as import**
+      (verified 2026-08-21). Writing is a codec responsibility now — CSV, Parquet, NDJSON
+      and ReadStat (`.sav`/`.dta`) all round-trip through `codecs`, and File ▸ Export data…
+      is the one unified picker (#113). `plugins/builtin-csv-export/` named below no longer
+      exists. Document-shaped exporters remain their own plugins (`builtin-docx-export`,
+      `builtin-html-export`, `builtin-rdata-export`, `builtin-syntax-export`). Of the
+      deferred decisions below, only the **labels-vs-codes toggle** is genuinely still open.
+      Original:
+      **Export data (exporter extension point).** Symmetric with import: a plugin
       registers `app.exporters.register({ label, extensions, export })`, pulls the
       current (transformed) data via `app.data`, and returns bytes; the engine owns
       the File ▸ Export menu and the download. Exports the derived `dataset` VIEW,
@@ -4093,7 +4176,11 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       other CAQDAS surface. If a declarative descriptor can express "palette hidden
       because the author supplied colours", it can express most things.
 
-- [ ] **Lift chart kinds out of core into a `builtin-charts` plugin (user's call,
+- [x] **DONE (`39ae645`, renamed "Chart engine" in `1a8da64`; verified 2026-08-21).**
+      `core/charts/` holds only `runtime.js` + `stdlib.js` — the runtime and the drawing
+      helpers — and all eleven kinds live in `plugins/builtin-charts`, declared
+      `charts: {via: 'chartKinds', kinds: [...]}`. The split below is exactly what shipped.
+      **Lift chart kinds out of core into a `builtin-charts` plugin (user's call,
       2026-08-05).** "Everything is a plugin" — menu-shell.js states there is no
       privileged path and every built-in menu registers exactly as a third party would.
       Charts are currently the exception: all kinds live in core/chart-renderer.js and
@@ -4275,15 +4362,16 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       SEM / SD / 95% CI error-bar selector. Also gained since: black & white print
       mode, and a marker vocabulary that alternates fill before shape.
 
-      **What is left is four new chart KINDS**, each a `registerChartKind` object in
-      core/chart-renderer.js:
-      - **Violin plot** — full distribution shape. Needs a density estimate; decide
-        whether to compute it in JS or lean on R.
-      - **Column scatter / dot plot** — individual values by group, jittered. The
-        renderer already has `jitterOffsets`.
-      - **Before-after (paired) line plot** — one line per subject across two
-        conditions. Closest to the existing `sced` kind in shape.
-      - **SuperPlots** — bars or violins with colour-coded replicates overlaid.
+      **THREE OF THE FOUR KINDS HAVE SHIPPED** (verified 2026-08-21) — `violin`, `dots`
+      and `paired` are all declared in `plugins/builtin-charts`, sharing a band-frame and a
+      points-plus-summary layer. Kinds also no longer live in core/chart-renderer.js; a
+      kind is a plugin-side object now, so what is left is a `builtin-charts` addition:
+      - **SuperPlots** — bars or violins with colour-coded replicates overlaid. The only
+        one outstanding, and the cheapest of the four now that `violin` and the point
+        overlay both exist: it is a colour-by-replicate mapping over marks already drawn.
+      - ~~Violin plot~~ — SHIPPED (`violin`).
+      - ~~Column scatter / dot plot~~ — SHIPPED (`dots`).
+      - ~~Before-after (paired) line plot~~ — SHIPPED (`paired`).
 
       `ggprism` is a styling reference, not a dependency: the engine renders SVG in JS.
 
@@ -4496,7 +4584,10 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       menu still uses the `order` field.
 - [ ] Batch a multi-variable Frequencies run into one R call instead of one job
       per variable (`plugins/builtin-frequencies/index.js`).
-- [~] Settings persistence (localStorage). *Started:* the plugin manager persists
+- [~] Settings persistence (localStorage). **Still ad hoc as of 2026-08-21** — nine core
+      modules now reach for `localStorage` independently (app, at-rest, debug, launcher,
+      live-sync, plugin-broker, plugin-manager, plugin-package-store, user-identity), which
+      strengthens rather than weakens the case for one store. *Started:* the plugin manager persists
       its disabled-set + catalog there (`core/plugin-manager.js`). A general
       settings store can generalise that pattern. (Dataset persistence is its own
       item — see **Dataset library** under Deferred features; OPFS, not IndexedDB.)
