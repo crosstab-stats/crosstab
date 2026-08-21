@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { ProjectLog } from '../core/project-log.js';
 import { HLC } from '../core/hlc.js';
 import { ItemStore } from '../core/item-store.js';
-import { normalizeCollection, childrenOf, surfacesConflicts } from '../core/collections.js';
+import { normalizeCollection, childrenOf, childTravels, surfacesConflicts } from '../core/collections.js';
 import { mergeProjects } from '../core/collab-sync.js';
 import { sortKeyBetween, nextSortKey } from '../plugins/builtin-caqdas/index.js';
 import { recordBlockFromManifest } from '../core/dataset-store.js';
@@ -54,6 +54,53 @@ test('a codebook block gathers its codes and nothing else', () => {
   }
   assert.deepEqual(collected.map((c) => c.id).sort(), ['c1', 'c2'], 'only THIS book’s codes');
   assert.ok(!collected.some((c) => c.collection === 'segments'), 'never a coding');
+});
+
+test('a dataset-bound child never travels, whatever its collection declares', () => {
+  // The record's scope is evidence, not a guess: the host resolved it at write time from
+  // the collection's scope (or the workspace's, when the collection omits one).
+  const projectScoped = { ...normalizeCollection({ id: 'codes' }), owner: OWNER };
+  assert.equal(childTravels(projectScoped, { scope: { dsId: null } }), true);
+  assert.equal(childTravels(projectScoped, { scope: { dsId: 7 } }), false,
+    'bound to dataset 7, so it means nothing in the project this block is handed to');
+  assert.equal(childTravels(projectScoped, {}), true, 'no scope at all is project-wide');
+});
+
+test('a collection DECLARED dataset-scoped never travels either', () => {
+  const perDataset = { ...normalizeCollection({ id: 'segments', scope: 'dataset' }), owner: OWNER };
+  assert.equal(childTravels(perDataset, { scope: { dsId: null } }), false,
+    'the declaration alone is disqualifying — the record need not be inspected');
+});
+
+test('a MIS-DECLARED parent is still harmless: the quote stays in the project', () => {
+  // #163 asked for belt and braces so this privacy boundary does not rest on one
+  // declaration staying right. Here it is wrong on purpose: segments claim to COMPOSE
+  // into a codebook. The gather must still refuse them.
+  const decls = [
+    { id: 'codebooks', portable: true },
+    { id: 'codes', scope: 'project', parent: { collection: 'codebooks', field: 'codebookId' } },
+    { id: 'segments', scope: 'dataset', parent: { collection: 'codebooks', field: 'codebookId' } },
+  ].map((d) => ({ ...normalizeCollection(d), owner: OWNER }));
+
+  const log = new ProjectLog({ hlc: new HLC({ now: () => 1 }), author: () => ({ authorId: 'a' }) });
+  const items = new ItemStore({ log });
+  items.put(OWNER, 'codebooks', 'bk1', { name: 'Wave 1' });
+  items.put(OWNER, 'codes', 'c1', { name: 'waiting', codebookId: 'bk1' });
+  items.put(OWNER, 'segments', 's1',
+    { doc: 'r1', codeId: 'c1', codebookId: 'bk1', quote: 'I waited four hours in A&E' },
+    { scope: { dsId: 7 } });
+
+  const collected = [];
+  for (const kid of childrenOf(decls, OWNER, 'codebooks')) {
+    for (const child of items.list(OWNER, kid.id)) {
+      if (String(child.fields?.[kid.parent.field]) !== 'bk1') continue;
+      if (!childTravels(kid, child)) continue;
+      collected.push({ collection: kid.id, id: child.id });
+    }
+  }
+  assert.deepEqual(collected.map((c) => c.id), ['c1']);
+  assert.ok(!collected.some((c) => c.collection === 'segments'),
+    'the participant passage never leaves, even though the declaration said it composes');
 });
 
 // --- ordering ----------------------------------------------------------------

@@ -189,6 +189,26 @@ export function assetRefDecls(decls) {
   return out;
 }
 
+/**
+ * May this child record travel inside a building block? (#163's second guard.)
+ *
+ * A block exists to be handed to other people, so anything bound to a DATASET cannot go:
+ * it refers to rows that will not exist in the recipient's project, and in the case that
+ * motivated the rule those rows are passages of real participant data.
+ *
+ * Two independent refusals, deliberately. The first states intent, the second is the one
+ * that matters: the whole point of a second guard is that a MIS-DECLARED `parent` must
+ * still be harmless, and a record's own scope was resolved by the host when it was
+ * written, so it is evidence rather than a guess about an omitted declaration.
+ *
+ * @param {CollectionDecl & {owner: string}} decl  the CHILD collection's declaration
+ * @param {{scope?: {dsId?: string|number|null}}} rec  the child record
+ */
+export function childTravels(decl, rec) {
+  if (decl?.scope === 'dataset') return false;
+  return rec?.scope?.dsId == null;
+}
+
 /** The collections that want to appear in the sidebar inventory, in declaration order. */
 export function sidebarCollections(decls) {
   return (decls ?? []).filter((d) => d.sidebar === 'list' || d.sidebar === 'count');

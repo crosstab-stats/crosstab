@@ -17,7 +17,7 @@
 /** Bus event: the building-block library changed (block saved/deleted) — the
  * sidebar's Building Blocks zone re-renders on this. */
 import { newItemId } from './item-store.js';
-import { childrenOf } from './collections.js';
+import { childrenOf, childTravels } from './collections.js';
 
 export const LIBRARY_CHANGED = 'library:changed';
 
@@ -182,9 +182,15 @@ export class DatasetLibrary {
       // data, to whoever it is handed to.
       const kids = childrenOf(decls, owner, collection);
       const children = [];
+      let withheld = 0;
       for (const kid of kids) {
         for (const child of this.#items.list(owner, kid.id)) {
           if (String(child.fields?.[kid.parent.field] ?? '') !== String(recordId)) continue;
+          // The second guard (#163). Composition alone is not enough to let a record out
+          // of the project: a dataset-bound child means nothing in the recipient's, and
+          // this is the check that keeps a mis-declared `parent` from being a leak rather
+          // than a bug. Never silent — a withheld child is a declaration to fix.
+          if (!childTravels(kid, child)) { withheld++; continue; }
           children.push({
             collection: kid.id,
             id: child.id,
@@ -226,6 +232,13 @@ export class DatasetLibrary {
       });
       this.#bus?.emit(LIBRARY_CHANGED);
       this.#results.appendText(`Saved **${name}** as a building block (v${version}).`);
+      if (withheld) {
+        console.warn('[library] withheld %d dataset-bound child record(s) from block "%s"', withheld, name);
+        this.#results.appendText(
+          `Note: ${withheld} record(s) bound to a dataset were left out of **${name}** — `
+          + 'a building block travels between projects, where they would refer to data that is not there.',
+        );
+      }
     } catch (err) {
       console.error('[library] record promote failed', err);
       this.#results.appendError(`Save to library failed: ${err.message}`);

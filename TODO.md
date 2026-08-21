@@ -196,8 +196,8 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       selection model, and a mid-session "switch me to my qual toolkit" is plausible.
 
 
-- [~] **#166 — THE CODING SYSTEM: one defect behind four symptoms. BUILT (2026-08-19),
-      needs human verification of the UI.** All four steps shipped across three commits
+- [x] **#166 — THE CODING SYSTEM: one defect behind four symptoms. DONE (verified
+      2026-08-20).** All four steps shipped across three commits
       (`94764ff`, `b502f26`, `de461e1`); 600/600 tests green, and the wiring was driven in
       a real browser (see the verification table in the design doc). **#163, #164 and #165
       are subsumed — they were this.**
@@ -223,20 +223,31 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       that composes) and the real gather against a real `ItemStore` — "only THIS book's
       codes", "never a coding".
 
-      *Still wanted:* that the note thread survives a re-anchor — preserving the segment
-      id is the entire mechanism by which notes survive, so it is worth seeing rather than
-      assuming; then *Change code*, which rests on the same trick.
+      *Also confirmed:* the note thread survives a re-anchor, and survives *Change code*.
+      Preserving the segment id is the entire mechanism by which notes survive an edit, so
+      both were worth seeing rather than assuming. **Nothing is outstanding.**
 
-      **Found while checking that: only ONE of the two guards exists.** #163 specified belt
-      and braces — "only a declared `parent` composes, AND a dataset-scoped child never
-      travels into a project-scoped block regardless (`scope`)". The first is built and
-      tested. The second is not: `library.js:183` gathers children purely on
-      `parent.collection` and never consults `scope`. The privacy property holds today
-      because `segments` declares no `parent` — but it rests on that one declaration
-      staying right, and the guard that was meant to make a mis-declaration harmless is the
-      one missing. Cheap to add at the gather: refuse a child collection whose effective
-      scope is 'dataset'. Owner's call, since it is defence in depth on a boundary that is
-      currently correct.
+      **The second guard was missing, and is now built** (`childTravels`,
+      core/collections.js). #163 specified belt and braces — "only a declared `parent`
+      composes, AND a dataset-scoped child never travels into a project-scoped block
+      regardless (`scope`)" — but only the first existed: the gather consulted
+      `parent.collection` and nothing else, so the privacy boundary rested on `segments`
+      declaring no parent and staying that way. The owner's call was to add it in advance
+      of ever needing a parent there ("it sounds like it's easy enough to make sure the
+      copy is safe now").
+
+      Two independent refusals. The collection declaring `scope: 'dataset'` states intent;
+      the RECORD carrying a `scope.dsId` is the one that does the work, because the host
+      resolved that when the record was written — evidence rather than a guess about an
+      omitted declaration, and therefore sound even when the declaration is the thing that
+      is wrong. A withheld child is reported, never silent: it means a declaration needs
+      fixing. Three tests, the last of which mis-declares `segments` as composing into a
+      codebook on purpose and asserts the participant quote still does not travel.
+
+      One consequence worth knowing: a `codes` record written before #151 made codes
+      project-scoped carries a `dsId` and would now be withheld from a block. Consistent
+      with this task's no-migration call, and visible rather than silent — it says so in
+      the output.
 
       **Two bugs found by that pass, both fixed:**
       - `aa55b65` — **the drift banner rendered no text at all.** `el` is `(tag, cls)` and
