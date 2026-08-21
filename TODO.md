@@ -4352,7 +4352,15 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 > These three were captured during the college tour and lived only in the memory
 > notes, so this section read as complete when it was not (spotted 2026-08-05).
 
-- [ ] **#140 — Prism-style charts.** Raised by a behavioural-psych faculty member;
+- [x] **#140 — DONE (2026-08-21), with SuperPlots deferred.** The engine toggles and
+      three of the four requested kinds shipped — `violin`, `dots` and `paired`, alongside
+      open L-shaped axes, the gridline toggle, the data-point overlay, the SEM/SD/95% CI
+      selector, black-and-white print mode and the marker vocabulary. The fourth,
+      SuperPlots, is **deferred by the owner** rather than dropped: it is real statistical
+      work (see the bullet below), not the afternoon this entry once implied, and no user
+      has asked for it. The write-up stays so it is findable the day a cell-biology user
+      does. Original:
+      **#140 — Prism-style charts.** Raised by a behavioural-psych faculty member;
       GraphPad Prism is the de facto journal-figure standard in biomedical and
       experimental science, and CrossTab's idiom is SPSS-utilitarian by comparison.
 
@@ -4366,8 +4374,9 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       and `paired` are all declared in `plugins/builtin-charts`, sharing a band-frame and a
       points-plus-summary layer. Kinds also no longer live in core/chart-renderer.js; a
       kind is a plugin-side object now, so what is left is a `builtin-charts` addition:
-      - **SuperPlots** — the only one outstanding, and NOT merely a colour scheme; that
-        was a wrong reading when this line was first written.
+      - **SuperPlots — DEFERRED (owner, 2026-08-21).** Not merely a colour scheme; that
+        was a wrong reading when this line was first written, and correcting it is what
+        moved the item from "cheapest of the four" to "wait until someone asks".
 
         A SuperPlot (Lord, Velle, Mullins & Fritz-Laylin, *J Cell Biol* 2020) exists to fix
         **pseudoreplication**. The practice it targets: measure 100 cells in each of 3
