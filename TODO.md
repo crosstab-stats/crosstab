@@ -2588,8 +2588,24 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       (the borrowed-client-id trap was Microsoft-specific and rejected anyway). But
       **desktop users of any provider need none** — the desktop sync client + folder mode
       already covers them (Dropbox/OneDrive/Drive/iCloud folders are identical to FSA).
-  - **Live transport — P2P over WebRTC (proven pattern, from sortie). [~] SIGNALING
-    LAYER BUILT** (commit 20d6427): `assets.js` pins trystero@0.21.5 (MQTT), lazy-loaded;
+  - **Live transport — P2P over WebRTC. [~] BUILT AND WIRED; one verification outstanding**
+    (re-checked 2026-08-21). Everything the "still to build" list below names now exists:
+    - *The op-log wire protocol* is `core/live-protocol.js` (`LiveDoc`) — and it answered
+      late-join more simply than planned: "snapshot and tail are the same `state` message —
+      no separate path", with commutativity bought by canonicalising operand order on peer
+      id so both sides compute a byte-identical merge and reach a fixpoint.
+    - *The presence UI* shipped (chips in the top bar, `core/live-presence.js`) and the
+      *invite UI* shipped as #156 (File ▸ Copy invite link, plus consumption at boot).
+    - *Gap-fill* is wired into this channel, not just built headlessly —
+      `ProjectSync#initGapFill` runs both the source and asset exchanges and calls
+      `requestMissing` as manifests change.
+
+    **What is genuinely still owed is a TEST, not code: two machines on two networks.**
+    The two-window pass during #156 exercised the real broker and found four bugs, but both
+    peers sat on one host, so ICE succeeded trivially — NAT traversal and the TURN path
+    have never been exercised. That is the one thing a second window cannot fake, and it is
+    why this stays `[~]`. Original note follows.
+    **[~] SIGNALING LAYER BUILT** (commit 20d6427): `assets.js` pins trystero@0.21.5 (MQTT), lazy-loaded;
     `core/live-invite.js` (rendezvous addressing = hashed-UUID topic + invite secret in
     the URL fragment); `core/live-sync.js` (`LiveSession` wrapping a Trystero room —
     presence + beacon + ordered/reliable op-log actions — plus `buildIceServers` /
@@ -2692,7 +2708,13 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     - *Residual, stated honestly (no theatre):* even fully encrypted, the operator still
       sees topic existence, subscriber count, timing, and message sizes — traffic
       analysis that encryption can't hide.
-  - **[~] Base-data GAP-FILL BUILT (headless) — commit 89e99a2.** `core/gap-fill.js`:
+  - **[x] Base-data GAP-FILL — DONE and wired (re-checked 2026-08-21).** The two pieces
+    this note left open have both landed: the *invite half* is #156, and live asset
+    gap-fill is #155. `ProjectSync#initGapFill` drives `SourceExchange` over the live
+    channel. **The sneakernet index UI is the one piece still missing** — split out as its
+    own bullet below, because it is the air-gap story rather than part of this transfer
+    path. Original note follows.
+    **[~] Base-data GAP-FILL BUILT (headless) — commit 89e99a2.** `core/gap-fill.js`:
     fetch a Parquet source a peer lacks over the channel — identity = the manifest source
     **op id** (no schema change / no per-file hash), integrity = transfer-time SHA-256
     verified before store, chunked (256 KiB) for multi-GB, consent/size-gated via
@@ -2736,6 +2758,14 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     - *Async/folder mode mostly gets this free* — the sync client mirrors the Parquet
       sources, so gaps appear only inside the sync-latency window; the mechanism is
       chiefly a live-mode concern plus the sneakernet path.
+  - [ ] **Sneakernet index UI — the air-gap fallback, still unbuilt (2026-08-21).** When
+    P2P will not connect, the index should name *exactly which file* to hand over
+    out-of-band, and verify the imported bytes against what the log expects. The engine
+    half exists — `missingSources` / `missingAssets` in `core/gap-fill.js` answer "what do
+    I lack?" — but nothing surfaces that answer to a user outside the automated transfer.
+    Small, and it earns its keep precisely where the automation cannot run, which is the
+    population the air-gap work (#71) exists for.
+
   - **Core-vs-plugin boundary — apply the doctrine we already have, don't invent one.**
     `import-service.js` states the rule: the engine owns **"only what the security model
     forces it to"** — host UI, the user-activated picker, and **the destructive commit**
