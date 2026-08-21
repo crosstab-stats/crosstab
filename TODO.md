@@ -683,7 +683,45 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       should own writing it.
 
 
-- [ ] **Stop sharing — an affirmative "this project is not shared" (user request,
+- [~] **Stop sharing — BUILT (2026-08-21); the link-revocation half is still open.**
+      `core/share-state.js` + File ▸ Sharing…, 612 tests. Needs a browser pass.
+
+      **What shipped.** A `share:project` target carrying `enableSharing` /
+      `disableSharing`, folded last-writer-wins by HLC and registered as a projection, so
+      the decision merges and travels like every other tier. Three states, and the third
+      is the load-bearing one: `true` / `false` / `null` for never-said. `null` is not
+      `false` — every project built before this tier has said nothing, and reading silence
+      as refusal would have switched collaboration off across the whole install on upgrade.
+
+      One gate covers hosting, auto-live and rejoining: `activeRoom()` refuses first,
+      ahead of even the invite room, so there is no second path to drift out of step.
+      `collabReady` is false while closed (the Go live button hides), `inviteLink()`
+      returns null rather than minting a key to a door that will not open, and the live
+      session is dropped the moment a refusal lands — **including when it arrives from a
+      peer**, since a stop that left the current session running would be the same empty
+      gesture `stopCoauthoring()` already was.
+
+      **The two open questions below, answered:**
+      - *Does disabling blank the collab identity?* **No.** The entry's own "two separable
+        actions — do not conflate them" wins over its "probably the right default": the
+        identity is what a folder co-holder syncs, and blanking it would make an
+        irreversible link-revocation ride along with a reversible refusal. Sharing can be
+        turned back on and the same room resumes. Revoking links stays a separate action.
+      - *Warn on open, or quietly refuse?* **Neither.** The state is simply visible: Go
+        live disappears and File ▸ Sharing… reads "Sharing is currently OFF for this
+        project". A modal on open would nag a co-holder about a decision that is not
+        theirs to make, and a silent refusal would leave them hunting a bug.
+
+      **STILL OPEN — action 1, revoke outstanding links.** Rotating `collabSecret` (and/or
+      `collabId`) to kill every invite URL already sent. Nothing here does that: stopping
+      sharing refuses the room those links point at, which is a different and weaker
+      promise, and the UI says so in as many words. Note it does NOT stop folder
+      co-holders, who receive the new identity on the next sync and rejoin transparently.
+
+      **Verification owed:** turn sharing off with a peer live and confirm the session
+      drops on both sides; reopen and confirm it is still off; turn it back on and confirm
+      the same room resumes. Original entry follows.
+      **Stop sharing — an affirmative "this project is not shared" (user request,
       2026-08-05).** Today the only way out of collaboration is
       `projects.stopCoauthoring()` (app.js ~1565), which leaves the *current session's*
       room. That is "don't go online right now", not "this project is no longer

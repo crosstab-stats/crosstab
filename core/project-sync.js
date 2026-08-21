@@ -26,6 +26,7 @@ import { rememberFolder, listFolders, forgetFolder, ensureReadWrite } from './fo
 import { passphraseFor, shouldEncrypt, PASSPHRASE_ABORT } from './at-rest.js';
 import { syncFolderProject, manifestsEqual } from './folder-sync.js';
 import { PLUGIN_STATE, pluginOpsOf, isPluginOp, pluginTarget, foldPluginOpinions, migrateLegacyActivePlugins } from './plugin-state.js';
+import { SHARE_STATE, isShareOp, shareOpsOf, shareOp, foldSharing } from './share-state.js';
 import { showConflictDialog } from './conflict-ui.js';
 import { shortcutFiles } from './folder-shortcut.js';
 import { showEncryptionSettings } from './encryption-settings.js';
@@ -353,6 +354,7 @@ export class ProjectSync {
     this.#log = projectLog ?? null;
     this.#log?.register(PROJECT_META);
     this.#log?.register(PLUGIN_STATE); // #157: activation is project state, on the log
+    this.#log?.register(SHARE_STATE); // may this project be shared at all — same argument
     this.#getAssetOps = getAssetOps ?? null;
     this.#applyAssetOps = applyAssetOps ?? null;
     this.#assetBytes = assetBytes ?? null;
@@ -435,6 +437,10 @@ export class ProjectSync {
     if (receive) {
       this.#log.clearWhere(isPluginOp);
       this.#log.receiveOps(pluginOpsOf(bundle?.log));
+      // Same reason, same place: fold the opened project's sharing decision, not the
+      // previous project's. Missing this is how a closed project would reopen shareable.
+      this.#log.clearWhere(isShareOp);
+      this.#log.receiveOps(shareOpsOf(bundle?.log));
     }
     if (migrate && Array.isArray(bundle?.activePlugins) && bundle.activePlugins.length) {
       const opinions = foldPluginOpinions(this.#log.slice(isPluginOp));
@@ -927,6 +933,9 @@ export class ProjectSync {
     if (Array.isArray(itemOps)) log.push(...itemOps);
     if (this.#log) log.push(...this.#log.slice(PROJECT_META.match)); // project/name (#149 A3)
     if (this.#log) log.push(...this.#log.slice(isPluginOp)); // plugin activation (#157)
+    // Sharing has to travel: a folder co-holder learns the project was closed by reading
+    // the log they already sync, which is the only channel left once the room is refused.
+    if (this.#log) log.push(...this.#log.slice(isShareOp));
     // Record the active plugin set alongside the data, so reopening restores the
     // analyses too. Null when the feature isn't wired (keeps old saves untouched).
     // Carry forward any recorded plugins this install can't resolve (not installed
@@ -2173,9 +2182,57 @@ export class ProjectSync {
   }
 
   /** Whether the active project can host live collaboration — it has a collab identity
-   * (minted for folder projects), so a signaling room can be derived (#148). */
+   * (minted for folder projects), so a signaling room can be derived (#148) — AND it has
+   * not been affirmatively closed to sharing. Both are required: an identity says a room
+   * *could* be derived, the decision says whether it may be. */
   get collabReady() {
-    return !!(this.#collabId && this.#collabSecret);
+    return !!(this.#collabId && this.#collabSecret) && !this.sharingDisabled;
+  }
+
+  /**
+   * The project's recorded sharing decision: `true` yes, `false` no, `null` never said.
+   *
+   * `null` is not `false`. Every project built before this tier existed has never said
+   * anything, and must stay shareable — reading silence as refusal would switch
+   * collaboration off across the whole install on upgrade.
+   */
+  get sharing() {
+    return this.#log ? foldSharing(this.#log.slice(isShareOp)) : null;
+  }
+
+  /** Has this project been affirmatively closed to sharing? */
+  get sharingDisabled() {
+    return this.sharing === false;
+  }
+
+  /* Deliberately not cached, though `collabReady` reads it on every render. The fold is
+   * a filter over the log plus a sort of at most a handful of ops, and a cache here
+   * could only fail in one direction — reporting a closed project as shareable — which
+   * is the single outcome this whole tier exists to prevent. Measure before trading that
+   * away. Note the identity check runs FIRST in `collabReady`, so a project with no room
+   * to derive never folds at all. */
+
+  /**
+   * Record whether this project may be shared, as an op.
+   *
+   * Writes only on a real change, so reopening a project cannot spam its log with a
+   * fresh decision per session. The op rides the same publish path as any edit, so a
+   * live peer hears it immediately and a folder co-holder on the next sync — which is
+   * the point: the refusal has to reach the people who can already derive the room.
+   *
+   * @param {boolean} on
+   * @returns {boolean} whether anything was recorded
+   */
+  setSharing(on) {
+    if (!this.#log) return false;
+    const want = !!on;
+    if (this.sharing === want) return false;
+    this.#log.append(shareOp(want));
+    if (this.#binding) { this.#dirty = true; this.#schedule(); }
+    this.#scheduleLivePublish();
+    this.#emitProject();
+    debug('project', 'sharing decision recorded', { sharing: want });
+    return true;
   }
 
   /** A stable identity for the CURRENTLY-OPEN project — changes only on a real project
@@ -2189,7 +2246,11 @@ export class ProjectSync {
    * collab identity (a non-shared OPFS project). Both folder peers derive the same
    * room from the manifest — the entry point for presence + live co-authoring (#148). */
   async activeRoom() {
-    // An invite join has a room before it has an identity — see #inviteRoom.
+    // Refused before anything else, including the invite room. A joiner's log is empty
+    // at this point so this cannot block a fresh join; once the project arrives carrying
+    // a refusal, every later session is turned away here — one gate covering hosting,
+    // auto-live and rejoining, rather than three that can drift apart.
+    if (this.sharingDisabled) return null;
     if (this.#inviteRoom) return this.#inviteRoom;
     return roomFor({ collabId: this.#collabId, collabSecret: this.#collabSecret });
   }
@@ -2206,6 +2267,9 @@ export class ProjectSync {
    */
   async inviteLink() {
     if (!this.#collabId || !this.#collabSecret) return null;
+    // Minting a link for a project that refuses the room would hand someone a key to a
+    // door that will not open — worse than no link, because it looks like it worked.
+    if (this.sharingDisabled) return null;
     // Strip the query string as well as the fragment: the host's own `?launch=demo-quant`
     // (or any other local state) has no business travelling to a recipient, who is
     // joining a project rather than replaying how the sender happened to open theirs.

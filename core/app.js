@@ -1191,6 +1191,46 @@ export async function boot(mounts) {
     },
   });
 
+  // The affirmative off switch. `stopCoauthoring()` leaves the CURRENT room, which is
+  // "not right now" — the room is derived from the manifest, so every co-holder can
+  // still walk back in, and so can you on the next open. This records a decision on the
+  // log instead, where it merges and travels.
+  menus.register({
+    id: 'core:sharing',
+    path: ['File'],
+    label: 'Sharing…',
+    order: 13,
+    command: async () => {
+      if (projects.sharingDisabled) {
+        if (!confirm(
+          'Sharing is currently OFF for this project.\n\n'
+          + 'Turning it back on lets you go live and invite people again. Existing invite '
+          + 'links still work — they were never revoked, only refused.\n\n'
+          + 'Allow sharing again?',
+        )) return;
+        projects.setSharing(true);
+        results.appendText('**Sharing is on** for this project again.');
+        return;
+      }
+      if (!confirm(
+        'Stop sharing this project?\n\n'
+        + 'It will refuse to go live, refuse invite links, and drop any session running '
+        + 'now. The decision travels with the project, so people syncing it through a '
+        + 'shared folder stop being able to join either.\n\n'
+        + 'What it CANNOT do: take back what people already have. Anyone holding a copy '
+        + 'keeps it, and a folder already sitting in someone else’s Dropbox is beyond '
+        + 'reach. This protects what happens next, not what already happened.',
+      )) return;
+      projects.setSharing(false);
+      results.appendText(
+        '**Sharing is off** for this project. It will not go live or issue an invite link '
+        + 'until you turn sharing back on in File ▸ Sharing…\n\n'
+        + 'This does not retract copies people already hold, and it does not revoke the '
+        + 'links themselves — it refuses the room they point at.',
+      );
+    },
+  });
+
   menus.register({
     id: 'core:export-bundle',
     path: ['File'],
@@ -1697,6 +1737,10 @@ export async function boot(mounts) {
         render();
         void maybeAutoLive(); // auto-join the newly-opened project if opted in
       } else {
+        // A refusal can arrive from a peer as easily as from this window, and it has to
+        // bite in both cases — a "stop sharing" that left the current session running
+        // would be the same empty gesture stopCoauthoring() already was.
+        if (presence.live && projects.sharingDisabled) await stopLive();
         render(); // same project, just a status/co-author re-emit → refresh UI only
       }
     });

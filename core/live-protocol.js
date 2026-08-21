@@ -24,14 +24,18 @@
  * empty side merges (add-wins datasets/blobs) up to the full project. Snapshot and
  * tail are the same `state` message — no separate path.
  *
- * ## Boundaries (still to build)
+ * ## Boundaries
  *
- *  - **Base-data gap-fill.** If a peer's merged manifest references Parquet it lacks
- *    (the other peer created a new dataset), it must request those bytes over the
- *    channel (content-hash index → "send this file"). Editing *shared* data (recodes,
- *    coding) needs no transfer; adding datasets does. Left as a follow-up.
+ *  - **Base-data gap-fill — BUILT, not a boundary any more** (#155). A merged manifest
+ *    referencing Parquet or assets this peer lacks is filled over this same channel:
+ *    `core/gap-fill.js` (`SourceExchange`), wired by `ProjectSync#initGapFill`, which
+ *    calls `requestMissing` as manifests change. Editing *shared* data needs no transfer;
+ *    adding datasets does, and now gets one.
  *  - **N>2 peers** converge by pairwise gossip rounds as messages flow; a formal
  *    proof / base-advancement for large rooms is deferred (the core case is two).
+ *  - **Two machines on two networks is still untested.** The live pass to date put both
+ *    peers on one host, so ICE succeeded trivially — NAT traversal and TURN have never
+ *    run in anger.
  */
 
 import { mergeProjects } from './collab-sync.js';
