@@ -35,6 +35,9 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       defences: the ✕ suppresses focus change on mousedown, and the blur handler ignores a
       move to anything inside the same thread, which keeps the keyboard path working too.
 
+      **Confirmed in the browser by the owner (2026-08-21):** the counted section and the
+      readable 💬 thread both behave. No follow-up wanted for now.
+
       **Not built, still available:** a clickable count opening a searchable project-wide
       memo list. That is memo RETRIEVAL, a feature with its own vocabulary — nearer the
       codebook manager than this — and nothing here forecloses it.
@@ -271,6 +274,9 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       the output.
 
       **Two bugs found by that pass, both fixed:**
+      Both fixes confirmed in the browser by the owner (2026-08-21): the banner reads
+      correctly now that its text renders, and coding gestures land on the right characters.
+
       - `aa55b65` — **the drift banner rendered no text at all.** `el` is `(tag, cls)` and
         six call sites passed `(tag, text, cls)`, so every string this system produces —
         the summary, the code name, the quoted passage, the reason, and the ⚠ in both the
