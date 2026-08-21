@@ -270,7 +270,7 @@ export class CodecService {
    * two plugins declaring the same asset name don't collide. */
   async #loadAsset(name) {
     const pluginId = this.#session?.pluginId || null;
-    const cacheKey = `${pluginId || '*'} ${name}`;
+    const cacheKey = `${pluginId || '*'}\0${name}`;
     if (this.#assetCache.has(cacheKey)) return this.#assetCache.get(cacheKey);
 
     // Tier 1 — the plugin brought it: its own bundle or a same-origin sibling.
