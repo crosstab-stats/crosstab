@@ -216,7 +216,7 @@ export async function applyRehome({
     const { fields, ok } = rehomeRecord(rec.fields, refsFor(rec.collection), map);
     if (!ok) { stranded.push(rec); continue; }
     // MOVE keeps the id, COPY mints a new one. The id is not bookkeeping: anchored
-    // memos target `item:<owner> <collection> <id>`, so a move carries a record's
+    // memos target `item:<owner>\0<collection>\0<id>`, so a move carries a record's
     // notes with it automatically, while a copy leaves them on the original — which is
     // right, because the original still exists and the notes were written about it.
     const id = mode === 'copy' ? (newId?.() ?? `${rec.id}_copy`) : rec.id;

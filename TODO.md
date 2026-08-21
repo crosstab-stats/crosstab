@@ -511,9 +511,9 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       Not affected: media codings (`doc.kind !== 'text'`), which anchor on time/region
       rather than character offsets.
 
-      Related but distinct: #151's still-open "codings anchor on `__ct_rid`, so moving
-      them between datasets is unsolved". That is anchoring ACROSS datasets; this is
-      anchoring rotting WITHIN one. Same family, different failure.
+      Related but distinct: #151 solved anchoring ACROSS datasets (the re-home engine
+      maps A's row ids onto B's by identity or a named key); this is anchoring rotting
+      WITHIN one. Same family, different failure.
 
 
 - [ ] **#165 — a coding can only be REMOVED, never adjusted (user, 2026-08-19).** A
@@ -1363,8 +1363,8 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       argued for tolerating it because auto-removal might delete real work; #158's answer
       is that the phantom should never have been created.
 
-- [~] **#151 — RESCOPED into a codebook manager, and mostly DISSOLVED rather than built
-      (2026-08-10). Shipped; NEEDS HUMAN VERIFICATION.**
+- [x] **#151 — DONE (2026-08-20).** Rescoped into a codebook manager; half of it
+      DISSOLVED rather than being built, and the other half shipped as a re-home engine.
 
       The owner's call: a plain re-home tool was too narrow — what was actually wanted
       was a codebook manager. Investigating that turned up something better than a tool.
@@ -1394,21 +1394,44 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         has a writable `items` bridge (compute-frame items are read-only) — the same
         constraint that forced `parseQdpx` to smuggle codes through a blob.
 
-      **Verification owed.** The manager's UI lives in a sandboxed opaque-origin iframe
-      that nothing outside can drive, so none of the buttons are automatically tested.
-      Confirmed: mounts clean, no console errors, writes zero records on mount (opening
-      the Coding tab and closing it must leave no trace). Wanted from a human: ⚙ → New
-      codebook → paste codes → select two → Merge → Move to the other book, and check the
-      codings followed. Plus a CSV round-trip between two projects.
+      **Verified by the owner (2026-08-20).** The manager's UI lives in a sandboxed
+      opaque-origin iframe that nothing outside can drive, so none of its buttons are
+      automatically tested and this needed a human: ⚙ → New codebook → paste codes →
+      multi-select → Merge → Move to the other book, with the codings following; plus a
+      CSV round-trip between two projects. Confirmed automatically alongside it: mounts
+      clean, no console errors, writes zero records on mount (opening the Coding tab and
+      closing it leaves no trace).
 
-      **STILL OPEN — the other half of #151, which the codebook work does not touch:**
-      - **Coding SEGMENTS still anchor on `__ct_rid`**, so moving codings from dataset A
-        to B remains unsolved. Only possible where row ids still match (a re-exported
-        file usually re-bakes them); wants match-by-key as the fallback.
-      - **Analysis runs** (`datasetId` per entry) and **`libraryLink`** still need
-        repointing, and nothing lists what references a dataset.
-      A tool for those is a smaller job than the original entry implied, because the
-      codebook — the part with the most work invested in it — no longer needs one.
+      **The other half — SHIPPED, after this entry was written** (`eb50797` the planner,
+      `03088db` gather + apply, `25134fe` the wiring and COPY):
+      - **Match-by-key is the fallback** this entry asked for. `planRowMap`
+        (`core/rehome.js:41`) maps A's rows onto B's by identity when the ids still line
+        up, and by a user-named key column when they do not. A named key WINS over
+        identity: `__ct_rid` is `sourceSeq * 1e9 + rowNumber`, so one row inserted at the
+        top of B would otherwise map every coding one row off, silently and plausibly. A
+        row reference that cannot be mapped is dropped and counted, never repointed at
+        whatever now occupies that id — a quotation on the wrong participant is worse
+        than a lost one, because nothing downstream can tell.
+      - **Analysis runs are re-RUN, not relabelled** (`applyRehome`, `core/rehome.js:229`).
+        An entry records what was run against A; restamping it with B's id would claim
+        results that were never produced. Only a MOVE retires A's runs — COPY leaves A
+        wholly intact, on the owner's call ("they may be splitting the dataset for some
+        reason we can't predict but it needs the old dataset and codings left intact").
+      - **What references a dataset is now listed** at the moment it matters: the dialog
+        states what will move, what will stay behind, and offers a key column when
+        position matching strands records. Offered proactively at a swap — after the
+        import lands and BEFORE the outgoing dataset is binned, while its rows can still
+        be read — and reactively from **Edit ▸ Move coding & analyses to another
+        dataset…** (`core/app.js:453`, `:848`), which is what someone uses when they kept
+        the old data as a backup and nothing detached.
+
+      **`libraryLink` repointing: DISSOLVED, not skipped.** This entry listed it as owed;
+      building it would have been a bug. A link means "this dataset's data IS the block's,
+      plus local transforms on top", and `pullLatest` (`core/library.js:333`) acts on that
+      claim by replaying the block's ops — a recipe that opens with a `load`, the replace
+      barrier. Carrying the link onto a freshly imported *corrected* dataset would make the
+      claim false and let the next Pull update overwrite the correction with the block's
+      version. Same principle that stops an analysis being relabelled.
 
 - [x] **#150 — DONE (2026-08-04).** Three bullets landed in #152 L5; the fourth
       (enumeration) was only half-wired and is now complete, and the vocabulary rename
