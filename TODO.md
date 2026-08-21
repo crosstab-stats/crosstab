@@ -207,12 +207,44 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       back-compat path would have been a permanent second route through the most delicate
       logic in the system.
 
-      **What still wants a human**, since the CAQDAS UI lives in a sandboxed
-      opaque-origin iframe nothing outside can drive: code a passage, edit that cell in
-      the grid, and confirm the amber banner names it; then use *Re-anchor to selection*
-      and check the note thread survived; then *Change code* and check the same. Plus a
-      codebook promoted to Building Blocks and added to a second project — its codes
-      should arrive, its codings must NOT.
+      **Verification, IN PROGRESS (2026-08-20)** — driven by the owner in a real browser,
+      since the CAQDAS UI lives in a sandboxed opaque-origin iframe nothing outside can
+      drive.
+
+      *Confirmed:* code a passage, edit that cell in the grid, and the amber banner names
+      it; *Re-anchor to selection* then moves the coding onto the selected passage. Both
+      needed a fix before they worked at all — see the two bugs below.
+
+      *Still wanted:* that the note thread survives a re-anchor — preserving the segment
+      id is the entire mechanism by which notes survive, so it is worth seeing rather than
+      assuming; then *Change code*, which rests on the same trick; then a codebook promoted
+      to Building Blocks and added to a second project, where its codes should arrive and
+      its codings must NOT.
+
+      **Two bugs found by that pass, both fixed:**
+      - `aa55b65` — **the drift banner rendered no text at all.** `el` is `(tag, cls)` and
+        six call sites passed `(tag, text, cls)`, so every string this system produces —
+        the summary, the code name, the quoted passage, the reason, and the ⚠ in both the
+        segment list and the segment popup — was assigned as a CLASS NAME and never
+        displayed. Nothing threw and the bar still drew its border, so it was reported as
+        "a bit sparse" rather than as a defect. The banner now also names the condition and
+        says what it means for the highlight — a design question that could not be seen
+        while the text was invisible.
+      - `a9db12c` — **selection offsets were measured against the pane, banner included.**
+        `offsetWithin` walks every text node in its container and was given `textPane`,
+        which holds the banner as well as the transcript, so banner chrome counted as
+        document characters and shifted every selection right. On short documents it ran
+        past the end, `textRef` returned null, and re-anchor wrote an anchor with no ref:
+        a coding attached to nothing. NOT limited to re-anchor — `currentSpan` feeds the
+        ordinary coding gestures too, so any coding made while the banner showed landed on
+        the wrong characters, silently. The transcript now owns its own element and every
+        offset is read from that.
+
+      Neither is reachable by the test suite: both need a DOM, and the repo takes no
+      dependencies. That is five bugs now from this one blind spot (three more in
+      `5cf95cb`). A minimal DOM harness for the offset math would have caught `a9db12c`
+      outright — it is pure arithmetic over text nodes — and wants an owner's decision
+      rather than a unilateral entry.
 
       **Deferred, deliberately:** the rolled-up "coding session" marker in Syntax mode
       (the owner's point that scripting codings does not really make sense stands — that
