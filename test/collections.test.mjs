@@ -59,9 +59,12 @@ test('portable is opt-in and strictly boolean', () => {
   assert.equal(normalizeCollection({ id: 'x', portable: true }).portable, true);
 });
 
-test('core memos are NOT portable — an anchor does not survive the move', () => {
+test('core memos are visible but NOT portable — an anchor does not survive the move', () => {
   const memos = CORE_COLLECTIONS.find((c) => c.id === 'memos');
-  assert.equal(memos.sidebar, 'list', 'listed…');
+  // COUNTED rather than listed (#168): a memo is written per coding, per analysis and per
+  // dataset, and every one of them is readable at the thing it annotates, so a row each
+  // was clutter plus a second route. Visible is the property that matters here.
+  assert.equal(memos.sidebar, 'count', 'visible in the inventory…');
   assert.equal(memos.portable, false, '…but not reusable elsewhere');
 });
 

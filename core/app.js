@@ -2688,10 +2688,31 @@ class ProjectSidebar {
    * @param {HTMLElement} row      the row to compose under
    * @param {{kind: string, target: string, ref?: string}} anchor
    */
-  #composeMemo(row, anchor) {
+  #memoThread(row, anchor) {
     if (!this.memoStore) return;
+    // Toggle: a second click on the same 💬 closes the thread rather than stacking another.
+    const open = row.nextElementSibling;
+    if (open?.classList.contains('proj__memos')) { open.remove(); return; }
+
     const holder = document.createElement('li');
-    holder.className = 'proj__blob';
+    holder.className = 'proj__memos';
+    for (const m of this.memoStore.list(anchor)) {
+      const line = document.createElement('div');
+      line.className = 'proj__memo';
+      const who = m.author?.initials ? `${m.author.initials}: ` : '';
+      line.append(el('span', `${who}${m.text}`, 'proj__memo-text'));
+      const del = iconBtn('✕', 'Delete this memo', (e) => {
+        e.stopPropagation();
+        this.memoStore.remove(m.id);
+        this.render();
+      });
+      // Keep focus in the composer: it commits on blur, and the re-render that commit
+      // triggers would take this button out of the DOM before its click ever landed.
+      del.addEventListener('mousedown', (e) => e.preventDefault());
+      line.append(del);
+      holder.append(line);
+    }
+
     const input = document.createElement('input');
     input.className = 'proj__ds-edit';
     input.placeholder = 'Memo — why, caveats, what you noticed…';
@@ -2709,19 +2730,22 @@ class ProjectSidebar {
       if (e.key === 'Enter') { e.preventDefault(); finish(true); }
       else if (e.key === 'Escape') { finish(false); }
     });
-    input.addEventListener('blur', () => finish(true));
+    // Tabbing to a ✕ inside this same thread is not leaving the composer.
+    input.addEventListener('blur', (e) => { if (!holder.contains(e.relatedTarget)) finish(true); });
     holder.append(input);
     row.insertAdjacentElement('afterend', holder);
     input.focus();
   }
 
-  /** The 💬 button that opens {@link #composeMemo}, plus a count when notes exist. */
+  /** The 💬 button that opens {@link #memoThread}, plus a count when notes exist. */
   #memoButton(row, anchor) {
     const n = this.memoStore?.countFor(anchor) ?? 0;
-    return iconBtn(n ? `💬${n}` : '💬', n ? `${n} memo${n === 1 ? '' : 's'} — click to add another` : 'Add a memo', (e) => {
-      e.stopPropagation();
-      this.#composeMemo(row, anchor);
-    }, 'proj__ds-x');
+    return iconBtn(
+      n ? `💬${n}` : '💬',
+      n ? `${n} memo${n === 1 ? '' : 's'} — click to read or add` : 'Add a memo',
+      (e) => { e.stopPropagation(); this.#memoThread(row, anchor); },
+      'proj__ds-x',
+    );
   }
 
   #recycleZone(binned, binnedItems = []) {

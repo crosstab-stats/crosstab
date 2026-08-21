@@ -221,7 +221,13 @@ export function sidebarCollections(decls) {
 export const CORE_COLLECTIONS = [
   // Deliberately NOT portable: a memo's anchor points into the project it was written
   // in, so a copy in another project would annotate nothing.
-  { id: 'memos', label: 'Memos', labelField: 'text', sidebar: 'list' },
+  //
+  // COUNTED, not listed (#168). A memo is written per coding, per analysis, per dataset,
+  // so this is the fastest-growing collection in a qualitative project — and unlike a
+  // segment, every memo is already readable at the thing it annotates. A row here was a
+  // second route to something that had one. Orphaned memos are the exception and keep
+  // their own listed section, because nothing else can reach them.
+  { id: 'memos', label: 'Memos', labelField: 'text', sidebar: 'count' },
 ].map((c) => ({ ...normalizeCollection(c), owner: 'core', pluginId: null }));
 
 /**

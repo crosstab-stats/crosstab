@@ -10,40 +10,34 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
-- [ ] **#168 — the sidebar lists every memo, one row each (user, 2026-08-20).** "Is it
-      required that memos be listed in the sidebar? If a project accumulates a lot of
-      memos that list could be quite long." It is not required, and the machinery already
-      exists — it is simply not applied here.
+- [x] **#168 — DONE (2026-08-21). Memos are COUNTED in the sidebar, and the 💬 at the
+      anchor can now be READ.** "Is it required that memos be listed in the sidebar? If a
+      project accumulates a lot of memos that list could be quite long." It was not, and
+      `sidebar: 'count'` already existed — but the one-word change would have been a trade,
+      not a fix, and that only showed up on opening the code.
 
-      **Where it stands.** `sidebar` is already a per-collection choice: `'list'` draws a
-      row per record, `'count'` draws one summary line. The count mode exists for exactly
-      this complaint — CAQDAS segments "run to thousands and would drown the sidebar"
-      (core/app.js:2246) — and both codes and codings use it. `memos` is the one core
-      collection declared `sidebar: 'list'` (core/collections.js:204), and it is the
-      collection that grows fastest in the workflow this app is built for: a memo per
-      coding, per analysis, per dataset.
+      **The premise was half wrong.** The argument for counting was that every anchored
+      memo is readable at the thing it annotates. True on an analysis output
+      (`decorateRunSection` lists each note with its text and a ✕) and true on a coding.
+      NOT true in the sidebar: `#composeMemo` only ever *composed*. The 💬 badge carried a
+      count and no way to see what any of it said, so for a memo anchored to a dataset or a
+      record row, the Memos section was the ONLY place its text could be read. Counting the
+      section without fixing that would have traded clutter for unreachable notes.
 
-      **The case for counting memos is STRONGER than for the collections already counted,**
-      because a memo is not otherwise hard to reach. Every anchored memo is reachable from
-      the thing it annotates — record rows, datasets, results and codings all carry the 💬
-      affordance, withheld only from memos themselves since #148 made memos flat rather
-      than threaded (app.js:2332). The sidebar row is a second route to something that
-      already has one. Segments, by contrast, have no other listing at all.
+      So the 💬 is now a thread — read, add, delete — matching what an analysis and a
+      coding already offer, and memos are `sidebar: 'count'`. Orphans keep their own listed
+      "Notes with no home" section, since nothing else can reach them; the count excludes
+      them, as it already did, so one note is never counted twice.
 
-      **The exception that must NOT be collapsed: orphaned memos.** They already get their
-      own "Notes with no home" section, listed individually (app.js:2195), and that list is
-      the only route to them — their anchor is gone, so nothing else can display them. So
-      the split is not list-vs-count across memos; it is that an ANCHORED memo wants a
-      count (reachable where it lives) and an ORPHANED one wants a row (nothing else
-      reaches it). The code already separates the two populations for a different reason —
-      it filters orphans out of the main section so one note is not listed twice — so this
-      is a one-word declaration change plus keeping that filter.
+      **The fiddly part was focus.** The composer commits on blur, so clicking a ✕ inside
+      the thread would have re-rendered the panel and destroyed that button before its
+      click landed — the note would never be deleted, with nothing to show why. Two
+      defences: the ✕ suppresses focus change on mousedown, and the blur handler ignores a
+      move to anything inside the same thread, which keeps the keyboard path working too.
 
-      **Question for the owner before building it:** should the count line be clickable? A
-      count that opens a searchable memo list would keep browsability without the length —
-      but that is memo RETRIEVAL across a project, a real feature with a vocabulary of its
-      own (nearer the codebook manager than this), not a tweak to a declaration. Answering
-      "no, just count it" makes this a five-minute change.
+      **Not built, still available:** a clickable count opening a searchable project-wide
+      memo list. That is memo RETRIEVAL, a feature with its own vocabulary — nearer the
+      codebook manager than this — and nothing here forecloses it.
 
 - [ ] **#161 — the launcher's "Start CrossTab" button is superfluous; clicking a
       source/project should just go (user request, 2026-08-19).** Today the rail
