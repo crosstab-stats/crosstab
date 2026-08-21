@@ -215,11 +215,28 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       it; *Re-anchor to selection* then moves the coding onto the selected passage. Both
       needed a fix before they worked at all — see the two bugs below.
 
+      *Also confirmed:* a codebook promoted to Building Blocks and added to a second
+      project arrives WITH its codes (the half that needed a human — `5cf95cb` showed it
+      failing silently on the load side). The other half, that its codings must NOT travel,
+      is covered by the suite rather than by eye: `composition.test.mjs` asserts both the
+      declaration (`childrenOf(codes)` is empty, so a coding is never a child of anything
+      that composes) and the real gather against a real `ItemStore` — "only THIS book's
+      codes", "never a coding".
+
       *Still wanted:* that the note thread survives a re-anchor — preserving the segment
       id is the entire mechanism by which notes survive, so it is worth seeing rather than
-      assuming; then *Change code*, which rests on the same trick; then a codebook promoted
-      to Building Blocks and added to a second project, where its codes should arrive and
-      its codings must NOT.
+      assuming; then *Change code*, which rests on the same trick.
+
+      **Found while checking that: only ONE of the two guards exists.** #163 specified belt
+      and braces — "only a declared `parent` composes, AND a dataset-scoped child never
+      travels into a project-scoped block regardless (`scope`)". The first is built and
+      tested. The second is not: `library.js:183` gathers children purely on
+      `parent.collection` and never consults `scope`. The privacy property holds today
+      because `segments` declares no `parent` — but it rests on that one declaration
+      staying right, and the guard that was meant to make a mis-declaration harmless is the
+      one missing. Cheap to add at the gather: refuse a child collection whose effective
+      scope is 'dataset'. Owner's call, since it is defence in depth on a boundary that is
+      currently correct.
 
       **Two bugs found by that pass, both fixed:**
       - `aa55b65` — **the drift banner rendered no text at all.** `el` is `(tag, cls)` and
