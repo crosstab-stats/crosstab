@@ -22,7 +22,7 @@ import { attachLiveDoc } from './live-sync.js';
 import { BlobExchange, sourceRefs, assetRefs } from './gap-fill.js';
 import { debug } from './debug.js';
 import { liveOps } from './op-log.js';
-import { rememberFolder, listFolders, forgetFolder, ensureReadWrite } from './folder-handle.js';
+import { rememberFolder, rememberRemote, listLocations, forgetLocation, ensureReadWrite } from './project-locations.js';
 import { passphraseFor, shouldEncrypt, PASSPHRASE_ABORT } from './at-rest.js';
 import { syncFolderProject, manifestsEqual } from './folder-sync.js';
 import { PLUGIN_STATE, pluginOpsOf, isPluginOp, pluginTarget, foldPluginOpinions, migrateLegacyActivePlugins } from './plugin-state.js';
@@ -1211,7 +1211,7 @@ export class ProjectSync {
    * @param {{label: string, hint?: string}} opts  `label` names the backend in errors
    * @returns {Promise<boolean>} whether a project was opened
    */
-  async openRemote(makeDriver, { label, hint } = {}) {
+  async openRemote(makeDriver, { label, hint, remember } = {}) {
     const probe = new ProjectStore();
     probe.useDriver(makeDriver());
 
@@ -1254,8 +1254,29 @@ export class ProjectSync {
       this.#store.useDriver(null); // damaged — fall back to OPFS rather than sit on a dead store
       return false;
     }
+    await this.#rememberLocation(remember);
     this.#emitProject();
     return true;
+  }
+
+  /**
+   * Record where the open project lives, so it appears in the Projects list.
+   *
+   * Called only after a successful open or move. A remote project used to leave no trace
+   * anywhere — the OPFS copy is deleted by a move, correctly, and nothing replaced it — so
+   * the only route back was retyping the address. Meanwhile a FOLDER project stayed listed,
+   * because folders had a registry and remote had none (#171).
+   *
+   * Best-effort: failing to remember where a project is must never fail the act of
+   * opening it.
+   */
+  async #rememberLocation(remember) {
+    if (!remember?.kind) return;
+    try {
+      this.#activeFolderId = await rememberRemote(remember.kind, remember.config, {
+        name: this.activeName || remember.config?.basePath || remember.kind,
+      });
+    } catch { /* the project is open; the list entry is a convenience */ }
   }
 
   /**
@@ -1274,6 +1295,7 @@ export class ProjectSync {
       {
         label: 'that WebDAV location',
         hint: 'If the address is right, the server may not send the CORS headers a browser needs — see docs/CLOUD.md.',
+        remember: { kind: 'webdav', config: { url: conn.url, username: conn.username } },
       },
     );
     // Remembered only AFTER it worked: a shortcut to a place that failed is not a
@@ -1416,7 +1438,7 @@ export class ProjectSync {
    * @param {{label: string}} opts
    * @returns {Promise<boolean>}
    */
-  async moveToRemote(makeDriver, { label }) {
+  async moveToRemote(makeDriver, { label, remember }) {
     const wasFolder = this.#folderMode;
     if (!wasFolder && !this.#binding) {
       this.#results.appendError('Add some data first — an empty project has nothing to move.');
@@ -1467,6 +1489,7 @@ export class ProjectSync {
       await this.#fullSave(null, projectName);
       this.#folderMode = false; // remote is not the folder flow — see the folderBacked note
       this.#lastManifest = await this.#store.readManifest(this.#binding.id);
+      await this.#rememberLocation(remember); // or the project vanishes from every list
       this.#emitProject();
       // A true move: drop the now-redundant OPFS copy, through a throwaway OPFS store
       // since the live one is remote. Best-effort — the data is already safely away.
@@ -1594,7 +1617,7 @@ export class ProjectSync {
    * picker. The browser still requires re-granting write via a user gesture, which
    * `#openExistingFolder` does (`ensureReadWrite`) before probing, so this runs from
    * that click. Like the pick path, it validates before touching the live project.
-   * @param {FileSystemDirectoryHandle} handle  from {@link module:core/folder-handle}
+   * @param {FileSystemDirectoryHandle} handle  from {@link module:core/project-locations}
    */
   async reopenFolder(handle) {
     if (!handle) return;
@@ -1764,14 +1787,19 @@ export class ProjectSync {
     this.#lastManifest = await this.#store.readManifest(FOLDER_PROJECT_ID);
   }
 
-  /** Remembered folder projects (for the sidebar + launcher lists). */
+  /** Remembered project locations — folders and remote alike (sidebar + launcher). */
+  listProjectLocations() {
+    return listLocations();
+  }
+
+  /** @deprecated Name kept while call sites migrate; it never meant folders only. */
   listFolderProjects() {
-    return listFolders();
+    return listLocations();
   }
 
   /** Forget a remembered folder (removes the list entry; leaves the folder's files). */
   async forgetFolderProject(id) {
-    await forgetFolder(id);
+    await forgetLocation(id);
     this.#emitProject(); // refresh sidebar
   }
 

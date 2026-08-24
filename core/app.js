@@ -375,6 +375,45 @@ function promptDropbox(saved, { move = false } = {}) {
   });
 }
 
+/** Ask only for a password — the address is already remembered. */
+function promptPassword(title, hint) {
+  return new Promise((resolve) => {
+    const d = document.createElement('dialog');
+    d.className = 'ct-dialog';
+    d.innerHTML = `
+      <form method="dialog" class="ct-dialog__form">
+        <h2 class="ct-dialog__title">${escapeText(title)}</h2>
+        <p class="ct-dialog__hint">${escapeText(hint)}</p>
+        <p><input name="password" type="password" autocomplete="current-password"
+          style="width:100%" placeholder="App password"></p>
+        <menu class="ct-dialog__buttons">
+          <button value="cancel" type="submit">Cancel</button>
+          <button value="ok" type="submit" class="ct-dialog__primary">Open</button>
+        </menu>
+      </form>`;
+    const f = d.querySelector('form');
+    d.addEventListener('close', () => {
+      const out = d.returnValue === 'ok' ? f.password.value : null;
+      d.remove();
+      resolve(out);
+    });
+    document.body.append(d);
+    d.showModal();
+  });
+}
+
+/**
+ * How each kind of remembered location presents itself.
+ *
+ * Kept as data rather than branches in the renderer: adding Graph or Drive should be a
+ * line here, not another `if` in the sidebar and another in the launcher.
+ */
+const LOCATION_KINDS = Object.freeze({
+  folder: { glyph: '📁', noun: 'folder', verb: 'Reopen folder project', detail: () => '' },
+  dropbox: { glyph: '📦', noun: 'Dropbox location', verb: 'Reopen from Dropbox', detail: (e) => e.config?.basePath ?? '' },
+  webdav: { glyph: '🌐', noun: 'WebDAV location', verb: 'Reopen from WebDAV', detail: (e) => e.config?.url ?? '' },
+});
+
 /** Minimal text escape for the few interpolations above. */
 function escapeText(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -1361,7 +1400,11 @@ export async function boot(mounts) {
       }
       const ok = await projects.openRemote(
         () => new DropboxDriver({ getToken: () => session.getToken(), basePath: cfg.basePath }),
-        { label: 'Dropbox', hint: 'Check the folder path, and that the app has the files.* permissions ticked.' },
+        {
+          label: 'Dropbox',
+          hint: 'Check the folder path, and that the app has the files.* permissions ticked.',
+          remember: { kind: 'dropbox', config: cfg },
+        },
       );
       if (ok) {
         saveDbxConfig(cfg); // remembered only after it worked, and only the public parts
@@ -1389,7 +1432,7 @@ export async function boot(mounts) {
       }
       const ok = await projects.moveToRemote(
         () => new DropboxDriver({ getToken: () => session.getToken(), basePath: cfg.basePath }),
-        { label: 'Dropbox' },
+        { label: 'Dropbox', remember: { kind: 'dropbox', config: cfg } },
       );
       if (ok) {
         saveDbxConfig(cfg);
@@ -1413,7 +1456,7 @@ export async function boot(mounts) {
       if (!chosen) return;
       const ok = await projects.moveToRemote(
         () => new WebDavDriver({ baseUrl: chosen.url, username: chosen.username, password: chosen.password }),
-        { label: 'WebDAV' },
+        { label: 'WebDAV', remember: { kind: 'webdav', config: { url: chosen.url, username: chosen.username } } },
       );
       if (ok) {
         rememberConnection({ url: chosen.url, username: chosen.username });
@@ -1544,12 +1587,42 @@ export async function boot(mounts) {
   // title to the active project name, and register its File menu item.
   outputExporters.activate(projects);
 
+  /**
+   * Reopen a remembered REMOTE location — one click from the Projects list.
+   *
+   * The address comes from the registry; the credential never does, so each kind asks for
+   * exactly the thing it does not keep: Dropbox re-signs in (reusing this tab's session if
+   * there is one), WebDAV asks for the app password. That asymmetry is why this is
+   * kind-aware rather than a single reopen call.
+   */
+  const reopenRemote = async (entry) => {
+    const cfg = entry?.config ?? {};
+    if (entry?.kind === 'dropbox') {
+      if (!cfg.appKey) {
+        results.appendError('That Dropbox entry predates the app key being remembered — open it once from File ▸ Open from Dropbox….');
+        return;
+      }
+      const session = await dropboxFor({ appKey: cfg.appKey, basePath: cfg.basePath });
+      await projects.openRemote(
+        () => new DropboxDriver({ getToken: () => session.getToken(), basePath: cfg.basePath }),
+        { label: 'Dropbox', remember: { kind: 'dropbox', config: cfg } },
+      );
+      return;
+    }
+    if (entry?.kind === 'webdav') {
+      const password = await promptPassword('Open from WebDAV', `${cfg.username ? `${cfg.username} at ` : ''}${cfg.url}`);
+      if (password == null) return;
+      await projects.openWebDav({ url: cfg.url, username: cfg.username }, async () => password);
+    }
+  };
+
   // The sidebar project manager (active project + datasets, other projects,
   // building blocks). Created here, after the services it drives exist.
   new ProjectSidebar(mounts.sidebar, {
     datasets, projects, library, bus,
     workspaceStore, itemStore, assetStore, sweepAssets, memoStore, orphanedMemos, selection,
     pluginList: () => (plugins ? plugins.list() : []),
+    reopenRemote,
   });
 
   // --- warm the runtimes ------------------------------------------------------
@@ -1772,7 +1845,7 @@ export async function boot(mounts) {
   // Connectivity indicator in the status bar — most useful on a field device, where
   // it tells the user why an online importer is quiet and confirms "you're cached."
   if (mounts.status) wireConnectivityIndicator(mounts.status, offline);
-  const launcher = new Launcher({ plugins, datasets, bus, projects, offline, workspaceStore, itemStore, assetStore });
+  const launcher = new Launcher({ plugins, datasets, bus, projects, offline, workspaceStore, itemStore, assetStore, reopenRemote });
   engine.launcher = launcher;
   const launchFlag = new URLSearchParams(location.search).get('launch');
   let bypassed = false;
@@ -2311,7 +2384,7 @@ class ProjectSidebar {
    * @param {import('./library.js').DatasetLibrary} deps.library
    * @param {EventBus} deps.bus
    */
-  constructor(host, { datasets, projects, library, bus, workspaceStore, itemStore, assetStore, sweepAssets, memoStore, orphanedMemos, selection, pluginList }) {
+  constructor(host, { datasets, projects, library, bus, workspaceStore, itemStore, assetStore, sweepAssets, memoStore, orphanedMemos, selection, pluginList, reopenRemote }) {
     this.host = host;
     this.datasets = datasets;
     this.projects = projects;
@@ -2327,6 +2400,7 @@ class ProjectSidebar {
      * from a field rather than awaited mid-DOM-build). @type {{count:number,bytes:number}|null} */
     this.#assets = null;
     this.pluginList = pluginList ?? (() => []);
+    this.reopenRemote = reopenRemote ?? null;
     this.projectName = null;
     bus.on(DATASETS_CHANGED, () => this.render());
     bus.on(CoreEvents.ITEMS_CHANGED, () => this.render()); // the inventory covers items too (#152)
@@ -2354,7 +2428,7 @@ class ProjectSidebar {
     }
     let folderProjects = [];
     try {
-      folderProjects = (await this.projects.listFolderProjects?.()) ?? [];
+      folderProjects = (await this.projects.listProjectLocations?.()) ?? [];
       // Exclude the open folder — it's shown in the active-project zone, not "other".
       const activeFolderId = this.projects.activeFolderId;
       if (activeFolderId) folderProjects = folderProjects.filter((f) => f.id !== activeFolderId);
@@ -3055,6 +3129,25 @@ class ProjectSidebar {
 
   // --- zone 2: other saved projects ------------------------------------------
 
+  /**
+   * Reopen a remembered location.
+   *
+   * Kind-aware because reconnecting differs by kind and cannot be papered over: a folder
+   * needs a write-permission re-grant (a user gesture, which this click is), while a
+   * remote needs a credential this app deliberately never stored. Both end in the same
+   * place, which is the point of one list.
+   */
+  async #openLocation(entry) {
+    if ((entry.kind ?? 'folder') === 'folder') { await this.projects.reopenFolder(entry.handle); return; }
+    const reopen = this.reopenRemote;
+    if (!reopen) return;
+    try {
+      await reopen(entry);
+    } catch (err) {
+      this.results?.appendError?.(`Could not reopen that location: ${err.message}`);
+    }
+  }
+
   #projectsZone(projects, folderProjects = []) {
     const frag = document.createDocumentFragment();
     frag.append(el('div', 'Projects', 'proj__sub proj__sub--zone'));
@@ -3094,16 +3187,21 @@ class ProjectSidebar {
     // Remembered folder projects (#143) — external folders (OneDrive/Dropbox/local),
     // first-class alongside in-browser projects. Click reopens (a permission re-grant
     // happens on the click); ✕ forgets the entry (leaves the folder's files intact).
+    // One row per remembered LOCATION, whatever kind it is. A project stored remotely
+    // used to appear nowhere at all, while a folder one appeared here — the inconsistency
+    // #171 predicted, and the reason this list is no longer folder-only.
     for (const f of folderProjects) {
+      const where = LOCATION_KINDS[f.kind] ?? LOCATION_KINDS.folder;
       const li = document.createElement('li');
-      li.className = 'proj__ds proj__ds--folder';
-      li.title = `Reopen folder project: ${f.name}`;
-      li.addEventListener('click', () => void this.projects.reopenFolder(f.handle));
-      const name = el('button', `📁 ${f.name}`, 'proj__ds-name');
+      li.className = `proj__ds proj__ds--folder proj__ds--${f.kind ?? 'folder'}`;
+      li.title = `${where.verb}: ${f.name}${where.detail(f) ? ` (${where.detail(f)})` : ''}`;
+      const open = () => void this.#openLocation(f);
+      li.addEventListener('click', open);
+      const name = el('button', `${where.glyph} ${f.name}`, 'proj__ds-name');
       name.type = 'button';
-      name.setAttribute('aria-label', `Reopen folder project ${f.name}`);
-      name.addEventListener('click', (e) => { e.stopPropagation(); void this.projects.reopenFolder(f.handle); });
-      const forget = iconBtn('✕', 'Forget this folder (keeps its files)', (e) => {
+      name.setAttribute('aria-label', `${where.verb} ${f.name}`);
+      name.addEventListener('click', (e) => { e.stopPropagation(); open(); });
+      const forget = iconBtn('✕', `Forget this ${where.noun} (keeps its files)`, (e) => {
         e.stopPropagation();
         void this.projects.forgetFolderProject(f.id);
       }, 'proj__ds-x');

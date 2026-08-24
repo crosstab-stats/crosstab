@@ -54,6 +54,9 @@ export class Launcher {
   #pendingSource = null; // source key chosen this session, applied on Start
   #pendingProject = null; // { id } when a saved project is chosen instead of a source
   #pendingFolder = null; // a remembered folder handle, when the "reopen folder" entry is chosen
+  /** Opens a remembered REMOTE location. Supplied by the app, because reconnecting one
+   * needs a credential dialog the launcher has no business owning. */
+  #reopenRemote = null;
   #resolve = null;
   #onKey = null; // Escape-to-dismiss handler, active only while reopened over a session
 
@@ -73,12 +76,13 @@ export class Launcher {
    * @param {import('./asset-store.js').AssetStore} [deps.assetStore] - Stores demo
    *   geometry as asset bytes, the same way a loaded file is stored.
    */
-  constructor({ plugins, datasets, bus, projects, offline, workspaceStore, itemStore, assetStore }) {
+  constructor({ plugins, datasets, bus, projects, offline, workspaceStore, itemStore, assetStore, reopenRemote }) {
     this.#plugins = plugins;
     this.#datasets = datasets;
     this.#bus = bus;
     this.#projects = projects ?? null;
     this.#offline = offline ?? null;
+    this.#reopenRemote = reopenRemote ?? null;
     this.#workspaceStore = workspaceStore ?? null;
     this.#itemStore = itemStore ?? null;
     this.#assetStore = assetStore ?? null;
@@ -346,18 +350,32 @@ export class Launcher {
       // Reconnecting needs a write-permission re-grant, which happens on the Start
       // click (the required user gesture). Shown even if the OPFS rail is empty.
       if (projBox && this.#projects?.reopenFolder) {
-        let folders = [];
-        try { folders = await this.#projects.listFolderProjects(); } catch { folders = []; }
-        if (folders.length) overlay.querySelector('.ctl__railhead--projects')?.removeAttribute('hidden');
-        for (const folder of folders) {
-          const btn = el('button', `📁 ${folder.name}`, 'ctl__source ctl__source--project ctl__source--folder');
+        let locations = [];
+        try { locations = await this.#projects.listProjectLocations(); } catch { locations = []; }
+        if (locations.length) overlay.querySelector('.ctl__railhead--projects')?.removeAttribute('hidden');
+        for (const loc of locations) {
+          const kind = loc.kind || 'folder';
+          const glyph = kind === 'dropbox' ? '📦' : kind === 'webdav' ? '🌐' : '📁';
+          const btn = el('button', `${glyph} ${loc.name}`, `ctl__source ctl__source--project ctl__source--folder ctl__source--${kind}`);
           btn.type = 'button';
-          btn.title = `Reopen project folder: ${folder.name}`;
+          btn.title = kind === 'folder'
+            ? `Reopen project folder: ${loc.name}`
+            : `Reopen from ${kind}: ${loc.config?.basePath || loc.config?.url || loc.name}`;
           btn.addEventListener('click', () => {
-            this.#pendingFolder = folder.handle;
-            this.#pendingProject = null;
-            this.#pendingSource = null;
-            overlay.querySelectorAll('.ctl__source').forEach((b) => b.classList.toggle('is-active', b === btn));
+            // A folder is DEFERRED to Start, because reconnecting needs a write-permission
+            // re-grant and that gesture belongs to the Start click. A remote has no handle
+            // to defer — it needs a credential, which means its own dialog — so it opens
+            // immediately and dismisses the launcher itself.
+            if (kind === 'folder') {
+              this.#pendingFolder = loc.handle;
+              this.#pendingProject = null;
+              this.#pendingSource = null;
+              overlay.querySelectorAll('.ctl__source').forEach((b) => b.classList.toggle('is-active', b === btn));
+              return;
+            }
+            if (!this.#reopenRemote) return;
+            this.#close();
+            void this.#reopenRemote(loc);
           });
           projBox.append(btn);
         }
