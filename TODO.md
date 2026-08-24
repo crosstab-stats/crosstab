@@ -42,6 +42,40 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       memo list. That is memo RETRIEVAL, a feature with its own vocabulary — nearer the
       codebook manager than this — and nothing here forecloses it.
 
+- [ ] **#171 — WHERE a project lives is not WHICH project is open (user, 2026-08-24).**
+      "When you open Word and see the recents list, it doesn't matter where each document
+      lives. Likewise for the launcher list and the sidebar list."
+
+      **The principle.** Location is an ATTRIBUTE of a project, not a category of project.
+      A saved project, a folder-backed project and a WebDAV project are one kind of thing
+      stored three ways, and the list a person picks from should say so — one list, with
+      where-it-lives as a detail on the row, beside the date and dataset count #167 also
+      wants there.
+
+      **What exists today is three parallel registries**, which is how the current shape
+      leaks into the UI:
+      - OPFS projects — the catalog in `project-store.js`
+      - folder projects — `core/folder-handle.js`, IndexedDB, because a
+        `FileSystemDirectoryHandle` needs structured clone
+      - WebDAV connections — `core/webdav-connections.js`, localStorage (2026-08-24)
+
+      Three stores means three renderings, three "forget" verbs, and a launcher rail that
+      grows a row per storage MECHANISM rather than per project. Adding WebDAV made this
+      concrete rather than theoretical: it is the third, and the first that was avoidable.
+
+      **What it wants to become:** one project index whose entries carry `{name, savedAt,
+      datasets, location: {kind, …}}`, with the per-kind stores demoted to what they
+      actually are — somewhere to keep a handle or an address that only the driver cares
+      about. The launcher rail and the sidebar then render the SAME list, which is also
+      what #167 asks for ("do not build a third rendering").
+
+      **Ordering constraint.** #167 wants verbs (rename/delete/duplicate) on that list;
+      doing that before this lands means writing each verb three times, once per registry.
+      This should come first, or at least alongside.
+
+      Not blocking the WebDAV work — a File-menu entry can open a connection without a
+      unified list — but every week it stays split, another feature gets written per-store.
+
 - [x] **#169 — DECLINED (owner, 2026-08-21): "let's not build anything we don't really
       need."** A DOM stub for the plugin's offset math would have caught `a9db12c`, and five
       bugs have now come from the area the suite cannot reach (three in `5cf95cb`, two on
@@ -127,7 +161,11 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       click reopens the launcher.
 
 
-- [ ] **#167 — project management belongs in the launcher (user, 2026-08-19).** "Having
+- [ ] **#167 — the launcher should INCLUDE project management (user, 2026-08-19).**
+      *Title corrected 2026-08-24: this was written up as "belongs in the launcher", which
+      reads as exclusive and is not what was asked. The sidebar keeps its verbs; the
+      launcher gains them. Nor does it pull against #161's "simplify the launcher flow" —
+      the owner's words: tangential goals, not opposing ones.* "Having
       to start a project to delete or rename a saved project seems odd." It is: rename and
       delete live in the SIDEBAR's other-projects zone (app.js ~2786–2794), which only
       exists once a project is open. The launcher already lists the same projects
