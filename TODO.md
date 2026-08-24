@@ -77,10 +77,17 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       unified list — but every week it stays split, another feature gets written per-store.
 
       **It has already bitten (2026-08-24).** A project moved to Dropbox vanishes from the
-      Projects list: the move deletes the OPFS copy correctly, and there is nowhere else
-      for a project to be listed FROM. So the app can put a project somewhere it cannot
-      then show you. That is the whole argument in one sentence, and it is the concrete
-      driver for doing this rather than a fourth registry.
+      Projects list, while one moved to a folder does not — because folders have a registry
+      of their own (`folder-handle.js`) that the sidebar and launcher render beside the OPFS
+      catalog, and remote has no equivalent. So the app can put a project somewhere it
+      cannot then show you, inconsistently, depending on where you put it.
+
+      **The step that is neither a stopgap nor the whole refactor:** generalise the existing
+      folder registry into a registry of remembered LOCATIONS — `{kind: 'folder' | 'dropbox'
+      | 'webdav', name, savedAt, handle?, config?}` — rather than adding a third one beside
+      it. That makes remote projects first-class immediately, collapses two render paths into
+      one, and is a move toward this entry rather than away from it; folding the OPFS catalog
+      in afterwards is then the only step left.
 
 - [x] **#169 — DECLINED (owner, 2026-08-21): "let's not build anything we don't really
       need."** A DOM stub for the plugin's offset math would have caught `a9db12c`, and five
@@ -2728,10 +2735,15 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
     **Open follow-up: a Dropbox project is not in the project list** (owner, 2026-08-24).
     The move deletes the OPFS copy, which is right, and nothing replaces it — so the only
-    route back is File ▸ Open from Dropbox… with the folder retyped. This is #171 arriving
-    in the shape #171 predicted: three registries, and a project whose location is not
-    OPFS therefore has no identity anywhere. Fix belongs with #171, not beside it — a
-    fourth "recent remote projects" list is the exact debt that entry exists to stop.
+    route back is File ▸ Open from Dropbox… with the folder retyped.
+
+    *Corrected 2026-08-25.* I first wrote that there was "nowhere else for a project to be
+    listed from". That is wrong, and the owner caught it: a project moved to a FOLDER still
+    appears, because `moveToFolder` calls `rememberFolder()` and both the sidebar
+    (app.js:2357) and the launcher (launcher.js:350) render that IndexedDB registry beside
+    the OPFS catalog. So there IS a place for a non-OPFS project — one per mechanism. Remote
+    has none because I declined to add a fourth, which left the feature knowingly
+    incomplete without saying so. See #171 for the shape of the fix.
 
     **Three bugs, all environment-specific, all invisible to the suite** — worth recording
     because the next provider will meet the same class:
