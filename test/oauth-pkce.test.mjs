@@ -114,56 +114,150 @@ test('refresh is due early, not late', () => {
 
 // --- the popup handshake -----------------------------------------------------
 
-/** A fake window/message environment. */
-function popupEnv({ opened = true } = {}) {
-  const handlers = new Set();
-  const win = { closed: false, close() { this.closed = true; } };
+/**
+ * A fake window/message/storage environment.
+ *
+ * `severed` models COOP: the handle reports `closed` immediately even though the window
+ * is open, and no `message` ever arrives from it. That is the real behaviour under
+ * `Cross-Origin-Opener-Policy: same-origin`, which this app cannot give up.
+ */
+function popupEnv({ opened = true, severed = false } = {}) {
+  const handlers = new Map();
+  const store = new Map();
+  let chan = null;
+  const win = { closed: severed, close() { this.closed = true; } };
   return {
     win,
     opts: {
       open: () => (opened ? win : null),
-      listen: (t, h) => handlers.add(h),
-      unlisten: (t, h) => handlers.delete(h),
+      listen: (t, h) => handlers.set(t, h),
+      unlisten: (t) => handlers.delete(t),
       origin: 'https://app.example',
+      storage: {
+        getItem: (k) => store.get(k) ?? null,
+        setItem: (k, v) => store.set(k, v),
+        removeItem: (k) => store.delete(k),
+      },
+      makeChannel: () => { chan = { onmessage: null, close() {} }; return chan; },
+      pollMs: 1,
     },
-    send: (data, origin = 'https://app.example') => handlers.forEach((h) => h({ origin, data })),
+    store,
+    /** Deliver over BroadcastChannel. */
+    broadcast: (data) => chan?.onmessage?.({ data }),
+    /** Deliver over postMessage (the non-COOP path). */
+    post: (data, origin = 'https://app.example') => handlers.get('message')?.({ origin, data }),
+    /** Deliver by writing where the callback page writes. */
+    write: (data) => store.set('crosstab.oauth.result', JSON.stringify(data)),
   };
 }
 
-test('a matching reply resolves with the code and closes the popup', async () => {
+const OK = { type: 'crosstab-oauth', code: 'CODE', state: 'ST' };
+
+test('a code arriving over BroadcastChannel resolves', async () => {
   const env = popupEnv();
   const p = runAuthPopup('https://provider/auth', 'ST', env.opts);
-  env.send({ type: 'crosstab-oauth', code: 'CODE', state: 'ST' });
+  env.broadcast(OK);
   assert.equal(await p, 'CODE');
-  assert.equal(env.win.closed, true);
 });
 
-test('a reply from another origin is ignored', async () => {
-  // The callback page is ours; a message from anywhere else is noise at best.
-  const env = popupEnv();
+test('a code left in storage is collected by polling', async () => {
+  // The route that works when the opener is severed AND the storage event does not fire —
+  // which is the combination this app actually runs in.
+  const env = popupEnv({ severed: true });
   const p = runAuthPopup('https://provider/auth', 'ST', env.opts);
-  env.send({ type: 'crosstab-oauth', code: 'EVIL', state: 'ST' }, 'https://attacker.example');
-  env.send({ type: 'crosstab-oauth', code: 'GOOD', state: 'ST' });
-  assert.equal(await p, 'GOOD');
+  env.write(OK);
+  assert.equal(await p, 'CODE');
 });
 
-test('a mismatched state is rejected, not accepted', async () => {
-  // This is the check that stops someone else's login being accepted as the answer to
-  // ours — the whole reason `state` exists.
+test('a severed handle is NOT read as a cancellation', async () => {
+  // The bug this replaces: under COOP the handle reports closed immediately, so polling
+  // it aborted every sign-in the instant it began — reported to the user as "cancelled"
+  // while the sign-in window sat there waiting for them.
+  const env = popupEnv({ severed: true });
+  const p = runAuthPopup('https://provider/auth', 'ST', env.opts);
+  await new Promise((r) => setTimeout(r, 20)); // several poll ticks
+  env.write(OK);
+  assert.equal(await p, 'CODE', 'it waited instead of giving up');
+});
+
+test('a handle that was NOT severed still detects a real cancellation', async () => {
+  // Where the opener relationship survives, closing the window is a genuine signal and
+  // should not be ignored.
   const env = popupEnv();
   const p = runAuthPopup('https://provider/auth', 'ST', env.opts);
-  env.send({ type: 'crosstab-oauth', code: 'CODE', state: 'OTHER' });
-  await assert.rejects(() => p, /state mismatch/);
+  env.win.closed = true;
+  await assert.rejects(() => p, /cancelled/i);
+});
+
+test('postMessage still works where COOP is not in play', async () => {
+  const env = popupEnv();
+  const p = runAuthPopup('https://provider/auth', 'ST', env.opts);
+  env.post(OK);
+  assert.equal(await p, 'CODE');
+});
+
+test('a message from another origin is ignored', async () => {
+  const env = popupEnv();
+  const p = runAuthPopup('https://provider/auth', 'ST', env.opts);
+  env.post({ type: 'crosstab-oauth', code: 'EVIL', state: 'ST' }, 'https://attacker.example');
+  env.broadcast(OK);
+  assert.equal(await p, 'CODE');
+});
+
+test('a mismatched state is rejected on every channel', async () => {
+  // Matters more with a storage handoff than with postMessage: an entry in localStorage
+  // is not addressed to anyone in particular.
+  for (const deliver of ['broadcast', 'write', 'post']) {
+    const env = popupEnv();
+    const p = runAuthPopup('https://provider/auth', 'ST', env.opts);
+    env[deliver]({ type: 'crosstab-oauth', code: 'CODE', state: 'OTHER' });
+    await assert.rejects(() => p, /state mismatch/);
+  }
+});
+
+test('a stale result from a previous attempt is cleared before opening', async () => {
+  // Otherwise the next sign-in collects the last one's answer instantly, and fails the
+  // state check for reasons nobody could work out.
+  const env = popupEnv();
+  env.write({ type: 'crosstab-oauth', code: 'OLD', state: 'PREVIOUS' });
+  const p = runAuthPopup('https://provider/auth', 'ST', env.opts);
+  env.broadcast(OK);
+  assert.equal(await p, 'CODE');
+});
+
+test('the result is removed from storage once collected', async () => {
+  const env = popupEnv();
+  const p = runAuthPopup('https://provider/auth', 'ST', env.opts);
+  env.write(OK);
+  await p;
+  assert.equal(env.store.get('crosstab.oauth.result'), undefined, 'the code does not linger');
 });
 
 test('a provider error comes back as an error', async () => {
   const env = popupEnv();
   const p = runAuthPopup('https://provider/auth', 'ST', env.opts);
-  env.send({ type: 'crosstab-oauth', error: 'access_denied' });
+  env.broadcast({ type: 'crosstab-oauth', error: 'access_denied' });
   await assert.rejects(() => p, /access_denied/);
+});
+
+test('a half-written storage entry does not throw inside the poll', async () => {
+  const env = popupEnv({ severed: true });
+  const p = runAuthPopup('https://provider/auth', 'ST', env.opts);
+  env.opts.storage.setItem('crosstab.oauth.result', '{"type":"crosstab-oau');
+  await new Promise((r) => setTimeout(r, 10));
+  env.broadcast(OK);
+  assert.equal(await p, 'CODE');
 });
 
 test('a blocked popup says so instead of hanging', async () => {
   const env = popupEnv({ opened: false });
   await assert.rejects(() => runAuthPopup('https://provider/auth', 'ST', env.opts), /blocked/i);
+});
+
+test('an abandoned sign-in times out with something actionable', async () => {
+  const env = popupEnv({ severed: true });
+  await assert.rejects(
+    () => runAuthPopup('https://provider/auth', 'ST', { ...env.opts, timeoutMs: 5 }),
+    /timed out/i,
+  );
 });

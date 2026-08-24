@@ -137,41 +137,109 @@ export async function exchangeToken({ tokenUrl, clientId, redirectUri, code, ver
  */
 export const needsRefresh = (expiresAt, skewMs = 60_000) => !expiresAt || Date.now() + skewMs >= expiresAt;
 
+/** Where the callback page leaves its answer, for the opener to collect. */
+export const OAUTH_RESULT_KEY = 'crosstab.oauth.result';
+export const OAUTH_CHANNEL = 'crosstab-oauth';
+
 /**
- * Run the browser half: open the provider's page, wait for the callback to report back.
+ * Run the browser half: open the provider's page, wait for the code to come back.
  *
- * A popup rather than a full-page redirect, because a redirect would tear down the app
- * and take unsaved work with it. `oauth-callback.html` is a static page on our own origin
- * whose only job is to post the code to its opener — the app itself never loads there.
+ * ## Why this does not use `window.opener`
+ *
+ * The obvious design — popup posts to `window.opener` — cannot work in this app.
+ * CrossTab serves `Cross-Origin-Opener-Policy: same-origin` because WebR and DuckDB need
+ * cross-origin isolation, and COOP severs the opener relationship as soon as the popup
+ * navigates to the provider. When it returns to our origin it is in a different browsing
+ * context group: `window.opener` is null, and the handle we kept reports `closed === true`
+ * even while the window is plainly on screen.
+ *
+ * That produced both halves of a confusing failure — the popup announcing it had nothing
+ * to do, and the app reporting a cancellation the user never made.
+ *
+ * So the answer comes back over channels that are scoped to the ORIGIN rather than to the
+ * window relationship, and the callback page writes to all of them:
+ *
+ *  - `BroadcastChannel` — the direct route where it exists.
+ *  - `localStorage` + the `storage` event — the fallback, with polling behind it, because
+ *    the event does not fire in every browser for every context pairing.
+ *  - `postMessage` to the opener — kept because it costs three lines and is the fast path
+ *    when COOP is not in play, such as under a dev server without the isolation headers.
+ *
+ * The code sits in `localStorage` for the instant between the callback writing it and the
+ * opener reading it. That is same-origin only, single-use, and bound to a PKCE verifier
+ * this page never saw — and it is deleted on read.
  *
  * @returns {Promise<string>} the authorization code
  */
-export function runAuthPopup(url, expectedState, { open = globalThis.open, listen = globalThis.addEventListener, unlisten = globalThis.removeEventListener, origin = globalThis.location?.origin } = {}) {
+export function runAuthPopup(url, expectedState, {
+  open = globalThis.open,
+  listen = globalThis.addEventListener,
+  unlisten = globalThis.removeEventListener,
+  origin = globalThis.location?.origin,
+  storage = globalThis.localStorage,
+  makeChannel = () => (typeof BroadcastChannel === 'function' ? new BroadcastChannel(OAUTH_CHANNEL) : null),
+  pollMs = 400,
+  timeoutMs = 5 * 60_000,
+} = {}) {
   return new Promise((resolve, reject) => {
+    // A previous attempt's answer would otherwise be collected instantly as this one's.
+    try { storage?.removeItem(OAUTH_RESULT_KEY); } catch { /* private mode */ }
+
     const win = open(url, 'crosstab-oauth', 'width=520,height=680');
     if (!win) { reject(new Error('The sign-in window was blocked. Allow popups for this site and try again.')); return; }
+
+    // A severed handle reports `closed` immediately. Sampling it once here is what tells
+    // us whether closing the window is a cancellation signal we can trust at all — under
+    // COOP it is not, and polling it would abort every sign-in the moment it started.
+    let severed = false;
+    try { severed = !!win.closed; } catch { severed = true; }
+
+    const channel = makeChannel();
     let done = false;
     const finish = (err, code) => {
       if (done) return;
       done = true;
       unlisten('message', onMessage);
-      clearInterval(closedTimer);
-      try { win.close(); } catch { /* already gone */ }
+      unlisten('storage', onStorage);
+      try { channel?.close(); } catch { /* already closed */ }
+      clearInterval(timer);
+      try { storage?.removeItem(OAUTH_RESULT_KEY); } catch { /* nothing to clean */ }
+      try { win.close(); } catch { /* severed, or already gone — it closes itself */ }
       if (err) reject(err); else resolve(code);
     };
-    const onMessage = (ev) => {
-      // Same-origin only: the callback page is ours, and a message from anywhere else is
-      // either noise or an attempt to feed us someone else's code.
-      if (ev.origin !== origin || ev.data?.type !== 'crosstab-oauth') return;
-      if (ev.data.error) { finish(new Error(String(ev.data.error))); return; }
-      if (ev.data.state !== expectedState) { finish(new Error('OAuth state mismatch — the sign-in reply did not match this request.')); return; }
-      finish(null, String(ev.data.code));
+
+    /** One delivery, from whichever channel got here first. */
+    const accept = (data) => {
+      if (!data || data.type !== 'crosstab-oauth') return;
+      if (data.error) { finish(new Error(String(data.error))); return; }
+      // The state check is what stops a code from someone else's attempt being accepted
+      // as the answer to ours, and it matters more here: a localStorage entry is not
+      // addressed to anyone in particular.
+      if (data.state !== expectedState) { finish(new Error('OAuth state mismatch — the sign-in reply did not match this request.')); return; }
+      finish(null, String(data.code));
     };
+
+    const onMessage = (ev) => { if (ev.origin === origin) accept(ev.data); };
+    const onStorage = (ev) => { if (ev.key === OAUTH_RESULT_KEY && ev.newValue) accept(safeParse(ev.newValue)); };
     listen('message', onMessage);
-    // A user who closes the window is cancelling, and should not be left waiting on a
-    // promise that never settles.
-    const closedTimer = setInterval(() => {
-      if (win.closed) finish(new Error('Sign-in was cancelled.'));
-    }, 500);
+    listen('storage', onStorage);
+    if (channel) channel.onmessage = (ev) => accept(ev.data);
+
+    const startedAt = Date.now();
+    const timer = setInterval(() => {
+      const raw = (() => { try { return storage?.getItem(OAUTH_RESULT_KEY); } catch { return null; } })();
+      if (raw) { accept(safeParse(raw)); return; }
+      // Only trustworthy when the handle was never severed.
+      if (!severed) { let closed = false; try { closed = !!win.closed; } catch { closed = true; }
+        if (closed) { finish(new Error('Sign-in was cancelled.')); return; } }
+      if (Date.now() - startedAt > timeoutMs) {
+        finish(new Error('Sign-in timed out. If you completed it in the other window, close it and try again.'));
+      }
+    }, pollMs);
   });
+}
+
+/** Parse without letting a half-written entry throw inside a poll tick. */
+function safeParse(raw) {
+  try { return JSON.parse(raw); } catch { return null; }
 }

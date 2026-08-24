@@ -5,11 +5,19 @@
 <title>Signing in — CrossTab</title>
 <!--
   The OAuth redirect target (#143). Its entire job is to hand the authorization code back
-  to the window that opened it, and close.
+  to the CrossTab tab that started the sign-in, and close.
 
   The app itself deliberately does NOT load here. A full boot inside a popup would start a
   second copy of CrossTab — a second set of stores, a second autosave — racing the real
   one, to read two query parameters.
+
+  WHY THREE CHANNELS. CrossTab is served with `Cross-Origin-Opener-Policy: same-origin`,
+  which it needs for the cross-origin isolation that WebR and DuckDB run on. COOP severs
+  the opener relationship the moment this window navigates to the provider, so by the time
+  it comes back, `window.opener` is null. The first version of this page relied on the
+  opener alone and therefore announced it had nothing to do, while the app reported a
+  cancellation nobody made. So the answer goes out over channels scoped to the ORIGIN
+  instead: BroadcastChannel, localStorage, and the opener if it happens to survive.
 
   Nothing here is a secret. The authorization code is single-use, bound to a PKCE verifier
   this page has never seen, and useless without it. The `state` value is echoed back so
@@ -23,31 +31,64 @@
 </style>
 </head>
 <body>
-<h1>Signing in…</h1>
+<h1 id="head">Signing in…</h1>
 <p id="msg" class="muted">You can close this window.</p>
 <script>
   (function () {
+    var KEY = 'crosstab.oauth.result';
+    var CHANNEL = 'crosstab-oauth';
     var q = new URLSearchParams(location.search.slice(1) || location.hash.slice(1));
     var payload = {
       type: 'crosstab-oauth',
       code: q.get('code'),
       state: q.get('state'),
       error: q.get('error_description') || q.get('error') || null,
+      at: Date.now(),
     };
-    // Same-origin target only. This page is served from the app's own origin, so the
-    // opener is too — posting to "*" would broadcast the code to whatever else happened
-    // to be listening.
-    if (window.opener) {
-      try { window.opener.postMessage(payload, location.origin); } catch (e) { /* opener gone */ }
-      setTimeout(function () { window.close(); }, 250);
-    } else {
-      // Opened directly, or the popup was blocked and this became a redirect. There is
-      // nobody to hand the code to, so say what happened rather than sit on a spinner.
-      document.getElementById('msg').textContent =
-        payload.error
-          ? 'Sign-in failed: ' + payload.error
-          : 'This page has nothing to do on its own — start sign-in from CrossTab.';
+
+    var delivered = false;
+
+    // 1. localStorage — the one that works regardless of opener or COOP, and the one the
+    //    app polls. Written first so it is already there whichever route arrives.
+    try { localStorage.setItem(KEY, JSON.stringify(payload)); delivered = true; } catch (e) { /* private mode */ }
+
+    // 2. BroadcastChannel — same origin, unaffected by the browsing-context split.
+    try {
+      if (typeof BroadcastChannel === 'function') {
+        var ch = new BroadcastChannel(CHANNEL);
+        ch.postMessage(payload);
+        delivered = true;
+        setTimeout(function () { try { ch.close(); } catch (e) {} }, 1000);
+      }
+    } catch (e) { /* not available */ }
+
+    // 3. The opener, for the case where COOP is not in play — a dev server without the
+    //    isolation headers, say. Costs three lines and is the fastest route when it works.
+    try {
+      if (window.opener) { window.opener.postMessage(payload, location.origin); delivered = true; }
+    } catch (e) { /* severed */ }
+
+    if (payload.error) {
+      document.getElementById('head').textContent = 'Sign-in failed';
+      document.getElementById('msg').textContent = payload.error + ' — you can close this window.';
+      return;
     }
+    if (!delivered) {
+      // Every channel refused. Rather than close and leave the app waiting on a timeout,
+      // say so — this is the only moment anyone can act on it.
+      document.getElementById('head').textContent = 'Could not finish sign-in';
+      document.getElementById('msg').textContent =
+        'This browser blocked the handoff back to CrossTab. Storage access may be disabled for this site.';
+      return;
+    }
+
+    // Closing is a courtesy, not the mechanism: the app has the answer already, and a
+    // window that will not close is untidy rather than broken.
+    document.getElementById('msg').textContent = 'Done — returning to CrossTab.';
+    setTimeout(function () {
+      try { window.close(); } catch (e) { /* not permitted */ }
+      document.getElementById('msg').textContent = 'Done. You can close this window.';
+    }, 400);
   }());
 </script>
 </body>
