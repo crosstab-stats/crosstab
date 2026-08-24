@@ -2601,6 +2601,70 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       reach via `/me/drive/sharedWithMe` or the shared drive id) — so onboarding is half
       CrossTab's invite-key, half Microsoft's sharing dialog; reconcile with the live-
       mode self-contained invite when unifying modes.
+  - [~] **CLOUD STORAGE — the architecture, settled 2026-08-24.** The bullets below are
+    a wish-list of providers with no design attached. This is the design. Owner's framing:
+    modular, host-side, third-party-extensible, and deliberately NOT called plugins,
+    because the code is trusted and runs on main.
+
+    **1. The seam already exists, and it is narrow.** `core/storage-driver.js` is a
+    path-and-bytes store — `read` / `write` / `remove` / `removeTree` / `list` / `stat`
+    (plus `writeStream`, see gap B) — with `ProjectStore#useDriver()` already injecting
+    one, and OPFS + FSA folder as two working implementations. **Crypto sits ABOVE it**:
+    ProjectStore encrypts before `write` and decrypts after `read`, so a driver handles
+    opaque bytes and an untrusted provider can withhold or corrupt but never read.
+
+    **2. Sandboxed plugins are OFF the table, and not for a soft reason.** Every sandbox
+    CSP tier — strict, codec, media — carries `connect-src 'none'`. A sandboxed plugin
+    cannot open a socket at all. The one network path is `app.web.get(url)`: GET only,
+    text only, no custom headers, no redirects followed, per-origin consent-gated. A
+    storage driver needs PUT/DELETE, binary bodies, `Authorization` headers and ranges,
+    so this is not a starting point that needs widening — it is a different thing.
+    OAuth compounds it: redirect URIs need a real origin, which an opaque-origin iframe
+    does not have, and refresh tokens are a different trust tier from a codec.
+
+    **3. PROTOCOL drivers, not VENDOR drivers — this is the load-bearing decision.**
+    ownCloud, the case that prompted this, *is WebDAV*; so are Nextcloud, Synology and a
+    long tail of self-hosted boxes. One WebDAV driver plus a server URL covers all of
+    them with zero code per provider. S3-compatible is a second family (MinIO, B2,
+    Wasabi, R2) behind one driver plus an endpoint. Genuinely proprietary APIs are only
+    Graph, Drive and Dropbox. Two protocol drivers plus three vendor drivers is close to
+    full coverage, and the tail after that is short.
+
+    **4. A provider DESCRIPTOR is data, not code** — `{protocol, baseUrl, auth, scopes}`.
+    A third party adds their cloud by CONFIGURING a protocol driver, which needs no trust
+    decision, no review, and can be a dialog field. This is expected to absorb most of
+    the tail on its own.
+
+    **5. `registerStorageDriver(kind, factory)` for the genuine remainder** (Drive's
+    file-ids being the obvious one). **Say plainly what trusted means here:** crypto sits
+    above the seam, so main-thread driver code is on the PLAINTEXT side of it and can
+    read the data, the tokens and the page. "Not a plugin" describes the trust level
+    honestly but does not reduce it, so the distribution model is source-in-repo via PR —
+    trust earned by review — rather than an install button. Runtime loading would need
+    blunt, non-remembered consent and is a security decision, not plumbing.
+
+    **6. Three contract gaps that would bite the third implementation** — fix BEFORE the
+    first cloud driver, because each is currently satisfied only by accident of both
+    existing drivers being handle-based:
+    - *A. `folderBacked` is `driver.kind === 'folder'`* (project-store.js:149) — identity,
+      not capability, and it drives eight call sites covering flat-vs-nested layout,
+      encryption defaults, launcher flow and sync mode. A WebDAV driver is semantically
+      folder-like, so today it would have to LIE ABOUT ITS NAME to inherit the right
+      behaviour. Split into capability flags (`flat`, `externallySynced`).
+    - *B. `writeStream(path, blob)` is in the code but not in the documented interface.*
+      It is the multi-GB media path and the hardest thing to do over HTTP — every
+      provider has its own resumable-upload protocol. Put it in the contract with a
+      declared fallback for drivers that cannot stream.
+    - *C. `write` promises atomic temp-then-rename.* WebDAV has MOVE, Graph and Dropbox
+      have moves, S3 has no rename at all. Atomicity becomes a DECLARED capability, and
+      the store needs an answer for the non-atomic case — a folder-sync peer polling a
+      path is precisely who a half-written file hurts.
+
+    **Build order:** contract gaps (A/B/C) → WebDAV → Dropbox → Graph → Drive last (the
+    path-to-id cache). WebDAV first on purpose: it is the only one that both serves real
+    users immediately and proves the seam against a non-handle driver, before any OAuth
+    flow or trust tier is committed to.
+
   - **Vendor-neutral cloud-API family — Dropbox & Google Drive are peers, not
     afterthoughts.** Two corrections to "Graph = *the* tablet story": (1) the
     `showDirectoryPicker` gap is **not iPad-specific** — Android Chrome and mobile
