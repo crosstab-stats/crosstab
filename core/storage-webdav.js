@@ -53,6 +53,27 @@
 
 import { debug } from './debug.js';
 
+/**
+ * A request failed because the credential is wrong, missing or expired.
+ *
+ * Worth distinguishing, because the password is held only in memory for the session
+ * (see webdav-connections.js): the caller's correct response is to ask for it again,
+ * NOT to report a failed save. Silently losing an autosave because an app password was
+ * revoked an hour ago is exactly the failure this flag exists to prevent.
+ *
+ * 401 only. A 403 means the server knows who you are and is refusing anyway — a
+ * different problem, which re-typing the password cannot fix and would only loop on.
+ */
+export const isAuthError = (err) => err?.authRequired === true;
+
+/** Attach the status to an error, flagging 401 as re-promptable. */
+function httpError(method, path, status) {
+  const err = new Error(`WebDAV ${method} ${path}: HTTP ${status}`);
+  err.status = status;
+  if (status === 401) err.authRequired = true;
+  return err;
+}
+
 /** Non-empty path segments. */
 const segs = (path) => String(path ?? '').split('/').filter(Boolean);
 
@@ -160,16 +181,18 @@ export class WebDavDriver {
     const h = { ...headers };
     if (this.#auth) h.Authorization = this.#auth;
     const res = await this.#fetch(this.#url(path), { method, body, headers: h, redirect: 'manual' });
-    if (okStatuses && !okStatuses.includes(res.status)) {
-      throw new Error(`WebDAV ${method} ${path}: HTTP ${res.status}`);
-    }
+    // A 401 is raised HERE rather than at each call site, so no method can accidentally
+    // treat "your password is wrong" as "the file isn't there" — which for `read` would
+    // look exactly like an empty project.
+    if (res.status === 401) throw httpError(method, path, 401);
+    if (okStatuses && !okStatuses.includes(res.status)) throw httpError(method, path, res.status);
     return res;
   }
 
   async read(path) {
     const res = await this.#req('GET', path);
     if (res.status === 404) return null;
-    if (!res.ok) throw new Error(`WebDAV GET ${path}: HTTP ${res.status}`);
+    if (!res.ok) throw httpError('GET', path, res.status);
     return new Uint8Array(await res.arrayBuffer());
   }
 
@@ -177,7 +200,7 @@ export class WebDavDriver {
   async readBlob(path) {
     const res = await this.#req('GET', path);
     if (res.status === 404) return null;
-    if (!res.ok) throw new Error(`WebDAV GET ${path}: HTTP ${res.status}`);
+    if (!res.ok) throw httpError('GET', path, res.status);
     return res.blob();
   }
 
@@ -191,7 +214,7 @@ export class WebDavDriver {
       if (this.#dirs.has(dir)) continue;
       const res = await this.#req('MKCOL', dir);
       if (res.ok || res.status === 405 || res.status === 301) this.#dirs.add(dir);
-      else throw new Error(`WebDAV MKCOL ${dir}: HTTP ${res.status}`);
+      else throw httpError('MKCOL', dir, res.status);
     }
   }
 
@@ -212,7 +235,7 @@ export class WebDavDriver {
       // and a stray sibling is something a co-author's sync client will faithfully
       // replicate to everyone.
       try { await this.#req('DELETE', tmp); } catch { /* best effort */ }
-      throw new Error(`WebDAV MOVE ${path}: HTTP ${res.status}`);
+      throw httpError('MOVE', path, res.status);
     }
   }
 
@@ -227,7 +250,7 @@ export class WebDavDriver {
 
   async remove(path) {
     const res = await this.#req('DELETE', path);
-    if (!res.ok && res.status !== 404) throw new Error(`WebDAV DELETE ${path}: HTTP ${res.status}`);
+    if (!res.ok && res.status !== 404) throw httpError('DELETE', path, res.status);
   }
 
   /** DELETE on a collection is recursive by specification, so this is `remove`. */
@@ -238,7 +261,7 @@ export class WebDavDriver {
   async list(dirPath) {
     const res = await this.#req('PROPFIND', dirPath, { headers: { Depth: '1' } });
     if (res.status === 404) return [];
-    if (!res.ok && res.status !== 207) throw new Error(`WebDAV PROPFIND ${dirPath}: HTTP ${res.status}`);
+    if (!res.ok && res.status !== 207) throw httpError('PROPFIND', dirPath, res.status);
     return parsePropfind(await res.text(), [...this.#prefix, ...segs(dirPath)].join('/'));
   }
 
