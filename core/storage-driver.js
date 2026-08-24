@@ -22,12 +22,63 @@
  *
  * The interface (all paths are `/`-joined, relative to the driver root):
  *  - `read(path) → Uint8Array | null`  (null = missing)
- *  - `write(path, bytes)`              (creates parent dirs; **atomic** where possible)
+ *  - `write(path, bytes)`              (creates parent dirs; atomic — see below)
+ *  - `writeStream(path, blob)`         (same, without materialising the bytes)
  *  - `remove(path)` / `removeTree(path)`  (no-op if missing)
  *  - `list(dirPath) → string[]`        (child entry names; [] if missing)
  *  - `stat(path) → {size, mtime} | null`
- *  - `available: boolean`, `kind: string`
+ *  - `available: boolean`, `kind: string`, `capabilities: DriverCapabilities`
+ *
+ * ## Capabilities are DECLARED, never inferred from `kind`
+ *
+ * `kind` is a label for logs and diagnostics. Behaviour must come from
+ * {@link DriverCapabilities}, because asking "are you the folder driver?" is a question
+ * only the two drivers that existed at the time could answer. It had already gone wrong
+ * once: `ProjectStore` derived its folder-vs-OPFS behaviour from `kind === 'folder'`
+ * while its LAYOUT came from the `flat` flag, so a driver injected through
+ * {@link ProjectStore#useDriver} — the seam's whole purpose — got a flat layout and
+ * nested behaviour. A third-party driver would have had to lie about its name to be
+ * treated correctly, which is the clearest possible sign the question was wrong.
+ *
+ * `writeStream` is in this list because it is in the code, and a contract that omits a
+ * method every implementation must supply is not a contract. It is also the hardest
+ * thing to do over HTTP — each provider has its own resumable-upload protocol — so
+ * `canStream: false` is a legitimate answer, and the caller falls back to `write`.
+ *
+ * Atomicity is likewise declared, not assumed. The handle drivers get it from
+ * temp-then-rename; WebDAV has `MOVE`, Graph and Dropbox have moves, and S3 has no
+ * rename at all. It matters because a folder-sync peer polling a path is exactly who a
+ * half-written file hurts, so a driver that cannot promise it has to say so rather than
+ * let the store believe otherwise.
  */
+
+/**
+ * What a driver can do, as declared facts rather than guesses about its identity.
+ *
+ * @typedef {object} DriverCapabilities
+ * @property {boolean} flat  One project per location: files sit at the root with no
+ *   per-project subdirectory and no catalog. Nested (OPFS) holds many projects.
+ * @property {boolean} externallySynced  Something other than this tab may write these
+ *   bytes — an OS sync client, another device, a co-author. Drives polling and merge.
+ * @property {boolean} atomicWrite  A reader at the target path sees the old bytes or
+ *   the new ones, never a partial write.
+ * @property {boolean} canStream  `writeStream` genuinely streams; false means the
+ *   caller should expect it to buffer, and avoid handing it multi-GB blobs.
+ */
+
+/** The conservative default for a driver that declares nothing. */
+export const DEFAULT_CAPABILITIES = Object.freeze({
+  flat: true,
+  externallySynced: true,
+  atomicWrite: false,
+  canStream: false,
+});
+
+/** A driver's declared capabilities, with anything unstated defaulted. */
+export const capabilitiesOf = (driver) => Object.freeze({
+  ...DEFAULT_CAPABILITIES,
+  ...(driver?.capabilities ?? {}),
+});
 
 /** Non-empty path segments. */
 function segs(path) {
@@ -202,6 +253,12 @@ export class OpfsDriver extends HandleDriver {
     super(() => navigator.storage.getDirectory(), 'opfs');
   }
 
+  /** Private to this origin and this tab's browser profile: many projects, and nobody
+   * else writing them. */
+  get capabilities() {
+    return { flat: false, externallySynced: false, atomicWrite: true, canStream: true };
+  }
+
   get available() {
     return typeof navigator !== 'undefined' && !!navigator.storage?.getDirectory;
   }
@@ -212,5 +269,11 @@ export class OpfsDriver extends HandleDriver {
 export class FsaFolderDriver extends HandleDriver {
   constructor(handle) {
     super(handle, 'folder');
+  }
+
+  /** The folder IS the project, and an OS sync client mirrors it — so another machine
+   * writing these bytes is the normal case, not an edge one. */
+  get capabilities() {
+    return { flat: true, externallySynced: true, atomicWrite: true, canStream: true };
   }
 }

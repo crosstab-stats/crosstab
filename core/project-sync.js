@@ -641,7 +641,7 @@ export class ProjectSync {
     // the id and set a per-project passphrase so the very first write is already
     // encrypted (never a plaintext version on disk first). Skipping the prompt leaves
     // this one project plaintext — it's asked once, at creation, not on every save.
-    if (id == null && !this.#store.folderBacked && !this.#store.encrypted && shouldEncrypt('local')) {
+    if (id == null && !this.#store.flat && !this.#store.encrypted && shouldEncrypt('local')) {
       const pass = await passphraseFor('local-new');
       if (pass) {
         const newId = crypto.randomUUID();
@@ -1024,7 +1024,7 @@ export class ProjectSync {
     // plaintext meta read FIRST (nothing loaded yet), so a wrong/cancelled passphrase
     // leaves the currently-open project untouched. (Folder mode already unlocked its
     // store in #openExistingFolder, so skip it there.)
-    if (!this.#store.folderBacked) {
+    if (!this.#store.flat) {
       this.#store.lock(); // drop any previously-open project's key before switching
       try {
         if (await this.#store.hasEncryption(id)) {
@@ -1163,7 +1163,14 @@ export class ProjectSync {
 
   // --- folder-backed projects (#143) ----------------------------------------
 
-  /** @returns {boolean} Whether a picked folder is the active backend. */
+  /**
+   * Whether the FOLDER FLOW is active — the user picked a directory and this session is
+   * attached to it. Distinct from `ProjectStore#flat`, which is a fact about layout: a
+   * cloud driver is flat but was never picked as a folder, so it will need its own mode
+   * rather than borrowing this one. Keeping them apart is what stops a third backend
+   * having to impersonate the folder to be handled correctly.
+   * @returns {boolean}
+   */
   get folderBacked() {
     return this.#folderMode;
   }
@@ -1430,7 +1437,7 @@ export class ProjectSync {
    * path for an existing plaintext project: mint the key + meta, re-save encrypted.
    */
   async protectProject() {
-    const folder = this.#folderMode || this.#store.folderBacked;
+    const folder = this.#folderMode || this.#store.flat;
     await this.#settle(); // make sure it's saved (and, for OPFS, has a binding) before we re-key it
     if (!folder && !this.#binding) {
       this.#results.appendError('Add some data first — an empty project has nothing to protect yet.');
@@ -1477,7 +1484,7 @@ export class ProjectSync {
    * under the new key.
    */
   async changePassphrase() {
-    const folder = this.#folderMode || this.#store.folderBacked;
+    const folder = this.#folderMode || this.#store.flat;
     await this.#settle();
     if (!folder && !this.#binding) return;
     const id = folder ? FOLDER_PROJECT_ID : this.#binding.id;
@@ -1525,7 +1532,7 @@ export class ProjectSync {
    * the key + meta and re-writes the whole bundle in the clear.
    */
   async unprotectProject() {
-    const folder = this.#folderMode || this.#store.folderBacked;
+    const folder = this.#folderMode || this.#store.flat;
     await this.#settle();
     if (!folder && !this.#binding) return;
     const id = folder ? FOLDER_PROJECT_ID : this.#binding.id;

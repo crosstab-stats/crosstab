@@ -23,7 +23,7 @@
  * untrusted provider — only ever sees ciphertext (#143/#144).
  */
 
-import { OpfsDriver, FsaFolderDriver } from './storage-driver.js';
+import { OpfsDriver, FsaFolderDriver, capabilitiesOf } from './storage-driver.js';
 import { deriveKey, encryptWithKey, decryptWithKey, isEnveloped, newSalt, DEFAULT_ITERATIONS } from './crypto-envelope.js';
 import { liveOps } from './op-log.js';
 
@@ -126,9 +126,17 @@ export class ProjectStore {
 
   /** Swap in an arbitrary storage driver (the general seam — e.g. a future cloud
    * driver, also one-project-per-location → flat). Null resets to OPFS. */
-  useDriver(driver, { flat = true } = {}) {
+  useDriver(driver, { flat } = {}) {
     this.#driver = driver ?? new OpfsDriver();
-    this.#flat = driver ? flat : false;
+    // The driver declares its own layout; the option is an override for a caller that
+    // knows better. Defaulting to `true` regardless of what the driver said was how the
+    // layout and the behaviour came apart in the first place.
+    this.#flat = driver ? (flat ?? capabilitiesOf(driver).flat) : false;
+  }
+
+  /** What the current driver can do (defaults filled in). */
+  get capabilities() {
+    return capabilitiesOf(this.#driver);
   }
 
   /** Path of a project file, respecting the layout. Flat (folder): the bare name.
@@ -144,9 +152,20 @@ export class ProjectStore {
     return this.#flat ? ENC_META : `${ROOT}/${id}/${ENC_META}`;
   }
 
-  /** @returns {boolean} Whether the store is currently folder-backed (vs OPFS). */
-  get folderBacked() {
-    return this.#driver.kind === 'folder';
+  /**
+   * Flat layout: one project at this location, files at the root, no catalog.
+   *
+   * This replaces a `kind === 'folder'` test, which asked the driver WHO IT WAS rather
+   * than what it does. The two answers had already diverged: a driver injected through
+   * {@link ProjectStore#useDriver} got `#flat` from the option and `folderBacked` from
+   * its name, so it would have been laid out flat and then treated as nested — the
+   * cloud case, i.e. the reason the seam exists.
+   *
+   * Everything that used to ask "is this a folder?" — layout, the encryption key id,
+   * whether the launcher is already in — was really asking this.
+   */
+  get flat() {
+    return this.#flat;
   }
 
   get available() {
