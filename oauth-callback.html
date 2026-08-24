@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Signing in — CrossTab</title>
+<!--
+  The OAuth redirect target (#143). Its entire job is to hand the authorization code back
+  to the window that opened it, and close.
+
+  The app itself deliberately does NOT load here. A full boot inside a popup would start a
+  second copy of CrossTab — a second set of stores, a second autosave — racing the real
+  one, to read two query parameters.
+
+  Nothing here is a secret. The authorization code is single-use, bound to a PKCE verifier
+  this page has never seen, and useless without it. The `state` value is echoed back so
+  the opener can confirm this reply belongs to the request it made.
+-->
+<style>
+  body { font: 15px/1.6 system-ui, sans-serif; margin: 3rem auto; max-width: 34rem;
+         padding: 0 1.5rem; color: #1a1a1a; background: #fff; }
+  @media (prefers-color-scheme: dark) { body { background: #14181c; color: #e8eaed; } }
+  .muted { color: #646e77; }
+</style>
+</head>
+<body>
+<h1>Signing in…</h1>
+<p id="msg" class="muted">You can close this window.</p>
+<script>
+  (function () {
+    var q = new URLSearchParams(location.search.slice(1) || location.hash.slice(1));
+    var payload = {
+      type: 'crosstab-oauth',
+      code: q.get('code'),
+      state: q.get('state'),
+      error: q.get('error_description') || q.get('error') || null,
+    };
+    // Same-origin target only. This page is served from the app's own origin, so the
+    // opener is too — posting to "*" would broadcast the code to whatever else happened
+    // to be listening.
+    if (window.opener) {
+      try { window.opener.postMessage(payload, location.origin); } catch (e) { /* opener gone */ }
+      setTimeout(function () { window.close(); }, 250);
+    } else {
+      // Opened directly, or the popup was blocked and this became a redirect. There is
+      // nobody to hand the code to, so say what happened rather than sit on a spinner.
+      document.getElementById('msg').textContent =
+        payload.error
+          ? 'Sign-in failed: ' + payload.error
+          : 'This page has nothing to do on its own — start sign-in from CrossTab.';
+    }
+  }());
+</script>
+</body>
+</html>
