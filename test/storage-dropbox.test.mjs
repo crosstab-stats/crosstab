@@ -41,12 +41,15 @@ const mk = (routes, basePath = '/CrossTab/study') => {
 
 // --- pure helpers ------------------------------------------------------------
 
-test('the API-arg header is pure ASCII, and still round-trips', () => {
-  // A non-ASCII header value is rejected by the browser before the request leaves, and
-  // it surfaces as a generic network error naming nothing.
-  const json = asciiJson({ path: '/Études/naïve.json' });
-  assert.ok(/^[\x00-\x7f]*$/.test(json), 'nothing above U+007F survives');
-  assert.equal(JSON.parse(json).path, '/Études/naïve.json', 'and the server still reads the real path');
+test('the API-arg header carries only what a header may carry, and round-trips', () => {
+  // A header value the browser rejects fails before the request leaves, as a generic
+  // network error naming nothing. The range starts at U+007F because DEL is nominally
+  // ASCII but is a control character and invalid in a header value — a correction taken
+  // from the official SDK when this driver was compared against it.
+  const json = asciiJson({ path: '/Études/naïve.json', ctrl: 'a\u007fb' });
+  assert.ok(/^[\x20-\x7e]*$/.test(json), 'printable ASCII only — no DEL, no high bytes');
+  assert.equal(JSON.parse(json).path, '/Études/naïve.json', 'the server still reads the real path');
+  assert.equal(JSON.parse(json).ctrl, 'a\u007fb');
 });
 
 test('paths are absolute, deduped of empty segments, and the root is empty', () => {

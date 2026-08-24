@@ -78,11 +78,15 @@ const SINGLE_SHOT_LIMIT = 100 * 1024 * 1024;
 const CHUNK = 8 * 1024 * 1024;
 
 /**
- * JSON with every non-ASCII character escaped, for use in an HTTP header.
+ * JSON with every character an HTTP header cannot carry escaped, for `Dropbox-API-Arg`.
+ *
+ * The range starts at U+007F, not U+0080: DEL is nominally ASCII but is a control
+ * character and invalid in a header value. Taken from the official SDK, whose range is
+ * right where mine was very slightly wrong.
  * @see the header-encoding note in this file's header
  */
 export function asciiJson(value) {
-  return JSON.stringify(value).replace(/[\u0080-\uffff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+  return JSON.stringify(value).replace(/[\u007f-\uffff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 }
 
 /** A Dropbox path: always absolute, `/` for the root — never a bare name. */
