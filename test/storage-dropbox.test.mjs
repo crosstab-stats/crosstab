@@ -24,6 +24,7 @@ function fakeDbx(routes = {}) {
     return {
       status,
       ok: status >= 200 && status < 300,
+      headers: new Map(Object.entries(reply.headers ?? {})),
       async json() { if (reply.json === undefined) throw new Error('not json'); return reply.json; },
       async arrayBuffer() { return (reply.bytes ?? new Uint8Array()).buffer; },
       async blob() { return reply.blob ?? 'BLOB'; },
@@ -32,9 +33,10 @@ function fakeDbx(routes = {}) {
   return { fetch, calls };
 }
 
+const NO_WAIT = { tries: 4, sleep: async () => {} }; // retry logic without the waiting
 const mk = (routes, basePath = '/CrossTab/study') => {
   const srv = fakeDbx(routes);
-  return { srv, d: new DropboxDriver({ getToken: async () => 'TOKEN', basePath, fetch: srv.fetch }) };
+  return { srv, d: new DropboxDriver({ getToken: async () => 'TOKEN', basePath, fetch: srv.fetch, retry: NO_WAIT }) };
 };
 
 // --- pure helpers ------------------------------------------------------------
@@ -184,4 +186,61 @@ test('the OAuth config asks for offline access', () => {
   assert.equal(DROPBOX_OAUTH.extra.token_access_type, 'offline');
   assert.match(DROPBOX_OAUTH.scope, /files\.content\.write/);
   assert.match(DROPBOX_OAUTH.authorizeUrl, /^https:\/\/www\.dropbox\.com/);
+});
+
+// --- rate limiting -----------------------------------------------------------
+
+test('a 429 is retried, and the wait comes from Retry-After', async () => {
+  // Dropbox rate-limits, and an autosave on a project with many sources is the shape
+  // that trips it. Without this, a save simply fails.
+  let n = 0;
+  const waits = [];
+  const srv = fakeDbx({
+    '/2/files/upload': () => (++n < 3
+      ? { status: 429, headers: { 'retry-after': '2' }, json: {} }
+      : { status: 200, json: {} }),
+  });
+  const d = new DropboxDriver({
+    getToken: async () => 'T', basePath: '/x', fetch: srv.fetch,
+    retry: { tries: 4, sleep: async (ms) => waits.push(ms) },
+  });
+  await d.write('project.json', new Uint8Array([1]));
+  assert.equal(n, 3, 'two refusals, then success');
+  assert.deepEqual(waits, [2000, 2000], "the server's own figure, not a guess");
+});
+
+test('a missing or nonsense Retry-After falls back to backoff', async () => {
+  let n = 0;
+  const waits = [];
+  const srv = fakeDbx({ '/2/files/upload': () => (++n < 3 ? { status: 429, json: {} } : { status: 200, json: {} }) });
+  const d = new DropboxDriver({
+    getToken: async () => 'T', basePath: '/x', fetch: srv.fetch,
+    retry: { tries: 4, sleep: async (ms) => waits.push(ms) },
+  });
+  await d.write('project.json', new Uint8Array([1]));
+  assert.deepEqual(waits, [500, 1000], 'exponential, not a tight loop');
+});
+
+test('a 5xx is NOT retried', async () => {
+  // A 429 says the request was rejected and not applied, which is what makes replaying
+  // it safe. A 500 is ambiguous — the server may have acted before failing, and
+  // replaying an upload_session append that landed would corrupt the file at the offset.
+  let n = 0;
+  const srv = fakeDbx({ '/2/files/upload': () => { n++; return { status: 503, json: {} }; } });
+  const d = new DropboxDriver({ getToken: async () => 'T', basePath: '/x', fetch: srv.fetch, retry: NO_WAIT });
+  await assert.rejects(() => d.write('a.json', new Uint8Array([1])), /HTTP 503/);
+  assert.equal(n, 1, 'tried once, then reported');
+});
+
+test('a token is re-fetched on each retry', async () => {
+  // A retry after a long Retry-After may well need a newer token than the first try had.
+  let n = 0;
+  let issued = 0;
+  const srv = fakeDbx({ '/2/files/upload': () => (++n < 2 ? { status: 429, json: {} } : { status: 200, json: {} }) });
+  const d = new DropboxDriver({
+    getToken: async () => `T${++issued}`, basePath: '/x', fetch: srv.fetch,
+    retry: { tries: 4, sleep: async () => {} },
+  });
+  await d.write('a.json', new Uint8Array([1]));
+  assert.equal(srv.calls[1].headers.Authorization, 'Bearer T2');
 });

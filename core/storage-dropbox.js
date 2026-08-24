@@ -44,6 +44,33 @@ export { isAuthError };
 const RPC = 'https://api.dropboxapi.com/2';
 const CONTENT = 'https://content.dropboxapi.com/2';
 
+/**
+ * Retry a throttled request, honouring `Retry-After`.
+ *
+ * Dropbox rate-limits, and an autosave on a project with many sources is the shape that
+ * trips it — so without this a save simply fails, at the moment the user is least able to
+ * do anything about it.
+ *
+ * **429 only, never 5xx.** A 429 is an explicit statement that the request was REJECTED
+ * and not applied, which is what makes replaying it safe. A 500 is ambiguous: the server
+ * may have acted before it failed, and replaying an `upload_session/append_v2` that
+ * actually landed would write the same chunk twice at the wrong offset and corrupt the
+ * file. Retrying only the unambiguous case is worth more than retrying more cases.
+ *
+ * @param {() => Promise<Response>} attempt
+ */
+async function withRetry(attempt, { tries = 4, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+  let res = await attempt();
+  for (let i = 0; i < tries && res.status === 429; i++) {
+    // Dropbox states how long to wait; trust it over a guess, and fall back to a short
+    // backoff when the header is missing or nonsense.
+    const after = Number(res.headers?.get?.('retry-after'));
+    await sleep(Number.isFinite(after) && after > 0 ? after * 1000 : 2 ** i * 500);
+    res = await attempt();
+  }
+  return res;
+}
+
 /** Anything above this goes through an upload session instead of a single request.
  * Dropbox's own ceiling is 150 MB; 100 keeps clear of it without chunking small saves. */
 const SINGLE_SHOT_LIMIT = 100 * 1024 * 1024;
@@ -88,12 +115,14 @@ export class DropboxDriver {
   #getToken;
   #base;
   #fetch;
+  #retry;
 
-  constructor({ getToken, basePath = '', fetch: f } = {}) {
+  constructor({ getToken, basePath = '', fetch: f, retry } = {}) {
     if (typeof getToken !== 'function') throw new Error('DropboxDriver: getToken is required');
     this.#getToken = getToken;
     this.#base = String(basePath ?? '').replace(/\/+$/, '');
     this.#fetch = f ?? ((...a) => globalThis.fetch(...a));
+    this.#retry = retry; // tests inject a no-wait sleep; production takes the defaults
   }
 
   /** One project per folder, someone else's client may write it, overwrite is atomic,
@@ -112,11 +141,13 @@ export class DropboxDriver {
 
   /** An RPC call: JSON in, JSON out. */
   async #rpc(endpoint, arg, { tolerateNotFound = false } = {}) {
-    const res = await this.#fetch(`${RPC}${endpoint}`, {
+    // The token is fetched inside the attempt, not outside: a retry after a long
+    // Retry-After may well need a newer one than the first try used.
+    const res = await withRetry(async () => this.#fetch(`${RPC}${endpoint}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${await this.#getToken()}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(arg),
-    });
+    }), this.#retry);
     if (res.status === 401) throw httpError(`Dropbox ${endpoint}`, 401);
     if (res.ok) return res.json();
     // 409 is Dropbox's "your request was well-formed but the path says otherwise", which
@@ -129,12 +160,14 @@ export class DropboxDriver {
 
   /** A content call: arguments in a header, bytes in the body. */
   async #content(endpoint, arg, { body, download = false } = {}) {
-    const headers = {
-      Authorization: `Bearer ${await this.#getToken()}`,
-      'Dropbox-API-Arg': asciiJson(arg),
-    };
-    if (!download) headers['Content-Type'] = 'application/octet-stream';
-    const res = await this.#fetch(`${CONTENT}${endpoint}`, { method: 'POST', headers, body });
+    const res = await withRetry(async () => {
+      const headers = {
+        Authorization: `Bearer ${await this.#getToken()}`,
+        'Dropbox-API-Arg': asciiJson(arg),
+      };
+      if (!download) headers['Content-Type'] = 'application/octet-stream';
+      return this.#fetch(`${CONTENT}${endpoint}`, { method: 'POST', headers, body });
+    }, this.#retry);
     if (res.status === 401) throw httpError(`Dropbox ${endpoint}`, 401);
     return res;
   }
