@@ -2712,6 +2712,25 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       still go browser-to-provider. The project simply owns a registration, and the
       consent screen reads "CrossTab" instead of the user's own app name.
 
+    **STATUS (2026-08-24).** Contract gaps A/B/C done; WebDAV built (unverified — the
+    owner's campus turned off WebDAV, and no server with the CORS headers is to hand);
+    **Dropbox built and browser-verified for WRITE** — File ▸ Move project to Dropbox…
+    produced `crosstab-project.json`, `project.json` and a source parquet in the target
+    folder, in the flat layout. **The read path is still unverified**: opening that project
+    back from Dropbox in a fresh session is the other half of the round trip.
+
+    **Three bugs, all environment-specific, all invisible to the suite** — worth recording
+    because the next provider will meet the same class:
+    - `d250fa5` — the popup handoff assumed `window.opener`. COOP severs it, so the
+      callback page announced it had nothing to do while the app reported a cancellation
+      nobody made. Now BroadcastChannel + localStorage + postMessage.
+    - `58b31c4` — the service worker answered the callback navigation with the app shell,
+      so the popup booted a second CrossTab. Only when INSTALLED or offline; an online tab
+      falls through to network-first and works.
+    - `f8bce2c` — `win.closed` cannot distinguish a closed window from a severed handle,
+      and severance happens on NAVIGATION so sampling at open misses it. Cancellation is
+      no longer detected at all; the wait is the lesser mistake.
+
     **Build order:** contract gaps (A/B/C) → WebDAV → Dropbox → Graph → Drive last (the
     path-to-id cache). WebDAV first on purpose: it is the only one that both serves real
     users immediately and proves the seam against a non-handle driver, before any OAuth
