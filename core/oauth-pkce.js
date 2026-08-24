@@ -165,6 +165,20 @@ export const OAUTH_CHANNEL = 'crosstab-oauth';
  *  - `postMessage` to the opener — kept because it costs three lines and is the fast path
  *    when COOP is not in play, such as under a dev server without the isolation headers.
  *
+ * ## Why cancellation is not detected
+ *
+ * `win.closed` looks like the obvious signal and is unusable here. Under COOP a severed
+ * handle reports `closed === true` while the window is plainly open, and the severance
+ * happens when the popup NAVIGATES — not when it is created — so sampling once at open
+ * reads `false` and every sample after it reads `true`. There is no moment at which the
+ * two cases can be told apart.
+ *
+ * Since they cannot be distinguished, the question is which mistake to make. Treating a
+ * severed handle as a cancellation breaks every sign-in, reporting a cancellation the user
+ * never made *after they have already granted access* — the bug this replaces, twice.
+ * Ignoring a real cancellation costs a wait. So the wait is what we take: the promise
+ * settles when the code arrives, or on a timeout that says what to do.
+ *
  * The code sits in `localStorage` for the instant between the callback writing it and the
  * opener reading it. That is same-origin only, single-use, and bound to a PKCE verifier
  * this page never saw — and it is deleted on read.
@@ -179,7 +193,7 @@ export function runAuthPopup(url, expectedState, {
   storage = globalThis.localStorage,
   makeChannel = () => (typeof BroadcastChannel === 'function' ? new BroadcastChannel(OAUTH_CHANNEL) : null),
   pollMs = 400,
-  timeoutMs = 5 * 60_000,
+  timeoutMs = 3 * 60_000,
 } = {}) {
   return new Promise((resolve, reject) => {
     // A previous attempt's answer would otherwise be collected instantly as this one's.
@@ -187,12 +201,6 @@ export function runAuthPopup(url, expectedState, {
 
     const win = open(url, 'crosstab-oauth', 'width=520,height=680');
     if (!win) { reject(new Error('The sign-in window was blocked. Allow popups for this site and try again.')); return; }
-
-    // A severed handle reports `closed` immediately. Sampling it once here is what tells
-    // us whether closing the window is a cancellation signal we can trust at all — under
-    // COOP it is not, and polling it would abort every sign-in the moment it started.
-    let severed = false;
-    try { severed = !!win.closed; } catch { severed = true; }
 
     const channel = makeChannel();
     let done = false;
@@ -229,11 +237,8 @@ export function runAuthPopup(url, expectedState, {
     const timer = setInterval(() => {
       const raw = (() => { try { return storage?.getItem(OAUTH_RESULT_KEY); } catch { return null; } })();
       if (raw) { accept(safeParse(raw)); return; }
-      // Only trustworthy when the handle was never severed.
-      if (!severed) { let closed = false; try { closed = !!win.closed; } catch { closed = true; }
-        if (closed) { finish(new Error('Sign-in was cancelled.')); return; } }
       if (Date.now() - startedAt > timeoutMs) {
-        finish(new Error('Sign-in timed out. If you completed it in the other window, close it and try again.'));
+        finish(new Error('Sign-in did not complete. Close the sign-in window and try again.'));
       }
     }, pollMs);
   });

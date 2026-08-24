@@ -1333,6 +1333,10 @@ export async function boot(mounts) {
   const dropboxFor = async (cfg) => {
     if (dropbox?.signedIn && dropbox.appKey === cfg.appKey) return dropbox;
     const session = new DropboxSession({ appKey: cfg.appKey });
+    // Say that we are waiting. A cancelled sign-in cannot be detected — `win.closed` is
+    // unusable under COOP (see oauth-pkce.js) — so without this the app would sit
+    // apparently idle for anyone who changed their mind.
+    results.appendText('Waiting for Dropbox sign-in in the other window…');
     await session.signIn();
     session.appKey = cfg.appKey;
     dropbox = session;

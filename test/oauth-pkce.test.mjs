@@ -169,24 +169,28 @@ test('a code left in storage is collected by polling', async () => {
   assert.equal(await p, 'CODE');
 });
 
-test('a severed handle is NOT read as a cancellation', async () => {
-  // The bug this replaces: under COOP the handle reports closed immediately, so polling
-  // it aborted every sign-in the instant it began — reported to the user as "cancelled"
-  // while the sign-in window sat there waiting for them.
-  const env = popupEnv({ severed: true });
-  const p = runAuthPopup('https://provider/auth', 'ST', env.opts);
-  await new Promise((r) => setTimeout(r, 20)); // several poll ticks
-  env.write(OK);
-  assert.equal(await p, 'CODE', 'it waited instead of giving up');
-});
-
-test('a handle that was NOT severed still detects a real cancellation', async () => {
-  // Where the opener relationship survives, closing the window is a genuine signal and
-  // should not be ignored.
+test('a handle reporting closed does NOT abort the sign-in', async () => {
+  // The bug this replaces, which appeared twice in two different disguises. Under COOP a
+  // severed handle reports closed while the window is open, and the severance happens on
+  // NAVIGATION — so sampling once at open reads false and everything after reads true.
+  // The two cases cannot be told apart, so `closed` is not consulted at all.
   const env = popupEnv();
   const p = runAuthPopup('https://provider/auth', 'ST', env.opts);
-  env.win.closed = true;
-  await assert.rejects(() => p, /cancelled/i);
+  env.win.closed = true; // the signal that used to end it here
+  await new Promise((r) => setTimeout(r, 20)); // several poll ticks
+  env.write(OK); // the user was still signing in the whole time
+  assert.equal(await p, 'CODE', 'it waited, and got the code');
+});
+
+test('a sign-in that never completes ends on a timeout, not a hang', async () => {
+  // The cost of not reading `closed`: a genuine cancellation is a wait rather than an
+  // immediate error. Accepted deliberately — the opposite mistake breaks every sign-in,
+  // and this one only costs time.
+  const env = popupEnv();
+  await assert.rejects(
+    () => runAuthPopup('https://provider/auth', 'ST', { ...env.opts, timeoutMs: 5 }),
+    /did not complete/i,
+  );
 });
 
 test('postMessage still works where COOP is not in play', async () => {
@@ -254,10 +258,12 @@ test('a blocked popup says so instead of hanging', async () => {
   await assert.rejects(() => runAuthPopup('https://provider/auth', 'ST', env.opts), /blocked/i);
 });
 
-test('an abandoned sign-in times out with something actionable', async () => {
-  const env = popupEnv({ severed: true });
-  await assert.rejects(
-    () => runAuthPopup('https://provider/auth', 'ST', { ...env.opts, timeoutMs: 5 }),
-    /timed out/i,
-  );
+test('a code that arrives just as the window closes is still collected', async () => {
+  // The real race: the callback page writes its answer and closes itself in the same
+  // breath. Nothing about the window's state may be allowed to pre-empt the answer.
+  const env = popupEnv();
+  const p = runAuthPopup('https://provider/auth', 'ST', env.opts);
+  env.write(OK);
+  env.win.closed = true;
+  assert.equal(await p, 'CODE');
 });
