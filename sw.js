@@ -44,7 +44,7 @@
 /* global self, caches */
 let coepCredentialless = false;
 
-const CACHE = 'crosstab-offline-v3';
+const CACHE = 'crosstab-offline-v4';
 // A synthetic key (never a real request) that marks "offline caching is on".
 const OFFLINE_MARKER = 'https://crosstab.local/__offline_enabled__';
 // Tier-1 caching (the app shell) is automatic — the OPT-IN marker now only gates
@@ -54,6 +54,32 @@ let offlineEnabled = false;
 // from a cold install (the rest of the same-origin module graph fills cache-on-use
 // on first load). Resolved against the SW's scope. Kept short + resilient: a missing
 // entry never fails the install.
+/**
+ * Same-origin documents that ARE themselves, and must never be answered with the app
+ * shell.
+ *
+ * The shell fallback exists so an in-app URL like `/?launch=demo-quant` boots from cache
+ * whatever its query. It was written as "any top-level navigation", which quietly
+ * included pages that are not the app: an installed (standalone) CrossTab answered the
+ * OAuth popup's navigation to `oauth-callback.html` with `index.html`, so the popup
+ * booted a second copy of the whole app and the sign-in it was carrying went nowhere.
+ *
+ * Only visible when installed or offline, because an online browser tab falls through to
+ * network-first and gets the right page — which is exactly the sort of difference that
+ * makes a bug look like magic.
+ */
+const STANDALONE_DOCS = ['oauth-callback.html'];
+
+/** Is this URL one of those documents? */
+function isStandaloneDoc(url) {
+  try {
+    const path = new URL(url).pathname;
+    return STANDALONE_DOCS.some((d) => path.endsWith(`/${d}`) || path === `/${d}`);
+  } catch {
+    return false;
+  }
+}
+
 const SHELL_PRECACHE = [
   './',
   'index.html',
@@ -64,6 +90,8 @@ const SHELL_PRECACHE = [
   // so it must be cached for plugins (hence analyses, importers, the demo data) to
   // work offline.
   'plugin-host.html',
+  // The OAuth redirect target. It is a real, separate document — see STANDALONE_DOCS.
+  'oauth-callback.html',
   'vendor/icon-192.png',
   'vendor/icon-180.png',
 ];
@@ -311,7 +339,8 @@ async function handleFetch(r) {
   // nested navigation (a plugin sandbox <iframe> loading plugin-host.html) must
   // resolve to its own cached document, never index.html — else the sandbox boots
   // the whole app and never signals ready.
-  const isTopNav = r.mode === 'navigate' && r.destination === 'document';
+  const isTopNav = r.mode === 'navigate' && r.destination === 'document'
+    && !isStandaloneDoc(r.url); // a page that is not the app must resolve to itself
   let sameOrigin = true;
   try {
     sameOrigin = new URL(r.url).origin === self.location.origin;
@@ -336,7 +365,12 @@ async function handleFetch(r) {
   // network-first below, staying fresh. A *navigation* (e.g. `/?launch=…`) maps to
   // the cached index document — its query would otherwise miss the cache key.
   if (isGet && sameOrigin && (standalone || !self.navigator.onLine)) {
-    const hit = isTopNav ? await matchShell() : await caches.match(r);
+    // A standalone doc is matched ignoring its query: the OAuth callback arrives as
+    // `oauth-callback.html?code=…`, and keying on that would miss the cache every time
+    // while filling it with one entry per sign-in.
+    const hit = isTopNav
+      ? await matchShell()
+      : await caches.match(r, isStandaloneDoc(r.url) ? { ignoreSearch: true } : undefined);
     if (hit) {
       networkAndCache(r, isGet, sameOrigin).catch(() => {}); // background revalidate
       return hit;
@@ -395,10 +429,16 @@ async function networkAndCache(r, isGet, sameOrigin) {
   // satisfies cross-origin isolation. Same-origin shell + known runtime hosts cache
   // AUTOMATICALLY (as used); opting in additionally caches any other cross-origin
   // (the pre-fetched package closure).
+  // Never cache a URL whose query carries the answer to a sign-in. The authorization
+  // code is single-use and useless without a PKCE verifier the cache has never seen, so
+  // this is not a breach — but writing a credential fragment to disk as a CACHE KEY,
+  // once per sign-in, forever, is not something to do by accident either.
+  const isOauthReturn = isStandaloneDoc(r.url) && new URL(r.url).search;
   if (
     isGet &&
     response.ok &&
     response.type !== 'opaque' &&
+    !isOauthReturn &&
     (sameOrigin || isRuntimeAsset(r.url) || offlineEnabled)
   ) {
     const forCache = withIsolation(response.clone());
