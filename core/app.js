@@ -20,6 +20,8 @@ import { ImportService } from './import-service.js';
 import { ExportService } from './export-service.js';
 import { installPassphraseUI } from './passphrase-ui.js';
 import { listConnections, labelFor } from './webdav-connections.js';
+import { DropboxSession, loadConfig as loadDbxConfig, saveConfig as saveDbxConfig } from './dropbox-session.js';
+import { DropboxDriver } from './storage-dropbox.js';
 import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } from './user-identity.js';
 import { ProjectLog } from './project-log.js';
 import { ItemStore, newItemId, isItemOp, parseItemTarget, itemTarget } from './item-store.js';
@@ -316,6 +318,51 @@ function promptWebDav(saved, label) {
       const out = ok
         ? { url: f.url.value.trim(), username: f.username.value.trim(), password: f.password.value }
         : null;
+      d.remove();
+      resolve(out);
+    });
+    document.body.append(d);
+    d.showModal();
+  });
+}
+
+/**
+ * Ask for the Dropbox app key and folder.
+ *
+ * The app key is an OAuth client id — PKCE publishes it by design — so it is remembered
+ * in the clear and the dialog says as much rather than implying a secret is being
+ * handled. What is NOT remembered is the token the sign-in produces.
+ *
+ * @returns {Promise<{appKey: string, basePath: string}|null>}
+ */
+function promptDropbox(saved) {
+  return new Promise((resolve) => {
+    const d = document.createElement('dialog');
+    d.className = 'ct-dialog ct-dialog--wide';
+    d.innerHTML = `
+      <form method="dialog" class="ct-dialog__form">
+        <h2 class="ct-dialog__title">Open from Dropbox</h2>
+        <p class="ct-dialog__hint">CrossTab uses <strong>your own</strong> Dropbox app
+          registration rather than one of ours, so the permission screen names your app and
+          nothing is routed through a third party. Create one at
+          <code>dropbox.com/developers/apps</code> — scoped access, full Dropbox — and paste
+          its <strong>app key</strong> below. The app key is not a secret; the app
+          <em>secret</em> is, and is not used here.</p>
+        <p><label>App key<br><input name="appKey" required style="width:100%"
+          value="${escapeText(saved.appKey ?? '')}" placeholder="abcdefghijklmno"></label></p>
+        <p><label>Folder<br><input name="basePath" style="width:100%"
+          value="${escapeText(saved.basePath ?? '')}" placeholder="/CrossTab/my-study"></label></p>
+        <p class="ct-dialog__hint">You will be asked to sign in. The sign-in is kept for this
+          session only and never written to disk, so you will sign in again after a reload.</p>
+        <menu class="ct-dialog__buttons">
+          <button value="cancel" type="submit">Cancel</button>
+          <button value="ok" type="submit" class="ct-dialog__primary">Sign in and open</button>
+        </menu>
+      </form>`;
+    const f = d.querySelector('form');
+    d.addEventListener('close', () => {
+      const ok = d.returnValue === 'ok' && f.appKey.value.trim();
+      const out = ok ? { appKey: f.appKey.value.trim(), basePath: f.basePath.value.trim() } : null;
       d.remove();
       resolve(out);
     });
@@ -1270,6 +1317,36 @@ export async function boot(mounts) {
         async () => chosen.password,
       );
       if (ok) results.appendText(`Opened **${projects.activeName ?? 'project'}** from ${escapeText(new URL(chosen.url).host)}.`);
+    },
+  });
+
+  // Open a project from Dropbox (#143). The session lives for as long as the tab does;
+  // the driver asks it for a token per request, so a renewal mid-save is invisible.
+  menus.register({
+    id: 'core:open-dropbox',
+    path: ['File'],
+    label: 'Open from Dropbox…',
+    order: 4,
+    command: async () => {
+      const cfg = await promptDropbox(loadDbxConfig());
+      if (!cfg) return;
+      const session = new DropboxSession({ appKey: cfg.appKey });
+      try {
+        await session.signIn();
+      } catch (err) {
+        results.appendError(`Dropbox sign-in failed: ${err.message}`);
+        return;
+      }
+      const ok = await projects.openRemote(
+        () => new DropboxDriver({ getToken: () => session.getToken(), basePath: cfg.basePath }),
+        { label: 'Dropbox', hint: 'Check the folder path, and that the app has the files.* permissions ticked.' },
+      );
+      if (ok) {
+        // Remembered only after it worked, and only the parts that are not secret.
+        saveDbxConfig(cfg);
+        engine.dropboxSession = session; // kept alive for the driver's token callback
+        results.appendText(`Opened **${projects.activeName ?? 'project'}** from Dropbox.`);
+      }
     },
   });
 

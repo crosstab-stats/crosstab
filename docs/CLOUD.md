@@ -1,4 +1,4 @@
-# Cloud storage (WebDAV)
+# Cloud storage
 
 CrossTab can keep a project on a WebDAV server — ownCloud, Nextcloud, Synology, Seafile,
 or anything else speaking the protocol. **File ▸ Open from WebDAV…**
@@ -7,9 +7,60 @@ WebDAV is a protocol rather than a product, so one implementation reaches all of
 There is no CrossTab account, no server component and no third party in the path: your
 browser talks to your server directly.
 
+**Dropbox** is supported too — **File ▸ Open from Dropbox…** — and needs no server
+configuration, which makes it the easier of the two to get working. See *Dropbox* below.
+
 ---
 
-## Before it will work: CORS
+## Dropbox
+
+### You register the app, not us
+
+CrossTab ships no Dropbox registration of its own. You create one and paste in its **app
+key**, which means the permission screen names *your* app, no stranger's registration sits
+in the path, and an institution that will not approve a third-party app can register its
+own instead.
+
+At [dropbox.com/developers/apps](https://www.dropbox.com/developers/apps):
+
+1. **Create app** → *Scoped access* → **Full Dropbox** → name it.
+   Choose Full Dropbox even if it sounds like more than you need. *App folder* access
+   confines the app to `/Apps/<name>/`, and a folder someone shares with you lands
+   **outside** that — so collaborators could not open a shared project. The access type
+   cannot be changed after creation.
+2. **Permissions tab** (it only appears after the app exists) → tick
+   `files.content.read`, `files.content.write`, `files.metadata.read` → **Submit** at the
+   bottom. Unticked scopes fail at runtime, not at sign-in, so this is easy to miss.
+3. **Settings tab** → OAuth 2 → Redirect URIs → add the callback page:
+   `https://<wherever you load CrossTab>/oauth-callback.html`. It must match exactly.
+4. Copy the **App key**. Ignore the app *secret* — a browser app has nowhere safe to keep
+   one, and this never asks for it.
+
+A new app is in **development** mode, which caps how many accounts can link it. That is
+fine for your own use; sharing a project with colleagues means applying for production.
+
+### What is stored
+
+**Remembered:** the app key and folder path, in `localStorage`. The app key is an OAuth
+client id — published by every browser client by design — so this is not a secret being
+left lying about.
+
+**Never remembered:** the sign-in itself. Access and refresh tokens live in memory for the
+session, so you sign in again after a reload, and a machine at rest holds no key to your
+Dropbox.
+
+### Limits
+
+- Development mode caps linked accounts until you apply for production.
+- Dropbox rate-limits; CrossTab waits and retries when it says to.
+- Large files upload in chunks and appear only when complete, so a collaborator never
+  sees a half-written file.
+
+---
+
+## WebDAV
+
+### Before it will work: CORS
 
 **This is the step people get stuck on, and it is not optional.** A browser refuses to
 send `PROPFIND`, `MKCOL` and `MOVE` to another origin unless that origin says it is
@@ -37,7 +88,7 @@ use *File ▸ Move project to a folder…*. That needs no server cooperation at 
 
 ---
 
-## Use an app password
+### Use an app password
 
 Create one in your account settings (Nextcloud and ownCloud both call it an *app
 password*; Synology issues application-specific passwords). Do not use your account
@@ -49,7 +100,7 @@ and nothing else you use is affected.
 
 ---
 
-## What CrossTab stores, and what it does not
+### What CrossTab stores, and what it does not
 
 **Remembered:** the address and the username, in `localStorage`. Plain text on purpose —
 you can read it yourself and confirm there is nothing else in there.
@@ -68,23 +119,7 @@ device, say — CrossTab tells you rather than reporting a failed save.
 
 ---
 
-## Encryption
-
-Storage encryption is **separate** from your cloud password, and one is not a substitute
-for the other.
-
-Your cloud password protects the **account**. It stops other people reaching the files.
-It does nothing about your provider, your provider's administrators, or a backup of their
-disks.
-
-A project passphrase (**File ▸ Protect project…**) protects the **data**. CrossTab
-encrypts before anything is written and decrypts after it is read, so a WebDAV server
-holding a protected project holds ciphertext and nothing else. For participant data on a
-server you do not personally administer, use it.
-
----
-
-## Known limits
+### Known limits
 
 - **One project per location.** The collection you point at *is* the project, the same
   way a folder-backed project works. Point at a different collection for a different
@@ -94,3 +129,21 @@ server you do not personally administer, use it.
   peer-to-peer path (**Go live**), which is independent of where the project is stored.
 - **Large files cross the network whole.** There is no resumable upload here yet, so a
   multi-gigabyte source on a poor connection is a bad time.
+
+---
+
+## Encryption — applies to every backend
+
+Storage encryption is **separate** from whatever credential reaches your cloud, and one is
+not a substitute for the other.
+
+The credential — a WebDAV app password, a Dropbox sign-in — protects the **account**. It
+stops other people reaching the files. It does nothing about the provider, the provider's
+administrators, or a backup of their disks.
+
+A project passphrase (**File ▸ Protect project…**) protects the **data**. CrossTab
+encrypts before anything is written and decrypts after it is read, so a server holding a
+protected project holds ciphertext and nothing else. Encryption sits above the storage
+layer, so this is true of every backend equally — Dropbox, WebDAV, a synced folder.
+
+For participant data on infrastructure you do not personally administer, use it.

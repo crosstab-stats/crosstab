@@ -1197,20 +1197,29 @@ export class ProjectSync {
    * @param {() => Promise<string|null>} askPassword
    * @returns {Promise<boolean>} whether a project was opened
    */
-  async openWebDav(conn, askPassword) {
-    if (!conn?.url) return false;
-    const password = await askPassword();
-    if (password == null) return false; // cancelled — nothing touched
-
-    const build = (pw) => new WebDavDriver({ baseUrl: conn.url, username: conn.username, password: pw });
+  /**
+   * Open a project held by any remote driver.
+   *
+   * Extracted from the WebDAV flow when Dropbox needed the identical dance, which is the
+   * point of the seam: probe on a THROWAWAY store, and touch the live project only once
+   * the remote has proved it holds one. A wrong address, a refused credential, a wrong
+   * passphrase or an empty location all leave whatever is open exactly as it was.
+   *
+   * @param {() => object} makeDriver  builds a fresh driver — called twice on purpose,
+   *   so the probe and the live store never share one and a failed probe leaves no
+   *   half-configured object behind
+   * @param {{label: string, hint?: string}} opts  `label` names the backend in errors
+   * @returns {Promise<boolean>} whether a project was opened
+   */
+  async openRemote(makeDriver, { label, hint } = {}) {
     const probe = new ProjectStore();
-    probe.useDriver(build(password));
+    probe.useDriver(makeDriver());
 
     let entries = [];
     let pass = null;
     try {
-      // Encryption first: the meta is plaintext, so this also serves as the reachability
-      // and credential check, before anything asks the user for a second secret.
+      // Encryption first: the meta is plaintext, so this read doubles as the reachability
+      // and credential check, before anyone is asked for a second secret.
       if (await probe.hasEncryption()) {
         pass = await passphraseFor('folder');
         if (!pass) return false;
@@ -1223,34 +1232,54 @@ export class ProjectSync {
       }
       entries = await probe.list();
     } catch (err) {
-      // A 401 is the one failure worth naming precisely: the password is held only for
-      // this session, so "wrong or expired" is both likely and fixable by retyping.
+      // A refused credential is the one failure worth naming precisely: it is both the
+      // likeliest and the only one the user can fix on the spot.
       if (isAuthError(err)) {
-        this.#results.appendError('That username or app password was refused by the server.');
+        this.#results.appendError(`${label} refused those credentials — sign in again.`);
       } else {
-        this.#results.appendError(
-          `Could not reach that WebDAV location: ${err.message}. If the address is right, the `
-          + 'server may not send the CORS headers a browser needs — see docs/CLOUD.md.',
-        );
+        this.#results.appendError(`Could not reach ${label}: ${err.message}${hint ? ` ${hint}` : ''}`);
       }
       return false;
     }
     if (!entries.length) {
-      this.#results.appendError('No CrossTab project at that address — use “Move project to a folder…” to put one there first.');
+      this.#results.appendError(`No CrossTab project there — use "Move project to a folder…" to put one there first.`);
       return false;
     }
 
     await this.#settle(); // flush any pending save before switching backends
-    this.#store.useDriver(build(password));
+    this.#store.useDriver(makeDriver());
     if (pass) await this.#store.unlock(pass);
     await this.openProject(entries[0].id);
     if (!this.#binding) {
       this.#store.useDriver(null); // damaged — fall back to OPFS rather than sit on a dead store
       return false;
     }
-    rememberConnection({ url: conn.url, username: conn.username, name: conn.name ?? entries[0].name });
     this.#emitProject();
     return true;
+  }
+
+  /**
+   * Open a project on a WebDAV server. The credential is asked for here and held only by
+   * the driver, so nothing on this path writes it anywhere.
+   *
+   * @param {{url: string, username?: string, name?: string}} conn
+   * @param {() => Promise<string|null>} askPassword
+   */
+  async openWebDav(conn, askPassword) {
+    if (!conn?.url) return false;
+    const password = await askPassword();
+    if (password == null) return false; // cancelled — nothing touched
+    const ok = await this.openRemote(
+      () => new WebDavDriver({ baseUrl: conn.url, username: conn.username, password }),
+      {
+        label: 'that WebDAV location',
+        hint: 'If the address is right, the server may not send the CORS headers a browser needs — see docs/CLOUD.md.',
+      },
+    );
+    // Remembered only AFTER it worked: a shortcut to a place that failed is not a
+    // convenience.
+    if (ok) rememberConnection({ url: conn.url, username: conn.username, name: conn.name ?? this.activeName });
+    return ok;
   }
 
   async #attach(handle) {
