@@ -66,6 +66,27 @@
  *   caller should expect it to buffer, and avoid handing it multi-GB blobs.
  */
 
+/**
+ * A request failed because the credential is wrong, missing or expired — shared by every
+ * remote driver, so the callers above them can respond the same way to all of them.
+ *
+ * The distinction earns its place because credentials here are session-scoped by policy:
+ * the correct response is to ask again, NOT to report a failed save. Losing an autosave
+ * because an app password was revoked an hour ago is the failure this exists to prevent.
+ *
+ * 401 only. A 403 means the server knows who you are and is refusing anyway — a different
+ * problem, which re-authenticating cannot fix and would only loop on.
+ */
+export const isAuthError = (err) => err?.authRequired === true;
+
+/** An HTTP failure as an Error, with 401 flagged re-promptable. */
+export function httpError(what, status, detail = '') {
+  const err = new Error(`${what}: HTTP ${status}${detail ? ` — ${detail}` : ''}`);
+  err.status = status;
+  if (status === 401) err.authRequired = true;
+  return err;
+}
+
 /** The conservative default for a driver that declares nothing. */
 export const DEFAULT_CAPABILITIES = Object.freeze({
   flat: true,

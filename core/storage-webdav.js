@@ -53,26 +53,14 @@
 
 import { debug } from './debug.js';
 
-/**
- * A request failed because the credential is wrong, missing or expired.
- *
- * Worth distinguishing, because the password is held only in memory for the session
- * (see webdav-connections.js): the caller's correct response is to ask for it again,
- * NOT to report a failed save. Silently losing an autosave because an app password was
- * revoked an hour ago is exactly the failure this flag exists to prevent.
- *
- * 401 only. A 403 means the server knows who you are and is refusing anyway — a
- * different problem, which re-typing the password cannot fix and would only loop on.
- */
-export const isAuthError = (err) => err?.authRequired === true;
+// The auth-failure signal is shared with every other remote driver, so a caller can
+// respond to "your credential expired" identically whatever it is talking to. Re-exported
+// because this module's consumers import it from here.
+import { isAuthError as sharedIsAuthError, httpError as sharedHttpError } from './storage-driver.js';
 
-/** Attach the status to an error, flagging 401 as re-promptable. */
-function httpError(method, path, status) {
-  const err = new Error(`WebDAV ${method} ${path}: HTTP ${status}`);
-  err.status = status;
-  if (status === 401) err.authRequired = true;
-  return err;
-}
+export const isAuthError = sharedIsAuthError;
+
+const httpError = (method, path, status) => sharedHttpError(`WebDAV ${method} ${path}`, status);
 
 /** Non-empty path segments. */
 const segs = (path) => String(path ?? '').split('/').filter(Boolean);
