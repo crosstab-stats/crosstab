@@ -19,7 +19,8 @@ import { UiService } from './ui-service.js';
 import { ImportService } from './import-service.js';
 import { ExportService } from './export-service.js';
 import { installPassphraseUI } from './passphrase-ui.js';
-import { listConnections, labelFor } from './webdav-connections.js';
+import { listConnections, labelFor, rememberConnection } from './webdav-connections.js';
+import { WebDavDriver } from './storage-webdav.js';
 import { DropboxSession, loadConfig as loadDbxConfig, saveConfig as saveDbxConfig } from './dropbox-session.js';
 import { DropboxDriver } from './storage-dropbox.js';
 import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } from './user-identity.js';
@@ -281,14 +282,14 @@ function promptNetworkDialog(name, url) {
  * @param {(c: object) => string} label
  * @returns {Promise<{url: string, username: string, password: string}|null>}
  */
-function promptWebDav(saved, label) {
+function promptWebDav(saved, label, { move = false } = {}) {
   return new Promise((resolve) => {
     const d = document.createElement('dialog');
     d.className = 'ct-dialog ct-dialog--wide';
     const options = saved.map((c, i) => `<option value="${i}">${escapeText(label(c))}</option>`).join('');
     d.innerHTML = `
       <form method="dialog" class="ct-dialog__form">
-        <h2 class="ct-dialog__title">Open from WebDAV</h2>
+        <h2 class="ct-dialog__title">${move ? 'Move project to WebDAV' : 'Open from WebDAV'}</h2>
         <p class="ct-dialog__hint">ownCloud, Nextcloud, Synology — anything speaking WebDAV.
           Use an <strong>app password</strong>, not your account password: it is revocable and
           cannot log in to the web interface. CrossTab remembers the address and username,
@@ -300,7 +301,7 @@ function promptWebDav(saved, label) {
         <p><label>App password<br><input name="password" type="password" autocomplete="current-password" style="width:100%"></label></p>
         <menu class="ct-dialog__buttons">
           <button value="cancel" type="submit">Cancel</button>
-          <button value="ok" type="submit" class="ct-dialog__primary">Open</button>
+          <button value="ok" type="submit" class="ct-dialog__primary">${move ? 'Move' : 'Open'}</button>
         </menu>
       </form>`;
     const f = d.querySelector('form');
@@ -335,13 +336,13 @@ function promptWebDav(saved, label) {
  *
  * @returns {Promise<{appKey: string, basePath: string}|null>}
  */
-function promptDropbox(saved) {
+function promptDropbox(saved, { move = false } = {}) {
   return new Promise((resolve) => {
     const d = document.createElement('dialog');
     d.className = 'ct-dialog ct-dialog--wide';
     d.innerHTML = `
       <form method="dialog" class="ct-dialog__form">
-        <h2 class="ct-dialog__title">Open from Dropbox</h2>
+        <h2 class="ct-dialog__title">${move ? 'Move project to Dropbox' : 'Open from Dropbox'}</h2>
         <p class="ct-dialog__hint">CrossTab uses <strong>your own</strong> Dropbox app
           registration rather than one of ours, so the permission screen names your app and
           nothing is routed through a third party. Create one at
@@ -352,11 +353,14 @@ function promptDropbox(saved) {
           value="${escapeText(saved.appKey ?? '')}" placeholder="abcdefghijklmno"></label></p>
         <p><label>Folder<br><input name="basePath" style="width:100%"
           value="${escapeText(saved.basePath ?? '')}" placeholder="/CrossTab/my-study"></label></p>
+        <p class="ct-dialog__hint">${move
+          ? 'The folder must be empty or not yet exist — CrossTab will not write over a project already there. It is created if missing.'
+          : 'The folder CrossTab should open the project from.'}</p>
         <p class="ct-dialog__hint">You will be asked to sign in. The sign-in is kept for this
           session only and never written to disk, so you will sign in again after a reload.</p>
         <menu class="ct-dialog__buttons">
           <button value="cancel" type="submit">Cancel</button>
-          <button value="ok" type="submit" class="ct-dialog__primary">Sign in and open</button>
+          <button value="ok" type="submit" class="ct-dialog__primary">${move ? 'Sign in and move' : 'Sign in and open'}</button>
         </menu>
       </form>`;
     const f = d.querySelector('form');
@@ -1322,6 +1326,20 @@ export async function boot(mounts) {
 
   // Open a project from Dropbox (#143). The session lives for as long as the tab does;
   // the driver asks it for a token per request, so a renewal mid-save is invisible.
+  /** The tab's Dropbox session, minted on first use and reused after. Signing in twice
+   * in one sitting because two menu items each built their own would be the app's
+   * fault, not the user's. */
+  let dropbox = null;
+  const dropboxFor = async (cfg) => {
+    if (dropbox?.signedIn && dropbox.appKey === cfg.appKey) return dropbox;
+    const session = new DropboxSession({ appKey: cfg.appKey });
+    await session.signIn();
+    session.appKey = cfg.appKey;
+    dropbox = session;
+    engine.dropboxSession = session; // kept alive for the driver's token callback
+    return session;
+  };
+
   menus.register({
     id: 'core:open-dropbox',
     path: ['File'],
@@ -1330,9 +1348,9 @@ export async function boot(mounts) {
     command: async () => {
       const cfg = await promptDropbox(loadDbxConfig());
       if (!cfg) return;
-      const session = new DropboxSession({ appKey: cfg.appKey });
+      let session;
       try {
-        await session.signIn();
+        session = await dropboxFor(cfg);
       } catch (err) {
         results.appendError(`Dropbox sign-in failed: ${err.message}`);
         return;
@@ -1342,10 +1360,60 @@ export async function boot(mounts) {
         { label: 'Dropbox', hint: 'Check the folder path, and that the app has the files.* permissions ticked.' },
       );
       if (ok) {
-        // Remembered only after it worked, and only the parts that are not secret.
-        saveDbxConfig(cfg);
-        engine.dropboxSession = session; // kept alive for the driver's token callback
+        saveDbxConfig(cfg); // remembered only after it worked, and only the public parts
         results.appendText(`Opened **${projects.activeName ?? 'project'}** from Dropbox.`);
+      }
+    },
+  });
+
+  // The other half: put the OPEN project into Dropbox. Without this, the API drivers are
+  // usable only on projects some other route put there — which is not testable.
+  menus.register({
+    id: 'core:move-dropbox',
+    path: ['File'],
+    label: 'Move project to Dropbox…',
+    order: 6,
+    command: async () => {
+      const cfg = await promptDropbox(loadDbxConfig(), { move: true });
+      if (!cfg) return;
+      let session;
+      try {
+        session = await dropboxFor(cfg);
+      } catch (err) {
+        results.appendError(`Dropbox sign-in failed: ${err.message}`);
+        return;
+      }
+      const ok = await projects.moveToRemote(
+        () => new DropboxDriver({ getToken: () => session.getToken(), basePath: cfg.basePath }),
+        { label: 'Dropbox' },
+      );
+      if (ok) {
+        saveDbxConfig(cfg);
+        results.appendText(
+          `**${projects.activeName ?? 'The project'}** now lives in Dropbox at \`${escapeText(cfg.basePath || '/')}\`. `
+          + 'Saving writes there from now on, and the local copy has been removed.',
+        );
+      }
+    },
+  });
+
+  // Same for WebDAV, so the two backends do not drift into "one can move, one cannot" —
+  // the asymmetry that made the Dropbox driver untestable in the first place.
+  menus.register({
+    id: 'core:move-webdav',
+    path: ['File'],
+    label: 'Move project to WebDAV…',
+    order: 7,
+    command: async () => {
+      const chosen = await promptWebDav(listConnections(), labelFor, { move: true });
+      if (!chosen) return;
+      const ok = await projects.moveToRemote(
+        () => new WebDavDriver({ baseUrl: chosen.url, username: chosen.username, password: chosen.password }),
+        { label: 'WebDAV' },
+      );
+      if (ok) {
+        rememberConnection({ url: chosen.url, username: chosen.username });
+        results.appendText(`**${projects.activeName ?? 'The project'}** now lives on ${escapeText(new URL(chosen.url).host)}.`);
       }
     },
   });

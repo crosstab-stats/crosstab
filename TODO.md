@@ -2698,6 +2698,20 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       the store needs an answer for the non-atomic case — a folder-sync peer polling a
       path is precisely who a half-written file hurts.
 
+    **7. SHIP A DEFAULT APP KEY — confirmed needed (owner, 2026-08-24): "I'll need to ship
+    a key for everyone eventually. For now dev is fine."** Bring-your-own is right for
+    institutions and wrong as the only option: telling a colleague to register a Dropbox
+    app before they can open a shared project is an absurd ask. What it needs, none of it
+    blocking today's work:
+    - A registration the PROJECT owns, per provider, through each provider's production
+      review — a Dropbox app starts in development mode with a hard cap on linked
+      accounts, so a shipped key fails for everyone but its owner until that clears.
+    - One constant per provider, with the existing BYO field kept as an override.
+    - Note what this does NOT cost, since it sounds like it cuts against the grain and
+      does not: no server, no CrossTab account, no third party in the data path. Bytes
+      still go browser-to-provider. The project simply owns a registration, and the
+      consent screen reads "CrossTab" instead of the user's own app name.
+
     **Build order:** contract gaps (A/B/C) → WebDAV → Dropbox → Graph → Drive last (the
     path-to-id cache). WebDAV first on purpose: it is the only one that both serves real
     users immediately and proves the seam against a non-handle driver, before any OAuth

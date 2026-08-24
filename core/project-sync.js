@@ -1400,6 +1400,89 @@ export class ProjectSync {
    * (opt-out): you're prompted to set a passphrase (Cancel = store plaintext). Must
    * be called from the menu click (`showDirectoryPicker` needs a user gesture).
    */
+  /**
+   * Move the open project to a remote backend — the mirror of {@link moveToFolder}.
+   *
+   * Opening a remote project only ever OPENED one, so until this existed the only way to
+   * get a project into Dropbox was to sync a folder with the desktop client. That left
+   * the API drivers usable exclusively on projects put there by some other route, which
+   * is not a feature anyone can test.
+   *
+   * Same order of operations as the folder move, for the same reason: everything before
+   * the commit line is side-effect-free, so a cancel or a refusal leaves the project
+   * exactly where it was.
+   *
+   * @param {() => object} makeDriver  builds a fresh driver (called twice — probe, live)
+   * @param {{label: string}} opts
+   * @returns {Promise<boolean>}
+   */
+  async moveToRemote(makeDriver, { label }) {
+    const wasFolder = this.#folderMode;
+    if (!wasFolder && !this.#binding) {
+      this.#results.appendError('Add some data first — an empty project has nothing to move.');
+      return false;
+    }
+
+    // Probe with a THROWAWAY store: never touch the live project to answer a question
+    // about the destination. `hasEncryption` reads the plaintext meta, so an occupied
+    // location is spotted even when it is protected and we hold no key — where `list`
+    // alone would look reassuringly empty.
+    try {
+      const probe = new ProjectStore();
+      probe.useDriver(makeDriver());
+      if ((await probe.hasEncryption()) || (await probe.list()).length > 0) {
+        this.#results.appendError(`That ${label} folder already holds a CrossTab project — open it instead.`);
+        return false;
+      }
+    } catch (err) {
+      // Unlike the folder case, "unreadable" here is usually a wrong path or a network
+      // problem rather than a folder full of someone else's data — so say what happened
+      // instead of reporting it as occupied.
+      this.#results.appendError(isAuthError(err)
+        ? `${label} refused those credentials — sign in again.`
+        : `Could not check that ${label} folder: ${err.message}`);
+      return false;
+    }
+
+    // Protection is decided BEFORE anything is written. Three outcomes: a passphrase,
+    // null (move unprotected), or an abort.
+    let pass = null;
+    if (shouldEncrypt('folder')) {
+      pass = await passphraseFor('folder-new');
+      if (pass === PASSPHRASE_ABORT) return false;
+    }
+
+    // --- committed ------------------------------------------------------------
+    const orphanOpfsId = wasFolder ? null : this.#binding?.id;
+    const projectName = this.activeName || 'My project'; // read BEFORE unbinding
+    try {
+      await this.#settle(); // flush any pending save before switching backends
+      this.#store.useDriver(makeDriver());
+      if (pass) await this.#store.unlock(pass);
+      // Mint the live-room identity, exactly as the folder move does: it rides the
+      // manifest, so a collaborator opening this location joins the same room (#148).
+      const ident = ensureCollabIdentity({ collabId: this.#collabId, collabSecret: this.#collabSecret });
+      this.#collabId = ident.collabId; this.#collabSecret = ident.collabSecret;
+      this.#binding = null; // a brand-new entry, living remotely now
+      await this.#fullSave(null, projectName);
+      this.#folderMode = false; // remote is not the folder flow — see the folderBacked note
+      this.#lastManifest = await this.#store.readManifest(this.#binding.id);
+      this.#emitProject();
+      // A true move: drop the now-redundant OPFS copy, through a throwaway OPFS store
+      // since the live one is remote. Best-effort — the data is already safely away.
+      if (orphanOpfsId) { try { await new ProjectStore().delete(orphanOpfsId); } catch { /* leave it */ } }
+      return true;
+    } catch (err) {
+      this.#results.appendError(`Move to ${label} failed: ${err.message}`);
+      // Back to OPFS, and re-open what we were moving — better than leaving the user
+      // looking at nothing while their project sits intact one reopen away.
+      this.#store.useDriver(null);
+      this.#store.lock();
+      if (orphanOpfsId) { try { await this.openProject(orphanOpfsId); } catch { /* report already made */ } }
+      return false;
+    }
+  }
+
   async moveToFolder() {
     const wasFolder = this.#folderMode; // preserve the current attachment for a clean abort
     // Pick WITHOUT attaching: we must not disturb the live project's store until the
