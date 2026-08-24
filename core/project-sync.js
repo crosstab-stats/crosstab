@@ -27,6 +27,8 @@ import { passphraseFor, shouldEncrypt, PASSPHRASE_ABORT } from './at-rest.js';
 import { syncFolderProject, manifestsEqual } from './folder-sync.js';
 import { PLUGIN_STATE, pluginOpsOf, isPluginOp, pluginTarget, foldPluginOpinions, migrateLegacyActivePlugins } from './plugin-state.js';
 import { SHARE_STATE, isShareOp, shareOpsOf, shareOp, foldSharing } from './share-state.js';
+import { WebDavDriver, isAuthError } from './storage-webdav.js';
+import { rememberConnection } from './webdav-connections.js';
 import { showConflictDialog } from './conflict-ui.js';
 import { shortcutFiles } from './folder-shortcut.js';
 import { showEncryptionSettings } from './encryption-settings.js';
@@ -1178,6 +1180,79 @@ export class ProjectSync {
   /** Pick a folder + attach the store to it (shared by move/open). Returns the
    * handle, or null on cancel/denied. Flushes any pending OPFS save first. */
   /** Re-grant write, flush any pending OPFS save, then point the store at the folder. */
+  /**
+   * Open a project stored on a WebDAV server.
+   *
+   * Same shape as {@link ProjectSync##openExistingFolder}, for the same reason: probe on
+   * a THROWAWAY store and touch the live project only once the remote has proved it
+   * holds one. A wrong address, a wrong password or an empty collection must all leave
+   * whatever is currently open exactly as it was.
+   *
+   * `askPassword` is passed in rather than imported so the credential never becomes this
+   * module's business: it prompts, hands the string to the driver, and nothing here
+   * writes it anywhere. The address is remembered only after a successful open — there
+   * is no point offering someone a shortcut to a place that did not work.
+   *
+   * @param {{url: string, username?: string, name?: string}} conn
+   * @param {() => Promise<string|null>} askPassword
+   * @returns {Promise<boolean>} whether a project was opened
+   */
+  async openWebDav(conn, askPassword) {
+    if (!conn?.url) return false;
+    const password = await askPassword();
+    if (password == null) return false; // cancelled — nothing touched
+
+    const build = (pw) => new WebDavDriver({ baseUrl: conn.url, username: conn.username, password: pw });
+    const probe = new ProjectStore();
+    probe.useDriver(build(password));
+
+    let entries = [];
+    let pass = null;
+    try {
+      // Encryption first: the meta is plaintext, so this also serves as the reachability
+      // and credential check, before anything asks the user for a second secret.
+      if (await probe.hasEncryption()) {
+        pass = await passphraseFor('folder');
+        if (!pass) return false;
+        try {
+          await probe.unlock(pass);
+        } catch {
+          this.#results.appendError('Wrong passphrase for this project.');
+          return false;
+        }
+      }
+      entries = await probe.list();
+    } catch (err) {
+      // A 401 is the one failure worth naming precisely: the password is held only for
+      // this session, so "wrong or expired" is both likely and fixable by retyping.
+      if (isAuthError(err)) {
+        this.#results.appendError('That username or app password was refused by the server.');
+      } else {
+        this.#results.appendError(
+          `Could not reach that WebDAV location: ${err.message}. If the address is right, the `
+          + 'server may not send the CORS headers a browser needs — see docs/CLOUD.md.',
+        );
+      }
+      return false;
+    }
+    if (!entries.length) {
+      this.#results.appendError('No CrossTab project at that address — use “Move project to a folder…” to put one there first.');
+      return false;
+    }
+
+    await this.#settle(); // flush any pending save before switching backends
+    this.#store.useDriver(build(password));
+    if (pass) await this.#store.unlock(pass);
+    await this.openProject(entries[0].id);
+    if (!this.#binding) {
+      this.#store.useDriver(null); // damaged — fall back to OPFS rather than sit on a dead store
+      return false;
+    }
+    rememberConnection({ url: conn.url, username: conn.username, name: conn.name ?? entries[0].name });
+    this.#emitProject();
+    return true;
+  }
+
   async #attach(handle) {
     if (!(await ensureReadWrite(handle))) {
       this.#results.appendError('Folder write access wasn’t granted.');

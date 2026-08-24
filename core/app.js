@@ -19,6 +19,7 @@ import { UiService } from './ui-service.js';
 import { ImportService } from './import-service.js';
 import { ExportService } from './export-service.js';
 import { installPassphraseUI } from './passphrase-ui.js';
+import { listConnections, labelFor } from './webdav-connections.js';
 import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } from './user-identity.js';
 import { ProjectLog } from './project-log.js';
 import { ItemStore, newItemId, isItemOp, parseItemTarget, itemTarget } from './item-store.js';
@@ -259,6 +260,64 @@ function promptNetworkDialog(name, url) {
       const allow = d.returnValue === 'allow';
       d.remove();
       resolve(allow);
+    });
+    document.body.append(d);
+    d.showModal();
+  });
+}
+
+/**
+ * Ask where a WebDAV project lives, and for the password to reach it.
+ *
+ * The address and username are remembered between sessions; the password never is
+ * (webdav-connections.js explains why), so this dialog is the whole credential story:
+ * it is typed here, handed to the driver, and exists nowhere else. `autocomplete`
+ * attributes are set so a browser password manager can fill it, which is where a stored
+ * secret actually belongs — under the user's own lock, not ours.
+ *
+ * @param {Array<{id: string, url: string, username?: string}>} saved
+ * @param {(c: object) => string} label
+ * @returns {Promise<{url: string, username: string, password: string}|null>}
+ */
+function promptWebDav(saved, label) {
+  return new Promise((resolve) => {
+    const d = document.createElement('dialog');
+    d.className = 'ct-dialog ct-dialog--wide';
+    const options = saved.map((c, i) => `<option value="${i}">${escapeText(label(c))}</option>`).join('');
+    d.innerHTML = `
+      <form method="dialog" class="ct-dialog__form">
+        <h2 class="ct-dialog__title">Open from WebDAV</h2>
+        <p class="ct-dialog__hint">ownCloud, Nextcloud, Synology — anything speaking WebDAV.
+          Use an <strong>app password</strong>, not your account password: it is revocable and
+          cannot log in to the web interface. CrossTab remembers the address and username,
+          never the password.</p>
+        ${saved.length ? `<p><label>Saved <select name="saved"><option value="">New location…</option>${options}</select></label></p>` : ''}
+        <p><label>Address<br><input name="url" type="url" required style="width:100%"
+          placeholder="https://cloud.example.org/remote.php/dav/files/jane/study"></label></p>
+        <p><label>Username<br><input name="username" autocomplete="username" style="width:100%"></label></p>
+        <p><label>App password<br><input name="password" type="password" autocomplete="current-password" style="width:100%"></label></p>
+        <menu class="ct-dialog__buttons">
+          <button value="cancel" type="submit">Cancel</button>
+          <button value="ok" type="submit" class="ct-dialog__primary">Open</button>
+        </menu>
+      </form>`;
+    const f = d.querySelector('form');
+    // Choosing a saved location fills the address and username, and leaves the cursor
+    // where the only thing still missing is.
+    f.saved?.addEventListener('change', () => {
+      const c = saved[Number(f.saved.value)];
+      if (!c) return;
+      f.url.value = c.url;
+      f.username.value = c.username ?? '';
+      f.password.focus();
+    });
+    d.addEventListener('close', () => {
+      const ok = d.returnValue === 'ok' && f.url.value.trim();
+      const out = ok
+        ? { url: f.url.value.trim(), username: f.username.value.trim(), password: f.password.value }
+        : null;
+      d.remove();
+      resolve(out);
     });
     document.body.append(d);
     d.showModal();
@@ -1195,6 +1254,25 @@ export async function boot(mounts) {
   // "not right now" — the room is derived from the manifest, so every co-holder can
   // still walk back in, and so can you on the next open. This records a decision on the
   // log instead, where it merges and travels.
+  // Open a project from a WebDAV server (#143). A separate item for now — the File menu
+  // is due a consolidation pass, and adding to it is the smaller mistake than pre-empting
+  // that design.
+  menus.register({
+    id: 'core:open-webdav',
+    path: ['File'],
+    label: 'Open from WebDAV…',
+    order: 5,
+    command: async () => {
+      const chosen = await promptWebDav(listConnections(), labelFor);
+      if (!chosen) return;
+      const ok = await projects.openWebDav(
+        { url: chosen.url, username: chosen.username },
+        async () => chosen.password,
+      );
+      if (ok) results.appendText(`Opened **${projects.activeName ?? 'project'}** from ${escapeText(new URL(chosen.url).host)}.`);
+    },
+  });
+
   menus.register({
     id: 'core:sharing',
     path: ['File'],
