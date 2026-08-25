@@ -29,7 +29,19 @@
  *    and another in the launcher.
  *  - `remember()` — what the location registry should store. Addresses, never secrets.
  *  - `pollMs` — how often a peer's write is worth checking for.
+ *  - `projectId` — WHICH project at this location, or null for "the one that is there".
+ *    Only local storage holds more than one, and this is the whole of that difference.
+ *  - `passphraseMode` — which unlock dialog fits: one project among many, or a location.
  *  - `shortcuts()` — optional; only a real directory can hold a double-click file.
+
+ * ## No favourite children
+ *
+ * Local storage is a backend too. It was briefly not — `openProject(id)` opened local
+ * projects and `openLocation(backend)` opened everything else — which is the same
+ * privileged-path flaw as `#folderMode`, just further in. It looked harmless only because
+ * local storage is the UNDEMANDING case: nothing else writes it, so there is no merge, no
+ * poll, no credential and no gesture to get wrong. Agreement by luck is not agreement, and
+ * it is where the next storage bug would have lived.
  *
  * ## The one thing that is genuinely not uniform
  *
@@ -58,11 +70,21 @@ export class OpfsBackend {
   kind = 'opfs';
   needsGesture = false;
   pollMs = 0; // nothing else writes it, so there is nothing to watch for
+  passphraseMode = 'unlock'; // one project among many, not a whole location
+
+  #id;
+
+  /** @param {string|number|null} projectId  which project; null means "browse". */
+  constructor(projectId = null) { this.#id = projectId ?? null; }
+
+  /** The one field that distinguishes local storage: it holds MANY projects, so it names
+   * which. Every other backend holds one and answers null. */
+  get projectId() { return this.#id; }
 
   driver() { return new OpfsDriver(); }
   async connect() { return true; }
   describe() { return { kind: this.kind, glyph: '💻', label: 'This browser', detail: '' }; }
-  remember() { return null; } // the OPFS catalog already lists these
+  remember() { return null; } // the local catalog already lists these
 }
 
 /**
@@ -76,6 +98,8 @@ export class FolderBackend {
   kind = 'folder';
   needsGesture = true;
   pollMs = LOCAL_POLL_MS;
+  projectId = null; // the location holds exactly one project
+  passphraseMode = 'folder';
 
   #handle;
 
@@ -121,6 +145,8 @@ export class DropboxBackend {
   kind = 'dropbox';
   needsGesture = false;
   pollMs = REMOTE_POLL_MS;
+  projectId = null;
+  passphraseMode = 'folder';
 
   #config;
   #getSession;
@@ -163,6 +189,8 @@ export class WebDavBackend {
   kind = 'webdav';
   needsGesture = false;
   pollMs = REMOTE_POLL_MS;
+  projectId = null;
+  passphraseMode = 'folder';
 
   #config;
   #getPassword;

@@ -18,11 +18,42 @@ import { capabilitiesOf } from '../core/storage-driver.js';
 
 const fakeHandle = (name = 'My study') => ({ name, queryPermission: async () => 'granted' });
 
+test('local storage is a backend like any other — no favourite children', () => {
+  // It briefly was not: openProject(id) opened local projects and openLocation(backend)
+  // opened everything else. That is the same privileged-path flaw as #folderMode, and it
+  // looked harmless only because local storage is the UNDEMANDING case — nothing else
+  // writes it, so there is no merge, no poll, no credential and no gesture to get wrong.
+  const local = new OpfsBackend('proj-7');
+  assert.equal(local.kind, 'opfs');
+  assert.equal(typeof local.connect, 'function');
+  assert.equal(typeof local.driver, 'function');
+  assert.ok(local.describe().label);
+});
+
+test('projectId is the ONLY thing that makes local storage different', () => {
+  // Local storage holds many projects and names one; every other backend holds a single
+  // project and discovers its id by listing. Keeping the difference to one field is what
+  // stops it becoming a second flow again.
+  assert.equal(new OpfsBackend('proj-7').projectId, 'proj-7');
+  assert.equal(new OpfsBackend().projectId, null, 'no id means browse');
+  assert.equal(new FolderBackend(fakeHandle()).projectId, null);
+  assert.equal(new DropboxBackend({ appKey: 'K' }, async () => ({})).projectId, null);
+  assert.equal(new WebDavBackend({ url: 'https://c/dav' }, async () => 'p').projectId, null);
+});
+
+test('the unlock dialog fits what is being unlocked', () => {
+  // One project among many reads differently from a whole location, and the backend is
+  // what knows which it is.
+  assert.equal(new OpfsBackend('p').passphraseMode, 'unlock');
+  assert.equal(new FolderBackend(fakeHandle()).passphraseMode, 'folder');
+  assert.equal(new DropboxBackend({ appKey: 'K' }, async () => ({})).passphraseMode, 'folder');
+});
+
 test('every backend answers the same questions', () => {
   // The interface is the point. A backend that cannot describe or remember itself forces
   // the caller to special-case it, which is how the branches came back last time.
   const backends = [
-    new OpfsBackend(),
+    new OpfsBackend('proj-7'),
     new FolderBackend(fakeHandle()),
     new DropboxBackend({ appKey: 'K', basePath: '/s' }, async () => ({ getToken: async () => 'T' })),
     new WebDavBackend({ url: 'https://c.example/dav/s' }, async () => 'pw'),
@@ -34,6 +65,8 @@ test('every backend answers the same questions', () => {
     assert.ok(b.describe().label, `${b.kind} describes itself`);
     assert.equal(typeof b.needsGesture, 'boolean', 'needsGesture');
     assert.equal(typeof b.pollMs, 'number', 'pollMs');
+    assert.ok('projectId' in b, `${b.kind} says which project`);
+    assert.equal(typeof b.passphraseMode, 'string', 'passphraseMode');
   }
 });
 

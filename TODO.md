@@ -94,6 +94,22 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       **A storage kind is now named in exactly one place in the UI** — the WebDAV dialog
       filtering for WebDAV locations, which is correct, because that dialog is WebDAV.
 
+      **And local storage joined them (owner: "no favourite children allowed").** The
+      refactor had stopped at the boundary where OPFS's multi-project nature lives:
+      `openProject(id)` opened local projects while `openLocation(backend)` opened
+      everything else, and `OpfsBackend` existed only in its own tests. The same
+      privileged-path flaw as `#folderMode`, one layer further in — and invisible for the
+      same reason it was harmless, since local storage is the UNDEMANDING case with no
+      merge, no poll, no credential and no gesture to get wrong. Agreement by luck.
+
+      Now `openProject(id)` is `openLocation(new OpfsBackend(id))`, and the difference is
+      one field: `projectId`, which local storage names because it holds many and everyone
+      else leaves null because they hold one. `passphraseMode` came with it — unlocking one
+      project among many reads differently from unlocking a location. The shared flow also
+      caught something the split had hidden: `#adopt` now LOCKS before switching, because
+      opening an unencrypted project after an encrypted one would otherwise carry the old
+      key across.
+
       **THE PLAN (owner's call, 2026-08-25: do it now, before more providers land).**
 
       ### Why now, in numbers

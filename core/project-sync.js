@@ -29,7 +29,7 @@ import { PLUGIN_STATE, pluginOpsOf, isPluginOp, pluginTarget, foldPluginOpinions
 import { SHARE_STATE, isShareOp, shareOpsOf, shareOp, foldSharing } from './share-state.js';
 import { isAuthError } from './storage-driver.js';
 import { showConflictDialog } from './conflict-ui.js';
-import { FolderBackend } from './storage-backend.js';
+import { FolderBackend, OpfsBackend } from './storage-backend.js';
 import { showEncryptionSettings } from './encryption-settings.js';
 import { ensureCollabIdentity, roomFor, inviteLinkFor } from './live-invite.js';
 
@@ -1032,7 +1032,9 @@ export class ProjectSync {
     if (id == null) {
       let entries;
       try {
-        entries = await this.#store.list();
+        // The local catalog, not the live store — with a remote project open, asking the
+        // live store would offer you the contents of Dropbox to browse.
+        entries = await this.listProjects();
       } catch (err) {
         this.#results.appendError(`Open project failed: ${err.message}`);
         return;
@@ -1040,33 +1042,20 @@ export class ProjectSync {
       this.#showBrowseModal(entries);
       return;
     }
-    await this.#settle();
-    // Opening an OPFS project while a folder is open leaves folder mode (the folder
-    // stays remembered in the registry; #openExistingFolder opens with folderMode
-    // still false, so it isn't affected by this).
-    if (this.#storeIsRemote() && id !== FOLDER_PROJECT_ID) this.#detachFolder();
-    // A protected OPFS project needs its passphrase before we can read it. Check on a
-    // plaintext meta read FIRST (nothing loaded yet), so a wrong/cancelled passphrase
-    // leaves the currently-open project untouched. (Folder mode already unlocked its
-    // store in #openExistingFolder, so skip it there.)
-    if (!this.#store.flat) {
-      this.#store.lock(); // drop any previously-open project's key before switching
-      try {
-        if (await this.#store.hasEncryption(id)) {
-          const pass = await passphraseFor('unlock');
-          if (!pass) return; // cancelled — current project untouched
-          await this.#store.unlock(pass, id); // throws on a wrong passphrase
-        }
-      } catch (err) {
-        this.#results.appendError(
-          /wrong passphrase/i.test(err.message)
-            ? 'Wrong passphrase — the project was not opened.'
-            : `Couldn’t open the project: ${err.message}`,
-        );
-        this.#store.lock();
-        return; // untouched
-      }
-    }
+    // Local storage is a backend like any other, so this is the same flow everything else
+    // takes: probe on a throwaway store, decrypt, adopt, load. The passphrase handling
+    // that used to live here inline is now the shared one.
+    return this.openLocation(new OpfsBackend(id), { applyPlugins });
+  }
+
+  /**
+   * Load a project id from the store that is ALREADY attached.
+   *
+   * The inner half of {@link openLocation}, and deliberately not public: calling it
+   * without adopting a backend first is how a project gets loaded out of whichever store
+   * happened to be attached.
+   */
+  async #loadProject(id, { applyPlugins = true } = {}) {
     this.#setStatus('loading');
     this.#loading = true;
     let projName = null;
@@ -1240,44 +1229,50 @@ export class ProjectSync {
    * @param {object} backend  see storage-backend.js
    * @returns {Promise<boolean>} whether a project was opened
    */
-  async openLocation(backend) {
+  async openLocation(backend, { applyPlugins = true } = {}) {
     const what = backend.describe?.() ?? { label: 'that location' };
     if (!(await backend.connect())) return false; // cancelled or refused — nothing touched
 
     const probe = new ProjectStore();
     probe.useDriver(backend.driver());
 
-    let entries = [];
+    // WHICH project. Local storage holds many and names one; every other backend holds a
+    // single project and discovers its id by listing. That is the entire difference, and
+    // keeping it to one line is what stops local storage being a separate flow again.
+    let id = backend.projectId;
     let pass = null;
     try {
       // Encryption first: the meta is plaintext, so this read doubles as the reachability
       // and credential check, before anyone is asked for a second secret.
-      if (await probe.hasEncryption()) {
-        pass = await passphraseFor('folder');
+      if (await probe.hasEncryption(id ?? undefined)) {
+        pass = await passphraseFor(backend.passphraseMode ?? 'folder');
         if (!pass) return false;
         try {
-          await probe.unlock(pass);
+          await probe.unlock(pass, id ?? undefined);
         } catch {
-          this.#results.appendError('Wrong passphrase for this project.');
+          this.#results.appendError('Wrong passphrase — the project was not opened.');
           return false;
         }
       }
-      entries = await probe.list();
+      if (id == null) {
+        const entries = await probe.list();
+        if (!entries.length) {
+          this.#results.appendError(`No CrossTab project at ${what.label} — use "Move project to…" to put one there first.`);
+          return false;
+        }
+        id = entries[0].id;
+      }
     } catch (err) {
       this.#results.appendError(isAuthError(err)
         ? `${what.label} refused those credentials — sign in again.`
         : `Could not reach ${what.label}: ${err.message}`);
       return false;
     }
-    if (!entries.length) {
-      this.#results.appendError(`No CrossTab project at ${what.label} — use "Move project to…" to put one there first.`);
-      return false;
-    }
 
     await this.#settle(); // flush any pending save before switching backends
     this.#adopt(backend);
-    if (pass) await this.#store.unlock(pass);
-    await this.openProject(entries[0].id);
+    if (pass) await this.#store.unlock(pass, id ?? undefined);
+    await this.#loadProject(id, { applyPlugins });
     if (!this.#binding) {
       this.#detachBackend(); // damaged — back to local rather than sitting on a dead store
       return false;
@@ -1355,8 +1350,17 @@ export class ProjectSync {
     }
   }
 
-  /** Point the live store at a backend. */
+  /**
+   * Point the live store at a backend.
+   *
+   * Locks first, always. Opening an UNENCRYPTED project after an encrypted one would
+   * otherwise leave the previous project's key in place — the save guard would catch the
+   * mismatch and throw, but "your save failed" is a poor way to learn that a key was
+   * never dropped. The old local-project path locked here for exactly this reason, and
+   * the shared flow has to keep doing it.
+   */
   #adopt(backend) {
+    this.#store.lock();
     this.#backend = backend;
     this.#store.useDriver(backend.driver());
   }
