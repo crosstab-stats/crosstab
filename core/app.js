@@ -19,10 +19,9 @@ import { UiService } from './ui-service.js';
 import { ImportService } from './import-service.js';
 import { ExportService } from './export-service.js';
 import { installPassphraseUI } from './passphrase-ui.js';
-import { listConnections, labelFor, rememberConnection } from './webdav-connections.js';
-import { WebDavDriver } from './storage-webdav.js';
+import { listConnections, labelFor } from './webdav-connections.js';
 import { DropboxSession, loadConfig as loadDbxConfig, saveConfig as saveDbxConfig } from './dropbox-session.js';
-import { DropboxDriver } from './storage-dropbox.js';
+import { DropboxBackend, WebDavBackend, backendFor } from './storage-backend.js';
 import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } from './user-identity.js';
 import { ProjectLog } from './project-log.js';
 import { ItemStore, newItemId, isItemOp, parseItemTarget, itemTarget } from './item-store.js';
@@ -1355,9 +1354,8 @@ export async function boot(mounts) {
     command: async () => {
       const chosen = await promptWebDav(listConnections(), labelFor);
       if (!chosen) return;
-      const ok = await projects.openWebDav(
-        { url: chosen.url, username: chosen.username },
-        async () => chosen.password,
+      const ok = await projects.openLocation(
+        new WebDavBackend({ url: chosen.url, username: chosen.username }, async () => chosen.password),
       );
       if (ok) results.appendText(`Opened **${projects.activeName ?? 'project'}** from ${escapeText(new URL(chosen.url).host)}.`);
     },
@@ -1398,14 +1396,7 @@ export async function boot(mounts) {
         results.appendError(`Dropbox sign-in failed: ${err.message}`);
         return;
       }
-      const ok = await projects.openRemote(
-        () => new DropboxDriver({ getToken: () => session.getToken(), basePath: cfg.basePath }),
-        {
-          label: 'Dropbox',
-          hint: 'Check the folder path, and that the app has the files.* permissions ticked.',
-          remember: { kind: 'dropbox', config: cfg },
-        },
-      );
+      const ok = await projects.openLocation(new DropboxBackend(cfg, async () => session));
       if (ok) {
         saveDbxConfig(cfg); // remembered only after it worked, and only the public parts
         results.appendText(`Opened **${projects.activeName ?? 'project'}** from Dropbox.`);
@@ -1430,10 +1421,7 @@ export async function boot(mounts) {
         results.appendError(`Dropbox sign-in failed: ${err.message}`);
         return;
       }
-      const ok = await projects.moveToRemote(
-        () => new DropboxDriver({ getToken: () => session.getToken(), basePath: cfg.basePath }),
-        { label: 'Dropbox', remember: { kind: 'dropbox', config: cfg } },
-      );
+      const ok = await projects.moveTo(new DropboxBackend(cfg, async () => session));
       if (ok) {
         saveDbxConfig(cfg);
         results.appendText(
@@ -1454,12 +1442,10 @@ export async function boot(mounts) {
     command: async () => {
       const chosen = await promptWebDav(listConnections(), labelFor, { move: true });
       if (!chosen) return;
-      const ok = await projects.moveToRemote(
-        () => new WebDavDriver({ baseUrl: chosen.url, username: chosen.username, password: chosen.password }),
-        { label: 'WebDAV', remember: { kind: 'webdav', config: { url: chosen.url, username: chosen.username } } },
+      const ok = await projects.moveTo(
+        new WebDavBackend({ url: chosen.url, username: chosen.username }, async () => chosen.password),
       );
       if (ok) {
-        rememberConnection({ url: chosen.url, username: chosen.username });
         results.appendText(`**${projects.activeName ?? 'The project'}** now lives on ${escapeText(new URL(chosen.url).host)}.`);
       }
     },
@@ -1595,25 +1581,27 @@ export async function boot(mounts) {
    * there is one), WebDAV asks for the app password. That asymmetry is why this is
    * kind-aware rather than a single reopen call.
    */
+  /**
+   * Reopen a remembered location — one click from the Projects list.
+   *
+   * The registry stores an address and never a credential, so the only per-kind work left
+   * is supplying how to get in. `backendFor` turns the entry into a backend and the one
+   * open flow does the rest: no branch here for what to do once it is open, which is the
+   * point of #172.
+   */
   const reopenRemote = async (entry) => {
-    const cfg = entry?.config ?? {};
-    if (entry?.kind === 'dropbox') {
-      if (!cfg.appKey) {
-        results.appendError('That Dropbox entry predates the app key being remembered — open it once from File ▸ Open from Dropbox….');
-        return;
-      }
-      const session = await dropboxFor({ appKey: cfg.appKey, basePath: cfg.basePath });
-      await projects.openRemote(
-        () => new DropboxDriver({ getToken: () => session.getToken(), basePath: cfg.basePath }),
-        { label: 'Dropbox', remember: { kind: 'dropbox', config: cfg } },
-      );
+    const backend = backendFor(entry, {
+      dropboxSession: (cfg) => dropboxFor({ appKey: cfg.appKey, basePath: cfg.basePath }),
+      webdavPassword: (cfg) => promptPassword(
+        'Open from WebDAV',
+        `${cfg.username ? `${cfg.username} at ` : ''}${cfg.url}`,
+      ),
+    });
+    if (!backend) {
+      results.appendError('That entry is missing what it needs to reconnect — open it once from the File menu.');
       return;
     }
-    if (entry?.kind === 'webdav') {
-      const password = await promptPassword('Open from WebDAV', `${cfg.username ? `${cfg.username} at ` : ''}${cfg.url}`);
-      if (password == null) return;
-      await projects.openWebDav({ url: cfg.url, username: cfg.username }, async () => password);
-    }
+    await projects.openLocation(backend);
   };
 
   // The sidebar project manager (active project + datasets, other projects,

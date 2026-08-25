@@ -69,6 +69,25 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       registry stores a structured-cloneable handle rather than an address. Those are true
       of handles and of nothing else.
 
+      **BUILT (2026-08-25).** `core/storage-backend.js`; `#folderMode` is gone from the
+      engine. Steps 1-4 of the plan below are done in one pass, since the owner lifted the
+      back-compat constraint ("no one's using this app yet, we can break existing saves").
+
+      - Four flows became two: `openLocation(backend)` and `moveTo(backend)`.
+        `#openExistingFolder` and `moveToFolder` are now three-line callers; the remote
+        pair is deleted. ~110 duplicated lines gone.
+      - `OpfsBackend` / `FolderBackend` / `DropboxBackend` / `WebDavBackend`, each owning
+        `capabilities`, `driver()`, `connect()`, `describe()`, `remember()`, `pollMs`, and
+        `shortcuts()` where a real directory makes one possible.
+      - The UI builds a backend and hands it over; `backendFor(entry, credentials)` rebuilds
+        one from a registry entry. No driver type is named anywhere in app.js any more.
+      - 12 new tests — the first coverage this area has ever had.
+
+      **Still to do:** fold `webdav-connections.js` into the location registry (two stores
+      hold WebDAV addresses now), and give the launcher `backend.needsGesture` instead of
+      its folder-shaped `#pendingFolder`. Neither is load-bearing; both are the last places
+      a kind is named.
+
       **THE PLAN (owner's call, 2026-08-25: do it now, before more providers land).**
 
       ### Why now, in numbers

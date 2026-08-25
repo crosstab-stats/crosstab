@@ -27,10 +27,9 @@ import { passphraseFor, shouldEncrypt, PASSPHRASE_ABORT } from './at-rest.js';
 import { syncFolderProject, manifestsEqual } from './folder-sync.js';
 import { PLUGIN_STATE, pluginOpsOf, isPluginOp, pluginTarget, foldPluginOpinions, migrateLegacyActivePlugins } from './plugin-state.js';
 import { SHARE_STATE, isShareOp, shareOpsOf, shareOp, foldSharing } from './share-state.js';
-import { WebDavDriver, isAuthError } from './storage-webdav.js';
-import { rememberConnection } from './webdav-connections.js';
+import { isAuthError } from './storage-driver.js';
 import { showConflictDialog } from './conflict-ui.js';
-import { shortcutFiles } from './folder-shortcut.js';
+import { FolderBackend } from './storage-backend.js';
 import { showEncryptionSettings } from './encryption-settings.js';
 import { ensureCollabIdentity, roomFor, inviteLinkFor } from './live-invite.js';
 
@@ -275,7 +274,8 @@ export class ProjectSync {
    * the registry holds a structured-cloneable handle rather than an address. Those are the
    * File System Access API's requirements, not the engine's opinion about storage.
    */
-  #folderMode = false;
+  /** The backend the open project lives on, or null for local storage (#172). */
+  #backend = null;
   /** Folder writes halted because its key changed under us (#144). Cleared by reopening. */
   #folderKeyStale = false;
 
@@ -287,9 +287,9 @@ export class ProjectSync {
    * is folder-backed — so the launcher/sidebar list always shows OPFS projects, never
    * the current folder's single project (which is surfaced via the folder registry). */
   #opfs = new ProjectStore();
-  /** The registry id of the currently-open folder project (so the sidebar can exclude
-   * the active one from its folder list, matching OPFS behaviour). */
-  #activeFolderId = null;
+  /** The registry id of the currently-open location, so the sidebar can exclude the
+   * active one from its list — true of a folder, a Dropbox path or a WebDAV address. */
+  #activeLocationId = null;
   /** The active project's collab identity (#148 step 5 / #143) — a stable id + secret
    * that derive the live signaling room. Minted for folder projects (they're the
    * shareable ones) and carried in the manifest so both peers compute the same room.
@@ -1189,15 +1189,20 @@ export class ProjectSync {
   // --- folder-backed projects (#143) ----------------------------------------
 
   /**
-   * Whether the FOLDER FLOW is active — the user picked a directory and this session is
-   * attached to it. Distinct from `ProjectStore#flat`, which is a fact about layout: a
-   * cloud driver is flat but was never picked as a folder, so it will need its own mode
-   * rather than borrowing this one. Keeping them apart is what stops a third backend
-   * having to impersonate the folder to be handled correctly.
+   * Is the open project somewhere other than this browser's own storage?
+   *
+   * Was `folderBacked`, and answered "is the folder FLOW active" — which is how behaviour
+   * came to be keyed on a UI path. Callers only ever wanted "not local", and that is now
+   * what they get, whether the bytes sit in a directory, in Dropbox or on a WebDAV server.
    * @returns {boolean}
    */
   get folderBacked() {
-    return this.#folderMode;
+    return !!this.#backend && this.#backend.kind !== 'opfs';
+  }
+
+  /** How the open project's location should be described in a list, or null if local. */
+  describeLocation() {
+    return this.#backend?.describe?.() ?? null;
   }
 
   /** Pick a folder + attach the store to it (shared by move/open). Returns the
@@ -1221,22 +1226,26 @@ export class ProjectSync {
    * @returns {Promise<boolean>} whether a project was opened
    */
   /**
-   * Open a project held by any remote driver.
+   * Open the project held by a backend — folder, Dropbox, WebDAV, anything (#172).
    *
-   * Extracted from the WebDAV flow when Dropbox needed the identical dance, which is the
-   * point of the seam: probe on a THROWAWAY store, and touch the live project only once
-   * the remote has proved it holds one. A wrong address, a refused credential, a wrong
-   * passphrase or an empty location all leave whatever is open exactly as it was.
+   * One flow, where there were two near-identical ones written by copying. The skeleton
+   * was always the same and is the part worth stating: **probe on a THROWAWAY store, and
+   * touch the live project only once the destination has proved it holds one.** A refused
+   * credential, a wrong passphrase, an unreachable server or an empty location all leave
+   * whatever is currently open exactly as it was.
    *
-   * @param {() => object} makeDriver  builds a fresh driver — called twice on purpose,
-   *   so the probe and the live store never share one and a failed probe leaves no
-   *   half-configured object behind
-   * @param {{label: string, hint?: string}} opts  `label` names the backend in errors
+   * `backend.driver()` is called twice on purpose — the probe and the live store must
+   * never share a driver, or aborting the probe would leave the live one half-configured.
+   *
+   * @param {object} backend  see storage-backend.js
    * @returns {Promise<boolean>} whether a project was opened
    */
-  async openRemote(makeDriver, { label, hint, remember } = {}) {
+  async openLocation(backend) {
+    const what = backend.describe?.() ?? { label: 'that location' };
+    if (!(await backend.connect())) return false; // cancelled or refused — nothing touched
+
     const probe = new ProjectStore();
-    probe.useDriver(makeDriver());
+    probe.useDriver(backend.driver());
 
     let entries = [];
     let pass = null;
@@ -1255,84 +1264,138 @@ export class ProjectSync {
       }
       entries = await probe.list();
     } catch (err) {
-      // A refused credential is the one failure worth naming precisely: it is both the
-      // likeliest and the only one the user can fix on the spot.
-      if (isAuthError(err)) {
-        this.#results.appendError(`${label} refused those credentials — sign in again.`);
-      } else {
-        this.#results.appendError(`Could not reach ${label}: ${err.message}${hint ? ` ${hint}` : ''}`);
-      }
+      this.#results.appendError(isAuthError(err)
+        ? `${what.label} refused those credentials — sign in again.`
+        : `Could not reach ${what.label}: ${err.message}`);
       return false;
     }
     if (!entries.length) {
-      this.#results.appendError(`No CrossTab project there — use "Move project to a folder…" to put one there first.`);
+      this.#results.appendError(`No CrossTab project at ${what.label} — use "Move project to…" to put one there first.`);
       return false;
     }
 
     await this.#settle(); // flush any pending save before switching backends
-    this.#store.useDriver(makeDriver());
+    this.#adopt(backend);
     if (pass) await this.#store.unlock(pass);
     await this.openProject(entries[0].id);
     if (!this.#binding) {
-      this.#stopPoll();
-      this.#store.useDriver(null); // damaged — fall back to OPFS rather than sit on a dead store
+      this.#detachBackend(); // damaged — back to local rather than sitting on a dead store
       return false;
     }
-    await this.#rememberLocation(remember);
-    // The baseline the poll compares against. Without it the first tick sees "changed"
-    // and merge-saves for no reason.
-    try { this.#lastManifest = await this.#store.readManifest(this.#binding.id); } catch { this.#lastManifest = null; }
-    this.#startPoll(REMOTE_POLL_MS);
-    this.#emitProject();
+    await this.#afterAttach(backend);
     return true;
   }
 
   /**
-   * Record where the open project lives, so it appears in the Projects list.
+   * Move the open project to a backend.
    *
-   * Called only after a successful open or move. A remote project used to leave no trace
-   * anywhere — the OPFS copy is deleted by a move, correctly, and nothing replaced it — so
-   * the only route back was retyping the address. Meanwhile a FOLDER project stayed listed,
-   * because folders had a registry and remote had none (#171).
+   * Same discipline as {@link openLocation}: everything before the commit line is
+   * side-effect-free, so a cancel or a refusal leaves the project where it was.
    *
-   * Best-effort: failing to remember where a project is must never fail the act of
-   * opening it.
+   * @returns {Promise<boolean>}
    */
-  async #rememberLocation(remember) {
-    if (!remember?.kind) return;
+  async moveTo(backend) {
+    const what = backend.describe?.() ?? { label: 'that location' };
+    const wasLocal = !this.#store.capabilities?.flat;
+    if (wasLocal && !this.#binding) {
+      this.#results.appendError('Add some data first — an empty project has nothing to move.');
+      return false;
+    }
+    if (!(await backend.connect())) return false;
+
+    // Probe with a THROWAWAY store. `hasEncryption` reads the plaintext meta, so an
+    // occupied destination is spotted even when it is protected and we hold no key —
+    // where `list` alone would look reassuringly empty and we would write over it.
     try {
-      this.#activeFolderId = await rememberRemote(remember.kind, remember.config, {
-        name: this.activeName || remember.config?.basePath || remember.kind,
-      });
-    } catch { /* the project is open; the list entry is a convenience */ }
+      const probe = new ProjectStore();
+      probe.useDriver(backend.driver());
+      if ((await probe.hasEncryption()) || (await probe.list()).length > 0) {
+        this.#results.appendError(`${what.label} already holds a CrossTab project — open it instead.`);
+        return false;
+      }
+    } catch (err) {
+      this.#results.appendError(isAuthError(err)
+        ? `${what.label} refused those credentials — sign in again.`
+        : `Could not check ${what.label}: ${err.message}`);
+      return false;
+    }
+
+    // Protection is decided BEFORE anything is written.
+    let pass = null;
+    if (shouldEncrypt('folder')) {
+      pass = await passphraseFor('folder-new');
+      if (pass === PASSPHRASE_ABORT) return false;
+    }
+
+    // --- committed ------------------------------------------------------------
+    const orphanLocalId = wasLocal ? this.#binding?.id : null;
+    const projectName = this.activeName || 'My project'; // read BEFORE unbinding
+    try {
+      await this.#settle();
+      this.#adopt(backend);
+      if (pass) await this.#store.unlock(pass);
+      // Mint the live-room identity: it rides the manifest, so a collaborator opening this
+      // location joins the same room (#148).
+      const ident = ensureCollabIdentity({ collabId: this.#collabId, collabSecret: this.#collabSecret });
+      this.#collabId = ident.collabId; this.#collabSecret = ident.collabSecret;
+      this.#binding = null; // a brand-new entry, living there now
+      await this.#fullSave(null, projectName);
+      await this.#afterAttach(backend);
+      // A true move: drop the now-redundant local copy, through a throwaway OPFS store
+      // since the live one is elsewhere. Best-effort — the data is already safely away.
+      if (orphanLocalId) { try { await new ProjectStore().delete(orphanLocalId); } catch { /* leave it */ } }
+      return true;
+    } catch (err) {
+      this.#results.appendError(`Move to ${what.label} failed: ${err.message}`);
+      this.#detachBackend();
+      // Re-open what we were moving rather than leaving the user looking at nothing while
+      // their project sits intact one reopen away.
+      if (orphanLocalId) { try { await this.openProject(orphanLocalId); } catch { /* already reported */ } }
+      return false;
+    }
+  }
+
+  /** Point the live store at a backend. */
+  #adopt(backend) {
+    this.#backend = backend;
+    this.#store.useDriver(backend.driver());
   }
 
   /**
-   * Open a project on a WebDAV server. The credential is asked for here and held only by
-   * the driver, so nothing on this path writes it anywhere.
-   *
-   * @param {{url: string, username?: string, name?: string}} conn
-   * @param {() => Promise<string|null>} askPassword
+   * The bookkeeping every successful attach needs, wherever the bytes are: record the
+   * poll baseline, start watching for a peer, remember the location, write any OS-facing
+   * shortcuts the backend offers, and tell the app.
    */
-  async openWebDav(conn, askPassword) {
-    if (!conn?.url) return false;
-    const password = await askPassword();
-    if (password == null) return false; // cancelled — nothing touched
-    const ok = await this.openRemote(
-      () => new WebDavDriver({ baseUrl: conn.url, username: conn.username, password }),
-      {
-        label: 'that WebDAV location',
-        hint: 'If the address is right, the server may not send the CORS headers a browser needs — see docs/CLOUD.md.',
-        remember: { kind: 'webdav', config: { url: conn.url, username: conn.username } },
-      },
-    );
-    // Remembered only AFTER it worked: a shortcut to a place that failed is not a
-    // convenience.
-    if (ok) rememberConnection({ url: conn.url, username: conn.username, name: conn.name ?? this.activeName });
-    return ok;
+  async #afterAttach(backend) {
+    try { this.#lastManifest = await this.#store.readManifest(this.#binding.id); } catch { this.#lastManifest = null; }
+    if (backend.pollMs) this.#startPoll(backend.pollMs);
+    const mark = backend.remember?.();
+    if (mark) {
+      try {
+        this.#activeLocationId = mark.handle
+          ? await rememberFolder(mark.handle, { name: this.activeName || mark.name, savedAt: Date.now() })
+          : await rememberRemote(mark.kind, mark.config, { name: this.activeName || mark.name });
+      } catch { /* the project is open; the list entry is a convenience */ }
+    }
+    if (backend.shortcuts) await this.#writeShortcuts(backend);
+
+    this.#emitProject();
+  }
+
+  /** Put the live store back on local storage. */
+  #detachBackend() {
+    this.#stopPoll();
+    this.#backend = null;
+    this.#activeLocationId = null;
+    this.#lastManifest = null;
+    this.#folderKeyStale = false;
+    this.#metaUnreadable = 0;
+    this.#store.useDriver(null);
+    this.#store.lock();
   }
 
   async #attach(handle) {
+
     if (!(await ensureReadWrite(handle))) {
       this.#results.appendError('Folder write access wasn’t granted.');
       return false;
@@ -1386,22 +1449,10 @@ export class ProjectSync {
     return !!this.#store.capabilities?.flat;
   }
 
-  /**
-   * Put the live store back on OPFS.
-   *
-   * Named for the folder because that was the only thing it could detach from. It now
-   * covers any non-local store; the folder-specific bookkeeping below is simply inert
-   * when there was no folder.
-   */
+  /** @deprecated Name kept where old call sites still read well; {@link #detachBackend}
+   * is the same act, and the only one now. */
   #detachFolder() {
-    this.#folderKeyStale = false; // a fresh attachment re-derives the key
-    this.#metaUnreadable = 0;
-    this.#store.useDriver(null); // covers a directory handle AND a remote driver
-    this.#store.lock();
-    this.#folderMode = false;
-    this.#lastManifest = null;
-    this.#activeFolderId = null;
-    this.#stopPoll();
+    this.#detachBackend();
   }
 
   /**
@@ -1413,210 +1464,23 @@ export class ProjectSync {
    * handle (does its own attach) and is shared by pick + reconnect.
    * @param {FileSystemDirectoryHandle} handle
    */
+  /** Open the project in a picked directory — the folder case of {@link openLocation}. */
   async #openExistingFolder(handle) {
-    if (!(await ensureReadWrite(handle))) {
-      this.#results.appendError('Folder write access wasn’t granted.');
-      return false;
-    }
-    // Probe on a throwaway store — never touch the live project until validated.
-    // These are reads only: hasEncryption/list read, and unlock() only checks the
-    // passphrase against the stored verifier (an already-set-up folder isn't written).
-    const probe = new ProjectStore();
-    probe.useDirectory(handle);
-    let pass = null;
-    if (await probe.hasEncryption()) {
-      pass = await passphraseFor('folder'); // enter mode
-      if (!pass) return false; // cancelled — live project untouched
-      try {
-        await probe.unlock(pass); // throws on a wrong passphrase
-      } catch {
-        this.#results.appendError('Wrong passphrase for this folder.');
-        return false; // untouched
-      }
-    }
-    let entries = [];
-    try { entries = await probe.list(); } catch { entries = []; }
-    if (!entries.length) {
-      this.#results.appendError('No CrossTab project in that folder — use “Move project to a folder…” to put one there.');
-      return false; // untouched
-    }
-
-    // --- cleared to load: only now switch the live store (flushing the outgoing
-    // project) and load the incoming one -------------------------------------------
-    if (!(await this.#attach(handle))) return false;
-    if (pass) await this.#store.unlock(pass);
-    await this.openProject(entries[0].id); // #folderMode still false here → openProject won't detach
-    if (!this.#binding) { this.#detachFolder(); return false; } // load failed (damaged) → recover to OPFS
-    this.#folderMode = true;
-    this.#lastManifest = await this.#store.readManifest(this.#binding.id);
-    // A folder project created before collab identity existed gets one now, persisted so
-    // every peer computes the same room (#148). openProject already captured any existing one.
-    if (!this.#collabId || !this.#collabSecret) {
-      const ident = ensureCollabIdentity({ collabId: this.#collabId, collabSecret: this.#collabSecret });
-      this.#collabId = ident.collabId; this.#collabSecret = ident.collabSecret;
-      if (ident.minted) await this.#folderRewrite(this.#binding.name);
-    }
-    this.#activeFolderId = await rememberFolder(handle, { name: this.#binding.name, savedAt: Date.now() }); // first-class in launcher + sidebar
-    await this.#ensureFolderShortcuts(this.#binding.name); // regenerate the on-ramp if a shared folder lacks it
-    this.#startPoll();
-    this.#emitProject();
-    return true;
+    return this.openLocation(new FolderBackend(handle));
   }
 
   /**
-   * **Move project to a folder…** — put the *current* project into a picked folder
-   * (the OneDrive/Dropbox/local collaboration path), then work from there. For the
-   * owner setting things up. Refuses a folder that already holds a project (that's
-   * what *Open project from a folder…* is for). Folder storage defaults to encrypted
-   * (opt-out): you're prompted to set a passphrase (Cancel = store plaintext). Must
-   * be called from the menu click (`showDirectoryPicker` needs a user gesture).
+   * Move the open project into a picked directory — the folder case of {@link moveTo}.
+   *
+   * The picker runs first and separately, because acquiring a handle is a user gesture
+   * that must not be entangled with the commit: a cancelled picker has to leave the
+   * project exactly where it was, and the cheapest way to guarantee that is to have
+   * nothing to undo.
    */
-  /**
-   * Move the open project to a remote backend — the mirror of {@link moveToFolder}.
-   *
-   * Opening a remote project only ever OPENED one, so until this existed the only way to
-   * get a project into Dropbox was to sync a folder with the desktop client. That left
-   * the API drivers usable exclusively on projects put there by some other route, which
-   * is not a feature anyone can test.
-   *
-   * Same order of operations as the folder move, for the same reason: everything before
-   * the commit line is side-effect-free, so a cancel or a refusal leaves the project
-   * exactly where it was.
-   *
-   * @param {() => object} makeDriver  builds a fresh driver (called twice — probe, live)
-   * @param {{label: string}} opts
-   * @returns {Promise<boolean>}
-   */
-  async moveToRemote(makeDriver, { label, remember }) {
-    const wasFolder = this.#folderMode;
-    if (!wasFolder && !this.#binding) {
-      this.#results.appendError('Add some data first — an empty project has nothing to move.');
-      return false;
-    }
-
-    // Probe with a THROWAWAY store: never touch the live project to answer a question
-    // about the destination. `hasEncryption` reads the plaintext meta, so an occupied
-    // location is spotted even when it is protected and we hold no key — where `list`
-    // alone would look reassuringly empty.
-    try {
-      const probe = new ProjectStore();
-      probe.useDriver(makeDriver());
-      if ((await probe.hasEncryption()) || (await probe.list()).length > 0) {
-        this.#results.appendError(`That ${label} folder already holds a CrossTab project — open it instead.`);
-        return false;
-      }
-    } catch (err) {
-      // Unlike the folder case, "unreadable" here is usually a wrong path or a network
-      // problem rather than a folder full of someone else's data — so say what happened
-      // instead of reporting it as occupied.
-      this.#results.appendError(isAuthError(err)
-        ? `${label} refused those credentials — sign in again.`
-        : `Could not check that ${label} folder: ${err.message}`);
-      return false;
-    }
-
-    // Protection is decided BEFORE anything is written. Three outcomes: a passphrase,
-    // null (move unprotected), or an abort.
-    let pass = null;
-    if (shouldEncrypt('folder')) {
-      pass = await passphraseFor('folder-new');
-      if (pass === PASSPHRASE_ABORT) return false;
-    }
-
-    // --- committed ------------------------------------------------------------
-    const orphanOpfsId = wasFolder ? null : this.#binding?.id;
-    const projectName = this.activeName || 'My project'; // read BEFORE unbinding
-    try {
-      await this.#settle(); // flush any pending save before switching backends
-      this.#store.useDriver(makeDriver());
-      if (pass) await this.#store.unlock(pass);
-      // Mint the live-room identity, exactly as the folder move does: it rides the
-      // manifest, so a collaborator opening this location joins the same room (#148).
-      const ident = ensureCollabIdentity({ collabId: this.#collabId, collabSecret: this.#collabSecret });
-      this.#collabId = ident.collabId; this.#collabSecret = ident.collabSecret;
-      this.#binding = null; // a brand-new entry, living remotely now
-      await this.#fullSave(null, projectName);
-      this.#folderMode = false; // remote is not the folder flow — see the folderBacked note
-      this.#lastManifest = await this.#store.readManifest(this.#binding.id);
-      this.#startPoll(REMOTE_POLL_MS); // a co-author's edits arrive the same way as in a folder
-      await this.#rememberLocation(remember); // or the project vanishes from every list
-      this.#emitProject();
-      // A true move: drop the now-redundant OPFS copy, through a throwaway OPFS store
-      // since the live one is remote. Best-effort — the data is already safely away.
-      if (orphanOpfsId) { try { await new ProjectStore().delete(orphanOpfsId); } catch { /* leave it */ } }
-      return true;
-    } catch (err) {
-      this.#results.appendError(`Move to ${label} failed: ${err.message}`);
-      this.#stopPoll();
-      // Back to OPFS, and re-open what we were moving — better than leaving the user
-      // looking at nothing while their project sits intact one reopen away.
-      this.#store.useDriver(null);
-      this.#store.lock();
-      if (orphanOpfsId) { try { await this.openProject(orphanOpfsId); } catch { /* report already made */ } }
-      return false;
-    }
-  }
-
   async moveToFolder() {
-    const wasFolder = this.#folderMode; // preserve the current attachment for a clean abort
-    // Pick WITHOUT attaching: we must not disturb the live project's store until the
-    // user has actually committed. Everything up to the commit line below is
-    // side-effect-free, so a cancel (picker, occupied folder, or passphrase dialog)
-    // leaves the project exactly where it is — OPFS or its existing folder.
-    const handle = await this.#pickFolderHandle();
-    if (!handle) return;
-
-    // Probe the target with a THROWAWAY store, so this read never touches the live
-    // project. `hasEncryption` reads the plaintext meta, so an occupied folder is
-    // detected even when it's encrypted and we hold no key (list() would look empty).
-    let occupied = false;
-    try {
-      const probe = new ProjectStore();
-      probe.useDirectory(handle);
-      occupied = (await probe.hasEncryption()) || (await probe.list()).length > 0;
-    } catch {
-      occupied = true; // unreadable → treat as occupied; never risk clobbering it
-    }
-    if (occupied) {
-      this.#results.appendError('That folder already holds a CrossTab project — use “Open project from a folder…” to work in it.');
-      return; // nothing changed
-    }
-
-    // Decide protection BEFORE mutating anything. Three outcomes: a passphrase
-    // (protect), null (move unprotected), or PASSPHRASE_ABORT (cancel the move).
-    let pass = null;
-    if (shouldEncrypt('folder')) {
-      pass = await passphraseFor('folder-new');
-      if (pass === PASSPHRASE_ABORT) return; // aborted — project untouched
-    }
-
-    // --- committed: only now do we switch the live store and write -------------
-    // If moving an OPFS-backed project, remember it so we can drop the leftover copy
-    // after the move (a true move, no confusing duplicate in the launcher).
-    const orphanOpfsId = wasFolder ? null : this.#binding?.id;
-    try {
-      if (!(await this.#attach(handle))) return; // ensures write, flushes, switches #store
-      if (pass) await this.#store.unlock(pass);
-      // Mint the live-room identity so this shared folder is collab-ready (#148): it rides
-      // the manifest to collaborators, so opening the shared folder joins the same room.
-      const ident = ensureCollabIdentity({ collabId: this.#collabId, collabSecret: this.#collabSecret });
-      this.#collabId = ident.collabId; this.#collabSecret = ident.collabSecret;
-      const projectName = this.activeName || 'My project'; // capture BEFORE unbinding — activeName reads #binding
-      this.#binding = null; // a brand-new entry, living in the folder now
-      await this.#fullSave(null, projectName); // snapshot now carries collab id/secret
-      this.#folderMode = true;
-      this.#lastManifest = await this.#store.readManifest(this.#binding.id);
-      this.#activeFolderId = await rememberFolder(handle, { name: this.#binding.name, savedAt: Date.now() });
-      await this.#ensureFolderShortcuts(this.#binding.name); // OS-facing double-click on-ramp for recipients
-      this.#startPoll();
-      this.#emitProject();
-      // True move: drop the now-redundant OPFS copy (via a throwaway OPFS store, since
-      // #store is now folder-backed). Best-effort — the data is safe in the folder.
-      if (orphanOpfsId) { try { await new ProjectStore().delete(orphanOpfsId); } catch { /* leave it */ } }
-    } catch (err) {
-      this.#results.appendError(`Move to folder failed: ${err.message}`);
-      this.#detachFolder();
-    }
+    const handle = await FolderBackend.pick();
+    if (!handle) return false;
+    return this.moveTo(new FolderBackend(handle));
   }
 
   /**
@@ -1626,21 +1490,20 @@ export class ProjectSync {
    * app-URL only — never the passphrase. Best-effort: a shortcut is a convenience,
    * so a write failure must never block opening or saving the project.
    */
-  async #ensureFolderShortcuts(name) {
+  /** Ask the backend for any OS-facing files it wants alongside the project, and write
+   * them. Only a real directory has anywhere for a double-click file to live, so most
+   * backends offer none and this does nothing. */
+  async #writeShortcuts(backend) {
     try {
-      const files = shortcutFiles(
-        name || this.#binding?.name || 'CrossTab project',
-        location.origin,
-        location.pathname,
-      );
-      for (const f of files) {
-        // Independent per file: one write failing (e.g. a blocked extension) must not
-        // abort the others — that once left a `.url.tmp` and no README behind.
+      const files = backend.shortcuts(this.activeName || 'CrossTab project', location.origin, location.pathname);
+      for (const f of files ?? []) {
+        // Independent per file: one failing (a blocked extension, say) must not cost the
+        // others, and none of them is worth failing an open over.
         try {
           if (!(await this.#store.hasPlainFile(f.name))) await this.#store.writePlainFile(f.name, f.text);
         } catch { /* skip this one */ }
       }
-    } catch { /* shortcuts are a convenience — never block folder open/save */ }
+    } catch { /* a shortcut is a convenience */ }
   }
 
   /**
@@ -1680,9 +1543,9 @@ export class ProjectSync {
     }
   }
 
-  /** Leave folder mode: flush, revert the store to OPFS, and start a fresh project. */
+  /** Leave the current location: flush, revert the store to local, start fresh. */
   async closeFolder() {
-    if (!this.#folderMode) return;
+    if (!this.folderBacked) return;
     this.#stopPoll();
     await this.#settle(); // flush while still folder-backed
     this.#detachFolder(); // → OPFS, clears folderMode/lastManifest/poll
@@ -2377,9 +2240,9 @@ export class ProjectSync {
     }
     this.#stopPoll();
     this.#store.lock();
-    // A dedicated halt, NOT `#folderMode = false`: clearing that flag would send the
-    // next save down the OPFS branch and quietly fork the project into a second copy on
-    // this device. The project stays folder-bound and simply stops writing.
+    // A dedicated halt, NOT a detach: reverting the store would send the next save to
+    // local storage and quietly fork the project into a second copy on this device. It
+    // stays bound to its location and simply stops writing.
     this.#folderKeyStale = true;
     const what = decision.reason;
     this.#setStatus(`Folder locked — ${what}`);
@@ -2477,7 +2340,7 @@ export class ProjectSync {
 
   /** Registry id of the open folder project (null if not in a folder). */
   get activeFolderId() {
-    return this.#activeFolderId;
+    return this.#activeLocationId;
   }
 
   /** Whether the active project can host live collaboration — it has a collab identity
