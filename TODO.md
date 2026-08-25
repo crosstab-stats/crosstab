@@ -42,6 +42,143 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       memo list. That is memo RETRIEVAL, a feature with its own vocabulary — nearer the
       codebook manager than this — and nothing here forecloses it.
 
+- [ ] **#173 — one project manager, and a File menu that stops multiplying (user,
+      2026-08-25).** The File menu carries **24 items** and grows by two per storage
+      backend, because every (verb x location) pair is its own entry. Graph and Drive would
+      make it 28. The fix is the same one #172 applied to the engine: **location is a
+      dimension inside a verb, not a multiplier on the menu.**
+
+      ### The verb bug that cannot be fixed in a menu
+
+      "Move project to Dropbox…" is a *move* when the source is local and a *copy* when it
+      is not — the app leaves a folder or cloud copy in place deliberately, because that
+      location belongs to the user. A static label cannot be right in both cases. A dialog
+      that knows the current location labels its own button: **Move here** / **Copy here**.
+      The verb problem dissolves rather than being worked around, which is the strongest
+      single argument for this design.
+
+      ### Save is not a verb this app has
+
+      Everything autosaves. `saveInteractive()` either force-flushes a project that is
+      already saving, or prompts for a name — so it is *naming*, not saving. `saveAs()`
+      writes a new entry bound to the copy: that is **duplicate**, and the current label is
+      actively dangerous, since someone reaching for a backup gets a fork and then edits
+      the copy believing it is the original.
+
+      So: no `Save` and no `Save as`. Naming is **rename**; forking is **duplicate**; the
+      flush is automatic, with **Ctrl+S** kept bound to flush-and-confirm so the trained
+      reflex still gets its "Saved ✓" without occupying a menu line.
+
+      ### The modal
+
+          +-----------------------------------------------------------+
+          | Recents |  Open  |  Store in  |  Export  |  Manage         |
+          +-----------------------------------------------------------+
+          | Internal   |  ProjectName1                                 |
+          | Dropbox    |  ProjectName2                                 |
+          | WebDAV     |  ProjectName3                                 |
+          | OneDrive   |                                               |
+          +-----------------------------------------------------------+
+
+      The left rail is the **backend registry**, rendered from `describe()` — the list
+      #172 already produces. Adding Graph puts a row there and changes nothing else.
+
+      **Not plugins.** The rail is core-trusted backends: every sandbox CSP carries
+      `connect-src 'none'`, and OAuth custody cannot live in a sandbox (#143). Same list,
+      different trust story, and worth writing down because "locations provided by plugins"
+      is the natural assumption and it is closed.
+
+      **Save and Export stay separate tabs.** They share a destination and differ on
+      everything else: Store writes the whole project, round-trippable, to a *location*;
+      Export writes some content — a dataset, the output, the syntax — in a *foreign
+      format*, one way. One tab would put "Word" and "Dropbox" side by side as sibling
+      choices and invite someone to treat a .docx as a backup.
+
+      ### Where all 24 items go
+
+      | Today | Tomorrow |
+      |---|---|
+      | New project | **File ▸ New project** (unchanged) |
+      | Open project… | **File ▸ Open…** → Open tab |
+      | Open project from a folder… | Open tab, Folder rail |
+      | Open from Dropbox… | Open tab, Dropbox rail |
+      | Open from WebDAV… | Open tab, WebDAV rail |
+      | Open project bundle (.crosstab)… | Open tab, File rail |
+      | Save project… | **dropped** — autosave; naming is rename |
+      | Save project as… | **Manage ▸ Duplicate** |
+      | Move project to a folder… | Store-in tab, Folder rail |
+      | Move project to Dropbox… | Store-in tab, Dropbox rail |
+      | Move project to WebDAV… | Store-in tab, WebDAV rail |
+      | Export project bundle (.crosstab)… | **Store-in tab, File rail** — it is a save, not an export |
+      | Close project folder | **Manage ▸ Close**, generalised to any location |
+      | Export data… | Export tab (keeps the #113 picker) |
+      | Export output… | Export tab |
+      | Import data… | **File ▸ Import data…** (unchanged — inbound content, already consolidated) |
+      | Save dataset to library… | **leaves File** — dataset-scoped, belongs with datasets |
+      | Add dataset from library… | **leaves File** — same |
+      | Protect this project… | **File ▸ Project settings… ▸ Security** |
+      | Remove protection… | Project settings ▸ Security |
+      | Change passphrase… | Project settings ▸ Security |
+      | Encryption settings… | **app preferences** — it is a global default, not a project's |
+      | Copy invite link… | Project settings ▸ Sharing |
+      | Sharing… | Project settings ▸ Sharing |
+
+      **Result: File ▸ New project · Recents · Open… · Store in… · Export… · Import data…
+      · Manage… · Project settings…** — eight, and adding a backend changes none of them.
+
+      ### The sidebar questions, answered
+
+      **Should recents still be in the sidebar at all?** Not as a *zone*. The sidebar is the
+      open project's CONTENTS — datasets, codebooks, memos, stored files, the bin. A list of
+      other projects is navigation squatting in a contents panel, which is why "Projects"
+      currently sits between "Recently deleted" and "Building blocks" reading like neither.
+
+      But switching is frequent, and a modal every time is friction. So: **the project name
+      in the sidebar header becomes the switcher.** Click it for a dropdown of the last few
+      projects plus *Manage projects…*. One click to switch, the contents panel stops
+      competing with itself, and the affordance sits where the mental model already is —
+      "this project → a different one".
+
+      **Only the last two?** No — in a dropdown the constraint is not vertical space, so
+      **five** is fine and two is uselessly few. (If the owner prefers an inline zone after
+      all, then three, because there it *is* vertical space.)
+
+      **Destructive verbs leave the sidebar.** The ✕ that forgets a location currently sits
+      one hover away from the row that opens it. Forget, delete, rename and duplicate all
+      move to Manage, where "you are about to lose something" can be said properly.
+
+      ### The launcher question
+
+      They are not mirrors — they are **one panel in two states**. With no project open there
+      are no contents to show, so the launcher's panel is necessarily "choose a project",
+      which is exactly the modal's Recents and Open tabs. So the launcher should EMBED that
+      component rather than render a third version of the list (#167 already says: do not
+      build a third rendering).
+
+      Launcher-only: **Start from** (blank / demos) — project *creation*, which has no
+      meaning once a project is open. Sidebar-only: the contents. Everything about *which
+      projects exist and where they live* is one component used in three places.
+
+      **Both get a link to the manager**, and it is the same link.
+
+      ### Dependency and sequencing
+
+      Recents and Manage need **#171** — one project index spanning every location. Today
+      Recents would have to merge the OPFS catalog with the location registry and hope.
+      That makes this the feature that finally pays for #171, rather than #171 being pure
+      refactor. Order: #171, then this.
+
+      ### Open questions for the owner
+
+      - **Wording of "Store in…"** — accurate but unfamiliar; "Move or copy to…" is clumsy
+        but exact. This is the item that names the concept the whole storage rework circles.
+      - **Manage's delete prompt.** "Removing this project from the list — also delete the
+        files at `<location>`?" is the right home for the destructive option deliberately
+        kept off the move dialog: a management screen is where someone expects consequences,
+        and the prompt can name the actual path. Confirm that is wanted before building it.
+      - **Recents ordering** — last *opened* needs a timestamp the index does not currently
+        carry; only `savedAt` exists. Cheap to add, but it is a schema decision.
+
 - [ ] **#172 — the engine should not know where the bytes are (user, 2026-08-25).**
       "If we are claiming a principle of *all are equal*, then the very existence of a
       folder mode is a flawed design. The engine shouldn't care — or indeed even know —
