@@ -42,6 +42,40 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       memo list. That is memo RETRIEVAL, a feature with its own vocabulary — nearer the
       codebook manager than this — and nothing here forecloses it.
 
+- [ ] **#172 — the engine should not know where the bytes are (user, 2026-08-25).**
+      "If we are claiming a principle of *all are equal*, then the very existence of a
+      folder mode is a flawed design. The engine shouldn't care — or indeed even know —
+      where or how the bytes are stored."
+
+      **The evidence, because this is not a style argument.** `#folderMode` answers "which
+      UI flow did the user come through", and behaviour was keyed on it. Four bugs, all the
+      same shape, all found by use rather than by tests:
+      - saves took the plain-overwrite branch for remote, so two peers would clobber each
+        other whole-project at a time, silently (`2df5a8e`);
+      - the poll never ran, so a co-author's edit never arrived (same commit);
+      - `#keyStillCurrent` returned true immediately, so a remote project never noticed a
+        peer re-keying it — #144's protection absent exactly where bytes leave the machine;
+      - `listProjects` asked the LIVE store for the local catalog, so an open Dropbox
+        project made the sidebar query Dropbox for your OPFS projects.
+
+      **Mostly done (2026-08-25).** Everything about how bytes behave now comes from the
+      driver's declared capabilities: `externallySynced` drives merge-on-save and polling,
+      `flat` drives layout, the re-key check and reverting to local storage. Uses of the
+      flag went from 22 to 14, and the survivors are all one thing.
+
+      **What remains, and whether it should.** The rest is the File System Access API's
+      requirements, not an opinion about storage: a write-permission re-grant needs a user
+      gesture, the OS double-click shortcuts are real files in a real directory, and the
+      registry stores a structured-cloneable handle rather than an address. Those are true
+      of handles and of nothing else.
+
+      The question left for the owner is whether even that belongs in `ProjectSync`. The
+      principled answer is no — it is the folder DRIVER's business, and the engine should
+      hold a store and its capabilities and nothing more. That means a driver gaining a
+      `connect()` (a no-op for remote, a permission re-grant for a folder) and the shortcut
+      writing moving behind the driver too. Worth doing; not urgent now that nothing about
+      correctness depends on the flag.
+
 - [ ] **#171 — WHERE a project lives is not WHICH project is open (user, 2026-08-24).**
       "When you open Word and see the recents list, it doesn't matter where each document
       lives. Likewise for the launcher list and the sidebar list."

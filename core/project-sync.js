@@ -261,6 +261,20 @@ export class ProjectSync {
   /** Current project: `{ id, name }` once saved/opened, else `null`. */
   #binding = null;
   /** True while a picked folder (FSA) is the active backend, vs OPFS (#143). */
+  /**
+   * Is a PICKED DIRECTORY attached — the File System Access handle, specifically?
+   *
+   * All that is left of what used to be "folder mode". Everything about how the bytes
+   * behave — merge, poll, layout, re-key checks — now comes from the driver's declared
+   * capabilities, because keying those on this flag produced four bugs: saves that
+   * overwrote a peer, a poll that never ran, a re-key that went unnoticed, and a project
+   * list that queried the wrong store.
+   *
+   * What genuinely remains folder-specific is the HANDLE: a write-permission re-grant
+   * needs a user gesture, the OS double-click shortcuts are files in a real directory, and
+   * the registry holds a structured-cloneable handle rather than an address. Those are the
+   * File System Access API's requirements, not the engine's opinion about storage.
+   */
   #folderMode = false;
   /** Folder writes halted because its key changed under us (#144). Cleared by reopening. */
   #folderKeyStale = false;
@@ -582,7 +596,7 @@ export class ProjectSync {
    */
   async closeProject() {
     await this.#settle();
-    if (this.#folderMode) this.#detachFolder();
+    if (this.#storeIsRemote()) this.#detachFolder();
     this.#loading = true;
     try {
       await this.#datasets.loadBundle({ log: [], empty: true });
@@ -977,7 +991,7 @@ export class ProjectSync {
   async newProject() {
     await this.#settle();
     this.#open = true; // "start blank" opens a REAL project that happens to be empty
-    if (this.#folderMode) this.#detachFolder(); // a fresh project is OPFS, not the folder's
+    if (this.#storeIsRemote()) this.#detachFolder(); // a fresh project is OPFS, not the folder's
     this.#loading = true;
     try {
       await this.#datasets.loadBundle({ log: [] }); // empty log ⇒ one fresh blank dataset
@@ -1030,7 +1044,7 @@ export class ProjectSync {
     // Opening an OPFS project while a folder is open leaves folder mode (the folder
     // stays remembered in the registry; #openExistingFolder opens with folderMode
     // still false, so it isn't affected by this).
-    if (this.#folderMode && id !== FOLDER_PROJECT_ID) this.#detachFolder();
+    if (this.#storeIsRemote() && id !== FOLDER_PROJECT_ID) this.#detachFolder();
     // A protected OPFS project needs its passphrase before we can read it. Check on a
     // plaintext meta read FIRST (nothing loaded yet), so a wrong/cancelled passphrase
     // leaves the currently-open project untouched. (Folder mode already unlocked its
@@ -1136,7 +1150,7 @@ export class ProjectSync {
   async openBundle({ name, bundle }) {
     await this.#settle();
     this.#open = true; // an imported bundle IS a project
-    if (this.#folderMode) this.#detachFolder(); // an imported bundle is a fresh OPFS project
+    if (this.#storeIsRemote()) this.#detachFolder(); // an imported bundle is a fresh OPFS project
     this.#setStatus('loading');
     this.#loading = true;
     try {
@@ -1358,10 +1372,31 @@ export class ProjectSync {
   }
 
   /** Revert the store to OPFS after a failed/aborted folder attach. */
+  /**
+   * Is the open project somewhere other than this browser's own storage?
+   *
+   * The question every `if (#folderMode) #detachFolder()` was really asking. Keyed on the
+   * store rather than on how the user got here, so a remote project reverts on the same
+   * terms a folder one does — closing, opening another, importing a bundle.
+   */
+  #storeIsRemote() {
+    // `flat` alone, deliberately: a picked folder declares it, so adding `#folderMode ||`
+    // would only reintroduce the flow flag as belt-and-braces — and belt-and-braces is
+    // how it survived long enough to cause four bugs.
+    return !!this.#store.capabilities?.flat;
+  }
+
+  /**
+   * Put the live store back on OPFS.
+   *
+   * Named for the folder because that was the only thing it could detach from. It now
+   * covers any non-local store; the folder-specific bookkeeping below is simply inert
+   * when there was no folder.
+   */
   #detachFolder() {
     this.#folderKeyStale = false; // a fresh attachment re-derives the key
     this.#metaUnreadable = 0;
-    this.#store.useDirectory(null);
+    this.#store.useDriver(null); // covers a directory handle AND a remote driver
     this.#store.lock();
     this.#folderMode = false;
     this.#lastManifest = null;
@@ -1663,7 +1698,7 @@ export class ProjectSync {
    * path for an existing plaintext project: mint the key + meta, re-save encrypted.
    */
   async protectProject() {
-    const folder = this.#folderMode || this.#store.flat;
+    const folder = this.#store.flat; // one project per location — folder or remote alike
     await this.#settle(); // make sure it's saved (and, for OPFS, has a binding) before we re-key it
     if (!folder && !this.#binding) {
       this.#results.appendError('Add some data first — an empty project has nothing to protect yet.');
@@ -1710,7 +1745,7 @@ export class ProjectSync {
    * under the new key.
    */
   async changePassphrase() {
-    const folder = this.#folderMode || this.#store.flat;
+    const folder = this.#store.flat; // one project per location — folder or remote alike
     await this.#settle();
     if (!folder && !this.#binding) return;
     const id = folder ? FOLDER_PROJECT_ID : this.#binding.id;
@@ -1758,7 +1793,7 @@ export class ProjectSync {
    * the key + meta and re-writes the whole bundle in the clear.
    */
   async unprotectProject() {
-    const folder = this.#folderMode || this.#store.flat;
+    const folder = this.#store.flat; // one project per location — folder or remote alike
     await this.#settle();
     if (!folder && !this.#binding) return;
     const id = folder ? FOLDER_PROJECT_ID : this.#binding.id;
@@ -2317,7 +2352,11 @@ export class ProjectSync {
    * written is a worse answer than a clear halt.
    */
   async #keyStillCurrent() {
-    if (!this.#folderMode || !this.#binding) return true;
+    // Anywhere a peer can write, a peer can re-key. Gating this on the folder FLOW meant a
+    // remote project never checked — it would have gone on writing under a key the other
+    // side had already replaced, which is #144's whole concern, absent exactly where the
+    // bytes leave the machine.
+    if (!this.#syncedElsewhere() || !this.#binding) return true;
     if (this.#folderKeyStale) return false; // already halted; don't re-announce every tick
     let status;
     try {
@@ -2367,7 +2406,7 @@ export class ProjectSync {
    * keyed on identity rather than on a declared capability. The capability now answers it.
    */
   #syncedElsewhere() {
-    return this.#folderMode || !!this.#store.capabilities?.externallySynced;
+    return !!this.#store.capabilities?.externallySynced;
   }
 
   /** Poll for a peer's write. Folders are a local file read, so they can be watched
@@ -2429,9 +2468,11 @@ export class ProjectSync {
 
   /** Summaries of all saved projects (for the sidebar's Projects zone). */
   listProjects() {
-    // Always the OPFS (in-browser) projects — never the current folder's single
-    // project (that's shown via the folder registry, not this list).
-    return (this.#folderMode ? this.#opfs : this.#store).list();
+    // Always the OPFS (in-browser) projects. The live store is whatever the open project
+    // sits on, so asking IT would query Dropbox for the list of your local projects —
+    // which is what happened while this was keyed on the folder flow rather than on
+    // whether the live store is the local one.
+    return (this.#store.capabilities?.flat ? this.#opfs : this.#store).list();
   }
 
   /** Registry id of the open folder project (null if not in a folder). */
