@@ -1422,9 +1422,11 @@ export async function boot(mounts) {
       const ok = await projects.moveTo(new DropboxBackend(cfg, async () => session));
       if (ok) {
         saveDbxConfig(cfg);
+        // What happened to the OLD copy is reported by moveTo, which is the only thing
+        // that knows whether it was ours to remove.
         results.appendText(
           `**${projects.activeName ?? 'The project'}** now lives in Dropbox at \`${escapeText(cfg.basePath || '/')}\`. `
-          + 'Saving writes there from now on, and the local copy has been removed.',
+          + 'Saving writes there from now on.',
         );
       }
     },
@@ -3198,13 +3200,17 @@ class ProjectSidebar {
       li.addEventListener('click', open);
       const name = el('button', `${what.glyph} ${label}`, 'proj__ds-name');
       name.type = 'button';
-      name.setAttribute('aria-label', `Reopen ${label}`);
+      name.setAttribute('aria-label', `Reopen ${label}${what.detail ? ` (${what.detail})` : ''}`);
       name.addEventListener('click', (e) => { e.stopPropagation(); open(); });
+      // WHERE, beside the name. Two copies of one project can now legitimately coexist —
+      // a move off a folder leaves the folder copy in place — and without this the list
+      // shows the same name twice with no way to tell which row is which.
+      const where = what.detail ? el('span', what.detail, 'proj__ds-where') : null;
       const forget = iconBtn('✕', 'Forget this location (keeps its files)', (e) => {
         e.stopPropagation();
         void this.projects.forgetFolderProject(f.id);
       }, 'proj__ds-x');
-      li.append(name, forget);
+      li.append(name, ...(where ? [where] : []), forget);
       list.append(li);
     }
     frag.append(list);

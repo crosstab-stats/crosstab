@@ -127,7 +127,7 @@ export class FolderBackend {
   async connect() { return ensureReadWrite(this.#handle); }
 
   describe() {
-    return { kind: this.kind, glyph: '📁', label: this.#handle.name ?? 'Folder', detail: '' };
+    return { kind: this.kind, glyph: '📁', label: this.#handle.name ?? 'Folder', detail: 'Folder' };
   }
 
   remember() { return { kind: 'folder', handle: this.#handle, name: this.#handle.name }; }
@@ -221,7 +221,7 @@ export class WebDavBackend {
   describe() {
     let host = this.#config.url;
     try { host = new URL(this.#config.url).host; } catch { /* not a URL — show it raw */ }
-    return { kind: this.kind, glyph: '🌐', label: host, detail: this.#config.url };
+    return { kind: this.kind, glyph: '🌐', label: host, detail: host };
   }
 
   remember() { return { kind: 'webdav', config: this.#config, name: this.describe().label }; }

@@ -1291,6 +1291,12 @@ export class ProjectSync {
    */
   async moveTo(backend) {
     const what = backend.describe?.() ?? { label: 'that location' };
+    // Only the app's OWN storage is safe to clear out afterwards. A picked folder or a
+    // cloud location belongs to the user: it may hold files we did not write, it may be
+    // shared with collaborators, and emptying it is not a side effect anyone should get
+    // from a menu item. So a move OFF local storage is a move, and a move off anywhere
+    // else is a copy — which has to be SAID, because it is not what "move" implies.
+    const previous = this.#backend?.describe?.() ?? null;
     const wasLocal = !this.#store.capabilities?.flat;
     if (wasLocal && !this.#binding) {
       this.#results.appendError('Add some data first — an empty project has nothing to move.');
@@ -1336,9 +1342,21 @@ export class ProjectSync {
       this.#binding = null; // a brand-new entry, living there now
       await this.#fullSave(null, projectName);
       await this.#afterAttach(backend);
-      // A true move: drop the now-redundant local copy, through a throwaway OPFS store
-      // since the live one is elsewhere. Best-effort — the data is already safely away.
-      if (orphanLocalId) { try { await new ProjectStore().delete(orphanLocalId); } catch { /* leave it */ } }
+      if (orphanLocalId) {
+        // A true move: drop the now-redundant local copy, through a throwaway OPFS store
+        // since the live one is elsewhere. Best-effort — the data is already safely away.
+        try { await new ProjectStore().delete(orphanLocalId); } catch { /* leave it */ }
+        this.#results.appendText('The copy in this browser has been removed.');
+      } else if (previous) {
+        // The old copy is still openable, which makes it a fork waiting to happen: edit
+        // it and the two diverge with no way to reconcile them. Better to say so than to
+        // delete someone's directory, and better than the silence this used to be.
+        this.#results.appendText(
+          `**The previous copy is still at ${previous.label}** — it was not deleted, because that `
+          + 'location is yours rather than the app\u2019s. It will not receive any further changes, so '
+          + 'open it only to retrieve something; editing both copies forks the project.',
+        );
+      }
       return true;
     } catch (err) {
       this.#results.appendError(`Move to ${what.label} failed: ${err.message}`);
