@@ -69,12 +69,94 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       registry stores a structured-cloneable handle rather than an address. Those are true
       of handles and of nothing else.
 
-      The question left for the owner is whether even that belongs in `ProjectSync`. The
-      principled answer is no — it is the folder DRIVER's business, and the engine should
-      hold a store and its capabilities and nothing more. That means a driver gaining a
-      `connect()` (a no-op for remote, a permission re-grant for a folder) and the shortcut
-      writing moving behind the driver too. Worth doing; not urgent now that nothing about
-      correctness depends on the flag.
+      **THE PLAN (owner's call, 2026-08-25: do it now, before more providers land).**
+
+      ### Why now, in numbers
+
+      - **Four bugs from one flag**, listed above, none caught by a test.
+      - **The flows are duplicated per backend.** `#openExistingFolder` is 48 lines and
+        `openRemote` 51; `moveToFolder` is 60 and `moveToRemote` 68. The remote pair was
+        written by copying the folder pair. Graph and Drive would each copy them again —
+        that is the "breaks every time we save to a new platform" mechanism, precisely.
+      - **None of those 227 lines is tested.** No test file touches the open or move paths;
+        `folder-sync` and `collab-sync` test the MERGE beneath them. The most bug-dense code
+        in the project has no coverage because it needs a real store to run.
+
+      ### The shape
+
+      One interface per platform, owning everything platform-specific. Not "driver" — a
+      driver is bytes, and bytes were never the hard part:
+
+          StorageBackend
+            capabilities   {flat, externallySynced, atomicWrite, canStream}   (exists)
+            driver()       the byte interface: read/write/list/stat/…         (exists)
+            connect()      permission re-grant | sign-in | no-op              (NEW)
+            describe()     {kind, glyph, label, detail} for lists             (NEW)
+            remember()     what the registry should store, never secrets      (NEW)
+            shortcuts?()   optional; folder-only today                        (NEW)
+
+      And **one flow each**, replacing four:
+
+          openLocation(backend)   ← #openExistingFolder + openRemote
+          moveTo(backend)         ← moveToFolder + moveToRemote
+
+      Both already have the same skeleton, which is why they were copyable: connect →
+      probe on a throwaway store → passphrase → validate → commit → remember → poll. Every
+      difference between them becomes a backend method instead of a second function.
+
+      ### What the engine stops knowing
+
+      `useDirectory`, `ensureReadWrite`, `#pickFolderHandle`, `shortcutFiles`, and the
+      remaining `#folderMode` all move behind a backend. The UI stops carrying kind strings
+      (13 occurrences of `'folder' | 'dropbox' | 'webdav'` across app.js and launcher.js)
+      and renders `describe()` instead. Adding Graph becomes **one file plus one line in a
+      registry** — no new branch in the sidebar, the launcher, the save path or the poll.
+
+      ### What the engine keeps
+
+      Capability-driven behaviour (merge, poll, layout), encryption (correctly above the
+      seam — a backend only ever sees ciphertext), and the op log. These are about the
+      PROJECT, not about where it sits.
+
+      ### The three hard parts, named in advance
+
+      1. **Layout is not really a capability.** `flat` says "one project per location", and
+         OPFS is the only backend where that is false. The honest model is that OPFS is a
+         CATALOG of locations rather than a special layout — which is #171's model arriving
+         from the other side. `FOLDER_PROJECT_ID` (19 uses) is the seam where the two meet.
+      2. **`connect()` is not uniform.** A folder needs a user GESTURE for its permission
+         re-grant; a remote needs a credential dialog it must not own. So `connect()` takes
+         a prompt-provider from the caller rather than opening UI itself — the same shape
+         `openWebDav` already uses for its password callback.
+      3. **The launcher defers a folder to the Start click** because that click *is* the
+         required gesture, while a remote opens immediately. Under one flow this becomes
+         `backend.needsGesture`, not two code paths — and it is the piece most likely to
+         regress, because it is invisible until a permission prompt silently fails.
+
+      ### Sequencing with #171
+
+      They are one refactor from two ends: #171 unifies the project LIST, #172 unifies the
+      backend behind it. Do #172 first — a unified list whose entries still fan out to four
+      bespoke open paths would keep the duplication and hide it behind a nicer surface.
+
+      ### Migration, and the risk that matters
+
+      **Folder backend first, behaviour unchanged.** Folders are in real use and are the
+      most demanding case: handles, permission re-grants, OS shortcuts. If the abstraction
+      survives the folder, the rest are simpler. Any step that requires "and now re-pick
+      your folder" is a failed step.
+
+      Order: (1) define the interface with the folder backend behind it and both old flows
+      still calling it; (2) collapse the two open flows into one; (3) collapse the two move
+      flows; (4) port Dropbox and WebDAV onto backends; (5) delete `#folderMode` and the
+      kind strings in the UI.
+
+      ### What it buys, concretely
+
+      A fake backend makes `openLocation` and `moveTo` **testable headlessly for the first
+      time** — the probe-then-commit ordering, the abort paths, the occupied-destination
+      refusal, remembering only on success. Those are the exact behaviours the four bugs
+      lived in, and they are currently verified by hand or not at all.
 
 - [ ] **#171 — WHERE a project lives is not WHICH project is open (user, 2026-08-24).**
       "When you open Word and see the recents list, it doesn't matter where each document
