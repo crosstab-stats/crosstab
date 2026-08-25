@@ -69,6 +69,14 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       registry stores a structured-cloneable handle rather than an address. Those are true
       of handles and of nothing else.
 
+      **VERIFIED IN THE BROWSER (2026-08-25), after the unification:** a local project
+      saves, survives a relaunch and reopens; move-to-folder writes the project AND its
+      shortcut files, and `Open in CrossTab.html` still lands on the open-folder button;
+      the folder project reopens from the launcher rail, which is the path where a refused
+      write permission would fail silently. **Not yet exercised: a PROTECTED project through
+      the shared flow** — the one place `#adopt`'s new lock actually bites, and the only
+      part of this change no test reaches.
+
       **BUILT (2026-08-25).** `core/storage-backend.js`; `#folderMode` is gone from the
       engine. Steps 1-4 of the plan below are done in one pass, since the owner lifted the
       back-compat constraint ("no one's using this app yet, we can break existing saves").
