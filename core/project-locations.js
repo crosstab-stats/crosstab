@@ -39,11 +39,27 @@ const REGISTRY_KEY = 'registry'; // { id, kind, name, savedAt, handle?, config? 
 /**
  * What a remote location's `config` may contain — WHERE it is, never how to get in.
  *
- * The same discipline as webdav-connections.js, structural for the same reason: a caller
- * handing over the whole object it used to build a driver is the likeliest slip, and it
- * reads perfectly well at the call site. Projecting through this list means such a call
- * stores the address and drops the secret, and no path here can write a password or token
- * unless someone adds the field deliberately.
+ * ## Addresses, never credentials — and why storing nothing beats storing it safely
+ *
+ * A WebDAV app password is the keys to someone's whole cloud account; a Dropbox refresh
+ * token is the same. So none of them is here. The address and the username are, and the
+ * secret is typed each session.
+ *
+ * The alternative that looks better and is not: encrypt the stored credential behind a
+ * passphrase. That trades one typed secret for another and buys nothing — *"if we're going
+ * to be asking for a password to unlock the credential in the first place, that isn't much
+ * different from simply not storing the credential and just asking for that"* (owner,
+ * 2026-08-24). A lock whose key sits beside it is decoration.
+ *
+ * The guarantee is structural rather than a convention: a caller handing over the whole
+ * object it used to build a driver is the likeliest slip, and it reads perfectly well at
+ * the call site. Projecting through this list means such a call stores the address and
+ * drops the secret, and no path here can write a password or a token unless someone adds
+ * the field deliberately.
+ *
+ * This is a different question from at-rest encryption. That passphrase protects the DATA
+ * in a project; a credential protects an ACCOUNT that happens to hold it. Neither excuses
+ * skipping the other.
  */
 // The INNER arrays are frozen too. `Object.freeze` is shallow, so freezing only the
 // outer object leaves every list push-able — and a single `PUBLIC_CONFIG.dropbox.push`

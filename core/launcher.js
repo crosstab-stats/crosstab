@@ -53,10 +53,18 @@ export class Launcher {
   #discipline = 'All';
   #pendingSource = null; // source key chosen this session, applied on Start
   #pendingProject = null; // { id } when a saved project is chosen instead of a source
-  #pendingFolder = null; // a remembered folder handle, when the "reopen folder" entry is chosen
-  /** Opens a remembered REMOTE location. Supplied by the app, because reconnecting one
-   * needs a credential dialog the launcher has no business owning. */
-  #reopenRemote = null;
+  /**
+   * A backend awaiting the Start click.
+   *
+   * Only ever one that declares `needsGesture` — a picked folder, whose write-permission
+   * re-grant the browser refuses outside a user gesture, and refuses SILENTLY. Everything
+   * else opens on click, because deferring it would buy nothing.
+   */
+  #pendingBackend = null;
+  /** Builds a backend from a remembered location, and opens one. Supplied by the app,
+   * because reconnecting needs credential dialogs the launcher has no business owning. */
+  #makeBackend = null;
+  #openBackend = null;
   #resolve = null;
   #onKey = null; // Escape-to-dismiss handler, active only while reopened over a session
 
@@ -76,13 +84,14 @@ export class Launcher {
    * @param {import('./asset-store.js').AssetStore} [deps.assetStore] - Stores demo
    *   geometry as asset bytes, the same way a loaded file is stored.
    */
-  constructor({ plugins, datasets, bus, projects, offline, workspaceStore, itemStore, assetStore, reopenRemote }) {
+  constructor({ plugins, datasets, bus, projects, offline, workspaceStore, itemStore, assetStore, makeBackend, openBackend }) {
     this.#plugins = plugins;
     this.#datasets = datasets;
     this.#bus = bus;
     this.#projects = projects ?? null;
     this.#offline = offline ?? null;
-    this.#reopenRemote = reopenRemote ?? null;
+    this.#makeBackend = makeBackend ?? null;
+    this.#openBackend = openBackend ?? null;
     this.#workspaceStore = workspaceStore ?? null;
     this.#itemStore = itemStore ?? null;
     this.#assetStore = assetStore ?? null;
@@ -295,7 +304,7 @@ export class Launcher {
         // Selecting a data source clears any saved-project/folder pick — the choices are
         // mutually exclusive, so highlight only this one across ALL source rows.
         this.#pendingProject = null;
-        this.#pendingFolder = null;
+        this.#pendingBackend = null;
         overlay.querySelectorAll('.ctl__source').forEach((b) => b.classList.toggle('is-active', b === btn));
         // A demo/blank choice seeds its preset's plugin selection (user can tweak).
         const preset = Object.values(PRESETS).find((p) => p.source === btn.dataset.source);
@@ -349,33 +358,34 @@ export class Launcher {
       // Remembered folder projects (#143): one-click reopen of any picked folder.
       // Reconnecting needs a write-permission re-grant, which happens on the Start
       // click (the required user gesture). Shown even if the OPFS rail is empty.
-      if (projBox && this.#projects?.reopenFolder) {
+      if (projBox && this.#makeBackend) {
         let locations = [];
         try { locations = await this.#projects.listProjectLocations(); } catch { locations = []; }
         if (locations.length) overlay.querySelector('.ctl__railhead--projects')?.removeAttribute('hidden');
         for (const loc of locations) {
-          const kind = loc.kind || 'folder';
-          const glyph = kind === 'dropbox' ? '📦' : kind === 'webdav' ? '🌐' : '📁';
-          const btn = el('button', `${glyph} ${loc.name}`, `ctl__source ctl__source--project ctl__source--folder ctl__source--${kind}`);
+          // The backend describes itself. Constructing one has no side effects — only
+          // `connect()` prompts — so this is safe to do while merely drawing a list, and
+          // it is what keeps the launcher from naming a storage kind at all.
+          const backend = this.#makeBackend(loc);
+          if (!backend) continue; // an entry this build cannot reconstruct
+          const what = backend.describe();
+          const btn = el('button', `${what.glyph} ${loc.name || what.label}`,
+            `ctl__source ctl__source--project ctl__source--folder ctl__source--${what.kind}`);
           btn.type = 'button';
-          btn.title = kind === 'folder'
-            ? `Reopen project folder: ${loc.name}`
-            : `Reopen from ${kind}: ${loc.config?.basePath || loc.config?.url || loc.name}`;
+          btn.title = `Reopen ${loc.name || what.label}${what.detail ? ` (${what.detail})` : ''}`;
           btn.addEventListener('click', () => {
-            // A folder is DEFERRED to Start, because reconnecting needs a write-permission
-            // re-grant and that gesture belongs to the Start click. A remote has no handle
-            // to defer — it needs a credential, which means its own dialog — so it opens
-            // immediately and dismisses the launcher itself.
-            if (kind === 'folder') {
-              this.#pendingFolder = loc.handle;
+            // Deferred only when the backend says a gesture is required — the Start click
+            // IS that gesture. Anything else opens now and dismisses the launcher itself,
+            // since there is nothing a later click would add.
+            if (backend.needsGesture) {
+              this.#pendingBackend = backend;
               this.#pendingProject = null;
               this.#pendingSource = null;
               overlay.querySelectorAll('.ctl__source').forEach((b) => b.classList.toggle('is-active', b === btn));
               return;
             }
-            if (!this.#reopenRemote) return;
             this.#close();
-            void this.#reopenRemote(loc);
+            void this.#openBackend?.(backend);
           });
           projBox.append(btn);
         }
@@ -492,11 +502,11 @@ export class Launcher {
     startBtn.disabled = true;
     startBtn.textContent = 'Starting…';
     try {
-      if (this.#pendingFolder && this.#projects) {
-        // Reopen a remembered folder — reopenFolder re-grants write (this Start click
-        // is the gesture) and restores the folder project + its own plugin set, so the
-        // picker's plugin selection isn't applied over it.
-        await this.#projects.reopenFolder(this.#pendingFolder);
+      if (this.#pendingBackend) {
+        // A backend that needed a gesture — this Start click IS the gesture, which is the
+        // only reason it waited. Opening restores the project and its own plugin set, so
+        // the picker's plugin selection is deliberately not applied over it.
+        await this.#openBackend?.(this.#pendingBackend);
       } else if (this.#pendingProject && this.#projects) {
         // Open the chosen project's data + workspace state FIRST, *then* apply the
         // picker's selection. Order matters: applying the selection mounts workspace
@@ -547,7 +557,7 @@ export class Launcher {
     root.remove();
     this.#pendingSource = null;
     this.#pendingProject = null;
-    this.#pendingFolder = null;
+    this.#pendingBackend = null;
     const r = this.#resolve; this.#resolve = null;
     r?.();
   }

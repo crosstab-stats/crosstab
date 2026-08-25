@@ -83,10 +83,16 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         one from a registry entry. No driver type is named anywhere in app.js any more.
       - 12 new tests — the first coverage this area has ever had.
 
-      **Still to do:** fold `webdav-connections.js` into the location registry (two stores
-      hold WebDAV addresses now), and give the launcher `backend.needsGesture` instead of
-      its folder-shaped `#pendingFolder`. Neither is load-bearing; both are the last places
-      a kind is named.
+      **Rolled up the same day, on the owner's "why not roll everything up?".** There was
+      no principled reason to stop — both loose ends were the same debt:
+      - `webdav-connections.js` deleted; the location registry is the only store of WebDAV
+        addresses, and the credential policy it documented moved there with it.
+      - The launcher holds a BACKEND rather than a folder handle, and defers to Start only
+        when `needsGesture` says the browser requires that click. `#pendingFolder` is gone.
+      - The sidebar renders `describe()`; the `LOCATION_KINDS` table is gone.
+
+      **A storage kind is now named in exactly one place in the UI** — the WebDAV dialog
+      filtering for WebDAV locations, which is correct, because that dialog is WebDAV.
 
       **THE PLAN (owner's call, 2026-08-25: do it now, before more providers land).**
 

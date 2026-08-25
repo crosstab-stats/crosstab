@@ -19,7 +19,6 @@ import { UiService } from './ui-service.js';
 import { ImportService } from './import-service.js';
 import { ExportService } from './export-service.js';
 import { installPassphraseUI } from './passphrase-ui.js';
-import { listConnections, labelFor } from './webdav-connections.js';
 import { DropboxSession, loadConfig as loadDbxConfig, saveConfig as saveDbxConfig } from './dropbox-session.js';
 import { DropboxBackend, WebDavBackend, backendFor } from './storage-backend.js';
 import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } from './user-identity.js';
@@ -281,11 +280,13 @@ function promptNetworkDialog(name, url) {
  * @param {(c: object) => string} label
  * @returns {Promise<{url: string, username: string, password: string}|null>}
  */
-function promptWebDav(saved, label, { move = false } = {}) {
+function promptWebDav(saved, { move = false } = {}) {
   return new Promise((resolve) => {
     const d = document.createElement('dialog');
     d.className = 'ct-dialog ct-dialog--wide';
-    const options = saved.map((c, i) => `<option value="${i}">${escapeText(label(c))}</option>`).join('');
+    const options = saved
+      .map((c, i) => `<option value="${i}">${escapeText(c.name || c.config?.url || 'Saved location')}</option>`)
+      .join('');
     d.innerHTML = `
       <form method="dialog" class="ct-dialog__form">
         <h2 class="ct-dialog__title">${move ? 'Move project to WebDAV' : 'Open from WebDAV'}</h2>
@@ -309,8 +310,8 @@ function promptWebDav(saved, label, { move = false } = {}) {
     f.saved?.addEventListener('change', () => {
       const c = saved[Number(f.saved.value)];
       if (!c) return;
-      f.url.value = c.url;
-      f.username.value = c.username ?? '';
+      f.url.value = c.config?.url ?? '';
+      f.username.value = c.config?.username ?? '';
       f.password.focus();
     });
     d.addEventListener('close', () => {
@@ -400,18 +401,6 @@ function promptPassword(title, hint) {
     d.showModal();
   });
 }
-
-/**
- * How each kind of remembered location presents itself.
- *
- * Kept as data rather than branches in the renderer: adding Graph or Drive should be a
- * line here, not another `if` in the sidebar and another in the launcher.
- */
-const LOCATION_KINDS = Object.freeze({
-  folder: { glyph: '📁', noun: 'folder', verb: 'Reopen folder project', detail: () => '' },
-  dropbox: { glyph: '📦', noun: 'Dropbox location', verb: 'Reopen from Dropbox', detail: (e) => e.config?.basePath ?? '' },
-  webdav: { glyph: '🌐', noun: 'WebDAV location', verb: 'Reopen from WebDAV', detail: (e) => e.config?.url ?? '' },
-});
 
 /** Minimal text escape for the few interpolations above. */
 function escapeText(s) {
@@ -1343,6 +1332,15 @@ export async function boot(mounts) {
   // "not right now" — the room is derived from the manifest, so every co-holder can
   // still walk back in, and so can you on the next open. This records a decision on the
   // log instead, where it merges and travels.
+  /** Remembered WebDAV locations, from the one registry that holds every location. */
+  const savedWebDav = async () => {
+    try {
+      return (await projects.listProjectLocations()).filter((e) => e.kind === 'webdav');
+    } catch {
+      return [];
+    }
+  };
+
   // Open a project from a WebDAV server (#143). A separate item for now — the File menu
   // is due a consolidation pass, and adding to it is the smaller mistake than pre-empting
   // that design.
@@ -1352,7 +1350,7 @@ export async function boot(mounts) {
     label: 'Open from WebDAV…',
     order: 5,
     command: async () => {
-      const chosen = await promptWebDav(listConnections(), labelFor);
+      const chosen = await promptWebDav(await savedWebDav());
       if (!chosen) return;
       const ok = await projects.openLocation(
         new WebDavBackend({ url: chosen.url, username: chosen.username }, async () => chosen.password),
@@ -1440,7 +1438,7 @@ export async function boot(mounts) {
     label: 'Move project to WebDAV…',
     order: 7,
     command: async () => {
-      const chosen = await promptWebDav(listConnections(), labelFor, { move: true });
+      const chosen = await promptWebDav(await savedWebDav(), { move: true });
       if (!chosen) return;
       const ok = await projects.moveTo(
         new WebDavBackend({ url: chosen.url, username: chosen.username }, async () => chosen.password),
@@ -1589,20 +1587,24 @@ export async function boot(mounts) {
    * open flow does the rest: no branch here for what to do once it is open, which is the
    * point of #172.
    */
-  const reopenRemote = async (entry) => {
-    const backend = backendFor(entry, {
-      dropboxSession: (cfg) => dropboxFor({ appKey: cfg.appKey, basePath: cfg.basePath }),
-      webdavPassword: (cfg) => promptPassword(
-        'Open from WebDAV',
-        `${cfg.username ? `${cfg.username} at ` : ''}${cfg.url}`,
-      ),
-    });
-    if (!backend) {
-      results.appendError('That entry is missing what it needs to reconnect — open it once from the File menu.');
-      return;
-    }
-    await projects.openLocation(backend);
-  };
+  /**
+   * Turn a remembered location into a backend.
+   *
+   * The registry stores an address and never a credential, so the only per-kind work is
+   * supplying how to get in — and even that is a lookup, not a branch. Constructing has no
+   * side effects (only `connect()` prompts), so a list can build one merely to ask how it
+   * should be drawn.
+   */
+  const makeBackend = (entry) => backendFor(entry, {
+    dropboxSession: (cfg) => dropboxFor({ appKey: cfg.appKey, basePath: cfg.basePath }),
+    webdavPassword: (cfg) => promptPassword(
+      'Open from WebDAV',
+      `${cfg.username ? `${cfg.username} at ` : ''}${cfg.url}`,
+    ),
+  });
+
+  /** Open one. No branch on kind after this point — that is the whole of #172. */
+  const openBackend = (backend) => projects.openLocation(backend);
 
   // The sidebar project manager (active project + datasets, other projects,
   // building blocks). Created here, after the services it drives exist.
@@ -1610,7 +1612,7 @@ export async function boot(mounts) {
     datasets, projects, library, bus,
     workspaceStore, itemStore, assetStore, sweepAssets, memoStore, orphanedMemos, selection,
     pluginList: () => (plugins ? plugins.list() : []),
-    reopenRemote,
+    makeBackend, openBackend,
   });
 
   // --- warm the runtimes ------------------------------------------------------
@@ -1833,7 +1835,7 @@ export async function boot(mounts) {
   // Connectivity indicator in the status bar — most useful on a field device, where
   // it tells the user why an online importer is quiet and confirms "you're cached."
   if (mounts.status) wireConnectivityIndicator(mounts.status, offline);
-  const launcher = new Launcher({ plugins, datasets, bus, projects, offline, workspaceStore, itemStore, assetStore, reopenRemote });
+  const launcher = new Launcher({ plugins, datasets, bus, projects, offline, workspaceStore, itemStore, assetStore, makeBackend, openBackend });
   engine.launcher = launcher;
   const launchFlag = new URLSearchParams(location.search).get('launch');
   let bypassed = false;
@@ -2372,7 +2374,7 @@ class ProjectSidebar {
    * @param {import('./library.js').DatasetLibrary} deps.library
    * @param {EventBus} deps.bus
    */
-  constructor(host, { datasets, projects, library, bus, workspaceStore, itemStore, assetStore, sweepAssets, memoStore, orphanedMemos, selection, pluginList, reopenRemote }) {
+  constructor(host, { datasets, projects, library, bus, workspaceStore, itemStore, assetStore, sweepAssets, memoStore, orphanedMemos, selection, pluginList, makeBackend, openBackend }) {
     this.host = host;
     this.datasets = datasets;
     this.projects = projects;
@@ -2388,7 +2390,8 @@ class ProjectSidebar {
      * from a field rather than awaited mid-DOM-build). @type {{count:number,bytes:number}|null} */
     this.#assets = null;
     this.pluginList = pluginList ?? (() => []);
-    this.reopenRemote = reopenRemote ?? null;
+    this.makeBackend = makeBackend ?? null;
+    this.openBackend = openBackend ?? (async () => {});
     this.projectName = null;
     bus.on(DATASETS_CHANGED, () => this.render());
     bus.on(CoreEvents.ITEMS_CHANGED, () => this.render()); // the inventory covers items too (#152)
@@ -3126,11 +3129,13 @@ class ProjectSidebar {
    * place, which is the point of one list.
    */
   async #openLocation(entry) {
-    if ((entry.kind ?? 'folder') === 'folder') { await this.projects.reopenFolder(entry.handle); return; }
-    const reopen = this.reopenRemote;
-    if (!reopen) return;
+    const backend = this.makeBackend?.(entry);
+    if (!backend) {
+      this.results?.appendError?.('That entry is missing what it needs to reconnect — open it once from the File menu.');
+      return;
+    }
     try {
-      await reopen(entry);
+      await this.openBackend(backend);
     } catch (err) {
       this.results?.appendError?.(`Could not reopen that location: ${err.message}`);
     }
@@ -3179,17 +3184,23 @@ class ProjectSidebar {
     // used to appear nowhere at all, while a folder one appeared here — the inconsistency
     // #171 predicted, and the reason this list is no longer folder-only.
     for (const f of folderProjects) {
-      const where = LOCATION_KINDS[f.kind] ?? LOCATION_KINDS.folder;
+      // Each location describes itself. There is no table of kinds here any more: adding
+      // Graph or Drive is a backend class, not another row of glyphs in two files.
+      // When a backend cannot be built the entry is still worth showing — but claiming
+      // it is a folder would be a guess, and guessing a kind is what this refactor removes.
+      const what = this.makeBackend?.(f)?.describe()
+        ?? { kind: 'unknown', glyph: '📍', label: f.name, detail: 'cannot reconnect' };
+      const label = f.name || what.label;
       const li = document.createElement('li');
-      li.className = `proj__ds proj__ds--folder proj__ds--${f.kind ?? 'folder'}`;
-      li.title = `${where.verb}: ${f.name}${where.detail(f) ? ` (${where.detail(f)})` : ''}`;
+      li.className = `proj__ds proj__ds--folder proj__ds--${what.kind}`;
+      li.title = `Reopen ${label}${what.detail ? ` (${what.detail})` : ''}`;
       const open = () => void this.#openLocation(f);
       li.addEventListener('click', open);
-      const name = el('button', `${where.glyph} ${f.name}`, 'proj__ds-name');
+      const name = el('button', `${what.glyph} ${label}`, 'proj__ds-name');
       name.type = 'button';
-      name.setAttribute('aria-label', `${where.verb} ${f.name}`);
+      name.setAttribute('aria-label', `Reopen ${label}`);
       name.addEventListener('click', (e) => { e.stopPropagation(); open(); });
-      const forget = iconBtn('✕', `Forget this ${where.noun} (keeps its files)`, (e) => {
+      const forget = iconBtn('✕', 'Forget this location (keeps its files)', (e) => {
         e.stopPropagation();
         void this.projects.forgetFolderProject(f.id);
       }, 'proj__ds-x');

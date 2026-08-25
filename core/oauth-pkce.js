@@ -32,7 +32,7 @@
  * The access token lives in memory only. A refresh token is offered to the caller and
  * NOT persisted here: whether a long-lived credential is written to disk is a policy
  * decision, and the same one the owner already made for WebDAV — type it again rather
- * than leave the keys lying about (see webdav-connections.js).
+ * than leave the keys lying about (see project-locations.js).
  */
 
 /** Base64url — no padding, URL-safe alphabet, as the spec requires. */
