@@ -124,9 +124,13 @@ device, say — CrossTab tells you rather than reporting a failed save.
 - **One project per location.** The collection you point at *is* the project, the same
   way a folder-backed project works. Point at a different collection for a different
   project.
-- **No change notification.** WebDAV has no usable push, so a co-author's edit is seen
-  when CrossTab next reads, not the instant it lands. For live co-authoring use the
-  peer-to-peer path (**Go live**), which is independent of where the project is stored.
+- **Changes arrive on a poll, not a push.** Neither WebDAV nor Dropbox offers a usable
+  push here, so CrossTab re-reads a remote project every 15 seconds and merges what it
+  finds — the same merge a synced folder uses, so two people editing at once do not
+  overwrite each other. A folder is polled every 3 seconds because that is a local file
+  read; a remote costs a network round trip against a provider that rate-limits.
+  For instant co-authoring use the peer-to-peer path (**Go live**), which is independent
+  of where the project is stored.
 - **Large files cross the network whole.** There is no resumable upload here yet, so a
   multi-gigabyte source on a poor connection is a bad time.
 

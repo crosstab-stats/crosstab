@@ -39,6 +39,15 @@ const DEBOUNCE_MS = 800;
 /** Bus event: the current project's name/binding changed (drives the sidebar header). */
 export const PROJECT_CHANGED = 'project:changed';
 
+/**
+ * How often to check a REMOTE project for a co-author's write.
+ *
+ * A folder poll reads a local file every 3s, which costs nothing. A remote poll is a
+ * network round trip against a provider that rate-limits, once per open tab — so this
+ * trades a slower pickup for not being the reason someone gets throttled mid-save.
+ */
+const REMOTE_POLL_MS = 15000;
+
 // Gap-fill chunks carry raw Parquet bytes (a Uint8Array). Trystero's action channel
 // only transmits binary when the WHOLE payload is a TypedArray; a Uint8Array nested
 // inside a plain object gets JSON-serialised to a numeric-keyed object and arrives
@@ -809,8 +818,8 @@ export class ProjectSync {
     const dirty = this.#sourcesDirty;
     this.#sourcesDirty = new Set();
     try {
-      if (this.#folderMode) {
-        await this.#attemptSave(() => this.#folderSave(dirty)); // merge-aware (never clobbers a peer)
+      if (this.#syncedElsewhere()) {
+        await this.#attemptSave(() => this.#mergeSave(dirty)); // merge-aware (never clobbers a peer)
       } else {
         await this.#attemptSave(async () => {
           const bundle = await this.#snapshot(false, dirty);
@@ -854,8 +863,8 @@ export class ProjectSync {
       const dirty = this.#sourcesDirty;
       this.#sourcesDirty = new Set();
       try {
-        if (this.#folderMode) {
-          await this.#attemptSave(() => this.#folderSave(dirty));
+        if (this.#syncedElsewhere()) {
+          await this.#attemptSave(() => this.#mergeSave(dirty));
         } else {
           await this.#attemptSave(async () => {
             const bundle = await this.#snapshot(false, dirty);
@@ -1251,10 +1260,15 @@ export class ProjectSync {
     if (pass) await this.#store.unlock(pass);
     await this.openProject(entries[0].id);
     if (!this.#binding) {
+      this.#stopPoll();
       this.#store.useDriver(null); // damaged — fall back to OPFS rather than sit on a dead store
       return false;
     }
     await this.#rememberLocation(remember);
+    // The baseline the poll compares against. Without it the first tick sees "changed"
+    // and merge-saves for no reason.
+    try { this.#lastManifest = await this.#store.readManifest(this.#binding.id); } catch { this.#lastManifest = null; }
+    this.#startPoll(REMOTE_POLL_MS);
     this.#emitProject();
     return true;
   }
@@ -1489,6 +1503,7 @@ export class ProjectSync {
       await this.#fullSave(null, projectName);
       this.#folderMode = false; // remote is not the folder flow — see the folderBacked note
       this.#lastManifest = await this.#store.readManifest(this.#binding.id);
+      this.#startPoll(REMOTE_POLL_MS); // a co-author's edits arrive the same way as in a folder
       await this.#rememberLocation(remember); // or the project vanishes from every list
       this.#emitProject();
       // A true move: drop the now-redundant OPFS copy, through a throwaway OPFS store
@@ -1497,6 +1512,7 @@ export class ProjectSync {
       return true;
     } catch (err) {
       this.#results.appendError(`Move to ${label} failed: ${err.message}`);
+      this.#stopPoll();
       // Back to OPFS, and re-open what we were moving — better than leaving the user
       // looking at nothing while their project sits intact one reopen away.
       this.#store.useDriver(null);
@@ -1811,7 +1827,7 @@ export class ProjectSync {
    * plugin-blob (e.g. CAQDAS codebook) merge needs the sandbox bridge — a follow-up —
    * so those currently surface as conflicts rather than auto-merging.
    */
-  async #folderSave(dirty) {
+  async #mergeSave(dirty) {
     if (!this.#binding) return;
     if (!(await this.#keyStillCurrent())) return; // #144 — never write with a stale key
     const bundle = await this.#snapshot(true, dirty); // include Parquet — syncFolderProject writes sources
@@ -2337,9 +2353,29 @@ export class ProjectSync {
     return false;
   }
 
-  #startPoll() {
+  /**
+   * Does something other than this tab write these bytes?
+   *
+   * If so, two things must be true: a save has to MERGE rather than overwrite, and a poll
+   * has to watch for a peer's write. That is equally true of a synced folder and of a
+   * cloud API, and it was previously keyed on `#folderMode` — a flag about which UI FLOW
+   * was used, not about how the bytes behave. Remote projects therefore took the
+   * plain-overwrite branch, which means two people editing one Dropbox project would have
+   * clobbered each other whole-project at a time, silently.
+   *
+   * Same mistake as `folderBacked` testing `kind === 'folder'`, one layer up: behaviour
+   * keyed on identity rather than on a declared capability. The capability now answers it.
+   */
+  #syncedElsewhere() {
+    return this.#folderMode || !!this.#store.capabilities?.externallySynced;
+  }
+
+  /** Poll for a peer's write. Folders are a local file read, so they can be watched
+   * often; a remote costs a network round trip per tick and a provider's rate limit, so
+   * it is watched less often. */
+  #startPoll(ms = 3000) {
     this.#stopPoll();
-    this.#pollTimer = setInterval(() => void this.#folderPull(), 3000);
+    this.#pollTimer = setInterval(() => void this.#syncPull(), ms);
   }
 
   #stopPoll() {
@@ -2348,8 +2384,8 @@ export class ProjectSync {
 
   /** Poll tick: cheaply read the folder's manifest; if a peer advanced it, merge it
    * in. Skips while the tab is hidden, or a save/load/merge is already in flight. */
-  async #folderPull() {
-    if (!this.#folderMode || !this.#binding || this.#saving || this.#loading) return;
+  async #syncPull() {
+    if (!this.#syncedElsewhere() || !this.#binding || this.#saving || this.#loading) return;
     if (typeof document !== 'undefined' && document.hidden) return; // back off when hidden
     if (!(await this.#keyStillCurrent())) return; // #144 — the poll is also how we notice
     let theirs;
@@ -2358,9 +2394,9 @@ export class ProjectSync {
     // A peer wrote → pull it in via the merge-aware save (guarded like #flush).
     this.#saving = true;
     try {
-      await this.#folderSave();
+      await this.#mergeSave();
     } catch (err) {
-      console.error('[project] folder pull failed', err);
+      console.error('[project] sync pull failed', err);
     } finally {
       this.#saving = false;
     }
