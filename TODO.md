@@ -168,16 +168,52 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       That makes this the feature that finally pays for #171, rather than #171 being pure
       refactor. Order: #171, then this.
 
-      ### Open questions for the owner
+      ### Settled (owner, 2026-08-25)
 
-      - **Wording of "Store in…"** — accurate but unfamiliar; "Move or copy to…" is clumsy
-        but exact. This is the item that names the concept the whole storage rework circles.
-      - **Manage's delete prompt.** "Removing this project from the list — also delete the
-        files at `<location>`?" is the right home for the destructive option deliberately
-        kept off the move dialog: a management screen is where someone expects consequences,
-        and the prompt can name the actual path. Confirm that is wanted before building it.
-      - **Recents ordering** — last *opened* needs a timestamp the index does not currently
-        carry; only `savedAt` exists. Cheap to add, but it is a schema decision.
+      - **"Store in…" is the verb.** "Getting away from *save* is probably wise as the thing
+        always auto-saves. And it's clearly different from *Export*."
+      - **Removing from the index offers to delete the files.** Confirmed, and it answers a
+        live complaint rather than a hypothetical: "currently OPFS data is just laying about
+        cluttering up storage."
+      - **`lastOpenedAt` will be added** (owner neutral; taken). Without it Recents would
+        order by `savedAt`, so opening a project without editing it would not move it up the
+        list — which is not what "recent" means to anyone.
+
+      ### What deleting has to actually delete — a constraint found while confirming this
+
+      `ProjectStore#delete(id)` removes the whole project tree, sources included, so an OPFS
+      project deleted from the sidebar today is genuinely gone. But its first line is
+      **`if (this.#flat) return;`** — *"don't blow away the user's picked folder from here"*.
+      So a folder, Dropbox or WebDAV project **cannot currently be deleted from inside the
+      app at all**, only forgotten. "Also delete the files" does not exist yet for exactly
+      the locations where files accumulate most visibly.
+
+      That guard is right and must not simply be lifted. The location is the user's: a
+      picked folder may hold their own files beside the project, and a Dropbox folder may be
+      shared with collaborators. So deletion must remove **what CrossTab wrote and nothing
+      else** — `project.json`, `crosstab-project.json`, `ds<id>_src<n>.parquet`, `assets/`,
+      the encryption meta, and the two shortcut files — and leave the directory itself and
+      anything unrecognised in place. That is a manifest-driven delete, not a `removeTree`,
+      and it belongs on the backend beside `shortcuts()`: the same object that knows what it
+      writes should know what it may remove.
+
+      **Two other things accumulate, worth folding into the same screen:**
+      - **Assets** are content-addressed and shared between projects, so deleting a project
+        does not free them. There is a sweep (`sweepAssets`) behind the sidebar's "Stored
+        files" zone, but it is manual and easy never to find. Manage should show the figure.
+      - **The recycle bin** keeps deleted datasets for restore, by design (#149 A4). Also
+        worth surfacing where someone is already thinking about space.
+
+      ### Open questions remaining
+
+      - Should "also delete the files" default to **checked or unchecked**? Unchecked is the
+        safe default, but it is also how storage quietly fills up — which is the complaint
+        that prompted this. A middle answer: default it checked for the app's OWN storage
+        (where the files are unambiguously ours) and unchecked for a folder or cloud
+        location (where they are not).
+      - Should Manage show **space used per project**? It is the information that makes a
+        cleanup screen actionable rather than a list of names, and the asset tally already
+        exists — but per-project size needs a walk of each project's tree.
 
 - [ ] **#172 — the engine should not know where the bytes are (user, 2026-08-25).**
       "If we are claiming a principle of *all are equal*, then the very existence of a
