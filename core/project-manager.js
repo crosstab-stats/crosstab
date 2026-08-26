@@ -139,9 +139,18 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
     dialog.className = 'ct-dialog ct-dialog--wide ctpm';
     const tabBar = el('div', 'ctpm__tabs');
     const body = el('div', 'ctpm__body');
-    const close = el('button', 'ct-dialog__primary ctpm__done', 'Done');
+    const close = el('button', 'ct-dialog__primary', 'Done');
     close.type = 'button';
     close.addEventListener('click', () => dialog.close());
+    // The shared containers, not hand-rolled equivalents. `.ct-dialog__form` carries the
+    // padding every other dialog has — appending straight to the <dialog>, which is
+    // `padding: 0`, left this one flush against its own border. And `.ct-dialog__buttons`
+    // is what makes a primary button look primary: the accent colour and the sizing are
+    // both defined as `.ct-dialog__buttons .ct-dialog__primary`, so outside that container
+    // the class does nothing and you get a raw browser button, left-aligned.
+    const shell = el('div', 'ct-dialog__form ctpm__shell');
+    const footer = el('menu', 'ct-dialog__buttons ctpm__footer');
+    footer.append(close);
 
     let active = TABS.some((t) => t.id === tab) ? tab : 'recents';
 
@@ -368,7 +377,8 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
       }
     }
 
-    dialog.append(tabBar, body, close);
+    shell.append(tabBar, body, footer);
+    dialog.append(shell);
     dialog.addEventListener('close', () => { dialog.remove(); resolve(); });
     document.body.append(dialog);
     dialog.showModal();

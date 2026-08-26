@@ -154,19 +154,26 @@
       /* where a listed project lives — dim, so it reads as a detail rather than a name */
       .proj__ds-where { font-size: 11px; color: #646e77; white-space: nowrap; flex: 0 0 auto; }
 
-      /* project manager (#173): one modal, location as a dimension inside a verb */
-      .ctpm { width: min(760px, 92vw); }
+      /* project manager (#173): one modal, location as a dimension inside a verb.
+         Sizes here deliberately match the rest of the app: body text is 14px, so a
+         secondary label is 13 and never 12, and a button matches `.ct-dialog__buttons
+         button` (14px / 8px 16px) rather than inventing a smaller one. */
+      /* Beats `.ct-dialog--wide`'s 640px, which this needs for the rail + pane split. */
+      .ctpm.ct-dialog--wide { max-width: min(800px, 94vw); width: 94vw; }
+      .ctpm__shell { display: flex; flex-direction: column; }
       .ctpm__tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin: 0 0 12px; }
-      .ctpm__tab { font: inherit; border: 0; background: none; padding: 8px 14px; cursor: pointer;
-        color: #4a5560; border-bottom: 2px solid transparent; border-radius: 4px 4px 0 0; }
+      .ctpm__tab { font: inherit; font-size: 15px; border: 0; background: none; padding: 9px 16px;
+        cursor: pointer; color: #4a5560; border-bottom: 2px solid transparent; border-radius: 4px 4px 0 0; }
       .ctpm__tab:hover { background: #eef5fb; }
       .ctpm__tab.is-active { color: #1a1a1a; font-weight: 600; border-bottom-color: var(--accent); }
-      .ctpm__body { min-height: 260px; max-height: 56vh; overflow: auto; }
+      .ctpm__body { min-height: 300px; max-height: 58vh; overflow: auto; padding: 4px 0 0; }
       .ctpm__split { display: flex; gap: 14px; align-items: stretch; }
-      .ctpm__rail { flex: 0 0 168px; display: flex; flex-direction: column; gap: 2px;
-        border-right: 1px solid var(--line); padding-right: 10px; }
-      .ctpm__railitem { font: inherit; text-align: left; border: 0; background: none; cursor: pointer;
-        padding: 7px 9px; border-radius: 6px; color: #2a3540; }
+      .ctpm__rail { flex: 0 0 180px; display: flex; flex-direction: column; gap: 4px;
+        border-right: 1px solid var(--line); padding-right: 12px; }
+      /* Matches `.ctl__source` in the launcher — the app's existing "pick a thing from a
+         list" control, which is exactly what this is. */
+      .ctpm__railitem { font: inherit; font-size: 14px; text-align: left; border: 0; background: none;
+        cursor: pointer; padding: 10px 12px; border-radius: 8px; color: #2a3540; }
       .ctpm__railitem:hover { background: #eef5fb; }
       .ctpm__railitem.is-active { background: #e3edf7; font-weight: 600; }
       .ctpm__pane { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
@@ -175,21 +182,27 @@
       .ctpm__row:hover { background: #f4f7fa; }
       .ctpm__row.is-open { background: #eef5fb; }
       .ctpm__rowmain { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 10px;
-        font: inherit; text-align: left; border: 0; background: none; cursor: pointer; padding: 9px 10px; }
+        font: inherit; font-size: 15px; text-align: left; border: 0; background: none;
+        cursor: pointer; padding: 11px 12px; }
       /* the open project: present so the list is complete, inert because there is nothing
          to do to it from here */
       .ctpm__rowmain:disabled { cursor: default; opacity: .85; }
       .ctpm__name { font-weight: 600; color: #1a1a1a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .ctpm__where { font-size: 12px; color: #646e77; white-space: nowrap; }
+      .ctpm__where { font-size: 13px; color: #646e77; white-space: nowrap; }
       .ctpm__acts { display: flex; gap: 4px; padding-right: 8px; }
-      .ctpm__act { font: inherit; font-size: 12px; border: 1px solid var(--line); background: #fff;
-        border-radius: 5px; padding: 4px 9px; cursor: pointer; color: #2a3540; }
+      /* Same metrics as `.ct-dialog__buttons button`, because it is the same kind of
+         thing — a button in a dialog. */
+      .ctpm__act { font: inherit; border: 1px solid var(--line); background: #fff;
+        border-radius: 6px; padding: 8px 16px; cursor: pointer; color: #2a3540; }
       .ctpm__act:hover { background: #eef5fb; }
       .ctpm__act.is-danger { color: #a33; border-color: #e3c3c3; }
       .ctpm__act.is-danger:hover { background: #fdf2f2; }
-      .ctpm__hint { font-size: 13px; color: #4a5560; margin: 0 0 8px; }
-      .ctpm__empty, .ctpm__loading { color: #646e77; padding: 24px 8px; }
-      .ctpm__done { margin-top: 12px; align-self: flex-end; }
+      .ctpm__hint { color: #5a6470; margin: 0 0 12px; line-height: 1.45; } /* = .ct-dialog__hint */
+      .ctpm__empty, .ctpm__loading { color: #646e77; padding: 32px 12px; }
+      /* Two classes, deliberately: `.ct-dialog__buttons` sets `margin: 0` and appears
+         LATER in this file, so a single-class rule here would lose to it and the footer
+         would sit flush against the list. */
+      .ct-dialog__buttons.ctpm__footer { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 14px; }
       /* memo thread under a row: the notes wrap and are read in full — truncating the
          one place a memo can be read would defeat the point of counting them (#168) */
       .proj__memos { display: block; padding: 2px 8px 4px 24px; font-size: 12px; }
