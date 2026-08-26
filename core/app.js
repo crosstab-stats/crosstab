@@ -20,7 +20,10 @@ import { ImportService } from './import-service.js';
 import { ExportService } from './export-service.js';
 import { installPassphraseUI } from './passphrase-ui.js';
 import { DropboxSession, loadConfig as loadDbxConfig, saveConfig as saveDbxConfig } from './dropbox-session.js';
-import { DropboxBackend, WebDavBackend, backendFor } from './storage-backend.js';
+import {
+  DropboxBackend, WebDavBackend, FolderBackend, OpfsBackend, backendFor,
+} from './storage-backend.js';
+import { openProjectManager } from './project-manager.js';
 import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } from './user-identity.js';
 import { ProjectLog } from './project-log.js';
 import { ItemStore, newItemId, isItemOp, parseItemTarget, itemTarget } from './item-store.js';
@@ -1349,23 +1352,37 @@ export async function boot(mounts) {
     }
   };
 
-  // Open a project from a WebDAV server (#143). A separate item for now — the File menu
-  // is due a consolidation pass, and adding to it is the smaller mistake than pre-empting
-  // that design.
+  // The project manager (#173): one modal, one item per VERB. Every location lives in
+  // its rail, so adding a backend costs no menu entries at all — where before it cost two.
   menus.register({
-    id: 'core:open-webdav',
+    id: 'core:proj-recents',
     path: ['File'],
-    label: 'Open from WebDAV…',
-    order: 5,
-    command: async () => {
-      const chosen = await promptWebDav(await savedWebDav());
-      if (!chosen) return;
-      const ok = await projects.openLocation(
-        new WebDavBackend({ url: chosen.url, username: chosen.username }, async () => chosen.password),
-      );
-      if (ok) results.appendText(`Opened **${projects.activeName ?? 'project'}** from ${escapeText(new URL(chosen.url).host)}.`);
-    },
+    label: 'Recent projects',
+    order: 2,
+    command: () => void openManager('recents'),
   });
+  menus.register({
+    id: 'core:proj-open',
+    path: ['File'],
+    label: 'Open…',
+    order: 3,
+    command: () => void openManager('open'),
+  });
+  menus.register({
+    id: 'core:proj-store',
+    path: ['File'],
+    label: 'Store in…',
+    order: 4,
+    command: () => void openManager('store'),
+  });
+  menus.register({
+    id: 'core:proj-manage',
+    path: ['File'],
+    label: 'Manage projects…',
+    order: 5,
+    command: () => void openManager('manage'),
+  });
+
 
   // Open a project from Dropbox (#143). The session lives for as long as the tab does;
   // the driver asks it for a token per request, so a renewal mid-save is invisible.
@@ -1387,77 +1404,12 @@ export async function boot(mounts) {
     return session;
   };
 
-  menus.register({
-    id: 'core:open-dropbox',
-    path: ['File'],
-    label: 'Open from Dropbox…',
-    order: 4,
-    command: async () => {
-      const cfg = await promptDropbox(loadDbxConfig());
-      if (!cfg) return;
-      let session;
-      try {
-        session = await dropboxFor(cfg);
-      } catch (err) {
-        results.appendError(`Dropbox sign-in failed: ${err.message}`);
-        return;
-      }
-      const ok = await projects.openLocation(new DropboxBackend(cfg, async () => session));
-      if (ok) {
-        saveDbxConfig(cfg); // remembered only after it worked, and only the public parts
-        results.appendText(`Opened **${projects.activeName ?? 'project'}** from Dropbox.`);
-      }
-    },
-  });
 
   // The other half: put the OPEN project into Dropbox. Without this, the API drivers are
   // usable only on projects some other route put there — which is not testable.
-  menus.register({
-    id: 'core:move-dropbox',
-    path: ['File'],
-    label: 'Move project to Dropbox…',
-    order: 6,
-    command: async () => {
-      const cfg = await promptDropbox(loadDbxConfig(), { move: true });
-      if (!cfg) return;
-      let session;
-      try {
-        session = await dropboxFor(cfg);
-      } catch (err) {
-        results.appendError(`Dropbox sign-in failed: ${err.message}`);
-        return;
-      }
-      const ok = await projects.moveTo(new DropboxBackend(cfg, async () => session));
-      if (ok) {
-        saveDbxConfig(cfg);
-        // What happened to the OLD copy is reported by moveTo, which is the only thing
-        // that knows whether it was ours to remove.
-        results.appendText(
-          `**${projects.activeName ?? 'The project'}** now lives in Dropbox at \`${escapeText(cfg.basePath || '/')}\`. `
-          + 'Saving writes there from now on.',
-        );
-      }
-    },
-  });
 
   // Same for WebDAV, so the two backends do not drift into "one can move, one cannot" —
   // the asymmetry that made the Dropbox driver untestable in the first place.
-  menus.register({
-    id: 'core:move-webdav',
-    path: ['File'],
-    label: 'Move project to WebDAV…',
-    order: 7,
-    command: async () => {
-      const chosen = await promptWebDav(await savedWebDav(), { move: true });
-      if (!chosen) return;
-      const ok = await projects.moveTo(
-        new WebDavBackend({ url: chosen.url, username: chosen.username }, async () => chosen.password),
-      );
-      if (ok) {
-        results.appendText(`**${projects.activeName ?? 'The project'}** now lives on ${escapeText(new URL(chosen.url).host)}.`);
-      }
-    },
-  });
 
   menus.register({
     id: 'core:sharing',
@@ -1616,6 +1568,84 @@ export async function boot(mounts) {
   /** Open one. No branch on kind after this point — that is the whole of #172. */
   const openBackend = (backend) => projects.openLocation(backend);
 
+  /**
+   * The manager's left rail: one entry per place a project can live.
+   *
+   * `chooseExisting` finds a project that is already somewhere; `chooseDestination`
+   * nominates somewhere to put the open one. They differ for local storage — you pick an
+   * existing local project from the list rather than "choosing" local — and are the same
+   * gesture everywhere else.
+   *
+   * Adding Graph or Drive means one more entry here. That is the entire UI cost, which is
+   * what #172 and #173 were both for.
+   */
+  const providers = [
+    {
+      kind: 'opfs',
+      glyph: '💻',
+      label: 'This browser',
+      newLabel: null,
+      chooseExisting: null, // local projects are listed, not chosen
+      chooseDestination: async () => new OpfsBackend(null), // a move back from the cloud
+    },
+    {
+      kind: 'folder',
+      glyph: '📁',
+      label: 'Folder',
+      newLabel: 'Choose a folder…',
+      chooseExisting: async () => {
+        const handle = await FolderBackend.pick();
+        return handle ? new FolderBackend(handle) : null;
+      },
+      chooseDestination: async () => {
+        const handle = await FolderBackend.pick();
+        return handle ? new FolderBackend(handle) : null;
+      },
+    },
+    {
+      kind: 'dropbox',
+      glyph: '📦',
+      label: 'Dropbox',
+      newLabel: 'Another Dropbox folder…',
+      chooseExisting: async () => dropboxBackendFromDialog(false),
+      chooseDestination: async () => dropboxBackendFromDialog(true),
+    },
+    {
+      kind: 'webdav',
+      glyph: '🌐',
+      label: 'WebDAV',
+      newLabel: 'Another WebDAV location…',
+      chooseExisting: async () => webdavBackendFromDialog(false),
+      chooseDestination: async () => webdavBackendFromDialog(true),
+    },
+  ];
+
+  const dropboxBackendFromDialog = async (move) => {
+    const cfg = await promptDropbox(loadDbxConfig(), { move });
+    if (!cfg) return null;
+    saveDbxConfig(cfg);
+    return new DropboxBackend(cfg, () => dropboxFor(cfg));
+  };
+
+  const webdavBackendFromDialog = async (move) => {
+    const chosen = await promptWebDav(await savedWebDav(), { move });
+    if (!chosen) return null;
+    return new WebDavBackend({ url: chosen.url, username: chosen.username }, async () => chosen.password);
+  };
+
+  /** The one entry point to the project manager. */
+  const openManager = (tab) => openProjectManager({
+    tab,
+    projects,
+    makeBackend,
+    providers,
+    results,
+    exporters: [
+      { label: 'Export data…', run: () => exporters.openPicker?.() },
+      { label: 'Export output…', run: () => outputExporters.open?.() },
+    ].filter((x) => x.run),
+  });
+
   // The sidebar project manager (active project + datasets, other projects,
   // building blocks). Created here, after the services it drives exist.
   new ProjectSidebar(mounts.sidebar, {
@@ -1623,6 +1653,7 @@ export async function boot(mounts) {
     workspaceStore, itemStore, assetStore, sweepAssets, memoStore, orphanedMemos, selection,
     pluginList: () => (plugins ? plugins.list() : []),
     makeBackend, openBackend,
+    openManager: () => openManager('manage'),
   });
 
   // --- warm the runtimes ------------------------------------------------------
@@ -2384,7 +2415,7 @@ class ProjectSidebar {
    * @param {import('./library.js').DatasetLibrary} deps.library
    * @param {EventBus} deps.bus
    */
-  constructor(host, { datasets, projects, library, bus, workspaceStore, itemStore, assetStore, sweepAssets, memoStore, orphanedMemos, selection, pluginList, makeBackend, openBackend }) {
+  constructor(host, { datasets, projects, library, bus, workspaceStore, itemStore, assetStore, sweepAssets, memoStore, orphanedMemos, selection, pluginList, makeBackend, openBackend, openManager }) {
     this.host = host;
     this.datasets = datasets;
     this.projects = projects;
@@ -2402,6 +2433,7 @@ class ProjectSidebar {
     this.pluginList = pluginList ?? (() => []);
     this.makeBackend = makeBackend ?? null;
     this.openBackend = openBackend ?? (async () => {});
+    this.openManager = openManager ?? null;
     this.projectName = null;
     bus.on(DATASETS_CHANGED, () => this.render());
     bus.on(CoreEvents.ITEMS_CHANGED, () => this.render()); // the inventory covers items too (#152)

@@ -538,13 +538,13 @@ export class ProjectSync {
       return;
     }
     this.#menus.register({ id: 'core:proj-new', path: ['File'], label: 'New project', order: 1, command: () => void this.newProject() });
-    this.#menus.register({ id: 'core:proj-open', path: ['File'], label: 'Open project…', order: 2, command: () => void this.openProject() });
-    this.#menus.register({ id: 'core:proj-save', path: ['File'], label: 'Save project…', order: 3, command: () => void this.saveInteractive() });
-    this.#menus.register({ id: 'core:proj-saveas', path: ['File'], label: 'Save project as…', order: 4, command: () => void this.saveAs() });
+    // Open / Store in / Manage live in the project manager (#173), registered by app.js.
+    // There is deliberately no Save: everything autosaves, "Save project…" was naming and
+    // "Save project as…" was duplicating — a label that handed people a fork when they
+    // wanted a backup. Naming is rename; forking is duplicate; the flush is automatic.
     if (typeof window !== 'undefined' && window.showDirectoryPicker) {
-      this.#menus.register({ id: 'core:proj-folder-move', path: ['File'], label: 'Move project to a folder…', order: 5, command: () => void this.moveToFolder() });
-      this.#menus.register({ id: 'core:proj-folder-open', path: ['File'], label: 'Open project from a folder…', order: 6, command: () => void this.openFromFolder() });
-      this.#menus.register({ id: 'core:proj-folder-close', path: ['File'], label: 'Close project folder', order: 7, command: () => void this.closeFolder() });
+      // Folder open/move/close are rows in the manager's rail, not menu items — the
+      // whole point of #173 being that a location is a dimension inside a verb.
     }
     // Per-project at-rest protection for OPFS projects (#144) — set/remove a passphrase
     // on the CURRENT project (each project has its own). Folder projects are protected
@@ -1803,6 +1803,50 @@ export class ProjectSync {
   /** @deprecated Name kept while call sites migrate; it never meant folders only. */
   listFolderProjects() {
     return listLocations();
+  }
+
+  /**
+   * Delete the files CrossTab wrote at a remembered location — and nothing else (#173).
+   *
+   * `ProjectStore#delete` refuses on a flat store, deliberately: *"don't blow away the
+   * user's picked folder from here"*. That guard is right. A picked folder may hold the
+   * user's own files beside the project, and a cloud folder may be shared with people who
+   * would simply find their data gone.
+   *
+   * So this removes a KNOWN LIST — the manifest, the marker, the encryption meta, the
+   * Parquet sources, the assets, the two shortcut files — and leaves the directory itself
+   * and anything unrecognised alone. A `removeTree` here would be indefensible; someone
+   * who keeps their analysis notes in the same folder should still have them afterwards.
+   *
+   * Best-effort per file: one failure must not strand the rest half-deleted.
+   *
+   * The BACKEND is passed in rather than built here: constructing one needs credential
+   * prompts, which belong to the UI. The engine deletes; it does not ask for passwords.
+   *
+   * @param {object} backend
+   * @returns {Promise<number>} how many files were removed
+   */
+  async deleteRemoteFiles(backend) {
+    if (!backend) throw new Error('That location cannot be reached to delete anything.');
+    if (!(await backend.connect())) return 0;
+    const driver = backend.driver();
+    const names = new Set(['project.json', 'project.base.json', 'crosstab-project.json',
+      'crosstab-encryption.json', 'Open in CrossTab.html', 'HOW TO OPEN.txt']);
+    // Sources and assets are named by the manifest rather than fixed, so they are read
+    // from what is actually there rather than guessed.
+    try {
+      for (const name of await driver.list('')) {
+        if (/^ds\d+_src\d+\.parquet$/.test(name)) names.add(name);
+      }
+      for (const name of await driver.list('assets')) names.add(`assets/${name}`);
+    } catch { /* an unreadable listing just means fewer files removed */ }
+
+    let removed = 0;
+    for (const name of names) {
+      try { await driver.remove(name); removed++; } catch { /* leave it and carry on */ }
+    }
+    debug('project', 'deleted remote project files', { removed });
+    return removed;
   }
 
   /** Forget a remembered folder (removes the list entry; leaves the folder's files). */

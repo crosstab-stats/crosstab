@@ -122,6 +122,9 @@ export class OutputExportService {
     return this.#projects?.activeName ?? 'CrossTab Output';
   }
 
+  /** Open the output-export dialog — public for the project manager's Export tab. */
+  open() { return this.#open(); }
+
   #open() {
     if (!this.#hasOutput()) {
       this.#results.appendError('Export output: there is no output yet. Run an analysis first.');

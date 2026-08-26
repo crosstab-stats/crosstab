@@ -131,6 +131,10 @@ export class ExportService {
   }
 
   /** Open the unified Export-data picker. The chosen row runs `#runExport(id)`. */
+  /** Open the format picker. Public so the project manager's Export tab can reach the
+   * same flow the File menu item does, rather than a second copy of it. */
+  openPicker() { return this.#openPicker(); }
+
   #openPicker() {
     const entries = [...this.#exporters.entries()]
       .map(([id, spec]) => ({

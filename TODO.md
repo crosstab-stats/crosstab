@@ -42,6 +42,39 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       memo list. That is memo RETRIEVAL, a feature with its own vocabulary — nearer the
       codebook manager than this — and nothing here forecloses it.
 
+- [~] **#173 — BUILT (2026-08-25), needs a browser pass.** `core/project-manager.js`:
+      one modal, tabs **Recents / Open / Store in / Manage** (+ Export when exporters are
+      present), with the backend registry as the left rail.
+
+      **File went from 24 items to 18**, and — the part that matters — **adding a backend
+      now costs zero menu entries** where it used to cost two. Removed: the four
+      location-specific open/move items, the three folder ones, and Save / Save as. Added:
+      Recent projects, Open…, Store in…, Manage projects….
+
+      The button label problem is fixed at the root: the Store-in tab reads the CURRENT
+      location and offers **Move here** (local source — that copy is ours to remove) or
+      **Copy here** (anywhere else — it is not), with a note saying which. No menu label
+      could ever have been right.
+
+      `deleteRemoteFiles(backend)` removes only what CrossTab wrote — manifest, marker,
+      encryption meta, `ds*_src*.parquet`, `assets/`, the two shortcut files — and leaves
+      the directory and anything unrecognised alone. A `removeTree` there would be
+      indefensible: someone keeping their notes beside the project should still have them.
+      The backend is passed IN, because building one needs credential prompts and the
+      engine has no business asking for passwords.
+
+      Local storage gets **no "also delete files" checkbox**: there is no forget-but-keep
+      when the list *is* the storage, so an unchecked box would do nothing while implying a
+      choice. Everywhere else it is present and defaults off.
+
+      Ten tests on the extracted rules — which verbs a row offers, what removal offers, and
+      whether a destination is a move or a copy. All three are invisible to inspection: an
+      over-generous action list looks exactly like a correct one until someone clicks it.
+
+      **Still to do:** Project settings (the 4 encryption items are still loose on File),
+      folding the two bundle items into an Open/Store rail entry, and the launcher using
+      the same component instead of its own rail.
+
 - [ ] **#173 — one project manager, and a File menu that stops multiplying (user,
       2026-08-25).** The File menu carries **24 items** and grows by two per storage
       backend, because every (verb x location) pair is its own entry. Graph and Drive would
