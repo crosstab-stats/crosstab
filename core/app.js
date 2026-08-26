@@ -274,7 +274,7 @@ function promptNetworkDialog(name, url) {
  * Ask where a WebDAV project lives, and for the password to reach it.
  *
  * The address and username are remembered between sessions; the password never is
- * (webdav-connections.js explains why), so this dialog is the whole credential story:
+ * (project-locations.js explains why), so this dialog is the whole credential story:
  * it is typed here, handed to the driver, and exists nowhere else. `autocomplete`
  * attributes are set so a browser password manager can fill it, which is where a stored
  * secret actually belongs — under the user's own lock, not ours.

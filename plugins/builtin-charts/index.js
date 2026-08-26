@@ -99,7 +99,7 @@ export function chartKinds(lib) {
   // --------------------------------------------------------------------------
 
   /**
-   * @file charts/kinds/categorical.js
+   * Chart kind — was charts/kinds/categorical.js before the kinds moved into this plugin (#131 L3)
    * Chart kind: grouped / stacked / 100%-stacked bars and lines.
    */
 
@@ -365,7 +365,7 @@ export function chartKinds(lib) {
   // --------------------------------------------------------------------------
 
   /**
-   * @file charts/kinds/scatter.js
+   * Chart kind — was charts/kinds/scatter.js before the kinds moved into this plugin (#131 L3)
    * Chart kind: points, optional grouping, regression line.
    */
 
@@ -516,7 +516,7 @@ export function chartKinds(lib) {
   // --------------------------------------------------------------------------
 
   /**
-   * @file charts/kinds/pie.js
+   * Chart kind — was charts/kinds/pie.js before the kinds moved into this plugin (#131 L3)
    * Chart kind: slices, start-angle rotation, percentage labels.
    */
 
@@ -608,7 +608,7 @@ export function chartKinds(lib) {
   // --------------------------------------------------------------------------
 
   /**
-   * @file charts/kinds/distribution.js
+   * Chart kind — was charts/kinds/distribution.js before the kinds moved into this plugin (#131 L3)
    * Chart kind: violin, dots and paired — the three band-frame distribution kinds.
    */
 
@@ -899,7 +899,7 @@ export function chartKinds(lib) {
   // --------------------------------------------------------------------------
 
   /**
-   * @file charts/kinds/box.js
+   * Chart kind — was charts/kinds/box.js before the kinds moved into this plugin (#131 L3)
    * Chart kind: Tukey box-and-whisker.
    */
 
@@ -1019,7 +1019,7 @@ export function chartKinds(lib) {
   // --------------------------------------------------------------------------
 
   /**
-   * @file charts/kinds/steps.js
+   * Chart kind — was charts/kinds/steps.js before the kinds moved into this plugin (#131 L3)
    * Chart kind: step functions with an optional confidence band.
    */
 
@@ -1160,7 +1160,7 @@ export function chartKinds(lib) {
   // --------------------------------------------------------------------------
 
   /**
-   * @file charts/kinds/forest.js
+   * Chart kind — was charts/kinds/forest.js before the kinds moved into this plugin (#131 L3)
    * Chart kind: one estimate + CI per study, with a pooled summary diamond.
    */
 
@@ -1362,7 +1362,7 @@ export function chartKinds(lib) {
   // --------------------------------------------------------------------------
 
   /**
-   * @file charts/kinds/sced.js
+   * Chart kind — was charts/kinds/sced.js before the kinds moved into this plugin (#131 L3)
    * Chart kind: single-case experimental design — multiple-baseline panels.
    */
 
@@ -1909,7 +1909,7 @@ export function chartKinds(lib) {
   // --------------------------------------------------------------------------
 
   /**
-   * @file charts/kinds/wordcloud.js
+   * Chart kind — was charts/kinds/wordcloud.js before the kinds moved into this plugin (#131 L3)
    * Chart kind: one field, or partitioned into labelled themes.
    */
 

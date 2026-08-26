@@ -1227,6 +1227,9 @@ export class ProjectSync {
    * never share a driver, or aborting the probe would leave the live one half-configured.
    *
    * @param {object} backend  see storage-backend.js
+   * @param {{applyPlugins?: boolean}} [opts]  `false` when the caller is applying its own
+   *   plugin selection afterwards (the launcher), so the project's own set is not applied
+   *   over it.
    * @returns {Promise<boolean>} whether a project was opened
    */
   async openLocation(backend, { applyPlugins = true } = {}) {
@@ -1287,6 +1290,7 @@ export class ProjectSync {
    * Same discipline as {@link openLocation}: everything before the commit line is
    * side-effect-free, so a cancel or a refusal leaves the project where it was.
    *
+   * @param {object} backend  the destination — see storage-backend.js
    * @returns {Promise<boolean>}
    */
   async moveTo(backend) {
