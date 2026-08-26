@@ -474,8 +474,18 @@ export class ProjectStore {
       const cat = await this.#readCatalog();
       // The summary carries activePlugins too, so the launcher's rail can seed its
       // picker from a project without loading the whole bundle.
-      const summary = { id, name, savedAt, datasetCount: countDatasets(manifest), activePlugins: manifest.activePlugins };
       const idx = cat.entries.findIndex((e) => e.id === id);
+      const summary = {
+        // `lastOpenedAt` is not in the manifest and never will be — it is a fact about
+        // this device, not about the project. The summary is REBUILT here on every save,
+        // so it has to be carried across or a save silently resets "recent".
+        lastOpenedAt: idx >= 0 ? cat.entries[idx].lastOpenedAt : undefined,
+        id,
+        name,
+        savedAt,
+        datasetCount: countDatasets(manifest),
+        activePlugins: manifest.activePlugins,
+      };
       if (idx >= 0) cat.entries[idx] = summary;
       else cat.entries.push(summary);
       await this.#writePlain(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
@@ -573,8 +583,15 @@ export class ProjectStore {
     const release = await this.#acquire();
     try {
       const cat = await this.#readCatalog();
-      const summary = { id, name: manifest.name, savedAt: manifest.savedAt, datasetCount: countDatasets(manifest), activePlugins: manifest.activePlugins ?? null };
       const idx = cat.entries.findIndex((e) => e.id === id);
+      const summary = {
+        lastOpenedAt: idx >= 0 ? cat.entries[idx].lastOpenedAt : undefined, // see #save
+        id,
+        name: manifest.name,
+        savedAt: manifest.savedAt,
+        datasetCount: countDatasets(manifest),
+        activePlugins: manifest.activePlugins ?? null,
+      };
       if (idx >= 0) cat.entries[idx] = summary;
       else cat.entries.push(summary);
       await this.#writePlain(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
@@ -605,6 +622,32 @@ export class ProjectStore {
 
   /** Delete a project bundle and drop it from the catalog. (Not used in flat/folder
    * mode — a folder project is deleted by the user removing the folder.) */
+  /**
+   * Note that a project was opened, for ordering a "recent projects" list (#171).
+   *
+   * Distinct from `savedAt`, and the difference is the whole point: opening a project to
+   * look at it without editing leaves `savedAt` untouched, so ordering by it would never
+   * move that project up the list — which is not what anyone means by recent.
+   *
+   * Best-effort and never throws: failing to remember that you looked at something must
+   * not stop you looking at it.
+   */
+  async markOpened(id, when = Date.now()) {
+    if (this.#flat || id == null) return; // one project per location; nothing to order
+    const release = await this.#acquire();
+    try {
+      const cat = await this.#readCatalog();
+      const e = cat.entries.find((x) => x.id === id);
+      if (!e) return; // never saved — nothing in the catalog to stamp
+      e.lastOpenedAt = when;
+      await this.#writePlain(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
+    } catch {
+      /* the project is open; the ordering hint is a convenience */
+    } finally {
+      release();
+    }
+  }
+
   async delete(id) {
     if (this.#flat) return; // don't blow away the user's picked folder from here
     await this.#driver.removeTree(`${ROOT}/${id}`);

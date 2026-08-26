@@ -1390,6 +1390,9 @@ export class ProjectSync {
    */
   async #afterAttach(backend) {
     try { this.#lastManifest = await this.#store.readManifest(this.#binding.id); } catch { this.#lastManifest = null; }
+    // Record the open. A remote location gets its stamp from remember() below; a local
+    // project has no registry entry, so the catalog carries it.
+    if (backend.kind === 'opfs') await this.#store.markOpened(this.#binding.id);
     if (backend.pollMs) this.#startPoll(backend.pollMs);
     const mark = backend.remember?.();
     if (mark) {
@@ -1726,6 +1729,75 @@ export class ProjectSync {
   /** Remembered project locations — folders and remote alike (sidebar + launcher). */
   listProjectLocations() {
     return listLocations();
+  }
+
+  /**
+   * **Every project this device knows about, wherever it lives** (#171).
+   *
+   * The one list. Until now the app kept two and rendered them separately — the local
+   * catalog and the location registry — which is why a project moved to Dropbox vanished
+   * from the Projects list while one moved to a folder did not, and why the sidebar showed
+   * two rows with the same name and no way to tell them apart.
+   *
+   * The two STORES stay, and that is deliberate: the local catalog is the nested store's
+   * own bookkeeping (it is how the store knows what it holds), and the registry has to
+   * hold `FileSystemDirectoryHandle`s, which only IndexedDB can keep. What changes is that
+   * nothing above this line sees either of them. Location becomes an attribute of a
+   * project rather than a category of project — the whole of #171 in one sentence.
+   *
+   * Ordered by `lastOpenedAt`, falling back to `savedAt` for anything that predates it.
+   *
+   * @returns {Promise<Array<{
+   *   key: string, name: string, kind: string, projectId: (string|number|null),
+   *   locationId: (string|null), savedAt: number, lastOpenedAt: number,
+   *   datasetCount: (number|null), entry: (object|null), isOpen: boolean,
+   * }>>}
+   */
+  async listAllProjects() {
+    const out = [];
+
+    // Local projects, from the store's own catalog.
+    try {
+      for (const p of await this.#opfs.list()) {
+        out.push({
+          key: `opfs:${p.id}`,
+          name: p.name,
+          kind: 'opfs',
+          projectId: p.id,
+          locationId: null,
+          savedAt: p.savedAt ?? 0,
+          lastOpenedAt: p.lastOpenedAt ?? p.savedAt ?? 0,
+          datasetCount: p.datasetCount ?? null,
+          entry: null,
+          isOpen: this.#backend?.kind === 'opfs' && String(this.#binding?.id) === String(p.id),
+        });
+      }
+    } catch { /* local storage unavailable — the remembered locations still stand */ }
+
+    // Everywhere else, from the location registry.
+    try {
+      for (const e of await listLocations()) {
+        out.push({
+          key: `loc:${e.id}`,
+          name: e.name,
+          kind: e.kind,
+          projectId: null,
+          locationId: e.id,
+          savedAt: e.savedAt ?? 0,
+          lastOpenedAt: e.lastOpenedAt ?? e.savedAt ?? 0,
+          datasetCount: null,
+          entry: e,
+          isOpen: this.#activeLocationId === e.id,
+        });
+      }
+    } catch { /* no registry — the local ones still stand */ }
+
+    return out.sort((a, b) => (b.lastOpenedAt || 0) - (a.lastOpenedAt || 0));
+  }
+
+  /** The `n` most recently opened, excluding whichever is open now. */
+  async listRecentProjects(n = 5) {
+    return (await this.listAllProjects()).filter((p) => !p.isOpen).slice(0, n);
   }
 
   /** @deprecated Name kept while call sites migrate; it never meant folders only. */

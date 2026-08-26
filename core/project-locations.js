@@ -147,13 +147,17 @@ export async function rememberFolder(handle, { name, savedAt } = {}) {
         e.kind = 'folder';
         if (name != null) e.name = name;
         e.savedAt = savedAt ?? Date.now();
+        e.lastOpenedAt = Date.now();
         await writeRegistry(reg);
         return e.id;
       }
     } catch { /* stale handle — skip */ }
   }
   const id = globalThis.crypto.randomUUID();
-  reg.push({ id, kind: 'folder', handle, name: name ?? handle.name, savedAt: savedAt ?? Date.now() });
+  reg.push({
+    id, kind: 'folder', handle, name: name ?? handle.name,
+    savedAt: savedAt ?? Date.now(), lastOpenedAt: Date.now(),
+  });
   await writeRegistry(reg);
   return id;
 }
@@ -181,6 +185,9 @@ export async function rememberRemote(kind, config, { name, savedAt } = {}) {
   if (name != null) entry.name = name;
   entry.name = entry.name || kind;
   entry.savedAt = savedAt ?? Date.now();
+  // Every successful open re-remembers, so for a remote location this is genuinely "last
+  // opened", where `savedAt` means the last time we WROTE.
+  entry.lastOpenedAt = Date.now();
   if (!found) reg.push(entry);
   await writeRegistry(reg);
   return entry.id;

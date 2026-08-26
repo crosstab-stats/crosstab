@@ -402,6 +402,14 @@ function promptPassword(title, hint) {
   });
 }
 
+/**
+ * How many recent projects the sidebar shows.
+ *
+ * Five, which is what fits without the navigation list crowding out the open project's
+ * own contents — the thing this panel is actually for. The full list lives in the manager.
+ */
+const SIDEBAR_RECENTS = 5;
+
 /** Minimal text escape for the few interpolations above. */
 function escapeText(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -2412,21 +2420,13 @@ class ProjectSidebar {
   async render() {
     // Reads the project + block catalogs (async); keep only the latest render.
     const token = ++this.#token;
-    let otherProjects = [];
-    let blocks = [];
+    let blocks = []; // local projects now arrive through the merged index (#171)
+    let recents = [];
     try {
-      otherProjects = (await this.projects.listProjects()).filter((p) => p.id !== this.projects.activeId);
+      // One index, most-recently-opened first, the open one already excluded.
+      recents = (await this.projects.listRecentProjects?.(SIDEBAR_RECENTS)) ?? [];
     } catch {
-      /* OPFS unavailable */
-    }
-    let folderProjects = [];
-    try {
-      folderProjects = (await this.projects.listProjectLocations?.()) ?? [];
-      // Exclude the open folder — it's shown in the active-project zone, not "other".
-      const activeFolderId = this.projects.activeFolderId;
-      if (activeFolderId) folderProjects = folderProjects.filter((f) => f.id !== activeFolderId);
-    } catch {
-      /* no remembered folders */
+      /* no index — the rest of the sidebar still renders */
     }
     try {
       blocks = await this.library.list();
@@ -2456,7 +2456,7 @@ class ProjectSidebar {
     this.host.append(this.#projectZone(blockVer));
     const binnedItems = this.itemStore?.binned() ?? [];
     if (binned.length || binnedItems.length) this.host.append(this.#recycleZone(binned, binnedItems));
-    this.host.append(this.#projectsZone(otherProjects, folderProjects));
+    this.host.append(this.#projectsZone(recents));
     this.host.append(this.#blocksZone(blocks));
   }
 
@@ -3130,6 +3130,18 @@ class ProjectSidebar {
    * remote needs a credential this app deliberately never stored. Both end in the same
    * place, which is the point of one list.
    */
+  /**
+   * Open a row from the merged index, whatever kind it is.
+   *
+   * The row knows which project it is; this knows how to get there. A local project is
+   * opened by id, a remembered location by rebuilding its backend — and after that they
+   * are the same call, which is the point of #172 arriving in the UI.
+   */
+  async #openProjectRow(p) {
+    if (p.kind === 'opfs') { await this.projects.openProject(p.projectId); return; }
+    await this.#openLocation(p.entry);
+  }
+
   async #openLocation(entry) {
     const backend = this.makeBackend?.(entry);
     if (!backend) {
@@ -3143,77 +3155,71 @@ class ProjectSidebar {
     }
   }
 
-  #projectsZone(projects, folderProjects = []) {
+  /**
+   * The Projects zone — ONE list, whatever the location (#171).
+   *
+   * It used to render two: local projects, then remembered locations, each with its own
+   * row shape and its own verbs. That is why a project moved to Dropbox appeared nowhere
+   * while a folder one appeared here, and why two copies of one project showed as two
+   * identical names. Location is an attribute of a row now, not a section heading.
+   *
+   * Capped, because this is a CONTENTS panel that happens to offer navigation — the full
+   * list belongs in the project manager (#173), and a sidebar that grows without limit
+   * pushes the open project's own datasets off the screen.
+   */
+  #projectsZone(recents) {
     const frag = document.createDocumentFragment();
-    frag.append(el('div', 'Projects', 'proj__sub proj__sub--zone'));
-    if (projects.length === 0 && folderProjects.length === 0) {
+    frag.append(el('div', 'Recent projects', 'proj__sub proj__sub--zone'));
+    if (!recents.length) {
       frag.append(el('div', 'No other saved projects.', 'proj__empty'));
       return frag;
     }
     const list = document.createElement('ul');
     list.className = 'proj__datasets';
-    for (const p of projects) {
+    for (const p of recents) {
+      // Each row describes where it lives. A local project has no backend to ask, and
+      // needs none: "this browser" is the absence of a location marker.
+      const what = p.kind === 'opfs'
+        ? { kind: 'opfs', glyph: '', label: p.name, detail: '' }
+        : (this.makeBackend?.(p.entry)?.describe()
+          ?? { kind: 'unknown', glyph: '📍', label: p.name, detail: 'cannot reconnect' });
+      const label = p.name || what.label;
       const li = document.createElement('li');
-      li.className = 'proj__ds';
-      li.title = 'Open this project';
-      li.addEventListener('click', () => void this.projects.openProject(p.id));
-      // These rows bypass #contentRow, so they need the same treatment: the name is
-      // the button, because the <li> already contains rename/delete buttons and
-      // cannot itself become one.
-      const name = el('button', p.name, 'proj__ds-name');
-      name.type = 'button';
-      name.setAttribute('aria-label', `Open project ${p.name}`);
-      name.addEventListener('click', (e) => { e.stopPropagation(); void this.projects.openProject(p.id); });
-      name.addEventListener('dblclick', (e) => {
-        e.stopPropagation();
-        this.#inlineRename(li, name, p.name, (v) => this.projects.renameProject(p.id, v));
-      });
-      const edit = iconBtn('✎', 'Rename', (e) => {
-        e.stopPropagation();
-        this.#inlineRename(li, name, p.name, (v) => this.projects.renameProject(p.id, v));
-      }, 'proj__ds-x');
-      const del = iconBtn('✕', 'Delete project', (e) => {
-        e.stopPropagation();
-        void this.projects.deleteProject(p.id);
-      }, 'proj__ds-x');
-      li.append(name, edit, del);
-      list.append(li);
-    }
-    // Remembered folder projects (#143) — external folders (OneDrive/Dropbox/local),
-    // first-class alongside in-browser projects. Click reopens (a permission re-grant
-    // happens on the click); ✕ forgets the entry (leaves the folder's files intact).
-    // One row per remembered LOCATION, whatever kind it is. A project stored remotely
-    // used to appear nowhere at all, while a folder one appeared here — the inconsistency
-    // #171 predicted, and the reason this list is no longer folder-only.
-    for (const f of folderProjects) {
-      // Each location describes itself. There is no table of kinds here any more: adding
-      // Graph or Drive is a backend class, not another row of glyphs in two files.
-      // When a backend cannot be built the entry is still worth showing — but claiming
-      // it is a folder would be a guess, and guessing a kind is what this refactor removes.
-      const what = this.makeBackend?.(f)?.describe()
-        ?? { kind: 'unknown', glyph: '📍', label: f.name, detail: 'cannot reconnect' };
-      const label = f.name || what.label;
-      const li = document.createElement('li');
-      li.className = `proj__ds proj__ds--folder proj__ds--${what.kind}`;
-      li.title = `Reopen ${label}${what.detail ? ` (${what.detail})` : ''}`;
-      const open = () => void this.#openLocation(f);
+      li.className = `proj__ds proj__ds--${what.kind}`;
+      li.title = `Open ${label}${what.detail ? ` (${what.detail})` : ''}`;
+      const open = () => void this.#openProjectRow(p);
       li.addEventListener('click', open);
-      const name = el('button', `${what.glyph} ${label}`, 'proj__ds-name');
+
+      const name = el('button', what.glyph ? `${what.glyph} ${label}` : label, 'proj__ds-name');
       name.type = 'button';
-      name.setAttribute('aria-label', `Reopen ${label}${what.detail ? ` (${what.detail})` : ''}`);
+      name.setAttribute('aria-label', `Open ${label}${what.detail ? ` (${what.detail})` : ''}`);
       name.addEventListener('click', (e) => { e.stopPropagation(); open(); });
-      // WHERE, beside the name. Two copies of one project can now legitimately coexist —
-      // a move off a folder leaves the folder copy in place — and without this the list
-      // shows the same name twice with no way to tell which row is which.
-      const where = what.detail ? el('span', what.detail, 'proj__ds-where') : null;
-      const forget = iconBtn('✕', 'Forget this location (keeps its files)', (e) => {
-        e.stopPropagation();
-        void this.projects.forgetFolderProject(f.id);
-      }, 'proj__ds-x');
-      li.append(name, ...(where ? [where] : []), forget);
+      // Renaming in place still works for a local project, where the catalog owns the
+      // name. A remembered location's name comes from the project inside it, so it is
+      // renamed by opening it — not from this list.
+      if (p.kind === 'opfs') {
+        const rename = () => this.#inlineRename(li, name, p.name, (v) => this.projects.renameProject(p.projectId, v));
+        name.addEventListener('dblclick', (e) => { e.stopPropagation(); rename(); });
+      }
+      li.append(name);
+      // WHERE, beside the name: two copies of one project can legitimately coexist, and
+      // without this the list shows the same name twice with no way to tell them apart.
+      if (what.detail) li.append(el('span', what.detail, 'proj__ds-where'));
       list.append(li);
     }
     frag.append(list);
+
+    // Destructive verbs are deliberately NOT here. Delete and forget used to sit one
+    // hover away from the row that opens the thing, which is a poor place for "this is
+    // gone" — they belong in the manager, where consequences can be stated (#173).
+    // Rendered only once there is a manager to open — a button that does nothing is
+    // worse than an absent one.
+    if (this.openManager) {
+      const more = el('button', 'Manage projects…', 'proj__add');
+      more.type = 'button';
+      more.addEventListener('click', () => void this.openManager());
+      frag.append(more);
+    }
     return frag;
   }
 

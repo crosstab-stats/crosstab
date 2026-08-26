@@ -206,11 +206,10 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
       ### Open questions remaining
 
-      - Should "also delete the files" default to **checked or unchecked**? Unchecked is the
-        safe default, but it is also how storage quietly fills up — which is the complaint
-        that prompted this. A middle answer: default it checked for the app's OWN storage
-        (where the files are unambiguously ours) and unchecked for a folder or cloud
-        location (where they are not).
+      - **Settled: "also delete the files" defaults UNCHECKED**, everywhere, including the
+        app's own storage (owner, 2026-08-25): "at least that way removing files is an
+        explicit affirmative act." Consistency beats the middle answer — a checkbox whose
+        default changes with context teaches nobody anything.
       - Should Manage show **space used per project**? It is the information that makes a
         cleanup screen actionable rather than a list of names, and the asset tally already
         exists — but per-project size needs a walk of each project's tree.
@@ -379,6 +378,31 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       time** — the probe-then-commit ordering, the abort paths, the occupied-destination
       refusal, remembering only on success. Those are the exact behaviours the four bugs
       lived in, and they are currently verified by hand or not at all.
+
+- [~] **#171 — WHERE a project lives is not WHICH project is open (user, 2026-08-24).
+      THE INDEX IS BUILT (2026-08-25); the manager that consumes it is #173.**
+
+      `listAllProjects()` returns every project this device knows about, wherever it lives,
+      most-recently-opened first, with location as an attribute of a row. The sidebar
+      renders ONE list from it instead of two, capped at five, with the location shown
+      beside the name.
+
+      **The two stores stay, deliberately.** The local catalog is the nested store's own
+      bookkeeping — it is how the store knows what it holds — and the registry has to keep
+      `FileSystemDirectoryHandle`s, which only IndexedDB can. What changed is that nothing
+      above `listAllProjects()` sees either of them.
+
+      `lastOpenedAt` is added and, more importantly, SURVIVES A SAVE: both catalog writers
+      rebuild their summary from the manifest, and the stamp is not in the manifest and
+      never will be, since it is a fact about this device rather than about the project.
+      Without the carry-across the first autosave after opening would have reset it, and
+      "recent" would have quietly gone back to meaning "recently saved". Seven tests, using
+      the first in-memory driver — which is also the first time `ProjectStore` has been
+      testable at all.
+
+      **Destructive verbs left the sidebar** (delete, forget) — they sat one hover from the
+      row that opens the thing. They land in #173's Manage tab, where consequences can be
+      stated. Original:
 
 - [ ] **#171 — WHERE a project lives is not WHICH project is open (user, 2026-08-24).**
       "When you open Word and see the recents list, it doesn't matter where each document
