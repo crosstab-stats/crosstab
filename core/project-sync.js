@@ -1380,6 +1380,13 @@ export class ProjectSync {
   #adopt(backend) {
     this.#store.lock();
     this.#backend = backend;
+    // Clear the OLD location marker here, not in #afterAttach. #afterAttach only sets it
+    // when the new backend has a registry entry, and local storage has none — so opening a
+    // local project while a folder was open left the folder's id in place. The folder then
+    // claimed to be open alongside the project that actually was, and because "open" hides
+    // the Open action, it could not be reached again. Whatever we are adopting, we are no
+    // longer at the previous location.
+    this.#activeLocationId = null;
     this.#store.useDriver(backend.driver());
   }
 

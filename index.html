@@ -176,6 +176,9 @@
       .ctpm__row.is-open { background: #eef5fb; }
       .ctpm__rowmain { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 10px;
         font: inherit; text-align: left; border: 0; background: none; cursor: pointer; padding: 9px 10px; }
+      /* the open project: present so the list is complete, inert because there is nothing
+         to do to it from here */
+      .ctpm__rowmain:disabled { cursor: default; opacity: .85; }
       .ctpm__name { font-weight: 600; color: #1a1a1a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .ctpm__where { font-size: 12px; color: #646e77; white-space: nowrap; }
       .ctpm__acts { display: flex; gap: 4px; padding-right: 8px; }

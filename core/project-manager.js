@@ -251,7 +251,10 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
     /** A flat list of projects — Recents and Manage differ only in which verbs show. */
     function renderList(rows, { verb }) {
       const list = el('div', 'ctpm__list');
-      const shown = verb === 'manage' ? rows : rows.filter((r) => !r.isOpen).slice(0, 8);
+      // The open project is SHOWN, marked, in every tab. Filtering it out made the list
+      // look like it had forgotten the thing you are working on, and made rows jump
+      // position depending on what happened to be open.
+      const shown = verb === 'manage' ? rows : rows.slice(0, 8);
       if (!shown.length) {
         body.append(el('div', 'ctpm__empty', 'No projects yet. Open one, or start a new one.'));
         return;
@@ -263,7 +266,10 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
         main.type = 'button';
         main.append(el('span', 'ctpm__name', `${what.glyph ? `${what.glyph} ` : ''}${row.name}`));
         main.append(el('span', 'ctpm__where', row.isOpen ? 'Open now' : what.detail));
-        main.addEventListener('click', () => void act(row.isOpen ? 'close' : 'open', row));
+        // Clicking the open project's NAME used to close it — a destructive-ish action on
+        // the one target nobody aims at deliberately. The row is inert; Close is a button.
+        if (row.isOpen) main.disabled = true;
+        else main.addEventListener('click', () => void act('open', row));
         item.append(main);
         if (verb === 'manage') {
           const acts = el('div', 'ctpm__acts');
@@ -306,11 +312,19 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
           return;
         }
         // Open: this provider's known projects, then a way to reach a new one.
-        const mine = rows.filter((r) => r.kind === provider.kind && !r.isOpen);
+        const mine = rows.filter((r) => r.kind === provider.kind);
         for (const row of mine) {
-          const b = el('button', 'ctpm__rowmain', row.name);
+          const b = el('button', 'ctpm__rowmain');
           b.type = 'button';
-          b.addEventListener('click', () => void act('open', row));
+          b.append(el('span', 'ctpm__name', row.name));
+          if (row.isOpen) {
+            // Present but inert, for the same reason as the list: a complete picture beats
+            // a shorter one, and there is nothing to do to the project you are in.
+            b.append(el('span', 'ctpm__where', 'Open now'));
+            b.disabled = true;
+          } else {
+            b.addEventListener('click', () => void act('open', row));
+          }
           pane.append(b);
         }
         if (!mine.length) pane.append(el('p', 'ctpm__hint', `No projects known here yet.`));
