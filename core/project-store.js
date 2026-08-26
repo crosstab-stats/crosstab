@@ -44,6 +44,17 @@ const isSourceOp = (op) => SOURCE_TYPES.has(op?.type);
 const ENC_META = 'crosstab-encryption.json'; // plaintext salt/verifier/epoch for the folder
 /** A fresh key-epoch id — see {@link ProjectStore#keyStatus}. */
 const newEpoch = () => (globalThis.crypto?.randomUUID?.() ?? String(Math.random()).slice(2));
+/**
+ * Is this one of CrossTab's source Parquet files?
+ *
+ * Exported and used everywhere the question is asked — the save sweep, the
+ * occupied-destination check, and the delete-files path. It was previously open-coded in
+ * the sweep and hand-written from a STALE DOC COMMENT elsewhere (`ds<id>_src<n>.parquet`,
+ * a naming this code has not used for a long time), so the delete path silently matched
+ * nothing and left every source file behind.
+ */
+export const isSourceFile = (name) => typeof name === 'string' && name.startsWith('src_') && name.endsWith('.parquet');
+
 const MARKER = 'crosstab-project.json'; // plaintext "this folder IS a CrossTab project" + display name
 const VERIFIER = 'crosstab-folder-v1'; // known token, encrypted, to check a passphrase on unlock
 
@@ -109,7 +120,7 @@ export class ProjectStore {
   #rekeyPending = false;
 
   /** **Flat, single-project layout** — for folder mode. The picked folder IS the
-   * project: files live directly in it (`project.json`, `ds<id>_src<n>.parquet`,
+   * project: files live directly in it (`project.json`, `src_<opId>.parquet`,
    * `crosstab-encryption.json`, a `crosstab-project.json` marker) with NO `projects/`
    * prefix, NO per-project id subdir, and NO catalog. OPFS keeps its nested
    * multi-project layout. So "a project is a folder" (like a Logic/git/.app bundle). */
@@ -389,6 +400,28 @@ export class ProjectStore {
   /** @returns {Promise<boolean>} Whether a given project already has encryption set
    * up (its `crosstab-encryption.json` present) — so an open flow knows to *enter* an
    * existing passphrase vs *set* a new one. Per-project in nested (OPFS) mode. */
+  /**
+   * Does this location already hold CrossTab files — a project, or the remains of one?
+   *
+   * Broader than "is there a project here" on purpose. A folder can contain source Parquet
+   * with no manifest (an interrupted move, a half-deleted project), and that reads as EMPTY
+   * to a manifest check. Moving in then succeeded, and the save sweep — which removes
+   * source files the manifest does not claim — quietly ate them.
+   *
+   * Only ever looks for OUR files. Someone else's documents in the same folder are not
+   * occupancy and are none of our business.
+   */
+  async looksOccupied(id = FOLDER_PROJECT_ID) {
+    if (await this.hasEncryption(id)) return 'a protected project';
+    if ((await this.list()).length) return 'a project';
+    try {
+      const here = await this.#driver.list(this.#flat ? '' : `${ROOT}/${id}`);
+      if (here.some(isSourceFile)) return 'data files from a CrossTab project';
+      if (here.includes(MARKER)) return 'a CrossTab project marker';
+    } catch { /* unreadable — the checks above are what matter */ }
+    return null;
+  }
+
   async hasEncryption(id = FOLDER_PROJECT_ID) {
     return !!(await this.#driver.read(this.#metaPath(id)));
   }
@@ -665,7 +698,7 @@ export class ProjectStore {
    * Write only the Parquet sources of a bundle (no `project.json`) — the folder-sync
    * step that lands *my* data so a merged manifest's file refs resolve, while
    * {@link folder-sync} owns `project.json` via the merge (#143). File names match
-   * {@link buildManifest}'s (`ds<id>_src<n>.parquet`).
+   * {@link buildManifest}'s (`src_<opId>.parquet`).
    * @param {string} id
    * @param {object} bundle
    * @param {Set<number>} [only]  dataset ids to write; omit for all.
@@ -722,7 +755,7 @@ export class ProjectStore {
         else if (op.type === 'addAsset' && op.payload?.id) keep.add(`${ASSET_DIR}/${safeAssetId(op.payload.id)}.bin`);
       }
       for (const name of await this.#driver.list(this.#flat ? '' : `${ROOT}/${id}`)) {
-        if (!name.startsWith('src_') || !name.endsWith('.parquet')) continue;
+        if (!isSourceFile(name)) continue;
         if (!keep.has(name)) await this.#driver.remove(this.#file(id, name));
       }
       for (const assetId of await this.listAssets(id)) {
@@ -865,7 +898,7 @@ export class ProjectStore {
   }
 
   /** Write each dataset's Parquet sources (all datasets, or only those in `only`).
-   * Source ops are numbered in recipe order → `ds<id>_src<n>.parquet`, matching
+   * Sources are named by the op that created them → `src_<opId>.parquet`, matching
    * {@link buildManifest}'s file refs. */
   async #writeSources(id, bundle, only) {
     const dsIdOf = (op) => { const m = /^ds:([^/]+)\//.exec(op.target); return m ? m[1] : null; };
@@ -886,7 +919,7 @@ export class ProjectStore {
  * refs, no bytes) from an in-memory bundle — the exact shape {@link ProjectStore#save}
  * writes and {@link module:core/collab-sync~mergeProjects} merges. Pure, so it also
  * produces "my" manifest for a folder sync without touching disk. File refs follow
- * `ds<id>_src<n>.parquet` (matching {@link ProjectStore#writeSourcesOnly}).
+ * `src_<opId>.parquet` (matching {@link ProjectStore#writeSourcesOnly}).
  *
  * @param {{name: string, savedAt: number, bundle: object}} arg
  * @returns {object} the manifest

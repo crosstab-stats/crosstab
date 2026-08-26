@@ -17,7 +17,7 @@
 import { CoreEvents } from './event-bus.js';
 import { DATASETS_CHANGED } from './dataset-manager.js';
 import { ASSETS_CHANGED } from './asset-store.js';
-import { ProjectStore, FOLDER_PROJECT_ID, buildManifest } from './project-store.js';
+import { ProjectStore, FOLDER_PROJECT_ID, buildManifest, isSourceFile } from './project-store.js';
 import { attachLiveDoc } from './live-sync.js';
 import { BlobExchange, sourceRefs, assetRefs } from './gap-fill.js';
 import { debug } from './debug.js';
@@ -1310,8 +1310,14 @@ export class ProjectSync {
     try {
       const probe = new ProjectStore();
       probe.useDriver(backend.driver());
-      if ((await probe.hasEncryption()) || (await probe.list()).length > 0) {
-        this.#results.appendError(`${what.label} already holds a CrossTab project — open it instead.`);
+      const occupied = await probe.looksOccupied();
+      if (occupied) {
+        // Refusing beats sweeping. The save sweep removes source files the manifest does
+        // not claim, so moving into a location holding another project's leftovers would
+        // silently destroy them — which is exactly what happened once.
+        this.#results.appendError(
+          `${what.label} already holds ${occupied} — open it instead, or clear it first if you are sure.`,
+        );
         return false;
       }
     } catch (err) {
@@ -1842,8 +1848,11 @@ export class ProjectSync {
     // Sources and assets are named by the manifest rather than fixed, so they are read
     // from what is actually there rather than guessed.
     try {
+      // The shared predicate, NOT a pattern written from memory. The first version of this
+      // matched `ds<id>_src<n>.parquet` — a naming taken from a stale doc comment and used
+      // nowhere in the code — so it removed everything except the actual data.
       for (const name of await driver.list('')) {
-        if (/^ds\d+_src\d+\.parquet$/.test(name)) names.add(name);
+        if (isSourceFile(name)) names.add(name);
       }
       for (const name of await driver.list('assets')) names.add(`assets/${name}`);
     } catch { /* an unreadable listing just means fewer files removed */ }

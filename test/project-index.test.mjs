@@ -10,7 +10,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ProjectStore } from '../core/project-store.js';
+import { ProjectStore, isSourceFile } from '../core/project-store.js';
 
 /** An in-memory driver: paths to bytes, and nothing else. */
 function memoryDriver() {
@@ -111,4 +111,46 @@ test('two projects list most-recently-saved first', async () => {
   await s.save({ id: 'old', name: 'Old', savedAt: 1000, bundle: bundle() });
   await s.save({ id: 'new', name: 'New', savedAt: 9000, bundle: bundle() });
   assert.deepEqual((await s.list()).map((e) => e.id), ['new', 'old']);
+});
+
+// --- what counts as ours, and what counts as occupied ------------------------
+
+test('isSourceFile matches the naming the code actually uses', () => {
+  // The bug this replaces: the delete path was written from a doc comment claiming
+  // `ds<id>_src<n>.parquet`, a naming nothing has produced for a long time. It therefore
+  // matched nothing, and "delete the files" left every byte of data behind while removing
+  // the manifest around it — the worst of both outcomes.
+  assert.ok(isSourceFile('src_op-56506a68-00b4-4a07-871e-7f0a8c.parquet'));
+  assert.ok(isSourceFile('src_1.parquet'));
+  assert.ok(!isSourceFile('ds1_src0.parquet'), 'the naming from the stale comment');
+  assert.ok(!isSourceFile('project.json'));
+  assert.ok(!isSourceFile('src_notes.txt'));
+  assert.ok(!isSourceFile('my_src_data.parquet'), 'must START with src_');
+  assert.ok(!isSourceFile(undefined));
+});
+
+test('a location holding another project’s data files reads as occupied', async () => {
+  // Moving in would have succeeded, and the save sweep — which removes source files the
+  // manifest does not claim — would then have deleted them. A manifest check alone sees
+  // an empty folder, which is how that happened.
+  const s = store();
+  s.useDriver(memoryDriver(), { flat: true });
+  await s.writePlainFile('src_op-abc.parquet', 'data');
+  assert.match(await s.looksOccupied(), /data files/);
+});
+
+test('someone else’s documents are not occupancy', async () => {
+  // Only ever our own files. A folder with the user's notes in it is a perfectly good
+  // place to put a project, and refusing would be presumptuous.
+  const s = store();
+  s.useDriver(memoryDriver(), { flat: true });
+  await s.writePlainFile('notes.txt', 'hello');
+  await s.writePlainFile('analysis.docx', 'x');
+  assert.equal(await s.looksOccupied(), null);
+});
+
+test('an empty location is free', async () => {
+  const s = store();
+  s.useDriver(memoryDriver(), { flat: true });
+  assert.equal(await s.looksOccupied(), null);
 });
