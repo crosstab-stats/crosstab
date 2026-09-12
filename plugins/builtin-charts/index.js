@@ -85,6 +85,7 @@ export function chartKinds(lib) {
     PALETTES, DEFAULT_PALETTE, colorFor, paletteControl, legendControl,
     valueLabelsControl, gridlinesControl, hasRawValues, pointOverlayControl,
     errorBarsControl, titleControls, axisControls, valueLabelFormatControls,
+    pointSizeControl, showPointsControl, markControl, summaryControl, yMeasureControl,
     W, H, FONT, AXIS, GRID, errorSvg, text, r, esc, clip, fmtNum,
     computeStats, errorBounds, jitterOffsets, minorTicks, niceTicks, niceNum,
     legendBlock, ordered, svgOpen, svgOpenH, chartAltText,
@@ -121,23 +122,17 @@ export function chartKinds(lib) {
     controls: (model) => {
       const multi = (model.series || []).length > 1;
       return [
-      {
-        id: 'mark', label: 'Type', type: 'select', structural: true, group: 'Chart', default: 'bar',
-        options: [['bar', 'Bars'], ['line', 'Lines']],
-      },
+      markControl([['bar', 'Bars'], ['line', 'Lines']], 'bar'),
       // Counts vs percent is a way of SHOWING the same numbers, so it belongs
       // here and not in a dialog that has already closed. Offered only when the
       // model says its values are case counts — a percentage of a group mean
       // would be nonsense, so the control is absent rather than disabled.
-      ...(model.counts ? [{
-        id: 'yMeasure', label: 'Y axis shows', type: 'select', structural: true, group: 'Chart', default: 'count',
-        options: [
-          ['count', 'Count'],
-          // Which percent is meant follows from the shape of the data, so the
-          // option says which one it is rather than leaving the reader to guess.
-          ['percent', multi ? 'Percent within each category' : 'Percent of all cases'],
-        ],
-      }] : []),
+      // Which percent is meant follows from the shape of the data, so the option
+      // says which one it is rather than leaving the reader to guess.
+      ...(model.counts ? [yMeasureControl([
+        ['count', 'Count'],
+        ['percent', multi ? 'Percent within each category' : 'Percent of all cases'],
+      ])] : []),
       // Stacking is meaningless for lines and for a single series. The line half is a
       // view dependency; the single-series half is a fact about the model, so it is
       // settled here by omitting the control rather than carried as a predicate.
@@ -447,10 +442,7 @@ export function chartKinds(lib) {
       ...(model.trend
         ? [{ id: 'trendLine', group: 'Chart', label: 'Trend line', type: 'check', default: false }]
         : []),
-      {
-        id: 'pointSize', label: 'Point size', type: 'select', group: 'Style', valueType: 'number', default: 4,
-        options: [['3', 'Small'], ['4', 'Medium'], ['6', 'Large']],
-      },
+      pointSizeControl({ default: 4 }),
       gridlinesControl(),
       paletteControl(multi),
       legendControl(multi, 'right'),
@@ -730,18 +722,12 @@ export function chartKinds(lib) {
     // what decides whether a palette and legend have anything to say.
     const multi = reps.length > 1 || (model.groups || []).length > 1;
     return [
-      { id: 'showPoints', label: 'Show data points', type: 'check', group: 'Chart', default: true },
-      {
-        id: 'pointSize', label: 'Point size', type: 'number', min: 1, max: 10, step: 0.5, group: 'Style', default: 3,
-        // Note this is the SAME declaration as the boxplot's point-size dependency, even
-        // though that kind defaults `showPoints` off and this one defaults it on. Naming
-        // the control instead of the view key is what makes the two identical.
-        visibleWhen: { control: 'showPoints', truthy: true },
-      },
-      {
-        id: 'summary', label: 'Summary', type: 'select', group: 'Chart', default: 'median',
-        options: [['median', 'Median + quartiles'], ['mean', 'Mean + SD'], ['none', 'None']],
-      },
+      showPointsControl({ default: true }),
+      // Identical to the boxplot's, including the dependency, even though that
+      // kind defaults `showPoints` off and this one defaults it on: naming the
+      // CONTROL rather than the view key is what lets one builder serve both.
+      pointSizeControl({ default: 3, visibleWhen: { control: 'showPoints', truthy: true } }),
+      summaryControl([['median', 'Median + quartiles'], ['mean', 'Mean + SD'], ['none', 'None']], 'median'),
       // The SuperPlot convention (Lord et al. 2020): colour points by biological
       // replicate and mark each replicate's MEAN, so the reader sees that the effect
       // reproduces across experiments rather than across pooled cells.
@@ -930,11 +916,8 @@ export function chartKinds(lib) {
         default: 'direction',
         options: [['direction', 'Direction of change'], ['subject', 'Subject'], ['none', 'One colour']],
       },
-      { id: 'showPoints', label: 'Show data points', type: 'check', group: 'Chart', default: true },
-      {
-        id: 'summary', label: 'Summary', type: 'select', group: 'Chart', default: 'mean',
-        options: [['mean', 'Mean per condition'], ['none', 'None']],
-      },
+      showPointsControl({ default: true }),
+      summaryControl([['mean', 'Mean per condition'], ['none', 'None']], 'mean'),
       gridlinesControl(),
       paletteControl(true),
       legendControl(true, 'none'),
@@ -1045,13 +1028,10 @@ export function chartKinds(lib) {
     controls: (model) => {
       const multi = (model.groups || []).length > 1;
       return [
-      { id: 'showPoints', label: 'Show data points', type: 'check', group: 'Chart', default: false },
+      showPointsControl({ default: false }),
       { id: 'showMean', label: 'Mark the mean', type: 'check', group: 'Chart', default: false },
       { id: 'boxWidth', label: 'Box width', type: 'number', min: 0.2, max: 1, step: 0.1, group: 'Chart', default: 0.7 },
-      {
-        id: 'pointSize', label: 'Point size', type: 'number', min: 1, max: 10, step: 0.5, group: 'Style', default: 3,
-        visibleWhen: { control: 'showPoints', truthy: true },
-      },
+      pointSizeControl({ default: 3, visibleWhen: { control: 'showPoints', truthy: true } }),
       gridlinesControl(),
       paletteControl(multi),
       legendControl(multi, 'none'),
@@ -1679,10 +1659,7 @@ export function chartKinds(lib) {
       // staircase and the condition labels instead — which is the convention's whole point.
       const notMono = { control: 'mono', truthy: false };
       return [
-      {
-        id: 'mark', label: 'Type', type: 'select', structural: true, group: 'Chart', default: 'both',
-        options: [['both', 'Points + lines'], ['points', 'Points only'], ['line', 'Lines only']],
-      },
+      markControl([['both', 'Points + lines'], ['points', 'Points only'], ['line', 'Lines only']], 'both'),
       { id: 'connectAcross', label: 'Connect across phase change', type: 'check', group: 'Chart', default: false },
       { id: 'phaseLines', label: 'Phase change lines', type: 'check', group: 'Phases', default: true },
       {
@@ -1714,7 +1691,7 @@ export function chartKinds(lib) {
         ? [{ id: 'sharedY', label: 'Same Y scale on all panels', type: 'check', group: 'Panels', default: true }]
         : []),
       { id: 'panelHeight', label: 'Panel height', type: 'number', min: 70, max: 320, step: 10, group: 'Panels', default: 130 },
-      { id: 'pointSize', label: 'Point size', type: 'number', min: 1, max: 10, step: 0.5, group: 'Style', default: 3.5 },
+      pointSizeControl({ default: 3.5 }),
       { id: 'yTickCount', label: 'Y tick count', type: 'number', min: 2, max: 11, step: 1, group: 'Style', default: 5 },
       gridlinesControl(),
       multi ? { ...paletteControl(true), visibleWhen: notMono } : null,
@@ -2366,10 +2343,7 @@ export function chartKinds(lib) {
           visibleWhen: { control: 'binMode', equals: 'custom' },
         },
         { id: 'edgeTicks', label: 'Mark the boundaries', type: 'check', group: 'Bins', default: false },
-        {
-          id: 'yMeasure', label: 'Y axis shows', type: 'select', group: 'Chart', structural: true, default: 'count',
-          options: [['count', 'Count'], ['percent', 'Percent of all cases'], ['density', 'Density']],
-        },
+        yMeasureControl([['count', 'Count'], ['percent', 'Percent of all cases'], ['density', 'Density']]),
         { id: 'normalCurve', label: 'Normal curve', type: 'check', group: 'Chart', default: false },
         { id: 'showStats', label: 'Show mean, SD and N', type: 'check', group: 'Chart', default: false },
         { id: 'barGap', label: 'Gap between bars', type: 'number', group: 'Chart', min: 0, max: 0.5, step: 0.05, default: 0 },

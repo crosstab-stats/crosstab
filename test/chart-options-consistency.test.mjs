@@ -52,22 +52,60 @@ test('every kind has a model here — a new kind must be added to this file', ()
   for (const n of names) assert.ok(MODELS[n], `no test model for the "${n}" chart kind`);
 });
 
-test('a control id means one thing: the same section and the same label everywhere', () => {
-  const seen = new Map(); // id -> { kind, group, label }
+test('a control id means one thing: same section, same name, same widget', () => {
+  // The WIDGET matters as much as the wording, and is easier to miss: the
+  // scatter's point size was a three-option select (Small/Medium/Large) while
+  // the violin, boxplot and SCED charts used a number spinner. Same id, same
+  // label, same section — and two different controls.
+  //
+  // `default` is deliberately not compared. A default is what every chart that
+  // never touched the control is currently drawn with, so it is a per-kind
+  // aesthetic judgement, and unifying defaults here would restyle charts that
+  // are already saved.
+  const seen = new Map(); // id -> { kind, group, label, type }
   const drift = [];
   for (const n of names) {
     for (const c of describe(n).controls) {
       const first = seen.get(c.id);
-      if (!first) { seen.set(c.id, { kind: n, group: c.group, label: c.label }); continue; }
-      if (first.group !== c.group) {
-        drift.push(`${c.id}: "${first.kind}" files it under ${first.group}, "${n}" under ${c.group}`);
-      }
-      if (first.label !== c.label) {
-        drift.push(`${c.id}: "${first.kind}" calls it "${first.label}", "${n}" calls it "${c.label}"`);
+      if (!first) { seen.set(c.id, { kind: n, group: c.group, label: c.label, type: c.type }); continue; }
+      for (const field of ['group', 'label', 'type']) {
+        if (first[field] !== c[field]) {
+          drift.push(`${c.id} (${field}): "${first.kind}" has ${first[field]}, "${n}" has ${c[field]}`);
+        }
       }
     }
   }
   assert.deepEqual(drift, [], `\n  ${drift.join('\n  ')}\n`);
+});
+
+test('a control shared by several kinds is built in ONE place', () => {
+  // The check above exists to fail; this one exists so it rarely has to.
+  // Anything more than one kind declares should come from a shared builder in
+  // core/charts/stdlib.js, so agreement is structural rather than something a
+  // test keeps catching after the fact.
+  const uses = new Map();
+  for (const n of names) {
+    for (const c of describe(n).controls) {
+      if (!uses.has(c.id)) uses.set(c.id, []);
+      uses.get(c.id).push(n);
+    }
+  }
+  // Held as an explicit list so that adding a duplicated inline control is a
+  // decision someone makes here, not an accident nobody sees.
+  const FROM_A_BUILDER = new Set([
+    'mark', 'yMeasure', 'summary', 'pointSize', 'showPoints',
+    'palette', 'legend', 'gridlines', 'valueLabels',
+    'valueLabelSize', 'valueLabelBold', 'valueLabelItalic',
+    'titleText', 'titleSize', 'titleBold', 'titleItalic',
+    'pointOverlay', 'errorBars',
+  ]);
+  const axisish = (id) => /^[xy]Axis|^[xy]Title/.test(id);
+  const unaccounted = [...uses]
+    .filter(([, ks]) => ks.length > 1)
+    .map(([id]) => id)
+    .filter((id) => !FROM_A_BUILDER.has(id) && !axisish(id));
+  assert.deepEqual(unaccounted, [],
+    `declared by several kinds but from no shared builder: ${unaccounted.join(', ')}`);
 });
 
 test('sections appear in one order, on every kind', () => {

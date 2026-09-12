@@ -160,6 +160,78 @@ export function axisControls(axis, model) {
 }
 
 /** Value label formatting controls (size, bold, italic). */
+/**
+ * Whether a distribution chart draws its individual observations.
+ *
+ * Paired with {@link pointSizeControl}, which several kinds show only when this
+ * is on — naming the CONTROL rather than the view key is what lets one builder
+ * serve kinds that default it on and kinds that default it off.
+ *
+ * @param {{default?: boolean}} [opts]
+ */
+export function showPointsControl({ default: dflt = true } = {}) {
+  return { id: 'showPoints', label: 'Show data points', type: 'check', group: 'Chart', default: dflt };
+}
+
+/**
+ * Point size, wherever a chart draws points.
+ *
+ * Four kinds hand-wrote this and they had already drifted apart in a way a
+ * group-and-label check does not see: the scatter's was a three-option SELECT
+ * (Small/Medium/Large) while the violin, boxplot and SCED charts used a number
+ * spinner. Same control, same name, two different widgets.
+ *
+ * `default` stays the caller's, deliberately. A control's default is what every
+ * chart that never touched it is currently drawn with, so unifying defaults here
+ * would silently restyle saved charts — the numbers differ because a dense
+ * scatter and a five-point SCED panel want different dots, which is a judgement
+ * each kind is entitled to.
+ *
+ * @param {{default?: number, visibleWhen?: object}} [opts]
+ */
+export function pointSizeControl({ default: dflt = 3, visibleWhen } = {}) {
+  return {
+    id: 'pointSize', label: 'Point size', type: 'number', group: 'Style',
+    min: 1, max: 10, step: 0.5, default: dflt, ...(visibleWhen ? { visibleWhen } : {}),
+  };
+}
+
+/**
+ * What mark the chart draws. The OPTIONS are the kind's own — bars or lines for
+ * a categorical chart, points and/or lines for a single-case design — but the
+ * id, name and section are everyone's.
+ *
+ * @param {[string,string][]} options
+ * @param {string} dflt
+ */
+export function markControl(options, dflt) {
+  return { id: 'mark', label: 'Type', type: 'select', structural: true, group: 'Chart', default: dflt, options };
+}
+
+/**
+ * The summary a distribution chart overlays on its points (median + quartiles,
+ * mean + SD, none). Options are the kind's; the wording is not.
+ *
+ * @param {[string,string][]} options
+ * @param {string} dflt
+ */
+export function summaryControl(options, dflt) {
+  return { id: 'summary', label: 'Summary', type: 'select', group: 'Chart', default: dflt, options };
+}
+
+/**
+ * What the y axis measures — counts, percentages, density. Distinct from a pie's
+ * "Label shows", which changes the text in a label rather than the scale.
+ *
+ * @param {[string,string][]} options
+ */
+export function yMeasureControl(options) {
+  return {
+    id: 'yMeasure', label: 'Y axis shows', type: 'select', structural: true,
+    group: 'Chart', default: 'count', options,
+  };
+}
+
 export function valueLabelFormatControls() {
   const dep = { control: 'valueLabels', truthy: true };
   return [
