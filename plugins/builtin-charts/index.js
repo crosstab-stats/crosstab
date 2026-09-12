@@ -554,7 +554,16 @@ export function chartKinds(lib) {
         { id: 'pieRotation', group: 'Chart', label: 'Rotate (°)', type: 'number', min: 0, max: 360, step: 15, wrap: 360, default: 0 },
         paletteControl(multi),
         legendControl(multi, 'right'),
-        valueLabelsControl('Show %'),
+        // The switch stays `valueLabels` and keeps its meaning, so every pie
+        // already saved keeps exactly the labels it was saved with; the new
+        // control only says WHAT goes in them, defaulting to the percent that
+        // was previously the only choice.
+        valueLabelsControl('Show labels on slices'),
+        {
+          id: 'pieLabel', label: 'Label shows', type: 'select', group: 'Labels', default: 'percent',
+          options: [['percent', 'Percent'], ['count', 'Count (N)'], ['both', 'Percent and count']],
+          visibleWhen: { control: 'valueLabels', truthy: true },
+        },
       ];
     },
     render: (model, view) => renderPie(model, view),
@@ -587,12 +596,20 @@ export function chartKinds(lib) {
       } else {
         out.push(`<path d="${arcPath(cx, cy, radius, a0, a1)}" fill="${color}" stroke="#fff" stroke-width="1.5"/>`);
       }
-      if (view.valueLabels && frac > 0.03) {
+      // A wedge only holds so much text, and the wider the label the wider the
+      // wedge has to be — so the cutoff moves with what is being written rather
+      // than being one number tuned for "34%".
+      const mode = view.pieLabel || 'percent';
+      const minFrac = mode === 'both' ? 0.05 : 0.03;
+      if (view.valueLabels && frac > minFrac) {
+        const pct = `${Math.round(frac * 100)}%`;
+        const n = fmtNum(s.value);
+        const label = mode === 'count' ? n : mode === 'both' ? `${pct} (${n})` : pct;
         const mid = (a0 + a1) / 2;
         const lr = radius * 0.62;
         const lx = cx + lr * Math.cos((mid * Math.PI) / 180);
         const ly = cy + lr * Math.sin((mid * Math.PI) / 180);
-        out.push(text(lx, ly + 3, `${Math.round(frac * 100)}%`, { size: 11, anchor: 'middle', fill: '#fff', weight: 600 }));
+        out.push(text(lx, ly + 3, label, { size: 11, anchor: 'middle', fill: '#fff', weight: 600 }));
       }
       items.push({ label: `${s.label || s.key}`, color });
       ang = a1;
