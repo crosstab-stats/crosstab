@@ -28,6 +28,29 @@
  *    where a half-typed query landing on the dialog's primary button confirms a
  *    selection the user has not finished making. One rule, not a flag.
  *
+ * ## What the two halves of the state mean
+ *
+ * The **order** is a preference — how this reader likes to read a list — so it is
+ * app-wide and persisted ({@link module:core/var-order}). The **filter** is a
+ * query — what they are looking for right now — and the two are not the same
+ * kind of thing, which is why they are not scoped the same way.
+ *
+ * The Data grid and Variable View are two views of ONE list of variables, so a
+ * query about that list follows you between them: filtering the grid to "race"
+ * and switching tabs should not mean retyping it. That is safe specifically
+ * because the query stays VISIBLE in the box — a filter hides rows, and hiding
+ * rows for a reason the reader cannot see is the failure mode to avoid, not
+ * sharing as such.
+ *
+ * The picker is not a third view of that list; it is a transient question asked
+ * for one analysis. It starts empty every time, because choosing variables from
+ * a list silently narrowed by something typed in another tab ten minutes ago is
+ * exactly how you fail to notice the variable you wanted was never offered.
+ *
+ * The shared query is session-scoped and deliberately NOT persisted: reopening a
+ * project to find 12 of 971 columns, because of something typed last week, is
+ * the hazard without the benefit.
+ *
  * What is deliberately NOT shared is the count that follows the controls. Each
  * caller appends its own, because they report different facts: the grid's is the
  * variable SELECTION ("3 selected"), Variable View's is the filter result
@@ -43,6 +66,26 @@ import { VAR_ORDER_OPTIONS } from './var-order.js';
 
 /** How long to wait after the last keystroke before filtering. */
 const DEBOUNCE_MS = 100;
+
+/**
+ * The filter text the two WORKSPACE surfaces share (see the note above).
+ *
+ * Held here rather than inside the widget because the sharing is a decision the
+ * two views make, not a property of the control: the picker builds the same
+ * widget and does not participate. Session-scoped on purpose — a query is not a
+ * preference and has no business surviving a reload.
+ */
+let workspaceFilter = '';
+
+/** The shared workspace query. */
+export function getWorkspaceFilter() {
+  return workspaceFilter;
+}
+
+/** Set the shared workspace query. */
+export function setWorkspaceFilter(q) {
+  workspaceFilter = String(q ?? '');
+}
 
 /**
  * Build the strip.

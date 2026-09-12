@@ -17,7 +17,7 @@ import { openSyntaxGuide } from './syntax-guide.js';
 import { stataToScript } from './stata-import.js';
 import { spssToScript } from './spss-import.js';
 import { loadVarOrder, saveVarOrder, sortVars } from './var-order.js';
-import { makeVarToolbar, filterVars } from './var-toolbar.js';
+import { makeVarToolbar, filterVars, getWorkspaceFilter, setWorkspaceFilter } from './var-toolbar.js';
 
 /** Syntax editor metrics: the textarea uses a FIXED line-height so the step gutter
  * can place each marker at `PAD + lineIndex * LINE_H` (and the textarea is no-wrap,
@@ -57,7 +57,10 @@ export class DataView {
      * exactly as before, so the data view has no hard dependency on the feature. */
     this.memos = opts.memos ?? null;
     this.metas = [];
-    this.filter = ''; // column-header filter text
+    // The query is shared with Variable View (var-toolbar.js): the two tabs are
+    // two views of one list of variables, so filtering to "race" in one and
+    // meeting all 971 in the other is a tab boundary showing through.
+    this.filter = getWorkspaceFilter();
     this.token = 0; // guards against stale async windows
     this.raf = null;
     this.lastKey = null; // `${startRow}:${startCol}:${filter}` of the rendered block
@@ -84,8 +87,9 @@ export class DataView {
     // hard to search as a 900-row dialog list, so one setting governs both.
     this.order = loadVarOrder();
     const bar = makeVarToolbar({
+      filter: this.filter,
       order: this.order,
-      onFilter: (q) => { this.filter = q; this.#applyFilter(); },
+      onFilter: (q) => { this.filter = q; setWorkspaceFilter(q); this.#applyFilter(); },
       onOrder: (v) => { this.order = v; saveVarOrder(v); this.#applyFilter(); },
     });
     this.toolbar = bar.el;
@@ -123,6 +127,8 @@ export class DataView {
     this.rowCache = null; // data changed → the cached block is stale
     const order = loadVarOrder();
     if (order !== this.order) { this.order = order; this.orderSelect.value = order; }
+    const q = getWorkspaceFilter();
+    if (q !== this.filter) { this.filter = q; this.filterInput.value = q; }
     await this.#render(true);
     this.#updateSelCount();
   }
@@ -138,6 +144,7 @@ export class DataView {
     this.lastKey = null;
     this.rowCache = null; // column set changed → re-fetch
     await this.#render(true);
+    this.#updateSelCount();
   }
 
   #onScroll() {
@@ -460,7 +467,16 @@ export class DataView {
 
   #updateSelCount() {
     const n = this.store.getSelectedVariables().length;
-    this.selCount.textContent = n ? `${n} selected` : '';
+    const total = (this.metas || []).length;
+    const shown = this.#visibleMetas().length;
+    // Two facts, one slot. The filter count appears only while a filter is
+    // narrowing the grid — and it has to appear, because the query can now
+    // arrive from the other tab and "why are most of my columns gone" should be
+    // answerable without reading the box.
+    const parts = [];
+    if (shown < total) parts.push(`${shown.toLocaleString()} of ${total.toLocaleString()} columns`);
+    if (n) parts.push(`${n} selected`);
+    this.selCount.textContent = parts.join(' · ');
   }
 
   #rowEl(num, row, winMetas, leftW, rightW) {
@@ -664,7 +680,7 @@ export class VariableView {
   constructor(host, store) {
     this.host = host;
     this.store = store;
-    /** Current name/label filter text (persists across re-renders). */
+    /** The name/label query, shared with the Data grid (var-toolbar.js). */
     this.filter = '';
     /** Flex column so the filter toolbar stays put while the list scrolls (a class,
      * not inline style, so `.view[hidden]` still wins when the tab is inactive). */
@@ -683,10 +699,11 @@ export class VariableView {
     // Toolbar: the shared filter + order controls, then this view's own count.
     // With thousands of variables, scanning the list to find one to recode is painful.
     this.order = loadVarOrder();
+    this.filter = getWorkspaceFilter();
     const bar = makeVarToolbar({
       filter: this.filter,
       order: this.order,
-      onFilter: (q) => { this.filter = q; this.#applyFilter(); },
+      onFilter: (q) => { this.filter = q; setWorkspaceFilter(q); this.#applyFilter(); },
       onOrder: (v) => { this.order = v; saveVarOrder(v); this.#applyFilter(); },
     });
     const toolbar = bar.el;
