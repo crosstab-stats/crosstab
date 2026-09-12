@@ -35,7 +35,11 @@ export const manifest = {
     'GUI: Descriptive Statistics ▸ Descriptives…, then pick one or more variables. You get an SPSS-style table of N, missing, mean, SD, variance, min/max, range, quartiles and mode.\n' +
     'Labelled categorical variables (factors) can be chosen too — the mode is the statistic that means anything for a nominal one.\n' +
     'Syntax: run builtin-descriptives.run {"vars": ["age", "income"]}\n' +
-    '  • vars — one or more measures to summarize.',
+    '  • vars — one or more measures to summarize.\n' +
+    'GUI: Descriptive Statistics ▸ Explore (confidence interval for the mean)… — SPSS\'s Explore. ' +
+    'Point estimate, lower bound and upper bound at a confidence level you choose, optionally split by a grouping variable.\n' +
+    'Syntax: run builtin-descriptives.explore {"vars": ["tvhours"], "level": 99, "by": "sex"}\n' +
+    '  • vars — the measures; level — confidence level in percent (default 95); by — optional grouping variable.',
   rPackages: [],
   menu: [
     {
@@ -49,6 +53,39 @@ export const manifest = {
           hint: 'The measures to summarize with mean, SD, variance, range and quartiles.',
           types: ['numeric', 'factor'],
           multiple: true,
+        },
+      ],
+    },
+    {
+      label: 'Explore (confidence interval for the mean)…',
+      run: 'explore',
+      order: 30,
+      inputs: [
+        {
+          name: 'vars',
+          kind: 'variables',
+          label: 'Dependent list',
+          hint: 'The measures to estimate a mean and a confidence interval for.',
+          types: ['numeric', 'factor'],
+          multiple: true,
+        },
+        {
+          name: 'by',
+          kind: 'variables',
+          label: 'Factor list',
+          optional: true,
+          hint:
+            'Optional: a grouping variable to estimate each group separately. ' +
+            'Cancel this to estimate the sample as a whole.',
+          types: ['factor', 'string'],
+          multiple: false,
+        },
+        {
+          name: 'level',
+          kind: 'number',
+          label: 'Confidence level (%)',
+          default: 95,
+          hint: 'Usually 95. Ask for 99 and the interval gets wider, not more accurate.',
         },
       ],
     },
@@ -108,6 +145,155 @@ export async function run(app, { vars }) {
   const labelled = withLabels(result, vars, meta);
   await app.results.appendTable(labelled, { caption: 'Descriptive Statistics' });
 }
+
+
+/**
+ * SPSS's **Explore** (#174e): the mean, its standard error, and a confidence
+ * interval at a level the user picks — optionally one estimate per group.
+ *
+ * A whole lab is this one table and nothing else: point estimate, lower bound,
+ * upper bound, at 95% *and* at 99%. The only interval in the app before this was
+ * the fixed 95% by-product of the one-sample t-test — which a student has to run
+ * against an arbitrary test value to see at all, and which cannot be moved to 99%.
+ *
+ * The interval comes from `t.test(conf.level=)` rather than a hand-written
+ * mean ± t·SE, so the bounds are R's own and the level is honoured exactly.
+ *
+ * @param {object} app
+ * @param {{vars: string[], by?: string|null, level?: number}} inputs
+ */
+export async function explore(app, { vars, by, level }) {
+  if (!vars || !vars.length) return;
+  const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
+
+  // A level is a percent strictly between the two useless extremes. Out-of-range
+  // input is corrected to 95 and said out loud, rather than handed to R to fail on.
+  const asked = Number(level);
+  const valid = Number.isFinite(asked) && asked > 0 && asked < 100;
+  const pct = valid ? asked : 95;
+  const corrected = !valid && level != null && level !== '';
+
+  const rCode = `
+    lv <- ${pct / 100}
+    KEYS <- c("n","mean","se","lo","hi","trimmed","median","variance","sd","min","max","range","iqr")
+    one <- function(x) {
+      x <- suppressWarnings(as.numeric(as.character(x))); x <- x[is.finite(x)]
+      n <- length(x)
+      out <- setNames(rep(NA_real_, length(KEYS)), KEYS)
+      out["n"] <- n
+      if (n >= 2) {
+        tt <- t.test(x, conf.level = lv)
+        q <- quantile(x, c(.25, .75), names = FALSE)
+        out["mean"] <- mean(x); out["se"] <- sd(x) / sqrt(n)
+        out["lo"] <- tt$conf.int[1]; out["hi"] <- tt$conf.int[2]
+        out["trimmed"] <- mean(x, trim = .05); out["median"] <- median(x)
+        out["variance"] <- var(x); out["sd"] <- sd(x)
+        out["min"] <- min(x); out["max"] <- max(x)
+        out["range"] <- max(x) - min(x); out["iqr"] <- q[2] - q[1]
+      }
+      out
+    }
+    grp <- ${by ? 'as.character(by)' : 'NULL'}
+    out <- list()
+    for (.n in names(vars)) {
+      col <- vars[[.n]]
+      if (is.null(grp)) {
+        out[[.n]] <- list(groups = "", stats = list(one(col)))
+      } else {
+        keep <- !is.na(grp) & grp != ""
+        g <- grp[keep]; v <- col[keep]
+        lvs <- sort(unique(g))
+        out[[.n]] <- list(groups = lvs, stats = lapply(lvs, function(k) one(v[g == k])))
+      }
+    }
+    out`;
+
+  const { result } = await app.webr.run(rCode);
+  if (!result) throw new Error('R returned no result');
+  const perVar = tagged(result);
+
+  const ROWS = [
+    ['n', 'N'],
+    ['mean', 'Mean'],
+    ['se', 'Std. Error of Mean'],
+    ['lo', `${pct}% CI — Lower Bound`],
+    ['hi', `${pct}% CI — Upper Bound`],
+    ['trimmed', '5% Trimmed Mean'],
+    ['median', 'Median'],
+    ['variance', 'Variance'],
+    ['sd', 'Std. Deviation'],
+    ['min', 'Minimum'],
+    ['max', 'Maximum'],
+    ['range', 'Range'],
+    ['iqr', 'Interquartile Range'],
+  ];
+
+  for (const name of vars) {
+    const entry = perVar[name];
+    if (!entry) continue;
+    const { groups, stats } = entry;
+    const varLabel = meta.get(name)?.label ? `${meta.get(name).label} (${name})` : name;
+    const grouped = !!by && groups.length > 0 && groups[0] !== '';
+    const head = grouped ? groups.map((g) => valueLabel(meta, by, g)) : [varLabel];
+    const rows = ROWS.map(([key, label]) => [
+      label,
+      ...stats.map((s) => (key === 'n' ? intOf(s[key]) : num(s[key]))),
+    ]);
+    await app.results.appendTable(
+      { columns: ['', ...head], rows, rowHeaders: true },
+      {
+        caption: grouped
+          ? `Descriptives — ${varLabel} by ${meta.get(by)?.label ?? by}`
+          : `Descriptives — ${varLabel}`,
+      },
+    );
+  }
+
+  await app.results.appendText(
+    corrected
+      ? `_Confidence level must be between 0 and 100 — ${pct}% was used._`
+      : `_Bounds are ${pct}% confidence intervals for the mean (t distribution, df = N − 1)._`,
+  );
+}
+
+/** Pull `{groups, stats}` per variable out of the nested WebR tagged list. */
+function tagged(rList) {
+  const names = rList?.names ?? [];
+  const values = rList?.values ?? [];
+  const out = {};
+  names.forEach((n, i) => {
+    const inner = values[i];
+    const iNames = inner?.names ?? [];
+    const iVals = inner?.values ?? [];
+    const at = (k) => iVals[iNames.indexOf(k)];
+    const groups = plain(at('groups')).map(String);
+    // `stats` is a list of NAMED numeric vectors — one per group. The names are
+    // what the row order is read back through, so `one()` always returns the full
+    // key set even for a group too small to measure.
+    const stats = (at('stats')?.values ?? []).map((vec) => {
+      const keys = vec?.names ?? [];
+      const nums = plain(vec);
+      const o = {};
+      keys.forEach((k, j) => (o[k] = Number(nums[j])));
+      return o;
+    });
+    out[n] = { groups, stats };
+  });
+  return out;
+}
+
+/** A WebR vector (or scalar) as a plain JS array. */
+function plain(v) {
+  if (v == null) return [];
+  return Array.isArray(v?.values) ? v.values : [].concat(v);
+}
+
+function valueLabel(meta, name, code) {
+  return meta.get(name)?.valueLabels?.[code] ?? code;
+}
+
+const num = (x) => (Number.isFinite(x) ? (Number.isInteger(x) ? String(x) : x.toFixed(3)) : '');
+const intOf = (x) => (Number.isFinite(x) ? String(Math.round(x)) : '');
 
 /**
  * Replace the result's first column (variable names) with "Label (name)", and
