@@ -130,7 +130,7 @@ export function chartKinds(lib) {
       // model says its values are case counts — a percentage of a group mean
       // would be nonsense, so the control is absent rather than disabled.
       ...(model.counts ? [{
-        id: 'yMeasure', label: 'Show', type: 'select', structural: true, group: 'Chart', default: 'count',
+        id: 'yMeasure', label: 'Y axis shows', type: 'select', structural: true, group: 'Chart', default: 'count',
         options: [
           ['count', 'Count'],
           // Which percent is meant follows from the shape of the data, so the
@@ -448,7 +448,7 @@ export function chartKinds(lib) {
         ? [{ id: 'trendLine', group: 'Chart', label: 'Trend line', type: 'check', default: false }]
         : []),
       {
-        id: 'pointSize', label: 'Point size', type: 'select', group: 'Chart', valueType: 'number', default: 4,
+        id: 'pointSize', label: 'Point size', type: 'select', group: 'Style', valueType: 'number', default: 4,
         options: [['3', 'Small'], ['4', 'Medium'], ['6', 'Large']],
       },
       gridlinesControl(),
@@ -612,12 +612,18 @@ export function chartKinds(lib) {
         // already saved keeps exactly the labels it was saved with; the new
         // control only says WHAT goes in them, defaulting to the percent that
         // was previously the only choice.
-        valueLabelsControl('Show labels on slices'),
+        valueLabelsControl(),
         {
           id: 'pieLabel', label: 'Label shows', type: 'select', group: 'Labels', default: 'percent',
           options: [['percent', 'Percent'], ['count', 'Count (N)'], ['both', 'Percent and count']],
           visibleWhen: { control: 'valueLabels', truthy: true },
         },
+        // A pie's labels were the only ones in the app with no size, weight or
+        // slant, and its title was the only one that could not be edited —
+        // neither by decision, just by having been written before the shared
+        // builders existed.
+        ...valueLabelFormatControls(),
+        ...titleControls(model),
       ];
     },
     render: (model, view) => renderPie(model, view),
@@ -635,7 +641,13 @@ export function chartKinds(lib) {
     const radius = Math.min((W - mRight - 24) / 2, (H - mTop - 24) / 2) - 6;
 
     const out = [svgOpen(chartAltText(model, view, `${slices.length} slices.`, 'Pie chart'))];
-    if (model.title) out.push(text(W / 2, 22, esc(model.title), { size: 15, weight: 600, anchor: 'middle', fill: '#222' }));
+    const title = view.titleText || model.title;
+    if (title) {
+      out.push(text(W / 2, 22, esc(title), {
+        size: view.titleSize || 15, weight: view.titleBold !== false ? 600 : 400,
+        italic: !!view.titleItalic, anchor: 'middle', fill: '#222',
+      }));
+    }
 
     let ang = -90 + (view.pieRotation || 0); // start at top, + rotation, clockwise
     const items = [];
@@ -663,7 +675,10 @@ export function chartKinds(lib) {
         const lr = radius * 0.62;
         const lx = cx + lr * Math.cos((mid * Math.PI) / 180);
         const ly = cy + lr * Math.sin((mid * Math.PI) / 180);
-        out.push(text(lx, ly + 3, label, { size: 11, anchor: 'middle', fill: '#fff', weight: 600 }));
+        out.push(text(lx, ly + 3, label, {
+          size: view.valueLabelSize || 11, anchor: 'middle', fill: '#fff',
+          weight: view.valueLabelBold === false ? 400 : 600, italic: !!view.valueLabelItalic,
+        }));
       }
       items.push({ label: `${s.label || s.key}`, color });
       ang = a1;
@@ -917,7 +932,7 @@ export function chartKinds(lib) {
       },
       { id: 'showPoints', label: 'Show data points', type: 'check', group: 'Chart', default: true },
       {
-        id: 'summary', label: 'Group summary', type: 'select', group: 'Chart', default: 'mean',
+        id: 'summary', label: 'Summary', type: 'select', group: 'Chart', default: 'mean',
         options: [['mean', 'Mean per condition'], ['none', 'None']],
       },
       gridlinesControl(),
@@ -1665,7 +1680,7 @@ export function chartKinds(lib) {
       const notMono = { control: 'mono', truthy: false };
       return [
       {
-        id: 'mark', label: 'Draw', type: 'select', structural: true, group: 'Chart', default: 'both',
+        id: 'mark', label: 'Type', type: 'select', structural: true, group: 'Chart', default: 'both',
         options: [['both', 'Points + lines'], ['points', 'Points only'], ['line', 'Lines only']],
       },
       { id: 'connectAcross', label: 'Connect across phase change', type: 'check', group: 'Chart', default: false },
@@ -2352,8 +2367,8 @@ export function chartKinds(lib) {
         },
         { id: 'edgeTicks', label: 'Mark the boundaries', type: 'check', group: 'Bins', default: false },
         {
-          id: 'yMeasure', label: 'Bar height', type: 'select', group: 'Chart', structural: true, default: 'count',
-          options: [['count', 'Count'], ['percent', 'Percent of cases'], ['density', 'Density']],
+          id: 'yMeasure', label: 'Y axis shows', type: 'select', group: 'Chart', structural: true, default: 'count',
+          options: [['count', 'Count'], ['percent', 'Percent of all cases'], ['density', 'Density']],
         },
         { id: 'normalCurve', label: 'Normal curve', type: 'check', group: 'Chart', default: false },
         { id: 'showStats', label: 'Show mean, SD and N', type: 'check', group: 'Chart', default: false },
@@ -2492,6 +2507,35 @@ export function chartKinds(lib) {
     },
   });
 
+  /**
+   * The order the options panel's sections appear in, for every kind.
+   *
+   * Enforced here rather than left to each kind's `controls()` for the reason the
+   * inventory turned up: twelve kinds hand-ordering the same handful of sections
+   * produced Chart > Labels > Style on one, Bins > Chart on another, and
+   * Chart > Style > Chart > Style on two more, because a control's group is
+   * decided where the control is written and nobody was reading the other eleven
+   * files. Sorting centrally means a reader learns the layout once, and a kind
+   * added tomorrow gets it without being told.
+   *
+   * The shape is: what is DRAWN, then anything specific to this kind of chart,
+   * then how it LOOKS, what it is LABELLED with, and what it is TITLED. An
+   * unrecognised group sorts with the kind-specific ones — a kind that invents a
+   * section means it by it, so it belongs beside Bins and Phases rather than
+   * after the shared furniture.
+   */
+  const GROUP_ORDER = { Chart: 0, Bins: 1, Phases: 2, Panels: 3, Style: 5, Labels: 6, 'Titles & axes': 7 };
+  const groupRank = (g) => (g in GROUP_ORDER ? GROUP_ORDER[g] : 4);
+
+  /** Controls in canonical section order. Stable, so each section's own order —
+   * which IS the kind's business — is untouched. */
+  function inGroupOrder(controls) {
+    return controls
+      .map((c, i) => [c, i])
+      .sort((a, b) => groupRank(a[0].group) - groupRank(b[0].group) || a[1] - b[1])
+      .map(([c]) => c);
+  }
+
   // Adapt each definition to the two-verb wire contract. `describe` is the same
   // computation core used to do in `chartSpecOf`; it lives here now because the kind,
   // not the host, is what knows its own controls and colour items.
@@ -2505,7 +2549,7 @@ export function chartKinds(lib) {
         colorItems: kd.colorItems ? kd.colorItems(model) : [],
         // Shared builders return null when a control does not apply to this model, so
         // a kind can list them flat.
-        controls: (kd.controls ? kd.controls(model) : []).filter(Boolean),
+        controls: inGroupOrder((kd.controls ? kd.controls(model) : []).filter(Boolean)),
         baseView: kd.baseView ? kd.baseView(model) : {},
       }),
       render: (model, view) => kd.render(model, view),
