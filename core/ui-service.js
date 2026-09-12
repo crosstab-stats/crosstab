@@ -28,7 +28,8 @@
  * @property {string} [okLabel='OK']
  */
 
-import { loadVarOrder, saveVarOrder, sortVars, VAR_ORDER_OPTIONS } from './var-order.js';
+import { loadVarOrder, saveVarOrder, sortVars } from './var-order.js';
+import { makeVarToolbar, filterVars } from './var-toolbar.js';
 
 export class UiService {
   /** @type {import('./data-store.js').DataStore} */
@@ -102,16 +103,8 @@ export class UiService {
         <form method="dialog" class="ct-dialog__form">
           <h2 class="ct-dialog__title">${esc(title)}</h2>
           ${hint ? `<p class="ct-dialog__hint">${esc(hint)}</p>` : ''}
-          <div class="ct-varfind">
-            <input type="search" class="ct-varfind__q" placeholder="Search name or label…"
-                   aria-label="Search variables by name or label" autocomplete="off">
-            <label class="ct-varfind__sort">Sort
-              <select class="ct-varfind__order" aria-label="Variable list order">
-                ${VAR_ORDER_OPTIONS.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('')}
-              </select>
-            </label>
-          </div>
-          <p class="ct-varfind__count" role="status" aria-live="polite"></p>
+          <div class="ct-vartools-slot"></div>
+          <p class="ct-vartools__count ct-vartools__count--dialog" role="status" aria-live="polite"></p>
           <ul class="ct-dialog__vars"></ul>
           <menu class="ct-dialog__buttons">
             <button value="cancel" type="submit">Cancel</button>
@@ -119,27 +112,24 @@ export class UiService {
           </menu>
         </form>`;
 
-      const search = dialog.querySelector('.ct-varfind__q');
-      const order = dialog.querySelector('.ct-varfind__order');
-      const countEl = dialog.querySelector('.ct-varfind__count');
+      const countEl = dialog.querySelector('.ct-vartools__count');
       const list = dialog.querySelector('.ct-dialog__vars');
-      order.value = loadVarOrder();
 
-      // Enter in the search box must not submit the form as OK on a half-typed
-      // query — the same rule selectFromList follows.
-      search.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') e.preventDefault();
+      // The same filter + order strip the Data grid and Variable View carry
+      // (var-toolbar.js) — including the rule that Enter belongs to the box and
+      // must not reach this dialog's primary button mid-query.
+      let query = '';
+      const bar = makeVarToolbar({
+        variant: 'dialog',
+        order: loadVarOrder(),
+        onFilter: (q) => { query = q; render(); },
+        onOrder: (v) => { saveVarOrder(v); render(); },
       });
+      dialog.querySelector('.ct-vartools-slot').replaceWith(bar.el);
+      const order = bar.orderSelect;
 
       const sorted = (rows) => sortVars(rows, order.value);
-      const matching = (rows) => {
-        const q = search.value.trim().toLowerCase();
-        if (!q) return rows;
-        return rows.filter(
-          (m) =>
-            m.name.toLowerCase().includes(q) || String(m.label ?? '').toLowerCase().includes(q),
-        );
-      };
+      const matching = (rows) => filterVars(rows, query);
 
       const row = (m) => {
         const disabled = excluded.has(m.name);
@@ -206,13 +196,8 @@ export class UiService {
           shown === meta.length
             ? `${meta.length} variable${meta.length === 1 ? '' : 's'}`
             : `${shown} of ${meta.length} variables`;
-        if (!shown) list.append(groupLabel('No variable matches that search.'));
+        if (!shown) list.append(groupLabel('No variable matches that filter.'));
       };
-      search.addEventListener('input', render);
-      order.addEventListener('change', () => {
-        saveVarOrder(order.value);
-        render();
-      });
       render();
 
       document.body.append(dialog);

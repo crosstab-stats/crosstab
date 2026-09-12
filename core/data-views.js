@@ -16,7 +16,8 @@ import { serialize, parse } from './crosstab-syntax.js';
 import { openSyntaxGuide } from './syntax-guide.js';
 import { stataToScript } from './stata-import.js';
 import { spssToScript } from './spss-import.js';
-import { loadVarOrder, saveVarOrder, sortVars, VAR_ORDER_OPTIONS } from './var-order.js';
+import { loadVarOrder, saveVarOrder, sortVars } from './var-order.js';
+import { makeVarToolbar, filterVars } from './var-toolbar.js';
 
 /** Syntax editor metrics: the textarea uses a FIXED line-height so the step gutter
  * can place each marker at `PAD + lineIndex * LINE_H` (and the textarea is no-wrap,
@@ -91,7 +92,7 @@ export class DataView {
     this.filterInput = bar.filterInput;
     this.orderSelect = bar.orderSelect;
     this.selCount = document.createElement('span');
-    this.selCount.className = 'grid-selcount';
+    this.selCount.className = 'ct-vartools__count';
     this.toolbar.append(this.selCount);
 
     this.scroller = document.createElement('div');
@@ -128,13 +129,7 @@ export class DataView {
 
   /** Columns to display, after the column-header filter and the chosen order. */
   #visibleMetas() {
-    const q = this.filter.trim().toLowerCase();
-    const kept = q
-      ? this.metas.filter(
-          (m) => m.name.toLowerCase().includes(q) || (m.label || '').toLowerCase().includes(q),
-        )
-      : this.metas;
-    return sortVars(kept, this.order);
+    return sortVars(filterVars(this.metas, this.filter), this.order);
   }
 
   /** Re-render after the filter changes (column set changed → reset H-scroll). */
@@ -696,7 +691,7 @@ export class VariableView {
     });
     const toolbar = bar.el;
     this.count = document.createElement('span');
-    this.count.className = 'grid-selcount';
+    this.count.className = 'ct-vartools__count';
     toolbar.append(this.count);
 
     const scroller = document.createElement('div');
@@ -722,12 +717,7 @@ export class VariableView {
   #applyFilter() {
     if (!this.tbody) return;
     const q = this.filter.trim().toLowerCase();
-    const matched = q
-      ? this.metas.filter(
-          (m) => m.name.toLowerCase().includes(q) || (m.label || '').toLowerCase().includes(q),
-        )
-      : this.metas;
-    const shown = sortVars(matched, this.order);
+    const shown = sortVars(filterVars(this.metas, this.filter), this.order);
     this.count.textContent = q
       ? `${shown.length.toLocaleString()} of ${this.metas.length.toLocaleString()}`
       : `${this.metas.length.toLocaleString()} variable${this.metas.length === 1 ? '' : 's'}`;
@@ -833,67 +823,6 @@ export class VariableView {
  * the base import is pinned, and an order that would break a dependency is rejected
  * with a message. Linear by design (not git branching).
  */
-/**
- * The toolbar both variable surfaces put above their list: a filter box and an
- * order select, in that arrangement, with that wording.
- *
- * The Data grid and Variable View each hand-rolled their own, and the copies had
- * already drifted in four ways — different placeholder text (one of which did not
- * fit its box), one with an accessible name and one without, one debounced and one
- * firing a DuckDB round-trip per keystroke, and the order select bolted on
- * separately to each. None of those were decisions; they were what happens when
- * two near-identical widgets are written a few months apart. There is one now.
- *
- * The count that follows is deliberately NOT shared: the grid's reports the
- * variable *selection* ("3 selected") and Variable View's reports the *filter*
- * result ("12 of 971"). Same slot, different facts.
- *
- * @param {Object} opts
- * @param {string} [opts.filter] - initial filter text
- * @param {(q: string) => void} opts.onFilter - debounced; called with the text
- * @param {string} opts.order - initial {@link module:core/var-order} order
- * @param {(v: string) => void} opts.onOrder
- * @returns {{el: HTMLElement, filterInput: HTMLInputElement, orderSelect: HTMLSelectElement}}
- */
-function makeVarToolbar({ filter = '', onFilter, order, onOrder }) {
-  const el = document.createElement('div');
-  el.className = 'grid-toolbar';
-
-  const filterInput = document.createElement('input');
-  filterInput.type = 'search';
-  filterInput.className = 'grid-filter';
-  // Both surfaces match on name OR label, so say that rather than naming the
-  // things being filtered — "columns" and "variables" are the same objects seen
-  // from two tabs, and the longer of the two wordings did not fit its box.
-  filterInput.placeholder = 'Filter by name or label…';
-  // A placeholder is a visual affordance, not an accessible name.
-  filterInput.setAttribute('aria-label', 'Filter variables by name or label');
-  filterInput.value = filter;
-  // Debounced in both. The grid used to re-render (and re-read DuckDB) on every
-  // keystroke, which on a 971-variable file is a round-trip per character.
-  let debounce = null;
-  filterInput.addEventListener('input', () => {
-    clearTimeout(debounce);
-    debounce = setTimeout(() => onFilter(filterInput.value), 100);
-  });
-
-  const orderSelect = document.createElement('select');
-  orderSelect.className = 'grid-order';
-  orderSelect.setAttribute('aria-label', 'Variable order');
-  orderSelect.title = 'Order the variables by file order, name or label';
-  for (const [v, label] of VAR_ORDER_OPTIONS) {
-    const o = document.createElement('option');
-    o.value = v;
-    o.textContent = label;
-    if (v === order) o.selected = true;
-    orderSelect.append(o);
-  }
-  orderSelect.addEventListener('change', () => onOrder(orderSelect.value));
-
-  el.append(filterInput, orderSelect);
-  return { el, filterInput, orderSelect };
-}
-
 export class HistoryView {
   /**
    * @param {HTMLElement} host
