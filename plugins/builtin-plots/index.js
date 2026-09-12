@@ -1,7 +1,8 @@
 /**
  * @file plugins/builtin-plots/index.js
- * Built-in plugin: the **Graphs** menu — histogram, scatter (+ trend line),
- * boxplot, pie chart, and a bar chart with error bars.
+ * Built-in plugin: the **Graphs** menu — histogram, plain bar and line charts of
+ * one variable, scatter (+ trend line and its equation), boxplot, pie chart, and a
+ * bar chart with error bars.
  *
  * **Every chart here is data-driven (#131).** Each aggregates in JS and emits a
  * structured chart MODEL to `app.results.appendChart`; the host renders the SVG and
@@ -29,14 +30,20 @@
 export const manifest = {
   id: 'builtin-plots',
   name: 'Plots',
-  version: '0.8.0',
+  version: '0.9.0',
   apiVersion: '0.1.0',
   category: 'Graphs',
-  keywords: ['chart', 'histogram', 'scatter', 'boxplot', 'bar', 'pie', 'plot'],
+  keywords: ['chart', 'histogram', 'scatter', 'boxplot', 'bar', 'bar chart', 'line', 'line chart', 'pie', 'plot', 'bins'],
   howto:
-    'GUI: Graphs ▸ Histogram, Scatter, Trends over time, Boxplot, Pie chart, or Bar chart with error bars — pick the variables. ' +
-    'Data-driven charts (scatter, trends, pie) render as live, re-editable chart models; others are baked SVG plots.\n' +
-    'Syntax: run builtin-plots.histogram {"v": "age"}\n' +
+    'GUI: Graphs ▸ Histogram, Bar chart, Line chart, Scatter, Trends over time, Boxplot, Pie chart, or Bar chart with error bars — pick the variables. ' +
+    'Every chart renders as a live, re-editable chart model.\n' +
+    'Level of measurement picks the picture: bar or pie for a nominal variable, histogram or line for an interval-ratio one. ' +
+    '“Bar chart” draws one bar per category of ONE variable — “Bar chart with error bars” is a different thing (group means).\n' +
+    'Syntax: run builtin-plots.histogram {"v": "age", "bins": 10}\n' +
+    '  • bins — number of intervals; 0 or omitted picks one automatically (Sturges).\n' +
+    'Syntax: run builtin-plots.bar {"v": "region", "stat": "count"}\n' +
+    'Syntax: run builtin-plots.line {"v": "tvhours", "stat": "percent"}\n' +
+    '  • bar / line — the distribution of ONE variable; stat is "count" (default) or "percent".\n' +
     'Syntax: run builtin-plots.scatter {"x": "age", "y": "income"}\n' +
     'Syntax: run builtin-plots.trends {"x": "year", "g": "bracket", "y": "income", "summary": "percent", "display": "lines"}\n' +
     'Syntax: run builtin-plots.violin {"y": "score", "g": "dose", "rep": "experiment"}\n' +
@@ -51,7 +58,55 @@ export const manifest = {
       label: 'Histogram…',
       run: 'histogram',
       order: 10,
-      inputs: [{ name: 'v', kind: 'variables', hint: 'The numeric variable whose distribution you want to see.', multiple: false, types: ['numeric'] }],
+      inputs: [
+        { name: 'v', kind: 'variables', hint: 'The numeric variable whose distribution you want to see.', multiple: false, types: ['numeric'] },
+        {
+          name: 'bins',
+          kind: 'number',
+          label: 'Number of intervals',
+          optional: true,
+          default: 0,
+          hint: "How many bars to divide the range into. Leave 0 for an automatic choice (Sturges' rule).",
+        },
+      ],
+    },
+    {
+      label: 'Bar chart…',
+      run: 'bar',
+      order: 12,
+      inputs: [
+        { name: 'v', kind: 'variables', hint: 'The category variable to draw one bar per value of.', multiple: false, types: ['factor', 'string'] },
+        {
+          name: 'stat',
+          kind: 'choice',
+          label: 'Show',
+          hint: 'Bar height: how many cases, or what share of the valid cases.',
+          default: 'count',
+          options: [
+            { value: 'count', label: 'Count of cases' },
+            { value: 'percent', label: 'Valid percent' },
+          ],
+        },
+      ],
+    },
+    {
+      label: 'Line chart…',
+      run: 'line',
+      order: 14,
+      inputs: [
+        { name: 'v', kind: 'variables', hint: 'The variable to plot the distribution of — a line joins the count at each value.', multiple: false, types: ['numeric', 'factor', 'string'] },
+        {
+          name: 'stat',
+          kind: 'choice',
+          label: 'Show',
+          hint: 'Line height: how many cases, or what share of the valid cases.',
+          default: 'count',
+          options: [
+            { value: 'count', label: 'Count of cases' },
+            { value: 'percent', label: 'Valid percent' },
+          ],
+        },
+      ],
     },
     {
       label: 'Scatter…',
@@ -261,7 +316,7 @@ export async function beforeAfter(app, { vars, idVar }) {
 
 // --- chart functions ---------------------------------------------------------
 
-export async function histogram(app, { v: name }) {
+export async function histogram(app, { v: name, bins }) {
   if (!name) return;
   const meta = await metaMap(app);
   const cols = await app.data.getColumns({ variables: [name] });
@@ -273,7 +328,7 @@ export async function histogram(app, { v: name }) {
     if (Number.isFinite(n)) xs.push(n);
   }
   if (!xs.length) { await app.results.appendError('Histogram: no finite values to plot.'); return; }
-  const { edges, counts } = binData(xs);
+  const { edges, counts } = binData(xs, bins);
   // Bins become categories (gapped bars — the smart-chart trade for live recolour/
   // reorder/relabel + persistence). Value = count per bin.
   const categories = counts.map((_, i) => ({ key: String(i), label: `${round2(edges[i])}–${round2(edges[i + 1])}` }));
@@ -285,6 +340,81 @@ export async function histogram(app, { v: name }) {
     axes: { x: { title: label(meta, name) }, y: { title: 'Count' } },
     view: { mark: 'bar', legend: 'none' },
   });
+}
+
+/**
+ * The distribution of ONE variable, as a bar chart or a line chart (#174g).
+ *
+ * These exist under those two plain names on purpose. A methods lab teaches that
+ * the level of measurement picks the picture — bar or pie for nominal, histogram
+ * or line for interval-ratio — and then says "make a bar chart of IMMRGHTS". What
+ * the Graphs menu offered instead was "Bar chart with error bars" (group *means*,
+ * a different thing entirely) and "Trends over time" (which can be coerced into
+ * counts per category, but nobody looking for a bar chart will ever open it).
+ *
+ * Bars and lines are the same `categorical` model with a different default mark,
+ * so either chart can be flipped to the other live from the Type control. They are
+ * two menu items because being findable by name is the whole point.
+ */
+async function oneVarDistribution(app, { v: name, stat }, { mark, what }) {
+  if (!name) return;
+  const meta = await metaMap(app);
+  const cols = await app.data.getColumns({ variables: [name] });
+  const col = cols[name] || [];
+  const miss = missingSet(meta, name);
+  const labelOf = labelMapper(meta, name);
+
+  const counts = new Map();
+  let valid = 0;
+  for (const raw of col) {
+    if (isBlank(raw)) continue;
+    const k = String(raw);
+    if (miss.has(k)) continue;
+    counts.set(k, (counts.get(k) || 0) + 1);
+    valid += 1;
+  }
+  if (!counts.size) {
+    await app.results.appendError(`${what}: no data after removing missing values.`);
+    return;
+  }
+  // A bar per distinct value only makes sense while there are few of them. Past
+  // that the honest answer is a histogram, not 400 one-case bars — say so instead
+  // of drawing something unreadable.
+  const CAP = 60;
+  if (counts.size > CAP) {
+    await app.results.appendError(
+      `${what}: ${label(meta, name)} has ${counts.size} distinct values — too many for one bar each. ` +
+        'Use Graphs ▸ Histogram (which groups values into intervals), or recode it into categories first.',
+    );
+    return;
+  }
+
+  // Numeric codes in numeric order (so 2 sits between 1 and 10, not after it);
+  // anything else alphabetically. Either way the user can re-order live.
+  const keys = [...counts.keys()];
+  const allNumeric = keys.every((k) => k.trim() !== '' && Number.isFinite(Number(k)));
+  keys.sort(allNumeric ? (a, b) => Number(a) - Number(b) : (a, b) => String(a).localeCompare(String(b)));
+
+  const percent = stat === 'percent';
+  const values = keys.map((k) => (percent ? (counts.get(k) / valid) * 100 : counts.get(k)));
+  await app.results.appendChart({
+    kind: 'categorical',
+    title: `${label(meta, name)}`,
+    categories: keys.map((k) => ({ key: k, label: labelOf(k) })),
+    series: [{ key: 'n', label: percent ? 'Valid percent' : 'Count', values }],
+    axes: { x: { title: label(meta, name) }, y: { title: percent ? 'Valid percent' : 'Count' } },
+    view: { mark, legend: 'none' },
+  });
+}
+
+/** Graphs ▸ Bar chart… — one bar per category. */
+export async function bar(app, inputs) {
+  return oneVarDistribution(app, inputs, { mark: 'bar', what: 'Bar chart' });
+}
+
+/** Graphs ▸ Line chart… — the same counts joined into a line across the values. */
+export async function line(app, inputs) {
+  return oneVarDistribution(app, inputs, { mark: 'line', what: 'Line chart' });
 }
 
 export async function scatter(app, { x, y }) {
@@ -593,11 +723,17 @@ function meanOf(arr) {
 /** Even-width histogram bins over [min,max] using Sturges' rule (k = ⌈log₂n⌉+1).
  * Returns `{edges: number[k+1], counts: number[k]}`; the max value lands in the last
  * bin. A single distinct value degenerates to one bin. */
-function binData(xs) {
+function binData(xs, requested) {
   const min = Math.min(...xs);
   const max = Math.max(...xs);
   if (min === max) return { edges: [min, min + 1], counts: [xs.length] };
-  const k = Math.max(1, Math.ceil(Math.log2(xs.length)) + 1);
+  // A histogram's shape is an argument about the data, and the interval count is
+  // the knob that argument turns — which is why a methods lab has students open
+  // SPSS's Binning and set it by hand (#174h). 0 / blank keeps Sturges' rule; the
+  // cap is high enough never to bite a real request and low enough that a typo
+  // cannot ask for ten thousand bars.
+  const asked = Math.floor(Number(requested));
+  const k = Number.isFinite(asked) && asked >= 1 ? Math.min(asked, 500) : Math.max(1, Math.ceil(Math.log2(xs.length)) + 1);
   const width = (max - min) / k;
   const edges = Array.from({ length: k + 1 }, (_, i) => min + i * width);
   edges[k] = max; // guard float drift so max is included, not spilled past the edge
