@@ -125,3 +125,52 @@ test('an empty category contributes no percentage instead of dividing by zero', 
   const svg = draw(model, { yMeasure: 'percent' });
   assert.ok(!/NaN|Infinity/.test(svg), 'an all-zero category must not produce NaN');
 });
+
+/** Every bar's geometry, so "did the picture change" is a measurement. */
+const bars = (svg) =>
+  [...svg.matchAll(/<rect x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)"/g)]
+    .map((m) => ({ x: +m[1], y: +m[2], w: +m[3], h: +m[4] }))
+    .filter((b) => b.w < 700); // not the frame's white background
+
+/** Each bar's height as a fraction of the tallest — the SHAPE, independent of
+ * whatever the axis happens to top out at. */
+const shape = (svg) => {
+  const hs = bars(svg).map((b) => b.h);
+  const max = Math.max(...hs);
+  return hs.map((h) => (h / max).toFixed(4)).join(' ');
+};
+
+test('with ONE series, percent is a rescale: the picture keeps its shape', () => {
+  // Worth stating because it is easy to claim otherwise. 120/60/20 of 200 become
+  // 60/30/10, and those are the same bars — the reader is told which quantity
+  // they are looking at by the AXIS, not by the drawing.
+  const c = draw(ONE, { yMeasure: 'count' });
+  const p = draw(ONE, { yMeasure: 'percent' });
+  assert.equal(shape(p), shape(c));
+  assert.equal(shape(c), '1.0000 0.5000 0.1667');
+  // Absolute pixel heights may still differ, because a "nice" axis maximum is
+  // not proportional between the two scales (120 rounds up to 150; 60 does not
+  // round at all). That scales every bar by the SAME factor, which is a zoom,
+  // not a change of shape.
+});
+
+test('with SEVERAL series, percent genuinely redraws the chart', () => {
+  // 2020 is 30 vs 60 in 2024 — half the height. As a share within its own year
+  // it is 75% against 50%, so the taller bar becomes the shorter one. This is
+  // the case where the two views are different claims about the data, not two
+  // labellings of one.
+  const model = {
+    ...TWO,
+    series: [
+      { key: 'a', label: 'A', values: [30, 60] },
+      { key: 'b', label: 'B', values: [10, 60] },
+    ],
+  };
+  const c = shape(draw(model, { yMeasure: 'count' }));
+  const p = shape(draw(model, { yMeasure: 'percent' }));
+  assert.notEqual(p, c);
+  const cH = bars(draw(model, { yMeasure: 'count' })).map((b) => b.h);
+  const pH = bars(draw(model, { yMeasure: 'percent' })).map((b) => b.h);
+  assert.ok(cH[0] < cH[2], 'in counts, 2020 A is shorter than 2024 A');
+  assert.ok(pH[0] > pH[2], 'in percentages, 2020 A is TALLER than 2024 A');
+});

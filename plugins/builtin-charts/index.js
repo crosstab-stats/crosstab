@@ -127,6 +127,16 @@ export function chartKinds(lib) {
       // here and not in a dialog that has already closed. Offered only when the
       // model says its values are case counts — a percentage of a group mean
       // would be nonsense, so the control is absent rather than disabled.
+      //
+      // It sits under Chart rather than Labels because it changes the QUANTITY
+      // plotted — the axis, its title, and every number read off it — where a
+      // pie's "Label shows" changes only the text in a label, a slice's size
+      // being its share by definition. Note that with ONE series that is not
+      // visible in the bars: 120/60/20 and 60/30/10 are the same picture, and
+      // only the axis says which. It is with several series, where the share is
+      // within each category, that the drawing itself changes — see
+      // test/categorical-measure.test.mjs, which measures both.
+      //
       // Which percent is meant follows from the shape of the data, so the option
       // says which one it is rather than leaving the reader to guess.
       ...(model.counts ? [yMeasureControl([
