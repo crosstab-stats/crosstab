@@ -300,12 +300,16 @@
 
       /* data grid toolbar (column filter + selection count), above the scroller */
       .grid-toolbar {
-        display: flex; align-items: center; gap: 12px; flex: none;
+        display: flex; align-items: center; gap: 12px; flex: none; flex-wrap: wrap;
         padding: 6px 8px; border-bottom: 1px solid var(--line); background: var(--panel);
       }
+      /* Wide enough for its own placeholder, and allowed to grow. A fixed
+         min-width clipped "Filter variables by name or label…" in Variable View
+         while the grid's shorter text fitted, so the two looked like different
+         controls; `ch` ties the floor to the text rather than to a guess. */
       .grid-filter {
         font: inherit; padding: 5px 8px; border: 1px solid var(--line);
-        border-radius: 6px; min-width: 200px;
+        border-radius: 6px; flex: 1 1 28ch; min-width: 28ch; max-width: 340px;
       }
       /* Variable order (file / name / label) — the same preference the analysis
          variable picker uses, so the three surfaces agree (#174a). */

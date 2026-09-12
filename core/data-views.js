@@ -78,30 +78,21 @@ export class DataView {
     // rule and leave the grid visible behind the other tabs.
     host.classList.add('ct-gridhost');
 
-    this.toolbar = document.createElement('div');
-    this.toolbar.className = 'grid-toolbar';
-    this.filterInput = document.createElement('input');
-    this.filterInput.type = 'search';
-    this.filterInput.className = 'grid-filter';
-    this.filterInput.placeholder = 'Filter columns…';
-    // A placeholder is a visual affordance, not an accessible name.
-    this.filterInput.setAttribute('aria-label', 'Filter columns');
-    this.filterInput.addEventListener('input', () => {
-      this.filter = this.filterInput.value;
-      this.#applyFilter();
-    });
-    // Ordering, shared with Variable View and every analysis picker (see
-    // var-order.js). A 900-column grid is exactly as hard to search as a
-    // 900-row dialog list, so the same preference governs both.
+    // Filter + order, shared with Variable View (see makeVarToolbar). The order
+    // is the app-wide preference in var-order.js: a 900-column grid is exactly as
+    // hard to search as a 900-row dialog list, so one setting governs both.
     this.order = loadVarOrder();
-    this.orderSelect = makeVarOrderSelect(this.order, (v) => {
-      this.order = v;
-      saveVarOrder(v);
-      this.#applyFilter();
+    const bar = makeVarToolbar({
+      order: this.order,
+      onFilter: (q) => { this.filter = q; this.#applyFilter(); },
+      onOrder: (v) => { this.order = v; saveVarOrder(v); this.#applyFilter(); },
     });
+    this.toolbar = bar.el;
+    this.filterInput = bar.filterInput;
+    this.orderSelect = bar.orderSelect;
     this.selCount = document.createElement('span');
     this.selCount.className = 'grid-selcount';
-    this.toolbar.append(this.filterInput, this.orderSelect, this.selCount);
+    this.toolbar.append(this.selCount);
 
     this.scroller = document.createElement('div');
     this.scroller.className = 'grid-scroll';
@@ -694,31 +685,19 @@ export class VariableView {
     }
     this.metas = metas;
 
-    // Toolbar: a filter box (matches name or label) + a live count. With thousands
-    // of variables, scanning the whole list to find one to recode is painful.
-    const toolbar = document.createElement('div');
-    toolbar.className = 'grid-toolbar';
-    const input = document.createElement('input');
-    input.type = 'search';
-    input.className = 'grid-filter';
-    input.placeholder = 'Filter variables by name or label…';
-    input.value = this.filter;
-    let debounce = null;
-    input.addEventListener('input', () => {
-      this.filter = input.value;
-      clearTimeout(debounce);
-      debounce = setTimeout(() => this.#applyFilter(), 100);
-    });
-    // Same ordering preference the grid and every analysis picker use.
+    // Toolbar: the shared filter + order controls, then this view's own count.
+    // With thousands of variables, scanning the list to find one to recode is painful.
     this.order = loadVarOrder();
-    const orderSelect = makeVarOrderSelect(this.order, (v) => {
-      this.order = v;
-      saveVarOrder(v);
-      this.#applyFilter();
+    const bar = makeVarToolbar({
+      filter: this.filter,
+      order: this.order,
+      onFilter: (q) => { this.filter = q; this.#applyFilter(); },
+      onOrder: (v) => { this.order = v; saveVarOrder(v); this.#applyFilter(); },
     });
+    const toolbar = bar.el;
     this.count = document.createElement('span');
     this.count.className = 'grid-selcount';
-    toolbar.append(input, orderSelect, this.count);
+    toolbar.append(this.count);
 
     const scroller = document.createElement('div');
     scroller.className = 'grid-scroll';
@@ -855,29 +834,64 @@ export class VariableView {
  * with a message. Linear by design (not git branching).
  */
 /**
- * The order `<select>` both grid surfaces put beside their filter box.
+ * The toolbar both variable surfaces put above their list: a filter box and an
+ * order select, in that arrangement, with that wording.
  *
- * One builder rather than two so the two toolbars cannot drift into offering
- * different orders, or the same orders under different names.
+ * The Data grid and Variable View each hand-rolled their own, and the copies had
+ * already drifted in four ways — different placeholder text (one of which did not
+ * fit its box), one with an accessible name and one without, one debounced and one
+ * firing a DuckDB round-trip per keystroke, and the order select bolted on
+ * separately to each. None of those were decisions; they were what happens when
+ * two near-identical widgets are written a few months apart. There is one now.
  *
- * @param {string} value current order
- * @param {(v: string) => void} onChange
- * @returns {HTMLSelectElement}
+ * The count that follows is deliberately NOT shared: the grid's reports the
+ * variable *selection* ("3 selected") and Variable View's reports the *filter*
+ * result ("12 of 971"). Same slot, different facts.
+ *
+ * @param {Object} opts
+ * @param {string} [opts.filter] - initial filter text
+ * @param {(q: string) => void} opts.onFilter - debounced; called with the text
+ * @param {string} opts.order - initial {@link module:core/var-order} order
+ * @param {(v: string) => void} opts.onOrder
+ * @returns {{el: HTMLElement, filterInput: HTMLInputElement, orderSelect: HTMLSelectElement}}
  */
-function makeVarOrderSelect(value, onChange) {
-  const sel = document.createElement('select');
-  sel.className = 'grid-order';
-  sel.setAttribute('aria-label', 'Variable order');
-  sel.title = 'Order the variables by file order, name or label';
+function makeVarToolbar({ filter = '', onFilter, order, onOrder }) {
+  const el = document.createElement('div');
+  el.className = 'grid-toolbar';
+
+  const filterInput = document.createElement('input');
+  filterInput.type = 'search';
+  filterInput.className = 'grid-filter';
+  // Both surfaces match on name OR label, so say that rather than naming the
+  // things being filtered — "columns" and "variables" are the same objects seen
+  // from two tabs, and the longer of the two wordings did not fit its box.
+  filterInput.placeholder = 'Filter by name or label…';
+  // A placeholder is a visual affordance, not an accessible name.
+  filterInput.setAttribute('aria-label', 'Filter variables by name or label');
+  filterInput.value = filter;
+  // Debounced in both. The grid used to re-render (and re-read DuckDB) on every
+  // keystroke, which on a 971-variable file is a round-trip per character.
+  let debounce = null;
+  filterInput.addEventListener('input', () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(() => onFilter(filterInput.value), 100);
+  });
+
+  const orderSelect = document.createElement('select');
+  orderSelect.className = 'grid-order';
+  orderSelect.setAttribute('aria-label', 'Variable order');
+  orderSelect.title = 'Order the variables by file order, name or label';
   for (const [v, label] of VAR_ORDER_OPTIONS) {
     const o = document.createElement('option');
     o.value = v;
     o.textContent = label;
-    if (v === value) o.selected = true;
-    sel.append(o);
+    if (v === order) o.selected = true;
+    orderSelect.append(o);
   }
-  sel.addEventListener('change', () => onChange(sel.value));
-  return sel;
+  orderSelect.addEventListener('change', () => onOrder(orderSelect.value));
+
+  el.append(filterInput, orderSelect);
+  return { el, filterInput, orderSelect };
 }
 
 export class HistoryView {
