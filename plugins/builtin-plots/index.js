@@ -60,14 +60,6 @@ export const manifest = {
       order: 10,
       inputs: [
         { name: 'v', kind: 'variables', hint: 'The numeric variable whose distribution you want to see.', multiple: false, types: ['numeric'] },
-        {
-          name: 'bins',
-          kind: 'number',
-          label: 'Number of intervals',
-          optional: true,
-          default: 0,
-          hint: "How many bars to divide the range into. Leave 0 for an automatic choice (Sturges' rule).",
-        },
       ],
     },
     {
@@ -76,17 +68,6 @@ export const manifest = {
       order: 12,
       inputs: [
         { name: 'v', kind: 'variables', hint: 'The category variable to draw one bar per value of.', multiple: false, types: ['factor', 'string'] },
-        {
-          name: 'stat',
-          kind: 'choice',
-          label: 'Show',
-          hint: 'Bar height: how many cases, or what share of the valid cases.',
-          default: 'count',
-          options: [
-            { value: 'count', label: 'Count of cases' },
-            { value: 'percent', label: 'Valid percent' },
-          ],
-        },
       ],
     },
     {
@@ -95,17 +76,6 @@ export const manifest = {
       order: 14,
       inputs: [
         { name: 'v', kind: 'variables', hint: 'The variable to plot the distribution of — a line joins the count at each value.', multiple: false, types: ['numeric', 'factor', 'string'] },
-        {
-          name: 'stat',
-          kind: 'choice',
-          label: 'Show',
-          hint: 'Line height: how many cases, or what share of the valid cases.',
-          default: 'count',
-          options: [
-            { value: 'count', label: 'Count of cases' },
-            { value: 'percent', label: 'Valid percent' },
-          ],
-        },
       ],
     },
     {
@@ -128,25 +98,16 @@ export const manifest = {
         {
           name: 'summary',
           kind: 'choice',
-          label: 'Value',
-          hint: 'Percent within each X (composition), a case count, or the mean of a measure.',
-          default: 'percent',
+          label: 'Plot',
+          // Counts and means are different DATA — a mean needs the measure above —
+          // so this one stays a question. Whether counts are drawn as counts or
+          // as percentages, and as lines or stacked bars, are ways of showing the
+          // same numbers and live in ⚙ Chart options instead.
+          hint: 'How many cases there are, or the average of the measure above. Counts can be switched to percentages in Chart options afterwards.',
+          default: 'count',
           options: [
-            { value: 'percent', label: '% within each X (e.g. income mix per year)' },
             { value: 'count', label: 'Count of cases' },
             { value: 'mean', label: 'Mean of the measure' },
-          ],
-        },
-        {
-          name: 'display',
-          kind: 'choice',
-          label: 'Display as',
-          hint: 'Lines for trends; stacked bars for absolute composition; 100% stacked to compare shares.',
-          default: 'lines',
-          options: [
-            { value: 'lines', label: 'Lines' },
-            { value: 'stacked', label: 'Stacked bars' },
-            { value: 'stacked100', label: '100% stacked bars' },
           ],
         },
       ],
@@ -358,7 +319,7 @@ export async function histogram(app, { v: name, bins }) {
     kind: 'histogram',
     title: `Histogram of ${label(meta, name)}`,
     values,
-    axes: { x: { title: label(meta, name) }, y: { title: 'Count' } },
+    axes: { x: { title: label(meta, name) } }, // the y axis is named by the measure
     view: Number.isFinite(asked) && asked >= 1
       ? { binMode: 'count', binCount: Math.min(asked, 500) }
       : { binMode: 'auto' },
@@ -409,13 +370,11 @@ async function oneVarDistribution(app, { v: name, stat }, { mark, what }) {
   const labelOf = labelMapper(meta, name);
 
   const counts = new Map();
-  let valid = 0;
   for (const raw of col) {
     if (isBlank(raw)) continue;
     const k = String(raw);
     if (miss.has(k)) continue;
     counts.set(k, (counts.get(k) || 0) + 1);
-    valid += 1;
   }
   if (!counts.size) {
     await app.results.appendError(`${what}: no data after removing missing values.`);
@@ -439,15 +398,19 @@ async function oneVarDistribution(app, { v: name, stat }, { mark, what }) {
   const allNumeric = keys.every((k) => k.trim() !== '' && Number.isFinite(Number(k)));
   keys.sort(allNumeric ? (a, b) => Number(a) - Number(b) : (a, b) => String(a).localeCompare(String(b)));
 
-  const percent = stat === 'percent';
-  const values = keys.map((k) => (percent ? (counts.get(k) / valid) * 100 : counts.get(k)));
+  // Raw counts go in the model; `counts: true` tells the chart it may offer the
+  // count/percent switch. The values are the same numbers either way, so which
+  // one is on screen is a view setting rather than something settled in a dialog
+  // that has already closed. `stat` still SEEDS it, so a saved script or a
+  // replayed analysis reproduces the picture it produced before.
   await app.results.appendChart({
     kind: 'categorical',
     title: `${label(meta, name)}`,
     categories: keys.map((k) => ({ key: k, label: labelOf(k) })),
-    series: [{ key: 'n', label: percent ? 'Valid percent' : 'Count', values }],
-    axes: { x: { title: label(meta, name) }, y: { title: percent ? 'Valid percent' : 'Count' } },
-    view: { mark, legend: 'none' },
+    series: [{ key: 'n', label: 'Count', values: keys.map((k) => counts.get(k)) }],
+    counts: true,
+    axes: { x: { title: label(meta, name) } }, // the y axis is named by the measure
+    view: { mark, legend: 'none', yMeasure: stat === 'percent' ? 'percent' : 'count' },
   });
 }
 
@@ -589,19 +552,13 @@ export async function trends(app, { x, g, y, summary, display }) {
     if (!c) return 0;
     return isMean ? (c.n ? c.sum / c.n : 0) : c.sum; // sum == count when isMean is false
   };
-  // summary='percent' bakes the share into the value (so a lines view shows %).
-  let valueAt = raw;
-  if (summary === 'percent') {
-    if (hasG) {
-      valueAt = (xk, gk) => {
-        const tot = grpKeys.reduce((a, k) => a + raw(xk, k), 0) || 1;
-        return (raw(xk, gk) / tot) * 100;
-      };
-    } else {
-      const grand = catKeys.reduce((a, xk) => a + raw(xk, 'All'), 0) || 1;
-      valueAt = (xk) => (raw(xk, 'All') / grand) * 100;
-    }
-  }
+  // Percent is no longer baked in: counts go to the chart and the `Show` control
+  // turns them into shares — within each X when there are groups, of all cases
+  // when there are not, which is what this used to compute here. `summary:
+  // 'percent'` is still accepted and seeds that control, so an older saved
+  // script replays to the same picture.
+  const valueAt = raw;
+  const wantPercent = summary === 'percent';
 
   const xLabel = labelMapper(meta, x);
   const gLabel = labelMapper(meta, g);
@@ -613,18 +570,33 @@ export async function trends(app, { x, g, y, summary, display }) {
   }));
 
   const yLab = y ? label(meta, y) : '';
-  const valLab = summary === 'percent' ? 'Percent' : summary === 'count' ? 'Count' : `Mean ${yLab}`;
+  // A mean names itself in the title because it cannot be switched to anything
+  // else. A count can — so its title names the VARIABLES and lets the y axis say
+  // what is being measured, rather than going stale the moment the reader
+  // switches to percentages.
+  const title = isMean
+    ? `Mean ${yLab} by ${label(meta, x)}`
+    : hasG
+      ? `${label(meta, x)} by ${label(meta, g)}`
+      : `${label(meta, x)}`;
+  const valLab = `Mean ${yLab}`;
   await app.results.appendChart({
     kind: 'categorical',
-    title: `${valLab} by ${label(meta, x)}`,
+    title,
     categories,
     series,
-    axes: { x: { title: label(meta, x) }, y: { title: valLab } },
+    // A mean is not a count and cannot be shown as a percentage of anything, so
+    // the switch is offered only for the counts.
+    ...(isMean ? {} : { counts: true }),
+    axes: isMean
+      ? { x: { title: label(meta, x) }, y: { title: valLab } }
+      : { x: { title: label(meta, x) } }, // the y axis is named by the measure
     // Plugin-suggested defaults; the user can change all of these in the chart.
     view: {
-      mark: display === 'lines' ? 'line' : 'bar',
+      mark: display === 'stacked' || display === 'stacked100' ? 'bar' : 'line',
       stack: display === 'stacked' ? 'stacked' : display === 'stacked100' ? 'percent' : 'none',
       legend: hasG ? 'right' : 'none',
+      ...(isMean ? {} : { yMeasure: wantPercent ? 'percent' : 'count' }),
     },
   });
 }

@@ -115,6 +115,7 @@ export function chartKinds(lib) {
     baseView: (model) => ({
       mark: 'bar',
       stack: 'none',
+      ...(model.counts ? { yMeasure: 'count' } : {}),
       legend: (model.series || []).length > 1 ? 'right' : 'none',
     }),
     controls: (model) => {
@@ -124,6 +125,19 @@ export function chartKinds(lib) {
         id: 'mark', label: 'Type', type: 'select', structural: true, group: 'Chart', default: 'bar',
         options: [['bar', 'Bars'], ['line', 'Lines']],
       },
+      // Counts vs percent is a way of SHOWING the same numbers, so it belongs
+      // here and not in a dialog that has already closed. Offered only when the
+      // model says its values are case counts — a percentage of a group mean
+      // would be nonsense, so the control is absent rather than disabled.
+      ...(model.counts ? [{
+        id: 'yMeasure', label: 'Show', type: 'select', structural: true, group: 'Chart', default: 'count',
+        options: [
+          ['count', 'Count'],
+          // Which percent is meant follows from the shape of the data, so the
+          // option says which one it is rather than leaving the reader to guess.
+          ['percent', multi ? 'Percent within each category' : 'Percent of all cases'],
+        ],
+      }] : []),
       // Stacking is meaningless for lines and for a single series. The line half is a
       // view dependency; the single-series half is a fact about the model, so it is
       // settled here by omitting the control rather than carried as a predicate.
@@ -147,9 +161,49 @@ export function chartKinds(lib) {
     render: (model, view) => renderCategorical(model, view),
   });
 
+  /**
+   * The series as the view asks to see them.
+   *
+   * A counts model carries raw case counts and the `yMeasure` control decides
+   * whether they are drawn as counts or as percentages — the same numbers shown
+   * two ways, which is why it is a view setting and not a question asked before
+   * the chart exists.
+   *
+   * Which percent is meant follows from the data: with several series the
+   * interesting share is WITHIN each category (a composition — what the mix at
+   * this year looks like), and with one series it is of all cases. Those are the
+   * two things people mean by "percent" here, and the shape says which.
+   */
+  function asMeasure(model, view) {
+    const list = model.series || [];
+    if (!model.counts || (view.yMeasure || 'count') !== 'percent') {
+      return { series: list, yTitle: model.counts ? 'Count' : null };
+    }
+    const multi = list.length > 1;
+    const grand = list.reduce((a, s) => a + (s.values || []).reduce((b, v) => b + (Number(v) || 0), 0), 0);
+    const denomAt = (i) =>
+      multi ? list.reduce((a, s) => a + (Number(s.values?.[i]) || 0), 0) : grand;
+    const series = list.map((s) => ({
+      ...s,
+      values: (s.values || []).map((v, i) => {
+        const d = denomAt(i);
+        return d ? (Number(v) || 0) / d * 100 : 0;
+      }),
+      // Raw observations are counts' opposite — a counts model has none — but if
+      // one ever arrives, dropping them is honest where rescaling them is not.
+      rawValues: undefined,
+    }));
+    return { series, yTitle: multi ? 'Percent within each category' : 'Percent of all cases' };
+  }
+
   function renderCategorical(model, view) {
     const cats = ordered(model.categories, view.categoryOrder);
-    const series = ordered(model.series, view.seriesOrder);
+    const shown = asMeasure(model, view);
+    const series = ordered(shown.series, view.seriesOrder);
+    // The axis has to follow the measure, and a user's own title has to beat
+    // both. The MODEL's title is not consulted for a counts chart: it would say
+    // "Count" while the bars showed percentages.
+    if (shown.yTitle) view = { ...view, yAxisTitle: view.yAxisTitle || shown.yTitle };
     const isLine = view.mark === 'line';
     const stack = isLine ? 'none' : (view.stack || 'none');
     const catIndex = new Map((model.categories || []).map((c, i) => [c.key, i]));
@@ -2347,7 +2401,9 @@ export function chartKinds(lib) {
       // can never claim 30 values while drawing 28 — and anything that fell outside
       // the intervals is named rather than quietly missing.
       const binned = counts.reduce((a, b) => a + b, 0);
-      const f = xyFrame(model, { ...view, yAxisTitle: view.yAxisTitle || model.axes?.y?.title || yTitle }, {
+      // The measure names the axis; only the user's own title beats it. Reading
+      // the MODEL's y title first left a density plot labelled "Count".
+      const f = xyFrame(model, { ...view, yAxisTitle: view.yAxisTitle || yTitle }, {
         xValues: [edges[0], edges[edges.length - 1]],
         yValues: [0, hiY, curvePeak],
         noun: 'Histogram',
