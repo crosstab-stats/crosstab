@@ -539,6 +539,16 @@
       /* Plain bulleted list inside a dialog (e.g. the missing-plugins warning). */
       .ct-dialog__list { margin: 0 0 16px; padding: 0 0 0 20px; max-height: 40vh; overflow-y: auto; }
       .ct-dialog__list li { margin: 0 0 6px; line-height: 1.4; }
+      /* Search + sort bar above the variable picker's list (#174a). A GSS
+         extract is ~900 variables; without these the picker is a scroll. */
+      .ct-varfind { display: flex; gap: 8px; align-items: center; margin: 0 0 6px; }
+      .ct-varfind__q {
+        flex: 1 1 auto; min-width: 0; font: inherit; padding: 8px;
+        border: 1px solid var(--line); border-radius: 6px;
+      }
+      .ct-varfind__sort { flex: none; display: flex; align-items: center; gap: 6px; font-size: 13px; color: #5a6470; }
+      .ct-varfind__sort select { font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; }
+      .ct-varfind__count { margin: 0 0 6px; font-size: 12px; color: #5a6470; }
       .ct-dialog__vars { list-style: none; margin: 0 0 16px; padding: 0; max-height: 40vh; overflow-y: auto; }
       .ct-dialog__vars label {
         display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 6px; cursor: pointer;

@@ -44,6 +44,15 @@ export class UiService {
    * Show a modal variable picker and resolve with the chosen variable names, or
    * `null` if the user cancels.
    *
+   * The list is **searchable and sortable** (#174a). That is not decoration: a
+   * GSS extract carries ~900 variables, and this picker is the surface a student
+   * meets in *every* analysis — it was the only one of the three variable
+   * surfaces (Variable View, data grid, this) with neither a filter box nor an
+   * ordering choice, so finding IMMRGHTS meant scrolling 896 rows in file order.
+   * The sort choice is remembered across dialogs and sessions, because SPSS's
+   * equivalent is a global preference (Edit ▸ Options ▸ Variable Lists) that a
+   * student sets once in Lab 2 and never revisits.
+   *
    * @param {SelectVariablesOptions} [options]
    * @returns {Promise<string[] | null>}
    */
@@ -70,29 +79,17 @@ export class UiService {
     // For a single-select picker (radios) we only pre-check when exactly one is
     // selected; with several selected we still surface them on top but let the
     // user pick which one (several pre-checked radios can't coexist).
+    //
+    // Grouping is decided ONCE, from the incoming selection, and never
+    // recomputed: ticking a box must not make its row jump to the top group
+    // under the user's cursor.
     const selected = meta.filter((m) => checked.has(m.name));
     const rest = meta.filter((m) => !checked.has(m.name));
     const autoCheck = multiple || selected.length === 1;
-
-    const item = (m, inSelected) => {
-      const disabled = excluded.has(m.name);
-      return `
-      <li${disabled ? ' class="ct-dialog__excluded"' : ''}>
-        <label>
-          <input type="${inputType}" name="var" value="${attr(m.name)}"
-                 ${disabled ? 'disabled' : inSelected && autoCheck ? 'checked' : ''}>
-          <span>${esc(m.label ?? m.name)}</span>
-          <code>${esc(m.name)}</code>
-          ${disabled ? '<span class="ct-dialog__taken">already selected</span>' : ''}
-        </label>
-      </li>`;
-    };
-    const groupLabel = (text) => `<li class="ct-dialog__group">${esc(text)}</li>`;
-    const listHtml = selected.length
-      ? groupLabel('Selected') +
-        selected.map((m) => item(m, true)).join('') +
-        (rest.length ? groupLabel('All variables') + rest.map((m) => item(m, false)).join('') : '')
-      : meta.map((m) => item(m, false)).join('');
+    // Live tick state, kept outside the DOM so re-rendering (filter/sort) is lossless.
+    const ticked = new Set(
+      autoCheck ? selected.filter((m) => !excluded.has(m.name)).map((m) => m.name) : [],
+    );
 
     return new Promise((resolve) => {
       const dialog = document.createElement('dialog');
@@ -101,20 +98,131 @@ export class UiService {
         <form method="dialog" class="ct-dialog__form">
           <h2 class="ct-dialog__title">${esc(title)}</h2>
           ${hint ? `<p class="ct-dialog__hint">${esc(hint)}</p>` : ''}
-          <ul class="ct-dialog__vars">${listHtml}</ul>
+          <div class="ct-varfind">
+            <input type="search" class="ct-varfind__q" placeholder="Search name or label…"
+                   aria-label="Search variables by name or label" autocomplete="off">
+            <label class="ct-varfind__sort">Sort
+              <select class="ct-varfind__order" aria-label="Variable list order">
+                <option value="file">File order</option>
+                <option value="name">Name (A–Z)</option>
+                <option value="label">Label (A–Z)</option>
+              </select>
+            </label>
+          </div>
+          <p class="ct-varfind__count" role="status" aria-live="polite"></p>
+          <ul class="ct-dialog__vars"></ul>
           <menu class="ct-dialog__buttons">
             <button value="cancel" type="submit">Cancel</button>
             <button value="ok" type="submit" class="ct-dialog__primary">${esc(okLabel)}</button>
           </menu>
         </form>`;
 
+      const search = dialog.querySelector('.ct-varfind__q');
+      const order = dialog.querySelector('.ct-varfind__order');
+      const countEl = dialog.querySelector('.ct-varfind__count');
+      const list = dialog.querySelector('.ct-dialog__vars');
+      order.value = loadVarSort();
+
+      // Enter in the search box must not submit the form as OK on a half-typed
+      // query — the same rule selectFromList follows.
+      search.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') e.preventDefault();
+      });
+
+      const sorted = (rows) => {
+        const key = order.value;
+        if (key === 'file') return rows;
+        const of = key === 'name' ? (m) => m.name : (m) => m.label ?? m.name;
+        return [...rows].sort((a, b) => collate(of(a), of(b)) || collate(a.name, b.name));
+      };
+      const matching = (rows) => {
+        const q = search.value.trim().toLowerCase();
+        if (!q) return rows;
+        return rows.filter(
+          (m) =>
+            m.name.toLowerCase().includes(q) || String(m.label ?? '').toLowerCase().includes(q),
+        );
+      };
+
+      const row = (m) => {
+        const disabled = excluded.has(m.name);
+        const li = document.createElement('li');
+        if (disabled) li.className = 'ct-dialog__excluded';
+        const label = document.createElement('label');
+        const input = document.createElement('input');
+        input.type = inputType;
+        input.name = 'var';
+        input.value = m.name;
+        input.disabled = disabled;
+        input.checked = ticked.has(m.name);
+        input.addEventListener('change', () => {
+          if (!multiple) ticked.clear();
+          if (input.checked) ticked.add(m.name);
+          else ticked.delete(m.name);
+          // A radio turning on silently turns its siblings off; repaint so the
+          // rows agree with the model even when the browser did it for us.
+          if (!multiple) {
+            for (const el of list.querySelectorAll('input[name="var"]')) {
+              el.checked = ticked.has(el.value);
+            }
+          }
+        });
+        const span = document.createElement('span');
+        span.textContent = m.label ?? m.name;
+        const code = document.createElement('code');
+        code.textContent = m.name;
+        label.append(input, span, code);
+        if (disabled) {
+          const taken = document.createElement('span');
+          taken.className = 'ct-dialog__taken';
+          taken.textContent = 'already selected';
+          label.append(taken);
+        }
+        li.append(label);
+        return li;
+      };
+      const groupLabel = (text) => {
+        const li = document.createElement('li');
+        li.className = 'ct-dialog__group';
+        li.textContent = text;
+        return li;
+      };
+
+      const render = () => {
+        const top = sorted(matching(selected));
+        const bottom = sorted(matching(rest));
+        list.replaceChildren();
+        if (selected.length) {
+          if (top.length) {
+            list.append(groupLabel('Selected'));
+            for (const m of top) list.append(row(m));
+          }
+          if (bottom.length) {
+            list.append(groupLabel('All variables'));
+            for (const m of bottom) list.append(row(m));
+          }
+        } else {
+          for (const m of bottom) list.append(row(m));
+        }
+        const shown = top.length + bottom.length;
+        countEl.textContent =
+          shown === meta.length
+            ? `${meta.length} variable${meta.length === 1 ? '' : 's'}`
+            : `${shown} of ${meta.length} variables`;
+        if (!shown) list.append(groupLabel('No variable matches that search.'));
+      };
+      search.addEventListener('input', render);
+      order.addEventListener('change', () => {
+        saveVarSort(order.value);
+        render();
+      });
+      render();
+
       document.body.append(dialog);
       dialog.addEventListener('close', () => {
-        const chosen = [...dialog.querySelectorAll('input[name="var"]:checked')].map(
-          (el) => el.value,
-        );
         dialog.remove();
-        resolve(dialog.returnValue === 'ok' ? chosen : null);
+        // Read the model, not the DOM: a tick scrolled out by a search is still a tick.
+        resolve(dialog.returnValue === 'ok' ? [...ticked] : null);
       });
       dialog.showModal();
     });
@@ -386,6 +494,45 @@ export class UiService {
       pickFile: (opts) => this.pickFile(opts),
     });
   }
+}
+
+/**
+ * The variable picker's ordering preference (`'file' | 'name' | 'label'`).
+ *
+ * It lives in localStorage rather than in the project, because it describes how
+ * *this reader* likes to hunt for a variable, not anything about the data — the
+ * same reasoning SPSS applies by putting it in Edit ▸ Options rather than in the
+ * .sav. A missing or unrecognised value falls back to file order, which is what
+ * the picker did before the choice existed.
+ */
+const VAR_SORT_KEY = 'crosstab.varpicker.sort';
+const VAR_SORTS = ['file', 'name', 'label'];
+
+/** Read the remembered picker order, defaulting to file order. */
+export function loadVarSort() {
+  try {
+    const v = globalThis.localStorage?.getItem(VAR_SORT_KEY);
+    return VAR_SORTS.includes(v) ? v : 'file';
+  } catch {
+    return 'file'; // storage disabled (private mode, sandboxed frame)
+  }
+}
+
+/** Remember the picker order. Failure to persist is not worth interrupting a dialog for. */
+export function saveVarSort(value) {
+  if (!VAR_SORTS.includes(value)) return;
+  try { globalThis.localStorage?.setItem(VAR_SORT_KEY, value); } catch { /* storage unavailable */ }
+}
+
+/**
+ * Case- and accent-aware comparison for the A–Z orders.
+ *
+ * Plain `<` would file every lowercase name after every uppercase one, which in
+ * a GSS extract (mixed `age`, `IMMASSIM`) reads as two separate alphabets.
+ */
+const COLLATOR = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+function collate(a, b) {
+  return COLLATOR.compare(String(a ?? ''), String(b ?? ''));
 }
 
 /** HTML-escape text content. */
