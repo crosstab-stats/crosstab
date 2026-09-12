@@ -39,28 +39,44 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
       **The must-haves, in the order they block a student:**
 
-      - [ ] **a. Mode.** There is no mode statistic anywhere in the app. Lab 4 asks for it
+      - [ ] **a. Sort the variable list — and search it where it actually matters.**
+            Lab 2's *first* instruction, before a single statistic, is SPSS's
+            Edit ▸ Options ▸ Variable Lists ▸ **Display names / Alphabetical** — because
+            GSS 2014 carries **896 variables** and the packet then sends students hunting
+            for IMMASSIM, IMMRGHTS, TVHOURS and WTSSNR one at a time. CrossTab has no
+            alphabetical option anywhere, and its three variable surfaces are
+            inconsistent: Variable View has a name/label filter box, the data grid has
+            "Filter columns…", and **`ui.selectVariables` — the picker that *every*
+            analysis opens — has neither filter nor sort** (`core/ui-service.js`). It
+            renders all 896 in dataset order, with only the already-selected floated into
+            a "Selected" group at the top. That makes the picker the worst of the three,
+            because it is the surface a student meets in every lab. Wants: a sort toggle
+            (file order / name / label) that persists, and the search box the other two
+            already have. *Found by the owner trying to follow Lab 2 (2026-09-11) — he
+            went looking for it and it was not there.*
+
+      - [ ] **b. Mode.** There is no mode statistic anywhere in the app. Lab 4 asks for it
             three times in the body and twice more in the practice problems, because for a
             *nominal* variable it is the only measure of central tendency that is legal —
             which is the lesson. Right now CrossTab cannot report the average of a nominal
             variable at all.
 
-      - [ ] **b. Variance and range.** Lab 5 names both. `builtin-descriptives` reports N,
+      - [ ] **c. Variance and range.** Lab 5 names both. `builtin-descriptives` reports N,
             missing, mean, SD, min, P25, median, P75, max — neither variance nor range.
 
-      - [ ] **c. Statistics reachable from Frequencies, for non-numeric variables.** The
+      - [ ] **d. Statistics reachable from Frequencies, for non-numeric variables.** The
             packet always gets central tendency by ticking boxes inside Frequencies ▸
             Statistics, and it does this *on ordinal and nominal variables*
             (IMMRGHTS, IMMASSIM). CrossTab's Descriptives is `types: ['numeric']`, so a
             factor cannot be selected, and Frequencies offers no statistics at all. Mode and
             median for a labelled factor is the single most-repeated action in Part I.
 
-      - [ ] **d. A confidence interval for a mean, at a level you choose.** Lab 9 is
+      - [ ] **e. A confidence interval for a mean, at a level you choose.** Lab 9 is
             nothing else: point estimate, lower bound, upper bound, at 95% *and* 99%. There
             is no Explore equivalent; the only CI in the app is the fixed 95% by-product of
             the one-sample t-test.
 
-      - [ ] **e. Weights on the everyday analyses.** Lab 9 turns on WTSSNR and **labs 10–12
+      - [ ] **f. Weights on the everyday analyses.** Lab 9 turns on WTSSNR and **labs 10–12
             are all run weighted**. Today a weight can only be supplied to `builtin-survey`'s
             three actions (weighted means, weighted crosstab, survey regression) — not to
             Frequencies, Descriptives, Crosstabs+χ², the t-tests, ANOVA or correlation.
@@ -70,7 +86,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
             an SPSS-style global mode — but a student following "Data ▸ Weight cases" must
             land somewhere.
 
-      - [ ] **f. A plain bar chart and a plain line chart of ONE variable.** Lab 3 teaches
+      - [ ] **g. A plain bar chart and a plain line chart of ONE variable.** Lab 3 teaches
             that the level of measurement picks the chart: bar for nominal, pie for nominal,
             histogram for interval-ratio, line for interval-ratio. CrossTab has pie and
             histogram. What it has instead of a simple bar chart is "Bar chart with error
@@ -78,11 +94,11 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
             coerced into counts-per-category, but no student reading "make a bar chart of
             IMMRGHTS" will ever find it under that name).
 
-      - [ ] **g. Number of bins on a histogram.** Lab 3 has students open Binning and set
+      - [ ] **h. Number of bins on a histogram.** Lab 3 has students open Binning and set
             the interval count. `binData` picks bins automatically and they become fixed
             categories in the model — not adjustable after render.
 
-      - [ ] **h. A recoded variable must be usable in the bivariate analyses.** This is the
+      - [ ] **i. A recoded variable must be usable in the bivariate analyses.** This is the
             sharpest one. The Recode dialog defaults Type to `numeric`; Crosstabs' row and
             column, the independent t-test's grouping variable, and ANOVA's factor all
             accept only `factor`/`string`. The whole assignment is *recode to dichotomous,
@@ -90,31 +106,31 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
             takes the default silently cannot select the variable they just made, with no
             message saying why.
 
-      - [ ] **i. Label the new variable, and its values, while recoding.** The packet always
+      - [ ] **j. Label the new variable, and its values, while recoding.** The packet always
             names the new variable AND its value labels in the same breath ("1 = Agree,
             2 = Disagree"). CrossTab makes that a second trip through Variable View. Minor
             per use; this happens eight times in Lab 7 alone.
 
-      - [ ] **j. Build an index — count a value across several variables per case.** Lab 8
+      - [ ] **k. Build an index — count a value across several variables per case.** Lab 8
             is SPSS's *Count Values Within Cases* over eight dichotomous variables, with
             only complete responders counted. Compute variable can do `a + b + c` (and NULL
             propagation gives the complete-responders rule for free), but counting a
             *specific value* across a variable list means hand-writing a CASE WHEN per
             variable. An index builder is the natural shape.
 
-      - [ ] **k. Levene's test and the equal-variances row in the independent t-test.**
+      - [ ] **l. Levene's test and the equal-variances row in the independent t-test.**
             Lab 11 walks students through reading F and Sig from "Levene's Test for Equality
             of Variances" and *then* choosing which t row to read. `builtin-compare` prints
             Welch only; Levene's lives in a separate Assumptions plugin, which teaches the
             wrong lesson about why the two rows exist.
 
-      - [ ] **l. The regression equation on the scatter fit.** Lab 16 has students read
+      - [ ] **m. The regression equation on the scatter fit.** Lab 16 has students read
             Y = A + B(X) off the chart and predict from it. R² is drawn; slope and intercept
             are computed (`leastSquares`) and then thrown away at render.
 
-      **Two things to decide, not to build blind:** (1) whether **e** becomes a per-analysis
+      **Two things to decide, not to build blind:** (1) whether **f** becomes a per-analysis
       weight input everywhere or a dataset-level declaration — it is the one item here with
-      an existing, deliberate design decision pointing the other way; (2) whether **a/b/c**
+      an existing, deliberate design decision pointing the other way; (2) whether **b/c/d**
       land as a *Statistics…* sub-dialog on Frequencies (SPSS's shape, which is what the
       packet's muscle memory expects) or as a widened Descriptives that accepts factors.
 
