@@ -30,7 +30,7 @@
 export const manifest = {
   id: 'builtin-plots',
   name: 'Plots',
-  version: '0.9.0',
+  version: '1.0.0',
   apiVersion: '0.1.0',
   category: 'Graphs',
   keywords: ['chart', 'histogram', 'scatter', 'boxplot', 'bar', 'bar chart', 'line', 'line chart', 'pie', 'plot', 'bins'],
@@ -316,6 +316,22 @@ export async function beforeAfter(app, { vars, idVar }) {
 
 // --- chart functions ---------------------------------------------------------
 
+/**
+ * Histogram (#174h, #174o).
+ *
+ * This hands the chart the **raw values**, not bins. A histogram's intervals are
+ * not a detail of how it was drawn — they are the argument it makes: the same
+ * column reads bimodal at six intervals and smooth at twelve, and where the
+ * boundaries fall decides which side of "18" a seventeen-year-old lands on.
+ * Binning here would settle that once, in a dialog, and freeze it. Binning in
+ * the `histogram` chart kind instead makes the interval count, the width, the
+ * first boundary and an explicit list of cut points into live controls, saved
+ * with the chart like any other view setting.
+ *
+ * The `bins` input survives because it still has two jobs: it seeds the chart,
+ * and it is how a script or a replayed analysis states an interval count without
+ * a human touching the options panel.
+ */
 export async function histogram(app, { v: name, bins }) {
   if (!name) return;
   const meta = await metaMap(app);
@@ -328,18 +344,46 @@ export async function histogram(app, { v: name, bins }) {
     if (Number.isFinite(n)) xs.push(n);
   }
   if (!xs.length) { await app.results.appendError('Histogram: no finite values to plot.'); return; }
-  const { edges, counts } = binData(xs, bins);
-  // Bins become categories (gapped bars — the smart-chart trade for live recolour/
-  // reorder/relabel + persistence). Value = count per bin.
-  const categories = counts.map((_, i) => ({ key: String(i), label: `${round2(edges[i])}–${round2(edges[i + 1])}` }));
+
+  // The model is saved with the project, so a million-row column would put a
+  // million numbers in it. Past the cap the chart is drawn from a random sample —
+  // a histogram's shape is a distribution estimate and 100k observations settle it
+  // — and the chart says so rather than quietly describing part of the data.
+  const CAP = 100000;
+  const sampled = xs.length > CAP;
+  const values = sampled ? reservoir(xs, CAP) : xs;
+
+  const asked = Math.floor(Number(bins));
   await app.results.appendChart({
-    kind: 'categorical',
+    kind: 'histogram',
     title: `Histogram of ${label(meta, name)}`,
-    categories,
-    series: [{ key: 'count', label: 'Count', values: counts }],
+    values,
     axes: { x: { title: label(meta, name) }, y: { title: 'Count' } },
-    view: { mark: 'bar', legend: 'none' },
+    view: Number.isFinite(asked) && asked >= 1
+      ? { binMode: 'count', binCount: Math.min(asked, 500) }
+      : { binMode: 'auto' },
   });
+  if (sampled) {
+    await app.results.appendText(
+      `_Drawn from a random sample of ${CAP.toLocaleString()} of the ${xs.length.toLocaleString()} values, ` +
+        'so the chart stays re-binnable without storing every observation in the project._',
+    );
+  }
+}
+
+/**
+ * A uniform random sample of `k` items, in one pass (reservoir sampling).
+ *
+ * Uniform matters: taking the first k would describe the head of the file, which
+ * in sorted or time-ordered data is a different distribution from the whole.
+ */
+function reservoir(xs, k) {
+  const out = xs.slice(0, k);
+  for (let i = k; i < xs.length; i++) {
+    const j = Math.floor(Math.random() * (i + 1));
+    if (j < k) out[j] = xs[i];
+  }
+  return out;
 }
 
 /**
@@ -718,33 +762,6 @@ function round2(v) {
 /** Arithmetic mean of a numeric array (NaN if empty). */
 function meanOf(arr) {
   return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : NaN;
-}
-
-/** Even-width histogram bins over [min,max] using Sturges' rule (k = ⌈log₂n⌉+1).
- * Returns `{edges: number[k+1], counts: number[k]}`; the max value lands in the last
- * bin. A single distinct value degenerates to one bin. */
-function binData(xs, requested) {
-  const min = Math.min(...xs);
-  const max = Math.max(...xs);
-  if (min === max) return { edges: [min, min + 1], counts: [xs.length] };
-  // A histogram's shape is an argument about the data, and the interval count is
-  // the knob that argument turns — which is why a methods lab has students open
-  // SPSS's Binning and set it by hand (#174h). 0 / blank keeps Sturges' rule; the
-  // cap is high enough never to bite a real request and low enough that a typo
-  // cannot ask for ten thousand bars.
-  const asked = Math.floor(Number(requested));
-  const k = Number.isFinite(asked) && asked >= 1 ? Math.min(asked, 500) : Math.max(1, Math.ceil(Math.log2(xs.length)) + 1);
-  const width = (max - min) / k;
-  const edges = Array.from({ length: k + 1 }, (_, i) => min + i * width);
-  edges[k] = max; // guard float drift so max is included, not spilled past the edge
-  const counts = new Array(k).fill(0);
-  for (const x of xs) {
-    let b = Math.floor((x - min) / width);
-    if (b >= k) b = k - 1; // the max value → last bin
-    if (b < 0) b = 0;
-    counts[b] += 1;
-  }
-  return { edges, counts };
 }
 
 /** Ordinary least-squares fit of y on x → {slope, intercept, r2}, or null if the

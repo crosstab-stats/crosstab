@@ -47,15 +47,15 @@ export const manifest = {
   // disabled Plots to test chart behaviour, then could not tell why the options panel
   // survived. "Engine" says infrastructure, and explains why this one has no menu.
   name: 'Chart engine',
-  version: '0.1.0',
+  version: '0.2.0',
   apiVersion: '0.1.0',
   // Filed under Graphs so it sorts directly above Plots in the plugin manager, where the
   // pairing is visible rather than something to infer. Category also picks the top-level
   // MENU, but this plugin contributes no menu items, so none appears.
   category: 'Graphs',
   keywords: ['chart', 'charts', 'plot', 'graph', 'figure', 'bar', 'line', 'scatter',
-    'pie', 'violin', 'boxplot', 'box plot', 'dot plot', 'word cloud', 'forest plot',
-    'kaplan-meier', 'survival curve', 'single-case', 'sced'],
+    'pie', 'violin', 'boxplot', 'box plot', 'dot plot', 'histogram', 'bins', 'word cloud',
+    'forest plot', 'kaplan-meier', 'survival curve', 'single-case', 'sced'],
   howto:
     'Draws every figure in CrossTab. It has no menu of its own — other plugins compute the numbers and hand them here to be drawn.\n' +
     'Eight plugins depend on it: Plots, Survival (Kaplan–Meier), Meta-analysis (forest), SCED, Factor, Time series, Text analytics and CAQDAS (word clouds).\n' +
@@ -66,7 +66,7 @@ export const manifest = {
   // the loader is explicit that a plugin can only do what a manifest section allows.
   charts: {
     via: 'chartKinds',
-    kinds: ['categorical', 'scatter', 'pie', 'violin', 'dots', 'paired', 'box', 'steps', 'forest', 'sced', 'wordcloud'],
+    kinds: ['categorical', 'scatter', 'pie', 'violin', 'dots', 'paired', 'box', 'histogram', 'steps', 'forest', 'sced', 'wordcloud'],
   },
 };
 
@@ -2128,6 +2128,296 @@ export function chartKinds(lib) {
     },
   });
 
+
+  // =============================================================================
+  // KIND: histogram (raw values, binned AT RENDER TIME)
+  // =============================================================================
+
+  /**
+   * Chart kind: a histogram over the raw observations (#174o).
+   *
+   * Unlike every other kind here, this one is handed the **data**, not a summary.
+   * That is the whole point. A histogram's bins are not a detail of how it was
+   * drawn — they are the argument it makes: the same column looks bimodal at six
+   * intervals and smooth at twelve, and where the boundaries fall decides which
+   * side of "18" a seventeen-year-old lands on. Pre-binning in the plugin made
+   * that argument once, in a dialog, and froze it: changing your mind meant
+   * re-running the analysis. Binning here instead makes the interval count, the
+   * interval width, the first boundary and (if you want) an explicit list of cut
+   * points into live controls, persisted with the chart like every other view
+   * setting.
+   *
+   * The cost is that the model carries every observation. The scatter kind
+   * already does exactly this with its `points`, so it is not a new precedent —
+   * but it is why there is a cap in the plugin that builds the model.
+   */
+
+  /** Bin boundaries from the raw values and the view's binning controls. */
+  function histEdges(values, view) {
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const mode = view.binMode || 'auto';
+
+    if (mode === 'custom') {
+      const cuts = String(view.binCuts ?? '')
+        .split(/[\s,;]+/)
+        .map(Number)
+        .filter(Number.isFinite);
+      const uniq = [...new Set(cuts)].sort((a, b) => a - b);
+      // Fewer than two cut points is not a binning, so fall through to automatic
+      // rather than drawing nothing. The renderer says so in a note.
+      if (uniq.length >= 2) return { edges: uniq, custom: true };
+    }
+
+    if (mode === 'width') {
+      const w = Number(view.binWidth);
+      if (Number.isFinite(w) && w > 0) {
+        // Anchored at the first boundary and extended in whole widths in BOTH
+        // directions until every value is covered — so setting an anchor above the
+        // minimum widens the picture rather than quietly dropping the low tail.
+        const anchor = Number.isFinite(Number(view.binStart)) && String(view.binStart ?? '') !== ''
+          ? Number(view.binStart)
+          : min;
+        const k0 = Math.floor((min - anchor) / w);
+        const k1 = Math.floor((max - anchor) / w) + 1; // +1 so the maximum is inside, not on the last edge
+        const n = Math.min(k1 - k0, 2000); // a typo in the width box must not ask for a million bars
+        const edges = [];
+        for (let k = 0; k <= n; k++) edges.push(anchor + (k0 + k) * w);
+        return { edges };
+      }
+    }
+
+    if (min === max) return { edges: [min, min + 1] };
+    const asked = Number(view.binCount);
+    const k = mode === 'count' && Number.isFinite(asked) && asked >= 1
+      ? Math.min(Math.round(asked), 500)
+      : Math.max(1, Math.ceil(Math.log2(values.length)) + 1); // Sturges
+    const step = (max - min) / k;
+    const edges = Array.from({ length: k + 1 }, (_, i) => min + i * step);
+    edges[k] = max; // guard float drift so the maximum is included, not spilled past the edge
+    return { edges };
+  }
+
+  /** Count values into `edges`. Bins are [lo, hi) with the LAST closed on the right. */
+  function histCounts(values, edges) {
+    const counts = new Array(edges.length - 1).fill(0);
+    let outside = 0;
+    for (const v of values) {
+      if (v < edges[0] || v > edges[edges.length - 1]) { outside += 1; continue; }
+      // Linear from the top: bin counts are small and this stays exact at the
+      // boundaries, where a computed index drifts by one on float error.
+      let i = counts.length - 1;
+      while (i > 0 && v < edges[i]) i -= 1;
+      counts[i] += 1;
+    }
+    return { counts, outside };
+  }
+
+  /**
+   * The finite observations in the model.
+   *
+   * Blanks are dropped BEFORE the numeric coercion, not after: `Number(null)` and
+   * `Number('')` are both 0, so filtering on `Number.isFinite` alone would bin
+   * every empty cell as a real zero and put a spike at the origin that nothing in
+   * the data put there.
+   */
+  const histValues = (model) =>
+    (model.values || [])
+      .filter((v) => v !== null && v !== undefined && v !== '')
+      .map(Number)
+      .filter(Number.isFinite);
+
+  /** Are all the bins the same width? (Custom cut points usually are not.) */
+  function equalWidth(edges) {
+    const w = edges[1] - edges[0];
+    return edges.every((e, i) => i === 0 || Math.abs(e - edges[i - 1] - w) < Math.abs(w) * 1e-9);
+  }
+
+  kinds['histogram'] = ({
+    altNoun: 'Histogram',
+    colorLabel: 'Bars',
+    reorderCategories: false,
+    colorItems: () => [{ key: '__bars__', label: 'Bars' }],
+    baseView: () => ({
+      binMode: 'auto',
+      yMeasure: 'count',
+      legend: 'none',
+      barGap: 0,
+    }),
+    controls: (model) => {
+      const vals = histValues(model);
+      const n = vals.length;
+      return [
+        {
+          id: 'binMode', label: 'Intervals', type: 'select', group: 'Bins', structural: true,
+          default: 'auto',
+          options: [
+            ['auto', `Automatic (${n ? Math.max(1, Math.ceil(Math.log2(n)) + 1) : 1} by Sturges' rule)`],
+            ['count', 'By number of intervals'],
+            ['width', 'By interval width'],
+            ['custom', 'At my own cut points'],
+          ],
+        },
+        {
+          id: 'binCount', label: 'Number of intervals', type: 'number', group: 'Bins',
+          min: 1, max: 500, step: 1,
+          default: n ? Math.max(1, Math.ceil(Math.log2(n)) + 1) : 1,
+          visibleWhen: { control: 'binMode', equals: 'count' },
+        },
+        {
+          id: 'binWidth', label: 'Interval width', type: 'number', group: 'Bins', min: 0, step: 1,
+          placeholder: 'e.g. 5',
+          visibleWhen: { control: 'binMode', equals: 'width' },
+        },
+        {
+          id: 'binStart', label: 'First boundary', type: 'number', group: 'Bins',
+          placeholder: n ? `${fmtNum(Math.min(...vals))} (the minimum)` : 'the minimum',
+          visibleWhen: { control: 'binMode', equals: 'width' },
+        },
+        {
+          id: 'binCuts', label: 'Cut points', type: 'text', group: 'Bins',
+          placeholder: 'e.g. 18, 30, 45, 65, 100',
+          visibleWhen: { control: 'binMode', equals: 'custom' },
+        },
+        { id: 'edgeTicks', label: 'Mark the boundaries', type: 'check', group: 'Bins', default: false },
+        {
+          id: 'yMeasure', label: 'Bar height', type: 'select', group: 'Chart', structural: true, default: 'count',
+          options: [['count', 'Count'], ['percent', 'Percent of cases'], ['density', 'Density']],
+        },
+        { id: 'normalCurve', label: 'Normal curve', type: 'check', group: 'Chart', default: false },
+        { id: 'showStats', label: 'Show mean, SD and N', type: 'check', group: 'Chart', default: false },
+        { id: 'barGap', label: 'Gap between bars', type: 'number', group: 'Chart', min: 0, max: 0.5, step: 0.05, default: 0 },
+        gridlinesControl(),
+        paletteControl(false),
+        valueLabelsControl(),
+        ...valueLabelFormatControls(),
+        ...titleControls(model),
+        ...axisControls('x', model),
+        ...axisControls('y', model),
+      ];
+    },
+    render: (model, view) => {
+      const vals = histValues(model);
+      if (!vals.length) return errorSvg('Histogram: no finite values to plot.');
+
+      const { edges, custom } = histEdges(vals, view);
+      const { counts, outside } = histCounts(vals, edges);
+      const n = vals.length;
+      const measure = view.yMeasure || 'count';
+      // Density is count / (n × width), so the bars enclose an area of 1 whatever
+      // the intervals are — the one height that stays comparable across unequal bins.
+      const heights = counts.map((c, i) =>
+        measure === 'percent' ? (c / n) * 100
+        : measure === 'density' ? c / (n * (edges[i + 1] - edges[i]))
+        : c,
+      );
+      const hiY = Math.max(...heights, 0);
+
+      const mean = vals.reduce((a, b) => a + b, 0) / n;
+      const sd = n > 1 ? Math.sqrt(vals.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1)) : 0;
+      const equal = equalWidth(edges);
+      const curveOk = view.normalCurve && sd > 0 && (measure === 'density' || equal);
+      // Scaled to the bars: a density integrates to 1, so counts multiply by n×width
+      // and percents by 100×width. Computed BEFORE the frame because the curve's peak
+      // has to be in the y domain — a curve that runs off the top of the plot is
+      // drawn at a height the axis says is impossible.
+      const binW = (edges[edges.length - 1] - edges[0]) / (edges.length - 1);
+      const curveK = measure === 'density' ? 1 : measure === 'percent' ? 100 * binW : n * binW;
+      const curvePeak = curveOk ? curveK / (sd * Math.sqrt(2 * Math.PI)) : 0;
+
+      const yTitle = measure === 'percent' ? 'Percent' : measure === 'density' ? 'Density' : 'Count';
+      // The alt text counts what was actually BINNED, not what was handed in, so it
+      // can never claim 30 values while drawing 28 — and anything that fell outside
+      // the intervals is named rather than quietly missing.
+      const binned = counts.reduce((a, b) => a + b, 0);
+      const f = xyFrame(model, { ...view, yAxisTitle: view.yAxisTitle || model.axes?.y?.title || yTitle }, {
+        xValues: [edges[0], edges[edges.length - 1]],
+        yValues: [0, hiY, curvePeak],
+        noun: 'Histogram',
+        alt: `${plural(counts.length, 'interval')} over ${plural(binned, 'value')}, ` +
+          `from ${fmtNum(edges[0])} to ${fmtNum(edges[edges.length - 1])}.` +
+          (outside ? ` ${plural(outside, 'value')} outside the intervals.` : ''),
+      });
+
+      const colour = colorFor(view, '__bars__', 0);
+      const gap = Math.min(0.5, Math.max(0, Number(view.barGap) || 0));
+      const y0 = f.yScale(0);
+      counts.forEach((c, i) => {
+        const x0 = f.xScale(edges[i]);
+        const x1 = f.xScale(edges[i + 1]);
+        const inset = ((x1 - x0) * gap) / 2;
+        const y = f.yScale(heights[i]);
+        const w = Math.max(0.5, x1 - x0 - inset * 2);
+        if (heights[i] > 0) {
+          f.out.push(
+            `<rect x="${r(x0 + inset)}" y="${r(y)}" width="${r(w)}" height="${r(y0 - y)}" ` +
+              `fill="${colour}" stroke="#fff" stroke-width="0.5"/>`,
+          );
+        }
+        if (view.valueLabels && c > 0) {
+          f.out.push(text((x0 + x1) / 2, y - 4, fmtNum(heights[i]), {
+            size: view.valueLabelSize || 11, anchor: 'middle', fill: '#333',
+            weight: view.valueLabelBold ? 600 : undefined, italic: !!view.valueLabelItalic,
+          }));
+        }
+      });
+
+      // Boundary ticks. Always drawn when asked; labelled only while they fit, so a
+      // 40-bin histogram gets marks rather than a band of overlapping numbers.
+      if (view.edgeTicks) {
+        // Label only boundaries the axis has not already numbered, on their own row.
+        // Repeating them produced two rows of interleaved numbers that read as noise
+        // and hid the ones that were actually new.
+        const axisTicks = niceTicks(f.xLo, f.xHi, 7);
+        const tol = (f.xHi - f.xLo) * 1e-6;
+        const onTick = (e) => axisTicks.some((t) => Math.abs(t - e) <= tol);
+        const label = edges.length <= 15;
+        for (const e of edges) {
+          const x = f.xScale(e);
+          f.out.push(`<line x1="${r(x)}" y1="${r(f.box.y0)}" x2="${r(x)}" y2="${r(f.box.y0 + 4)}" stroke="#8a6d3b" stroke-width="1"/>`);
+          if (label && !onTick(e)) {
+            f.out.push(text(x, f.box.y0 + 31, fmtNum(e), { size: 10, anchor: 'middle', fill: '#8a6d3b' }));
+          }
+        }
+      }
+
+      if (curveOk) {
+        // Drawn only where the scaling above is defined — with unequal intervals
+        // there is no single width to scale by, so the control is replaced by a note
+        // saying so rather than drawing a curve that matches nothing on screen.
+        const k = curveK;
+        const pts = [];
+        const steps = 120;
+        for (let i = 0; i <= steps; i++) {
+          const x = f.xLo + ((f.xHi - f.xLo) * i) / steps;
+          const d = Math.exp(-((x - mean) ** 2) / (2 * sd * sd)) / (sd * Math.sqrt(2 * Math.PI));
+          pts.push(`${r(f.xScale(x))},${r(f.yScale(k * d))}`);
+        }
+        f.out.push(`<polyline points="${pts.join(' ')}" fill="none" stroke="#c0392b" stroke-width="2"/>`);
+      }
+
+      const notes = [];
+      if (view.normalCurve && !curveOk) {
+        notes.push(sd > 0
+          ? 'Normal curve needs equal intervals (or Density)'
+          : 'Normal curve needs some spread in the data');
+      }
+      if (outside) notes.push(`${plural(outside, 'value')} outside the cut points`);
+      if (view.binMode === 'custom' && !custom) notes.push('Give at least two cut points');
+      if (notes.length) {
+        f.out.push(text(f.box.x1, f.box.y1 - 4, notes.join(' · '), {
+          size: 11, anchor: 'end', fill: '#8a6d3b',
+        }));
+      }
+      if (view.showStats) {
+        const lines = [`Mean = ${fmtNum(mean)}`, `SD = ${fmtNum(sd)}`, `N = ${n}`];
+        lines.forEach((s, i) => {
+          f.out.push(text(f.box.x1 - 4, f.box.y1 + 14 + i * 14, s, { size: 11, anchor: 'end', fill: '#444' }));
+        });
+      }
+      return f.close();
+    },
+  });
 
   // Adapt each definition to the two-verb wire contract. `describe` is the same
   // computation core used to do in `chartSpecOf`; it lives here now because the kind,
