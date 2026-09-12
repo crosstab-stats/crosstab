@@ -4,7 +4,8 @@
  *
  * Four classic tests, each a declarative menu item with its own inputs:
  *  - One-sample t-test (a variable's mean vs. a value)
- *  - Independent-samples t-test (a numeric outcome across two groups; Welch)
+ *  - Independent-samples t-test (a numeric outcome across two groups; Levene's
+ *    test, then the equal-variances and Welch rows — SPSS's two-row table)
  *  - Paired-samples t-test (two variables on the same cases)
  *  - One-way ANOVA (a numeric outcome across 3+ groups)
  *
@@ -17,10 +18,10 @@
 export const manifest = {
   id: 'builtin-compare',
   name: 'Compare Means',
-  version: '0.1.0',
+  version: '0.2.0',
   apiVersion: '0.1.0',
   category: 'Comparison',
-  keywords: ['t-test', 't test', 'anova', 'means', 'compare', 'group', 'welch'],
+  keywords: ['t-test', 't test', 'anova', 'means', 'compare', 'group', 'welch', 'levene', 'equal variances'],
   disciplines: ['Psychology', 'Public Health', 'Nutrition, Food & Dietetics', 'Education', 'Gerontology'],
   howto:
     'GUI: Comparison ▸ pick a test (One-sample / Independent-samples / Paired-samples t-test, or One-way ANOVA), then choose the variables. You get SPSS-style group/test tables with effect sizes.\n' +
@@ -101,8 +102,28 @@ export async function oneSample(app, { x: name, mu }) {
   );
 }
 
-// --- Independent-samples t-test (Welch) --------------------------------------
+// --- Independent-samples t-test (Levene + pooled + Welch) ------------------
 
+/**
+ * Independent-samples t-test — SPSS's two-row **Independent Samples Test** table
+ * (#174l).
+ *
+ * This printed Welch only. That is the safer default, but it teaches the wrong
+ * lesson: a methods lab walks students through reading F and Sig from "Levene's
+ * Test for Equality of Variances" and *then* choosing which t row to read, and
+ * the whole point of there being two rows is the choice. Levene's did exist, in
+ * a separate Assumptions plugin — which is precisely the arrangement that hides
+ * why the rows differ.
+ *
+ * The Levene here is **mean-centred**, because that is what SPSS's T-TEST
+ * procedure reports and what the answer key will say. The standalone Assumptions
+ * plugin runs the median-centred (Brown–Forsythe) variant, which is more robust
+ * and gives a slightly different F — so the footnote says which is which rather
+ * than leaving two numbers in one app unexplained.
+ *
+ * @param {object} app
+ * @param {{y: string, g: string}} inputs
+ */
 export async function independent(app, { y: yName, g: gName }) {
   if (!yName || !gName) return;
   const meta = await metaMap(app);
@@ -111,14 +132,30 @@ export async function independent(app, { y: yName, g: gName }) {
     ok <- is.finite(y) & !is.na(g); y <- y[ok]; g <- droplevels(g[ok])
     lv <- levels(g)
     if (length(lv) != 2) stop(sprintf("the grouping variable must have exactly 2 groups (found %d)", length(lv)))
-    tt <- t.test(y ~ g)
     .n <- as.integer(tapply(y, g, length)); .s <- as.numeric(tapply(y, g, sd))
-    .sp <- sqrt(((.n[1] - 1) * .s[1]^2 + (.n[2] - 1) * .s[2]^2) / (sum(.n) - 2))
+    if (any(.n < 2)) stop("each group needs at least 2 cases")
+    tw <- t.test(y ~ g)                    # Welch — equal variances NOT assumed
+    tp <- t.test(y ~ g, var.equal = TRUE)  # pooled — equal variances assumed
+
+    # Levene's test IS a one-way ANOVA on each case's absolute deviation from its
+    # own group's centre; centring on the MEAN is SPSS's t-test variant.
+    z  <- abs(y - ave(y, g, FUN = mean))
+    la <- anova(lm(z ~ g))
+
+    .sp  <- sqrt(((.n[1] - 1) * .s[1]^2 + (.n[2] - 1) * .s[2]^2) / (sum(.n) - 2))
+    # Standard errors written out rather than read off htest$stderr, so the table
+    # does not depend on a field that only newer R versions carry.
+    .sep <- .sp * sqrt(1 / .n[1] + 1 / .n[2])
+    .sew <- sqrt(.s[1]^2 / .n[1] + .s[2]^2 / .n[2])
+
     list(levels = lv, n = .n, mean = as.numeric(tapply(y, g, mean)), sd = .s,
-         t = unname(tt$statistic), df = unname(tt$parameter), p = tt$p.value,
-         diff = unname(tt$estimate[1] - tt$estimate[2]),
-         d = unname((tt$estimate[1] - tt$estimate[2]) / .sp),
-         lo = tt$conf.int[1], hi = tt$conf.int[2])`;
+         levF = la[["F value"]][1], levP = la[["Pr(>F)"]][1],
+         tp = unname(tp$statistic), dfp = unname(tp$parameter), pp = tp$p.value,
+         plo = tp$conf.int[1], phi = tp$conf.int[2], sep = .sep,
+         tw = unname(tw$statistic), dfw = unname(tw$parameter), pw = tw$p.value,
+         wlo = tw$conf.int[1], whi = tw$conf.int[2], sew = .sew,
+         diff = unname(tp$estimate[1] - tp$estimate[2]),
+         d = unname((tp$estimate[1] - tp$estimate[2]) / .sp))`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
@@ -131,12 +168,57 @@ export async function independent(app, { y: yName, g: gName }) {
     },
     { caption: `Group Statistics — ${label(meta, yName)} by ${label(meta, gName)}` },
   );
+
+  const diff = f(r.n1('diff'), 3);
   await app.results.appendTable(
     {
-      columns: ['t', 'df', 'Sig. (2-tailed)', 'Mean diff.', "Cohen's d", '95% CI of diff.'],
-      rows: [[f(r.n1('t'), 3), fmtDf(r.n1('df')), fmtP(r.n1('p')), f(r.n1('diff'), 3), f(r.n1('d'), 3), ci(r.n1('lo'), r.n1('hi'))]],
+      columns: [
+        '',
+        "Levene's F",
+        'Levene Sig.',
+        't',
+        'df',
+        'Sig. (2-tailed)',
+        'Mean diff.',
+        'Std. Error diff.',
+        '95% CI of diff.',
+      ],
+      rows: [
+        [
+          'Equal variances assumed',
+          f(r.n1('levF'), 3),
+          fmtP(r.n1('levP')),
+          f(r.n1('tp'), 3),
+          fmtDf(r.n1('dfp')),
+          fmtP(r.n1('pp')),
+          diff,
+          f(r.n1('sep'), 3),
+          ci(r.n1('plo'), r.n1('phi')),
+        ],
+        [
+          'Equal variances not assumed',
+          '',
+          '',
+          f(r.n1('tw'), 3),
+          fmtDf(r.n1('dfw')),
+          fmtP(r.n1('pw')),
+          diff,
+          f(r.n1('sew'), 3),
+          ci(r.n1('wlo'), r.n1('whi')),
+        ],
+      ],
+      rowHeaders: true,
     },
-    { caption: 'Independent-Samples t-Test (Welch)' },
+    { caption: 'Independent-Samples Test' },
+  );
+  const sig = r.n1('levP') < 0.05;
+  await app.results.appendText(
+    `Read Levene's test first. Here Sig. = ${fmtP(r.n1('levP'))}, so the variances ` +
+      `${sig ? 'differ' : 'can be treated as equal'} — report the **equal variances ` +
+      `${sig ? 'not ' : ''}assumed** row. Cohen's d = ${f(r.n1('d'), 3)} (pooled SD).\n\n` +
+      "_Levene's is centred on the group means here, matching SPSS's t-test output. " +
+      'Assumptions ▸ Homogeneity of variance runs the median-centred (Brown–Forsythe) ' +
+      'variant, which is more robust and will give a slightly different F._',
   );
 }
 

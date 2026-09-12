@@ -307,13 +307,43 @@ export async function scatter(app, { x, y }) {
     await app.results.appendError('Scatter plot: no finite data after removing missing values.');
     return;
   }
+  const trend = leastSquares(points);
   await app.results.appendChart({
     kind: 'scatter',
     title: `${label(meta, y)} vs ${label(meta, x)}`,
     points,
-    trend: leastSquares(points),
+    trend,
     axes: { x: { title: label(meta, x) }, y: { title: label(meta, y) } },
   });
+  // The fit's coefficients, in a table (#174m). The chart draws the line and its
+  // equation, but only while the Trend line control is on — and a lab asks
+  // students to read Y = A + B(X) and *predict* from it, which needs the numbers
+  // at more precision than a label on a chart, in something that survives export.
+  if (trend) {
+    const { slope, intercept, r2 } = trend;
+    const yl = label(meta, y);
+    const xl = label(meta, x);
+    await app.results.appendTable(
+      {
+        columns: ['', 'Value'],
+        rows: [
+          ['Intercept (A)', fitNum(intercept)],
+          [`Slope (B) — per 1 of ${xl}`, fitNum(slope)],
+          ['R²', r2.toFixed(3)],
+          ['N (complete pairs)', String(points.length)],
+        ],
+        rowHeaders: true,
+      },
+      { caption: `Least-squares fit — ${yl} = A + B(${xl})` },
+    );
+  }
+}
+
+/** A fit coefficient at a precision worth predicting from: 3 decimals in the
+ * ordinary range, 4 significant figures when the scale makes that meaningless. */
+function fitNum(v) {
+  if (!Number.isFinite(v)) return '—';
+  return Math.abs(v) >= 10000 || (v !== 0 && Math.abs(v) < 0.001) ? v.toPrecision(4) : v.toFixed(3);
 }
 
 /**

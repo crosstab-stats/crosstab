@@ -484,6 +484,22 @@ export function chartKinds(lib) {
       const x1 = xMin;
       const x2 = xMax;
       out.push(`<line x1="${r(xScale(x1))}" y1="${r(yScale(slope * x1 + intercept))}" x2="${r(xScale(x2))}" y2="${r(yScale(slope * x2 + intercept))}" stroke="#e74c3c" stroke-width="2"/>`);
+      // The EQUATION, not just R² (#174m). A lab has students read Y = A + B(X)
+      // off the chart and predict from it; the slope and intercept were computed
+      // to draw this very line and then thrown away at render, so the one number
+      // on screen was the one you cannot predict with.
+      const coef = (v) =>
+        Math.abs(v) >= 10000 || (v !== 0 && Math.abs(v) < 0.001) ? v.toPrecision(4) : v.toFixed(3);
+      const eq = `Y = ${coef(intercept)} ${slope < 0 ? '−' : '+'} ${coef(Math.abs(slope))}(X)`;
+      // Inside the plot, on a backing plate: the equation belongs in the top-right
+      // corner, which is also exactly where a steep fit line passes through. No
+      // corner is safe for every slope, so make the text legible wherever it lands
+      // rather than guessing at a free one. (~6.4px/char at size 12.)
+      const eqW = eq.length * 6.4;
+      out.push(
+        `<rect x="${r(box.x1 - 6 - eqW)}" y="${r(box.y1 + 3)}" width="${r(eqW + 8)}" height="16" rx="3" fill="#fff" fill-opacity="0.82"/>`,
+      );
+      out.push(text(box.x1 - 2, box.y1 + 14, eq, { size: 12, anchor: 'end', fill: '#e74c3c' }));
       if (Number.isFinite(r2)) out.push(text(box.x1, box.y1 - 4, `R² = ${r2.toFixed(3)}`, { size: 12, anchor: 'end', fill: '#e74c3c' }));
     }
 
