@@ -15,7 +15,7 @@
 export const manifest = {
   id: 'builtin-correlation',
   name: 'Correlation',
-  version: '0.2.0',
+  version: '0.3.0',
   apiVersion: '0.1.0',
   category: 'Correlation',
   keywords: ['pearson', 'correlation', 'bivariate', 'r'],
@@ -47,6 +47,17 @@ export const manifest = {
           ],
           default: 'pearson',
         },
+        {
+          name: 'weight',
+          kind: 'variables',
+          label: 'Weight cases by (optional)',
+          optional: true,
+          multiple: false,
+          types: ['numeric'],
+          hint:
+            'A survey weight (e.g. WTSSNR), so the correlation describes the population rather ' +
+            'than the sample. Pearson only. Cancel this to count each case once.',
+        },
       ],
     },
     {
@@ -76,26 +87,57 @@ export const manifest = {
  * @param {object} app
  * @param {{vars: string[]}} inputs
  */
-export async function run(app, { vars, method }) {
+export async function run(app, { vars, method, weight }) {
   if (!vars || vars.length < 2) {
     await app.results.appendError('Correlation needs at least two variables.');
     return;
   }
   const m = method === 'spearman' || method === 'kendall' ? method : 'pearson';
+  // Weighting a rank method needs weighted ranks, and there is more than one
+  // defensible way to rank 2.5 cases. Rather than pick one silently and print a
+  // rho nobody can reproduce, say so and stop (#174f).
+  if (weight && m !== 'pearson') {
+    await app.results.appendError(
+      `Correlation: a weight can only be applied to Pearson here. ${m === 'spearman' ? "Spearman's rho" : "Kendall's tau"} ` +
+        'ranks the cases first, and weighted ranking has no single agreed definition — ' +
+        'run it unweighted, or switch the method to Pearson.',
+    );
+    return;
+  }
   const methodLabel = { pearson: 'Pearson', spearman: "Spearman's rho", kendall: "Kendall's tau" }[m];
   const meta = new Map((await app.data.getVariableMeta()).map((mm) => [mm.name, mm]));
 
   const rCode = `
     d <- data.frame(lapply(vars, function(c) suppressWarnings(as.numeric(c))), check.names = FALSE)
     k <- ncol(d)
+    W0 <- ${weight ? 'suppressWarnings(as.numeric(weight))' : 'rep(1, nrow(d))'}
+    W0[!is.finite(W0) | W0 <= 0] <- NA
+    # Weighted Pearson, pairwise: every N is sum(w) over the pairs that survive,
+    # and the t test carries that N into its degrees of freedom. Verified against
+    # case expansion — with integer weights this equals cor.test on the
+    # physically replicated data.
+    wcor <- function(x, y, w) {
+      n <- sum(w); mx <- sum(w * x) / n; my <- sum(w * y) / n
+      sxy <- sum(w * (x - mx) * (y - my))
+      sxx <- sum(w * (x - mx)^2); syy <- sum(w * (y - my)^2)
+      if (sxx <= 0 || syy <= 0) return(list(r = NA_real_, p = NA_real_))
+      r <- sxy / sqrt(sxx * syy)
+      if (n <= 2 || abs(r) >= 1) return(list(r = r, p = NA_real_))
+      t <- r * sqrt((n - 2) / (1 - r^2))
+      list(r = r, p = 2 * pt(-abs(t), n - 2))
+    }
     r <- matrix(NA_real_, k, k); p <- matrix(NA_real_, k, k); n <- matrix(0, k, k)
     for (i in 1:k) for (j in 1:k) {
       x <- d[[i]]; y <- d[[j]]
-      ok <- is.finite(x) & is.finite(y); nn <- sum(ok); n[i, j] <- nn
+      ok <- is.finite(x) & is.finite(y) & !is.na(W0)
+      nn <- sum(W0[ok]); n[i, j] <- nn
       if (i == j) { r[i, j] <- 1 }
       else if (nn >= 3) {
-        ct <- tryCatch(suppressWarnings(cor.test(x[ok], y[ok], method = ${rStr(m)}, exact = FALSE)), error = function(e) NULL)
-        if (!is.null(ct)) { r[i, j] <- unname(ct$estimate); p[i, j] <- ct$p.value }
+        ct <- if (all(W0[ok] == 1))
+          tryCatch(suppressWarnings(cor.test(x[ok], y[ok], method = ${rStr(m)}, exact = FALSE)), error = function(e) NULL)
+        else
+          tryCatch(wcor(x[ok], y[ok], W0[ok]), error = function(e) NULL)
+        if (!is.null(ct)) { r[i, j] <- unname(if (is.null(ct$estimate)) ct$r else ct$estimate); p[i, j] <- if (is.null(ct$p.value)) ct$p else ct$p.value }
       }
     }
     list(k = k, r = as.vector(t(r)), p = as.vector(t(p)), n = as.vector(t(n)))`;
@@ -121,7 +163,7 @@ export async function run(app, { vars, method }) {
     return [label(rowName), ...cells];
   });
 
-  await app.results.appendTable({ columns, rows, rowHeaders: true }, { caption: `Correlations (${methodLabel})` });
+  await app.results.appendTable({ columns, rows, rowHeaders: true }, { caption: `Correlations (${methodLabel})` + (weight ? ` — weighted by ${meta.get(weight)?.label ?? weight}` : '') });
   await app.results.appendText(
     'Significance (two-tailed): a single star = p < .05, a double star = p < .01. N is pairwise.',
   );

@@ -14,7 +14,7 @@
 export const manifest = {
   id: 'builtin-crosstabs',
   name: 'Crosstabs',
-  version: '0.3.0',
+  version: '0.4.0',
   apiVersion: '0.1.0',
   category: 'Descriptive Statistics',
   keywords: ['chi-square', 'contingency', 'crosstab', 'association'],
@@ -26,7 +26,8 @@ export const manifest = {
     '  • rowvar / colvar — the two category variables.\n' +
     '  • pmethod — "asymptotic" (default) or "montecarlo" (sparse tables).\n' +
     '  • percent — "none" | "row" | "column" | "total".\n' +
-    '  • measures — association measures (see the dialog for options).',
+    '  • measures — association measures (see the dialog for options).\n' +
+    '  • weight — optional survey weight; cells become weighted case counts.',
   rPackages: [],
   menu: [
     {
@@ -72,6 +73,17 @@ export const manifest = {
             { value: 'nominal', label: 'Nominal only (χ², φ, Cramér\'s V, lambda)' },
           ],
         },
+        {
+          name: 'weight',
+          kind: 'variables',
+          label: 'Weight cases by (optional)',
+          optional: true,
+          multiple: false,
+          types: ['numeric'],
+          hint:
+            'A survey weight (e.g. WTSSNR), so the table describes the population rather than ' +
+            'the sample. Cancel this to count each case once. The caption names the weight used.',
+        },
       ],
     },
   ],
@@ -81,13 +93,24 @@ export const manifest = {
  * @param {object} app
  * @param {{rowvar: string, colvar: string}} inputs
  */
-export async function run(app, { rowvar: rowName, colvar: colName, pmethod, measures, percent }) {
+export async function run(app, { rowvar: rowName, colvar: colName, pmethod, measures, percent, weight }) {
   if (!rowName || !colName) return;
   const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
 
   const rCode = `
     ${ORD_MEASURES_R}
-    tab <- table(rowvar, colvar)
+    # Weighted cell counts, ROUNDED to whole cases before anything is tested on
+    # them — SPSS's model, and the one that keeps the printed table and the
+    # chi-square answering to the same numbers. A case with no usable weight has
+    # no size at all, so it leaves the table rather than becoming a missing value.
+    .w <- ${weight ? 'suppressWarnings(as.numeric(weight))' : 'rep(1, length(rowvar))'}
+    .w[!is.finite(.w) | .w <= 0] <- NA
+    .k <- !is.na(.w) & !is.na(rowvar) & !is.na(colvar)
+    tab <- if (all(.w[.k] == 1)) table(rowvar[.k], colvar[.k]) else {
+      .t <- tapply(.w[.k], list(rowvar[.k], colvar[.k]), sum)
+      .t[is.na(.t)] <- 0
+      as.table(round(.t))
+    }
     om <- tryCatch(ord_measures(tab), error = function(e) NULL)
     chi <- tryCatch(suppressWarnings(chisq.test(tab)), error = function(e) NULL)
     minExp <- if (is.null(chi)) NA_real_ else min(chi$expected, na.rm = TRUE)
@@ -118,6 +141,9 @@ export async function run(app, { rowvar: rowName, colvar: colName, pmethod, meas
 
   const rowMeta = meta.get(rowName);
   const colMeta = meta.get(colName);
+  // Every weighted result names its own weight, so no table is ever ambiguous
+  // about which population it describes (#174f).
+  const wSuffix = weight ? ` — weighted by ${meta.get(weight)?.label ?? weight}` : '';
   const lv = (m, code) => m?.valueLabels?.[code] ?? code;
   const ncol = x.colLevels.length;
 
@@ -134,7 +160,7 @@ export async function run(app, { rowvar: rowName, colvar: colName, pmethod, meas
       rows,
       rowHeaders: true,
     },
-    { caption: `${labelOf(rowMeta, rowName)} × ${labelOf(colMeta, colName)}` },
+    { caption: `${labelOf(rowMeta, rowName)} × ${labelOf(colMeta, colName)}${wSuffix}` },
   );
 
   // Percentages (#129): row / column / total, SPSS-style. Column % is the one that
@@ -154,7 +180,7 @@ export async function run(app, { rowvar: rowName, colvar: colName, pmethod, meas
     const basisLabel = { row: 'Row %', column: 'Column %', total: '% of total' }[percent];
     await app.results.appendTable(
       { columns: ['', ...x.colLevels.map((c) => lv(colMeta, c)), 'Total'], rows: pctRows, rowHeaders: true },
-      { caption: `${labelOf(rowMeta, rowName)} × ${labelOf(colMeta, colName)} — ${basisLabel}` },
+      { caption: `${labelOf(rowMeta, rowName)} × ${labelOf(colMeta, colName)} — ${basisLabel}${wSuffix}` },
     );
   }
 
@@ -176,7 +202,7 @@ export async function run(app, { rowvar: rowName, colvar: colName, pmethod, meas
       rows: chiRows,
       rowHeaders: true,
     },
-    { caption: 'Chi-Square Tests' },
+    { caption: `Chi-Square Tests${wSuffix}` },
   );
   // Sparse-table guidance: the asymptotic χ² is unreliable when expected counts
   // are small; nudge toward the Monte Carlo option (or note it's already in use).
@@ -225,6 +251,12 @@ export async function run(app, { rowvar: rowName, colvar: colName, pmethod, meas
     await app.results.appendTable(
       { columns: ['', 'Value', 'Approx. Sig.'], rows: dir, rowHeaders: true },
       { caption: 'Directional Measures' },
+    );
+  }
+  if (weight) {
+    await app.results.appendText(
+      `_Cell counts are weighted by ${weight} and rounded to whole cases; the chi-square and every ` +
+        'measure below are computed from that same rounded table, so what is tested is what is shown._',
     );
   }
   if (wantOrdinal) {

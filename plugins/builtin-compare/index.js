@@ -14,11 +14,61 @@
  * variable → vector, the test value → a scalar).
  */
 
+/**
+ * Weighted-statistics helpers as R source (#174f).
+ *
+ * The weight is a **frequency weight**: a case with w = 2.5 counts as two and a
+ * half cases. Every N below is `sum(w)` and every variance divides by
+ * `sum(w) - 1` — SPSS's WEIGHT BY, and what a survey weight means in a methods
+ * course, where labs 9 onward are all run weighted.
+ *
+ * The t and F statistics are then the ordinary textbook formulas over those
+ * weighted means, variances and Ns. They are written out rather than handed to
+ * `t.test`/`aov`, which take no frequency weights (`lm(weights=)` are ANALYTIC
+ * weights — same point estimates, wrong residual degrees of freedom). With every
+ * weight at 1 each helper falls through to R's own function, so switching
+ * weighting off reproduces the previous output exactly.
+ *
+ * Verified against case expansion: with integer weights every figure below
+ * equals the unweighted figure computed on the physically replicated data.
+ */
+const WEIGHTED_R = `
+  wclean <- function(w, n) {
+    if (is.null(w)) return(rep(1, n))
+    w <- suppressWarnings(as.numeric(w))
+    w[!is.finite(w) | w <= 0] <- NA
+    w
+  }
+  wmean <- function(x, w) if (all(w == 1)) mean(x) else sum(w * x) / sum(w)
+  wvar  <- function(x, w) {
+    if (all(w == 1)) return(if (length(x) > 1) var(x) else NA_real_)
+    n <- sum(w); if (n <= 1) return(NA_real_)
+    m <- sum(w * x) / n
+    sum(w * (x - m)^2) / (n - 1)
+  }
+  wsd <- function(x, w) sqrt(wvar(x, w))
+  # Two-sample t from group Ns, means and variances — the pooled and Welch forms
+  # side by side, so both rows of SPSS's table come from one place.
+  wt2 <- function(n1, m1, v1, n2, m2, v2, conf = 0.95, pooled) {
+    d <- m1 - m2
+    if (pooled) {
+      sp2 <- ((n1 - 1) * v1 + (n2 - 1) * v2) / (n1 + n2 - 2)
+      se <- sqrt(sp2 * (1 / n1 + 1 / n2)); df <- n1 + n2 - 2
+    } else {
+      se <- sqrt(v1 / n1 + v2 / n2)
+      df <- (v1 / n1 + v2 / n2)^2 / ((v1 / n1)^2 / (n1 - 1) + (v2 / n2)^2 / (n2 - 1))
+    }
+    t <- d / se; tq <- qt(1 - (1 - conf) / 2, df)
+    list(t = t, df = df, p = 2 * pt(-abs(t), df), se = se,
+         lo = d - tq * se, hi = d + tq * se, diff = d)
+  }
+`;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-compare',
   name: 'Compare Means',
-  version: '0.2.0',
+  version: '0.3.0',
   apiVersion: '0.1.0',
   category: 'Comparison',
   keywords: ['t-test', 't test', 'anova', 'means', 'compare', 'group', 'welch', 'levene', 'equal variances'],
@@ -32,7 +82,8 @@ export const manifest = {
     'Syntax: run builtin-compare.paired {"x1": "pre", "x2": "post"}\n' +
     '  • x1 / x2 — two numeric measures on the same cases.\n' +
     'Syntax: run builtin-compare.oneway {"y": "score", "g": "group"}\n' +
-    '  • y — numeric outcome; g — factor (3+ groups; Tukey post-hoc).',
+    '  • y — numeric outcome; g — factor (3+ groups; Tukey post-hoc).\n' +
+    '  • Every test takes an optional weight — a survey weight read as a frequency weight, so N and df follow its sum.',
   rPackages: [],
   menu: [
     {
@@ -42,6 +93,7 @@ export const manifest = {
       inputs: [
         { name: 'x', kind: 'variables', label: 'Test variable', hint: 'The numeric measure whose mean you want to test.', multiple: false, types: ['numeric'] },
         { name: 'mu', kind: 'number', label: 'Test value', hint: 'The reference value to compare the mean against.', default: 0 },
+        { name: 'weight', kind: 'variables', label: 'Weight cases by (optional)', optional: true, multiple: false, types: ['numeric'], hint: 'A survey weight (e.g. WTSSNR), so the test describes the population rather than the sample. Cancel this to count each case once; the caption names the weight used.' },
       ],
     },
     {
@@ -51,6 +103,7 @@ export const manifest = {
       inputs: [
         { name: 'y', kind: 'variables', label: 'Outcome', hint: 'The numeric measure whose mean you want to compare.', multiple: false, types: ['numeric'], unique: true },
         { name: 'g', kind: 'variables', label: 'Groups (2)', hint: 'The variable that splits cases into the two groups to compare.', multiple: false, types: ['factor', 'string'], unique: true },
+        { name: 'weight', kind: 'variables', label: 'Weight cases by (optional)', optional: true, multiple: false, types: ['numeric'], hint: 'A survey weight (e.g. WTSSNR), so the test describes the population rather than the sample. Cancel this to count each case once; the caption names the weight used.' },
       ],
     },
     {
@@ -60,6 +113,7 @@ export const manifest = {
       inputs: [
         { name: 'x1', kind: 'variables', label: 'Variable 1', hint: 'The first of two measures on the same cases.', multiple: false, types: ['numeric'], unique: true },
         { name: 'x2', kind: 'variables', label: 'Variable 2', hint: 'The second measure, compared against the first.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'weight', kind: 'variables', label: 'Weight cases by (optional)', optional: true, multiple: false, types: ['numeric'], hint: 'A survey weight (e.g. WTSSNR), so the test describes the population rather than the sample. Cancel this to count each case once; the caption names the weight used.' },
       ],
     },
     {
@@ -69,6 +123,7 @@ export const manifest = {
       inputs: [
         { name: 'y', kind: 'variables', label: 'Outcome', hint: 'The numeric measure whose mean you want to compare.', multiple: false, types: ['numeric'], unique: true },
         { name: 'g', kind: 'variables', label: 'Factor', hint: 'The variable that splits cases into three or more groups.', multiple: false, types: ['factor', 'string'], unique: true },
+        { name: 'weight', kind: 'variables', label: 'Weight cases by (optional)', optional: true, multiple: false, types: ['numeric'], hint: 'A survey weight (e.g. WTSSNR), so the test describes the population rather than the sample. Cancel this to count each case once; the caption names the weight used.' },
       ],
     },
   ],
@@ -76,17 +131,23 @@ export const manifest = {
 
 // --- One-sample t-test -------------------------------------------------------
 
-export async function oneSample(app, { x: name, mu }) {
+export async function oneSample(app, { x: name, mu, weight }) {
   if (!name) return;
   const meta = await metaMap(app);
   const rCode = `
-    x <- as.numeric(x); x <- x[is.finite(x)]
+    ${WEIGHTED_R}
+    w <- wclean(${weight ? 'weight' : 'NULL'}, length(x))
+    x <- as.numeric(x)
+    ok <- is.finite(x) & !is.na(w); x <- x[ok]; w <- w[ok]
     if (length(x) < 2) stop("need at least 2 non-missing values")
     if (!is.finite(mu)) mu <- 0
-    tt <- t.test(x, mu = mu)
-    list(n = length(x), mean = mean(x), sd = sd(x), mu = mu,
-         diff = mean(x) - mu, t = unname(tt$statistic), df = unname(tt$parameter),
-         p = tt$p.value, d = (mean(x) - mu) / sd(x), lo = tt$conf.int[1], hi = tt$conf.int[2])`;
+    n <- sum(w); m <- wmean(x, w); s <- wsd(x, w)
+    se <- s / sqrt(n); df <- n - 1
+    t <- (m - mu) / se; tq <- qt(.975, df)
+    list(n = n, mean = m, sd = s, mu = mu,
+         diff = m - mu, t = t, df = df,
+         p = 2 * pt(-abs(t), df), d = (m - mu) / s,
+         lo = (m - mu) - tq * se, hi = (m - mu) + tq * se)`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
@@ -98,11 +159,12 @@ export async function oneSample(app, { x: name, mu }) {
         f(r.n1('t'), 3), fmtDf(r.n1('df')), fmtP(r.n1('p')), f(r.n1('d'), 3), ci(r.n1('lo'), r.n1('hi')),
       ]],
     },
-    { caption: `One-Sample t-Test — ${label(meta, name)}` },
+    { caption: `One-Sample t-Test — ${label(meta, name)}${wSuffix(meta, weight)}` },
   );
+  await weightNote(app, weight);
 }
 
-// --- Independent-samples t-test (Levene + pooled + Welch) ------------------
+// --- Independent-samples t-test (Levene + pooled + Welch) --------------------
 
 /**
  * Independent-samples t-test — SPSS's two-row **Independent Samples Test** table
@@ -122,51 +184,57 @@ export async function oneSample(app, { x: name, mu }) {
  * than leaving two numbers in one app unexplained.
  *
  * @param {object} app
- * @param {{y: string, g: string}} inputs
+ * @param {{y: string, g: string, weight?: string|null}} inputs
  */
-export async function independent(app, { y: yName, g: gName }) {
+export async function independent(app, { y: yName, g: gName, weight }) {
   if (!yName || !gName) return;
   const meta = await metaMap(app);
   const rCode = `
+    ${WEIGHTED_R}
+    w <- wclean(${weight ? 'weight' : 'NULL'}, length(y))
     y <- as.numeric(y); g <- as.factor(g)
-    ok <- is.finite(y) & !is.na(g); y <- y[ok]; g <- droplevels(g[ok])
+    ok <- is.finite(y) & !is.na(g) & !is.na(w); y <- y[ok]; g <- droplevels(g[ok]); w <- w[ok]
     lv <- levels(g)
     if (length(lv) != 2) stop(sprintf("the grouping variable must have exactly 2 groups (found %d)", length(lv)))
-    .n <- as.integer(tapply(y, g, length)); .s <- as.numeric(tapply(y, g, sd))
-    if (any(.n < 2)) stop("each group needs at least 2 cases")
-    tw <- t.test(y ~ g)                    # Welch — equal variances NOT assumed
-    tp <- t.test(y ~ g, var.equal = TRUE)  # pooled — equal variances assumed
+    i1 <- g == lv[1]; i2 <- g == lv[2]
+    n1 <- sum(w[i1]); n2 <- sum(w[i2])
+    if (n1 < 2 || n2 < 2) stop("each group needs at least 2 cases")
+    m1 <- wmean(y[i1], w[i1]); m2 <- wmean(y[i2], w[i2])
+    v1 <- wvar(y[i1], w[i1]);  v2 <- wvar(y[i2], w[i2])
+    tp <- wt2(n1, m1, v1, n2, m2, v2, 0.95, TRUE)
+    tw <- wt2(n1, m1, v1, n2, m2, v2, 0.95, FALSE)
 
     # Levene's test IS a one-way ANOVA on each case's absolute deviation from its
-    # own group's centre; centring on the MEAN is SPSS's t-test variant.
-    z  <- abs(y - ave(y, g, FUN = mean))
-    la <- anova(lm(z ~ g))
+    # own group's centre; centring on the MEAN is SPSS's t-test variant. The
+    # ANOVA is written out so the weighted degrees of freedom are sum(w) - k,
+    # which is what a frequency weight means — lm(weights=) would give n - k.
+    z <- abs(y - ifelse(i1, m1, m2))
+    zm1 <- wmean(z[i1], w[i1]); zm2 <- wmean(z[i2], w[i2])
+    zgm <- wmean(z, w)
+    ssb <- n1 * (zm1 - zgm)^2 + n2 * (zm2 - zgm)^2
+    ssw <- (n1 - 1) * wvar(z[i1], w[i1]) + (n2 - 1) * wvar(z[i2], w[i2])
+    ldf1 <- 1; ldf2 <- n1 + n2 - 2
+    levF <- (ssb / ldf1) / (ssw / ldf2)
+    levP <- pf(levF, ldf1, ldf2, lower.tail = FALSE)
 
-    .sp  <- sqrt(((.n[1] - 1) * .s[1]^2 + (.n[2] - 1) * .s[2]^2) / (sum(.n) - 2))
-    # Standard errors written out rather than read off htest$stderr, so the table
-    # does not depend on a field that only newer R versions carry.
-    .sep <- .sp * sqrt(1 / .n[1] + 1 / .n[2])
-    .sew <- sqrt(.s[1]^2 / .n[1] + .s[2]^2 / .n[2])
-
-    list(levels = lv, n = .n, mean = as.numeric(tapply(y, g, mean)), sd = .s,
-         levF = la[["F value"]][1], levP = la[["Pr(>F)"]][1],
-         tp = unname(tp$statistic), dfp = unname(tp$parameter), pp = tp$p.value,
-         plo = tp$conf.int[1], phi = tp$conf.int[2], sep = .sep,
-         tw = unname(tw$statistic), dfw = unname(tw$parameter), pw = tw$p.value,
-         wlo = tw$conf.int[1], whi = tw$conf.int[2], sew = .sew,
-         diff = unname(tp$estimate[1] - tp$estimate[2]),
-         d = unname((tp$estimate[1] - tp$estimate[2]) / .sp))`;
+    .sp <- sqrt(((n1 - 1) * v1 + (n2 - 1) * v2) / (n1 + n2 - 2))
+    list(levels = lv, n = c(n1, n2), mean = c(m1, m2), sd = c(sqrt(v1), sqrt(v2)),
+         levF = levF, levP = levP,
+         tp = tp$t, dfp = tp$df, pp = tp$p, plo = tp$lo, phi = tp$hi, sep = tp$se,
+         tw = tw$t, dfw = tw$df, pw = tw$p, wlo = tw$lo, whi = tw$hi, sew = tw$se,
+         diff = tp$diff, d = tp$diff / .sp)`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
   const lv = r.str('levels');
+  const ws = wSuffix(meta, weight);
   await app.results.appendTable(
     {
       columns: ['Group', 'N', 'Mean', 'SD'],
       rows: lv.map((l, i) => [valueLabel(meta, gName, l), int(r.num('n')[i]), f(r.num('mean')[i], 3), f(r.num('sd')[i], 3)]),
       rowHeaders: true,
     },
-    { caption: `Group Statistics — ${label(meta, yName)} by ${label(meta, gName)}` },
+    { caption: `Group Statistics — ${label(meta, yName)} by ${label(meta, gName)}${ws}` },
   );
 
   const diff = f(r.n1('diff'), 3);
@@ -209,7 +277,7 @@ export async function independent(app, { y: yName, g: gName }) {
       ],
       rowHeaders: true,
     },
-    { caption: 'Independent-Samples Test' },
+    { caption: `Independent-Samples Test${ws}` },
   );
   const sig = r.n1('levP') < 0.05;
   await app.results.appendText(
@@ -220,24 +288,31 @@ export async function independent(app, { y: yName, g: gName }) {
       'Assumptions ▸ Homogeneity of variance runs the median-centred (Brown–Forsythe) ' +
       'variant, which is more robust and will give a slightly different F._',
   );
+  await weightNote(app, weight);
 }
 
 // --- Paired-samples t-test ---------------------------------------------------
 
-export async function paired(app, { x1: n1, x2: n2 }) {
+export async function paired(app, { x1: n1, x2: n2, weight }) {
   if (!n1 || !n2) return;
   const meta = await metaMap(app);
   const rCode = `
+    ${WEIGHTED_R}
+    w <- wclean(${weight ? 'weight' : 'NULL'}, length(x1))
     x1 <- as.numeric(x1); x2 <- as.numeric(x2)
-    ok <- is.finite(x1) & is.finite(x2); x1 <- x1[ok]; x2 <- x2[ok]
+    ok <- is.finite(x1) & is.finite(x2) & !is.na(w); x1 <- x1[ok]; x2 <- x2[ok]; w <- w[ok]
     if (length(x1) < 2) stop("need at least 2 complete pairs")
-    tt <- t.test(x1, x2, paired = TRUE)
-    list(n = length(x1), m1 = mean(x1), m2 = mean(x2), sd1 = sd(x1), sd2 = sd(x2),
-         diff = mean(x1 - x2), sddiff = sd(x1 - x2), t = unname(tt$statistic),
-         df = unname(tt$parameter), p = tt$p.value, lo = tt$conf.int[1], hi = tt$conf.int[2])`;
+    d <- x1 - x2
+    n <- sum(w); md <- wmean(d, w); sdd <- wsd(d, w)
+    se <- sdd / sqrt(n); df <- n - 1
+    t <- md / se; tq <- qt(.975, df)
+    list(n = n, m1 = wmean(x1, w), m2 = wmean(x2, w), sd1 = wsd(x1, w), sd2 = wsd(x2, w),
+         diff = md, sddiff = sdd, t = t, df = df,
+         p = 2 * pt(-abs(t), df), lo = md - tq * se, hi = md + tq * se)`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
+  const ws = wSuffix(meta, weight);
   await app.results.appendTable(
     {
       columns: ['', 'N', 'Mean', 'SD'],
@@ -247,7 +322,7 @@ export async function paired(app, { x1: n1, x2: n2 }) {
       ],
       rowHeaders: true,
     },
-    { caption: 'Paired Statistics' },
+    { caption: `Paired Statistics${ws}` },
   );
   await app.results.appendTable(
     {
@@ -257,38 +332,69 @@ export async function paired(app, { x1: n1, x2: n2 }) {
         f(r.n1('diff') / r.n1('sddiff'), 3), ci(r.n1('lo'), r.n1('hi')),
       ]],
     },
-    { caption: `Paired-Samples t-Test — ${label(meta, n1)} vs ${label(meta, n2)}` },
+    { caption: `Paired-Samples t-Test — ${label(meta, n1)} vs ${label(meta, n2)}${ws}` },
   );
+  await weightNote(app, weight);
 }
 
 // --- One-way ANOVA -----------------------------------------------------------
 
-export async function oneway(app, { y: yName, g: gName }) {
+export async function oneway(app, { y: yName, g: gName, weight }) {
   if (!yName || !gName) return;
   const meta = await metaMap(app);
   const rCode = `
+    ${WEIGHTED_R}
+    w <- wclean(${weight ? 'weight' : 'NULL'}, length(y))
     y <- as.numeric(y); g <- as.factor(g)
-    ok <- is.finite(y) & !is.na(g); y <- y[ok]; g <- droplevels(g[ok])
+    ok <- is.finite(y) & !is.na(g) & !is.na(w); y <- y[ok]; g <- droplevels(g[ok]); w <- w[ok]
     if (nlevels(g) < 2) stop("need at least 2 groups")
-    fit <- aov(y ~ g); a <- summary(fit)[[1]]
-    tuk <- TukeyHSD(fit)$g
-    list(levels = levels(g), gn = as.integer(tapply(y, g, length)),
-         gmean = as.numeric(tapply(y, g, mean)), gsd = as.numeric(tapply(y, g, sd)),
-         df1 = a[["Df"]][1], df2 = a[["Df"]][2], ssb = a[["Sum Sq"]][1], ssw = a[["Sum Sq"]][2],
-         msb = a[["Mean Sq"]][1], msw = a[["Mean Sq"]][2], Fval = a[["F value"]][1], p = a[["Pr(>F)"]][1],
-         eta2 = a[["Sum Sq"]][1] / sum(a[["Sum Sq"]]),
-         tukComp = rownames(tuk), tukDiff = tuk[, "diff"], tukLo = tuk[, "lwr"], tukUp = tuk[, "upr"], tukP = tuk[, "p adj"])`;
+    lvs <- levels(g)
+    gn  <- sapply(lvs, function(k) sum(w[g == k]))
+    gm  <- sapply(lvs, function(k) wmean(y[g == k], w[g == k]))
+    gv  <- sapply(lvs, function(k) wvar(y[g == k], w[g == k]))
+    gsd <- sqrt(gv)
+    # The one-way ANOVA written from group Ns, means and variances, so a frequency
+    # weight lands in the degrees of freedom (sum(w) - k) where it belongs. At
+    # w = 1 these are aov()'s own sums of squares.
+    gmean <- wmean(y, w)
+    ssb <- sum(gn * (gm - gmean)^2)
+    ssw <- sum((gn - 1) * gv)
+    df1 <- nlevels(g) - 1; df2 <- sum(gn) - nlevels(g)
+    msb <- ssb / df1; msw <- ssw / df2
+    Fval <- msb / msw
+    p <- pf(Fval, df1, df2, lower.tail = FALSE)
+
+    # Tukey HSD, from the same weighted quantities: the studentised-range interval
+    # around each pairwise difference. ptukey/qtukey are base R, so the p-values
+    # and the critical value are not hand-rolled — only the inputs are weighted.
+    k <- nlevels(g); comps <- character(0)
+    tdiff <- numeric(0); tlo <- numeric(0); tup <- numeric(0); tp <- numeric(0)
+    if (k >= 2) for (a in 1:(k - 1)) for (b in (a + 1):k) {
+      d <- gm[b] - gm[a]
+      se <- sqrt(msw / 2 * (1 / gn[a] + 1 / gn[b]))
+      q <- abs(d) / se
+      comps <- c(comps, paste0(lvs[b], "-", lvs[a]))
+      tdiff <- c(tdiff, d)
+      tlo <- c(tlo, d - qtukey(.95, k, df2) * se)
+      tup <- c(tup, d + qtukey(.95, k, df2) * se)
+      tp  <- c(tp, ptukey(q, k, df2, lower.tail = FALSE))
+    }
+    list(levels = lvs, gn = gn, gmean = gm, gsd = gsd,
+         df1 = df1, df2 = df2, ssb = ssb, ssw = ssw, msb = msb, msw = msw,
+         Fval = Fval, p = p, eta2 = ssb / (ssb + ssw),
+         tukComp = comps, tukDiff = tdiff, tukLo = tlo, tukUp = tup, tukP = tp)`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
   const lv = r.str('levels');
+  const ws = wSuffix(meta, weight);
   await app.results.appendTable(
     {
       columns: ['Group', 'N', 'Mean', 'SD'],
       rows: lv.map((l, i) => [valueLabel(meta, gName, l), int(r.num('gn')[i]), f(r.num('gmean')[i], 3), f(r.num('gsd')[i], 3)]),
       rowHeaders: true,
     },
-    { caption: `Descriptives — ${label(meta, yName)} by ${label(meta, gName)}` },
+    { caption: `Descriptives — ${label(meta, yName)} by ${label(meta, gName)}${ws}` },
   );
   const ssb = r.n1('ssb');
   const ssw = r.n1('ssw');
@@ -304,7 +410,7 @@ export async function oneway(app, { y: yName, g: gName }) {
       ],
       rowHeaders: true,
     },
-    { caption: 'ANOVA' },
+    { caption: `ANOVA${ws}` },
   );
   await app.results.appendText(`Effect size: η² = ${f(r.n1('eta2'), 3)}.`);
 
@@ -318,12 +424,28 @@ export async function oneway(app, { y: yName, g: gName }) {
         ]),
         rowHeaders: true,
       },
-      { caption: 'Post-hoc (Tukey HSD)' },
+      { caption: `Post-hoc (Tukey HSD)${ws}` },
     );
   }
+  await weightNote(app, weight);
 }
 
 // --- helpers -----------------------------------------------------------------
+
+/** The " — weighted by X" a caption carries so no result is ambiguous about which
+ * population it describes. There is no global weight mode to forget you left on. */
+function wSuffix(meta, weight) {
+  return weight ? ` — weighted by ${meta.get(weight)?.label ?? weight}` : '';
+}
+
+/** Say what the weight did to N, once, under the tables it changed. */
+async function weightNote(app, weight) {
+  if (!weight) return;
+  await app.results.appendText(
+    `_N is the sum of ${weight}, not a head count, and the degrees of freedom follow it: ` +
+      'the weight is read as a frequency weight, so a case weighted 2.5 counts as two and a half cases._',
+  );
+}
 
 async function metaMap(app) {
   return new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
