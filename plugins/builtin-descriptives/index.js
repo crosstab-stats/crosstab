@@ -23,14 +23,55 @@
  *    reports what was asked for, as SPSS does.
  */
 
+/**
+ * Weighted-statistics helpers, as R source, prepended to this plugin's R (#174f).
+ *
+ * The weight is a **frequency weight**: a case with w = 2.5 counts as two and a
+ * half cases. Every N below is therefore `sum(w)` and every variance divides by
+ * `sum(w) - 1`. That is what SPSS's WEIGHT BY means, and what a survey weight
+ * like WTSSNR carries in a methods course — labs 9 onward are all run weighted.
+ *
+ * Two rules keep this honest. A case whose weight is missing, zero or negative
+ * cannot be counted as a fraction of a case, so it is dropped outright. And when
+ * every weight is 1 each helper falls through to R's own unweighted function, so
+ * turning weighting off reproduces the previous output exactly rather than
+ * something that merely rounds to it.
+ */
+export const WEIGHTED_R = `
+  wclean <- function(w, n) {
+    if (is.null(w)) return(rep(1, n))
+    w <- suppressWarnings(as.numeric(w))
+    w[!is.finite(w) | w <= 0] <- NA
+    w
+  }
+  wmean <- function(x, w) if (all(w == 1)) mean(x) else sum(w * x) / sum(w)
+  wvar  <- function(x, w) {
+    if (all(w == 1)) return(if (length(x) > 1) var(x) else NA_real_)
+    n <- sum(w); if (n <= 1) return(NA_real_)
+    m <- sum(w * x) / n
+    sum(w * (x - m)^2) / (n - 1)
+  }
+  wsd <- function(x, w) sqrt(wvar(x, w))
+  # Quantiles: R's default (type 7, interpolating) while unweighted, so nothing
+  # changes; the inverse empirical CDF (type 1) once weights are in play, because
+  # interpolating between two values that stand for 3.7 and 1.2 cases has no
+  # defensible meaning.
+  wquant <- function(x, w, p) {
+    if (!length(x)) return(NA_real_)
+    if (all(w == 1)) return(unname(quantile(x, p, names = FALSE)))
+    o <- order(x); xs <- x[o]; cw <- cumsum(w[o]); n <- cw[length(cw)]
+    xs[which(cw >= p * n)[1]]
+  }
+`;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-descriptives',
   name: 'Descriptive Statistics',
-  version: '0.3.0',
+  version: '0.4.0',
   apiVersion: '0.1.0',
   category: 'Descriptive Statistics',
-  keywords: ['mean', 'sd', 'median', 'mode', 'variance', 'range', 'summary', 'descriptive'],
+  keywords: ['mean', 'sd', 'median', 'mode', 'variance', 'range', 'summary', 'descriptive', 'explore', 'confidence interval', 'weight', 'weighted'],
   howto:
     'GUI: Descriptive Statistics ▸ Descriptives…, then pick one or more variables. You get an SPSS-style table of N, missing, mean, SD, variance, min/max, range, quartiles and mode.\n' +
     'Labelled categorical variables (factors) can be chosen too — the mode is the statistic that means anything for a nominal one.\n' +
@@ -39,7 +80,8 @@ export const manifest = {
     'GUI: Descriptive Statistics ▸ Explore (confidence interval for the mean)… — SPSS\'s Explore. ' +
     'Point estimate, lower bound and upper bound at a confidence level you choose, optionally split by a grouping variable.\n' +
     'Syntax: run builtin-descriptives.explore {"vars": ["tvhours"], "level": 99, "by": "sex"}\n' +
-    '  • vars — the measures; level — confidence level in percent (default 95); by — optional grouping variable.',
+    '  • vars — the measures; level — confidence level in percent (default 95); by — optional grouping variable.\n' +
+    '  • Both actions take an optional weight — a survey weight read as a frequency weight, so N becomes its sum.',
   rPackages: [],
   menu: [
     {
@@ -53,6 +95,17 @@ export const manifest = {
           hint: 'The measures to summarize with mean, SD, variance, range and quartiles.',
           types: ['numeric', 'factor'],
           multiple: true,
+        },
+        {
+          name: 'weight',
+          kind: 'variables',
+          label: 'Weight cases by (optional)',
+          optional: true,
+          multiple: false,
+          types: ['numeric'],
+          hint:
+            'A survey weight (e.g. WTSSNR), so the estimates describe the population rather than ' +
+            'the sample. Cancel this to count each case once. The caption names the weight used.',
         },
       ],
     },
@@ -87,6 +140,17 @@ export const manifest = {
           default: 95,
           hint: 'Usually 95. Ask for 99 and the interval gets wider, not more accurate.',
         },
+        {
+          name: 'weight',
+          kind: 'variables',
+          label: 'Weight cases by (optional)',
+          optional: true,
+          multiple: false,
+          types: ['numeric'],
+          hint:
+            'A survey weight (e.g. WTSSNR), so the estimates describe the population rather than ' +
+            'the sample. Cancel this to count each case once. The caption names the weight used.',
+        },
       ],
     },
   ],
@@ -100,21 +164,36 @@ export const manifest = {
  * @param {object} app
  * @param {{vars: string[]}} inputs
  */
-export async function run(app, { vars }) {
+export async function run(app, { vars, weight }) {
   if (!vars || !vars.length) return;
   const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
 
   const rCode = `
+    ${WEIGHTED_R}
     nm  <- names(vars)
-    num <- lapply(nm, function(n) suppressWarnings(as.numeric(as.character(vars[[n]]))))
-    fin <- function(x) x[is.finite(x)]
+    W0  <- wclean(${weight ? 'weight' : 'NULL'}, nrow(vars))
+    # A case the weight cannot score has no size at all, so it leaves every column
+    # rather than landing in Missing and inflating the totals.
+    each <- function(n) {
+      x <- suppressWarnings(as.numeric(as.character(vars[[n]])))
+      w <- W0
+      ok <- !is.na(w)
+      list(x = x[ok], w = w[ok])
+    }
+    cols <- lapply(nm, each)
+    fin  <- function(d) { k <- is.finite(d$x); list(x = d$x[k], w = d$w[k]) }
+    valid <- lapply(cols, fin)
+    stat <- function(f, default = NA_real_) {
+      sapply(valid, function(d) if (length(d$x)) f(d$x, d$w) else default)
+    }
     # The mode is read off the RAW column, not the numeric view: it is the one
     # statistic here that is defined for a nominal variable whose codes are
     # strings. Ties report the smallest, numerically where the codes are numbers.
     modeOf <- function(n) {
-      v <- as.character(vars[[n]]); v <- v[!is.na(v)]
+      v <- as.character(vars[[n]]); w <- W0
+      ok <- !is.na(v) & !is.na(w); v <- v[ok]; w <- w[ok]
       if (!length(v)) return(NA_character_)
-      tb <- table(v); m <- names(tb)[tb == max(tb)]
+      tb <- tapply(w, v, sum); m <- names(tb)[tb == max(tb)]
       if (length(m) > 1) {
         o <- suppressWarnings(as.numeric(m))
         m <- if (any(is.na(o))) sort(m) else m[order(o)]
@@ -123,17 +202,17 @@ export async function run(app, { vars }) {
     }
     data.frame(
       Variable = nm,
-      N        = sapply(num, function(x) sum(!is.na(x))),
-      Missing  = sapply(num, function(x) sum(is.na(x))),
-      Mean     = round(sapply(num, function(x) mean(x, na.rm = TRUE)), 3),
-      "Std. Dev." = round(sapply(num, function(x) sd(x, na.rm = TRUE)), 3),
-      Variance = round(sapply(num, function(x) var(x, na.rm = TRUE)), 3),
-      Min      = sapply(num, function(x) { v <- fin(x); if (length(v)) min(v) else NA }),
-      P25      = round(sapply(num, function(x) quantile(x, .25, na.rm = TRUE, names = FALSE)), 3),
-      Median   = round(sapply(num, function(x) median(x, na.rm = TRUE)), 3),
-      P75      = round(sapply(num, function(x) quantile(x, .75, na.rm = TRUE, names = FALSE)), 3),
-      Max      = sapply(num, function(x) { v <- fin(x); if (length(v)) max(v) else NA }),
-      Range    = sapply(num, function(x) { v <- fin(x); if (length(v)) max(v) - min(v) else NA }),
+      N        = round(sapply(valid, function(d) sum(d$w)), 3),
+      Missing  = round(mapply(function(a, b) sum(a$w) - sum(b$w), cols, valid), 3),
+      Mean     = round(stat(wmean), 3),
+      "Std. Dev." = round(stat(wsd), 3),
+      Variance = round(stat(wvar), 3),
+      Min      = stat(function(x, w) min(x)),
+      P25      = round(stat(function(x, w) wquant(x, w, .25)), 3),
+      Median   = round(stat(function(x, w) wquant(x, w, .50)), 3),
+      P75      = round(stat(function(x, w) wquant(x, w, .75)), 3),
+      Max      = stat(function(x, w) max(x)),
+      Range    = stat(function(x, w) max(x) - min(x)),
       Mode     = sapply(nm, modeOf, USE.NAMES = FALSE),
       check.names = FALSE, stringsAsFactors = FALSE
     )`;
@@ -143,9 +222,18 @@ export async function run(app, { vars }) {
 
   // Show the variable's label (falling back to its name) in the first column.
   const labelled = withLabels(result, vars, meta);
-  await app.results.appendTable(labelled, { caption: 'Descriptive Statistics' });
+  await app.results.appendTable(labelled, {
+    caption:
+      'Descriptive Statistics' +
+      (weight ? ` — weighted by ${meta.get(weight)?.label ?? weight}` : ''),
+  });
+  if (weight) {
+    await app.results.appendText(
+      `_N is the sum of ${weight}, not a head count: the weight says how many people in the ` +
+        'population each respondent stands for. Variances divide by that N − 1._',
+    );
+  }
 }
-
 
 /**
  * SPSS's **Explore** (#174e): the mean, its standard error, and a confidence
@@ -160,9 +248,9 @@ export async function run(app, { vars }) {
  * mean ± t·SE, so the bounds are R's own and the level is honoured exactly.
  *
  * @param {object} app
- * @param {{vars: string[], by?: string|null, level?: number}} inputs
+ * @param {{vars: string[], by?: string|null, level?: number, weight?: string|null}} inputs
  */
-export async function explore(app, { vars, by, level }) {
+export async function explore(app, { vars, by, level, weight }) {
   if (!vars || !vars.length) return;
   const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
 
@@ -174,22 +262,34 @@ export async function explore(app, { vars, by, level }) {
   const corrected = !valid && level != null && level !== '';
 
   const rCode = `
+    ${WEIGHTED_R}
     lv <- ${pct / 100}
+    W0 <- wclean(${weight ? 'weight' : 'NULL'}, nrow(vars))
     KEYS <- c("n","mean","se","lo","hi","trimmed","median","variance","sd","min","max","range","iqr")
-    one <- function(x) {
-      x <- suppressWarnings(as.numeric(as.character(x))); x <- x[is.finite(x)]
-      n <- length(x)
+    one <- function(x, w) {
+      xn <- suppressWarnings(as.numeric(as.character(x)))
+      k <- is.finite(xn) & !is.na(w); x <- xn[k]; w <- w[k]
       out <- setNames(rep(NA_real_, length(KEYS)), KEYS)
+      n <- sum(w)
       out["n"] <- n
-      if (n >= 2) {
-        tt <- t.test(x, conf.level = lv)
-        q <- quantile(x, c(.25, .75), names = FALSE)
-        out["mean"] <- mean(x); out["se"] <- sd(x) / sqrt(n)
-        out["lo"] <- tt$conf.int[1]; out["hi"] <- tt$conf.int[2]
-        out["trimmed"] <- mean(x, trim = .05); out["median"] <- median(x)
-        out["variance"] <- var(x); out["sd"] <- sd(x)
+      if (length(x) >= 2 && n > 1) {
+        m <- wmean(x, w); s <- wsd(x, w); se <- s / sqrt(n)
+        # The interval is built from the t quantile rather than handed to t.test,
+        # which takes no weights. Unweighted this is t.test's own arithmetic, and
+        # the two agree to the last printed digit; weighted, the degrees of
+        # freedom are sum(w) - 1, the frequency-weight reading of "how many cases".
+        tq <- qt(1 - (1 - lv) / 2, n - 1)
+        out["mean"] <- m; out["se"] <- se
+        out["lo"] <- m - tq * se; out["hi"] <- m + tq * se
+        out["median"] <- wquant(x, w, .50)
+        out["variance"] <- wvar(x, w); out["sd"] <- s
         out["min"] <- min(x); out["max"] <- max(x)
-        out["range"] <- max(x) - min(x); out["iqr"] <- q[2] - q[1]
+        out["range"] <- max(x) - min(x)
+        out["iqr"] <- wquant(x, w, .75) - wquant(x, w, .25)
+        # A trimmed mean needs a rule for trimming fractional cases, and inventing
+        # one would put a number in the table that answers to nothing. Left blank
+        # when weighted; the footnote says so.
+        if (all(w == 1)) out["trimmed"] <- mean(x, trim = .05)
       }
       out
     }
@@ -198,12 +298,12 @@ export async function explore(app, { vars, by, level }) {
     for (.n in names(vars)) {
       col <- vars[[.n]]
       if (is.null(grp)) {
-        out[[.n]] <- list(groups = "", stats = list(one(col)))
+        out[[.n]] <- list(groups = "", stats = list(one(col, W0)))
       } else {
         keep <- !is.na(grp) & grp != ""
-        g <- grp[keep]; v <- col[keep]
+        g <- grp[keep]; v <- col[keep]; vw <- W0[keep]
         lvs <- sort(unique(g))
-        out[[.n]] <- list(groups = lvs, stats = lapply(lvs, function(k) one(v[g == k])))
+        out[[.n]] <- list(groups = lvs, stats = lapply(lvs, function(k) one(v[g == k], vw[g == k])))
       }
     }
     out`;
@@ -242,17 +342,22 @@ export async function explore(app, { vars, by, level }) {
     await app.results.appendTable(
       { columns: ['', ...head], rows, rowHeaders: true },
       {
-        caption: grouped
-          ? `Descriptives — ${varLabel} by ${meta.get(by)?.label ?? by}`
-          : `Descriptives — ${varLabel}`,
+        caption:
+          (grouped
+            ? `Descriptives — ${varLabel} by ${meta.get(by)?.label ?? by}`
+            : `Descriptives — ${varLabel}`) +
+          (weight ? ` — weighted by ${meta.get(weight)?.label ?? weight}` : ''),
       },
     );
   }
 
   await app.results.appendText(
-    corrected
-      ? `_Confidence level must be between 0 and 100 — ${pct}% was used._`
-      : `_Bounds are ${pct}% confidence intervals for the mean (t distribution, df = N − 1)._`,
+    (corrected ? `_Confidence level must be between 0 and 100 — ${pct}% was used._ ` : '') +
+      `_Bounds are ${pct}% confidence intervals for the mean (t distribution, df = N − 1)._` +
+      (weight
+        ? ` _N is the sum of ${weight}, so the interval reflects the weighted sample size. ` +
+          'The 5% trimmed mean is left blank: trimming a fraction of a case has no agreed rule._'
+        : ''),
   );
 }
 
@@ -274,7 +379,11 @@ function tagged(rList) {
       const keys = vec?.names ?? [];
       const nums = plain(vec);
       const o = {};
-      keys.forEach((k, j) => (o[k] = Number(nums[j])));
+      // R's NA arrives as null, and `Number(null)` is 0 — which printed a trimmed
+      // mean of 0 for a weighted column that deliberately declines to compute one,
+      // and would print 0 for every statistic of a group too small to measure.
+      // A missing number has to stay missing all the way to the cell.
+      keys.forEach((k, j) => (o[k] = nums[j] == null ? NaN : Number(nums[j])));
       return o;
     });
     out[n] = { groups, stats };

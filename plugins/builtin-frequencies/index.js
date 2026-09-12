@@ -38,14 +38,55 @@ const STATS = [
   { value: 'quartiles', label: 'Quartiles (25th, 50th, 75th)' },
 ];
 
+/**
+ * Weighted-statistics helpers, as R source, prepended to this plugin's R (#174f).
+ *
+ * The weight is a **frequency weight**: a case with w = 2.5 counts as two and a
+ * half cases. Every N below is therefore `sum(w)` and every variance divides by
+ * `sum(w) - 1`. That is what SPSS's WEIGHT BY means, and what a survey weight
+ * like WTSSNR carries in a methods course — labs 9 onward are all run weighted.
+ *
+ * Two rules keep this honest. A case whose weight is missing, zero or negative
+ * cannot be counted as a fraction of a case, so it is dropped outright. And when
+ * every weight is 1 each helper falls through to R's own unweighted function, so
+ * turning weighting off reproduces the previous output exactly rather than
+ * something that merely rounds to it.
+ */
+export const WEIGHTED_R = `
+  wclean <- function(w, n) {
+    if (is.null(w)) return(rep(1, n))
+    w <- suppressWarnings(as.numeric(w))
+    w[!is.finite(w) | w <= 0] <- NA
+    w
+  }
+  wmean <- function(x, w) if (all(w == 1)) mean(x) else sum(w * x) / sum(w)
+  wvar  <- function(x, w) {
+    if (all(w == 1)) return(if (length(x) > 1) var(x) else NA_real_)
+    n <- sum(w); if (n <= 1) return(NA_real_)
+    m <- sum(w * x) / n
+    sum(w * (x - m)^2) / (n - 1)
+  }
+  wsd <- function(x, w) sqrt(wvar(x, w))
+  # Quantiles: R's default (type 7, interpolating) while unweighted, so nothing
+  # changes; the inverse empirical CDF (type 1) once weights are in play, because
+  # interpolating between two values that stand for 3.7 and 1.2 cases has no
+  # defensible meaning.
+  wquant <- function(x, w, p) {
+    if (!length(x)) return(NA_real_)
+    if (all(w == 1)) return(unname(quantile(x, p, names = FALSE)))
+    o <- order(x); xs <- x[o]; cw <- cumsum(w[o]); n <- cw[length(cw)]
+    xs[which(cw >= p * n)[1]]
+  }
+`;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-frequencies',
   name: 'Frequencies',
-  version: '0.3.0',
+  version: '0.4.0',
   apiVersion: '0.1.0',
   category: 'Descriptive Statistics',
-  keywords: ['frequency', 'counts', 'distribution', 'table', 'mode', 'median', 'variance', 'range'],
+  keywords: ['frequency', 'counts', 'distribution', 'table', 'mode', 'median', 'variance', 'range', 'weight', 'weighted'],
   howto:
     'GUI: Descriptive Statistics ▸ Frequencies…, then pick one or more variables. ' +
     'You get a value/frequency/percent table per variable (value labels and user-missing codes honoured).\n' +
@@ -54,7 +95,8 @@ export const manifest = {
     'Unlike Descriptives this works on nominal and ordinal variables, which is where the mode belongs.\n' +
     'Syntax: run builtin-frequencies.run {"vars": ["gender", "region"], "statistics": ["mode", "median"]}\n' +
     '  • vars — one or more variables to tabulate.\n' +
-    '  • statistics — optional list from: ' + STATS.map((s) => s.value).join(', ') + '.',
+    '  • statistics — optional list from: ' + STATS.map((s) => s.value).join(', ') + '.\n' +
+    '  • weight — optional survey weight; counts become weighted case counts and the caption names it.',
   rPackages: [],
   menu: [
     {
@@ -79,6 +121,17 @@ export const manifest = {
             'Leave empty (or Cancel) for the frequency tables alone. ' +
             'For a nominal variable only the mode is meaningful.',
         },
+        {
+          name: 'weight',
+          kind: 'variables',
+          label: 'Weight cases by (optional)',
+          optional: true,
+          multiple: false,
+          types: ['numeric'],
+          hint:
+            'A survey weight (e.g. WTSSNR), so the table describes the population rather than ' +
+            'the sample. Cancel this to count each case once. The caption names the weight used.',
+        },
       ],
     },
   ],
@@ -88,10 +141,14 @@ export const manifest = {
  * @param {object} app
  * @param {{vars: string[], statistics?: string[]}} inputs
  */
-export async function run(app, { vars, statistics }) {
+export async function run(app, { vars, statistics, weight }) {
   if (!vars || !vars.length) return;
   const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
   const wanted = pickStats(statistics);
+  // Every weighted result names its own weight in the caption. There is no global
+  // "weight by" mode to forget you left on — the same reasoning that keeps the
+  // Survey plugin's designs explicit (#174f).
+  const wSuffix = weight ? ` — weighted by ${meta.get(weight)?.label ?? weight}` : '';
 
   // Compute every variable first, then print: the Statistics table belongs ABOVE
   // the frequency tables (SPSS's order), but it can only be assembled once every
@@ -100,7 +157,7 @@ export async function run(app, { vars, statistics }) {
   for (const name of vars) {
     const m = meta.get(name);
     try {
-      const { result } = await app.webr.run(rFor(name, m));
+      const { result } = await app.webr.run(rFor(name, m, weight));
       if (!result) throw new Error('R returned no result');
       done.push({ name, meta: m, data: normalizeResult(result) });
     } catch (err) {
@@ -112,14 +169,24 @@ export async function run(app, { vars, statistics }) {
 
   if (wanted.length) {
     const { spec, notes } = buildStatsSpec(done, wanted);
-    await app.results.appendTable(spec, { caption: 'Statistics' });
+    await app.results.appendTable(spec, { caption: `Statistics${wSuffix}` });
     for (const note of notes) await app.results.appendText(`_${note}_`);
   }
 
   for (const d of done) {
     await app.results.appendTable(buildSpec(d.meta, d.data), {
-      caption: d.meta?.label ? `${d.meta.label} (${d.name})` : d.name,
+      caption: (d.meta?.label ? `${d.meta.label} (${d.name})` : d.name) + wSuffix,
     });
+  }
+
+  if (weight) {
+    const dropped = done[0]?.data.dropped ?? 0;
+    await app.results.appendText(
+      `_Counts are weighted by ${weight} and rounded to whole cases; percentages come from the ` +
+        `unrounded weighted totals, so they still sum to 100.` +
+        (dropped ? ` ${dropped} case${dropped === 1 ? '' : 's'} had no usable weight and were excluded.` : '') +
+        '_',
+    );
   }
 }
 
@@ -141,7 +208,7 @@ function pickStats(chosen) {
  * gives: an unenumerable `(LO THRU 0)` span otherwise contributes only its two
  * endpoints, and every value between them is silently counted as real data.
  */
-function rFor(name, meta) {
+function rFor(name, meta, weight) {
   const codes = (meta?.missingValues ?? []).map(Number).filter(Number.isFinite);
   const ranges = (meta?.missingRanges ?? [])
     .map((r) => (Array.isArray(r) ? [Number(r[0]), Number(r[1])] : [Number(r?.lo), Number(r?.hi)]))
@@ -159,40 +226,55 @@ function rFor(name, meta) {
   }
 
   return `
+    ${WEIGHTED_R}
     x <- vars[[${rStr(name)}]]
     ${folds.join('\n    ')}
-    counts <- table(x, useNA = "no")
-    n_total <- length(x); n_valid <- sum(!is.na(x))
+    # A case the weight cannot score is not a case with a missing VALUE — it has
+    # no size at all — so it leaves the table entirely rather than landing in the
+    # Missing row and inflating the total.
+    w <- wclean(${weight ? 'weight' : 'NULL'}, length(x))
+    keep <- !is.na(w); x <- x[keep]; w <- w[keep]
+    dropped <- sum(!keep)
+
+    counts <- tapply(w, x, sum)          # weighted; identical to table(x) at w = 1
+    counts <- counts[!is.na(names(counts))]
+    n_total <- sum(w); n_valid <- sum(w[!is.na(x)])
     valid_pct <- as.numeric(counts) / n_valid * 100
 
     # Statistics are measured on two views of the same (already folded) column:
     # a numeric one for everything that needs arithmetic, and a raw one for the
     # mode — which is defined for a nominal variable whose codes are strings.
-    xn <- suppressWarnings(as.numeric(as.character(x))); xn <- xn[!is.na(xn)]
-    xs <- as.character(x); xs <- xs[!is.na(xs)]
-    num <- function(f) if (length(xn)) f(xn) else NA_real_
-    tb <- if (length(xs)) table(xs) else NULL
+    .xn <- suppressWarnings(as.numeric(as.character(x)))
+    okn <- !is.na(.xn); xn <- .xn[okn]; wn <- w[okn]
+    oks <- !is.na(x); xs <- as.character(x)[oks]; ws <- w[oks]
+    tb <- if (length(xs)) tapply(ws, xs, sum) else NULL
     mvals <- if (is.null(tb)) character(0) else names(tb)[tb == max(tb)]
     # Ties: report the SMALLEST, numerically when the codes are numbers (SPSS's rule).
     if (length(mvals) > 1) {
       mo <- suppressWarnings(as.numeric(mvals))
       mvals <- if (any(is.na(mo))) sort(mvals) else mvals[order(mo)]
     }
+    has <- length(xn) > 0
+    nW <- if (has) sum(wn) else 0
 
     list(
-      values = names(counts), counts = as.integer(counts),
+      values = names(counts), counts = as.numeric(counts),
       percent = as.numeric(counts) / n_total * 100,
       valid_percent = valid_pct, cumulative = cumsum(valid_pct),
       n_total = n_total, n_valid = n_valid, n_missing = n_total - n_valid,
-      mean = num(mean), median = num(median), sum = num(sum),
-      sd = if (length(xn) > 1) sd(xn) else NA_real_,
-      variance = if (length(xn) > 1) var(xn) else NA_real_,
-      se = if (length(xn) > 1) sd(xn) / sqrt(length(xn)) else NA_real_,
-      min = num(min), max = num(max),
-      range = if (length(xn)) max(xn) - min(xn) else NA_real_,
-      p25 = num(function(v) quantile(v, .25, names = FALSE)),
-      p50 = num(function(v) quantile(v, .50, names = FALSE)),
-      p75 = num(function(v) quantile(v, .75, names = FALSE)),
+      dropped = dropped,
+      mean = if (has) wmean(xn, wn) else NA_real_,
+      median = if (has) wquant(xn, wn, .50) else NA_real_,
+      sum = if (has) sum(wn * xn) else NA_real_,
+      sd = if (has) wsd(xn, wn) else NA_real_,
+      variance = if (has) wvar(xn, wn) else NA_real_,
+      se = if (has && nW > 1) wsd(xn, wn) / sqrt(nW) else NA_real_,
+      min = if (has) min(xn) else NA_real_,
+      max = if (has) max(xn) else NA_real_,
+      range = if (has) max(xn) - min(xn) else NA_real_,
+      p25 = if (has) wquant(xn, wn, .25) else NA_real_,
+      p50 = if (has) wquant(xn, wn, .50) else NA_real_,
+      p75 = if (has) wquant(xn, wn, .75) else NA_real_,
       mode_value = if (length(mvals)) mvals[1] else NA_character_,
       mode_ties = length(mvals),
       n_numeric = length(xn)
@@ -209,18 +291,18 @@ function buildSpec(meta, data) {
   data.values.forEach((value, i) => {
     rows.push([
       labels[value] ?? value,
-      data.counts[i],
+      cases(data.counts[i]),
       fmt(data.percent[i]),
       fmt(data.valid_percent[i]),
       fmt(data.cumulative[i]),
     ]);
   });
   const validTotalPct = (data.n_valid / data.n_total) * 100;
-  rows.push(['Total (valid)', data.n_valid, fmt(validTotalPct), '100.0', '']);
-  if (data.n_missing) {
-    rows.push(['Missing', data.n_missing, fmt((data.n_missing / data.n_total) * 100), '', '']);
+  rows.push(['Total (valid)', cases(data.n_valid), fmt(validTotalPct), '100.0', '']);
+  if (data.n_missing > 0.5) {
+    rows.push(['Missing', cases(data.n_missing), fmt((data.n_missing / data.n_total) * 100), '', '']);
   }
-  rows.push(['Total', data.n_total, '100.0', '', '']);
+  rows.push(['Total', cases(data.n_total), '100.0', '', '']);
   return {
     columns: ['', 'Frequency', 'Percent', 'Valid Percent', 'Cumulative Percent'],
     rows,
@@ -240,8 +322,8 @@ function buildSpec(meta, data) {
 function buildStatsSpec(done, wanted) {
   const head = done.map((d) => (d.meta?.label ? `${d.meta.label} (${d.name})` : d.name));
   const rows = [
-    ['N — Valid', ...done.map((d) => d.data.n_valid)],
-    ['N — Missing', ...done.map((d) => d.data.n_missing)],
+    ['N — Valid', ...done.map((d) => cases(d.data.n_valid))],
+    ['N — Missing', ...done.map((d) => cases(d.data.n_missing))],
   ];
   const numRow = (label, key) => [label, ...done.map((d) => fmtNum(d.data[key]))];
 
@@ -275,6 +357,12 @@ function modeText(d) {
   if (v == null || v === '') return '';
   const label = d.meta?.valueLabels?.[v];
   return label ? `${label} (${v})` : String(v);
+}
+
+/** A case count. Whole while unweighted; rounded to whole cases once weights make
+ * it fractional, as SPSS does — a table cannot hold 12.34 respondents. */
+function cases(n) {
+  return Number.isFinite(n) ? Math.round(n) : '';
 }
 
 /** Print a statistic: whole numbers plainly, everything else to 3 decimals. */
@@ -315,6 +403,7 @@ function normalizeResult(rList) {
     n_total: scalar(byName.n_total),
     n_valid: scalar(byName.n_valid),
     n_missing: scalar(byName.n_missing),
+    dropped: scalar(byName.dropped),
     mean: num(byName.mean),
     median: num(byName.median),
     sum: num(byName.sum),
