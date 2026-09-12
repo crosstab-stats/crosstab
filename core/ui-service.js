@@ -68,7 +68,7 @@ export class UiService {
     } = options;
 
     let meta = this.#store.getVariableMeta();
-    if (types?.length) meta = meta.filter((m) => types.includes(m.type));
+    if (types?.length) meta = meta.filter((m) => fitsRole(m, types));
     const checked = new Set(preselect ?? this.#store.getSelectedVariables());
     const excluded = new Set(exclude ?? []); // disabled (e.g. chosen in a prior `unique` round)
     const inputType = multiple ? 'checkbox' : 'radio';
@@ -494,6 +494,31 @@ export class UiService {
       pickFile: (opts) => this.pickFile(opts),
     });
   }
+}
+
+/**
+ * Does a variable fit the role an input asked for?
+ *
+ * `types` is a list of **storage** types, but what an analysis actually needs is
+ * a **role**: Crosstabs' rows, the independent t-test's grouping variable and
+ * ANOVA's factor all declare `['factor', 'string']` meaning *categorical*, not
+ * meaning "stored as text". Filtering on storage alone hid every numeric-coded
+ * category — which is most of them. A dichotomy recoded to 1/2 is numeric, and
+ * so the entire recode-then-crosstab exercise (#174i) failed silently: the
+ * variable the student had just made was not in the list, with nothing on screen
+ * saying why. The same applied to any `.sav` variable SPSS marked nominal that
+ * arrived without value labels.
+ *
+ * So a categorical role also admits a numeric variable whose **measure** says it
+ * is categorical. Measure is already first-class here: the importers carry it,
+ * Variable View edits it, and Recode sets it. A numeric role is left alone — it
+ * means arithmetic, and widening that would be a different (and wrong) claim.
+ */
+function fitsRole(m, types) {
+  if (types.includes(m.type)) return true;
+  const wantsCategorical = types.includes('factor') || types.includes('string');
+  if (!wantsCategorical || types.includes('numeric') || m.type !== 'numeric') return false;
+  return m.measurementLevel === 'nominal' || m.measurementLevel === 'ordinal';
 }
 
 /**

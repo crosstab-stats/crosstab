@@ -767,9 +767,15 @@
       }
       .ct-cr__chip:hover { background: #dcebfa; }
       .ct-cr__ruleshead, .ct-cr__rule, .ct-cr__else {
-        display: grid; grid-template-columns: 90px 1fr 18px minmax(150px, 1fr) 24px;
+        display: grid; grid-template-columns: 90px 1fr 18px minmax(150px, 1fr) minmax(110px, .8fr) 24px;
         gap: 8px; align-items: center; margin: 4px 0;
       }
+      /* The per-rule value label ("1 = Agree"). The cell keeps the grid column
+         even when the input is hidden (target isn't a value), so the remove
+         button never slides sideways under the cursor. */
+      .ct-cr__tolabelcell { display: flex; min-width: 0; }
+      .ct-cr .ct-cr__tolabel { flex: 1; font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 5px; min-width: 0; }
+      .ct-cr .ct-cr__tolabel[hidden] { display: none; }
       .ct-cr__ruleshead { color: #646e77; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-top: 8px; }
       .ct-cr__else { grid-template-columns: auto minmax(150px, 1fr); margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
       .ct-cr__elselabel { color: #5a6470; font-size: 13px; }
@@ -785,6 +791,17 @@
       .ct-cr__rm { border: 0; background: none; color: #b3424a; cursor: pointer; font-size: 14px; padding: 0; }
       .ct-cr__addrule { font: inherit; font-size: 13px; background: none; border: 1px dashed var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; color: var(--accent); margin-top: 4px; }
       .ct-cr__addrule:hover { background: #f0f7ff; }
+      /* Count values within cases (#174k): a variable tick-list and a value list. */
+      .ct-cr__counthead { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #646e77; margin: 12px 0 4px; }
+      .ct-cr__countvars {
+        display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 2px 12px;
+        max-height: 28vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; padding: 6px;
+      }
+      .ct-cr__countvar { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 4px; cursor: pointer; min-width: 0; }
+      .ct-cr__countvar:hover { background: #f0f3f6; }
+      .ct-cr__countvar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .ct-cr__match { display: grid; grid-template-columns: 90px 1fr 24px; gap: 8px; align-items: center; margin: 4px 0; }
+      .ct-cr__complete { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; margin: 12px 0 0; cursor: pointer; }
 
       /* Export-output dialog uses .ct-dialog--wide (640px) so the four actions sit
          on one row; wrap is a fallback on very narrow viewports. Cancel sits apart
