@@ -183,7 +183,8 @@ function probeServices() {
  * @property {string[]} [extensions] - (file) picker filter, e.g. `['.geojson']`.
  *   A `file` input opens a picker and passes the plugin `{ name, bytes:Uint8Array }`
  *   (a supplementary file — distinct from an importer, which makes a dataset).
- * @property {boolean} [multiple] - (variables) allow several.
+ * @property {boolean} [multiple] - (variables) allow several; (choice) render a
+ *   tick-list and deliver an array, the shape an SPSS "Statistics…" panel has.
  * @property {string[]} [types] - (variables) restrict to types, e.g. `['numeric']`.
  * @property {boolean} [optional] - cancel yields null/empty instead of aborting.
  * @property {boolean} [unique] - (variables) exclude vars chosen by earlier

@@ -431,7 +431,8 @@ export interface InputSpec {
   hint?: string;
   /** Treat as optional (don't abort the action if skipped). */
   optional?: boolean;
-  /** (`variables`) allow several; delivered as `string[]` vs a single `string`. */
+  /** (`variables`, `choice`) allow several; delivered as `string[]` vs a single
+   * `string`. A multi `choice` is a tick-list — an SPSS "Statistics…" panel. */
   multiple?: boolean;
   /** (`variables`) restrict the picker to these variable types. */
   types?: VariableType[];

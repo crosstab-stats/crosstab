@@ -1481,11 +1481,18 @@ function renderMiniMarkdown(md) {
   const escape = (s) =>
     s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+  // `_underscore_` emphasis as well as `*asterisk*`: three callers already wrote
+  // it that way (Frequencies' mode-tie note, the ACF bound, "the script ran with
+  // no printed output") and it rendered as literal underscores on screen.
+  // Emphasis requires a boundary on both sides, so `WTSSNR_2` and `my_var_name`
+  // stay the identifiers they are rather than turning into italics.
   const inline = (s) =>
     escape(s)
       .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*([^*]+)\*/g, '<em>$1</em>');
+      .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+      .replace(/(^|[^\w`])__([^_\n]+)__(?![\w])/g, '$1<strong>$2</strong>')
+      .replace(/(^|[^\w`])_([^_\n]+)_(?![\w])/g, '$1<em>$2</em>');
 
   return md
     .split(/\n{2,}/)

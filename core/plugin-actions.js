@@ -703,15 +703,20 @@ async function gatherInputs(ui, specs, item) {
       const items = (spec.options || []).map((o) =>
         typeof o === 'object' ? { value: String(o.value), label: o.label } : { value: String(o) },
       );
-      const r = await ui.selectFromList({ title, hint, items, multiple: false });
+      // `multiple` turns a choice into a tick-list — the shape SPSS's
+      // "Statistics…" sub-dialogs have, where several options are ticked at once
+      // (#174d). A multi choice hands the plugin an array; a single one a string.
+      const many = !!spec.multiple;
+      const seed = spec.default == null ? [] : [].concat(spec.default).map(String);
+      const r = await ui.selectFromList({ title, hint, items, multiple: many, selected: seed });
       if (r === null) {
         if (spec.optional) {
-          out[spec.name] = spec.default ?? null;
+          out[spec.name] = many ? seed : spec.default ?? null;
           continue;
         }
         return null;
       }
-      out[spec.name] = r[0] ?? null;
+      out[spec.name] = many ? r : r[0] ?? null;
     } else if (kind === 'file') {
       // A supplementary file the analysis needs (boundary map, dictionary, weights
       // matrix…) — distinct from the importer flow, which produces a dataset. The
@@ -743,7 +748,9 @@ function hintFor(spec) {
   const kind = spec?.kind || 'variables';
   if (kind === 'number') return 'Enter a number for this setting.';
   if (kind === 'text') return 'Enter a value for this setting.';
-  if (kind === 'choice') return 'Choose one of the options.';
+  if (kind === 'choice') {
+    return spec?.multiple ? 'Tick every option you want.' : 'Choose one of the options.';
+  }
   if (kind === 'file') return 'Choose a file to use for this analysis.';
   const types = Array.isArray(spec?.types) ? spec.types : [];
   const numeric = types.length === 1 && types[0] === 'numeric';
