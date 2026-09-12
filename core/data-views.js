@@ -16,6 +16,7 @@ import { serialize, parse } from './crosstab-syntax.js';
 import { openSyntaxGuide } from './syntax-guide.js';
 import { stataToScript } from './stata-import.js';
 import { spssToScript } from './spss-import.js';
+import { loadVarOrder, saveVarOrder, sortVars, VAR_ORDER_OPTIONS } from './var-order.js';
 
 /** Syntax editor metrics: the textarea uses a FIXED line-height so the step gutter
  * can place each marker at `PAD + lineIndex * LINE_H` (and the textarea is no-wrap,
@@ -89,9 +90,18 @@ export class DataView {
       this.filter = this.filterInput.value;
       this.#applyFilter();
     });
+    // Ordering, shared with Variable View and every analysis picker (see
+    // var-order.js). A 900-column grid is exactly as hard to search as a
+    // 900-row dialog list, so the same preference governs both.
+    this.order = loadVarOrder();
+    this.orderSelect = makeVarOrderSelect(this.order, (v) => {
+      this.order = v;
+      saveVarOrder(v);
+      this.#applyFilter();
+    });
     this.selCount = document.createElement('span');
     this.selCount.className = 'grid-selcount';
-    this.toolbar.append(this.filterInput, this.selCount);
+    this.toolbar.append(this.filterInput, this.orderSelect, this.selCount);
 
     this.scroller = document.createElement('div');
     this.scroller.className = 'grid-scroll';
@@ -119,17 +129,21 @@ export class DataView {
     this.scroller.scrollLeft = 0;
     this.lastKey = null;
     this.rowCache = null; // data changed → the cached block is stale
+    const order = loadVarOrder();
+    if (order !== this.order) { this.order = order; this.orderSelect.value = order; }
     await this.#render(true);
     this.#updateSelCount();
   }
 
-  /** Columns to display, after applying the column-header filter. */
+  /** Columns to display, after the column-header filter and the chosen order. */
   #visibleMetas() {
     const q = this.filter.trim().toLowerCase();
-    if (!q) return this.metas;
-    return this.metas.filter(
-      (m) => m.name.toLowerCase().includes(q) || (m.label || '').toLowerCase().includes(q),
-    );
+    const kept = q
+      ? this.metas.filter(
+          (m) => m.name.toLowerCase().includes(q) || (m.label || '').toLowerCase().includes(q),
+        )
+      : this.metas;
+    return sortVars(kept, this.order);
   }
 
   /** Re-render after the filter changes (column set changed → reset H-scroll). */
@@ -202,7 +216,7 @@ export class DataView {
 
     // Skip if the visible block hasn't moved (cheap small scrolls within buffer).
     // The filter is part of the key so a filter change always re-renders.
-    const key = `${startRow}:${startCol}:${this.filter}`;
+    const key = `${startRow}:${startCol}:${this.filter}:${this.order}`;
     if (!force && key === this.lastKey) return;
     this.lastKey = key;
 
@@ -214,7 +228,7 @@ export class DataView {
     // The cache holds one column window, so a horizontal move re-fetches; vertical
     // scrolls within ±FETCH_BUF rows of the fetched block do not.
     const c = this.rowCache;
-    const cacheHit = c && !force && c.filter === this.filter
+    const cacheHit = c && !force && c.filter === this.filter && c.order === this.order
       && c.startCol === startCol && c.endCol === endCol
       && startRow >= c.start && endRow <= c.end;
 
@@ -238,7 +252,7 @@ export class DataView {
       // the current grid: the rebuild emits DATA_CHANGED on completion, which fires a
       // fresh refresh that renders correctly. Never surface a raw DuckDB error here.
       if (fetched == null) return;
-      this.rowCache = { start: fetchStart, end: fetchEnd, startCol, endCol, filter: this.filter, rows: fetched };
+      this.rowCache = { start: fetchStart, end: fetchEnd, startCol, endCol, filter: this.filter, order: this.order, rows: fetched };
       blockRows = fetched;
       blockStart = fetchStart;
     }
@@ -695,9 +709,16 @@ export class VariableView {
       clearTimeout(debounce);
       debounce = setTimeout(() => this.#applyFilter(), 100);
     });
+    // Same ordering preference the grid and every analysis picker use.
+    this.order = loadVarOrder();
+    const orderSelect = makeVarOrderSelect(this.order, (v) => {
+      this.order = v;
+      saveVarOrder(v);
+      this.#applyFilter();
+    });
     this.count = document.createElement('span');
     this.count.className = 'grid-selcount';
-    toolbar.append(input, this.count);
+    toolbar.append(input, orderSelect, this.count);
 
     const scroller = document.createElement('div');
     scroller.className = 'grid-scroll';
@@ -722,11 +743,12 @@ export class VariableView {
   #applyFilter() {
     if (!this.tbody) return;
     const q = this.filter.trim().toLowerCase();
-    const shown = q
+    const matched = q
       ? this.metas.filter(
           (m) => m.name.toLowerCase().includes(q) || (m.label || '').toLowerCase().includes(q),
         )
       : this.metas;
+    const shown = sortVars(matched, this.order);
     this.count.textContent = q
       ? `${shown.length.toLocaleString()} of ${this.metas.length.toLocaleString()}`
       : `${this.metas.length.toLocaleString()} variable${this.metas.length === 1 ? '' : 's'}`;
@@ -832,6 +854,32 @@ export class VariableView {
  * the base import is pinned, and an order that would break a dependency is rejected
  * with a message. Linear by design (not git branching).
  */
+/**
+ * The order `<select>` both grid surfaces put beside their filter box.
+ *
+ * One builder rather than two so the two toolbars cannot drift into offering
+ * different orders, or the same orders under different names.
+ *
+ * @param {string} value current order
+ * @param {(v: string) => void} onChange
+ * @returns {HTMLSelectElement}
+ */
+function makeVarOrderSelect(value, onChange) {
+  const sel = document.createElement('select');
+  sel.className = 'grid-order';
+  sel.setAttribute('aria-label', 'Variable order');
+  sel.title = 'Order the variables by file order, name or label';
+  for (const [v, label] of VAR_ORDER_OPTIONS) {
+    const o = document.createElement('option');
+    o.value = v;
+    o.textContent = label;
+    if (v === value) o.selected = true;
+    sel.append(o);
+  }
+  sel.addEventListener('change', () => onChange(sel.value));
+  return sel;
+}
+
 export class HistoryView {
   /**
    * @param {HTMLElement} host

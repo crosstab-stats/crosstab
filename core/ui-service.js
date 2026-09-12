@@ -28,6 +28,8 @@
  * @property {string} [okLabel='OK']
  */
 
+import { loadVarOrder, saveVarOrder, sortVars, VAR_ORDER_OPTIONS } from './var-order.js';
+
 export class UiService {
   /** @type {import('./data-store.js').DataStore} */
   #store;
@@ -49,9 +51,11 @@ export class UiService {
    * meets in *every* analysis — it was the only one of the three variable
    * surfaces (Variable View, data grid, this) with neither a filter box nor an
    * ordering choice, so finding IMMRGHTS meant scrolling 896 rows in file order.
-   * The sort choice is remembered across dialogs and sessions, because SPSS's
-   * equivalent is a global preference (Edit ▸ Options ▸ Variable Lists) that a
-   * student sets once in Lab 2 and never revisits.
+   * The order is the shared preference in {@link module:core/var-order}, so the
+   * grid and Variable View follow the same choice — SPSS's equivalent is a
+   * global option (Edit ▸ Options ▸ Variable Lists) that a student sets once in
+   * Lab 2 and never revisits, and an option only one list obeyed would be worse
+   * than none.
    *
    * @param {SelectVariablesOptions} [options]
    * @returns {Promise<string[] | null>}
@@ -103,9 +107,7 @@ export class UiService {
                    aria-label="Search variables by name or label" autocomplete="off">
             <label class="ct-varfind__sort">Sort
               <select class="ct-varfind__order" aria-label="Variable list order">
-                <option value="file">File order</option>
-                <option value="name">Name (A–Z)</option>
-                <option value="label">Label (A–Z)</option>
+                ${VAR_ORDER_OPTIONS.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('')}
               </select>
             </label>
           </div>
@@ -121,7 +123,7 @@ export class UiService {
       const order = dialog.querySelector('.ct-varfind__order');
       const countEl = dialog.querySelector('.ct-varfind__count');
       const list = dialog.querySelector('.ct-dialog__vars');
-      order.value = loadVarSort();
+      order.value = loadVarOrder();
 
       // Enter in the search box must not submit the form as OK on a half-typed
       // query — the same rule selectFromList follows.
@@ -129,12 +131,7 @@ export class UiService {
         if (e.key === 'Enter') e.preventDefault();
       });
 
-      const sorted = (rows) => {
-        const key = order.value;
-        if (key === 'file') return rows;
-        const of = key === 'name' ? (m) => m.name : (m) => m.label ?? m.name;
-        return [...rows].sort((a, b) => collate(of(a), of(b)) || collate(a.name, b.name));
-      };
+      const sorted = (rows) => sortVars(rows, order.value);
       const matching = (rows) => {
         const q = search.value.trim().toLowerCase();
         if (!q) return rows;
@@ -213,7 +210,7 @@ export class UiService {
       };
       search.addEventListener('input', render);
       order.addEventListener('change', () => {
-        saveVarSort(order.value);
+        saveVarOrder(order.value);
         render();
       });
       render();
@@ -519,45 +516,6 @@ function fitsRole(m, types) {
   const wantsCategorical = types.includes('factor') || types.includes('string');
   if (!wantsCategorical || types.includes('numeric') || m.type !== 'numeric') return false;
   return m.measurementLevel === 'nominal' || m.measurementLevel === 'ordinal';
-}
-
-/**
- * The variable picker's ordering preference (`'file' | 'name' | 'label'`).
- *
- * It lives in localStorage rather than in the project, because it describes how
- * *this reader* likes to hunt for a variable, not anything about the data — the
- * same reasoning SPSS applies by putting it in Edit ▸ Options rather than in the
- * .sav. A missing or unrecognised value falls back to file order, which is what
- * the picker did before the choice existed.
- */
-const VAR_SORT_KEY = 'crosstab.varpicker.sort';
-const VAR_SORTS = ['file', 'name', 'label'];
-
-/** Read the remembered picker order, defaulting to file order. */
-export function loadVarSort() {
-  try {
-    const v = globalThis.localStorage?.getItem(VAR_SORT_KEY);
-    return VAR_SORTS.includes(v) ? v : 'file';
-  } catch {
-    return 'file'; // storage disabled (private mode, sandboxed frame)
-  }
-}
-
-/** Remember the picker order. Failure to persist is not worth interrupting a dialog for. */
-export function saveVarSort(value) {
-  if (!VAR_SORTS.includes(value)) return;
-  try { globalThis.localStorage?.setItem(VAR_SORT_KEY, value); } catch { /* storage unavailable */ }
-}
-
-/**
- * Case- and accent-aware comparison for the A–Z orders.
- *
- * Plain `<` would file every lowercase name after every uppercase one, which in
- * a GSS extract (mixed `age`, `IMMASSIM`) reads as two separate alphabets.
- */
-const COLLATOR = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
-function collate(a, b) {
-  return COLLATOR.compare(String(a ?? ''), String(b ?? ''));
 }
 
 /** HTML-escape text content. */
