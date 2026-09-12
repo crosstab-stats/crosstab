@@ -28,16 +28,34 @@
 const KEY = 'crosstab.varlist.sort';
 const LEGACY_KEY = 'crosstab.varpicker.sort';
 
-/** @typedef {'file'|'name'|'label'} VarOrder */
+/**
+ * @typedef {'file'|'file-desc'|'name'|'name-desc'|'label'|'label-desc'} VarOrder
+ *
+ * Direction is part of the order rather than a separate toggle. Six
+ * self-describing entries in one menu are easier to learn than a field
+ * selector plus a direction button whose current state has to be read off an
+ * arrow — and this strip already carries a filter box and a count.
+ *
+ * Reversed FILE order earns its place alongside the two alphabetical reverses:
+ * a computed or recoded variable lands at the end of the file, so "last first"
+ * is how you find the eight dichotomies you just made. Offering it also avoids
+ * the obvious question about why two of the three orders reverse and one does
+ * not.
+ */
 
 /** The orders a surface may offer, in the order they are offered. */
-export const VAR_ORDERS = /** @type {VarOrder[]} */ (['file', 'name', 'label']);
+export const VAR_ORDERS = /** @type {VarOrder[]} */ ([
+  'file', 'file-desc', 'name', 'name-desc', 'label', 'label-desc',
+]);
 
 /** `[value, label]` pairs for a `<select>`. */
 export const VAR_ORDER_OPTIONS = [
   ['file', 'File order'],
+  ['file-desc', 'File order (last first)'],
   ['name', 'Name (A–Z)'],
+  ['name-desc', 'Name (Z–A)'],
   ['label', 'Label (A–Z)'],
+  ['label-desc', 'Label (Z–A)'],
 ];
 
 /** The remembered order, defaulting to file order — what every surface did before
@@ -71,8 +89,7 @@ export function collate(a, b) {
 }
 
 /**
- * A copy of `metas` in the given order. `file` returns the input untouched —
- * the dataset's own order is not something this module invents.
+ * `metas` in the given order.
  *
  * Ties break on name so the result is stable and reproducible: two variables
  * sharing a label (or both unlabelled) must not swap places between renders.
@@ -80,10 +97,21 @@ export function collate(a, b) {
  * @template {{name: string, label?: string}} T
  * @param {T[]} metas
  * @param {VarOrder} order
- * @returns {T[]}
+ * @returns {T[]} a copy, except in plain `file` order where the input is passed
+ *   through untouched — the dataset's own order is not something this invents.
  */
 export function sortVars(metas, order) {
-  if (order !== 'name' && order !== 'label') return metas;
-  const of = order === 'name' ? (m) => m.name : (m) => m.label ?? m.name;
-  return [...metas].sort((a, b) => collate(of(a), of(b)) || collate(a.name, b.name));
+  const desc = typeof order === 'string' && order.endsWith('-desc');
+  const key = desc ? order.slice(0, -5) : order;
+  if (key !== 'name' && key !== 'label') {
+    // File order: the dataset's own, or exactly that read backwards.
+    return desc ? [...metas].reverse() : metas;
+  }
+  const of = key === 'name' ? (m) => m.name : (m) => m.label ?? m.name;
+  const asc = [...metas].sort((a, b) => collate(of(a), of(b)) || collate(a.name, b.name));
+  // Descending is the ascending order REVERSED, not a negated comparator, so
+  // ties reverse with everything else. Negating only the primary key would leave
+  // equal-labelled variables in ascending name order inside a descending list —
+  // a subtlety nobody would notice until it looked wrong.
+  return desc ? asc.reverse() : asc;
 }

@@ -83,7 +83,7 @@ export function makeVarToolbar({ filter = '', onFilter, order, onOrder, variant 
   const orderSelect = document.createElement('select');
   orderSelect.className = 'ct-vartools__order';
   orderSelect.setAttribute('aria-label', 'Variable order');
-  orderSelect.title = 'Order the variables by file order, name or label';
+  orderSelect.title = 'Order the variables: file order or A–Z / Z–A by name or label';
   for (const [v, label] of VAR_ORDER_OPTIONS) {
     const o = document.createElement('option');
     o.value = v;
