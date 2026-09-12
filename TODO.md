@@ -10,6 +10,114 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
+- [ ] **#174 — MUST HAVE: the gaps a real intro-soc methods class falls into (user,
+      2026-09-11).** Source: `sample-data/Sarabia_GSS2014_MODULES_ON_IMMIGRATION_…_STUDENT_VERSION.pdf`
+      — Heidy Sarabia, PhD, 17 labs of SPSS coursework on GSS 2014, handed to students as
+      their first statistics assignment. **This list is not a guess about what teaching
+      needs. It is the assignment.** Every item below is something a student is instructed,
+      in writing, to produce; the practice problems then grade them on the number.
+
+      Status of each was checked against the code (reading the plugins, not running them —
+      a browser pass per item is still owed, per the usual rule).
+
+      **What the packet already gets right in CrossTab** — so nobody rebuilds it:
+      frequency tables with valid % and cumulative % (`builtin-frequencies`, honours value
+      labels + user-missing); crosstabs with row/column/total % and the whole association
+      battery the labs name — χ², φ, **Cramér's V**, **lambda** (symmetric and both
+      directional), **gamma**, tau-b/c, Somers' d (`builtin-crosstabs`); one-sample t-test;
+      paired t-test; **one-way ANOVA with a Descriptives table and Tukey post-hoc**
+      (`builtin-compare`); the exact-binomial one-proportion test with a settable test
+      proportion (`builtin-categorical`); Pearson/Spearman/Kendall correlation matrix with
+      two-tailed p and pairwise N (`builtin-correlation`); scatter with a least-squares fit
+      line and R² (`builtin-plots` + the scatter kind's *Trend line* toggle); pie chart with
+      percentage labels; histogram; **Recode into new variable** with value / range /
+      missing rules and an all-other-values row, plus Compute variable and Select cases
+      (`core/compute-recode.js`); a Variable View editor for label, type, **measure
+      (nominal/ordinal/scale)**, user-missing codes and value labels (`core/data-views.js`);
+      GSS `.sav` import, where labelled numerics arrive as factors with their labels intact.
+      Labs 13, 14, 15 and most of 16 can be done today.
+
+      **The must-haves, in the order they block a student:**
+
+      - [ ] **a. Mode.** There is no mode statistic anywhere in the app. Lab 4 asks for it
+            three times in the body and twice more in the practice problems, because for a
+            *nominal* variable it is the only measure of central tendency that is legal —
+            which is the lesson. Right now CrossTab cannot report the average of a nominal
+            variable at all.
+
+      - [ ] **b. Variance and range.** Lab 5 names both. `builtin-descriptives` reports N,
+            missing, mean, SD, min, P25, median, P75, max — neither variance nor range.
+
+      - [ ] **c. Statistics reachable from Frequencies, for non-numeric variables.** The
+            packet always gets central tendency by ticking boxes inside Frequencies ▸
+            Statistics, and it does this *on ordinal and nominal variables*
+            (IMMRGHTS, IMMASSIM). CrossTab's Descriptives is `types: ['numeric']`, so a
+            factor cannot be selected, and Frequencies offers no statistics at all. Mode and
+            median for a labelled factor is the single most-repeated action in Part I.
+
+      - [ ] **d. A confidence interval for a mean, at a level you choose.** Lab 9 is
+            nothing else: point estimate, lower bound, upper bound, at 95% *and* 99%. There
+            is no Explore equivalent; the only CI in the app is the fixed 95% by-product of
+            the one-sample t-test.
+
+      - [ ] **e. Weights on the everyday analyses.** Lab 9 turns on WTSSNR and **labs 10–12
+            are all run weighted**. Today a weight can only be supplied to `builtin-survey`'s
+            three actions (weighted means, weighted crosstab, survey regression) — not to
+            Frequencies, Descriptives, Crosstabs+χ², the t-tests, ANOVA or correlation.
+            Note the constraint before designing: `builtin-survey` deliberately has "no
+            hidden global weight-by state", so every result documents its own design. That
+            argues for a weight input on the ordinary analyses (named in the caption), not
+            an SPSS-style global mode — but a student following "Data ▸ Weight cases" must
+            land somewhere.
+
+      - [ ] **f. A plain bar chart and a plain line chart of ONE variable.** Lab 3 teaches
+            that the level of measurement picks the chart: bar for nominal, pie for nominal,
+            histogram for interval-ratio, line for interval-ratio. CrossTab has pie and
+            histogram. What it has instead of a simple bar chart is "Bar chart with error
+            bars" (group *means*, a different thing) and "Trends over time" (which can be
+            coerced into counts-per-category, but no student reading "make a bar chart of
+            IMMRGHTS" will ever find it under that name).
+
+      - [ ] **g. Number of bins on a histogram.** Lab 3 has students open Binning and set
+            the interval count. `binData` picks bins automatically and they become fixed
+            categories in the model — not adjustable after render.
+
+      - [ ] **h. A recoded variable must be usable in the bivariate analyses.** This is the
+            sharpest one. The Recode dialog defaults Type to `numeric`; Crosstabs' row and
+            column, the independent t-test's grouping variable, and ANOVA's factor all
+            accept only `factor`/`string`. The whole assignment is *recode to dichotomous,
+            then crosstab* (labs 7 → 13 → 14 → 15, eight variables' worth). A student who
+            takes the default silently cannot select the variable they just made, with no
+            message saying why.
+
+      - [ ] **i. Label the new variable, and its values, while recoding.** The packet always
+            names the new variable AND its value labels in the same breath ("1 = Agree,
+            2 = Disagree"). CrossTab makes that a second trip through Variable View. Minor
+            per use; this happens eight times in Lab 7 alone.
+
+      - [ ] **j. Build an index — count a value across several variables per case.** Lab 8
+            is SPSS's *Count Values Within Cases* over eight dichotomous variables, with
+            only complete responders counted. Compute variable can do `a + b + c` (and NULL
+            propagation gives the complete-responders rule for free), but counting a
+            *specific value* across a variable list means hand-writing a CASE WHEN per
+            variable. An index builder is the natural shape.
+
+      - [ ] **k. Levene's test and the equal-variances row in the independent t-test.**
+            Lab 11 walks students through reading F and Sig from "Levene's Test for Equality
+            of Variances" and *then* choosing which t row to read. `builtin-compare` prints
+            Welch only; Levene's lives in a separate Assumptions plugin, which teaches the
+            wrong lesson about why the two rows exist.
+
+      - [ ] **l. The regression equation on the scatter fit.** Lab 16 has students read
+            Y = A + B(X) off the chart and predict from it. R² is drawn; slope and intercept
+            are computed (`leastSquares`) and then thrown away at render.
+
+      **Two things to decide, not to build blind:** (1) whether **e** becomes a per-analysis
+      weight input everywhere or a dataset-level declaration — it is the one item here with
+      an existing, deliberate design decision pointing the other way; (2) whether **a/b/c**
+      land as a *Statistics…* sub-dialog on Frequencies (SPSS's shape, which is what the
+      packet's muscle memory expects) or as a widened Descriptives that accepts factors.
+
 - [x] **#168 — DONE (2026-08-21). Memos are COUNTED in the sidebar, and the 💬 at the
       anchor can now be READ.** "Is it required that memos be listed in the sidebar? If a
       project accumulates a lot of memos that list could be quite long." It was not, and
