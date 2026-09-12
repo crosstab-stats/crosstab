@@ -905,7 +905,9 @@ export class DataStore {
           type: normType(op.varType),
           measurementLevel: cast === 'DOUBLE' ? 'scale' : 'nominal',
         });
-        const scalar = op.type === 'computeVar' ? `(${op.expr})` : recodeCaseSql(op);
+        // The source's metadata AS OF THIS STEP, so a `missing` rule sees exactly the
+        // designated codes that were declared before the recode ran (#174n).
+        const scalar = op.type === 'computeVar' ? `(${op.expr})` : recodeCaseSql(op, byName.get(op.source));
         sql = `SELECT *, TRY_CAST(${scalar} AS ${cast}) AS ${quoteIdent(op.name)} FROM (${sql})`;
       } else if (op.type === 'filterCases') {
         // Select cases: keep rows where the condition holds. Wrap the running query
@@ -1868,15 +1870,9 @@ export class DataStore {
    */
   #missingWrap(name, q, value, applyMissing) {
     if (!applyMissing) return value;
-    const codes = this.#numericMissing(name);
-    const ranges = this.#numericMissingRanges(name);
-    if (!codes.length && !ranges.length) return value;
-    const tests = [];
-    if (codes.length) tests.push(`TRY_CAST(${q} AS DOUBLE) IN (${codes.join(', ')})`);
-    for (const [lo, hi] of ranges) {
-      tests.push(`TRY_CAST(${q} AS DOUBLE) BETWEEN ${lo} AND ${hi}`);
-    }
-    return `CASE WHEN ${tests.join(' OR ')} THEN NULL ELSE ${value} END`;
+    const test = designatedMissingSql(q, this.#numericMissing(name), this.#numericMissingRanges(name));
+    if (!test) return value;
+    return `CASE WHEN ${test} THEN NULL ELSE ${value} END`;
   }
 
   /**
@@ -2201,9 +2197,11 @@ function validateOrder(log) {
  * (`sysmis`). Unmatched falls to `elseRule` (default: copy).
  *
  * @param {{source:string, rules:Array, elseRule:object, varType:string}} t
+ * @param {{missingValues?: Array, missingRanges?: Array}} [srcMeta] - The SOURCE
+   variable's metadata at this point in the replay, for the `missing` rule.
  * @returns {string}
  */
-function recodeCaseSql(t) {
+function recodeCaseSql(t, srcMeta) {
   const src = quoteIdent(t.source);
   const isNum = normType(t.varType) === 'numeric';
   const whens = (t.rules ?? [])
@@ -2217,7 +2215,14 @@ function recodeCaseSql(t) {
             ? `TRY_CAST(${src} AS DOUBLE) BETWEEN ${lo} AND ${hi}`
             : '1 = 0';
       } else if (r.from === 'missing') {
-        cond = `${src} IS NULL`;
+        // "Missing" means what it means everywhere else in the app: blank, OR one
+        // of the variable's DESIGNATED codes or ranges (#174n). This used to test
+        // `IS NULL` alone, so `recode IMMRGHTS into X: missing -> sysmis` quietly
+        // matched nothing on a GSS variable whose 8 and 9 are Don't know / No
+        // answer — the codes stay in the raw column by design (the Data grid shows
+        // them, SPSS-style), so only a declaration makes them missing.
+        const test = designatedMissingSql(src, srcMeta?.missingValues ?? [], srcMeta?.missingRanges ?? []);
+        cond = test ? `(${src} IS NULL OR ${test})` : `${src} IS NULL`;
       } else {
         cond = `CAST(${src} AS VARCHAR) = ${sqlString(String(r.value ?? ''))}`;
       }
@@ -2226,6 +2231,29 @@ function recodeCaseSql(t) {
     .join(' ');
   const elseSql = recodeTo(t.elseRule ?? { kind: 'copy' }, isNum, src);
   return `CASE ${whens} ELSE ${elseSql} END`;
+}
+
+/**
+ * The SQL test for "this value is one of the variable's DESIGNATED missing codes
+ * or ranges" — `null` when the variable declares none.
+ *
+ * Shared by {@link DataStore#missingWrap} (which folds them to NULL at analysis
+ * injection) and by a recode's `missing` rule, so both agree on what missing
+ * means. Compared through `TRY_CAST` so a text column never matches a numeric
+ * code instead of erroring.
+ */
+function designatedMissingSql(q, codes, ranges) {
+  const tests = [];
+  const nums = (Array.isArray(codes) ? codes : []).map(Number).filter(Number.isFinite);
+  if (nums.length) tests.push(`TRY_CAST(${q} AS DOUBLE) IN (${nums.join(', ')})`);
+  for (const r of Array.isArray(ranges) ? ranges : []) {
+    const lo = Number(Array.isArray(r) ? r[0] : r?.lo);
+    const hi = Number(Array.isArray(r) ? r[1] : r?.hi);
+    if (Number.isFinite(lo) && Number.isFinite(hi) && hi >= lo) {
+      tests.push(`TRY_CAST(${q} AS DOUBLE) BETWEEN ${lo} AND ${hi}`);
+    }
+  }
+  return tests.length ? tests.join(' OR ') : null;
 }
 
 /** SQL for a recode target: a typed literal, the source value (copy), or NULL. */
