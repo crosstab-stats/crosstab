@@ -131,11 +131,17 @@ export function chartKinds(lib) {
       // It sits under Chart rather than Labels because it changes the QUANTITY
       // plotted — the axis, its title, and every number read off it — where a
       // pie's "Label shows" changes only the text in a label, a slice's size
-      // being its share by definition. Note that with ONE series that is not
-      // visible in the bars: 120/60/20 and 60/30/10 are the same picture, and
-      // only the axis says which. It is with several series, where the share is
-      // within each category, that the drawing itself changes — see
-      // test/categorical-measure.test.mjs, which measures both.
+      // being its share by definition.
+      //
+      // Worth knowing which case is which, because they look different. With ONE
+      // series the switch is invisible in the bars: 120/60/20 and 60/30/10 are
+      // the same picture and only the axis says which — that is every chart from
+      // Graphs ▸ Bar chart and ▸ Line chart, which plot a single variable and so
+      // always have exactly one series. The drawing only changes with SEVERAL
+      // series, where the share is within each category, and the one route to
+      // that is Graphs ▸ Trends over time with a group variable (switch Type to
+      // Bars for a grouped bar chart of counts). test/categorical-measure.test.mjs
+      // measures both cases rather than taking either on trust.
       //
       // Which percent is meant follows from the shape of the data, so the option
       // says which one it is rather than leaving the reader to guess.
