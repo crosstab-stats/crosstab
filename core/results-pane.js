@@ -692,8 +692,23 @@ export class ResultsPane {
     block.append(save);
     // Controls need the spec, so they arrive with it — inserted above the save bar
     // rather than appended, to keep the panel between the figure and the buttons.
+    // A control change redraws the chart AND has to tell the project it is dirty.
+    // `rerender` alone only repainted: the new view lived in memory and was written
+    // only if some unrelated action happened to trigger a save, so a chart restyled
+    // and then closed came back with its defaults. This is the third tier to hit
+    // that — assets (#149 A5) and item records (#152) got there first — and it is
+    // the same shape each time: mutating state in place emits nothing by itself.
+    //
+    // A separate event from `output:written`, not the same one: that means "a new
+    // result arrived", and the workspace answers it by switching to Output and
+    // scrolling to the bottom. Firing it on every nudge of a size spinner would
+    // scroll the chart being edited off the screen.
+    const onEdit = () => {
+      rerender();
+      this.#bus?.emit?.('output:edited');
+    };
     ready.then(() => {
-      if (item.spec) block.insertBefore(buildChartControls(item, rerender), save);
+      if (item.spec) block.insertBefore(buildChartControls(item, onEdit), save);
     });
     return block;
   }

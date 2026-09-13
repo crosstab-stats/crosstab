@@ -565,6 +565,10 @@ export class ProjectSync {
     // project.json) and after (present, no manual nudge).
     this.#bus.on(CoreEvents.ITEMS_CHANGED, () => this.#onChange(null));
     this.#bus.on('output:written', () => this.#onChange(null));
+    // Restyling a chart edits saved output in place. Distinct from 'output:written'
+    // because only that one means "a new result arrived" and makes the workspace
+    // jump to the bottom; both mean the project is dirty.
+    this.#bus.on('output:edited', () => this.#onChange(null));
     this.#bus.on('output:cleared', () => this.#onChange(null)); // persist a user "Clear output"
     this.#setStatus();
     this.#emitProject();
