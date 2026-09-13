@@ -147,7 +147,7 @@ test('a normal curve is drawn only where its scaling is defined', () => {
   assert.doesNotMatch(uneven, /<polyline/);
   assert.match(uneven, /equal intervals/i);
   // Density is per unit of x, so it is defined whatever the intervals are.
-  assert.match(draw({ normalCurve: true, binMode: 'custom', binCuts: '20, 30, 60, 70', yMeasure: 'density' }), /<polyline/);
+  assert.match(draw({ normalCurve: true, binMode: 'custom', binCuts: '20, 30, 60, 70', valueMeasure: 'density' }), /<polyline/);
 });
 
 test('a single distinct value degenerates to one interval instead of dividing by zero', () => {
@@ -171,7 +171,7 @@ test('the bin controls are offered, and only the ones the mode uses are shown', 
   const m = model();
   const controls = chartUiSpec(m).controls;
   const ids = controls.map((c) => c.id);
-  for (const id of ['binMode', 'binCount', 'binWidth', 'binStart', 'binCuts', 'edgeTicks', 'yMeasure', 'normalCurve']) {
+  for (const id of ['binMode', 'binCount', 'binWidth', 'binStart', 'binCuts', 'edgeTicks', 'valueMeasure', 'normalCurve']) {
     assert.ok(ids.includes(id), `missing control: ${id}`);
   }
   const visible = (view) => {
@@ -196,8 +196,8 @@ test('the bin controls are offered, and only the ones the mode uses are shown', 
 
 test('percent and density are rescalings of the same bars, not different binning', () => {
   const counts = alt(draw({ binMode: 'count', binCount: 6 }));
-  for (const yMeasure of ['percent', 'density']) {
-    const a = alt(draw({ binMode: 'count', binCount: 6, yMeasure }));
+  for (const valueMeasure of ['percent', 'density']) {
+    const a = alt(draw({ binMode: 'count', binCount: 6, valueMeasure }));
     assert.equal(a.intervals, counts.intervals);
     assert.equal(a.binned, counts.binned);
   }

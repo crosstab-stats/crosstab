@@ -1,6 +1,6 @@
 /**
  * @file categorical-measure.test.mjs
- * Counts shown as counts or as percentages — the `yMeasure` view control.
+ * Counts shown as counts or as percentages — the `valueMeasure` view control.
  *
  * Counts and percentages are the same numbers shown two ways, so which one is on
  * screen is a view setting, not a question answered in a dialog that has since
@@ -57,9 +57,9 @@ const controlIds = (model) => chartUiSpec(model).controls.map((c) => c.id);
 const hasText = (svg, t) => svg.includes(`>${t}<`);
 
 test('a counts model offers the switch; a means model does not', () => {
-  assert.ok(controlIds(ONE).includes('yMeasure'));
-  assert.ok(controlIds(TWO).includes('yMeasure'));
-  assert.ok(!controlIds(MEANS).includes('yMeasure'), 'a percentage of a mean is nonsense');
+  assert.ok(controlIds(ONE).includes('valueMeasure'));
+  assert.ok(controlIds(TWO).includes('valueMeasure'));
+  assert.ok(!controlIds(MEANS).includes('valueMeasure'), 'a percentage of a mean is nonsense');
 });
 
 test('counts are drawn unchanged by default', () => {
@@ -69,7 +69,7 @@ test('counts are drawn unchanged by default', () => {
 });
 
 test('one series: percent is of ALL cases', () => {
-  const svg = draw(ONE, { yMeasure: 'percent', valueLabels: true });
+  const svg = draw(ONE, { valueMeasure: 'percent', valueLabels: true });
   for (const n of ['60', '30', '10']) assert.ok(hasText(svg, n), `120/60/20 of 200 → ${n}%`);
   // And the counts themselves are gone from the picture, so the conversion is
   // real rather than an extra label alongside the old scale.
@@ -80,7 +80,7 @@ test('one series: percent is of ALL cases', () => {
 test('several series: percent is WITHIN each category', () => {
   // 30 of 40 is 75% within 2020 — NOT 30 of 80 (37.5% of the grand total), which
   // is the plausible wrong answer.
-  const svg = draw(TWO, { yMeasure: 'percent', valueLabels: true });
+  const svg = draw(TWO, { valueMeasure: 'percent', valueLabels: true });
   assert.ok(hasText(svg, '75'), 'expected 75% within 2020');
   assert.ok(hasText(svg, '25'), 'expected 25% within 2020');
   assert.ok(!hasText(svg, '37.5'), 'that would be a share of the grand total');
@@ -88,7 +88,7 @@ test('several series: percent is WITHIN each category', () => {
 });
 
 test('each category of a multi-series percent view sums to 100', () => {
-  const svg = draw(TWO, { yMeasure: 'percent', valueLabels: true });
+  const svg = draw(TWO, { valueMeasure: 'percent', valueLabels: true });
   // 2020 is 75/25 and 2024 is 25/75 — each category's shares add to 100 whatever
   // the counts behind them were.
   assert.equal([...svg.matchAll(/>75</g)].length, 2);
@@ -96,14 +96,14 @@ test('each category of a multi-series percent view sums to 100', () => {
 });
 
 test('the option says which percent it means', () => {
-  const one = chartUiSpec(ONE).controls.find((c) => c.id === 'yMeasure');
-  const two = chartUiSpec(TWO).controls.find((c) => c.id === 'yMeasure');
+  const one = chartUiSpec(ONE).controls.find((c) => c.id === 'valueMeasure');
+  const two = chartUiSpec(TWO).controls.find((c) => c.id === 'valueMeasure');
   assert.deepEqual(one.options.map(([, l]) => l), ['Count', 'Percent of all cases']);
   assert.deepEqual(two.options.map(([, l]) => l), ['Count', 'Percent within each category']);
 });
 
 test('a means chart keeps its own y-axis title and its values', () => {
-  const svg = draw(MEANS, { valueLabels: true, yMeasure: 'percent' }); // control absent; value ignored
+  const svg = draw(MEANS, { valueLabels: true, valueMeasure: 'percent' }); // control absent; value ignored
   assert.ok(hasText(svg, 'Mean income'));
   assert.ok(hasText(svg, '42,000') || hasText(svg, '42000'), 'the means must not be rescaled');
 });
@@ -114,7 +114,7 @@ test('a chart saved before the switch existed renders exactly as it did', () => 
     axes: { x: { title: 'Region' }, y: { title: 'Valid percent' } } };
   const svg = draw(legacy, { valueLabels: true });
   assert.ok(hasText(svg, 'Valid percent'), 'its own y title is still used');
-  assert.ok(!controlIds(legacy).includes('yMeasure'));
+  assert.ok(!controlIds(legacy).includes('valueMeasure'));
 });
 
 test('an empty category contributes no percentage instead of dividing by zero', () => {
@@ -122,7 +122,7 @@ test('an empty category contributes no percentage instead of dividing by zero', 
     { key: 'a', label: 'A', values: [0, 10] },
     { key: 'b', label: 'B', values: [0, 30] },
   ] };
-  const svg = draw(model, { yMeasure: 'percent' });
+  const svg = draw(model, { valueMeasure: 'percent' });
   assert.ok(!/NaN|Infinity/.test(svg), 'an all-zero category must not produce NaN');
 });
 
@@ -144,8 +144,8 @@ test('with ONE series, percent is a rescale: the picture keeps its shape', () =>
   // Worth stating because it is easy to claim otherwise. 120/60/20 of 200 become
   // 60/30/10, and those are the same bars — the reader is told which quantity
   // they are looking at by the AXIS, not by the drawing.
-  const c = draw(ONE, { yMeasure: 'count' });
-  const p = draw(ONE, { yMeasure: 'percent' });
+  const c = draw(ONE, { valueMeasure: 'count' });
+  const p = draw(ONE, { valueMeasure: 'percent' });
   assert.equal(shape(p), shape(c));
   assert.equal(shape(c), '1.0000 0.5000 0.1667');
   // Absolute pixel heights may still differ, because a "nice" axis maximum is
@@ -166,11 +166,37 @@ test('with SEVERAL series, percent genuinely redraws the chart', () => {
       { key: 'b', label: 'B', values: [10, 60] },
     ],
   };
-  const c = shape(draw(model, { yMeasure: 'count' }));
-  const p = shape(draw(model, { yMeasure: 'percent' }));
+  const c = shape(draw(model, { valueMeasure: 'count' }));
+  const p = shape(draw(model, { valueMeasure: 'percent' }));
   assert.notEqual(p, c);
-  const cH = bars(draw(model, { yMeasure: 'count' })).map((b) => b.h);
-  const pH = bars(draw(model, { yMeasure: 'percent' })).map((b) => b.h);
+  const cH = bars(draw(model, { valueMeasure: 'count' })).map((b) => b.h);
+  const pH = bars(draw(model, { valueMeasure: 'percent' })).map((b) => b.h);
   assert.ok(cH[0] < cH[2], 'in counts, 2020 A is shorter than 2024 A');
   assert.ok(pH[0] > pH[2], 'in percentages, 2020 A is TALLER than 2024 A');
+});
+
+test('the control and the drawing never disagree about the measure', () => {
+  // This control was briefly `yMeasure` (bar/line/histogram) and `pieLabel`
+  // (pie) before the two were recognised as one question. A chart saved under
+  // either resets to the default rather than being migrated, DELIBERATELY: the
+  // widget reads `valueMeasure` through the host's generic descriptor engine,
+  // which knows nothing about aliases, so honouring a legacy key would draw
+  // percentages under a select reading "Count". What the panel says and what
+  // the chart shows have to be the same thing.
+  const legacy = renderChart(ONE, { ...defaultView(ONE), yMeasure: 'percent', valueLabels: true });
+  assert.ok(legacy.includes('>120<'), 'a stale key is ignored, so the chart shows counts');
+  assert.ok(!legacy.includes('Percent of all cases'), 'and says counts on the axis');
+  // Which is exactly what the control reports for that same view.
+  const ctl = chartUiSpec(ONE).controls.find((c) => c.id === 'valueMeasure');
+  assert.equal(ctl.default, 'count');
+});
+
+test('the default lives on the control, not baked into every saved view', () => {
+  // baseView used to write `valueMeasure: 'count'` into every chart, which made
+  // each one carry an explicit setting it never chose — and made any later
+  // change of default unable to reach it.
+  const v = defaultView(ONE);
+  assert.ok(!('valueMeasure' in v), 'a new chart should not pin the default into its view');
+  // It still renders as counts, because the control's default says so.
+  assert.ok(renderChart(ONE, { ...v, valueLabels: true }).includes('>120<'));
 });

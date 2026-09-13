@@ -85,7 +85,7 @@ export function chartKinds(lib) {
     PALETTES, DEFAULT_PALETTE, colorFor, paletteControl, legendControl,
     valueLabelsControl, gridlinesControl, hasRawValues, pointOverlayControl,
     errorBarsControl, titleControls, axisControls, valueLabelFormatControls,
-    pointSizeControl, showPointsControl, markControl, summaryControl, yMeasureControl,
+    pointSizeControl, showPointsControl, markControl, summaryControl, valueMeasureControl,
     W, H, FONT, AXIS, GRID, errorSvg, text, r, esc, clip, fmtNum,
     computeStats, errorBounds, jitterOffsets, minorTicks, niceTicks, niceNum,
     legendBlock, ordered, svgOpen, svgOpenH, chartAltText,
@@ -94,6 +94,20 @@ export function chartKinds(lib) {
 
   /** name -> kind definition, in the shape the kind bodies below assign into. */
   const kinds = {};
+
+  /**
+   * The count/percent setting for a chart, read in ONE place so the three kinds
+   * that offer it cannot disagree about what a saved view means.
+   *
+   * It deliberately does NOT fall back to the older `yMeasure` / `pieLabel` keys
+   * this control briefly used. It could — but the control's own widget reads
+   * `valueMeasure` through the host's generic descriptor engine, which knows
+   * nothing about aliases, so a chart drawn from a legacy key would show
+   * percentages above a select that said "Count". A control lying about the
+   * chart it governs is worse than a reset, and the reset costs one click on
+   * charts saved during the single session those keys existed.
+   */
+  const measureOf = (view, dflt = 'count') => view.valueMeasure ?? dflt;
 
   // --------------------------------------------------------------------------
   // categorical
@@ -116,7 +130,6 @@ export function chartKinds(lib) {
     baseView: (model) => ({
       mark: 'bar',
       stack: 'none',
-      ...(model.counts ? { yMeasure: 'count' } : {}),
       legend: (model.series || []).length > 1 ? 'right' : 'none',
     }),
     controls: (model) => {
@@ -145,7 +158,7 @@ export function chartKinds(lib) {
       //
       // Which percent is meant follows from the shape of the data, so the option
       // says which one it is rather than leaving the reader to guess.
-      ...(model.counts ? [yMeasureControl([
+      ...(model.counts ? [valueMeasureControl([
         ['count', 'Count'],
         ['percent', multi ? 'Percent within each category' : 'Percent of all cases'],
       ])] : []),
@@ -175,7 +188,7 @@ export function chartKinds(lib) {
   /**
    * The series as the view asks to see them.
    *
-   * A counts model carries raw case counts and the `yMeasure` control decides
+   * A counts model carries raw case counts and the `valueMeasure` control decides
    * whether they are drawn as counts or as percentages — the same numbers shown
    * two ways, which is why it is a view setting and not a question asked before
    * the chart exists.
@@ -187,7 +200,7 @@ export function chartKinds(lib) {
    */
   function asMeasure(model, view) {
     const list = model.series || [];
-    if (!model.counts || (view.yMeasure || 'count') !== 'percent') {
+    if (!model.counts || measureOf(view) !== 'percent') {
       return { series: list, yTitle: model.counts ? 'Count' : null };
     }
     const multi = list.length > 1;
@@ -621,9 +634,17 @@ export function chartKinds(lib) {
         // control only says WHAT goes in them, defaulting to the percent that
         // was previously the only choice.
         valueLabelsControl(),
+        // Same control as the bar chart's and the histogram's, in the same
+        // section under the same name. It keeps its dependency on the labels
+        // being switched on — a pie has no axis, so this really can only reach
+        // the label text — and a control in one section depending on one in
+        // another is already the pattern (the boxplot's Point size, in Style,
+        // depends on Show data points, in Chart).
         {
-          id: 'pieLabel', label: 'Label shows', type: 'select', group: 'Labels', default: 'percent',
-          options: [['percent', 'Percent'], ['count', 'Count (N)'], ['both', 'Percent and count']],
+          ...valueMeasureControl(
+            [['percent', 'Percent'], ['count', 'Count (N)'], ['both', 'Percent and count']],
+            'percent',
+          ),
           visibleWhen: { control: 'valueLabels', truthy: true },
         },
         // A pie's labels were the only ones in the app with no size, weight or
@@ -673,7 +694,7 @@ export function chartKinds(lib) {
       // A wedge only holds so much text, and the wider the label the wider the
       // wedge has to be — so the cutoff moves with what is being written rather
       // than being one number tuned for "34%".
-      const mode = view.pieLabel || 'percent';
+      const mode = measureOf(view, 'percent');
       const minFrac = mode === 'both' ? 0.05 : 0.03;
       if (view.valueLabels && frac > minFrac) {
         const pct = `${Math.round(frac * 100)}%`;
@@ -2319,7 +2340,6 @@ export function chartKinds(lib) {
     colorItems: () => [{ key: '__bars__', label: 'Bars' }],
     baseView: () => ({
       binMode: 'auto',
-      yMeasure: 'count',
       legend: 'none',
       barGap: 0,
     }),
@@ -2359,7 +2379,7 @@ export function chartKinds(lib) {
           visibleWhen: { control: 'binMode', equals: 'custom' },
         },
         { id: 'edgeTicks', label: 'Mark the boundaries', type: 'check', group: 'Bins', default: false },
-        yMeasureControl([['count', 'Count'], ['percent', 'Percent of all cases'], ['density', 'Density']]),
+        valueMeasureControl([['count', 'Count'], ['percent', 'Percent of all cases'], ['density', 'Density']]),
         { id: 'normalCurve', label: 'Normal curve', type: 'check', group: 'Chart', default: false },
         { id: 'showStats', label: 'Show mean, SD and N', type: 'check', group: 'Chart', default: false },
         { id: 'barGap', label: 'Gap between bars', type: 'number', group: 'Chart', min: 0, max: 0.5, step: 0.05, default: 0 },
@@ -2379,7 +2399,7 @@ export function chartKinds(lib) {
       const { edges, custom } = histEdges(vals, view);
       const { counts, outside } = histCounts(vals, edges);
       const n = vals.length;
-      const measure = view.yMeasure || 'count';
+      const measure = measureOf(view);
       // Density is count / (n × width), so the bars enclose an area of 1 whatever
       // the intervals are — the one height that stays comparable across unequal bins.
       const heights = counts.map((c, i) =>

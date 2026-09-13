@@ -220,15 +220,40 @@ export function summaryControl(options, dflt) {
 }
 
 /**
- * What the y axis measures — counts, percentages, density. Distinct from a pie's
- * "Label shows", which changes the text in a label rather than the scale.
+ * Counts or percentages — the same question wherever a chart reports a number.
+ *
+ * One control, one name, one section, on every kind that can answer it. That is
+ * not cosmetic tidying: to a reader the question is identical on a bar chart, a
+ * histogram and a pie ("do I want counts or percentages?"), and it was living
+ * under Chart on three kinds and under Labels on the pie because of what it
+ * happens to DO rather than what it asks.
+ *
+ * What it does varies, and only on one kind does it redraw anything. On a
+ * single-series bar or line chart, and on a histogram with equal intervals, the
+ * marks are pixel-identical either way and only the axis and the printed numbers
+ * change. On a pie it can only ever change the label text, a slice's size being
+ * its share by definition. The drawing genuinely changes in exactly two places:
+ * a grouped Trends chart, where the share is within each category, and a
+ * histogram with unequal cut points shown as Density.
+ *
+ * Filing it by that side effect would put one control in two sections and, worse,
+ * move it between them with the shape of the data — a Trends chart would keep it
+ * in a different place depending on whether a group variable was chosen. So it
+ * is filed by the QUESTION, under Chart, and the side effect is left to be a side
+ * effect. `Chart` rather than `Labels` because on four of the five it changes the
+ * axis, which no Labels control should.
+ *
+ * The OPTIONS stay the kind's own — a pie can offer "both", a histogram can offer
+ * density — and this owns the id, the name and the section, which is the part
+ * that was drifting.
  *
  * @param {[string,string][]} options
+ * @param {string} [dflt]
  */
-export function yMeasureControl(options) {
+export function valueMeasureControl(options, dflt = 'count') {
   return {
-    id: 'yMeasure', label: 'Y axis shows', type: 'select', structural: true,
-    group: 'Chart', default: 'count', options,
+    id: 'valueMeasure', label: 'Show values as', type: 'select', structural: true,
+    group: 'Chart', default: dflt, options,
   };
 }
 

@@ -93,7 +93,7 @@ test('a control shared by several kinds is built in ONE place', () => {
   // Held as an explicit list so that adding a duplicated inline control is a
   // decision someone makes here, not an accident nobody sees.
   const FROM_A_BUILDER = new Set([
-    'mark', 'yMeasure', 'summary', 'pointSize', 'showPoints',
+    'mark', 'valueMeasure', 'summary', 'pointSize', 'showPoints',
     'palette', 'legend', 'gridlines', 'valueLabels',
     'valueLabelSize', 'valueLabelBold', 'valueLabelItalic',
     'titleText', 'titleSize', 'titleBold', 'titleItalic',
@@ -170,5 +170,25 @@ test('every control is usable: a label, a known type, and options where it needs
         assert.ok(Array.isArray(c.options) && c.options.length > 1, `${n}: "${c.id}" is a select with nothing to choose`);
       }
     }
+  }
+});
+
+test('the count/percent question is ONE control, in one place, wherever it is asked', () => {
+  // It was `yMeasure` under Chart on the bar, line and histogram charts and
+  // `pieLabel` under Labels on the pie — the same question in two sections under
+  // two names, because it had been filed by what it happens to DO (only the
+  // grouped-Trends case redraws anything) rather than by what it asks.
+  const offering = names.filter((n) => describe(n).controls.some((c) => c.id === 'valueMeasure'));
+  assert.ok(offering.length >= 3, `expected several kinds to offer it, got ${offering.join(', ')}`);
+  for (const n of offering) {
+    const c = describe(n).controls.find((x) => x.id === 'valueMeasure');
+    assert.equal(c.group, 'Chart', `${n} files it under ${c.group}`);
+    assert.equal(c.label, 'Show values as', `${n} calls it "${c.label}"`);
+  }
+  // And the older ids are gone, so nothing can answer the question twice.
+  for (const n of names) {
+    const ids = describe(n).controls.map((c) => c.id);
+    assert.ok(!ids.includes('yMeasure'), `${n} still has the old yMeasure`);
+    assert.ok(!ids.includes('pieLabel'), `${n} still has the old pieLabel`);
   }
 });
