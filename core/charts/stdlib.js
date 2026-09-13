@@ -79,10 +79,83 @@ export function paletteControl(multi = true) {
 /** Legend placement — only when more than one item is shown. */
 export function legendControl(multi = true, fallback = 'right') {
   return multi ? {
-    id: 'legend', label: 'Legend', type: 'select', group: 'Style',
+    id: 'legend', label: 'Placement', type: 'select', group: 'Legend', structural: true,
     default: fallback,
-    options: [['right', 'Right'], ['top', 'Top'], ['bottom', 'Bottom'], ['none', 'Hidden']],
+    options: [
+      ['right', 'Right of the chart'],
+      ['top', 'Above the chart'],
+      ['bottom', 'Below the chart'],
+      // Inside the plot: no margin is reserved, so the chart keeps its full
+      // width and the legend sits over it. Worth having exactly where a corner
+      // is empty, which is a judgement only the reader can make.
+      ['inside-tl', 'Inside \u2014 top left'],
+      ['inside-tr', 'Inside \u2014 top right'],
+      ['inside-bl', 'Inside \u2014 bottom left'],
+      ['inside-br', 'Inside \u2014 bottom right'],
+      ['none', 'Hidden'],
+    ],
   } : null;
+}
+
+/**
+ * Size, weight and slant for the legend's text.
+ *
+ * Every other run of text on a chart \u2014 title, axis titles, value labels \u2014 could
+ * be set and the legend could not, so enlarging a chart for a slide left one bit
+ * of 11px text behind looking like an oversight. Shown only when there is a
+ * legend to format.
+ *
+ * @param {boolean} multi - false when the kind has nothing to put in a legend
+ */
+export function legendFormatControls(multi = true) {
+  if (!multi) return [];
+  const dep = { control: 'legend', notEquals: 'none' };
+  return [
+    { id: 'legendSize', label: 'Text size', type: 'number', min: 7, max: 24, step: 0.5, group: 'Legend', default: 11, visibleWhen: dep },
+    { id: 'legendBold', label: 'Bold', type: 'check', group: 'Legend', default: false, visibleWhen: dep },
+    { id: 'legendItalic', label: 'Italic', type: 'check', group: 'Legend', default: false, visibleWhen: dep },
+  ];
+}
+
+/**
+ * The right-hand margin a legend needs, or the margin to use when it needs none.
+ *
+ * There were FIVE copies of this sum — in the two shared frames and hand-written
+ * again in the categorical, scatter, pie and SCED renderers — each with its own
+ * floor and ceiling (18/20/24, 200/220) and all of them multiplying by a
+ * hard-coded 7px per character. That constant was the legend's font size baked
+ * into a number, so the moment the size became adjustable every one of them
+ * would reserve room for 11px text and clip anything larger off the canvas.
+ *
+ * @param {Array<string>} labels - the legend entries' text
+ * @param {object} view
+ * @param {{none?: number}} [opts] - margin when there is no right-hand legend
+ */
+export function legendMargin(labels, view, { none = 20 } = {}) {
+  const items = (labels || []).filter((l) => l != null);
+  if (!view || view.legend !== 'right' || items.length < 2) return none;
+  const size = legendSizeOf(view);
+  const longest = Math.max(0, ...items.map((l) => String(l).length));
+  return Math.min(260, Math.max(70, longest * size * 0.62 + size * 1.1 + 22));
+}
+
+/**
+ * Extra room above or below the plot for a legend placed there — again scaled by
+ * the text rather than by a constant that assumed one size.
+ *
+ * @param {object} view @param {'top'|'bottom'} place @param {boolean} multi
+ */
+export function legendGap(view, place, multi = true) {
+  if (!multi || !view || view.legend !== place) return 0;
+  const size = legendSizeOf(view);
+  return place === 'top' ? size * 1.8 : size * 2.4;
+}
+
+/** The legend's text size. Its default, and the number the frames reserve space
+ * against, live in one place so the two cannot disagree and clip the text. */
+export function legendSizeOf(view) {
+  const n = Number(view && view.legendSize);
+  return Number.isFinite(n) && n >= 7 && n <= 24 ? n : 11;
 }
 
 /** Value-labels toggle. */
@@ -383,26 +456,52 @@ export function niceNum(range, round) {
 
 /** A legend (right column, or a centred top/bottom row). `items` = [{label,color}].
  * `box` = {x0,x1,y0,y1} plot rect. */
-export function legendBlock(items, place, box) {
+export function legendBlock(items, place, box, view = {}) {
   if (!items.length || place === 'none') return '';
+  const size = legendSizeOf(view);
+  const opts = { size, fill: '#333', weight: view.legendBold ? 600 : undefined, italic: !!view.legendItalic };
+  // Everything scales off the text, so a 20px legend does not draw 12px swatches
+  // on 19px rows. The character width is the same 0.62em the frames reserve by.
+  const sw = Math.round(size * 1.1); // swatch
+  const rowH = Math.round(size * 1.75); // line pitch
+  const chW = size * 0.62;
   const out = [];
-  if (place === 'right') {
-    let ly = box.y1 + 4;
-    const lx = box.x1 + 14;
+
+  const inside = place.indexOf('inside-') === 0;
+  if (place === 'right' || inside) {
+    const rows = items.map((it) => clip(it.label, 26));
+    const boxW = sw + 5 + Math.max(0, ...rows.map((t) => t.length * chW)) + 8;
+    const boxH = rows.length * rowH + 6;
+    let lx;
+    let ly;
+    if (inside) {
+      const pad = 8;
+      lx = place.charAt(place.length - 1) === 'l' ? box.x0 + pad + 4 : box.x1 - boxW - pad + 4;
+      ly = place.indexOf('inside-t') === 0 ? box.y1 + pad : box.y0 - boxH - pad + 3;
+      // A plate, because inside means over the data: without it a legend on a
+      // dark bar is unreadable, which would make the option a trap.
+      out.push(
+        `<rect x="${r(lx - 4)}" y="${r(ly - 3)}" width="${r(boxW)}" height="${r(boxH)}" rx="4" ` +
+          `fill="#fff" fill-opacity="0.82" stroke="${GRID}" stroke-width="1"/>`,
+      );
+    } else {
+      lx = box.x1 + 14;
+      ly = box.y1 + 4;
+    }
     for (const it of items) {
-      out.push(`<rect x="${r(lx)}" y="${r(ly)}" width="12" height="12" rx="2" fill="${it.color}"/>`);
-      out.push(text(lx + 17, ly + 10, esc(clip(it.label, 26)), { size: 11, fill: '#333' }));
-      ly += 19;
+      out.push(`<rect x="${r(lx)}" y="${r(ly)}" width="${sw}" height="${sw}" rx="2" fill="${it.color}"/>`);
+      out.push(text(lx + sw + 5, ly + sw - 1, esc(clip(it.label, 26)), opts));
+      ly += rowH;
     }
   } else {
     const gap = 16;
-    const widths = items.map((it) => 16 + clip(it.label, 22).length * 6.2 + gap);
+    const widths = items.map((it) => sw + 4 + clip(it.label, 22).length * chW + gap);
     const totalW = widths.reduce((a, b) => a + b, 0) - gap;
     let lx = (box.x0 + box.x1) / 2 - totalW / 2;
-    const ly = place === 'top' ? box.y1 - 16 : box.y0 + 38;
+    const ly = place === 'top' ? box.y1 - rowH + 3 : box.y0 + rowH + 22;
     for (let i = 0; i < items.length; i++) {
-      out.push(`<rect x="${r(lx)}" y="${r(ly - 9)}" width="12" height="12" rx="2" fill="${items[i].color}"/>`);
-      out.push(text(lx + 16, ly + 1, esc(clip(items[i].label, 22)), { size: 11, fill: '#333' }));
+      out.push(`<rect x="${r(lx)}" y="${r(ly - sw + 1)}" width="${sw}" height="${sw}" rx="2" fill="${items[i].color}"/>`);
+      out.push(text(lx + sw + 4, ly + 1, esc(clip(items[i].label, 22)), opts));
       lx += widths[i];
     }
   }
@@ -487,11 +586,9 @@ export function bandFrame(model, view, { allValues, bands, legendItems = [], alt
   const yHi = yMaxUser ? view.yAxisMax : yticks[yticks.length - 1];
 
   const showLegend = view.legend !== 'none' && legendItems.length > 1;
-  const mRight = showLegend && view.legend === 'right'
-    ? Math.min(200, Math.max(70, Math.max(...legendItems.map((i) => i.label.length)) * 7 + 28))
-    : 20;
-  const mTop = title ? 34 : 16;
-  const mBottom = 46 + (xTitle ? 16 : 0) + (showLegend && view.legend === 'bottom' ? 26 : 0);
+  const mRight = legendMargin(legendItems.map((i) => i.label), showLegend ? view : {});
+  const mTop = (title ? 34 : 16) + legendGap(view, 'top', showLegend);
+  const mBottom = 46 + (xTitle ? 16 : 0) + legendGap(view, 'bottom', showLegend);
   const mLeft = 56 + (yTitle ? 16 : 0);
   const box = { x0: mLeft, x1: W - mRight, y0: H - mBottom, y1: mTop };
   const yScale = (v) => box.y0 - ((v - yLo) / (yHi - yLo || 1)) * (box.y0 - box.y1);
@@ -531,7 +628,7 @@ export function bandFrame(model, view, { allValues, bands, legendItems = [], alt
       const my = (box.y0 + box.y1) / 2;
       out.push(`<text x="14" y="${r(my)}" font-size="${view.yAxisTitleSize || 12}" fill="#333" text-anchor="middle" transform="rotate(-90 14 ${r(my)})">${esc(yTitle)}</text>`);
     }
-    if (showLegend) out.push(legendBlock(legendItems, view.legend, box));
+    if (showLegend) out.push(legendBlock(legendItems, view.legend, box, view));
     out.push('</svg>');
     return out.join('');
   };
@@ -631,11 +728,9 @@ export function xyFrame(model, view, { xValues, yValues, legendItems = [], alt, 
   const ys = span(yValues, 'yAxisMin', 'yAxisMax', yTickCount);
 
   const showLegend = view.legend !== 'none' && legendItems.length > 1;
-  const mRight = showLegend && view.legend === 'right'
-    ? Math.min(200, Math.max(70, Math.max(...legendItems.map((i) => i.label.length)) * 7 + 28))
-    : 20;
-  const mTop = title ? 34 : 16;
-  const mBottom = 44 + (xTitle ? 16 : 0) + (showLegend && view.legend === 'bottom' ? 26 : 0);
+  const mRight = legendMargin(legendItems.map((i) => i.label), showLegend ? view : {});
+  const mTop = (title ? 34 : 16) + legendGap(view, 'top', showLegend);
+  const mBottom = 44 + (xTitle ? 16 : 0) + legendGap(view, 'bottom', showLegend);
   const mLeft = 56 + (yTitle ? 16 : 0);
   const box = { x0: mLeft, x1: W - mRight, y0: H - mBottom, y1: mTop };
 
@@ -679,7 +774,7 @@ export function xyFrame(model, view, { xValues, yValues, legendItems = [], alt, 
       const my = (box.y0 + box.y1) / 2;
       out.push(`<text x="14" y="${r(my)}" font-size="${view.yAxisTitleSize || 12}" fill="#333" text-anchor="middle" transform="rotate(-90 14 ${r(my)})">${esc(yTitle)}</text>`);
     }
-    if (showLegend) out.push(legendBlock(legendItems, view.legend, box));
+    if (showLegend) out.push(legendBlock(legendItems, view.legend, box, view));
     out.push('</svg>');
     return out.join('');
   };

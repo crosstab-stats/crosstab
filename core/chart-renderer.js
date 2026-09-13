@@ -92,6 +92,7 @@
  * @property {(view:ViewState)=>*} get
  * @property {(view:ViewState, value:*)=>void} set
  * @property {(view:ViewState, model:ChartModel)=>boolean} [visible]
+ * @property {{control:string, equals?:*, notEquals?:*, truthy?:boolean}} [visibleWhen]
  * @property {boolean} [structural] - changing it re-lays-out the controls panel.
  */
 

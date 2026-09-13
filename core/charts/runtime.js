@@ -219,7 +219,7 @@ function reconcileOrder(wanted, all) {
  * @property {string} [placeholder]
  * @property {string} [group] - collapsible section title in the controls panel.
  * @property {boolean} [structural] - changing it re-lays-out the panel.
- * @property {{control:string, truthy?:boolean, equals?:*}} [visibleWhen] - show only
+ * @property {{control:string, truthy?:boolean, equals?:*, notEquals?:*}} [visibleWhen] - show only
  *   when ANOTHER control's *effective* value matches. Referencing a control rather than
  *   a raw view key is deliberate: "show the point-size slider when points are on" is one
  *   statement, but `!!v.showPoints` and `v.showPoints !== false` are two, purely because
@@ -266,5 +266,9 @@ export function controlVisible(ctl, view, controls) {
   if (!dep) return true; // a dangling reference should not hide the control silently
   const val = controlValue(dep, view);
   if ('equals' in w) return val === w.equals;
+  // `notEquals` for the common "everything except one option" case — the legend's
+  // size and weight apply to every placement but Hidden, which `equals` can only
+  // express by listing the rest and going stale when one is added.
+  if ('notEquals' in w) return val !== w.notEquals;
   return w.truthy === false ? !val : !!val;
 }

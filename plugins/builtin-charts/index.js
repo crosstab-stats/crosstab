@@ -84,6 +84,7 @@ export function chartKinds(lib) {
   const {
     PALETTES, DEFAULT_PALETTE, colorFor, paletteControl, legendControl,
     valueLabelsControl, gridlinesControl, hasRawValues, pointOverlayControl,
+    legendFormatControls, legendMargin, legendGap,
     errorBarsControl, titleControls, axisControls, valueLabelFormatControls,
     pointSizeControl, showPointsControl, markControl, summaryControl, valueMeasureControl,
     W, H, FONT, AXIS, GRID, errorSvg, text, r, esc, clip, fmtNum,
@@ -175,6 +176,7 @@ export function chartKinds(lib) {
       gridlinesControl(),
       paletteControl(multi),
       legendControl(multi, 'right'),
+      ...legendFormatControls(multi),
       valueLabelsControl(),
       ...valueLabelFormatControls(),
       ...titleControls(model),
@@ -267,13 +269,11 @@ export function chartKinds(lib) {
     const xTitle = view.xAxisTitle || model.axes?.x?.title;
     const yTitle = view.yAxisTitle || model.axes?.y?.title;
 
-    const legendRight = view.legend === 'right' && series.length > 1;
-    const longest = Math.max(0, ...series.map((s) => (s.label || s.key).length));
-    const mRight = legendRight ? Math.min(220, Math.max(70, longest * 7 + 28)) : 18;
-    const mTop = (chartTitle ? 34 : 14) + (view.legend === 'top' && series.length > 1 ? 22 : 0);
+    const mRight = legendMargin(series.map((x) => x.label || x.key), view, { none: 18 });
+    const mTop = (chartTitle ? 34 : 14) + legendGap(view, 'top', series.length > 1);
     const rotate = cats.length > 6 || Math.max(0, ...cats.map((c) => (c.label || c.key).length)) > 6;
     const longestX = Math.max(0, ...cats.map((c) => (c.label || c.key).length));
-    const mBottom = (rotate ? Math.min(120, 28 + longestX * 6) : 40) + (xTitle ? 16 : 0) + (view.legend === 'bottom' && series.length > 1 ? 22 : 0);
+    const mBottom = (rotate ? Math.min(120, 28 + longestX * 6) : 40) + (xTitle ? 16 : 0) + legendGap(view, 'bottom', series.length > 1);
     const mLeft = 56 + (yTitle ? 16 : 0);
 
     const box = { x0: mLeft, x1: W - mRight, y0: H - mBottom, y1: mTop };
@@ -333,7 +333,7 @@ export function chartKinds(lib) {
 
     if (series.length > 1) {
       const items = series.map((s, i) => ({ label: s.label || s.key, color: colorFor(view, s.key, i) }));
-      out.push(legendBlock(items, view.legend, box));
+      out.push(legendBlock(items, view.legend, box, view));
     }
 
     out.push('</svg>');
@@ -475,6 +475,7 @@ export function chartKinds(lib) {
       gridlinesControl(),
       paletteControl(multi),
       legendControl(multi, 'right'),
+      ...legendFormatControls(multi),
       ...titleControls(model),
       ...axisControls('x', model),
       ...axisControls('y', model),
@@ -516,8 +517,7 @@ export function chartKinds(lib) {
     const xTitle = view.xAxisTitle || model.axes?.x?.title;
     const yTitle = view.yAxisTitle || model.axes?.y?.title;
 
-    const legendRight = view.legend === 'right' && groups && groups.length > 1;
-    const mRight = legendRight ? Math.min(200, Math.max(70, Math.max(...groups.map((g) => (g.label || g.key).length)) * 7 + 28)) : 18;
+    const mRight = legendMargin((groups || []).map((g) => g.label || g.key), view, { none: 18 });
     const mTop = chartTitle ? 34 : 16;
     const mBottom = 42 + (xTitle ? 16 : 0);
     const mLeft = 56 + (yTitle ? 16 : 0);
@@ -594,7 +594,7 @@ export function chartKinds(lib) {
 
     if (groups && groups.length > 1) {
       const items = groups.map((g, i) => ({ label: g.label || g.key, color: colorFor(view, g.key, i) }));
-      out.push(legendBlock(items, view.legend, box));
+      out.push(legendBlock(items, view.legend, box, view));
     }
 
     out.push('</svg>');
@@ -629,6 +629,7 @@ export function chartKinds(lib) {
         { id: 'pieRotation', group: 'Chart', label: 'Rotate (°)', type: 'number', min: 0, max: 360, step: 15, wrap: 360, default: 0 },
         paletteControl(multi),
         legendControl(multi, 'right'),
+        ...legendFormatControls(multi),
         // The switch stays `valueLabels` and keeps its meaning, so every pie
         // already saved keeps exactly the labels it was saved with; the new
         // control only says WHAT goes in them, defaulting to the percent that
@@ -662,8 +663,7 @@ export function chartKinds(lib) {
     const slices = ordered(model.slices, view.seriesOrder).filter((s) => Number.isFinite(s.value) && s.value > 0);
     const total = slices.reduce((a, s) => a + s.value, 0) || 1;
 
-    const legendRight = view.legend === 'right' && slices.length > 1;
-    const mRight = legendRight ? Math.min(220, Math.max(80, Math.max(0, ...slices.map((s) => (s.label || s.key).length)) * 7 + 40)) : 24;
+    const mRight = legendMargin(slices.map((x) => x.label || x.key), view, { none: 24 });
     const mTop = model.title ? 38 : 18;
     const cx = (24 + (W - mRight)) / 2;
     const cy = mTop + (H - mTop - 24) / 2;
@@ -714,7 +714,7 @@ export function chartKinds(lib) {
     });
 
     const box = { x0: 24, x1: W - mRight, y0: H - 24, y1: mTop };
-    if (slices.length > 1) out.push(legendBlock(items, view.legend, box));
+    if (slices.length > 1) out.push(legendBlock(items, view.legend, box, view));
 
     out.push('</svg>');
     return out.join('');
@@ -774,6 +774,7 @@ export function chartKinds(lib) {
       gridlinesControl(),
       paletteControl(multi),
       legendControl(multi, 'right'),
+      ...legendFormatControls(multi),
       ...titleControls(model),
       ...axisControls('x', model),
       ...axisControls('y', model),
@@ -958,6 +959,7 @@ export function chartKinds(lib) {
       gridlinesControl(),
       paletteControl(true),
       legendControl(true, 'none'),
+      ...legendFormatControls(true),
       ...titleControls(model),
       ...axisControls('x', model),
       ...axisControls('y', model),
@@ -1072,6 +1074,7 @@ export function chartKinds(lib) {
       gridlinesControl(),
       paletteControl(multi),
       legendControl(multi, 'none'),
+      ...legendFormatControls(multi),
       ...titleControls(model),
       ...axisControls('x', model),
       ...axisControls('y', model),
@@ -1218,6 +1221,7 @@ export function chartKinds(lib) {
       gridlinesControl(),
       paletteControl(multi),
       legendControl(multi, 'right'),
+      ...legendFormatControls(multi),
       ...titleControls(model),
       ...axisControls('x', model),
       ...axisControls('y', model),
@@ -1733,6 +1737,7 @@ export function chartKinds(lib) {
       gridlinesControl(),
       multi ? { ...paletteControl(true), visibleWhen: notMono } : null,
       multi ? { ...legendControl(true, 'right'), visibleWhen: notMono } : null,
+      ...legendFormatControls(multi),
       ...titleControls(model),
       ...axisControls('x', model),
       ...axisControls('y', model),
@@ -1808,12 +1813,9 @@ export function chartKinds(lib) {
     // legend survives mono, because the markers still differ — that is the whole reason
     // measures are encoded by marker rather than colour.
     const showLegend = multiSeries ? seriesKeys.length > 1 : (!view.mono && phaseList.length > 1);
-    const legendRow = view.legend === 'bottom' && showLegend ? 34 : 0;
+    const legendRow = legendGap(view, 'bottom', showLegend);
     const mBottom = 34 + (xTitle ? 18 : 0) + legendRow;
-    const legendRight = view.legend === 'right' && showLegend;
-    const mRight = legendRight
-      ? Math.min(200, Math.max(70, Math.max(...phaseList.map((p) => (p.label || p.key).length)) * 7 + 28))
-      : 20;
+    const mRight = legendMargin(phaseList.map((p) => p.label || p.key), showLegend ? view : {});
     // Row labels. Published SCED figures stack TWO rotated captions to the left of the y
     // axis — outer: the antecedent the behaviour is scored against ("Newcomer's Arrival"),
     // inner: the behaviour itself ("Acknowledging and Complimenting Others"). Both need
@@ -2011,7 +2013,7 @@ export function chartKinds(lib) {
         })), view.legend, box));
       } else {
         const items = phaseList.map((p, i) => ({ label: p.label || p.key, color: colorFor(view, p.key, i) }));
-        out.push(legendBlock(items, view.legend, box));
+        out.push(legendBlock(items, view.legend, box, view));
       }
     }
 
@@ -2124,6 +2126,7 @@ export function chartKinds(lib) {
         // with no visible effect reads as broken).
         paletteControl(themed && !authored),
         legendControl(themed, 'none'),
+        ...legendFormatControls(themed),
         // …and say WHY the palette is missing, rather than leaving a hole. This used to
         // be a permanently-checked checkbox, which was the very sin the comment above
         // warns about: a control that cannot do anything. `note` is inert by construction.
@@ -2221,7 +2224,7 @@ export function chartKinds(lib) {
 
       if (view.legend !== 'none' && themes.length > 1 && !authored) {
         out.push(legendBlock(themes.map((t, i) => ({ label: t.label, color: colorFor(view, t.key, i) })),
-          view.legend, { x0: bounds.x0, x1: bounds.x1 - 8, y0: bounds.y1, y1: bounds.y0 }));
+          view.legend, { x0: bounds.x0, x1: bounds.x1 - 8, y0: bounds.y1, y1: bounds.y0 }, view));
       }
       out.push('</svg>');
       return out.join('');
@@ -2534,7 +2537,7 @@ export function chartKinds(lib) {
    * section means it by it, so it belongs beside Bins and Phases rather than
    * after the shared furniture.
    */
-  const GROUP_ORDER = { Chart: 0, Bins: 1, Phases: 2, Panels: 3, Style: 5, Labels: 6, 'Titles & axes': 7 };
+  const GROUP_ORDER = { Chart: 0, Bins: 1, Phases: 2, Panels: 3, Style: 5, Labels: 6, Legend: 7, 'Titles & axes': 8 };
   const groupRank = (g) => (g in GROUP_ORDER ? GROUP_ORDER[g] : 4);
 
   /** Controls in canonical section order. Stable, so each section's own order —

@@ -41,7 +41,7 @@ const MODELS = {
 };
 
 /** The canonical section order the panel presents. */
-const ORDER = ['Chart', 'Bins', 'Phases', 'Panels', 'Style', 'Labels', 'Titles & axes'];
+const ORDER = ['Chart', 'Bins', 'Phases', 'Panels', 'Style', 'Labels', 'Legend', 'Titles & axes'];
 
 const describe = (name) => KINDS[name].describe(MODELS[name]);
 const names = Object.keys(KINDS);
@@ -97,6 +97,7 @@ test('a control shared by several kinds is built in ONE place', () => {
     'palette', 'legend', 'gridlines', 'valueLabels',
     'valueLabelSize', 'valueLabelBold', 'valueLabelItalic',
     'titleText', 'titleSize', 'titleBold', 'titleItalic',
+    'legendSize', 'legendBold', 'legendItalic',
     'pointOverlay', 'errorBars',
   ]);
   const axisish = (id) => /^[xy]Axis|^[xy]Title/.test(id);

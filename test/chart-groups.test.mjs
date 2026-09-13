@@ -100,8 +100,8 @@ test('SCED stays navigable as the data gets harder', () => {
   const many = { ...MODELS.sced, panels: Array.from({ length: 8 }, (_, i) => ({ ...MODELS.sced.panels[0], key: `k${i}`, label: `K${i}` })) };
   assert.ok(visible(one).length < visible(many).length, 'controls scale with the data');
   const groupsOf = (m) => [...new Set(visible(m).map((c) => c.group))];
-  assert.deepEqual(groupsOf(many), ['Chart', 'Phases', 'Panels', 'Style', 'Titles & axes'],
-    'and the section list stays the same five either way');
+  assert.deepEqual(groupsOf(many), ['Chart', 'Phases', 'Panels', 'Style', 'Legend', 'Titles & axes'],
+    'and the section list stays the same six either way');
   assert.deepEqual(groupsOf(one), groupsOf(many));
 });
 
