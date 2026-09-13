@@ -568,6 +568,10 @@
       }
       .ct-dialog__vars li.ct-dialog__group + li label { border-top: 0; }
       .ct-dialog__vars code { color: #646e77; font-size: 12px; }
+      /* The explicit "none" choice on an optional single-select picker, kept apart
+         from the variables so it reads as an answer rather than as one of them. */
+      .ct-dialog__vars li.ct-dialog__none label { color: #5a6470; font-style: italic; }
+      .ct-dialog__vars li.ct-dialog__none { border-bottom: 1px solid var(--line); margin-bottom: 4px; padding-bottom: 2px; }
       /* A variable disabled because a prior `unique` input already took it. */
       .ct-dialog__vars li.ct-dialog__excluded label { opacity: .5; cursor: not-allowed; }
       .ct-dialog__taken { margin-left: auto; font-size: 11px; color: #b07; font-style: italic; }

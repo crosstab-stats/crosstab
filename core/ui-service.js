@@ -25,6 +25,10 @@
  *   to the user's current sidebar selection.
  * @property {Array<'numeric'|'string'|'factor'>} [types] - Restrict the list to
  *   these variable types (e.g. only categorical variables for a crosstab).
+ * @property {boolean} [optional] - This role may be left empty. A single-select
+ *   picker then offers an explicit "none" choice, because a radio cannot be
+ *   un-chosen once chosen, and nothing is pre-selected — the default answer to an
+ *   optional question is "no".
  * @property {string} [okLabel='OK']
  */
 
@@ -69,12 +73,18 @@ export class UiService {
       preselect,
       types,
       exclude,
+      optional = false,
       okLabel = 'OK',
     } = options;
 
     let meta = this.#store.getVariableMeta();
     if (types?.length) meta = meta.filter((m) => fitsRole(m, types));
-    const checked = new Set(preselect ?? this.#store.getSelectedVariables());
+    // The sidebar/grid selection means "these are the variables I am working on",
+    // which is a good default for the variables an analysis is ABOUT and a bad one
+    // for a secondary role. Seeding it into an OPTIONAL input inverted that input's
+    // default: a weight picker opened with whatever happened to be selected in the
+    // Data view already chosen, so a user who wanted no weight got one.
+    const checked = new Set(preselect ?? (optional ? [] : this.#store.getSelectedVariables()));
     const excluded = new Set(exclude ?? []); // disabled (e.g. chosen in a prior `unique` round)
     const inputType = multiple ? 'checkbox' : 'radio';
 
@@ -150,7 +160,7 @@ export class UiService {
           // rows agree with the model even when the browser did it for us.
           if (!multiple) {
             for (const el of list.querySelectorAll('input[name="var"]')) {
-              el.checked = ticked.has(el.value);
+              el.checked = el.value === '' ? ticked.size === 0 : ticked.has(el.value);
             }
           }
         });
@@ -175,10 +185,44 @@ export class UiService {
         return li;
       };
 
+      /**
+       * The "none" choice for an optional single-select.
+       *
+       * A radio cannot be un-chosen by clicking it again, so without this an
+       * optional role had no way back to empty once anything was picked —
+       * Cancel was the only exit, and Cancel does not read as "no thanks", it
+       * reads as "abandon the analysis".
+       *
+       * Never filtered out by the search: it is not a variable, and hiding the
+       * way out while hunting for a name would be its own trap.
+       */
+      const noneRow = () => {
+        const li = document.createElement('li');
+        li.className = 'ct-dialog__none';
+        const label = document.createElement('label');
+        const input = document.createElement('input');
+        input.type = 'radio';
+        input.name = 'var';
+        input.value = '';
+        input.checked = ticked.size === 0;
+        input.addEventListener('change', () => {
+          if (input.checked) ticked.clear();
+          for (const el of list.querySelectorAll('input[name="var"]')) {
+            el.checked = el.value === '' ? ticked.size === 0 : ticked.has(el.value);
+          }
+        });
+        const span = document.createElement('span');
+        span.textContent = 'None';
+        label.append(input, span);
+        li.append(label);
+        return li;
+      };
+
       const render = () => {
         const top = sorted(matching(selected));
         const bottom = sorted(matching(rest));
         list.replaceChildren();
+        if (optional && !multiple) list.append(noneRow());
         if (selected.length) {
           if (top.length) {
             list.append(groupLabel('Selected'));

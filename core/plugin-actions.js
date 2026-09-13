@@ -667,6 +667,7 @@ async function gatherInputs(ui, specs, item) {
         hint,
         multiple: !!spec.multiple,
         types: spec.types,
+        optional: !!spec.optional,
         exclude: spec.unique ? takenUnique.slice() : undefined,
       });
       if (res === null) {
