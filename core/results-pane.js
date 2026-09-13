@@ -532,10 +532,7 @@ export class ResultsPane {
     // "Save this plot": SVG direct (already SVG); PNG rasterised via canvas.
     const save = document.createElement('div');
     save.className = 'results-plot__save';
-    save.append(
-      makeSaveBtn('⬇ SVG', () => savePlotSvg(holder, handle)),
-      makeSaveBtn('⬇ PNG', () => savePlotPng(holder, handle)),
-    );
+    save.append(...exportButtons(holder, handle));
     box.append(save);
     wrap.append(box);
 
@@ -685,10 +682,7 @@ export class ResultsPane {
 
     const save = document.createElement('div');
     save.className = 'results-plot__save';
-    save.append(
-      makeSaveBtn('⬇ SVG', () => savePlotSvg(holder, handle)),
-      makeSaveBtn('⬇ PNG', () => savePlotPng(holder, handle)),
-    );
+    save.append(...exportButtons(holder, handle));
     block.append(save);
     // Controls need the spec, so they arrive with it — inserted above the save bar
     // rather than appended, to keep the panel between the figure and the buttons.
@@ -803,10 +797,7 @@ export class ResultsPane {
 
     const save = document.createElement('div');
     save.className = 'results-plot__save';
-    save.append(
-      makeSaveBtn('⬇ SVG', () => savePlotSvg(holder, handle)),
-      makeSaveBtn('⬇ PNG', () => savePlotPng(holder, handle)),
-    );
+    save.append(...exportButtons(holder, handle));
     block.append(save);
     return block;
   }
@@ -1379,6 +1370,31 @@ export function pendingChartNotice(item) {
     : 'This figure has no chart type recorded, so nothing can draw it.';
 }
 
+/**
+ * The ⬇ SVG / ⬇ PNG pair, with the size they will produce in their tooltips.
+ *
+ * The size is read when the pointer arrives rather than when the bar is built,
+ * because the chart is resizable and the answer changes as it is dragged. Saying
+ * it up front is the point: an export whose dimensions you only discover in the
+ * file's properties is one you have to export twice.
+ */
+function exportButtons(holder, handle) {
+  const svg = () => holder.querySelector('svg');
+  const tell = (btn, what) => {
+    btn.addEventListener('pointerenter', () => {
+      const el = svg();
+      if (!el) return;
+      const { w, h } = shownSize(el);
+      btn.title = `${what} at ${w} × ${h} — drag the chart's corner to change it`;
+    });
+    return btn;
+  };
+  return [
+    tell(makeSaveBtn('⬇ SVG', () => savePlotSvg(holder, handle)), 'Vector file'),
+    tell(makeSaveBtn('⬇ PNG', () => savePlotPng(holder, handle)), 'Image'),
+  ];
+}
+
 function makeSaveBtn(label, onClick) {
   const b = document.createElement('button');
   b.type = 'button';
@@ -1420,28 +1436,47 @@ function makeEditable(text, placeholder, className, onCommit) {
  * @param {SVGElement} svgEl
  * @returns {string}
  */
+function shownSize(svgEl) {
+  const rect = svgEl.getBoundingClientRect();
+  return { w: Math.max(1, Math.round(rect.width)), h: Math.max(1, Math.round(rect.height)) };
+}
+
 function serializeSvgEl(svgEl) {
   const clone = svgEl.cloneNode(true);
   if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  // The chart carries only a viewBox, which is right on the page (it stretches to
+  // its box) and wrong in a file: a viewBox-only SVG has no intrinsic size, so
+  // every consumer picks its own. Stamp the size it is on screen, so the vector
+  // export opens at the size it was exported at — and the two buttons agree about
+  // what "this chart" means.
+  const { w, h } = shownSize(svgEl);
+  clone.setAttribute('width', String(w));
+  clone.setAttribute('height', String(h));
   return new XMLSerializer().serializeToString(clone);
 }
 
 /**
  * Rasterise an `<svg>` element to PNG bytes via a canvas. The SVG is
- * self-contained (svglite output, no external refs) so the canvas isn't tainted
- * and `toBlob` works. Drawn at ~`scale`× device pixels on a white background.
+ * self-contained (no external refs) so the canvas isn't tainted and `toBlob`
+ * works. Drawn on a white background at `scale`× the size the chart is on
+ * screen.
+ *
+ * `devicePixelRatio` is deliberately NOT part of that. It used to be, which made
+ * the SAME chart export at different pixel dimensions depending on the monitor
+ * it happened to be displayed on — a file's size should not depend on the screen
+ * that made it. It is a screen-rendering concept and has no business in a
+ * document asset.
  *
  * @param {SVGElement} svgEl
- * @param {number} [scale=2] - Extra crispness multiplier on top of devicePixelRatio.
+ * @param {number} [scale=2] - Size multiplier. 1 means exactly what is on screen;
+ *   the report exporters ask for 2 because an embedded raster is resampled.
  * @returns {Promise<Uint8Array>}
  */
 function svgElToPngBytes(svgEl, scale = 2) {
   return new Promise((resolve, reject) => {
     const svgStr = serializeSvgEl(svgEl);
-    const rect = svgEl.getBoundingClientRect();
-    const w = Math.max(1, Math.round(rect.width));
-    const h = Math.max(1, Math.round(rect.height));
-    const s = Math.max(1, window.devicePixelRatio || 1) * scale;
+    const { w, h } = shownSize(svgEl);
+    const s = Math.max(0.1, scale);
     const url = URL.createObjectURL(new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' }));
     const img = new Image();
     img.onload = () => {
@@ -1466,7 +1501,7 @@ function svgElToPngBytes(svgEl, scale = 2) {
   });
 }
 
-/** Download the plot as a vector `.svg` file. */
+/** Download the plot as a vector `.svg` file, at the size it is on screen. */
 function savePlotSvg(holder, handle) {
   const svg = holder.querySelector('svg');
   if (svg) downloadFile(`plot-${handle}.svg`, 'image/svg+xml;charset=utf-8', serializeSvgEl(svg));
@@ -1476,7 +1511,12 @@ function savePlotSvg(holder, handle) {
 function savePlotPng(holder, handle) {
   const svg = holder.querySelector('svg');
   if (!svg) return;
-  svgElToPngBytes(svg)
+  // 1: the file is the size the chart is on screen. Charts here are resizable by
+  // the corner grip, and that grip is the resolution control — the point of being
+  // able to drag a chart bigger is to see the size it will export at. Silently
+  // doubling it meant the number in the file's properties never matched the one
+  // the user had set.
+  svgElToPngBytes(svg, 1)
     .then((bytes) => downloadFile(`plot-${handle}.png`, 'image/png', bytes))
     .catch((err) => console.error('[results] PNG export failed', err));
 }
