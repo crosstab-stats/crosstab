@@ -227,10 +227,18 @@ function reconcileOrder(wanted, all) {
  *   that control's own default, so the dependent control does not have to know it.
  */
 
-/** The effective value of a control: what is stored, else its declared default. */
+/** The effective value of a control: what is stored, else its declared default.
+ * A `defaultFrom` makes the default TRACK another control's value (e.g. the counts
+ * y-axis title follows the `valueMeasure` control — "Count" vs "Percent…"), so the
+ * pre-filled box updates when that control changes instead of showing a stale default. */
 export function controlValue(ctl, view) {
   const raw = view ? view[ctl.key || ctl.id] : undefined;
-  const val = raw === undefined ? ctl.default : raw;
+  let dflt = ctl.default;
+  if (ctl.defaultFrom && view) {
+    const sib = view[ctl.defaultFrom.control]; // the sibling's stored value (undefined = its own default)
+    dflt = (ctl.defaultFrom.map && ctl.defaultFrom.map[sib]) ?? ctl.defaultFrom.fallback ?? ctl.default;
+  }
+  const val = raw === undefined ? dflt : raw;
   if (ctl.type === 'check') return !!val;
   if (ctl.type === 'select') return String(val ?? '');
   if (ctl.type === 'number') return val ?? '';

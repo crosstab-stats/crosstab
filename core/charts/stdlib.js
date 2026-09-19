@@ -223,12 +223,15 @@ export function titleControls(model) {
  *
  * @param {'x'|'y'} axis
  * @param {object} model
- * @param {{defaultTitle?: string}} [opts] - `defaultTitle` is the title the renderer
- *   draws by default when this axis has none in the model (e.g. the counts chart's
- *   "Count" on y). It pre-fills the box so the user can edit or clear it — see the
- *   note in {@link titleControls}.
+ * @param {{defaultTitle?: string, defaultFrom?: {control: string, map: Object<string,string>, fallback?: string}}} [opts]
+ *   - `defaultTitle` is the title the renderer draws by default when this axis has none
+ *   in the model (e.g. the counts chart's "Count" on y); it pre-fills the box so the
+ *   user can edit or clear it (see {@link titleControls}). `defaultFrom` is for a
+ *   default that TRACKS another control — e.g. the counts y-title is "Count" or
+ *   "Percent…" depending on the `valueMeasure` control — so the pre-filled box follows
+ *   that control instead of showing a stale static default (resolved in controlValue).
  */
-export function axisControls(axis, model, { defaultTitle } = {}) {
+export function axisControls(axis, model, { defaultTitle, defaultFrom } = {}) {
   const upper = axis.toUpperCase();
   const modelTitle = model.axes?.[axis]?.title || '';
   const p = `${axis}Axis`;
@@ -237,6 +240,7 @@ export function axisControls(axis, model, { defaultTitle } = {}) {
       // Pre-filled with the effective default so it's editable/clearable (see titleControls).
       id: `${p}Title`, label: `${upper} axis title`, type: 'text', group: 'Titles & axes',
       placeholder: '(no title)', default: modelTitle || defaultTitle || '',
+      ...(defaultFrom ? { defaultFrom } : {}),
     },
     { id: `${p}TitleSize`, label: `${upper} title size`, type: 'number', min: 8, max: 22, step: 1, group: 'Titles & axes', default: 12 },
     { id: `${p}TitleBold`, label: `${upper} title bold`, type: 'check', group: 'Titles & axes', default: false },

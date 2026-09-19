@@ -181,9 +181,13 @@ export function chartKinds(lib) {
       ...valueLabelFormatControls(),
       ...titleControls(model),
       ...axisControls('x', model),
-      // The y-axis title is a render-time default ("Count"/"Percent…") the model
-      // doesn't carry, so pre-fill the box with it ("Count") so it's editable/clearable.
-      ...axisControls('y', model, { defaultTitle: model.counts ? 'Count' : undefined }),
+      // The y-axis title is a render-time default the model doesn't carry, and for a
+      // counts chart it TRACKS the "Show values as" control: Count vs Percent. Pre-fill
+      // the box with that effective default (via defaultFrom) so it's editable/clearable
+      // AND stays in step with the measure instead of showing a stale "Count".
+      ...axisControls('y', model, model.counts
+        ? { defaultTitle: 'Count', defaultFrom: { control: 'valueMeasure', map: { count: 'Count', percent: multi ? 'Percent within each category' : 'Percent of all cases' }, fallback: 'Count' } }
+        : {}),
       ];
     },
     render: (model, view) => renderCategorical(model, view),
