@@ -204,8 +204,13 @@ export function errorBarsControl(model) {
 export function titleControls(model) {
   return [
     {
+      // The box is PRE-FILLED with the effective default title (`default`), so it shows
+      // as real, editable text — backspacing it to empty stores '' ("no title"), which
+      // the renderers honour via `?? default`. (An empty box with the default shown only
+      // as a placeholder can't be cleared: there's nothing to backspace, so no change
+      // fires.) The placeholder is what an emptied box shows.
       id: 'titleText', label: 'Title', type: 'text', group: 'Titles & axes',
-      placeholder: model.title || '(none)', default: '',
+      placeholder: '(no title)', default: model.title || '',
     },
     { id: 'titleSize', label: 'Title size', type: 'number', min: 8, max: 28, step: 1, group: 'Titles & axes', default: 15 },
     { id: 'titleBold', label: 'Title bold', type: 'check', group: 'Titles & axes', default: true },
@@ -218,18 +223,20 @@ export function titleControls(model) {
  *
  * @param {'x'|'y'} axis
  * @param {object} model
- * @param {{placeholder?: string}} [opts] - `placeholder` names the title the renderer
+ * @param {{defaultTitle?: string}} [opts] - `defaultTitle` is the title the renderer
  *   draws by default when this axis has none in the model (e.g. the counts chart's
- *   "Count" on y), so the empty text box hints the real default rather than "(none)".
+ *   "Count" on y). It pre-fills the box so the user can edit or clear it — see the
+ *   note in {@link titleControls}.
  */
-export function axisControls(axis, model, { placeholder } = {}) {
+export function axisControls(axis, model, { defaultTitle } = {}) {
   const upper = axis.toUpperCase();
   const modelTitle = model.axes?.[axis]?.title || '';
   const p = `${axis}Axis`;
   return [
     {
+      // Pre-filled with the effective default so it's editable/clearable (see titleControls).
       id: `${p}Title`, label: `${upper} axis title`, type: 'text', group: 'Titles & axes',
-      placeholder: modelTitle || placeholder || '(none)', default: '',
+      placeholder: '(no title)', default: modelTitle || defaultTitle || '',
     },
     { id: `${p}TitleSize`, label: `${upper} title size`, type: 'number', min: 8, max: 22, step: 1, group: 'Titles & axes', default: 12 },
     { id: `${p}TitleBold`, label: `${upper} title bold`, type: 'check', group: 'Titles & axes', default: false },

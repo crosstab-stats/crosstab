@@ -182,8 +182,8 @@ export function chartKinds(lib) {
       ...titleControls(model),
       ...axisControls('x', model),
       // The y-axis title is a render-time default ("Count"/"Percent…") the model
-      // doesn't carry, so hint it in the empty box rather than showing "(none)".
-      ...axisControls('y', model, { placeholder: model.counts ? 'Count' : undefined }),
+      // doesn't carry, so pre-fill the box with it ("Count") so it's editable/clearable.
+      ...axisControls('y', model, { defaultTitle: model.counts ? 'Count' : undefined }),
       ];
     },
     render: (model, view) => renderCategorical(model, view),
