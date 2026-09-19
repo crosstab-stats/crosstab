@@ -193,39 +193,47 @@ export function errorBarsControl(model) {
 /**
  * Chart title text + formatting controls.
  *
- * The formatting controls only make sense once there IS a title. When the model supplies
- * one they are always relevant; when it does not, they appear as soon as the user types
- * one — expressed as `visibleWhen` against the text control rather than as a closure
- * over `model.title`, so the whole descriptor stays clonable.
+ * The size/weight/slant controls are always shown, so the title, x-axis and y-axis
+ * offer an identical set (a chart whose x-axis exposed formatting while its y-axis
+ * did not was the reported inconsistency). Formatting an as-yet-empty title is simply
+ * a no-op, and it takes effect on any default title the renderer draws (e.g. "Count").
+ * The text box's placeholder shows the effective default, and its value overrides it —
+ * an *explicitly emptied* box (see the `??` resolution in the renderers) means "no
+ * title", distinct from an untouched box, which keeps the default.
  */
 export function titleControls(model) {
-  const always = !!model.title;
-  const dep = always ? undefined : { control: 'titleText', truthy: true };
   return [
     {
       id: 'titleText', label: 'Title', type: 'text', group: 'Titles & axes',
       placeholder: model.title || '(none)', default: '',
     },
-    { id: 'titleSize', label: 'Title size', type: 'number', min: 8, max: 28, step: 1, group: 'Titles & axes', default: 15, visibleWhen: dep },
-    { id: 'titleBold', label: 'Title bold', type: 'check', group: 'Titles & axes', default: true, visibleWhen: dep },
-    { id: 'titleItalic', label: 'Title italic', type: 'check', group: 'Titles & axes', default: false, visibleWhen: dep },
+    { id: 'titleSize', label: 'Title size', type: 'number', min: 8, max: 28, step: 1, group: 'Titles & axes', default: 15 },
+    { id: 'titleBold', label: 'Title bold', type: 'check', group: 'Titles & axes', default: true },
+    { id: 'titleItalic', label: 'Title italic', type: 'check', group: 'Titles & axes', default: false },
   ];
 }
 
-/** Axis title + formatting + min/max controls for one axis. */
-export function axisControls(axis, model) {
+/**
+ * Axis title + formatting + min/max controls for one axis.
+ *
+ * @param {'x'|'y'} axis
+ * @param {object} model
+ * @param {{placeholder?: string}} [opts] - `placeholder` names the title the renderer
+ *   draws by default when this axis has none in the model (e.g. the counts chart's
+ *   "Count" on y), so the empty text box hints the real default rather than "(none)".
+ */
+export function axisControls(axis, model, { placeholder } = {}) {
   const upper = axis.toUpperCase();
   const modelTitle = model.axes?.[axis]?.title || '';
   const p = `${axis}Axis`;
-  const dep = modelTitle ? undefined : { control: `${p}Title`, truthy: true };
   return [
     {
       id: `${p}Title`, label: `${upper} axis title`, type: 'text', group: 'Titles & axes',
-      placeholder: modelTitle || '(none)', default: '',
+      placeholder: modelTitle || placeholder || '(none)', default: '',
     },
-    { id: `${p}TitleSize`, label: `${upper} title size`, type: 'number', min: 8, max: 22, step: 1, group: 'Titles & axes', default: 12, visibleWhen: dep },
-    { id: `${p}TitleBold`, label: `${upper} title bold`, type: 'check', group: 'Titles & axes', default: false, visibleWhen: dep },
-    { id: `${p}TitleItalic`, label: `${upper} title italic`, type: 'check', group: 'Titles & axes', default: false, visibleWhen: dep },
+    { id: `${p}TitleSize`, label: `${upper} title size`, type: 'number', min: 8, max: 22, step: 1, group: 'Titles & axes', default: 12 },
+    { id: `${p}TitleBold`, label: `${upper} title bold`, type: 'check', group: 'Titles & axes', default: false },
+    { id: `${p}TitleItalic`, label: `${upper} title italic`, type: 'check', group: 'Titles & axes', default: false },
     // No default: blank means "auto", and a number here is an explicit override.
     { id: `${p}Min`, label: `${upper} axis min`, type: 'number', placeholder: 'auto', group: 'Titles & axes' },
     { id: `${p}Max`, label: `${upper} axis max`, type: 'number', placeholder: 'auto', group: 'Titles & axes' },
@@ -554,7 +562,7 @@ export function svgOpenH(h, label) {
  * Both routes were the same mistake in different clothes. A kind knows its own noun.
  */
 export function chartAltText(model, view, extra, noun) {
-  const title = view.titleText || model.title || '';
+  const title = (view.titleText ?? model.title) || '';
   const kind = noun || 'Chart';
   // Don't say "Word cloud: Word cloud." when the title already names the chart type.
   const named = title && !title.toLowerCase().startsWith(kind.toLowerCase())
@@ -573,9 +581,9 @@ export function chartAltText(model, view, extra, noun) {
  * Returns the open SVG buffer plus the geometry a kind needs to draw into it.
  */
 export function bandFrame(model, view, { allValues, bands, legendItems = [], alt = plural(bands, 'group') + '.' , noun }) {
-  const title = view.titleText || model.title;
-  const xTitle = view.xAxisTitle || model.axes?.x?.title;
-  const yTitle = view.yAxisTitle || model.axes?.y?.title;
+  const title = view.titleText ?? model.title;
+  const xTitle = view.xAxisTitle ?? model.axes?.x?.title;
+  const yTitle = view.yAxisTitle ?? model.axes?.y?.title;
 
   const yMinUser = Number.isFinite(view.yAxisMin);
   const yMaxUser = Number.isFinite(view.yAxisMax);
@@ -708,9 +716,9 @@ export function jitterFor(i, n) {
  * regardless of how long it actually was.
  */
 export function xyFrame(model, view, { xValues, yValues, legendItems = [], alt, xTickCount = 7, yTickCount = 6 , noun }) {
-  const title = view.titleText || model.title;
-  const xTitle = view.xAxisTitle || model.axes?.x?.title;
-  const yTitle = view.yAxisTitle || model.axes?.y?.title;
+  const title = view.titleText ?? model.title;
+  const xTitle = view.xAxisTitle ?? model.axes?.x?.title;
+  const yTitle = view.yAxisTitle ?? model.axes?.y?.title;
 
   const span = (vals, minKey, maxKey, count) => {
     const userMin = Number.isFinite(view[minKey]);

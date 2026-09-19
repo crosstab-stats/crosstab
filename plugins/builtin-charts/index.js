@@ -181,7 +181,9 @@ export function chartKinds(lib) {
       ...valueLabelFormatControls(),
       ...titleControls(model),
       ...axisControls('x', model),
-      ...axisControls('y', model),
+      // The y-axis title is a render-time default ("Count"/"Percent…") the model
+      // doesn't carry, so hint it in the empty box rather than showing "(none)".
+      ...axisControls('y', model, { placeholder: model.counts ? 'Count' : undefined }),
       ];
     },
     render: (model, view) => renderCategorical(model, view),
@@ -229,7 +231,7 @@ export function chartKinds(lib) {
     // The axis has to follow the measure, and a user's own title has to beat
     // both. The MODEL's title is not consulted for a counts chart: it would say
     // "Count" while the bars showed percentages.
-    if (shown.yTitle) view = { ...view, yAxisTitle: view.yAxisTitle || shown.yTitle };
+    if (shown.yTitle) view = { ...view, yAxisTitle: view.yAxisTitle ?? shown.yTitle };
     const isLine = view.mark === 'line';
     const stack = isLine ? 'none' : (view.stack || 'none');
     const catIndex = new Map((model.categories || []).map((c, i) => [c.key, i]));
@@ -265,9 +267,9 @@ export function chartKinds(lib) {
     yMin = ticks[0];
     yMax = ticks[ticks.length - 1];
 
-    const chartTitle = view.titleText || model.title;
-    const xTitle = view.xAxisTitle || model.axes?.x?.title;
-    const yTitle = view.yAxisTitle || model.axes?.y?.title;
+    const chartTitle = view.titleText ?? model.title;
+    const xTitle = view.xAxisTitle ?? model.axes?.x?.title;
+    const yTitle = view.yAxisTitle ?? model.axes?.y?.title;
 
     const mRight = legendMargin(series.map((x) => x.label || x.key), view, { none: 18 });
     const mTop = (chartTitle ? 34 : 14) + legendGap(view, 'top', series.length > 1);
@@ -513,9 +515,9 @@ export function chartKinds(lib) {
     xMin = xticks[0]; xMax = xticks[xticks.length - 1];
     yMin = yticks[0]; yMax = yticks[yticks.length - 1];
 
-    const chartTitle = view.titleText || model.title;
-    const xTitle = view.xAxisTitle || model.axes?.x?.title;
-    const yTitle = view.yAxisTitle || model.axes?.y?.title;
+    const chartTitle = view.titleText ?? model.title;
+    const xTitle = view.xAxisTitle ?? model.axes?.x?.title;
+    const yTitle = view.yAxisTitle ?? model.axes?.y?.title;
 
     const mRight = legendMargin((groups || []).map((g) => g.label || g.key), view, { none: 18 });
     const mTop = chartTitle ? 34 : 16;
@@ -670,7 +672,7 @@ export function chartKinds(lib) {
     const radius = Math.min((W - mRight - 24) / 2, (H - mTop - 24) / 2) - 6;
 
     const out = [svgOpen(chartAltText(model, view, `${slices.length} slices.`, 'Pie chart'))];
-    const title = view.titleText || model.title;
+    const title = view.titleText ?? model.title;
     if (title) {
       out.push(text(W / 2, 22, esc(title), {
         size: view.titleSize || 15, weight: view.titleBold !== false ? 600 : 400,
@@ -1358,8 +1360,8 @@ export function chartKinds(lib) {
       const summary = model.summary && Number.isFinite(model.summary.est) ? model.summary : null;
       const hasWeights = view.showWeights !== false && rows.some((s) => Number.isFinite(s.weight));
 
-      const title = view.titleText || model.title;
-      const xTitle = view.xAxisTitle || model.axes?.x?.title;
+      const title = view.titleText ?? model.title;
+      const xTitle = view.xAxisTitle ?? model.axes?.x?.title;
       const rowH = view.rowHeight || 22;
 
       // Height is driven by the study count — a 40-study meta-analysis cannot be squeezed
@@ -1802,9 +1804,9 @@ export function chartKinds(lib) {
     const xMin = xMinUser ? view.xAxisMin : xticks[0];
     const xMax = xMaxUser ? view.xAxisMax : xticks[xticks.length - 1];
 
-    const chartTitle = view.titleText || model.title;
-    const xTitle = view.xAxisTitle || model.axes?.x?.title;
-    const yTitle = view.yAxisTitle || model.axes?.y?.title;
+    const chartTitle = view.titleText ?? model.title;
+    const xTitle = view.xAxisTitle ?? model.axes?.x?.title;
+    const yTitle = view.yAxisTitle ?? model.axes?.y?.title;
 
     const panelH = Math.max(70, view.panelHeight || 130);
     const gap = 24;              // between a panel's baseline and the next panel's top
@@ -2144,7 +2146,7 @@ export function chartKinds(lib) {
       const clustered = (view.layout || 'single') === 'clustered' && themes.length > 1;
       const authored = cloudHasAuthorColours(model);
 
-      const title = view.titleText || model.title;
+      const title = view.titleText ?? model.title;
       const mTop = title ? 34 : 8;
       const bounds = { x0: 4, x1: W - 4, y0: mTop, y1: H - 6 };
       const out = [svgOpen(chartAltText(model, view,
@@ -2431,7 +2433,7 @@ export function chartKinds(lib) {
       const binned = counts.reduce((a, b) => a + b, 0);
       // The measure names the axis; only the user's own title beats it. Reading
       // the MODEL's y title first left a density plot labelled "Count".
-      const f = xyFrame(model, { ...view, yAxisTitle: view.yAxisTitle || yTitle }, {
+      const f = xyFrame(model, { ...view, yAxisTitle: view.yAxisTitle ?? yTitle }, {
         xValues: [edges[0], edges[edges.length - 1]],
         yValues: [0, hiY, curvePeak],
         noun: 'Histogram',

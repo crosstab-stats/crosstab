@@ -242,7 +242,11 @@ export function setControlValue(ctl, view, raw) {
   const key = ctl.key || ctl.id;
   if (ctl.type === 'check') { view[key] = !!raw; return; }
   if (ctl.type === 'select') { view[key] = ctl.valueType === 'number' ? Number(raw) : raw; return; }
-  if (ctl.type === 'text') { view[key] = raw === '' ? undefined : String(raw); return; }
+  // An emptied text box is stored as '' (an EXPLICIT "no title"), distinct from the
+  // untouched `undefined` (use the model/renderer default). The renderers resolve with
+  // `?? default`, so `''` renders nothing while `undefined` keeps the default. The
+  // placeholder still shows that default, so it's clear what an empty box would drop.
+  if (ctl.type === 'text') { view[key] = String(raw); return; }
   // number: blank clears back to the default, anything unparseable is ignored rather
   // than stored as NaN (a NaN in the view silently breaks every scale downstream).
   if (raw === '' || raw == null) { view[key] = undefined; return; }
