@@ -263,9 +263,7 @@ export class Launcher {
     // first load it is the whole app, so refuse the cancel rather than drop the
     // user into a projectless shell they did not ask for.
     if (!reopen) overlay.addEventListener('cancel', (e) => e.preventDefault());
-    void stampBuild(overlay.querySelector('.ctl__build'));
-    const updateBtn = overlay.querySelector('.ctl__update');
-    updateBtn?.addEventListener('click', () => void checkForUpdates(updateBtn, overlay.querySelector('.ctl__build')));
+    void initUpdateArea(overlay);
 
     const indicator = overlay.querySelector('.ctl__indicator');
     const listBox = overlay.querySelector('.ctl__plugins');
@@ -784,13 +782,82 @@ function formatBuildTime(lm) {
   });
 }
 
-/** Fill the launcher's build stamp with the LOADED build's publish time (see
- * {@link loadedBuildTime}) — so a stale installed PWA shows the OLD time, truthfully
- * reflecting the code that's running rather than the server's latest deploy. */
-async function stampBuild(elBuild) {
-  if (!elBuild) return;
-  const f = formatBuildTime(await loadedBuildTime());
-  elBuild.textContent = f ? `build: ${f}` : 'build: (unknown)';
+/** The RUNNING build's stamp, captured ONCE per page load and memoised. Capturing it
+ * once matters on an installed PWA: the SW serves the shell cache-first and then
+ * revalidates in the background, so a *later* read of app.js could return a newer
+ * deploy the revalidate has since written into the cache — but the code actually
+ * running is whatever booted. The first read (at launcher open, before revalidate
+ * completes) is that version; we hold onto it. @type {Promise<string|null>|null} */
+let runningStampP = null;
+function runningBuildStamp() {
+  if (!runningStampP) runningStampP = loadedBuildTime();
+  return runningStampP;
+}
+
+/** The server's LATEST build stamp. A HEAD request skips the SW's cache-first shell
+ * path (it gates on GET) and the Cache API never stores it, so this reads the live
+ * deploy's Last-Modified straight from the network without disturbing the cache.
+ * null on error/offline. */
+async function latestBuildTime() {
+  try {
+    const res = await fetch('core/app.js', { method: 'HEAD', cache: 'no-store' });
+    return res.headers.get('last-modified') || null;
+  } catch {
+    return null;
+  }
+}
+
+/** A Last-Modified header → epoch ms, or null if unparseable. */
+function stampMs(lm) {
+  const t = lm ? new Date(lm).getTime() : NaN;
+  return Number.isNaN(t) ? null : t;
+}
+
+/**
+ * Wire the launcher's update strip. Shows the RUNNING build's date and — when online —
+ * compares it against the server's latest, so the strip actually says whether you're
+ * up to date instead of printing a date you can't act on. "Get updates" appears only
+ * when a newer build exists; otherwise it shows "✓ Up to date" with a low-key
+ * "Check for updates" that still forces a re-fetch+reload (the escape hatch an
+ * installed PWA needs, since it has no browser refresh). All comparison is by the
+ * files' Last-Modified (GitHub Pages re-stamps every file per deploy) — no build
+ * number to maintain.
+ */
+async function initUpdateArea(overlay) {
+  const elBuild = overlay.querySelector('.ctl__build');
+  const elStatus = overlay.querySelector('.ctl__updatestatus');
+  const btn = overlay.querySelector('.ctl__update');
+  const header = overlay.querySelector('.ctl__header');
+  if (!btn) return;
+  btn.addEventListener('click', () => void checkForUpdates(btn, elBuild));
+
+  const set = (state, status, label) => {
+    if (header) header.dataset.update = state;
+    if (elStatus) elStatus.textContent = status;
+    btn.textContent = label;
+    btn.classList.toggle('is-update', state === 'behind');
+    btn.disabled = state === 'checking';
+    btn.hidden = false;
+  };
+
+  const running = await runningBuildStamp();
+  if (elBuild) {
+    const f = formatBuildTime(running);
+    elBuild.textContent = f ? `This version: ${f}` : 'This version: (unknown)';
+  }
+
+  if (!navigator.onLine) { set('offline', 'Offline — can’t check for updates', 'Check for updates'); return; }
+
+  set('checking', 'Checking for updates…', 'Checking…');
+  const rMs = stampMs(running);
+  const lMs = stampMs(await latestBuildTime());
+  if (rMs == null || lMs == null) {
+    set('unknown', '', 'Check for updates'); // couldn't compare — offer a manual check
+  } else if (lMs > rMs) {
+    set('behind', '● Update available', '⬇ Get updates');
+  } else {
+    set('current', '✓ Up to date', 'Check for updates');
+  }
 }
 
 /** Post a one-shot message to the active service worker and await its reply (or null
@@ -857,8 +924,9 @@ function SHELL_HTML(reopen) {
         <div class="ctl__brand">CrossTab</div>
         <div class="ctl__tagline">Statistics for everyone, every device, everywhere</div>
         <div class="ctl__prerelease" role="note">⚠ Pre-release software — updates may break your saved projects. Keep your own copies of anything that matters.</div>
-        <div class="ctl__build" title="When this deployed build was published (the served files' last-modified time). Useful for confirming a device picked up the latest version.">build: …</div>
-        <button type="button" class="ctl__update" title="Re-check the server for a newer version and reload into it. Useful as an installed app (Home Screen), where there's no browser refresh button.">Check for updates</button>
+        <div class="ctl__build" title="The build your device is running right now (the loaded files' last-modified time).">This version: …</div>
+        <div class="ctl__updatestatus" role="status" aria-live="polite"></div>
+        <button type="button" class="ctl__update" title="Re-fetch the latest files from the server and reload into them. Useful as an installed app (Home Screen), where there's no browser refresh button.">Check for updates</button>
       </div>
       <div class="ctl__body">
         <aside class="ctl__library">
@@ -933,6 +1001,17 @@ function injectStyles() {
       border-radius: 6px; min-height: 30px; }
     .ctl__update:hover { background: #eef5fb; }
     .ctl__update:disabled { opacity: .6; cursor: default; }
+    /* Update status line: colour tracks the state set on the header (data-update).
+       Greens/ambers are chosen to read on the dark #2c3e50 bar. */
+    .ctl__updatestatus { font-size: 12px; font-weight: 600; margin-top: 6px; min-height: 15px; }
+    .ctl__header[data-update="current"] .ctl__updatestatus { color: #7ddca4; }
+    .ctl__header[data-update="behind"]  .ctl__updatestatus { color: #ffd48a; }
+    .ctl__header[data-update="checking"] .ctl__updatestatus,
+    .ctl__header[data-update="offline"] .ctl__updatestatus { opacity: .6; }
+    /* "Get updates" (behind) is the one time this button is an action to take, so fill
+       it; every other state keeps the quiet outline (an available escape hatch). */
+    .ctl__update.is-update { color: #fff; background: #2f6f9f; border-color: #2f6f9f; }
+    .ctl__update.is-update:hover { background: #357cb0; }
     .ctl__body { display: flex; min-height: 0; flex: 1; }
     .ctl__library, .ctl__about { flex: 0 0 200px; padding: 16px; overflow-y: auto; }
     .ctl__about { border-left: 1px solid var(--line, #d8dde2); font-size: 13px; color: #41505e; }
