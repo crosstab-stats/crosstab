@@ -124,6 +124,10 @@ const RESULTS_STYLES = `
     background: #fff; border: 1px solid var(--accent, #2572a5);
     color: var(--accent, #2572a5); border-radius: 6px; cursor: pointer;
   }
+  /* Per-block export row for TEXTUAL output (tables): the counterpart to a chart's
+     SVG/PNG buttons. Always visible (not hover-only) so it works on touch/iPad, but
+     quiet — small buttons under the table. */
+  .results-export { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
   /* Layer-1 universal frame: a host-owned editable title above, caption below, any
      chart body (svglite plot OR model chart). Title/caption are host text, never
      baked into the SVG, so they're renameable + persisted. */
@@ -451,6 +455,10 @@ export class ResultsPane {
     const spec = normalizeTableData(data, opts);
     const tableEl = renderTableEl(spec);
     block.append(tableEl);
+    // Per-table export (CSV + copy-for-spreadsheet) — the textual counterpart to a
+    // chart's SVG/PNG buttons. Appended as a sibling of the table, so `tableEl.outerHTML`
+    // (what the report exporters read) stays just the table.
+    block.append(tableExportRow(spec));
     this.#place(block);
     // Store the spec (for structured exporters) plus the host-rendered HTML (the
     // output exporters read `.html` to reproduce the table).
@@ -940,12 +948,15 @@ export class ResultsPane {
           const tableEl = renderTableEl(item.table); // re-render from spec (host DOM, no injection)
           block.append(tableEl);
           html = tableEl.outerHTML;
+          block.append(tableExportRow(item.table));
         } else {
           // No spec to re-render from — the saved html comes from a project file that
           // may be untrusted (shared .crosstab), so sanitise before it hits the host
           // DOM. The live append path produces escaped DOM; this guards restore (#89).
           html = sanitizeHtml(html);
           block.innerHTML = html;
+          const text = block.textContent || ''; // captured before the export row is added
+          block.append(tableExportRow(null, () => text));
         }
         this.#place(block);
         this.#model.push({ kind: 'table', table: item.table, html });
@@ -1402,6 +1413,84 @@ function makeSaveBtn(label, onClick) {
   b.textContent = label;
   b.addEventListener('click', onClick);
   return b;
+}
+
+/** A save button that copies text to the clipboard, with brief "✓ Copied" feedback. */
+function makeCopyBtn(label, getText) {
+  const b = makeSaveBtn(label, async () => {
+    const ok = await copyText(getText());
+    const orig = b.textContent;
+    b.textContent = ok ? '✓ Copied' : 'Copy failed';
+    setTimeout(() => { b.textContent = orig; }, 1400);
+  });
+  return b;
+}
+
+/** Copy text to the clipboard: Clipboard API, with a legacy execCommand fallback for
+ * non-secure contexts / older engines. Returns whether it succeeded. */
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch { /* fall through to the execCommand path */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed; left:-9999px; top:0;';
+    document.body.append(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+/** A cell's value flattened to one string for CSV/TSV — a stacked cell (array, e.g.
+ * r / p / N) joins with " / ", blanks (NA/NaN/null) drop out. */
+function flattenCell(v) {
+  return (Array.isArray(v) ? v : [v]).map(fmtCellValue).filter((s) => s !== '').join(' / ');
+}
+
+/** Serialise a table spec to CSV (RFC 4180 quoting). */
+function tableToCsv(spec) {
+  const cell = (v) => {
+    const s = flattenCell(v);
+    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [];
+  if (spec.columns?.length) lines.push(spec.columns.map(cell).join(','));
+  for (const row of spec.rows || []) lines.push(row.map(cell).join(','));
+  return lines.join('\r\n');
+}
+
+/** Serialise a table spec to TSV — for pasting straight into a spreadsheet (tabs +
+ * newlines flattened inside cells so columns stay aligned). */
+function tableToTsv(spec) {
+  const cell = (v) => flattenCell(v).replace(/[\t\r\n]+/g, ' ');
+  const lines = [];
+  if (spec.columns?.length) lines.push(spec.columns.map(cell).join('\t'));
+  for (const row of spec.rows || []) lines.push(row.map(cell).join('\t'));
+  return lines.join('\n');
+}
+
+/** The export row shown under a table block — the textual counterpart to a chart's
+ * SVG/PNG buttons: a CSV download and a copy-for-spreadsheet. When only rendered html
+ * survives (a legacy/untrusted save with no spec), fall back to copying its text. */
+function tableExportRow(spec, fallbackText) {
+  const row = document.createElement('div');
+  row.className = 'results-export';
+  if (spec) {
+    row.append(
+      makeSaveBtn('⬇ CSV', () => downloadFile('table.csv', 'text/csv;charset=utf-8', tableToCsv(spec))),
+      makeCopyBtn('⧉ Copy', () => tableToTsv(spec)),
+    );
+  } else {
+    row.append(makeCopyBtn('⧉ Copy', () => fallbackText()));
+  }
+  return row;
 }
 
 /** An inline-editable single-line text element (host-owned chart title/caption, the
