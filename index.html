@@ -526,6 +526,9 @@
       }
       .ct-dialog::backdrop { background: rgba(0,0,0,.35); }
       .ct-dialog--wide { max-width: 640px; }
+      /* Recode carries a 7-column rule grid (two selects + two value inputs + a label);
+         640px squeezes the value inputs to a sliver, so give it more room. */
+      .ct-cr-dialog.ct-dialog--wide { max-width: min(800px, 96vw); }
 
       /* sync-conflict resolver: roomier, and each choice on its own line */
       .ct-conflict-dialog { max-width: 560px; }
@@ -791,7 +794,10 @@
       }
       .ct-cr__chip:hover { background: #dcebfa; }
       .ct-cr__ruleshead, .ct-cr__rule, .ct-cr__else {
-        display: grid; grid-template-columns: 90px 1fr 18px minmax(150px, 1fr) minmax(110px, .8fr) 24px;
+        /* old-kind | old-value | → | new-kind | new-value | label | ✕. The new value
+           gets its OWN column (it used to share one cell with the new-kind select, which
+           squeezed the input down to a sliver). */
+        display: grid; grid-template-columns: 90px 1fr 18px 130px 1fr minmax(110px, .8fr) 24px;
         gap: 8px; align-items: center; margin: 4px 0;
       }
       /* The per-rule value label ("1 = Agree"). The cell keeps the grid column
@@ -804,9 +810,12 @@
       .ct-cr__else { grid-template-columns: auto minmax(150px, 1fr); margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
       .ct-cr__elselabel { color: #5a6470; font-size: 13px; }
       .ct-cr__frominputs { display: flex; gap: 4px; align-items: center; min-width: 0; }
-      .ct-cr__frominputs input, .ct-cr .ct-cr__to input, .ct-cr select {
+      .ct-cr__frominputs input, .ct-cr .ct-cr__to input, .ct-cr .ct-cr__toval, .ct-cr select {
         font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 5px; min-width: 0;
       }
+      /* The new-value input is now its own grid cell — stretch it to fill the column. */
+      .ct-cr__rule .ct-cr__toval { width: 100%; }
+      .ct-cr__rule .ct-cr__toval[hidden] { display: none; }
       .ct-cr__frominputs input { flex: 1; }
       .ct-cr__to { display: flex; gap: 4px; }
       .ct-cr__to select { flex: none; }

@@ -204,7 +204,7 @@ export class ComputeRecode {
     if (!this.#guardData()) return;
     const vars = this.#vars();
     const dialog = document.createElement('dialog');
-    dialog.className = 'ct-dialog ct-dialog--wide';
+    dialog.className = 'ct-dialog ct-dialog--wide ct-cr-dialog';
     dialog.innerHTML = `
       <form method="dialog" class="ct-dialog__form ct-cr">
         <h2 class="ct-dialog__title">Recode into new variable</h2>
@@ -235,7 +235,7 @@ export class ComputeRecode {
             </select>
           </label>
         </div>
-        <div class="ct-cr__ruleshead"><span>Old value</span><span></span><span>New value</span><span>Label for it</span><span></span></div>
+        <div class="ct-cr__ruleshead"><span>Old value</span><span></span><span></span><span>New value</span><span></span><span>Label for it</span><span></span></div>
         <div class="ct-cr__rules"></div>
         <button type="button" class="ct-cr__addrule">+ Add rule</button>
         <div class="ct-cr__else"></div>
@@ -498,7 +498,10 @@ function makeRuleRow(onRemove) {
   rm.title = 'Remove rule';
   rm.addEventListener('click', onRemove);
 
-  wrap.append(from, fromInputs, arrow, to.el, lblCell, rm);
+  // The new-value KIND select and its VALUE input go in as SEPARATE grid cells (not
+  // wrapped together), so the value input gets its own full column instead of sharing
+  // one with the select.
+  wrap.append(from, fromInputs, arrow, to.kind, to.value, lblCell, rm);
 
   const read = () => {
     const match = matcher.read();
@@ -568,7 +571,9 @@ function makeToControls() {
   sync();
   wrap.append(kind, value);
   const read = () => (kind.value === 'value' ? { kind: 'value', value: value.value.trim() } : { kind: kind.value });
-  return { el: wrap, kind, sync, read };
+  // `value` is exposed so the recode rule row can place it as its own grid cell (the
+  // else row/count still use `el`, the kind+value pair wrapped together).
+  return { el: wrap, kind, value, sync, read };
 }
 
 /** One value-matcher row for the Count dialog: the "from" half of a recode rule
