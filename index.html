@@ -824,15 +824,8 @@
       .ct-cr__rm { border: 0; background: none; color: #b3424a; cursor: pointer; font-size: 14px; padding: 0; }
       .ct-cr__addrule { font: inherit; font-size: 13px; background: none; border: 1px dashed var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; color: var(--accent); margin-top: 4px; }
       .ct-cr__addrule:hover { background: #f0f7ff; }
-      /* Count values within cases (#174k): a variable tick-list and a value list. */
+      /* Count values within cases (#174k): the variable picker button + a value list. */
       .ct-cr__counthead { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #646e77; margin: 12px 0 4px; }
-      .ct-cr__countvars {
-        display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 2px 12px;
-        max-height: 28vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; padding: 6px;
-      }
-      .ct-cr__countvar { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 4px; cursor: pointer; min-width: 0; }
-      .ct-cr__countvar:hover { background: #f0f3f6; }
-      .ct-cr__countvar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .ct-cr__match { display: grid; grid-template-columns: 90px 1fr 24px; gap: 8px; align-items: center; margin: 4px 0; }
       .ct-cr__complete { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; margin: 12px 0 0; cursor: pointer; }
 

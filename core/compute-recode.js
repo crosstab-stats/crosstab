@@ -392,7 +392,9 @@ export class ComputeRecode {
           </label>
         </div>
         <p class="ct-cr__counthead">Count across these variables</p>
-        <div class="ct-cr__countvars"></div>
+        <button type="button" class="ct-cr__pick" name="countvarsbtn">
+          <span class="ct-cr__picklabel"></span><span class="ct-cr__pickcaret" aria-hidden="true">▾</span>
+        </button>
         <p class="ct-cr__counthead">…each time the value is</p>
         <div class="ct-cr__matches"></div>
         <button type="button" class="ct-cr__addrule">+ Add value</button>
@@ -402,23 +404,37 @@ export class ComputeRecode {
           <span class="ct-hint">(off: missing items just don't count towards the score)</span>
         </label>
         <p class="ct-hint">Categorical variables are stored as <em>codes</em> (the grid shows
-          their labels) — count the code. Hover a variable to see its code↔label map.</p>
+          their labels) — count the code, not the label.</p>
         <menu class="ct-dialog__buttons">
           <button value="cancel" type="submit">Cancel</button>
           <button value="ok" type="submit" class="ct-dialog__primary">Count</button>
         </menu>
       </form>`;
 
-    const varsEl = dialog.querySelector('.ct-cr__countvars');
-    for (const m of vars) {
-      const label = el('label', null, 'ct-cr__countvar');
-      const box = document.createElement('input');
-      box.type = 'checkbox';
-      box.value = m.name;
-      label.title = codeHint(m) || m.label || m.name;
-      label.append(box, el('span', m.label ? `${m.label} (${m.name})` : m.name));
-      varsEl.append(label);
-    }
+    // The variable list uses the SAME searchable multi-picker the plugins use
+    // (ui.selectVariables) — filter/sort + pre-checked from the grid selection — rather
+    // than an inline tick-list of every variable (which doesn't scale to a GSS extract).
+    const known = new Set(vars.map((m) => m.name));
+    const metaByName = new Map(vars.map((m) => [m.name, m]));
+    let chosen = (this.#data.getSelectedVariables?.() || []).filter((n) => known.has(n));
+    const countBtn = dialog.querySelector('button[name="countvarsbtn"]');
+    const countLabel = countBtn.querySelector('.ct-cr__picklabel');
+    const renderChosen = () => {
+      if (!chosen.length) { countLabel.textContent = 'Choose variables…'; return; }
+      const names = chosen.map((n) => metaByName.get(n)?.name || n);
+      countLabel.textContent = `${chosen.length} variable${chosen.length === 1 ? '' : 's'}: ${names.join(', ')}`;
+    };
+    renderChosen();
+    countBtn.addEventListener('click', async () => {
+      if (!this.#ui) return;
+      const picked = await this.#ui.selectVariables({
+        title: 'Count across these variables',
+        hint: 'Pick the battery of items to score each case on.',
+        multiple: true,
+        preselect: chosen,
+      });
+      if (picked) { chosen = picked; renderChosen(); }
+    });
 
     const matchesEl = dialog.querySelector('.ct-cr__matches');
     const matches = [];
@@ -439,14 +455,12 @@ export class ComputeRecode {
       const name = dialog.querySelector('input[name="name"]').value.trim();
       const varLabel = dialog.querySelector('input[name="varlabel"]').value.trim();
       const complete = dialog.querySelector('input[name="complete"]').checked;
-      const chosen = [...varsEl.querySelectorAll('input[type="checkbox"]:checked')].map((b) => b.value);
       const tests = matches.map((r) => r.read()).filter(Boolean);
       dialog.remove();
       if (!ok) return;
       try {
         if (!chosen.length) throw new Error('Count: choose at least one variable to count across.');
         if (!tests.length) throw new Error('Count: name at least one value to count.');
-        const metaByName = new Map(vars.map((m) => [m.name, m]));
         const opId = await this.#data.computeVariable(name, countExpr(chosen, tests, complete, metaByName), 'numeric');
         // A count is a quantity, and it is the thing the next analysis means to
         // average — so it is declared scale, not left to be guessed at.
