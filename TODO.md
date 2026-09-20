@@ -5370,6 +5370,28 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       **picker→selection write-back** so confirming a picker updates the shared
       selection (today the picker's choice returns to the plugin but doesn't
       change the grid/sidebar selection — a real design call, left as-is for now).
+- [ ] **#175 — User bug reports, server-free (parked 2026-09-20).** A "Report a bug"
+      affordance that costs nothing to run and needs no new service/account: the app
+      builds a PRE-FILLED report the user reviews and submits themselves — no backend,
+      no form host. Two routes, offered side by side:
+        • **Open a GitHub issue** — deep-link to
+          `github.com/crosstab-stats/crosstab/issues/new?labels=bug&title=…&body=…`.
+          Issues on the public repo are free/unlimited and reuse the account we already
+          have; the reporter needs a GitHub account.
+        • **Email a report** — a `mailto:` with the same pre-filled body, for the many
+          who have no GitHub account (uses an inbox we already own; a public address
+          attracts some spam — accept or lightly obfuscate).
+      Auto-fill sanitized DIAGNOSTICS, never data: build stamp (the launcher version
+      work — loadedBuildTime), browser/OS UA, crossOriginIsolated, active dataset SHAPE
+      (variable/row counts — never cell values or variable contents), enabled plugins,
+      and the last error if any. Privacy guardrails, load-bearing: shapes-not-data (a
+      GitHub issue is world-readable) and the user always reviews/edits before sending —
+      the app transmits nothing itself. Surface: a **Help ▸ Report a bug…** item + a
+      launcher-footer link beside "Caveats & limits"; add
+      `.github/ISSUE_TEMPLATE/bug_report.yml` so issues opened directly on GitHub are
+      structured too. NOT Formspree/Google Forms/Tally — those are exactly the extra
+      service + account the user asked to avoid, and several route submissions through
+      their own servers. (Design discussed 2026-09-20; user parked it for later.)
 
 ## Blocked until public deploy (GitHub Pages)
 
