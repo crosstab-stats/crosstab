@@ -689,6 +689,10 @@ async function gatherInputs(ui, specs, item) {
             type: kind === 'number' ? 'number' : 'text',
             value: spec.default != null ? String(spec.default) : '',
             hint,
+            // Numbers accept any decimal by default; a plugin may pin step/min/max.
+            step: spec.step,
+            min: spec.min,
+            max: spec.max,
           },
         ],
       });

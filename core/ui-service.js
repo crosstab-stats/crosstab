@@ -422,7 +422,9 @@ export class UiService {
    * @param {Object} [options]
    * @param {string} [options.title='Form']
    * @param {string} [options.hint]
-   * @param {Array<{name: string, label?: string, type?: 'text'|'password'|'number', value?: string, placeholder?: string, hint?: string}>} [options.fields]
+   * @param {Array<{name: string, label?: string, type?: 'text'|'password'|'number', value?: string, placeholder?: string, hint?: string, step?: number|string, min?: number|string, max?: number|string}>} [options.fields]
+   *   For `type:'number'`, `step` defaults to `'any'` (accepts decimals); pass an
+   *   explicit `step`/`min`/`max` to constrain (e.g. `step:1` for integers).
    * @param {string} [options.okLabel='OK']
    * @returns {Promise<Record<string,string> | null>}
    */
@@ -434,12 +436,22 @@ export class UiService {
       const fieldHtml = fields
         .map((f) => {
           const type = f.type === 'password' ? 'password' : f.type === 'number' ? 'number' : 'text';
+          // Number inputs default to `step="any"` so a fractional value (e.g. a test
+          // proportion of 0.892) isn't rejected against the browser's step=1 grid,
+          // which anchors on the field's default and only accepts x, x±1, x±2…
+          // A field may still declare an explicit step/min/max for integer-only cases.
+          const numAttrs =
+            type === 'number'
+              ? ` step="${attr(f.step != null ? String(f.step) : 'any')}"${
+                  f.min != null ? ` min="${attr(String(f.min))}"` : ''
+                }${f.max != null ? ` max="${attr(String(f.max))}"` : ''}`
+              : '';
           return `
             <label class="ct-field">${esc(f.label ?? f.name)}${
               f.hint ? ` <span class="ct-hint">${esc(f.hint)}</span>` : ''
             }
               <input name="${attr(f.name)}" type="${type}" value="${attr(f.value ?? '')}"
-                     placeholder="${attr(f.placeholder ?? '')}" autocomplete="off">
+                     placeholder="${attr(f.placeholder ?? '')}"${numAttrs} autocomplete="off">
             </label>`;
         })
         .join('');
