@@ -1484,11 +1484,20 @@ function tableToHtml(spec) {
   const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
   const cellHtml = (v) => (Array.isArray(v) ? v : [v]).map(fmtCellValue).filter((s) => s !== '').map(esc).join('<br>');
   const cellStyle = 'border:1px solid #ccc;padding:3px 8px;text-align:left';
+  const ncols = spec.columns?.length || (spec.rows?.[0]?.length ?? 1);
   const out = ['<table style="border-collapse:collapse;font-family:sans-serif;font-size:13px">'];
-  if (spec.caption) out.push(`<caption style="text-align:left;font-weight:bold;padding:4px 0">${esc(spec.caption)}</caption>`);
-  if (spec.columns?.length) {
-    out.push('<thead><tr>' + spec.columns.map((c) => `<th style="${cellStyle};font-weight:bold">${esc(c)}</th>`).join('') + '</tr></thead>');
+  const head = [];
+  // The title is a colspan banner ROW rather than a <caption>: many rich editors
+  // (Gmail, Word, some clients) strip or hide a table's <caption> on paste, so the
+  // title vanished. A header cell spanning every column travels with the table and
+  // always renders — an SPSS-style titled table.
+  if (spec.caption) {
+    head.push(`<tr><th colspan="${ncols}" style="${cellStyle};font-weight:bold;font-size:14px;background:#f2f2f2">${esc(spec.caption)}</th></tr>`);
   }
+  if (spec.columns?.length) {
+    head.push('<tr>' + spec.columns.map((c) => `<th style="${cellStyle};font-weight:bold">${esc(c)}</th>`).join('') + '</tr>');
+  }
+  if (head.length) out.push('<thead>' + head.join('') + '</thead>');
   out.push('<tbody>');
   for (const row of spec.rows || []) {
     out.push('<tr>' + row.map((v, i) => {
