@@ -788,6 +788,9 @@
       /* Compute / Recode dialogs */
       .ct-cr__expr { font: 12px ui-monospace, Menlo, monospace; resize: vertical; }
       .ct-cr__palette { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 6px; max-height: 96px; overflow: auto; }
+      /* Separator between the grid-selected chips (floated to the top) and the rest —
+         flex-basis:100% forces it onto its own line so the two groups don't run together. */
+      .ct-cr__palette-sep { flex: 0 0 100%; height: 0; border-top: 1px solid var(--line); margin: 3px 0; }
       .ct-cr__chip {
         font: 11px ui-monospace, Menlo, monospace; padding: 2px 8px; cursor: pointer;
         background: #eef5fb; border: 1px solid var(--line); border-radius: 10px; color: #1a4a73;

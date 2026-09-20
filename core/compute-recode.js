@@ -9,6 +9,9 @@
  * Host-owned (it draws host dialogs and drives engine transform methods), the same
  * line as the data grid and the Variable-View editor — not a sandboxed plugin.
  */
+import { makeVarToolbar, filterVars } from './var-toolbar.js';
+import { loadVarOrder, saveVarOrder, sortVars } from './var-order.js';
+
 export class ComputeRecode {
   #data;
   #menus;
@@ -89,16 +92,7 @@ export class ComputeRecode {
       </form>`;
 
     const cond = dialog.querySelector('textarea[name="cond"]');
-    const palette = dialog.querySelector('.ct-cr__palette');
-    for (const m of this.#vars()) {
-      const chip = document.createElement('button');
-      chip.type = 'button';
-      chip.className = 'ct-cr__chip';
-      chip.textContent = m.name;
-      chip.title = codeHint(m) || m.label || m.name;
-      chip.addEventListener('click', () => insertAtCursor(cond, identForExpr(m.name)));
-      palette.append(chip);
-    }
+    this.#wireVarPalette(dialog.querySelector('.ct-cr__palette'), cond);
 
     dialog.addEventListener('close', async () => {
       const ok = dialog.returnValue === 'ok';
@@ -127,6 +121,62 @@ export class ComputeRecode {
 
   #vars() {
     return this.#data.getVariableMeta();
+  }
+
+  /**
+   * Fill a variable **chip palette** (click a chip to insert `"name"` into `target`)
+   * with the same filter/sort strip the plugin picker and Data grid carry, and float
+   * the grid's current selection to the top above a thin separator. The chips stay
+   * click-to-insert — this is the Compute/Select-cases expression builder, not a
+   * role-picker — but they're now findable in a large dataset. Inserts the toolbar
+   * just above `paletteEl` (between the formula box and the chips).
+   *
+   * @param {HTMLElement} paletteEl - the `.ct-cr__palette` container.
+   * @param {HTMLTextAreaElement} target - the expression textarea chips insert into.
+   */
+  #wireVarPalette(paletteEl, target) {
+    const metas = this.#vars();
+    const known = new Set(metas.map((m) => m.name));
+    // Snapshot the grid selection once (like the picker's "Selected" group): clicking a
+    // chip inserts text, it doesn't change the selection, so the top group stays put.
+    const selectedNames = new Set((this.#data.getSelectedVariables?.() || []).filter((n) => known.has(n)));
+    const selected = metas.filter((m) => selectedNames.has(m.name));
+    const rest = metas.filter((m) => !selectedNames.has(m.name));
+
+    let query = '';
+    const bar = makeVarToolbar({
+      variant: 'dialog',
+      order: loadVarOrder(),
+      onFilter: (q) => { query = q; render(); },
+      onOrder: (v) => { saveVarOrder(v); render(); },
+    });
+    paletteEl.before(bar.el);
+    const orderSel = bar.orderSelect;
+
+    const chip = (m) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'ct-cr__chip';
+      b.textContent = m.name;
+      b.title = codeHint(m) || m.label || m.name;
+      b.addEventListener('click', () => insertAtCursor(target, identForExpr(m.name)));
+      return b;
+    };
+    const render = () => {
+      paletteEl.replaceChildren();
+      const show = (rows) => sortVars(filterVars(rows, query), orderSel.value);
+      const top = show(selected);
+      const bottom = show(rest);
+      for (const m of top) paletteEl.append(chip(m));
+      if (top.length && bottom.length) {
+        const sep = document.createElement('div');
+        sep.className = 'ct-cr__palette-sep';
+        paletteEl.append(sep);
+      }
+      for (const m of bottom) paletteEl.append(chip(m));
+      if (!top.length && !bottom.length) paletteEl.append(el('span', 'No variable matches that filter.', 'ct-hint'));
+    };
+    render();
   }
 
   #guardData() {
@@ -170,16 +220,7 @@ export class ComputeRecode {
       </form>`;
 
     const expr = dialog.querySelector('textarea[name="expr"]');
-    const palette = dialog.querySelector('.ct-cr__palette');
-    for (const m of this.#vars()) {
-      const chip = document.createElement('button');
-      chip.type = 'button';
-      chip.className = 'ct-cr__chip';
-      chip.textContent = m.name;
-      chip.title = m.label || m.name;
-      chip.addEventListener('click', () => insertAtCursor(expr, identForExpr(m.name)));
-      palette.append(chip);
-    }
+    this.#wireVarPalette(dialog.querySelector('.ct-cr__palette'), expr);
 
     dialog.addEventListener('close', async () => {
       const ok = dialog.returnValue === 'ok';
