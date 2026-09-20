@@ -483,6 +483,10 @@
          (the "new variable" name) off the dialog. */
       .ct-row .ct-field { flex: 1; min-width: 0; }
       .ct-hint { color: #646e77; font-weight: 400; font-size: 11px; }
+      /* Live new-variable-name validation (Compute / Recode / Count): a red box + a
+         message below the field the moment a disallowed name is typed. */
+      .ct-field input.is-invalid { border-color: #cf5560; box-shadow: 0 0 0 1px #cf5560; outline: none; }
+      .ct-cr__nameerr { color: #b3424a; font-size: 11px; margin: 2px 0 0; }
       /* Recode's "Recode from" — a button that opens the shared variable picker,
          styled like a <select> and ellipsising a long label instead of growing. */
       .ct-cr__pick {

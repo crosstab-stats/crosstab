@@ -1241,12 +1241,8 @@ export class DataStore {
 
   /** Validate a new variable name: a fresh, identifier-like name. */
   #assertNewVarName(name) {
-    const n = (name ?? '').trim();
-    if (!n) throw new Error('A variable name is required.');
-    if (!/^[A-Za-z][A-Za-z0-9_.]*$/.test(n)) {
-      throw new Error('Name must start with a letter and use only letters, digits, _ or .');
-    }
-    if (this.#byName.has(n)) throw new Error(`A variable named "${n}" already exists.`);
+    const err = varNameError(name, this.#byName);
+    if (err) throw new Error(err);
   }
 
   /**
@@ -2142,6 +2138,26 @@ function cellLiteral(val, isNumeric) {
 /** Clamp a variable type to a known value (defaults to numeric). */
 function normType(t) {
   return t === 'string' || t === 'factor' ? t : 'numeric';
+}
+
+/**
+ * The reason a proposed NEW variable name is invalid, or `null` if it's fine — the
+ * single source of truth shared by the store's assert (throws it) and the dialogs
+ * (show it live under the field), so the live hint and the submit error never disagree.
+ *
+ * @param {string} name - The proposed name (trimmed here).
+ * @param {{has: (n: string) => boolean}} [taken] - Existing names (Map or Set) to
+ *   reject a collision against.
+ * @returns {string|null}
+ */
+export function varNameError(name, taken) {
+  const n = (name ?? '').trim();
+  if (!n) return 'A variable name is required.';
+  if (!/^[A-Za-z][A-Za-z0-9_.]*$/.test(n)) {
+    return 'Name must start with a letter and use only letters, digits, _ or .';
+  }
+  if (taken && taken.has(n)) return `A variable named “${n}” already exists.`;
+  return null;
 }
 
 /**

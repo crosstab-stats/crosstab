@@ -11,6 +11,7 @@
  */
 import { makeVarToolbar, filterVars } from './var-toolbar.js';
 import { loadVarOrder, saveVarOrder, sortVars } from './var-order.js';
+import { varNameError } from './data-store.js';
 
 export class ComputeRecode {
   #data;
@@ -115,12 +116,42 @@ export class ComputeRecode {
         this.#results.appendError(err.message);
       }
     });
+    this.#wireNameValidation(dialog);
     document.body.append(dialog);
     dialog.showModal();
   }
 
   #vars() {
     return this.#data.getVariableMeta();
+  }
+
+  /**
+   * Live-validate a dialog's "new variable name" field against the same rule the store
+   * enforces ({@link varNameError}): flag the box red with a message below it as soon as
+   * a bad character/name is typed, and disable the primary button until it's valid — so
+   * the user learns the rule inline instead of hitting an error only on submit. Shared
+   * by every new-variable dialog (Compute, Recode, Count).
+   */
+  #wireNameValidation(dialog) {
+    const input = dialog.querySelector('input[name="name"]');
+    if (!input) return;
+    const ok = dialog.querySelector('button[value="ok"]');
+    const taken = new Set(this.#vars().map((m) => m.name));
+    const msg = el('p', '', 'ct-cr__nameerr');
+    msg.setAttribute('role', 'alert');
+    msg.hidden = true;
+    (input.closest('.ct-field') || input.parentElement).append(msg);
+    const validate = () => {
+      const err = varNameError(input.value, taken);
+      // Don't shout at an empty field (nothing typed yet); still block submit though.
+      const showErr = input.value.trim() !== '' && !!err;
+      input.classList.toggle('is-invalid', showErr);
+      msg.textContent = showErr ? err : '';
+      msg.hidden = !showErr;
+      if (ok) ok.disabled = !!err;
+    };
+    input.addEventListener('input', validate);
+    validate();
   }
 
   /**
@@ -236,6 +267,7 @@ export class ComputeRecode {
         this.#results.appendError(err.message);
       }
     });
+    this.#wireNameValidation(dialog);
     document.body.append(dialog);
     dialog.showModal();
   }
@@ -393,6 +425,7 @@ export class ComputeRecode {
         this.#results.appendError(err.message);
       }
     });
+    this.#wireNameValidation(dialog);
     document.body.append(dialog);
     dialog.showModal();
   }
@@ -517,6 +550,7 @@ export class ComputeRecode {
         this.#results.appendError(err.message);
       }
     });
+    this.#wireNameValidation(dialog);
     document.body.append(dialog);
     dialog.showModal();
   }
