@@ -1415,10 +1415,11 @@ function makeSaveBtn(label, onClick) {
   return b;
 }
 
-/** A save button that copies text to the clipboard, with brief "✓ Copied" feedback. */
-function makeCopyBtn(label, getText) {
+/** A copy button with brief "✓ Copied" feedback. `doCopy` is an async fn returning
+ * whether the copy succeeded. */
+function makeCopyBtn(label, doCopy) {
   const b = makeSaveBtn(label, async () => {
-    const ok = await copyText(getText());
+    const ok = await doCopy();
     const orig = b.textContent;
     b.textContent = ok ? '✓ Copied' : 'Copy failed';
     setTimeout(() => { b.textContent = orig; }, 1400);
@@ -1476,6 +1477,53 @@ function tableToTsv(spec) {
   return lines.join('\n');
 }
 
+/** A real HTML `<table>` (with the caption/title and light borders) for the clipboard,
+ * so rich editors — email, Word, Google Docs — paste it back as aligned columns with
+ * its title, instead of the tab-collapsed mush a plain-text paste becomes. */
+function tableToHtml(spec) {
+  const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const cellHtml = (v) => (Array.isArray(v) ? v : [v]).map(fmtCellValue).filter((s) => s !== '').map(esc).join('<br>');
+  const cellStyle = 'border:1px solid #ccc;padding:3px 8px;text-align:left';
+  const out = ['<table style="border-collapse:collapse;font-family:sans-serif;font-size:13px">'];
+  if (spec.caption) out.push(`<caption style="text-align:left;font-weight:bold;padding:4px 0">${esc(spec.caption)}</caption>`);
+  if (spec.columns?.length) {
+    out.push('<thead><tr>' + spec.columns.map((c) => `<th style="${cellStyle};font-weight:bold">${esc(c)}</th>`).join('') + '</tr></thead>');
+  }
+  out.push('<tbody>');
+  for (const row of spec.rows || []) {
+    out.push('<tr>' + row.map((v, i) => {
+      const tag = spec.rowHeaders && i === 0 ? 'th' : 'td';
+      return `<${tag} style="${cellStyle}">${cellHtml(v)}</${tag}>`;
+    }).join('') + '</tr>');
+  }
+  out.push('</tbody></table>');
+  return out.join('');
+}
+
+/** Plain-text form for the clipboard's text/plain: the title (if any) then TSV. */
+function tableToPlain(spec) {
+  const tsv = tableToTsv(spec);
+  return spec.caption ? `${spec.caption}\n${tsv}` : tsv;
+}
+
+/** Copy a table to the clipboard in BOTH forms at once — an HTML table (rich editors
+ * paste aligned columns + title) and a plain-text fallback (title + TSV for
+ * spreadsheets/plain editors). Falls back to plain-text-only where ClipboardItem
+ * isn't available. Returns whether it succeeded. */
+async function copyTable(spec) {
+  const plain = tableToPlain(spec);
+  try {
+    if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+      await navigator.clipboard.write([new ClipboardItem({
+        'text/html': new Blob([tableToHtml(spec)], { type: 'text/html' }),
+        'text/plain': new Blob([plain], { type: 'text/plain' }),
+      })]);
+      return true;
+    }
+  } catch { /* fall through to plain-text copy */ }
+  return copyText(plain);
+}
+
 /** The export row shown under a table block — the textual counterpart to a chart's
  * SVG/PNG buttons: a CSV download and a copy-for-spreadsheet. When only rendered html
  * survives (a legacy/untrusted save with no spec), fall back to copying its text. */
@@ -1485,10 +1533,10 @@ function tableExportRow(spec, fallbackText) {
   if (spec) {
     row.append(
       makeSaveBtn('⬇ CSV', () => downloadFile('table.csv', 'text/csv;charset=utf-8', tableToCsv(spec))),
-      makeCopyBtn('⧉ Copy', () => tableToTsv(spec)),
+      makeCopyBtn('⧉ Copy', () => copyTable(spec)),
     );
   } else {
-    row.append(makeCopyBtn('⧉ Copy', () => fallbackText()));
+    row.append(makeCopyBtn('⧉ Copy', () => copyText(fallbackText())));
   }
   return row;
 }
