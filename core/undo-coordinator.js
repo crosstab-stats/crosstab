@@ -80,7 +80,7 @@ export class UndoCoordinator {
     if (!this.#log) return [];
     const out = [];
     const data = this.#log.topUndoable(isDataOp);
-    if (data && this.#datasets.canUndo) out.push({ kind: 'data', hlc: data.hlc });
+    if (data && this.#datasets.canUndo) out.push({ kind: 'data', hlc: data.hlc, op: data });
     const item = this.#log.topUndoable(isItemOp);
     if (item) out.push({ kind: 'item', hlc: item.hlc, op: item });
     const analysis = this.#log.topUndoable(isAnalysisOp);
@@ -122,7 +122,11 @@ export class UndoCoordinator {
       return;
     }
     if (top.kind === 'data') {
+      const opId = top.op?.id ?? null;
       await this.#datasets.undo();
+      // Drop the confirmation line a compute/recode/filter appended for THIS op, so the
+      // Output doesn't claim a transform that's now undone (a no-op for ops with no note).
+      if (opId) this.#results.removeByTag?.(opId);
       return;
     }
     if (top.kind === 'item') {

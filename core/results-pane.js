@@ -817,14 +817,28 @@ export class ResultsPane {
    *
    * @param {string} markdown - Markdown source.
    */
-  appendText(markdown) {
+  appendText(markdown, opts = {}) {
     const block = this.#makeBlock();
     block.className += ' results-note';
     const html = renderMiniMarkdown(markdown);
     block.innerHTML = html;
+    // A `tag` ties this note to the data op that produced it (a compute/recode/filter
+    // confirmation), so undoing that op can drop the note — see removeByTag.
+    const tag = opts.tag != null ? String(opts.tag) : undefined;
+    if (tag) block.dataset.tag = tag;
     this.#place(block);
-    this.#model.push({ kind: 'text', html });
+    this.#model.push({ kind: 'text', html, tag });
     this.#bus?.emit?.('output:written');
+  }
+
+  /** Remove text blocks carrying `tag` (a data-op id). Used when that transform is
+   * undone, so its confirmation line doesn't linger after the change is reverted.
+   * Mirrors {@link ResultsPane#removeRun}: filter the model, rebuild. */
+  removeByTag(tag) {
+    if (tag == null) return;
+    const t = String(tag);
+    const kept = this.#model.filter((b) => !(b.kind === 'text' && b.tag === t));
+    if (kept.length !== this.#model.length) this.restoreModel(kept, { divider: false });
   }
 
   /**
@@ -966,8 +980,10 @@ export class ResultsPane {
         // Saved html can come from an untrusted project file — sanitise on restore (#89).
         const safe = sanitizeHtml(item.html || '');
         block.innerHTML = safe;
+        const tag = item.tag != null ? String(item.tag) : undefined; // keep the data-op link across reload
+        if (tag) block.dataset.tag = tag;
         this.#place(block);
-        this.#model.push({ kind: 'text', html: safe });
+        this.#model.push({ kind: 'text', html: safe, tag });
       } else if (item.kind === 'plot') {
         // Rebuild through the shared frame so a restored plot keeps its editable
         // title/caption (Layer 1). No onRedraw on restore — the plugin callback is gone.
@@ -1155,7 +1171,7 @@ export class ResultsPane {
       appendImage: (s, opts) => this.appendImage(s, opts),
       appendChart: (model) => this.appendChart(model),
       updatePlot: (handle, s) => this.updatePlot(handle, s),
-      appendText: (m) => this.appendText(m),
+      appendText: (m, opts) => this.appendText(m, opts),
       appendError: (m) => this.appendError(m),
       clear: () => this.clear(),
       // Read surface for output-export plugins (honours "everything is a plugin").

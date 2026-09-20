@@ -108,13 +108,14 @@ export class ComputeRecode {
       if (!ok || !condition) return;
       try {
         const before = this.#data.rowCount;
-        await this.#data.filterCases(condition);
+        const opId = await this.#data.filterCases(condition);
         const after = this.#data.rowCount;
         // 0 rows is the classic "filtered a label, but the column stores codes"
         // trap — diagnose it and tell the user the exact code to match.
         const note = after === 0 && before > 0 ? diagnoseZeroRows(condition, vars) : '';
         this.#results.appendText(
           `Selected cases where \`${condition}\` — ${after.toLocaleString()} of ${before.toLocaleString()} rows kept.${note}`,
+          { tag: opId },
         );
       } catch (err) {
         this.#results.appendError(err.message);
@@ -188,8 +189,8 @@ export class ComputeRecode {
       dialog.remove();
       if (!ok) return;
       try {
-        await this.#data.computeVariable(name, expression, type);
-        this.#results.appendText(`Computed **${name}** = \`${expression}\`.`);
+        const opId = await this.#data.computeVariable(name, expression, type);
+        this.#results.appendText(`Computed **${name}** = \`${expression}\`.`, { tag: opId });
       } catch (err) {
         this.#results.appendError(err.message);
       }
@@ -332,7 +333,7 @@ export class ComputeRecode {
       dialog.remove();
       if (!ok) return;
       try {
-        await this.#data.recodeVariable(name, source, rules, type, elseRule);
+        const opId = await this.#data.recodeVariable(name, source, rules, type, elseRule);
         // Metadata lands as an ordinary `setVariable` patch rather than as new
         // fields on the recode op: `setVariable` already carries label / value
         // labels / measure and already round-trips through the syntax editor, so
@@ -346,6 +347,7 @@ export class ComputeRecode {
         this.#results.appendText(
           `Recoded **${source}** → **${name}** (${rules.length} rule${rules.length === 1 ? '' : 's'}` +
             `${labelled ? `, ${labelled} value label${labelled === 1 ? '' : 's'}` : ''}, ${measure}).`,
+          { tag: opId }, // undo of the recode drops this line
         );
       } catch (err) {
         this.#results.appendError(err.message);
@@ -446,7 +448,7 @@ export class ComputeRecode {
         if (!chosen.length) throw new Error('Count: choose at least one variable to count across.');
         if (!tests.length) throw new Error('Count: name at least one value to count.');
         const metaByName = new Map(vars.map((m) => [m.name, m]));
-        await this.#data.computeVariable(name, countExpr(chosen, tests, complete, metaByName), 'numeric');
+        const opId = await this.#data.computeVariable(name, countExpr(chosen, tests, complete, metaByName), 'numeric');
         // A count is a quantity, and it is the thing the next analysis means to
         // average — so it is declared scale, not left to be guessed at.
         const patch = { measurementLevel: 'scale' };
@@ -455,6 +457,7 @@ export class ComputeRecode {
         this.#results.appendText(
           `Counted **${name}** across ${chosen.length} variable${chosen.length === 1 ? '' : 's'}` +
             `${complete ? ', blank unless all were answered' : ''}.`,
+          { tag: opId },
         );
       } catch (err) {
         this.#results.appendError(err.message);

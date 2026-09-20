@@ -1118,7 +1118,7 @@ export class DataStore {
   async computeVariable(name, expr, varType = 'numeric') {
     this.#assertNewVarName(name);
     if (!expr || !String(expr).trim()) throw new Error('Compute: the expression is empty.');
-    await this.#addDerivedVar('computeVar', { name: name.trim(), expr: String(expr), varType: normType(varType) }, `var:${name.trim()}`);
+    return this.#addDerivedVar('computeVar', { name: name.trim(), expr: String(expr), varType: normType(varType) }, `var:${name.trim()}`);
   }
 
   /**
@@ -1139,7 +1139,7 @@ export class DataStore {
   async recodeVariable(name, source, rules, varType = 'numeric', elseRule = { kind: 'copy' }) {
     this.#assertNewVarName(name);
     if (!this.#byName.has(source)) throw new Error(`Recode: source variable "${source}" not found.`);
-    await this.#addDerivedVar(
+    return this.#addDerivedVar(
       'recodeVar',
       {
         name: name.trim(),
@@ -1166,7 +1166,7 @@ export class DataStore {
   async filterCases(expr, label) {
     if (!expr || !String(expr).trim()) throw new Error('Select cases: the condition is empty.');
     const cond = String(expr).trim();
-    await this.#addDerivedVar('filterCases', { expr: cond, label: label || cond }, 'rows');
+    return this.#addDerivedVar('filterCases', { expr: cond, label: label || cond }, 'rows');
   }
 
   /**
@@ -1223,6 +1223,7 @@ export class DataStore {
     const op = this.#append(type, payload, targetSuffix, reads);
     try {
       await this.rederive('transform');
+      return op.id; // so the caller can tie a confirmation/output line to this op (undo removes it)
     } catch (err) {
       this.#log.discardLocal(op.id);
       await this.rederive('transform');
@@ -2224,7 +2225,17 @@ function recodeCaseSql(t, srcMeta) {
         const test = designatedMissingSql(src, srcMeta?.missingValues ?? [], srcMeta?.missingRanges ?? []);
         cond = test ? `(${src} IS NULL OR ${test})` : `${src} IS NULL`;
       } else {
-        cond = `CAST(${src} AS VARCHAR) = ${sqlString(String(r.value ?? ''))}`;
+        // Match numerically when the typed value reads as a number, so a code stored as
+        // a DOUBLE (GSS/ReadStat imports render the code 1 as "1.0") still matches the
+        // "1" the user typed — a plain CAST-to-VARCHAR compare is "1.0" = "1" → false, so
+        // recode silently matched nothing on such data. Non-numeric text (a string
+        // category like "North") still compares as text.
+        const raw = String(r.value ?? '').trim();
+        const num = Number(raw);
+        cond =
+          raw !== '' && Number.isFinite(num)
+            ? `TRY_CAST(${src} AS DOUBLE) = ${num}`
+            : `CAST(${src} AS VARCHAR) = ${sqlString(raw)}`;
       }
       return `WHEN ${cond} THEN ${recodeTo(r.to, isNum, src)}`;
     })
