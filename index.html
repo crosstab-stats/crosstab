@@ -478,8 +478,21 @@
       }
       .ct-field textarea { resize: vertical; font: 12px ui-monospace, monospace; }
       .ct-row { display: flex; gap: 12px; }
-      .ct-row .ct-field { flex: 1; }
+      /* min-width:0 lets a field shrink below its content: without it a <select> or
+         button holding a long variable label can't shrink and shoves its siblings
+         (the "new variable" name) off the dialog. */
+      .ct-row .ct-field { flex: 1; min-width: 0; }
       .ct-hint { color: #646e77; font-weight: 400; font-size: 11px; }
+      /* Recode's "Recode from" — a button that opens the shared variable picker,
+         styled like a <select> and ellipsising a long label instead of growing. */
+      .ct-cr__pick {
+        display: flex; align-items: center; gap: 6px; width: 100%;
+        font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
+        background: #fff; cursor: pointer; text-align: left;
+      }
+      .ct-cr__pick:hover { background: #f0f3f6; }
+      .ct-cr__picklabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .ct-cr__pickcaret { color: #646e77; flex: 0 0 auto; }
 
       /* --- footer / status --- */
       footer {

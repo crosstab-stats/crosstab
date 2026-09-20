@@ -1006,7 +1006,7 @@ export async function boot(mounts) {
 
   // Transform ▸ Compute variable… / Recode into new variable… — Phase-2 data
   // transforms that create derived variables (logged, undoable, in History).
-  new ComputeRecode({ data: datasets, menus, results: results.api }).activate();
+  new ComputeRecode({ data: datasets, menus, results: results.api, ui }).activate();
   // Transform ▸ Extract columns to a new dataset… / Join with another dataset… —
   // dataset-level manipulation: subset columns into a fresh dataset, and join two
   // open project datasets by key (all four join types) (#121).

@@ -13,17 +13,21 @@ export class ComputeRecode {
   #data;
   #menus;
   #results;
+  #ui;
 
   /**
    * @param {Object} deps
    * @param {import('./dataset-manager.js').DatasetManager} deps.data
    * @param {import('./menu-shell.js').MenuShell} deps.menus
    * @param {{appendText: Function, appendError: Function}} deps.results - ResultsPane#api.
+   * @param {import('./ui-service.js').UiService} [deps.ui] - Shared variable picker,
+   *   so Recode's source uses the same searchable list as the plugins.
    */
-  constructor({ data, menus, results }) {
+  constructor({ data, menus, results, ui }) {
     this.#data = data;
     this.#menus = menus;
     this.#results = results;
+    this.#ui = ui ?? null;
   }
 
   activate() {
@@ -201,16 +205,17 @@ export class ComputeRecode {
     const vars = this.#vars();
     const dialog = document.createElement('dialog');
     dialog.className = 'ct-dialog ct-dialog--wide';
-    const opts = vars.map((m) => `<option value="${attr(m.name)}">${esc(m.label ? `${m.label} (${m.name})` : m.name)}</option>`).join('');
     dialog.innerHTML = `
       <form method="dialog" class="ct-dialog__form ct-cr">
         <h2 class="ct-dialog__title">Recode into new variable</h2>
         <p class="ct-dialog__hint">Map the values of a variable into a new one
           (collapse categories, reverse-code, bin a scale).</p>
         <div class="ct-row">
-          <label class="ct-field">Recode from
-            <select name="source">${opts}</select>
-          </label>
+          <div class="ct-field">Recode from
+            <button type="button" class="ct-cr__pick" name="sourcebtn">
+              <span class="ct-cr__picklabel"></span><span class="ct-cr__pickcaret" aria-hidden="true">▾</span>
+            </button>
+          </div>
           <label class="ct-field">New variable name
             <input name="name" type="text" placeholder="e.g. agegroup" autocomplete="off">
           </label>
@@ -254,6 +259,32 @@ export class ComputeRecode {
     addRow();
     dialog.querySelector('.ct-cr__addrule').addEventListener('click', addRow);
 
+    // Recode source: the SAME searchable picker the plugins use (ui.selectVariables),
+    // pre-seeded from the grid selection. A plain <select> of every variable doesn't
+    // scale — a GSS extract has thousands — and its longest option used to blow out the
+    // row; a compact button that opens the shared picker fixes both.
+    const known = new Set(vars.map((m) => m.name));
+    const preselected = (this.#data.getSelectedVariables?.() || []).filter((n) => known.has(n));
+    let source = preselected[0] || vars[0]?.name || '';
+    const metaByName = new Map(vars.map((m) => [m.name, m]));
+    const srcBtn = dialog.querySelector('button[name="sourcebtn"]');
+    const srcLabel = srcBtn.querySelector('.ct-cr__picklabel');
+    const renderSource = () => {
+      const m = metaByName.get(source);
+      srcLabel.textContent = m ? (m.label ? `${m.label} (${m.name})` : m.name) : 'Choose a variable…';
+    };
+    renderSource();
+    srcBtn.addEventListener('click', async () => {
+      if (!this.#ui) return;
+      const picked = await this.#ui.selectVariables({
+        title: 'Recode from',
+        hint: 'The variable whose values you want to map into a new one.',
+        multiple: false,
+        preselect: source ? [source] : undefined,
+      });
+      if (picked && picked[0]) { source = picked[0]; renderSource(); }
+    });
+
     // "All other values →" else row.
     const elseRow = makeToControls();
     elseRow.kind.value = 'copy';
@@ -280,7 +311,6 @@ export class ComputeRecode {
 
     dialog.addEventListener('close', async () => {
       const ok = dialog.returnValue === 'ok';
-      const source = dialog.querySelector('select[name="source"]').value;
       const name = dialog.querySelector('input[name="name"]').value.trim();
       const type = dialog.querySelector('select[name="type"]').value;
       const varLabel = dialog.querySelector('input[name="varlabel"]').value.trim();
@@ -695,11 +725,4 @@ function diagnoseZeroRows(condition, vars) {
     '\n\n⚠ 0 rows matched. If you filtered a categorical by the label shown in the grid, those variables are ' +
     'stored as codes — open Variables to see the code↔label map and match the code, or double-check the value’s type.'
   );
-}
-
-function esc(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-function attr(s) {
-  return esc(s).replace(/"/g, '&quot;');
 }
