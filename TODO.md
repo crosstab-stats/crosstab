@@ -5392,6 +5392,25 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       structured too. NOT Formspree/Google Forms/Tally — those are exactly the extra
       service + account the user asked to avoid, and several route submissions through
       their own servers. (Design discussed 2026-09-20; user parked it for later.)
+- [ ] **#176 — Export the syntax/history to a Stata `.do` (and SPSS `.sps`) file
+      (raised 2026-09-20, confirmed absent).** Import already translates a `.do`/`.sps`
+      into the native CrossTab syntax (`core/stata-import.js` `stataToScript`,
+      `core/spss-import.js` `spssToScript`), but there is no export the other way. The
+      Syntax-mode editor's ⬇ Export writes only `.ctscript` (native, lossless); the
+      separate R-syntax export (`builtin-syntax-export`) emits `.R`; `File ▸ Export
+      data… ▸ Stata` writes the `.dta` DATA file — none emit a `.do`/`.sps` command
+      script. Add best-effort `scriptToStata` / `scriptToSpss` (the inverse of the
+      import translators) and offer them from the Syntax editor's Export (and/or the
+      format picker), so a user can hand a colleague a runnable do-file. Best-effort
+      like the import: compute/recode/keep/drop/rename/label/set → the nearest
+      Stata/SPSS command; anything without a clean equivalent (verbatim DuckDB SQL in a
+      compute expression, `run pluginId.fn` analyses) → a comment, so the file is
+      honest about what it couldn't translate. Scope: transforms only (matching the
+      import); analyses are out (they'd need each plugin to declare its Stata/SPSS —
+      the same blocker noted for analyses in the R-syntax export above). "Be forgiving
+      in what you input, strict in what you output" cuts both ways — the output file
+      should be clean, valid Stata/SPSS or an honest comment, never half-translated
+      guesses.
 
 ## Blocked until public deploy (GitHub Pages)
 
