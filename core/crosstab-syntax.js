@@ -149,7 +149,7 @@ function opToLines(op) {
     case 'renameVar':
       return [`rename ${ident(op.from)} to ${ident(op.to)}`];
     case 'recodeVar':
-      return [recodeToLine(op)];
+      return recodeToLines(op);
     case 'setVariable':
       return setVarToLines(op);
     default:
@@ -174,6 +174,22 @@ function recodeToLine(op) {
   }
   parts.push(`else ${toStr(op.elseRule || { kind: 'copy' })}`);
   return `recode ${ident(op.source)} into ${ident(op.name)}${typeSuffix(op.varType)}: ${parts.join('; ')}`;
+}
+
+/** The recode line, plus any metadata the op carries (label / value labels / measure —
+ * folded onto the recode op so the dialog's recode is ONE undoable step). The metadata
+ * is emitted as its own lines so export stays lossless; they parse back as setVariable
+ * ops, which produce identical data. */
+function recodeToLines(op) {
+  const lines = [recodeToLine(op)];
+  const name = ident(op.name);
+  if (op.measure && MEASURES.has(op.measure)) lines.push(`set measure ${name} = ${op.measure}`);
+  if (op.valueLabels && Object.keys(op.valueLabels).length) {
+    const pairs = Object.entries(op.valueLabels).map(([code, lbl]) => `${val(code)} ${str(lbl)}`);
+    lines.push(`label values ${name} ${pairs.join(', ')}`);
+  }
+  if (op.label) lines.push(`label variable ${name} ${str(op.label)}`);
+  return lines;
 }
 
 function toStr(to) {

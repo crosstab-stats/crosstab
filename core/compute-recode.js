@@ -333,16 +333,15 @@ export class ComputeRecode {
       dialog.remove();
       if (!ok) return;
       try {
-        const opId = await this.#data.recodeVariable(name, source, rules, type, elseRule);
-        // Metadata lands as an ordinary `setVariable` patch rather than as new
-        // fields on the recode op: `setVariable` already carries label / value
-        // labels / measure and already round-trips through the syntax editor, so
-        // the recode stays losslessly representable as one `recode` line.
-        const patch = {};
-        if (varLabel) patch.label = varLabel;
-        if (Object.keys(valueLabels).length) patch.valueLabels = valueLabels;
-        if (measure) patch.measurementLevel = measure;
-        if (Object.keys(patch).length) await this.#data.updateVariable(name, patch);
+        // The new variable's metadata (label / value labels / measure) is folded onto
+        // the recode op, so the whole thing is ONE step in History and one Undo — it
+        // reads as a single action to the user, which is what it is. (The syntax export
+        // still writes the metadata as its own lines, so it stays lossless.)
+        const opId = await this.#data.recodeVariable(name, source, rules, type, elseRule, {
+          label: varLabel || undefined,
+          valueLabels: Object.keys(valueLabels).length ? valueLabels : undefined,
+          measure,
+        });
         const labelled = Object.keys(valueLabels).length;
         this.#results.appendText(
           `Recoded **${source}** → **${name}** (${rules.length} rule${rules.length === 1 ? '' : 's'}` +

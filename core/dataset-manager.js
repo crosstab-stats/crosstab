@@ -595,8 +595,8 @@ export class DatasetManager {
   computeVariable(name, expr, varType) {
     return this.active.computeVariable(name, expr, varType);
   }
-  recodeVariable(name, source, rules, varType, elseRule) {
-    return this.active.recodeVariable(name, source, rules, varType, elseRule);
+  recodeVariable(name, source, rules, varType, elseRule, meta) {
+    return this.active.recodeVariable(name, source, rules, varType, elseRule, meta);
   }
   filterCases(expr, label) {
     return this.active.filterCases(expr, label);

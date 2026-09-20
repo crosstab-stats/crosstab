@@ -899,12 +899,17 @@ export class DataStore {
         }
       } else if (op.type === 'computeVar' || op.type === 'recodeVar') {
         const cast = normType(op.varType) === 'numeric' ? 'DOUBLE' : 'VARCHAR';
-        byName.set(op.name, {
+        // A recode may carry its own label / value labels / measure (folded on so the
+        // dialog is one undoable op, #—); apply them here. A later setVariable still
+        // overrides, since ops apply in order. computeVar carries none, so it's unchanged.
+        const derived = {
           name: op.name,
           label: op.label,
           type: normType(op.varType),
-          measurementLevel: cast === 'DOUBLE' ? 'scale' : 'nominal',
-        });
+          measurementLevel: op.measure || (cast === 'DOUBLE' ? 'scale' : 'nominal'),
+        };
+        if (op.valueLabels && Object.keys(op.valueLabels).length) derived.valueLabels = op.valueLabels;
+        byName.set(op.name, derived);
         // The source's metadata AS OF THIS STEP, so a `missing` rule sees exactly the
         // designated codes that were declared before the recode ran (#174n).
         const scalar = op.type === 'computeVar' ? `(${op.expr})` : recodeCaseSql(op, byName.get(op.source));
@@ -1136,20 +1141,23 @@ export class DataStore {
    * @param {{kind:string, value?:any}} [elseRule]
    * @returns {Promise<void>}
    */
-  async recodeVariable(name, source, rules, varType = 'numeric', elseRule = { kind: 'copy' }) {
+  async recodeVariable(name, source, rules, varType = 'numeric', elseRule = { kind: 'copy' }, meta = {}) {
     this.#assertNewVarName(name);
     if (!this.#byName.has(source)) throw new Error(`Recode: source variable "${source}" not found.`);
-    return this.#addDerivedVar(
-      'recodeVar',
-      {
-        name: name.trim(),
-        source,
-        rules: Array.isArray(rules) ? rules : [],
-        elseRule: elseRule ?? { kind: 'copy' },
-        varType: normType(varType),
-      },
-      `var:${name.trim()}`,
-    );
+    // Fold the new variable's metadata (label / value labels / measure) onto the recode
+    // op itself, so the dialog's recode is ONE step in History and one Undo — instead of
+    // a recode op followed by a separate setVariable patch.
+    const payload = {
+      name: name.trim(),
+      source,
+      rules: Array.isArray(rules) ? rules : [],
+      elseRule: elseRule ?? { kind: 'copy' },
+      varType: normType(varType),
+    };
+    if (meta.label) payload.label = String(meta.label);
+    if (meta.valueLabels && Object.keys(meta.valueLabels).length) payload.valueLabels = meta.valueLabels;
+    if (meta.measure) payload.measure = meta.measure;
+    return this.#addDerivedVar('recodeVar', payload, `var:${name.trim()}`);
   }
 
   /**
