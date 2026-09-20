@@ -342,7 +342,7 @@ export class PluginActions {
     const specs = Array.isArray(verb.inputs) ? verb.inputs : [];
     let gathered = {};
     if (specs.length) {
-      gathered = await gatherInputs(this.#ui, specs, verb);
+      gathered = await gatherInputs(this.#ui, specs, verb, this.#dataStore);
       if (gathered === null) return;
     }
     if (verb.needsFile) {
@@ -387,7 +387,7 @@ export class PluginActions {
       this.#results.appendError(`${item.label}: open or start a project first — there's no data to analyse.`);
       return;
     }
-    const gathered = await gatherInputs(this.#ui, specs, item);
+    const gathered = await gatherInputs(this.#ui, specs, item, this.#dataStore);
     if (gathered === null) return; // a required input was cancelled
 
     const entry = {
@@ -533,7 +533,7 @@ export class PluginActions {
 
     let gathered;
     if (missing.length) {
-      gathered = await gatherInputs(this.#ui, specs, t.item);
+      gathered = await gatherInputs(this.#ui, specs, t.item, this.#dataStore);
       if (gathered === null) return { ok: false, error: 'cancelled' };
       Object.assign(gathered, supplied);
     } else {
@@ -651,8 +651,11 @@ export class PluginActions {
  * @param {object} ui - UiService#api
  * @param {Array<object>} specs
  * @param {object} item - The menu item (for composing dialog titles).
+ * @param {object} [data] - Read-only data accessor (DatasetManager/DataStore api),
+ *   used by dynamic input kinds (e.g. `level`) that enumerate a chosen variable's
+ *   categories at gather time so the pick is recorded and replays non-interactively.
  */
-async function gatherInputs(ui, specs, item) {
+async function gatherInputs(ui, specs, item, data) {
   const out = {};
   const takenUnique = []; // variables chosen by earlier `unique` inputs → excluded later
 
@@ -722,6 +725,35 @@ async function gatherInputs(ui, specs, item) {
         return null;
       }
       out[spec.name] = many ? r : r[0] ?? null;
+    } else if (kind === 'level') {
+      // A category of a variable chosen by an EARLIER `variables` input (spec.of).
+      // Enumerated at gather time so the pick is captured in the recorded inputs and
+      // replays without re-prompting (a mid-run app.ui prompt couldn't be recorded).
+      const srcName = out[spec.of];
+      const varName = Array.isArray(srcName) ? srcName[0] : srcName;
+      if (!varName || !data) {
+        out[spec.name] = spec.optional ? null : null; // nothing to pick from
+        if (!spec.optional) return null;
+        continue;
+      }
+      const cats = await variableCategories(data, varName);
+      if (!cats.length) {
+        if (spec.optional) {
+          out[spec.name] = null;
+          continue;
+        }
+        return null;
+      }
+      const seed = spec.default != null ? [String(spec.default)] : [cats[0].value];
+      const r = await ui.selectFromList({ title, hint, items: cats, multiple: false, selected: seed });
+      if (r === null) {
+        if (spec.optional) {
+          out[spec.name] = spec.default != null ? String(spec.default) : null;
+          continue;
+        }
+        return null;
+      }
+      out[spec.name] = r[0] ?? null;
     } else if (kind === 'file') {
       // A supplementary file the analysis needs (boundary map, dictionary, weights
       // matrix…) — distinct from the importer flow, which produces a dataset. The
@@ -806,6 +838,38 @@ function pickFile(extensions) {
     input.addEventListener('cancel', () => finish(null));
     document.body.append(input);
     input.click();
+  });
+}
+
+/**
+ * Distinct categories of `varName` as pickable items, in value order, each labelled
+ * with its value label (if any) and observed count — so a `level` input shows the
+ * user what SPSS calls the value labels rather than bare codes. Returns
+ * `[{ value:string, label:string }]` (empty if the variable is unreadable).
+ */
+async function variableCategories(data, varName) {
+  let cols = {};
+  try {
+    cols = (await data.getColumns?.({ variables: [varName] })) || {};
+  } catch {
+    return [];
+  }
+  const col = cols[varName];
+  if (!col || !col.length) return [];
+  const meta = (data.getVariableMeta?.() || []).find((m) => m.name === varName);
+  const vlabs = meta?.valueLabels || {};
+  const counts = new Map(); // value(string) → count; skips nulls/NaN (missing)
+  for (const raw of col) {
+    if (raw == null || (typeof raw === 'number' && Number.isNaN(raw))) continue;
+    const key = String(raw);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  const numeric = [...counts.keys()].every((k) => k !== '' && Number.isFinite(Number(k)));
+  const keys = [...counts.keys()].sort((a, b) => (numeric ? Number(a) - Number(b) : a.localeCompare(b)));
+  return keys.map((k) => {
+    const lab = vlabs[k] ?? vlabs[Number(k)];
+    const shown = lab != null && lab !== '' ? `${lab}` : k;
+    return { value: k, label: `${shown}  (n=${counts.get(k).toLocaleString()})` };
   });
 }
 

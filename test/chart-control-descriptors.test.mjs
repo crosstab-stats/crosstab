@@ -123,14 +123,17 @@ test('blank clears back to auto, and garbage is never stored', () => {
   assert.ok(!Number.isNaN(v.yAxisMin));
 });
 
-test('a select can carry numbers, and text clears to undefined when emptied', () => {
+test('a select can carry numbers, and an emptied text stores "" (explicitly cleared)', () => {
   const v = {};
   setControlValue({ id: 'pointSize', type: 'select', valueType: 'number' }, v, '6');
   assert.strictEqual(v.pointSize, 6);
   setControlValue({ id: 'titleText', type: 'text' }, v, 'Hi');
   assert.equal(v.titleText, 'Hi');
   setControlValue({ id: 'titleText', type: 'text' }, v, '');
-  assert.equal(v.titleText, undefined, 'an emptied title falls back to the model title');
+  // Empty must be stored as '' (not undefined) so a title the user deliberately cleared
+  // stays cleared: the render layer resolves with `??`, which keeps '' but replaces
+  // undefined with the model default. Storing undefined here made a title un-clearable.
+  assert.strictEqual(v.titleText, '', 'an emptied title is explicitly cleared, not reset to the default');
 });
 
 // --- visibility -----------------------------------------------------------------

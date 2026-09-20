@@ -26,9 +26,10 @@ export const manifest = {
   howto:
     'GUI: Categorical ▸ pick a test (Chi-square goodness-of-fit, One-/Two-proportion, McNemar\'s, or Log-linear model). You get the test statistic, p-value, and (where applicable) a CI.\n' +
     'Syntax: run builtin-categorical.gof {"variable": "region", "expected": ""}\n' +
-    'Syntax: run builtin-categorical.oneProp {"variable": "passed", "p0": 0.5}\n' +
+    'Syntax: run builtin-categorical.oneProp {"variable": "passed", "category": "yes", "p0": 0.5}\n' +
     'Syntax: run builtin-categorical.twoProp {"outcome": "passed", "groups": "cohort"}\n' +
     '  • variable / outcome / groups — the categorical variable(s); expected — comma-separated proportions (blank = equal); p0 — the test proportion.\n' +
+    '  • category (oneProp) — which of the two categories is tested against p0; omit to test the second category.\n' +
     '  • other actions: McNemar\'s test (paired) — run builtin-categorical.mcnemar {"v1": "before", "v2": "after"}; Log-linear model — run builtin-categorical.loglinear {"vars": ["a", "b"], "model": "homogeneous"}.',
   rPackages: [],
   menu: [
@@ -47,7 +48,8 @@ export const manifest = {
       order: 20,
       inputs: [
         { name: 'variable', kind: 'variables', label: 'Binary variable', hint: 'The yes/no variable whose proportion you want to test.', types: ['factor', 'string', 'numeric'] },
-        { name: 'p0', kind: 'number', label: 'Test proportion', hint: 'The proportion to compare against, such as 0.5.', default: 0.5 },
+        { name: 'category', kind: 'level', of: 'variable', label: 'Category to test', hint: 'Which category’s proportion is compared against the test proportion — the other category is 1 minus this one.' },
+        { name: 'p0', kind: 'number', label: 'Test proportion', hint: 'The proportion to compare against, such as 0.5.', default: 0.5, min: 0, max: 1 },
       ],
     },
     {
@@ -212,16 +214,25 @@ export async function gof(app, { variable, expected }) {
   );
 }
 
-export async function oneProp(app, { variable, p0 }) {
+export async function oneProp(app, { variable, p0, category }) {
   if (!variable) return void app.results.appendError('Pick a variable.');
   const meta = metaMap(await app.data.getVariableMeta());
   const test = Number.isFinite(p0) ? p0 : 0.5;
+  // The category to test is chosen in the dialog (a `level` input). Inlined as an R
+  // string literal; when absent (e.g. an older script) fall back to the second level,
+  // which is what this test tested before the picker existed — so old logs replay the
+  // same. `binom.test` then tests THIS category's share against the test proportion.
+  const want = category != null ? JSON.stringify(String(category)) : 'NULL';
   const rCode = `
-    x <- as.factor(variable[!is.na(variable)])
-    if (nlevels(x) != 2) stop("need a variable with exactly 2 categories")
-    tab <- table(x); succ <- tab[2]; nn <- sum(tab)
+    v <- variable[!is.na(variable)]
+    xf <- as.factor(v)
+    if (nlevels(xf) != 2) stop("need a variable with exactly 2 categories")
+    tab <- table(xf); nn <- sum(tab)
+    want <- ${want}
+    lv <- if (!is.null(want) && nzchar(want) && want %in% levels(xf)) want else names(tab)[2]
+    succ <- as.integer(tab[lv])
     bt <- binom.test(succ, nn, p = ${test})
-    list(level = names(tab)[2], succ = as.integer(succ), n = as.integer(nn), phat = succ / nn,
+    list(level = lv, succ = succ, n = as.integer(nn), phat = succ / nn,
          ciLo = bt$conf.int[1], ciHi = bt$conf.int[2], p = bt$p.value,
          levels = names(tab), counts = as.integer(tab))`;
   const r = flat((await app.webr.run(rCode)).result);
