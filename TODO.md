@@ -5425,49 +5425,65 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       **picker→selection write-back** so confirming a picker updates the shared
       selection (today the picker's choice returns to the plugin but doesn't
       change the grid/sidebar selection — a real design call, left as-is for now).
-- [ ] **#180 — "Show only selected" filter on the variable lists (user, 2026-09-21).**
-      Real workflow that provokes it: a homework question needs seven variables with
-      unrelated names; the next question needs seven different ones. Clearing the first
-      set means **remembering each name**, finding it in a 900-column grid, and
-      unticking it one at a time. The count that says `7 selected` knows exactly which
-      seven they are and won't show them to you.
+- [ ] **#180 — float the SELECTED variables to the top (and to the left), the way the
+      analysis picker already does (user, 2026-09-21).** Real workflow that provokes it:
+      a homework question needs seven variables with unrelated names; the next question
+      needs seven different ones. Clearing the first set means **remembering each name**,
+      finding it in a 900-column grid, and unticking one at a time. The count that says
+      `7 selected` knows exactly which seven they are and won’t show them to you.
 
-      The strip is already the right place and already shared. `makeVarToolbar`
-      (`core/var-toolbar.js`) builds the filter + order controls for all three variable
-      lists, and the Data grid appends its own `N selected` count into the slot after
-      them (`core/data-views.js` `#updateSelCount`, ~468). What's missing is any way to
-      filter BY that fact: visible columns are `sortVars(filterVars(this.metas,
-      this.filter), this.order)` — a name/label text query and nothing else. Variable
-      View (~703/737) uses the same toolbar and the same call, so it has the same gap
-      and should get the same control in the same motion.
+      **The pattern already exists, in the third surface.** `ui.selectVariables` floats
+      the workspace selection into a "Selected" group at the top of the picker
+      (`core/ui-service.js` ~92–101): partition the list into `selected` / `rest`, sort
+      each partition by the chosen order, render "Selected" then "All variables". Two
+      properties of that implementation are the whole reason to copy it rather than
+      invent something:
 
-      Design notes, in the order they'll bite:
-  - [ ] **The toggle must be visible while it's on.** `var-toolbar.js` already states
-        the rule this feature is most likely to break — "hiding rows for a reason the
-        reader cannot see is the failure mode to avoid". A pressed toolbar toggle
-        (`aria-pressed`) next to the filter box, not a hidden mode.
-  - [ ] **It empties itself, and that's the trap.** Untick the last variable while
-        "show only selected" is on and the list goes blank — including the rows you'd
-        need in order to undo it. Either auto-release the toggle when the selection
-        reaches zero, or render an empty state that says why and offers "Show all".
-        Decide which; do NOT ship the blank list.
-  - [ ] **Rows vanish under the pointer as you untick.** Here that's the *point* — but
-        it still shifts what's under the cursor, the same mis-click hazard
-        "Variable-picker polish (later)" (above) cites as the reason the picker's
-        "Selected" group is a snapshot rather than live. The grid may well want the
-        opposite answer from the picker; what it must not do is make the choice by
-        accident. A "Clear selection" button next to the toggle may remove the need to
-        untick one-by-one at all, which is the user's ACTUAL goal — worth building
-        first and measuring whether the filter is still wanted.
-  - [ ] **Not in the analysis picker.** `ui.selectVariables` builds the same toolbar
-        but already groups a "Selected" snapshot at the top (`core/ui-service.js` ~228)
-        and reports a different count. So this is an opt-in flag on `makeVarToolbar`,
-        not a fourth control everybody inherits.
-  - [ ] **Scope like the filter, not like the order.** Per `var-toolbar.js`'s own
-        split: the order is a persisted app-wide preference, the query is
-        session-scoped and shared between grid and Variable View. "Show only selected"
-        is a query about right now — share it between those two surfaces, don't
-        persist it.
+        1. **Grouping is computed ONCE, from the incoming selection, and never
+           recomputed** — the comment says why: "ticking a box must not make its row
+           jump to the top group under the user’s cursor."
+        2. **Nothing selected → no groups at all**, just the plain list.
+
+      Apply the same idea to the two workspace surfaces: **Variable View floats selected
+      rows to the top, the Data grid floats selected columns to the left** (next to the
+      row-number gutter). Mechanically it is a secondary sort key in `#visibleMetas()`
+      — partition on selection, then `sortVars(…, this.order)` within each part — so it
+      composes with the existing file-order / name / label preference instead of
+      competing with it.
+
+      **Why this beats the "show only selected" filter it replaces.** Floating is not
+      hiding, so the two hazards that filter had both evaporate: "which seven are
+      selected?" is answered by looking at the top/left, and "I unticked them all and
+      now the view is empty" cannot happen — an empty selection is just the ordinary
+      list. It also needs no toggle to be visible-while-on, no empty state, and no
+      recovery affordance. A "Clear selection" button is still worth having next to the
+      count, because dropping the whole set in one click is the user’s actual goal; the
+      float is what makes dropping *part* of the set easy.
+  - [ ] **The one real question: when is the snapshot taken?** The picker can freeze
+        the grouping at open because a modal has an obvious open moment. The grid and
+        Variable View are persistent, so "open" has to be defined. Candidates, none
+        free: **on entering the view / on refresh** (predictable, matches the picker,
+        but a tick you just made doesn’t move until you leave and come back — which can
+        read as broken); **live** (instant, but columns shift under the cursor at the
+        exact moment you are clicking checkboxes — the mis-click the picker
+        deliberately avoids); or **on an explicit "Float selected" / re-sort action**
+        (honest, costs a click, and the toolbar already has somewhere to put it).
+        Whichever is chosen, reset `scrollLeft` when the column order changes, as
+        `#applyFilter` already does.
+  - [ ] **Is it always on, or opt-in?** The picker floats unconditionally, but it is
+        transient. A persistent grid that permanently reorders columns away from file
+        order may disorient someone who navigates by position — and file order is a
+        first-class choice in `var-order.js`, not an accident. Decide deliberately;
+        if opt-in, it belongs beside the order select, and per `var-toolbar.js`’s own
+        split it is a *preference* (persisted, app-wide) rather than a query.
+  - [ ] **Both workspace surfaces, one change.** Variable View and the Data grid share
+        `makeVarToolbar` and both call `sortVars(filterVars(…))`; the float belongs in
+        that shared path so the two cannot drift — which is the exact failure
+        `var-toolbar.js` was written to end.
+  - [ ] **Leave the picker alone.** It already does this, and its snapshot-at-open
+        behaviour is correct for a modal. Related: "Variable-picker polish (later)"
+        above, which records why the picker’s group is deliberately not live.
+
 - [ ] **#175 — User bug reports, server-free (parked 2026-09-20).** A "Report a bug"
       affordance that costs nothing to run and needs no new service/account: the app
       builds a PRE-FILLED report the user reviews and submits themselves — no backend,
