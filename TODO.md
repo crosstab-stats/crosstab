@@ -392,20 +392,40 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         passphrase*; protected → *Change passphrase* / *Remove protection*. The guard
         then has nothing to guard.
 
-        **Leave the policy dialog alone — and mind the name.** `Encryption settings…`
-        is NOT per-project: `core/encryption-settings.js` is the app-wide at-rest
-        POLICY (#144), one switch for "encrypt new projects on this device by default",
-        with exports and folder projects shown as read-only context. Tellingly, it
-        already ends with "To protect (or unprotect) a project you've already made, use
-        **File ▸ Protect this project…**" — a settings dialog that has to send you back
-        to the menu, which is the seam this split resolves. So two dialogs, and they
-        need two names: the owner called the new one "encryption settings", but that
-        string is taken. Suggest **Project protection…** (or keep `Protect this
-        project…`) for the per-project modal and leave `Encryption settings…` for
-        policy — or rename the policy one *Encryption defaults…* and take the better
-        name for the project modal. Pick one; do not ship two things called settings.
-        Whichever way it goes, update that pointer paragraph — it will name a menu item
-        that no longer exists.
+        **DECIDED (owner, 2026-09-21): one File item, `Encryption settings…`, opening a
+        TABBED modal.** Default tab **this project** — set / change / remove its
+        passphrase; second tab **the global defaults** — encrypt new projects on this
+        device by default, and whatever else accrues later (passphrase-strength rules
+        were named as a likely example). Four File items become one, and the naming
+        collision dissolves instead of being negotiated: the organising axis is
+        *encryption*, not *scope*, which is also why this does not contradict the
+        manager decision above — that rejected mixing encryption with open/move/delete,
+        not mixing two scopes of one subject.
+
+        It absorbs `core/encryption-settings.js` (#144), which is the app-wide at-rest
+        POLICY dialog: one switch, with exports and folder projects as read-only
+        context. Evidence the seam was already wrong — it currently ends with "To
+        protect (or unprotect) a project you've already made, use **File ▸ Protect this
+        project…**". A settings dialog that has to send you back to the menu becomes a
+        tab switch.
+
+        Three things to get right when building it:
+    - [ ] **The two tabs must not look interchangeable.** One acts on the open project
+          NOW; the other changes a default for projects that don't exist yet and touches
+          no existing project. Name them by scope (*This project* / *New projects*
+          rather than *Project* / *Globals*), and let the defaults tab say plainly that
+          it changes nothing already saved. The failure to design out is someone
+          flipping a default believing they just protected the project in front of them.
+    - [ ] **Two degenerate states, expressed not guarded.** #158 shipped, so "no project
+          open" is a real state (sitting at the launcher) — and `protectProject()` also
+          refuses an empty unsaved one ("Add some data first — an empty project has
+          nothing to protect yet"). Both are facts the project tab should SHOW, with the
+          modal opening on the defaults tab when there is nothing to act on. Turning
+          those two errors into a visible state is the same [[guard-means-missing-state]]
+          move as collapsing the three verbs.
+    - [ ] **Keep the per-project verbs state-driven inside the tab**, as above:
+          unprotected → *Set a passphrase*; protected → *Change passphrase* / *Remove
+          protection*. Never all three at once.
   - [ ] **Fold the two bundle items into an Open/Store rail entry.** Import/export of a
         `.crosstab` bundle is a *location* — the same dimension the manager already
         models as the left rail — so it should be a backend row there rather than two
