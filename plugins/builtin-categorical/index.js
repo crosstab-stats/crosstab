@@ -266,10 +266,13 @@ export async function oneProp(app, { variable, p0, category, weight }) {
   const counts = r.num('counts');
   const exact = r.n1('exact') === 1;
   const ws = wSuffix(meta, weight);
+  // Weighted counts are fractional, so show one decimal — rounding each to a whole
+  // number makes the categories appear not to sum to N (sum-of-rounded ≠ rounded-sum).
+  const cnt = exact ? int : (x) => f(x, 1);
   await app.results.appendTable(
     {
       columns: ['Category', 'Count'],
-      rows: levels.map((lv, i) => [vlab(meta, variable, lv), int(counts[i])]),
+      rows: levels.map((lv, i) => [vlab(meta, variable, lv), cnt(counts[i])]),
       rowHeaders: true,
     },
     { caption: `${label(meta, variable)}${ws}` },
@@ -280,7 +283,7 @@ export async function oneProp(app, { variable, p0, category, weight }) {
       columns: ['', 'Value'],
       rows: [
         [`Proportion "${lvl}"`, f(r.n1('phat'), 3)],
-        ['N', int(r.n1('n'))],
+        ['N', cnt(r.n1('n'))],
         ['Test proportion', f(test, 3)],
         ['95% CI', ci(r.n1('ciLo'), r.n1('ciHi'))],
         [exact ? 'Exact Sig. (binomial)' : 'Asymp. Sig. (2-tailed)', fmtP(r.n1('p'))],
