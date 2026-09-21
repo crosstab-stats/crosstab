@@ -5428,6 +5428,51 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       edit / remove) intact, put the new title on the row label, and check that
       hovering the 🔍 still shows its own tooltip rather than the row's.
 
+- [ ] **#178 — Binary Logistic is missing every option the SPSS Options dialog offers
+      (faculty homework, 2026-09-21).** NOT optional: a Sacramento State methods class is
+      assigned this exact click-path — *Analyze ▸ Regression ▸ Binary Logistic*, dependent
+      `SCHOOL_ATTEND`, covariate `LANGUAGE`, **Categorical…** with `LANGUAGE` declared and
+      reference **First**, then **Options ▸** Classification plots, Hosmer–Lemeshow
+      goodness-of-fit, Casewise listing of residuals, CI for exp(B), Display *At last step*.
+      `plugins/builtin-logistic/index.js` fits the model and prints Model Summary (−2LL,
+      Cox & Snell, Nagelkerke) + Variables in the Equation (B, S.E., Wald, df, Sig.,
+      Exp(B)) — and **nothing else on that list exists**, in this plugin or anywhere in the
+      repo (`grep -i hosmer|lemeshow|casewise|classification` finds no hits). Build:
+  - [ ] **CI for Exp(B).** SPSS's is Wald: `exp(B ± z_{1-α/2}·SE)`, not a profile
+        likelihood — so it must be hand-computed rather than `confint()`. Two extra
+        columns on Variables in the Equation, headed with the level (default 95%).
+        `plugins/builtin-ordinal/index.js:195` already prints exactly this shape; follow it.
+  - [ ] **Hosmer–Lemeshow.** Deciles of risk: χ² = Σ_g Σ_{k∈{0,1}} (O−E)²/E over g
+        groups, df = g−2. Print SPSS's **Contingency Table for Hosmer and Lemeshow Test**
+        (observed/expected per group, per outcome) above the test row. Hand-rolled — so
+        by [[validate-handrolled-vs-official]] it gets checked against
+        `ResourceSelection::hoslem.test` on local R before it ships. Ties at a decile
+        boundary are where implementations diverge; match `hoslem.test`'s `cut(quantile)`
+        binning and say so in a comment.
+  - [ ] **Classification table + classification plot.** The table is observed × predicted
+        at the 0.5 cut with percent-correct per row and overall (SPSS prints it by
+        default). The plot is the frequency of predicted probability split by OBSERVED
+        group — emit it as a `categorical` chart model (20 bins of .05, two series,
+        `view.stack = 'stacked'`) so it goes through the #131 chart layer and gets live
+        controls, not a baked SVG.
+  - [ ] **Casewise listing of residuals.** SPSS lists cases whose |ZResid| exceeds 2 SD:
+        Case, Observed, Predicted, Predicted group, Resid, ZResid (the Pearson residual
+        `(y−p)/√(p(1−p))`). The case number must be the **dataset row number** — injection
+        hands R every row in dataset order, so pin `rownames(d) <- seq_len(nrow(d))` before
+        fitting and read `rownames(fit$model)` back, since `glm` drops the NA rows.
+  - [ ] **The Categorical… sub-dialog (reference category).** Today a predictor is
+        dummy-coded only if its CrossTab type is already `factor`, and the reference is
+        whatever R picks — the first level. That is right by luck, not by control:
+        a numerically-coded `LANGUAGE` (1/2/3, no value labels) is silently fitted as a
+        CONTINUOUS slope, which is the wrong model with no warning. Add an optional
+        "Categorical predictors" variable input (force `factor()` regardless of stored
+        type) + a First/Last reference choice. **Keep First as the default** — it is what
+        the plugin does today, so no existing output shifts; note in the hint that SPSS
+        defaults to Last, which is why the assignment makes students change it.
+  - [ ] **"Display: At last step"** — n/a. Entry is the only method (no stepwise), so
+        there is one step and nothing to choose between. Say so in the howto rather than
+        offering a control that can only have one value ([[guard-means-missing-state]]).
+
 ## Blocked until public deploy (GitHub Pages)
 
 - [x] **Milestone 3 — verify on iPad Safari — DONE.** The deploy gate is lifted (live
