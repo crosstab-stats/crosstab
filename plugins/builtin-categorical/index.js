@@ -26,10 +26,11 @@ export const manifest = {
   howto:
     'GUI: Categorical ▸ pick a test (Chi-square goodness-of-fit, One-/Two-proportion, McNemar\'s, or Log-linear model). You get the test statistic, p-value, and (where applicable) a CI.\n' +
     'Syntax: run builtin-categorical.gof {"variable": "region", "expected": ""}\n' +
-    'Syntax: run builtin-categorical.oneProp {"variable": "passed", "category": "yes", "p0": 0.5}\n' +
+    'Syntax: run builtin-categorical.oneProp {"variable": "passed", "category": "yes", "p0": 0.5, "weight": "wtssnr"}\n' +
     'Syntax: run builtin-categorical.twoProp {"outcome": "passed", "groups": "cohort"}\n' +
     '  • variable / outcome / groups — the categorical variable(s); expected — comma-separated proportions (blank = equal); p0 — the test proportion.\n' +
     '  • category (oneProp) — which of the two categories is tested against p0; omit to test the second category.\n' +
+    '  • weight (oneProp) — optional frequency weight; with it N is the sum of weights and the test uses a normal approximation instead of the exact binomial.\n' +
     '  • other actions: McNemar\'s test (paired) — run builtin-categorical.mcnemar {"v1": "before", "v2": "after"}; Log-linear model — run builtin-categorical.loglinear {"vars": ["a", "b"], "model": "homogeneous"}.',
   rPackages: [],
   menu: [
@@ -50,6 +51,7 @@ export const manifest = {
         { name: 'variable', kind: 'variables', label: 'Binary variable', hint: 'The yes/no variable whose proportion you want to test.', types: ['factor', 'string', 'numeric'] },
         { name: 'category', kind: 'level', of: 'variable', label: 'Category to test', hint: 'Which category’s proportion is compared against the test proportion — the other category is 1 minus this one.' },
         { name: 'p0', kind: 'number', label: 'Test proportion', hint: 'The proportion to compare against, such as 0.5.', default: 0.5, min: 0, max: 1 },
+        { name: 'weight', kind: 'variables', label: 'Weight cases by (optional)', optional: true, multiple: false, types: ['numeric'], hint: 'A survey weight (e.g. WTSSNR), so the test describes the population rather than the sample. With a weight the exact binomial gives way to a normal approximation (SPSS’s large-sample method); cancel this to count each case once.' },
       ],
     },
     {
@@ -214,37 +216,63 @@ export async function gof(app, { variable, expected }) {
   );
 }
 
-export async function oneProp(app, { variable, p0, category }) {
+export async function oneProp(app, { variable, p0, category, weight }) {
   if (!variable) return void app.results.appendError('Pick a variable.');
   const meta = metaMap(await app.data.getVariableMeta());
   const test = Number.isFinite(p0) ? p0 : 0.5;
   // The category to test is chosen in the dialog (a `level` input). Inlined as an R
   // string literal; when absent (e.g. an older script) fall back to the second level,
   // which is what this test tested before the picker existed — so old logs replay the
-  // same. `binom.test` then tests THIS category's share against the test proportion.
+  // same. The test then compares THIS category's share against the test proportion.
   const want = category != null ? JSON.stringify(String(category)) : 'NULL';
+  // Unweighted (or all-1 weights) → the exact binomial (Clopper–Pearson CI). With a
+  // frequency weight the counts are fractional, so an exact binomial isn't defined:
+  // fall back to the continuity-corrected normal approximation and a Wilson-score CI —
+  // SPSS's large-sample WEIGHT BY behaviour. N becomes the sum of the weights.
   const rCode = `
-    v <- variable[!is.na(variable)]
+    v <- variable
+    w <- ${weight ? 'suppressWarnings(as.numeric(weight))' : 'rep(1, length(v))'}
+    ok <- !is.na(v) & is.finite(w) & w > 0; v <- v[ok]; w <- w[ok]
     xf <- as.factor(v)
     if (nlevels(xf) != 2) stop("need a variable with exactly 2 categories")
-    tab <- table(xf); nn <- sum(tab)
+    levs <- levels(xf)
     want <- ${want}
-    lv <- if (!is.null(want) && nzchar(want) && want %in% levels(xf)) want else names(tab)[2]
-    succ <- as.integer(tab[lv])
-    bt <- binom.test(succ, nn, p = ${test})
-    list(level = lv, succ = succ, n = as.integer(nn), phat = succ / nn,
-         ciLo = bt$conf.int[1], ciHi = bt$conf.int[2], p = bt$p.value,
-         levels = names(tab), counts = as.integer(tab))`;
+    lv <- if (!is.null(want) && nzchar(want) && want %in% levs) want else levs[2]
+    inCat <- as.character(xf) == lv
+    wN <- sum(w); wsucc <- sum(w[inCat]); phat <- wsucc / wN
+    p0 <- ${test}
+    counts <- sapply(levs, function(k) sum(w[as.character(xf) == k]))
+    exact <- isTRUE(all.equal(w, rep(1, length(w))))
+    if (exact) {
+      bt <- binom.test(round(wsucc), round(wN), p = p0)
+      ciLo <- bt$conf.int[1]; ciHi <- bt$conf.int[2]; pval <- bt$p.value
+    } else {
+      # continuity-corrected normal approximation of the binomial (2-tailed)
+      mu0 <- wN * p0; sigma <- sqrt(wN * p0 * (1 - p0))
+      cc <- max(0, abs(wsucc - mu0) - 0.5)
+      z <- if (sigma > 0) cc / sigma else 0
+      pval <- 2 * pnorm(-z)
+      # Wilson score interval — better than Wald near 0/1, uses the weighted N
+      zc <- qnorm(0.975); den <- 1 + zc^2 / wN
+      ctr <- (phat + zc^2 / (2 * wN)) / den
+      hlf <- zc * sqrt(phat * (1 - phat) / wN + zc^2 / (4 * wN^2)) / den
+      ciLo <- ctr - hlf; ciHi <- ctr + hlf
+    }
+    list(level = lv, succ = wsucc, n = wN, phat = phat,
+         ciLo = ciLo, ciHi = ciHi, p = pval, exact = exact,
+         levels = levs, counts = as.numeric(counts))`;
   const r = flat((await app.webr.run(rCode)).result);
   const levels = r.str('levels');
   const counts = r.num('counts');
+  const exact = r.n1('exact') === 1;
+  const ws = wSuffix(meta, weight);
   await app.results.appendTable(
     {
       columns: ['Category', 'Count'],
       rows: levels.map((lv, i) => [vlab(meta, variable, lv), int(counts[i])]),
       rowHeaders: true,
     },
-    { caption: `${label(meta, variable)}` },
+    { caption: `${label(meta, variable)}${ws}` },
   );
   const lvl = vlab(meta, variable, r.s1('level'));
   await app.results.appendTable(
@@ -255,12 +283,19 @@ export async function oneProp(app, { variable, p0, category }) {
         ['N', int(r.n1('n'))],
         ['Test proportion', f(test, 3)],
         ['95% CI', ci(r.n1('ciLo'), r.n1('ciHi'))],
-        ['Exact Sig. (binomial)', fmtP(r.n1('p'))],
+        [exact ? 'Exact Sig. (binomial)' : 'Asymp. Sig. (2-tailed)', fmtP(r.n1('p'))],
       ],
       rowHeaders: true,
     },
-    { caption: 'One-Proportion Test' },
+    { caption: `One-Proportion Test${ws}` },
   );
+  if (!exact) {
+    await app.results.appendText(
+      `_Weighted by ${weightLabel(meta, weight)}: N is the sum of the weights, not a head count. ` +
+        'With a frequency weight the exact binomial is undefined (fractional counts), so this uses the ' +
+        'continuity-corrected normal approximation and a Wilson-score CI — SPSS’s large-sample method._',
+    );
+  }
 }
 
 export async function twoProp(app, { outcome, groups }) {
@@ -352,6 +387,14 @@ function label(meta, name) {
 }
 function vlab(meta, name, code) {
   return meta.get(name)?.valueLabels?.[code] ?? code;
+}
+/** The variable's label (or bare name) for the weight, and the " — weighted by X"
+ * caption suffix so no result is ambiguous about which population it describes. */
+function weightLabel(meta, weight) {
+  return weight ? meta.get(weight)?.label ?? weight : '';
+}
+function wSuffix(meta, weight) {
+  return weight ? ` — weighted by ${weightLabel(meta, weight)}` : '';
 }
 function parseProps(s) {
   return String(s || '')
