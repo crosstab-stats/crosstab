@@ -77,12 +77,12 @@ export const manifest = {
     'GUI: Comparison ▸ pick a test (One-sample / Independent-samples / Paired-samples t-test, or One-way ANOVA), then choose the variables. You get SPSS-style group/test tables with effect sizes.\n' +
     'Syntax: run builtin-compare.oneSample {"x": "score", "mu": 0}\n' +
     '  • x — numeric test variable; mu — reference value (default 0).\n' +
-    'Syntax: run builtin-compare.independent {"y": "score", "g": "group"}\n' +
-    '  • y — numeric outcome; g — grouping variable (exactly 2 groups).\n' +
+    'Syntax: run builtin-compare.independent {"y": "score", "g": "group", "g1": "A", "g2": "B"}\n' +
+    '  • y — numeric outcome; g — grouping variable; g1 / g2 — the two groups to compare (the difference is g1 − g2). Omit g1/g2 and it uses the first two groups.\n' +
     'Syntax: run builtin-compare.paired {"x1": "pre", "x2": "post"}\n' +
     '  • x1 / x2 — two numeric measures on the same cases.\n' +
-    'Syntax: run builtin-compare.oneway {"y": "score", "g": "group"}\n' +
-    '  • y — numeric outcome; g — factor (3+ groups; Tukey post-hoc).\n' +
+    'Syntax: run builtin-compare.oneway {"y": "score", "g": "group", "groups": ["A", "B", "C"]}\n' +
+    '  • y — numeric outcome; g — factor; groups — optional subset of groups to include (default all); Tukey post-hoc.\n' +
     '  • Every test takes an optional weight — a survey weight read as a frequency weight, so N and df follow its sum.',
   rPackages: [],
   menu: [
@@ -102,7 +102,9 @@ export const manifest = {
       order: 20,
       inputs: [
         { name: 'y', kind: 'variables', label: 'Outcome', hint: 'The numeric measure whose mean you want to compare.', multiple: false, types: ['numeric'], unique: true },
-        { name: 'g', kind: 'variables', label: 'Groups (2)', hint: 'The variable that splits cases into the two groups to compare.', multiple: false, types: ['factor', 'string'], unique: true },
+        { name: 'g', kind: 'variables', label: 'Grouping variable', hint: 'The variable that identifies the groups; pick the two to compare next.', multiple: false, types: ['factor', 'string'], unique: true },
+        { name: 'g1', kind: 'level', of: 'g', label: 'Group 1', hint: 'The first group. The mean difference is reported as Group 1 minus Group 2.' },
+        { name: 'g2', kind: 'level', of: 'g', exclude: 'g1', label: 'Group 2', hint: 'The second group, compared against Group 1.' },
         { name: 'weight', kind: 'variables', label: 'Weight cases by (optional)', optional: true, multiple: false, types: ['numeric'], hint: 'A survey weight (e.g. WTSSNR), so the test describes the population rather than the sample. Cancel this to count each case once; the caption names the weight used.' },
       ],
     },
@@ -123,6 +125,7 @@ export const manifest = {
       inputs: [
         { name: 'y', kind: 'variables', label: 'Outcome', hint: 'The numeric measure whose mean you want to compare.', multiple: false, types: ['numeric'], unique: true },
         { name: 'g', kind: 'variables', label: 'Factor', hint: 'The variable that splits cases into three or more groups.', multiple: false, types: ['factor', 'string'], unique: true },
+        { name: 'groups', kind: 'level', of: 'g', multiple: true, optional: true, label: 'Groups to include (optional)', hint: 'Leave empty to use every group, or pick which groups to compare (e.g. 3 of 5 categories).' },
         { name: 'weight', kind: 'variables', label: 'Weight cases by (optional)', optional: true, multiple: false, types: ['numeric'], hint: 'A survey weight (e.g. WTSSNR), so the test describes the population rather than the sample. Cancel this to count each case once; the caption names the weight used.' },
       ],
     },
@@ -186,16 +189,28 @@ export async function oneSample(app, { x: name, mu, weight }) {
  * @param {object} app
  * @param {{y: string, g: string, weight?: string|null}} inputs
  */
-export async function independent(app, { y: yName, g: gName, weight }) {
+export async function independent(app, { y: yName, g: gName, g1, g2, weight }) {
   if (!yName || !gName) return;
   const meta = await metaMap(app);
+  // The two groups are chosen in the dialog (SPSS's "Define Groups"), so a variable
+  // with 3+ categories can be compared two-at-a-time. Inlined as R string literals;
+  // when absent (an older script) fall back to the first two levels — the pre-picker
+  // behaviour — so old logs replay unchanged.
+  const g1want = g1 != null ? JSON.stringify(String(g1)) : 'NULL';
+  const g2want = g2 != null ? JSON.stringify(String(g2)) : 'NULL';
   const rCode = `
     ${WEIGHTED_R}
     w <- wclean(${weight ? 'weight' : 'NULL'}, length(y))
     y <- as.numeric(y); g <- as.factor(g)
-    ok <- is.finite(y) & !is.na(g) & !is.na(w); y <- y[ok]; g <- droplevels(g[ok]); w <- w[ok]
-    lv <- levels(g)
-    if (length(lv) != 2) stop(sprintf("the grouping variable must have exactly 2 groups (found %d)", length(lv)))
+    ok <- is.finite(y) & !is.na(g) & !is.na(w); y <- y[ok]; g <- g[ok]; w <- w[ok]
+    all_lv <- levels(g)
+    g1w <- ${g1want}; g2w <- ${g2want}
+    lv1 <- if (!is.null(g1w) && g1w %in% all_lv) g1w else all_lv[1]
+    lv2 <- if (!is.null(g2w) && g2w %in% all_lv) g2w else all_lv[2]
+    if (is.na(lv1) || is.na(lv2)) stop("the grouping variable needs at least 2 groups")
+    if (lv1 == lv2) stop("pick two different groups to compare")
+    keep <- g == lv1 | g == lv2; y <- y[keep]; g <- droplevels(g[keep]); w <- w[keep]
+    lv <- c(lv1, lv2)  # explicit order: Group 1 first, so the difference is g1 - g2
     i1 <- g == lv[1]; i2 <- g == lv[2]
     n1 <- sum(w[i1]); n2 <- sum(w[i2])
     if (n1 < 2 || n2 < 2) stop("each group needs at least 2 cases")
@@ -339,14 +354,22 @@ export async function paired(app, { x1: n1, x2: n2, weight }) {
 
 // --- One-way ANOVA -----------------------------------------------------------
 
-export async function oneway(app, { y: yName, g: gName, weight }) {
+export async function oneway(app, { y: yName, g: gName, groups, weight }) {
   if (!yName || !gName) return;
   const meta = await metaMap(app);
+  // Optional group subset (empty = all groups). Inlined as an R character vector so a
+  // 5-category factor can be run on, say, 3 of its groups.
+  const sel = Array.isArray(groups) && groups.length
+    ? `c(${groups.map((v) => JSON.stringify(String(v))).join(', ')})`
+    : 'character(0)';
   const rCode = `
     ${WEIGHTED_R}
     w <- wclean(${weight ? 'weight' : 'NULL'}, length(y))
     y <- as.numeric(y); g <- as.factor(g)
-    ok <- is.finite(y) & !is.na(g) & !is.na(w); y <- y[ok]; g <- droplevels(g[ok]); w <- w[ok]
+    ok <- is.finite(y) & !is.na(g) & !is.na(w); y <- y[ok]; g <- g[ok]; w <- w[ok]
+    sel <- ${sel}
+    if (length(sel)) { keep <- as.character(g) %in% sel; y <- y[keep]; g <- g[keep]; w <- w[keep] }
+    g <- droplevels(g)
     if (nlevels(g) < 2) stop("need at least 2 groups")
     lvs <- levels(g)
     gn  <- sapply(lvs, function(k) sum(w[g == k]))

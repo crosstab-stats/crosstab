@@ -726,34 +726,40 @@ async function gatherInputs(ui, specs, item, data) {
       }
       out[spec.name] = many ? r : r[0] ?? null;
     } else if (kind === 'level') {
-      // A category of a variable chosen by an EARLIER `variables` input (spec.of).
-      // Enumerated at gather time so the pick is captured in the recorded inputs and
-      // replays without re-prompting (a mid-run app.ui prompt couldn't be recorded).
+      // One (or, with `multiple`, several) categories of a variable chosen by an EARLIER
+      // `variables` input (spec.of). Enumerated at gather time so the pick is captured in
+      // the recorded inputs and replays without re-prompting (a mid-run app.ui prompt
+      // couldn't be recorded). `spec.exclude` drops a category a sibling input already
+      // took (e.g. Group 2 must differ from Group 1).
+      const many = !!spec.multiple;
+      const emptyVal = () => (many ? [] : null);
       const srcName = out[spec.of];
       const varName = Array.isArray(srcName) ? srcName[0] : srcName;
       if (!varName || !data) {
-        out[spec.name] = spec.optional ? null : null; // nothing to pick from
+        out[spec.name] = emptyVal();
         if (!spec.optional) return null;
         continue;
       }
-      const cats = await variableCategories(data, varName);
-      if (!cats.length) {
-        if (spec.optional) {
-          out[spec.name] = null;
-          continue;
-        }
-        return null;
+      let cats = await variableCategories(data, varName);
+      if (spec.exclude) {
+        const taken = new Set([].concat(out[spec.exclude] ?? []).map(String));
+        cats = cats.filter((c) => !taken.has(c.value));
       }
-      const seed = spec.default != null ? [String(spec.default)] : [cats[0].value];
-      const r = await ui.selectFromList({ title, hint, items: cats, multiple: false, selected: seed });
+      if (!cats.length) {
+        out[spec.name] = emptyVal();
+        if (!spec.optional) return null;
+        continue;
+      }
+      const seed = spec.default != null ? [].concat(spec.default).map(String) : many ? [] : [cats[0].value];
+      const r = await ui.selectFromList({ title, hint, items: cats, multiple: many, selected: seed });
       if (r === null) {
         if (spec.optional) {
-          out[spec.name] = spec.default != null ? String(spec.default) : null;
+          out[spec.name] = spec.default != null ? (many ? [].concat(spec.default).map(String) : String(spec.default)) : emptyVal();
           continue;
         }
         return null;
       }
-      out[spec.name] = r[0] ?? null;
+      out[spec.name] = many ? r : r[0] ?? null;
     } else if (kind === 'file') {
       // A supplementary file the analysis needs (boundary map, dictionary, weights
       // matrix…) — distinct from the importer flow, which produces a dataset. The
