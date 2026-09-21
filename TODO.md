@@ -372,14 +372,16 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       `New project` and `Encryption settings…`. 840 tests (10 new).
 
       **Browser pass: looked over by the owner on the deployed build (2026-09-21) — "looks
-      good from what I can see", no problems seen.** Recorded as what it was: a look at
-      the new surfaces, not an exhaustive run. Two paths are worth exercising when
-      someone is next in there, because neither is visible from the menu: opening
-      **Encryption settings… with NO project open** (should land on *New projects*, with
-      the project tab saying why rather than showing a dead tab), and a **bundle
-      round-trip** (Export ▸ the `.crosstab` bundle, then Open ▸ Project bundle on the
-      file it wrote) — that one is only covered as a function call, since the two halves
-      used to be menu items and are now reached from two different tabs.
+      good from what I can see", no problems seen — and the **no-project-open** case
+      confirmed separately.** That was the one worth checking by hand: it is the state
+      #158 made real, it is unreachable from the menu of an open project, and getting it
+      wrong would have meant a dead first tab. The dialog lands on *New projects* with
+      the project tab saying why.
+
+      Still only covered as a function call: the **bundle round-trip** — Export ▸ the
+      `.crosstab` bundle, then Open ▸ Project bundle on the file it wrote. The two halves
+      used to be adjacent menu items and are now reached from two different tabs, so the
+      seam between them is new even though neither body changed.
   - [x] **DONE (2026-09-21) — one per-project encryption modal, NOT a project-manager
         tab (decided by the owner).** Four File items became one: `Encryption settings…`
         opens `core/encryption-settings.js`, rewritten as a two-tab dialog — **This
