@@ -366,16 +366,46 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       shipped the project manager and is closed; these rode along inside its entry and
       would have been closed with it. None blocks anything — they are the difference
       between "the File menu stopped multiplying" and "the File menu is finished".
-  - [ ] **Project settings — the four encryption items are still loose on File.**
-        `core/project-sync.js` registers them straight onto the menu: `Protect this
-        project…` (order 8), `Change passphrase…` (9), `Remove protection…` (10) and
-        `Encryption settings…` (also 10 — two items claiming one slot, which is its own
-        small bug). That is four entries describing ONE property of the open project,
-        which is exactly the (verb × thing) multiplication #173 removed everywhere
-        else. They belong behind a single **Project settings…** — most naturally a tab
-        on the manager, since it already knows the current project and its location.
-        Note the state-dependence the menu currently fakes: Protect and Remove
-        protection are opposites, and only one is ever applicable.
+  - [ ] **One per-project encryption modal, NOT a project-manager tab (decided by the
+        owner, 2026-09-21).** Today `core/project-sync.js` registers four File items:
+        `Protect this project…` (order 8), `Change passphrase…` (9), `Remove
+        protection…` (10) and `Encryption settings…` (also 10 — two items claiming one
+        slot, a small bug in its own right).
+
+        **The owner's reasoning, and it is right:** the manager is "the place for
+        opening, moving, exporting, or deleting projects **including** this one", while
+        these four are "update, enable, or disable encryption on **this one** project".
+        Different theme. A manager tab would only earn its place if it listed EVERY
+        project with encryption controls per row — and that variant is not merely
+        unwanted, it is close to unbuildable: `protectProject()` (~1609) works on the
+        ACTIVE project, `#settle()`s it to disk, then re-encrypts every file through
+        `#fullSave`/`#folderRewrite`. Doing that from a list would mean opening — and,
+        for an already-protected project, unlocking — each one first. So: a dedicated
+        modal for the active project.
+
+        **What it replaces, and why a modal beats three menu items.** The three verbs
+        are state-dependent and the menu fakes it: all three show always, and
+        `protectProject()` opens with a guard that errors "This project is already
+        protected." That is precisely [[guard-means-missing-state]] — a guard whose only
+        job is to neutralise a state means the state should not be reachable. A modal
+        reads the current state and offers only what applies: unprotected → *Set a
+        passphrase*; protected → *Change passphrase* / *Remove protection*. The guard
+        then has nothing to guard.
+
+        **Leave the policy dialog alone — and mind the name.** `Encryption settings…`
+        is NOT per-project: `core/encryption-settings.js` is the app-wide at-rest
+        POLICY (#144), one switch for "encrypt new projects on this device by default",
+        with exports and folder projects shown as read-only context. Tellingly, it
+        already ends with "To protect (or unprotect) a project you've already made, use
+        **File ▸ Protect this project…**" — a settings dialog that has to send you back
+        to the menu, which is the seam this split resolves. So two dialogs, and they
+        need two names: the owner called the new one "encryption settings", but that
+        string is taken. Suggest **Project protection…** (or keep `Protect this
+        project…`) for the per-project modal and leave `Encryption settings…` for
+        policy — or rename the policy one *Encryption defaults…* and take the better
+        name for the project modal. Pick one; do not ship two things called settings.
+        Whichever way it goes, update that pointer paragraph — it will name a menu item
+        that no longer exists.
   - [ ] **Fold the two bundle items into an Open/Store rail entry.** Import/export of a
         `.crosstab` bundle is a *location* — the same dimension the manager already
         models as the left rail — so it should be a backend row there rather than two
