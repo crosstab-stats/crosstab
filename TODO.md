@@ -5412,6 +5412,22 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       should be clean, valid Stata/SPSS or an honest comment, never half-translated
       guesses.
 
+- [ ] **#177 — the plugin manager has no "what does this add?" tooltip; the launcher
+      does (user, 2026-09-20).** The two plugin pickers render the same catalogue and
+      diverged on one line. `core/launcher.js` `#pluginRow` (~453) sets
+      ``label.title = `${p.name} adds:\n• ${p.menu.join('\n• ')}` `` when the manifest
+      declares menu items, so hovering a plugin on the start screen tells you which
+      analyses it brings. `core/plugin-manager.js` `#pluginRow` (~1085) appends the
+      checkbox, the name and the version badge and sets no title at all — so the
+      surface users reach for *after* startup (Edit ▸ Plugins…) is the one that
+      doesn't say what a plugin contains. Cheap: `menu` is already in the manager's
+      view model (`list()`, ~921, `menu: cat?.menu ?? []`), recorded into the catalog
+      from the manifest — the same two lines. Factor it into one shared helper rather
+      than pasting a second copy, since the divergence *is* the bug. Keep the
+      manager's existing per-control titles (🔍 how-to, ⚐ network, fork / export /
+      edit / remove) intact, put the new title on the row label, and check that
+      hovering the 🔍 still shows its own tooltip rather than the row's.
+
 ## Blocked until public deploy (GitHub Pages)
 
 - [x] **Milestone 3 — verify on iPad Safari — DONE.** The deploy gate is lifted (live
