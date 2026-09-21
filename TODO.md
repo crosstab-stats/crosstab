@@ -362,12 +362,33 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         cleanup screen actionable rather than a list of names, and the asset tally already
         exists — but per-project size needs a walk of each project's tree.
 
-- [ ] **#181 — the three follow-ons #173 was carrying (split out 2026-09-21).** #173
+- [~] **#181 — the three follow-ons #173 was carrying (split out 2026-09-21).** #173
       shipped the project manager and is closed; these rode along inside its entry and
       would have been closed with it. None blocks anything — they are the difference
       between "the File menu stopped multiplying" and "the File menu is finished".
-  - [ ] **One per-project encryption modal, NOT a project-manager tab (decided by the
-        owner, 2026-09-21).** Today `core/project-sync.js` registers four File items:
+
+      **Two of the three BUILT (2026-09-21), both menu moves; the third is not a menu
+      move and is still open — see below.** File is down to **two** project items:
+      `New project` and `Encryption settings…`. 840 tests (10 new); no browser pass yet.
+  - [x] **DONE (2026-09-21) — one per-project encryption modal, NOT a project-manager
+        tab (decided by the owner).** Four File items became one: `Encryption settings…`
+        opens `core/encryption-settings.js`, rewritten as a two-tab dialog — **This
+        project** (default) and **New projects**. `projectEncryptionOffer(state)` is the
+        extracted rule and decides what the project tab shows, so an unprotected project
+        is offered only *Set a passphrase…* and a protected one only *Change passphrase…*
+        / *Remove protection…*; the three `if (already protected) appendError` guards in
+        `project-sync.js` are now backstops for a direct call rather than the thing
+        standing between the user and a wrong state. `ProjectSync#protectionState()` is
+        the new read-only accessor — deliberately NOT `#settle()`ing, since settling only
+        writes when a binding already exists and so cannot change the answer, and saving
+        as a side effect of opening a dialog to *look* at a setting is a surprise. Both
+        empty states are distinguished and shown: `none` (no project open — real since
+        #158) and `unsaved` (exists, never written), with the dialog landing on the
+        defaults tab when there is nothing to act on. The defaults tab carries an
+        explicit scope disclaimer, and `docs/SECURITY.md` was updated where it named the
+        old menu path. 7 tests. *Original reasoning below.*
+
+        Today `core/project-sync.js` registers four File items:
         `Protect this project…` (order 8), `Change passphrase…` (9), `Remove
         protection…` (10) and `Encryption settings…` (also 10 — two items claiming one
         slot, a small bug in its own right).
@@ -426,12 +447,36 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     - [ ] **Keep the per-project verbs state-driven inside the tab**, as above:
           unprotected → *Set a passphrase*; protected → *Change passphrase* / *Remove
           protection*. Never all three at once.
-  - [ ] **Fold the two bundle items into an Open/Store rail entry.** Import/export of a
-        `.crosstab` bundle is a *location* — the same dimension the manager already
-        models as the left rail — so it should be a backend row there rather than two
-        more File items. Watch [[format-equality-no-lockin]] here: the bundle is one
-        location among several, and must not be presented as the privileged one.
-  - [ ] **The launcher should reuse the manager component instead of its own rail.**
+  - [x] **DONE (2026-09-21) — the two bundle items folded into the manager.** `Export
+        project bundle (.crosstab)…` and `Open project bundle (.crosstab)…` left File;
+        their bodies are unchanged, only where they are reached from. **Opening** is a
+        row in the **Open** rail (`kind: 'bundle'`); **writing** is a row on the
+        **Export** tab.
+
+        Two things had to be got right rather than wired. (1) A bundle is NOT a *Store
+        in* destination — it is a snapshot that stops receiving changes the moment it
+        lands — so `providersFor(providers, mode)` now decides which rail a location
+        belongs in. That also fixed a pre-existing bug found on the way: a provider with
+        no `chooseDestination` still drew a Store button that did nothing when clicked, a
+        dead control indistinguishable from a live one. (2) The Export tab's hint claimed
+        every export "is one-way — an exported file cannot be reopened as a project",
+        which the bundle makes false. It is now two groups — *A copy you can open again*
+        and *For another program* — which keeps [[format-equality-no-lockin]] intact: the
+        bundle is described by what it does, not promoted, and the other formats keep
+        equal billing. A bundle also cannot be ENUMERATED (there is no index of
+        `.crosstab` files on a disk), so the provider declares `enumerable: false` and
+        the pane says what it is instead of reporting an empty list. 3 tests.
+  - [ ] **STILL OPEN — and NOT a menu move.** *(Flagged 2026-09-21: the other two
+        sub-items were "move some menu items" and took an afternoon. This one is a
+        refactor and should not be waved through on the same estimate.)*
+        `core/project-manager.js` is written as a `<dialog>`-based modal that resolves a
+        promise on close; the launcher needs the same rail rendered INLINE in its
+        overlay. So reusing it means first extracting the rail/list rendering from the
+        dialog shell — a real change to a component that was browser-verified two days
+        ago — and it lands on top of #167 and #161, which both also rewrite the
+        launcher. Do the three together, deliberately, not as a follow-on.
+
+        **The launcher should reuse the manager component instead of its own rail.**
         `core/launcher.js` builds its own saved-project list, remembered folders and
         source buttons; `core/project-manager.js` now does the same job properly, with
         the backend registry and the verbs. Two renderings of one list is the drift

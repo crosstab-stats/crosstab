@@ -1447,12 +1447,11 @@ export async function boot(mounts) {
     },
   });
 
-  menus.register({
-    id: 'core:export-bundle',
-    path: ['File'],
-    label: 'Export project bundle (.crosstab)…',
-    order: 6,
-    command: async () => {
+  // The .crosstab bundle is a LOCATION, not a menu verb (#181): opening one is a row in
+  // the manager's Open rail, writing one is a row on its Export tab. Both used to be
+  // File items, which is the (verb x location) multiplication #173 removed everywhere
+  // else. The bodies are unchanged — only where they are reached from.
+  const exportProjectBundleFile = async () => {
       try {
         // Name the bundle after the project; fall back to the active dataset's name (so
         // an unsaved/unnamed project still exports something meaningful) before the
@@ -1494,14 +1493,9 @@ export async function boot(mounts) {
       } catch (err) {
         results.api.appendError(`Export project bundle failed: ${err.message}`);
       }
-    },
-  });
-  menus.register({
-    id: 'core:import-bundle',
-    path: ['File'],
-    label: 'Open project bundle (.crosstab)…',
-    order: 7,
-    command: async () => {
+  };
+
+  const openProjectBundleFile = async () => {
       const file = await pickBundleFile();
       if (!file) return;
       try {
@@ -1523,8 +1517,7 @@ export async function boot(mounts) {
       } catch (err) {
         results.api.appendError(`Open project bundle failed: ${err.message}`);
       }
-    },
-  });
+  };
 
   // SPSS (.sav) / Stata (.dta) export is now provided by the ReadStat codec plugin
   // (File ▸ Export data… ▸ SPSS/Stata), streamed through the codec interface (#98 Phase 2).
@@ -1618,6 +1611,23 @@ export async function boot(mounts) {
       chooseExisting: async () => webdavBackendFromDialog(false),
       chooseDestination: async () => webdavBackendFromDialog(true),
     },
+    {
+      // A bundle is a place a project can come FROM, so it belongs in the Open rail —
+      // but not a place one can live, so it declares no `chooseDestination` and
+      // `providersFor` keeps it off the Store rail. It also cannot be enumerated: there
+      // is no index of .crosstab files on a disk, only a file you browse to, which is
+      // why it opens directly rather than returning a backend to reconnect.
+      kind: 'bundle',
+      glyph: '🗄️',
+      label: 'Project bundle',
+      newLabel: 'Choose a .crosstab file…',
+      hint: 'A .crosstab bundle is a complete copy of a project in a single file — '
+        + 'someone else’s hand-off, or your own backup. Opening one makes it a project here.',
+      enumerable: false,
+      openDirect: () => openProjectBundleFile(),
+      chooseExisting: null,
+      chooseDestination: null,
+    },
   ];
 
   const dropboxBackendFromDialog = async (move) => {
@@ -1641,6 +1651,9 @@ export async function boot(mounts) {
     providers,
     results,
     exporters: [
+      // `reopens` splits the tab's two groups: a bundle can be opened back into
+      // CrossTab, the others carry data to another program and cannot.
+      { label: 'Project bundle (.crosstab)…', reopens: true, run: () => exportProjectBundleFile() },
       { label: 'Export data…', run: () => exporters.openPicker?.() },
       { label: 'Export output…', run: () => outputExporters.open?.() },
     ].filter((x) => x.run),

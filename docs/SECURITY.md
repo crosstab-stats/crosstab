@@ -292,8 +292,9 @@ warrants for a local single-user tool. Recorded so the trade-off is deliberate.
     derived per session from the passphrase, never persisted). Real, because keyed by a
     user secret; non-taxing, because scoped to who asks for it. Each OPFS project has its
     **own** passphrase (the shared-lab case); the catalog stays plaintext because it spans
-    projects with different keys; `File ▸ Protect this project… / Remove protection…` set
-    or clear it in place for both OPFS and folder projects. **What it does *not* change:**
+    projects with different keys; `File ▸ Encryption settings… ▸ This project` sets
+    or clears it in place for both OPFS and folder projects (that tab offers only the
+    verbs the current state allows — set a passphrase, or change/remove an existing one). **What it does *not* change:**
     it protects the powered-off / offline / backup copy, never a live session (malware
     running as the user reads the decrypted data regardless), and DuckDB's direct-OPFS
     streaming read still can't run against ciphertext — so the multi-GB path stays on the

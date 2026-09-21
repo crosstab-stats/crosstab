@@ -25,6 +25,10 @@
  *    source is ours to remove.
  *  - **Manage** — rename, duplicate, close, and the destructive pair. Deliberately not in
  *    the sidebar, where delete sat one hover from the row that opens the thing.
+ *  - **Export** — a copy of the project, in two groups: the `.crosstab` bundle, which can
+ *    be opened again, and the one-way formats for other programs (#181). The bundle used
+ *    to be two more File items; opening one is now a row in the Open rail, writing one is
+ *    a row here.
  *
  * There is no **Save** tab, because there is no save: everything autosaves. What used to
  * be "Save project…" was naming (now rename) and what used to be "Save project as…" was
@@ -103,6 +107,27 @@ export function removalOffer(row) {
     fileDefault: false,
     confirmLabel: 'Remove',
   };
+}
+
+/**
+ * Which locations belong in a rail, for the tab being shown.
+ *
+ * The two rails ask different questions, so they cannot show the same list. **Open**
+ * asks "where might a project already be?" — anywhere you can enumerate or browse to,
+ * including a `.crosstab` bundle sitting on disk. **Store in** asks "where should this
+ * project LIVE?", and a bundle is not an answer: it is a snapshot that stops receiving
+ * changes the moment it is written. Listing it there would offer a destination that
+ * silently isn't one.
+ *
+ * Before this existed, a provider lacking `chooseDestination` still drew a Store button
+ * that did nothing when clicked — a dead control that looked identical to a live one.
+ *
+ * @param {Array<object>} providers
+ * @param {'open'|'store'} mode
+ */
+export function providersFor(providers, mode) {
+  if (mode === 'store') return providers.filter((p) => p.chooseDestination);
+  return providers.filter((p) => p.chooseExisting || p.openDirect || p.enumerable !== false);
 }
 
 /** The button a "store in" destination should show, given where the project is now. */
@@ -300,11 +325,12 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
       const wrap = el('div', 'ctpm__split');
       const rail = el('div', 'ctpm__rail');
       const pane = el('div', 'ctpm__pane');
-      let chosen = providers[0]?.kind ?? 'opfs';
+      const shown = providersFor(providers, mode);
+      let chosen = shown[0]?.kind ?? 'opfs';
 
       const paint = () => {
         pane.replaceChildren();
-        const provider = providers.find((p) => p.kind === chosen);
+        const provider = shown.find((p) => p.kind === chosen);
         if (!provider) return;
         if (mode === 'store') {
           const verb = storeVerb(projects.describeLocation?.()?.kind ?? 'opfs');
@@ -321,6 +347,20 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
           return;
         }
         // Open: this provider's known projects, then a way to reach a new one.
+        // A location whose contents cannot be listed (a bundle is a file you browse to,
+        // not a place with an index) says what it is instead of reporting an empty list
+        // — "No projects known here yet" would imply some could appear later.
+        if (provider.enumerable === false) {
+          if (provider.hint) pane.append(el('p', 'ctpm__hint', provider.hint));
+          const go = el('button', 'proj__add', provider.newLabel ?? 'Choose a file…');
+          go.type = 'button';
+          go.addEventListener('click', async () => {
+            dialog.close();
+            await provider.openDirect?.();
+          });
+          pane.append(go);
+          return;
+        }
         const mine = rows.filter((r) => r.kind === provider.kind);
         for (const row of mine) {
           const b = el('button', 'ctpm__rowmain');
@@ -350,7 +390,7 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
         }
       };
 
-      for (const p of providers) {
+      for (const p of shown) {
         const b = el('button', `ctpm__railitem${p.kind === chosen ? ' is-active' : ''}`, `${p.glyph} ${p.label}`);
         b.type = 'button';
         b.addEventListener('click', () => {
@@ -366,15 +406,36 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
     }
 
     function renderExport() {
-      body.append(el('p', 'ctpm__hint',
-        'Export writes a copy in another program’s format. It is one-way — an exported file '
-        + 'cannot be reopened as a project. To move the project itself, use Store in.'));
-      for (const x of exporters) {
-        const b = el('button', 'proj__add', x.label);
-        b.type = 'button';
-        b.addEventListener('click', () => { dialog.close(); void x.run(); });
-        body.append(b);
-      }
+      // Two groups, because the old single hint said every export "is one-way — an
+      // exported file cannot be reopened as a project", and that became untrue the
+      // moment the .crosstab bundle moved in here (#181): a bundle is exactly a copy
+      // you can open again. Grouping by what the file can DO keeps the claim honest
+      // without privileging CrossTab's own format — the bundle is described, not
+      // promoted, and the other formats keep equal billing.
+      const group = (title, hint, items) => {
+        if (!items.length) return;
+        body.append(el('h3', 'ctpm__grouphead', title));
+        body.append(el('p', 'ctpm__hint', hint));
+        for (const x of items) {
+          const b = el('button', 'proj__add', x.label);
+          b.type = 'button';
+          b.addEventListener('click', () => { dialog.close(); void x.run(); });
+          body.append(b);
+        }
+      };
+      group(
+        'A copy you can open again',
+        'A complete copy of this project — data, analyses and all — in a file you or a '
+        + 'colleague can open back into CrossTab. To move the project itself rather than '
+        + 'copy it, use Store in.',
+        exporters.filter((x) => x.reopens),
+      );
+      group(
+        'For another program',
+        'A copy in another program’s format. One-way: these files carry the data, not the '
+        + 'project, and cannot be reopened as one.',
+        exporters.filter((x) => !x.reopens),
+      );
     }
 
     shell.append(tabBar, body, footer);

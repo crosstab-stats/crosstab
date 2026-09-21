@@ -199,6 +199,11 @@
       .ctpm__act.is-danger:hover { background: #fdf2f2; }
       .ctpm__hint { color: #5a6470; margin: 0 0 12px; line-height: 1.45; } /* = .ct-dialog__hint */
       .ctpm__empty, .ctpm__loading { color: #646e77; padding: 32px 12px; }
+      /* Export-tab group heads (#181). The two groups differ in what the file can DO —
+         reopen as a project, or not — so they are separated rather than listed flat. */
+      .ctpm__grouphead { font-size: 1em; margin: 4px 0 4px; }
+      .ctpm__grouphead + .ctpm__hint { margin-bottom: 8px; }
+      .ctpm__grouphead ~ .ctpm__grouphead { margin-top: 18px; }
       /* Two classes, deliberately: `.ct-dialog__buttons` sets `margin: 0` and appears
          LATER in this file, so a single-class rule here would lose to it and the footer
          would sit flush against the list. */

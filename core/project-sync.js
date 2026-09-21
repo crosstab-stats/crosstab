@@ -549,10 +549,11 @@ export class ProjectSync {
     // Per-project at-rest protection for OPFS projects (#144) — set/remove a passphrase
     // on the CURRENT project (each project has its own). Folder projects are protected
     // via their folder passphrase instead, so these guard against that case.
-    this.#menus.register({ id: 'core:proj-protect', path: ['File'], label: 'Protect this project…', order: 8, command: () => void this.protectProject() });
-    this.#menus.register({ id: 'core:proj-changepass', path: ['File'], label: 'Change passphrase…', order: 9, command: () => void this.changePassphrase() });
-    this.#menus.register({ id: 'core:proj-unprotect', path: ['File'], label: 'Remove protection…', order: 10, command: () => void this.unprotectProject() });
-    this.#menus.register({ id: 'core:encryption-settings', path: ['File'], label: 'Encryption settings…', order: 10, command: () => showEncryptionSettings() });
+    // ONE item, not four (#181). Protect / Change passphrase / Remove protection are
+    // verbs on this project and the fourth was an app-wide default — four lines for one
+    // subject, and three of them wrong at any given moment. They are now two tabs behind
+    // this entry, which offers only the verbs the current state actually allows.
+    this.#menus.register({ id: 'core:encryption-settings', path: ['File'], label: 'Encryption settings…', order: 8, command: () => void showEncryptionSettings({ projects: this }) });
     this.#bus.on(CoreEvents.DATA_CHANGED, (s) => this.#onChange(s));
     this.#bus.on(DATASETS_CHANGED, () => this.#onChange(null));
     this.#bus.on(CoreEvents.PLUGINS_CHANGED, () => this.#onPluginsChanged());
@@ -1601,10 +1602,42 @@ export class ProjectSync {
   }
 
   /**
-   * **Protect this project…** — set a passphrase so the project's data is encrypted at
-   * rest (#144). Works for both an OPFS project (its own per-project passphrase — the
-   * shared-lab case) and a folder project (its folder passphrase). Also the migration
-   * path for an existing plaintext project: mint the key + meta, re-save encrypted.
+   * The open project's encryption state, for the settings dialog (#181).
+   *
+   * Read-only on purpose: it does NOT `#settle()` first, the way the three verbs below
+   * do. Settle only writes when there is already a binding, so it cannot turn an unbound
+   * project into a bound one — meaning it would change nothing this answer depends on,
+   * and saving as a side effect of opening a dialog to *look* at a setting is a surprise
+   * nobody asked for.
+   *
+   * The two empty cases are distinguished rather than merged, because they need different
+   * sentences: `none` is no project at all (a real state since #158), `unsaved` is a
+   * project that exists but has never been written, which is what the verbs report as
+   * "add some data first".
+   *
+   * @returns {Promise<{scope: 'none'|'unsaved'|'local'|'folder', name?: string, protected?: boolean}>}
+   */
+  async protectionState() {
+    if (!this.#open && !this.#store.flat) return { scope: 'none' };
+    const folder = this.#store.flat;
+    if (!folder && !this.#binding) return { scope: 'unsaved' };
+    const id = folder ? FOLDER_PROJECT_ID : this.#binding.id;
+    return {
+      scope: folder ? 'folder' : 'local',
+      name: this.#binding?.name ?? this.activeName ?? 'this project',
+      protected: await this.#store.hasEncryption(id),
+    };
+  }
+
+  /**
+   * **Set a passphrase** — encrypt the project's data at rest (#144). Works for both an
+   * OPFS project (its own per-project passphrase — the shared-lab case) and a folder
+   * project (its folder passphrase). Also the migration path for an existing plaintext
+   * project: mint the key + meta, re-save encrypted.
+   *
+   * Reached from **File ▸ Encryption settings… ▸ This project** (#181), which only offers
+   * it when it applies — the guard below is now a backstop for a direct call, not the
+   * thing standing between the user and a wrong state.
    */
   async protectProject() {
     const folder = this.#store.flat; // one project per location — folder or remote alike

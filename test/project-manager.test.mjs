@@ -10,7 +10,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { projectActions, removalOffer, storeVerb, TABS } from '../core/project-manager.js';
+import { projectActions, removalOffer, storeVerb, providersFor, TABS } from '../core/project-manager.js';
 
 const row = (over = {}) => ({
   key: 'opfs:p1', name: 'My study', kind: 'opfs', projectId: 'p1',
@@ -90,4 +90,32 @@ test('there is no Save tab', () => {
   const ids = TABS.map((t) => t.id);
   assert.ok(!ids.includes('save'));
   assert.deepEqual(ids, ['recents', 'open', 'store', 'manage']);
+});
+
+// --- which locations belong in which rail (#181) -----------------------------
+
+const PROVIDERS = [
+  { kind: 'opfs', chooseExisting: null, chooseDestination: () => {} },
+  { kind: 'folder', chooseExisting: () => {}, chooseDestination: () => {} },
+  { kind: 'bundle', enumerable: false, openDirect: () => {}, chooseExisting: null, chooseDestination: null },
+];
+
+test('a bundle can be opened from, but is never offered as somewhere to live', () => {
+  // Writing a bundle is a snapshot: it stops receiving changes the moment it lands, so
+  // "store the project here" would be a promise the file cannot keep.
+  assert.ok(providersFor(PROVIDERS, 'open').map((p) => p.kind).includes('bundle'));
+  assert.ok(!providersFor(PROVIDERS, 'store').map((p) => p.kind).includes('bundle'));
+});
+
+test('the store rail lists only real destinations', () => {
+  // Before this rule, a provider with no chooseDestination still drew a button that did
+  // nothing when clicked — a dead control indistinguishable from a live one.
+  assert.deepEqual(providersFor(PROVIDERS, 'store').map((p) => p.kind), ['opfs', 'folder']);
+  for (const p of providersFor(PROVIDERS, 'store')) assert.ok(p.chooseDestination);
+});
+
+test('local storage stays in the open rail even though it browses to nothing', () => {
+  // It has no chooseExisting — its projects are LISTED, not chosen — so the rule cannot
+  // simply require a picker.
+  assert.ok(providersFor(PROVIDERS, 'open').map((p) => p.kind).includes('opfs'));
 });
