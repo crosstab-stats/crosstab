@@ -2940,6 +2940,61 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       earlier. They were concatenated purely because this gap is open — see #131 Layer 3a.
       That is the first real client for this feature, and it already exists.
 
+- [ ] **#179 — cross-dataset variable inputs: let a picker offer variables from EVERY
+      open dataset, not just the active one (user, 2026-09-21).** "Rather than forcing
+      the second dataset to be input as new columns it can instead be kept as a second
+      dataset and the plugin variable picker simply lists the variables from all
+      datasets as options." The user accepts that whether row *i* of dataset A lines up
+      with row *i* of dataset B is their problem, not the app's.
+
+      **Not supported today, and the workaround is exactly the thing being objected
+      to.** `UiService` holds ONE store (`core/ui-service.js` `#store`) and
+      `selectVariables` lists `this.#store.getVariableMeta()` — the DatasetManager
+      delegates every read to the ACTIVE dataset, so a picker physically cannot show
+      another dataset's variables. The only current route is **Data ▸ Join with another
+      dataset…** (`core/dataset-ops.js`), which materialises a third dataset by
+      key-joining the two — new columns, a copy, and a key you may not have.
+
+      Four things have to be decided before this is buildable; none is hard, but all
+      four are load-bearing and cheap to get wrong:
+  - [ ] **A variable reference stops being a bare string.** Every plugin input passes
+        variable NAMES (`{"ivs": ["age", "income"]}`), and two datasets may both have
+        `AGE`. So a cross-dataset pick needs qualifying — `dataset:name`, or an object
+        `{dataset, name}`. That touches far more than the picker: `toInjectInputs` /
+        `buildInputAliases` (`core/webr-manager.js`), the recorded inputs in the
+        analysis log, **the syntax grammar** (`core/crosstab-syntax.js` has no dataset
+        qualifier on a variable reference at all — so a cross-dataset analysis is
+        currently unspeakable in a do-file and would not survive a Syntax Run), and
+        every plugin that echoes a chosen name into a caption. Decide the spelling
+        ONCE, and make the qualifier optional so the thousands of existing
+        single-dataset references keep parsing unchanged.
+  - [ ] **What does "the same row" mean?** The honest answer for "keep it as a second
+        dataset" is *row position* — zip column A[i] with column B[i]. Then say what
+        happens when the lengths differ: truncate to the shorter and SAY SO in the
+        caption, rather than recycling (R's silent recycling rule would fabricate
+        pairings) or padding with NA (which quietly changes N). This is the one place
+        the user's "it's on the user" needs the app to be loud, because a
+        length mismatch is invisible in the output otherwise.
+  - [ ] **Injection has to span datasets.** `getInjectionParquet({variables})` builds
+        the frame from the active dataset. Each dataset is its own DataStore with
+        id-namespaced DuckDB tables, so the data CAN be read side by side in one
+        engine — but the per-dataset boundary the manager maintains needs an explicit
+        seam rather than an accidental one.
+  - [ ] **Which dataset does the RESULT belong to?** `analysis-log.js` records one
+        `datasetId` per run, and uses it for exactly one thing that matters: a
+        destructive re-import of a dataset clears only that dataset's analyses
+        (`clearFor`). An analysis spanning two datasets has two parents, and the
+        conservative reading (clear it if EITHER parent is re-imported) is probably
+        right but should be chosen deliberately. Same question for the syntax replay,
+        which rebuilds transform state per dataset.
+
+      **Scope guard.** For most analyses, mixing datasets is a mistake, not a feature —
+      so this should not silently widen every picker. Either the plugin input opts in,
+      or the picker offers it behind a visible "Show variables from all datasets"
+      toggle that makes the qualified names apparent once switched on. Defaulting every
+      variable list to the union would make `AGE` ambiguous in the one place a user
+      most needs to trust what they clicked.
+
 ## Deferred features (intentionally not built yet)
 
 - [~] **Online collaboration — async (folder-backed) + live (P2P) (#143). BOTH
