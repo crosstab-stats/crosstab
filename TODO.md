@@ -153,7 +153,9 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       memo list. That is memo RETRIEVAL, a feature with its own vocabulary — nearer the
       codebook manager than this — and nothing here forecloses it.
 
-- [~] **#173 — BUILT (2026-08-25), needs a browser pass.** `core/project-manager.js`:
+- [x] **#173 — DONE (built 2026-08-25; browser-verified 2026-09-21).** The user drove
+      the real manager and confirmed **open, delete, move and export** all behave as
+      expected. `core/project-manager.js`:
       one modal, tabs **Recents / Open / Store in / Manage** (+ Export when exporters are
       present), with the backend registry as the left rail.
 
@@ -182,12 +184,14 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       whether a destination is a move or a copy. All three are invisible to inspection: an
       over-generous action list looks exactly like a correct one until someone clicks it.
 
-      **Still to do:** Project settings (the 4 encryption items are still loose on File),
-      folding the two bundle items into an Open/Store rail entry, and the launcher using
-      the same component instead of its own rail.
+      **Three follow-ons were carried in this entry and are now #181**, so closing the
+      manager does not quietly close them: Project settings (the four encryption items
+      are still loose on File), folding the two bundle items into an Open/Store rail
+      entry, and the launcher reusing this component instead of its own rail.
 
-- [ ] **#173 — one project manager, and a File menu that stops multiplying (user,
-      2026-08-25).** The File menu carries **24 items** and grows by two per storage
+- [x] **#173 — DONE (2026-09-21). One project manager, and a File menu that stops
+      multiplying (user, 2026-08-25).** *The original write-up; shipped and verified
+      as recorded above.* The File menu carries **24 items** and grows by two per storage
       backend, because every (verb x location) pair is its own entry. Graph and Drive would
       make it 28. The fix is the same one #172 applied to the engine: **location is a
       dimension inside a verb, not a multiplier on the menu.**
@@ -357,6 +361,34 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       - Should Manage show **space used per project**? It is the information that makes a
         cleanup screen actionable rather than a list of names, and the asset tally already
         exists — but per-project size needs a walk of each project's tree.
+
+- [ ] **#181 — the three follow-ons #173 was carrying (split out 2026-09-21).** #173
+      shipped the project manager and is closed; these rode along inside its entry and
+      would have been closed with it. None blocks anything — they are the difference
+      between "the File menu stopped multiplying" and "the File menu is finished".
+  - [ ] **Project settings — the four encryption items are still loose on File.**
+        `core/project-sync.js` registers them straight onto the menu: `Protect this
+        project…` (order 8), `Change passphrase…` (9), `Remove protection…` (10) and
+        `Encryption settings…` (also 10 — two items claiming one slot, which is its own
+        small bug). That is four entries describing ONE property of the open project,
+        which is exactly the (verb × thing) multiplication #173 removed everywhere
+        else. They belong behind a single **Project settings…** — most naturally a tab
+        on the manager, since it already knows the current project and its location.
+        Note the state-dependence the menu currently fakes: Protect and Remove
+        protection are opposites, and only one is ever applicable.
+  - [ ] **Fold the two bundle items into an Open/Store rail entry.** Import/export of a
+        `.crosstab` bundle is a *location* — the same dimension the manager already
+        models as the left rail — so it should be a backend row there rather than two
+        more File items. Watch [[format-equality-no-lockin]] here: the bundle is one
+        location among several, and must not be presented as the privileged one.
+  - [ ] **The launcher should reuse the manager component instead of its own rail.**
+        `core/launcher.js` builds its own saved-project list, remembered folders and
+        source buttons; `core/project-manager.js` now does the same job properly, with
+        the backend registry and the verbs. Two renderings of one list is the drift
+        `var-toolbar.js` was written to end, one layer up. **Overlaps [[#167]]** ("the
+        launcher should INCLUDE project management") and #161 ("clicking a
+        source/project should just go") — do these together or the launcher gets rebuilt
+        twice.
 
 - [ ] **#172 — the engine should not know where the bytes are (user, 2026-08-25).**
       "If we are claiming a principle of *all are equal*, then the very existence of a
