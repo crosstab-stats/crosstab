@@ -5425,6 +5425,49 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       **picker→selection write-back** so confirming a picker updates the shared
       selection (today the picker's choice returns to the plugin but doesn't
       change the grid/sidebar selection — a real design call, left as-is for now).
+- [ ] **#180 — "Show only selected" filter on the variable lists (user, 2026-09-21).**
+      Real workflow that provokes it: a homework question needs seven variables with
+      unrelated names; the next question needs seven different ones. Clearing the first
+      set means **remembering each name**, finding it in a 900-column grid, and
+      unticking it one at a time. The count that says `7 selected` knows exactly which
+      seven they are and won't show them to you.
+
+      The strip is already the right place and already shared. `makeVarToolbar`
+      (`core/var-toolbar.js`) builds the filter + order controls for all three variable
+      lists, and the Data grid appends its own `N selected` count into the slot after
+      them (`core/data-views.js` `#updateSelCount`, ~468). What's missing is any way to
+      filter BY that fact: visible columns are `sortVars(filterVars(this.metas,
+      this.filter), this.order)` — a name/label text query and nothing else. Variable
+      View (~703/737) uses the same toolbar and the same call, so it has the same gap
+      and should get the same control in the same motion.
+
+      Design notes, in the order they'll bite:
+  - [ ] **The toggle must be visible while it's on.** `var-toolbar.js` already states
+        the rule this feature is most likely to break — "hiding rows for a reason the
+        reader cannot see is the failure mode to avoid". A pressed toolbar toggle
+        (`aria-pressed`) next to the filter box, not a hidden mode.
+  - [ ] **It empties itself, and that's the trap.** Untick the last variable while
+        "show only selected" is on and the list goes blank — including the rows you'd
+        need in order to undo it. Either auto-release the toggle when the selection
+        reaches zero, or render an empty state that says why and offers "Show all".
+        Decide which; do NOT ship the blank list.
+  - [ ] **Rows vanish under the pointer as you untick.** Here that's the *point* — but
+        it still shifts what's under the cursor, the same mis-click hazard
+        "Variable-picker polish (later)" (above) cites as the reason the picker's
+        "Selected" group is a snapshot rather than live. The grid may well want the
+        opposite answer from the picker; what it must not do is make the choice by
+        accident. A "Clear selection" button next to the toggle may remove the need to
+        untick one-by-one at all, which is the user's ACTUAL goal — worth building
+        first and measuring whether the filter is still wanted.
+  - [ ] **Not in the analysis picker.** `ui.selectVariables` builds the same toolbar
+        but already groups a "Selected" snapshot at the top (`core/ui-service.js` ~228)
+        and reports a different count. So this is an opt-in flag on `makeVarToolbar`,
+        not a fourth control everybody inherits.
+  - [ ] **Scope like the filter, not like the order.** Per `var-toolbar.js`'s own
+        split: the order is a persisted app-wide preference, the query is
+        session-scoped and shared between grid and Variable View. "Show only selected"
+        is a query about right now — share it between those two surfaces, don't
+        persist it.
 - [ ] **#175 — User bug reports, server-free (parked 2026-09-20).** A "Report a bug"
       affordance that costs nothing to run and needs no new service/account: the app
       builds a PRE-FILLED report the user reviews and submits themselves — no backend,
