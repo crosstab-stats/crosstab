@@ -38,7 +38,9 @@ export const manifest = {
       order: 10,
       inputs: [
         { name: 'y', kind: 'variables', label: 'Test variable', hint: 'The numeric or ordinal measure whose ranks you compare.', multiple: false, types: ['numeric'], unique: true },
-        { name: 'g', kind: 'variables', label: 'Groups (2)', hint: 'The variable that splits cases into the two groups to compare.', multiple: false, types: ['factor', 'string'], unique: true },
+        { name: 'g', kind: 'variables', label: 'Groups', hint: 'The variable that splits cases into groups; pick the two to compare next.', multiple: false, types: ['factor', 'string'], unique: true },
+        { name: 'g1', kind: 'level', of: 'g', label: 'Group 1', hint: 'The first group to compare. A variable with more than two groups can now be compared two at a time rather than being refused.' },
+        { name: 'g2', kind: 'level', of: 'g', exclude: 'g1', label: 'Group 2', hint: 'The second group, compared against Group 1.' },
       ],
     },
     {
@@ -64,14 +66,26 @@ export const manifest = {
 
 // --- Mann-Whitney U ----------------------------------------------------------
 
-export async function mannWhitney(app, { y: yName, g: gName }) {
+export async function mannWhitney(app, { y: yName, g: gName, g1, g2 }) {
   if (!yName || !gName) return;
+  const g1want = g1 != null && g1 !== '' ? JSON.stringify(String(g1)) : 'NULL';
+  const g2want = g2 != null && g2 !== '' ? JSON.stringify(String(g2)) : 'NULL';
   const meta = await metaMap(app);
   const rCode = `
     y <- as.numeric(y); g <- as.factor(g)
     ok <- is.finite(y) & !is.na(g); y <- y[ok]; g <- droplevels(g[ok])
     lv <- levels(g)
-    if (length(lv) != 2) stop(sprintf("the grouping variable must have exactly 2 groups (found %d)", length(lv)))
+    if (length(lv) < 2) stop("the grouping variable needs at least 2 groups")
+    # Two of k, chosen in the dialog — a three-category variable used to be refused
+    # outright, so the only way to test two of its groups was to recode the data (#187).
+    g1w <- ${g1want}; g2w <- ${g2want}
+    lv1 <- if (!is.null(g1w) && g1w %in% lv) g1w else lv[1]
+    lv2 <- if (!is.null(g2w) && g2w %in% lv) g2w else lv[2]
+    if (lv1 == lv2) stop("pick two different groups to compare")
+    keep <- g == lv1 | g == lv2
+    y <- y[keep]; g <- factor(as.character(g[keep]), levels = c(lv1, lv2)); lv <- levels(g)
+    # Ranks are computed AFTER the subset: a Mann-Whitney on two of five groups must
+    # rank within those two, not inherit ranks from cases that are not in the test.
     rk <- rank(y)
     n1 <- sum(g == lv[1]); n2 <- sum(g == lv[2]); N <- n1 + n2
     R1 <- sum(rk[g == lv[1]]); R2 <- sum(rk[g == lv[2]])

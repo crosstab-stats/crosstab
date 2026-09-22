@@ -52,7 +52,9 @@ export const manifest = {
       order: 20,
       inputs: [
         { name: 'y', kind: 'variables', label: 'Outcome (numeric)', hint: 'The numeric measure whose means you want to compare.', multiple: false, types: ['numeric'], unique: true },
-        { name: 'group', kind: 'variables', label: 'Group (2 levels)', hint: 'The variable that splits cases into the two groups to compare.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'group', kind: 'variables', label: 'Group', hint: 'The variable that splits cases into groups; pick the two to compare next.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'g1', kind: 'level', of: 'group', label: 'Group 1', hint: 'The first group to compare. A variable with more than two groups can now be compared two at a time instead of being refused.' },
+        { name: 'g2', kind: 'level', of: 'group', exclude: 'g1', label: 'Group 2', hint: 'The second group, compared against Group 1.' },
       ],
     },
     {
@@ -140,7 +142,9 @@ export async function regression(app, { dv: dvName, ivs: ivNames }) {
  * @param {object} app
  * @param {{y: string, group: string}} inputs
  */
-export async function bfTTest(app, { y: yName, group: gName }) {
+export async function bfTTest(app, { y: yName, group: gName, g1, g2 }) {
+  const g1want = g1 != null && g1 !== '' ? JSON.stringify(String(g1)) : 'NULL';
+  const g2want = g2 != null && g2 !== '' ? JSON.stringify(String(g2)) : 'NULL';
   if (!yName || !gName) {
     await app.results.appendError('Bayes factor t-test: choose an outcome and a 2-level grouping variable.');
     return;
@@ -152,7 +156,14 @@ export async function bfTTest(app, { y: yName, group: gName }) {
     suppressMessages(library(BayesFactor))
     g <- as.factor(group); ok <- is.finite(y) & !is.na(g)
     y <- y[ok]; g <- droplevels(g[ok]); lv <- levels(g)
-    if (length(lv) != 2) stop("group must have exactly 2 levels (has ", length(lv), ")")
+    if (length(lv) < 2) stop("the grouping variable needs at least 2 groups")
+    g1w <- ${g1want}; g2w <- ${g2want}
+    lv1 <- if (!is.null(g1w) && g1w %in% lv) g1w else lv[1]
+    lv2 <- if (!is.null(g2w) && g2w %in% lv) g2w else lv[2]
+    if (is.na(lv1) || is.na(lv2)) stop("the grouping variable needs at least 2 groups")
+    if (lv1 == lv2) stop("pick two different groups to compare")
+    keep <- g == lv1 | g == lv2
+    y <- y[keep]; g <- factor(as.character(g[keep]), levels = c(lv1, lv2)); lv <- levels(g)
     a <- y[g == lv[1]]; b <- y[g == lv[2]]
     bf <- extractBF(ttestBF(x = a, y = b))$bf
     list(lv = as.character(lv), n1 = length(a), n2 = length(b),

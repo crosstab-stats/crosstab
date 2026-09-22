@@ -57,6 +57,7 @@ export const manifest = {
       order: 20,
       inputs: [
         { name: 'dv', kind: 'variables', label: 'Outcome (binary)', hint: 'The yes/no outcome to model; must have exactly two categories.', multiple: false, unique: true },
+        { name: 'modelled', kind: 'level', of: 'dv', preferLast: true, label: 'Which category is being modelled?', hint: 'Exp(B) is the odds of THIS category. SPSS models the higher code; with 1 = Yes / 2 = No that is No, so pick Yes if you want the odds of Yes.' },
         { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think predict the outcome.', multiple: true, unique: true },
         {
           name: 'cats',
@@ -100,7 +101,7 @@ export const manifest = {
  * @param {object} app
  * @param {{dv: string, ivs: string[], cats?: string[], ref?: string, opts?: string[]}} inputs
  */
-export async function run(app, { dv: dvName, ivs: ivNames, cats, ref, opts }) {
+export async function run(app, { dv: dvName, ivs: ivNames, modelled, cats, ref, opts }) {
   if (!dvName || !ivNames || !ivNames.length) {
     await app.results.appendError('Binary Logistic: choose an outcome and at least one predictor.');
     return;
@@ -120,12 +121,19 @@ export async function run(app, { dv: dvName, ivs: ivNames, cats, ref, opts }) {
   const strays = [...asked].filter((n) => !ivNames.includes(n));
 
   const formula = `.y ~ ${ivNames.map((n) => `\`${n}\``).join(' + ')}`;
+  // Which outcome category is the "1". NULL keeps the old rule — the higher of the two
+  // codes, which is also SPSS's — so a recorded script replays to the same model (#187).
+  const modelWant = modelled != null && modelled !== '' ? rStr(String(modelled)) : 'NULL';
   const needPred = want.has('class') || want.has('plot') || want.has('casewise');
 
   const rCode = `
-    u <- sort(unique(dv[!is.na(dv)]))
+    u <- sort(unique(as.character(dv[!is.na(dv)])))
     if (length(u) != 2) stop("dependent must have exactly 2 categories (found ", length(u), ")")
-    d <- cbind(.y = as.integer(factor(dv, levels = u)) - 1L, ivs)
+    # The modelled category, named rather than assumed. Ordering u so the modelled one
+    # is SECOND keeps the rest of the block (and positive/negative below) unchanged.
+    .want <- ${modelWant}
+    if (!is.null(.want) && .want %in% u) u <- c(u[u != .want][1], .want)
+    d <- cbind(.y = as.integer(factor(as.character(dv), levels = u)) - 1L, ivs)
     # Row names carry the DATASET row number through glm's NA drop, so the casewise
     # listing can name a case the user can go and look at. Injection hands R every
     # row in dataset order, so seq_len() IS that number.

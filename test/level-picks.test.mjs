@@ -27,6 +27,12 @@ import * as multilevel from '../plugins/builtin-multilevel/index.js';
 import * as margins from '../plugins/builtin-margins/index.js';
 import * as survey from '../plugins/builtin-survey/index.js';
 import * as epi from '../plugins/builtin-epi/index.js';
+import * as logistic from '../plugins/builtin-logistic/index.js';
+import * as ordinal from '../plugins/builtin-ordinal/index.js';
+import * as nonparametric from '../plugins/builtin-nonparametric/index.js';
+import * as bayesian from '../plugins/builtin-bayesian/index.js';
+import * as bootstrap from '../plugins/builtin-bootstrap/index.js';
+import * as categorical from '../plugins/builtin-categorical/index.js';
 
 /** Collect the R source a plugin emits, plus whatever it printed. */
 function harness(meta, result) {
@@ -178,4 +184,71 @@ test('margins: the category is named for logistic, absent for linear', async () 
   const lin = harness(META, rList({ term: 'days', est: 0.1, se: 0.01, z: 10, p: 0.001, lo: 0.08, hi: 0.12, n: 100, pos: 'NA' }));
   await margins.margins(lin.app, { dv: 'score', ivs: ['days'], family: 'linear', kind: 'ame' });
   assert.ok(!/modelling/.test(lin.out.tables[0].caption));
+});
+
+// --- Tier 3 & 4 ---------------------------------------------------------------
+
+test('logistic: the modelled outcome category is now choosable', () => {
+  const i = levelInputs(logistic.manifest).find((x) => x.name === 'modelled');
+  assert.equal(i.of, 'dv');
+  assert.equal(i.preferLast, true, 'SPSS models the higher code; the default must match');
+});
+
+test('logistic: the pick reaches R, and its absence keeps the old ordering', async () => {
+  const res = rList({
+    terms: '(Intercept)', termVar: '(Intercept)', termLevel: '', estimate: 1, se: 0.1,
+    z: 10, p: 0.001, expb: 2.7, n: 100, nulldev: 130, resdev: 100,
+    positive: '1', negative: '2', catVar: [], catRef: [], expbLo: 2, expbHi: 3,
+  });
+  const picked = harness(META, res);
+  await logistic.run(picked.app, { dv: 'died', ivs: ['score'], modelled: '1', opts: [] });
+  assert.match(picked.out.rCode, /\.want <- "1"/);
+  assert.match(picked.out.tables[0].caption, /modelling Died/);
+
+  const old = harness(META, res);
+  await logistic.run(old.app, { dv: 'died', ivs: ['score'], opts: [] });
+  assert.match(old.out.rCode, /\.want <- NULL/);
+});
+
+test('ordinal: the multinomial reference category is choosable', () => {
+  const i = levelInputs(ordinal.manifest).find((x) => x.name === 'base');
+  assert.equal(i.of, 'dv');
+  // NOT preferLast: R's own default baseline is the FIRST level, and this picker exists
+  // to make that visible, not to change it.
+  assert.ok(!i.preferLast);
+});
+
+test('Tier 4: a 3-group variable is no longer refused — pick two of k', () => {
+  // Each of these used to stop() unless the variable had exactly two levels, so the
+  // only way to test two of three groups was to go and recode the data.
+  for (const [name, mod] of Object.entries({ nonparametric, bayesian, bootstrap, categorical })) {
+    const lv = levelInputs(mod.manifest);
+    const g1 = lv.find((x) => x.name === 'g1');
+    const g2 = lv.find((x) => x.name === 'g2');
+    assert.ok(g1, `${name} has no Group 1 picker`);
+    assert.ok(g2, `${name} has no Group 2 picker`);
+    assert.equal(g2.exclude, 'g1', `${name}: Group 2 must exclude whatever Group 1 took`);
+    assert.equal(g1.of, g2.of, `${name}: both pickers must read the same variable`);
+  }
+});
+
+test('Tier 4: the hard "exactly 2" stops are gone from the touched paths', async () => {
+  const { app, out } = harness(META, rList({
+    levels: ['A', 'B'], n: [5, 5], meanRank: [4, 7], sumRank: [20, 35],
+    U: 5, W: 20, Z: -1.5, p: 0.13, r: 0.3,
+  }));
+  await nonparametric.mannWhitney(app, { y: 'score', g: 'site', g1: 'A', g2: 'B' });
+  assert.ok(!/must have exactly 2 groups/.test(out.rCode));
+  assert.match(out.rCode, /needs at least 2 groups/);
+  assert.match(out.rCode, /g1w <- "A"/);
+  // The subset must happen BEFORE ranking — a third group's cases must not contribute
+  // ranks. See scripts/validation/mannwhitney-subset-ranks.R for why this matters.
+  assert.ok(out.rCode.indexOf('keep <- g == lv1') < out.rCode.indexOf('rk <- rank(y)'));
+});
+
+test('twoProp: both the group pair AND the counted category are choosable', () => {
+  const lv = levelInputs(categorical.manifest);
+  const succ = lv.find((x) => x.name === 'success');
+  assert.equal(succ.of, 'outcome');
+  assert.equal(succ.preferLast, true, 'it counted the SECOND outcome level before');
 });

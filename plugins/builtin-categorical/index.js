@@ -60,7 +60,10 @@ export const manifest = {
       order: 30,
       inputs: [
         { name: 'outcome', kind: 'variables', label: 'Binary outcome', hint: 'The yes/no outcome whose rate you compare across groups.', types: ['factor', 'string', 'numeric'], unique: true },
-        { name: 'groups', kind: 'variables', label: 'Groups (2)', hint: 'The variable that splits cases into the two groups to compare.', types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'success', kind: 'level', of: 'outcome', preferLast: true, label: 'Which category are you counting?', hint: 'The proportions reported are the share of cases in THIS category.' },
+        { name: 'groups', kind: 'variables', label: 'Groups', hint: 'The variable that splits cases into groups; pick the two to compare next.', types: ['factor', 'string', 'numeric'], unique: true },
+        { name: 'g1', kind: 'level', of: 'groups', label: 'Group 1', hint: 'The first group. The difference is reported as Group 1 minus Group 2.' },
+        { name: 'g2', kind: 'level', of: 'groups', exclude: 'g1', label: 'Group 2', hint: 'The second group, compared against Group 1.' },
       ],
     },
     {
@@ -301,16 +304,29 @@ export async function oneProp(app, { variable, p0, category, weight }) {
   }
 }
 
-export async function twoProp(app, { outcome, groups }) {
-  if (!outcome || !groups) return void app.results.appendError('Pick a binary outcome and a 2-group variable.');
+export async function twoProp(app, { outcome, success, groups, g1, g2 }) {
+  if (!outcome || !groups) return void app.results.appendError('Pick a binary outcome and a grouping variable.');
   const meta = metaMap(await app.data.getVariableMeta());
+  // Three decisions this used to make by itself: which two groups, and which outcome
+  // category counts as a success. NULL keeps the old rule for each (first two groups;
+  // the second outcome level), so recorded scripts replay to the same numbers (#187).
+  const q = (v) => (v != null && v !== '' ? JSON.stringify(String(v)) : 'NULL');
   const rCode = `
     y <- as.factor(outcome); g <- as.factor(groups)
     ok <- !is.na(y) & !is.na(g); y <- droplevels(y[ok]); g <- droplevels(g[ok])
-    if (nlevels(g) != 2 || nlevels(y) != 2) stop("need a 2-category outcome and exactly 2 groups")
-    tab <- table(g, y); succ <- tab[, 2]; nn <- rowSums(tab)
+    if (nlevels(y) != 2) stop("the outcome needs exactly 2 categories")
+    if (nlevels(g) < 2) stop("the grouping variable needs at least 2 groups")
+    glv <- levels(g)
+    lv1 <- if (!is.null(${q(g1)}) && ${q(g1)} %in% glv) ${q(g1)} else glv[1]
+    lv2 <- if (!is.null(${q(g2)}) && ${q(g2)} %in% glv) ${q(g2)} else glv[2]
+    if (lv1 == lv2) stop("pick two different groups to compare")
+    keep <- g == lv1 | g == lv2
+    y <- droplevels(y[keep]); g <- factor(as.character(g[keep]), levels = c(lv1, lv2))
+    ylv <- levels(y)
+    sl <- if (!is.null(${q(success)}) && ${q(success)} %in% ylv) ${q(success)} else ylv[2]
+    tab <- table(g, y); succ <- tab[, sl]; nn <- rowSums(tab)
     pt <- suppressWarnings(prop.test(as.integer(succ), as.integer(nn)))
-    list(groups = rownames(tab), succLevel = colnames(tab)[2], succ = as.integer(succ), n = as.integer(nn),
+    list(groups = rownames(tab), succLevel = sl, succ = as.integer(succ), n = as.integer(nn),
          p1 = unname(pt$estimate[1]), p2 = unname(pt$estimate[2]),
          chisq = unname(pt$statistic), df = unname(pt$parameter), p = pt$p.value,
          ciLo = pt$conf.int[1], ciHi = pt$conf.int[2])`;

@@ -49,6 +49,7 @@ export const manifest = {
       order: 35,
       inputs: [
         { name: 'dv', kind: 'variables', label: 'Unordered outcome', hint: 'The category outcome with no natural order, like party chosen.', multiple: false, unique: true },
+        { name: 'base', kind: 'level', of: 'dv', label: 'Reference category', hint: 'Every other category is compared against this one, so it decides what each relative-risk ratio means. Defaults to the first category.' },
         { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think predict which category cases fall into.', multiple: true, unique: true },
       ],
     },
@@ -139,7 +140,10 @@ export async function ordinal(app, { dv: dvName, ivs: ivNames }) {
  * @param {object} app
  * @param {{dv: string, ivs: string[]}} inputs
  */
-export async function multinomial(app, { dv: dvName, ivs: ivNames }) {
+export async function multinomial(app, { dv: dvName, base, ivs: ivNames }) {
+  // The reference category the other categories are compared against. NULL keeps the
+  // old rule — the first level in sort order — so recorded scripts replay unchanged.
+  const baseWant = base != null && base !== '' ? rStr(String(base)) : 'NULL';
   if (!dvName || !ivNames || !ivNames.length) {
     await app.results.appendError('Multinomial regression: choose an outcome and at least one predictor.');
     return;
@@ -151,7 +155,12 @@ export async function multinomial(app, { dv: dvName, ivs: ivNames }) {
   const formula = `.y ~ ${ivNames.map(term).join(' + ')}`;
   const rCode = `
     suppressMessages(library(nnet))
-    .y <- factor(dv, levels = sort(unique(dv[!is.na(dv)])))
+    .lv <- sort(unique(as.character(dv[!is.na(dv)])))
+    .b <- ${baseWant}
+    # relevel by putting the chosen category first: multinom() treats level 1 as the
+    # baseline, so this is the whole of "choose the reference".
+    if (!is.null(.b) && .b %in% .lv) .lv <- c(.b, .lv[.lv != .b])
+    .y <- factor(as.character(dv), levels = .lv)
     if (nlevels(.y) < 3) stop("multinomial needs at least 3 outcome categories (use binary Logistic for 2)")
     d <- ivs; d[[".y"]] <- .y; d <- d[stats::complete.cases(d), , drop = FALSE]; d <- droplevels(d)
     fit <- multinom(as.formula(${rStr(formula)}), data = d, trace = FALSE)

@@ -2975,8 +2975,29 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       "against epitools::riskratio"; that check must have used 0/1 data, which is exactly
       the case where the bug is invisible. Re-verify with 1/2 coding.
 
-- [ ] **#187 — which group/level gets tested should be the user's choice, everywhere it
-      is currently implicit (owner, 2026-09-22).** The `level` input kind built for the
+- [x] **#187 — DONE (2026-09-22). Which group/level gets tested is now the user's
+      choice everywhere it used to be implicit (owner).**
+
+      **All four tiers resolved across eleven plugins**, to the two rules #186 taught:
+      the label and the recode come from ONE decision, and a default that was never
+      examined is still named in the output. Every pick is optional at the R level —
+      absent sends `NULL` and R keeps the previous rule — so **no recorded script
+      changes its numbers**, only its captions.
+
+      Host: `kind: 'level'` gained **`preferLast`**, seeding the higher code, because
+      that is the convention every one of these recodes already spelled; a picker that
+      seeded the lower one would have inverted these analyses the first time anyone
+      accepted a default.
+
+      Verified on desktop R at each tier, not eyeballed: survival's two readings give
+      genuinely different medians (17.03 vs 11.43, so this was consequential);
+      logistic's default reproduces the old recode byte-for-byte while the picked one
+      flips every coefficient's sign exactly; Mann–Whitney on two of three groups matches
+      `wilcox.test` U and p exactly. `scripts/validation/mannwhitney-subset-ranks.R`
+      records a subtlety worth keeping: the subset must happen BEFORE ranking, and that
+      is only visible when the excluded group falls BETWEEN the two being tested — with
+      it above or below, both orders agree and the bug hides. 20 tests. *No browser pass
+      yet.* Original survey: The `level` input kind built for the
       one-proportion test and Compare Means is the answer to a question **nine other
       plugins are still answering by themselves**. A survey of every plugin that takes a
       `variables` input found twelve implicit picks, in four tiers of severity.
