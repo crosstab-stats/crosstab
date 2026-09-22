@@ -93,7 +93,7 @@ export async function regression(app, { dv: dvName, ivs: ivNames }) {
   await app.webr.installPackages(['MCMCpack']);
   const meta = metaMap(await app.data.getVariableMeta());
 
-  const term = (n) => (meta.get(n)?.type === 'factor' ? `factor(\`${n}\`)` : `\`${n}\``);
+  const term = (n) => (meta.get(n)?.categorical ? `factor(\`${n}\`)` : `\`${n}\``);
   const formula = `.dv ~ ${ivNames.map(term).join(' + ')}`;
 
   const rCode = `

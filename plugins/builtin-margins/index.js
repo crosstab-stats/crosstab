@@ -102,7 +102,7 @@ export async function margins(app, { dv: dvName, ivs: ivNames, yes, family, kind
   const meta = metaMap(await app.data.getVariableMeta());
 
   const factorConv = ivNames
-    .filter((n) => meta.get(n)?.type === 'factor')
+    .filter((n) => meta.get(n)?.categorical)
     .map((n) => factorLine(n, meta.get(n)))
     .join('\n');
   const formula = `.dv ~ ${ivNames.map((n) => '`' + n + '`').join(' + ')}`;

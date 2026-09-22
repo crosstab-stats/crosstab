@@ -3039,6 +3039,90 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       default pick must still be named in the output** — an unnamed default is how all
       of Tier 2 happened.
 
+- [x] **#188 — DONE (2026-09-22). `type` was answering four different questions, and a
+      labelled weight got the wrong answer to all of them (owner).**
+
+      All three stages shipped. `core/var-role.js` holds the predicate;
+      `getVariableMeta()` decorates every record with derived **`categorical`** /
+      **`quantitative`** booleans, so core and all 60 plugins read one answer instead of
+      re-deriving it. 17 modelling sites migrated from `type === 'factor'` to the flag;
+      the 4 remaining `type` reads are SERIALISATION (writing `.RData`, `.sav` and
+      R-syntax), where the declared type is exactly the right question. The importer now
+      believes the file's measurement level, and the grid prints a value label whenever
+      one exists for the code rather than only for factors.
+
+      **The rule is ADDITIVE ONLY, and that was a decision.** `fitsRole` keeps its exact
+      type-match shortcut ahead of everything else, so this can widen what a picker
+      offers and never narrow it. Two tests first written the strict way failed, which
+      is how the decision surfaced: tidier would be to drop a Scale-measured factor from
+      grouping lists, and doing so would mean a numeric column someone marked nominal
+      vanishing from weight pickers. The reported fault was a variable MISSING from a
+      list; a fix that starts removing variables from lists breaks working projects to
+      improve a taxonomy. The untidiness is left, with an assertion so it stays a choice
+      rather than decaying into an oversight.
+
+      20 tests, including the compatibility floor — a legacy factor with no measurement
+      level answers exactly as it always did, so no stored project is reclassified.
+      *No browser pass yet.* Original analysis: Reported as: "with the GSS
+      weights, that variable was not selectable as a weight until I changed it to
+      numeric, even though none of the actual data was altered."
+
+      **Why it happens.** `plugins/builtin-readstat-codec/index.js:230` types a variable
+      `factor` if it carries **any** value label at all. A GSS weight carries one or two
+      (for special codes), so it becomes categorical on that basis — *overruling the
+      SPSS measure the very next lines import*, which says **Scale**. Weight inputs
+      declare `types: ['numeric']`, and `fitsRole` admits only an exact type match for a
+      numeric role, so the variable never appears. Retyping it changes nothing about the
+      data: `storageTypes` (what DuckDB actually holds) is computed from the PHYSICAL
+      SPSS type and was `numeric` the whole time.
+
+      **The real defect: one field, four questions.** `type` is asked, by four
+      different callers, four questions that do not have the same answer:
+        1. **Storage** — DOUBLE or VARCHAR? (`normType`, and `storageTypes` on the
+           codec path)
+        2. **Role** — may this fill a categorical slot? (`fitsRole`,
+           `plugin-actions.js:811`)
+        3. **Modelling** — should the R term be wrapped `factor(x)`? (**22 plugin
+           sites**, all spelling `meta.get(n)?.type === 'factor'`)
+        4. **Display** — render through `valueLabels`? (`data-views.js:416, 496`)
+      `factor` answers *yes* to all four at once. A labelled weight wants no, no, no,
+      yes; a numeric-coded nominal variable wants yes to 2 and 3 and currently gets no.
+
+      **The model — SPSS's, which CrossTab already half-implements.** `type` is
+      storage, `measurementLevel` is role, `valueLabels` is decoration valid on any
+      type. This is NOT a new distinction: `beginStreamIngest(table, storageTypes, …)`
+      already takes physical types *separately* from `variables[].type`, so `type` is
+      already semantic on the import path — the typedef at `data-store.js:85` claiming
+      "a factor is stored as VARCHAR" is simply stale.
+  - [ ] **Stage 1 — one predicate, computed once.** `core/var-role.js` exports
+        `isCategorical(meta)`, and `getVariableMeta()` decorates every returned record
+        with a derived **`categorical`** boolean, so core and plugins read the same
+        answer without a new API. The rule, in order:
+        **measure wins over type** — `scale` → not categorical; `nominal`/`ordinal` →
+        categorical; otherwise fall back to `type === 'factor' || 'string'`. That last
+        clause is what keeps every existing project behaving EXACTLY as before: a
+        legacy factor with no measure is still categorical. Route questions 2 and 4
+        through it; leave 1 alone.
+  - [ ] **Stage 2 — believe the file.** At import, a variable SPSS marks `Scale` is
+        typed `numeric` even when it carries value labels. Blast radius is deliberately
+        small: nominal/ordinal keep `factor`, so the 22 modelling sites are unaffected
+        and the `.sav` round-trip already survives (the exporter's
+        `} else if (valueLabels)` branch writes labels for a numeric variable).
+  - [ ] **Stage 3 — the 22 modelling sites read `categorical`, not `type`.** Needed for
+        correctness, not tidiness: once a numeric variable can be nominal (a CSV column
+        the user marks nominal in Variable View), a site still testing `type ===
+        'factor'` fits it as a straight-line SLOPE — the exact silent-wrong-model trap
+        #178 closed for `LANGUAGE`.
+  - [ ] **Display follows the labels, not the type.** Show a value label whenever one
+        exists for the code, whatever the type — so a weight with a labelled missing
+        code reads properly AND is offerable as a weight. Fixes the split where
+        `data-views.js:496` gates label rendering on `factor`.
+  - [ ] **Not in scope (a later stage-4 if ever wanted):** fully retiring `factor` as a
+        `type`. Formats with no measure metadata (CSV, Parquet) would still need a
+        heuristic or a user decision, `crosstab-syntax.js` accepts `factor` in recorded
+        scripts, and ~60 manifests declare `types: ['factor', 'string']`. The predicate
+        makes those harmless; removing the word does not pay for itself.
+
 ## Hardening before any public/shared deploy
 
 > **#89 hardening pass — DONE (see [docs/SECURITY.md](docs/SECURITY.md)).** Full

@@ -139,7 +139,7 @@ export async function moderation(app, { y: yName, x: xName, w: wName, covs: covN
   const covs = covNames || [];
   const covTok = covs.map((_, i) => `C${i + 1}`);
   const covMk = covs.map((n, i) => {
-    const fac = meta.get(n)?.type === 'factor';
+    const fac = meta.get(n)?.categorical;
     return `d$${covTok[i]} <- ${fac ? `factor(covs[[${rStr(n)}]])` : `as.numeric(covs[[${rStr(n)}]])`}`;
   }).join('\n');
   const covPart = covTok.length ? ' + ' + covTok.join(' + ') : '';

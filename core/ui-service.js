@@ -34,6 +34,7 @@
 
 import { loadVarOrder, saveVarOrder, sortVars } from './var-order.js';
 import { makeVarToolbar, filterVars } from './var-toolbar.js';
+import { isCategorical, isQuantitative } from './var-role.js';
 
 export class UiService {
   /** @type {import('./data-store.js').DataStore} */
@@ -553,10 +554,26 @@ export class UiService {
  * means arithmetic, and widening that would be a different (and wrong) claim.
  */
 function fitsRole(m, types) {
+  // ADDITIVE ONLY. An exact type match wins before anything below is consulted, so this
+  // function can only ever widen what a picker offers — never narrow it. That is a
+  // deliberate limit on #188's blast radius: the reported fault was a variable being
+  // MISSING from a list, and a fix that also started removing variables from lists
+  // (a numeric column someone marked nominal disappearing from weight pickers) would
+  // break working projects to tidy up a taxonomy. Untidiness that costs nothing —
+  // a Scale-measured factor still appearing among grouping variables — is left alone.
   if (types.includes(m.type)) return true;
   const wantsCategorical = types.includes('factor') || types.includes('string');
-  if (!wantsCategorical || types.includes('numeric') || m.type !== 'numeric') return false;
-  return m.measurementLevel === 'nominal' || m.measurementLevel === 'ordinal';
+  const wantsNumeric = types.includes('numeric');
+  // Categorical role: a numeric-CODED category qualifies (#174i).
+  if (wantsCategorical && !wantsNumeric && isCategorical(m)) return true;
+  // Numeric role: the mirror image, and the half that was missing (#188). A variable
+  // the FILE calls Scale is a quantity even if the importer typed it `factor` because
+  // it happened to carry a value label — which is how a GSS weight came to be
+  // unselectable as a weight while its data sat in DuckDB as a plain number. The test
+  // is `isQuantitative`, not `!isCategorical`, so a nominal code is still refused:
+  // widening a numeric role to *everything* would offer race codes as a weight.
+  if (wantsNumeric && m.type !== 'string' && isQuantitative(m)) return true;
+  return false;
 }
 
 /** HTML-escape text content. */

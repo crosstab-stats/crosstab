@@ -211,7 +211,7 @@ function label(meta, name) {
   return meta.get(name)?.label || name;
 }
 function term(meta, name) {
-  return meta.get(name)?.type === 'factor' ? `factor(\`${name}\`)` : `\`${name}\``;
+  return meta.get(name)?.categorical ? `factor(\`${name}\`)` : `\`${name}\``;
 }
 function prettyTerm(t) {
   const m = /^factor\(`?(.+?)`?\)(.*)$/.exec(t);

@@ -47,6 +47,7 @@ import { CoreEvents } from './event-bus.js';
 import { quoteIdent } from './duckdb-manager.js';
 import { newOpId } from './merge.js';
 import { foldDataOps, flattenStep, barrierDroppedIds } from './data-fold.js';
+import { isCategorical, isQuantitative } from './var-role.js';
 import { ProjectLog } from './project-log.js';
 
 /** Column auto-added when stacking files, tagging each row with its origin so a
@@ -2009,7 +2010,15 @@ export class DataStore {
     return names
       .map((n) => this.#byName.get(n))
       .filter(Boolean)
-      .map((meta) => structuredClone(meta));
+      // `categorical` / `quantitative` are DERIVED, computed here so core and plugins
+      // read one answer instead of each re-deriving it from `type` (#188). They are not
+      // stored and not persisted: they are a view of `type` + `measurementLevel`, and
+      // computing them at the door is what stops 22 copies of the rule drifting apart.
+      .map((meta) => ({
+        ...structuredClone(meta),
+        categorical: isCategorical(meta),
+        quantitative: isQuantitative(meta),
+      }));
   }
 
   /** @returns {string[]} Names of currently selected variables. */

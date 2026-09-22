@@ -68,7 +68,7 @@ async function fitCount(app, { dv: dvName, ivs: ivNames }, nb) {
   }
   if (nb) await app.webr.installPackages(['MASS']);
   const meta = metaMap(await app.data.getVariableMeta());
-  const term = (n) => (meta.get(n)?.type === 'factor' ? `factor(\`${n}\`)` : `\`${n}\``);
+  const term = (n) => (meta.get(n)?.categorical ? `factor(\`${n}\`)` : `\`${n}\``);
   const formula = `.dv ~ ${ivNames.map(term).join(' + ')}`;
   const fitCall = nb
     ? `MASS::glm.nb(as.formula(${rStr(formula)}), data = d)`

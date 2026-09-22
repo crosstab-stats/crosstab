@@ -53,7 +53,7 @@ export async function run(app, { y: yName, ivs: ivNames, m, model }) {
   const logistic = model === 'logistic';
   const tok = ivNames.map((_, i) => `V${i + 1}`);
   const mk = ivNames.map((n, i) => {
-    const fac = meta.get(n)?.type === 'factor';
+    const fac = meta.get(n)?.categorical;
     return `d$${tok[i]} <- ${fac ? `as.factor(ivs[[${rStr(n)}]])` : `as.numeric(ivs[[${rStr(n)}]])`}`;
   }).join('\n');
   const rhs = tok.join(' + ');

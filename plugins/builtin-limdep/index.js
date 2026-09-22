@@ -67,7 +67,7 @@ export const manifest = {
   ],
 };
 
-const term = (n, meta) => (meta.get(n)?.type === 'factor' ? `factor(\`${n}\`)` : `\`${n}\``);
+const term = (n, meta) => (meta.get(n)?.categorical ? `factor(\`${n}\`)` : `\`${n}\``);
 
 // --- Quantile regression -----------------------------------------------------
 

@@ -70,7 +70,7 @@ export async function ordinal(app, { dv: dvName, ivs: ivNames }) {
   await app.webr.installPackages(['MASS']);
   const meta = metaMap(await app.data.getVariableMeta());
   const dvMeta = meta.get(dvName);
-  const term = (n) => (meta.get(n)?.type === 'factor' ? `factor(\`${n}\`)` : `\`${n}\``);
+  const term = (n) => (meta.get(n)?.categorical ? `factor(\`${n}\`)` : `\`${n}\``);
   const formula = `.y ~ ${ivNames.map(term).join(' + ')}`;
   const rCode = `
     suppressMessages(library(MASS))
@@ -151,7 +151,7 @@ export async function multinomial(app, { dv: dvName, base, ivs: ivNames }) {
   await app.webr.installPackages(['nnet']);
   const meta = metaMap(await app.data.getVariableMeta());
   const dvMeta = meta.get(dvName);
-  const term = (n) => (meta.get(n)?.type === 'factor' ? `factor(\`${n}\`)` : `\`${n}\``);
+  const term = (n) => (meta.get(n)?.categorical ? `factor(\`${n}\`)` : `\`${n}\``);
   const formula = `.y ~ ${ivNames.map(term).join(' + ')}`;
   const rCode = `
     suppressMessages(library(nnet))

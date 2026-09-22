@@ -63,7 +63,7 @@ export async function metaAnalysis(app, { yi: yiName, prec: precName, precType, 
   const modTok = mods.map((_, i) => `M${i + 1}`);
   const hasLabel = !!labelName;
   const modMk = mods.map((n, i) => {
-    const fac = meta.get(n)?.type === 'factor';
+    const fac = meta.get(n)?.categorical;
     return `d$${modTok[i]} <- ${fac ? `factor(mods[[${rStr(n)}]])` : `as.numeric(mods[[${rStr(n)}]])`}`;
   }).join('\n');
   const viExpr = precType === 'var' ? 'as.numeric(prec)' : 'as.numeric(prec)^2';

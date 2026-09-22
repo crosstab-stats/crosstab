@@ -51,7 +51,7 @@ export async function run(app, { dv: dvName, ivs: ivNames }) {
   const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
 
   const term = (name) =>
-    meta.get(name)?.type === 'factor' ? `factor(\`${name}\`)` : `\`${name}\``;
+    meta.get(name)?.categorical ? `factor(\`${name}\`)` : `\`${name}\``;
   const formula = `.dv ~ ${ivNames.map(term).join(' + ')}`;
 
   const rCode = `

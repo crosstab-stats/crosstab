@@ -18,6 +18,7 @@ import { stataToScript } from './stata-import.js';
 import { spssToScript } from './spss-import.js';
 import { loadVarOrder, saveVarOrder, sortVars } from './var-order.js';
 import { makeVarToolbar, filterVars, getWorkspaceFilter, setWorkspaceFilter } from './var-toolbar.js';
+import { labelForValue } from './var-role.js';
 
 /** Syntax editor metrics: the textarea uses a FIXED line-height so the step gutter
  * can place each marker at `PAD + lineIndex * LINE_H` (and the textarea is no-wrap,
@@ -493,8 +494,11 @@ export class DataView {
       let td;
       if (v === null || v === undefined) {
         td = el('td', '·', 'na cell');
-      } else if (m.type === 'factor' && m.valueLabels && m.valueLabels[v] !== undefined) {
-        td = el('td', String(m.valueLabels[v]), 'cell');
+      } else if (labelForValue(m, v) !== null) {
+        // A value label is a fact about a CODE, not about the variable's storage, so
+        // this no longer gates on `factor` (#188). A weight whose missing codes are
+        // labelled now reads properly and stays selectable as a weight.
+        td = el('td', labelForValue(m, v), 'cell');
         td.title = String(v); // raw code on hover
       } else {
         td = el('td', String(v), m.type === 'numeric' ? 'num cell' : 'cell');

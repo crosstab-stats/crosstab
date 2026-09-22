@@ -68,7 +68,7 @@ export async function linear(app, { y: yName, fixed: fixedNames, group: groupNam
   }
   await app.webr.installPackages(['lme4', 'lmerTest']);
   const meta = metaMap(await app.data.getVariableMeta());
-  const term = (n) => (meta.get(n)?.type === 'factor' ? `factor(\`${n}\`)` : `\`${n}\``);
+  const term = (n) => (meta.get(n)?.categorical ? `factor(\`${n}\`)` : `\`${n}\``);
   const ranPart = slopeName ? `(1 + \`${slopeName}\` | .g)` : `(1 | .g)`;
   const formula = `.y ~ ${fixedNames.map(term).join(' + ')} + ${ranPart}`;
   const rCode = `
@@ -130,7 +130,7 @@ export async function logistic(app, { y: yName, yes, fixed: fixedNames, group: g
   }
   await app.webr.installPackages(['lme4']);
   const meta = metaMap(await app.data.getVariableMeta());
-  const term = (n) => (meta.get(n)?.type === 'factor' ? `factor(\`${n}\`)` : `\`${n}\``);
+  const term = (n) => (meta.get(n)?.categorical ? `factor(\`${n}\`)` : `\`${n}\``);
   const formula = `.y ~ ${fixedNames.map(term).join(' + ')} + (1 | .g)`;
   const rCode = `
     suppressMessages(library(lme4))

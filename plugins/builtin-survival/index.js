@@ -153,7 +153,7 @@ export async function cox(app, { time: timeName, status: statusName, event, pred
   }
   await app.webr.installPackages(['survival']);
   const meta = metaMap(await app.data.getVariableMeta());
-  const term = (n) => (meta.get(n)?.type === 'factor' ? `factor(\`${n}\`)` : `\`${n}\``);
+  const term = (n) => (meta.get(n)?.categorical ? `factor(\`${n}\`)` : `\`${n}\``);
   const formula = `Surv(.time, .st) ~ ${predNames.map(term).join(' + ')}`;
   const rCode = `
     suppressMessages(library(survival))

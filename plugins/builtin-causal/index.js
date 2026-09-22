@@ -88,7 +88,7 @@ export async function did(app, { y: yName, treat: treatName, treated, post: post
   await app.webr.installPackages(['sandwich', 'lmtest']);
   const meta = metaMap(await app.data.getVariableMeta());
   const covs = covNames || [];
-  const term = (n) => (meta.get(n)?.type === 'factor' ? `factor(\`${n}\`)` : `\`${n}\``);
+  const term = (n) => (meta.get(n)?.categorical ? `factor(\`${n}\`)` : `\`${n}\``);
   const covPart = covs.length ? ' + ' + covs.map(term).join(' + ') : '';
   const rCode = `
     suppressMessages({library(sandwich); library(lmtest)})
@@ -185,7 +185,7 @@ export async function matching(app, { y: yName, treat: treatName, treated, covs:
   await app.webr.installPackages(['MatchIt', 'sandwich', 'lmtest']);
   const meta = metaMap(await app.data.getVariableMeta());
   const dist = distance === 'mahalanobis' ? 'mahalanobis' : 'glm';
-  const term = (n) => (meta.get(n)?.type === 'factor' ? `factor(\`${n}\`)` : `\`${n}\``);
+  const term = (n) => (meta.get(n)?.categorical ? `factor(\`${n}\`)` : `\`${n}\``);
   const formula = `.t ~ ${covNames.map(term).join(' + ')}`;
   const rCode = `
     suppressMessages({library(MatchIt); library(sandwich); library(lmtest)})

@@ -227,15 +227,29 @@ function finalizeVariables({ rawVars, labelSets, missing }) {
     const labels = labelSets[v.labelSet] ?? labelSets[sasFormatKey(v.format)];
     const out = { name: v.name };
     if (v.label) out.label = v.label;
-    if (labels && Object.keys(labels).length) { out.type = 'factor'; out.valueLabels = labels; }
-    else { out.type = isString ? 'string' : 'numeric'; }
+    const ml = MEASURE[v.measure];
+    const hasLabels = labels && Object.keys(labels).length;
+    // Value labels are a fact about CODES, not a declaration that the variable is
+    // categorical (#188). This used to read "has labels → factor", which overruled the
+    // measurement level imported on the very next line: a GSS weight carries a label or
+    // two for special codes, so it arrived as a factor and could not then be picked as
+    // a weight — while its data sat in DuckDB as a plain number the whole time.
+    //
+    // When the FILE says Scale, believe the file. Nominal/ordinal keep `factor` so that
+    // nothing downstream shifts; the labels ride along either way, and the exporter
+    // already writes value labels for a numeric variable, so the round-trip holds.
+    if (hasLabels) {
+      out.valueLabels = labels;
+      out.type = isString ? 'string' : (ml === 'scale' ? 'numeric' : 'factor');
+    } else {
+      out.type = isString ? 'string' : 'numeric';
+    }
     const miss = missing[v.index];
     if (miss && miss.length) {
       const { values, ranges } = splitMissing(miss);
       if (values.length) out.missingValues = values;
       if (ranges.length) out.missingRanges = ranges;
     }
-    const ml = MEASURE[v.measure];
     if (ml) out.measurementLevel = ml;
     variables.push(out);
   }

@@ -45,7 +45,7 @@ export async function run(app, { y: yName, ivs: ivNames, cluster: clName }) {
   }
   await app.webr.installPackages(['sandwich', 'lmtest']);
   const meta = metaMap(await app.data.getVariableMeta());
-  const term = (n) => (meta.get(n)?.type === 'factor' ? `factor(\`${n}\`)` : `\`${n}\``);
+  const term = (n) => (meta.get(n)?.categorical ? `factor(\`${n}\`)` : `\`${n}\``);
   const formula = `.y ~ ${ivNames.map(term).join(' + ')}`;
   const rCode = `
     suppressMessages({library(sandwich); library(lmtest)})

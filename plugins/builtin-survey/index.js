@@ -194,7 +194,7 @@ export async function regression(app, { dv, ivs, yes, family, weight, strata, cl
   }
   const meta = metaMap(await app.data.getVariableMeta());
   const logistic = family === 'logistic';
-  const term = (n) => (meta.get(n)?.type === 'factor' ? `factor(\`${n}\`)` : `\`${n}\``);
+  const term = (n) => (meta.get(n)?.categorical ? `factor(\`${n}\`)` : `\`${n}\``);
   const formula = `.dv ~ ${ivs.map(term).join(' + ')}`;
   const rCode = `
     suppressMessages(library(survey))
