@@ -2935,6 +2935,76 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 - [x] **Provide the PWA icons — DONE.** `vendor/icon-192.png`, `vendor/icon-512.png`
       (+ `icon-180.png` Apple touch) exist and are referenced by `manifest.json`.
 
+- [ ] **#186 — BUG: `builtin-epi` labels its 2×2 backwards for any variable not coded
+      0/1 (found 2026-09-22 during the #187 review).** Not a missing feature — **wrong,
+      confidently-labelled output**. Fix this before, or alongside, #187.
+
+      `BIN01_R` maps the HIGHER of the two observed values to 1
+      (`as.integer(v == u[2])`), but the printed table names its rows and columns by
+      looking up the value labels of the literal codes `'1'` and `'0'`
+      (`lv(expName, '1')` … `(exposed)`, `lv(outName, '0')` … `(non-case)`). Those agree
+      only when the variable really is coded 0/1. For the coding social-science data
+      actually arrives in — **1 = Yes, 2 = No**, the GSS/SPSS convention — `bin01` makes
+      *No* the exposed group while the table asserts the row is *Yes*, and every measure
+      below it (RR, OR, RD, NNT, attributable fraction) describes the opposite exposure
+      from the one named.
+
+      Demonstrated on 10 rows (`/tmp` scratch, reproducible from the recoder verbatim):
+      printed **RR = 0.222 labelled as the risk for "Yes"**, when the risk ratio for Yes
+      is **4.500**. Protective instead of harmful, with the label insisting on the wrong
+      direction — the worst failure mode available, since nothing on screen looks odd.
+
+      Fix: pick the level explicitly (`kind: 'level'`, as #187 proposes) and derive BOTH
+      the recode and the labels from that one choice, so they cannot disagree. The
+      interim fix, if the picker is deferred, is to label from the level `bin01` actually
+      chose (`u[2]`) rather than from the literal `'1'` — that makes the output honest
+      without changing any number. Note the plugin's own header claims verification
+      "against epitools::riskratio"; that check must have used 0/1 data, which is exactly
+      the case where the bug is invisible. Re-verify with 1/2 coding.
+
+- [ ] **#187 — which group/level gets tested should be the user's choice, everywhere it
+      is currently implicit (owner, 2026-09-22).** The `level` input kind built for the
+      one-proportion test and Compare Means is the answer to a question **nine other
+      plugins are still answering by themselves**. A survey of every plugin that takes a
+      `variables` input found twelve implicit picks, in four tiers of severity.
+
+      The pattern is always the same: a binary variable is recoded with
+      `as.integer(v == u[2])` — the higher of the two observed values becomes 1 — or a
+      grouping variable is rejected unless it has exactly two levels. Both are decisions
+      the data happens to make, and both flip on nothing more than whether the codebook
+      used 0/1 or 1/2.
+  - [ ] **Tier 1 — wrong output.** `builtin-epi`: see **#186**.
+  - [ ] **Tier 2 — the direction is chosen silently and never named.** Five plugins pick
+        a level and print nothing to say which: **`builtin-survival`** (the event
+        indicator — with 1 = dead / 2 = alive, the curves describe survival from being
+        *alive*), **`builtin-causal`** (`treat` and `post` — the sign of the treatment
+        effect), **`builtin-multilevel`** (binary outcome), **`builtin-margins`** (binary
+        outcome), **`builtin-survey`** (logistic outcome, `max(dv)`; its note says "the
+        higher category is modelled as 1" generically but never names the category).
+        These are the urgent half of #187: a reader cannot even tell they were guessed
+        at. **The minimum fix is to NAME the chosen level in the caption; the right fix
+        is to let the user pick it.**
+  - [ ] **Tier 3 — named, but not choosable.** `builtin-logistic` prints "modelling
+        {category}" and `builtin-ordinal` prints "reference = {level}". Both are honest
+        today, so these are a genuine enhancement rather than a repair — and #178 has
+        just shown the demand: a class is *assigned* changing the reference category.
+  - [ ] **Tier 4 — "exactly 2 groups" guards that should be a 2-of-k picker.** Four
+        plugins refuse a variable with three or more groups outright:
+        `builtin-nonparametric` (Mann–Whitney), `builtin-bayesian`, `builtin-bootstrap`,
+        and `builtin-categorical` (two-group proportion, McNemar). This is precisely what
+        Compare Means used to do, and it is [[guard-means-missing-state]] again — the
+        guard exists only to reject a state the picker makes representable. A user with a
+        three-category variable currently has to recode the data to run a test on two of
+        its groups.
+
+      Do it as one pass, not nine. The `level` input already handles the hard parts
+      (enumerated at gather time so the pick is recorded and replays without
+      re-prompting, labelled with value labels and counts), so each plugin is an input
+      declaration plus deriving the recode from it. Two rules to hold to, both learned
+      from #186: **the label and the recode must come from the same choice**, and **a
+      default pick must still be named in the output** — an unnamed default is how all
+      of Tier 2 happened.
+
 ## Hardening before any public/shared deploy
 
 > **#89 hardening pass — DONE (see [docs/SECURITY.md](docs/SECURITY.md)).** Full
