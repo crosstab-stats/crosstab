@@ -41,8 +41,10 @@ export const manifest = {
       order: 70,
       inputs: [
         { name: 'y', kind: 'variables', label: 'Outcome', hint: 'The numeric result you expect the treatment to change.', multiple: false, types: ['numeric'], unique: true },
-        { name: 'treat', kind: 'variables', label: 'Treatment group (1 = treated)', hint: 'Marks who got the treatment versus the comparison group.', multiple: false, unique: true },
-        { name: 'post', kind: 'variables', label: 'Post period (1 = after)', hint: 'Marks observations measured after treatment began.', multiple: false, unique: true },
+        { name: 'treat', kind: 'variables', label: 'Treatment group', hint: 'Marks who got the treatment versus the comparison group.', multiple: false, unique: true },
+        { name: 'treated', kind: 'level', of: 'treat', preferLast: true, label: 'Which category is TREATED?', hint: 'The other category is the comparison group. Get this backwards and the estimated effect changes sign.' },
+        { name: 'post', kind: 'variables', label: 'Post period', hint: 'Marks observations measured after treatment began.', multiple: false, unique: true },
+        { name: 'after', kind: 'level', of: 'post', preferLast: true, label: 'Which category is AFTER treatment began?', hint: 'The other category is the before period.' },
         { name: 'covs', kind: 'variables', label: 'Covariates (optional)', hint: 'Extra controls to adjust for, if you have any.', multiple: true, optional: true, unique: true },
       ],
     },
@@ -63,7 +65,8 @@ export const manifest = {
       order: 90,
       inputs: [
         { name: 'y', kind: 'variables', label: 'Outcome', hint: 'The numeric result compared between treated and matched controls.', multiple: false, types: ['numeric'], unique: true },
-        { name: 'treat', kind: 'variables', label: 'Treatment (1 = treated)', hint: 'Marks who got the treatment versus the comparison group.', multiple: false, unique: true },
+        { name: 'treat', kind: 'variables', label: 'Treatment', hint: 'Marks who got the treatment versus the comparison group.', multiple: false, unique: true },
+        { name: 'treated', kind: 'level', of: 'treat', preferLast: true, label: 'Which category is TREATED?', hint: 'The other category is the pool matched controls are drawn from.' },
         { name: 'covs', kind: 'variables', label: 'Covariates to balance on', hint: 'Background traits to make the two groups comparable on.', multiple: true, unique: true },
         { name: 'distance', kind: 'choice', label: 'Distance', hint: 'How closeness between cases is measured when matching.', default: 'glm', options: [
           { value: 'glm', label: 'Propensity score (logistic)' },
@@ -76,7 +79,8 @@ export const manifest = {
 
 // --- Difference-in-differences ----------------------------------------------
 
-export async function did(app, { y: yName, treat: treatName, post: postName, covs: covNames }) {
+export async function did(app, { y: yName, treat: treatName, treated, post: postName, after, covs: covNames }) {
+  const want = (v) => (v != null && v !== '' ? JSON.stringify(String(v)) : 'NULL');
   if (!yName || !treatName || !postName) {
     await app.results.appendError('DiD: choose an outcome, a treatment-group indicator, and a post-period indicator.');
     return;
@@ -88,7 +92,8 @@ export async function did(app, { y: yName, treat: treatName, post: postName, cov
   const covPart = covs.length ? ' + ' + covs.map(term).join(' + ') : '';
   const rCode = `
     suppressMessages({library(sandwich); library(lmtest)})
-    .t <- bin01(treat); .p <- bin01(post)
+    .t <- bin01(treat, ${want(treated)}); .p <- bin01(post, ${want(after)})
+    .tpos <- attr(.t, "pos"); .ppos <- attr(.p, "pos")
     d <- data.frame(.y = as.numeric(y), .t = .t, .p = .p)
     ${covs.length ? 'd <- cbind(d, covs)' : ''}
     d <- d[stats::complete.cases(d), , drop = FALSE]
@@ -96,7 +101,7 @@ export async function did(app, { y: yName, treat: treatName, post: postName, cov
     ctab <- coeftest(fit, vcov = vcovHC(fit, type = "HC1"))
     rn <- rownames(ctab)
     list(terms = rn, est = ctab[, 1], se = ctab[, 2], t = ctab[, 3], p = ctab[, 4],
-         n = nrow(d), iIdx = which(rn == ".t:.p"))`;
+         n = nrow(d), iIdx = which(rn == ".t:.p"), tpos = .tpos, ppos = .ppos)`;
   const r = flat(await runR(app, rCode, [bin01R(), ].join('\n')));
   const terms = r.strs('terms'), est = r.nums('est'), se = r.nums('se'), tv = r.nums('t'), p = r.nums('p');
   const iIdx = r.num('iIdx') - 1;
@@ -107,7 +112,11 @@ export async function did(app, { y: yName, treat: treatName, post: postName, cov
       rows: terms.map((t, i) => [didLabel(t, treatName, postName, meta), f(est[i], 3), f(se[i], 3), f(tv[i], 2), fmtP(p[i]), ci(est[i] - 1.96 * se[i], est[i] + 1.96 * se[i])]),
       rowHeaders: true,
     },
-    { caption: `Difference-in-Differences — outcome: ${labelOf(meta.get(yName), yName)} (N = ${r.num('n')})` },
+    {
+      caption: `Difference-in-Differences — outcome: ${labelOf(meta.get(yName), yName)}, `
+        + `treated = ${lvl(meta.get(treatName), r.str1('tpos'))}, `
+        + `after = ${lvl(meta.get(postName), r.str1('ppos'))} (N = ${r.num('n')})`,
+    },
   );
   if (Number.isFinite(iIdx) && iIdx >= 0) {
     await app.results.appendText(
@@ -167,7 +176,8 @@ export async function rdd(app, { y: yName, run: runName, cutoff, bw }) {
 
 // --- Matching (MatchIt) ------------------------------------------------------
 
-export async function matching(app, { y: yName, treat: treatName, covs: covNames, distance }) {
+export async function matching(app, { y: yName, treat: treatName, treated, covs: covNames, distance }) {
+  const want = (v) => (v != null && v !== '' ? JSON.stringify(String(v)) : 'NULL');
   if (!yName || !treatName || !covNames || !covNames.length) {
     await app.results.appendError('Matching: choose an outcome, a treatment indicator, and at least one covariate.');
     return;
@@ -179,7 +189,8 @@ export async function matching(app, { y: yName, treat: treatName, covs: covNames
   const formula = `.t ~ ${covNames.map(term).join(' + ')}`;
   const rCode = `
     suppressMessages({library(MatchIt); library(sandwich); library(lmtest)})
-    .t <- bin01(treat)
+    .t <- bin01(treat, ${want(treated)})
+    .tpos <- attr(.t, "pos")
     d <- data.frame(.y = as.numeric(y), .t = .t)
     d <- cbind(d, covs)
     d <- d[stats::complete.cases(d), , drop = FALSE]
@@ -191,7 +202,7 @@ export async function matching(app, { y: yName, treat: treatName, covs: covNames
     ball <- s$sum.all; bmat <- s$sum.matched
     smdCol <- "Std. Mean Diff."
     list(att = ctab[".t", 1], se = ctab[".t", 2], t = ctab[".t", 3], p = ctab[".t", 4],
-         nTreatAll = sum(d$.t == 1), nCtrlAll = sum(d$.t == 0), nMatched = nrow(md),
+         nTreatAll = sum(d$.t == 1), nCtrlAll = sum(d$.t == 0), nMatched = nrow(md), tpos = .tpos,
          covNames = rownames(ball), smdBefore = ball[, smdCol], smdAfter = bmat[, smdCol])`;
   const r = flat(await runR(app, rCode, bin01R()));
 
@@ -201,7 +212,11 @@ export async function matching(app, { y: yName, treat: treatName, covs: covNames
       rows: [['ATT (treated − matched control)', f(r.num('att'), 3), f(r.num('se'), 3), f(r.num('t'), 2), fmtP(r.num('p')), ci(r.num('att') - 1.96 * r.num('se'), r.num('att') + 1.96 * r.num('se'))]],
       rowHeaders: true,
     },
-    { caption: `Matching — ATT on ${labelOf(meta.get(yName), yName)} (${r.num('nTreatAll')} treated, ${r.num('nMatched')} in matched sample)` },
+    {
+      caption: `Matching — ATT on ${labelOf(meta.get(yName), yName)}, `
+        + `treated = ${lvl(meta.get(treatName), r.str1('tpos'))} `
+        + `(${r.num('nTreatAll')} treated, ${r.num('nMatched')} in matched sample)`,
+    },
   );
 
   const cn = r.strs('covNames'), sb = r.nums('smdBefore'), sa = r.nums('smdAfter');
@@ -222,8 +237,13 @@ export async function matching(app, { y: yName, treat: treatName, covs: covNames
 
 /** R helper: coerce a vector to 0/1 (two distinct values → low=0, high=1). */
 function bin01R() {
-  return `bin01 <- function(v){ v <- suppressWarnings(as.numeric(v)); u <- sort(unique(v[is.finite(v)]))
-    if (length(u) != 2) stop("indicator must have exactly two values (e.g. 0/1)"); as.integer(v == u[2]) }`;
+  // Recode against a NAMED positive level and carry it back, so the caption can say
+  // which category was treated as 1 (#187). `want` NULL keeps the old rule — the higher
+  // of the two codes — so recorded scripts replay to the same estimates.
+  return `bin01 <- function(v, want = NULL){ ch <- as.character(v); u <- sort(unique(ch[!is.na(ch)]))
+    if (length(u) != 2) stop("indicator must have exactly two values (e.g. 0/1)")
+    pos <- if (!is.null(want) && want %in% u) want else u[2]
+    structure(as.integer(ch == pos), pos = pos) }`;
 }
 
 async function runR(app, rCode, prelude) {
@@ -245,6 +265,13 @@ function metaMap(meta) {
 
 function labelOf(meta, name) {
   return meta?.label ? `${meta.label} (${name})` : name;
+}
+
+/** A category shown through its value label — the same category the recode used. */
+function lvl(meta, code) {
+  if (code == null || code === '') return '?';
+  const v = meta?.valueLabels?.[code] ?? meta?.valueLabels?.[Number(code)];
+  return v != null && v !== '' ? String(v) : String(code);
 }
 
 function prettyTerm(term) {

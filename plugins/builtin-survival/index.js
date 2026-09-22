@@ -40,7 +40,8 @@ export const manifest = {
       order: 10,
       inputs: [
         { name: 'time', kind: 'variables', label: 'Time to event', hint: 'Follow-up time until the event or censoring.', multiple: false, types: ['numeric'], unique: true },
-        { name: 'status', kind: 'variables', label: 'Event (1 = event, 0 = censored)', hint: 'Marks whether the event happened or the case was censored.', multiple: false, unique: true },
+        { name: 'status', kind: 'variables', label: 'Event indicator', hint: 'Marks whether the event happened or the case was censored.', multiple: false, unique: true },
+        { name: 'event', kind: 'level', of: 'status', preferLast: true, label: 'Which category means the EVENT happened?', hint: 'Everything else counts as censored. Get this backwards and the curves describe survival from the wrong state — with 1 = died / 2 = alive, pick died.' },
         { name: 'group', kind: 'variables', label: 'Compare groups (optional)', hint: 'Splits cases into groups whose survival curves are compared.', multiple: false, types: ['factor', 'string'], optional: true, unique: true },
       ],
     },
@@ -50,7 +51,8 @@ export const manifest = {
       order: 20,
       inputs: [
         { name: 'time', kind: 'variables', label: 'Time to event', hint: 'Follow-up time until the event or censoring.', multiple: false, types: ['numeric'], unique: true },
-        { name: 'status', kind: 'variables', label: 'Event (1 = event, 0 = censored)', hint: 'Marks whether the event happened or the case was censored.', multiple: false, unique: true },
+        { name: 'status', kind: 'variables', label: 'Event indicator', hint: 'Marks whether the event happened or the case was censored.', multiple: false, unique: true },
+        { name: 'event', kind: 'level', of: 'status', preferLast: true, label: 'Which category means the EVENT happened?', hint: 'Everything else counts as censored. Hazard ratios are ratios of the hazard of THIS outcome.' },
         { name: 'preds', kind: 'variables', label: 'Predictors', hint: 'The variables you think speed up or slow down the event.', multiple: true, unique: true },
       ],
     },
@@ -59,11 +61,14 @@ export const manifest = {
 
 // --- Kaplan–Meier & log-rank -------------------------------------------------
 
-export async function kaplanMeier(app, { time: timeName, status: statusName, group: groupName }) {
+export async function kaplanMeier(app, { time: timeName, status: statusName, event, group: groupName }) {
   if (!timeName || !statusName) {
     await app.results.appendError('Kaplan–Meier: choose a time variable and an event indicator.');
     return;
   }
+  // NULL for a script recorded before the picker: R keeps the old rule (0/1 → 1, else
+  // the higher code), so old logs replay to the same curves — now with the level named.
+  const eventWant = event != null && event !== '' ? JSON.stringify(String(event)) : 'NULL';
   await app.webr.installPackages(['survival']);
   const meta = metaMap(await app.data.getVariableMeta());
   const hasGroup = !!groupName;
@@ -77,7 +82,7 @@ export async function kaplanMeier(app, { time: timeName, status: statusName, gro
   const rCode = `
     suppressMessages(library(survival))
     ${STATUS01_R}
-    .time <- as.numeric(time); .st <- status01(status)
+    .time <- as.numeric(time); .st <- status01(status, ${eventWant})
     ${hasGroup ? 'grp <- factor(group)' : ''}
     d <- data.frame(.time = .time, .st = .st${hasGroup ? ', grp = grp' : ''})
     d <- d[stats::complete.cases(d) & d$.time >= 0, , drop = FALSE]
@@ -98,6 +103,7 @@ export async function kaplanMeier(app, { time: timeName, status: statusName, gro
          median = tb[, "median"], lcl = tb[, "0.95LCL"], ucl = tb[, "0.95UCL"],
          lrChi = if (is.null(lr)) NA_real_ else lr$chi, lrDf = if (is.null(lr)) NA_real_ else lr$df,
          lrP = if (is.null(lr)) NA_real_ else lr$p,
+         eventLevel = attr(.st, "event"),
          curveT = sf$time, curveS = sf$surv, curveLo = lo, curveHi = hi,
          curveCens = sf$n.censor, curveStratum = stratum, curveNames = stratumNames)`;
   const r = flat(await runR(app, rCode));
@@ -109,7 +115,11 @@ export async function kaplanMeier(app, { time: timeName, status: statusName, gro
       rows: groups.map((g, i) => [hasGroup ? lvl(meta.get(groupName), g) : 'Overall', String(nn[i]), String(ev[i]), f(med[i], 3), ci(lcl[i], ucl[i])]),
       rowHeaders: true,
     },
-    { caption: `Kaplan–Meier — time: ${labelOf(meta.get(timeName), timeName)}` },
+    {
+      caption: `Kaplan–Meier — time: ${labelOf(meta.get(timeName), timeName)}, `
+        + `event = ${lvl(meta.get(statusName), r.str1('eventLevel'))} `
+        + `(${labelOf(meta.get(statusName), statusName)}); everything else is censored`,
+    },
   );
   const curves = kmCurves(r, hasGroup ? (g) => lvl(meta.get(groupName), g) : () => 'Overall');
   if (curves.length) {
@@ -136,7 +146,7 @@ export async function kaplanMeier(app, { time: timeName, status: statusName, gro
 
 // --- Cox proportional hazards ------------------------------------------------
 
-export async function cox(app, { time: timeName, status: statusName, preds: predNames }) {
+export async function cox(app, { time: timeName, status: statusName, event, preds: predNames }) {
   if (!timeName || !statusName || !predNames || !predNames.length) {
     await app.results.appendError('Cox regression: choose a time variable, an event indicator, and at least one predictor.');
     return;
@@ -148,7 +158,7 @@ export async function cox(app, { time: timeName, status: statusName, preds: pred
   const rCode = `
     suppressMessages(library(survival))
     ${STATUS01_R}
-    .time <- as.numeric(time); .st <- status01(status)
+    .time <- as.numeric(time); .st <- status01(status, ${eventWant})
     d <- data.frame(.time = .time, .st = .st)
     d <- cbind(d, preds)
     d <- d[stats::complete.cases(d) & d$.time >= 0, , drop = FALSE]
@@ -161,6 +171,7 @@ export async function cox(app, { time: timeName, status: statusName, preds: pred
          n = s$n, nevent = s$nevent, concordance = unname(s$concordance["C"]),
          lrTest = unname(s$logtest["test"]), lrDf = unname(s$logtest["df"]), lrP = unname(s$logtest["pvalue"]),
          zphTerms = if (is.null(zt)) character(0) else rownames(zt),
+         eventLevel = attr(.st, "event"),
          zphChi = if (is.null(zt)) numeric(0) else zt[, "chisq"], zphP = if (is.null(zt)) numeric(0) else zt[, "p"])`;
   const r = flat(await runR(app, rCode));
   const terms = r.strs('terms'), coef = r.nums('coef'), hr = r.nums('hr'), se = r.nums('se'), z = r.nums('z'), p = r.nums('p'), lo = r.nums('lo'), hi = r.nums('hi');
@@ -171,7 +182,11 @@ export async function cox(app, { time: timeName, status: statusName, preds: pred
       rows: terms.map((t, i) => [prettyTerm(t), f(coef[i], 3), f(se[i], 3), f(z[i], 2), fmtP(p[i]), f(hr[i], 3), ci(lo[i], hi[i])]),
       rowHeaders: true,
     },
-    { caption: `Cox Proportional Hazards — time: ${labelOf(meta.get(timeName), timeName)} (N = ${r.num('n')}, events = ${r.num('nevent')})` },
+    {
+      caption: `Cox Proportional Hazards — time: ${labelOf(meta.get(timeName), timeName)}, `
+        + `event = ${lvl(meta.get(statusName), r.str1('eventLevel'))} `
+        + `(N = ${r.num('n')}, events = ${r.num('nevent')})`,
+    },
   );
   await app.results.appendTable(
     {
@@ -204,14 +219,25 @@ export async function cox(app, { time: timeName, status: statusName, preds: pred
 
 // --- helpers -----------------------------------------------------------------
 
-/** R helper: coerce an event indicator to 0/1 (1 = event). 0/1 kept as-is; two
- * other values map the larger to 1; logical/factor handled by as.numeric path. */
-const STATUS01_R = `status01 <- function(v){
-  if (is.logical(v)) return(as.integer(v))
-  vn <- suppressWarnings(as.numeric(v)); u <- sort(unique(vn[is.finite(vn)]))
-  if (all(u %in% c(0,1))) return(as.integer(vn))
-  if (length(u) == 2) return(as.integer(vn == u[2]))
-  stop("event indicator must be 0/1 (0 = censored, 1 = event)") }`;
+/**
+ * R helper: coerce an event indicator to 0/1 against a NAMED event level, and carry that
+ * level back on the result so the caller can say which category it treated as the event.
+ *
+ * Which category means "the event" decides what the curves are curves OF. Before #187
+ * this was `u[2]` — the higher code — with nothing printed to say so, which is fine for
+ * 0/1 data and exactly wrong for `1 = died, 2 = alive`: the survival curve then described
+ * survival from being *alive*, and no part of the output mentioned it. `want` NULL keeps
+ * the old rule, so recorded scripts replay to the same numbers; what changes for them is
+ * that the caption now names the level.
+ */
+const STATUS01_R = `status01 <- function(v, want = NULL){
+  ch <- as.character(v)
+  if (is.logical(v)) ch <- ifelse(v, "TRUE", "FALSE")
+  u <- sort(unique(ch[!is.na(ch)]))
+  if (length(u) == 1) return(structure(as.integer(ch == u[1]), event = u[1]))
+  if (length(u) != 2) stop("event indicator must have two values (e.g. 0 = censored, 1 = event)")
+  ev <- if (!is.null(want) && want %in% u) want else if (identical(u, c("0","1"))) "1" else if (is.logical(v)) "TRUE" else u[2]
+  structure(as.integer(ch == ev), event = ev) }`;
 
 /**
  * Reshape `survfit`'s flat vectors into one step series per stratum.

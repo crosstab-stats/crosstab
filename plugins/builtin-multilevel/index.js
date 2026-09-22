@@ -51,6 +51,7 @@ export const manifest = {
       order: 110,
       inputs: [
         { name: 'y', kind: 'variables', label: 'Binary outcome', hint: 'The yes/no outcome to model; must have exactly two categories.', multiple: false, unique: true },
+        { name: 'yes', kind: 'level', of: 'y', preferLast: true, label: 'Which category is being modelled?', hint: 'Odds ratios describe the odds of THIS category. With 1 = Yes / 2 = No coding, pick Yes — otherwise every effect is reported upside down.' },
         { name: 'fixed', kind: 'variables', label: 'Fixed-effect predictors', hint: 'Predictors whose average effect you want to estimate.', multiple: true, unique: true },
         { name: 'group', kind: 'variables', label: 'Grouping variable (random intercept)', hint: 'The cluster each case belongs to, such as school or clinic.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
       ],
@@ -121,7 +122,8 @@ export async function linear(app, { y: yName, fixed: fixedNames, group: groupNam
 
 // --- Logistic mixed model ----------------------------------------------------
 
-export async function logistic(app, { y: yName, fixed: fixedNames, group: groupName }) {
+export async function logistic(app, { y: yName, yes, fixed: fixedNames, group: groupName }) {
+  const want = yes != null && yes !== '' ? JSON.stringify(String(yes)) : 'NULL';
   if (!yName || !fixedNames || !fixedNames.length || !groupName) {
     await app.results.appendError('Logistic mixed model: choose a binary outcome, at least one predictor, and a grouping variable.');
     return;
@@ -133,14 +135,16 @@ export async function logistic(app, { y: yName, fixed: fixedNames, group: groupN
   const rCode = `
     suppressMessages(library(lme4))
     ${BIN01_R}
-    d <- data.frame(.y = bin01(y)); d <- cbind(d, fixed); d$.g <- factor(group)
+    .yb <- bin01(y, ${want})
+    d <- data.frame(.y = as.integer(.yb)); d <- cbind(d, fixed); d$.g <- factor(group)
     d <- d[stats::complete.cases(d), , drop = FALSE]
     fit <- glmer(as.formula(${rStr(formula)}), data = d, family = binomial())
     s <- summary(fit); co <- s$coefficients
     vc <- as.data.frame(VarCorr(fit)); gvar <- vc$vcov[vc$grp != "Residual"][1]
     list(terms = rownames(co), est = co[, "Estimate"], se = co[, "Std. Error"],
          z = co[, "z value"], p = co[, "Pr(>|z|)"],
-         gvar = gvar, icc = gvar / (gvar + (pi^2) / 3), nobs = nobs(fit), ngrp = as.numeric(ngrps(fit)))`;
+         gvar = gvar, icc = gvar / (gvar + (pi^2) / 3), nobs = nobs(fit), ngrp = as.numeric(ngrps(fit)),
+         ypos = attr(.yb, "pos"))`;
   const r = flat(await runR(app, rCode));
   const terms = r.strs('terms'), est = r.nums('est'), se = r.nums('se'), z = r.nums('z'), p = r.nums('p');
 
@@ -153,7 +157,11 @@ export async function logistic(app, { y: yName, fixed: fixedNames, group: groupN
       ]),
       rowHeaders: true,
     },
-    { caption: `Logistic Mixed Model — outcome: ${labelOf(meta.get(yName), yName)} (N = ${r.num('nobs')}, groups = ${r.num('ngrp')})` },
+    {
+      caption: `Logistic Mixed Model — outcome: ${labelOf(meta.get(yName), yName)}, `
+        + `modelling ${lvl(meta.get(yName), r.str1('ypos'))} `
+        + `(N = ${r.num('nobs')}, groups = ${r.num('ngrp')})`,
+    },
   );
   await app.results.appendTable(
     {
@@ -173,9 +181,13 @@ export async function logistic(app, { y: yName, fixed: fixedNames, group: groupN
 
 // --- helpers -----------------------------------------------------------------
 
-const BIN01_R = `bin01 <- function(v){ v <- suppressWarnings(as.numeric(v)); u <- sort(unique(v[is.finite(v)]))
-  if (all(u %in% c(0,1))) return(as.integer(v)); if (length(u) == 2) return(as.integer(v == u[2]))
-  stop("binary outcome must have exactly two values") }`;
+// Recode against a NAMED positive level, carrying it back so the caption can say which
+// category is being modelled (#187). `want` NULL keeps the old rule (higher code), so
+// recorded scripts replay unchanged.
+const BIN01_R = `bin01 <- function(v, want = NULL){ ch <- as.character(v); u <- sort(unique(ch[!is.na(ch)]))
+  if (length(u) != 2) stop("binary outcome must have exactly two values")
+  pos <- if (!is.null(want) && want %in% u) want else if (identical(u, c("0","1"))) "1" else u[2]
+  structure(as.integer(ch == pos), pos = pos) }`;
 
 async function runR(app, rCode) {
   const { result } = await app.webr.run(rCode);
@@ -185,6 +197,13 @@ async function runR(app, rCode) {
 
 function metaMap(meta) {
   return new Map(meta.map((m) => [m.name, m]));
+}
+
+/** A category shown through its value label — the same category the recode used. */
+function lvl(meta, code) {
+  if (code == null || code === '' || code === 'NA') return '?';
+  const v = meta?.valueLabels?.[code] ?? meta?.valueLabels?.[Number(code)];
+  return v != null && v !== '' ? String(v) : String(code);
 }
 
 function labelOf(meta, name) {
@@ -224,6 +243,7 @@ function flat(rList) {
   return {
     nums: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
     strs: (k) => arr(byName[k]).map((x) => (x == null ? 'NA' : String(x))),
+    str1: (k) => { const a = arr(byName[k]); return a.length && a[0] != null ? String(a[0]) : ''; },
     num: (k) => {
       const a = arr(byName[k]);
       return a.length ? Number(a[0]) : NaN;

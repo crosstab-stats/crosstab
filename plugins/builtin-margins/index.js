@@ -48,6 +48,7 @@ export const manifest = {
       order: 60,
       inputs: [
         { name: 'dv', kind: 'variables', label: 'Outcome', hint: 'The outcome to model; match its type to the model below.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'yes', kind: 'level', of: 'dv', preferLast: true, optional: true, label: 'Which category is being modelled? (logistic/probit only)', hint: 'For a binary outcome, the category whose probability the effects describe. Skip this for a linear or Poisson model, where it means nothing.' },
         { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think predict the outcome.', multiple: true, unique: true },
         {
           name: 'family',
@@ -89,7 +90,9 @@ const FAMILIES = {
  * @param {object} app
  * @param {{dv: string, ivs: string[], family: string, kind: string}} inputs
  */
-export async function margins(app, { dv: dvName, ivs: ivNames, family, kind }) {
+export async function margins(app, { dv: dvName, ivs: ivNames, yes, family, kind }) {
+  const want = yes != null && yes !== '' ? JSON.stringify(String(yes)) : 'NULL';
+  const binaryFam = family !== 'poisson' && family !== 'linear';
   if (!dvName || !ivNames || !ivNames.length) {
     await app.results.appendError('Marginal effects: choose an outcome and at least one predictor.');
     return;
@@ -108,7 +111,13 @@ export async function margins(app, { dv: dvName, ivs: ivNames, family, kind }) {
       ? 'dv <- as.numeric(dv); if (any(dv[is.finite(dv)] < 0, na.rm = TRUE)) stop("Poisson outcome must be non-negative")'
       : family === 'linear'
         ? 'dv <- as.numeric(dv)'
-        : 'dv <- as.numeric(dv); .u <- sort(unique(dv[is.finite(dv)])); if (length(.u) != 2) stop("Logistic/probit need a binary (two-value) outcome"); dv <- as.integer(dv == .u[2])';
+        // The positive level is named rather than assumed (#187): with 1 = Yes / 2 = No
+        // coding the old `.u[2]` rule modelled the probability of *No* with nothing
+        // printed to say so. NULL keeps that rule, so old scripts replay unchanged.
+        : `dv <- as.character(dv); .u <- sort(unique(dv[!is.na(dv)]))
+           if (length(.u) != 2) stop("Logistic/probit need a binary (two-value) outcome")
+           .pos <- if (!is.null(${want}) && ${want} %in% .u) ${want} else .u[2]
+           dv <- as.integer(dv == .pos)`;
 
   const rCode = `
     ame_glm <- function(fit, atmeans = FALSE) {
@@ -154,6 +163,7 @@ export async function margins(app, { dv: dvName, ivs: ivNames, family, kind }) {
     if (nrow(d) < 3) stop("need at least 3 complete cases")
     fit <- glm(as.formula(${rStr(formula)}), data = d, family = ${fam.call})
     res <- ame_glm(fit, atmeans = ${atmeans ? 'TRUE' : 'FALSE'})
+    res$pos <- if (exists(".pos")) .pos else NA_character_
     res`;
 
   const { result } = await app.webr.run(rCode);
@@ -168,7 +178,12 @@ export async function margins(app, { dv: dvName, ivs: ivNames, family, kind }) {
       rowHeaders: true,
     },
     {
-      caption: `${atmeans ? 'Marginal Effects at the Mean' : 'Average Marginal Effects'} — ${fam.label}, outcome: ${labelOf(meta.get(dvName), dvName)} (N = ${r.num('n')})`,
+      caption: `${atmeans ? 'Marginal Effects at the Mean' : 'Average Marginal Effects'} — ${fam.label}, `
+        + `outcome: ${labelOf(meta.get(dvName), dvName)}`
+        // Only the binary families model "a category"; for linear/Poisson there is no
+        // positive level and claiming one would be its own small lie.
+        + `${binaryFam ? `, modelling ${lvl(meta.get(dvName), r.str1('pos'))}` : ''}`
+        + ` (N = ${r.num('n')})`,
     },
   );
 
@@ -209,6 +224,13 @@ function labelOf(meta, name) {
   return meta?.label ? `${meta.label} (${name})` : name;
 }
 
+/** A category shown through its value label — the same category the recode used. */
+function lvl(meta, code) {
+  if (code == null || code === '' || code === 'NA') return '?';
+  const v = meta?.valueLabels?.[code] ?? meta?.valueLabels?.[Number(code)];
+  return v != null && v !== '' ? String(v) : String(code);
+}
+
 function f(n, d) {
   return Number.isFinite(n) ? n.toFixed(d) : '—';
 }
@@ -237,6 +259,7 @@ function flat(rList) {
   return {
     nums: (k) => arr(byName[k]).map(Number),
     strs: (k) => arr(byName[k]).map(String),
+    str1: (k) => { const a = arr(byName[k]); return a.length && a[0] != null ? String(a[0]) : ''; },
     num: (k) => {
       const a = arr(byName[k]);
       return a.length ? Number(a[0]) : NaN;

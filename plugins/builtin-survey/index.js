@@ -71,6 +71,7 @@ export const manifest = {
       order: 30,
       inputs: [
         { name: 'dv', kind: 'variables', label: 'Outcome', hint: 'The measure you want to explain; binary for logistic.', multiple: false, types: ['numeric'], unique: true },
+        { name: 'yes', kind: 'level', of: 'dv', preferLast: true, optional: true, label: 'Which category is being modelled? (logistic only)', hint: 'For a logistic model, the category the odds ratios describe. Skip this for a linear model, where it means nothing.' },
         { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think predict the outcome.', multiple: true, unique: true },
         {
           name: 'family',
@@ -185,7 +186,8 @@ export async function crosstab(app, { rowvar, colvar, weight, strata, cluster })
  * @param {object} app
  * @param {{dv: string, ivs: string[], family: string, weight: string, strata: ?string, cluster: ?string}} inputs
  */
-export async function regression(app, { dv, ivs, family, weight, strata, cluster }) {
+export async function regression(app, { dv, ivs, yes, family, weight, strata, cluster }) {
+  const wantYes = yes != null && yes !== '' ? JSON.stringify(String(yes)) : 'NULL';
   if (!dv || !ivs || !ivs.length || !weight) {
     await app.results.appendError('Survey regression: choose an outcome, predictor(s), and a weight.');
     return;
@@ -197,7 +199,12 @@ export async function regression(app, { dv, ivs, family, weight, strata, cluster
   const rCode = `
     suppressMessages(library(survey))
     dv <- as.numeric(dv)
-    ${logistic ? 'dv <- as.numeric(dv == max(dv, na.rm = TRUE))  # model the higher category as 1' : ''}
+    ${logistic ? `
+    # Which category is modelled is now named rather than assumed (#187). NULL keeps the
+    # old rule (the higher code), so recorded scripts replay to the same odds ratios.
+    .dvch <- as.character(dv); .u <- sort(unique(.dvch[!is.na(.dvch)]))
+    .pos <- if (!is.null(${wantYes}) && ${wantYes} %in% .u) ${wantYes} else .u[length(.u)]
+    dv <- as.integer(.dvch == .pos)` : ''}
     d <- cbind(.dv = dv, ivs)
     d[[".w"]] <- as.numeric(weight)
     ${strata ? 'd[[".st"]] <- strata' : ''}
@@ -208,7 +215,8 @@ export async function regression(app, { dv, ivs, family, weight, strata, cluster
     s <- summary(fit); co <- s$coefficients
     ci <- tryCatch(confint(fit), error = function(e) matrix(NA_real_, nrow(co), 2))
     list(terms = rownames(co), est = co[, 1], se = co[, 2], tval = co[, 3], p = co[, 4],
-         lo = ci[, 1], hi = ci[, 2], n = nrow(d))`;
+         lo = ci[, 1], hi = ci[, 2], n = nrow(d),
+         pos = if (exists(".pos")) .pos else NA_character_)`;
   const r = flat(await runR(app, rCode));
   const terms = r.strs('terms'), est = r.nums('est'), se = r.nums('se'), tv = r.nums('tval'), p = r.nums('p'), lo = r.nums('lo'), hi = r.nums('hi');
   const cols = logistic
@@ -225,11 +233,17 @@ export async function regression(app, { dv, ivs, family, weight, strata, cluster
       }),
       rowHeaders: true,
     },
-    { caption: `Survey ${logistic ? 'Logistic ' : ''}Regression — outcome: ${labelOf(meta.get(dv), dv)} (N = ${r.num('n')})` },
+    {
+      caption: `Survey ${logistic ? 'Logistic ' : ''}Regression — outcome: ${labelOf(meta.get(dv), dv)}`
+        + `${logistic ? `, modelling ${lvl(meta.get(dv), r.str1('pos'))}` : ''}`
+        + ` (N = ${r.num('n')})`,
+    },
   );
   await app.results.appendText(
     `Coefficients and standard errors are design-based (${designCaption(meta, weight, strata, cluster)}). ` +
-      (logistic ? 'Odds ratios are exp(B); the higher category of the outcome is modelled as 1.' : ''),
+      (logistic
+        ? `Odds ratios are exp(B); they describe the odds of ${lvl(meta.get(dv), r.str1('pos'))}.`
+        : ''),
   );
 }
 
@@ -261,6 +275,13 @@ function metaMap(meta) {
 
 function labelOf(meta, name) {
   return meta?.label ? `${meta.label} (${name})` : name;
+}
+
+/** A category shown through its value label — the same category the recode used. */
+function lvl(meta, code) {
+  if (code == null || code === '' || code === 'NA') return '?';
+  const v = meta?.valueLabels?.[code] ?? meta?.valueLabels?.[Number(code)];
+  return v != null && v !== '' ? String(v) : String(code);
 }
 
 function prettyTerm(term) {
@@ -296,6 +317,7 @@ function flat(rList) {
   return {
     nums: (k) => arr(byName[k]).map(Number),
     strs: (k) => arr(byName[k]).map(String),
+    str1: (k) => { const a = arr(byName[k]); return a.length && a[0] != null ? String(a[0]) : ''; },
     num: (k) => {
       const a = arr(byName[k]);
       return a.length ? Number(a[0]) : NaN;
