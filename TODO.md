@@ -5683,8 +5683,8 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       service + account the owner asked to avoid, and several route submissions through
       their own servers.
 
-- [~] **#182 — a Help menu, and the two dialogs that were trapped in the launcher
-      (2026-09-21).** DECIDED by the owner after weighing it: Help earns a top-level
+- [x] **#182 — DONE (2026-09-21, browser-verified). A Help menu, and the two dialogs
+      that were trapped in the launcher.** DECIDED by the owner after weighing it: Help earns a top-level
       menu, because six things want to live in it and not because the bug report needed
       a home. `core/help.js` + `registerHelpMenu`; `Help: 999` in `menu-shell.js`'s
       `TOP_LEVEL_RANK` pins it to the right-hand end — left to the alphabetical fallback
@@ -5706,13 +5706,18 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       of orientation, and an item labelled "How to use CrossTab" in a Help menu promises
       documentation that does not exist yet (#184). Deliberately NO such item ships until
       it does: a menu entry that opens something else teaches the reader the menu lies.
-  - [ ] **Still to add — the plugin/analysis lookup (#183)** and, when it exists, the
-        how-to guide (#184). Both were named by the owner as Help contents; they are
-        separate features rather than menu entries, so they are their own items.
-  - [ ] **No browser pass yet.** Worth clicking: the menu lands at the right-hand end;
-        the launcher's two footer links still work now that they call the shared
-        functions; Report a bug shows the diagnostics and the GitHub tab opens pre-filled
-        (and the "Open without diagnostics" button opens a blank one).
+      *Two more Help entries are coming from elsewhere and do not hold this item open:*
+      the plugin/analysis lookup (**#183**) and, once it exists, the how-to guide
+      (**#184**). Both were named by the owner as Help contents, but they are features
+      rather than menu entries.
+
+      **Browser pass: DONE by the owner (2026-09-21)** — on the iPhone PWA and then with
+      the quantitative demo loaded. Menu and all items work. The part worth recording is
+      how the bug report was tested: **with one plugin enabled, then with none at all,
+      and the report was right both times.** That is the better test of the fix, because
+      an honest "(none)" and the catalog bug that also printed "(none)" are
+      indistinguishable from one report — checking the *transition* is what separates
+      them, and both directions now hold on a real device.
 
 - [ ] **#185 — deploy config for someone else hosting CrossTab (owner, 2026-09-21).**
       Raised while declining the bug-report email route (#175): "later we can build
