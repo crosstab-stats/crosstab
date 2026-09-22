@@ -750,7 +750,18 @@ async function gatherInputs(ui, specs, item, data) {
         if (!spec.optional) return null;
         continue;
       }
-      const seed = spec.default != null ? [].concat(spec.default).map(String) : many ? [] : [cats[0].value];
+      // Which category to pre-tick when the plugin names no explicit default.
+      //
+      // `preferLast` exists because almost every binary recode in the codebase spells
+      // the same convention — `as.integer(v == u[2])`, the HIGHER of the two observed
+      // values is the event/exposed/positive case. A picker that silently seeded the
+      // LOWER one would quietly invert those analyses the first time someone accepted
+      // the default, which is the failure #186 was (see #187). There is no
+      // coding-independent right answer — 0/1 data wants the higher, 1=Yes/2=No data
+      // wants the lower — which is exactly why the user gets to choose; this only
+      // decides which choice is already ticked when the dialog opens.
+      const fallback = spec.preferLast ? cats[cats.length - 1].value : cats[0].value;
+      const seed = spec.default != null ? [].concat(spec.default).map(String) : many ? [] : [fallback];
       const r = await ui.selectFromList({ title, hint, items: cats, multiple: many, selected: seed });
       if (r === null) {
         if (spec.optional) {

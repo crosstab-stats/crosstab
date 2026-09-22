@@ -2935,8 +2935,21 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 - [x] **Provide the PWA icons — DONE.** `vendor/icon-192.png`, `vendor/icon-512.png`
       (+ `icon-180.png` Apple touch) exist and are referenced by `manifest.json`.
 
-- [ ] **#186 — BUG: `builtin-epi` labels its 2×2 backwards for any variable not coded
-      0/1 (found 2026-09-22 during the #187 review).** Not a missing feature — **wrong,
+- [x] **#186 — FIXED (2026-09-22). `builtin-epi` labelled its 2×2 backwards for any
+      variable not coded 0/1 (found during the #187 review).**
+
+      **The fix:** `bin01(v, want)` now takes the wanted positive level and carries the
+      two level names back on its result (`attr(·, "pos")` / `"neg"`); the table and the
+      measures caption are labelled from those. There is now exactly ONE place where
+      "which category is positive" is decided, so the label cannot disagree with the
+      arithmetic. The dialog gained **"Which category is EXPOSED?"** and **"Which
+      category is a CASE?"** (`kind: 'level'`, `preferLast`).
+
+      Verified in R: an old recorded script (no level) reproduces the old numbers exactly
+      (RR 0.222) but is now labelled `exposed = 2`, which is the group those numbers were
+      always about; picking Yes gives RR **4.500**, matching `epitools::riskratio` to
+      0.00e+00; and 0/1 data still defaults to 1 = exposed, so nothing regresses. 6 tests.
+      *Original report:* Not a missing feature — **wrong,
       confidently-labelled output**. Fix this before, or alongside, #187.
 
       `BIN01_R` maps the HIGHER of the two observed values to 1
