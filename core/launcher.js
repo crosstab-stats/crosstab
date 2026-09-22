@@ -16,6 +16,12 @@
 
 import { makeDemoDataset, makeQualDemoDataset, makeSpatialDemoDataset } from './demo-data.js';
 import { newItemId } from './item-store.js';
+// The build stamp moved to its own module when the Help menu's bug report needed the
+// same answer (#175) — two readers, one definition of "which build is running".
+import { formatBuildTime, latestBuildTime, runningBuildStamp, stampMs } from './build-stamp.js';
+// The caveats dialog moved to help.js so the Help menu and this footer open the SAME
+// one (#182) — it used to be unreachable the moment a project opened.
+import { showCaveats, showGettingAround } from './help.js';
 
 /** Curated-core analysis plugins, pre-selected on a fresh "Start blank". */
 const CORE_IDS = new Set([
@@ -390,8 +396,8 @@ export class Launcher {
       }
     }
 
-    overlay.querySelector('.ctl__howto').addEventListener('click', () => this.#showHowTo());
-    overlay.querySelector('.ctl__caveats').addEventListener('click', () => this.#showCaveats());
+    overlay.querySelector('.ctl__howto').addEventListener('click', () => showGettingAround());
+    overlay.querySelector('.ctl__caveats').addEventListener('click', () => showCaveats());
     this.#renderOffline(overlay);
     this.#renderInstallHint(overlay);
     overlay.querySelector('.ctl__start').addEventListener('click', () => this.#start(reopen));
@@ -670,63 +676,6 @@ export class Launcher {
     box.hidden = false;
   }
 
-  #showHowTo() {
-    const d = document.createElement('dialog');
-    d.className = 'ct-dialog ct-dialog--wide';
-    d.innerHTML = `
-      <form method="dialog" class="ct-dialog__form">
-        <h2 class="ct-dialog__title">How to use CrossTab</h2>
-        <div class="ctl__howto-body">
-          <p><strong>Menubar</strong> (top) — File, Edit, and your analysis menus. The analyses you see are the plugins you switched on here; add more anytime via <em>Edit ▸ Plugins…</em> or by clicking <strong>CrossTab</strong> in the corner to reopen this screen.</p>
-          <p><strong>Sidebar</strong> (left) — your project and its datasets. Import a file, or pick a demo on this screen to explore.</p>
-          <p><strong>Workspace tabs</strong> — <em>Data</em> (the grid), <em>Variables</em> (rename/recode/label), <em>Output</em> (your results), and an <em>R Console</em>.</p>
-          <p><strong>Run an analysis</strong> — pick it from a menu, choose variables in the dialog, and the result appears in Output (export it from <em>File</em>).</p>
-        </div>
-        <menu class="ct-dialog__buttons"><button value="ok" type="submit" class="ct-dialog__primary">Got it</button></menu>
-      </form>`;
-    d.addEventListener('close', () => d.remove());
-    document.body.append(d);
-    d.showModal();
-  }
-
-  /** "Caveats & limits": an honest list of the structural limitations of running a
-   * whole stats stack in the browser — the trade-offs we haven't engineered away,
-   * and what each means in practice. Keeps the "everyone, every device" tagline
-   * truthful. */
-  #showCaveats() {
-    const d = document.createElement('dialog');
-    d.className = 'ct-dialog ct-dialog--wide';
-    d.innerHTML = `
-      <form method="dialog" class="ct-dialog__form">
-        <h2 class="ct-dialog__title">Caveats &amp; limits — the honest version</h2>
-        <div class="ctl__howto-body">
-          <p>CrossTab runs entirely in your browser, on your device. That's what keeps
-            your data private and lets it work offline — but it also means a few real
-            limits we haven't been able to engineer away. Here's what to expect.</p>
-          <p><strong>Scrolling a large dataset can lag.</strong> The data grid streams
-            rows from an on-disk store instead of holding the whole table in memory, so
-            scrolling through a big dataset may take a second to catch up.
-            <em>Your data is complete and correct — the view just paints a beat behind.</em></p>
-          <p><strong>R analyses are capped at a few GB.</strong> The in-browser R engine
-            is 32-bit, so any single R-based analysis can address only a few gigabytes at
-            once. <em>Basic data handling scales further (the out-of-core store does that),
-            but a heavy model on a very large dataset can run out of memory — work on a
-            subset or a sample if you hit it.</em></p>
-          <p><strong>First use needs the internet — once.</strong> The R engine and each
-            stats package download the first time they're used (tens of MB).
-            <em>After that they're cached; you can also pre-cache everything for offline or
-            air-gapped use from the loading screen.</em></p>
-          <p><strong>Speed depends on your device.</strong> Every computation runs locally,
-            so a phone or tablet is slower than a desktop and a heavy model can take a while.
-            <em>Nothing is sent to a server to speed it up — that's the trade-off for full
-            privacy.</em></p>
-        </div>
-        <menu class="ct-dialog__buttons"><button value="ok" type="submit" class="ct-dialog__primary">Got it</button></menu>
-      </form>`;
-    d.addEventListener('close', () => d.remove());
-    document.body.append(d);
-    d.showModal();
-  }
 }
 
 // --- helpers ----------------------------------------------------------------
@@ -757,60 +706,6 @@ function el(tag, text, className) {
 }
 function esc(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-}
-
-/** The Last-Modified of the app code this device is actually RUNNING. Fetched through
- * the service worker, so on an installed PWA (where the shell is served cache-first)
- * this is the CACHED/loaded build — NOT whatever the server now has. GitHub Pages
- * re-stamps every file's Last-Modified to the deploy time on each rebuild, so this is
- * effectively "which deploy is loaded." Best-effort: null if unavailable. */
-async function loadedBuildTime() {
-  try {
-    const res = await fetch('core/app.js', { cache: 'no-store' });
-    return res.headers.get('last-modified') || null;
-  } catch {
-    return null;
-  }
-}
-
-function formatBuildTime(lm) {
-  if (!lm) return null;
-  const d = new Date(lm);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleString(undefined, {
-    year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
-  });
-}
-
-/** The RUNNING build's stamp, captured ONCE per page load and memoised. Capturing it
- * once matters on an installed PWA: the SW serves the shell cache-first and then
- * revalidates in the background, so a *later* read of app.js could return a newer
- * deploy the revalidate has since written into the cache — but the code actually
- * running is whatever booted. The first read (at launcher open, before revalidate
- * completes) is that version; we hold onto it. @type {Promise<string|null>|null} */
-let runningStampP = null;
-function runningBuildStamp() {
-  if (!runningStampP) runningStampP = loadedBuildTime();
-  return runningStampP;
-}
-
-/** The server's LATEST build stamp. A HEAD request skips the SW's cache-first shell
- * path (it gates on GET) and the Cache API never stores it, so this reads the live
- * deploy's Last-Modified straight from the network without disturbing the cache.
- * null on error/offline. */
-async function latestBuildTime() {
-  try {
-    const res = await fetch('core/app.js', { method: 'HEAD', cache: 'no-store' });
-    return res.headers.get('last-modified') || null;
-  } catch {
-    return null;
-  }
-}
-
-/** A Last-Modified header → epoch ms, or null if unparseable. */
-function stampMs(lm) {
-  const t = lm ? new Date(lm).getTime() : NaN;
-  return Number.isNaN(t) ? null : t;
 }
 
 /**

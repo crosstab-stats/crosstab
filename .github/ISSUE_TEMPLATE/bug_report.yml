@@ -1,0 +1,61 @@
+name: Bug report
+description: Something in CrossTab behaves wrongly, or breaks.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **This issue will be public**, so please don't paste research
+        data, participant information, variable names or file paths into it. Counts and
+        shapes ("a 40-variable, 1,200-row file") are enough for almost every bug.
+
+        CrossTab can fill most of this in for you: in the app, use **Help ▸ Report a bug…**.
+        It builds the report from your session — diagnostics only, never your data — and
+        hands it to you to review before you submit.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, including any error message shown on screen.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: false
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What you clicked, in order. A bug someone else can reproduce gets fixed far sooner.
+      placeholder: |
+        1. Open the demo dataset
+        2. Regression ▸ Binary Logistic…
+        3. …
+    validations:
+      required: false
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: >
+        Paste what Help ▸ Report a bug… produced, or fill in by hand. The build stamp is on
+        the start screen ("This version: …").
+      render: text
+      placeholder: |
+        App build: 2026-09-21 14:02
+        Browser: (your browser and version)
+        Cross-origin isolated: true
+        Active dataset size: 40 variables × 1200 rows
+        Plugins enabled: builtin-frequencies, builtin-logistic
+    validations:
+      required: false
+  - type: checkboxes
+    id: nodata
+    attributes:
+      label: Before submitting
+      options:
+        - label: I've checked this report contains no research data or personal information.
+          required: true

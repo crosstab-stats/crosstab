@@ -97,3 +97,65 @@ function _serialize(args) {
     try { return JSON.parse(JSON.stringify(v)); } catch { return String(v); }
   });
 }
+
+// --- last error, always on ----------------------------------------------------
+//
+// The ring buffer above only fills when debugging is ENABLED, which is exactly wrong
+// for a bug report: nobody turns debugging on before the thing they cannot reproduce.
+// So one slot, recorded unconditionally, costing a string assignment per uncaught error.
+//
+// It is deliberately NOT a second buffer. A report needs "what broke last", and a
+// history of everything that ever broke is both larger than a URL can carry (#175) and
+// more than a reporter can be asked to read before they send it.
+
+/** @type {{time: string, message: string, where: string, stack: string}|null} */
+let _lastError = null;
+
+/** One stack, clipped: enough to name the failing module, short enough for a URL. */
+function _clipStack(stack) {
+  if (typeof stack !== 'string' || !stack) return '';
+  return stack.split('\n').slice(0, 4).join('\n').slice(0, 600);
+}
+
+/**
+ * Record an uncaught error for a later bug report. Called by the global handlers below,
+ * and available to any code that swallows an error it still wants reported.
+ *
+ * @param {any} err
+ * @param {string} [where] - a hint about the source, e.g. 'unhandledrejection'.
+ */
+export function recordError(err, where = '') {
+  try {
+    const message = err instanceof Error
+      ? `${err.name}: ${err.message}`
+      : String(err && err.message ? err.message : err);
+    _lastError = {
+      time: new Date().toISOString(),
+      message: message.slice(0, 300),
+      where: String(where).slice(0, 120),
+      stack: _clipStack(err instanceof Error ? err.stack : ''),
+    };
+  } catch {
+    /* recording a failure must never be a second failure */
+  }
+}
+
+/** The last uncaught error, or null. */
+export function lastError() {
+  return _lastError;
+}
+
+/** Install the global capture. Idempotent; called once from app start-up. */
+export function installErrorCapture(target = globalThis) {
+  if (target.__ctErrorCapture) return;
+  target.__ctErrorCapture = true;
+  target.addEventListener?.('error', (e) => {
+    // A failed <img>/<script> load also fires 'error' on window, with no `error` object.
+    // Those are not app faults and would evict a real one from the single slot.
+    if (!e?.error) return;
+    recordError(e.error, e.filename ? `${e.filename}:${e.lineno ?? '?'}` : 'error');
+  });
+  target.addEventListener?.('unhandledrejection', (e) => {
+    recordError(e?.reason, 'unhandledrejection');
+  });
+}

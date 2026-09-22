@@ -1,0 +1,7 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question or idea
+    url: https://github.com/crosstab-stats/crosstab/discussions
+    about: >
+      For "how do I…", feature ideas and general discussion. Issues are for things that
+      are broken; Discussions is for everything else.

@@ -5623,28 +5623,138 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         behaviour is correct for a modal. Related: "Variable-picker polish (later)"
         above, which records why the picker’s group is deliberately not live.
 
-- [ ] **#175 — User bug reports, server-free (parked 2026-09-20).** A "Report a bug"
-      affordance that costs nothing to run and needs no new service/account: the app
-      builds a PRE-FILLED report the user reviews and submits themselves — no backend,
-      no form host. Two routes, offered side by side:
-        • **Open a GitHub issue** — deep-link to
-          `github.com/crosstab-stats/crosstab/issues/new?labels=bug&title=…&body=…`.
-          Issues on the public repo are free/unlimited and reuse the account we already
-          have; the reporter needs a GitHub account.
-        • **Email a report** — a `mailto:` with the same pre-filled body, for the many
-          who have no GitHub account (uses an inbox we already own; a public address
-          attracts some spam — accept or lightly obfuscate).
-      Auto-fill sanitized DIAGNOSTICS, never data: build stamp (the launcher version
-      work — loadedBuildTime), browser/OS UA, crossOriginIsolated, active dataset SHAPE
-      (variable/row counts — never cell values or variable contents), enabled plugins,
-      and the last error if any. Privacy guardrails, load-bearing: shapes-not-data (a
-      GitHub issue is world-readable) and the user always reviews/edits before sending —
-      the app transmits nothing itself. Surface: a **Help ▸ Report a bug…** item + a
-      launcher-footer link beside "Caveats & limits"; add
-      `.github/ISSUE_TEMPLATE/bug_report.yml` so issues opened directly on GitHub are
-      structured too. NOT Formspree/Google Forms/Tally — those are exactly the extra
-      service + account the user asked to avoid, and several route submissions through
-      their own servers. (Design discussed 2026-09-20; user parked it for later.)
+- [x] **#175 — DONE (2026-09-21). User bug reports, server-free.** **Help ▸ Report a
+      bug…** builds a pre-filled GitHub issue the user reviews and submits themselves —
+      no backend, no form host, nothing of ours in the path. `core/help.js`.
+
+      **Nothing had to be enabled.** Issues were already on for the public repo and the
+      default `bug` label already existed, and the deep link needs no app, token, OAuth
+      or secret — `issues/new?labels=bug&title=…&body=…` is honoured by any public repo
+      with Issues on.
+
+      **Email route: declined for now (owner, 2026-09-21).** Not wanted for this
+      deployment. What IS wanted later: a way for **someone else hosting CrossTab** to
+      point the report at their own contact route. `REPO` in `core/help.js` is the single
+      constant a fork changes today; a self-hoster's own email/issue target is a
+      deploy-config question, filed as part of #185.
+
+      **Discussions: enabled** (`has_discussions: true`, set 2026-09-21) and linked from
+      Help ▸ Ask a question, plus `.github/ISSUE_TEMPLATE/config.yml` so GitHub itself
+      offers Discussions beside the bug form. Issues for what is broken, Discussions for
+      everything else.
+
+      **What the report carries, and the rule that keeps it honest.** Build stamp,
+      browser/OS, `crossOriginIsolated` (the commonest cause of "R won't start"), dataset
+      SHAPE (variable and row counts), enabled plugin ids, and the last uncaught error.
+      Never a cell value, variable name, label, file path or project name — a GitHub
+      issue is world-readable, so the line is drawn at counts. That is enforced twice:
+      `collectDiagnostics` takes `getVariableMeta().length` rather than its contents, and
+      `test/help-bug-report.test.mjs` feeds a session holding a participant name, an
+      identifying variable name, a confidential file path and a project name, then asserts
+      none of the four appears anywhere in the output. The user also reviews the full text
+      in-app before anything opens, with an "Open without diagnostics" escape.
+
+      Two things built along the way. **`installErrorCapture()`** in `debug.js` — the ring
+      buffer only fills when debugging is ENABLED, which is exactly wrong for a bug
+      report, since nobody turns debugging on before the thing they cannot reproduce; so
+      one always-on slot holds the last uncaught error, clipped to four stack lines.
+      **A URL budget** — the deep link is a GET and URLs cap around 8 KB, so a long report
+      would silently lose its tail; `bugReportUrl` measures, sheds the error text first,
+      and says in the issue that it did. 10 tests. *No browser pass yet.*
+
+      *Original entry:* a "Report a bug" affordance that costs nothing to run and needs no
+      new service/account. NOT Formspree/Google Forms/Tally — those are exactly the extra
+      service + account the owner asked to avoid, and several route submissions through
+      their own servers.
+
+- [~] **#182 — a Help menu, and the two dialogs that were trapped in the launcher
+      (2026-09-21).** DECIDED by the owner after weighing it: Help earns a top-level
+      menu, because six things want to live in it and not because the bug report needed
+      a home. `core/help.js` + `registerHelpMenu`; `Help: 999` in `menu-shell.js`'s
+      `TOP_LEVEL_RANK` pins it to the right-hand end — left to the alphabetical fallback
+      it would have landed between *Graphs* and *Regression*.
+
+      **Shipped: Getting around · Syntax guide · Caveats & limits · Report a bug · Ask a
+      question (Discussions) · Source code.**
+
+      The two lifts are the part worth noting, because both were **bugs disguised as
+      layout**. *Caveats & limits* and *How to use →* lived as private methods on the
+      launcher (`#showCaveats`, `#showHowTo`), reachable only from the start screen — so
+      each stopped existing the instant a project opened, which is precisely when someone
+      hits a caveat and wants to know whether it is a bug, or forgets which tab is
+      Output. Both now live in `help.js` and the launcher footer opens the SAME dialog,
+      so there is one copy rather than two that will drift. The syntax guide was
+      similarly reachable only from the History panel's ✎ button.
+
+      *How to use →* was renamed **Getting around** on the way out. It is four paragraphs
+      of orientation, and an item labelled "How to use CrossTab" in a Help menu promises
+      documentation that does not exist yet (#184). Deliberately NO such item ships until
+      it does: a menu entry that opens something else teaches the reader the menu lies.
+  - [ ] **Still to add — the plugin/analysis lookup (#183)** and, when it exists, the
+        how-to guide (#184). Both were named by the owner as Help contents; they are
+        separate features rather than menu entries, so they are their own items.
+  - [ ] **No browser pass yet.** Worth clicking: the menu lands at the right-hand end;
+        the launcher's two footer links still work now that they call the shared
+        functions; Report a bug shows the diagnostics and the GitHub tab opens pre-filled
+        (and the "Open without diagnostics" button opens a blank one).
+
+- [ ] **#185 — deploy config for someone else hosting CrossTab (owner, 2026-09-21).**
+      Raised while declining the bug-report email route (#175): "later we can build
+      support for someone else hosting this to have an email." The general shape is that
+      a fork or institutional deployment has a handful of facts about ITSELF that are
+      currently constants in our source:
+  - [ ] **Where bug reports and questions go.** `REPO` in `core/help.js` is one constant
+        today, and the Help menu's three GitHub links derive from it. A self-hoster wants
+        their own issue tracker, their own Discussions, and/or a support email address —
+        the email route #175 declined for us is exactly what someone running this for a
+        department would want.
+  - [ ] **Survey the other self-identifying constants before designing this**, so it is
+        one mechanism rather than five: the CDN base for runtimes
+        ([[airgap-offline-requirement]] already made this switchable via
+        `core/assets.js` local mode), the deployed origin baked into shortcut files
+        (`backend.shortcuts(...)` in `project-sync.js`), and whatever the launcher's
+        About/onboarding names.
+      Likely answer: one optional `deploy.json` fetched at boot, absent by default, with
+      every field falling back to today's constant — so the default build is byte-identical
+      in behaviour and a self-hoster edits one file. Do NOT build it as a build-time
+      substitution: that needs a toolchain, which the project does not have and does not
+      want.
+
+- [ ] **#183 — "what do I enable to do X?" — an analysis lookup across ALL plugins
+      (owner, 2026-09-21, as Help-menu content).** The gap is specific: the syntax
+      guide's live list enumerates `pluginActions.listRunnable()`, which is only the
+      **currently active** plugins, and the plugin manager's search matches
+      `[name, id, category, keywords]` — not the menu labels. So a user who wants a
+      Hosmer–Lemeshow test, or a Kaplan–Meier curve, can search for it in the one place
+      that would tell them and get nothing, because the plugin providing it is switched
+      off and its analysis names were never indexed.
+
+      Build: search the CATALOG (every catalogued plugin, activated or not), matching
+      each plugin's `menu[].label` as well as its name/keywords, and answer with
+      *analysis → the plugin that provides it → **Enable***. The data is already there —
+      `menu` is recorded into the catalog from every manifest (`#recordCatalog`), which is
+      the same field the launcher's hover tooltip uses and that **#177** wants surfaced in
+      the plugin manager. Do #177 and this together; they are one idea (catalogued menu
+      labels are a searchable index of what CrossTab can do) seen from two surfaces.
+      Note the 60 built-ins also carry `howto` text, which is worth matching too.
+
+- [ ] **#184 — a comprehensive how-to guide (owner, 2026-09-21).** Nothing like it
+      exists. What exists is scattered and each piece is deliberately narrow: *Getting
+      around* (four paragraphs of orientation, #182), the *Syntax guide* (the command
+      language + a live plugin-call list), per-plugin `howto` strings behind the 🔍 in
+      the plugin manager, *Caveats & limits*, and the launcher's onboarding. None of that
+      teaches someone how to DO a piece of work end to end.
+
+      Scope question to settle before writing a word: is this **task-oriented** ("how do
+      I recode a variable", "how do I run a crosstab with weights") or a **course** (a
+      methods walk-through using the demo data)? The college-tour material and the
+      Sarabia labs (#174) suggest the second is what teaching actually needs — and #174
+      proved the value of building from a real assignment rather than guessing at a
+      curriculum. Either way it must be **in-app and offline** — a docs site fails the
+      air-gap requirement ([[airgap-offline-requirement]]) — and it has to say which
+      plugins a walk-through needs enabled, which makes #183 a dependency rather than a
+      sibling.
+
 - [ ] **#176 — Export the syntax/history to a Stata `.do` (and SPSS `.sps`) file
       (raised 2026-09-20, confirmed absent).** Import already translates a `.do`/`.sps`
       into the native CrossTab syntax (`core/stata-import.js` `stataToScript`,

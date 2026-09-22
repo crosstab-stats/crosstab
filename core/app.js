@@ -24,6 +24,8 @@ import {
   DropboxBackend, WebDavBackend, FolderBackend, OpfsBackend, backendFor,
 } from './storage-backend.js';
 import { openProjectManager } from './project-manager.js';
+import { registerHelpMenu } from './help.js';
+import { openSyntaxGuide } from './syntax-guide.js';
 import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } from './user-identity.js';
 import { ProjectLog } from './project-log.js';
 import { ItemStore, newItemId, isItemOp, parseItemTarget, itemTarget } from './item-store.js';
@@ -47,7 +49,7 @@ import { runRScript, registerRScriptRunner } from './r-script.js';
 import { CodecService } from './codec-service.js';
 import { PluginCreator } from './plugin-creator.js';
 import { DatasetStore } from './dataset-store.js';
-import { debug, isDebug, setDebug, saveLog } from './debug.js';
+import { debug, isDebug, setDebug, saveLog, installErrorCapture } from './debug.js';
 import { DatasetLibrary, LIBRARY_CHANGED } from './library.js';
 import { ProjectStore } from './project-store.js';
 import { ProjectSync, PROJECT_CHANGED } from './project-sync.js';
@@ -525,6 +527,10 @@ function offerRestartR(webr, resultsApi) {
 export async function boot(mounts) {
   // Enter activates each dialog's primary (blue) button, app-wide (see dialog-keys).
   installDialogKeybindings();
+  // Remember the last uncaught error so Help ▸ Report a bug… can include it (#175).
+  // First thing in boot, because the errors most worth catching are the ones that
+  // happen while the rest of this function is still running.
+  installErrorCapture();
 
   // --- core services ---------------------------------------------------------
   const bus = new EventBus();
@@ -1657,6 +1663,18 @@ export async function boot(mounts) {
       { label: 'Export data…', run: () => exporters.openPicker?.() },
       { label: 'Export output…', run: () => outputExporters.open?.() },
     ].filter((x) => x.run),
+  });
+
+  // Help (#182). Registered here because it needs `datasets` and `plugins` for the bug
+  // report's diagnostics, and both exist by now. `plugins` is read through a getter
+  // rather than captured: the PluginManager is constructed BELOW this point, so passing
+  // the value would pass `undefined` and the report would list no plugins.
+  registerHelpMenu({
+    menus,
+    datasets,
+    plugins: { list: () => (plugins ? plugins.list() : []) },
+    openSyntaxGuide,
+    pluginActions,
   });
 
   // The sidebar project manager (active project + datasets, other projects,

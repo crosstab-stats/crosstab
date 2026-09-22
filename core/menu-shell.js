@@ -408,7 +408,10 @@ function byOrderThenLabel(a, b) {
  * in a fixed order — File, Edit, Transform — and everything else (plugin-
  * contributed, e.g. Analyze, Graphs) sorts alphabetically after them. The guiding
  * idea: turn off every plugin and the base menus stay exactly where they are. */
-const TOP_LEVEL_RANK = { File: 0, Edit: 1, Transform: 2 };
+// Help is pinned LAST (999) rather than left to the alphabetical fallback, where it
+// would land among the analysis menus — 'Help' sorts between 'Graphs' and 'Regression'.
+// Every desktop app puts it at the right-hand end; that is where people look for it.
+const TOP_LEVEL_RANK = { File: 0, Edit: 1, Transform: 2, Help: 999 };
 function byTopLevel(a, b) {
   const ra = TOP_LEVEL_RANK[a.label] ?? 100;
   const rb = TOP_LEVEL_RANK[b.label] ?? 100;
