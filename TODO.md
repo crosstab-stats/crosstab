@@ -5660,7 +5660,23 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       one always-on slot holds the last uncaught error, clipped to four stack lines.
       **A URL budget** — the deep link is a GET and URLs cap around 8 KB, so a long report
       would silently lose its tail; `bugReportUrl` measures, sheds the error text first,
-      and says in the issue that it did. 10 tests. *No browser pass yet.*
+      and says in the issue that it did.
+
+      **Browser-verified on the iPhone PWA (owner, 2026-09-21)** — and the first real
+      report immediately earned its keep by exposing a bug in itself. It read
+      **"Plugins enabled: (none)"** for a session with every core plugin running.
+      Cause: the report asked `PluginManager#list()`, which derives `activated` by
+      joining the loaded set against the persisted CATALOG — and a `CATALOG_VERSION`
+      bump clears that catalog, so immediately after installing a new build every entry
+      reads `activated: false`. Which is precisely when someone files a bug. It now reads
+      `loader.list()` — the loaded manifests themselves, no catalog, no join, no lag —
+      with the manager kept only as a fallback.
+
+      Also fixed from the same report: a blank project truthfully reports `0 variables ×
+      0 rows`, which reads like a failed measurement rather than a fact (it fooled the
+      author, who went looking for an accessor bug before the owner said "I had no
+      dataset open, started from blank"). It now appends *"(blank project — nothing
+      imported yet)"*, so a triager's wrong guess is closed off at the source. 14 tests.
 
       *Original entry:* a "Report a bug" affordance that costs nothing to run and needs no
       new service/account. NOT Formspree/Google Forms/Tally — those are exactly the extra

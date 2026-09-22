@@ -61,10 +61,39 @@ test('nothing identifying survives into the issue body either', async () => {
   assert.match(body, /builtin-logistic/);
 });
 
-test('only ENABLED plugins are listed', async () => {
+const loader = { list: () => [{ id: 'builtin-logistic' }, { id: 'builtin-frequencies' }] };
+
+test('the plugin list comes from the LOADER, which is what is actually wired', async () => {
+  const diag = await collectDiagnostics({ datasets, loader, plugins });
+  assert.equal(diag.plugins, 'builtin-logistic, builtin-frequencies');
+});
+
+test('a not-yet-probed catalog cannot empty the plugin list (iPhone PWA, 2026-09-21)', async () => {
+  // The first real report off a device said "Plugins enabled: (none)" for a session with
+  // every core plugin running. Cause: the manager reports `activated` by joining the
+  // loaded set against the persisted CATALOG, and a CATALOG_VERSION bump clears that
+  // catalog — so right after installing a new build, every entry reads activated:false.
+  // That is precisely when someone files a bug, so the report has to not depend on it.
+  const blindManager = { list: () => [
+    { id: 'builtin-logistic', activated: false },
+    { id: 'builtin-frequencies', activated: false },
+  ] };
+  const diag = await collectDiagnostics({ datasets, loader, plugins: blindManager });
+  assert.match(diag.plugins, /builtin-logistic/);
+  assert.match(diag.plugins, /builtin-frequencies/);
+});
+
+test('with no loader it falls back to the manager, and still filters to enabled', async () => {
   const diag = await collectDiagnostics({ datasets, plugins });
   assert.match(diag.plugins, /builtin-logistic/);
   assert.ok(!diag.plugins.includes('builtin-sem'), 'a disabled plugin is not part of the session');
+});
+
+test('a genuinely plugin-free session reports none, and says so in the body', async () => {
+  // Not every "(none)" is the bug above — this is what the honest empty case looks like.
+  const diag = await collectDiagnostics({ datasets, loader: { list: () => [] }, plugins: { list: () => [] } });
+  assert.equal(diag.plugins, '');
+  assert.match(bugReportBody(diag), /Plugins enabled: \(none\)/);
 });
 
 test('no dataset open is reported as such, not as a crash', async () => {
@@ -132,4 +161,16 @@ test('even an absurd plugin list cannot produce an over-long URL', () => {
   const { url, clipped } = bugReportUrl(diag);
   assert.equal(clipped, true);
   assert.ok(url.length <= 6000, `url was ${url.length}`);
+});
+
+test('a blank project says it is blank, not just 0 x 0', async () => {
+  // 0 variables x 0 rows is the TRUE reading for a blank start, and it looks exactly
+  // like a diagnostics failure. Saying which removes a wrong guess from triage.
+  const blank = {
+    all: () => [{}],
+    active: { rowCount: 0, getVariableMeta: () => [] },
+  };
+  const diag = await collectDiagnostics({ datasets: blank, loader });
+  assert.equal(diag.datasets, '1');
+  assert.match(diag.shape, /^0 variables × 0 rows \(blank project/);
 });

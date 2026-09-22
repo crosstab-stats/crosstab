@@ -1672,6 +1672,7 @@ export async function boot(mounts) {
   registerHelpMenu({
     menus,
     datasets,
+    loader, // the authority on what is actually wired — see collectDiagnostics
     plugins: { list: () => (plugins ? plugins.list() : []) },
     openSyntaxGuide,
     pluginActions,

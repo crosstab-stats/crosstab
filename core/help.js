@@ -48,10 +48,12 @@ const URL_BUDGET = 6000;
  *
  * @param {object} deps
  * @param {{all?: Function, active?: object}} [deps.datasets]
- * @param {{list?: Function}} [deps.plugins]
+ * @param {{list?: Function}} [deps.loader] - PluginLoader: the AUTHORITY on what is
+ *   actually wired. Preferred over the plugin manager's view — see below.
+ * @param {{list?: Function}} [deps.plugins] - PluginManager, used only as a fallback.
  * @returns {Promise<object>} plain fields, ready to render
  */
-export async function collectDiagnostics({ datasets, plugins } = {}) {
+export async function collectDiagnostics({ datasets, loader, plugins } = {}) {
   const out = {
     build: formatBuildTime(await runningBuildStamp().catch(() => null)) || 'unknown',
     browser: (navigator.userAgent || 'unknown').slice(0, 300),
@@ -72,14 +74,31 @@ export async function collectDiagnostics({ datasets, plugins } = {}) {
       const vars = active.getVariableMeta?.()?.length ?? null;
       const rows = active.rowCount ?? null;
       out.shape = `${vars ?? '?'} variables × ${rows ?? '?'} rows`;
+      // A blank project is one EMPTY dataset, so a real session legitimately reports
+      // 0 × 0 — which reads like a failed measurement rather than a fact. It fooled its
+      // own author on the first report off a device, so it says which it is: a triager
+      // seeing this should be asking about a blank start, not about broken diagnostics.
+      if (vars === 0 && rows === 0) out.shape += ' (blank project — nothing imported yet)';
     }
   } catch {
     out.shape = 'unreadable';
   }
   try {
     // Plugin IDs are public identifiers of shipped code, not user content.
-    const on = (plugins?.list?.() ?? []).filter((p) => p.activated).map((p) => p.id || p.key);
-    out.plugins = on.join(', ');
+    //
+    // Read from the LOADER, not the plugin manager. `PluginManager#list()` reports
+    // `activated` by joining the loaded set against the persisted CATALOG, so an entry
+    // the catalog has not probed yet comes back `activated: false` even while its code
+    // is loaded and its menus are on screen. A CATALOG_VERSION bump clears that catalog,
+    // which is exactly when someone has just installed a new build — i.e. exactly when
+    // they are most likely to be filing a bug. First real report off the iPhone PWA said
+    // "Plugins enabled: (none)" for a session with every core plugin running.
+    //
+    // `loader.list()` is the loaded manifests themselves: no catalog, no join, no lag.
+    const ids = (loader?.list?.() ?? []).map((m) => m?.id).filter(Boolean);
+    out.plugins = ids.length
+      ? ids.join(', ')
+      : (plugins?.list?.() ?? []).filter((p) => p.activated).map((p) => p.id || p.key).join(', ');
   } catch {
     out.plugins = 'unreadable';
   }
@@ -320,11 +339,12 @@ async function openBugReport(deps) {
  * @param {object} deps
  * @param {{register: Function}} deps.menus
  * @param {object} [deps.datasets]
+ * @param {object} [deps.loader]
  * @param {object} [deps.plugins]
  * @param {Function} [deps.openSyntaxGuide]
  * @param {object} [deps.pluginActions]
  */
-export function registerHelpMenu({ menus, datasets, plugins, openSyntaxGuide, pluginActions }) {
+export function registerHelpMenu({ menus, datasets, loader, plugins, openSyntaxGuide, pluginActions }) {
   const link = (url) => window.open(url, '_blank', 'noopener');
 
   menus.register({
@@ -359,7 +379,7 @@ export function registerHelpMenu({ menus, datasets, plugins, openSyntaxGuide, pl
     path: ['Help'],
     label: 'Report a bug…',
     order: 4,
-    command: () => void openBugReport({ datasets, plugins }),
+    command: () => void openBugReport({ datasets, loader, plugins }),
   });
   menus.register({
     id: 'core:help-discuss',
