@@ -6113,21 +6113,48 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         applied is still what gets exported — which is right (export what you see), and is
         why the import's own comments were in there to be re-emitted at all.
 
-      **Still open from that session: the Run error itself.** The script parses clean
-      (0 errors, 35 transforms + 1 analysis — verified headlessly against the same file),
-      and `dropVars` filters to existing columns before building its `EXCLUDE`, so the only
-      remaining path by which `replaceTransforms` can throw here is `validateOrder`'s
-      `“X” must be created before it’s edited` — a `label variable` / `label values` naming
-      a variable the imported dataset does not have (a case or spelling mismatch between
-      the faculty's do-file and the file they sent). Two things to settle once the exact
-      message is known:
-  - [ ] The wrapper wording. `replaceTransforms` throws
-        “That script change isn’t valid here: …”, which is wrong for the import-a-do-file
-        route — nothing was *changed*, a translated script was run for the first time.
-  - [ ] Whether a label on a missing variable should abort the WHOLE Run. The importers
-        report per command and leave the rest runnable; a Run is atomic by design (a bad
-        data step must not half-apply), but a variable label is not a data step, so the
-        all-or-nothing rule may be costing the user 34 good statements for one bad one.
+      **The Run error: FOUND AND FIXED (2026-09-25) — and it was not in the export at
+      all.** The owner supplied the two facts that cracked it: the message was
+      `Cannot read properties of undefined (reading 'wall')`, and **the output was
+      generated correctly** (the faculty member confirmed the numbers). `wall` is an HLC
+      field, and correct output means the throw came *after* the replay — so the earlier
+      guess in this entry (a `validateOrder` rejection naming a missing variable) was
+      wrong, and the atomic-Run worry it raised does not apply.
+
+      The real fault was the **last statement of `PluginActions#replayScript`**:
+      `this.#analysisLog.load(entries)`. `AnalysisLog#load` is the PROJECT-RESTORE path —
+      it takes raw envelope ops and hands them to `receiveOps`, which dereferences
+      `op.hlc` — and `entries` is the *folded* entry list, where there is no `hlc`. A
+      contract that changed under a caller in the #148 migration
+      ([[one-true-log-explicit-ops]]): `load` used to take entries, and nothing failed
+      loudly enough at the time to catch the one call site that still did.
+
+      **It needed exactly one `run` line in the script to fire.** With no analyses,
+      `entries` is `[]`, and an empty array through the same path throws nothing — so the
+      do-file editor's Run was broken for every script that analysed anything and fine for
+      every script that did not, which is why it survived the #133/#134 browser passes and
+      only showed up on a faculty do-file ending in `tabulate q1`.
+
+      Fixed by saying what that line MEANT in log-native terms: retire the previous set
+      (`clear()` — a `removeAnalysis` op each, not a physical drop, per the
+      delete-inference rule) and re-append the replayed entries in script order
+      (`restore()`, which deliberately does not emit the new-run signal — a replay is not
+      a fresh action).
+
+      **The second-order consequence, which nobody would have reported as a bug:** because
+      the throw was the last statement, the analysis log kept its PRE-Run contents while
+      the Output pane showed the freshly replayed analyses. So after any Run with an
+      analysis, the log and the visible output disagreed — ↻ Refresh or reopening the panel
+      would have dropped the `run` line from the script text, and a save would not have
+      recorded the analysis at all. Both follow from the same line.
+
+      `test/replay-script-log.test.mjs` (6 tests) drives the real `replayScript` against
+      fakes for the pieces it only pokes, and a **real** `AnalysisLog` over a real
+      `ProjectLog` — the HLC has to be genuine or the bug cannot reproduce. Checked the
+      only way a regression test earns its keep: with the fix reverted, three of the six
+      fail with the user's exact message, and the no-analyses test passes either way,
+      confirming the trigger. One test pins the contract itself (`load` takes raw ops;
+      handing it entries throws) so the two shapes cannot be confused again silently.
 
 - [ ] **#177 — the plugin manager has no "what does this add?" tooltip; the launcher
       does (user, 2026-09-20).** The two plugin pickers render the same catalogue and

@@ -1287,7 +1287,8 @@ export async function boot(mounts) {
     getOutput: () => results.getModel(),
     applyOutput: (model) => results.restoreModel(model),
     getAnalysisLog: () => analysisLog.toJSON(),
-    applyAnalysisLog: (entries) => analysisLog.load(entries),
+    // Raw ops, not folded entries — `load` pairs with `toJSON` above (see AnalysisLog).
+    applyAnalysisLog: (ops) => analysisLog.load(ops),
     materializeAnalyses: () => materializeMissingAnalyses(),
     getPluginStates: () => (plugins ? plugins.list().map((p) => ({ key: p.key, activated: !!p.activated })) : []),
     applyProjectPlugins: async (opinions) => {

@@ -635,7 +635,20 @@ export class PluginActions {
       await this.#execute(h);
       entries.push(h);
     }
-    this.#analysisLog?.load(entries);
+    // Make the log hold exactly the analyses this script ran, log-natively: retire the
+    // previous set (a removeAnalysis op each — see AnalysisLog#clear on why this is not a
+    // physical drop) and append the replayed ones in script order.
+    //
+    // This used to be `load(entries)`, which was a contract bug from the #148 migration:
+    // `load` is the PROJECT-RESTORE path and takes raw envelope ops, so it dereferences
+    // `op.hlc` — and a folded entry has none. Any script containing a single `run` line
+    // therefore threw "Cannot read properties of undefined (reading 'wall')" from the
+    // HLC, at the very last statement here, AFTER every analysis had already executed and
+    // rendered. That is why it read as an error with correct output behind it.
+    if (this.#analysisLog) {
+      this.#analysisLog.clear();
+      for (const entry of entries) this.#analysisLog.restore(entry);
+    }
     return { unknown };
   }
 }
