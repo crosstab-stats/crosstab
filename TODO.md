@@ -6017,9 +6017,10 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       editor's **⬇ Export**, which is now a three-way choice — `.ctscript` (lossless,
       re-importable, unchanged and still the default), `.do`, `.sps`.
 
-      **Transforms only, as scoped.** `run pluginId.fn {…}` lines become comments that
-      keep the original text; translating them would need every plugin to declare its own
-      Stata/SPSS spelling, which is the same blocker the R-syntax export has.
+      **Transforms, plus the analyses the importers can read (see the 2026-09-25 note
+      below).** An analysis outside that set becomes a comment holding the original line;
+      translating the rest needs every plugin to declare its own Stata/SPSS spelling, which
+      is the same blocker the R-syntax export has.
 
       The shape the work took, and the one decision that drove it: **"clean valid output
       or an honest comment" is not a slogan you can implement with regex substitutions.**
@@ -6155,6 +6156,62 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       fail with the user's exact message, and the no-analyses test passes either way,
       confirming the trigger. One test pins the contract itself (`load` takes raw ops;
       handing it entries throws) so the two shapes cannot be confused again silently.
+
+      **Analyses: now translated too (2026-09-25) — the "transforms only" scope was wrong
+      where the importers already knew the answer.** The owner, holding the exported
+      do-file: *"our exported do file wouldn't generate any actual output from stata, which
+      is like buying all this nice running gear and prepping and on the day of the race you
+      forget and don't even show up to the starting line."* And the question that settles
+      it: is there a reason the translator can go `tabulate` → `builtin-frequencies` but not
+      back? No. The original scope note stands for the fifty-odd plugins nothing has ever
+      translated; it never applied to the ten the IMPORTERS read, where the mapping is
+      already established in this codebase and was simply never inverted.
+
+      The boundary is now a rule with teeth: **emit only what the matching importer can
+      read back.** Every entry in `ANALYSES` is covered by a round-trip test
+      (script → `.do`/`.sps` → script) asserting the call that comes back, so the syntax is
+      checked by the pair rather than by trusting that it looks right. Ten analyses in
+      Stata, eight in SPSS; the two SPSS gaps (`LOGISTIC REGRESSION`, `UNIANOVA`) say
+      *"no SPSS spelling is round-trip verified"* rather than improvising, and closing them
+      means teaching `spss-import` to read them first — at which point the export follows
+      for free.
+
+      The faculty do-file that prompted this now round-trips **36 of 36 statements, 0
+      comments, in both dialects**, ending in the `tabulate q1` it started with.
+
+      Three decisions inside it, all of the same kind — where the two languages disagree,
+      say so or refuse; never quietly emit the near-miss:
+  - [x] **A logistic run that names its modelled category is refused.** Stata's `logit`
+        models the non-zero category of a 0/1 outcome and cannot be pointed at a chosen
+        level; CrossTab can (#187). For 1/2-coded survey data those are *opposite events* —
+        #186 exactly — so the line becomes a comment saying the outcome has to be recoded
+        first. An imported `logit` line (no level recorded) translates normally. The
+        reference-category pick *is* expressible and is emitted: `i.var`, or `ib(last).var`
+        for CrossTab's "Last".
+  - [x] **A factorial ANOVA emits `anova y f1##f2`, not `anova y f1 f2`.** The plugin fits
+        `.y ~ f1 * f2`; the space-separated list is main effects only, which would have been
+        a different model reported as the same one.
+  - [x] **A weight is written, and the mismatch is named in the header.** CrossTab reads a
+        weight as a frequency weight, so Stata gets `[fweight=w]` — but `fweight` wants
+        whole numbers, and a fractional survey weight needs `aweight`/`pweight`, so the
+        header says that whenever the file contains one. SPSS has no per-command weight at
+        all, so the command is bracketed `WEIGHT BY w.` / `WEIGHT OFF.`.
+
+      Two guards make the table safe to leave alone as plugins grow: an input **outside** an
+      entry's declared `keys`, carrying a value, refuses the whole line (a future input that
+      changes the numbers can never be dropped in silence), while options that only change
+      *printed detail* (Frequencies' Statistics panel in Stata, the association measures)
+      are named in a comment above a command that still runs.
+
+      Also, to keep the round-trip rule true rather than nearly true, three readings were
+      added to the importers: `spearman` and `ktau` (Stata) and `NONPAR CORR` (SPSS), so a
+      rank correlation survives in both directions instead of coming back as a comment.
+
+      **Found while checking for it:** `test/chart-static-fallback.test.mjs` had a literal
+      backspace where `\b` was meant (`/Charts\b/`), from a heredoc escape mangled in the
+      session that wrote it (a70132c, 2026-08-07). The assertion was weaker than it read;
+      restored, and it still passes. Worth a look wherever else a regex was written through
+      a shell heredoc.
 
 - [ ] **#177 — the plugin manager has no "what does this add?" tooltip; the launcher
       does (user, 2026-09-20).** The two plugin pickers render the same catalogue and

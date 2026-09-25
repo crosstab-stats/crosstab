@@ -118,6 +118,12 @@ function translateCommand(text, state) {
   if (/^CROSSTABS$/i.test(word)) return transCrosstabs(text);
   if (/^(REGRESSION|REG)$/i.test(word)) return transRegression(text);
   if (/^(CORRELATIONS|CORRELATION)$/i.test(word)) return transVarlistAnalysis(text, 'builtin-correlation', 'run', 'vars', { method: 'pearson' });
+  // NONPAR CORR is SPSS's rank correlation; /PRINT= says which. Read so that an exported
+  // rank correlation comes back as one rather than as a comment (#176).
+  if (/^NONPAR$/i.test(word) && /^nonpar\s+corr/i.test(text)) {
+    const method = /KENDALL/i.test(text) ? 'kendall' : 'spearman';
+    return transVarlistAnalysis(text, 'builtin-correlation', 'run', 'vars', { method });
+  }
   if (/^(T-TEST|TTEST)$/i.test(word) || /^t-test\b/i.test(text)) return transTtest(text);
   if (/^ONEWAY$/i.test(word)) return transOneway(text);
 

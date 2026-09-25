@@ -21,6 +21,7 @@ import assert from 'node:assert/strict';
 
 import { scriptToStata, scriptToSpss, scriptFileName } from '../core/script-export.js';
 import { stataToScript } from '../core/stata-import.js';
+import { spssToScript } from '../core/spss-import.js';
 
 /** The translated lines only — no header, no comments, no blanks. */
 function code(out) {
@@ -204,7 +205,9 @@ test('an untranslatable construct is commented verbatim and counted, never guess
     ['compute r = round(income, 2)', /does not mean the same thing/], // decimals vs multiples
     ['compute c = list_value(1, 2)', /no Stata equivalent|has no/],
     ['compute s = a || b', /uses “|”/],
-    ['run builtin-frequencies.run {"vars": ["educ"]}', /analysis/],
+    // An analysis with no declared spelling (builtin-sem has none); the ones the importers
+    // know are translated now - see the analyses section below.
+    ['run builtin-sem.run {"model": "y ~ x"}', /analysis/],
   ];
   for (const [line, why] of cases) {
     const out = scriptToStata(line);
@@ -380,4 +383,223 @@ test('an importer banner or breadcrumb is never re-emitted as fact about the new
   // The faculty's own comments DO survive - only our own translators' notes are dropped.
   assert.match(out.text, /Applying Variable Labels/);
   assert.match(out.text, /Summarize data/);
+});
+
+// =============================================================================
+// Analyses (#176 follow-up): the export writes the ones the importers can read
+// =============================================================================
+
+/**
+ * The reason this section exists, in the owner's words: an exported do-file whose only
+ * analysis line is a comment "wouldn't generate any actual output from Stata, which is
+ * like buying all this nice running gear and prepping and on the day of the race you
+ * forget and don't even show up to the starting line."
+ *
+ * One `run …` line in, one command out. The expected text is spelled in full rather than
+ * matched loosely, because a wrong-but-plausible command is the failure that matters.
+ */
+const EMIT = [
+  // --- frequencies
+  ['builtin-frequencies.run', { vars: ['q1'] }, ['tabulate q1'], ['FREQUENCIES VARIABLES=q1.']],
+  ['builtin-frequencies.run', { vars: ['q1', 'q2'] }, ['tab1 q1 q2'], ['FREQUENCIES VARIABLES=q1 q2.']],
+  // SPSS can print the Statistics panel; Stata's tabulate cannot, so it is named instead.
+  [
+    'builtin-frequencies.run',
+    { vars: ['q1'], statistics: ['mean', 'sd', 'quartiles'] },
+    ['tabulate q1'],
+    ['FREQUENCIES VARIABLES=q1 /STATISTICS=MEAN STDDEV QUARTILES.'],
+  ],
+  // A weight: Stata takes it per command, SPSS only as a mode, so SPSS brackets it.
+  [
+    'builtin-frequencies.run',
+    { vars: ['q1'], weight: 'WTSSNR' },
+    ['tabulate q1 [fweight=WTSSNR]'],
+    ['WEIGHT BY WTSSNR.', 'FREQUENCIES VARIABLES=q1.', 'WEIGHT OFF.'],
+  ],
+  // --- descriptives
+  ['builtin-descriptives.run', { vars: ['age', 'inc'] }, ['summarize age inc'], ['DESCRIPTIVES VARIABLES=age inc.']],
+  // --- crosstabs (CrossTab always reports chi-square, hence , chi2 / STATISTICS=CHISQ)
+  [
+    'builtin-crosstabs.run',
+    { rowvar: 'q1', colvar: 'q2' },
+    ['tabulate q1 q2, chi2'],
+    ['CROSSTABS /TABLES=q1 BY q2 /STATISTICS=CHISQ /CELLS=COUNT.'],
+  ],
+  [
+    'builtin-crosstabs.run',
+    { rowvar: 'q1', colvar: 'q2', percent: 'row' },
+    ['tabulate q1 q2, chi2 row'],
+    ['CROSSTABS /TABLES=q1 BY q2 /STATISTICS=CHISQ /CELLS=COUNT ROW.'],
+  ],
+  // --- regression
+  [
+    'builtin-regression.run',
+    { dv: 'y', ivs: ['x1', 'x2'] },
+    ['regress y x1 x2'],
+    ['REGRESSION /DEPENDENT=y /METHOD=ENTER x1 x2.'],
+  ],
+  // --- correlation, all three methods
+  ['builtin-correlation.run', { vars: ['a', 'b'] }, ['correlate a b'], ['CORRELATIONS /VARIABLES=a b.']],
+  [
+    'builtin-correlation.run',
+    { vars: ['a', 'b'], method: 'spearman' },
+    ['spearman a b'],
+    ['NONPAR CORR /VARIABLES=a b /PRINT=SPEARMAN.'],
+  ],
+  [
+    'builtin-correlation.run',
+    { vars: ['a', 'b'], method: 'kendall' },
+    ['ktau a b'],
+    ['NONPAR CORR /VARIABLES=a b /PRINT=KENDALL.'],
+  ],
+  // --- t-tests
+  ['builtin-compare.oneSample', { x: 'a', mu: 5 }, ['ttest a == 5'], ['T-TEST /TESTVAL=5 /VARIABLES=a.']],
+  ['builtin-compare.paired', { x1: 'a', x2: 'b' }, ['ttest a == b'], ['T-TEST PAIRS=a WITH b.']],
+  // No group pick recorded (what an imported `ttest y, by(g)` means).
+  ['builtin-compare.independent', { y: 'a', g: 'g' }, ['ttest a, by(g)'], ['T-TEST GROUPS=g /VARIABLES=a.']],
+  // With the pick (#187): Stata's by() needs exactly two values, so the pick is a filter.
+  [
+    'builtin-compare.independent',
+    { y: 'a', g: 'g', g1: 1, g2: 2 },
+    ['ttest a if inlist(g, 1, 2), by(g)'],
+    ['T-TEST GROUPS=g(1 2) /VARIABLES=a.'],
+  ],
+  // --- oneway
+  ['builtin-compare.oneway', { y: 'a', g: 'g' }, ['oneway a g'], ['ONEWAY a BY g.']],
+  [
+    'builtin-compare.oneway',
+    { y: 'a', g: 'g', groups: [1, 2, 3] },
+    ['oneway a g if inlist(g, 1, 2, 3)'],
+    ['ONEWAY a BY g.'], // SPSS would need a filter; the omission is noted in a comment
+  ],
+  // --- logistic (Stata only) and factorial ANOVA (Stata only)
+  ['builtin-logistic.run', { dv: 'y', ivs: ['x1'] }, ['logit y x1'], null],
+  [
+    'builtin-logistic.run',
+    { dv: 'y', ivs: ['x1', 'edu'], cats: ['edu'], ref: 'last' },
+    ['logit y x1 ib(last).edu'],
+    null,
+  ],
+  ['builtin-anova.factorial', { dv: 'y', facs: ['f1', 'f2'] }, ['anova y f1##f2'], null],
+];
+
+for (const [call, inputs, stata, spss] of EMIT) {
+  const line = `run ${call} ${JSON.stringify(inputs)}`;
+  test(`${call} ${JSON.stringify(inputs)} → Stata`, () => {
+    assert.deepEqual(code(scriptToStata(line)), stata);
+  });
+  test(`${call} ${JSON.stringify(inputs)} → SPSS`, () => {
+    if (spss) assert.deepEqual(code(scriptToSpss(line)), spss);
+    // null = no verified SPSS spelling: it must refuse, not improvise.
+    else assert.match(refusals(scriptToSpss(line))[0], /no SPSS spelling is round-trip verified/);
+  });
+}
+
+/**
+ * The rule that keeps the table honest: **only emit what the matching importer can read
+ * back.** Each command below goes out and comes straight back in, and the analysis call it
+ * returns as is asserted in full. Options neither language can express (a weight, the
+ * percentages, the group pick) are dropped on the way back — which is the point of
+ * asserting the returned call rather than assuming symmetry.
+ */
+const ROUND_TRIP = [
+  [{ vars: ['q1'] }, 'builtin-frequencies.run', { vars: ['q1'] }],
+  [{ vars: ['q1', 'q2'] }, 'builtin-frequencies.run', { vars: ['q1', 'q2'] }],
+  [{ vars: ['age', 'inc'] }, 'builtin-descriptives.run', { vars: ['age', 'inc'] }, 'builtin-descriptives.run'],
+  [{ rowvar: 'q1', colvar: 'q2' }, 'builtin-crosstabs.run', { rowvar: 'q1', colvar: 'q2' }],
+  [{ dv: 'y', ivs: ['x1', 'x2'] }, 'builtin-regression.run', { dv: 'y', ivs: ['x1', 'x2'] }],
+  [{ vars: ['a', 'b'], method: 'spearman' }, 'builtin-correlation.run', { vars: ['a', 'b'], method: 'spearman' }],
+  [{ vars: ['a', 'b'], method: 'kendall' }, 'builtin-correlation.run', { vars: ['a', 'b'], method: 'kendall' }],
+  [{ x: 'a', mu: 5 }, 'builtin-compare.oneSample', { x: 'a', mu: 5 }],
+  [{ x1: 'a', x2: 'b' }, 'builtin-compare.paired', { x1: 'a', x2: 'b' }],
+  [{ y: 'a', g: 'g' }, 'builtin-compare.independent', { y: 'a', g: 'g' }],
+  [{ y: 'a', g: 'g' }, 'builtin-compare.oneway', { y: 'a', g: 'g' }],
+];
+
+/** The `run …` lines a translated script comes back as. */
+function runLinesOf(script) {
+  return script
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith('run '));
+}
+
+for (const [inputs, call, expected] of ROUND_TRIP) {
+  test(`${call} survives .do → script`, () => {
+    const out = scriptToStata(`run ${call} ${JSON.stringify(inputs)}`);
+    assert.equal(out.stats.skipped, 0, out.text);
+    const back = runLinesOf(stataToScript(out.text).script);
+    assert.deepEqual(back, [`run ${call} ${JSON.stringify(expected)}`]);
+  });
+  test(`${call} survives .sps → script`, () => {
+    const out = scriptToSpss(`run ${call} ${JSON.stringify(inputs)}`);
+    assert.equal(out.stats.skipped, 0, out.text);
+    const back = runLinesOf(spssToScript(out.text).script);
+    assert.deepEqual(back, [`run ${call} ${JSON.stringify(expected)}`]);
+  });
+}
+
+test('an analysis nothing has ever translated is still an honest comment', () => {
+  const line = 'run builtin-sem.run {"model": "y ~ x"}';
+  const out = scriptToStata(line);
+  assert.equal(out.stats.skipped, 1);
+  assert.equal(code(out).length, 0);
+  assert.match(refusals(out)[0], /no Stata spelling is declared for it/);
+  assert.ok(refusals(out)[0].includes(line), 'the original call must survive in the comment');
+});
+
+test('an input the table does not account for refuses the line rather than dropping it', () => {
+  // The guard that matters for the future: add an input to a plugin that changes the
+  // numbers, and an out-of-date export must fail loudly instead of writing the old command.
+  const out = scriptToStata('run builtin-crosstabs.run {"rowvar":"a","colvar":"b","layers":["c"]}');
+  assert.equal(out.stats.skipped, 1);
+  assert.match(refusals(out)[0], /does not account for \(layers\)/);
+});
+
+test('options that only change printed detail are named, and the command still runs', () => {
+  // Not the same class as an unknown input: the analysis IS this command, just without the
+  // extras, so the command is written and the omission stated above it.
+  const out = scriptToStata('run builtin-crosstabs.run {"rowvar":"a","colvar":"b","measures":"ordinal","pmethod":"montecarlo"}');
+  assert.equal(out.stats.skipped, 0);
+  assert.deepEqual(code(out), ['tabulate a b, chi2']);
+  assert.match(out.text, /leaves out the Monte Carlo p-value.*the association measures/);
+});
+
+test('a logistic run that names the modelled category is refused, not silently flipped', () => {
+  // #186/#187: Stata's logit models the non-zero category, so for 1/2-coded data it would
+  // model the opposite event. Exactly the bug class those two entries exist to kill.
+  const out = scriptToStata('run builtin-logistic.run {"dv":"voted","ivs":["age"],"modelled":"Yes"}');
+  assert.equal(out.stats.skipped, 1);
+  assert.match(refusals(out)[0], /models the non-zero category/);
+  assert.match(refusals(out)[0], /recoded first/);
+});
+
+test('a weighted analysis says how the weight was written', () => {
+  const stata = scriptToStata('run builtin-descriptives.run {"vars":["age"],"weight":"w"}');
+  assert.match(stata.text, /\[fweight=w\]/);
+  assert.match(stata.text, /whole-number fweights/);
+  const spss = scriptToSpss('run builtin-descriptives.run {"vars":["age"],"weight":"w"}');
+  assert.match(spss.text, /WEIGHT BY w\./);
+  assert.match(spss.text, /WEIGHT OFF\./);
+  // Unweighted files get no note.
+  assert.ok(!/fweight/.test(scriptToStata('run builtin-descriptives.run {"vars":["age"]}').text));
+});
+
+test('a weighted rank correlation is refused in both languages', () => {
+  // The plugin itself rejects it (weighted ranking has no agreed definition), so neither
+  // language should be handed one.
+  for (const f of [scriptToStata, scriptToSpss]) {
+    const out = f('run builtin-correlation.run {"vars":["a","b"],"method":"spearman","weight":"w"}');
+    assert.equal(out.stats.skipped, 1);
+    assert.match(refusals(out)[0], /weighted rank correlation/);
+  }
+});
+
+test('the faculty do-file now comes back with its analysis intact', () => {
+  // The whole point, end to end: their file ends in `tabulate q1`, and the exported file
+  // must end in a command Stata will actually run.
+  const script = stataToScript(FACULTY_DO).script;
+  const out = scriptToStata(script);
+  assert.equal(out.stats.skipped, 0, `nothing should be left as a comment now:\n${out.text}`);
+  assert.equal(code(out).at(-1), 'tabulate q1');
 });

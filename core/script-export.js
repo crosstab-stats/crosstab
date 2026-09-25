@@ -22,10 +22,10 @@
  *   - `"x"` is a *quoted identifier* in SQL and a *string literal* in Stata, so the
  *     tokenizer keeps the two apart instead of passing the quotes through.
  *
- * Scope, matching the import side and #176's decision: **transforms only.**
- * `run pluginId.fn {…}` analysis lines become comments — translating them would need
- * every plugin to declare its own Stata/SPSS spelling, the same blocker the R-syntax
- * export has.
+ * Scope: every transform, plus the analyses the matching IMPORTER can read back — see
+ * {@link ANALYSES} for why that is the boundary. An analysis outside it becomes a comment
+ * holding the original line: translating the other fifty plugins needs each to declare its
+ * own Stata/SPSS spelling, the same blocker the R-syntax export has.
  *
  * Pure module — no DOM, no app deps. Each entry point returns
  * `{ text, stats: { statements, translated, skipped } }`.
@@ -161,7 +161,7 @@ export function scriptFileName(dialect, base = 'analysis') {
 function translate(text, D) {
   const lines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n');
   const body = [];
-  const ctx = { labelSets: new Set(), labelSetByLabels: new Map(), needsExecute: false, sawFilter: false };
+  const ctx = { labelSets: new Set(), labelSetByLabels: new Map(), needsExecute: false, sawFilter: false, sawWeight: false };
   let statements = 0;
   let translated = 0;
   let skipped = 0;
@@ -204,6 +204,20 @@ function translate(text, D) {
     'The data is NOT in this file: open your dataset first, then run this.',
   ];
   if (skipped) head.push('Read every commented line: those steps have NOT been applied.');
+  // A weight is the input most likely to change the numbers, so the one place the two
+  // languages do not line up exactly has to be said out loud rather than left to be found.
+  if (ctx.sawWeight) {
+    head.push(
+      D.id === 'stata'
+        ? 'A weighted analysis is written [fweight=w], which is what CrossTab computes — but Stata'
+        : 'A weighted analysis is bracketed WEIGHT BY / WEIGHT OFF, since SPSS weighting is a mode',
+    );
+    head.push(
+      D.id === 'stata'
+        ? 'wants whole-number fweights, so a fractional survey weight needs aweight/pweight instead.'
+        : 'rather than a per-command option. Check nothing between them expects unweighted data.',
+    );
+  }
   // Stata's missing value sorts ABOVE every number, so `keep if x > 5` KEEPS the rows a
   // SQL filter drops, and cond() returns missing where CASE would have taken the ELSE.
   // Both are silent differences in the numbers, so they are worth saying out loud — but
@@ -254,12 +268,7 @@ function notTranslated(line, why, D) {
 function translateStatement(line, D, ctx) {
   const { transforms, analyses, errors } = parse(line);
   if (errors.length) return notTranslated(line, errors[0].message, D);
-  if (analyses.length) {
-    // Out of scope by decision (#176): an analysis is a plugin call, and only the plugin
-    // knows its Stata/SPSS spelling. Keep the line verbatim so nothing is lost.
-    const a = analyses[0];
-    return notTranslated(line, `analysis (${a.pluginId}.${a.run}) — run it in ${D.label} by hand`, D);
-  }
+  if (analyses.length) return transAnalysis(analyses[0], D, ctx, line);
   const op = transforms[0];
   if (!op) return notTranslated(line, 'nothing to translate', D);
 
@@ -554,6 +563,309 @@ function literal(v, D) {
   const s = String(v);
   if (s !== '' && Number.isFinite(Number(s))) return s;
   return D.str(s);
+}
+
+// =============================================================================
+// Analyses
+// =============================================================================
+
+/**
+ * The analyses this translator will WRITE, and why it is these and not all sixty.
+ *
+ * #176 originally put analyses out of scope on the grounds that each plugin would have to
+ * declare its own Stata/SPSS spelling. That holds for the fifty-odd plugins nothing has
+ * ever translated — but not for the handful the IMPORTERS already read, where the mapping
+ * is established in this codebase and was simply never inverted. An exported do-file whose
+ * one analysis line is a comment produces no output at all, which is most of the point of
+ * handing it to a colleague.
+ *
+ * The boundary is therefore: **emit only what the matching importer can read back.** Every
+ * entry below is covered by a round-trip test (script → .do/.sps → script), so the syntax
+ * is checked by the pair rather than by trusting that it looks right. Two entries are
+ * Stata-only for exactly that reason — `spss-import` reads no `LOGISTIC REGRESSION` or
+ * `UNIANOVA` — and they say so rather than guessing.
+ *
+ * `keys` lists every input the entry accounts for. An input OUTSIDE that list, carrying a
+ * value, refuses the whole line: a future input that changes the numbers must never be
+ * dropped in silence. Inputs the target language cannot print (the Statistics panel in
+ * Stata, the association measures) are named in a comment above the command — the command
+ * is still the right analysis, just without that extra detail.
+ */
+const ANALYSES = {
+  'builtin-frequencies.run': {
+    keys: ['vars', 'statistics', 'weight'],
+    // `tabulate` is the one-variable form the importer reads; `tab1` is its n-variable
+    // sibling. Both come back as this same call.
+    stata: (i, D, ctx) => ({
+      lines: [
+        `${asList(i.vars).length > 1 ? 'tab1' : 'tabulate'} ${vlist(i.vars, D)}${stataWeight(i.weight, D, ctx)}`,
+      ],
+      dropped: asList(i.statistics).length ? ['the Statistics panel (tabulate cannot print it)'] : [],
+    }),
+    spss: (i, D, ctx) => ({
+      lines: spssWeighted(i.weight, D, ctx, [`FREQUENCIES VARIABLES=${vlist(i.vars, D)}${spssStats(i.statistics)}.`]),
+    }),
+  },
+
+  'builtin-descriptives.run': {
+    keys: ['vars', 'weight'],
+    stata: (i, D, ctx) => ({ lines: [`summarize ${vlist(i.vars, D)}${stataWeight(i.weight, D, ctx)}`] }),
+    spss: (i, D, ctx) => ({ lines: spssWeighted(i.weight, D, ctx, [`DESCRIPTIVES VARIABLES=${vlist(i.vars, D)}.`]) }),
+  },
+
+  'builtin-crosstabs.run': {
+    keys: ['rowvar', 'colvar', 'pmethod', 'percent', 'measures', 'weight'],
+    stata: (i, D, ctx) => ({
+      lines: [
+        `tabulate ${varName(i.rowvar, D)} ${varName(i.colvar, D)}${stataWeight(i.weight, D, ctx)}, chi2` +
+          ({ row: ' row', column: ' col', total: ' cell' }[i.percent] || ''),
+      ],
+      dropped: crosstabExtras(i),
+    }),
+    spss: (i, D, ctx) => ({
+      lines: spssWeighted(i.weight, D, ctx, [
+        `CROSSTABS /TABLES=${varName(i.rowvar, D)} BY ${varName(i.colvar, D)} /STATISTICS=CHISQ /CELLS=COUNT` +
+          ({ row: ' ROW', column: ' COLUMN', total: ' TOTAL' }[i.percent] || '') + '.',
+      ]),
+      dropped: crosstabExtras(i),
+    }),
+  },
+
+  'builtin-regression.run': {
+    keys: ['dv', 'ivs'],
+    stata: (i, D) => ({ lines: [`regress ${varName(i.dv, D)} ${vlist(i.ivs, D)}`] }),
+    spss: (i, D) => ({ lines: [`REGRESSION /DEPENDENT=${varName(i.dv, D)} /METHOD=ENTER ${vlist(i.ivs, D)}.`] }),
+  },
+
+  'builtin-logistic.run': {
+    keys: ['dv', 'modelled', 'ivs', 'cats', 'ref', 'opts'],
+    stata: (i, D) => {
+      // Stata's logit models the NON-ZERO category of a 0/1 outcome; it cannot be pointed
+      // at a chosen level. CrossTab can (#187), and for 1/2-coded survey data the two
+      // disagree about which category is the event — the #186 bug class exactly. So a run
+      // that names its level is refused rather than quietly modelling the other one.
+      if (!isEmpty(i.modelled)) {
+        bail(
+          `Stata’s logit models the non-zero category of a 0/1 outcome, and this run models ` +
+            `“${i.modelled}” — the outcome has to be recoded first`,
+        );
+      }
+      const cats = new Set(asList(i.cats));
+      // Stata's factor notation: `i.var` dummy-codes with the LOWEST level as base;
+      // `ib(last).` moves the base to the highest, which is CrossTab's "Last".
+      const prefix = i.ref === 'last' ? 'ib(last).' : 'i.';
+      const ivs = asList(i.ivs).map((v) => (cats.has(v) ? `${prefix}${varName(v, D)}` : varName(v, D)));
+      if (!ivs.length) bail('the analysis has no predictors');
+      return {
+        lines: [`logit ${varName(i.dv, D)} ${ivs.join(' ')}`],
+        dropped: asList(i.opts).length
+          ? ['the extra tables (classification, CI for Exp(B), Hosmer–Lemeshow, residuals)']
+          : [],
+      };
+    },
+    // No `spss`: spss-import reads no LOGISTIC REGRESSION, so nothing written here would be
+    // round-trip checked. Refused with that reason rather than guessed at.
+  },
+
+  'builtin-correlation.run': {
+    keys: ['vars', 'method', 'weight'],
+    stata: (i, D, ctx) => {
+      const cmd = { spearman: 'spearman', kendall: 'ktau' }[i.method] || 'correlate';
+      if (!isEmpty(i.weight) && cmd !== 'correlate') bail('a weighted rank correlation has no Stata equivalent');
+      return { lines: [`${cmd} ${vlist(i.vars, D)}${cmd === 'correlate' ? stataWeight(i.weight, D, ctx) : ''}`] };
+    },
+    spss: (i, D, ctx) => {
+      const rank = { spearman: 'SPEARMAN', kendall: 'KENDALL' }[i.method];
+      if (!isEmpty(i.weight) && rank) bail('a weighted rank correlation has no SPSS equivalent');
+      const line = rank
+        ? `NONPAR CORR /VARIABLES=${vlist(i.vars, D)} /PRINT=${rank}.`
+        : `CORRELATIONS /VARIABLES=${vlist(i.vars, D)}.`;
+      return { lines: spssWeighted(i.weight, D, ctx, [line]) };
+    },
+  },
+
+  'builtin-compare.oneSample': {
+    keys: ['x', 'mu', 'weight'],
+    stata: (i, D, ctx) => ({
+      lines: [`ttest ${varName(i.x, D)} == ${numLit(i.mu)}${stataWeight(i.weight, D, ctx)}`],
+    }),
+    spss: (i, D, ctx) => ({
+      lines: spssWeighted(i.weight, D, ctx, [`T-TEST /TESTVAL=${numLit(i.mu)} /VARIABLES=${varName(i.x, D)}.`]),
+    }),
+  },
+
+  'builtin-compare.independent': {
+    keys: ['y', 'g', 'g1', 'g2', 'weight'],
+    stata: (i, D, ctx) => ({
+      // Stata's by() needs the grouping variable to take exactly two values, and CrossTab
+      // lets you pick which two out of many (#187) — so the pick becomes a row filter.
+      lines: [
+        `ttest ${varName(i.y, D)}${pickedGroups(i.g, groupsOf(i.g1, i.g2), D)}` +
+          `${stataWeight(i.weight, D, ctx)}, by(${varName(i.g, D)})`,
+      ],
+    }),
+    spss: (i, D, ctx) => ({
+      lines: spssWeighted(i.weight, D, ctx, [
+        `T-TEST GROUPS=${varName(i.g, D)}${groupPair(i.g1, i.g2, D)} /VARIABLES=${varName(i.y, D)}.`,
+      ]),
+    }),
+  },
+
+  'builtin-compare.paired': {
+    keys: ['x1', 'x2', 'weight'],
+    stata: (i, D, ctx) => ({
+      lines: [`ttest ${varName(i.x1, D)} == ${varName(i.x2, D)}${stataWeight(i.weight, D, ctx)}`],
+    }),
+    spss: (i, D, ctx) => ({
+      lines: spssWeighted(i.weight, D, ctx, [`T-TEST PAIRS=${varName(i.x1, D)} WITH ${varName(i.x2, D)}.`]),
+    }),
+  },
+
+  'builtin-compare.oneway': {
+    keys: ['y', 'g', 'groups', 'weight'],
+    stata: (i, D, ctx) => ({
+      lines: [
+        `oneway ${varName(i.y, D)} ${varName(i.g, D)}${pickedGroups(i.g, asList(i.groups), D)}` +
+          `${stataWeight(i.weight, D, ctx)}`,
+      ],
+    }),
+    spss: (i, D, ctx) => ({
+      lines: spssWeighted(i.weight, D, ctx, [`ONEWAY ${varName(i.y, D)} BY ${varName(i.g, D)}.`]),
+      dropped: asList(i.groups).length ? ['the pick of which groups to include (SPSS would need a filter)'] : [],
+    }),
+  },
+
+  'builtin-anova.factorial': {
+    keys: ['dv', 'facs'],
+    // The plugin fits `.y ~ f1 * f2` (full factorial), so the Stata model is `##`. A
+    // space-separated list would be main effects only — silently a different model.
+    stata: (i, D) => {
+      const facs = asList(i.facs).map((f) => varName(f, D));
+      if (facs.length < 2) bail('a factorial ANOVA needs two or more factors');
+      return { lines: [`anova ${varName(i.dv, D)} ${facs.join('##')}`] };
+    },
+    // No `spss`: spss-import reads no UNIANOVA.
+  },
+};
+
+/** Options a crosstab carries that neither `tabulate` nor `CROSSTABS` prints here. */
+function crosstabExtras(i) {
+  const out = [];
+  if (i.pmethod === 'montecarlo') out.push('the Monte Carlo p-value (this is the asymptotic chi-square)');
+  if (i.measures && i.measures !== 'none') out.push('the association measures');
+  return out;
+}
+
+/**
+ * Translate one `run pluginId.fn {…}` line.
+ * @param {{pluginId:string, run:string, inputs?:object}} a
+ */
+function transAnalysis(a, D, ctx, line) {
+  const spec = ANALYSES[`${a.pluginId}.${a.run}`];
+  const emit = spec && spec[D.id];
+  if (!emit) {
+    // Either nothing has ever translated this analysis, or only the other language has a
+    // verified spelling. Say which, and keep the line verbatim in the comment.
+    const why = spec
+      ? `no ${D.label} spelling is round-trip verified for it`
+      : `no ${D.label} spelling is declared for it`;
+    return notTranslated(line, `analysis (${a.pluginId}.${a.run}) — ${why}; run it by hand`, D);
+  }
+  const inputs = a.inputs || {};
+  const unaccounted = Object.keys(inputs).filter((k) => !spec.keys.includes(k) && !isEmpty(inputs[k]));
+  if (unaccounted.length) {
+    bail(
+      `the analysis carries options this translator does not account for (${unaccounted.join(', ')}), ` +
+        `which could change the result`,
+    );
+  }
+  const { lines, dropped } = emit(inputs, D, ctx);
+  const out = [];
+  if (dropped && dropped.length) out.push(D.comment(`The next command leaves out ${dropped.join('; ')}.`));
+  out.push(...lines);
+  return ok(out);
+}
+
+/** An input with no value: absent, blank, or an empty list. */
+function isEmpty(v) {
+  return v == null || v === '' || (Array.isArray(v) && v.length === 0);
+}
+
+/** An input as an array, whether it arrived as one or as a bare value. */
+function asList(v) {
+  return Array.isArray(v) ? v.filter((x) => !isEmpty(x)) : isEmpty(v) ? [] : [v];
+}
+
+/** A space-separated, dialect-validated variable list. */
+function vlist(v, D) {
+  const arr = asList(v);
+  if (!arr.length) bail('the analysis names no variables');
+  return arr.map((n) => varName(n, D)).join(' ');
+}
+
+/** A number input as a literal. */
+function numLit(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) bail('a numeric input is not a number');
+  return String(n);
+}
+
+/** A chosen category as a literal (codes may be numeric or text). */
+function levelLit(v, D) {
+  if (isEmpty(v)) bail('a group pick is missing');
+  const s = String(v);
+  return s !== '' && Number.isFinite(Number(s)) ? s : D.str(s);
+}
+
+/**
+ * Stata weight clause. CrossTab reads a weight as a **frequency** weight (N is `sum(w)`,
+ * variances divide by `sum(w) - 1`), so `fweight` is the faithful spelling — and it is why
+ * a weighted export adds a header note, because Stata's `fweight` wants whole numbers.
+ */
+function stataWeight(w, D, ctx) {
+  if (isEmpty(w)) return '';
+  ctx.sawWeight = true;
+  return ` [fweight=${varName(w, D)}]`;
+}
+
+/** SPSS has no per-command weight — `WEIGHT BY` is a global mode — so bracket the command
+ * and switch it back off, which is the closest thing to CrossTab's per-analysis weight. */
+function spssWeighted(w, D, ctx, lines) {
+  if (isEmpty(w)) return lines;
+  ctx.sawWeight = true;
+  return [`WEIGHT BY ${varName(w, D)}.`, ...lines, 'WEIGHT OFF.'];
+}
+
+/** SPSS's `GROUPS=g(1 2)`, or a bare `GROUPS=g` when no pick was recorded (SPSS then uses
+ * the two values present, which is what an imported `ttest y, by(g)` meant). */
+function groupsOf(g1, g2) {
+  if (isEmpty(g1) && isEmpty(g2)) return [];
+  if (isEmpty(g1) || isEmpty(g2)) bail('only one of the two groups was recorded');
+  return [g1, g2];
+}
+
+function groupPair(g1, g2, D) {
+  if (isEmpty(g1) && isEmpty(g2)) return '';
+  if (isEmpty(g1) || isEmpty(g2)) bail('only one of the two groups was recorded');
+  return `(${levelLit(g1, D)} ${levelLit(g2, D)})`;
+}
+
+/** A row filter for the groups the user picked out of a larger factor. */
+function pickedGroups(g, picks, D) {
+  const vals = asList(picks);
+  if (!vals.length) return '';
+  return ` if inlist(${varName(g, D)}, ${vals.map((v) => levelLit(v, D)).join(', ')})`;
+}
+
+/** The `/STATISTICS=` clause for SPSS FREQUENCIES, from the plugin's tick-list. */
+function spssStats(stats) {
+  const MAP = {
+    mean: 'MEAN', median: 'MEDIAN', mode: 'MODE', sum: 'SUM', sd: 'STDDEV',
+    variance: 'VARIANCE', se: 'SEMEAN', range: 'RANGE', min: 'MINIMUM',
+    max: 'MAXIMUM', quartiles: 'QUARTILES',
+  };
+  const picked = asList(stats).map((s) => MAP[s]).filter(Boolean);
+  return picked.length ? ` /STATISTICS=${picked.join(' ')}` : '';
 }
 
 // =============================================================================

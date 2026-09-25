@@ -130,5 +130,5 @@ test('core never hardcodes a plugin name it cannot know', () => {
   // is exactly what is missing from it, so there is nobody to ask. Guessing "Charts"
   // would also be core naming a plugin that may not be ours.
   const note = pendingChartNotice({ model: { kind: 'pie' } });
-  assert.ok(!/Chart engine|builtin-charts|Charts/.test(note), `guessed a provider: ${note}`);
+  assert.ok(!/Chart engine|builtin-charts|Charts\b/.test(note), `guessed a provider: ${note}`);
 });

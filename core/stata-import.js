@@ -177,6 +177,10 @@ function translateCommand(raw, labelSets) {
   if (/^(regress|reg|regr|regre|regres)$/.test(word)) return transModel(text, raw, 'builtin-regression', 'run');
   if (/^(logit|logistic)$/.test(word)) return transModel(text, raw, 'builtin-logistic', 'run');
   if (/^(correlate|correlat|correl|corr|pwcorr)$/.test(word)) return transAnalysisVarlist(text, raw, 'builtin-correlation', 'run', 'vars', { method: 'pearson' });
+  // The rank siblings of correlate, so a rank correlation survives a round trip through
+  // the exporter instead of coming back as a comment (#176).
+  if (/^(spearman)$/.test(word)) return transAnalysisVarlist(text, raw, 'builtin-correlation', 'run', 'vars', { method: 'spearman' });
+  if (/^(ktau)$/.test(word)) return transAnalysisVarlist(text, raw, 'builtin-correlation', 'run', 'vars', { method: 'kendall' });
   if (/^(ttest)$/.test(word)) return transTtest(text, raw);
   if (/^(oneway)$/.test(word)) return transOneway(text, raw);
   if (/^(anova)$/.test(word)) return transAnova(text, raw);
