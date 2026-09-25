@@ -16,6 +16,7 @@ import { serialize, parse } from './crosstab-syntax.js';
 import { openSyntaxGuide } from './syntax-guide.js';
 import { stataToScript } from './stata-import.js';
 import { spssToScript } from './spss-import.js';
+import { scriptToStata, scriptToSpss, scriptFileName } from './script-export.js';
 import { loadVarOrder, saveVarOrder, sortVars } from './var-order.js';
 import { makeVarToolbar, filterVars, getWorkspaceFilter, setWorkspaceFilter } from './var-toolbar.js';
 import { labelForValue } from './var-role.js';
@@ -1227,11 +1228,12 @@ export class HistoryPanel {
     guide.type = 'button';
     guide.title = 'Open the CrossTab syntax reference and the list of plugin calls';
     guide.addEventListener('click', () => openSyntaxGuide({ pluginActions: this.#pluginActions }));
-    // Export / Import the script as a portable .ctscript text file (lossless — it's
-    // serialize() output). Import loads into the editor as a draft for review + Run.
+    // Export the script as a file: .ctscript (lossless — it's serialize() output, and
+    // still the default) or a best-effort Stata .do / SPSS .sps (#176). Import accepts
+    // all three and loads into the editor as a draft for review + Run.
     const exportBtn = el('button', '⬇ Export', 'history-panel__action');
     exportBtn.type = 'button';
-    exportBtn.title = 'Save this script to a .ctscript file';
+    exportBtn.title = 'Save this script — .ctscript (lossless), or a best-effort Stata .do / SPSS .sps';
     exportBtn.addEventListener('click', () => this.#exportScript());
     const fileInput = document.createElement('input');
     fileInput.type = 'file';
@@ -1427,11 +1429,67 @@ export class HistoryPanel {
     if (unknown > 0) this.#showErr(`${unknown} analysis line(s) referenced a plugin that isn’t active — skipped.`);
   }
 
-  /** Save the current script (the textarea text — lossless serialize() output) to a
-   * portable .ctscript file. */
+  /** Save the current script. CrossTab's own `.ctscript` is the lossless default (it is
+   * `serialize()` output, so it imports back exactly); the Stata/SPSS choices are #176's
+   * best-effort translation, for handing the data steps to a colleague who does not run
+   * CrossTab. The dialog translates on SELECTION rather than on Export, because "12 of
+   * 16 statements" is the fact that decides whether the file is worth sending — finding
+   * that out after the download is too late to matter. */
   #exportScript() {
     const text = this.#ta ? this.#ta.value : '';
-    downloadTextFile('analysis.ctscript', text);
+    const dialog = document.createElement('dialog');
+    dialog.className = 'ct-dialog';
+    const choice = (value, label, note, checked) => `
+      <label style="display:block; margin:8px 0; font-size:13px;">
+        <input type="radio" name="fmt" value="${value}"${checked ? ' checked' : ''}> ${label}
+        <span style="display:block; margin-left:22px; color:#6a7480;">${note}</span>
+      </label>`;
+    dialog.innerHTML = `
+      <form method="dialog" class="ct-dialog__form">
+        <h2 class="ct-dialog__title">Export script</h2>
+        <fieldset style="border:0; padding:0; margin:0; min-width:0;">
+        <legend class="ct-dialog__hint" style="padding:0;">Format</legend>
+        ${choice('ctscript', 'CrossTab syntax (.ctscript)', 'Lossless — imports back into this editor exactly as it is.', true)}
+        ${choice('stata', 'Stata do-file (.do)', 'Best-effort translation of the data steps; analyses become comments.', false)}
+        ${choice('spss', 'SPSS syntax (.sps)', 'Best-effort translation of the data steps; analyses become comments.', false)}
+        </fieldset>
+        <p class="ct-dialog__hint" data-role="summary"></p>
+        <menu class="ct-dialog__buttons">
+          <button value="cancel" type="submit">Cancel</button>
+          <button value="ok" type="submit" class="ct-dialog__primary">Export</button>
+        </menu>
+      </form>`;
+    const form = dialog.querySelector('form');
+    const summary = dialog.querySelector('[data-role="summary"]');
+    const done = new Map(); // translate each dialect at most once
+    const translateTo = (fmt) => {
+      if (!done.has(fmt)) done.set(fmt, fmt === 'spss' ? scriptToSpss(text) : scriptToStata(text));
+      return done.get(fmt);
+    };
+    const render = () => {
+      const fmt = form.fmt.value;
+      if (fmt === 'ctscript') {
+        summary.textContent = 'The whole script, verbatim.';
+        return;
+      }
+      const { statements, translated, skipped } = translateTo(fmt).stats;
+      const n = `${statements} statement${statements === 1 ? '' : 's'}`;
+      summary.textContent = skipped
+        ? `${translated} of ${n} translate; ${skipped} are written into the file as comments to finish by hand.`
+        : `All ${n} translate.`;
+    };
+    form.addEventListener('change', render);
+    dialog.addEventListener('close', () => {
+      const fmt = form.fmt.value;
+      const ok = dialog.returnValue === 'ok';
+      dialog.remove();
+      if (!ok) return;
+      if (fmt === 'ctscript') downloadTextFile('analysis.ctscript', text);
+      else downloadTextFile(scriptFileName(fmt), translateTo(fmt).text);
+    });
+    document.body.append(dialog);
+    dialog.showModal();
+    render();
   }
 
   /** Load a .ctscript (or .txt) file into the editor as a DRAFT — never auto-applied.
@@ -1506,7 +1564,12 @@ export class HistoryPanel {
     });
     this.#off = () => { offData?.(); offLog?.(); offItems?.(); };
     this.#escHandler = (e) => {
-      if (e.key === 'Escape') this.close();
+      if (e.key !== 'Escape') return;
+      // A modal dialog opened FROM this panel (the Syntax guide, the Export chooser)
+      // takes Escape for itself. Without this guard the one keypress closed the dialog
+      // AND the panel behind it, which reads as the panel vanishing on Cancel.
+      if (document.querySelector('dialog[open]')) return;
+      this.close();
     };
     document.addEventListener('keydown', this.#escHandler);
   }

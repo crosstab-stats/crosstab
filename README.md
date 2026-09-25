@@ -28,7 +28,8 @@ never leaves the machine.
   ordered, undoable transform over immutable source data. The transform log is
   an exportable script.
 - **Do-file editor** — view your analysis history as editable syntax; run it to
-  rebuild the dataset and replay analyses.
+  rebuild the dataset and replay analyses. Load a Stata `.do` or SPSS `.sps` into
+  it, or export your data steps back out as one.
 - **Works offline** — PWA with a "Make available offline" toggle; also supports
   fully air-gapped deployment for sensitive data environments.
 - **iPad Safari tested** and working.

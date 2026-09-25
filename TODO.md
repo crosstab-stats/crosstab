@@ -5907,27 +5907,73 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       indistinguishable from one report — checking the *transition* is what separates
       them, and both directions now hold on a real device.
 
-- [ ] **#185 — deploy config for someone else hosting CrossTab (owner, 2026-09-21).**
-      Raised while declining the bug-report email route (#175): "later we can build
-      support for someone else hosting this to have an email." The general shape is that
-      a fork or institutional deployment has a handful of facts about ITSELF that are
-      currently constants in our source:
-  - [ ] **Where bug reports and questions go.** `REPO` in `core/help.js` is one constant
-        today, and the Help menu's three GitHub links derive from it. A self-hoster wants
-        their own issue tracker, their own Discussions, and/or a support email address —
-        the email route #175 declined for us is exactly what someone running this for a
-        department would want.
-  - [ ] **Survey the other self-identifying constants before designing this**, so it is
-        one mechanism rather than five: the CDN base for runtimes
-        ([[airgap-offline-requirement]] already made this switchable via
-        `core/assets.js` local mode), the deployed origin baked into shortcut files
-        (`backend.shortcuts(...)` in `project-sync.js`), and whatever the launcher's
-        About/onboarding names.
+- [ ] **#185 — consolidate every hosting/deployment variable into ONE server-side
+      settings file — and let it declare a SECOND plugin directory (owner, 2026-09-21;
+      extended 2026-09-24).** Raised while declining the bug-report email route (#175):
+      "later we can build support for someone else hosting this to have an email." The
+      general shape is that a fork or institutional deployment has a handful of facts
+      about ITSELF that are currently constants scattered across our source — and the
+      2026-09-24 addition makes the case sharper: a department should be able to
+      `git clone` the whole repo (getting all 60+ built-ins as they are) and point one
+      settings file at a **locally maintained directory of their own plugins**, which are
+      then catalogued and registered at boot exactly like the built-ins — no source edit,
+      no per-user "load plugin from file", no fork of `core/app.js`.
+
       Likely answer: one optional `deploy.json` fetched at boot, absent by default, with
-      every field falling back to today's constant — so the default build is byte-identical
-      in behaviour and a self-hoster edits one file. Do NOT build it as a build-time
-      substitution: that needs a toolchain, which the project does not have and does not
-      want.
+      every field falling back to today's constant — so the default build is
+      byte-identical in behaviour and a self-hoster edits one file. Do NOT build it as a
+      build-time substitution: that needs a toolchain, which the project does not have and
+      does not want. Two constraints on the fetch itself: it must be in the service
+      worker's precache (it is same-origin config the app cannot boot correctly without,
+      and the app must work offline and air-gapped, [[airgap-offline-requirement]]), and a
+      missing or malformed file must never block boot — parse failure falls back silently
+      to today's constants, because a typo in a deploy file must not brick the department's
+      install.
+  - [ ] **The secondary plugin directory (the 2026-09-24 ask).** The loading side is
+        nearly free: `BUILTIN_PLUGINS` in `core/app.js` (~126) is just an array of
+        `./plugins/<id>/index.js` URLs that the host fetches and resolves against the
+        document, and every one of them already goes through the same sandboxed-iframe
+        path as a third-party plugin (loader.js: *all plugins are equal*, no privileged
+        loader) — so "append the site's entries to that list" is the mechanism. What needs
+        deciding:
+    - [ ] **How the directory is enumerated.** Static hosting has no directory listing, so
+          auto-registration needs either an index file *in* that directory (e.g.
+          `plugins/index.json` listing entry modules, which is the version a group can
+          maintain without touching `deploy.json` every time they add one) or an explicit
+          list in `deploy.json`. Prefer the index file, with `deploy.json` naming the
+          directory — that is what makes it "auto-registered" rather than "re-declared".
+    - [ ] **Identity / namespace.** `qualifiedId` (loader.js) passes `builtin-…` through
+          unchanged, namespaces a URL plugin by its **host**, and falls back to the
+          self-declared author (unverifiable) or `local` for file/authored ones. A
+          same-origin site plugin would land in that unverifiable bucket, where it can
+          collide with a user's own file-loaded plugin. Give a deploy-declared directory
+          its own reserved namespace (`site-…`?) — verifiable in the same sense
+          `builtin-` is (the host serves it), and still unable to forge a `builtin-` id.
+    - [ ] **Activation defaults.** `CORE_IDS` and `DEFAULT_ON_CATEGORIES` in
+          `core/launcher.js` decide what a fresh launch pre-selects. A department whose
+          whole reason for a local directory is "our students must have *our* plugin on"
+          will want `deploy.json` to add to that set — and the discipline pinning the
+          launcher already has ([[launcher-startup-screen]]) is the natural place for it.
+    - [ ] **Offline precache.** `SHELL_PRECACHE` in `sw.js` lists same-origin files by
+          name; site plugins are same-origin, so cache-on-use already covers them after
+          one run, but a cold air-gapped install would not have them until first use.
+  - [ ] **Where bug reports and questions go.** `REPO = 'crosstab-stats/crosstab'`
+        (`core/help.js:35`) is one constant today and the Help menu's three GitHub deep
+        links derive from it. A self-hoster wants their own issue tracker, their own
+        Discussions, and/or a **support email** — the email route #175 declined for us is
+        exactly what someone running this for a department would want.
+  - [ ] **Survey the remaining self-identifying constants before designing this**, so it
+        is one mechanism rather than five. Found so far: the runtime CDN pins and the
+        `local`/air-gap switch (`core/assets.js` — `CROSSTAB_ASSETS` /
+        `CROSSTAB_ASSETS_MODE` are today's ad-hoc precedent for exactly this file, and
+        should be folded in rather than left as a second system); `RUNTIME_HOSTS` and the
+        `CACHE` name in `sw.js` (the hostnames tier-2 caching is willing to trust — a
+        deploy pointing at its own mirror must be able to add one); `manifest.json`
+        (`name`, `short_name`, `theme_color`, `start_url`, icons — a department deploy is
+        entitled to its own PWA identity); whatever the launcher's About/onboarding names;
+        and the deployed origin baked into shortcut files
+        (`backend.shortcuts(name, location.origin, location.pathname)`,
+        `core/project-sync.js:1545`).
 
 - [ ] **#183 — "what do I enable to do X?" — an analysis lookup across ALL plugins
       (owner, 2026-09-21, as Help-menu content).** The gap is specific: the syntax
@@ -5964,25 +6010,84 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       plugins a walk-through needs enabled, which makes #183 a dependency rather than a
       sibling.
 
-- [ ] **#176 — Export the syntax/history to a Stata `.do` (and SPSS `.sps`) file
-      (raised 2026-09-20, confirmed absent).** Import already translates a `.do`/`.sps`
-      into the native CrossTab syntax (`core/stata-import.js` `stataToScript`,
-      `core/spss-import.js` `spssToScript`), but there is no export the other way. The
-      Syntax-mode editor's ⬇ Export writes only `.ctscript` (native, lossless); the
-      separate R-syntax export (`builtin-syntax-export`) emits `.R`; `File ▸ Export
-      data… ▸ Stata` writes the `.dta` DATA file — none emit a `.do`/`.sps` command
-      script. Add best-effort `scriptToStata` / `scriptToSpss` (the inverse of the
-      import translators) and offer them from the Syntax editor's Export (and/or the
-      format picker), so a user can hand a colleague a runnable do-file. Best-effort
-      like the import: compute/recode/keep/drop/rename/label/set → the nearest
-      Stata/SPSS command; anything without a clean equivalent (verbatim DuckDB SQL in a
-      compute expression, `run pluginId.fn` analyses) → a comment, so the file is
-      honest about what it couldn't translate. Scope: transforms only (matching the
-      import); analyses are out (they'd need each plugin to declare its Stata/SPSS —
-      the same blocker noted for analyses in the R-syntax export above). "Be forgiving
-      in what you input, strict in what you output" cuts both ways — the output file
-      should be clean, valid Stata/SPSS or an honest comment, never half-translated
-      guesses.
+- [x] **#176 — DONE (2026-09-25). Export the syntax/history to a Stata `.do` (and SPSS
+      `.sps`) file.** Import already translated a `.do`/`.sps` into the native syntax
+      (`stataToScript`, `spssToScript`); there was no export the other way. There is now:
+      `core/script-export.js` (`scriptToStata` / `scriptToSpss`), offered from the Syntax
+      editor's **⬇ Export**, which is now a three-way choice — `.ctscript` (lossless,
+      re-importable, unchanged and still the default), `.do`, `.sps`.
+
+      **Transforms only, as scoped.** `run pluginId.fn {…}` lines become comments that
+      keep the original text; translating them would need every plugin to declare its own
+      Stata/SPSS spelling, which is the same blocker the R-syntax export has.
+
+      The shape the work took, and the one decision that drove it: **"clean valid output
+      or an honest comment" is not a slogan you can implement with regex substitutions.**
+      Every statement is either translated in full or emitted verbatim inside a
+      `[CrossTab, not translated: why]` comment and counted as skipped, so the file is
+      never a half-translation that runs and computes something else. That is why the
+      expression translator is a real tokenizer over an explicit whitelist: an
+      unrecognised function, operator or character fails the whole statement instead of
+      passing through. Two traps it caught that a substitution pass would have shipped:
+
+      - `round(x, 2)` is **two decimal places** in DuckDB and **to the nearest multiple
+        of 2** in Stata, so two-argument `round` is refused rather than renamed (one-arg
+        `round` translates). Same class of bug as `log()`, which is base-10 in DuckDB —
+        it maps to `log10`/`LG10`, not `ln`.
+      - `"x"` is a **quoted identifier** in SQL and a **string literal** in Stata, so the
+        tokenizer keeps them apart. `compute north = CASE WHEN "region" = 'North' …`
+        becomes `cond(region == "North", …)` — the column stays a column.
+
+      What each construct became, where the two languages genuinely differ:
+      - **`CASE`** → Stata's nested `cond()`; SPSS has no inline conditional, so it
+        becomes a statement: a single branch whose `ELSE` is the target (or absent) is
+        `IF (c) v = e.` — exactly the shape `spss-import` reads back — and anything richer
+        is a `DO IF / ELSE IF / ELSE / END IF` block.
+      - **`compute`** → Stata `generate`, *except* when the expression mentions the target
+        (the stored form of a conditional overwrite), which is `replace`. Getting this
+        wrong is not cosmetic: `generate` errors on an existing variable and `replace`
+        errors on a new one, so one of the two always fails.
+      - **`recode`** → both languages' own `recode`. `else copy` is Stata's default so it
+        is omitted there, but SPSS's `RECODE … INTO` **blanks every unmatched value**
+        unless told `(ELSE = COPY)`, so it is always written out — omitting it would have
+        silently emptied the variable. The ±1e308 bounds the importers write for LO/HI
+        come back as `min`/`max` and `LO`/`HI`.
+      - **`label values`** → SPSS `VALUE LABELS`; Stata needs a *named set*, so one line
+        becomes `label define x_lbl …, replace` + `label values x x_lbl`, with set names
+        de-duplicated and kept inside Stata's 32 characters.
+      - **`set missing`** → SPSS `MISSING VALUES`; Stata has no metadata equivalent, so it
+        is `mvdecode` with a comment saying it *converts* rather than marks (same effect
+        on every analysis, but it edits the data). Clearing them (`= none`) is refusable in
+        Stata and fine in SPSS.
+      - **`set cell`** → `replace x = v in N` / `IF ($CASENUM = N) x = v.`, both preceded
+        by the caveat that they address a row NUMBER and only land on the same case if the
+        data is in the same order.
+      - Refused with a note rather than guessed: `set measure` in Stata (no measurement
+        level), `keep` in SPSS (no in-place "keep only" — the comment names
+        `SAVE OUTFILE=… /KEEP=` instead), `set type … = factor` in both (neither language
+        has the type), a string rule in a Stata `recode` (numeric-only there; SPSS takes
+        it), and any name legal in CrossTab but not in the target language.
+
+      **The header is part of the deliverable**, since a best-effort file that doesn't say
+      so is a trap: it carries the count ("13 of 16 statements translated; 3 left as
+      comments"), the reminder that the data is not in the file, and — only when the file
+      can actually hit it — the one semantic difference worth naming out loud, that Stata
+      sorts missing ABOVE every number, so a `keep if` can keep rows CrossTab dropped and
+      `cond()` yields missing where a `CASE` would have taken the ELSE.
+
+      `test/script-export.test.mjs` (25 tests, suite 894 → 919, all green) pins both halves: the
+      mappings, and the honesty contract (each refusal is counted, emits no command, and
+      still contains the original line). The last test **round-trips the Stata output back
+      through `stataToScript`** — the two translators are inverses for the statements that
+      map cleanly both ways, which is a stronger check on either one than reading its
+      output. One asymmetry is documented there rather than "fixed": the export writes
+      `!missing(x)` and the importer reads it back as `NOT (x IS NULL)`, the same
+      condition spelled the other way.
+
+      **Not yet done: the browser pass.** The translation is verified by tests, but the
+      Export dialog itself (three radios, the live "N of M translate" line under them, the
+      download) has not been clicked in the app — same manual-click gap the entries above
+      carry.
 
 - [ ] **#177 — the plugin manager has no "what does this add?" tooltip; the launcher
       does (user, 2026-09-20).** The two plugin pickers render the same catalogue and
