@@ -6084,10 +6084,50 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       `!missing(x)` and the importer reads it back as `NOT (x IS NULL)`, the same
       condition spelled the other way.
 
-      **Not yet done: the browser pass.** The translation is verified by tests, but the
-      Export dialog itself (three radios, the live "N of M translate" line under them, the
-      download) has not been clicked in the app — same manual-click gap the entries above
-      carry.
+      **Browser pass: DONE by the owner (2026-09-25)** — and worth doing on a real file
+      rather than the demo data. The route was: blank project → import a faculty member's
+      survey dataset → import their `.do` (46/46 commands translated) → Run → Export to
+      `.do`, with no edits in between. The dialog and the download work. Three defects in
+      the EXPORT that only a real do-file could have surfaced, all fixed:
+  - [x] **Shared label sets exploded.** A survey do-file defines `label define support …`
+        once and attaches it to q2 q3 q4 q5. CrossTab has no shared label sets (labels
+        live per variable, so the import expands them), and the export then wrote the set
+        out again for every variable — 17 `label define`s where the original had 10, the
+        five-level `trust` list copied four times. Valid Stata, but not something you hand
+        a colleague. Identical label lists now share one set, so the structure survives
+        the round trip (10 sets back to 10; 104 lines → 85).
+  - [x] **A previous translator's banner was re-emitted as fact about the new file.** The
+        exported `.do` carried “Imported from Stata .do — 46/46 commands translated”
+        directly under this file's own “35 of 36” header, plus the
+        `(label set defined; applied at 'label values')` breadcrumb, which put a
+        commented-out `label define Party …` immediately above the real one generated from
+        the same labels. Both read as statements about the file you are holding and
+        neither is. Our own importers' notes are dropped on export now; the user's own
+        comments still pass through.
+  - [x] **The dirty marker read as “your Run didn't register”.** Reported as the editor
+        insisting there were edits after clicking Run. It is *correct* that the draft is
+        unapplied — the Run had errored — but “● edited — Run to apply” next to an error
+        message says the wrong thing. A rejected Run now says “● not applied — see the
+        error above”, and typing puts it back to “edited”. **This also explains the export
+        contents:** `#exportScript` translates the TEXTAREA, so a script that never
+        applied is still what gets exported — which is right (export what you see), and is
+        why the import's own comments were in there to be re-emitted at all.
+
+      **Still open from that session: the Run error itself.** The script parses clean
+      (0 errors, 35 transforms + 1 analysis — verified headlessly against the same file),
+      and `dropVars` filters to existing columns before building its `EXCLUDE`, so the only
+      remaining path by which `replaceTransforms` can throw here is `validateOrder`'s
+      `“X” must be created before it’s edited` — a `label variable` / `label values` naming
+      a variable the imported dataset does not have (a case or spelling mismatch between
+      the faculty's do-file and the file they sent). Two things to settle once the exact
+      message is known:
+  - [ ] The wrapper wording. `replaceTransforms` throws
+        “That script change isn’t valid here: …”, which is wrong for the import-a-do-file
+        route — nothing was *changed*, a translated script was run for the first time.
+  - [ ] Whether a label on a missing variable should abort the WHOLE Run. The importers
+        report per command and leave the rest runnable; a Run is atomic by design (a bad
+        data step must not half-apply), but a variable label is not a data step, so the
+        all-or-nothing rule may be costing the user 34 good statements for one bad one.
 
 - [ ] **#177 — the plugin manager has no "what does this add?" tooltip; the launcher
       does (user, 2026-09-20).** The two plugin pickers render the same catalogue and
