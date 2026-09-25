@@ -1118,6 +1118,7 @@ export class HistoryPanel {
   #gutter = null; // left margin host (clips); #gutterInner is translated to track scroll
   #gutterInner = null;
   #dirty = false; // true once the user types — guards navigation from discarding the draft
+  #runFailed = false; // last Run was rejected, so the draft is unapplied for a REASON
   #dirtyHint = null;
   #syntaxBtn = null;
   /** () => plugin-action rows for the timeline (#152). */
@@ -1300,7 +1301,12 @@ export class HistoryPanel {
       `position:absolute; inset:0; width:100%; height:100%; resize:none; border:0; outline:none; box-sizing:border-box; ` +
       `white-space:pre; overflow:auto; tab-size:2; background:transparent; ${FONT} ${GLYPH} ` +
       `padding:${SYN_PAD}px 8px;`;
-    ta.addEventListener('input', () => { this.#dirty = true; this.#updateDirtyHint(); this.#renderGutter(); });
+    ta.addEventListener('input', () => {
+      this.#dirty = true;
+      this.#runFailed = false; // typing again: the draft is being edited, not stuck
+      this.#updateDirtyHint();
+      this.#renderGutter();
+    });
     ta.addEventListener('scroll', () => this.#syncGutterScroll());
     this.#ta = ta;
 
@@ -1339,6 +1345,7 @@ export class HistoryPanel {
     const analyses = this.#analysisLog ? this.#analysisLog.entries() : [];
     this.#ta.value = serialize(applied, analyses);
     this.#dirty = false; // the textarea now matches committed state
+    this.#runFailed = false;
     this.#updateDirtyHint();
     this.#renderGutter();
   }
@@ -1346,7 +1353,14 @@ export class HistoryPanel {
   /** Show/hide the "unsaved edits" indicator (the draft isn't committed until Run). */
   #updateDirtyHint() {
     if (!this.#dirtyHint) return;
-    this.#dirtyHint.textContent = this.#dirty ? '● edited — Run to apply' : '';
+    // A failed Run leaves the draft unapplied, which is correct — but saying "edited —
+    // Run to apply" next to an error reads as though the click never registered, which
+    // is how it was reported. Name the actual state instead.
+    this.#dirtyHint.textContent = !this.#dirty
+      ? ''
+      : this.#runFailed
+        ? '● not applied — see the error above'
+        : '● edited — Run to apply';
     this.#dirtyHint.hidden = !this.#dirty;
   }
 
@@ -1408,11 +1422,14 @@ export class HistoryPanel {
    * position-faithfully. */
   async #runScript() {
     this.#clearErr();
+    this.#runFailed = false;
     const script = this.#ta ? this.#ta.value : '';
     const { steps, errors } = parse(script);
     if (errors.length) {
       const first = errors[0];
       this.#showErr(`Line ${first.line}: ${first.message}${errors.length > 1 ? ` (and ${errors.length - 1} more)` : ''}`);
+      this.#runFailed = true;
+      this.#updateDirtyHint();
       return;
     }
     let unknown = 0;
@@ -1423,6 +1440,8 @@ export class HistoryPanel {
       ({ unknown } = await this.#pluginActions.replayScript(steps));
     } catch (err) {
       this.#showErr(err.message);
+      this.#runFailed = true;
+      this.#updateDirtyHint();
       return;
     }
     this.#fillEditor(); // reflect the rebuilt state (and drop any unknown lines)

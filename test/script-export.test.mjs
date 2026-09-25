@@ -317,3 +317,67 @@ test('the statements that map cleanly both ways survive a Stata round trip', () 
     'keep if age > 20 AND NOT (income IS NULL)',
   ]);
 });
+
+// =============================================================================
+// A real faculty do-file, round-tripped (the shape reported 2026-09-25)
+// =============================================================================
+
+/**
+ * The shape that matters from a real survey do-file: ONE label set defined once and
+ * attached to several variables, plus lines echoed with a leading `. ` (a do-file
+ * assembled from the Results window). Re-created here rather than committing the
+ * faculty member's own file.
+ */
+const FACULTY_DO = [
+  'drop R q20 q21 AI Q36',
+  '',
+  '***Applying Variable Labels',
+  'label variable q1 "Party"',
+  'label variable q2 "Abortion"',
+  '',
+  '***Applying value labels',
+  'label define Party 1 "Democrat" 2 "Republican" 3 "Independent/Other " 4 "Not Sure/Refused"',
+  'label values q1 Party',
+  'label define support 1 "Support" 2 "Oppose" 3 "Undecided"',
+  'label values q2 support',
+  'label values q3 support',
+  'label values q4 support',
+  '. label values q5 support',
+  '',
+  '***Summarize data',
+  'tabulate q1',
+].join('\n');
+
+test('variables sharing one label set share one label define on the way back out', () => {
+  const script = stataToScript(FACULTY_DO).script;
+  const out = code(scriptToStata(script));
+  // CrossTab stores labels per variable, so the import expanded `support` onto four
+  // variables. The export must not write the same `label define` four times.
+  const defines = out.filter((l) => l.startsWith('label define'));
+  assert.equal(defines.length, 2, `expected 2 label sets, got ${defines.length}: ${defines.join(' | ')}`);
+  const support = defines.find((l) => l.includes('"Support"'));
+  assert.match(support, /^label define q2_lbl 1 "Support" 2 "Oppose" 3 "Undecided", replace$/);
+  // ...and all four variables are attached to that one set, the `. ` echoed line included.
+  for (const v of ['q2', 'q3', 'q4', 'q5']) {
+    assert.ok(out.includes(`label values ${v} q2_lbl`), `${v} not attached to the shared set`);
+  }
+  // A different label list still gets its own set.
+  assert.ok(out.includes('label values q1 q1_lbl'));
+});
+
+test('an importer banner or breadcrumb is never re-emitted as fact about the new file', () => {
+  const script = stataToScript(FACULTY_DO).script;
+  assert.match(script, /Imported from Stata/); // the importer does write one
+  const out = scriptToStata(script);
+  // It described a DIFFERENT file (and a different count), so it must not survive into
+  // this one, where the header states this file's own numbers.
+  assert.ok(!/Imported from Stata/.test(out.text));
+  assert.ok(!/Best-effort: check the translation/.test(out.text));
+  // Nor the breadcrumb that would sit a commented-out `label define Party` immediately
+  // above the real one generated from the same labels.
+  assert.ok(!/label set defined; applied at/.test(out.text));
+  assert.match(out.text, /Exported from CrossTab/);
+  // The faculty's own comments DO survive - only our own translators' notes are dropped.
+  assert.match(out.text, /Applying Variable Labels/);
+  assert.match(out.text, /Summarize data/);
+});

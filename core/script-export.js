@@ -33,6 +33,10 @@
 
 import { parse } from './crosstab-syntax.js';
 
+/** Banners and breadcrumbs our own .do/.sps importers write into a script. See
+ * {@link commentThrough} for why an export drops them instead of passing them on. */
+const IMPORTER_NOTE = /^(Imported from (Stata|SPSS)|Best-effort: check the translation|[(]label set defined; applied at)/;
+
 /** Thrown when a construct has no clean equivalent. Caught per statement, which then
  * becomes a comment — so one untranslatable line never costs the rest of the file. */
 class Unsupported extends Error {}
@@ -157,7 +161,7 @@ export function scriptFileName(dialect, base = 'analysis') {
 function translate(text, D) {
   const lines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n');
   const body = [];
-  const ctx = { labelSets: new Set(), needsExecute: false, sawFilter: false };
+  const ctx = { labelSets: new Set(), labelSetByLabels: new Map(), needsExecute: false, sawFilter: false };
   let statements = 0;
   let translated = 0;
   let skipped = 0;
@@ -220,6 +224,12 @@ function translate(text, D) {
  * for the native banner, which this file's own header replaces. */
 function commentThrough(line, D) {
   const t = line.replace(/^#+\s?/, '').trim();
+  // A banner or breadcrumb written by OUR OWN importers is a statement about a DIFFERENT
+  // file. Left in, the exported file carried "Imported from Stata .do — 46/46 commands
+  // translated" directly under this file's own "35 of 36" header, and a commented-out
+  // `label define Party ...` directly above the real one we generate from the same
+  // labels. Both read as facts about the file you are holding, and neither is.
+  if (IMPORTER_NOTE.test(t)) return null;
   if (/^CrossTab syntax\b/.test(t)) return null;
   if (!t) return D.comment('');
   // A data-source anchor is the one comment worth rewording: in a do-file it is an
@@ -461,13 +471,22 @@ function transSetVariable(op, D, ctx, line) {
     }
     // Stata keeps value labels in a named SET attached to the variable, so one CrossTab
     // line becomes two Stata commands — and the set name has to be unique in the file.
-    const set = labelSetName(op.name, ctx);
+    //
+    // Variables carrying the SAME labels share one set, which is how a real do-file is
+    // written: a survey defines `support` once and attaches it to q2 q3 q4 q5. CrossTab's
+    // model has no shared sets (labels live per variable, so the import expanded them),
+    // and without this the export wrote four identical `label define`s — valid, but not
+    // something a person would hand a colleague.
     const body = pairs
       .map(([code, lbl]) => {
         if (!/^-?\d+$/.test(String(code))) bail('Stata value labels must have integer codes');
         return `${Number(code)} ${D.str(String(lbl))}`;
       })
       .join(' ');
+    const shared = ctx.labelSetByLabels.get(body);
+    if (shared) return ok([`label values ${name} ${shared}`]);
+    const set = labelSetName(op.name, ctx);
+    ctx.labelSetByLabels.set(body, set);
     return ok([`label define ${set} ${body}, replace`, `label values ${name} ${set}`]);
   }
 
