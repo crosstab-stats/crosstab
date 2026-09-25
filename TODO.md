@@ -3123,6 +3123,61 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         scripts, and ~60 manifests declare `types: ['factor', 'string']`. The predicate
         makes those harmless; removing the word does not pay for itself.
 
+- [x] **#189 — DONE (2026-09-25). The History/Syntax panel put two things in the wrong
+      place (user, 2026-09-25).** Both reported as things that had been "eating at me"
+      while we worked on #176, and both checked in the code before agreeing — one claim was
+      exactly right, the other was right about the symptom and wrong about the cause, which
+      changed the fix.
+
+  - [x] **Import / Export were reachable only from Syntax view.** Confirmed: they were built
+        in `#buildEditor`, so they sat in the editor's own button row, behind the ✎ Syntax
+        toggle. But the script exists in both views — the Steps list *is* the same log —
+        so "save my steps to a file" looked like a syntax feature because of where it lived.
+        Moved to the panel toolbar beside ↑ Collect imports and ✎ Syntax, available from
+        either view.
+
+        That move needed a real fix behind it, not just a re-parent: `#exportScript` read
+        `this.#ta.value`, which in Steps view is empty (never opened) or a stale fill. There
+        is now `#currentScript()` — an unapplied DRAFT wins, because exporting something
+        other than what the editor shows would be the worse surprise; otherwise the
+        committed state is serialised fresh. And when it *is* the draft, the dialog says so
+        ("This exports your unapplied draft"), which is the disclosure the faculty-do-file
+        session went without: the export that puzzled us was a draft that never applied.
+
+        Import from Steps view now switches to Syntax view, after the draft is in place and
+        marked dirty — so a cancelled confirm or an unreadable file changes nothing, and the
+        toggle re-renders the gutter instead of refilling over the import. Loading a script
+        invisibly behind a toggle was the old behaviour and it was indefensible: an imported
+        script is a draft to READ.
+
+  - [x] **Reordering "wasn't possible" in Syntax view — it was; there was no gesture.**
+        The premise was wrong in a way worth writing down: the replay rebuilds the pipeline
+        from the text **in order** (`parse` → `replaceTransforms`), so moving a line has
+        always *been* moving the step. What did not exist was any affordance saying so —
+        the only reorder control was ▲/▼ on the Steps rows, one view away, which is exactly
+        the round trip reported ("switch to steps view to reorder and then switch back").
+        The panel's own doc comment even promised "insert/reorder/paste freely" while the
+        hint text never mentioned it.
+
+        So: **Alt+↑ / Alt+↓ moves the line you are on**, the standard editor gesture, with a
+        multi-line selection moving as one block and staying selected (a second press moves
+        it again). A plain caret keeps its column, so you can keep typing after a move. The
+        line arithmetic is `moveScriptLines` in `data-views.js` — pure, exported, and tested
+        (`test/syntax-line-move.test.mjs`, 7 tests) rather than verified by clicking, because
+        the failure mode of line arithmetic is silently deleting a step that Run then
+        applies. One test asserts the invariant directly: the script after a series of moves
+        is a permutation of itself, same line count.
+
+        Deliberately NOT blocked: moving a transform above the `🔒` data source. The editor
+        is free-form text on purpose (you can paste anything), and `validateOrder` already
+        rejects it at Run with "Steps must come after the base import". Guarding the gesture
+        would only guard one of the ways to type it.
+
+      **Not yet done: the browser pass.** The move arithmetic and the export-source choice
+      are unit-tested, but the two changes that are purely about placement — the buttons on
+      the panel toolbar in both views, and Alt+↑/↓ under a real keyboard — have not been
+      clicked in the app.
+
 ## Hardening before any public/shared deploy
 
 > **#89 hardening pass — DONE (see [docs/SECURITY.md](docs/SECURITY.md)).** Full

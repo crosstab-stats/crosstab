@@ -1165,6 +1165,27 @@ export class HistoryPanel {
     });
     toolbar.append(collect);
 
+    // Import / Export the script. These live on the PANEL toolbar, not inside the syntax
+    // editor, because the script exists in both views — having to switch to Syntax to reach
+    // "save my steps to a file" made a file operation look like a syntax feature.
+    if (this.#analysisLog && this.#pluginActions) {
+      const exportBtn = el('button', '⬇ Export', 'history-panel__action');
+      exportBtn.type = 'button';
+      exportBtn.title = 'Save this script — .ctscript (lossless), or a best-effort Stata .do / SPSS .sps';
+      exportBtn.addEventListener('click', () => this.#exportScript());
+      const fileInput = document.createElement('input');
+      fileInput.type = 'file';
+      fileInput.accept = '.ctscript,.txt,.do,.sps,text/plain';
+      fileInput.style.display = 'none';
+      fileInput.addEventListener('change', () => this.#importScript(fileInput));
+      const importBtn = el('button', '⬆ Import', 'history-panel__action');
+      importBtn.type = 'button';
+      importBtn.title =
+        'Load a .ctscript file — or a Stata .do / SPSS .sps file (best-effort translation) — as a draft to review and Run';
+      importBtn.addEventListener('click', () => fileInput.click());
+      toolbar.append(exportBtn, importBtn, fileInput);
+    }
+
     // Syntax mode toggle — only when the editor deps are wired (#134).
     if (this.#analysisLog && this.#pluginActions) {
       const synBtn = el('button', '✎ Syntax', 'history-panel__action');
@@ -1203,8 +1224,10 @@ export class HistoryPanel {
     const hint = el(
       'p',
       'Edit the script freely like a text file, then Run to rebuild the dataset and re-run the ' +
-        'analyses. The left margin labels each line with the step it maps to. Lines starting with # ' +
-        'are comments; 🔒 marks a data source (re-import to change it). Expressions are SQL.',
+        'analyses. Alt+↑ / Alt+↓ moves the line you are on, so steps reorder here too — no need ' +
+        'to switch to Steps. The left margin labels each line with the step it maps to. Lines ' +
+        'starting with # are comments; 🔒 marks a data source (re-import to change it). ' +
+        'Expressions are SQL.',
       'history-panel__synhint',
     );
     hint.style.cssText = 'margin:0; font-size:12px; color:#6a7480; line-height:1.4;';
@@ -1229,29 +1252,13 @@ export class HistoryPanel {
     guide.type = 'button';
     guide.title = 'Open the CrossTab syntax reference and the list of plugin calls';
     guide.addEventListener('click', () => openSyntaxGuide({ pluginActions: this.#pluginActions }));
-    // Export the script as a file: .ctscript (lossless — it's serialize() output, and
-    // still the default) or a best-effort Stata .do / SPSS .sps (#176). Import accepts
-    // all three and loads into the editor as a draft for review + Run.
-    const exportBtn = el('button', '⬇ Export', 'history-panel__action');
-    exportBtn.type = 'button';
-    exportBtn.title = 'Save this script — .ctscript (lossless), or a best-effort Stata .do / SPSS .sps';
-    exportBtn.addEventListener('click', () => this.#exportScript());
-    const fileInput = document.createElement('input');
-    fileInput.type = 'file';
-    fileInput.accept = '.ctscript,.txt,.do,.sps,text/plain';
-    fileInput.style.display = 'none';
-    fileInput.addEventListener('change', () => this.#importScript(fileInput));
-    const importBtn = el('button', '⬆ Import', 'history-panel__action');
-    importBtn.type = 'button';
-    importBtn.title = 'Load a .ctscript file — or a Stata .do / SPSS .sps file (best-effort translation) — into the editor (review, then Run)';
-    importBtn.addEventListener('click', () => fileInput.click());
     // "Unsaved edits" indicator — the textarea is a draft until you Run; this makes
     // that visible so a draft never feels silently lost.
     const dirtyHint = el('span', '', 'history-panel__dirty');
     dirtyHint.style.cssText = 'margin-left:auto; align-self:center; font-size:12px; color:#b06a00;';
     dirtyHint.hidden = true;
     this.#dirtyHint = dirtyHint;
-    row.append(run, refresh, guide, exportBtn, importBtn, fileInput, dirtyHint);
+    row.append(run, refresh, guide, dirtyHint);
 
     // body: gutter (clips) | textarea (the editable script)
     const body = el('div', null, 'history-panel__synbody');
@@ -1301,6 +1308,22 @@ export class HistoryPanel {
       `position:absolute; inset:0; width:100%; height:100%; resize:none; border:0; outline:none; box-sizing:border-box; ` +
       `white-space:pre; overflow:auto; tab-size:2; background:transparent; ${FONT} ${GLYPH} ` +
       `padding:${SYN_PAD}px 8px;`;
+    // Reorder without leaving Syntax view. Replay is sequential and rebuilt from the text
+    // in order, so moving a line IS moving the step — it just had no gesture, and the only
+    // affordance for reordering lived on the Steps rows (▲/▼), one view away.
+    ta.addEventListener('keydown', (e) => {
+      if (!e.altKey || e.ctrlKey || e.metaKey) return;
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+      e.preventDefault();
+      const moved = moveScriptLines(ta.value, ta.selectionStart, ta.selectionEnd, e.key === 'ArrowUp' ? -1 : 1);
+      if (!moved) return; // already at the top/bottom
+      ta.value = moved.value;
+      ta.setSelectionRange(moved.start, moved.end);
+      this.#dirty = true;
+      this.#runFailed = false;
+      this.#updateDirtyHint();
+      this.#renderGutter();
+    });
     ta.addEventListener('input', () => {
       this.#dirty = true;
       this.#runFailed = false; // typing again: the draft is being edited, not stuck
@@ -1448,6 +1471,18 @@ export class HistoryPanel {
     if (unknown > 0) this.#showErr(`${unknown} analysis line(s) referenced a plugin that isn’t active — skipped.`);
   }
 
+  /**
+   * The script the file buttons act on, from either view. In Steps view the textarea may
+   * hold nothing (never opened) or a stale fill, so the committed state is serialised fresh;
+   * an unapplied DRAFT wins, because exporting something other than what the editor is
+   * showing would be the worse surprise. `draft` says which, so the dialog can disclose it.
+   */
+  #currentScript() {
+    if (this.#dirty && this.#ta) return { text: this.#ta.value, draft: true };
+    const { applied } = this.#store.getHistory();
+    return { text: serialize(applied, this.#analysisLog ? this.#analysisLog.entries() : []), draft: false };
+  }
+
   /** Save the current script. CrossTab's own `.ctscript` is the lossless default (it is
    * `serialize()` output, so it imports back exactly); the Stata/SPSS choices are #176's
    * best-effort translation, for handing the data steps to a colleague who does not run
@@ -1455,7 +1490,7 @@ export class HistoryPanel {
    * 16 statements" is the fact that decides whether the file is worth sending — finding
    * that out after the download is too late to matter. */
   #exportScript() {
-    const text = this.#ta ? this.#ta.value : '';
+    const { text, draft } = this.#currentScript();
     const dialog = document.createElement('dialog');
     dialog.className = 'ct-dialog';
     const choice = (value, label, note, checked) => `
@@ -1469,9 +1504,14 @@ export class HistoryPanel {
         <fieldset style="border:0; padding:0; margin:0; min-width:0;">
         <legend class="ct-dialog__hint" style="padding:0;">Format</legend>
         ${choice('ctscript', 'CrossTab syntax (.ctscript)', 'Lossless — imports back into this editor exactly as it is.', true)}
-        ${choice('stata', 'Stata do-file (.do)', 'Best-effort translation of the data steps; analyses become comments.', false)}
-        ${choice('spss', 'SPSS syntax (.sps)', 'Best-effort translation of the data steps; analyses become comments.', false)}
+        ${choice('stata', 'Stata do-file (.do)', 'Best-effort translation, checked by round-tripping it back through the importer.', false)}
+        ${choice('spss', 'SPSS syntax (.sps)', 'Best-effort translation, checked by round-tripping it back through the importer.', false)}
         </fieldset>
+        ${
+          draft
+            ? '<p class="ct-dialog__hint">This exports your <strong>unapplied draft</strong> — the edits you have not Run yet, not the applied steps.</p>'
+            : ''
+        }
         <p class="ct-dialog__hint" data-role="summary"></p>
         <menu class="ct-dialog__buttons">
           <button value="cancel" type="submit">Cancel</button>
@@ -1533,7 +1573,12 @@ export class HistoryPanel {
       this.#ta.value = content;
       this.#dirty = true; // an imported script is a draft until you Run it
       this.#updateDirtyHint();
-      this.#renderGutter();
+      // An imported script is a draft to READ, so land in the view that shows it — importing
+      // from Steps otherwise loaded it invisibly behind the toggle. After the draft is in
+      // place and marked dirty, so a cancelled confirm or an unreadable file changes nothing,
+      // and so the toggle re-renders the gutter instead of refilling over the import.
+      if (!this.#syntax) this.#toggleSyntax();
+      else this.#renderGutter();
       this.#clearErr();
     } catch (err) {
       this.#showErr(`Could not read file: ${err.message}`);
@@ -1797,6 +1842,46 @@ function el(tag, text, className) {
   if (text != null) e.textContent = text;
   if (className) e.className = className;
   return e;
+}
+
+/**
+ * Move the line(s) the selection touches up or down by one.
+ *
+ * Reordering in Syntax view always worked — the replay rebuilds from the text in order, so
+ * moving a line moves the step — but the only *gesture* for it was the ▲/▼ buttons on the
+ * Steps rows, which meant leaving the editor to reorder and coming back to keep typing.
+ *
+ * Pure so it can be tested without a DOM: give it the value and the selection, get back the
+ * new value and where the selection should sit, or null when the block is already at that end.
+ *
+ * @param {string} value @param {number} selStart @param {number} selEnd
+ * @param {-1|1} dir  -1 = up, 1 = down
+ * @returns {{value:string, start:number, end:number}|null}
+ */
+export function moveScriptLines(value, selStart, selEnd, dir) {
+  const text = String(value ?? '');
+  const lines = text.split('\n');
+  const lineOf = (pos) => text.slice(0, Math.max(0, pos)).split('\n').length - 1;
+  const first = lineOf(Math.min(selStart, selEnd));
+  const last = lineOf(Math.max(selStart, selEnd));
+  const to = dir < 0 ? first - 1 : last + 1;
+  if (to < 0 || to >= lines.length) return null;
+
+  // Where the caret sits within its line, so a plain caret keeps its column rather than
+  // selecting the whole line it just moved.
+  const startOf = (idx, arr) => arr.slice(0, idx).reduce((n, l) => n + l.length + 1, 0);
+  const caretCol = selStart === selEnd ? selStart - startOf(first, lines) : null;
+
+  const block = lines.splice(first, last - first + 1);
+  const at = dir < 0 ? first - 1 : first + 1;
+  lines.splice(at, 0, ...block);
+
+  const offset = startOf(at, lines);
+  if (caretCol != null) {
+    const pos = offset + Math.min(caretCol, block[0].length);
+    return { value: lines.join('\n'), start: pos, end: pos };
+  }
+  return { value: lines.join('\n'), start: offset, end: offset + block.join('\n').length };
 }
 
 /** Download a string as a text file (script export). */
