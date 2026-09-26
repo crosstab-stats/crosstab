@@ -5075,10 +5075,17 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     script structurally matches the app's history. Verified: an interleaved
     import→compute→append→recode→join exported all 5 steps in order, parses in R.
     Source bytes aren't embedded — the load lines point at file paths (label hints).
-  - *Deferred:* **SPSS `.sps`** syntax (a second format in the same plugin — fast
-    follow); including **analyses** in the script (needs a run-log + plugins
-    declaring their R — bigger); key-normalisation in the emitted join (the app
-    matches case/space-insensitively; the `merge` stub doesn't yet).
+  - *Deferred:* key-normalisation in the emitted join (the app matches
+    case/space-insensitively; the `merge` stub doesn't yet).
+  - *Overtaken by #176, and worth reading before touching this:* a **Stata `.do` /
+    SPSS `.sps` command-script** export now exists — but in `core/script-export.js`,
+    off the Syntax editor, NOT in this plugin. Don't build a second one here. Two
+    assumptions in the old deferral turned out to be wrong: the **run-log** that
+    "including analyses" needed has existed since #132 (`AnalysisLog`), and plugins do
+    not all have to declare their syntax first — the ten the `.do`/`.sps` importers
+    already read were translated by inverting that table, with the round trip as the
+    check. What remains genuinely blocked here is the same thing by a different name:
+    **R** for an analysis can only come from the plugin that emits it.
 - [~] **In-app plugin creator / editor — BUILT** (`core/plugin-creator.js`;
       **Edit ▸ Create plugin…**, and **"+ Create new…"** in the plugin manager).
       A scaffolded editor so non-programmers build the plugin they need without a
@@ -6261,6 +6268,24 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       Also, to keep the round-trip rule true rather than nearly true, three readings were
       added to the importers: `spearman` and `ktau` (Stata) and `NONPAR CORR` (SPSS), so a
       rank correlation survives in both directions instead of coming back as a comment.
+
+      **Not yet browser-tested:** the analyses half shipped after the owner's import → Run
+      → Export pass, so what has been clicked in the app is the version whose analysis line
+      was still a comment. The translation is unit- and round-trip tested; what is unseen
+      is a 36-of-36 file coming out of the real dialog.
+  - [ ] **Two more analyses would close the SPSS side** — teach `spss-import` to read
+        `LOGISTIC REGRESSION` and `UNIANOVA`, and the export follows for free, because the
+        table is keyed on what the importer can read back. Doing it in that order is the
+        point: it keeps the round-trip test as the thing that verifies the syntax.
+  - [ ] **The in-app Syntax guide says nothing about Import/Export.** `core/syntax-guide.js`
+        documents the grammar and the live `run id.fn` list, so a user who opens it to find
+        out how to hand their steps to a Stata colleague finds no mention that the button
+        exists. Small, and it belongs with **#184**'s task-oriented material rather than as
+        a grammar entry. Related and worth deciding at the same time: **File ▸ Export data…
+        is where someone will look first**, and a command script is deliberately not in that
+        picker (it lists DATA formats — [[unified-import-export-picker]]). That is the right
+        call for the picker and the wrong answer for the user; a pointer *to* the Syntax
+        editor from somewhere in the File menu may be all it needs.
 
       **Found while checking for it:** `test/chart-static-fallback.test.mjs` had a literal
       backspace where `\b` was meant (`/Charts\b/`), from a heredoc escape mangled in the

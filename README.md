@@ -29,7 +29,8 @@ never leaves the machine.
   an exportable script.
 - **Do-file editor** — view your analysis history as editable syntax; run it to
   rebuild the dataset and replay analyses. Load a Stata `.do` or SPSS `.sps` into
-  it, or export your data steps back out as one.
+  it, or export your steps — and the analyses that have a Stata/SPSS spelling — back
+  out as one.
 - **Works offline** — PWA with a "Make available offline" toggle; also supports
   fully air-gapped deployment for sensitive data environments.
 - **iPad Safari tested** and working.
