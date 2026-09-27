@@ -6072,11 +6072,21 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
           expression buried in a row builder. It also fixed a case I had not thought about: a
           project made on a deployment and opened elsewhere now says the missing plugin
           *belongs to the sharer's install*, instead of "not a built-in plugin".
-    - [ ] **One check left:** the ignored-settings list — uncomment the deliberately-invalid
-          `repo` in the bench `deploy.json` and reload. Everything else should still apply, with
-          a tappable line naming just that field. It is the only part of the affordance not yet
-          seen on screen, and the one that matters most when a real department mistypes
-          something.
+    - [x] **The ignored-settings list — checked, and it found two more bugs.** One invalid
+          field reported as **two** ignored settings, and the panel named the field without
+          saying where it was.
+      - [x] **Reported twice:** the launcher merged `deployConfig().issues` with a list
+            `app.js` had already composed from the same source. Two copies of one list — the
+            same root shape as the origin bug an hour earlier, and as #177's tooltip. The fix
+            is one owner: `addDeployIssues()` folds the plugin-index problems into the config's
+            list, the launcher reads only `deployConfig().issues`, and nothing is passed around.
+      - [x] **Now says where:** each issue carries its file and LINE, so the panel reads
+            `repo — expected "owner/repo" (deploy.json line 28)`. The line comes from searching
+            the COMMENT-STRIPPED text, which is what makes it trustworthy in this file: the
+            stripper replaces comments with blank lines rather than deleting them, so numbers
+            still match what the user sees, and a commented-out `// "repo": …` example cannot
+            be mistaken for the live key. That mattered immediately — the bench file carries a
+            commented example of the very key that was wrong.
   - [ ] **Still constants, deliberately deferred:** `RUNTIME_HOSTS` in `sw.js` (a service
         worker cannot import `core/`, so honouring `runtimeHosts` means the SW reading
         `deploy.json` itself — worth doing, but not worth folding into the same commit as a

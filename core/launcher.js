@@ -61,8 +61,6 @@ export class Launcher {
   /** Selected plugin keys (the checked set). @type {Set<string>} */
   #selected = new Set();
   #discipline = 'All';
-  /** @type {Array<{field:string, why:string}>} */
-  #deployIssues = [];
   #pendingSource = null; // source key chosen this session, applied on Start
   #pendingProject = null; // { id } when a saved project is chosen instead of a source
   /**
@@ -96,10 +94,7 @@ export class Launcher {
    * @param {import('./asset-store.js').AssetStore} [deps.assetStore] - Stores demo
    *   geometry as asset bytes, the same way a loaded file is stored.
    */
-  constructor({ plugins, datasets, bus, projects, offline, workspaceStore, itemStore, assetStore, makeBackend, openBackend, deployIssues }) {
-    // Problems found reading this deployment's own files at boot (#185) — shown in the
-    // About rail, because the admin who caused them is not reading a console.
-    this.#deployIssues = Array.isArray(deployIssues) ? deployIssues : [];
+  constructor({ plugins, datasets, bus, projects, offline, workspaceStore, itemStore, assetStore, makeBackend, openBackend }) {
     this.#plugins = plugins;
     this.#datasets = datasets;
     this.#bus = bus;
@@ -612,7 +607,10 @@ export class Launcher {
     const box = overlay.querySelector('.ctl__hosted');
     if (!box) return;
     const cfg = deployConfig();
-    const issues = [...(cfg.issues || []), ...(this.#deployIssues || [])];
+    // ONE source. This line used to merge the config's list with a copy the caller had
+    // composed from the same place, so every settings problem was reported twice (owner,
+    // 2026-09-27, with one bad field showing as “two settings ignored”).
+    const issues = cfg.issues || [];
     // No settings file: no claim. Absence is what tells you this is the stock build.
     if (!cfg.applied && !issues.length) return;
 
@@ -1028,6 +1026,7 @@ function injectStyles() {
     .ctl__hostedwarn { display: block; margin-top: 6px; font: inherit; font-size: 12px; text-align: left;
       color: #8a5a00; background: #fdf3e0; border: 1px solid #f0d9ad; border-radius: 6px; padding: 5px 7px; cursor: pointer; }
     .ctl__hostedwarn:hover, .ctl__hostedwarn:focus-visible { background: #f9e9cf; }
+    .ctl__issuewhere { color: #6c7882; }
     .ctl__offline { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line, #d8dde2); }
     .ctl__offlinehint { font-size: 12px; color: #687381; margin: 0 0 8px; }
     .ctl__offlinebtn { font: inherit; font-size: 13px; padding: 7px 10px; width: 100%; cursor: pointer;
@@ -1095,11 +1094,15 @@ function showDeployIssues(issues) {
     const li = el('li', null);
     li.append(el('code', i.field, null));
     li.append(document.createTextNode(` — ${i.why}`));
+    // Where to go and change it. Without this the user is hunting a key by eye through a file
+    // full of commented-out examples of the same key (owner, 2026-09-27).
+    const at = i.line ? `${i.file || 'deploy.json'} line ${i.line}` : i.file || 'deploy.json';
+    li.append(el('span', ` (${at})`, 'ctl__issuewhere'));
     ul.append(li);
   }
   form.append(ul);
-  form.append(el('p', 'Edit deploy.json (or your plugin index) and reload. docs/DEPLOY.md lists every '
-    + 'field and what it accepts.', 'ct-dialog__hint'));
+  form.append(el('p', 'Fix those lines and reload. docs/DEPLOY.md lists every field and what it '
+    + 'accepts.', 'ct-dialog__hint'));
   const menu = el('menu', null, 'ct-dialog__buttons');
   const close = el('button', 'Close', 'ct-dialog__primary');
   close.value = 'cancel';

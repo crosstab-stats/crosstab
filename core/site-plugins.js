@@ -34,7 +34,7 @@
  * a server.
  */
 
-import { deployConfig, parseDeployConfig } from './deploy-config.js';
+import { deployConfig, findFieldLine, parseDeployConfig } from './deploy-config.js';
 
 /** The file inside a deployment's plugin directory that lists its plugins. */
 export const INDEX_FILE = 'index.json';
@@ -109,7 +109,9 @@ export async function loadSitePlugins({ cfg = deployConfig(), fetch: f = globalT
     /* unreachable — fall through to the missing-index issue */
   }
   if (text == null) {
-    return { ...empty, issues: [{ field: 'pluginDir', why: `no ${url} found (the directory needs an index)` }] };
+    // Reported against deploy.json, not the index: `pluginDir` is what pointed at a directory
+    // with no index in it, and that is the line the user has to fix.
+    return { ...empty, issues: [{ file: 'deploy.json', field: 'pluginDir', why: `no ${url} found (the directory needs an index)` }] };
   }
   let value = null;
   try {
@@ -120,10 +122,16 @@ export async function loadSitePlugins({ cfg = deployConfig(), fetch: f = globalT
     value = null;
   }
   if (value == null) {
-    return { ...empty, issues: [{ field: url, why: 'could not be parsed' }] };
+    return { ...empty, issues: [{ file: `${dir}/${INDEX_FILE}`, field: INDEX_FILE, why: 'could not be parsed' }] };
   }
   const { entries, issues } = parsePluginIndex(value, dir);
-  return { dir, namespace, entries, issues };
+  // Locate each complaint in the index the user actually edits.
+  const located = issues.map((i) => ({
+    file: `${dir}/${INDEX_FILE}`,
+    ...i,
+    line: findFieldLine(text, i.field),
+  }));
+  return { dir, namespace, entries, issues: located };
 }
 
 /**

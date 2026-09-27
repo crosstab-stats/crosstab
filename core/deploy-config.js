@@ -90,6 +90,44 @@ export function deployConfig() {
   return resolved;
 }
 
+/**
+ * Merge in problems found reading the deployment's OTHER files (its plugin index), so there is
+ * exactly ONE list to read.
+ *
+ * This exists because there were briefly two: the launcher merged `deployConfig().issues` with a
+ * list the caller had already composed from the same source, and reported every settings problem
+ * twice (owner, 2026-09-27: "it said two settings not applied even though I only uncommented one
+ * line"). One list, one owner.
+ *
+ * @param {Array<{file?:string, field:string, why:string, line?:number|null}>} extra
+ */
+export function addDeployIssues(extra) {
+  if (!Array.isArray(extra) || !extra.length) return resolved;
+  resolved = Object.freeze({ ...resolved, issues: [...resolved.issues, ...extra] });
+  return resolved;
+}
+
+/**
+ * Which line of a hand-edited file a field is on, so a complaint can point at it.
+ *
+ * Searches the COMMENT-STRIPPED text, which is the trick that makes this reliable: the stripper
+ * replaces comments with blank lines rather than deleting them, so line numbers still match the
+ * file the user is looking at — and a commented-out `// "repo": …` cannot be mistaken for the
+ * live one.
+ *
+ * @param {string} text the file's raw contents @param {string} field the key (or path) to find
+ * @returns {number|null} 1-based line, or null if it is not literally in the text
+ */
+export function findFieldLine(text, field) {
+  if (!text || !field) return null;
+  const needle = `"${field}"`;
+  const lines = stripJsonComments(String(text)).split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].includes(needle)) return i + 1;
+  }
+  return null;
+}
+
 /** Whether a `deploy.json` was actually found and applied (for the About/diagnostics line). */
 export function deployConfigLoaded() {
   return loaded;
@@ -116,7 +154,11 @@ export async function loadDeployConfig({ fetch: f = globalThis.fetch, url = DEPL
     console.warn(`[deploy] ${url} could not be parsed — ignoring it and using the built-in defaults.`);
     return resolved;
   }
-  resolved = Object.freeze({ ...validateDeployConfig(raw), applied: true });
+  const validated = validateDeployConfig(raw);
+  // Point at the line, because this file is hand-edited and "expected owner/repo" without a
+  // location is a scavenger hunt in a file full of commented examples (owner, 2026-09-27).
+  const issues = validated.issues.map((i) => ({ ...i, file: 'deploy.json', line: findFieldLine(text, i.field) }));
+  resolved = Object.freeze({ ...validated, issues, applied: true });
   loaded = true;
   return resolved;
 }

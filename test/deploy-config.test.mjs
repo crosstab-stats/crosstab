@@ -17,7 +17,9 @@ import assert from 'node:assert/strict';
 
 import {
   DEFAULT_REPO,
+  addDeployIssues,
   deployConfig,
+  findFieldLine,
   loadDeployConfig,
   parseDeployConfig,
   stripJsonComments,
@@ -202,4 +204,62 @@ test('a good file is applied and readable synchronously afterwards', async () =>
   // Consumers read it without awaiting anything — that is why boot loads it first.
   assert.equal(deployConfig().repo, 'dept/crosstab');
   assert.equal(deployConfig().pluginNamespace, 'dept');
+});
+
+// =============================================================================
+// Reporting a problem to the person who caused it (owner, on the bench, 2026-09-27)
+// =============================================================================
+
+/**
+ * Two bugs from one screenshot, both about the ignored-settings panel:
+ *
+ *  - **One bad field was reported twice.** The launcher merged `deployConfig().issues` with a
+ *    list the caller had already composed from the same source. Two copies of one list is the
+ *    bug; the fix is one owner, which is what `addDeployIssues` is for.
+ *  - **It named the field but not where it is.** In a hand-edited file full of commented-out
+ *    examples of the very same key, "repo — expected owner/repo" is a scavenger hunt.
+ */
+test('an issue is recorded once, and carries where to fix it', async () => {
+  const text = [
+    '{',
+    '  "siteName": "Example Lab",',
+    '  // "repo": "a commented-out example of the same key",',
+    '  "repo": "not a repo!!"',
+    '}',
+  ].join('\n');
+  const warn = console.warn;
+  console.warn = () => {};
+  let cfg;
+  try {
+    cfg = await loadDeployConfig({ fetch: async () => ({ ok: true, text: async () => text }), url: './x.json' });
+  } finally {
+    console.warn = warn;
+  }
+  assert.equal(cfg.issues.length, 1, 'one bad field is one issue');
+  assert.equal(cfg.issues[0].field, 'repo');
+  assert.equal(cfg.issues[0].file, 'deploy.json');
+  // Line 4, not line 3: the commented-out example of the same key must not be what it points at.
+  assert.equal(cfg.issues[0].line, 4);
+  assert.equal(cfg.siteName, 'Example Lab', 'the good field still applied');
+});
+
+test('the config owns the one list, and other files add to it', () => {
+  const before = deployConfig().issues.length;
+  addDeployIssues([{ file: 'site-plugins/index.json', field: 'bad.js', why: 'nope', line: 3 }]);
+  const after = deployConfig().issues;
+  assert.equal(after.length, before + 1);
+  assert.equal(after.at(-1).file, 'site-plugins/index.json');
+  // Adding nothing changes nothing (the empty/absent cases callers actually hit).
+  addDeployIssues([]);
+  addDeployIssues(undefined);
+  assert.equal(deployConfig().issues.length, before + 1);
+});
+
+test('findFieldLine reads the file the user sees, comments and all', () => {
+  const text = ['{', '  // "a": 1,', '', '  "a": 2,', '  "b": 3', '}'].join('\n');
+  assert.equal(findFieldLine(text, 'a'), 4); // the live one, not the commented example
+  assert.equal(findFieldLine(text, 'b'), 5);
+  assert.equal(findFieldLine(text, 'missing'), null);
+  assert.equal(findFieldLine('', 'a'), null);
+  assert.equal(findFieldLine(text, ''), null);
 });

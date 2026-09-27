@@ -25,7 +25,7 @@ import {
 } from './storage-backend.js';
 import { openProjectManager } from './project-manager.js';
 import { registerHelpMenu } from './help.js';
-import { loadDeployConfig } from './deploy-config.js';
+import { addDeployIssues, loadDeployConfig } from './deploy-config.js';
 import { loadSitePlugins } from './site-plugins.js';
 import { openSyntaxGuide } from './syntax-guide.js';
 import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } from './user-identity.js';
@@ -539,6 +539,9 @@ export async function boot(mounts) {
   // plugin manager is constructed with the full set: a site plugin is catalogued, activated and
   // sandboxed by exactly the same path as a built-in — provided, not privileged.
   const sitePlugins = await loadSitePlugins({ cfg: deploy });
+  // Fold them into the ONE list the config owns, so nothing downstream has to compose (or
+  // double-count) them — which is exactly what went wrong the first time.
+  addDeployIssues(sitePlugins.issues);
   // Also to the console: a deep-link boot (`?launch=…`) never opens the launcher, so that
   // surface cannot be the only place a deployment problem is reported.
   for (const issue of sitePlugins.issues) console.warn(`[deploy] ${issue.field}: ${issue.why}`);
@@ -1927,11 +1930,10 @@ export async function boot(mounts) {
   // Connectivity indicator in the status bar — most useful on a field device, where
   // it tells the user why an online importer is quiet and confirms "you're cached."
   if (mounts.status) wireConnectivityIndicator(mounts.status, offline);
+  // Deployment problems are read from deployConfig() by whoever needs them — not passed
+  // around, because two copies of one list is how they got reported twice (#185).
   const launcher = new Launcher({
     plugins, datasets, bus, projects, offline, workspaceStore, itemStore, assetStore, makeBackend, openBackend,
-    // Anything wrong with this deployment's own files, so the launcher can tell the person
-    // who edited them rather than only the console (#185).
-    deployIssues: [...deploy.issues, ...sitePlugins.issues],
   });
   engine.launcher = launcher;
   const launchFlag = new URLSearchParams(location.search).get('launch');
