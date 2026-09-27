@@ -1454,7 +1454,6 @@ export class HistoryPanel {
       if (info.kind !== 'source') {
         const lineIndex = i;
         const controls = el('span', null, 'history-panel__gctl');
-        controls.style.cssText = 'flex:0 0 auto; display:flex; gap:1px; opacity:.5;';
         controls.append(
           ctlBtn('▲', 'Move this line up', lineIndex === 0, () => this.#moveGutterLine(lineIndex, -1)),
           ctlBtn('▼', 'Move this line down', lineIndex >= lines.length - 1, () => this.#moveGutterLine(lineIndex, 1)),

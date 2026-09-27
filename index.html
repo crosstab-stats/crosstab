@@ -420,8 +420,17 @@
         padding: 7px 10px; border-radius: 6px; color: #1a1a1a; font: inherit;
       }
       /* per-step controls: move up/down, delete */
-      .history__ctl { display: flex; gap: 1px; flex: none; padding-right: 4px; opacity: 0; transition: opacity .1s; }
-      .history__step:hover .history__ctl { opacity: 1; }
+      /* Always visible — NOT revealed on hover (owner, 2026-09-27: "touch devices dont have
+         hover"). These were `opacity: 0` until the row was hovered, which on a phone meant an
+         INVISIBLE BUT TAPPABLE row of buttons, delete included: a transparent control still
+         takes pointer events, so the affordance was not merely missing, it was a trap. The
+         hover highlight on each button (below) is still the pointer nicety; visibility is not.
+         Full strength rather than dimmed, because a dimmed glyph on white drops under the 3:1
+         WCAG needs for a control — quiet has to come from size and colour, not opacity. */
+      .history__ctl { display: flex; gap: 1px; flex: none; padding-right: 4px; }
+      /* The Syntax gutter's copies of the same controls (#189), styled here so the two cannot
+         drift apart the way the two pickers' tooltips did. */
+      .history-panel__gctl { display: flex; gap: 1px; flex: none; }
       .history__ctlbtn {
         border: 0; background: none; cursor: pointer; color: #687381; font-size: 12px;
         width: 20px; height: 22px; border-radius: 4px; line-height: 1;
