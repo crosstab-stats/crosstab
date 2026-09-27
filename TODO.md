@@ -5883,64 +5883,36 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       **picker→selection write-back** so confirming a picker updates the shared
       selection (today the picker's choice returns to the plugin but doesn't
       change the grid/sidebar selection — a real design call, left as-is for now).
-- [ ] **#180 — float the SELECTED variables to the top (and to the left), the way the
-      analysis picker already does (user, 2026-09-21).** Real workflow that provokes it:
-      a homework question needs seven variables with unrelated names; the next question
-      needs seven different ones. Clearing the first set means **remembering each name**,
-      finding it in a 900-column grid, and unticking one at a time. The count that says
-      `7 selected` knows exactly which seven they are and won’t show them to you.
+- [x] **#180 — DONE (2026-09-27). The selected variables float: to the top of Variable
+      View, to the left of the Data grid.** The workflow that asked for it — seven variables
+      with unrelated names for one homework question, seven different ones for the next, and
+      clearing the first set meant remembering each name and hunting it in a 900-column grid
+      while the `7 selected` counter knew exactly which seven and would not show them.
 
-      **The pattern already exists, in the third surface.** `ui.selectVariables` floats
-      the workspace selection into a "Selected" group at the top of the picker
-      (`core/ui-service.js` ~92–101): partition the list into `selected` / `rest`, sort
-      each partition by the chosen order, render "Selected" then "All variables". Two
-      properties of that implementation are the whole reason to copy it rather than
-      invent something:
+      Copied from `ui.selectVariables` rather than reinvented, including the two properties
+      that implementation's comments call out:
+  - [x] **Nothing selected → no grouping at all** — not an empty group, not a stray rule. The
+        same array comes back, so a caller can skip re-rendering. Everything selected has no
+        boundary either: a rule at one end of the list says nothing.
+  - [x] **The grouping is a SNAPSHOT, never the live selection.** This mattered more here than
+        in the picker: `#render` runs on every scroll, so a live read would reshuffle the grid
+        mid-scroll, and ticking a column would slide it left from under the cursor as you
+        reached for the next one. The snapshot is retaken on the deliberate re-renders —
+        entering the tab (`app.js` re-renders a tab when shown), a data change, a new filter or
+        order — which is exactly when someone has come back to hunt for their selection again.
+  - [x] **Floating is a secondary sort key, not a re-sort.** Whatever `sortVars` decided still
+        holds inside the floated block and inside the rest, so "Label (A–Z)" is honoured twice.
+  - [x] **The boundary is a rule, because a grid cannot carry a group heading.** Down the left
+        edge of the first unselected column; under the last selected row in Variable View.
 
-        1. **Grouping is computed ONCE, from the incoming selection, and never
-           recomputed** — the comment says why: "ticking a box must not make its row
-           jump to the top group under the user’s cursor."
-        2. **Nothing selected → no groups at all**, just the plain list.
+      `floatSelected` lives in `core/var-order.js` — the module that already owns "how
+      variables are ordered in every list that shows them", so the third surface stops being
+      the only one that can answer "which ones are ticked?". 7 tests, suite 1077 → 1084; the
+      one that matters most asserts no variable is ever added, lost or duplicated, because a
+      column that vanishes from the view is a column the user cannot reach.
 
-      Apply the same idea to the two workspace surfaces: **Variable View floats selected
-      rows to the top, the Data grid floats selected columns to the left** (next to the
-      row-number gutter). Mechanically it is a secondary sort key in `#visibleMetas()`
-      — partition on selection, then `sortVars(…, this.order)` within each part — so it
-      composes with the existing file-order / name / label preference instead of
-      competing with it.
-
-      **Why this beats the "show only selected" filter it replaces.** Floating is not
-      hiding, so the two hazards that filter had both evaporate: "which seven are
-      selected?" is answered by looking at the top/left, and "I unticked them all and
-      now the view is empty" cannot happen — an empty selection is just the ordinary
-      list. It also needs no toggle to be visible-while-on, no empty state, and no
-      recovery affordance. A "Clear selection" button is still worth having next to the
-      count, because dropping the whole set in one click is the user’s actual goal; the
-      float is what makes dropping *part* of the set easy.
-  - [ ] **The one real question: when is the snapshot taken?** The picker can freeze
-        the grouping at open because a modal has an obvious open moment. The grid and
-        Variable View are persistent, so "open" has to be defined. Candidates, none
-        free: **on entering the view / on refresh** (predictable, matches the picker,
-        but a tick you just made doesn’t move until you leave and come back — which can
-        read as broken); **live** (instant, but columns shift under the cursor at the
-        exact moment you are clicking checkboxes — the mis-click the picker
-        deliberately avoids); or **on an explicit "Float selected" / re-sort action**
-        (honest, costs a click, and the toolbar already has somewhere to put it).
-        Whichever is chosen, reset `scrollLeft` when the column order changes, as
-        `#applyFilter` already does.
-  - [ ] **Is it always on, or opt-in?** The picker floats unconditionally, but it is
-        transient. A persistent grid that permanently reorders columns away from file
-        order may disorient someone who navigates by position — and file order is a
-        first-class choice in `var-order.js`, not an accident. Decide deliberately;
-        if opt-in, it belongs beside the order select, and per `var-toolbar.js`’s own
-        split it is a *preference* (persisted, app-wide) rather than a query.
-  - [ ] **Both workspace surfaces, one change.** Variable View and the Data grid share
-        `makeVarToolbar` and both call `sortVars(filterVars(…))`; the float belongs in
-        that shared path so the two cannot drift — which is the exact failure
-        `var-toolbar.js` was written to end.
-  - [ ] **Leave the picker alone.** It already does this, and its snapshot-at-open
-        behaviour is correct for a modal. Related: "Variable-picker polish (later)"
-        above, which records why the picker’s group is deliberately not live.
+  - [ ] **Not browser-tested:** the float on both surfaces, the boundary rule, and — the point
+        of the snapshot — that ticking a column does NOT make it jump left under the cursor.
 
 - [x] **#175 — DONE (2026-09-21). User bug reports, server-free.** **Help ▸ Report a
       bug…** builds a pre-filled GitHub issue the user reviews and submits themselves —

@@ -798,6 +798,13 @@
         display: flex; align-items: center; justify-content: space-between; gap: 12px;
         padding: 7px 4px; border-bottom: 1px solid var(--line);
       }
+      /* #180: where the floated (selected) variables end. The picker can label its
+         "Selected" group with a heading; a grid and a dense table cannot, so the boundary
+         is a rule instead — down the left edge of the first unselected column, and under
+         the last selected row. Drawn only when there IS a boundary. */
+      .grid th.is-floatedge, .grid td.is-floatedge { border-left: 2px solid var(--accent, #2572a5); }
+      .vargrid__row.is-floatedge > * { border-top: 2px solid var(--accent, #2572a5); }
+
       .ct-plugin__lead { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
       .ct-plugin__main { display: flex; align-items: center; gap: 9px; cursor: pointer; font-size: 14px; }
       /* Which of this plugin's analyses matched the search (#183). */

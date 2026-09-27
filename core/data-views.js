@@ -17,7 +17,7 @@ import { openSyntaxGuide } from './syntax-guide.js';
 import { stataToScript } from './stata-import.js';
 import { spssToScript } from './spss-import.js';
 import { scriptToStata, scriptToSpss, scriptFileName } from './script-export.js';
-import { loadVarOrder, saveVarOrder, sortVars } from './var-order.js';
+import { floatSelected, loadVarOrder, saveVarOrder, sortVars } from './var-order.js';
 import { makeVarToolbar, filterVars, getWorkspaceFilter, setWorkspaceFilter } from './var-toolbar.js';
 import { labelForValue } from './var-role.js';
 
@@ -123,6 +123,7 @@ export class DataView {
   /** Rebuild from scratch (call on data change or first show). */
   async refresh() {
     this.metas = this.store.getVariableMeta();
+    this.#snapshotFloat();
     this.scroller.scrollTop = 0;
     this.scroller.scrollLeft = 0;
     this.lastKey = null;
@@ -135,13 +136,33 @@ export class DataView {
     this.#updateSelCount();
   }
 
-  /** Columns to display, after the column-header filter and the chosen order. */
+  /**
+   * Columns to display: filtered, ordered, and with the SELECTED ones floated to the left
+   * (#180) — next to the row-number gutter, where the seven you ticked for the last question
+   * are findable without remembering their names.
+   *
+   * The float reads a SNAPSHOT, never the live selection. Ticking a column must not slide it
+   * left from under the cursor while you reach for the next one, and `#render` runs on every
+   * scroll, so a live read would reshuffle the grid mid-scroll. The snapshot is retaken on the
+   * deliberate re-renders — entering the tab, a data change, a new filter or order — which is
+   * also exactly when a user has come back to hunt for their selection again.
+   */
   #visibleMetas() {
-    return sortVars(filterVars(this.metas, this.filter), this.order);
+    const list = sortVars(filterVars(this.metas, this.filter), this.order);
+    const { list: floated, floated: n } = floatSelected(list, this.floatSnapshot);
+    this.floatBoundary = n ? floated[n]?.name ?? null : null;
+    return floated;
+  }
+
+  /** Re-read which variables float. See {@link DataGridView#visibleMetas} for why this is a
+   * snapshot and when it is allowed to change. */
+  #snapshotFloat() {
+    this.floatSnapshot = new Set(this.store.getSelectedVariables());
   }
 
   /** Re-render after the filter changes (column set changed → reset H-scroll). */
   async #applyFilter() {
+    this.#snapshotFloat();
     this.scroller.scrollLeft = 0;
     this.lastKey = null;
     this.rowCache = null; // column set changed → re-fetch
@@ -431,6 +452,10 @@ export class DataView {
     th.dataset.row = '-1';
     th.tabIndex = -1;
     th.title = `${m.name} · ${m.type}${m.measurementLevel ? ` · ${m.measurementLevel}` : ''}`;
+    // Where the floated (selected) block ends. A grid cannot carry a "Selected" group
+    // heading the way the picker does, so the boundary is a rule down the edge instead
+    // of a label (#180).
+    if (this.floatBoundary && m.name === this.floatBoundary) th.classList.add('is-floatedge');
     const wrap = document.createElement('label');
     wrap.className = 'colhead';
     const cb = document.createElement('input');
@@ -493,6 +518,7 @@ export class DataView {
     for (const m of winMetas) {
       const v = row[m.name];
       let td;
+      const edge = !!this.floatBoundary && m.name === this.floatBoundary;
       if (v === null || v === undefined) {
         td = el('td', '·', 'na cell');
       } else if (labelForValue(m, v) !== null) {
@@ -509,6 +535,7 @@ export class DataView {
       // Non-destructive, undoable, shows in History. Edits the raw value (a
       // factor's *code*, not its label).
       td.setAttribute('role', 'gridcell');
+      if (edge) td.classList.add('is-floatedge'); // the left edge of the floated block (#180)
       td.setAttribute('aria-colindex', String(this.#visibleMetas().findIndex((x) => x.name === m.name) + 2));
       td.dataset.row = String(num - 1);
       td.dataset.col = m.name;
@@ -700,6 +727,10 @@ export class VariableView {
       return;
     }
     this.metas = metas;
+    // Which variables float, fixed for this viewing (#180). The workspace re-renders a tab
+    // when it is shown, so this is retaken exactly when a user comes back to look — and not
+    // while they are working down the list.
+    this.floatSnapshot = new Set(this.store.getSelectedVariables());
 
     // Toolbar: the shared filter + order controls, then this view's own count.
     // With thousands of variables, scanning the list to find one to recode is painful.
@@ -739,15 +770,21 @@ export class VariableView {
   #applyFilter() {
     if (!this.tbody) return;
     const q = this.filter.trim().toLowerCase();
-    const shown = sortVars(filterVars(this.metas, this.filter), this.order);
+    // Selected variables float to the top here too (#180) — same snapshot rule as the grid:
+    // taken when the view is (re)built, so a row cannot jump while the list is being read.
+    const ordered = sortVars(filterVars(this.metas, this.filter), this.order);
+    const { list: shown, floated } = floatSelected(ordered, this.floatSnapshot);
     this.count.textContent = q
       ? `${shown.length.toLocaleString()} of ${this.metas.length.toLocaleString()}`
       : `${this.metas.length.toLocaleString()} variable${this.metas.length === 1 ? '' : 's'}`;
 
     const frag = document.createDocumentFragment();
-    for (const m of shown) {
+    shown.forEach((m, i) => {
       const tr = document.createElement('tr');
       tr.className = 'vargrid__row';
+      // A rule under the last floated row, where the picker would put its next group
+      // heading. Only drawn when there IS a boundary (see floatSelected).
+      if (floated && i === floated) tr.classList.add('is-floatedge');
       tr.title = 'Click to edit';
       tr.append(openerCellFor(m, () => this.#openEditor(m)));
       tr.append(el('td', m.label || ''));
@@ -757,7 +794,7 @@ export class VariableView {
       tr.append(el('td', (m.missingValues || []).join(', ')));
       tr.addEventListener('click', () => this.#openEditor(m));
       frag.append(tr);
-    }
+    });
     if (shown.length === 0) {
       const td = el('td', `No variables match “${this.filter.trim()}”.`);
       td.colSpan = 6;

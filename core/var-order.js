@@ -115,3 +115,48 @@ export function sortVars(metas, order) {
   // a subtlety nobody would notice until it looked wrong.
   return desc ? asc.reverse() : asc;
 }
+
+/**
+ * Float the SELECTED variables to the front of a list (#180).
+ *
+ * The workflow that asks for it: a homework question needs seven variables with unrelated
+ * names, the next needs seven different ones. Clearing the first set means remembering each
+ * name and finding it again in a 900-column grid — while the `7 selected` counter knows
+ * exactly which seven and will not show them to you.
+ *
+ * The picker has done this since #174a; this is the same partition for the Data grid's columns
+ * and Variable View's rows, so the third surface stops being the only one that can answer
+ * "which ones are ticked?".
+ *
+ * Two properties are copied deliberately from that implementation, and they are the reason to
+ * copy rather than reinvent:
+ *
+ *  1. **Nothing selected → no grouping at all.** Not an empty group, not a separator: the plain
+ *     list, exactly as before. The feature has to be invisible until it is useful.
+ *  2. **The caller decides WHEN.** This function is pure and takes the selection it is given;
+ *     the surfaces pass a SNAPSHOT taken when the view was (re)built, never the live set.
+ *     Re-partitioning on every tick would make a row jump out from under the cursor mid-click
+ *     — the picker's comment calls that out, and a grid is worse, because the column you just
+ *     ticked would slide left while you reach for the next one.
+ *
+ * Within each group the incoming order is preserved, so whatever `sortVars` decided still
+ * holds inside the floated block and inside the rest.
+ *
+ * @param {Array<{name: string}>} metas  already filtered and sorted
+ * @param {Set<string>|null|undefined} selected  the snapshot to float
+ * @returns {{list: Array<object>, floated: number}} the list, and how many are at the front
+ *   (the boundary a surface draws its separator at)
+ */
+export function floatSelected(metas, selected) {
+  const list = Array.isArray(metas) ? metas : [];
+  if (!selected || typeof selected.has !== 'function' || selected.size === 0) {
+    return { list, floated: 0 };
+  }
+  const front = [];
+  const rest = [];
+  for (const m of list) (selected.has(m?.name) ? front : rest).push(m);
+  // Everything selected (or nothing of it present) means there is no boundary to draw, so say
+  // so rather than reporting a separator that would sit at one end of the list.
+  if (!front.length || !rest.length) return { list, floated: 0 };
+  return { list: [...front, ...rest], floated: front.length };
+}
