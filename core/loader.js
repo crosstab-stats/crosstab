@@ -76,14 +76,28 @@ export const API_VERSION = '0.1.0';
  * Because the namespace is prepended by the host (never by the author's id text),
  * a third-party plugin can't forge a `builtin-…` identity or squat another's.
  *
- * @param {{kind:'builtin'|'url'|'file'|'authored', url?:string}} origin
+ * A **site** plugin — one this deployment serves from its own directory (#185) — is namespaced
+ * by the deployment's declared prefix (`sdsu-attendance`). That prefix is prepended by the HOST
+ * from `deploy.json`, never taken from the plugin's own id, which is what makes it worth
+ * anything: a site plugin cannot mint `builtin-…`, and two deployments' plugins cannot collide
+ * inside one saved project.
+ *
+ * @param {{kind:'builtin'|'site'|'url'|'file'|'authored', url?:string, namespace?:string}} origin
  * @param {{id:string, author?:string}} manifest
- * @returns {string} the qualified id, e.g. `builtin-regression` or `alice.dev:regression`.
+ * @returns {string} the qualified id, e.g. `builtin-regression`, `sdsu-attendance`,
+ *   or `alice.dev:regression`.
  */
 export function qualifyId(origin, manifest) {
   const local = String(manifest?.id ?? '').trim();
   if (!local) throw new Error('Plugin manifest is missing an id.');
   if (!origin || origin.kind === 'builtin') return local; // reserved builtin namespace
+  if (origin.kind === 'site') {
+    const ns = String(origin.namespace || 'site').trim().toLowerCase() || 'site';
+    // Already prefixed by its author? Leave it — `sdsu-sdsu-attendance` helps nobody. Anything
+    // else gets the prefix even if it starts with `builtin-`, so a would-be forgery reads as
+    // exactly what it is: `sdsu-builtin-frequencies`.
+    return local === ns || local.startsWith(`${ns}-`) ? local : `${ns}-${local}`;
+  }
   if (origin.kind === 'url') {
     let host = '';
     try {

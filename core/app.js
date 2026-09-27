@@ -26,6 +26,7 @@ import {
 import { openProjectManager } from './project-manager.js';
 import { registerHelpMenu } from './help.js';
 import { loadDeployConfig } from './deploy-config.js';
+import { loadSitePlugins } from './site-plugins.js';
 import { openSyntaxGuide } from './syntax-guide.js';
 import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } from './user-identity.js';
 import { ProjectLog } from './project-log.js';
@@ -529,7 +530,14 @@ export async function boot(mounts) {
   // The deployment's own settings (#185), first: support routes, asset mode and (slice 2) a
   // site plugin directory all read it. Absent by default, and a bad file never blocks boot —
   // it warns and leaves every built-in default standing.
-  await loadDeployConfig();
+  const deploy = await loadDeployConfig();
+  // ...and the plugins that deployment serves of its own (#185). Read here, once, so the
+  // plugin manager is constructed with the full set: a site plugin is catalogued, activated and
+  // sandboxed by exactly the same path as a built-in — provided, not privileged.
+  const sitePlugins = await loadSitePlugins({ cfg: deploy });
+  // Also to the console: a deep-link boot (`?launch=…`) never opens the launcher, so that
+  // surface cannot be the only place a deployment problem is reported.
+  for (const issue of sitePlugins.issues) console.warn(`[deploy] ${issue.field}: ${issue.why}`);
   // Enter activates each dialog's primary (blue) button, app-wide (see dialog-keys).
   installDialogKeybindings();
   // Remember the last uncaught error so Help ▸ Report a bug… can include it (#175).
@@ -1707,6 +1715,7 @@ export async function boot(mounts) {
     loader,
     projectLog, // activation DECISIONS are ops on the project's log (#157)
     urls: BUILTIN_PLUGINS,
+    sitePlugins,
     menus,
     results: results.api,
     actions: pluginActions,
@@ -1914,7 +1923,12 @@ export async function boot(mounts) {
   // Connectivity indicator in the status bar — most useful on a field device, where
   // it tells the user why an online importer is quiet and confirms "you're cached."
   if (mounts.status) wireConnectivityIndicator(mounts.status, offline);
-  const launcher = new Launcher({ plugins, datasets, bus, projects, offline, workspaceStore, itemStore, assetStore, makeBackend, openBackend });
+  const launcher = new Launcher({
+    plugins, datasets, bus, projects, offline, workspaceStore, itemStore, assetStore, makeBackend, openBackend,
+    // Anything wrong with this deployment's own files, so the launcher can tell the person
+    // who edited them rather than only the console (#185).
+    deployIssues: [...deploy.issues, ...sitePlugins.issues],
+  });
   engine.launcher = launcher;
   const launchFlag = new URLSearchParams(location.search).get('launch');
   let bypassed = false;

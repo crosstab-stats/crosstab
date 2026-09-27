@@ -35,7 +35,7 @@ import { formatBuildTime, runningBuildStamp } from './build-stamp.js';
  * which is where #175's "later we can build support for someone else hosting this to have an
  * email" landed. Re-exported here because this is where callers have always looked for it.
  */
-import { supportLinks } from './deploy-config.js';
+import { deployConfig, supportLinks } from './deploy-config.js';
 
 export { DEFAULT_REPO as REPO } from './deploy-config.js';
 
@@ -68,6 +68,10 @@ export async function collectDiagnostics({ datasets, loader, plugins } = {}) {
     datasets: '0',
     shape: 'none open',
     plugins: '',
+    // Which install this came from (#185). A report from a department's own deployment that
+    // does not say so sends us hunting for a bug in a build we did not ship — and a site
+    // plugin in the list below is otherwise unexplained.
+    install: installLabel(),
     error: '',
   };
   try {
@@ -126,6 +130,7 @@ export async function collectDiagnostics({ datasets, loader, plugins } = {}) {
 export function bugReportBody(diag) {
   const block = [
     `- App build: ${diag.build}`,
+    diag.install ? `- Install: ${diag.install}` : '',
     `- Browser: ${diag.browser}`,
     diag.platform ? `- Platform: ${diag.platform}` : '',
     `- Cross-origin isolated: ${diag.isolated}`,
@@ -298,6 +303,7 @@ async function openBugReport(deps) {
   const pre = el('pre', 'help__diag');
   pre.textContent = [
     `App build: ${diag.build}`,
+    diag.install ? `Install: ${diag.install}` : '',
     `Browser: ${diag.browser}`,
     diag.platform ? `Platform: ${diag.platform}` : '',
     `Cross-origin isolated: ${diag.isolated}`,
@@ -496,4 +502,15 @@ function bugRouteHint(route) {
   return 'This opens a new issue on the public CrossTab repository with the details below '
     + 'filled in. Nothing is sent from here — you review it on GitHub and press Submit '
     + 'yourself. A GitHub account is needed to post.';
+}
+
+/**
+ * A one-line description of WHICH CrossTab this is: the stock build says nothing (there is
+ * nothing to say), a configured deployment names itself and its plugin namespace.
+ */
+function installLabel() {
+  const cfg = deployConfig();
+  if (!cfg.applied) return '';
+  const who = cfg.siteName || 'self-hosted';
+  return cfg.pluginDir ? `${who} (site plugins: ${cfg.pluginNamespace}-*)` : who;
 }

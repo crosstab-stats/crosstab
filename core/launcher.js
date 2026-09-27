@@ -25,6 +25,7 @@ import { showCaveats, showGettingAround } from './help.js';
 // The “what you get” hover text is shared with the plugin manager so the two pickers cannot
 // drift again — they render the same catalogue, and this line is where they did (#177).
 import { addsTooltip, openPluginAbout } from './plugin-manager.js';
+import { deployConfig } from './deploy-config.js';
 
 /** Curated-core analysis plugins, pre-selected on a fresh "Start blank". */
 const CORE_IDS = new Set([
@@ -60,6 +61,8 @@ export class Launcher {
   /** Selected plugin keys (the checked set). @type {Set<string>} */
   #selected = new Set();
   #discipline = 'All';
+  /** @type {Array<{field:string, why:string}>} */
+  #deployIssues = [];
   #pendingSource = null; // source key chosen this session, applied on Start
   #pendingProject = null; // { id } when a saved project is chosen instead of a source
   /**
@@ -93,7 +96,10 @@ export class Launcher {
    * @param {import('./asset-store.js').AssetStore} [deps.assetStore] - Stores demo
    *   geometry as asset bytes, the same way a loaded file is stored.
    */
-  constructor({ plugins, datasets, bus, projects, offline, workspaceStore, itemStore, assetStore, makeBackend, openBackend }) {
+  constructor({ plugins, datasets, bus, projects, offline, workspaceStore, itemStore, assetStore, makeBackend, openBackend, deployIssues }) {
+    // Problems found reading this deployment's own files at boot (#185) — shown in the
+    // About rail, because the admin who caused them is not reading a console.
+    this.#deployIssues = Array.isArray(deployIssues) ? deployIssues : [];
     this.#plugins = plugins;
     this.#datasets = datasets;
     this.#bus = bus;
@@ -201,6 +207,11 @@ export class Launcher {
     const keys = new Set();
     for (const p of list) {
       if (CORE_IDS.has(p.id) || DEFAULT_ON_CATEGORIES.has(p.category)) keys.add(p.key);
+      // A deployment's own plugin, marked `"default": true` in its index (#185). The marker
+      // lives next to the plugin so one directory can serve several groups with only part of
+      // it on — and it only seeds a FRESH launch, exactly like the curated core: a later
+      // deselect still sticks.
+      if (p.siteDefault) keys.add(p.key);
     }
     return keys;
   }
@@ -401,6 +412,7 @@ export class Launcher {
 
     overlay.querySelector('.ctl__howto').addEventListener('click', () => showGettingAround());
     overlay.querySelector('.ctl__caveats').addEventListener('click', () => showCaveats());
+    this.#renderHosted(overlay);
     this.#renderOffline(overlay);
     this.#renderInstallHint(overlay);
     overlay.querySelector('.ctl__start').addEventListener('click', () => this.#start(reopen));
@@ -580,6 +592,50 @@ export class Launcher {
     this.#pendingBackend = null;
     const r = this.#resolve; this.#resolve = null;
     r?.();
+  }
+
+  /**
+   * "Hosted by …" — shown **only when this deployment's settings file actually applied**.
+   *
+   * Two audiences, one line (owner, 2026-09-27). For whoever set the deployment up it is the
+   * only feedback that `deploy.json` was found and read: a console warning is not feedback,
+   * because the person who edited the file is not watching a console. For everyone else it
+   * answers "am I on my university's install or the public one?" — and the stock build showing
+   * nothing is the honest answer for the stock build.
+   *
+   * Deliberately not a binary. A file can apply and still have had fields thrown out, and
+   * saying "hosted by X" while silently ignoring half their settings would be the worse lie of
+   * the two, so a dropped field gets its own line, tappable for the details. (Tappable, not a
+   * tooltip — see the hover lesson from #177.)
+   */
+  #renderHosted(overlay) {
+    const box = overlay.querySelector('.ctl__hosted');
+    if (!box) return;
+    const cfg = deployConfig();
+    const issues = [...(cfg.issues || []), ...(this.#deployIssues || [])];
+    // No settings file: no claim. Absence is what tells you this is the stock build.
+    if (!cfg.applied && !issues.length) return;
+
+    box.replaceChildren();
+    box.hidden = false;
+    box.append(el('div', 'This install', 'ctl__railhead'));
+
+    const who = cfg.siteName || hostLabel();
+    const line = el('p', null);
+    line.append(document.createTextNode('Hosted by '));
+    line.append(el('span', who, 'ctl__hostedwho'));
+    box.append(line);
+
+    if (issues.length) {
+      const warn = el(
+        'button',
+        `⚠ ${issues.length} deployment setting${issues.length === 1 ? ' was' : 's were'} ignored — see why`,
+        'ctl__hostedwarn',
+      );
+      warn.type = 'button';
+      warn.addEventListener('click', () => showDeployIssues(issues));
+      box.append(warn);
+    }
   }
 
   /** Render the "Make available offline" control (installed-PWA offline caching).
@@ -864,6 +920,7 @@ function SHELL_HTML(reopen) {
           <p>All plugin code is inspectable, and <strong>all plugins are equal</strong> — you're encouraged to write your own.</p>
           <button type="button" class="ctl__howto">How to use →</button>
           <button type="button" class="ctl__howto ctl__caveats">Caveats &amp; limits →</button>
+          <div class="ctl__hosted" hidden></div>
           <div class="ctl__offline" hidden></div>
           <div class="ctl__install" hidden></div>
         </aside>
@@ -964,6 +1021,13 @@ function injectStyles() {
     .ctl__about .ctl__howto { display: block; font: inherit; font-size: 13px; color: var(--accent, #2572a5); background: none; border: 0; cursor: pointer; padding: 0; }
     .ctl__about .ctl__howto:hover { text-decoration: underline; }
     .ctl__about .ctl__caveats { margin-top: 6px; }
+    /* "Hosted by …" — shown only when this deployment's settings file actually applied, so
+       its presence is the signal (#185). */
+    .ctl__hosted { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line, #d8dde2); font-size: 12px; color: #41505e; }
+    .ctl__hostedwho { font-weight: 600; }
+    .ctl__hostedwarn { display: block; margin-top: 6px; font: inherit; font-size: 12px; text-align: left;
+      color: #8a5a00; background: #fdf3e0; border: 1px solid #f0d9ad; border-radius: 6px; padding: 5px 7px; cursor: pointer; }
+    .ctl__hostedwarn:hover, .ctl__hostedwarn:focus-visible { background: #f9e9cf; }
     .ctl__offline { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line, #d8dde2); }
     .ctl__offlinehint { font-size: 12px; color: #687381; margin: 0 0 8px; }
     .ctl__offlinebtn { font: inherit; font-size: 13px; padding: 7px 10px; width: 100%; cursor: pointer;
@@ -1001,4 +1065,49 @@ function injectStyles() {
     .ctl__link { font: inherit; font-size: 13px; background: none; border: 0; color: var(--accent, #2572a5); cursor: pointer; padding: 2px 4px; }
     .ctl__link:hover { text-decoration: underline; }`;
   document.head.append(s);
+}
+
+/** Where this copy is served from, when the deployment did not name itself. */
+function hostLabel() {
+  try {
+    return location.host || 'this site';
+  } catch {
+    return 'this site';
+  }
+}
+
+/**
+ * The detail behind "N settings were ignored": which field, and why. Every line here is a
+ * thing the deployment asked for and did not get, so it names the field exactly as written in
+ * the file rather than paraphrasing it.
+ */
+function showDeployIssues(issues) {
+  const d = document.createElement('dialog');
+  d.className = 'ct-dialog';
+  const form = el('form', null, 'ct-dialog__form');
+  form.method = 'dialog';
+  form.append(el('h2', 'Deployment settings that were ignored', 'ct-dialog__title'));
+  form.append(el('p', 'CrossTab read this install’s settings but could not use these. Everything else '
+    + 'applied, and anything ignored fell back to the built-in default.', 'ct-dialog__hint'));
+  const ul = el('ul', null, 'ctl__issuelist');
+  ul.style.cssText = 'margin:0 0 14px; padding-left:20px; line-height:1.6; font-size:13px;';
+  for (const i of issues) {
+    const li = el('li', null);
+    li.append(el('code', i.field, null));
+    li.append(document.createTextNode(` — ${i.why}`));
+    ul.append(li);
+  }
+  form.append(ul);
+  form.append(el('p', 'Edit deploy.json (or your plugin index) and reload. docs/DEPLOY.md lists every '
+    + 'field and what it accepts.', 'ct-dialog__hint'));
+  const menu = el('menu', null, 'ct-dialog__buttons');
+  const close = el('button', 'Close', 'ct-dialog__primary');
+  close.value = 'cancel';
+  close.type = 'submit';
+  menu.append(close);
+  form.append(menu);
+  d.append(form);
+  d.addEventListener('close', () => d.remove());
+  document.body.append(d);
+  d.showModal();
 }

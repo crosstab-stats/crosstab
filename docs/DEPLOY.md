@@ -54,9 +54,14 @@ comment a field out without the file breaking. What you can set:
 | `pluginDir`, `pluginNamespace` | Your own plugin directory — see below. |
 
 **A bad file cannot break your install.** Each field is validated on its own and a bad one is
-dropped with a warning in the browser console; if the whole file fails to parse, CrossTab boots
-on its defaults. Check the console after editing: a silent fallback is the failure mode to look
-for, not a crash.
+dropped; if the whole file fails to parse, CrossTab boots on its defaults.
+
+**How to tell it worked.** The launcher's About rail shows **"Hosted by …"** — your `siteName`,
+or your host if you did not set one — and that line appears *only* when a settings file actually
+applied. No line means CrossTab did not find or could not read one. If some fields were dropped,
+the same panel says how many and lists them with reasons, so you do not have to go looking in a
+console. The install is also named in Help ▸ Report a bug, so a report from your deployment
+says where it came from.
 
 ### What this file cannot do
 
@@ -66,17 +71,56 @@ not by CrossTab, so no runtime setting can change it. Edit `manifest.json` (and 
 
 ## 3. Your own plugins
 
-*(Coming in the second half of #185 — `pluginDir` is already accepted and validated, and the
-index format is specified in `deploy.example.json`.)*
+Keep them in their own directory beside the clone, list them in an index file **inside that
+directory**, and CrossTab registers them at boot exactly like the built-ins.
 
-A group can keep its own plugins in its own directory alongside the clone, list them in an index
-file inside that directory, and have CrossTab register them at boot exactly like the built-ins —
-no fork of our source, and `git pull` stays clean because nothing of yours lives in our tree.
+```
+crosstab/
+  deploy.json            <- "pluginDir": "site-plugins"
+  site-plugins/          <- yours; gitignored, so `git pull` never touches it
+    index.json
+    attendance/index.js
+    gradebook/index.js
+```
 
-Your plugins get their own id namespace (`pluginNamespace`, default `site`) so they can never
-collide with ours or with a plugin a user loads from a file. **Pick that namespace once**: it
-becomes part of every one of your plugin ids, and a saved project refers to them by it, so
-changing it later orphans those references.
+`site-plugins/index.json`:
+
+```jsonc
+{
+  // Comments and trailing commas are fine here too.
+  "plugins": [
+    // "default": true switches it on for a fresh launch, the way the curated core is on.
+    // Leave it off and the plugin is listed in Edit > Plugins for people to enable.
+    { "entry": "attendance/index.js", "default": true },
+    { "entry": "gradebook/index.js" }
+  ]
+}
+```
+
+A bare list works when you do not need the marker: `["attendance/index.js", "gradebook/index.js"]`.
+
+**The index lives in your directory on purpose.** You add a plugin by editing the file next to
+it — `deploy.json` names the directory once and then stays out of your way.
+
+Notes worth knowing before you build one:
+
+- **They are provided, not privileged.** A site plugin runs in the same sandboxed iframe as
+  every other plugin, ours included, and talks to the engine over `postMessage`. Being served by
+  the deployment gets it registered automatically; it grants no extra access.
+- **Entries must stay inside the directory.** An absolute URL, a `//host`, or a `..` is refused
+  with a message rather than fetched — this file names files *you* serve.
+- **Ids are namespaced by you.** `pluginNamespace` (default `site`) is prepended by CrossTab, so
+  `attendance` becomes `sdsu-attendance`. A site plugin cannot mint a `builtin-…` id, and two
+  universities' plugins cannot collide inside one shared project. **Pick the namespace once** —
+  it is part of every id, and a saved project refers to your plugins by it.
+- **Users stay in charge.** `"default": true` seeds a *fresh* launch. Someone who switches your
+  plugin off keeps it off.
+- **Nothing is fatal.** A missing index, a bad entry, a plugin that fails to load: CrossTab says
+  so on the launcher and carries on with everything else.
+
+Start from any built-in as a worked example — `plugins/builtin-frequencies/` is about the
+smallest complete one — or use **Edit ▸ Create plugin…** in the app and export the result into
+your directory.
 
 ## 4. Offline and air-gapped
 

@@ -25,6 +25,7 @@
 
 import { foldPluginOpinions, isPluginOp, pluginTarget } from './plugin-state.js';
 import { PluginActions } from './plugin-actions.js';
+import { deployConfig } from './deploy-config.js';
 import { CoreEvents } from './event-bus.js';
 import { packPlugin, unpackPlugin, looksLikeZip } from './plugin-package.js';
 import { ownerToken } from './workspace-store.js';
@@ -59,6 +60,8 @@ export class PluginManager {
   /** key → {id, name, category, keywords} learned when a plugin loads (persisted),
    * so disabled/unloaded plugins still show details in the dialog. @type {Object} */
   #catalog;
+  /** @type {{entries: Array<{url:string, defaultOn:boolean}>, namespace: string}} */
+  #site = { entries: [], namespace: 'site' };
   /** User-added plugins (persisted): `{key, kind:'url'|'file'|'authored', url?,
    * name?, source?}`. @type {Array<object>} */
   #user;
@@ -119,10 +122,14 @@ export class PluginManager {
    *   are installed is install state. localStorage keeps the latter, plus the current
    *   set as the next boot's default; the log is what merges, undoes and travels.
    */
-  constructor({ loader, urls, menus, results, actions, bus, projectReferences, workspaceStore, project, packageStore, projectLog }) {
+  constructor({ loader, urls, sitePlugins, menus, results, actions, bus, projectReferences, workspaceStore, project, packageStore, projectLog }) {
     this.#log = projectLog ?? null;
     this.#loader = loader;
     this.#urls = urls;
+    // The deployment's own plugins (#185): provided like built-ins (the user cannot remove
+    // them from the picker) but namespaced by the site, and only default-on if its index
+    // says so. Empty for the stock build.
+    this.#site = sitePlugins && Array.isArray(sitePlugins.entries) ? sitePlugins : { entries: [], namespace: 'site' };
     this.#menus = menus;
     this.#results = results;
     this.#actions = actions;
@@ -204,7 +211,16 @@ export class PluginManager {
   /** Every known plugin as a load descriptor (built-ins first, then user). */
   #entries() {
     const builtins = this.#urls.map((url) => ({ key: url, kind: 'url', url, builtin: true }));
-    return [...builtins, ...this.#user];
+    const site = this.#site.entries.map((e) => ({
+      key: e.url,
+      kind: 'site',
+      url: e.url,
+      builtin: true, // deployment-provided: catalogued and undeletable like ours
+      site: true,
+      namespace: this.#site.namespace,
+      defaultOn: !!e.defaultOn,
+    }));
+    return [...builtins, ...site, ...this.#user];
   }
 
   /** Load every enabled plugin (built-in + user). Call once at boot. Activations run
@@ -349,6 +365,9 @@ export class PluginManager {
    * id (#102). Built-ins are the reserved namespace; everything else is namespaced
    * by its verifiable host (URL) or self-declared author (file/authored). */
   #originDescriptor(entry) {
+    // Checked BEFORE `builtin`, which a site entry also sets: it is provided like a built-in
+    // but must not be namespaced like one, or it could mint `builtin-…` ids.
+    if (entry.site) return { kind: 'site', namespace: entry.namespace };
     if (entry.builtin) return { kind: 'builtin' };
     if (entry.kind === 'url') return { kind: 'url', url: entry.url };
     // A package is a file you added — namespaced like a file/authored plugin.
@@ -358,6 +377,7 @@ export class PluginManager {
 
   /** Host-tracked origin for output attribution — the part a plugin can't forge. */
   #originLabel(entry) {
+    if (entry.site) return deployConfig().siteName ? `from ${deployConfig().siteName}` : 'from this site';
     if (entry.builtin) return 'built-in';
     if (entry.kind === 'authored') return 'created here';
     if (entry.kind === 'package') return 'from package';
@@ -915,6 +935,10 @@ export class PluginManager {
       return {
         key: e.key,
         builtin: !!e.builtin,
+        // Deployment-provided (#185): shown as such, and its index may ask for it to be on
+        // by default in a fresh launch.
+        site: !!e.site,
+        siteDefault: !!e.defaultOn,
         id: cat?.id ?? null,
         name: cat?.name ?? e.name ?? prettyName(e.url || e.key),
         category: cat?.category || 'Other',

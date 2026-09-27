@@ -70,6 +70,12 @@ const DEFAULTS = Object.freeze({
   /** Slice 2: a directory of the site's own plugins, and the namespace they get. */
   pluginDir: null,
   pluginNamespace: 'site',
+  /** Fields this deployment set that were dropped, as `{field, why}` — surfaced in the app so
+   * the person who edited the file finds out. A console warning nobody reads is not feedback. */
+  issues: [],
+  /** True once a file was found and applied, so the UI can say "hosted by …" only when it
+   * actually means something. */
+  applied: false,
 });
 
 /** The resolved config for this session. Set once by {@link loadDeployConfig}. */
@@ -110,7 +116,7 @@ export async function loadDeployConfig({ fetch: f = globalThis.fetch, url = DEPL
     console.warn(`[deploy] ${url} could not be parsed — ignoring it and using the built-in defaults.`);
     return resolved;
   }
-  resolved = Object.freeze(validateDeployConfig(raw));
+  resolved = Object.freeze({ ...validateDeployConfig(raw), applied: true });
   loaded = true;
   return resolved;
 }
@@ -226,8 +232,13 @@ export function stripTrailingCommas(src) {
  * @returns {object} defaults with the valid overrides applied
  */
 export function validateDeployConfig(raw) {
-  const out = { ...DEFAULTS };
-  const warn = (field, why) => console.warn(`[deploy] ignoring "${field}": ${why}`);
+  const out = { ...DEFAULTS, issues: [] };
+  // Both channels on purpose: the console for whoever is looking at it, and the list for the
+  // launcher, because the person who edited this file is not watching a console.
+  const warn = (field, why) => {
+    out.issues.push({ field, why });
+    console.warn(`[deploy] ignoring "${field}": ${why}`);
+  };
 
   if ('repo' in raw) {
     // owner/repo, which is all the Help deep links interpolate.
