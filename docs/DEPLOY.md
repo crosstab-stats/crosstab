@@ -46,7 +46,7 @@ comment a field out without the file breaking. What you can set:
 | --- | --- |
 | `repo` | Your fork as `owner/repo`. Every Help ▸ GitHub link derives from it. |
 | `issuesUrl`, `discussionsUrl` | Point "Report a bug" / "Ask a question" anywhere, including off GitHub. |
-| `supportEmail` | Take mail instead of tickets: the bug dialog's main button becomes **Email support…**. |
+| `supportEmail` | Take mail instead of tickets: the bug dialog's main button becomes **Email support…**, which opens the user's own mail app with the report ready. CrossTab never sends anything itself — there is no server and no mailbox credentials. |
 | `siteName` | Who runs this install. Shown where a user is about to send a report. |
 | `assetsMode` | `cdn` (default) or `local` — see [OFFLINE.md](OFFLINE.md) for the air-gapped build. |
 | `assets` | Override individual runtime URLs, e.g. mirror WebR only. |

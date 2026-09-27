@@ -6055,8 +6055,19 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
         **Confirmed on screen:** the site plugin is fetched, sandboxed, catalogued and runs; its
         origin reads "from CrossTab Local Test Bench" rather than claiming to be ours; the
-        index's per-entry `"default": true` ticks it on a fresh launch; and the "Hosted by …"
-        line shows in the About rail — which is the whole signal that the settings file parsed.
+        index's per-entry `"default": true` ticks it on a fresh launch; the "Hosted by …" line
+        shows in the About rail — which is the whole signal that the settings file parsed — and
+        **the bug reporter works end to end** (2026-09-27): the report reached GitHub as a real
+        issue.
+
+        Worth recording because it looked like a fault and is not: **no email arrived.** Two
+        reasons, neither a bug. GitHub does not notify you about **your own** activity unless
+        you turn that on (Settings ▸ Notifications ▸ "Email notifications for your own
+        updates") — it is not a digest delay. And CrossTab **never sends mail at all**: with
+        `supportEmail` set, the primary button opens the user's mail app with the report ready
+        and they press Send, which is the same "nothing leaves here without you" rule the
+        GitHub route follows. There is no server and no mail credentials in this design, and
+        adding either would be a much larger decision than a settings field.
 
         Using a REAL example plugin rather than a stub is what earned this pass: it found a bug
         within minutes that no unit test of mine could have.
