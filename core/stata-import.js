@@ -338,12 +338,57 @@ function transTab(text, raw) {
   return skip(raw, 'tabulate (no variables)');
 }
 
-/** `regress y x1 x2` / `logit y x...` → {dv, ivs}. */
+/**
+ * Stata's factor-variable notation on a predictor: `i.educ` dummy-codes with the LOWEST level
+ * as the base, `ib(last).educ` with the highest, `ib2.educ` with a named one.
+ *
+ * It used to fall straight through `varlistAfterCommand`'s "starts with a letter" filter, so
+ * `regress y i.educ` imported a predictor literally called `i.educ` — a variable no dataset has.
+ * Found while making the .do round trip symmetric (#176 follow-up): the exporter writes exactly
+ * this notation, so the importer has to read it.
+ *
+ * @returns {{name:string, factor:boolean, ref:'first'|'last'|null}}
+ */
+function readFactorVar(token) {
+  const m = String(token).match(/^i\.(.+)$/i);
+  if (m) return { name: m[1], factor: true, ref: 'first' };
+  const b = String(token).match(/^ib\(?\s*(last|first|#?\d+)\s*\)?\.(.+)$/i);
+  if (b) {
+    const which = b[1].toLowerCase();
+    return { name: b[2], factor: true, ref: which === 'last' ? 'last' : 'first' };
+  }
+  return { name: String(token), factor: false, ref: null };
+}
+
+/** `regress y x1 x2` / `logit y x…` → {dv, ivs}, reading Stata's `i.var` factor notation. */
 function transModel(text, raw, pluginId, fn) {
   if (hasIfIn(text)) return skip(raw, `${pluginId} with if/in (per-analysis filter not supported)`);
   const vars = varlistAfterCommand(text);
   if (vars.length < 2) return skip(raw, `${pluginId} (need an outcome and ≥1 predictor)`);
-  return ok([`run ${pluginId}.${fn} ${JSON.stringify({ dv: vars[0], ivs: vars.slice(1) })}`]);
+  const dv = readFactorVar(vars[0]).name;
+  const parsed = vars.slice(1).map(readFactorVar);
+  const inputs = { dv, ivs: parsed.map((p) => p.name) };
+  const cats = parsed.filter((p) => p.factor);
+  const lines = [];
+  if (cats.length) {
+    if (pluginId === 'builtin-logistic') {
+      // The logistic plugin takes the categorical list and a reference end (#178), so this
+      // survives exactly.
+      inputs.cats = cats.map((p) => p.name);
+      inputs.ref = cats.some((p) => p.ref === 'last') ? 'last' : 'first';
+    } else {
+      // Linear regression has no such input: CrossTab decides from the variable's MEASURE.
+      // Say so rather than drop it silently — read as continuous, `i.educ` is a different model.
+      lines.push(
+        comment(
+          `[Stata] ${cats.map((p) => p.name).join(', ')} was dummy-coded with i./ib. — CrossTab `
+            + 'decides that from the variable’s measurement level, so check it is nominal or ordinal.',
+        ),
+      );
+    }
+  }
+  lines.push(`run ${pluginId}.${fn} ${JSON.stringify(inputs)}`);
+  return ok(lines);
 }
 
 /** `ttest x, by(g)` → independent; `ttest x == y` → paired; `ttest x == #` → one-sample. */
@@ -373,12 +418,34 @@ function transOneway(text, raw) {
   return ok([`run builtin-compare.oneway ${JSON.stringify({ y: vars[0], g: vars[1] })}`]);
 }
 
-/** `anova y g1 g2` → anova.factorial {dv, facs}. */
+/**
+ * `anova y a##b` → the factorial ANOVA. `anova y a` → a one-way (the same model, in the plugin
+ * that owns it).
+ *
+ * **`anova y a b` is refused**, and that is a correctness fix, not pedantry: in Stata that
+ * spelling fits MAIN EFFECTS ONLY, while CrossTab's factorial ANOVA fits `y ~ a * b` with every
+ * interaction. Importing it as factorial reported a different model from the one the file asked
+ * for — silently. Same rule the SPSS side applies to a `/DESIGN` that is not the full factorial.
+ */
 function transAnova(text, raw) {
   if (hasIfIn(text)) return skip(raw, 'anova with if/in (per-analysis filter not supported)');
   const vars = varlistAfterCommand(text);
   if (vars.length < 2) return skip(raw, 'anova (need outcome and ≥1 factor)');
-  return ok([`run builtin-anova.factorial ${JSON.stringify({ dv: vars[0], facs: vars.slice(1) })}`]);
+  const dv = vars[0];
+  const rest = vars.slice(1);
+  // One term joining every factor with ## is Stata's full factorial.
+  if (rest.length === 1 && rest[0].includes('##')) {
+    const facs = rest[0].split('##').map((f) => readFactorVar(f).name).filter(Boolean);
+    if (facs.length >= 2) return ok([`run builtin-anova.factorial ${JSON.stringify({ dv, facs })}`]);
+  }
+  if (rest.length === 1 && !rest[0].includes('#')) {
+    return ok([`run builtin-compare.oneway ${JSON.stringify({ y: dv, g: readFactorVar(rest[0]).name })}`]);
+  }
+  return skip(
+    raw,
+    'anova (CrossTab fits the full factorial — write it as `anova y a##b`; `anova y a b` is '
+      + 'main effects only, which is a different model)',
+  );
 }
 
 // =============================================================================

@@ -126,6 +126,10 @@ function translateCommand(text, state) {
   }
   if (/^(T-TEST|TTEST)$/i.test(word) || /^t-test\b/i.test(text)) return transTtest(text);
   if (/^ONEWAY$/i.test(word)) return transOneway(text);
+  // Added with #176's export table: it only emits what an importer can read back, so these
+  // two are what let a logistic regression and a factorial ANOVA leave CrossTab as .sps.
+  if (/^LOGISTIC$/i.test(word) && /^logistic\s+regression/i.test(text)) return transLogistic(text);
+  if (/^UNIANOVA$/i.test(word)) return transUnianova(text);
 
   return skip(text, `unrecognised command "${word}"`);
 }
@@ -318,6 +322,80 @@ function transTtest(text) {
     return ok([`run builtin-compare.oneSample ${JSON.stringify({ x: v, mu: Number(tv[1]) })}`]);
   }
   return skip(text, 't-test (unsupported form)');
+}
+
+/**
+ * `LOGISTIC REGRESSION [VARIABLES=]y WITH x1 x2 [/METHOD=ENTER …] [/CATEGORICAL=v]
+ * [/CONTRAST(v)=Indicator(1)]` → `builtin-logistic.run`.
+ *
+ * Added so the pair is symmetric (#176 follow-up): the export table only emits what an importer
+ * can read back, so teaching this command is what lets a logistic analysis leave CrossTab as
+ * `.sps` at all.
+ *
+ * `/CONTRAST(v)=Indicator(n)` names the reference CATEGORY NUMBER, and SPSS's default when a
+ * variable is `/CATEGORICAL` but has no contrast is the LAST category — which is the opposite of
+ * CrossTab's default (#178 kept First, because that is what the plugin already did). So the
+ * reference is recorded explicitly here rather than left to either side's default, or the same
+ * file would fit a different model in each program.
+ */
+function transLogistic(text) {
+  const head = text.replace(/^logistic\s+regression\s*/i, '').split('/')[0];
+  const m = head.match(/^(?:variables\s*=?\s*)?([A-Za-z_][\w.]*)\s+with\s+(.+)$/i);
+  if (!m) return skip(text, 'logistic regression (need "y WITH x1 x2")');
+  const dv = m[1];
+  const ivs = m[2].trim().split(/[\s,]+/).filter((v) => v && /^[A-Za-z_]/.test(v));
+  if (!ivs.length) return skip(text, 'logistic regression (no predictors)');
+  // A stepwise method fits a different model; entry is all CrossTab does.
+  const meth = text.match(/\/\s*method\s*=\s*(\w+)/i);
+  if (meth && !/^enter$/i.test(meth[1])) {
+    return skip(text, `logistic regression /METHOD=${meth[1]} (CrossTab fits entry only)`);
+  }
+  const inputs = { dv, ivs };
+  const cats = subVarlist(text, 'CATEGORICAL');
+  if (cats && cats.length) {
+    inputs.cats = cats;
+    // Indicator(1) = the first category; anything else (or no CONTRAST at all) is SPSS's
+    // default, the last.
+    const contrast = text.match(/\/\s*contrast\s*\([^)]*\)\s*=\s*indicator\s*\(\s*(\d+)\s*\)/i);
+    inputs.ref = contrast && contrast[1] === '1' ? 'first' : 'last';
+  }
+  return ok([`run builtin-logistic.run ${JSON.stringify(inputs)}`]);
+}
+
+/**
+ * `UNIANOVA y BY f1 f2 [/DESIGN=…]` → `builtin-anova.factorial` (or `compare.oneway` for a
+ * single factor, which is the same model by another name).
+ *
+ * The `/DESIGN` check is the whole reason this is not two lines. CrossTab's factorial ANOVA
+ * fits `y ~ f1 * f2` — every main effect and every interaction — so a file whose DESIGN says
+ * otherwise (main effects only, a nested term) is a DIFFERENT model, and importing it as a
+ * factorial would report one thing while the file asked for another. The SPSS GUI writes the
+ * full factorial out explicitly, so the common case still lands; anything else is refused with
+ * its reason. Covariates (`WITH`) make it ANCOVA, which is not this plugin either.
+ */
+function transUnianova(text) {
+  if (/\bwith\b/i.test(text.split('/')[0])) return skip(text, 'UNIANOVA with covariates (that is ANCOVA)');
+  const head = text.replace(/^unianova\s*/i, '').split('/')[0];
+  const by = head.split(/\s+by\s+/i);
+  if (by.length < 2) return skip(text, 'UNIANOVA (need y BY factor)');
+  const dv = by[0].trim().split(/\s+/)[0];
+  const facs = by[1].trim().split(/[\s,]+/).filter((v) => v && /^[A-Za-z_]/.test(v));
+  if (!dv || !facs.length) return skip(text, 'UNIANOVA (could not read the variables)');
+
+  const design = text.match(/\/\s*design\s*=?\s*([^/]*)/i);
+  if (design && facs.length > 1) {
+    // Accept only a design that includes the all-way interaction, i.e. the full factorial the
+    // plugin actually fits. `f1 f2 f1*f2` passes; `f1 f2` does not.
+    const terms = design[1].trim().split(/[\s,]+/).filter(Boolean).map((t) => t.toLowerCase());
+    const full = facs.map((f) => f.toLowerCase()).sort().join('*');
+    const hasFull = terms.some((t) => t.split('*').filter(Boolean).map((x) => x.trim()).sort().join('*') === full);
+    if (!hasFull) return skip(text, 'UNIANOVA /DESIGN is not the full factorial CrossTab fits');
+  }
+  if (facs.length === 1) {
+    // One factor is a one-way ANOVA — the same model, and CrossTab has a better home for it.
+    return ok([`run builtin-compare.oneway ${JSON.stringify({ y: dv, g: facs[0] })}`]);
+  }
+  return ok([`run builtin-anova.factorial ${JSON.stringify({ dv, facs })}`]);
 }
 
 /** ONEWAY y BY g */

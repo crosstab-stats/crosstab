@@ -473,14 +473,36 @@ const EMIT = [
     ['ONEWAY a BY g.'], // SPSS would need a filter; the omission is noted in a comment
   ],
   // --- logistic (Stata only) and factorial ANOVA (Stata only)
-  ['builtin-logistic.run', { dv: 'y', ivs: ['x1'] }, ['logit y x1'], null],
+  // Both were Stata-only until `spss-import` learned LOGISTIC REGRESSION and UNIANOVA — the
+  // rule being that the export writes only what an importer can read back, so teaching the
+  // importer is what unlocked the exporter (#176 follow-up).
+  [
+    'builtin-logistic.run',
+    { dv: 'y', ivs: ['x1'] },
+    ['logit y x1'],
+    ['LOGISTIC REGRESSION VARIABLES y WITH x1 /METHOD=ENTER x1.'],
+  ],
   [
     'builtin-logistic.run',
     { dv: 'y', ivs: ['x1', 'edu'], cats: ['edu'], ref: 'last' },
     ['logit y x1 ib(last).edu'],
-    null,
+    // "last" is SPSS's own default for a /CATEGORICAL variable, so it is written by leaving
+    // the contrast out; "first" has to be stated.
+    ['LOGISTIC REGRESSION VARIABLES y WITH x1 edu /METHOD=ENTER x1 edu /CATEGORICAL=edu.'],
   ],
-  ['builtin-anova.factorial', { dv: 'y', facs: ['f1', 'f2'] }, ['anova y f1##f2'], null],
+  [
+    'builtin-logistic.run',
+    { dv: 'y', ivs: ['x1', 'edu'], cats: ['edu'], ref: 'first' },
+    ['logit y x1 i.edu'],
+    ['LOGISTIC REGRESSION VARIABLES y WITH x1 edu /METHOD=ENTER x1 edu /CATEGORICAL=edu /CONTRAST(edu)=Indicator(1).'],
+  ],
+  [
+    'builtin-anova.factorial',
+    { dv: 'y', facs: ['f1', 'f2'] },
+    ['anova y f1##f2'],
+    // No /DESIGN: SPSS's default for `y BY f1 f2` IS the full factorial the plugin fits.
+    ['UNIANOVA y BY f1 f2.'],
+  ],
 ];
 
 for (const [call, inputs, stata, spss] of EMIT) {
@@ -514,6 +536,13 @@ const ROUND_TRIP = [
   [{ x1: 'a', x2: 'b' }, 'builtin-compare.paired', { x1: 'a', x2: 'b' }],
   [{ y: 'a', g: 'g' }, 'builtin-compare.independent', { y: 'a', g: 'g' }],
   [{ y: 'a', g: 'g' }, 'builtin-compare.oneway', { y: 'a', g: 'g' }],
+  [{ dv: 'y', ivs: ['x1', 'x2'] }, 'builtin-logistic.run', { dv: 'y', ivs: ['x1', 'x2'] }],
+  [
+    { dv: 'y', ivs: ['x1', 'edu'], cats: ['edu'], ref: 'first' },
+    'builtin-logistic.run',
+    { dv: 'y', ivs: ['x1', 'edu'], cats: ['edu'], ref: 'first' },
+  ],
+  [{ dv: 'y', facs: ['f1', 'f2'] }, 'builtin-anova.factorial', { dv: 'y', facs: ['f1', 'f2'] }],
 ];
 
 /** The `run …` lines a translated script comes back as. */
@@ -565,13 +594,42 @@ test('options that only change printed detail are named, and the command still r
   assert.match(out.text, /leaves out the Monte Carlo p-value.*the association measures/);
 });
 
-test('a logistic run that names the modelled category is refused, not silently flipped', () => {
-  // #186/#187: Stata's logit models the non-zero category, so for 1/2-coded data it would
-  // model the opposite event. Exactly the bug class those two entries exist to kill.
-  const out = scriptToStata('run builtin-logistic.run {"dv":"voted","ivs":["age"],"modelled":"Yes"}');
-  assert.equal(out.stats.skipped, 1);
-  assert.match(refusals(out)[0], /models the non-zero category/);
-  assert.match(refusals(out)[0], /recoded first/);
+test('a logistic run that names the modelled category is refused in BOTH languages', () => {
+  // #186/#187: Stata's logit models the non-zero category and SPSS models the higher code, so
+  // for 1/2-coded data either would model the opposite event. Exactly the bug class those two
+  // entries exist to kill — and the refusal has to hold in the language that was added later,
+  // or the SPSS route becomes the quiet way to get the wrong model.
+  const line = 'run builtin-logistic.run {"dv":"voted","ivs":["age"],"modelled":"Yes"}';
+  const stata = scriptToStata(line);
+  assert.equal(stata.stats.skipped, 1);
+  assert.match(refusals(stata)[0], /models the non-zero category/);
+  assert.match(refusals(stata)[0], /recoded first/);
+  const spss = scriptToSpss(line);
+  assert.equal(spss.stats.skipped, 1);
+  assert.match(refusals(spss)[0], /models the higher code/);
+  assert.match(refusals(spss)[0], /recoded first/);
+});
+
+test('the SPSS importer refuses the forms that are a different model', () => {
+  // The other half of the pair. Reading these as if they were what CrossTab fits would report
+  // one model while the file asked for another — quietly.
+  const cases = [
+    ['LOGISTIC REGRESSION voted WITH age /METHOD=FSTEP.', /entry only/],
+    ['UNIANOVA score BY a b /DESIGN=a b.', /full factorial/], // main effects only
+    ['UNIANOVA score BY a WITH pretest.', /ANCOVA/],
+  ];
+  for (const [line, why] of cases) {
+    const script = spssToScript(line).script;
+    assert.ok(!/^run /m.test(script), `should not have translated: ${line}`);
+    assert.match(script, why);
+  }
+  // ...and the full factorial spelled out explicitly, which is what the SPSS GUI writes, IS read.
+  assert.match(
+    spssToScript('UNIANOVA score BY a b /DESIGN=a b a*b.').script,
+    /run builtin-anova\.factorial \{"dv":"score","facs":\["a","b"\]\}/,
+  );
+  // A single factor is a one-way ANOVA — the same model, in the plugin that owns it.
+  assert.match(spssToScript('UNIANOVA score BY a.').script, /run builtin-compare\.oneway/);
 });
 
 test('a weighted analysis says how the weight was written', () => {
@@ -602,4 +660,47 @@ test('the faculty do-file now comes back with its analysis intact', () => {
   const out = scriptToStata(script);
   assert.equal(out.stats.skipped, 0, `nothing should be left as a comment now:\n${out.text}`);
   assert.equal(code(out).at(-1), 'tabulate q1');
+});
+
+// =============================================================================
+// Two importer faults the symmetry work exposed (#176 follow-up)
+// =============================================================================
+
+/**
+ * Making the `.do` round trip symmetric meant the importer had to read the notation the
+ * exporter writes — and doing that turned up two things it had been getting wrong all along,
+ * both of the same kind: **reading a file as a different model from the one it describes.**
+ */
+test('Stata factor notation is a factor, not a variable called "i.educ"', () => {
+  // `varlistAfterCommand` filters on "starts with a letter", which `i.educ` passes — so it
+  // imported a predictor no dataset has.
+  const logit = stataToScript('logit voted age i.educ').script;
+  assert.match(logit, /"ivs":\["age","educ"\]/);
+  assert.match(logit, /"cats":\["educ"\],"ref":"first"/);
+  // ib(last). is Stata's "use the highest level as the base", which is SPSS's default and
+  // CrossTab's "Last".
+  assert.match(stataToScript('logit voted age ib(last).educ').script, /"ref":"last"/);
+});
+
+test('linear regression has no categorical input, so the dummy-coding is called out', () => {
+  // The regression plugin decides from the variable's MEASURE. Read as continuous, `i.educ` is
+  // a different model — so the line still translates, with the check stated rather than a
+  // silent reinterpretation.
+  const out = stataToScript('regress inc age i.educ').script;
+  assert.match(out, /run builtin-regression\.run \{"dv":"inc","ivs":\["age","educ"\]\}/);
+  assert.match(out, /measurement level/);
+});
+
+test('`anova y a b` is main effects only, and is now refused rather than mis-read', () => {
+  // In Stata that spelling fits main effects; CrossTab's factorial ANOVA fits y ~ a * b. The
+  // importer used to translate it as factorial, reporting a model the file never asked for.
+  // This is the one place the follow-up made the importer translate FEWER commands on purpose.
+  const main = stataToScript('anova y a b').script;
+  assert.ok(!/^run /m.test(main), 'must not translate a main-effects design as factorial');
+  assert.match(main, /main effects only/);
+  // The full factorial spelling is read, including three-way.
+  assert.match(stataToScript('anova y a##b').script, /"facs":\["a","b"\]/);
+  assert.match(stataToScript('anova y a##b##c').script, /"facs":\["a","b","c"\]/);
+  // One factor is a one-way ANOVA, which has its own plugin.
+  assert.match(stataToScript('anova y a').script, /run builtin-compare\.oneway/);
 });

@@ -6400,10 +6400,30 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       → Export pass, so what has been clicked in the app is the version whose analysis line
       was still a comment. The translation is unit- and round-trip tested; what is unseen
       is a 36-of-36 file coming out of the real dialog.
-  - [ ] **Two more analyses would close the SPSS side** — teach `spss-import` to read
-        `LOGISTIC REGRESSION` and `UNIANOVA`, and the export follows for free, because the
-        table is keyed on what the importer can read back. Doing it in that order is the
-        point: it keeps the round-trip test as the thing that verifies the syntax.
+  - [x] **DONE (2026-09-27). The SPSS side is closed, and doing it importer-first paid off
+        twice over.** `spss-import` now reads `LOGISTIC REGRESSION` and `UNIANOVA`, so the
+        export table — which only emits what an importer can read back — gained both for free.
+        All ten analyses now travel in both languages, each with a round-trip test.
+
+        The rule earned its keep in a way I did not expect: making the pair symmetric forced
+        the importers to read the notation the exporters write, and that turned up **two
+        pre-existing faults, both of the "reads as a different model" kind**:
+    - [x] **`i.educ` was imported as a variable called `i.educ`.** Stata's factor notation
+          passed `varlistAfterCommand`'s starts-with-a-letter filter, so `regress y i.educ`
+          produced a predictor no dataset has. Now read properly: for logistic it becomes
+          `cats` + `ref` (`ib(last).` → last, matching SPSS's default and CrossTab's "Last");
+          for linear regression, which has no such input because it decides from the
+          variable's MEASURE, the line still translates with the check stated in a comment.
+    - [x] **`anova y a b` was imported as a factorial.** In Stata that spelling fits MAIN
+          EFFECTS ONLY, while CrossTab's factorial ANOVA fits `y ~ a * b`. It now refuses,
+          naming the `a##b` spelling it does read — the one place this work made the importer
+          translate *fewer* commands, deliberately, because the old behaviour reported a model
+          the file never asked for. The SPSS side applies the same rule to a `/DESIGN` that is
+          not the full factorial, and refuses `WITH` covariates (that is ANCOVA) and
+          `/METHOD=` anything but ENTER.
+    - [x] A logistic run that names its **modelled category** is refused in BOTH languages now,
+          not just Stata — SPSS models the higher code, so the newer route would otherwise have
+          been the quiet way to get the #186 bug back.
   - [ ] **The in-app Syntax guide says nothing about Import/Export.** `core/syntax-guide.js`
         documents the grammar and the live `run id.fn` list, so a user who opens it to find
         out how to hand their steps to a Stata colleague finds no mention that the button

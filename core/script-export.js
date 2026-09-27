@@ -663,8 +663,36 @@ const ANALYSES = {
           : [],
       };
     },
-    // No `spss`: spss-import reads no LOGISTIC REGRESSION, so nothing written here would be
-    // round-trip checked. Refused with that reason rather than guessed at.
+    // `spss-import` learned LOGISTIC REGRESSION (the #176 follow-up), so this is round-trip
+    // checked now and no longer has to be refused.
+    spss: (i, D) => {
+      // Same refusal as Stata, same reason: SPSS models the higher code of the outcome and
+      // cannot be aimed at a chosen level, so a run that names one would fit the opposite
+      // event for 1/2-coded data — the #186 bug class.
+      if (!isEmpty(i.modelled)) {
+        bail(
+          `SPSS's LOGISTIC REGRESSION models the higher code of the outcome, and this run models `
+            + `“${i.modelled}” — the outcome has to be recoded first`,
+        );
+      }
+      const dv = varName(i.dv, D);
+      const ivs = vlist(i.ivs, D);
+      const cats = asList(i.cats).map((v) => varName(v, D));
+      let line = `LOGISTIC REGRESSION VARIABLES ${dv} WITH ${ivs} /METHOD=ENTER ${ivs}`;
+      if (cats.length) {
+        line += ` /CATEGORICAL=${cats.join(' ')}`;
+        // Indicator(1) names the FIRST category as the reference. SPSS's own default is the
+        // last, so "last" is written by leaving the contrast out — and CrossTab's default is
+        // first, which is why it has to be stated rather than assumed either way (#178).
+        if (i.ref !== 'last') for (const c of cats) line += ` /CONTRAST(${c})=Indicator(1)`;
+      }
+      return {
+        lines: [`${line}.`],
+        dropped: asList(i.opts).length
+          ? ['the extra tables (classification, CI for Exp(B), Hosmer–Lemeshow, residuals)']
+          : [],
+      };
+    },
   },
 
   'builtin-correlation.run': {
@@ -744,7 +772,13 @@ const ANALYSES = {
       if (facs.length < 2) bail('a factorial ANOVA needs two or more factors');
       return { lines: [`anova ${varName(i.dv, D)} ${facs.join('##')}`] };
     },
-    // No `spss`: spss-import reads no UNIANOVA.
+    // `spss-import` learned UNIANOVA (the #176 follow-up). No /DESIGN is written: SPSS's
+    // default for `y BY f1 f2` is the full factorial, which is the model the plugin fits.
+    spss: (i, D) => {
+      const facs = asList(i.facs).map((f) => varName(f, D));
+      if (facs.length < 2) bail('a factorial ANOVA needs two or more factors');
+      return { lines: [`UNIANOVA ${varName(i.dv, D)} BY ${facs.join(' ')}.`] };
+    },
   },
 };
 
