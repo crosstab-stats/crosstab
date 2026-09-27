@@ -156,3 +156,45 @@ test('a plugin that declares no actions gets no tooltip rather than an empty lis
   assert.equal(addsTooltip({ name: 'X' }), '');
   assert.equal(addsTooltip(undefined), '');
 });
+
+// =============================================================================
+// The touch path (owner, phone, 2026-09-26: "hover doesn't work on the phone")
+// =============================================================================
+
+/**
+ * Every row now carries a details button, so the answer #177 promised is reachable without a
+ * pointer. The invariant worth asserting is that the button never opens an empty box: for each
+ * real plugin there must be something to show — action labels, a usage note, or the explicit
+ * "this is infrastructure" line the dialog falls back to.
+ *
+ * Read from the REAL manifests, and the `menu` list is built exactly the way `#recordCatalog`
+ * builds it, so this tracks what the catalogue will actually hold rather than a fixture.
+ */
+test('every real plugin has something to show behind the details button', async () => {
+  const { readdirSync } = await import('node:fs');
+  const dirs = readdirSync('plugins');
+  const rows = [];
+  for (const d of dirs) {
+    const mod = await import(`../plugins/${d}/index.js`);
+    const m = mod.manifest || mod.default?.manifest;
+    assert.ok(m, `${d} exports no manifest`);
+    const menu = ['menu', 'imports', 'exports', 'outputExports', 'codecs']
+      .flatMap((k) => (Array.isArray(m[k]) ? m[k] : []))
+      .map((x) => String(x?.label ?? '').replace(/\s*[.…]+\s*$/, ''))
+      .filter(Boolean);
+    rows.push({ id: m.id, name: m.name, menu, howto: m.howto || '' });
+  }
+  assert.ok(rows.length >= 60, `expected the full plugin set, read ${rows.length}`);
+  const empty = rows.filter((r) => !r.menu.length && !r.howto).map((r) => r.id);
+  // Not a failure if one is genuinely infrastructure — but it must be a KNOWN one, so a new
+  // plugin shipping with neither a menu nor a note shows up here rather than as an empty panel.
+  assert.deepEqual(empty, [], `plugins with nothing to show: ${empty.join(', ')}`);
+});
+
+test('the search index and the details panel read the same field', () => {
+  // Both are `menu`. If these ever diverge, a plugin could be findable by an analysis the
+  // panel does not list, or vice versa.
+  const m = matchPlugin(SURVIVAL, 'cox');
+  assert.ok(m.items.every((label) => SURVIVAL.menu.includes(label)));
+  assert.ok(addsTooltip(SURVIVAL).includes(m.items[0]));
+});

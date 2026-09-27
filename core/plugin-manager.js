@@ -1143,17 +1143,19 @@ export class PluginManager {
       right.append(badge);
     }
 
-    // 🔍 How-to: show the plugin's author-written usage note (GUI + syntax). Only when
-    // the manifest declares `howto` — no icon means the author didn't include one.
-    if (p.howto) {
+    // What this plugin adds, and how to use it. On EVERY row now, because it is the only path
+    // to that answer on a touch screen — the row tooltip needs a hovering pointer (owner, on a
+    // phone, 2026-09-26) and is silent to a keyboard and a screen reader besides.
+    {
       const how = document.createElement('button');
       how.type = 'button';
       how.className = 'ct-plugin__howto';
       how.textContent = '🔍';
-      how.title = 'How to use this plugin';
+      how.title = 'What this plugin adds, and how to use it';
+      how.setAttribute('aria-label', `What ${p.name} adds, and how to use it`);
       how.addEventListener('click', (e) => {
         e.stopPropagation();
-        this.#showHowto(p);
+        this.#showAbout(p);
       });
       right.append(how);
     }
@@ -1261,27 +1263,9 @@ export class PluginManager {
   /** Modal showing a plugin's author-written how-to (the 🔍 on its row). Plain text
    * (rendered via textContent — never HTML — so an authored note can't inject markup),
    * line breaks preserved. */
-  #showHowto(p) {
-    const dialog = document.createElement('dialog');
-    dialog.className = 'ct-dialog ct-dialog--wide';
-    const form = el('form', null, 'ct-dialog__form');
-    form.method = 'dialog';
-    form.append(el('h2', `How to use ${p.name}`, 'ct-dialog__title'));
-    const body = el('div', null, 'ct-howto');
-    body.style.cssText =
-      'white-space:pre-wrap; line-height:1.5; font-size:14px; color:#2a323a; max-height:60vh; overflow:auto; margin:0 0 16px;';
-    body.textContent = p.howto;
-    form.append(body);
-    const menu = el('menu', null, 'ct-dialog__buttons');
-    const close = el('button', 'Close', 'ct-dialog__primary');
-    close.value = 'cancel';
-    close.type = 'submit';
-    menu.append(close);
-    form.append(menu);
-    dialog.append(form);
-    dialog.addEventListener('close', () => dialog.remove());
-    document.body.append(dialog);
-    dialog.showModal();
+  /** The touch-reachable "what does this add?" panel — see {@link openPluginAbout}. */
+  #showAbout(p) {
+    openPluginAbout(p);
   }
 
   /** A nested prompt for a plugin URL. Resolves the trimmed URL, or null. */
@@ -1314,6 +1298,71 @@ export class PluginManager {
 }
 
 // --- helpers ---------------------------------------------------------------
+
+/**
+ * "What does this plugin add?", as a dialog — the **touch-reachable** answer.
+ *
+ * #177 gave both pickers a hover tooltip listing a plugin's actions, and the owner found the
+ * hole in that on the first phone check (2026-09-26): *"hover doesn't work on the phone."*
+ * A `title` needs a pointer that can rest somewhere, so on touch neither picker said what a
+ * plugin adds — and a title is no better for a keyboard or a screen reader, which is the same
+ * gap wearing different clothes. The tooltips stay (they are a good quick read on a desktop),
+ * but the answer now also lives behind a real button on every row.
+ *
+ * Shared by the plugin manager and the launcher so the two cannot drift again — the same
+ * reason `addsTooltip` is one function.
+ *
+ * @param {{name?:string, menu?:string[], howto?:string}} p  a catalogue row
+ */
+export function openPluginAbout(p) {
+  const adds = (p?.menu || []).filter(Boolean);
+  const dialog = document.createElement('dialog');
+  dialog.className = 'ct-dialog ct-dialog--wide';
+  const form = el('form', null, 'ct-dialog__form');
+  form.method = 'dialog';
+  form.append(el('h2', String(p?.name ?? 'Plugin'), 'ct-dialog__title'));
+
+  if (adds.length) {
+    form.append(el('p', `Adds ${adds.length} item${adds.length === 1 ? '' : 's'} to the menus:`, 'ct-dialog__hint'));
+    const ul = el('ul', null, 'ct-about__adds');
+    ul.style.cssText = 'margin:0 0 14px; padding-left:20px; line-height:1.6; font-size:14px; color:#2a323a;';
+    for (const label of adds) ul.append(el('li', label));
+    form.append(ul);
+  }
+
+  if (p?.howto) {
+    if (adds.length) form.append(el('h3', 'How to use it', 'ct-about__h'));
+    const body = el('div', null, 'ct-howto');
+    body.style.cssText =
+      'white-space:pre-wrap; line-height:1.5; font-size:14px; color:#2a323a; max-height:50vh; overflow:auto; margin:0 0 16px;';
+    body.textContent = p.howto;
+    form.append(body);
+  }
+
+  // Neither a menu nor a note: say so rather than opening an empty box. Infrastructure
+  // plugins (a chart-kind provider, say) legitimately add no menu items of their own.
+  if (!adds.length && !p?.howto) {
+    form.append(
+      el(
+        'p',
+        'This plugin adds no menu items of its own and carries no usage note — it is likely '
+          + 'infrastructure another plugin depends on.',
+        'ct-dialog__hint',
+      ),
+    );
+  }
+
+  const menu = el('menu', null, 'ct-dialog__buttons');
+  const close = el('button', 'Close', 'ct-dialog__primary');
+  close.value = 'cancel';
+  close.type = 'submit';
+  menu.append(close);
+  form.append(menu);
+  dialog.append(form);
+  dialog.addEventListener('close', () => dialog.remove());
+  document.body.append(dialog);
+  dialog.showModal();
+}
 
 function el(tag, text, className) {
   const e = document.createElement(tag);

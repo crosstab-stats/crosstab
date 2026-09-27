@@ -3173,10 +3173,15 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         rejects it at Run with "Steps must come after the base import". Guarding the gesture
         would only guard one of the ways to type it.
 
-      **Not yet done: the browser pass.** The move arithmetic and the export-source choice
-      are unit-tested, but the two changes that are purely about placement — the buttons on
-      the panel toolbar in both views, and Alt+↑/↓ under a real keyboard — have not been
-      clicked in the app.
+      **Browser pass: PARTLY DONE by the owner (2026-09-26, on a phone).** Import / Export
+      from the History (Steps) view work — which is the half of this entry that was about
+      placement, and it is confirmed on the surface where it matters most, a phone. Still
+      unclicked: reading a real `.do`/`.ctscript` back in (no test files on that device), and
+      **Alt+↑/↓**, which a phone has no way to send — it needs a desktop keyboard. Worth
+      noting for later: line reordering is now keyboard-only, so a touch-only user still has
+      to switch to Steps view and use ▲/▼. That is not a regression (it is what they did
+      before), but it is the same lesson as the hover finding below — a gesture that needs
+      hardware the device lacks is not an affordance for that device.
 
 ## Hardening before any public/shared deploy
 
@@ -6088,9 +6093,30 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
       **Browser pass: DONE by the owner (2026-09-26)** — searching by analysis name works in
       the app, which is the thing the feature exists for: a name typed into Edit ▸ Plugins…
-      reaches the plugin that provides it. Not separately reported, so worth an eye next time
-      either picker is open — that hovering the 🔍 still shows its own tooltip rather than
-      the row's new one.
+      reaches the plugin that provides it.
+
+      **And it found the hole in #177 on the first phone check: "hover doesn't work on the
+      phone."** Correct, and it made the tooltip half of this work a desktop-only feature —
+      on touch NEITHER picker said what a plugin adds, which is the exact complaint #177
+      existed to answer. A `title` needs a pointer that can rest somewhere; it is also silent
+      to a keyboard and a screen reader, so this was one defect wearing two hats. Fixed by
+      giving the answer a real control instead of only a tooltip:
+  - [x] **A shared details dialog** — `openPluginAbout(p)`, one function used by both
+        pickers (the same reason `addsTooltip` is one function): the plugin's action list,
+        then its how-to note, with an explicit "this is infrastructure another plugin depends
+        on" line when it has neither.
+  - [x] **Plugin manager:** the 🔍 button now appears on EVERY row, not only ones carrying a
+        `howto`, and opens that dialog. It already worked by tap — it just was not on most
+        rows, and said "How to use this plugin" rather than what it now shows.
+  - [x] **Launcher:** each row gained a small ⓘ button. It has to sit OUTSIDE the `<label>`,
+        or tapping it would toggle the checkbox the label is bound to — so the row is now a
+        wrapper holding the label plus the button.
+  - [x] The tooltips stay. They are a good quick read with a pointer; they are simply no
+        longer the only path.
+
+      A test over all 63 real manifests asserts the tap path is never empty — every plugin has
+      action labels, a how-to, or both — so a new plugin shipping with neither shows up as a
+      failing test rather than as an empty panel a user tapped into.
 
       **Unblocks #184**, which the TODO already recorded as depending on this: a how-to
       walk-through has to be able to say which plugins to enable.

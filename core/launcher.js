@@ -24,7 +24,7 @@ import { formatBuildTime, latestBuildTime, runningBuildStamp, stampMs } from './
 import { showCaveats, showGettingAround } from './help.js';
 // The “what you get” hover text is shared with the plugin manager so the two pickers cannot
 // drift again — they render the same catalogue, and this line is where they did (#177).
-import { addsTooltip } from './plugin-manager.js';
+import { addsTooltip, openPluginAbout } from './plugin-manager.js';
 
 /** Curated-core analysis plugins, pre-selected on a fresh "Start blank". */
 const CORE_IDS = new Set([
@@ -460,9 +460,13 @@ export class Launcher {
   }
 
   #pluginRow(p) {
+    // The row is a wrapper, not just the label: the details button has to sit OUTSIDE the
+    // <label>, or tapping it would toggle the checkbox the label is bound to.
+    const row = el('div', null, 'ctl__pluginrow');
     const label = el('label', null, 'ctl__plugin');
-    // Hover tooltip: the analyses this plugin adds (so a user can see *why* it's
-    // recommended — e.g. Econometrics → robust regression, IV/2SLS, panel).
+    // Hover text: what this plugin adds, so you can see *why* it is recommended. Kept for
+    // pointers, but it cannot be the only path — there is no hover on a phone, which is the
+    // whole reason for the button below (owner, 2026-09-26).
     const adds = addsTooltip(p);
     if (adds) label.title = adds;
     const cb = document.createElement('input');
@@ -472,7 +476,17 @@ export class Launcher {
       if (cb.checked) this.#selected.add(p.key); else this.#selected.delete(p.key);
     });
     label.append(cb, el('span', p.name, 'ctl__pluginname'));
-    return label;
+    const what = el('button', 'ⓘ', 'ctl__pluginwhat');
+    what.type = 'button';
+    what.title = 'What this plugin adds';
+    what.setAttribute('aria-label', `What ${p.name} adds`);
+    what.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openPluginAbout(p);
+    });
+    row.append(label, what);
+    return row;
   }
 
   /** Diff the desired selection against current load state and apply live — the
@@ -939,7 +953,12 @@ function injectStyles() {
     .ctl__catgroup { break-inside: avoid; -webkit-column-break-inside: avoid; display: block; }
     .ctl__cat { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: #6c7882;
       margin: 6px 0 2px; break-inside: avoid; }
-    .ctl__plugin { display: flex; align-items: center; gap: 7px; padding: 3px 2px; font-size: 13.5px; cursor: pointer; break-inside: avoid; }
+    .ctl__pluginrow { display: flex; align-items: center; gap: 4px; break-inside: avoid; }
+    .ctl__plugin { display: flex; align-items: center; gap: 7px; padding: 3px 2px; font-size: 13.5px; cursor: pointer; flex: 1; min-width: 0; }
+    /* The touch/keyboard path to “what does this add?” — the row's title needs a pointer. */
+    .ctl__pluginwhat { font: inherit; font-size: 13px; line-height: 1; color: #6c7882; background: none;
+      border: 0; cursor: pointer; padding: 4px 6px; border-radius: 4px; flex: none; }
+    .ctl__pluginwhat:hover, .ctl__pluginwhat:focus-visible { color: var(--accent, #2572a5); background: #eef4fa; }
     .ctl__plugin:hover { background: #f4f8fc; }
     .ctl__pluginname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ctl__about .ctl__howto { display: block; font: inherit; font-size: 13px; color: var(--accent, #2572a5); background: none; border: 0; cursor: pointer; padding: 0; }
