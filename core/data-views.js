@@ -1431,8 +1431,37 @@ export class HistoryPanel {
       const mk = el('span', info.kind === 'analysis' ? '∑' : info.kind === 'source' ? '🔒' : String(stepNo), 'history__marker');
       mk.style.cssText = 'flex:0 0 auto; opacity:.7; font-size:11px;' + (info.kind === 'analysis' ? 'color:var(--accent,#2572a5);' : '');
       const title = el('span', info.title, 'history__title');
-      title.style.cssText = 'overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px;' + (info.kind === 'source' ? 'color:#9aa4ae;' : '');
+      title.style.cssText =
+        'flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; '
+        + `font-size:12px;${info.kind === 'source' ? 'color:#9aa4ae;' : ''}`;
       marker.append(mk, title);
+
+      // The same ▲ ▼ ✕ the Steps rows have (owner, 2026-09-27: "is there a reason the arrow and
+      // 'x' icons on the steps view are not used in syntax view?"). There was not one.
+      //
+      // They do a DIFFERENT thing here, though, and that difference is the whole design: in
+      // Steps view they mutate the committed log, while here they edit the TEXT. The textarea is
+      // an unapplied draft, so moving a committed step behind it would leave two versions of the
+      // list disagreeing — the bug shape that produced the duplicated deploy issues and the
+      // diverged tooltip. Editing the text keeps one source, and Run is still what applies it.
+      //
+      // Not offered on a 🔒 data source: its line is a comment the parser ignores, so the
+      // buttons would move something that does not move.
+      //
+      // Always present rather than shown on hover, because a touch device has no hover — the
+      // same lesson the plugin tooltips taught, and this is the only way to reorder in Syntax
+      // view without a keyboard (Alt+↑/↓ needs one).
+      if (info.kind !== 'source') {
+        const lineIndex = i;
+        const controls = el('span', null, 'history-panel__gctl');
+        controls.style.cssText = 'flex:0 0 auto; display:flex; gap:1px; opacity:.5;';
+        controls.append(
+          ctlBtn('▲', 'Move this line up', lineIndex === 0, () => this.#moveGutterLine(lineIndex, -1)),
+          ctlBtn('▼', 'Move this line down', lineIndex >= lines.length - 1, () => this.#moveGutterLine(lineIndex, 1)),
+          ctlBtn('✕', 'Delete this line', false, () => this.#deleteGutterLine(lineIndex)),
+        );
+        marker.append(controls);
+      }
       marker.title = info.detail ? `${info.title} — ${info.detail}` : info.title;
       frag.append(marker);
     }
@@ -1481,6 +1510,43 @@ export class HistoryPanel {
     if (this.#dirty && this.#ta) return { text: this.#ta.value, draft: true };
     const { applied } = this.#store.getHistory();
     return { text: serialize(applied, this.#analysisLog ? this.#analysisLog.entries() : []), draft: false };
+  }
+
+  /**
+   * Move the line at `index` by one, from the gutter's ▲/▼. The mouse (and touch) equivalent
+   * of Alt+↑/↓ — same helper, so the two gestures cannot drift apart.
+   */
+  #moveGutterLine(index, dir) {
+    if (!this.#ta) return;
+    const start = lineStartOffset(this.#ta.value, index);
+    const moved = moveScriptLines(this.#ta.value, start, start, dir);
+    if (!moved) return;
+    this.#ta.value = moved.value;
+    this.#ta.setSelectionRange(moved.start, moved.end);
+    this.#afterDraftEdit();
+  }
+
+  /** Delete the line at `index`, from the gutter's ✕. One line, not the whole step: a recode
+   * writes its metadata on following lines, and this is a text editor — what you see deleted is
+   * what is deleted. */
+  #deleteGutterLine(index) {
+    if (!this.#ta) return;
+    const lines = this.#ta.value.split('\n');
+    if (index < 0 || index >= lines.length) return;
+    lines.splice(index, 1);
+    this.#ta.value = lines.join('\n');
+    const caret = lineStartOffset(this.#ta.value, Math.min(index, Math.max(0, lines.length - 1)));
+    this.#ta.setSelectionRange(caret, caret);
+    this.#afterDraftEdit();
+  }
+
+  /** Shared tail of every draft edit made through a control rather than typing. */
+  #afterDraftEdit() {
+    this.#dirty = true;
+    this.#runFailed = false;
+    this.#updateDirtyHint();
+    this.#renderGutter();
+    this.#ta?.focus();
   }
 
   /** Save the current script. CrossTab's own `.ctscript` is the lossless default (it is
@@ -1842,6 +1908,13 @@ function el(tag, text, className) {
   if (text != null) e.textContent = text;
   if (className) e.className = className;
   return e;
+}
+
+/** Character offset of the first character of line `index`. */
+export function lineStartOffset(value, index) {
+  const lines = String(value ?? '').split('\n');
+  const n = Math.max(0, Math.min(index, lines.length - 1));
+  return lines.slice(0, n).reduce((acc, l) => acc + l.length + 1, 0);
 }
 
 /**

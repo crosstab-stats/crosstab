@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { moveScriptLines } from '../core/data-views.js';
+import { lineStartOffset, moveScriptLines } from '../core/data-views.js';
 
 /** A script shaped like the real thing: a source anchor, transforms, an analysis. */
 const SCRIPT = [
@@ -108,4 +108,53 @@ test('a caret past the end of the destination line lands at that line’s end', 
   assert.equal(out.value, 'a much longer line\nshort');
   assert.ok(out.start <= out.value.length);
   assert.equal(out.value.slice(0, out.start), 'a much longer line');
+});
+
+// =============================================================================
+// The gutter's own controls (owner, 2026-09-27)
+// =============================================================================
+
+/**
+ * "Is there a reason the arrow and 'x' icons on the steps view are not used in syntax view?"
+ * There was not. They are there now, and they do a DIFFERENT thing from their Steps-view
+ * twins: Steps mutates the committed log, the gutter edits the TEXT. The textarea is an
+ * unapplied draft, so moving a committed step behind it would leave two versions of the list
+ * disagreeing — the same shape as the duplicated deploy issues and the diverged tooltip.
+ *
+ * They also matter for reach: Alt+↑/↓ needs a keyboard, so before this there was no way to
+ * reorder in Syntax view on a touch device at all.
+ *
+ * `lineStartOffset` is the seam the buttons use to turn "line N" into the caret position the
+ * shared mover expects, so it is what gets tested here.
+ */
+test('lineStartOffset finds the start of each line, and clamps', () => {
+  const text = ['alpha', 'beta', 'gamma'].join('\n');
+  assert.equal(lineStartOffset(text, 0), 0);
+  assert.equal(lineStartOffset(text, 1), 6);
+  assert.equal(lineStartOffset(text, 2), 11);
+  assert.equal(text.slice(lineStartOffset(text, 2)), 'gamma');
+  // Out of range clamps rather than returning NaN — a gutter index can lag a fast edit.
+  assert.equal(lineStartOffset(text, 99), 11);
+  assert.equal(lineStartOffset(text, -3), 0);
+  assert.equal(lineStartOffset('', 0), 0);
+});
+
+test('a gutter move is the same operation as the keyboard one', () => {
+  // The button computes a caret from the line index and hands it to the shared mover, so the
+  // two gestures cannot drift apart.
+  const start = lineStartOffset(SCRIPT, 3);
+  const byButton = moveScriptLines(SCRIPT, start, start, -1);
+  const byKeyboard = moveScriptLines(SCRIPT, start + 4, start + 4, -1); // caret mid-line
+  assert.equal(byButton.value, byKeyboard.value);
+});
+
+test('deleting one line leaves the rest intact', () => {
+  // What the gutter's ✕ does, as plain text: one line, not a whole multi-line construct. The
+  // recode's metadata lines are their own lines, and what you see deleted is what is deleted.
+  const lines = SCRIPT.split('\n');
+  const index = 2;
+  const after = lines.slice(0, index).concat(lines.slice(index + 1));
+  assert.equal(after.length, lines.length - 1);
+  assert.ok(!after.includes(lines[index]));
+  assert.deepEqual(after[index], lines[index + 1]);
 });
