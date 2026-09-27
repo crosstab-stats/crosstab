@@ -3200,6 +3200,45 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         construct — a recode's metadata lines are their own lines, and in a text editor what
         you see deleted is what is deleted.
 
+- [ ] **#190 — an analysis can be reordered in Syntax view but not in Steps view (user,
+      2026-09-27).** Reported as "arrows show on analysis runs in syntax but not steps", and it
+      is a real inconsistency — but NOT a rendering oversight, which is why it is filed rather
+      than fixed on the spot. The two views differ in what they can actually *do*:
+
+      - **Syntax view** reorders an analysis for real. Moving its `run` line and pressing Run
+        re-parses the whole script; `replayScript` recomputes every analysis's `at` from its
+        position in the text and **re-executes it against the data state at that position**
+        (the position-faithful replay #134 exists for). Output and history agree afterwards.
+      - **Steps view** has no such operation. `AnalysisLog#move` is a deliberate **no-op** with
+        the comment *"Reordering under the unified log needs a dedicated order op (deferred);
+        left as a no-op rather than silently corrupting HLC order"* (#148). So `#analysisStep`
+        renders only ✕ — the arrows were left off because they would do nothing, which was the
+        honest choice at the time.
+
+      **What making them work actually requires**, since this looked like a small UI fix and is
+      not — three things, and the third is the one that makes it a feature rather than a tweak:
+  - [ ] **A position that can change.** An analysis's place is `at` = the number of transforms
+        applied when it ran. Crossing a data step is expressible today without touching the
+        fold: append a fresh `runAnalysis` op for the same `runId` with a new `at`, since the
+        projection already folds the newest op per run as authoritative (last-writer-wins by
+        HLC, which is also a sane merge rule for a position).
+  - [ ] **An order key for siblings.** Two analyses at the same `at` are ordered by the fold's
+        insertion order, so one cannot be moved past the other without the explicit order op
+        #148 deferred. This half DOES touch a merge-sensitive projection and deserves its own
+        deliberate change, not a drive-by.
+  - [ ] **A re-run, or the output is a lie.** This is the part that decides the shape. Moving an
+        analysis changes *which data it describes*. In Syntax view that is safe because Run
+        re-executes everything. A Steps-view reorder that only rewrote `at` would leave output
+        computed at the old position filed under the new one — "history/output that lie to the
+        user? that's no good" (#134). So it needs to rebuild the data to the new prefix, re-run
+        that one analysis, and replace its output block — the machinery exists inside
+        `replayScript` but not as a single-analysis operation.
+
+      **Not done in the meantime:** adding disabled arrows to the Steps rows with a "reorder
+      these in Syntax view" tooltip. That is precisely the [[guard-means-missing-state]]
+      antipattern — a control that exists only to be inert. Either the operation exists in both
+      views or the control appears in neither, and it genuinely works in one of them today.
+
 ## Hardening before any public/shared deploy
 
 > **#89 hardening pass — DONE (see [docs/SECURITY.md](docs/SECURITY.md)).** Full
