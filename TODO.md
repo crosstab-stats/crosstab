@@ -6086,9 +6086,11 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       (12 tests) pins the behaviour, including that the old four fields still match — this
       widened the search, it did not narrow it.
 
-      **Not yet done: the browser pass.** The matcher and the tooltip are unit-tested; what
-      has not been clicked is the dialog itself — the two ranked sections, the `adds:` line
-      under a row, and the hover text now appearing in the plugin manager.
+      **Browser pass: DONE by the owner (2026-09-26)** — searching by analysis name works in
+      the app, which is the thing the feature exists for: a name typed into Edit ▸ Plugins…
+      reaches the plugin that provides it. Not separately reported, so worth an eye next time
+      either picker is open — that hovering the 🔍 still shows its own tooltip rather than
+      the row's new one.
 
       **Unblocks #184**, which the TODO already recorded as depending on this: a how-to
       walk-through has to be able to say which plugins to enable.
