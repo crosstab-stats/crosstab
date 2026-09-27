@@ -6048,11 +6048,18 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       commented index would have worked in the test and failed in the app. Tolerant by default
       now. `docs/DEPLOY.md` is the deployer's page.
 
-  - [~] **Browser pass STARTED by the owner (2026-09-27)** against a local bench: a gitignored
+  - [~] **Browser pass by the owner (2026-09-27)** against a local bench: a gitignored
         `deploy.json` (siteName / supportEmail / discussionsUrl / pluginDir / namespace `bench`)
         plus a real one-plugin `site-plugins/` directory — an R-free "Data dictionary" analysis,
-        so the test exercises the LOADING path rather than WebR warming. It found a bug within
-        minutes that no unit test of mine could have:
+        so the test exercised the LOADING path rather than WebR warming.
+
+        **Confirmed on screen:** the site plugin is fetched, sandboxed, catalogued and runs; its
+        origin reads "from CrossTab Local Test Bench" rather than claiming to be ours; the
+        index's per-entry `"default": true` ticks it on a fresh launch; and the "Hosted by …"
+        line shows in the About rail — which is the whole signal that the settings file parsed.
+
+        Using a REAL example plugin rather than a stub is what earned this pass: it found a bug
+        within minutes that no unit test of mine could have.
     - [x] **A site plugin read as "built-in" in Edit ▸ Plugins.** Two places independently
           answer "where did this come from": `#originLabel` (output attribution) and
           `list().origin` (the picker row + the missing-plugin dialog). A site entry sets
@@ -6065,9 +6072,11 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
           expression buried in a row builder. It also fixed a case I had not thought about: a
           project made on a deployment and opened elsewhere now says the missing plugin
           *belongs to the sharer's install*, instead of "not a built-in plugin".
-    - [ ] Still to confirm on that bench: the default-on tick on a FRESH launch (a remembered
-          selection wins, so it needs a clean profile), the "Hosted by" line, and the
-          ignored-settings list (uncomment the deliberately-invalid `repo` in the bench file).
+    - [ ] **One check left:** the ignored-settings list — uncomment the deliberately-invalid
+          `repo` in the bench `deploy.json` and reload. Everything else should still apply, with
+          a tappable line naming just that field. It is the only part of the affordance not yet
+          seen on screen, and the one that matters most when a real department mistypes
+          something.
   - [ ] **Still constants, deliberately deferred:** `RUNTIME_HOSTS` in `sw.js` (a service
         worker cannot import `core/`, so honouring `runtimeHosts` means the SW reading
         `deploy.json` itself — worth doing, but not worth folding into the same commit as a
