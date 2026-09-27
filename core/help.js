@@ -29,10 +29,15 @@
 import { lastError } from './debug.js';
 import { formatBuildTime, runningBuildStamp } from './build-stamp.js';
 
-/** The public repo the deep links point at. One constant, because a fork that wants its
- * own issue tracker should have exactly one line to change (and see #175's note about
- * a self-hoster's own contact route). */
-export const REPO = 'crosstab-stats/crosstab';
+/**
+ * The public repo the deep links point at **by default**. A deployment overrides it (and can
+ * point somewhere other than GitHub entirely, or take mail instead) in `deploy.json` — #185,
+ * which is where #175's "later we can build support for someone else hosting this to have an
+ * email" landed. Re-exported here because this is where callers have always looked for it.
+ */
+import { supportLinks } from './deploy-config.js';
+
+export { DEFAULT_REPO as REPO } from './deploy-config.js';
 
 /** Ceiling for the assembled URL. Under the ~8 KB most browsers and proxies allow, with
  * room for the origin and the query scaffolding. */
@@ -166,7 +171,11 @@ export function bugReportBody(diag) {
  * @returns {{url: string, clipped: boolean}}
  */
 export function bugReportUrl(diag) {
-  const base = `https://github.com/${REPO}/issues/new`;
+  const base = supportLinks().issues;
+  // GitHub's prefill is a query convention, not a standard. A deployment pointing at its own
+  // tracker gets the plain link and the report on the clipboard instead of a guess at how to
+  // prefill a form we have never seen.
+  if (!isGitHubIssues(base)) return { url: base, clipped: false, prefilled: false };
   const make = (body) => `${base}?labels=bug&title=${encodeURIComponent('')}&body=${encodeURIComponent(body)}`;
   let body = bugReportBody(diag);
   let url = make(body);
@@ -280,10 +289,11 @@ async function openBugReport(deps) {
   d.className = 'ct-dialog ct-dialog--wide';
   const form = el('div', 'ct-dialog__form');
   form.append(el('h2', 'ct-dialog__title', 'Report a bug'));
-  form.append(el('p', 'ct-dialog__hint',
-    'This opens a new issue on the public CrossTab repository with the details below '
-    + 'filled in. Nothing is sent from here — you review it on GitHub and press Submit '
-    + 'yourself. A GitHub account is needed to post.'));
+  // The hint must name the real destination: telling a department's user their report goes to
+  // "the public CrossTab repository" when it goes to their own help desk would be a lie the UI
+  // tells on our behalf.
+  const route = supportLinks();
+  form.append(el('p', 'ct-dialog__hint', bugRouteHint(route)));
 
   const pre = el('pre', 'help__diag');
   pre.textContent = [
@@ -302,23 +312,72 @@ async function openBugReport(deps) {
     'Only the counts above are included — never your variable names, values or file '
     + 'names. The issue will be public, so have a look before you submit.'));
 
+  // Where this deployment wants reports. The stock build is a prefilled GitHub issue; a
+  // department can point at its own tracker or take mail instead (#185, which is where #175's
+  // declined email route belongs — for a self-hoster, not for us).
+  const links = supportLinks();
+  const github = isGitHubIssues(links.issues);
+  const who = links.siteName ? `${links.siteName}` : null;
+
   const buttons = el('menu', 'ct-dialog__buttons');
   const cancel = el('button', null, 'Cancel');
   cancel.type = 'button';
   cancel.addEventListener('click', () => d.close());
-  const plain = el('button', null, 'Open without diagnostics');
-  plain.type = 'button';
-  plain.addEventListener('click', () => {
-    d.close();
-    window.open(`https://github.com/${REPO}/issues/new?labels=bug`, '_blank', 'noopener');
+  buttons.append(cancel);
+
+  // Copy is always offered: it is the one route that works whatever the destination is, and
+  // for a custom tracker it is how the details get there at all (we cannot prefill a form we
+  // have never seen).
+  const copy = el('button', null, 'Copy report');
+  copy.type = 'button';
+  copy.addEventListener('click', async () => {
+    const body = bugReportBody(diag);
+    try {
+      await navigator.clipboard.writeText(body);
+      copy.textContent = 'Copied';
+    } catch {
+      // No clipboard permission (or no secure context): select the text so Ctrl+C works.
+      const range = document.createRange();
+      range.selectNodeContents(pre);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+      copy.textContent = 'Selected — press Ctrl/⌘+C';
+    }
   });
-  const go = el('button', 'ct-dialog__primary', 'Open GitHub issue');
+  buttons.append(copy);
+
+  if (github) {
+    const plain = el('button', null, 'Open without diagnostics');
+    plain.type = 'button';
+    plain.addEventListener('click', () => {
+      d.close();
+      window.open(links.issues, '_blank', 'noopener');
+    });
+    buttons.append(plain);
+  }
+
+  if (links.email) {
+    const mail = el('button', 'ct-dialog__primary', 'Email support…');
+    mail.type = 'button';
+    mail.addEventListener('click', () => {
+      d.close();
+      const subject = encodeURIComponent('CrossTab bug report');
+      const body = encodeURIComponent(bugReportBody(diag));
+      // mailto has no agreed length limit and clients differ, so the body may be truncated by
+      // the mail client. Copy report above is the reliable route for a long one.
+      window.location.href = `mailto:${links.email}?subject=${subject}&body=${body}`;
+    });
+    buttons.append(mail);
+  }
+
+  const go = el('button', links.email ? null : 'ct-dialog__primary', github ? 'Open GitHub issue' : 'Open issue tracker');
   go.type = 'button';
   go.addEventListener('click', () => {
     d.close();
     window.open(bugReportUrl(diag).url, '_blank', 'noopener');
   });
-  buttons.append(cancel, plain, go);
+  buttons.append(go);
   form.append(buttons);
 
   injectStyles();
@@ -386,14 +445,14 @@ export function registerHelpMenu({ menus, datasets, loader, plugins, openSyntaxG
     path: ['Help'],
     label: 'Ask a question (Discussions)…',
     order: 5,
-    command: () => link(`https://github.com/${REPO}/discussions`),
+    command: () => link(supportLinks().discussions),
   });
   menus.register({
     id: 'core:help-source',
     path: ['Help'],
     label: 'Source code…',
     order: 6,
-    command: () => link(`https://github.com/${REPO}`),
+    command: () => link(supportLinks().repo),
   });
 }
 
@@ -409,4 +468,32 @@ function injectStyles() {
     .help__note { font-size: .85em; color: #5a6470; margin: 0 0 4px; }
   `;
   document.head.append(s);
+}
+
+/** Whether a URL is a GitHub issue form, i.e. whether the prefill convention applies. */
+function isGitHubIssues(url) {
+  try {
+    return new URL(url).hostname === 'github.com';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * What to tell the user about where this report goes. Three routes: our public GitHub (the
+ * stock build), a deployment's own tracker, or a deployment's support mailbox.
+ */
+function bugRouteHint(route) {
+  const who = route.siteName ? route.siteName : 'this deployment';
+  if (route.email) {
+    return `The details below go to ${who} at ${route.email}. Nothing is sent from here — your `
+      + 'mail app opens with the report ready, and you press Send yourself.';
+  }
+  if (!isGitHubIssues(route.issues)) {
+    return `${who} collects reports at ${route.issues}. Nothing is sent from here — copy the `
+      + 'details below, open the tracker, and paste them in.';
+  }
+  return 'This opens a new issue on the public CrossTab repository with the details below '
+    + 'filled in. Nothing is sent from here — you review it on GitHub and press Submit '
+    + 'yourself. A GitHub account is needed to post.';
 }

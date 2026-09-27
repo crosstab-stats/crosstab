@@ -92,6 +92,10 @@ const SHELL_PRECACHE = [
   'plugin-host.html',
   // The OAuth redirect target. It is a real, separate document — see STANDALONE_DOCS.
   'oauth-callback.html',
+  // The deployment's own settings (#185). Absent in the stock build, and a missing entry never
+  // fails the install — but a site that HAS one needs it cached, or an air-gapped/offline boot
+  // would silently fall back to our defaults instead of their support routes and mirror.
+  'deploy.json',
   'vendor/icon-192.png',
   'vendor/icon-180.png',
 ];

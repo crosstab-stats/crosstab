@@ -1,0 +1,66 @@
+// CrossTab — deployment settings (#185)
+//
+// Copy this file to `deploy.json` and edit what you need:
+//
+//     cp deploy.example.json deploy.json
+//
+// `deploy.json` is gitignored, so your settings survive `git pull` without ever producing a
+// merge conflict. Copy it, do not rename it — this file keeps getting new fields as they are
+// added, and you want to be able to read the new ones.
+//
+// EVERY FIELD IS OPTIONAL. Delete the ones you do not care about; each falls back to the
+// built-in default shown here. A field with a bad value is ignored (with a warning in the
+// browser console) and the rest still apply — and if the whole file fails to parse, CrossTab
+// boots normally on its defaults rather than refusing to start. Comments like these are fine.
+//
+// Not settable here: the PWA name, icons and theme colour live in `manifest.json`, which the
+// BROWSER reads rather than CrossTab — edit that file directly. See docs/DEPLOY.md.
+{
+  // ---------------------------------------------------------------- support routes
+  // Where "Report a bug…", "Ask a question…" and "Source code…" in the Help menu go.
+
+  // Your fork, as owner/repo. Every GitHub link below is derived from it.
+  "repo": "crosstab-stats/crosstab",
+
+  // Or point somewhere that is not GitHub at all. Full URLs; both optional.
+  // A non-GitHub tracker cannot be prefilled, so the bug dialog offers "Copy report" instead.
+  // "issuesUrl": "https://helpdesk.example.edu/new-ticket",
+  // "discussionsUrl": "https://forum.example.edu/crosstab",
+
+  // Or take mail instead of tickets. When set, the bug dialog's primary button becomes
+  // "Email support…" and opens the user's mail app with the report ready to send.
+  // "supportEmail": "stats-help@example.edu",
+
+  // Who runs this deployment. Shown in the bug dialog so users know where a report is going.
+  // "siteName": "Example University Statistics Lab",
+
+  // ---------------------------------------------------------------- runtimes
+  // Where the heavy runtimes (R/WebR, DuckDB, Arrow) come from.
+  //   "cdn"   — the default: zero setup, always current, needs internet on first use.
+  //   "local" — everything from ./vendor/ (run `node scripts/vendor-assets.mjs` first).
+  //             This is the air-gapped mode: nothing cross-origin is fetched.
+  // "assetsMode": "cdn",
+
+  // Override individual runtime URLs — e.g. mirror WebR on your own host but leave the rest
+  // on the CDN. Keys match core/assets.js.
+  // "assets": {
+  //   "webrUrl": "https://mirror.example.edu/webr/webr.mjs",
+  //   "webrOptions": { "baseUrl": "https://mirror.example.edu/webr/" }
+  // },
+
+  // Extra hostnames the offline cache is allowed to keep runtime payloads from. Add your
+  // mirror here if you set "assets" above, or its files will not be cached for offline use.
+  // "runtimeHosts": ["mirror.example.edu"],
+
+  // ---------------------------------------------------------------- your own plugins
+  // A directory of plugins you maintain, served from this same deployment. CrossTab reads
+  // `<pluginDir>/index.json` to find them, so you add a plugin by editing that index rather
+  // than this file. See docs/DEPLOY.md for the index format.
+  // "pluginDir": "site-plugins",
+
+  // The namespace your plugins' ids get, so they can never collide with ours or with a
+  // plugin a user loads from a file. Short slug, letters/digits/dashes.
+  // WARNING: this becomes part of every one of your plugin ids, so a saved project refers to
+  // them by it. Pick it once — changing it later orphans those references.
+  // "pluginNamespace": "site"
+}

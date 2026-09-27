@@ -25,6 +25,7 @@ import {
 } from './storage-backend.js';
 import { openProjectManager } from './project-manager.js';
 import { registerHelpMenu } from './help.js';
+import { loadDeployConfig } from './deploy-config.js';
 import { openSyntaxGuide } from './syntax-guide.js';
 import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } from './user-identity.js';
 import { ProjectLog } from './project-log.js';
@@ -525,6 +526,10 @@ function offerRestartR(webr, resultsApi) {
  * @returns {Promise<object>} The assembled engine (handy for console debugging).
  */
 export async function boot(mounts) {
+  // The deployment's own settings (#185), first: support routes, asset mode and (slice 2) a
+  // site plugin directory all read it. Absent by default, and a bad file never blocks boot —
+  // it warns and leaves every built-in default standing.
+  await loadDeployConfig();
   // Enter activates each dialog's primary (blue) button, app-wide (see dialog-keys).
   installDialogKeybindings();
   // Remember the last uncaught error so Help ▸ Report a bug… can include it (#175).

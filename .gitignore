@@ -13,6 +13,13 @@ Thumbs.db
 # Vendored binaries / icons placeholder (add real assets, ignore scratch)
 vendor/*.wasm
 
+# A deployment's own settings (#185). The committed template is deploy.example.json; the live
+# file is yours, so it is never in our history and never conflicts on `git pull`.
+deploy.json
+
+# A deployment's own plugin directory (#185) — whatever it points pluginDir at is theirs.
+site-plugins/
+
 # Local build output (if a bundler is added later)
 dist/
 

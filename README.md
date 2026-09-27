@@ -81,7 +81,10 @@ WebR downloads in the background the first time you run an analysis.
 The live instance is on **GitHub Pages** at
 [crosstab-stats.github.io/crosstab/](https://crosstab-stats.github.io/crosstab/).
 
-For air-gapped or offline deployment, see [`docs/OFFLINE.md`](./docs/OFFLINE.md).
+Hosting your own copy for a department or class? See
+[`docs/DEPLOY.md`](./docs/DEPLOY.md) — one optional `deploy.json` carries your support
+routes, runtime mirrors and your own plugin directory. For air-gapped or offline
+deployment, see [`docs/OFFLINE.md`](./docs/OFFLINE.md).
 
 ## Tech
 

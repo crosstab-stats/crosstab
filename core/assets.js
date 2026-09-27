@@ -28,7 +28,11 @@
  * built-in plugin URLs and the ReadStat worker are already resolved.
  *
  * Keep the pinned versions here in sync with `scripts/vendor-assets.mjs`.
+ *
+ * Mode resolution now also reads `deploy.json` (#185) — see {@link resolveMode} for where it
+ * sits in the precedence order.
  */
+import { deployConfig } from './deploy-config.js';
 
 /** CDN asset set — the default. Versions pinned for reproducibility. */
 const CDN = Object.freeze({
@@ -80,7 +84,12 @@ const LOCAL = Object.freeze({
   }),
 });
 
-/** Resolve the mode from the URL param then a global flag. */
+/**
+ * Resolve the mode: the `?assets=` param (testing) beats the page global (index.html), which
+ * beats the DEPLOYMENT's own setting in `deploy.json` (#185), which beats the default. More
+ * specific wins — a site sets its mode once in the settings file and can still override it
+ * per page or per URL without editing that file.
+ */
 function resolveMode() {
   try {
     const p = new URLSearchParams(location.search).get('assets');
@@ -90,6 +99,8 @@ function resolveMode() {
   }
   const g = globalThis.CROSSTAB_ASSETS_MODE;
   if (g === 'local' || g === 'cdn') return g;
+  const d = deployConfig().assetsMode;
+  if (d === 'local' || d === 'cdn') return d;
   return 'cdn';
 }
 
@@ -106,10 +117,14 @@ let cached = null;
  */
 export function getAssets() {
   if (cached) return cached;
-  const override =
+  // Per-URL overrides, page global first and then the deployment's file — merged, so a site
+  // can mirror WebR in deploy.json while a page still redirects DuckDB somewhere else.
+  const fromDeploy = deployConfig().assets;
+  const fromPage =
     globalThis.CROSSTAB_ASSETS && typeof globalThis.CROSSTAB_ASSETS === 'object'
       ? globalThis.CROSSTAB_ASSETS
       : null;
+  const override = fromDeploy || fromPage ? { ...(fromDeploy || {}), ...(fromPage || {}) } : null;
   const mode = override?.mode === 'local' || override?.mode === 'cdn' ? override.mode : resolveMode();
   const base = mode === 'local' ? LOCAL : CDN;
   cached = Object.freeze({ mode, ...base, ...(override || {}) });
