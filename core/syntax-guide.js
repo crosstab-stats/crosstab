@@ -146,6 +146,17 @@ export function openSyntaxGuide({ pluginActions } = {}) {
     const lead = el('p', `Each analysis is called with \`run pluginId.fn {…}\`. ${runnable.length} action${runnable.length === 1 ? '' : 's'} from your active plugins:`);
     lead.style.cssText = 'margin:0 0 12px; font-size:13px; color:#5a6470; line-height:1.5;';
     body.append(lead);
+    // Only an ACTIVE plugin can be called, so this list is activated-only by design — which
+    // makes it a dead end for "which plugin does X?" if X is switched off. Point at the one
+    // surface that searches the whole catalogue, including disabled plugins (#183).
+    const more = el(
+      'p',
+      'Something you expected is missing? Only activated plugins can be called. Search for the '
+        + 'analysis by name in Edit ▸ Plugins… — that searches every plugin, on or off, and names '
+        + 'the one that adds it.',
+    );
+    more.style.cssText = 'margin:-6px 0 12px; font-size:12.5px; color:#5a6470; line-height:1.5;';
+    body.append(more);
 
     // filter box
     const filter = document.createElement('input');

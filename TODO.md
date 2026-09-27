@@ -6037,14 +6037,61 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         (`backend.shortcuts(name, location.origin, location.pathname)`,
         `core/project-sync.js:1545`).
 
-- [ ] **#183 — "what do I enable to do X?" — an analysis lookup across ALL plugins
-      (owner, 2026-09-21, as Help-menu content).** The gap is specific: the syntax
-      guide's live list enumerates `pluginActions.listRunnable()`, which is only the
-      **currently active** plugins, and the plugin manager's search matches
-      `[name, id, category, keywords]` — not the menu labels. So a user who wants a
-      Hosmer–Lemeshow test, or a Kaplan–Meier curve, can search for it in the one place
-      that would tell them and get nothing, because the plugin providing it is switched
-      off and its analysis names were never indexed.
+- [x] **#183 + #177 — DONE (2026-09-26). "What do I enable to do X?" — the catalogue is
+      now searchable by analysis name, and both pickers say what a plugin adds.** Built as
+      one change because they are one idea from two surfaces, exactly as #183 predicted:
+      catalogued action labels are an index of what CrossTab can do.
+
+      **The gap was total, not partial.** `matchesQuery` read `[name, id, category,
+      keywords]`, so a user after a **Hosmer–Lemeshow** test or a **Kaplan–Meier** curve
+      searched the one dialog that could have told them and got *"No plugins match your
+      search"* — while the plugin providing it sat right there, switched off. Nothing needed
+      plumbing: `#recordCatalog` has always stored every catalogued plugin's action labels
+      (`menu`, aggregated across analyses, importers, exporters and codecs, ellipsis-trimmed)
+      *precisely so* a not-yet-activated plugin can show full detail. The search never looked
+      at it. `howto` is matched for the same reason — and it turns out to be where the
+      *options* live, which is why Hosmer–Lemeshow (a tick-box inside the logistic dialog,
+      not a menu item) is findable at all.
+
+      **The near-miss worth recording:** every real menu label uses an **en dash** —
+      `Kaplan–Meier`, `Shapiro–Wilk`, `Brown–Forsythe` — so a user typing the right name with
+      the hyphen on their keyboard would still have missed under a plain substring match.
+      `normalizeSearch` folds dashes and curly apostrophes, and terms are now ANDed and
+      order-independent, so "curve survival" reaches "Kaplan–Meier & log-rank" too.
+
+      **The answer is ranked and actionable, not just a hit.** `matchPlugin` returns *which*
+      labels a term touched, so the row names the analysis it found next to the box that
+      enables it. A match on the plugin's own name claims no analysis in particular (listing
+      all of them would bury what was asked for). And plugins that actually PROVIDE the named
+      analysis lead, under *"Adds what you searched for"*, ahead of *"Other matches"* — a
+      query naming an analysis outranks the discipline dropdown. That ordering matters more
+      than it sounds: searching "levene" used to reach only `builtin-compare`, because the
+      word is in its keywords, while `builtin-assumptions` — which has the actual Levene's
+      test — was invisible.
+
+  - [x] **#177 — the tooltip parity.** `addsTooltip(p)` is now ONE definition imported by
+        both pickers. The launcher had built the "adds:" hover list inline since #138 and the
+        plugin manager had nothing, though both render the same catalogue — which is how they
+        drifted on one line in the first place.
+  - [x] **The syntax guide's dead end, closed.** Its live list enumerates
+        `listRunnable()` = activated plugins only, which is *correct* for a list of callable
+        things and useless for "which plugin does X?". It now points at Edit ▸ Plugins as the
+        surface that searches everything, on or off.
+
+      **Verified against the real catalogue, not fixtures.** A probe read all **63** plugin
+      manifests, built the `menu` list exactly as `#recordCatalog` does, and searched ten real
+      analysis names — `kaplan-meier`, `hosmer-lemeshow`, `levene`, `shapiro-wilk`,
+      `cronbach`, `odds ratio`, `topic model`, `icer`, `mediation`, `propensity`. Every one
+      resolves to the right plugin with the matching analysis named. `test/plugin-search.test.mjs`
+      (12 tests) pins the behaviour, including that the old four fields still match — this
+      widened the search, it did not narrow it.
+
+      **Not yet done: the browser pass.** The matcher and the tooltip are unit-tested; what
+      has not been clicked is the dialog itself — the two ranked sections, the `adds:` line
+      under a row, and the hover text now appearing in the plugin manager.
+
+      **Unblocks #184**, which the TODO already recorded as depending on this: a how-to
+      walk-through has to be able to say which plugins to enable.
 
       Build: search the CATALOG (every catalogued plugin, activated or not), matching
       each plugin's `menu[].label` as well as its name/keywords, and answer with
@@ -6293,21 +6340,16 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       restored, and it still passes. Worth a look wherever else a regex was written through
       a shell heredoc.
 
-- [ ] **#177 — the plugin manager has no "what does this add?" tooltip; the launcher
-      does (user, 2026-09-20).** The two plugin pickers render the same catalogue and
-      diverged on one line. `core/launcher.js` `#pluginRow` (~453) sets
-      ``label.title = `${p.name} adds:\n• ${p.menu.join('\n• ')}` `` when the manifest
-      declares menu items, so hovering a plugin on the start screen tells you which
-      analyses it brings. `core/plugin-manager.js` `#pluginRow` (~1085) appends the
-      checkbox, the name and the version badge and sets no title at all — so the
-      surface users reach for *after* startup (Edit ▸ Plugins…) is the one that
-      doesn't say what a plugin contains. Cheap: `menu` is already in the manager's
-      view model (`list()`, ~921, `menu: cat?.menu ?? []`), recorded into the catalog
-      from the manifest — the same two lines. Factor it into one shared helper rather
-      than pasting a second copy, since the divergence *is* the bug. Keep the
-      manager's existing per-control titles (🔍 how-to, ⚐ network, fork / export /
-      edit / remove) intact, put the new title on the row label, and check that
-      hovering the 🔍 still shows its own tooltip rather than the row's.
+- [x] **#177 — DONE (2026-09-26), with #183 — see that entry above.** The two pickers
+      rendered the same catalogue and had diverged on one line: the launcher built the
+      "adds:" hover list inline (`#pluginRow`), the plugin manager set no title at all — so
+      the surface users reach for *after* startup (Edit ▸ Plugins…) was the one that did not
+      say what a plugin contains. Fixed the way this entry asked for it: **one shared
+      helper** (`addsTooltip`, exported from `plugin-manager.js`, imported by the launcher),
+      because the divergence *was* the bug. The per-control titles (🔍 how-to,
+      🌐 network, fork / export / edit / remove) are untouched and the new title sits on
+      the row label, so hovering 🔍 should still show its own tooltip — worth a glance in
+      the browser pass.
 
 - [x] **#178 — DONE (2026-09-21). Binary Logistic was missing every option the SPSS
       Options dialog offers (faculty homework, 2026-09-21).** NOT optional: a Sacramento State methods class is

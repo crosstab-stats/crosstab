@@ -955,6 +955,9 @@ export class PluginManager {
       <p class="ct-dialog__hint">Toggle, add, or remove plugins — changes are live and
         saved across sessions. <strong>Added plugins run sandboxed</strong> (no network
         of their own) but can read the data you load here, so only add ones you trust.</p>
+      <p class="ct-dialog__hint">Looking for a particular analysis? Search for it by name
+        — <em>Kaplan–Meier</em>, <em>Hosmer–Lemeshow</em>, <em>Levene</em> — and the plugin that
+        adds it is listed, switched on or off.</p>
       <div class="ct-plugins__add">
         <button type="button" class="ct-plugins__addbtn" data-act="create">+ Create new…</button>
         <button type="button" class="ct-plugins__addbtn" data-act="url">+ Add from URL…</button>
@@ -962,7 +965,7 @@ export class PluginManager {
       </div>
       <div class="ct-plugins__filters">
         <select class="ct-plugins__discipline" aria-label="Field / discipline"></select>
-        <input type="search" class="ct-plugins__search" placeholder="Search plugins…" aria-label="Search plugins" autocomplete="off">
+        <input type="search" class="ct-plugins__search" placeholder="Search plugins or analyses…" aria-label="Search plugins or analyses" autocomplete="off">
       </div>
       <div class="ct-plugins__err" role="alert" hidden></div>
       <div class="ct-plugins"></div>
@@ -982,21 +985,42 @@ export class PluginManager {
     discSel.replaceChildren(new Option('All disciplines', 'All'));
     for (const d of disciplines) discSel.append(new Option(d, d));
 
+    // Which action labels the current query matched, per plugin key — so a row can name the
+    // analysis that answered the search rather than just turning up in the list (#183).
+    let hits = new Map();
     const renderGroups = (list) => {
       for (const group of groupByCategory(list)) {
         box.append(el('div', group.category, 'ct-plugins__cat'));
         const ul = el('ul', null, 'ct-plugins__list');
-        for (const p of group.items) ul.append(this.#row(p, renderList, setErr));
+        for (const p of group.items) ul.append(this.#row(p, renderList, setErr, hits.get(p.key) || []));
         box.append(ul);
       }
     };
     const renderList = () => {
-      const q = search.value.trim().toLowerCase();
+      const q = search.value.trim();
       const disc = discSel.value;
-      const items = this.list().filter((p) => matchesQuery(p, q));
+      hits = new Map();
+      const items = this.list().filter((p) => {
+        const m = matchPlugin(p, q);
+        if (m.hit && m.items.length) hits.set(p.key, m.items);
+        return m.hit;
+      });
       box.replaceChildren();
       if (items.length === 0) {
         box.append(el('p', 'No plugins match your search.', 'ct-plugins__empty'));
+        return;
+      }
+      // A query that named an ANALYSIS is a stronger signal than the discipline dropdown, so
+      // it takes precedence: the plugins that actually PROVIDE what was typed lead, the rest
+      // follow. Searching "levene" used to reach only `builtin-compare` (the word is in its
+      // keywords) while `builtin-assumptions`, which has the actual Levene's test, was
+      // invisible — now both appear and the one that answers the question is first.
+      const providers = items.filter((pl) => hits.has(pl.key));
+      if (q && providers.length && providers.length < items.length) {
+        box.append(el('div', 'Adds what you searched for', 'ct-plugins__section'));
+        renderGroups(providers);
+        box.append(el('div', 'Other matches', 'ct-plugins__section'));
+        renderGroups(items.filter((pl) => !hits.has(pl.key)));
         return;
       }
       if (disc && disc !== 'All') {
@@ -1054,8 +1078,16 @@ export class PluginManager {
     search.focus();
   }
 
-  #row(p, refresh, setErr) {
+  /**
+   * One plugin's row. `matched` is the action labels the current search touched (#183) — empty
+   * when there is no query, or when the query matched the plugin's own name rather than one of
+   * its analyses.
+   */
+  #row(p, refresh, setErr, matched = []) {
     const li = el('li', null, 'ct-plugin');
+    // The left side is a COLUMN so the matched-analysis line can sit under the name without
+    // breaking the row's name-vs-controls layout.
+    const lead = el('span', null, 'ct-plugin__lead');
 
     const label = el('label', null, 'ct-plugin__main');
     const cb = document.createElement('input');
@@ -1083,6 +1115,10 @@ export class PluginManager {
       refresh();
     });
     label.append(cb, el('span', p.name, 'ct-plugin__name'));
+    // What this plugin adds, on hover — the launcher has had this since #138 and the plugin
+    // manager did not, though both render the same catalogue (#177). One definition now.
+    const adds = addsTooltip(p);
+    if (adds) label.title = adds;
     // Version badge next to the name — defaults to "1" when the manifest declares
     // none (all built-ins). A visible confirmation that a freshly-deployed plugin
     // file actually loaded: bump the manifest's `version` and watch this change (#91).
@@ -1212,7 +1248,13 @@ export class PluginManager {
       right.append(rm);
     }
 
-    li.append(label, right);
+    lead.append(label);
+    // Name the analysis that answered the search, right next to the box that enables it —
+    // that is the whole of "what do I enable to do X?".
+    if (matched.length) {
+      lead.append(el('span', `adds: ${matched.join(' · ')}`, 'ct-plugin__hit'));
+    }
+    li.append(lead, right);
     return li;
   }
 
@@ -1372,10 +1414,66 @@ function pickFile() {
 
 /** Does a plugin match the search query? Matches across name, id, category, and
  * keywords — so an oddly-named plugin is still found by what it does. */
-function matchesQuery(p, q) {
-  if (!q) return true;
-  const hay = [p.name, p.id, p.category, ...(p.keywords || [])].join(' ').toLowerCase();
-  return hay.includes(q);
+/**
+ * Fold the punctuation a user cannot be expected to type. Real menu labels carry EN DASHES
+ * (`Kaplan–Meier`, `Shapiro–Wilk`, `Hosmer–Lemeshow`), so someone typing the right name with
+ * the hyphen on their keyboard has to match them — under the old substring search that was a
+ * silent miss on exactly the analyses people go looking for by name.
+ */
+function normalizeSearch(s) {
+  return String(s ?? '')
+    .toLowerCase()
+    .replace(/[‐-―−]/g, '-') // hyphens, dashes, minus sign
+    .replace(/[‘’ʼ]/g, "'") // curly apostrophes
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Does this plugin answer the query, and **which of its analyses did the answering**?
+ *
+ * The question this exists to answer is "what do I enable to do X?" (#183). The search used to
+ * read `[name, id, category, keywords]` only, so a user after a Hosmer–Lemeshow test or a
+ * Kaplan–Meier curve searched the one dialog that could have told them and got "No plugins
+ * match your search" — while the plugin providing it sat right there, switched off.
+ *
+ * The index was already being kept: {@link PluginManager#recordCatalog} stores every
+ * catalogued plugin's action labels (`menu`, aggregated across analyses, importers, exporters
+ * and codecs) precisely so a not-yet-activated plugin can still show full detail. Nothing here
+ * is new data — the search simply never looked at it. `howto` is matched for the same reason.
+ *
+ * Terms are ANDed and order-independent, so "survival curve" and "curve survival" both reach
+ * "Kaplan–Meier & log-rank" — strictly more forgiving than the old whole-string substring.
+ *
+ * `items` is what makes the answer actionable rather than a bare hit: the action labels a term
+ * actually touched, so the row can name the analysis it found, next to the Enable box.
+ *
+ * @param {{name?:string, id?:string, category?:string, keywords?:string[], menu?:string[], howto?:string}} p
+ * @param {string} q
+ * @returns {{hit:boolean, items:string[]}}
+ */
+export function matchPlugin(p, q) {
+  const terms = normalizeSearch(q).split(' ').filter(Boolean);
+  if (!terms.length) return { hit: true, items: [] };
+  const labels = (p?.menu || []).map((m) => String(m ?? '')).filter(Boolean);
+  const normLabels = labels.map(normalizeSearch);
+  const hay = normalizeSearch(
+    [p?.name, p?.id, p?.category, ...(p?.keywords || []), ...labels, p?.howto || ''].join(' '),
+  );
+  if (!terms.every((t) => hay.includes(t))) return { hit: false, items: [] };
+  // Only the labels a term actually touched: a match on the plugin's own name points at no
+  // analysis in particular, and listing all of them would bury the one that was asked for.
+  return { hit: true, items: labels.filter((_, i) => terms.some((t) => normLabels[i].includes(t))) };
+}
+
+/**
+ * The "what you get" hover text, in ONE place because the two pickers render the same
+ * catalogue and had drifted on exactly this line (#177): the launcher built it inline and the
+ * plugin manager had nothing at all. Returns '' for a plugin that declares no actions.
+ */
+export function addsTooltip(p) {
+  const menu = (p?.menu || []).filter(Boolean);
+  return menu.length ? `${p.name} adds:\n• ${menu.join('\n• ')}` : '';
 }
 
 /** Group plugins into category sections, BOTH categories and the plugins within

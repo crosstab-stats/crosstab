@@ -22,6 +22,9 @@ import { formatBuildTime, latestBuildTime, runningBuildStamp, stampMs } from './
 // The caveats dialog moved to help.js so the Help menu and this footer open the SAME
 // one (#182) — it used to be unreachable the moment a project opened.
 import { showCaveats, showGettingAround } from './help.js';
+// The “what you get” hover text is shared with the plugin manager so the two pickers cannot
+// drift again — they render the same catalogue, and this line is where they did (#177).
+import { addsTooltip } from './plugin-manager.js';
 
 /** Curated-core analysis plugins, pre-selected on a fresh "Start blank". */
 const CORE_IDS = new Set([
@@ -460,9 +463,8 @@ export class Launcher {
     const label = el('label', null, 'ctl__plugin');
     // Hover tooltip: the analyses this plugin adds (so a user can see *why* it's
     // recommended — e.g. Econometrics → robust regression, IV/2SLS, panel).
-    if (p.menu && p.menu.length) {
-      label.title = `${p.name} adds:\n• ${p.menu.join('\n• ')}`;
-    }
+    const adds = addsTooltip(p);
+    if (adds) label.title = adds;
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.checked = this.#selected.has(p.key);

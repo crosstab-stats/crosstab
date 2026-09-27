@@ -789,7 +789,10 @@
         display: flex; align-items: center; justify-content: space-between; gap: 12px;
         padding: 7px 4px; border-bottom: 1px solid var(--line);
       }
+      .ct-plugin__lead { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
       .ct-plugin__main { display: flex; align-items: center; gap: 9px; cursor: pointer; font-size: 14px; }
+      /* Which of this plugin's analyses matched the search (#183). */
+      .ct-plugin__hit { font-size: 12px; color: var(--accent, #2572a5); padding-left: 25px; }
       .ct-plugin__name { color: #1a1a1a; }
       .ct-plugin__ver { font: 11px ui-monospace, Menlo, monospace; color: #6b7682; background: #eef1f4; border-radius: 4px; padding: 0 5px; flex: none; }
       .ct-plugin__meta { font: 11px ui-monospace, Menlo, monospace; color: #687381; }
