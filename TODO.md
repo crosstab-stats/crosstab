@@ -5974,73 +5974,90 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       indistinguishable from one report — checking the *transition* is what separates
       them, and both directions now hold on a real device.
 
-- [ ] **#185 — consolidate every hosting/deployment variable into ONE server-side
-      settings file — and let it declare a SECOND plugin directory (owner, 2026-09-21;
-      extended 2026-09-24).** Raised while declining the bug-report email route (#175):
-      "later we can build support for someone else hosting this to have an email." The
-      general shape is that a fork or institutional deployment has a handful of facts
-      about ITSELF that are currently constants scattered across our source — and the
-      2026-09-24 addition makes the case sharper: a department should be able to
-      `git clone` the whole repo (getting all 60+ built-ins as they are) and point one
-      settings file at a **locally maintained directory of their own plugins**, which are
-      then catalogued and registered at boot exactly like the built-ins — no source edit,
-      no per-user "load plugin from file", no fork of `core/app.js`.
+- [x] **#185 — DONE (2026-09-26/27). One server-side settings file for everything a
+      deployment knows about itself, plus a directory for its own plugins.** Raised by the
+      owner mid-session ("we should consolidate all the hosting variables in a single server
+      side settings file… and add the ability to declare a secondary plugin directory"),
+      which turned out to be where #175's declined bug-report-email route had been heading
+      all along. Shipped in two slices so the risky half (boot) landed on its own.
 
-      Likely answer: one optional `deploy.json` fetched at boot, absent by default, with
-      every field falling back to today's constant — so the default build is
-      byte-identical in behaviour and a self-hoster edits one file. Do NOT build it as a
-      build-time substitution: that needs a toolchain, which the project does not have and
-      does not want. Two constraints on the fetch itself: it must be in the service
-      worker's precache (it is same-origin config the app cannot boot correctly without,
-      and the app must work offline and air-gapped, [[airgap-offline-requirement]]), and a
-      missing or malformed file must never block boot — parse failure falls back silently
-      to today's constants, because a typo in a deploy file must not brick the department's
-      install.
-  - [ ] **The secondary plugin directory (the 2026-09-24 ask).** The loading side is
-        nearly free: `BUILTIN_PLUGINS` in `core/app.js` (~126) is just an array of
-        `./plugins/<id>/index.js` URLs that the host fetches and resolves against the
-        document, and every one of them already goes through the same sandboxed-iframe
-        path as a third-party plugin (loader.js: *all plugins are equal*, no privileged
-        loader) — so "append the site's entries to that list" is the mechanism. What needs
-        deciding:
-    - [ ] **How the directory is enumerated.** Static hosting has no directory listing, so
-          auto-registration needs either an index file *in* that directory (e.g.
-          `plugins/index.json` listing entry modules, which is the version a group can
-          maintain without touching `deploy.json` every time they add one) or an explicit
-          list in `deploy.json`. Prefer the index file, with `deploy.json` naming the
-          directory — that is what makes it "auto-registered" rather than "re-declared".
-    - [ ] **Identity / namespace.** `qualifiedId` (loader.js) passes `builtin-…` through
-          unchanged, namespaces a URL plugin by its **host**, and falls back to the
-          self-declared author (unverifiable) or `local` for file/authored ones. A
-          same-origin site plugin would land in that unverifiable bucket, where it can
-          collide with a user's own file-loaded plugin. Give a deploy-declared directory
-          its own reserved namespace (`site-…`?) — verifiable in the same sense
-          `builtin-` is (the host serves it), and still unable to forge a `builtin-` id.
-    - [ ] **Activation defaults.** `CORE_IDS` and `DEFAULT_ON_CATEGORIES` in
-          `core/launcher.js` decide what a fresh launch pre-selects. A department whose
-          whole reason for a local directory is "our students must have *our* plugin on"
-          will want `deploy.json` to add to that set — and the discipline pinning the
-          launcher already has ([[launcher-startup-screen]]) is the natural place for it.
-    - [ ] **Offline precache.** `SHELL_PRECACHE` in `sw.js` lists same-origin files by
-          name; site plugins are same-origin, so cache-on-use already covers them after
-          one run, but a cold air-gapped install would not have them until first use.
-  - [ ] **Where bug reports and questions go.** `REPO = 'crosstab-stats/crosstab'`
-        (`core/help.js:35`) is one constant today and the Help menu's three GitHub deep
-        links derive from it. A self-hoster wants their own issue tracker, their own
-        Discussions, and/or a **support email** — the email route #175 declined for us is
-        exactly what someone running this for a department would want.
-  - [ ] **Survey the remaining self-identifying constants before designing this**, so it
-        is one mechanism rather than five. Found so far: the runtime CDN pins and the
-        `local`/air-gap switch (`core/assets.js` — `CROSSTAB_ASSETS` /
-        `CROSSTAB_ASSETS_MODE` are today's ad-hoc precedent for exactly this file, and
-        should be folded in rather than left as a second system); `RUNTIME_HOSTS` and the
-        `CACHE` name in `sw.js` (the hostnames tier-2 caching is willing to trust — a
-        deploy pointing at its own mirror must be able to add one); `manifest.json`
-        (`name`, `short_name`, `theme_color`, `start_url`, icons — a department deploy is
-        entitled to its own PWA identity); whatever the launcher's About/onboarding names;
-        and the deployed origin baked into shortcut files
-        (`backend.shortcuts(name, location.origin, location.pathname)`,
-        `core/project-sync.js:1545`).
+      **Slice 1 — `core/deploy-config.js` + `deploy.example.json` (commit 912d751).** One
+      optional file, absent by default, every field falling back to the constant it replaced,
+      so the stock build behaves byte-identically. It absorbs `core/assets.js`'s ad-hoc
+      `CROSSTAB_ASSETS` globals rather than becoming a second config system, and drives the
+      Help menu's support routes (`repo`, `issuesUrl`, `discussionsUrl`, `supportEmail`,
+      `siteName`).
+
+      **Slice 2 — `core/site-plugins.js` (commit f4b1f59).** A deployment's own plugin
+      directory, read from an index INSIDE that directory, registered at boot beside the
+      built-ins.
+
+      **Where the shipped design differs from the spec above, and why:**
+  - [x] **The file ships as `deploy.example.json`, not a live `deploy.json`** — the one place
+        the owner's instinct got pushback and the reasoning held. They proposed committing the
+        real file with helpful comments so a site edits it in place. But the stated workflow is
+        clone-then-`git pull`, and a committed file that sites customise conflicts every time
+        we add a field — landing a three-way JSON merge on whoever administers the install.
+        Committed template, gitignored live file, `.env.example` style. The goal (never face a
+        blank page) is met by the template.
+  - [x] **Comments AND trailing commas are tolerated**, with a string-aware stripper. Not
+        polish: every value in this file is a URL, so a naive stripper turns
+        `"https://example.edu"` into `"https:` — a valid file with a silently wrong support
+        address. The trailing-comma half was found by **the example file failing its own
+        test**, which is exactly what a site admin hits the first time they comment out a
+        field they do not need.
+  - [x] **The namespace is the site's to name** (owner: "colleges can be uppity about school
+        spirit"), validated as a slug with `builtin`/`core`/`crosstab` refused. The HOST
+        prepends it, so `attendance` → `sdsu-attendance` and a forgery attempt comes out as
+        `sdsu-builtin-frequencies` — which reads as exactly what it is. Documented footgun:
+        the namespace is part of every id, so changing it later orphans saved projects'
+        plugin references. Pick it once.
+  - [x] **Default-on is a per-entry marker in the index** (owner's refinement, better than
+        the deploy.json-level list I proposed: the marker sits next to the plugin, so one
+        directory serves several groups with only part of it on). It seeds a FRESH launch
+        only — a deselect still sticks. Worth noting: "many plugins for different groups" is
+        *also* already served by `disciplines` in each plugin's own manifest, which the
+        launcher already pins by, so the marker stayed a simple boolean.
+  - [x] **"Hosted by …" on the launcher** (owner, while reviewing slice 1): shown only when a
+        settings file actually applied, so its presence is the signal that the file parsed and
+        its absence is the honest answer for the stock build — and it tells a user whether
+        they are on their university's install or the public one. Deliberately **not** a
+        binary: a file can apply and still have had fields thrown out, so dropped fields get
+        their own tappable line naming each field and why (tappable, not a tooltip — the #177
+        hover lesson). Help ▸ Report a bug names the install too, so a report from a
+        department's deployment says so rather than sending us hunting through a build we
+        never shipped.
+
+      **Provided, not privileged** is the line that kept this safe. A site plugin rides the
+      same fetch → sandbox → activate path as a built-in (`#readSource` returns null for it,
+      so the loader activates by URL exactly as ours does) and runs in the same opaque-origin
+      iframe. The directory buys *registration*, not access. And an entry that would leave the
+      directory — an absolute URL, a protocol-relative `//host`, a `..` — is refused rather
+      than fetched, because a settings file must not become a way to aim the plugin loader at
+      another origin. Same rule on `pluginDir` itself.
+
+      **Nothing here can break an install.** Absent, unreachable, unparseable, or full of
+      nonsense: every path ends with the app booting on built-in defaults, and each bad field
+      is dropped individually so a fat-fingered support email does not cost the asset mode.
+      `deploy.json` is precached in `sw.js`, or an air-gapped boot would silently revert to our
+      defaults.
+
+      26 tests across `test/deploy-config.test.mjs` and `test/site-plugins.test.mjs`
+      (suite 1017 → 1043). One gap they caught in my own work: `loadSitePlugins` took the
+      tolerant parser as a caller option, and the test passed it while `app.js` did not, so a
+      commented index would have worked in the test and failed in the app. Tolerant by default
+      now. `docs/DEPLOY.md` is the deployer's page.
+
+  - [ ] **Not yet browser-tested, and it is a deployment exercise rather than a click:** stand
+        up a `deploy.json` plus a one-plugin `site-plugins/` directory and confirm the plugin
+        appears in the picker as `<ns>-…`, is on by default if marked, shows "from <siteName>"
+        as its origin, and that the "Hosted by" line and the ignored-settings list read right.
+  - [ ] **Still constants, deliberately deferred:** `RUNTIME_HOSTS` in `sw.js` (a service
+        worker cannot import `core/`, so honouring `runtimeHosts` means the SW reading
+        `deploy.json` itself — worth doing, but not worth folding into the same commit as a
+        boot change), and `manifest.json`'s PWA identity, which the BROWSER reads rather than
+        us and so can only ever be a direct edit. `runtimeHosts` is accepted and validated
+        today; nothing consumes it yet.
 
 - [x] **#183 + #177 — DONE (2026-09-26). "What do I enable to do X?" — the catalogue is
       now searchable by analysis name, and both pickers say what a plugin adds.** Built as
