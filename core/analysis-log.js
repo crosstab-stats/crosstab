@@ -110,11 +110,31 @@ export class AnalysisLog {
     this.#changed();
   }
 
-  /** Move the entry at `from` to `to`. NOTE: order is now the log's HLC order; an
-   * explicit reorder op is future work (this method has no callers today). No-op. */
-  move(_from, _to) {
-    // Reordering under the unified log needs a dedicated order op (deferred); left as a
-    // no-op rather than silently corrupting HLC order. Unused in the app today.
+  /**
+   * Move an analysis to a different **data position** — `at` is the number of transforms
+   * applied when it ran, so this is "run it one data step earlier/later" (#190).
+   *
+   * Log-native without a new op type: a fresh `runAnalysis` for the same `runId` replaces the
+   * payload, because the projection folds the newest op per run as authoritative. Two peers
+   * moving the same analysis resolve last-writer-wins by HLC, which is the right rule for a
+   * position. What this deliberately CANNOT do is reorder two analyses that share an `at` —
+   * their order is the fold's, and changing it needs the explicit order op #148 deferred.
+   *
+   * Callers must re-run the analysis afterwards: `at` says which data the result describes, so
+   * changing it without recomputing would file the old numbers under a new position.
+   *
+   * @param {string} runId @param {number} at
+   * @returns {object|null} the updated entry, or null if there is no such run
+   */
+  reposition(runId, at) {
+    const entry = this.#log.state('analysis').find((e) => e.runId === runId);
+    if (!entry) return null;
+    const next = Math.max(0, Math.floor(Number(at) || 0));
+    if (next === entry.at) return entry;
+    const payload = { ...structuredClone(entry), at: next };
+    this.#log.append({ target: `analysis:${runId}`, owner: 'core', type: 'runAnalysis', payload });
+    this.#changed();
+    return payload;
   }
 
   /**

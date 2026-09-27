@@ -588,6 +588,45 @@ export class PluginActions {
   }
 
   /**
+   * Move one analysis to a new data position and **recompute it there** (#190).
+   *
+   * `at` is which data the result describes, so changing it without re-running would file the
+   * old numbers under the new position — the history-that-lies failure the position-faithful
+   * replay exists to prevent. This is the single-analysis version of what a Syntax Run does to
+   * the whole script: rebuild the data to that prefix, execute just this one, put the data
+   * back, and then reorder the OUTPUT so it reads in the same order History does (the moved
+   * run's fresh output would otherwise sit at the bottom).
+   *
+   * Only this analysis re-runs. Nothing else moved, so nothing else needs recomputing.
+   *
+   * @param {string} runId @param {number} at  the new transform count to run it after
+   * @returns {Promise<boolean>} whether it moved
+   */
+  async repositionAnalysis(runId, at) {
+    if (!this.#analysisLog || !this.#dataStore) return false;
+    const all = this.#dataStore.getTransforms?.() ?? [];
+    const target = Math.max(0, Math.min(Math.floor(Number(at) || 0), all.length));
+    const moved = this.#analysisLog.reposition(runId, target);
+    if (!moved) return false;
+
+    const entry = this.#analysisLog.entries().find((e) => e.runId === runId);
+    if (!entry) return false;
+    // Drop the stale output first: if the re-run fails, an empty slot is honest, whereas the
+    // old block left in place would claim a result for a position it never ran at.
+    this.#results.removeRun?.(runId);
+    try {
+      await this.#dataStore.replaceTransforms(all.slice(0, target));
+      await this.#execute(entry);
+    } finally {
+      // Always put the dataset back, even if the analysis threw: leaving the grid rewound to a
+      // prefix because a plugin failed would be a much worse outcome than a missing table.
+      await this.#dataStore.replaceTransforms(all);
+    }
+    this.#results.reorderRuns?.(analysisOrder(this.#analysisLog.entries()));
+    return true;
+  }
+
+  /**
    * Run a parsed script (#134), **position-faithfully**: each analysis is executed
    * against the dataset AS OF its place in the script, so the output matches the
    * order shown (an analysis above a `keep if` reflects the pre-filter data, not the
@@ -651,6 +690,23 @@ export class PluginActions {
     }
     return { unknown };
   }
+}
+
+
+/**
+ * The runIds in the order the timeline shows them: by data position, and within one position
+ * by the order they were run. The same ordering `serialize()` and the History list use, so
+ * Output, History and the script text cannot disagree about sequence.
+ */
+function analysisOrder(entries) {
+  return [...(entries || [])]
+    .map((e, i) => ({ e, i }))
+    .sort((a, b) => {
+      const at = (Number.isFinite(a.e.at) ? a.e.at : Infinity) - (Number.isFinite(b.e.at) ? b.e.at : Infinity);
+      return at || a.i - b.i;
+    })
+    .map(({ e }) => e.runId)
+    .filter(Boolean);
 }
 
 // --- input gathering ---------------------------------------------------------

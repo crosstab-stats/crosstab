@@ -1127,6 +1127,17 @@ export class ResultsPane {
     if (kept.length !== this.#model.length) this.restoreModel(kept, { divider: false });
   }
 
+  /**
+   * Put the output blocks in `order` (an array of runIds), so Output reads in the same order
+   * History does after an analysis is moved (#190). Re-renders from the existing model —
+   * nothing is recomputed.
+   */
+  reorderRuns(order) {
+    const next = reorderRunBlocks(this.#model, order);
+    if (next.length === this.#model.length && next.every((b, i) => b === this.#model[i])) return;
+    this.restoreModel(next, { divider: false });
+  }
+
   /** The canonical results stylesheet, so an HTML export can reproduce the look
    * (`app.results.getStyles`). */
   getStyles() {
@@ -1266,6 +1277,75 @@ function normalizeTableData(data, opts) {
     rows: data.rows ?? [],
     rowHeaders: !!(data.rowHeaders ?? opts.rowHeaders),
   };
+}
+
+/**
+ * Reorder the output blocks so they follow a new analysis order (#190).
+ *
+ * The wrinkle that makes this necessary: re-running a moved analysis appends its output at the
+ * BOTTOM, so History would say "position 2" while Output said "last" — the same
+ * history-and-output-disagree class the position-faithful replay exists to prevent. Nothing is
+ * re-executed here; the blocks are already-rendered artifacts being put in the right order.
+ *
+ * Only run-owned groups move, and they move **among the positions they already occupy**.
+ * Everything else — a transform's confirmation line, anything with no `runId` — stays exactly
+ * where it is, because those are anchored to the data steps around them, not to an analysis.
+ *
+ * Pure, so the slicing is tested without a DOM.
+ *
+ * @param {Array<{runId?: string}>} model  the results model (`getModel()`)
+ * @param {string[]} order  every runId, in the order they should now appear
+ * @returns {Array<object>} a new model array
+ */
+export function reorderRunBlocks(model, order) {
+  const blocks = Array.isArray(model) ? model : [];
+  const want = Array.isArray(order) ? order.filter(Boolean) : [];
+  if (!blocks.length || !want.length) return [...blocks];
+
+  // Group each run's contiguous blocks, and remember the slots those groups occupy.
+  const groups = new Map(); // runId → blocks
+  const slots = []; // index in `blocks` where each group started, in document order
+  const seen = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const id = blocks[i]?.runId;
+    if (!id) continue;
+    if (!groups.has(id)) {
+      groups.set(id, []);
+      slots.push(i);
+      seen.push(id);
+    }
+    groups.get(id).push(blocks[i]);
+  }
+  if (groups.size < 2) return [...blocks];
+
+  // The new sequence: every run we know the order for, then any run the caller did not
+  // mention, in its existing order — a block whose analysis has no entry must not vanish.
+  const ordered = want.filter((id) => groups.has(id));
+  for (const id of seen) if (!ordered.includes(id)) ordered.push(id);
+
+  const out = [];
+  let slot = 0;
+  const emitted = new Set();
+  for (let i = 0; i < blocks.length; i++) {
+    const id = blocks[i]?.runId;
+    if (!id) {
+      out.push(blocks[i]);
+      continue;
+    }
+    // At the start of a group's slot, emit whichever group now belongs in that slot.
+    if (slots[slot] === i) {
+      const takeId = ordered[slot];
+      if (takeId && !emitted.has(takeId)) {
+        out.push(...groups.get(takeId));
+        emitted.add(takeId);
+      }
+      slot += 1;
+    }
+  }
+  // Anything not placed (defensive: a slot/order mismatch) keeps its blocks rather than losing
+  // them — dropping output would be far worse than an odd order.
+  for (const id of ordered) if (!emitted.has(id)) out.push(...groups.get(id));
+  return out;
 }
 
 /** Build a `<table>` from a normalised spec, entirely via DOM APIs so cell text

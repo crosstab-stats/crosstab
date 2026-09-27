@@ -3200,44 +3200,52 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         construct — a recode's metadata lines are their own lines, and in a text editor what
         you see deleted is what is deleted.
 
-- [ ] **#190 — an analysis can be reordered in Syntax view but not in Steps view (user,
-      2026-09-27).** Reported as "arrows show on analysis runs in syntax but not steps", and it
-      is a real inconsistency — but NOT a rendering oversight, which is why it is filed rather
-      than fixed on the spot. The two views differ in what they can actually *do*:
+- [x] **#190 — DONE (2026-09-27). An analysis can now be moved in the Steps view too, and
+      moving it recomputes it.** Reported as "arrows show on analysis runs in syntax but not
+      steps". Not a rendering oversight: `AnalysisLog#move` was a deliberate no-op, so Syntax
+      view could reorder an analysis (Run re-parses the whole script) and Steps view had no
+      such operation. Three pieces, and the third is what made it a feature rather than a tweak.
 
-      - **Syntax view** reorders an analysis for real. Moving its `run` line and pressing Run
-        re-parses the whole script; `replayScript` recomputes every analysis's `at` from its
-        position in the text and **re-executes it against the data state at that position**
-        (the position-faithful replay #134 exists for). Output and history agree afterwards.
-      - **Steps view** has no such operation. `AnalysisLog#move` is a deliberate **no-op** with
-        the comment *"Reordering under the unified log needs a dedicated order op (deferred);
-        left as a no-op rather than silently corrupting HLC order"* (#148). So `#analysisStep`
-        renders only ✕ — the arrows were left off because they would do nothing, which was the
-        honest choice at the time.
+  - [x] **The position, log-natively and with no new op type.** ▲/▼ mean *"run this one data
+        step earlier/later"* — `at` is how many transforms had run when it did. `reposition()`
+        appends a fresh `runAnalysis` for the same `runId`, because the projection already
+        folds the newest op per run as authoritative; concurrent moves resolve last-writer-wins
+        by HLC, which is the right rule for a position. It survives save/reload as ops, and a
+        *removed* analysis cannot be moved back into existence.
 
-      **What making them work actually requires**, since this looked like a small UI fix and is
-      not — three things, and the third is the one that makes it a feature rather than a tweak:
-  - [ ] **A position that can change.** An analysis's place is `at` = the number of transforms
-        applied when it ran. Crossing a data step is expressible today without touching the
-        fold: append a fresh `runAnalysis` op for the same `runId` with a new `at`, since the
-        projection already folds the newest op per run as authoritative (last-writer-wins by
-        HLC, which is also a sane merge rule for a position).
-  - [ ] **An order key for siblings.** Two analyses at the same `at` are ordered by the fold's
-        insertion order, so one cannot be moved past the other without the explicit order op
-        #148 deferred. This half DOES touch a merge-sensitive projection and deserves its own
-        deliberate change, not a drive-by.
-  - [ ] **A re-run, or the output is a lie.** This is the part that decides the shape. Moving an
-        analysis changes *which data it describes*. In Syntax view that is safe because Run
-        re-executes everything. A Steps-view reorder that only rewrote `at` would leave output
-        computed at the old position filed under the new one — "history/output that lie to the
-        user? that's no good" (#134). So it needs to rebuild the data to the new prefix, re-run
-        that one analysis, and replace its output block — the machinery exists inside
-        `replayScript` but not as a single-analysis operation.
+        **This is why no order key was needed.** Bounding the arrows by the DATA (up while a
+        transform is above, down while one is below) makes every move an `at` change, so an
+        analysis sharing a position with a sibling jumps past it too — coherent, and never a
+        button that does nothing. The one move this cannot make is swapping two analyses at the
+        SAME position, which is display order only, needs the order op #148 deferred, and is
+        already possible in the Syntax view.
 
-      **Not done in the meantime:** adding disabled arrows to the Steps rows with a "reorder
-      these in Syntax view" tooltip. That is precisely the [[guard-means-missing-state]]
-      antipattern — a control that exists only to be inert. Either the operation exists in both
-      views or the control appears in neither, and it genuinely works in one of them today.
+  - [x] **A re-run, because otherwise the output lies.** The owner asked whether to defer it —
+        *"auto run on every change is expensive... how about auto-run when the panel closes?"*
+        The cost worry is right but the trigger is not: **only the moved analysis re-runs**, not
+        the script, so it is one execution per deliberate click. And Steps is the
+        direct-manipulation view — rewinding, moving a transform and deleting all apply at once
+        — so deferring this one would put two models in one panel, and closing a panel (or
+        pressing Escape) would start WebR work nobody asked for, with no way to say never mind.
+        Bulk reordering already has the right home: the Syntax view's draft-then-Run. The row
+        disables its own controls while the run is in flight, so a second click cannot queue a
+        move against a stale position.
+
+  - [x] **The output follows — the wrinkle neither of us named up front.** A re-run appends its
+        block at the BOTTOM, so History would say "position 2" while Output said "last": the
+        history-and-output-disagree failure the position-faithful replay exists to prevent.
+        `reorderRunBlocks` (pure, tested) puts the run-owned groups in the new order **among
+        the slots they already occupy**, leaving anything without a `runId` — a transform's
+        confirmation line — exactly where it is, because those are anchored to the data steps
+        around them. Nothing is recomputed: the blocks are already-rendered artifacts. The
+        property under test is that no block is ever dropped, whatever the order says.
+
+      The dataset is restored in a `finally`, so a plugin that fails at its new position (its
+      variable may not exist there yet) leaves an honest empty slot rather than a grid stuck
+      rewound to a prefix. 14 tests in `test/analysis-reposition.test.mjs`; suite 1063 → 1077.
+
+  - [ ] **Not browser-tested yet:** the arrows on an analysis row, the busy state during a
+        WebR re-run, and that Output visibly reorders to match History.
 
 ## Hardening before any public/shared deploy
 

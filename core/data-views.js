@@ -846,6 +846,9 @@ export class VariableView {
  * with a message. Linear by design (not git branching).
  */
 export class HistoryView {
+  /** @type {string|null} */
+  #movingAnalysis = null;
+
   /**
    * @param {HTMLElement} host
    * @param {import('./data-store.js').DataStore} store
@@ -859,6 +862,9 @@ export class HistoryView {
     this.results = opts.results ?? null; // to drop an analysis's output when its step is deleted
     this.undo = opts.undo ?? null; // undo coordinator — tells us if an analysis is the latest action
     this.itemHistory = opts.itemHistory ?? null; // plugin-action rows (#152)
+    this.pluginActions = opts.pluginActions ?? null; // to re-run an analysis moved to a new position (#190)
+    /** runId currently being moved+recomputed, so its row's controls disable. @type {string|null} */
+    this.#movingAnalysis = null;
     host.classList.add('ct-historyhost');
   }
 
@@ -1051,11 +1057,55 @@ export class HistoryView {
     if (isCurrent) row.append(el('span', 'current', 'history__badge'));
     li.append(row);
     if (this.analysisLog) {
+      // ▲/▼ move the analysis one DATA step, which is what its position means: `at` is how
+      // many transforms had run when it did, so moving it changes which data the result
+      // describes — and that is why each move re-runs it (#190). Before this the row had only
+      // ✕, because `AnalysisLog#move` was a no-op and arrows would have done nothing; the
+      // Syntax view could reorder an analysis and this view could not (user, 2026-09-27).
+      //
+      // Bounded by the data, not by the neighbours: up is possible while there is a transform
+      // above to cross, down while there is one below. An analysis sharing a position with a
+      // sibling therefore jumps past it too — coherent ("one data step earlier"), and never a
+      // button that does nothing. Swapping two analyses at the SAME position is the one move
+      // this cannot make; it needs the order op #148 deferred, and the Syntax view can do it.
+      const at = Number.isFinite(entry.at) ? entry.at : this.store.getTransforms?.().length ?? 0;
+      const total = this.store.getTransforms?.().length ?? 0;
+      const busy = !!this.pluginActions && this.#movingAnalysis === entry.runId;
       const ctl = el('span', null, 'history__ctl');
-      ctl.append(ctlBtn('✕', 'Remove this analysis from the history', false, () => this.#removeAnalysis(idx)));
+      ctl.append(
+        ctlBtn('▲', 'Run this one data step earlier', !this.pluginActions || busy || at <= 0,
+          () => this.#moveAnalysis(entry, at - 1)),
+        ctlBtn('▼', 'Run this one data step later', !this.pluginActions || busy || at >= total,
+          () => this.#moveAnalysis(entry, at + 1)),
+        ctlBtn('✕', 'Remove this analysis from the history', busy, () => this.#removeAnalysis(idx)),
+      );
       li.append(ctl);
     }
     return li;
+  }
+
+  /**
+   * Move an analysis to a new data position and recompute it there.
+   *
+   * Applied immediately, like every other control in this view (rewinding, moving a transform,
+   * deleting) — Steps is the direct-manipulation view, and deferring just this one would put
+   * two models in one panel. Only the moved analysis re-runs, so the cost is one analysis
+   * rather than the script; bulk reordering has a better home in the Syntax view's
+   * draft-then-Run. The row is marked busy meanwhile, because a WebR analysis is not instant
+   * and a second click mid-run would queue a move against a stale position.
+   */
+  async #moveAnalysis(entry, to) {
+    if (!this.pluginActions || !entry?.runId || this.#movingAnalysis) return;
+    this.#movingAnalysis = entry.runId;
+    this.render();
+    try {
+      await this.pluginActions.repositionAnalysis(entry.runId, to);
+    } catch (err) {
+      this.onError(err.message);
+    } finally {
+      this.#movingAnalysis = null;
+      this.render();
+    }
   }
 
   #removeAnalysis(idx) {
@@ -1206,7 +1256,14 @@ export class HistoryPanel {
     }
     document.body.append(panel);
     this.#panel = panel;
-    this.#view = new HistoryView(content, this.#store, { onError: (m) => this.#showErr(m), analysisLog: this.#analysisLog, undo: this.#undo, results: this.#results, itemHistory: this.#itemHistory });
+    this.#view = new HistoryView(content, this.#store, {
+      onError: (m) => this.#showErr(m),
+      analysisLog: this.#analysisLog,
+      undo: this.#undo,
+      results: this.#results,
+      itemHistory: this.#itemHistory,
+      pluginActions: this.#pluginActions,
+    });
   }
 
   /** The Syntax editor: ONE free-form textarea holding the whole script (edit like a
