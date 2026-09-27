@@ -461,6 +461,10 @@ function showMissingPluginsDialog(missing) {
 
 /** Human-readable origin label for a recorded plugin descriptor. */
 function originText(origin) {
+  // A project made on a deployment that serves its own plugins, opened somewhere else (#185):
+  // the plugin is not missing because the sharer did something odd, it is missing because it
+  // belongs to their install. Say that, rather than "not a built-in plugin".
+  if (origin === 'site') return 'provided by the site that hosts the sharer’s copy of CrossTab';
   if (origin === 'url') return 'from a URL (not recorded)';
   if (origin === 'file') return 'added from a file on the sharer’s device';
   if (origin === 'authored') return 'authored in CrossTab on the sharer’s device';

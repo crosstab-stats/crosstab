@@ -6048,10 +6048,26 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       commented index would have worked in the test and failed in the app. Tolerant by default
       now. `docs/DEPLOY.md` is the deployer's page.
 
-  - [ ] **Not yet browser-tested, and it is a deployment exercise rather than a click:** stand
-        up a `deploy.json` plus a one-plugin `site-plugins/` directory and confirm the plugin
-        appears in the picker as `<ns>-…`, is on by default if marked, shows "from <siteName>"
-        as its origin, and that the "Hosted by" line and the ignored-settings list read right.
+  - [~] **Browser pass STARTED by the owner (2026-09-27)** against a local bench: a gitignored
+        `deploy.json` (siteName / supportEmail / discussionsUrl / pluginDir / namespace `bench`)
+        plus a real one-plugin `site-plugins/` directory — an R-free "Data dictionary" analysis,
+        so the test exercises the LOADING path rather than WebR warming. It found a bug within
+        minutes that no unit test of mine could have:
+    - [x] **A site plugin read as "built-in" in Edit ▸ Plugins.** Two places independently
+          answer "where did this come from": `#originLabel` (output attribution) and
+          `list().origin` (the picker row + the missing-plugin dialog). A site entry sets
+          `builtin: true` on purpose — so the picker will not let a user delete a plugin the
+          deployment provides — and I had taught the first and not the second, so the row fell
+          through to the built-in branch. Both were "correct" in isolation, which is exactly why
+          only a real plugin in a real picker could show it. The same divergence shape as #177's
+          tooltip. Fixed by adding `site` to the provenance TOKEN vocabulary and teaching both
+          renderers, with the picker's now a pure exported `originMeta()` rather than an
+          expression buried in a row builder. It also fixed a case I had not thought about: a
+          project made on a deployment and opened elsewhere now says the missing plugin
+          *belongs to the sharer's install*, instead of "not a built-in plugin".
+    - [ ] Still to confirm on that bench: the default-on tick on a FRESH launch (a remembered
+          selection wins, so it needs a clean profile), the "Hosted by" line, and the
+          ignored-settings list (uncomment the deliberately-invalid `repo` in the bench file).
   - [ ] **Still constants, deliberately deferred:** `RUNTIME_HOSTS` in `sw.js` (a service
         worker cannot import `core/`, so honouring `runtimeHosts` means the SW reading
         `deploy.json` itself — worth doing, but not worth folding into the same commit as a

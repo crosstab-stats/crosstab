@@ -961,7 +961,12 @@ export class PluginManager {
         webAllowed: this.isWebAllowed(cat?.id),
         removable: !e.builtin,
         editable: e.kind === 'authored',
-        origin: e.builtin ? 'built-in' : e.kind, // 'url' | 'file' | 'authored'
+        // The provenance TOKEN — 'built-in' | 'site' | 'url' | 'file' | 'authored' | 'package'.
+        // Two renderers consume it (originMeta below, and originText in app.js for the
+        // missing-plugin dialog), so a new kind has to be taught to both. A site plugin sets
+        // `builtin` too (it is undeletable like ours), which is why it is checked first: it
+        // read "built-in" in the picker until a real site plugin proved otherwise.
+        origin: e.site ? 'site' : e.builtin ? 'built-in' : e.kind,
       };
     });
   }
@@ -1149,7 +1154,7 @@ export class PluginManager {
     label.append(el('span', `v${p.version ?? '1'}`, 'ct-plugin__ver'));
 
     const right = el('span', null, 'ct-plugin__right');
-    const metaText = p.enabled ? (p.activated ? p.origin : 'failed') : 'disabled';
+    const metaText = p.enabled ? (p.activated ? originMeta(p) : 'failed') : 'disabled';
     right.append(el('span', metaText, 'ct-plugin__meta'));
 
     // Version-mismatch badge (warn-and-allow): a loaded plugin whose apiVersion
@@ -1487,6 +1492,19 @@ function pickFile() {
 
 /** Does a plugin match the search query? Matches across name, id, category, and
  * keywords — so an oddly-named plugin is still found by what it does. */
+/**
+ * How a plugin's provenance reads in the picker. Mostly the token itself, except a deployment's
+ * own plugin, which names the deployment — “built-in” would be wrong (it is not ours) and
+ * “site” would be jargon (#185).
+ *
+ * @param {{origin?:string}} p a row from {@link PluginManager#list}
+ * @param {string|null} [siteName] the deployment's name, for tests; defaults to the config
+ */
+export function originMeta(p, siteName = deployConfig().siteName) {
+  if (p?.origin !== 'site') return p?.origin ?? '';
+  return siteName ? `from ${siteName}` : 'from this site';
+}
+
 /**
  * Fold the punctuation a user cannot be expected to type. Real menu labels carry EN DASHES
  * (`Kaplan–Meier`, `Shapiro–Wilk`, `Hosmer–Lemeshow`), so someone typing the right name with

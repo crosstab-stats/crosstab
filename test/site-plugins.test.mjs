@@ -20,6 +20,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { INDEX_FILE, loadSitePlugins, parsePluginIndex } from '../core/site-plugins.js';
+import { originMeta } from '../core/plugin-manager.js';
 import { qualifyId } from '../core/loader.js';
 import { validateDeployConfig } from '../core/deploy-config.js';
 
@@ -181,4 +182,34 @@ test('the index tolerates comments and trailing commas, like deploy.json', async
     fetch: async () => ({ ok: true, text: async () => text }),
   });
   assert.deepEqual(urls(r), ['./p/a.js']);
+});
+
+// =============================================================================
+// Provenance (found by the owner, 2026-09-27, on the example site plugin)
+// =============================================================================
+
+/**
+ * A site plugin showed as **"built-in"** in Edit ▸ Plugins. The cause is worth keeping: a site
+ * entry deliberately sets `builtin: true` so the picker will not let a user delete a plugin the
+ * deployment provides — and TWO places independently answer "where did this come from". I had
+ * taught `#originLabel` (output attribution) about site plugins and not `list().origin` (the
+ * picker row and the missing-plugin dialog), so the row fell through to the built-in branch.
+ *
+ * It took a real example plugin to show it; no unit test I had written could have, because both
+ * paths were "correct" in isolation. So the token is checked here, and the renderer is a pure
+ * exported function rather than an expression buried in a row builder.
+ */
+test('a deployment’s own plugin does not read as one of ours', () => {
+  assert.equal(originMeta({ origin: 'site' }, 'Example University Lab'), 'from Example University Lab');
+  // A deployment that never named itself still must not claim to be us.
+  assert.equal(originMeta({ origin: 'site' }, null), 'from this site');
+  assert.notEqual(originMeta({ origin: 'site' }, null), 'built-in');
+});
+
+test('every other provenance token is passed through untouched', () => {
+  for (const origin of ['built-in', 'url', 'file', 'authored', 'package']) {
+    assert.equal(originMeta({ origin }, 'Example Lab'), origin);
+  }
+  assert.equal(originMeta({}, null), '');
+  assert.equal(originMeta(undefined, null), '');
 });
