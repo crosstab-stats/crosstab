@@ -3173,15 +3173,32 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         rejects it at Run with "Steps must come after the base import". Guarding the gesture
         would only guard one of the ways to type it.
 
-      **Browser pass: PARTLY DONE by the owner (2026-09-26, on a phone).** Import / Export
-      from the History (Steps) view work — which is the half of this entry that was about
-      placement, and it is confirmed on the surface where it matters most, a phone. Still
-      unclicked: reading a real `.do`/`.ctscript` back in (no test files on that device), and
-      **Alt+↑/↓**, which a phone has no way to send — it needs a desktop keyboard. Worth
-      noting for later: line reordering is now keyboard-only, so a touch-only user still has
-      to switch to Steps view and use ▲/▼. That is not a regression (it is what they did
-      before), but it is the same lesson as the hover finding below — a gesture that needs
-      hardware the device lacks is not an affordance for that device.
+      **Browser pass: DONE by the owner (2026-09-26 on a phone, 2026-09-27 on a desktop).**
+      Import / Export from the History (Steps) view work, and **Alt+↑/↓ works**. Reading a
+      real `.do` back in is the one thing still unproven — it needed test files that were not
+      on the phone.
+
+      **The phone half also exposed a gap, which the desktop half then closed.** Alt+↑/↓
+      needs a keyboard, so line reordering in Syntax view was keyboard-only — a touch user had
+      to switch to Steps view and use ▲/▼. Not a regression (it is what they did before), but
+      the same lesson as the hover finding: a gesture needing hardware the device lacks is not
+      an affordance for that device. Which is exactly where the owner's next question went.
+
+      **"Is there a reason the arrow and 'x' icons on the steps view are not used in syntax
+      view? it looks like they could fit between the step and the free text field."** (owner,
+      2026-09-27). There was not, and they fit exactly there.
+  - [x] **The gutter has ▲ ▼ ✕ now, on every editable line — doing a DIFFERENT thing from
+        their Steps-view twins.** Steps mutates the committed log; the gutter edits the TEXT.
+        The textarea is an unapplied draft, so moving a committed step behind it would leave
+        two versions of the list disagreeing — the same shape as the duplicated deploy issues
+        (#185) and the diverged tooltip (#177), twice this week. Editing the text keeps one
+        source, and Run is still what applies it. The buttons call the same helper Alt+↑/↓
+        does, so the two gestures cannot drift apart.
+  - [x] **Always visible, not revealed on hover** — which is what closes the touch gap above.
+  - [x] Not offered on a 🔒 data source: its line is a comment the parser ignores, so the
+        buttons would move something that does not move. ✕ deletes ONE line, not a multi-line
+        construct — a recode's metadata lines are their own lines, and in a text editor what
+        you see deleted is what is deleted.
 
 ## Hardening before any public/shared deploy
 
