@@ -859,8 +859,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         encryption work draws. Two verbs, worded differently, not one.
 
 
-- [~] **#162 — user-defined plugin presets. THE PRESETS ARE BUILT (2026-09-27); the
-      multi-select discipline half is still open — see the end.** The picker curated on one
+- [x] **#162 — DONE (2026-09-27). User-defined plugin presets.** The picker curated on one
       axis, `Recommended for <discipline>`, so the motivating case — *qualitative psychology
       with a regional dimension*, needing CAQDAS **and** spatial **and** the usual psych set —
       was a combination no single discipline names and had to be rebuilt by hand on every
@@ -896,11 +895,17 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         store is injected, so every rule above is tested without a browser (12 tests,
         suite 1084 → 1096).
 
-  - [ ] **Still open — the other half of the original entry:** `.ctl__discipline` is a
-        *single*-select, so the motivating combination cannot even be SEEN at once; you switch
-        discipline three times and hunt. Presets fix "save it once"; they do not fix building
-        it the first time. Make the discipline control multi-select and pin the union under
-        `Recommended for Psychology, Qualitative, Spatial`.
+  - [ ] **Multi-select disciplines — TABLED by the owner (2026-09-27), and the reasoning is
+        worth keeping** so nobody re-opens it as an oversight. The original entry argued that
+        a single-select `.ctl__discipline` means the motivating combination cannot be SEEN at
+        once, so presets fix "save it once" but not "build it the first time". The owner's
+        call against: *"I'm not sure I want to complicate that UI so much. the whole list
+        isn't THAT big, and they can build the preset from the 'all plugins' view just fine."*
+        Which is right — the discipline pin is a convenience over a list of ~60 that the
+        filter box and the (now searchable, #183) catalogue already make navigable, and a
+        multi-select adds a control whose state is harder to read than the thing it saves.
+        Revisit only if the plugin count grows enough that the flat list stops being
+        workable.
   - [ ] **Phase 2 (unchanged):** export/import a preset as a small JSON file, so a lab lead can
         hand out "our lab's toolkit". Cheap now that the shape exists — and it pairs with
         #185's deployments, where a department could ship one.
