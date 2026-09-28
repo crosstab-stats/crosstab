@@ -183,3 +183,76 @@ test('boot wires the hook once, not each rename site', () => {
   assert.match(app, /datasets\.onRenamed\(\(id, from, to\) => \{/);
   assert.match(app, /analysisLog\.retargetDataset\(from, to\)/);
 });
+
+// =============================================================================
+// The output that NAMES a dataset
+// =============================================================================
+
+/**
+ * The owner spotted this the moment the rewrite landed: *"if the output generated that title
+ * based on the dataset name automatically, then wouldn't renaming the dataset generate a state
+ * where the output identified a source that doesn't exist? Or worse, if the user renames Wave2
+ * to Wave1 and then Wave3 to Wave2, wouldn't the non-renamed chart 'Wave2: results' now be
+ * implying a data source that is not the actual source?"*
+ *
+ * Both, and the second is the argument. A dangling reference is a puzzle; a confidently wrong
+ * one is a false record — the reader has no way to know the name has moved.
+ *
+ * Only one place in the host writes a dataset name into output: the cross-dataset note. It is
+ * not a finding — it is the host saying which datasets a run read — so it is the host's to keep
+ * true. A plugin's output stays what it was ([[output-outlives-its-maker]]).
+ */
+test('the cross-dataset note is tagged to its run, so it can be restated', () => {
+  const src = readFileSync(new URL('../core/plugin-actions.js', import.meta.url), 'utf8');
+  assert.match(src, /appendText\(text, \{ tag: PluginActions\.#spanTag\(e\.runId\) \}\)/);
+  assert.match(src, /refreshSpanNotes\(\)/);
+});
+
+test('restating reads the CURRENT inputs, so a re-pointed run gets the new name', async () => {
+  // The whole chain in one: rename → inputs re-pointed → note rebuilt from them.
+  const { PluginActions } = await import('../core/plugin-actions.js');
+  const log = new AnalysisLog(null, new ProjectLog());
+  log.record(entry('spanning', { vars: ['age', 'Wave 2:income'] }));
+
+  const written = [];
+  const actions = new PluginActions({
+    loader: {}, menus: { register: () => () => {} },
+    results: {
+      appendText: (t, o) => written.push({ t, tag: o?.tag }),
+      updateTextByTag: (tag, t) => { written.push({ t, tag, update: true }); return true; },
+    },
+    ui: {}, bus: { emit() {} }, importers: {}, exporters: {}, outputExporters: {},
+    analysisLog: log,
+    dataStore: {
+      list: () => [{ id: 1, name: 'Wave 1', rowCount: 1200, active: true }, { id: 2, name: 'Follow-up', rowCount: 1540 }],
+      activeId: 1,
+    },
+  });
+
+  log.retargetDataset('Wave 2', 'Follow-up');
+  assert.equal(actions.refreshSpanNotes(), 1);
+  const note = written.find((w) => w.update);
+  assert.match(note.t, /Follow-up \(1,540 rows\)/, 'the new name, with its live row count');
+  assert.equal(note.t.includes('Wave 2'), false, 'and no trace of the old one');
+  assert.equal(note.tag, 'span:spanning');
+});
+
+test('a single-dataset analysis has no note to restate', async () => {
+  const { PluginActions } = await import('../core/plugin-actions.js');
+  const log = new AnalysisLog(null, new ProjectLog());
+  log.record(entry('local', { vars: ['age'] }));
+  const actions = new PluginActions({
+    loader: {}, menus: { register: () => () => {} },
+    results: { appendText() {}, updateTextByTag: () => true },
+    ui: {}, bus: { emit() {} }, importers: {}, exporters: {}, outputExporters: {},
+    analysisLog: log,
+    dataStore: { list: () => [{ id: 1, name: 'Wave 1', rowCount: 10, active: true }], activeId: 1 },
+  });
+  assert.equal(actions.refreshSpanNotes(), 0);
+});
+
+test('updateTextByTag is for host text, and is not on the plugin surface', async () => {
+  // A plugin must not gain an "edit my past output" verb: its output is the artefact of a run.
+  const broker = readFileSync(new URL('../core/plugin-broker.js', import.meta.url), 'utf8');
+  assert.equal(broker.includes('updateTextByTag'), false);
+});

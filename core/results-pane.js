@@ -831,6 +831,39 @@ export class ResultsPane {
     this.#bus?.emit?.('output:written');
   }
 
+  /**
+   * Rewrite the text of blocks carrying `tag`, in place.
+   *
+   * For host-generated DERIVED text — a note that states something about the project rather
+   * than a finding of the analysis. The cross-dataset note (#179) names the datasets a run read,
+   * and a dataset can be renamed, so that sentence has to be able to catch up. Remove-and-append
+   * would not do: it would move the note out of the section it belongs to and to the end of the
+   * output.
+   *
+   * This is deliberately NOT a general "edit my output" verb for plugins. A plugin's output is
+   * the artefact of a run and stays what it was ([[output-outlives-its-maker]]); what may be
+   * refreshed is text the HOST wrote about the run, from facts the host still holds.
+   *
+   * @param {string} tag @param {string} markdown @returns {boolean} whether anything changed
+   */
+  updateTextByTag(tag, markdown) {
+    if (tag == null) return false;
+    const t = String(tag);
+    const html = renderMiniMarkdown(markdown);
+    let changed = false;
+    for (const b of this.#model) {
+      if (b.kind !== 'text' || b.tag !== t || b.html === html) continue;
+      b.html = html;
+      changed = true;
+    }
+    if (!changed) return false;
+    // Rebuild from the model, exactly as {@link ResultsPane#removeByTag} does. A targeted DOM
+    // patch would need the tag escaped into a selector and would still have to keep the chart
+    // blocks' live handles in step; a rename is rare enough to pay for the honest path.
+    this.restoreModel(this.#model.slice(), { divider: false });
+    return true;
+  }
+
   /** Remove text blocks carrying `tag` (a data-op id). Used when that transform is
    * undone, so its confirmation line doesn't linger after the change is reverted.
    * Mirrors {@link ResultsPane#removeRun}: filter the model, rebuild. */

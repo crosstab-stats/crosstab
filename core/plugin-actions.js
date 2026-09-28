@@ -507,21 +507,61 @@ export class PluginActions {
     return ids.length > 1 ? { datasetIds: ids } : {};
   }
 
-  /** @see the disclosure note in {@link PluginActions##execute}. */
-  #discloseSpan(e) {
+  /**
+   * The cross-dataset note's text, from an entry's CURRENT inputs — or null when the run reads
+   * only one dataset and there is nothing to disclose.
+   */
+  #spanNote(e) {
     const named = datasetsNamed(e.inputs || {}, e.specs || []);
-    if (named.length < 2) return;
-    const rows = new Map((this.#dataStore?.list?.() ?? []).map((d) => [String(d.name), d.rowCount]));
-    const own = (this.#dataStore?.list?.() ?? []).find((d) => d.active)?.name ?? 'this dataset';
+    if (named.length < 2) return null;
+    const list = this.#dataStore?.list?.() ?? [];
+    const rows = new Map(list.map((d) => [String(d.name), d.rowCount]));
+    const own = list.find((d) => d.active)?.name ?? 'this dataset';
     const parts = named.map((ds) => {
       const label = ds ?? own;
       const n = rows.get(String(label));
       return Number.isFinite(n) ? `${label} (${n.toLocaleString()} rows)` : String(label);
     });
-    this.#results.appendText(
-      `_Variables from ${named.length} datasets: ${parts.join(', ')}. `
-      + 'Rows are not matched across datasets — each variable keeps its own cases._',
-    );
+    return `_Variables from ${named.length} datasets: ${parts.join(', ')}. `
+      + 'Rows are not matched across datasets — each variable keeps its own cases._';
+  }
+
+  /** The tag tying a run's disclosure note to the run, so it can be refreshed in place. */
+  static #spanTag(runId) {
+    return `span:${runId}`;
+  }
+
+  /** @see the disclosure note in {@link PluginActions##execute}. */
+  #discloseSpan(e) {
+    const text = this.#spanNote(e);
+    if (!text) return;
+    this.#results.appendText(text, { tag: PluginActions.#spanTag(e.runId) });
+  }
+
+  /**
+   * Re-state every cross-dataset note from the inputs as they stand now (#179).
+   *
+   * **Why output gets rewritten here, when output is otherwise immutable.** This note is not a
+   * finding — it is the host saying which datasets a run read, and it says so by NAME. A rename
+   * makes that sentence wrong, and the owner spotted the worse case: rename Wave 2 → Wave 1 and
+   * Wave 3 → Wave 2, and a note still reading "Wave 2" now names a dataset that exists and is
+   * not the one the analysis used. A dangling reference is a puzzle; a confidently wrong one is
+   * a false record.
+   *
+   * So the rule stands unchanged — a plugin's output is the artefact of its run and keeps what
+   * it said — and what is refreshed is text the HOST wrote, from facts the host still holds.
+   * Idempotent, and cheap enough to run over every analysis, because a rename is rare.
+   *
+   * @returns {number} notes restated
+   */
+  refreshSpanNotes() {
+    let n = 0;
+    for (const e of this.#analysisLog?.entries() ?? []) {
+      const text = this.#spanNote(e);
+      if (!text) continue;
+      if (this.#results.updateTextByTag?.(PluginActions.#spanTag(e.runId), text)) n += 1;
+    }
+    return n;
   }
 
   /** Register a host-action runner (see {@link PluginActions#runHost}). */

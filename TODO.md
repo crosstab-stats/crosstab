@@ -3668,6 +3668,35 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         throws is logged and skipped — a failed consequence must not undo the rename the user
         asked for.
 
+  - [x] **...and the OUTPUT that names a dataset is restated too.** The owner caught this
+        immediately: *"if the output generated that title based on the dataset name
+        automatically, then wouldn't renaming the dataset generate a state where the output
+        identified a source that doesn't exist? Or worse, if the user renames Wave2 to Wave1 and
+        then Wave3 to Wave2, wouldn't the non-renamed chart 'Wave2: results' now be implying a
+        data source that is not the actual source?"*
+
+        Both, and the second is the argument: a dangling reference is a puzzle, a confidently
+        wrong one is a false record, because the reader has no way to know the name has moved.
+
+        Exactly one thing in the host writes a dataset name into output — the cross-dataset note,
+        added the day before. It is not a finding; it is the host stating which datasets a run
+        read. So it carries a tag tying it to its run, and a rename restates it in place from the
+        (already re-pointed) inputs and the live row counts. `ResultsPane#updateTextByTag` is
+        deliberately **not** on the plugin surface: a plugin's output is the artefact of its run
+        and keeps what it said ([[output-outlives-its-maker]]); what may be refreshed is text the
+        HOST wrote, from facts the host still holds.
+
+        **The one residue, and it is the plugin's side of the line.** A plugin that prints a
+        variable's label falls back to the reference it was handed when the variable has no label
+        of its own — so an *unlabelled* cross-dataset variable can put `Wave 2:income` in a table
+        caption, and a rename leaves that caption stale. Left as-is on purpose: stripping the
+        qualifier from the fallback would make two unlabelled variables that share a bare name
+        (two CSV waves, both with `age`) print identically in the same table, which is a certain
+        ambiguity traded for a conditional staleness. The restated note sits directly above the
+        table and is authoritative. Re-running affected analyses on a rename would fix the
+        captions and was rejected as a surprising, arbitrarily expensive side effect of typing a
+        name.
+
       Original:
 
 - [ ] **#179 — cross-dataset variable inputs: let a picker offer variables from EVERY

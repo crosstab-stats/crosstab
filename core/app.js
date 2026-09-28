@@ -736,7 +736,15 @@ export async function boot(mounts) {
   // analysis — so the re-pointing is part of the history rather than a silent edit behind it.
   datasets.onRenamed((id, from, to) => {
     const n = analysisLog.retargetDataset(from, to);
-    if (n) console.info(`[datasets] re-pointed ${n} analys${n === 1 ? 'is' : 'es'} from "${from}" to "${to}"`);
+    // ...and the host's own cross-dataset notes, which name the datasets a run read. Leaving
+    // those alone would be worse than a dangling reference: rename Wave 2 → Wave 1 and Wave 3 →
+    // Wave 2, and a note still reading "Wave 2" names a dataset that exists and is not the one
+    // the analysis used. `pluginActions` is declared below — fine, because this closure runs on a
+    // rename, long after boot.
+    const notes = pluginActions.refreshSpanNotes();
+    if (n || notes) {
+      console.info(`[datasets] "${from}" → "${to}": re-pointed ${n} analys${n === 1 ? 'is' : 'es'}, restated ${notes} note${notes === 1 ? '' : 's'}`);
+    }
   });
   // A destructive re-import swaps the base data out from under the analyses that ran
   // on it, so those analyses are cleared. Two things keep that narrow (#149 A1):
