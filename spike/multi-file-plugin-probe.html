@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Probe — multi-file plugins (import maps in the sandbox)</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+        margin: 0 auto; padding: 16px; max-width: 46rem; color: #1a1a1a; background: #fff;
+      }
+      h1 { font-size: 20px; margin: 0 0 4px; }
+      .sub { color: #5a6470; margin: 0 0 16px; font-size: 13px; }
+      table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px; }
+      th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid #e3e8ee; vertical-align: top; }
+      th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #5a6470; }
+      .verdict { font-weight: 700; white-space: nowrap; }
+      .pass { color: #1a7f4b; }
+      .fail { color: #b3261e; }
+      .pending { color: #8a5a00; }
+      .why { color: #5a6470; font-size: 13px; }
+      code { font: 12.5px ui-monospace, Menlo, Consolas, monospace; background: #f2f4f7; padding: 1px 4px; border-radius: 4px; }
+      button {
+        font: inherit; padding: 9px 14px; border-radius: 8px; border: 1px solid #c8d0d8;
+        background: #f7f9fb; cursor: pointer;
+      }
+      button.primary { background: #2572a5; border-color: #2572a5; color: #fff; }
+      .env { background: #f7f9fb; border: 1px solid #e3e8ee; border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+      .env div { margin: 2px 0; }
+      .note { border-left: 3px solid #2572a5; padding: 2px 0 2px 10px; margin: 14px 0; color: #41505e; font-size: 13.5px; }
+      @media (prefers-color-scheme: dark) {
+        body { background: #14181d; color: #e6eaee; }
+        th, td { border-bottom-color: #2a323a; }
+        code, .env { background: #1c2229; border-color: #2a323a; }
+        button { background: #1c2229; border-color: #39424c; color: #e6eaee; }
+        .why, .sub, th { color: #9aa6b1; }
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Multi-file plugins: can a sandboxed plugin import a second module?</h1>
+    <p class="sub">
+      A probe, not a feature. It answers one question before any code gets written — and it
+      exists because the first design for this <em>already collapsed</em>: a <code>blob:</code>
+      URL minted in the host realm carries the host's origin, and a plugin sandbox is an
+      <em>opaque</em> origin, so the frame cannot fetch it.
+    </p>
+
+    <div class="note">
+      <strong>What is being tested.</strong> The frame receives every module's <em>source text</em>
+      and makes its own blobs (same origin, therefore fetchable). The open question is how the
+      entry module then refers to its sibling. Each row below is one answer, run inside a real
+      plugin sandbox: <code>&lt;iframe sandbox="allow-scripts"&gt;</code> with CrossTab's own CSP,
+      <code>default-src 'none'; script-src 'unsafe-inline' blob:; connect-src 'none'</code>.
+      A row can fail for lack of browser support <em>or</em> because the CSP refused it, so the
+      environment block records both.
+    </div>
+
+    <div class="env" id="env">Collecting…</div>
+
+    <p style="margin:16px 0 0">
+      <button class="primary" id="run">Run the probe</button>
+      <button id="copy">Copy results</button>
+    </p>
+
+    <table>
+      <thead>
+        <tr><th>What it tries</th><th>Result</th><th>Detail</th></tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+
+    <div class="note" id="reading" hidden></div>
+
+    <script type="module">
+      // The CSP comes from the app itself, so this probe cannot quietly test a weaker sandbox
+      // than the one plugins actually run in.
+      import { HOST_CSP } from '../core/plugin-sandbox.js';
+
+      /**
+       * The document each probe runs inside. Same `sandbox="allow-scripts"` opaque origin and
+       * same CSP as a real plugin sandbox; the runtime is the probe's own, because the real
+       * one speaks the plugin load protocol and this is testing something underneath it.
+       */
+      const FRAME_DOC = (csp) => `<!doctype html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="${csp}">
+</head><body><script>
+(() => {
+  const reply = (m) => parent.postMessage(m, '*');
+  const blobUrl = (src) => URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+  const addMap = (imports) => {
+    const s = document.createElement('script');
+    s.type = 'importmap';
+    s.textContent = JSON.stringify({ imports });
+    document.head.append(s);
+  };
+  window.addEventListener('message', async (e) => {
+    const { id, kind, entry, util } = e.data || {};
+    if (!kind) return;
+    try {
+      const utilUrl = blobUrl(util);
+      let entrySrc = entry;
+      if (kind === 'baseline') {
+        // No second module at all: proves the harness itself works, since this is exactly
+        // what CrossTab does today.
+      } else if (kind === 'map-bare') {
+        addMap({ 'probe:util': utilUrl });
+      } else if (kind === 'map-relative') {
+        addMap({ './util.js': utilUrl });
+      } else if (kind === 'map-late') {
+        // A map added AFTER a module has already been imported in this frame — the case the
+        // TODO flagged as uneven ("multiple/late import maps"). Import something first.
+        await import(blobUrl('export const warm = 1;'));
+        addMap({ 'probe:util': utilUrl });
+      } else if (kind === 'rewrite') {
+        // The fallback that needs no platform feature: rewrite the specifier to the blob URL
+        // before importing.
+        entrySrc = entry.replace(/'\\.\\/util\\.js'/, JSON.stringify(utilUrl));
+      }
+      const mod = await import(blobUrl(entrySrc));
+      const value = typeof mod.answer === 'function' ? mod.answer() : null;
+      reply({ id, ok: value === 42, detail: value === 42 ? 'imported, answer() === 42' : \`answer() returned \${JSON.stringify(value)}\` });
+    } catch (err) {
+      reply({ id, ok: false, detail: String(err && err.message ? err.message : err) });
+    }
+  });
+  reply({ ready: true });
+})();
+<\/script></body></html>`;
+
+      /** The sibling module every variant tries to reach. */
+      const UTIL = 'export const answer = () => 42;\n';
+
+      const VARIANTS = [
+        {
+          id: 'baseline',
+          what: 'Entry module alone (no second file)',
+          why: 'What CrossTab does today. If this fails, nothing below means anything.',
+          entry: 'export const answer = () => 42;\n',
+        },
+        {
+          id: 'map-bare',
+          what: 'Import map + <em>bare</em> specifier <code>import … from "probe:util"</code>',
+          why: 'The likeliest winner: bare specifiers are unambiguously import-map territory.',
+          entry: 'import { answer as a } from "probe:util";\nexport const answer = a;\n',
+        },
+        {
+          id: 'map-relative',
+          what: 'Import map + <em>relative</em> specifier <code>"./util.js"</code>',
+          why: 'What a plugin author would write naturally — but a URL-like key resolves against the document, not the blob, so this may well fail.',
+          entry: 'import { answer as a } from "./util.js";\nexport const answer = a;\n',
+        },
+        {
+          id: 'map-late',
+          what: 'Import map added <em>after</em> a module already loaded in the frame',
+          why: 'Only matters if one frame ever hosts two plugins — production gives each its own — but worth knowing.',
+          entry: 'import { answer as a } from "probe:util";\nexport const answer = a;\n',
+        },
+        {
+          id: 'rewrite',
+          what: 'No import map: rewrite the specifier to a blob URL first',
+          why: 'The fallback. Needs no platform feature, so it should pass everywhere.',
+          entry: 'import { answer as a } from \'./util.js\';\nexport const answer = a;\n',
+        },
+      ];
+
+      const rows = document.getElementById('rows');
+      const results = new Map();
+
+      function paint() {
+        rows.replaceChildren();
+        for (const v of VARIANTS) {
+          const r = results.get(v.id);
+          const tr = document.createElement('tr');
+          const what = document.createElement('td');
+          what.innerHTML = `${v.what}<div class="why">${v.why}</div>`;
+          const verdict = document.createElement('td');
+          verdict.className = `verdict ${r ? (r.ok ? 'pass' : 'fail') : 'pending'}`;
+          verdict.textContent = r ? (r.ok ? 'PASS' : 'FAIL') : '…';
+          const detail = document.createElement('td');
+          detail.className = 'why';
+          detail.textContent = r ? r.detail : '';
+          tr.append(what, verdict, detail);
+          rows.append(tr);
+        }
+      }
+
+      /** Run one variant in its own fresh sandbox, exactly as a plugin gets one. */
+      function runVariant(v) {
+        return new Promise((resolve) => {
+          const html = FRAME_DOC(HOST_CSP.strict);
+          const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+          const iframe = document.createElement('iframe');
+          iframe.setAttribute('sandbox', 'allow-scripts'); // opaque origin, as in production
+          iframe.style.cssText = 'position:absolute;width:0;height:0;border:0;visibility:hidden;';
+          let done = false;
+          const finish = (r) => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            window.removeEventListener('message', onMsg);
+            iframe.remove();
+            URL.revokeObjectURL(url);
+            resolve(r);
+          };
+          // A hang has to read as a failure, not a page that never finishes.
+          const timer = setTimeout(() => finish({ ok: false, detail: 'timed out after 6s' }), 6000);
+          const onMsg = (e) => {
+            if (e.source !== iframe.contentWindow) return;
+            if (e.data?.ready) {
+              iframe.contentWindow.postMessage({ id: v.id, kind: v.id, entry: v.entry, util: UTIL }, '*');
+              return;
+            }
+            if (e.data?.id === v.id) finish({ ok: !!e.data.ok, detail: e.data.detail || '' });
+          };
+          window.addEventListener('message', onMsg);
+          iframe.src = url;
+          document.body.append(iframe);
+        });
+      }
+
+      function env() {
+        const supports = typeof HTMLScriptElement?.supports === 'function'
+          ? HTMLScriptElement.supports('importmap')
+          : 'HTMLScriptElement.supports unavailable';
+        return {
+          'User agent': navigator.userAgent,
+          'importmap supported': String(supports),
+          'Cross-origin isolated': String(typeof crossOriginIsolated === 'boolean' ? crossOriginIsolated : 'unknown'),
+          'Sandbox CSP used': HOST_CSP.strict,
+        };
+      }
+
+      function paintEnv() {
+        const box = document.getElementById('env');
+        box.replaceChildren();
+        for (const [k, v] of Object.entries(env())) {
+          const d = document.createElement('div');
+          d.innerHTML = `<strong>${k}:</strong> `;
+          d.append(document.createTextNode(v));
+          box.append(d);
+        }
+      }
+
+      /** What the results MEAN, so the answer does not depend on reading the table right. */
+      function verdictText() {
+        const r = (id) => results.get(id);
+        if (!r('baseline')?.ok) {
+          return '<strong>Inconclusive.</strong> Even a single-module plugin failed here, so the probe '
+            + 'itself is not working in this browser — nothing below can be trusted.';
+        }
+        if (r('map-bare')?.ok) {
+          return '<strong>Import maps work.</strong> Build it the planned way: post every module\'s source, '
+            + 'let the frame blob them, inject one import map per frame before the entry import, and have '
+            + 'the manifest list the module files. Note whether the <em>relative</em> row also passed — if it '
+            + 'did not, plugin authors must use a bare prefix, or the host must rewrite relative specifiers '
+            + 'into bare ones.';
+        }
+        if (r('rewrite')?.ok) {
+          return '<strong>Import maps are out; the fallback is in.</strong> Rewrite relative specifiers to '
+            + 'in-frame blob URLs before importing. Crude, needs no platform feature, and this row proves it '
+            + 'works here. Multi-file plugins are still buildable.';
+        }
+        return '<strong>Neither approach works in this browser.</strong> Worth capturing the errors above '
+          + 'verbatim before going further — a multi-file plugin would have to be bundled into one file '
+          + 'instead, which the no-build-step ethos rules out.';
+      }
+
+      async function run() {
+        results.clear();
+        paint();
+        document.getElementById('reading').hidden = true;
+        for (const v of VARIANTS) {
+          // Serially, so a failing variant cannot poison another's frame or message stream.
+          results.set(v.id, await runVariant(v));
+          paint();
+        }
+        const reading = document.getElementById('reading');
+        reading.innerHTML = verdictText();
+        reading.hidden = false;
+      }
+
+      function summary() {
+        const lines = ['CrossTab multi-file plugin probe', ''];
+        for (const [k, v] of Object.entries(env())) lines.push(`${k}: ${v}`);
+        lines.push('');
+        for (const v of VARIANTS) {
+          const r = results.get(v.id);
+          lines.push(`${r ? (r.ok ? 'PASS' : 'FAIL') : '—'}  ${v.id}  ${r?.detail || ''}`.trim());
+        }
+        return lines.join('\n');
+      }
+
+      document.getElementById('run').addEventListener('click', run);
+      document.getElementById('copy').addEventListener('click', async () => {
+        const btn = document.getElementById('copy');
+        try {
+          await navigator.clipboard.writeText(summary());
+          btn.textContent = 'Copied';
+        } catch {
+          // No clipboard on this device: show the text so it can be selected by hand.
+          const pre = document.createElement('pre');
+          pre.style.cssText = 'white-space:pre-wrap;user-select:all;font-size:12px;';
+          pre.textContent = summary();
+          document.body.append(pre);
+          btn.textContent = 'Select the text below';
+        }
+      });
+
+      paintEnv();
+      paint();
+      run();
+    </script>
+  </body>
+</html>

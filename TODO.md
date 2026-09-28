@@ -3398,6 +3398,38 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       text, so it can rewrite bare relative specifiers to blob URLs before importing.
       Crude, but it needs no platform feature at all.
 
+      **THE PROBE IS BUILT (2026-09-27): `spike/multi-file-plugin-probe.html`.** Open it and it
+      runs itself; every row is one answer, and the page states what the results MEAN so the
+      decision does not depend on reading a table correctly. **Copy results** puts a pasteable
+      summary (user agent, `HTMLScriptElement.supports('importmap')`, every row) on the
+      clipboard — it is meant to be run on a phone and reported back.
+
+      It is faithful where fidelity decides the answer: each variant gets its own
+      `<iframe sandbox="allow-scripts">` (opaque origin, as in production) and the CSP is
+      **imported from `core/plugin-sandbox.js`** rather than copied, so the probe cannot
+      quietly test a weaker sandbox than plugins actually run in. A row can fail for lack of
+      support *or* because the CSP refused it, so the environment block records both.
+
+      Five rows, and the first and last are the ones that make the others readable:
+  - **Entry module alone** — what CrossTab does today. If this fails the probe is broken and
+        nothing else means anything.
+  - **Import map + bare specifier** (`import … from "probe:util"`) — the likeliest winner,
+        since bare specifiers are unambiguously import-map territory.
+  - **Import map + relative specifier** (`"./util.js"`) — what an author would write
+        naturally, and the one I expect to FAIL: a URL-like key resolves against the document's
+        base URL, not the importing blob's, so the map may never match. If bare passes and
+        relative fails, the host must rewrite relative specifiers into bare ones — which is
+        worth knowing before the manifest format is designed.
+  - **A map added after a module already loaded in that frame** — the "multiple/late maps"
+        worry. Worth knowing, but **less load-bearing than the entry assumed**: production
+        gives every plugin its OWN frame, so the real requirement is one map per frame before
+        the entry import, which is far better supported.
+  - **No map at all: rewrite the specifier to a blob URL** — the fallback. It should pass
+        everywhere, and if it does, multi-file plugins are buildable whatever the other rows say.
+
+  - [ ] **Run it on iPad/iPhone Safari and on desktop Chrome, then decide.** That is the whole
+        gate; the build is a day's work either way, and which way depends on these five rows.
+
       *Cost of not having this, concretely:* `plugins/builtin-charts/index.js` is ~2,100
       lines holding eleven chart kinds that were nine tidy modules in core an hour
       earlier. They were concatenated purely because this gap is open — see #131 Layer 3a.
