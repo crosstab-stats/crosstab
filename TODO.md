@@ -3697,6 +3697,12 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         captions and was rejected as a surprising, arbitrarily expensive side effect of typing a
         name.
 
+        **Owner's call (2026-09-28): keep this shape, revisit only if it bites** — *"this
+        deserves more thought than I can spare at the moment, keep what you have and push it. If
+        this becomes an issue we can adjust later."* So this is a DECISION, not an open item. If
+        it does surface, the change to make is "re-run the analyses that name this dataset" — not
+        all of them — and the reason it was not done pre-emptively is above.
+
       Original:
 
 - [ ] **#179 — cross-dataset variable inputs: let a picker offer variables from EVERY
