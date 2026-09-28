@@ -3411,10 +3411,15 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - [x] The blob-served coupling is written down in `core/plugin-sandbox.js`, where someone
         changing how the sandbox document is delivered would actually read it.
 
-      14 tests (`test/plugin-modules.test.mjs`), suite 1101 → 1115. **No browser pass** — the
-      owner cannot test remotely, so the split is: the platform mechanism is verified by the
-      probe on iOS 18.7, the host's scanning and shapes by unit tests, and the join between
-      them by the probe's shipped-path row.
+      14 tests (`test/plugin-modules.test.mjs`), suite 1101 → 1115.
+
+      **VERIFIED END TO END on iOS 18.7 (owner, 2026-09-27): all six probe rows pass**, the
+      shipped-path row included — *"real loader path: entry imported its sibling"*. So the
+      earlier "no browser pass" note on this entry is superseded: there was no pass through the
+      APP (nothing ships a multi-file plugin yet), but the loading path itself has been
+      exercised in a real browser, through the real sandbox document and the real load message.
+      What remains unexercised is only a multi-file plugin in ordinary use — which will happen
+      the first time anyone writes one.
 
   - [ ] **Nested layouts (`./lib/util.js`)** — refused with a message today. Needs per-module
         specifier rewriting so two same-named specifiers in different directories cannot
