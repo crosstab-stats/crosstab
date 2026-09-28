@@ -3427,8 +3427,39 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - **No map at all: rewrite the specifier to a blob URL** — the fallback. It should pass
         everywhere, and if it does, multi-file plugins are buildable whatever the other rows say.
 
-  - [ ] **Run it on iPad/iPhone Safari and on desktop Chrome, then decide.** That is the whole
-        gate; the build is a day's work either way, and which way depends on these five rows.
+  - [x] **PROBE RUN (owner, iPhone, iOS 18.7 / WebKit — 2026-09-27): ALL FIVE PASS.**
+        `importmap supported: true`, and baseline, bare, relative, late and the rewrite
+        fallback all imported and returned 42. That is the strictest target we have, so the
+        gate is open — **import maps are viable and multi-file plugins are buildable**.
+
+        **The relative row passing is the interesting result, and it is not luck.** I predicted
+        it would fail, reasoning that a URL-like map key resolves against the document while
+        the specifier resolves against the importing blob. Both halves of that are wrong in the
+        same way: `blob:` has an **opaque path**, so `./util.js` is UNRESOLVABLE against a blob
+        base — for the specifier *and* for the key, because the sandbox document is itself
+        blob-served. Per the resolution algorithm, a specifier that fails to parse as a URL
+        falls back to being matched as a **literal string**, and the key does too. They match as
+        raw text.
+
+        **The coupling that creates, written down now while it is fresh:** this works *because
+        `attachSandbox` serves the sandbox document from a blob URL*. Serve that document from
+        a real URL and the key would parse (→ `https://host/util.js`) while the specifier still
+        would not, and every relative import would break — a silent, puzzling failure a long
+        way from its cause.
+
+  - [ ] **Build it, with the coupling neutralised rather than trusted:**
+    - [ ] Manifest lists the module files; host posts every module's SOURCE with the `load`
+          message; the frame blobs them itself (the correction above) and injects **one import
+          map per frame** before importing the entry — production gives each plugin its own
+          frame, so one map is all that is ever needed.
+    - [ ] Key the map on **several spellings per module** (`./util.js`, `util.js`, and any
+          declared subpath), since matching is literal-string when the base is a blob: the key
+          has to be exactly what the author typed.
+    - [ ] **Automatic fallback on a resolution failure:** catch the entry import, rewrite the
+          relative specifiers to blob URLs, retry. The probe proves that path works, and it
+          makes the blob-document coupling a performance detail rather than a correctness one.
+    - [ ] Note the coupling in `core/plugin-sandbox.js`, where someone changing how the sandbox
+          document is delivered would actually read it.
 
       *Cost of not having this, concretely:* `plugins/builtin-charts/index.js` is ~2,100
       lines holding eleven chart kinds that were nine tidy modules in core an hour
