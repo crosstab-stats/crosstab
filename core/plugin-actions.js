@@ -17,7 +17,7 @@
  */
 
 import { CoreEvents } from './event-bus.js';
-import { datasetsNamed } from './var-ref.js';
+import { datasetsNamed, parseVarRef } from './var-ref.js';
 import { registerRemoteChartKind, unregisterChartKind } from './chart-renderer.js';
 import { newOpId } from './merge.js';
 
@@ -1064,15 +1064,20 @@ function pickFile(extensions) {
  * `[{ value:string, label:string }]` (empty if the variable is unreadable).
  */
 async function variableCategories(data, varName) {
+  // The variable may live in another dataset (#179). Read it from there: the store keys columns
+  // by BARE name, so a qualified reference would come back empty and this would report "no
+  // categories" — which, for a non-optional level input, aborts the dialog with no explanation.
+  const { dataset, name } = parseVarRef(varName);
+  const where = dataset ? { dataset } : {};
   let cols = {};
   try {
-    cols = (await data.getColumns?.({ variables: [varName] })) || {};
+    cols = (await data.getColumns?.({ variables: [name], ...where })) || {};
   } catch {
     return [];
   }
-  const col = cols[varName];
+  const col = cols[name];
   if (!col || !col.length) return [];
-  const meta = (data.getVariableMeta?.() || []).find((m) => m.name === varName);
+  const meta = (data.getVariableMeta?.(where) || []).find((m) => m.name === name);
   const vlabs = meta?.valueLabels || {};
   const counts = new Map(); // value(string) → count; skips nulls/NaN (missing)
   for (const raw of col) {

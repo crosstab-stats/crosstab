@@ -78,14 +78,30 @@ export class UiService {
       okLabel = 'OK',
     } = options;
 
-    let meta = this.#store.getVariableMeta();
-    if (types?.length) meta = meta.filter((m) => fitsRole(m, types));
+    // Cross-dataset scope (#179). OFF by default — for most analyses mixing datasets is a
+    // mistake rather than a feature, and defaulting every list to the union would make `AGE`
+    // ambiguous in the one place a user most needs to trust what they clicked.
+    //
+    // It turns itself on when the user has ALREADY ticked variables in more than one dataset,
+    // because at that point they have stated the intent and hiding what they just selected
+    // behind a toggle would be the app forgetting. No plugin opts in or out: a plugin has no
+    // business knowing where its data came from.
+    const canSpan = typeof this.#store.allVariableMeta === 'function';
+    let allDatasets = canSpan && (this.#store.selectionSpread?.() ?? 0) > 1;
+    const metaFor = (spanning) => {
+      const raw = spanning ? this.#store.allVariableMeta() : this.#store.getVariableMeta();
+      return types?.length ? raw.filter((m) => fitsRole(m, types)) : raw;
+    };
+    let meta = metaFor(allDatasets);
     // The sidebar/grid selection means "these are the variables I am working on",
     // which is a good default for the variables an analysis is ABOUT and a bad one
     // for a secondary role. Seeding it into an OPTIONAL input inverted that input's
     // default: a weight picker opened with whatever happened to be selected in the
     // Data view already chosen, so a user who wanted no weight got one.
-    const checked = new Set(preselect ?? (optional ? [] : this.#store.getSelectedVariables()));
+    const seedSelection = () => (allDatasets && this.#store.allSelectedVariables
+      ? this.#store.allSelectedVariables()
+      : this.#store.getSelectedVariables());
+    const checked = new Set(preselect ?? (optional ? [] : seedSelection()));
     const excluded = new Set(exclude ?? []); // disabled (e.g. chosen in a prior `unique` round)
     const inputType = multiple ? 'checkbox' : 'radio';
 
@@ -99,8 +115,8 @@ export class UiService {
     // Grouping is decided ONCE, from the incoming selection, and never
     // recomputed: ticking a box must not make its row jump to the top group
     // under the user's cursor.
-    const selected = meta.filter((m) => checked.has(m.name));
-    const rest = meta.filter((m) => !checked.has(m.name));
+    let selected = meta.filter((m) => checked.has(m.name));
+    let rest = meta.filter((m) => !checked.has(m.name));
     const autoCheck = multiple || selected.length === 1;
     // Live tick state, kept outside the DOM so re-rendering (filter/sort) is lossless.
     const ticked = new Set(
@@ -139,6 +155,33 @@ export class UiService {
       dialog.querySelector('.ct-vartools-slot').replaceWith(bar.el);
       const order = bar.orderSelect;
 
+      // The scope switch. Only offered when the project HAS another dataset — a switch that
+      // could not change anything reads as broken (the same rule the chart controls follow).
+      let scopeBox = null;
+      if (canSpan && (this.#store.list?.() ?? []).length > 1) {
+        const wrap = document.createElement('label');
+        wrap.className = 'ct-vartools__scope';
+        scopeBox = document.createElement('input');
+        scopeBox.type = 'checkbox';
+        scopeBox.checked = allDatasets;
+        const txt = document.createElement('span');
+        txt.textContent = 'Variables from all datasets';
+        wrap.append(scopeBox, txt);
+        wrap.title = 'Rows are not matched across datasets — each variable keeps its own cases.';
+        scopeBox.addEventListener('change', () => {
+          allDatasets = scopeBox.checked;
+          meta = metaFor(allDatasets);
+          // Re-group here, and only here. The rule is that ticking a box must never reorder
+          // rows under the cursor; changing the scope is a deliberate act that replaces the
+          // list wholesale, so regrouping is what the user asked for.
+          for (const name of [...ticked]) if (!meta.some((m) => m.name === name)) ticked.delete(name);
+          selected = meta.filter((m) => checked.has(m.name));
+          rest = meta.filter((m) => !checked.has(m.name));
+          render();
+        });
+        bar.el.append(wrap);
+      }
+
       const sorted = (rows) => sortVars(rows, order.value);
       const matching = (rows) => filterVars(rows, query);
 
@@ -170,6 +213,16 @@ export class UiService {
         const code = document.createElement('code');
         code.textContent = m.name;
         label.append(input, span, code);
+        // Which dataset, when it is not this one. The `code` already shows the qualified
+        // reference, but a name is read as a name — the badge is what makes the difference
+        // visible at a glance rather than something to notice in the punctuation.
+        if (m.dataset) {
+          const badge = document.createElement('span');
+          badge.className = 'ct-dialog__dsbadge';
+          badge.textContent = m.dataset;
+          badge.title = `From the dataset “${m.dataset}”`;
+          label.append(badge);
+        }
         if (disabled) {
           const taken = document.createElement('span');
           taken.className = 'ct-dialog__taken';

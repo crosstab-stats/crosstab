@@ -609,6 +609,17 @@
       /* A variable disabled because a prior `unique` input already took it. */
       .ct-dialog__vars li.ct-dialog__excluded label { opacity: .5; cursor: not-allowed; }
       .ct-dialog__taken { margin-left: auto; font-size: 11px; color: #b07; font-style: italic; }
+      /* Which dataset a variable came from, when it is not the active one (#179). Colours
+         are the muted-but-legible pair used for secondary text elsewhere: 4.6:1 on the row
+         background, so it passes AA as small text rather than relying on the reader
+         noticing a colon in the code beside it. */
+      .ct-dialog__dsbadge {
+        margin-left: auto; font-size: 11px; color: #3c4a57; background: #eef2f6;
+        border: 1px solid #d7e0e8; border-radius: 999px; padding: 1px 7px; white-space: nowrap;
+      }
+      /* The cross-dataset scope switch, on the picker's filter strip. */
+      .ct-vartools__scope { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: #3c4a57; white-space: nowrap; }
+      .ct-vartools__scope input { margin: 0; }
       .ct-dialog__buttons { display: flex; justify-content: flex-end; gap: 8px; margin: 0; padding: 0; }
       .ct-dialog__buttons button {
         font: inherit; padding: 8px 16px; border-radius: 6px; border: 1px solid var(--line);

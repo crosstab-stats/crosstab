@@ -209,6 +209,28 @@ test('the host appends a note naming each dataset and its row count', () => {
   assert.match(src, /#discloseSpan/);
 });
 
+test('a level input follows the reference to the right dataset', () => {
+  // `variableCategories` reads the column to enumerate its categories. Against the active
+  // dataset a qualified reference finds nothing, which reads as "no categories" — and for a
+  // non-optional level input that aborts the whole dialog with no message at all.
+  const src = readFileSync('core/plugin-actions.js', 'utf8');
+  const start = src.indexOf('async function variableCategories');
+  const fn = src.slice(start, src.indexOf('return keys.map', start));
+  assert.match(fn, /parseVarRef\(varName\)/);
+  assert.match(fn, /variables: \[name\], \.\.\.where/, 'the read must be scoped to the named dataset');
+  assert.match(fn, /getVariableMeta\?\.\(where\)/, 'and so must the value labels');
+});
+
+test('a plugin reading columns itself gets them keyed by the reference it asked for', () => {
+  // Five plugins bypass the R injection and read columns directly. Keyed by bare name, two
+  // datasets' `age` would collapse into one and the plugin would work on the wrong data.
+  const src = readFileSync('core/plugin-broker.js', 'utf8');
+  assert.match(src, /#columnsAcross/);
+  const fn = src.slice(src.indexOf('async #columnsAcross'), src.indexOf('/** @see the `data.getVariableMeta`'));
+  assert.match(fn, /if \(!wanted \|\| !wanted\.some/, 'an ordinary request must pass straight through');
+  assert.match(fn, /out\[ref\] = got\[name\]/, 'keyed by reference, read by bare name');
+});
+
 test('cross-dataset metadata is served for the datasets a run names', () => {
   // Without this a `Wave 2:income` input arrives with no label, no value labels, and its
   // user-missing codes silently un-folded — the analysis would be quietly wrong, not broken.

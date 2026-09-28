@@ -26,6 +26,7 @@
  */
 
 import { CoreEvents } from './event-bus.js';
+import { formatVarRef } from './var-ref.js';
 import { DataStore } from './data-store.js';
 import { ProjectLog } from './project-log.js';
 import { liveOps } from './op-log.js';
@@ -238,6 +239,64 @@ export class DatasetManager {
       name: c.name,
       applied: this.#datasets.get(c.id)?.getHistory()?.applied ?? [],
     }));
+  }
+
+  /**
+   * Every open dataset's variables as ONE list, the other datasets' entries named with the
+   * qualified reference they must be passed as (#179) — what a picker offers when the user asks
+   * to see across datasets.
+   *
+   * The active dataset's entries keep their bare names, so a selection that never leaves it is
+   * indistinguishable from one made before this existed.
+   *
+   * @param {{types?: string[]}} [opts] unused here; kept so callers can filter downstream
+   * @returns {Array<object>} variable meta, each carrying `dataset` (null for the active one)
+   */
+  allVariableMeta() {
+    const out = [];
+    for (const c of this.#collection()) {
+      const ds = this.#datasets.get(c.id);
+      if (!ds) continue;
+      const mine = c.id === this.#activeId;
+      for (const m of ds.getVariableMeta() || []) {
+        out.push({
+          ...m,
+          name: mine ? m.name : formatVarRef(c.name, m.name),
+          dataset: mine ? null : c.name,
+        });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * How many open datasets currently have a variable selected.
+   *
+   * The picker uses it to decide whether to open in cross-dataset mode without being asked: a
+   * user who has already ticked variables in two datasets has stated the intent, and making
+   * them find a toggle to see what they just selected would be the app forgetting.
+   */
+  selectionSpread() {
+    let n = 0;
+    for (const c of this.#collection()) {
+      const sel = this.#datasets.get(c.id)?.getSelectedVariables?.() ?? [];
+      if (sel.length) n += 1;
+    }
+    return n;
+  }
+
+  /** Selected variables across every dataset, the foreign ones qualified (#179). */
+  allSelectedVariables() {
+    const out = [];
+    for (const c of this.#collection()) {
+      const ds = this.#datasets.get(c.id);
+      if (!ds) continue;
+      const mine = c.id === this.#activeId;
+      for (const name of ds.getSelectedVariables?.() ?? []) {
+        out.push(mine ? name : formatVarRef(c.name, name));
+      }
+    }
+    return out;
   }
 
   /**

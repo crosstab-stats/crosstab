@@ -127,6 +127,10 @@ export class PluginBroker {
     // the in-flight inputs actually name, so nothing changes for a single-dataset run.
     this.#dispatch['data.getVariableMeta'] = (opts) =>
       this.#withQualifiedMeta(services.data.getVariableMeta(opts), services.data);
+    // Same reason, for the plugins that read columns themselves rather than through the R
+    // injection (aggregate, plots, and three others). A store keys columns by BARE name, so a
+    // qualified reference would come back absent and the plugin would quietly work on nothing.
+    this.#dispatch['data.getColumns'] = (opts) => this.#columnsAcross(opts, services.data);
     this.#dispatch['results.beginAnalysis'] = (title) => services.results.beginAnalysis(title, this.#attribution);
     this.#dispatch['results.endAnalysis'] = () => services.results.endAnalysis();
     // Declarative plugins call `webr.run(code)` with no injection args; the host
@@ -321,6 +325,36 @@ export class PluginBroker {
         const { dataset } = parseVarRef(ref);
         if (dataset) out.add(dataset);
       }
+    }
+    return out;
+  }
+
+  /**
+   * `getColumns` across datasets, keyed by the REFERENCE that was asked for (#179).
+   *
+   * Keyed by reference rather than by bare name for the same reason the R binding is: two
+   * datasets' `age` must stay two columns instead of one of them silently standing in for both.
+   * A request with no qualified reference in it goes straight through, untouched.
+   */
+  async #columnsAcross(opts, data) {
+    const wanted = Array.isArray(opts?.variables) ? opts.variables : null;
+    if (!wanted || !wanted.some((v) => parseVarRef(v).dataset != null)) return data.getColumns(opts);
+    const groups = new Map();
+    for (const ref of wanted) {
+      const { dataset, name } = parseVarRef(ref);
+      const key = dataset ?? '';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push({ ref, name });
+    }
+    const out = {};
+    for (const [ds, list] of groups) {
+      // eslint-disable-next-line no-await-in-loop -- one read per dataset
+      const got = await data.getColumns({
+        ...opts,
+        variables: list.map((x) => x.name),
+        ...(ds ? { dataset: ds } : {}),
+      });
+      for (const { ref, name } of list) if (got && name in got) out[ref] = got[name];
     }
     return out;
   }

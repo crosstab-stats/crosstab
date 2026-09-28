@@ -25,12 +25,18 @@ const UI = readFileSync(new URL('../core/ui-service.js', import.meta.url), 'utf8
 const ACTIONS = readFileSync(new URL('../core/plugin-actions.js', import.meta.url), 'utf8');
 
 test('an optional role is not seeded from the Data view selection', () => {
-  // The fallback has to be gated on `optional`, not applied to every picker.
+  // The fallback has to be gated on `optional`, not applied to every picker. Pinned as the
+  // GATE rather than as one specific getter: the non-optional branch grew a second source when
+  // pickers learned to span datasets (#179), and a pin on the exact call would have failed for
+  // a refactor that kept the rule perfectly intact.
   assert.match(
     UI,
-    /preselect\s*\?\?\s*\(optional\s*\?\s*\[\]\s*:\s*this\.#store\.getSelectedVariables\(\)\)/,
+    /preselect\s*\?\?\s*\(optional\s*\?\s*\[\]\s*:\s*[^)]+\(\)\)/,
     'an optional input must start empty, not from the grid selection',
   );
+  // ...and the branch it takes when the input is NOT optional really is the selection.
+  assert.match(UI, /getSelectedVariables\(\)/);
+  assert.match(UI, /allSelectedVariables\(\)/, 'the cross-dataset seed reads a selection too');
 });
 
 test('the picker is told which inputs are optional', () => {
