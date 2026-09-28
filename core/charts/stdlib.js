@@ -296,6 +296,20 @@ export function pointSizeControl({ default: dflt = 3, visibleWhen } = {}) {
  * @param {[string,string][]} options
  * @param {string} dflt
  */
+/**
+ * Row height, for the kinds that draw one row per item (forest, tornado). Shared because two
+ * kinds declaring the same control independently is how "Row height" ends up in two sections
+ * under two names — the thing chart-options-consistency exists to prevent.
+ *
+ * @param {{default?: number}} [opts]
+ */
+export function rowHeightControl({ default: dflt = 22 } = {}) {
+  return {
+    id: 'rowHeight', label: 'Row height', type: 'number', group: 'Style',
+    min: 14, max: 48, step: 2, default: dflt,
+  };
+}
+
 export function markControl(options, dflt) {
   return { id: 'mark', label: 'Type', type: 'select', structural: true, group: 'Chart', default: dflt, options };
 }

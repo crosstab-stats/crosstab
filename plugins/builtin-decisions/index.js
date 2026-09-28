@@ -431,13 +431,16 @@ export const workspace = {
 
       const chart = el('div'); chart.style.cssText = 'margin: 10px 0; overflow: auto;';
       const summary = el('div', 'ds__hint'); summary.style.marginTop = '0';
+      // TWO renderings of one exploration, on purpose. `currentSvg` is the INSTRUMENT: it
+      // redraws on every slider frame and carries a live marker for where the parameter sits
+      // right now. `currentModel()` is the FIGURE that "Send to Output" publishes — a chart
+      // model, so it gets the palette, a re-editable title, and survives this plugin being
+      // gone. Routing the instrument through the host renderer instead would put a
+      // postMessage round-trip inside a drag handler, and a snapshot of a pointer means
+      // nothing to a later reader anyway.
       let currentSvg = '';
-      // The workspace preview keeps its own baked-in title; the Output frame owns an
-      // editable title (Layer 1), so we hand appendPlot a title-less SVG + opts.title.
-      // `currentTitle`/`currentSvgFor(title)` capture the live view so "Send to Output"
-      // can re-emit the same chart without the baked title.
       let currentTitle = '';
-      let currentSvgFor = () => currentSvg;
+      let currentModel = () => null;
 
       if (cfg.mode === 'tornado') {
         const sp = el('div', 'ds__row');
@@ -448,8 +451,8 @@ export const workspace = {
           const pct = num(spi.value) ?? 50;
           const bars = sensTornado(model, state, params, pct / 100);
           currentTitle = `${model.label}: tornado (±${Math.round(pct)}%)`;
-          currentSvgFor = (t) => sensTornadoSvg(bars, { title: t, outLabel: model.outLabel, baseline });
-          currentSvg = currentSvgFor(currentTitle);
+          currentModel = () => tornadoModel(bars, { title: currentTitle, outLabel: model.outLabel, baseline });
+          currentSvg = sensTornadoSvg(bars, { title: currentTitle, outLabel: model.outLabel, baseline });
           chart.innerHTML = currentSvg;
           summary.textContent = bars.length ? `Most influential: ${bars[0].label} (swings ${model.outLabel} by ${fmt(bars[0].swing)}).` : 'No parameter has a non-zero base to vary.';
         };
@@ -491,8 +494,10 @@ export const workspace = {
           const at = +slider.value;
           const cur = model.evalAt(state, param.key, at);
           currentTitle = `${model.label}: ${param.label}`;
-          currentSvgFor = (t) => sensLineSvg(pts, { title: t, xLabel: param.label, yLabel: model.outLabel, reference: model.reference, base, threshold: thr, flips, marker: { x: at, y: cur.y } });
-          currentSvg = currentSvgFor(currentTitle);
+          const shape = { xLabel: param.label, yLabel: model.outLabel, reference: model.reference, threshold: thr, flips };
+          currentModel = () => sensLineModel(pts, { ...shape, title: currentTitle });
+          // The preview keeps the live marker and the baked title; the output model has neither.
+          currentSvg = sensLineSvg(pts, { ...shape, title: currentTitle, base, marker: { x: at, y: cur.y } });
           chart.innerHTML = currentSvg;
           readout.textContent = `${param.label} = ${fmt(at)} → ${model.outLabel} ${fmt(cur.y)}${cur.choice ? ` · ${cur.choice}` : ''}`;
           const bits = [];
@@ -508,10 +513,11 @@ export const workspace = {
 
       const go = el('button', 'ds__btn ds__btn--go'); go.textContent = 'Send to Output'; go.style.marginTop = '10px';
       go.addEventListener('click', async () => {
-        if (!currentSvg) return;
+        const figure = currentModel(); // not `chart`: that name is the live preview container
+        if (!figure) return;
         await app.results.beginAnalysis(`Sensitivity — ${model.label}`);
         await app.results.appendText(summary.textContent || `${cfg.mode === 'tornado' ? 'Tornado' : 'One-way'} sensitivity of ${model.outLabel}.`);
-        await app.results.appendPlot(currentSvgFor(''), { title: currentTitle });
+        await app.results.appendChart(figure);
         await app.results.endAnalysis();
       });
       body.append(go);
@@ -773,6 +779,47 @@ export function sensTornado(model, state, params, spread = 0.5) {
     .sort((a, b) => b.swing - a.swing);
 }
 
+/**
+ * A one-way sensitivity sweep as a chart MODEL (#131), for the figure that goes to Output.
+ *
+ * **Why this coexists with `sensLineSvg` rather than replacing it.** The in-panel version is an
+ * INSTRUMENT: it redraws on every slider frame and carries a live marker showing where the
+ * parameter currently sits. Routing that through the host renderer would mean a postMessage
+ * round-trip per drag frame, and the marker has no business in a published figure anyway. So
+ * the panel keeps its own drawing and the *output* gets a model — different artefacts with
+ * different jobs, not one thing drawn twice.
+ *
+ * What survives the trip: the curve, the axis titles, the break-even crossing and each point
+ * where the recommendation changes. Those last two were hard-coded green and amber lines in
+ * the SVG; as `guides` they are named on the chart and can be switched off.
+ *
+ * Exported for unit testing.
+ *
+ * @param {Array<{x:number,y:number}>} pts from {@link sensSweep}
+ * @param {{title:string, xLabel:string, yLabel:string, reference?:number|null,
+ *          threshold?:number|null, flips?:Array<{x:number,to:string}>}} o
+ */
+export function sensLineModel(pts, o) {
+  const points = (pts || []).filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+  if (points.length < 2) return null; // a curve needs two points; one is a dot, not a sweep
+  return {
+    kind: 'scatter',
+    title: o.title || 'One-way sensitivity',
+    // 61 samples of one continuous function: a cloud of dots hides the shape, which IS the
+    // finding.
+    line: true,
+    points: points.map((p) => ({ x: p.x, y: p.y })),
+    axes: { x: { title: o.xLabel || '' }, y: { title: o.yLabel || '' } },
+    guides: [
+      ...(o.reference != null
+        ? [{ axis: 'y', at: o.reference, label: `${o.yLabel || 'outcome'} = ${fmt(o.reference)}` }]
+        : []),
+      ...(o.threshold != null ? [{ axis: 'x', at: o.threshold, label: 'break-even' }] : []),
+      ...(o.flips || []).map((f) => ({ axis: 'x', at: f.x, label: `→ ${f.to}` })),
+    ],
+  };
+}
+
 function sensLineSvg(pts, o) {
   const W = 560, H = 300, mL = 64, mR = 18, mT = 32, mB = 48;
   const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
@@ -806,6 +853,35 @@ function sensLineSvg(pts, o) {
   return s + '</svg>';
 }
 
+/**
+ * A tornado diagram as a chart MODEL (#131), for the figure that goes to Output.
+ *
+ * Coexists with `sensTornadoSvg` for the same reason `sensLineModel` does: the in-panel version
+ * redraws on every keystroke of the ±% box and is an instrument, while this is the published
+ * figure. See {@link sensLineModel}.
+ *
+ * Note what is NOT passed on: `swing`. The kind computes |hi − lo| itself, because it orders
+ * the rows by it, and a swing carried separately from the bar it describes is a swing that can
+ * disagree with the bar.
+ *
+ * Exported for unit testing.
+ *
+ * @param {Array<{label:string, lo:number, hi:number}>} bars from {@link sensTornado}
+ * @param {{title:string, outLabel:string, baseline?:number|null}} o
+ */
+export function tornadoModel(bars, o) {
+  const rows = (bars || []).filter((b) => Number.isFinite(b.lo) && Number.isFinite(b.hi));
+  if (!rows.length) return null; // nothing varies the outcome: the summary line says so in words
+  return {
+    kind: 'tornado',
+    title: o.title || 'Tornado',
+    ...(Number.isFinite(o.baseline) ? { baseline: o.baseline } : {}),
+    rows: rows.map((b) => ({ label: b.label, lo: b.lo, hi: b.hi })),
+    axes: { x: { title: o.outLabel || '' } },
+    valueHeading: 'Swing',
+  };
+}
+
 function sensTornadoSvg(bars, o) {
   if (!bars.length) { return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 60" width="400" height="60"><rect width="400" height="60" fill="#fff"/><text x="12" y="34" font-family="system-ui" font-size="12" fill="#777">No parameter has a non-zero base to vary.</text></svg>`; }
   const rowH = 26, mL = 180, mR = 24, mT = 36, mB = 30, W = 600;
@@ -827,7 +903,6 @@ function sensTornadoSvg(bars, o) {
   return s + '</svg>';
 }
 
-/** A tiny cost-effectiveness plane (cost vs effect scatter), as an SVG string. */
 /**
  * The cost-effectiveness plane as a chart MODEL (#131), not an SVG this plugin draws.
  *

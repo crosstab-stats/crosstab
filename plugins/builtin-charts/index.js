@@ -87,6 +87,7 @@ export function chartKinds(lib) {
     legendFormatControls, legendMargin, legendGap,
     errorBarsControl, titleControls, axisControls, valueLabelFormatControls,
     pointSizeControl, showPointsControl, markControl, summaryControl, valueMeasureControl,
+    rowHeightControl,
     W, H, FONT, AXIS, GRID, errorSvg, text, r, esc, clip, fmtNum,
     computeStats, errorBounds, jitterOffsets, minorTicks, niceTicks, niceNum,
     legendBlock, ordered, svgOpen, svgOpenH, chartAltText,
@@ -481,16 +482,32 @@ export function chartKinds(lib) {
       // anonymous dots that says nothing. A scatter of ordinary observations supplies none,
       // and is unaffected.
       valueLabels: scatterHasLabels(model),
+      // A CONNECTED scatter, when the model says its points are a curve rather than a cloud.
+      // A one-way sensitivity sweep is 61 samples of one continuous function: as dots it reads
+      // as a cloud, and the shape — which is the finding — disappears.
+      mark: model.line ? 'line' : 'points',
+      guides: !!(model.guides || []).length,
       legend: model.groups && model.groups.length > 1 ? 'right' : 'none',
     }),
     controls: (model) => {
       const multi = (model.groups || []).length > 1;
+      // Offered when the points could plausibly BE a curve: a declared line, or few enough
+      // points that connecting them is a sane thing to ask for. 30,000 observations joined in
+      // input order is not a chart anybody wants, and offering it invites it.
+      const hasMark = !!model.line || (model.points || []).length <= 200;
       return [
       ...(model.trend
         // `true` to agree with this kind's own baseView six lines up. The declared default
         // is dead while baseView sets the key — but a descriptor that contradicts the
         // behaviour two lines away is a trap for whoever reads it next.
         ? [{ id: 'trendLine', group: 'Chart', label: 'Trend line', type: 'check', default: true }]
+        : []),
+      ...(hasMark
+        ? [markControl([['points', 'Points'], ['line', 'Lines'], ['both', 'Points + lines']],
+          model.line ? 'line' : 'points')]
+        : []),
+      ...((model.guides || []).length
+        ? [{ id: 'guides', group: 'Chart', label: 'Guide lines', type: 'check', default: true }]
         : []),
       ...(model.reference
         ? [{
@@ -501,7 +518,10 @@ export function chartKinds(lib) {
           default: true,
         }]
         : []),
-      pointSizeControl({ default: 4 }),
+      pointSizeControl({
+        default: 4,
+        ...(hasMark ? { visibleWhen: { control: 'mark', notEquals: 'line' } } : {}),
+      }),
       gridlinesControl(),
       // The shared wording, not a scatter-specific "Point labels": one control id means one
       // thing in the panel, and the reader learns it once (chart-options-consistency).
@@ -598,9 +618,51 @@ export function chartKinds(lib) {
       );
     }
 
+    // Axis-aligned GUIDES: a named value on one axis (break-even here, the willingness-to-pay
+    // line elsewhere), as opposed to `reference`, which is a relationship across both. Dashed
+    // grey like the reference, because they say the same thing about themselves — "I am not
+    // data" — and the meaning is carried by the label rather than by inventing a colour
+    // vocabulary a colourblind reader would have to decode.
+    if (view.guides !== false) {
+      for (const g of model.guides || []) {
+        if (!g || !Number.isFinite(g.at)) continue;
+        const vertical = g.axis !== 'y';
+        if (vertical) {
+          if (g.at < xMin || g.at > xMax) continue; // off-scale: a line on the frame is a lie
+          const x = xScale(g.at);
+          out.push(`<line x1="${r(x)}" y1="${r(box.y1)}" x2="${r(x)}" y2="${r(box.y0)}" stroke="#8c98a4" stroke-width="1.5" stroke-dasharray="4 3"/>`);
+          if (g.label) out.push(text(x + 4, box.y1 + 12, esc(g.label), { size: 10.5, fill: '#5d6b7a' }));
+        } else {
+          if (g.at < yMin || g.at > yMax) continue;
+          const y = yScale(g.at);
+          out.push(`<line x1="${r(box.x0)}" y1="${r(y)}" x2="${r(box.x1)}" y2="${r(y)}" stroke="#8c98a4" stroke-width="1.5" stroke-dasharray="4 3"/>`);
+          if (g.label) out.push(text(box.x1 - 3, y - 4, esc(g.label), { size: 10.5, anchor: 'end', fill: '#5d6b7a' }));
+        }
+      }
+    }
+
+    // The curve, when the points are a function rather than a cloud. Sorted by x, because a
+    // polyline follows the order it is given and an unsorted sweep draws a zigzag.
+    if (view.mark === 'line' || view.mark === 'both') {
+      const bySeries = new Map();
+      for (const p of pts) {
+        const key = p.g ?? '__points__';
+        if (!bySeries.has(key)) bySeries.set(key, []);
+        bySeries.get(key).push(p);
+      }
+      for (const [, list] of bySeries) {
+        const sorted = list.slice().sort((a, b) => a.x - b.x);
+        if (sorted.length < 2) continue;
+        const d = sorted.map((p) => `${r(xScale(p.x))},${r(yScale(p.y))}`).join(' ');
+        out.push(`<polyline points="${d}" fill="none" stroke="${colorOf(sorted[0])}" stroke-width="2" stroke-linejoin="round"/>`);
+      }
+    }
+
     const r0 = Math.max(1.5, view.pointSize || 4);
-    for (const p of pts) {
-      out.push(`<circle cx="${r(xScale(p.x))}" cy="${r(yScale(p.y))}" r="${r0}" fill="${colorOf(p)}" fill-opacity="0.62"/>`);
+    if (view.mark !== 'line') {
+      for (const p of pts) {
+        out.push(`<circle cx="${r(xScale(p.x))}" cy="${r(yScale(p.y))}" r="${r0}" fill="${colorOf(p)}" fill-opacity="0.62"/>`);
+      }
     }
 
     // Names, after the points so they are never painted over. Drawn to the right of the
@@ -1416,7 +1478,7 @@ export function chartKinds(lib) {
       ...(forestRows(model).some((s) => Number.isFinite(s.weight))
         ? [{ id: 'showWeights', label: 'Weight column', type: 'check', group: 'Labels', default: true }]
         : []),
-      { id: 'rowHeight', label: 'Row height', type: 'number', min: 14, max: 40, step: 2, group: 'Style', default: 22 },
+      rowHeightControl({ default: 22 }),
       gridlinesControl(),
       ...titleControls(model),
       ...axisControls('x', model),
@@ -1544,6 +1606,158 @@ export function chartKinds(lib) {
         out.push(text((box.x0 + box.x1) / 2, height - 6, esc(xTitle),
           { size: view.xAxisTitleSize || 12, anchor: 'middle', fill: '#333' }));
       }
+      out.push('</svg>');
+      return out.join('');
+    },
+  });
+
+
+  // --------------------------------------------------------------------------
+  // tornado
+  // --------------------------------------------------------------------------
+
+  // =============================================================================
+  // KIND: tornado (one-way sensitivity: each input's swing around a base case)
+  // =============================================================================
+
+  /**
+   * The standard one-way sensitivity figure: a horizontal bar per input, spanning the outcome
+   * it produces at the low and high end of that input's plausible range, against a vertical
+   * line at the base case. It answers "which of these numbers actually matters?" — a wide bar
+   * is an assumption worth arguing about, a narrow one is not.
+   *
+   * Three things here are definitional rather than stylistic:
+   *
+   *  - **Widest bar at the top.** That descending order is what makes the outline a funnel,
+   *    which is the whole reason it is called a tornado and the only reason it reads at a
+   *    glance. It is enforced here rather than trusted to the caller: a model arriving in
+   *    input order would draw a correct chart of the wrong kind.
+   *  - **The base line is the origin of the reading.** Every bar means "distance from the base
+   *    case", so the line is drawn ON TOP of the bars — losing it under a wide bar removes the
+   *    datum the whole figure is relative to.
+   *  - **A bar that crosses the base must read as crossing it.** Bars are single spans from
+   *    `lo` to `hi`, so one straddling the base case looks like it does: that is the case where
+   *    even the direction of the input's effect is uncertain.
+   *
+   * Model: `{ baseline, rows: [{ key?, label, lo, hi }], axes: { x: { title } } }`. `swing` is
+   * NOT read from the model — it is |hi − lo|, computed here, so the ordering can never
+   * disagree with the bars it is ordering.
+   */
+
+  /** Rows with a usable span, widest swing first. */
+  function tornadoRows(model) {
+    return (model.rows || [])
+      .filter((b) => b && Number.isFinite(b.lo) && Number.isFinite(b.hi))
+      .map((b) => ({ ...b, swing: Math.abs(b.hi - b.lo) }))
+      .sort((a, b) => b.swing - a.swing);
+  }
+
+  kinds['tornado'] = ({
+    altNoun: 'Tornado diagram',
+    colorLabel: 'Bars',
+    reorderCategories: false,
+    // One colour item, not one per input: the bars are one population of swings, and colouring
+    // each separately would imply a grouping that is not there (the forest plot's studies for
+    // the same reason).
+    colorItems: () => [{ key: '__bars__', label: 'Bars' }],
+    baseView: () => ({
+      legend: 'none',
+      gridlines: false,
+      showSwing: true,
+      rowHeight: 26,
+    }),
+    controls: (model) => [
+      // Its own id, not the forest plot's `showSwing`: that control is named "Estimate
+      // column" everywhere it appears, and a swing is not an estimate. One id, one meaning.
+      { id: 'showSwing', label: 'Swing column', type: 'check', group: 'Labels', default: true },
+      rowHeightControl({ default: 26 }),
+      gridlinesControl(),
+      paletteControl(false),
+      ...titleControls(model),
+      ...axisControls('x', model),
+    ],
+    render: (model, view) => {
+      const rows = tornadoRows(model);
+      if (!rows.length) return errorSvg('Tornado diagram: no input varies the outcome.');
+
+      const title = view.titleText ?? model.title;
+      const xTitle = view.xAxisTitle ?? model.axes?.x?.title;
+      const rowH = view.rowHeight || 26;
+      const base = Number.isFinite(model.baseline) ? model.baseline : null;
+
+      const mTop = (title ? 34 : 14) + 16;
+      const mBottom = 40 + (xTitle ? 16 : 0);
+      const bodyH = rowH * rows.length;
+      const height = mTop + bodyH + mBottom;
+
+      const labelW = Math.min(230, Math.max(90, Math.max(...rows.map((b) => String(b.label || b.key || '').length)) * 6.2 + 12));
+      const valueW = view.showSwing !== false ? 86 : 0;
+      const box = { x0: 12 + labelW, x1: W - 12 - valueW, y0: mTop, y1: mTop + bodyH };
+
+      const values = rows.flatMap((b) => [b.lo, b.hi]);
+      if (base != null) values.push(base);
+      const userMin = Number.isFinite(view.xAxisMin);
+      const userMax = Number.isFinite(view.xAxisMax);
+      const rawLo = userMin ? view.xAxisMin : Math.min(...values);
+      const rawHi = userMax ? view.xAxisMax : Math.max(...values);
+      const pad = (rawHi - rawLo) * 0.06 || 1;
+      const xLo = userMin ? rawLo : rawLo - pad;
+      const xHi = userMax ? rawHi : rawHi + pad;
+      const xScale = (v) => box.x0 + ((v - xLo) / (xHi - xLo || 1)) * (box.x1 - box.x0);
+
+      const out = [svgOpenH(height, chartAltText(model, view,
+        `${plural(rows.length, 'input', 'inputs')}, widest swing first.`, 'Tornado diagram'))];
+      if (title) {
+        out.push(text(W / 2, 21, esc(title), {
+          size: view.titleSize || 15,
+          weight: view.titleBold !== false ? 600 : 400,
+          italic: !!view.titleItalic,
+          anchor: 'middle',
+          fill: '#222',
+        }));
+      }
+
+      for (const t of niceTicks(xLo, xHi, 5)) {
+        if (t < xLo || t > xHi) continue;
+        const x = xScale(t);
+        if (view.gridlines) {
+          out.push(`<line x1="${r(x)}" y1="${r(box.y0)}" x2="${r(x)}" y2="${r(box.y1)}" stroke="${GRID}" stroke-width="1"/>`);
+        }
+        out.push(`<line x1="${r(x)}" y1="${r(box.y1)}" x2="${r(x)}" y2="${r(box.y1 + 5)}" stroke="${AXIS}" stroke-width="1"/>`);
+        out.push(text(x, box.y1 + 18, fmtNum(t), { size: 11, anchor: 'middle', fill: AXIS }));
+      }
+      out.push(`<line x1="${r(box.x0)}" y1="${r(box.y1)}" x2="${r(box.x1)}" y2="${r(box.y1)}" stroke="${AXIS}" stroke-width="1"/>`);
+
+      if (view.showSwing !== false) {
+        out.push(text(W - 12, mTop - 6, esc(model.valueHeading || 'Swing'), { size: 10.5, anchor: 'end', fill: '#555', weight: 600 }));
+      }
+
+      const colour = colorFor(view, '__bars__', 0);
+      rows.forEach((b, i) => {
+        const y = box.y0 + rowH * i;
+        const cy = y + rowH / 2;
+        const x0 = xScale(Math.min(b.lo, b.hi));
+        const x1 = xScale(Math.max(b.lo, b.hi));
+        out.push(`<rect x="${r(x0)}" y="${r(y + 3)}" width="${r(Math.max(1, x1 - x0))}" height="${r(rowH - 8)}" fill="${colour}" fill-opacity="0.85"/>`);
+        out.push(text(12, cy + 4, esc(clip(b.label || b.key || '', Math.floor(labelW / 6.2))), { size: 11, fill: '#333' }));
+        if (view.showSwing !== false) {
+          out.push(text(W - 12, cy + 4, fmtNum(b.swing), { size: 10.5, anchor: 'end', fill: '#555' }));
+        }
+      });
+
+      if (base != null && base >= xLo && base <= xHi) {
+        const bx = xScale(base);
+        out.push(`<line x1="${r(bx)}" y1="${r(box.y0 - 4)}" x2="${r(bx)}" y2="${r(box.y1 + 4)}" stroke="#444" stroke-width="1.5" stroke-dasharray="4 3"/>`);
+        out.push(text(bx, box.y0 - 8, `base ${fmtNum(base)}`, { size: 10.5, anchor: 'middle', fill: '#555' }));
+      }
+
+      if (xTitle) {
+        const xts = view.xAxisTitleSize || 12;
+        const xtw = view.xAxisTitleBold ? ' font-weight="600"' : '';
+        const xti = view.xAxisTitleItalic ? ' font-style="italic"' : '';
+        out.push(`<text x="${r((box.x0 + box.x1) / 2)}" y="${r(height - 4)}" font-size="${xts}" fill="#333" text-anchor="middle"${xtw}${xti}>${esc(xTitle)}</text>`);
+      }
+
       out.push('</svg>');
       return out.join('');
     },

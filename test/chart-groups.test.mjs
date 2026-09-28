@@ -48,6 +48,11 @@ const MODELS = {
     kind: 'pie', title: 't',
     slices: [{ key: 'a', label: 'A', value: 1 }, { key: 'b', label: 'B', value: 2 }],
   },
+  tornado: {
+    kind: 'tornado', title: 't', baseline: 100,
+    rows: [{ label: 'Rate', lo: 40, hi: 180 }, { label: 'Uptake', lo: 90, hi: 120 }],
+    axes: { x: { title: 'NPV' } },
+  },
 };
 
 /** The controls actually shown for a model at its default view. */

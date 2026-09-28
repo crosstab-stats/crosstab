@@ -38,6 +38,11 @@ const MODELS = {
   forest: { kind: 'forest', title: 'T', rows: [{ key: 'r', label: 'R', est: 1, lo: 0, hi: 2 }] },
   sced: { kind: 'sced', title: 'T', cases: [{ key: 'c', label: 'C', phases: [{ key: 'A', label: 'A', points: [{ t: 1, y: 2 }] }] }] },
   wordcloud: { kind: 'wordcloud', title: 'T', words: [{ text: 'a', weight: 3 }, { text: 'b', weight: 1 }] },
+  tornado: {
+    kind: 'tornado', title: 'T', baseline: 100,
+    rows: [{ label: 'Rate', lo: 40, hi: 180 }, { label: 'Uptake', lo: 90, hi: 120 }],
+    axes: { x: { title: 'NPV' } },
+  },
 };
 
 /** The canonical section order the panel presents. */
@@ -99,6 +104,8 @@ test('a control shared by several kinds is built in ONE place', () => {
     'titleText', 'titleSize', 'titleBold', 'titleItalic',
     'legendSize', 'legendBold', 'legendItalic',
     'pointOverlay', 'errorBars',
+    // A row per item, on the forest plot and the tornado diagram.
+    'rowHeight',
   ]);
   const axisish = (id) => /^[xy]Axis|^[xy]Title/.test(id);
   const unaccounted = [...uses]
