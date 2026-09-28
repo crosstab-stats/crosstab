@@ -37,6 +37,7 @@
 import { newOpId } from './merge.js';
 import { liveOps } from './op-log.js';
 import { ProjectLog } from './project-log.js';
+import { retargetRefs } from './var-ref.js';
 
 /** The analysis-run projection: folds runAnalysis/removeAnalysis ops into the ordered
  * list of runs (keyed by `runId`, so a re-added run after a remove reappears). */
@@ -135,6 +136,43 @@ export class AnalysisLog {
     this.#log.append({ target: `analysis:${runId}`, owner: 'core', type: 'runAnalysis', payload });
     this.#changed();
     return payload;
+  }
+
+  /**
+   * Re-point every analysis that names a dataset by its OLD name at its new one (#179).
+   *
+   * Qualified variable references resolve by dataset NAME, so without this a rename left saved
+   * analyses pointing at a dataset that no longer exists: the next Run failed loudly (which is
+   * the right failure, but still a failure) and the Syntax view showed a reference that could
+   * not be resolved. The owner's call: *"ideally a dataset rename should be a rare event, so
+   * it's okay if it is a little expensive."*
+   *
+   * **Append-only, like everything else here.** One fresh `runAnalysis` per affected run, which
+   * is exactly what {@link AnalysisLog#reposition} does for a position: the projection folds the
+   * newest op per run as authoritative, so the rewrite IS the history rather than hiding it.
+   * Two peers renaming the same dataset resolve last-writer-wins by HLC, the right rule for a
+   * name. The log gains one visible "this analysis was re-pointed" entry per analysis, which is
+   * the audit trail the one-true-log exists to keep.
+   *
+   * Nothing is re-run: the numbers do not change, only the spelling of where they came from.
+   *
+   * @param {string} oldName @param {string} newName
+   * @returns {number} how many analyses were re-pointed
+   */
+  retargetDataset(oldName, newName) {
+    const from = String(oldName ?? '').trim();
+    const to = String(newName ?? '').trim();
+    if (!from || !to || from === to) return 0;
+    let n = 0;
+    for (const entry of this.#log.state('analysis')) {
+      const inputs = retargetRefs(entry.inputs, entry.specs, from, to);
+      if (!inputs) continue;
+      const payload = { ...structuredClone(entry), inputs };
+      this.#log.append({ target: `analysis:${entry.runId}`, owner: 'core', type: 'runAnalysis', payload });
+      n += 1;
+    }
+    if (n) this.#changed();
+    return n;
   }
 
   /**

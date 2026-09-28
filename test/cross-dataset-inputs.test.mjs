@@ -249,7 +249,7 @@ test('a cross-dataset analysis is invalidated by a re-import of EITHER parent', 
   // it records no `datasetIds` at all, so nothing about a saved project grows.
   const { AnalysisLog } = await import('../core/analysis-log.js');
   const { ProjectLog } = await import('../core/project-log.js');
-  const log = new AnalysisLog(new ProjectLog());
+  const log = new AnalysisLog(null, new ProjectLog());
   log.record({ runId: 'a', pluginId: 'p', run: 'x', label: 'own', inputs: {}, at: 0, datasetId: 1 });
   log.record({ runId: 'b', pluginId: 'p', run: 'x', label: 'spanning', inputs: {}, at: 0, datasetId: 1, datasetIds: ['1', '2'] });
   log.clearFor(2); // dataset 2 was re-imported; nothing of dataset 1's own is touched

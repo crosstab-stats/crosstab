@@ -3641,11 +3641,32 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         datasets a run names: without it a `Wave 2:income` input arrived with no label, no value
         labels and its user-missing codes silently un-folded — quietly wrong rather than broken.
 
-      **Not done, and deliberately:** renaming a dataset does not rewrite the qualified
-      references in saved analyses. They resolve by name, so a rename makes them fail *loudly*
-      at the next run (naming the dataset that is missing) rather than silently reading
-      something else. Rewriting them would mean editing recorded inputs in the log, which is a
-      bigger decision than this entry; the loud failure is the safe interim.
+  - [x] **A rename re-points the analyses that name the dataset** (owner, same day: *"ideally a
+        dataset rename should be a rare event, so it's okay if it is a little expensive. Could we
+        have the dataset rename trigger a scan through the history looking for steps that use the
+        old name and update them?"*). It can, and the append-only part is the point — the owner
+        saw it too: *"obviously the OneTrueLog being write-only means these will appear in that as
+        'edit step foo to baz'."*
+
+        One fresh `runAnalysis` per affected analysis, which is exactly the mechanism
+        `reposition` already uses: the projection folds the newest op per run, so the re-pointing
+        IS part of the history rather than an edit hiding behind it, it merges last-writer-wins
+        by HLC like any other op, and the previous spelling stays recoverable. Nothing is
+        re-run — the numbers do not change, only the spelling of where they came from, so `at`,
+        `datasetId` and the run's identity all survive.
+
+        `retargetRefs` lives in `var-ref.js` with the rest of the format, because a rename that
+        rewrote references by string surgery elsewhere would be the second implementation of the
+        spelling and the first to disagree with the parser wins silently. Only VARIABLE inputs
+        are touched: a chart title reading *"Wave 2: results"* is prose, and rewriting it would
+        corrupt output on a rename. An analysis that never named the dataset is not re-appended,
+        so a project does not grow an op per analysis every time a dataset is renamed.
+
+        Wired as a hook on the VERB (`DatasetManager#onRenamed`), not a bus event: re-pointing is
+        a consequence of renaming, not a notification about it, and three call sites rename a
+        dataset today (the sidebar, the launcher, an import that names its own). A hook that
+        throws is logged and skipped — a failed consequence must not undo the rename the user
+        asked for.
 
       Original:
 

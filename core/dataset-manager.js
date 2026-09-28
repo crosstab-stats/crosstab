@@ -108,6 +108,8 @@ const collRemove = (id) => ({ target: `coll/ds:${id}`, owner: 'core', type: 'rem
 const collPurge = (id) => ({ target: `coll/ds:${id}`, owner: 'core', type: 'purgeDataset', payload: { id } });
 
 export class DatasetManager {
+  /** @see {@link DatasetManager#onRenamed} — consequences of a rename, in registration order. */
+  #renameHooks = [];
   /** @type {import('./event-bus.js').EventBus} */
   #bus;
   /** @type {import('./duckdb-manager.js').DuckDBManager} */
@@ -323,13 +325,46 @@ export class DatasetManager {
     this.#emitActive('switch');
   }
 
+  /**
+   * Called after a successful rename with `(id, oldName, newName)`, so anything in the project
+   * that quotes a dataset BY NAME can re-point itself (#179: qualified variable references in
+   * saved analyses). Returns a disposer.
+   *
+   * A hook rather than an import, because the dataset collection has no business knowing what
+   * else in the project mentions a dataset. A hook on the VERB rather than a bus event, because
+   * re-pointing is a consequence of the rename and not a notification about it — three call
+   * sites rename a dataset today (the sidebar, the launcher, and an import that names its own),
+   * and none of them should have to remember.
+   */
+  onRenamed(fn) {
+    if (typeof fn !== 'function') return () => {};
+    this.#renameHooks.push(fn);
+    return () => {
+      const i = this.#renameHooks.indexOf(fn);
+      if (i >= 0) this.#renameHooks.splice(i, 1);
+    };
+  }
+
   /** Rename a dataset (updates the switcher). The op is the source of truth; `ds.name`
    * is kept in sync as the synchronous display cache many callers read. */
   rename(id, name) {
     const ds = this.#datasets.get(id);
     if (!ds) return;
+    const was = ds.name;
     ds.name = name;
     this.#log.append(collRename(id, name));
+    // Before the UI event, so a listener that re-reads the log sees the re-pointed references
+    // rather than the stale ones.
+    if (String(was ?? '') !== String(name ?? '')) {
+      for (const fn of this.#renameHooks.slice()) {
+        try {
+          fn(id, was, name);
+        } catch (err) {
+          // A failed consequence must not undo the rename the user asked for.
+          console.warn('[datasets] a rename hook failed; the rename itself stands', err);
+        }
+      }
+    }
     this.#bus.emit(DATASETS_CHANGED, this.list());
   }
 

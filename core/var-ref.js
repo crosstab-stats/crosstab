@@ -127,3 +127,46 @@ export function datasetsNamed(inputs, specs) {
   }
   return out;
 }
+
+/**
+ * Re-point every reference to `oldName` at `newName`, across one gathered input set (#179).
+ *
+ * Lives here because this module owns the spelling: a rename that rewrote references by string
+ * surgery somewhere else would be the second implementation of the format, and the first one to
+ * disagree with the parser wins silently.
+ *
+ * Only VARIABLE inputs are touched — for the same reason {@link datasetsNamed} requires the
+ * specs. Rewriting a text input that happens to contain "Wave 2:" would corrupt a chart title.
+ *
+ * Matching is case-insensitive because resolution is: a rename that only changes case still has
+ * to leave the stored references spelled the way the dataset now is.
+ *
+ * @param {Object<string, any>} inputs
+ * @param {Array<{name: string, kind?: string}>} specs
+ * @param {string} oldName @param {string} newName
+ * @returns {Object<string, any>|null} a new inputs object, or null if nothing referenced it
+ */
+export function retargetRefs(inputs, specs, oldName, newName) {
+  const from = String(oldName ?? '').trim().toLowerCase();
+  const to = String(newName ?? '').trim();
+  if (!from || !to) return null;
+  const varNames = new Set(
+    (Array.isArray(specs) ? specs : [])
+      .filter((sp) => (sp?.kind || 'variables') === 'variables')
+      .map((sp) => sp.name),
+  );
+  let touched = false;
+  const one = (v) => {
+    if (typeof v !== 'string') return v;
+    const { dataset, name } = parseVarRef(v);
+    if (dataset == null || dataset.trim().toLowerCase() !== from) return v;
+    touched = true;
+    return formatVarRef(to, name);
+  };
+  const out = {};
+  for (const [key, v] of Object.entries(inputs || {})) {
+    if (!varNames.has(key)) { out[key] = v; continue; }
+    out[key] = Array.isArray(v) ? v.map(one) : one(v);
+  }
+  return touched ? out : null;
+}

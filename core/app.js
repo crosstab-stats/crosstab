@@ -730,6 +730,14 @@ export async function boot(mounts) {
   // Ordered, replayable record of analyses run (the analysis half of the script,
   // #132). Data ops already replay via the data-store log; this covers analyses.
   const analysisLog = new AnalysisLog(bus, projectLog);
+  // A dataset rename re-points the qualified variable references that name it (#179). Wired
+  // here, once, rather than at each of the three places that can rename: it is a consequence of
+  // the verb, not something a caller opts into. Append-only — one fresh runAnalysis per affected
+  // analysis — so the re-pointing is part of the history rather than a silent edit behind it.
+  datasets.onRenamed((id, from, to) => {
+    const n = analysisLog.retargetDataset(from, to);
+    if (n) console.info(`[datasets] re-pointed ${n} analys${n === 1 ? 'is' : 'es'} from "${from}" to "${to}"`);
+  });
   // A destructive re-import swaps the base data out from under the analyses that ran
   // on it, so those analyses are cleared. Two things keep that narrow (#149 A1):
   // `replace` now fires only when the load actually destroyed existing data (filling a
