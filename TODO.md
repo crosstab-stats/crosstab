@@ -6298,12 +6298,42 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
             still match what the user sees, and a commented-out `// "repo": …` example cannot
             be mistaken for the live key. That mattered immediately — the bench file carries a
             commented example of the very key that was wrong.
-  - [ ] **Still constants, deliberately deferred:** `RUNTIME_HOSTS` in `sw.js` (a service
-        worker cannot import `core/`, so honouring `runtimeHosts` means the SW reading
-        `deploy.json` itself — worth doing, but not worth folding into the same commit as a
-        boot change), and `manifest.json`'s PWA identity, which the BROWSER reads rather than
-        us and so can only ever be a direct edit. `runtimeHosts` is accepted and validated
-        today; nothing consumes it yet.
+  - [x] **`runtimeHosts` now actually caches — DONE (2026-09-28).** It was the one field in
+        the file that was accepted, validated, reported on, and consumed by nothing: a site
+        mirroring WebR set `assets` + `runtimeHosts`, was told both were fine, and still
+        re-downloaded the whole R runtime every session.
+
+        **The worker does NOT read `deploy.json`.** That was the obvious fix and it was the
+        wrong one: a service worker cannot import `core/`, so it would need a second
+        comment-and-trailing-comma-tolerant parser and a second copy of the hostname rule —
+        the same two-copies-of-one-rule shape that produced the diverged plugin tooltip, the
+        "built-in" origin label and the double-counted deploy issues inside one week. Instead
+        `deploy-config.js` stays the only reader and the page announces the result
+        (`set-runtime-hosts`, the channel `set-standalone` already used). The worker persists
+        it under a synthetic cache key, so the list is in place before the first fetch of
+        every later boot — including the cold offline ones where no page has run yet.
+
+        Three things that came out of building it:
+        - **A defensive floor stricter than the validator upstream is a silent drop.** The
+          first floor was a hostname regex, which rejected `localhost` and single-label
+          intranet names that `deploy-config.js` accepts without a warning — the deployer
+          would have set the field, been told nothing, and never been cached. The floor is now
+          the same primitive the MATCH uses (does `new URL('https://' + host)` round-trip it),
+          so it cannot be stricter, and the test asserts that against the real validator's
+          output rather than a hand-written list.
+        - The built-ins are never replaced, only added to, and an empty announcement clears a
+          mirror that has been removed — which is why the page announces every boot rather
+          than only when it has something to say.
+        - The worker's synthetic keys are a FAMILY now (`__offline_enabled__`,
+          `__runtime_hosts__`), so the four places that matched the first one by exact URL
+          match the shared prefix instead. Left as-is, the host list would have been counted
+          as a cached asset in the "N files cached" figure, in both the worker and the page.
+
+        `sw.js` is not importable (a classic worker script that touches `self`/`caches` on
+        load), so the rules sit between `hosts:start` / `hosts:end` markers and the test
+        extracts and runs them — the same seam as plugin-host.html's import-map aliases.
+  - [ ] **Still a constant, and can only ever be one:** `manifest.json`'s PWA identity, which
+        the BROWSER reads rather than us, so it is a direct edit by design.
 
 - [x] **#183 + #177 — DONE (2026-09-26). "What do I enable to do X?" — the catalogue is
       now searchable by analysis name, and both pickers say what a plugin adds.** Built as

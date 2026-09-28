@@ -34,8 +34,11 @@ const SW_URL = 'sw.js';
 // nothing" symptom, even though the SW was caching ~200 entries correctly. Resolve
 // the live cache(s) by prefix instead, so a future SW cache-name bump can't desync us.
 const CACHE_PREFIX = 'crosstab-offline-';
-// Must match sw.js OFFLINE_MARKER.
-const MARKER = 'https://crosstab.local/__offline_enabled__';
+// Must match sw.js. The worker keeps a small family of synthetic keys under one prefix (the
+// offline opt-in marker, the deployment's runtime hosts), so anything that COUNTS cache
+// entries has to skip the prefix rather than the one URL it knew about.
+const MARKER_PREFIX = 'https://crosstab.local/__';
+const MARKER = `${MARKER_PREFIX}offline_enabled__`;
 
 /** Live SW offline cache name(s), by prefix (normally exactly one). */
 async function offlineCacheNames() {
@@ -93,6 +96,7 @@ export class OfflineManager {
             enabled = true;
             continue;
           }
+          if (req.url.startsWith(MARKER_PREFIX)) continue; // the worker's own bookkeeping
           count++;
           // The WebR engine being cached (CDN host or vendored same-origin) is what
           // lets analyses run offline.
@@ -126,6 +130,28 @@ export class OfflineManager {
     if (!navigator.serviceWorker?.controller) return;
     this.#message('set-standalone', { value: !!value }).catch(() => {
       /* not critical */
+    });
+  }
+
+  /**
+   * Tell the service worker which EXTRA hosts this deployment serves its runtimes from
+   * (#185 `runtimeHosts`), so their payloads are cached like the built-in CDN's.
+   *
+   * The worker cannot read `deploy.json` itself — it cannot import `core/`, so it would
+   * need a second copy of the tolerant parser and the hostname check, and two copies of one
+   * rule is how three separate bugs got shipped in one week. So the page, which has already
+   * parsed the file properly, hands over the answer. The worker persists it, meaning the
+   * announcement only has to reach it once per deployment, not once per fetch.
+   *
+   * Announcing an empty list is meaningful: it clears a mirror that has been removed. The
+   * built-in hosts are never affected either way.
+   *
+   * @param {string[]} hosts bare hostnames from the deployment config
+   */
+  setRuntimeHosts(hosts) {
+    if (!navigator.serviceWorker?.controller) return;
+    this.#message('set-runtime-hosts', { hosts: Array.isArray(hosts) ? hosts : [] }).catch(() => {
+      /* not critical: the built-in runtime hosts are cached regardless */
     });
   }
 

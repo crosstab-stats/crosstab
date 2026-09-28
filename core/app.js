@@ -1927,6 +1927,16 @@ export async function boot(mounts) {
   // worker to cache the app shell + runtimes; surfaced in the launcher About panel.
   const offline = new OfflineManager({ webr, duckdb, plugins });
   engine.offline = offline;
+  // If this deployment mirrors the runtimes on its own host (#185 `runtimeHosts`), tell the
+  // service worker, or it would cache the CDN's payloads and not the ones actually being
+  // served. The page owns this list — the worker cannot read `deploy.json` — so it STATES it
+  // every boot, empty included: announcing nothing is what makes a mirror that has since been
+  // removed stop being cached. The worker persists it, which covers the cold offline start
+  // where no page has run yet; the re-announce on `controllerchange` covers the first-ever
+  // load, where the worker was still registering when boot began.
+  offline.setRuntimeHosts(deploy.runtimeHosts);
+  navigator.serviceWorker?.addEventListener?.('controllerchange', () =>
+    offline.setRuntimeHosts(deploy.runtimeHosts));
   // Connectivity indicator in the status bar — most useful on a field device, where
   // it tells the user why an online importer is quiet and confirms "you're cached."
   if (mounts.status) wireConnectivityIndicator(mounts.status, offline);

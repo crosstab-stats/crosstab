@@ -128,6 +128,25 @@ Both are covered in [OFFLINE.md](OFFLINE.md): the "Make available offline" toggl
 use, and `assetsMode: "local"` plus `scripts/vendor-assets.mjs` for a machine that never touches
 the internet.
 
+**If you mirror the runtimes, list your mirror in `runtimeHosts`.** CrossTab keeps the R and
+DuckDB payloads it has already downloaded so they are not fetched twice — but only from hosts it
+recognises, because the same rule must not quietly cache whatever data a plugin fetches. Set
+`assets` without `runtimeHosts` and your mirror's files are downloaded fresh every session:
+
+```jsonc
+{
+  "assets": { "webrUrl": "https://mirror.example.edu/webr/webr.mjs" },
+  "runtimeHosts": ["mirror.example.edu"]
+}
+```
+
+One wrinkle worth knowing, because it looks like a bug: caching is done by a service worker,
+which is a separate process that cannot read `deploy.json`, so CrossTab tells it your hosts as
+the page boots. On the **very first** load of a fresh install that message can arrive after the
+first few downloads have started, so one or two payloads go uncached. The worker remembers the
+list from then on — including across restarts and offline launches — so the second load and
+everything after it caches normally.
+
 ## 5. Keeping up to date
 
 ```sh

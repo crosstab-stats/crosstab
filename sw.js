@@ -45,8 +45,20 @@
 let coepCredentialless = false;
 
 const CACHE = 'crosstab-offline-v4';
-// A synthetic key (never a real request) that marks "offline caching is on".
-const OFFLINE_MARKER = 'https://crosstab.local/__offline_enabled__';
+// Synthetic keys (never real requests) the worker uses to remember a decision across
+// restarts. A service worker is killed and respawned freely, so anything that must survive
+// that lives in the cache, not in a variable. They share a prefix so every place that
+// ENUMERATES the cache can skip them as a family — the first one was matched by exact URL in
+// four places, which would have silently counted the second as a cached asset.
+const MARKER_PREFIX = 'https://crosstab.local/__';
+const OFFLINE_MARKER = `${MARKER_PREFIX}offline_enabled__`;
+// The deployment's extra runtime hosts (#185 `runtimeHosts`), as announced by the page.
+const HOSTS_MARKER = `${MARKER_PREFIX}runtime_hosts__`;
+
+/** Is this one of the worker's own bookkeeping keys rather than a cached asset? */
+function isMarker(url) {
+  return String(url).startsWith(MARKER_PREFIX);
+}
 // Tier-1 caching (the app shell) is automatic — the OPT-IN marker now only gates
 // tier-2 (the big cross-origin runtimes + R packages).
 let offlineEnabled = false;
@@ -105,6 +117,9 @@ const SHELL_PRECACHE = [
 // cache-first — so "used online once → works offline" + faster boot, with no opt-in.
 // Restricted to these known hosts so we never auto-cache arbitrary fetched *data*
 // (e.g. a plugin's app.web request, the FRED/Wikipedia importers).
+// hosts:start — a test seam. sw.js cannot be imported (it is a classic worker script that
+// touches `self` and `caches` on load), so test/runtime-hosts.test.mjs extracts these lines
+// and runs them. Keep the region self-contained; see the test for what it asserts.
 const RUNTIME_HOSTS = [
   'webr.r-wasm.org', // WebR runtime
   'repo.r-wasm.org', // WebR R-package binaries
@@ -112,13 +127,68 @@ const RUNTIME_HOSTS = [
   'esm.sh', // codec libs (hyparquet) + esm.sh bundles
 ];
 
+/**
+ * ...plus whatever the deployment's own `runtimeHosts` adds (#185) — a site that mirrors
+ * WebR on its own host needs those payloads cached too, or "used online once → works
+ * offline" quietly excludes the very files it was set up to serve.
+ *
+ * **The page announces these; the worker does not read `deploy.json`.** A service worker
+ * cannot import `core/`, so parsing the file here would mean a SECOND comment-and-trailing-
+ * comma-tolerant parser and a second copy of the hostname validation. Two copies of one rule
+ * is the exact shape that produced the diverged plugin tooltip, the "built-in" origin label
+ * and the double-counted deploy issues — all in one week. So `core/deploy-config.js` stays
+ * the only thing that reads that file, and the page posts the result (`set-runtime-hosts`,
+ * the same path `set-standalone` already uses).
+ *
+ * The cost of that choice, stated plainly: on the very first load the announcement can
+ * arrive after WebR has already started fetching, so a payload or two goes uncached. It is
+ * persisted to {@link HOSTS_MARKER}, so from the second load — and every cold start after,
+ * including the offline ones where no page has run yet — the list is in place before the
+ * first fetch. The built-ins are never replaced, only added to: a bad or empty announcement
+ * cannot switch off caching for the CDN the stock build depends on.
+ */
+let extraRuntimeHosts = [];
+
+/**
+ * Bare hostnames, deduplicated against the built-ins.
+ *
+ * A floor, not a second validator: `deploy-config.js` has already checked the field and
+ * warned the deployer about anything it rejected. The test used here is deliberately the
+ * SAME primitive the match uses — a host is acceptable if `new URL('https://' + host)`
+ * round-trips it unchanged — so this can never be stricter than `isRuntimeAsset`, which is
+ * how a legitimate host (`localhost`, an intranet `mirror`) would otherwise be accepted in
+ * the settings file, dropped silently here, and never cached with nobody told why.
+ *
+ * Note what does NOT need guarding: matching is exact equality against a URL's hostname, and
+ * there is no wildcard syntax, so an entry like `*.example.edu` is inert rather than
+ * dangerous — it simply never equals anything. What this does refuse is a malformed MESSAGE
+ * (a bug, or another script on the origin) filling the allow-list with junk.
+ */
+function sanitizeHosts(list) {
+  const out = [];
+  for (const h of Array.isArray(list) ? list : []) {
+    const host = String(h ?? '').trim().toLowerCase();
+    if (!host || host.length > 253) continue;
+    let round = '';
+    try { round = new URL(`https://${host}`).hostname; } catch { continue; }
+    if (round !== host) continue; // a port, a path, whitespace — not a hostname
+    if (RUNTIME_HOSTS.includes(host) || out.includes(host)) continue;
+    out.push(host);
+    if (out.length >= 20) break; // an allow-list, not a directory
+  }
+  return out;
+}
+
 function isRuntimeAsset(url) {
   try {
-    return RUNTIME_HOSTS.includes(new URL(url).hostname);
+    const { hostname } = new URL(url);
+    return RUNTIME_HOSTS.includes(hostname) || extraRuntimeHosts.includes(hostname);
   } catch {
     return false;
   }
 }
+// hosts:end
+
 // Set by the page when running as a Home Screen (standalone) app — then the
 // same-origin shell is served cache-first/stale-while-revalidate so a flaky or
 // absent connection (a field iPad) never blocks launch. In-memory; the page
@@ -161,6 +231,10 @@ if (typeof window === 'undefined') {
           }
           const c = await caches.open(CACHE);
           offlineEnabled = !!(await c.match(OFFLINE_MARKER));
+          // The deployment's extra runtime hosts, from the last page that announced them.
+          // Restored BEFORE any fetch is handled, which is the point of persisting them.
+          const saved = await c.match(HOSTS_MARKER);
+          if (saved) extraRuntimeHosts = sanitizeHosts(await saved.json().catch(() => []));
         } catch {
           /* Cache API unavailable */
         }
@@ -182,6 +256,26 @@ if (typeof window === 'undefined') {
       coepCredentialless = d.value;
     } else if (d.type === 'set-standalone') {
       standalone = !!d.value;
+    } else if (d.type === 'set-runtime-hosts') {
+      // Additive and idempotent: every page load re-announces, and announcing nothing
+      // leaves the built-in CDN hosts exactly as they are.
+      extraRuntimeHosts = sanitizeHosts(d.hosts);
+      ev.waitUntil(
+        (async () => {
+          try {
+            const c = await caches.open(CACHE);
+            if (extraRuntimeHosts.length) {
+              await c.put(HOSTS_MARKER, new Response(JSON.stringify(extraRuntimeHosts)));
+            } else {
+              // A deployment that REMOVED its mirror must not keep caching from it.
+              await c.delete(HOSTS_MARKER);
+            }
+            reply({ ok: true, hosts: extraRuntimeHosts });
+          } catch (e) {
+            reply({ ok: false, error: String(e) });
+          }
+        })(),
+      );
     } else if (d.type === 'offline-enable') {
       offlineEnabled = true;
       ev.waitUntil(
@@ -213,7 +307,7 @@ if (typeof window === 'undefined') {
             const keys = await c.keys();
             await Promise.allSettled(
               keys.map(async (req) => {
-                if (req.url === OFFLINE_MARKER) return;
+                if (isMarker(req.url)) return;
                 let same = false;
                 try { same = new URL(req.url).origin === self.location.origin; } catch { /* opaque */ }
                 if (!same) return; // app shell only
@@ -237,7 +331,7 @@ if (typeof window === 'undefined') {
           try {
             const c = await caches.open(CACHE);
             for (const req of await c.keys()) {
-              if (req.url === OFFLINE_MARKER) continue;
+              if (isMarker(req.url)) continue;
               count++;
               // Sum Content-Length from headers only (cheap — no body reads), so a
               // status check stays fast even with ~100 MB cached.
