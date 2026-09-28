@@ -26,6 +26,9 @@ import { showCaveats, showGettingAround } from './help.js';
 // drift again — they render the same catalogue, and this line is where they did (#177).
 import { addsTooltip, openPluginAbout } from './plugin-manager.js';
 import { deployConfig } from './deploy-config.js';
+import {
+  deletePreset, listPresets, presetExists, presetFromSelection, renamePreset, resolvePreset, savePreset,
+} from './plugin-presets.js';
 
 /** Curated-core analysis plugins, pre-selected on a fresh "Start blank". */
 const CORE_IDS = new Set([
@@ -307,6 +310,7 @@ export class Launcher {
 
     const rerender = () => this.#renderPlugins(listBox, list, searchEl.value.trim().toLowerCase());
     discSel.addEventListener('change', () => { this.#discipline = discSel.value; rerender(); });
+    this.#wirePresets(overlay, list, rerender);
     searchEl.addEventListener('input', rerender);
     rerender();
 
@@ -494,6 +498,111 @@ export class Launcher {
     });
     row.append(label, what);
     return row;
+  }
+
+  /**
+   * The preset controls: a dropdown of saved plugin sets, plus Save / Rename / Delete (#162).
+   *
+   * They live in the centre head beside the discipline and filter controls, NOT beside the
+   * `Select all` / `None` links, which are rendered per SECTION and whose select-all is scoped
+   * to that section's keys. A preset spans the whole picker, so putting it in a section header
+   * would be claiming a scope it does not have.
+   *
+   * Choosing a preset applies it immediately — this screen is a chooser, and a second
+   * confirmation gesture would be the same superfluous step #161 objects to elsewhere.
+   */
+  #wirePresets(overlay, list, rerender) {
+    const sel = overlay.querySelector('.ctl__preset');
+    const note = overlay.querySelector('.ctl__presetnote');
+    const saveBtn = overlay.querySelector('.ctl__presetsave');
+    const renameBtn = overlay.querySelector('.ctl__presetrename');
+    const delBtn = overlay.querySelector('.ctl__presetdel');
+    if (!sel) return;
+
+    const say = (msg, warn = false) => {
+      note.textContent = msg || '';
+      note.hidden = !msg;
+      note.classList.toggle('is-warn', !!warn);
+    };
+
+    const fill = (keep = '') => {
+      const presets = listPresets();
+      sel.replaceChildren();
+      sel.append(new Option('Plugin preset…', ''));
+      for (const p of presets) sel.append(new Option(p.name, p.name));
+      sel.value = presets.some((p) => p.name === keep) ? keep : '';
+      const chosen = !!sel.value;
+      renameBtn.hidden = !chosen;
+      delBtn.hidden = !chosen;
+      sel.hidden = presets.length === 0; // nothing saved yet: just the Save link
+    };
+
+    sel.addEventListener('change', () => {
+      const preset = listPresets().find((p) => p.name === sel.value);
+      renameBtn.hidden = !preset;
+      delBtn.hidden = !preset;
+      if (!preset) return say('');
+      // Infra (codecs/importers/exporters) is unioned in rather than left to the preset: one
+      // saved before a codec existed must not leave someone unable to open that file type.
+      const { keys, missing } = resolvePreset(preset, list, { infraCategories: DEFAULT_ON_CATEGORIES });
+      this.#selected = keys;
+      rerender();
+      // Missing plugins are REPORTED, never quietly dropped — the user picked them.
+      say(
+        missing.length
+          ? `${missing.length} plugin${missing.length === 1 ? '' : 's'} in “${preset.name}” ${missing.length === 1 ? 'is' : 'are'} not installed here: ${missing.join(', ')}`
+          : `“${preset.name}” applied — ${keys.size} plugins selected.`,
+        missing.length > 0,
+      );
+    });
+
+    saveBtn.addEventListener('click', async () => {
+      const plugins = presetFromSelection(list, this.#selected);
+      if (!plugins.length) return say('Nothing is selected to save.', true);
+      const name = await promptText({
+        title: 'Save plugin preset',
+        hint: `${plugins.length} plugin${plugins.length === 1 ? '' : 's'} selected. Presets are yours, on this device, and work with any start choice.`,
+        label: 'Preset name',
+        value: sel.value || '',
+        confirm: 'Save',
+      });
+      if (!name) return;
+      // Overwrite is offered rather than silently making a second preset with the same name.
+      if (presetExists(name) && !confirm(`Replace the preset “${name}”?`)) return;
+      try {
+        savePreset(name, plugins);
+        fill(name);
+        say(`Saved “${name}” — ${plugins.length} plugins.`);
+      } catch (err) {
+        say(err.message, true);
+      }
+    });
+
+    renameBtn.addEventListener('click', async () => {
+      const from = sel.value;
+      if (!from) return;
+      const to = await promptText({
+        title: 'Rename preset', label: 'New name', value: from, confirm: 'Rename',
+      });
+      if (!to || to === from) return;
+      try {
+        renamePreset(from, to);
+        fill(to);
+        say(`Renamed to “${to}”.`);
+      } catch (err) {
+        say(err.message, true);
+      }
+    });
+
+    delBtn.addEventListener('click', () => {
+      const name = sel.value;
+      if (!name || !confirm(`Delete the preset “${name}”? The plugins stay as they are.`)) return;
+      deletePreset(name);
+      fill('');
+      say(`Deleted “${name}”.`);
+    });
+
+    fill('');
   }
 
   /** Diff the desired selection against current load state and apply live — the
@@ -908,8 +1017,13 @@ function SHELL_HTML(reopen) {
           <div class="ctl__centerhead">
             <span class="ctl__indicator">Loading…</span>
             <select class="ctl__discipline" aria-label="Field / discipline"></select>
+            <select class="ctl__preset" aria-label="Plugin preset" hidden></select>
+            <button type="button" class="ctl__linkbtn ctl__presetsave">Save preset…</button>
+            <button type="button" class="ctl__linkbtn ctl__presetrename" hidden>Rename</button>
+            <button type="button" class="ctl__linkbtn ctl__presetdel" hidden>Delete</button>
             <input type="search" class="ctl__search" placeholder="Filter plugins…" autocomplete="off">
           </div>
+          <p class="ctl__presetnote" hidden></p>
           <div class="ctl__plugins"></div>
         </section>
         <aside class="ctl__about">
@@ -1004,6 +1118,11 @@ function injectStyles() {
     .ctl__sectiontitle { font-size: 12px; font-weight: 700; color: #41505e; flex: 1; }
     .ctl__linkbtn { font: inherit; font-size: 12px; background: none; border: 0; color: var(--accent, #2572a5); cursor: pointer; padding: 2px 4px; }
     .ctl__linkbtn:hover { text-decoration: underline; }
+    .ctl__preset { font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--line, #d8dde2); border-radius: 6px; max-width: 180px; }
+    /* What a preset just did, or why it could not: a saved set that quietly applies fewer
+       plugins than it names would be the one failure worth avoiding here (#162). */
+    .ctl__presetnote { margin: -4px 0 8px; font-size: 12px; color: #41505e; }
+    .ctl__presetnote.is-warn { color: #8a5a00; }
     .ctl__grid { columns: 2; column-gap: 22px; }
     .ctl__catgroup { break-inside: avoid; -webkit-column-break-inside: avoid; display: block; }
     .ctl__cat { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: #6c7882;
@@ -1064,6 +1183,52 @@ function injectStyles() {
     .ctl__link { font: inherit; font-size: 13px; background: none; border: 0; color: var(--accent, #2572a5); cursor: pointer; padding: 2px 4px; }
     .ctl__link:hover { text-decoration: underline; }`;
   document.head.append(s);
+}
+
+/**
+ * A one-field modal prompt, in the app's dialog idiom rather than `window.prompt` — which is
+ * unstyled, untranslatable, and blocked outright in some embedded contexts.
+ *
+ * @param {{title: string, label: string, hint?: string, value?: string, confirm?: string}} opts
+ * @returns {Promise<string|null>} the trimmed text, or null if cancelled
+ */
+function promptText({ title, label, hint = '', value = '', confirm: confirmLabel = 'OK' }) {
+  return new Promise((resolve) => {
+    const d = document.createElement('dialog');
+    d.className = 'ct-dialog';
+    const form = el('form', null, 'ct-dialog__form');
+    form.method = 'dialog';
+    form.append(el('h2', title, 'ct-dialog__title'));
+    if (hint) form.append(el('p', hint, 'ct-dialog__hint'));
+    const lab = el('label', null, 'ct-field');
+    lab.append(document.createTextNode(label));
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = value;
+    input.autocomplete = 'off';
+    input.style.cssText = 'width:100%; margin-top:4px;';
+    lab.append(input);
+    form.append(lab);
+    const menu = el('menu', null, 'ct-dialog__buttons');
+    const cancel = el('button', 'Cancel', null);
+    cancel.value = 'cancel';
+    cancel.type = 'submit';
+    const ok = el('button', confirmLabel, 'ct-dialog__primary');
+    ok.value = 'ok';
+    ok.type = 'submit';
+    menu.append(cancel, ok);
+    form.append(menu);
+    d.append(form);
+    d.addEventListener('close', () => {
+      const text = d.returnValue === 'ok' ? input.value.trim() : '';
+      d.remove();
+      resolve(text || null);
+    });
+    document.body.append(d);
+    d.showModal();
+    input.focus();
+    input.select();
+  });
 }
 
 /** Where this copy is served from, when the deployment did not name itself. */

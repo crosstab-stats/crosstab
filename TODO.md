@@ -859,62 +859,52 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         encryption work draws. Two verbs, worded differently, not one.
 
 
-- [ ] **#162 — user-defined plugin presets (user request, 2026-08-19).** The picker
-      offers exactly one axis of curation: `Recommended for <discipline>`, pinned from
-      each manifest's self-declared `disciplines` (launcher.js `#renderPlugins` ~385).
-      A researcher doing *qualitative psychology with a regional dimension* needs
-      CAQDAS **and** spatial **and** the usual psych set — a combination no single
-      discipline names, and one they have to rebuild by hand on every fresh launch.
-      Let them save it.
+- [~] **#162 — user-defined plugin presets. THE PRESETS ARE BUILT (2026-09-27); the
+      multi-select discipline half is still open — see the end.** The picker curated on one
+      axis, `Recommended for <discipline>`, so the motivating case — *qualitative psychology
+      with a regional dimension*, needing CAQDAS **and** spatial **and** the usual psych set —
+      was a combination no single discipline names and had to be rebuilt by hand on every
+      fresh launch. `core/plugin-presets.js` + controls in the launcher's centre head.
 
-      **UI.** A `Save preset…` link (prompts for a name) plus a preset dropdown that
-      populates with what they've saved. **Not** beside `Select all` / `None`, which
-      is where this was first sketched: that header is rendered per *section*
-      (`#section` ~399), once for `Recommended for X` and again for `All other
-      plugins`, and its select-all is scoped to that section's keys. A preset spans
-      the whole picker, so both controls belong in `.ctl__centerhead` next to the
-      discipline dropdown and the filter box. Also needs rename/delete, and Save over
-      an existing name should offer overwrite rather than silently duplicating.
+  - [x] **Where the controls went, and why not where they were first sketched.** In
+        `.ctl__centerhead` beside the discipline and filter, NOT beside `Select all` / `None`:
+        that header is rendered per SECTION and its select-all is scoped to that section's
+        keys, so a preset control there would be claiming a scope it does not have. Choosing
+        a preset applies it immediately — this screen is a chooser, and a confirm step would
+        be the same superfluous gesture #161 objects to.
+  - [x] **Plugins only, never a data source.** The built-in launch presets conflate the two
+        because they back `?launch=` deep links; a user's preset has to compose with any start
+        choice, so a source could only get in the way. The saved shape is exactly
+        `{name, plugins:[{id, key}]}` — asserted, so it cannot quietly grow a source later.
+  - [x] **Ids recorded, keys as fallback.** A key is an install-location detail that dies on a
+        repackage; a manifest id survives ([[plugin-lifecycle-terms]]). Both are written and
+        either resolves — the same id-or-key matching a saved project's plugin list already
+        does. Tested with the repackage case: same plugin, new path, still found.
+  - [x] **Infrastructure is unioned in, never left to the preset.** One saved before the
+        Parquet codec existed must not leave its owner unable to open a Parquet file, so the
+        default-on categories come in regardless of what the preset says.
+  - [x] **A plugin this install lacks is REPORTED, not dropped.** "2 plugins in “Lab kit” are
+        not installed here: …" under the controls. Silently applying a smaller set than the
+        one that was saved is the failure this could most easily have shipped with — the user
+        picked those deliberately.
+  - [x] Overwrite is offered on a name clash rather than making a second preset; rename
+        refuses a collision; delete is idempotent; a corrupt or hand-edited store reads as
+        "no presets" rather than taking the first screen down. Names are case-insensitive,
+        because "Psych" and "psych" are one preset to a human.
+  - [x] Storage is `localStorage`, deliberately off the op log: a preset is a *person's*
+        working preference across all their projects, not a fact about any one project. The
+        store is injected, so every rule above is tested without a browser (12 tests,
+        suite 1084 → 1096).
 
-      **What a preset stores: plugins only — not a data source.** The built-in
-      `PRESETS` (~39) conflate source + plugin set because they back the `?launch=`
-      bypass; a user preset must compose with *any* start choice, so it is a plugin
-      set and nothing else. (Optionally show the built-ins in the same dropdown,
-      read-only, so there is one concept rather than two.)
-
-      **Record ids, not just keys.** Key ≠ id ([[plugin-lifecycle-terms]]); a key is
-      an install-location detail and will not survive a repackage or a reinstall,
-      whereas a manifest id will. Save ids where a plugin has one, key as fallback,
-      and resolve with the id-or-key matcher already written for saved projects
-      (`speaksFor`, ~335).
-
-      **Applying a preset — mind #157's rule.** A preset says what its author *chose*;
-      it is silent about plugins that did not exist when it was saved, and reading
-      that silence as "off" is exactly the inference we removed elsewhere. So: apply
-      the preset's set, union the default-on infra categories (`DEFAULT_ON_CATEGORIES`
-      — the codecs), and **report** rather than swallow anything the preset names that
-      is not installed ("2 plugins in this preset aren't available") — the user picked
-      those deliberately and deserves to know they're missing.
-
-      **Storage: `localStorage`, deliberately not the op log.** Presets are a
-      *person's* working preferences across all their projects, not a fact about any
-      one project, so they are one of the few things that correctly stays off the log
-      ([[one-true-log-explicit-ops]] governs project state; this isn't it). Phase 2:
-      export/import a preset as a small JSON file so a lab lead can hand out "our
-      lab's toolkit" — the same instinct as the shared-folder work, and cheap once the
-      shape exists.
-
-      **The other half of this, easy to miss:** `.ctl__discipline` is a *single*-select
-      (~277–283, `#discipline` a scalar), so the user's own example — psych + qual +
-      spatial — cannot even be *seen* at once; you switch discipline three times and
-      hunt. Presets fix "save it once"; they don't fix building it the first time.
-      Make the discipline control multi-select and pin the union under
-      `Recommended for Psychology, Qualitative, Spatial`. Do it alongside the preset
-      work — together they're the actual feature, and separately each is half of it.
-
-      Open question: should `Edit ▸ Plugins…` share the same preset control? Same
-      selection model, and a mid-session "switch me to my qual toolkit" is plausible.
-
+  - [ ] **Still open — the other half of the original entry:** `.ctl__discipline` is a
+        *single*-select, so the motivating combination cannot even be SEEN at once; you switch
+        discipline three times and hunt. Presets fix "save it once"; they do not fix building
+        it the first time. Make the discipline control multi-select and pin the union under
+        `Recommended for Psychology, Qualitative, Spatial`.
+  - [ ] **Phase 2 (unchanged):** export/import a preset as a small JSON file, so a lab lead can
+        hand out "our lab's toolkit". Cheap now that the shape exists — and it pairs with
+        #185's deployments, where a department could ship one.
+  - [ ] **Not browser-tested:** the dropdown, Save/Rename/Delete, and the missing-plugin note.
 
 - [x] **#166 — THE CODING SYSTEM: one defect behind four symptoms. DONE (verified
       2026-08-20).** All four steps shipped across three commits
