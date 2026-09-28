@@ -3361,7 +3361,57 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     nothing for storage/transport/display (JS `Number` hits the same 2⁵³ wall),
     so it's only worth loading for genuine 64-bit *arithmetic in R* — a per-
     variable opt-in to add later, purely additive, no debt from deferring.
-- [ ] **Multi-file plugins via import maps (decided approach; to build).** Let a
+- [x] **Multi-file plugins — DONE (2026-09-27). A plugin's code can span several files.**
+      `import { x } from './util.js'` now works inside the sandbox. Authors declare nothing:
+      the host scans the entry's source for relative specifiers, fetches those siblings, scans
+      those, and posts the closure with the load message; the frame blobs each one and installs
+      an import map before importing the entry.
+
+      **The design the entry proposed could not have worked, for a second reason beyond the
+      one already recorded.** A `modules: […]` manifest field is unreachable: the manifest
+      lives *inside* the entry module, so reading it means importing the module, and importing
+      the module is precisely what fails without its siblings. The list has to exist before the
+      first import — hence discovery from source text rather than declaration.
+
+      **What the probe's result forced, and what it cost.** Matching is on LITERAL TEXT (a
+      `blob:` base makes a relative specifier unparseable as a URL, so the raw specifier is
+      compared to the raw key). Two consequences:
+  - [x] **Several key spellings per module** — `./util.js`, `util.js`, and the extension-less
+        forms — because they are one file to a person and different keys to the resolver.
+  - [x] **v1 is flat, deliberately.** Modules sit beside the entry. Two files in different
+        directories both written `./deep.js` would be ONE key and collide, so a subdirectory or
+        a `../` is refused **by name, with the reason**, rather than shipping a nested layout
+        that is subtly wrong. Nested support needs per-module rewriting — separate work.
+  - [x] **Nothing is fatal.** Specifiers are found by scanning text, so a commented-out
+        `import './old.js'` looks exactly like a real one; throwing would turn a stale comment
+        into a broken plugin, and every built-in is single-file today. Unreadable or
+        unsupported specifiers are warned and skipped; if one was genuinely needed, the import
+        fails next and names it. A single-file plugin triggers no scan, no fetches, no cost.
+  - [x] **The probe now tests the shipped path**, not an imitation: a final row loads a real
+        two-file plugin through the real `plugin-host.html` over the real load message. Since
+        this feature gets no browser pass, that row is its end-to-end check — re-run
+        `spike/multi-file-plugin-probe.html` after touching any of it.
+  - [x] **The frame's alias rule is duplicated (it cannot import a module) and therefore
+        TESTED against the host's** — extracted between `aliases:start/end` markers and run on
+        the same inputs. Two copies of one rule is the shape that produced the diverged plugin
+        tooltip, the "built-in" origin label and the double-counted deploy issues in a single
+        week; this one has a test instead of a hope.
+  - [x] The blob-served coupling is written down in `core/plugin-sandbox.js`, where someone
+        changing how the sandbox document is delivered would actually read it.
+
+      14 tests (`test/plugin-modules.test.mjs`), suite 1101 → 1115. **No browser pass** — the
+      owner cannot test remotely, so the split is: the platform mechanism is verified by the
+      probe on iOS 18.7, the host's scanning and shapes by unit tests, and the join between
+      them by the probe's shipped-path row.
+
+  - [ ] **Nested layouts (`./lib/util.js`)** — refused with a message today. Needs per-module
+        specifier rewriting so two same-named specifiers in different directories cannot
+        collide on one literal key.
+
+      **The original entry, kept because the two corrections in it are the record of how this
+      was got wrong twice:**
+
+      > *Original:* Let a
       plugin's *code* span several ES modules with normal relative imports
       (`import { foo } from './util.js'`). **Chosen: import maps, not bundling** — no
       build step (fits the no-tooling / everything-inspectable ethos), and it reuses the

@@ -77,6 +77,10 @@
       // The CSP comes from the app itself, so this probe cannot quietly test a weaker sandbox
       // than the one plugins actually run in.
       import { HOST_CSP } from '../core/plugin-sandbox.js';
+      // The REAL host-side discovery, so the last row below tests shipped code rather than an
+      // imitation of it.
+      import { collectModuleClosure } from '../core/plugin-modules.js';
+      import { attachSandbox } from '../core/plugin-sandbox.js';
 
       /**
        * The document each probe runs inside. Same `sandbox="allow-scripts"` opaque origin and
@@ -158,12 +162,73 @@
           entry: 'import { answer as a } from "probe:util";\nexport const answer = a;\n',
         },
         {
+          id: 'real',
+          what: '<strong>The shipped path</strong>: a two-file plugin through <code>plugin-host.html</code>',
+          why: 'Uses the real collectModuleClosure, the real sandbox document and the real load message — the only end-to-end check this feature gets, since it has no browser pass.',
+          real: true,
+        },
+        {
           id: 'rewrite',
           what: 'No import map: rewrite the specifier to a blob URL first',
           why: 'The fallback. Needs no platform feature, so it should pass everywhere.',
           entry: 'import { answer as a } from \'./util.js\';\nexport const answer = a;\n',
         },
       ];
+
+      /**
+       * The one row that tests what actually ships: a real two-file plugin, through the real
+       * `plugin-host.html`, over the real load message. Everything above probes the platform;
+       * this probes CrossTab.
+       *
+       * It matters more than usual here because this feature has no browser pass — the unit
+       * tests cover the host's scanning and the frame's map is only ever exercised in a real
+       * browser, which is this.
+       */
+      async function runRealLoader() {
+        const ENTRY = "import { answer } from './util.js';\n"
+          + "export const manifest = { id: 'probe-multifile', name: 'Probe', apiVersion: '0.1.0', answer: answer() };\n";
+        const UTIL_SRC = 'export const answer = () => 42;\n';
+        // The host half, for real: discover the imports from the source.
+        const { modules, issues } = await collectModuleClosure(ENTRY, async (n) => (n === 'util.js' ? UTIL_SRC : null));
+        if (issues.length) return { ok: false, detail: `closure issues: ${issues.map((i) => i.why).join('; ')}` };
+        if (!modules['util.js']) return { ok: false, detail: 'the host did not collect util.js' };
+
+        const iframe = document.createElement('iframe');
+        iframe.setAttribute('sandbox', 'allow-scripts');
+        iframe.style.cssText = 'position:absolute;width:0;height:0;border:0;visibility:hidden;';
+        document.body.append(iframe);
+        const { loaded, release } = await attachSandbox(iframe, 'strict');
+        return new Promise((resolve) => {
+          let done = false;
+          const finish = (r) => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            window.removeEventListener('message', onMsg);
+            iframe.remove();
+            release?.();
+            resolve(r);
+          };
+          const timer = setTimeout(() => finish({ ok: false, detail: 'timed out after 8s' }), 8000);
+          const onMsg = (e) => {
+            if (e.source !== iframe.contentWindow) return;
+            const m = e.data;
+            if (!m || m.__crosstab !== 1) return;
+            if (m.t === 'ready') {
+              // Exactly what PluginBroker#sendLoad posts.
+              iframe.contentWindow.postMessage({ __crosstab: 1, t: 'load', code: ENTRY, stdlib: null, modules }, '*');
+              return;
+            }
+            if (m.t === 'manifest') {
+              if (!m.ok) return finish({ ok: false, detail: String(m.error || 'load failed') });
+              const got = m.manifest && m.manifest.answer;
+              finish({ ok: got === 42, detail: got === 42 ? 'real loader path: entry imported its sibling' : `manifest.answer = ${JSON.stringify(got)}` });
+            }
+          };
+          window.addEventListener('message', onMsg);
+          loaded.catch(() => finish({ ok: false, detail: 'sandbox document failed to load' }));
+        });
+      }
 
       const rows = document.getElementById('rows');
       const results = new Map();
@@ -250,6 +315,12 @@
           return '<strong>Inconclusive.</strong> Even a single-module plugin failed here, so the probe '
             + 'itself is not working in this browser — nothing below can be trusted.';
         }
+        if (r('real')?.ok) {
+          return '<strong>The shipped path works here.</strong> A two-file plugin loaded through the '
+            + 'real sandbox document and its entry imported its sibling. That is the check this '
+            + 'feature exists to pass; the rows above explain WHY it passes, and which fallback '
+            + 'would be available if a future browser changed its mind.';
+        }
         if (r('map-bare')?.ok) {
           return '<strong>Import maps work.</strong> Build it the planned way: post every module\'s source, '
             + 'let the frame blob them, inject one import map per frame before the entry import, and have '
@@ -273,7 +344,7 @@
         document.getElementById('reading').hidden = true;
         for (const v of VARIANTS) {
           // Serially, so a failing variant cannot poison another's frame or message stream.
-          results.set(v.id, await runVariant(v));
+          results.set(v.id, v.real ? await runRealLoader() : await runVariant(v));
           paint();
         }
         const reading = document.getElementById('reading');

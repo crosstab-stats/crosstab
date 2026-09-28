@@ -58,6 +58,18 @@ export const HOST_CSP = Object.freeze({
   media: "default-src 'none'; script-src 'unsafe-inline' blob:; connect-src 'none'; media-src blob:; img-src blob:",
 });
 
+/**
+ * **The sandbox document must stay blob-served.** Multi-file plugins depend on it, in a way
+ * that is invisible from here: a plugin's `import './util.js'` is matched against the frame's
+ * import map as LITERAL TEXT, because `blob:` has an opaque path and the specifier cannot be
+ * parsed as a URL. The map's key cannot be parsed either — for the same reason — so the two
+ * raw strings match. Serve this document from a real URL and the key would resolve
+ * (→ `https://host/util.js`) while the specifier still would not, and every relative import in
+ * every multi-file plugin would stop resolving, far from the change that caused it.
+ *
+ * Verified on iOS 18.7 via `spike/multi-file-plugin-probe.html`, which is also how to re-check
+ * it if this ever has to change.
+ */
 let templatePromise = null;
 
 /** The sandbox document for a capability, as an HTML string. Fetched once (through the

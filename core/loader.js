@@ -21,6 +21,7 @@
 
 import { PluginBroker } from './plugin-broker.js';
 import { attachSandbox } from './plugin-sandbox.js';
+import { collectModuleClosure } from './plugin-modules.js';
 import { scopedAssetList } from './asset-store.js';
 import { assetRefDecls, declaredCollections } from './collections.js';
 
@@ -363,7 +364,7 @@ export class PluginLoader {
   async probeManifest(url, origin = { kind: 'url', url }) {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Failed to fetch plugin ${url}: HTTP ${res.status}`);
-    return this.#probe(await res.text(), url, origin);
+    return this.#probe(await res.text(), url, origin, { entryUrl: url });
   }
 
   /** Like {@link probeManifest} but from source text (file/authored plugins). */
@@ -371,9 +372,46 @@ export class PluginLoader {
     return this.#probe(code, label, origin);
   }
 
+  /**
+   * Read one of a plugin's own modules by filename — from its `.ctplugin` bundle, or from a
+   * sibling of its entry URL. Returns null when there is no such file, which is not an error:
+   * see {@link PluginLoader#moduleClosure}.
+   */
+  #moduleReader({ entryUrl = null, assets = null } = {}) {
+    return async (name) => {
+      if (assets && assets.has(name)) return new TextDecoder().decode(assets.get(name));
+      if (!entryUrl) return null;
+      const base = new URL(entryUrl, location.href);
+      const target = new URL(`./${name}`, base);
+      // The same rule a declared asset follows: a plugin's files come from the plugin's own
+      // origin, never from wherever a specifier happens to point.
+      if (target.origin !== base.origin) return null;
+      const res = await fetch(target.href);
+      return res.ok ? res.text() : null;
+    };
+  }
+
+  /**
+   * The plugin's own modules, discovered from its source so they can be sent with it.
+   *
+   * **Nothing here is fatal, deliberately.** The specifiers are found by scanning text, so a
+   * commented-out `import './old.js'` looks exactly like a real one. Throwing on a module that
+   * cannot be read would turn a stale comment into a broken plugin — and every built-in is
+   * single-file today, so the failure would be new, not pre-existing. Unreadable or
+   * unsupported specifiers are reported and skipped; if one was genuinely needed, the import
+   * itself fails next, naming it.
+   */
+  async #moduleClosure(code, label, opts) {
+    const { modules, issues } = await collectModuleClosure(code, this.#moduleReader(opts));
+    for (const issue of issues) {
+      try { console.warn(`[plugin ${label}] ${issue.why}`); } catch { /* console may be gone */ }
+    }
+    return modules;
+  }
+
   /** Sandbox `code`, return its manifest (id qualified by origin), and dispose the
    * sandbox. No activation. */
-  async #probe(code, label, origin) {
+  async #probe(code, label, origin, opts = {}) {
     const iframe = this.#createIframe();
     // A probe only reads the manifest — it must expose NO capabilities. Importing
     // the plugin runs its top-level module code, which can synchronously RPC the
@@ -386,7 +424,10 @@ export class PluginLoader {
     try {
       await loaded;
       await broker.whenReady();
-      const manifest = await broker.sendLoad(code, await chartStdlibSource());
+      // A multi-file plugin has to be READABLE as well as runnable: without its modules the
+      // probe's import fails and the plugin cannot even be catalogued.
+      const modules = await this.#moduleClosure(code, label, opts);
+      const manifest = await broker.sendLoad(code, await chartStdlibSource(), modules);
       if (!manifest || typeof manifest.id !== 'string') {
         throw new Error(`Plugin at ${label} exported no valid manifest`);
       }
@@ -433,7 +474,8 @@ export class PluginLoader {
     try {
       await loaded;             // the frame's own load/error — not a clock
       await broker.whenReady(); // …and the guest's own ready signal
-      const manifest = await broker.sendLoad(code, await chartStdlibSource());
+      const modules = await this.#moduleClosure(code, label, { entryUrl, assets });
+      const manifest = await broker.sendLoad(code, await chartStdlibSource(), modules);
 
       if (!manifest || typeof manifest.id !== 'string') {
         throw new Error(`Plugin at ${label} exported no valid manifest`);

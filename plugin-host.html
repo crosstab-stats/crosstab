@@ -292,7 +292,7 @@
             case 'load':
               setStep('loading');
               stdlibSource = msg.stdlib || null;
-              await importPlugin(msg.code, msg.rid);
+              await importPlugin(msg.code, msg.rid, msg.modules);
               break;
 
             case 'chartCall': {
@@ -442,9 +442,58 @@
         });
 
         /** Import the plugin source from a blob URL and report its manifest. */
-        async function importPlugin(code, rid) {
+        /**
+         * Make a plugin's own modules importable from its entry.
+         *
+         * Each arrives as SOURCE and is blobbed here, in this realm — a blob minted by the host
+         * carries the host's origin and this frame is opaque, which is why the first design for
+         * multi-file plugins collapsed. An import map then points each specifier at its blob.
+         *
+         * The map matches on LITERAL TEXT, not resolved URLs: `blob:` has an opaque path, so
+         * `./util.js` cannot be parsed as a URL against a blob base, and the resolver falls back
+         * to comparing the raw specifier against the raw key. That is also why several spellings
+         * of each name are registered, and why this only works while THIS DOCUMENT is itself
+         * blob-served — from a real URL the key would parse and the specifier still would not,
+         * so nothing would match. The canary below reports that rather than leaving a future
+         * maintainer with silent resolution failures.
+         */
+        function installModules(modules) {
+          const names = Object.keys(modules || {});
+          if (!names.length) return;
+          if (location.protocol !== 'blob:') {
+            // Not fatal — say so and try anyway, because being wrong about this should produce
+            // a message, not a mystery.
+            try {
+              console.warn(
+                '[plugin-host] this sandbox document is not blob-served ('
+                  + location.protocol + '), so a plugin\'s relative imports may not resolve.',
+              );
+            } catch {}
+          }
+          const imports = {};
+          for (const name of names) {
+            const blobUrl = URL.createObjectURL(new Blob([modules[name]], { type: 'text/javascript' }));
+            // aliases:start — this rule also lives in core/plugin-modules.js `moduleKeyAliases`,
+            // because an inline sandbox runtime cannot import a module. The markers are a seam
+            // for the test that checks the two agree; keep them.
+            const stem = name.replace(/\.m?js$/, '');
+            const aliases = ['./' + name, name];
+            if (stem && stem !== name) aliases.push('./' + stem, stem);
+            // aliases:end
+            for (const a of aliases) imports[a] = blobUrl;
+          }
+          const tag = document.createElement('script');
+          tag.type = 'importmap';
+          tag.textContent = JSON.stringify({ imports });
+          // Before any module import in this frame. Production gives every plugin its own
+          // frame, so one map per document is all that is ever needed.
+          document.head.appendChild(tag);
+        }
+
+        async function importPlugin(code, rid, modules) {
           let url;
           try {
+            installModules(modules);
             const blob = new Blob([code], { type: 'text/javascript' });
             url = URL.createObjectURL(blob);
             pluginModule = await import(url);
