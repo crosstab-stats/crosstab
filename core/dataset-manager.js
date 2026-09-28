@@ -223,6 +223,24 @@ export class DatasetManager {
   }
 
   /**
+   * Every open dataset's operation history, in collection order — what the Syntax view
+   * serializes (#179). Collection order, not active-first, so the script text does not change
+   * when the user clicks a different dataset tab.
+   *
+   * Binned datasets are excluded: they are not part of the project's live shape, and a script
+   * that rebuilt them would resurrect what the user threw away.
+   *
+   * @returns {Array<{id: number|string, name: string, applied: object[]}>}
+   */
+  getHistories() {
+    return this.#collection().map((c) => ({
+      id: c.id,
+      name: c.name,
+      applied: this.#datasets.get(c.id)?.getHistory()?.applied ?? [],
+    }));
+  }
+
+  /**
    * Create a new (empty) dataset and return its {@link DataStore}. Becomes active
    * if it's the first dataset or `activate` is set.
    * @param {string} [name='Dataset']

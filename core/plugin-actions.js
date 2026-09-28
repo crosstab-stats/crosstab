@@ -604,13 +604,19 @@ export class PluginActions {
    */
   async repositionAnalysis(runId, at) {
     if (!this.#analysisLog || !this.#dataStore) return false;
+    // Its OWN dataset, not whatever is active (#179). `at` counts the transforms of the dataset
+    // the analysis ran against, so measuring it against a different dataset's transform list
+    // would clamp it to the wrong length and rebuild the wrong data underneath it.
+    const existing = this.#analysisLog.entries().find((e) => e.runId === runId);
+    const restoreTo = this.#dataStore.activeId ?? null;
+    if (existing?.datasetId != null) this.#activate(existing.datasetId);
     const all = this.#dataStore.getTransforms?.() ?? [];
     const target = Math.max(0, Math.min(Math.floor(Number(at) || 0), all.length));
     const moved = this.#analysisLog.reposition(runId, target);
-    if (!moved) return false;
+    if (!moved) { this.#activate(restoreTo); return false; }
 
     const entry = this.#analysisLog.entries().find((e) => e.runId === runId);
-    if (!entry) return false;
+    if (!entry) { this.#activate(restoreTo); return false; }
     // Drop the stale output first: if the re-run fails, an empty slot is honest, whereas the
     // old block left in place would claim a result for a position it never ran at.
     this.#results.removeRun?.(runId);
@@ -621,50 +627,142 @@ export class PluginActions {
       // Always put the dataset back, even if the analysis threw: leaving the grid rewound to a
       // prefix because a plugin failed would be a much worse outcome than a missing table.
       await this.#dataStore.replaceTransforms(all);
+      this.#activate(restoreTo); // and the user's dataset tab back where they left it
     }
     this.#results.reorderRuns?.(analysisOrder(this.#analysisLog.entries()));
     return true;
   }
 
   /**
-   * Run a parsed script (#134), **position-faithfully**: each analysis is executed
-   * against the dataset AS OF its place in the script, so the output matches the
-   * order shown (an analysis above a `keep if` reflects the pre-filter data, not the
-   * final dataset). Walks the interleaved steps, growing the transform set and
-   * rebuilding the data to that prefix before each analysis, then leaves the dataset
-   * at its final state. Atomic: the full transform set is validated first, so a bad
-   * data step aborts the whole Run before any output is cleared.
+   * Split a parsed script into per-dataset sections (#179).
    *
-   * @param {Array<{kind:'transform',op:object}|{kind:'analysis',ref:object}>} steps
+   * Everything before the first `dataset` statement belongs to whatever is active — which is
+   * what makes a script written before the statement existed mean exactly what it meant, and
+   * what keeps a single-dataset project's Run byte-for-byte the same operation.
+   *
+   * Names are resolved here, up front and all at once, so an unknown dataset aborts the Run
+   * before a single transform is applied or a single output block cleared. A script naming a
+   * dataset this project does not have is a typo or a script from another project; either way
+   * the honest answer is to refuse, not to silently run it against whatever is in front of us.
+   *
+   * @param {Array<object>} steps from {@link parse}
+   * @returns {Array<{id: number|string|null, name: string|null, steps: Array<object>}>}
+   */
+  #sectionize(steps) {
+    const known = (this.#dataStore?.list?.() ?? []);
+    const resolve = (name) => {
+      const want = String(name).trim();
+      const hit = known.find((d) => String(d.name).trim() === want)
+        ?? known.find((d) => String(d.name).trim().toLowerCase() === want.toLowerCase());
+      if (!hit) {
+        throw new Error(
+          `dataset "${want}" is not open in this project`
+          + (known.length ? ` — it has ${known.map((d) => `"${d.name}"`).join(', ')}.` : '.'),
+        );
+      }
+      return hit;
+    };
+
+    // One section per dataset, in first-mention order. Re-entering a dataset CONTINUES its
+    // section rather than starting a second one, so its transform count stays the count of its
+    // own transforms however the script is laid out.
+    const byId = new Map();
+    const order = [];
+    const sectionFor = (id, name) => {
+      const key = String(id);
+      if (!byId.has(key)) {
+        const made = { id, name, steps: [] };
+        byId.set(key, made);
+        order.push(made);
+      }
+      const sec = byId.get(key);
+      if (name != null) sec.name = name;
+      return sec;
+    };
+
+    let current = sectionFor(this.#dataStore?.activeId ?? null, null);
+    for (const step of steps || []) {
+      if (step.kind === 'dataset') {
+        const d = resolve(step.name);
+        current = sectionFor(d.id, d.name);
+        continue;
+      }
+      current.steps.push(step);
+    }
+    // Drop the implicit leading section when the script opened with a `dataset` statement and
+    // put nothing in it. An empty script still gets one, so "Run an empty script" keeps
+    // meaning "clear this dataset's transforms".
+    const used = order.filter((sec) => sec.steps.length || sec.name != null);
+    return used.length ? used : order.slice(0, 1);
+  }
+
+  /**
+   * Run a parsed script (#134), **position-faithfully and per dataset** (#179): each analysis
+   * is executed against the dataset it belongs to, as of its place within that dataset's
+   * section — so the output matches the order shown (an analysis above a `keep if` reflects the
+   * pre-filter data), and a two-dataset project no longer re-runs one dataset's analyses
+   * against the other's data.
+   *
+   * Atomic in the way that matters: every section's transform set is validated (applied) before
+   * any output is cleared, so a bad data step anywhere aborts the whole Run with the previous
+   * output still on screen.
+   *
+   * @param {Array<{kind:'transform',op:object}|{kind:'analysis',ref:object}|{kind:'dataset',name:string}>} steps
    * @returns {Promise<{unknown:number}>} count of analysis lines whose plugin wasn't active.
    */
   async replayScript(steps) {
-    const allTransforms = steps.filter((s) => s.kind === 'transform').map((s) => s.op);
-    // Validate + apply the whole transform set first — throws (and changes nothing)
-    // if a data step is invalid, BEFORE we clear the output pane.
-    await this.#dataStore.replaceTransforms(allTransforms);
+    const sections = this.#sectionize(steps); // throws on an unknown dataset, before any change
+    const restoreTo = this.#dataStore?.activeId ?? null;
+    const plan = sections.map((s) => ({
+      ...s,
+      transforms: s.steps.filter((x) => x.kind === 'transform').map((x) => x.op),
+    }));
+
+    // Validate + apply every section's full transform set FIRST — throws (having changed data
+    // but no output) if a data step is invalid, before the output pane is cleared.
+    for (const sec of plan) {
+      this.#activate(sec.id);
+      // eslint-disable-next-line no-await-in-loop -- one dataset at a time, by construction
+      await this.#dataStore.replaceTransforms(sec.transforms);
+    }
 
     this.#results.clear?.();
-    const acc = [];
     const entries = [];
     let unknown = 0;
-    let appliedLen = allTransforms.length; // data currently reflects all transforms
-    for (const step of steps) {
-      if (step.kind === 'transform') { acc.push(step.op); continue; }
-      const entry = this.analysisEntryFor(step.ref);
-      if (!entry) { unknown += 1; continue; }
-      entry.at = acc.length;
-      if (appliedLen !== acc.length) {
-        // eslint-disable-next-line no-await-in-loop -- rebuild to this analysis's data state
-        await this.#dataStore.replaceTransforms(acc.slice());
-        appliedLen = acc.length;
+    for (const sec of plan) {
+      this.#activate(sec.id);
+      const acc = [];
+      let appliedLen = sec.transforms.length; // data currently reflects all of this section
+      for (const step of sec.steps) {
+        if (step.kind === 'transform') { acc.push(step.op); continue; }
+        const entry = this.analysisEntryFor(step.ref);
+        if (!entry) { unknown += 1; continue; }
+        // The count of THIS dataset's transforms, which is what `at` has always meant.
+        entry.at = acc.length;
+        // And WHICH dataset that count is of. `analysisEntryFor` rebuilds an entry from a script
+        // line, which names a plugin and its inputs and nothing about data — and `#execute` does
+        // not stamp provenance either (only the live `run`/`runVerb`/`runHost` paths do). So
+        // before this, every Syntax Run silently dropped `datasetId` from every analysis it
+        // replayed: harmless in a one-dataset project, and in a two-dataset one it un-attributed
+        // the whole log, which is what `clearFor` and the script sections both read.
+        entry.datasetId = sec.id ?? this.#dataStore?.activeId ?? null;
+        if (appliedLen !== acc.length) {
+          // eslint-disable-next-line no-await-in-loop -- rebuild to this analysis's data state
+          await this.#dataStore.replaceTransforms(acc.slice());
+          appliedLen = acc.length;
+        }
+        // eslint-disable-next-line no-await-in-loop -- analyses run in script order
+        await this.#execute(entry);
+        entries.push(entry);
       }
-      // eslint-disable-next-line no-await-in-loop -- analyses run in script order
-      await this.#execute(entry);
-      entries.push(entry);
+      // Leave this dataset at its final state before moving to the next.
+      if (appliedLen !== sec.transforms.length) {
+        // eslint-disable-next-line no-await-in-loop -- per section
+        await this.#dataStore.replaceTransforms(sec.transforms);
+      }
     }
-    // Leave the dataset at its final state.
-    if (appliedLen !== allTransforms.length) await this.#dataStore.replaceTransforms(allTransforms);
+    this.#activate(restoreTo); // the user's dataset tab is theirs, not the script's
+
     // R-script (host) steps aren't part of the native syntax text, so they're not in
     // `steps` — preserve them across a Syntax Run: re-run at the end and keep them in
     // the log (else a Run would silently drop them).
@@ -689,6 +787,12 @@ export class PluginActions {
       for (const entry of entries) this.#analysisLog.restore(entry);
     }
     return { unknown };
+  }
+
+  /** Switch the active dataset, tolerating a manager that has none (tests, no project). */
+  #activate(id) {
+    if (id == null) return;
+    this.#dataStore?.setActive?.(id);
   }
 }
 

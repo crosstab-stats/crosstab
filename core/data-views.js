@@ -12,7 +12,7 @@
  */
 
 import { CoreEvents } from './event-bus.js';
-import { serialize, parse } from './crosstab-syntax.js';
+import { serializeProject, parse } from './crosstab-syntax.js';
 import { openSyntaxGuide } from './syntax-guide.js';
 import { stataToScript } from './stata-import.js';
 import { spssToScript } from './spss-import.js';
@@ -1458,9 +1458,7 @@ export class HistoryPanel {
    * analysis log) and (re)draw the step gutter. */
   #fillEditor() {
     if (!this.#ta) return;
-    const { applied } = this.#store.getHistory();
-    const analyses = this.#analysisLog ? this.#analysisLog.entries() : [];
-    this.#ta.value = serialize(applied, analyses);
+    this.#ta.value = this.#scriptText();
     this.#dirty = false; // the textarea now matches committed state
     this.#runFailed = false;
     this.#updateDirtyHint();
@@ -1517,12 +1515,12 @@ export class HistoryPanel {
         } catch { return null; }
       });
       if (!info) continue; // blank or plain comment
-      if (info.kind !== 'analysis') stepNo += 1;
+      if (info.kind !== 'analysis' && info.kind !== 'dataset') stepNo += 1;
       const marker = el('div', null, `history-panel__gmark is-${info.kind}`);
       marker.style.cssText =
         `position:absolute; left:0; right:0; height:${SYN_LINE_H}px; top:${SYN_PAD + i * SYN_LINE_H}px; ` +
         'display:flex; gap:5px; align-items:center; padding:0 6px 0 8px; overflow:hidden; white-space:nowrap;';
-      const mk = el('span', info.kind === 'analysis' ? '∑' : info.kind === 'source' ? '🔒' : String(stepNo), 'history__marker');
+      const mk = el('span', info.kind === 'analysis' ? '∑' : info.kind === 'source' ? '🔒' : info.kind === 'dataset' ? '▤' : String(stepNo), 'history__marker');
       mk.style.cssText = 'flex:0 0 auto; opacity:.7; font-size:11px;' + (info.kind === 'analysis' ? 'color:var(--accent,#2572a5);' : '');
       const title = el('span', info.title, 'history__title');
       title.style.cssText =
@@ -1540,12 +1538,13 @@ export class HistoryPanel {
       // diverged tooltip. Editing the text keeps one source, and Run is still what applies it.
       //
       // Not offered on a 🔒 data source: its line is a comment the parser ignores, so the
-      // buttons would move something that does not move.
+      // buttons would move something that does not move. Nor on a `dataset` heading, where
+      // moving the line would silently re-attribute every step beneath it to another dataset.
       //
       // Always present rather than shown on hover, because a touch device has no hover — the
       // same lesson the plugin tooltips taught, and this is the only way to reorder in Syntax
       // view without a keyboard (Alt+↑/↓ needs one).
-      if (info.kind !== 'source') {
+      if (info.kind !== 'source' && info.kind !== 'dataset') {
         const lineIndex = i;
         const controls = el('span', null, 'history-panel__gctl');
         controls.append(
@@ -1601,8 +1600,24 @@ export class HistoryPanel {
    */
   #currentScript() {
     if (this.#dirty && this.#ta) return { text: this.#ta.value, draft: true };
-    const { applied } = this.#store.getHistory();
-    return { text: serialize(applied, this.#analysisLog ? this.#analysisLog.entries() : []), draft: false };
+    return { text: this.#scriptText(), draft: false };
+  }
+
+  /**
+   * The project as script text — EVERY dataset, each in its own `dataset` section (#179).
+   *
+   * It used to serialize the active dataset's transforms against the whole project's analyses,
+   * which in a two-dataset project interleaved one dataset's analyses into the other's
+   * timeline and made Run re-execute them against the wrong data. `serializeProject` places
+   * each analysis in the section of the dataset it actually ran against; a single-dataset
+   * project is byte-identical to before, `dataset` statement included (there isn't one).
+   */
+  #scriptText() {
+    const analyses = this.#analysisLog ? this.#analysisLog.entries() : [];
+    const histories = this.#store.getHistories?.();
+    if (histories?.length) return serializeProject(histories, analyses);
+    // No manager (a bare store, as in tests): one unnamed dataset.
+    return serializeProject([{ id: null, name: '', applied: this.#store.getHistory().applied }], analyses);
   }
 
   /**
@@ -1985,6 +2000,13 @@ function classifyScriptLine(rawLine, describe) {
     const em = trimmed.match(/^#\s*edit\b\s*(.*)$/i);
     if (em) return { kind: 'source', title: 'Cell edit', detail: em[1].trim() };
     return null; // plain comment
+  }
+  // A section heading, not a step: it changes which dataset the following lines describe and
+  // applies nothing itself, so it must not take a step number (the numbers would then not
+  // match the Steps view) and must not offer ▲▼✕ (there is nothing to reorder).
+  if (/^dataset\s/i.test(trimmed)) {
+    const nm = trimmed.replace(/^dataset\s+/i, '').trim().replace(/^"|"$/g, '');
+    return { kind: 'dataset', title: nm || 'dataset', detail: 'dataset' };
   }
   if (/^run\s/i.test(trimmed)) {
     const lbl = (rawLine.match(/#\s*(.+?)\s*$/) || [])[1]; // trailing "# Label" from serialize

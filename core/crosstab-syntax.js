@@ -54,7 +54,22 @@ const TRANSFORM_TYPES = new Set(['setVariable', 'setCell', 'computeVar', 'recode
  * @returns {string}
  */
 export function serialize(applied, analyses = []) {
-  const lines = ['# CrossTab syntax — edit and Run to rebuild. Lines starting with # are comments.', ''];
+  return `${[HEADER, '', ...bodyLines(applied, analyses)].join('\n')}\n`;
+}
+
+/** The one-line preamble every script carries. */
+const HEADER = '# CrossTab syntax — edit and Run to rebuild. Lines starting with # are comments.';
+
+/**
+ * One dataset's transforms with its analyses spliced in at their `at` positions — the body
+ * of a script, without the header, so {@link serialize} and {@link serializeProject} share it
+ * rather than keeping two copies of the interleaving rule.
+ *
+ * @param {object[]} applied @param {object[]} analyses  ALREADY scoped to this dataset
+ * @returns {string[]}
+ */
+function bodyLines(applied, analyses = []) {
+  const lines = [];
 
   // Place each analysis at the data position it was run at (`at` = number of data
   // transforms applied then), so the script shows — and Run reproduces — its output
@@ -85,7 +100,59 @@ export function serialize(applied, analyses = []) {
   // go at the end, in ascending order.
   for (const k of [...byAt.keys()].sort((a, b) => a - b)) flush(k);
 
-  return lines.join('\n') + '\n';
+  return lines;
+}
+
+/**
+ * The whole project as one script, when it holds more than one dataset (#179 step 1).
+ *
+ * **The bug this exists to fix.** `serialize()` took the ACTIVE dataset's transforms and
+ * *every* analysis in the log, and placed each analysis by its `at` count alone. But `at`
+ * means "after N transforms of the dataset this ran against", and the entry says which
+ * dataset that was (`datasetId`) — so in a two-dataset project the script interleaved
+ * dataset B's analyses into dataset A's transform sequence by a number that measured
+ * something else, and a Run then re-executed them against A. Nothing errored; the output
+ * just quietly described the wrong data.
+ *
+ * The log was never at fault — one `ProjectLog`, ops targeted `ds:<id>/…`, every analysis
+ * carrying its `datasetId`. It was the readers that ignored it.
+ *
+ * **The fix is a `dataset` statement.** Each dataset gets a section, introduced by
+ * `dataset "Name"`, holding its own transforms with its own analyses placed among them.
+ * `at` is then read inside the section it belongs to, which is what it always meant.
+ *
+ * Sections are emitted in COLLECTION order (the order the dataset switcher shows), not
+ * active-first: the serialized text must not change when the user clicks a different
+ * dataset tab, or the unsaved-draft detection would flap every time they switched.
+ *
+ * A single-dataset project emits **no** `dataset` statement and is byte-identical to what
+ * it produced before — the overwhelmingly common case pays nothing, and every existing
+ * script still round-trips.
+ *
+ * @param {Array<{id: number|string, name: string, applied: object[]}>} datasets
+ *   in collection order
+ * @param {import('./analysis-log.js').AnalysisEntry[]} [analyses] the whole project's
+ * @returns {string}
+ */
+export function serializeProject(datasets, analyses = []) {
+  const sets = Array.isArray(datasets) ? datasets.filter(Boolean) : [];
+  if (sets.length <= 1) return serialize(sets[0]?.applied ?? [], analyses);
+
+  const runs = Array.isArray(analyses) ? analyses : [];
+  // An analysis recorded before `datasetId` was tracked cannot be attributed, and guessing
+  // would put it under a heading that asserts something untrue. They go in the first
+  // section, which is where an un-sectioned script would have run them anyway.
+  const known = new Set(sets.map((d) => String(d.id)));
+  const orphans = runs.filter((a) => a.datasetId == null || !known.has(String(a.datasetId)));
+
+  const lines = [HEADER, ''];
+  sets.forEach((d, i) => {
+    const mine = runs.filter((a) => String(a.datasetId) === String(d.id));
+    lines.push(`dataset ${str(d.name ?? '')}`);
+    lines.push(...bodyLines(d.applied ?? [], i === 0 ? [...orphans, ...mine] : mine));
+    if (i < sets.length - 1) lines.push('');
+  });
+  return `${lines.join('\n')}\n`;
 }
 
 /**
@@ -276,7 +343,9 @@ export function parse(text) {
     try {
       const op = parseLine(line);
       if (!op) continue;
-      if (op.__analysis) {
+      if (op.__dataset != null) {
+        steps.push({ kind: 'dataset', name: op.__dataset, line: i + 1 });
+      } else if (op.__analysis) {
         analyses.push(op.__analysis);
         steps.push({ kind: 'analysis', ref: op.__analysis });
       } else {
@@ -305,6 +374,20 @@ function stripComment(s) {
 }
 
 function parseLine(line) {
+  // dataset "Name"  — which dataset the lines that follow belong to (#179). Absent in a
+  // single-dataset script, which is why it is optional rather than required: every script
+  // written before this statement existed still means exactly what it meant.
+  // `\b` so the rule owns the word without swallowing `dataset_id`; a bare `dataset` then
+  // reports the missing name instead of falling through to be misread as something else.
+  let dm = line.match(/^dataset\b\s*(.*)$/i);
+  if (dm) {
+    const arg = dm[1].trim();
+    if (!arg) throw new Error('dataset: expected a dataset name');
+    const name = arg.startsWith('"') ? readStr(arg) : readIdent(arg);
+    if (!name) throw new Error('dataset: expected a dataset name');
+    return { __dataset: name };
+  }
+
   // run pluginId.fn {json}
   let m = line.match(/^run\s+([A-Za-z0-9_-]+)\.([A-Za-z0-9_]+)\s*(\{.*\})?\s*$/);
   if (m) {
