@@ -167,7 +167,16 @@ export class AnalysisLog {
    */
   clearFor(datasetId) {
     if (datasetId == null) return;
-    this.clear((e) => e.datasetId != null && String(e.datasetId) === String(datasetId));
+    const want = String(datasetId);
+    // A cross-dataset analysis has more than one parent (#179), so it is invalidated by a
+    // re-import of ANY of them. The conservative reading on purpose: a stale entry the user can
+    // re-run is a much smaller harm than output that silently quotes data no longer there.
+    this.clear((e) => {
+      if (Array.isArray(e.datasetIds) && e.datasetIds.length) {
+        return e.datasetIds.some((id) => id != null && String(id) === want);
+      }
+      return e.datasetId != null && String(e.datasetId) === want;
+    });
   }
 
   /** Serialise for the project bundle: the tier's **raw** ops (runAnalysis/removeAnalysis

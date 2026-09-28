@@ -238,3 +238,29 @@ test('cross-dataset metadata is served for the datasets a run names', () => {
   assert.match(src, /#withQualifiedMeta/);
   assert.match(src, /formatVarRef\(ds, m\.name\)/, 'the extra entries must be keyed by the reference');
 });
+
+// =============================================================================
+// Which dataset the RESULT belongs to
+// =============================================================================
+
+test('a cross-dataset analysis is invalidated by a re-import of EITHER parent', async () => {
+  // The conservative reading, on purpose: a stale entry the user can re-run is a much smaller
+  // harm than output that silently quotes data no longer there. An ordinary run is unaffected —
+  // it records no `datasetIds` at all, so nothing about a saved project grows.
+  const { AnalysisLog } = await import('../core/analysis-log.js');
+  const { ProjectLog } = await import('../core/project-log.js');
+  const log = new AnalysisLog(new ProjectLog());
+  log.record({ runId: 'a', pluginId: 'p', run: 'x', label: 'own', inputs: {}, at: 0, datasetId: 1 });
+  log.record({ runId: 'b', pluginId: 'p', run: 'x', label: 'spanning', inputs: {}, at: 0, datasetId: 1, datasetIds: ['1', '2'] });
+  log.clearFor(2); // dataset 2 was re-imported; nothing of dataset 1's own is touched
+  assert.deepEqual(log.entries().map((e) => e.label), ['own']);
+});
+
+test('the parent list is ids, so it survives a rename', () => {
+  // Matched by `clearFor` against a dataset id; a renamed dataset is still the same data.
+  const src = readFileSync('core/plugin-actions.js', 'utf8');
+  const start = src.indexOf('#parentDatasets(inputs, specs) {');
+  const fn = src.slice(start, src.indexOf('@see the disclosure note', start));
+  assert.match(fn, /hit \? hit\.id : null/);
+  assert.match(fn, /named\.length < 2\) return \{\}/, 'an ordinary run records no extra field');
+});

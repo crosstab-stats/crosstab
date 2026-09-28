@@ -408,6 +408,10 @@ export class PluginActions {
       // Which dataset this ran against, so a destructive re-import of THAT dataset
       // clears only its own analyses (#149 A1) instead of every analysis in the project.
       datasetId: this.#dataStore?.activeId ?? null,
+      // Every dataset this run READ, not just the one it belongs to (#179) — so a
+      // destructive re-import of any of them invalidates it. Absent for the ordinary
+      // single-dataset run, where `datasetId` already says everything.
+      ...this.#parentDatasets(gathered, specs),
       // Output position before this run, so undo can remove exactly this analysis's
       // output blocks (the tail it's about to append).
       outputMark: this.#results.getModel ? this.#results.getModel().length : 0,
@@ -481,6 +485,28 @@ export class PluginActions {
     return ok;
   }
 
+  /**
+   * The ids of every dataset a run READ (#179), as `{datasetIds}` — or nothing at all for the
+   * ordinary single-dataset run, where `datasetId` already says everything and an extra field
+   * would only bloat every saved project.
+   *
+   * Ids, not names, because this outlives a rename: it is what `clearFor` matches when a
+   * dataset is destructively re-imported, and a renamed dataset is still the same data.
+   */
+  #parentDatasets(inputs, specs) {
+    const named = datasetsNamed(inputs || {}, specs || []);
+    if (named.length < 2) return {};
+    const list = this.#dataStore?.list?.() ?? [];
+    const idOf = (name) => {
+      if (name == null) return this.#dataStore?.activeId ?? null;
+      const hit = list.find((d) => String(d.name).trim() === String(name).trim())
+        ?? list.find((d) => String(d.name).trim().toLowerCase() === String(name).trim().toLowerCase());
+      return hit ? hit.id : null;
+    };
+    const ids = [...new Set(named.map(idOf).filter((x) => x != null).map(String))];
+    return ids.length > 1 ? { datasetIds: ids } : {};
+  }
+
   /** @see the disclosure note in {@link PluginActions##execute}. */
   #discloseSpan(e) {
     const named = datasetsNamed(e.inputs || {}, e.specs || []);
@@ -524,6 +550,10 @@ export class PluginActions {
       // Which dataset this ran against, so a destructive re-import of THAT dataset
       // clears only its own analyses (#149 A1) instead of every analysis in the project.
       datasetId: this.#dataStore?.activeId ?? null,
+      // Every dataset this run READ, not just the one it belongs to (#179) — so a
+      // destructive re-import of any of them invalidates it. Absent for the ordinary
+      // single-dataset run, where `datasetId` already says everything.
+      ...this.#parentDatasets(inputs, []),
       outputMark: this.#results.getModel ? this.#results.getModel().length : 0,
     };
     const ok = await this.#execute(entry);
@@ -582,6 +612,10 @@ export class PluginActions {
       // Which dataset this ran against, so a destructive re-import of THAT dataset
       // clears only its own analyses (#149 A1) instead of every analysis in the project.
       datasetId: this.#dataStore?.activeId ?? null,
+      // Every dataset this run READ, not just the one it belongs to (#179) — so a
+      // destructive re-import of any of them invalidates it. Absent for the ordinary
+      // single-dataset run, where `datasetId` already says everything.
+      ...this.#parentDatasets(gathered, specs),
       outputMark: this.#results.getModel ? this.#results.getModel().length : 0,
     };
     const ok = await this.#execute(entry);

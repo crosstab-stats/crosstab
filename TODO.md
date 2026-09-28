@@ -3533,6 +3533,122 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       earlier. They were concatenated purely because this gap is open — see #131 Layer 3a.
       That is the first real client for this feature, and it already exists.
 
+- [x] **#179 — DONE (2026-09-28). A variable picker can offer every open dataset, and the
+      script finally knows which dataset an analysis belongs to.** Raised by the owner:
+      *"rather than forcing the second dataset to be input as new columns it can instead be
+      kept as a second dataset and the plugin variable picker simply lists the variables from
+      all datasets as options."* Built in three commits, in the order the design conversation
+      settled them.
+
+      **The conversation changed the design twice, and both corrections mattered more than
+      the code.**
+
+      *First:* the obvious implementation is to build one combined frame, which forces a
+      choice about what "the same row" means. The owner rejected the premise — *"inner join
+      makes sense only for multi-selects where there is some sense of relationship. If I'm
+      selecting A from dataset1 and B from dataset2 and then run frequencies there's no reason
+      for any kind of truncation or implied relationship"* — and the evidence went further
+      than either option. `builtin-frequencies` computes `n_valid <- sum(w[!is.na(x)])` and
+      prints a **Missing** row, so **truncating** silently drops cases *and* **padding with
+      NA** inflates: a 1,200-row variable beside a 1,540-row one would report either 1,200
+      cases or 1,540-with-340-missing, and the 340 never existed. Both are the host asserting
+      a relationship only the analysis knows about. So it asserts nothing: **one R frame per
+      dataset, every input bound from its own**, and each analysis's R decides. `lm(y ~ x)`
+      across mismatched lengths raises R's own *"variable lengths differ"* — loud, and the
+      plugin's rule rather than ours. Cheap, too: only 5 of 63 plugins touch the bare `df` and
+      none use `injectData`, so `df` stays the analysis's own dataset and a single-dataset run
+      emits a byte-identical prelude.
+
+      *Second:* the owner read the `at` note and said *"I thought the OneTrueLog was
+      per-project, not per-dataset. If the 'at' is per dataset this sounds like a huge latent
+      correctness bug."* It was — and the log was innocent. See step 1.
+
+  - [x] **Step 1 — the script and its replay honour `datasetId`.** The log was never at fault:
+        one `ProjectLog`, data ops targeted `ds:<id>/…`, every live run stamped with its
+        dataset. Every *reader* ignored that second field. `serialize()` took the ACTIVE
+        dataset's transforms and EVERY analysis and placed each by `at` alone — a number
+        measuring a different dataset's transforms. `replayScript()` then applied all of it to
+        the active dataset and re-ran every analysis against it: no error, output that quietly
+        described the wrong data. `repositionAnalysis()` clamped `at` to the wrong list and
+        rebuilt the wrong dataset underneath it.
+
+        **And one the tests found that nobody had suspected:** `analysisEntryFor()` rebuilds an
+        entry from a script line, which says nothing about data, and `#execute` stamps no
+        provenance either (only the live `run`/`runVerb`/`runHost` paths do). So a Syntax Run
+        **dropped `datasetId` from every analysis it replayed** — the field `clearFor` reads to
+        decide whose analyses a destructive re-import invalidates. Harmless in a one-dataset
+        project; in a two-dataset one it un-attributed the entire log.
+
+        The fix is a **`dataset "Name"` statement**: one section per dataset, `at` read inside
+        its own section, each analysis executed against the dataset it belongs to and
+        re-stamped with it. A single-dataset project emits no statement and is byte-identical.
+        An unknown dataset name aborts the whole Run *before* a transform is applied or an
+        output block cleared, and the error names the datasets that do exist. Re-entering a
+        dataset continues its section, so its transform count stays a count of its own
+        transforms however the script is laid out. In the gutter the line is a heading, not a
+        step: no number (they would stop matching the Steps view) and no reorder controls
+        (moving it would silently re-attribute every step beneath it).
+
+  - [x] **A variable reference stops being a bare string** — `dataset:variable`, qualifier
+        optional, backtick-quoted when a dataset name contains a colon. `core/var-ref.js` is
+        the only thing that knows the spelling. A colon cannot appear in a bare identifier, so
+        every reference ever written still parses; a **dot could not have worked**, because
+        dots are legal inside variable names and R/Stata users write them constantly, so
+        `wave2.income` is already a plausible single variable. Unqualified is the bare name, so
+        recorded inputs and scripts for a single-dataset project are unchanged.
+
+  - [x] **What "the same row" means: nothing, and that is the answer.** Each input gets exactly
+        its own values; no join, no truncation, no padding. The host discloses what it will not
+        decide — a note naming each dataset and its row count, and saying rows are not matched.
+        The one residual risk is R's own recycling inside a plugin that assumes equal lengths
+        (`data.frame(a, b)` when one length divides the other); the disclosure is what makes
+        that visible, and it is the plugin's rule to fix.
+
+  - [x] **Injection spans datasets** — one frame per dataset named, `df` still the analysis's
+        own. The per-dataset boundary is an explicit seam now: `getColumns`,
+        `getVariableMeta` and `getInjectionParquet` take a `dataset` name, and an unresolvable
+        name **throws** rather than falling back to the active dataset, because silently
+        reading the wrong dataset is the failure this whole entry exists to prevent and it
+        would produce a plausible number.
+
+  - [x] **Which dataset the RESULT belongs to** — `datasetId` stays the dataset the run belongs
+        to (what `at` and the script sections are measured against), and a cross-dataset run
+        also records **`datasetIds`**, every dataset it read, as ids so they survive a rename.
+        `clearFor` invalidates on ANY parent. Conservative deliberately: a stale entry the user
+        can re-run is a much smaller harm than output that silently quotes data that is gone.
+        An ordinary run records no extra field at all.
+
+  - [x] **Scope: a host toggle, never a plugin opt-in.** The owner: *"I see no reason a plugin
+        should ever care about the provenance of the data we are passing it. This is all host
+        based logic, drop a toggle in the picker (can auto-on if the data grid already has
+        variables from multiple datasets selected)."* Off by default — for most analyses mixing
+        datasets is a mistake, and defaulting every list to the union would make `AGE`
+        ambiguous in the one place a user most needs to trust what they clicked. On by itself
+        when variables are already ticked in more than one dataset, because that IS the intent.
+        Shown only when a second dataset exists, since a switch that cannot change anything
+        reads as broken. A foreign variable is badged with its dataset rather than left to a
+        colon in the code beside it.
+
+      **Two holes that would have made this nominal rather than real**, both found by following
+      a qualified reference through the code instead of assuming it arrived:
+      - A **`level` input** (pick a category of a variable chosen earlier) enumerated the column
+        against the active dataset. A qualified reference found nothing, which reads as "no
+        categories" — and for a non-optional level input that aborts the dialog with no message.
+      - **Five plugins read columns directly** rather than through the R injection. A store keys
+        columns by bare name, so a qualified reference came back absent and the plugin quietly
+        worked on nothing. The broker routes those reads now and keys them by the reference
+        asked for, the same rule the R binding uses. The broker also serves **metadata** for the
+        datasets a run names: without it a `Wave 2:income` input arrived with no label, no value
+        labels and its user-missing codes silently un-folded — quietly wrong rather than broken.
+
+      **Not done, and deliberately:** renaming a dataset does not rewrite the qualified
+      references in saved analyses. They resolve by name, so a rename makes them fail *loudly*
+      at the next run (naming the dataset that is missing) rather than silently reading
+      something else. Rewriting them would mean editing recorded inputs in the log, which is a
+      bigger decision than this entry; the loud failure is the safe interim.
+
+      Original:
+
 - [ ] **#179 — cross-dataset variable inputs: let a picker offer variables from EVERY
       open dataset, not just the active one (user, 2026-09-21).** "Rather than forcing
       the second dataset to be input as new columns it can instead be kept as a second
