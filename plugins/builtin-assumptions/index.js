@@ -27,7 +27,10 @@ export const manifest = {
     'Syntax: run builtin-assumptions.levene {"outcome": "income", "groups": "region"}\n' +
     '  • vars — the numeric variables to check for normality.\n' +
     '  • outcome / groups — the numeric measure and the variable defining the groups.',
-  rPackages: ['svglite'],
+  // Nothing to install: the Q–Q plots are chart models now, drawn by the host. The offline
+  // cache pre-fetches the R packages of enabled plugins, so a stale entry here is a
+  // download every user pays for.
+  rPackages: [],
   menu: [
     {
       label: 'Normality (Shapiro–Wilk)…',
@@ -63,25 +66,34 @@ export async function normality(app, { vars }) {
   // data.frame.
   const rCode = `
     d <- if (is.data.frame(vars)) vars else data.frame(v = vars)
-    library(svglite)
+    # NUMBERS, not a picture (#131). qqnorm(plot.it = FALSE) hands back the very x/y it would
+    # have plotted, and qqline's line is the one through the first and third quartiles — so the
+    # host can draw this, which buys live controls, the palette and re-editability, and drops
+    # this plugin's svglite dependency.
     stat <- function(col) {
       x <- suppressWarnings(as.numeric(col)); x <- x[is.finite(x)]; n <- length(x)
-      if (n < 3) return(list(n = n, skew = NA_real_, kurt = NA_real_, W = NA_real_, p = NA_real_, svg = ""))
+      if (n < 3) return(list(n = n, skew = NA_real_, kurt = NA_real_, W = NA_real_, p = NA_real_,
+                             qx = numeric(0), qy = numeric(0), slope = NA_real_, int = NA_real_))
       m <- mean(x); s2 <- sum((x - m)^2) / n
       skew <- (sum((x - m)^3) / n) / s2^1.5
       kurt <- (sum((x - m)^4) / n) / s2^2 - 3
       sw <- if (n <= 5000) shapiro.test(x) else list(statistic = NA_real_, p.value = NA_real_)
-      .dev <- svgstring(width = 5, height = 3.4, pointsize = 10)
-      par(mar = c(4, 4, 1.4, 1))
-      qqnorm(x, main = "", pch = 19, col = "#2980b9", cex = 0.7)
-      qqline(x, col = "#999999", lty = 2)
-      dev.off()
-      list(n = n, skew = skew, kurt = kurt, W = unname(sw$statistic), p = sw$p.value, svg = .dev())
+      qq <- qqnorm(x, plot.it = FALSE)
+      qy <- quantile(x, c(0.25, 0.75), names = FALSE, type = 7)
+      qx <- qnorm(c(0.25, 0.75))
+      sl <- diff(qy) / diff(qx)
+      list(n = n, skew = skew, kurt = kurt, W = unname(sw$statistic), p = sw$p.value,
+           qx = unname(qq$x), qy = unname(qq$y), slope = sl, int = qy[1] - sl * qx[1])
     }
     res <- lapply(d, stat)
+    # Points come back CONCATENATED with a 1-based variable index: each variable has a different
+    # number of them, and a ragged list would not survive the flat marshalling below.
     list(
       n = sapply(res, \`[[\`, "n"), skew = sapply(res, \`[[\`, "skew"), kurt = sapply(res, \`[[\`, "kurt"),
-      W = sapply(res, \`[[\`, "W"), p = sapply(res, \`[[\`, "p"), svg = sapply(res, \`[[\`, "svg")
+      W = sapply(res, \`[[\`, "W"), p = sapply(res, \`[[\`, "p"),
+      qqx = unlist(lapply(res, \`[[\`, "qx")), qqy = unlist(lapply(res, \`[[\`, "qy")),
+      qqi = rep(seq_along(res), sapply(res, function(z) length(z$qx))),
+      qqSlope = sapply(res, \`[[\`, "slope"), qqInt = sapply(res, \`[[\`, "int")
     )`;
 
   const { result } = await app.webr.run(rCode);
@@ -105,10 +117,28 @@ export async function normality(app, { vars }) {
   );
   await app.results.appendText('A significant Shapiro–Wilk (p < .05) means the data depart from normal. Read it with the Q–Q plot and the sample size in mind.');
 
-  const svgs = r.str('svg');
+  // One chart model per variable, split out of the concatenated points by their index.
+  const qx = r.num('qqx');
+  const qy = r.num('qqy');
+  const qi = r.num('qqi');
+  const slope = r.num('qqSlope');
+  const intercept = r.num('qqInt');
   for (let i = 0; i < names.length; i++) {
-    if (!/<svg[\s>]/i.test(svgs[i] || '')) continue;
-    await app.results.appendPlot(stripSize(svgs[i]), { title: `Q–Q plot — ${label(meta, names[i])}` });
+    const points = [];
+    for (let k = 0; k < qx.length; k++) if (qi[k] === i + 1) points.push({ x: qx[k], y: qy[k] });
+    if (!points.length) continue; // fewer than 3 finite values — the table above already says so
+    await app.results.appendChart({
+      kind: 'scatter',
+      title: `Q–Q plot — ${label(meta, names[i])}`,
+      xTitle: 'Theoretical quantiles',
+      yTitle: 'Sample quantiles',
+      points,
+      // The normal line is what this plot MEANS, so it is a reference rather than a trend:
+      // grey, on by default, and no equation printed (see the scatter kind).
+      ...(Number.isFinite(slope[i])
+        ? { reference: { slope: slope[i], intercept: intercept[i], label: 'Normal line' } }
+        : {}),
+    });
   }
 }
 
@@ -164,10 +194,6 @@ function metaMap(meta) {
 }
 function label(meta, name) {
   return meta.get(name)?.label || name;
-}
-/** svglite emits a fixed pt width/height; drop them so the plot fills its box. */
-function stripSize(svg) {
-  return svg.replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1').replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1');
 }
 function flat(rList) {
   const byName = {};

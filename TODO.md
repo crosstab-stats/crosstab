@@ -5702,26 +5702,23 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 - [ ] **Baked-chart review — the lesson from #140 (2026-08-05).** Originally 21
       `appendPlot` call sites across 16 plugins handed the host a FINISHED SVG, so they
       got no live controls, no palette, no re-editability. Reviewed to find out why.
-      **Now 16 sites** — box, wordcloud (×2), steps and forest have all been migrated,
-      and builtin-plots, builtin-survival and builtin-meta each dropped `svglite`.
+      **Now 13 sites across 9 plugins** — box, wordcloud (×2), steps, forest and the
+      three diagnostic scatters have been migrated, and builtin-plots, builtin-survival,
+      builtin-meta, builtin-regression and builtin-assumptions each dropped `svglite`.
 
       **The dividing line is not difficulty — it is who holds the numbers.**
 
-      - **16 are R-produced** (svglite): Kaplan–Meier, forest plot, impulse-response,
-        GARCH volatility, CA biplot, MDS map, NMDS, two Q–Q plots, residuals-vs-fitted,
-        Lorenz curve, network graph, choropleth, STL decomposition, ARIMA forecast,
-        boxplot. These share a property: the coordinates do not exist until R has fitted
-        something. But that is a DATA-EXTRACTION choice, not a barrier — `survfit`
-        already yields time/surv/lower/upper vectors; we ask R for a picture instead of
-        those numbers.
-      - **5 are produced in JavaScript by the plugin itself** and still baked:
+      - **10 are R-produced** (svglite): impulse-response, conditional volatility, CA
+        biplot, MDS map, NMDS, Lorenz curve, network graph, choropleth, STL
+        decomposition, ARIMA forecast. These share a property: the coordinates do not
+        exist until R has fitted something. But that is a DATA-EXTRACTION choice, not a
+        barrier — `survfit` already yields time/surv/lower/upper vectors; we ask R for a
+        picture instead of those numbers.
+      - **3 are produced in JavaScript by the plugin itself** and still baked:
         builtin-decisions' cost-effectiveness plane, decision tree and workspace
-        preview; builtin-caqdas' word cloud; builtin-textanalytics' word cloud.
-        (builtin-caqdas does not import WebR at all.) These are the tell: **the plugin
-        already holds every number and is hand-drawing SVG anyway.** Nothing
-        architectural stops them participating — there is simply no kind. And TWO
-        plugins independently hand-rolled a word cloud, which is exactly the
-        duplication the kind registry exists to prevent.
+        preview. These are the tell: **the plugin already holds every number and is
+        hand-drawing SVG anyway.** Nothing architectural stops them participating —
+        there is simply no kind.
 
       **Rule to apply going forward: ask R for NUMBERS, not pictures.** A plugin should
       return fitted geometry and let the host draw it. Baking stays legitimate where the
@@ -5739,10 +5736,31 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       What is left is the genuinely hard residue, and it is the right residue: the 16
       remaining sites are mostly cases where **the geometry is the hard part and is not
       ours** — force-directed network layout, map projections, biplot arrow fields,
-      ordination configurations. The exceptions still worth doing are builtin-decisions'
+      ordination configurations. The one exception still worth doing is builtin-decisions'
       three JS-drawn figures (cost-effectiveness plane, decision tree, workspace
-      preview), which already hold every number they need, plus the two Q–Q plots and
-      residuals-vs-fitted, which are just scatter with a reference line.
+      preview), which already hold every number they need.
+
+      5. ~~**the three diagnostic scatters**~~ — done (2026-09-27); regression's
+         *Residuals vs Fitted* and *Normal Q–Q*, and builtin-assumptions' per-variable
+         *Q–Q plot*, are chart models now. They needed no new kind: `scatter` gained a
+         `reference` field, which is the guide line a plot's MEANING requires (zero
+         residual, the normal line) as opposed to `trend`, which reports a finding — so
+         a reference is grey, dashed and prints no equation, because `Y = 0 + 1(X)`
+         beside a Q–Q plot is a tautology. Both plugins' `rPackages` are now empty,
+         which matters beyond tidiness: the offline cache pre-fetches the R packages of
+         every enabled plugin, so a stale entry is a download nobody uses.
+
+         Two things the migration turned up, neither blocking:
+         - The assumptions plugin returns every variable's Q–Q points in ONE
+           concatenated vector plus a 1-based index, because per-variable results are
+           ragged and a ragged list does not survive the flat marshalling. Any future
+           plugin returning per-group geometry hits the same wall.
+         - Three chart controls declare a `default` that disagrees with their kind's
+           `baseView` (scatter `trendLine`, pie `valueLabels`, forest `gridlines`). It
+           is latent — `viewFromSpec` always writes the key, so `controlValue` never
+           falls back to `default` — but the declaration is a lie a reader will believe,
+           and any future "reset to default" path would act on it. One-line fix each;
+           worth doing the next time that file is open.
 
 
 > These three were captured during the college tour and lived only in the memory

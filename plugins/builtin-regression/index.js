@@ -25,7 +25,10 @@ export const manifest = {
     'Syntax: run builtin-regression.run {"dv": "income", "ivs": ["age", "education"]}\n' +
     '  • dv — the numeric outcome to explain.\n' +
     '  • ivs — one or more predictor variables.',
-  rPackages: ['svglite'],
+  // No svglite: the diagnostics are chart MODELS now, drawn by the host. Dropping the
+  // declaration matters beyond tidiness — the offline cache pre-fetches the R packages of
+  // ENABLED plugins, so a stale entry costs every user a download they never use.
+  rPackages: [],
   menu: [
     {
       label: 'Linear…',
@@ -66,12 +69,15 @@ export async function run(app, { dv: dvName, ivs: ivNames }) {
     sw <- if (n >= 3 && n <= 5000) shapiro.test(res) else list(statistic = NA_real_, p.value = NA_real_)
     dw <- sum(diff(res)^2) / sum(res^2)
     cook <- cooks.distance(fit); thr <- 4 / n
-    library(svglite)
-    .d1 <- svgstring(width = 5.6, height = 3.6, pointsize = 10); par(mar = c(4.2, 4.2, 2, 1))
-    plot(fitv, res, xlab = "Fitted values", ylab = "Residuals", pch = 19, col = "#2980b9", cex = 0.7)
-    abline(h = 0, lty = 2, col = "#999999"); dev.off(); svgResid <- .d1()
-    .d2 <- svgstring(width = 5.6, height = 3.6, pointsize = 10); par(mar = c(4.2, 4.2, 2, 1))
-    qqnorm(res, main = NULL, pch = 19, col = "#2980b9", cex = 0.7); qqline(res, lty = 2, col = "#999999"); dev.off(); svgQQ <- .d2()
+    # The two diagnostic plots are returned as NUMBERS, not pictures (#131 / baked-chart
+    # review): the host draws them, so they get live controls, the colourblind-safe palette
+    # and re-editability, and this plugin needs no svglite. qqnorm(plot.it = FALSE) returns
+    # the very x/y it would have drawn; qqline's line is the one through the quartiles.
+    qq <- qqnorm(res, plot.it = FALSE)
+    qy <- quantile(res, c(0.25, 0.75), names = FALSE, type = 7)
+    qx <- qnorm(c(0.25, 0.75))
+    qqSlope <- diff(qy) / diff(qx)
+    qqInt <- qy[1] - qqSlope * qx[1]
     list(
       terms = rownames(co), estimate = co[, 1], se = co[, 2], t = co[, 3], p = co[, 4],
       ciLo = ci[, 1], ciHi = ci[, 2], vifNames = colnames(X), vif = unname(vifv),
@@ -83,7 +89,8 @@ export async function run(app, { dv: dvName, ivs: ivNames }) {
       n     = n,
       swW = unname(sw$statistic), swP = sw$p.value, dw = dw,
       nInf = sum(cook > thr, na.rm = TRUE), maxCook = max(cook, na.rm = TRUE), thr = thr,
-      svgResid = svgResid, svgQQ = svgQQ
+      fitted = unname(fitv), resid = unname(res),
+      qqx = unname(qq$x), qqy = unname(qq$y), qqSlope = qqSlope, qqInt = qqInt
     )`;
 
   const { result } = await app.webr.run(rCode);
@@ -138,8 +145,32 @@ export async function run(app, { dv: dvName, ivs: ivNames }) {
   await app.results.appendText(
     'Residuals should scatter randomly around 0 (constant variance, linearity) and track the diagonal on the Q–Q plot (normality). Durbin–Watson near 2 suggests independent residuals (1.5–2.5 is fine); VIF above ~5–10 flags multicollinearity.',
   );
-  if (/<svg[\s>]/i.test(m.svgResid)) await app.results.appendPlot(stripSize(m.svgResid), { title: 'Residuals vs Fitted' });
-  if (/<svg[\s>]/i.test(m.svgQQ)) await app.results.appendPlot(stripSize(m.svgQQ), { title: 'Normal Q-Q (residuals)' });
+  // Both diagnostics are scatter plots with a straight guide line, so they are chart MODELS
+  // the host renders — not SVG this plugin bakes. The guide is a `reference`, not a `trend`:
+  // it states what the plot means (zero residual; the normal line) rather than reporting a
+  // finding, so it is on by default and carries no equation.
+  if (m.fitted.length && m.fitted.length === m.resid.length) {
+    await app.results.appendChart({
+      kind: 'scatter',
+      title: 'Residuals vs Fitted',
+      xTitle: 'Fitted values',
+      yTitle: 'Residuals',
+      points: m.fitted.map((x, i) => ({ x, y: m.resid[i] })),
+      reference: { slope: 0, intercept: 0, label: 'Zero line' },
+    });
+  }
+  if (m.qqx.length && m.qqx.length === m.qqy.length) {
+    await app.results.appendChart({
+      kind: 'scatter',
+      title: 'Normal Q–Q (residuals)',
+      xTitle: 'Theoretical quantiles',
+      yTitle: 'Sample quantiles',
+      points: m.qqx.map((x, i) => ({ x, y: m.qqy[i] })),
+      ...(Number.isFinite(m.qqSlope)
+        ? { reference: { slope: m.qqSlope, intercept: m.qqInt, label: 'Normal line' } }
+        : {}),
+    });
+  }
 }
 
 // --- helpers -----------------------------------------------------------------
@@ -171,10 +202,6 @@ function normalizeResult(rList) {
     const first = a.length ? a[0] : v;
     return first == null ? NaN : Number(first);
   };
-  const str1 = (v) => {
-    const a = arr(v);
-    return a.length ? String(a[0] ?? '') : '';
-  };
   return {
     terms: arr(byName.terms).map(String),
     estimate: arr(byName.estimate).map(Number),
@@ -197,19 +224,18 @@ function normalizeResult(rList) {
     dw: scalar(byName.dw),
     nInf: scalar(byName.nInf),
     maxCook: scalar(byName.maxCook),
-    svgResid: str1(byName.svgResid),
-    svgQQ: str1(byName.svgQQ),
+    fitted: arr(byName.fitted).map(Number),
+    resid: arr(byName.resid).map(Number),
+    qqx: arr(byName.qqx).map(Number),
+    qqy: arr(byName.qqy).map(Number),
+    qqSlope: scalar(byName.qqSlope),
+    qqInt: scalar(byName.qqInt),
   };
 }
 
 /** Format a 95% CI like "[lo, hi]". */
 function ci(lo, hi) {
   return Number.isFinite(lo) && Number.isFinite(hi) ? `[${lo.toFixed(3)}, ${hi.toFixed(3)}]` : '—';
-}
-
-/** svglite emits a fixed pt width/height; drop them so the plot fills its box. */
-function stripSize(svg) {
-  return svg.replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1').replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1');
 }
 
 function rStr(s) {

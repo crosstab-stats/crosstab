@@ -468,6 +468,12 @@ export function chartKinds(lib) {
       : [{ key: '__points__', label: 'Points' }]),
     baseView: (model) => ({
       trendLine: !!model.trend,
+      // A REFERENCE line is not a trend line, and the difference is why it is a separate
+      // field. A trend is a finding, drawn in red, printed with its equation, and OFF until
+      // asked for. A reference is part of what the plot MEANS — the identity line of a Q–Q
+      // plot, the zero line of a residual plot — so it is on by default, grey, and carries no
+      // equation: reading `Y = 0 + 1(X)` off a Q–Q plot would be reading a tautology.
+      referenceLine: !!model.reference,
       pointSize: 4,
       legend: model.groups && model.groups.length > 1 ? 'right' : 'none',
     }),
@@ -476,6 +482,15 @@ export function chartKinds(lib) {
       return [
       ...(model.trend
         ? [{ id: 'trendLine', group: 'Chart', label: 'Trend line', type: 'check', default: false }]
+        : []),
+      ...(model.reference
+        ? [{
+          id: 'referenceLine',
+          group: 'Chart',
+          label: model.reference.label || 'Reference line',
+          type: 'check',
+          default: true,
+        }]
         : []),
       pointSizeControl({ default: 4 }),
       gridlinesControl(),
@@ -554,6 +569,17 @@ export function chartKinds(lib) {
     minorTicks(out, xticks, xScale, 'x', box.y0);
     out.push(`<line x1="${box.x0}" y1="${r(yScale(yMax))}" x2="${box.x0}" y2="${r(yScale(yMin))}" stroke="${AXIS}" stroke-width="1"/>`);
     out.push(`<line x1="${box.x0}" y1="${r(yScale(yMin))}" x2="${r(xScale(xMax))}" y2="${r(yScale(yMin))}" stroke="${AXIS}" stroke-width="1"/>`);
+
+    // Behind the points and behind any trend line: a guide, not a finding.
+    if (view.referenceLine !== false && model.reference && Number.isFinite(model.reference.slope)) {
+      const { slope, intercept } = model.reference;
+      const y1 = slope * xMin + intercept;
+      const y2 = slope * xMax + intercept;
+      out.push(
+        `<line x1="${r(xScale(xMin))}" y1="${r(yScale(y1))}" x2="${r(xScale(xMax))}" y2="${r(yScale(y2))}" `
+          + 'stroke="#8c98a4" stroke-width="1.5" stroke-dasharray="5 4"/>',
+      );
+    }
 
     const r0 = Math.max(1.5, view.pointSize || 4);
     for (const p of pts) {
