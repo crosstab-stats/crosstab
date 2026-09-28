@@ -586,14 +586,47 @@ export class DatasetManager {
   getDataFrame(o) {
     return this.active.getDataFrame(o);
   }
+
+  /**
+   * Resolve an `opts.dataset` NAME to the store that holds it (#179).
+   *
+   * Reads can now name a dataset other than the active one — that is the whole of
+   * cross-dataset variable inputs on the host side. A name that does not resolve THROWS rather
+   * than falling back to the active dataset: silently reading the wrong dataset is the failure
+   * this feature exists to make impossible, and it would produce a plausible number.
+   *
+   * Names, not ids, because the qualifier is the one the user typed and the one the script
+   * shows (see var-ref.js). Exact match first, then case-insensitively.
+   */
+  #storeNamed(name) {
+    if (name == null || name === '') return this.active;
+    const want = String(name).trim();
+    const hit = this.#collection().find((c) => String(c.name).trim() === want)
+      ?? this.#collection().find((c) => String(c.name).trim().toLowerCase() === want.toLowerCase());
+    const ds = hit && this.#datasets.get(hit.id);
+    if (!ds) {
+      const have = this.#collection().map((c) => `"${c.name}"`).join(', ');
+      throw new Error(`no open dataset called “${want}”${have ? ` — this project has ${have}.` : '.'}`);
+    }
+    return ds;
+  }
+
+  /** Strip the dataset selector from read options before handing them to a store. */
+  static #withoutDataset(o) {
+    if (!o || !('dataset' in o)) return o;
+    const { dataset, ...rest } = o;
+    void dataset;
+    return rest;
+  }
+
   getColumns(o) {
-    return this.active.getColumns(o);
+    return this.#storeNamed(o?.dataset).getColumns(DatasetManager.#withoutDataset(o));
   }
   getRows(o) {
     return this.active.getRows(o);
   }
   getVariableMeta(o) {
-    return this.active?.getVariableMeta(o) ?? [];
+    return this.#storeNamed(o?.dataset)?.getVariableMeta(DatasetManager.#withoutDataset(o)) ?? [];
   }
   getSelectedVariables() {
     return this.active?.getSelectedVariables() ?? [];
@@ -602,7 +635,7 @@ export class DatasetManager {
     return this.active.setSelectedVariables(n);
   }
   getInjectionParquet(o) {
-    return this.active.getInjectionParquet(o);
+    return this.#storeNamed(o?.dataset).getInjectionParquet(DatasetManager.#withoutDataset(o));
   }
   updateVariable(n, p) {
     return this.active.updateVariable(n, p);

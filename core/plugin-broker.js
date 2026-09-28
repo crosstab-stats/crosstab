@@ -37,6 +37,7 @@
  */
 
 import { debug } from './debug.js';
+import { formatVarRef, parseVarRef } from './var-ref.js';
 import { PendingCalls } from './plugin-lifecycle.js';
 import { currentAuthor } from './user-identity.js';
 
@@ -118,6 +119,14 @@ export class PluginBroker {
     // Output bracketing for plugin-driven output (e.g. a workspace's own buttons):
     // the plugin supplies only the title; the host stamps the trustworthy
     // attribution, so a plugin can't mislabel its output.
+    // Variable metadata for a CROSS-DATASET run (#179). A plugin looks up a variable's label,
+    // value labels and designated missing codes by the reference it was handed — and the base
+    // call only knows the active dataset, so a `Wave 2:income` input would arrive with no meta
+    // at all: no label, no value labels, and its user-missing codes silently not folded to NA.
+    // Appended rather than replacing, keyed by the qualified reference, and only for datasets
+    // the in-flight inputs actually name, so nothing changes for a single-dataset run.
+    this.#dispatch['data.getVariableMeta'] = (opts) =>
+      this.#withQualifiedMeta(services.data.getVariableMeta(opts), services.data);
     this.#dispatch['results.beginAnalysis'] = (title) => services.results.beginAnalysis(title, this.#attribution);
     this.#dispatch['results.endAnalysis'] = () => services.results.endAnalysis();
     // Declarative plugins call `webr.run(code)` with no injection args; the host
@@ -301,6 +310,36 @@ export class PluginBroker {
   clearActiveInputs() {
     this.#activeInputs = null;
     this.#activeInjectOpts = {};
+  }
+
+  /** Datasets the in-flight inputs reach into, by name. Empty for an ordinary run. */
+  #inputDatasets() {
+    const out = new Set();
+    for (const d of Object.values(this.#activeInputs || {})) {
+      if (d?.kind !== 'variables' || !Array.isArray(d.columns)) continue;
+      for (const ref of d.columns) {
+        const { dataset } = parseVarRef(ref);
+        if (dataset) out.add(dataset);
+      }
+    }
+    return out;
+  }
+
+  /** @see the `data.getVariableMeta` override in the constructor. */
+  #withQualifiedMeta(base, data) {
+    const names = this.#inputDatasets();
+    if (!names.size) return base;
+    const out = Array.isArray(base) ? [...base] : [];
+    for (const ds of names) {
+      let meta = [];
+      try {
+        meta = data.getVariableMeta({ dataset: ds }) || [];
+      } catch {
+        continue; // a dataset that has since closed: the lookup will fail loudly at read time
+      }
+      for (const m of meta) out.push({ ...m, name: formatVarRef(ds, m.name), dataset: ds });
+    }
+    return out;
   }
 
   /** Host-facing: set this plugin's output attribution ("Name · origin"). The

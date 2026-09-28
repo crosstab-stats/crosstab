@@ -25,6 +25,7 @@
  */
 
 import { CoreEvents } from './event-bus.js';
+import { parseVarRef } from './var-ref.js';
 import { getAssets } from './assets.js';
 import { debug } from './debug.js';
 
@@ -77,37 +78,92 @@ function safeStr(x) {
 }
 
 /**
- * The union of all columns referenced by `variables`-kind inputs, deduped — the
- * set `df` must contain so the per-input aliases can slice from it.
- * @param {Object<string, {kind:string, columns?:string[]}>} injectInputs
- * @returns {string[]}
+ * Group an input set's columns by the dataset each names (#179).
+ *
+ * The key is the dataset name, or `''` for "this analysis's own dataset" — the unqualified
+ * case, which is every reference written before qualifiers existed and still the overwhelming
+ * majority. The `''` group is always present and always first, so `df` keeps its meaning.
+ *
+ * @param {Object<string, object>} injectInputs
+ * @returns {Map<string, string[]>} dataset name (or '') → bare column names
  */
-function inputColumns(injectInputs) {
-  const set = new Set();
-  for (const d of Object.values(injectInputs)) {
-    if (d?.kind === 'variables' && Array.isArray(d.columns)) d.columns.forEach((c) => set.add(c));
+function groupInputColumns(injectInputs) {
+  const groups = new Map([['', []]]);
+  for (const d of Object.values(injectInputs || {})) {
+    if (d?.kind !== 'variables' || !Array.isArray(d.columns)) continue;
+    for (const ref of d.columns) {
+      const { dataset, name } = parseVarRef(ref);
+      const key = dataset ?? '';
+      if (!groups.has(key)) groups.set(key, []);
+      const list = groups.get(key);
+      if (!list.includes(name)) list.push(name);
+    }
   }
-  return [...set];
+  return groups;
 }
 
 /**
- * R prelude that binds each declared input under its own name, sliced from `df`:
+ * R prelude that binds each declared input under its own name, sliced from the frame of the
+ * dataset it names:
  *  - multi variables → a `data.frame` (`name <- df[c("a","b")]`)
  *  - single variable → a vector (`name <- df[["a"]]`)
  *  - number/choice/text → the scalar value
  * Skipped optional inputs bind to `NULL`/`NA` so the plugin can test for them.
+ *
+ * ## Why each input comes from ITS OWN frame, and nothing is joined
+ *
+ * When inputs span datasets there is a pull towards building one combined frame, which forces a
+ * choice about what "the same row" means. Both available answers corrupt something:
+ *
+ *  - **Truncate to the shortest** and a frequency table silently loses cases: a variable from a
+ *    1,200-row dataset, picked beside a 1,540-row one, would report 1,200 — for an analysis
+ *    with no relationship to that other dataset at all.
+ *  - **Pad with NA to the longest** and it inflates. `builtin-frequencies` computes
+ *    `n_valid <- sum(w[!is.na(x)])` and prints a **Missing** row, so the same variable would
+ *    report N = 1,540 with 340 missing values that do not exist.
+ *
+ * Both are the host deciding something only the analysis knows. Frequencies of two variables
+ * from two datasets implies no pairing; a regression across them implies a total one. So the
+ * host asserts nothing: every input gets exactly its own values, and each analysis's own R
+ * decides. `lm(y ~ x)` on mismatched lengths raises R's own "variable lengths differ" — loud,
+ * correct, and the plugin's rule rather than ours.
+ *
+ * `df` stays bound to the unqualified group, so the few plugins that read the frame directly
+ * are untouched.
+ *
+ * **The R-side key is the reference the plugin was handed.** Unqualified, that is the bare name
+ * and the prelude is byte-identical to before. Qualified, it is the whole `Wave 2:age` string —
+ * which is what the plugin passes back when it does `vars[[name]]`, and what keeps two datasets'
+ * `age` from colliding into one column that silently reports the first one twice.
+ *
  * @param {Object<string, object>} injectInputs
+ * @param {Map<string, string>} [frames] dataset name (or '') → the R symbol holding its frame
  * @returns {string}
  */
-function buildInputAliases(injectInputs) {
+function buildInputAliases(injectInputs, frames = new Map([['', 'df']])) {
   const q = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  const frameFor = (ref) => frames.get(parseVarRef(ref).dataset ?? '') ?? 'df';
   let out = '';
   for (const [name, d] of Object.entries(injectInputs)) {
     if (d?.kind === 'variables') {
       const cols = Array.isArray(d.columns) ? d.columns : [];
+      const qualified = cols.some((c) => parseVarRef(c).dataset != null);
       if (!cols.length) out += `${name} <- NULL\n`;
-      else if (d.multiple) out += `${name} <- df[c(${cols.map(q).join(', ')})]\n`;
-      else out += `${name} <- df[[${q(cols[0])}]]\n`;
+      else if (!qualified) {
+        // Unchanged: one dataset, bare names, exactly the prelude this always emitted.
+        if (d.multiple) out += `${name} <- df[c(${cols.map(q).join(', ')})]\n`;
+        else out += `${name} <- df[[${q(cols[0])}]]\n`;
+      } else if (d.multiple) {
+        // `list`, not `data.frame`: a data.frame would recycle the shorter columns to a common
+        // length, which is exactly the fabrication this design refuses. A plugin that needs a
+        // rectangle builds one itself, and gets R's error when the lengths do not permit it.
+        // Keyed by the full reference, so `vars[["Wave 2:age"]]` resolves and two datasets'
+        // `age` stay two columns.
+        const parts = cols.map((c) => `${q(c)} = ${frameFor(c)}[[${q(parseVarRef(c).name)}]]`);
+        out += `${name} <- list(${parts.join(', ')})\n`;
+      } else {
+        out += `${name} <- ${frameFor(cols[0])}[[${q(parseVarRef(cols[0]).name)}]]\n`;
+      }
     } else if (d?.kind === 'number') {
       out += `${name} <- ${Number.isFinite(d.value) ? d.value : 'NA'}\n`;
     } else {
@@ -411,14 +467,29 @@ export class WebRManager {
         if (injectInputs) {
           // New plugin API: bind each declared input into R under its own name —
           // a single-variable input → a vector, a multi → a data.frame, a scalar
-          // input → its value. `df` is built (union of all chosen columns) as the
-          // source the aliases slice from.
+          // input → its value.
           // Designated missing codes are folded to NA at injection so every analysis
           // honours them centrally (#missing-values) — unless the analysis opts out
           // via `keepMissing` (e.g. Frequencies, which reports the missing breakdown).
-          const cols = inputColumns(injectInputs);
-          if (cols.length) prelude = await this.#buildInjection(webR, env, cols, !keepMissing);
-          prelude += buildInputAliases(injectInputs);
+          //
+          // ONE FRAME PER DATASET the inputs name (#179). `df` is still the analysis's own
+          // dataset, so a single-dataset run produces exactly the prelude it always did; a
+          // reference qualified `Wave 2:income` gets its own frame, and nothing is joined —
+          // see {@link buildInputAliases} for why combining them would have to fabricate.
+          const groups = groupInputColumns(injectInputs);
+          const frames = new Map();
+          let n = 0;
+          for (const [dsName, cols] of groups) {
+            const symbol = dsName === '' ? 'df' : `.ct_ds${(n += 1)}`;
+            frames.set(dsName, symbol);
+            if (!cols.length) continue;
+            // eslint-disable-next-line no-await-in-loop -- one Parquet write per dataset
+            prelude += await this.#buildInjection(webR, env, cols, !keepMissing, {
+              frame: symbol,
+              dataset: dsName || null,
+            });
+          }
+          prelude += buildInputAliases(injectInputs, frames);
         } else if (injectData) {
           // Raw dataset bind (r-console / manual R) stays raw — the escape hatch.
           prelude = await this.#buildInjection(webR, env, variables);
@@ -715,18 +786,30 @@ export class WebRManager {
    * @param {any} webR
    * @param {Object} env - captureR env; the fallback binds `.crosstab_data` here.
    * @param {string[]} [variables]
+   * @param {boolean} [applyMissing]
+   * @param {{frame?: string, dataset?: string|null}} [into] - which R symbol to bind, and which
+   *   dataset to read (#179). Defaults to `df` from the active dataset, which is every call
+   *   site that existed before cross-dataset inputs.
    * @returns {Promise<string>} R prelude source.
    */
-  async #buildInjection(webR, env, variables, applyMissing = false) {
-    const opts = { ...(variables ? { variables } : {}), applyMissing };
+  async #buildInjection(webR, env, variables, applyMissing = false, into = {}) {
+    const frame = into.frame || 'df';
+    const opts = {
+      ...(variables ? { variables } : {}),
+      ...(into.dataset ? { dataset: into.dataset } : {}),
+      applyMissing,
+    };
 
     if (this.#getInjectionParquet && (await this.#ensureNanoparquet(webR))) {
       try {
         const bytes = await this.#getInjectionParquet(opts);
         if (bytes && bytes.byteLength) {
-          await webR.FS.writeFile(INJECT_PATH, bytes);
+          // One path per frame: two datasets in one run would otherwise write the second over
+          // the first and read it back twice.
+          const path = frame === 'df' ? INJECT_PATH : `${INJECT_PATH}.${frame}`;
+          await webR.FS.writeFile(path, bytes);
           return (
-            `df <- as.data.frame(nanoparquet::read_parquet("${INJECT_PATH}"), ` +
+            `${frame} <- as.data.frame(nanoparquet::read_parquet("${path}"), ` +
             `stringsAsFactors = FALSE, check.names = FALSE)\n`
           );
         }
@@ -745,8 +828,10 @@ export class WebRManager {
         typeof v === 'number' && Number.isNaN(v) ? null : v,
       );
     }
-    env['.crosstab_data'] = cols;
-    return 'df <- as.data.frame(.crosstab_data, stringsAsFactors = FALSE, check.names = FALSE)\n';
+    // A distinct env key per frame, for the same reason the Parquet path uses a distinct file.
+    const key = frame === 'df' ? '.crosstab_data' : `.crosstab_data_${frame.replace(/[^A-Za-z0-9_]/g, '')}`;
+    env[key] = cols;
+    return `${frame} <- as.data.frame(${key}, stringsAsFactors = FALSE, check.names = FALSE)\n`;
   }
 
   /**

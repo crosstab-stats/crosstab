@@ -17,6 +17,7 @@
  */
 
 import { CoreEvents } from './event-bus.js';
+import { datasetsNamed } from './var-ref.js';
 import { registerRemoteChartKind, unregisterChartKind } from './chart-renderer.js';
 import { newOpId } from './merge.js';
 
@@ -466,10 +467,35 @@ export class PluginActions {
       this.#results.endAnalysis();
       this.#bus.emit(CoreEvents.ANALYSIS_FINISHED, { plugin: e.pluginId });
     }
+    // A run that reached across datasets says so, in the output (#179).
+    //
+    // The host will not decide whether those variables are related — that is the plugin's
+    // business, and joining or padding them to a common length would silently change an N. What
+    // the host CAN do, and is the only party able to, is disclose: how many rows each dataset
+    // brought, and that nothing was matched up. Without this the reader of a saved analysis has
+    // no way to tell that its inputs came from two places.
+    if (ok) this.#discloseSpan(e);
     // Tag the output this run produced with its runId (only on success — a failed run
     // isn't recorded, so its error block has no analysis to be removed with).
     if (ok) this.#results.assignRun?.(outMark, e.runId);
     return ok;
+  }
+
+  /** @see the disclosure note in {@link PluginActions##execute}. */
+  #discloseSpan(e) {
+    const named = datasetsNamed(e.inputs || {}, e.specs || []);
+    if (named.length < 2) return;
+    const rows = new Map((this.#dataStore?.list?.() ?? []).map((d) => [String(d.name), d.rowCount]));
+    const own = (this.#dataStore?.list?.() ?? []).find((d) => d.active)?.name ?? 'this dataset';
+    const parts = named.map((ds) => {
+      const label = ds ?? own;
+      const n = rows.get(String(label));
+      return Number.isFinite(n) ? `${label} (${n.toLocaleString()} rows)` : String(label);
+    });
+    this.#results.appendText(
+      `_Variables from ${named.length} datasets: ${parts.join(', ')}. `
+      + 'Rows are not matched across datasets — each variable keeps its own cases._',
+    );
   }
 
   /** Register a host-action runner (see {@link PluginActions#runHost}). */
