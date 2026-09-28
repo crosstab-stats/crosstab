@@ -906,9 +906,26 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         multi-select adds a control whose state is harder to read than the thing it saves.
         Revisit only if the plugin count grows enough that the flat list stops being
         workable.
-  - [ ] **Phase 2 (unchanged):** export/import a preset as a small JSON file, so a lab lead can
-        hand out "our lab's toolkit". Cheap now that the shape exists — and it pairs with
-        #185's deployments, where a department could ship one.
+  - [x] **Phase 2 — DONE (2026-09-27): export AND import a preset as a JSON file.** The owner
+        made the pairing explicit and named the use that sets the bar: *"JSON export would also
+        need a json import. And that can be handy for the lab-style guide (chapter one could
+        include ‘import this json to enable the plugins you'll need’)."* That turns the format
+        into a **teaching artefact**, not a backup, which decided three things:
+    - [x] **Import applies immediately.** "Import this file to enable the plugins you'll need"
+          is one step, not two — so the file is saved to the user's presets AND selected.
+    - [x] **The errors are written for a student.** A file picker's reader cannot act on
+          "unexpected token", so each refusal says what was expected: not JSON, no name, lists
+          no plugins, written by a newer CrossTab. A hand-written `{"name":…, "plugins":["id"]}`
+          is accepted too — a lab lead may well type one rather than export it.
+    - [x] **`.json`, not a house extension.** `.ctpreset` would match the family, but an LMS
+          that blocks unknown types would stop a handbook's chapter one dead.
+    - [x] The safety property is what makes handing the file to a class reasonable, and is
+          stated in the module: **a preset NAMES plugins, it does not carry them.** Importing
+          selects from what the install already has and reports the rest, so a file from a
+          stranger is no more dangerous than a list of names. 5 more tests (17 in the file;
+          suite 1096 → 1101).
+  - [ ] **The obvious pairing, when #184 happens:** ship a preset file per chapter, and #185's
+        deployments could hand one out with the install.
   - [ ] **Not browser-tested:** the dropdown, Save/Rename/Delete, and the missing-plugin note.
 
 - [x] **#166 — THE CODING SYSTEM: one defect behind four symptoms. DONE (verified

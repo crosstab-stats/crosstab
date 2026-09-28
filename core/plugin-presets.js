@@ -164,3 +164,67 @@ function write(list, store) {
     /* quota or a private-mode store: the in-memory list still applies for this session */
   }
 }
+
+/**
+ * The file form of a preset (#162 phase 2) — so a lab lead can hand one out.
+ *
+ * The use the owner named: a course handbook whose chapter one says *"import this file to
+ * enable the plugins you'll need"*. That makes the format part of a teaching artefact, not
+ * just a backup, so it is plain JSON with a version marker rather than anything clever.
+ *
+ * **What a preset file can and cannot do is the point.** It names plugins; it carries no
+ * code and cannot install anything. Importing one selects from what this install already
+ * has and REPORTS the rest — so a file from a stranger is no more dangerous than a list of
+ * names, which is exactly why it is safe to hand to a class.
+ *
+ * IDs are what travel. A key is where the file happens to sit on the author's machine, so it
+ * is written for completeness but a shared file will almost always resolve by id.
+ */
+export const PRESET_FILE_VERSION = 1;
+
+/** Serialise a preset for download. */
+export function exportPresetFile(preset) {
+  return `${JSON.stringify({
+    crosstabPreset: PRESET_FILE_VERSION,
+    name: String(preset?.name ?? 'Preset'),
+    plugins: (preset?.plugins || []).map((p) => ({ id: p?.id ?? null, key: p?.key ?? null })),
+  }, null, 2)}
+`;
+}
+
+/** A filename a student will recognise, and an LMS will not refuse. */
+export function presetFileName(name) {
+  const slug = String(name ?? 'preset').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  return `crosstab-preset-${slug || 'preset'}.json`;
+}
+
+/**
+ * Read a preset file. Throws with a sentence a person can act on — this is opened from a
+ * file picker, where "unexpected token" tells the reader nothing about what to do next.
+ *
+ * The marker is checked when present but not required: a hand-written `{name, plugins}` is
+ * obviously a preset and refusing it would be pedantry.
+ *
+ * @param {string} text @returns {{name: string, plugins: Array<{id: string|null, key: string|null}>}}
+ */
+export function parsePresetFile(text) {
+  let raw;
+  try {
+    raw = JSON.parse(String(text ?? ''));
+  } catch {
+    throw new Error('That file is not JSON, so it is not a CrossTab preset.');
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('A preset file holds one object with a name and a list of plugins.');
+  }
+  if (raw.crosstabPreset != null && Number(raw.crosstabPreset) > PRESET_FILE_VERSION) {
+    throw new Error('That preset was written by a newer CrossTab than this one.');
+  }
+  const name = String(raw.name ?? '').trim();
+  if (!name) throw new Error('That preset file has no name in it.');
+  const plugins = (Array.isArray(raw.plugins) ? raw.plugins : [])
+    .map((p) => (typeof p === 'string' ? { id: p, key: null } : { id: p?.id ?? null, key: p?.key ?? null }))
+    .filter((p) => p.id || p.key);
+  if (!plugins.length) throw new Error(`“${name}” lists no plugins.`);
+  return { name, plugins };
+}

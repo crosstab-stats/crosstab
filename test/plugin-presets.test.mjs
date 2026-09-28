@@ -23,8 +23,11 @@ import assert from 'node:assert/strict';
 
 import {
   deletePreset,
+  exportPresetFile,
   listPresets,
   presetExists,
+  presetFileName,
+  parsePresetFile,
   presetFromSelection,
   renamePreset,
   resolvePreset,
@@ -162,4 +165,61 @@ test('presetFromSelection reads the picker’s chosen keys', () => {
     './nonexistent/index.js', // a stale key in the selection must not invent an entry
   ]));
   assert.deepEqual(chosen.map((p) => p.id), ['builtin-spatial', 'builtin-sem']);
+});
+
+// =============================================================================
+// The file form (#162 phase 2) — a preset a lab lead can hand out
+// =============================================================================
+
+/**
+ * The owner's use for it: a course handbook whose chapter one says *"import this file to
+ * enable the plugins you'll need"*. That makes the format a teaching artefact, which sets the
+ * bar for two things — it round-trips exactly, and when it cannot be read it says something a
+ * student can act on instead of "unexpected token".
+ *
+ * The safety property is worth stating because it is what makes handing the file to a class
+ * reasonable: **a preset names plugins, it does not carry them.** Importing selects from what
+ * the install already has and reports the rest; a file from a stranger is no more dangerous
+ * than a list of names.
+ */
+test('a preset survives export and import unchanged', () => {
+  const preset = { name: 'Soc 301 — Week 1', plugins: [{ id: 'builtin-crosstabs', key: './plugins/builtin-crosstabs/index.js' }] };
+  assert.deepEqual(parsePresetFile(exportPresetFile(preset)), preset);
+});
+
+test('the file names itself in a way a student and an LMS will both accept', () => {
+  assert.equal(presetFileName('Soc 301 — Week 1'), 'crosstab-preset-soc-301-week-1.json');
+  assert.equal(presetFileName(''), 'crosstab-preset-preset.json');
+  // .json rather than a house extension: an LMS that blocks unknown types would stop a
+  // handbook's chapter one dead.
+  assert.ok(presetFileName('x').endsWith('.json'));
+});
+
+test('a bare list of ids is accepted — the hand-written case', () => {
+  // A lab lead may well write this by hand rather than exporting one.
+  const out = parsePresetFile('{"name":"Lab kit","plugins":["builtin-sem","builtin-caqdas"]}');
+  assert.deepEqual(out.plugins, [{ id: 'builtin-sem', key: null }, { id: 'builtin-caqdas', key: null }]);
+});
+
+test('a file that cannot be used says what is wrong with it', () => {
+  // Opened from a file picker, where a parser's own wording tells the reader nothing.
+  const cases = [
+    ['not json at all', /not JSON/],
+    ['[]', /one object/],
+    ['{"plugins":["a"]}', /no name/],
+    ['{"name":"Empty","plugins":[]}', /lists no plugins/],
+    ['{"crosstabPreset":99,"name":"X","plugins":["a"]}', /newer CrossTab/],
+  ];
+  for (const [text, why] of cases) {
+    assert.throws(() => parsePresetFile(text), why, `accepted ${text}`);
+  }
+});
+
+test('an imported preset is resolved like any other — reported, not silently shrunk', () => {
+  // The handbook case with a plugin this install lacks: the student has to be told, or they
+  // work through chapter two wondering why a menu is missing.
+  const file = exportPresetFile({ name: 'Kit', plugins: [{ id: 'builtin-caqdas' }, { id: 'lab-only-thing' }] });
+  const { keys, missing } = resolvePreset(parsePresetFile(file), CATALOGUE, { infraCategories: INFRA });
+  assert.ok(keys.has('./plugins/builtin-caqdas/index.js'));
+  assert.deepEqual(missing, ['lab-only-thing']);
 });

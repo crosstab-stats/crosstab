@@ -27,8 +27,10 @@ import { showCaveats, showGettingAround } from './help.js';
 import { addsTooltip, openPluginAbout } from './plugin-manager.js';
 import { deployConfig } from './deploy-config.js';
 import {
-  deletePreset, listPresets, presetExists, presetFromSelection, renamePreset, resolvePreset, savePreset,
+  deletePreset, exportPresetFile, listPresets, parsePresetFile, presetExists, presetFileName,
+  presetFromSelection, renamePreset, resolvePreset, savePreset,
 } from './plugin-presets.js';
+import { downloadFile } from './export-service.js';
 
 /** Curated-core analysis plugins, pre-selected on a fresh "Start blank". */
 const CORE_IDS = new Set([
@@ -515,6 +517,9 @@ export class Launcher {
     const sel = overlay.querySelector('.ctl__preset');
     const note = overlay.querySelector('.ctl__presetnote');
     const saveBtn = overlay.querySelector('.ctl__presetsave');
+    const exportBtn = overlay.querySelector('.ctl__presetexport');
+    const importBtn = overlay.querySelector('.ctl__presetimport');
+    const fileInput = overlay.querySelector('.ctl__presetfile');
     const renameBtn = overlay.querySelector('.ctl__presetrename');
     const delBtn = overlay.querySelector('.ctl__presetdel');
     if (!sel) return;
@@ -534,6 +539,7 @@ export class Launcher {
       const chosen = !!sel.value;
       renameBtn.hidden = !chosen;
       delBtn.hidden = !chosen;
+      exportBtn.hidden = !chosen;
       sel.hidden = presets.length === 0; // nothing saved yet: just the Save link
     };
 
@@ -541,6 +547,7 @@ export class Launcher {
       const preset = listPresets().find((p) => p.name === sel.value);
       renameBtn.hidden = !preset;
       delBtn.hidden = !preset;
+      exportBtn.hidden = !preset;
       if (!preset) return say('');
       // Infra (codecs/importers/exporters) is unioned in rather than left to the preset: one
       // saved before a codec existed must not leave someone unable to open that file type.
@@ -600,6 +607,46 @@ export class Launcher {
       deletePreset(name);
       fill('');
       say(`Deleted “${name}”.`);
+    });
+
+    // Export / import a preset as a small JSON file (#162 phase 2). The use the owner named
+    // is a course handbook whose chapter one says "import this file to enable the plugins
+    // you'll need" — so the file is a teaching artefact, and importing has to be one step.
+    exportBtn.addEventListener('click', () => {
+      const preset = listPresets().find((p) => p.name === sel.value);
+      if (!preset) return;
+      downloadFile(presetFileName(preset.name), 'application/json', exportPresetFile(preset));
+      say(`Exported “${preset.name}” — hand that file to anyone running CrossTab.`);
+    });
+
+    importBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', async () => {
+      const file = fileInput.files && fileInput.files[0];
+      fileInput.value = ''; // so the same file can be picked again after a fix
+      if (!file) return;
+      let preset;
+      try {
+        preset = parsePresetFile(await file.text());
+      } catch (err) {
+        return say(err.message, true);
+      }
+      // A file cannot bring plugins with it — it names them. So importing is safe in a way
+      // worth being plain about: it selects from what this install already has, and says what
+      // it could not find.
+      if (presetExists(preset.name) && !confirm(`Replace your preset “${preset.name}” with the one in this file?`)) return;
+      savePreset(preset.name, preset.plugins);
+      fill(preset.name);
+      // Apply it straight away: "import this file to enable the plugins you'll need" is one
+      // step, not two.
+      const { keys, missing } = resolvePreset(preset, list, { infraCategories: DEFAULT_ON_CATEGORIES });
+      this.#selected = keys;
+      rerender();
+      say(
+        missing.length
+          ? `Imported “${preset.name}” and selected ${keys.size} plugins. Not installed here: ${missing.join(', ')}`
+          : `Imported “${preset.name}” — ${keys.size} plugins selected.`,
+        missing.length > 0,
+      );
     });
 
     fill('');
@@ -1021,6 +1068,9 @@ function SHELL_HTML(reopen) {
             <button type="button" class="ctl__linkbtn ctl__presetsave">Save preset…</button>
             <button type="button" class="ctl__linkbtn ctl__presetrename" hidden>Rename</button>
             <button type="button" class="ctl__linkbtn ctl__presetdel" hidden>Delete</button>
+            <button type="button" class="ctl__linkbtn ctl__presetexport" hidden>Export…</button>
+            <button type="button" class="ctl__linkbtn ctl__presetimport">Import…</button>
+            <input type="file" class="ctl__presetfile" accept=".json,application/json" hidden>
             <input type="search" class="ctl__search" placeholder="Filter plugins…" autocomplete="off">
           </div>
           <p class="ctl__presetnote" hidden></p>
