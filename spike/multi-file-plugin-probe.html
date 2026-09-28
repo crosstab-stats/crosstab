@@ -185,8 +185,18 @@
        * browser, which is this.
        */
       async function runRealLoader() {
-        const ENTRY = "import { answer } from './util.js';\n"
-          + "export const manifest = { id: 'probe-multifile', name: 'Probe', apiVersion: '0.1.0', answer: answer() };\n";
+        // A VALID declarative plugin, not just a module: the frame rejects a manifest with no
+        // declarative section, and the first version of this fixture had none — so the row
+        // failed on validation while the sibling import it was testing had already worked.
+        const ENTRY = [
+          "import { answer } from './util.js';",
+          "export const manifest = {",
+          "  id: 'probe-multifile', name: 'Probe', apiVersion: '0.1.0',",
+          "  menu: [{ label: 'Probe', run: 'run' }],",
+          "  answer: answer(),", // proves the sibling resolved: this is evaluated at import
+          "};",
+          "export function run() { return answer(); }",
+        ].join('\n');
         const UTIL_SRC = 'export const answer = () => 42;\n';
         // The host half, for real: discover the imports from the source.
         const { modules, issues } = await collectModuleClosure(ENTRY, async (n) => (n === 'util.js' ? UTIL_SRC : null));
@@ -220,7 +230,14 @@
               return;
             }
             if (m.t === 'manifest') {
-              if (!m.ok) return finish({ ok: false, detail: String(m.error || 'load failed') });
+              if (!m.ok) {
+                // Distinguish the two failures that look alike from here: the entry not
+                // resolving its sibling (what this row tests) versus the frame rejecting the
+                // fixture (a bug in this probe, which is what happened the first time).
+                const why = String(m.error || 'load failed');
+                const fixture = /declarative section|manifest/i.test(why) && !/resolve|specifier|module/i.test(why);
+                return finish({ ok: false, detail: fixture ? `probe fixture rejected, not the feature: ${why}` : why });
+              }
               const got = m.manifest && m.manifest.answer;
               finish({ ok: got === 42, detail: got === 42 ? 'real loader path: entry imported its sibling' : `manifest.answer = ${JSON.stringify(got)}` });
             }

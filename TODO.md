@@ -3391,6 +3391,18 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         two-file plugin through the real `plugin-host.html` over the real load message. Since
         this feature gets no browser pass, that row is its end-to-end check — re-run
         `spike/multi-file-plugin-probe.html` after touching any of it.
+
+        **It earned its keep on the first run by failing (owner, iPhone, 2026-09-27) — and the
+        failure was the probe, not the feature.** The row reported *"plugin must export
+        `manifest` with a declarative section"*: my fixture was a bare module, and the frame
+        correctly refuses a manifest that contributes nothing. What that error proves is the
+        opposite of what it looks like — validation runs AFTER `await import()` and after
+        `pluginModule.manifest` is read, and the fixture builds its manifest with
+        `answer: answer()` where `answer` comes from `./util.js`. The sibling import had
+        already resolved and returned 42; only the fixture was invalid. Fixed to a real
+        declarative plugin, and the row now distinguishes the two failures that look alike
+        from the outside: a specifier that would not resolve (the thing under test) versus the
+        frame rejecting the fixture (a bug in the probe).
   - [x] **The frame's alias rule is duplicated (it cannot import a module) and therefore
         TESTED against the host's** — extracted between `aliases:start/end` markers and run on
         the same inputs. Two copies of one rule is the shape that produced the diverged plugin
