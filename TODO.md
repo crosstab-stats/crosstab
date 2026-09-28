@@ -5755,12 +5755,16 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
            concatenated vector plus a 1-based index, because per-variable results are
            ragged and a ragged list does not survive the flat marshalling. Any future
            plugin returning per-group geometry hits the same wall.
-         - Three chart controls declare a `default` that disagrees with their kind's
-           `baseView` (scatter `trendLine`, pie `valueLabels`, forest `gridlines`). It
-           is latent — `viewFromSpec` always writes the key, so `controlValue` never
-           falls back to `default` — but the declaration is a lie a reader will believe,
-           and any future "reset to default" path would act on it. One-line fix each;
-           worth doing the next time that file is open.
+         - A view value has THREE possible sources, and they are not interchangeable:
+           `SHARED_DEFAULTS` → the kind's `baseView` → the saved `model.view`
+           (`viewFromSpec`), with a control descriptor's own `default` consulted only by
+           `controlValue`, and only for a key none of those three set. So pie's
+           `valueLabels: true` and forest's `gridlines: false` are not bugs even though
+           they contradict the shared descriptors — that is a kind overriding a shared
+           default, which is the mechanism working. (First read of this looked like three
+           bugs; two of them were the design.) Scatter's `trendLine` was the real one: a
+           kind-local descriptor saying `false` six lines from the `baseView` that sets
+           it `true`. Made to agree — dead either way, but not a trap any more.
 
 
 > These three were captured during the college tour and lived only in the memory

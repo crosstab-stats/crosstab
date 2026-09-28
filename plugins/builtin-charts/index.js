@@ -481,7 +481,10 @@ export function chartKinds(lib) {
       const multi = (model.groups || []).length > 1;
       return [
       ...(model.trend
-        ? [{ id: 'trendLine', group: 'Chart', label: 'Trend line', type: 'check', default: false }]
+        // `true` to agree with this kind's own baseView six lines up. The declared default
+        // is dead while baseView sets the key — but a descriptor that contradicts the
+        // behaviour two lines away is a trap for whoever reads it next.
+        ? [{ id: 'trendLine', group: 'Chart', label: 'Trend line', type: 'check', default: true }]
         : []),
       ...(model.reference
         ? [{
