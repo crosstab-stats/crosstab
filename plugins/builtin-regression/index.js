@@ -153,8 +153,7 @@ export async function run(app, { dv: dvName, ivs: ivNames }) {
     await app.results.appendChart({
       kind: 'scatter',
       title: 'Residuals vs Fitted',
-      xTitle: 'Fitted values',
-      yTitle: 'Residuals',
+      axes: { x: { title: 'Fitted values' }, y: { title: 'Residuals' } },
       points: m.fitted.map((x, i) => ({ x, y: m.resid[i] })),
       reference: { slope: 0, intercept: 0, label: 'Zero line' },
     });
@@ -163,8 +162,7 @@ export async function run(app, { dv: dvName, ivs: ivNames }) {
     await app.results.appendChart({
       kind: 'scatter',
       title: 'Normal Q–Q (residuals)',
-      xTitle: 'Theoretical quantiles',
-      yTitle: 'Sample quantiles',
+      axes: { x: { title: 'Theoretical quantiles' }, y: { title: 'Sample quantiles' } },
       points: m.qqx.map((x, i) => ({ x, y: m.qqy[i] })),
       ...(Number.isFinite(m.qqSlope)
         ? { reference: { slope: m.qqSlope, intercept: m.qqInt, label: 'Normal line' } }

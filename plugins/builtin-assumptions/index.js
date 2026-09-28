@@ -130,8 +130,7 @@ export async function normality(app, { vars }) {
     await app.results.appendChart({
       kind: 'scatter',
       title: `Q–Q plot — ${label(meta, names[i])}`,
-      xTitle: 'Theoretical quantiles',
-      yTitle: 'Sample quantiles',
+      axes: { x: { title: 'Theoretical quantiles' }, y: { title: 'Sample quantiles' } },
       points,
       // The normal line is what this plot MEANS, so it is a reference rather than a trend:
       // grey, on by default, and no equation printed (see the scatter kind).

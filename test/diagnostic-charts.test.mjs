@@ -173,7 +173,6 @@ test('the residual plot pairs each fitted value with its own residual', async ()
   // Zero, not a fitted trend: a residual plot is read against y = 0.
   assert.deepEqual(resid.reference, { slope: 0, intercept: 0, label: 'Zero line' });
   assert.equal(resid.trend, undefined);
-  assert.equal(resid.yTitle, 'Residuals');
 });
 
 test('the Q–Q plot carries the quartile line R computed, not a fitted one', async () => {
@@ -183,7 +182,30 @@ test('the Q–Q plot carries the quartile line R computed, not a fitted one', as
     { x: -1.2, y: -0.5 }, { x: -0.4, y: -0.25 }, { x: 0.4, y: 0.25 }, { x: 1.2, y: 0.5 },
   ]);
   assert.deepEqual(qq.reference, { slope: 0.6, intercept: 0, label: 'Normal line' });
-  assert.equal(qq.xTitle, 'Theoretical quantiles');
+});
+
+/**
+ * Asserted on the RENDERED SVG, not on the model, because the first version of this shipped
+ * with `xTitle`/`yTitle` at the top of the model — a shape the scatter kind does not read
+ * (it takes `axes.x.title`). Every field was present and correct and not one axis was
+ * labelled. A test that checks the model field would have passed then too, which is the
+ * whole reason this one draws the chart.
+ */
+test('the diagnostics come out with their axes labelled', async () => {
+  const { charts } = await invoke(regression, { dv: 'y', ivs: ['x'] }, REG_RESULT);
+  const norm = await invoke(normality, { vars: ['income'] }, NORM_RESULT, META2);
+  const expected = [
+    ['Fitted values', 'Residuals'],
+    ['Theoretical quantiles', 'Sample quantiles'],
+    ['Theoretical quantiles', 'Sample quantiles'],
+  ];
+  const all = [...charts, norm.charts[0]];
+  all.forEach((model, i) => {
+    const svg = renderChart(model, defaultView(model));
+    for (const title of expected[i]) {
+      assert.ok(svg.includes(title), `${model.title} does not draw “${title}”`);
+    }
+  });
 });
 
 test('regression asks R for numbers and no longer asks it to draw', async () => {

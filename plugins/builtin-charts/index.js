@@ -469,12 +469,18 @@ export function chartKinds(lib) {
     baseView: (model) => ({
       trendLine: !!model.trend,
       // A REFERENCE line is not a trend line, and the difference is why it is a separate
-      // field. A trend is a finding, drawn in red, printed with its equation, and OFF until
-      // asked for. A reference is part of what the plot MEANS — the identity line of a Q–Q
-      // plot, the zero line of a residual plot — so it is on by default, grey, and carries no
-      // equation: reading `Y = 0 + 1(X)` off a Q–Q plot would be reading a tautology.
+      // field. A trend is a FINDING: red, and printed with its equation and R². A reference is
+      // what the plot MEANS — the normal line of a Q–Q plot, the zero line of a residual plot
+      // — so it is grey, dashed, drawn behind the points and carries no equation: reading
+      // `Y = 0 + 1(X)` off a Q–Q plot would be reading a tautology. Both are on when the model
+      // supplies them, and each has its own switch.
       referenceLine: !!model.reference,
       pointSize: 4,
+      // A point that CARRIES a name is a named thing — an option on a cost-effectiveness
+      // plane, a city on an MDS map — and hiding the names by default would leave a plot of
+      // anonymous dots that says nothing. A scatter of ordinary observations supplies none,
+      // and is unaffected.
+      valueLabels: scatterHasLabels(model),
       legend: model.groups && model.groups.length > 1 ? 'right' : 'none',
     }),
     controls: (model) => {
@@ -497,6 +503,9 @@ export function chartKinds(lib) {
         : []),
       pointSizeControl({ default: 4 }),
       gridlinesControl(),
+      // The shared wording, not a scatter-specific "Point labels": one control id means one
+      // thing in the panel, and the reader learns it once (chart-options-consistency).
+      ...(scatterHasLabels(model) ? [valueLabelsControl(), ...valueLabelFormatControls()] : []),
       paletteControl(multi),
       legendControl(multi, 'right'),
       ...legendFormatControls(multi),
@@ -507,6 +516,11 @@ export function chartKinds(lib) {
     },
     render: (model, view) => renderScatter(model, view),
   });
+
+  /** Does any point name itself? Decides whether the labels vocabulary appears at all. */
+  function scatterHasLabels(model) {
+    return (model.points || []).some((p) => p && p.label != null && String(p.label) !== '');
+  }
 
   function renderScatter(model, view) {
     const pts = (model.points || []).filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
@@ -587,6 +601,27 @@ export function chartKinds(lib) {
     const r0 = Math.max(1.5, view.pointSize || 4);
     for (const p of pts) {
       out.push(`<circle cx="${r(xScale(p.x))}" cy="${r(yScale(p.y))}" r="${r0}" fill="${colorOf(p)}" fill-opacity="0.62"/>`);
+    }
+
+    // Names, after the points so they are never painted over. Drawn to the right of the
+    // marker, except near the right edge where that would run out of the plot — the labels
+    // are identities, so one clipped to "Usual ca…" is worse than one on the other side.
+    if (view.valueLabels) {
+      const size = view.valueLabelSize || 9.5;
+      for (const p of pts) {
+        const label = p.label == null ? '' : String(p.label);
+        if (!label) continue;
+        const px = xScale(p.x);
+        const py = yScale(p.y);
+        const flip = px + r0 + 4 + label.length * size * 0.55 > box.x1;
+        out.push(text(flip ? px - r0 - 4 : px + r0 + 4, py + size * 0.35, esc(label), {
+          size,
+          anchor: flip ? 'end' : 'start',
+          fill: '#333',
+          weight: view.valueLabelBold ? 600 : undefined,
+          italic: !!view.valueLabelItalic,
+        }));
+      }
     }
 
     if (view.trendLine && model.trend && Number.isFinite(model.trend.slope)) {

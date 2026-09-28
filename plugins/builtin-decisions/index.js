@@ -157,8 +157,8 @@ export const workspace = {
       await app.results.beginAnalysis('Cost-effectiveness (ICER)');
       await app.results.appendText(`Willingness-to-pay: **${fmt(num(t.wtp))}** per unit effect. ICER = Δcost ÷ Δeffect vs the next-cheaper non-dominated option. (Simple frontier — no extended-dominance pass.)`);
       await app.results.appendTable({ columns: ['Option', 'Cost', 'Effect', 'ICER', 'Status'], rows });
-      const plot = cePlaneSvg(res);
-      if (plot) await app.results.appendPlot(plot, { title: 'Cost-effectiveness plane' });
+      const plane = cePlaneModel(res);
+      if (plane) await app.results.appendChart(plane);
       await app.results.endAnalysis();
     }
 
@@ -828,28 +828,53 @@ function sensTornadoSvg(bars, o) {
 }
 
 /** A tiny cost-effectiveness plane (cost vs effect scatter), as an SVG string. */
-function cePlaneSvg(res) {
-  const pts = res.filter((r) => r.cost != null && r.effect != null);
-  if (pts.length < 1) return null;
-  const W = 420, H = 280, pad = 44;
-  const xs = pts.map((p) => p.effect), ys = pts.map((p) => p.cost);
-  const xmin = Math.min(...xs), xmax = Math.max(...xs), ymin = Math.min(...ys), ymax = Math.max(...ys);
-  const sx = (x) => pad + ((x - xmin) / (xmax - xmin || 1)) * (W - pad - 16);
-  const sy = (y) => H - pad - ((y - ymin) / (ymax - ymin || 1)) * (H - pad - 16);
-  const esc = (s) => String(s).replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
-  let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" font-family="system-ui,sans-serif" font-size="11">`;
-  s += `<rect x="0" y="0" width="${W}" height="${H}" fill="#fff"/>`;
-  s += `<line x1="${pad}" y1="${H - pad}" x2="${W - 16}" y2="${H - pad}" stroke="#888"/><line x1="${pad}" y1="16" x2="${pad}" y2="${H - pad}" stroke="#888"/>`;
-  s += `<text x="${(W) / 2}" y="${H - 10}" text-anchor="middle" fill="#555">Effect</text>`;
-  s += `<text x="14" y="${H / 2}" text-anchor="middle" fill="#555" transform="rotate(-90 14 ${H / 2})">Cost</text>`;
-  for (const p of pts) {
-    const cx = sx(p.effect), cy = sy(p.cost);
-    const color = p.status === 'dominated' ? '#b04a4a' : p.status === 'cost-effective' ? '#2e7d32' : '#2f6fb0';
-    s += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="5" fill="${color}"/>`;
-    s += `<text x="${(cx + 7).toFixed(1)}" y="${(cy + 3).toFixed(1)}" fill="#333">${esc(p.name)}</text>`;
-  }
-  s += `</svg>`;
-  return s;
+/**
+ * The cost-effectiveness plane as a chart MODEL (#131), not an SVG this plugin draws.
+ *
+ * This figure was the clearest case in the baked-chart review: the plugin already held every
+ * number — it had just computed them — and was hand-rolling axes, scales and text anchors
+ * anyway. Handing over a model instead buys the live controls, the colourblind-safe palette,
+ * a re-editable title and axis titles, and an output that still renders if this plugin is
+ * gone.
+ *
+ * Two things the model says that the old drawing only implied:
+ *  - **Status is a grouping, not a colour.** The plane had `dominated` red, `cost-effective`
+ *    green and the rest blue, hard-coded — which is a legend the reader had to guess at, and
+ *    red/green at that. As groups they get a real legend, the safe palette, and a user can
+ *    recolour or reorder them.
+ *  - **An option's name belongs to its point.** `label` on each point is why the scatter kind
+ *    grew point labels; they are identities, not decoration, so they default to on.
+ *
+ * Exported for unit testing, like `computeICER` beside it — a model builder is a pure
+ * function and is worth checking directly rather than through a rebuilt copy of itself.
+ *
+ * @param {Array<{name:string,cost:number,effect:number,status:string}>} res from computeICER
+ * @returns {object|null} a scatter model, or null if nothing is plottable
+ */
+export function cePlaneModel(res) {
+  const pts = (res || []).filter((r) => r.cost != null && r.effect != null);
+  if (!pts.length) return null;
+  // A stable, meaningful order rather than order-of-appearance: this is the sequence the
+  // legend reads in, and it runs from the comparator outwards.
+  const ORDER = ['baseline', 'cost-effective', 'not cost-effective', 'dominated'];
+  const LABELS = {
+    baseline: 'Baseline (cheapest)',
+    'cost-effective': 'Cost-effective at this WTP',
+    'not cost-effective': 'Above this WTP',
+    dominated: 'Dominated',
+  };
+  // `status` is '' when no willingness-to-pay was given — there is no verdict to report then,
+  // so those points are simply "Options" rather than a group with an empty name.
+  const keyOf = (r) => (r.status ? r.status : 'other');
+  const present = [...new Set(pts.map(keyOf))]
+    .sort((x, y) => (ORDER.indexOf(x) + 1 || 99) - (ORDER.indexOf(y) + 1 || 99));
+  return {
+    kind: 'scatter',
+    title: 'Cost-effectiveness plane',
+    axes: { x: { title: 'Effect' }, y: { title: 'Cost' } },
+    points: pts.map((r) => ({ x: r.effect, y: r.cost, label: r.name, g: keyOf(r) })),
+    groups: present.map((k) => ({ key: k, label: LABELS[k] || 'Options' })),
+  };
 }
 
 /** Coerce a saved/empty blob into the working shape (with sensible starter rows). */
