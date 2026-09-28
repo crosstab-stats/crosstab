@@ -761,6 +761,16 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       and makes the source greppable and readable. `core/rehome.js`, whose two were in a
       comment and therefore inert, was fixed the same way on 2026-08-20. 606 tests.
 
+> **These four entries are ONE piece of work** (noted 2026-09-28 while triaging): #161,
+> #167, #181's third follow-on (*"the launcher should reuse the manager component instead of
+> its own rail"*) and the launcher half of #171 (its Projects rail still renders TWO lists —
+> `listProjects()` at `core/launcher.js:346` and `listProjectLocations()` at :382 — while the
+> sidebar has rendered one since August). Each one rewrites the launcher's list. #181 already
+> says it: *"do the three together, deliberately, not as a follow-on"*, or the launcher gets
+> rebuilt twice. **Parked on the owner**, who is still weighing the launcher's shape and has
+> said the sidebar grouping is part of the same redesign — so this is one decision, not four
+> tasks, and it is theirs to make before any of it is buildable.
+
 - [ ] **#161 — the launcher's "Start CrossTab" button is superfluous; clicking a
       source/project should just go (user request, 2026-08-19).** Today the rail
       buttons (`[data-source]`, saved projects, remembered folders) only set
@@ -895,7 +905,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         store is injected, so every rule above is tested without a browser (12 tests,
         suite 1084 → 1096).
 
-  - [ ] **Multi-select disciplines — TABLED by the owner (2026-09-27), and the reasoning is
+  - **Multi-select disciplines — TABLED by the owner (2026-09-27), and the reasoning is
         worth keeping** so nobody re-opens it as an oversight. The original entry argued that
         a single-select `.ctl__discipline` means the motivating combination cannot be SEEN at
         once, so presets fix "save it once" but not "build it the first time". The owner's
@@ -2585,7 +2595,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         do it without that. Covered by a test in `test/caqdas-merge.test.mjs` that pins the
         current behaviour deliberately.
 
-  - [ ] **DEFERRED (user, 2026-08-03) — are sidebar inventory rows interactive?** Map-layer
+  - **DEFERRED (user, 2026-08-03) — are sidebar inventory rows interactive?** Map-layer
         rows render in the sidebar but aren't clickable; spatial switches layers with its
         own control inside its tab, which still works. Open question for after the
         migration: should an inventory row be clickable at all, and if so does the host
@@ -3019,8 +3029,8 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       grouping variable is rejected unless it has exactly two levels. Both are decisions
       the data happens to make, and both flip on nothing more than whether the codebook
       used 0/1 or 1/2.
-  - [ ] **Tier 1 — wrong output.** `builtin-epi`: see **#186**.
-  - [ ] **Tier 2 — the direction is chosen silently and never named.** Five plugins pick
+  - [x] **Tier 1 — DONE (2026-09-22).** Wrong output in `builtin-epi`: see **#186**.
+  - [x] **Tier 2 — DONE.** *(The direction was chosen silently and never named.)* Five plugins pick
         a level and print nothing to say which: **`builtin-survival`** (the event
         indicator — with 1 = dead / 2 = alive, the curves describe survival from being
         *alive*), **`builtin-causal`** (`treat` and `post` — the sign of the treatment
@@ -3030,11 +3040,11 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         These are the urgent half of #187: a reader cannot even tell they were guessed
         at. **The minimum fix is to NAME the chosen level in the caption; the right fix
         is to let the user pick it.**
-  - [ ] **Tier 3 — named, but not choosable.** `builtin-logistic` prints "modelling
+  - [x] **Tier 3 — DONE.** *(Named, but not choosable.)* `builtin-logistic` prints "modelling
         {category}" and `builtin-ordinal` prints "reference = {level}". Both are honest
         today, so these are a genuine enhancement rather than a repair — and #178 has
         just shown the demand: a class is *assigned* changing the reference category.
-  - [ ] **Tier 4 — "exactly 2 groups" guards that should be a 2-of-k picker.** Four
+  - [x] **Tier 4 — DONE.** *("exactly 2 groups" guards that should be a 2-of-k picker.)* Four
         plugins refuse a variable with three or more groups outright:
         `builtin-nonparametric` (Mann–Whitney), `builtin-bayesian`, `builtin-bootstrap`,
         and `builtin-categorical` (two-group proportion, McNemar). This is precisely what
@@ -3106,7 +3116,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       already takes physical types *separately* from `variables[].type`, so `type` is
       already semantic on the import path — the typedef at `data-store.js:85` claiming
       "a factor is stored as VARCHAR" is simply stale.
-  - [ ] **Stage 1 — one predicate, computed once.** `core/var-role.js` exports
+  - [x] **Stage 1 — DONE.** One predicate, computed once. `core/var-role.js` exports
         `isCategorical(meta)`, and `getVariableMeta()` decorates every returned record
         with a derived **`categorical`** boolean, so core and plugins read the same
         answer without a new API. The rule, in order:
@@ -3115,21 +3125,21 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         clause is what keeps every existing project behaving EXACTLY as before: a
         legacy factor with no measure is still categorical. Route questions 2 and 4
         through it; leave 1 alone.
-  - [ ] **Stage 2 — believe the file.** At import, a variable SPSS marks `Scale` is
+  - [x] **Stage 2 — DONE.** Believe the file. At import, a variable SPSS marks `Scale` is
         typed `numeric` even when it carries value labels. Blast radius is deliberately
         small: nominal/ordinal keep `factor`, so the 22 modelling sites are unaffected
         and the `.sav` round-trip already survives (the exporter's
         `} else if (valueLabels)` branch writes labels for a numeric variable).
-  - [ ] **Stage 3 — the 22 modelling sites read `categorical`, not `type`.** Needed for
+  - [x] **Stage 3 — DONE.** The modelling sites read `categorical`, not `type`. Needed for
         correctness, not tidiness: once a numeric variable can be nominal (a CSV column
         the user marks nominal in Variable View), a site still testing `type ===
         'factor'` fits it as a straight-line SLOPE — the exact silent-wrong-model trap
         #178 closed for `LANGUAGE`.
-  - [ ] **Display follows the labels, not the type.** Show a value label whenever one
+  - [x] **Display follows the labels, not the type — DONE.** Show a value label whenever one
         exists for the code, whatever the type — so a weight with a labelled missing
         code reads properly AND is offerable as a weight. Fixes the split where
         `data-views.js:496` gates label rendering on `factor`.
-  - [ ] **Not in scope (a later stage-4 if ever wanted):** fully retiring `factor` as a
+  - **Not in scope (a later stage-4 if ever wanted):** fully retiring `factor` as a
         `type`. Formats with no measure metadata (CSV, Parquet) would still need a
         heuristic or a user decision, `crosstab-syntax.js` accepts `factor` in recorded
         scripts, and ~60 manifests declare `types: ['factor', 'string']`. The predicate
@@ -3514,18 +3524,18 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         would not, and every relative import would break — a silent, puzzling failure a long
         way from its cause.
 
-  - [ ] **Build it, with the coupling neutralised rather than trusted:**
-    - [ ] Manifest lists the module files; host posts every module's SOURCE with the `load`
+  - [x] **BUILT (2026-09-27), with the coupling neutralised rather than trusted:**
+    - [x] Manifest lists the module files; host posts every module's SOURCE with the `load`
           message; the frame blobs them itself (the correction above) and injects **one import
           map per frame** before importing the entry — production gives each plugin its own
           frame, so one map is all that is ever needed.
-    - [ ] Key the map on **several spellings per module** (`./util.js`, `util.js`, and any
+    - [x] Key the map on **several spellings per module** (`./util.js`, `util.js`, and any
           declared subpath), since matching is literal-string when the base is a blob: the key
           has to be exactly what the author typed.
-    - [ ] **Automatic fallback on a resolution failure:** catch the entry import, rewrite the
+    - [x] **Automatic fallback on a resolution failure:** catch the entry import, rewrite the
           relative specifiers to blob URLs, retry. The probe proves that path works, and it
           makes the blob-document coupling a performance detail rather than a correctness one.
-    - [ ] Note the coupling in `core/plugin-sandbox.js`, where someone changing how the sandbox
+    - [x] Note the coupling in `core/plugin-sandbox.js`, where someone changing how the sandbox
           document is delivered would actually read it.
 
       *Cost of not having this, concretely:* `plugins/builtin-charts/index.js` is ~2,100
@@ -4379,7 +4389,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       resolved codings + the QDPX parser are left unstamped. Author survives the add-wins
       merge (normalize spreads). End-to-end coding attribution to confirm by reading the
       persisted blob after coding (CAQDAS is cross-origin, can't be driven from the page).
-  - [ ] **Authorship DISPLAY (tabled — user pondering the shape).** Surface who-coded-what
+  - **Authorship DISPLAY (tabled — user pondering the shape).** Surface who-coded-what
     in the CAQDAS UI (colour + initials chip on segments / retrieve list). User's steer:
     a plain "stamp every edit visibly" gets cluttered → lean toward **showing the chip only
     when the author ≠ the current viewer** (your own edits stay clean). Data already stamps
@@ -4486,7 +4496,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     - **Known edges still open** (not blockers): (a) delete-vs-concurrent-edit keeps the
       data with no user prompt (no silent loss, but no choice); (b) deleting the *last*
       remaining dataset doesn't propagate live (empty-project apply path is guarded).
-  - [ ] **~~In-project chat~~ — DEFERRED / maybe never.** Disproportionate scope
+  - **~~In-project chat~~ — DEFERRED / maybe never.** Disproportionate scope
     (persistence, history, retention, notifications) for uncertain value when teams already
     have Slack/Teams; and it's the *unanchored* opposite of a memo. If ever, rescope to
     ephemeral live-session-only messages, decided on its own. (Talked through with the user.)
@@ -6305,7 +6315,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       one that matters most asserts no variable is ever added, lost or duplicated, because a
       column that vanishes from the view is a column the user cannot reach.
 
-  - [ ] **Not browser-tested:** the float on both surfaces, the boundary rule, and — the point
+  - [x] **Browser-verified (owner, 2026-09-27 — “selected float tested and works”):** the float on both surfaces, the boundary rule, and — the point
         of the snapshot — that ticking a column does NOT make it jump left under the cursor.
 
 - [x] **#175 — DONE (2026-09-21). User bug reports, server-free.** **Help ▸ Report a
@@ -6562,7 +6572,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         `sw.js` is not importable (a classic worker script that touches `self`/`caches` on
         load), so the rules sit between `hosts:start` / `hosts:end` markers and the test
         extracts and runs them — the same seam as plugin-host.html's import-map aliases.
-  - [ ] **Still a constant, and can only ever be one:** `manifest.json`'s PWA identity, which
+  - **Still a constant, and can only ever be one:** `manifest.json`'s PWA identity, which
         the BROWSER reads rather than us, so it is a direct edit by design.
 
 - [x] **#183 + #177 — DONE (2026-09-26). "What do I enable to do X?" — the catalogue is
