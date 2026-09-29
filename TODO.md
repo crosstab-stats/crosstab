@@ -6145,12 +6145,28 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       its absence is also why `tidyLPA` was never an option. A `flexmix` Gaussian mixture is the
       same model by another route.
 
-      **The R was validated against local R 4.6.0 on data simulated with a known structure**, not
-      just run to see if it errored. LCA recovered class shares .659/.341 against a true .667/.333
-      and item probabilities .912/.143 against .90/.15. LPA recovered centres (−.05, .04, −.05) and
-      (3.03, 2.50, 3.52) against (0,0,0) and (3, 2.5, 3.5). The growth model recovered a mean
-      intercept of 9.91 and slope of 1.49 against 10 and 1.5, variances 4.30 and 0.39 against 4 and
-      0.36, and put the intercept–slope covariance at p = .33 against a true zero. 42 tests.
+      **The R is validated against local R 4.6.0 by a committed script** —
+      `spike/validate-mixture-R.R`, which exits non-zero on failure. It makes two KINDS of
+      assertion, and the distinction matters because the first version of this entry blurred them:
+
+      - **Exact identities**, which hold to floating point whatever the sample looks like, and are
+        the real tests because they cannot pass by luck: AIC and BIC against
+        `-2logL + npar·{2, log n}` — including that the plugin's own `npar` formula for flexmix,
+        which does not expose one, reproduces flexmix's BIC to the last decimal; posterior rows
+        summing to 1; the modal class being the argmax of the posterior; item-response
+        probabilities summing to 1 within every class; poLCA's `npar` and residual df against the
+        cell count; lavaan's `z` against `est/se`; and every growth loading being **fixed** rather
+        than estimated, which is the whole claim of the model. 27 such checks pass.
+      - **Recovery within sampling error**, reported in standard errors against an explicit
+        tolerance (|z| < 4). This is a smoke test with a known answer: it catches "the wrong field
+        was extracted", because a wiring error gives nonsense rather than a near miss. It does NOT
+        certify numerical accuracy — poLCA, flexmix and lavaan do the estimating, not us.
+
+      **An estimate is never equal to the parameter that generated the data**, and the first
+      version of this entry said "recovered .341 (true .333)", which implied otherwise. Everything
+      lands 0.04–2.4 SE out depending on the seed — that is what correct behaviour looks like, and a
+      mixture model returning .33333 exactly would be evidence it was ignoring the data. 42 headless
+      tests besides.
 
   - [x] **Latent growth curve — in `builtin-sem`, deliberately.** The entry offered "builtin-sem or
         its own plugin"; the WebR lavaan patch decided it. `parallel::detectCores()` returns NA

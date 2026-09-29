@@ -9,10 +9,12 @@
  * the alternative is the shape that has already produced a diverged tooltip, a wrong origin label
  * and a double-counted deploy issue in this codebase.
  *
- * The generated R was validated by running it on local R 4.6.0 against data simulated with a
- * known structure (N = 400; true mean intercept 10, mean slope 1.5, intercept variance 4, slope
- * variance 0.36, no intercept–slope covariance). It recovered 9.91, 1.49, 4.30 and 0.36, with the
- * covariance at p = .33. The fixture below is that run's actual output.
+ * The generated R is validated by `spike/validate-mixture-R.R` on local R 4.6.0, which checks what
+ * must hold EXACTLY — `z = est/se`, df against the moment count, and every loading being FIXED
+ * rather than estimated, which is the whole claim of the model — and separately reports parameter
+ * recovery in standard errors. On data generated with a mean intercept of 10 and a slope of 1.5 the
+ * estimates land within about 2 SE: that is what correct looks like, not a mismatch, because an
+ * estimate is not the parameter that generated it. The fixture below is one such run's output.
  *
  * What is tested here is the wrapper's judgement, which is where a growth-curve GUI earns its
  * keep or misleads:

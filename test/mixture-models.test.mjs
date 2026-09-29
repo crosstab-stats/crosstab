@@ -8,12 +8,18 @@
  * packages fail. `mclust` is **not built for WebR at all**, which is why LPA runs on a flexmix
  * Gaussian mixture and why `tidyLPA` (closure 115, needing mclust) was never an option.
  *
- * The R itself was validated against local R 4.6.0 on simulated data with a known structure:
- * LCA recovered class shares .659/.341 against a true .667/.333 and item probabilities .912/.143
- * against .90/.15; LPA recovered centres (−.05, .04, −.05) and (3.03, 2.50, 3.52) against
- * (0,0,0) and (3, 2.5, 3.5). Both comparison tables put BIC's minimum at the true k — and the LPA
- * run is a textbook demonstration of why BIC is the one to trust, since AIC preferred k = 3 over
- * the true k = 2.
+ * The R itself is validated by `spike/validate-mixture-R.R` against local R 4.6.0. That script
+ * separates two things this header used to run together: **exact identities** (BIC against
+ * `-2logL + npar·log n`, posterior rows summing to 1, the modal class being the posterior's
+ * argmax) which cannot pass by luck, and **recovery within sampling error**, reported in standard
+ * errors. An estimate from 600 sampled cases is never equal to the parameter that generated them:
+ * everything lands within a couple of SE, which is what correct looks like. What the simulation
+ * establishes is that the WIRING is right, since a wrong field gives nonsense rather than a near
+ * miss — poLCA and flexmix do the estimating.
+ *
+ * One result from that run is load-bearing for the code here: on the LPA data **AIC preferred
+ * k = 3 over the true k = 2 while BIC got it right**, which is why the comparison table ships with
+ * the rule for reading it instead of leaving the user to pick a column.
  *
  * What is tested HERE is everything around that, in two groups:
  *
