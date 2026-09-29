@@ -909,21 +909,39 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       entirely convinced of yet."* So the default is that everything appears on both, and anything
       omitted needs a reason written down.
 
-      **The one real difference to reconcile, recorded so it is not discovered late.** The two
-      surfaces act on different lifecycle states ([[plugin-lifecycle-terms]]). The launcher picks
-      a **desired activated set before boot** — nothing is running yet, and the preset system is
-      about "start like this". Edit ▸ Plugins mutates the **live** set, so ticking a box activates
-      or deactivates a plugin in a session with data already loaded and a workspace possibly
-      mounted. That is a genuine semantic difference, and it argues for **one component with a
-      mode**, not for two components: the list, the search, the filters, the grouping, the glyph
-      and the presets are identical in both, and only the commit action differs.
+      **There is no lifecycle difference — the argument I raised against this was wrong, and the
+      owner corrected it with a fact I had not checked.** I claimed the two surfaces act on
+      different states: the launcher choosing a desired set *before boot*, Edit ▸ Plugins mutating
+      the *live* one, which would make them one component with a mode. The owner: *"the launcher
+      is also callable mid-cycle from the logo in the upper left corner and has an 'apply changes'
+      button when launched that way, so it also acts as a 'mutate existing behaviour' mode in
+      addition to the 'set behaviour for new work' mode."*
 
-      Two consequences worth deciding at the same time:
-      - **Presets in-session** would then come for free, and they are arguably more useful there
-        (*"switch me to the qualitative set"*) than at launch. It also pairs with #162's handbook
-        idea and #185's site-provided plugin directory.
-      - **Select all / None in-session** needs thought rather than inheritance: selecting all
-        at launch is a download, but in-session it is dozens of activations at once.
+      Confirmed in the code. `core/app.js:2019` opens it from the brand click with
+      `{ reopen: true }`; `launcher.js:1092` swaps the primary button to **"Apply changes"** and
+      adds "← Back to project"; and in `#start(reopen)` with no new data source chosen, the whole
+      body reduces to `#applySelection(this.#selected)` — applying plugins to the live session and
+      nothing else. **That is Edit ▸ Plugins' job, done by the launcher, today.**
+
+      So the correction makes unification simpler rather than harder, in three ways:
+
+      - **The mode already exists**, and it exists in the surface with the RICHER feature set.
+        This is not "add a mode to a shared component"; it is "Edit ▸ Plugins is a subset of
+        something already built", and the shared component inherits `reopen` rather than needing a
+        new concept.
+      - **Presets are already available in-session** — via the logo — so the asymmetry is worse
+        than "launch-time vs session-time". The same session-time job is offered through two doors,
+        and **which door you walk through decides whether you can use a preset or add a plugin
+        from a URL**. That is a capability lottery, not a cosmetic difference.
+      - **"Select all" in-session is not a new risk** introduced by unifying. The launcher already
+        permits it in reopen mode, so it is existing behaviour to verify (dozens of activations at
+        once, and what that does to a session with a workspace mounted), not a question to settle
+        before starting.
+
+      What remains genuinely different is only the **commit action's side effects**: the launcher's
+      Apply can also load a data source or open a project, because its rail offers those. Edit ▸
+      Plugins cannot. That is a difference in what else the dialog contains, not in what the plugin
+      list means.
 
       **Do it with the rest of the launcher work, not before it.** This is the fifth entry in that
       cluster, and it is the one that most clearly wants a shared COMPONENT rather than a tidier
