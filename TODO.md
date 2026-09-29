@@ -2747,9 +2747,67 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - [ ] **Layer tree in region selection column.** Display loaded boundary sets as a
         tree in the region-selection sidebar, so the user can expand/collapse layers
         and select regions within each.
-  - [ ] **Point-in-polygon geocoding.** Given boundaries and a dataset with lat/long
-        columns, assign each observation to the region it falls in (adds a region-ID
-        column). Pure JS via Turf.js — no R needed.
+  - [x] **Point-in-polygon geocoding — DONE (2026-09-29).** Map layers ▸ **Assign regions…**:
+        given the boundary set already loaded in the workspace and a longitude/latitude column
+        pair, every case is matched to the region whose shape contains it. The gap it closes is
+        mundane and constant — survey and admin data arrives with coordinates and no area code,
+        while the choropleth, Moran's I by region and "Analyse selection" all need a region
+        column nobody has, so today it comes from ArcGIS or a QGIS spatial join before CrossTab
+        is opened at all.
+
+        **Hand-rolled, not Turf.js** — this entry had assumed the dependency. Even-odd ray
+        casting with holes and multipolygons is about forty lines; the dependency is not forty
+        lines, because a plugin runs in a sandboxed opaque-origin iframe, so an external import
+        means a CSP allowance, an entry in `core/assets.js`, a runtime host for the offline cache
+        and a line in the air-gap vendor script — carried forever, for arithmetic that fits on a
+        screen. Same test the owner applied to vendoring and to hand-rolled statistics: judge a
+        dependency by what maintaining it costs. `rPackages` is unchanged; no R is involved.
+
+        **Four properties decide whether a geocode can be trusted, and each is tested:**
+        - **A case on a shared border lands in exactly ONE region.** The half-open comparison
+          `(yi > y) !== (yj > y)` gives that; the intuitive `>=` counts it in both, so a
+          respondent on a county line would inflate two counties. Swept along a whole shared
+          edge, vertices included, not spot-checked. The cost of that rule is pinned too: a point
+          exactly on the *excluded outer* edge of the coverage falls in no region, is reported as
+          `outside`, and must not be "fixed" into the double-counting version.
+        - **A hole is outside.** GeoJSON rings after the first are interior, so an enclave —
+          Lesotho, a lake, a city carved out of its county — is not the surrounding region.
+        - **Three different outcomes, counted separately and all reported:** no coordinates,
+          outside every region, and inside more than one (overlapping boundary files are common;
+          the first in file order wins and the count says a choice was made). A geocode that
+          reported only its successes would be the shape of a silent wrong answer.
+        - **A swapped column pair is named as the likely cause**, because it is the most common
+          way this goes wrong and it presents as "my boundary file doesn't cover my data". Only
+          when the columns as given place almost nothing AND flipping them places most of it — a
+          looser rule cried wolf on a file that genuinely does not cover every case.
+
+        **The bug the tests found, which is the reason for writing them:** `Number(null)` is
+        **0**, as are `Number('')` and `Number(' ')`. A case with a missing coordinate was
+        therefore geocoded to whichever region contains the point (0, 0) — silently, and with
+        full confidence. The app's own numeric columns arrive as NaN so the app path was safe,
+        but a string column or any caller passing plain arrays would have hit it. A `coord()`
+        helper rejects non-numbers before coercion, and a numeric `0` (or `"0"`) is still a
+        coordinate.
+
+        **It writes a new dataset, not a column**, and that is not a limitation to route around:
+        a plugin's data surface is read-only apart from `data.create`, because the data op-log
+        belongs to the host and a plugin adding a column would be a mutation with no op behind
+        it. Same rule that made import offer a Swap ([[no-inplace-replace]]). So the result is a
+        sibling dataset with the original columns plus the region, the original is untouched, and
+        the report says so — a user looking for a new column in the grid they were on needs
+        telling where it went.
+
+        A grid index over the features' bounding boxes, because unindexed this is
+        points × regions × vertices: 10,000 respondents against 3,000 census tracts is tens of
+        millions of ring walks, which is the difference between instant and a frozen tab. 5,000
+        cases against 400 regions runs in single-digit milliseconds. 28 tests.
+
+        **Deliberately not handled:** coordinates are planar, which is right for
+        point-in-polygon at the scale this is for (a country, a state, a city) and wrong across
+        the antimeridian or at a pole, where a ring's coordinates wrap. Not silently wrong —
+        those cases land in the `outside` count rather than in a neighbouring region. Projected
+        coordinate systems are the user's to reconcile: the failure message says so rather than
+        guessing at a datum.
 
 - [x] **Plugin data as first-class citizens (#146).** *Built.*
       Workspace blobs promoted from opaque side-cars to host-managed, independently

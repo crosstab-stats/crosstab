@@ -23,7 +23,8 @@ export const manifest = {
   version: '0.1.0',
   apiVersion: '0.1.0',
   category: 'Spatial',
-  keywords: ['spatial', 'gis', 'moran', 'geary', 'autocorrelation', 'choropleth', 'map', 'sf', 'spdep', 'geojson', 'lisa'],
+  keywords: ['spatial', 'gis', 'moran', 'geary', 'autocorrelation', 'choropleth', 'map', 'sf', 'spdep', 'geojson', 'lisa',
+    'geocode', 'geocoding', 'point in polygon', 'spatial join', 'latitude', 'longitude', 'coordinates', 'region', 'assign regions'],
   howto:
     'GUI: Spatial ▸ Spatial autocorrelation (Moran’s I), Spatial lag regression, or Choropleth map — pick the variables ' +
     '(and a GeoJSON boundary file for the map). You get Moran\'s I / Geary\'s C tests, a spatial-lag model, or a shaded region map.\n' +
@@ -32,7 +33,11 @@ export const manifest = {
     'Syntax: run builtin-spatial.choropleth {"region": "GEOID", "value": "rate", "boundary": "counties.geojson", "keyprop": "GEOID"}\n' +
     '  • value / xcoord / ycoord / k — autocorrelation: the measure, its coordinates, and neighbours k (default 4).\n' +
     '  • outcome / preds — lag regression: the numeric outcome and its predictors (k default 5).\n' +
-    '  • region / value / boundary / keyprop — choropleth: region key, value to shade, a GeoJSON file, and its matching property.',
+    '  • region / value / boundary / keyprop — choropleth: region key, value to shade, a GeoJSON file, and its matching property.\n' +
+    'GUI: Map layers workspace ▸ Load boundaries… then **Assign regions…** to geocode: given longitude and latitude '
+    + 'columns, every case is matched to the region whose shape contains it, and a new dataset is created with a region-id '
+    + 'column added. That is the column the choropleth and “Analyse selection” need, and survey data rarely arrives with it. '
+    + 'Point-in-polygon, on device, no service and no API key.',
   disciplines: ['Environmental Studies', 'Public Policy & Administration', 'Sociology', 'Economics', 'Public Health', 'Ethnic Studies'],
   rPackages: ['sf', 'spdep', 'spatialreg', 'svglite'],
   // Item collections this plugin owns (#152 Layer 5). Top-level, because a collection is
@@ -65,6 +70,7 @@ export const manifest = {
       verbs: [
         { id: 'load-boundaries', label: 'Load boundaries…', run: 'loadBoundaries', category: 'toolbar', needsFile: { extensions: ['.geojson', '.json'] } },
         { id: 'shade-by-variable', label: 'Shade by variable…', run: 'shadeByVariable', category: 'toolbar' },
+        { id: 'geocode-points', label: 'Assign regions…', run: 'geocodePoints', category: 'toolbar' },
         { id: 'filter-to-selection', label: 'Analyse selection…', run: 'filterToSelection', category: 'toolbar' },
         { id: 'clear-boundaries', label: 'Clear', run: 'clearBoundaries', category: 'toolbar' },
         { id: 'export-map', label: 'Export map', run: 'exportMap', category: 'toolbar' },
@@ -655,6 +661,139 @@ export async function shadeByVariable(app) {
   return { ok: true };
 }
 
+/**
+ * Toolbar verb: assign every case to the region its coordinates fall in.
+ *
+ * The gap this closes: survey and admin data arrives with latitude/longitude and no area code,
+ * and every areal tool in this plugin — the choropleth, Moran's I by region, "Analyse
+ * selection" — needs a region column that nobody has. Users currently get it from ArcGIS or a
+ * QGIS spatial join before they can start.
+ *
+ * **It writes a new dataset rather than a column.** A plugin's data surface is read-only apart
+ * from `data.create`, and deliberately: the data op-log belongs to the host, and a plugin
+ * reaching in to add a column would be a mutation with no op behind it. The same rule that made
+ * import offer a Swap instead of an in-place replace ([[no-inplace-replace]]) — so this produces
+ * a sibling dataset carrying the original columns plus the region, and the original is untouched.
+ */
+export async function geocodePoints(app) {
+  if (!_ws) return { ok: false, message: 'Workspace not mounted.' };
+  if (!_ws.features.length) {
+    return { ok: false, message: 'Load a boundary set first — “Load boundaries…” in this toolbar.' };
+  }
+  if (!_ws.keyProp) {
+    return { ok: false, message: 'This boundary set has no region-id property chosen, so there is nothing to assign.' };
+  }
+
+  const xPick = await app.ui.selectVariables({
+    title: 'Longitude (X)',
+    hint: 'The east–west coordinate of each case. GeoJSON stores longitude first, so this is the one that matches the map’s X.',
+    multiple: false,
+    types: ['numeric'],
+  });
+  if (!xPick?.length) return { ok: false, message: 'Cancelled.' };
+  const yPick = await app.ui.selectVariables({
+    title: 'Latitude (Y)',
+    hint: 'The north–south coordinate of each case.',
+    multiple: false,
+    types: ['numeric'],
+  });
+  if (!yPick?.length) return { ok: false, message: 'Cancelled.' };
+
+  const cols = await app.data.getColumns();
+  const colNames = Array.isArray(cols) ? cols.map((c) => c.name) : Object.keys(cols || {});
+  const colAt = (n) => (Array.isArray(cols) ? cols.find((c) => c.name === n)?.values : cols?.[n]) || [];
+  const suggested = uniqueName(_ws.keyProp || 'region', colNames);
+  const form = await app.ui.showForm({
+    title: 'Region column',
+    fields: [{
+      name: 'col',
+      label: 'Name for the new column',
+      type: 'text',
+      value: suggested,
+      hint: 'Holds each case’s region id, so it can be crosstabbed, aggregated or mapped.',
+    }],
+  });
+  if (!form) return { ok: false, message: 'Cancelled.' };
+  const colName = uniqueName(String(form.col || '').trim() || suggested, colNames);
+
+  const xs = colAt(xPick[0]);
+  const ys = colAt(yPick[0]);
+  if (!xs.length || !ys.length) return { ok: false, message: 'Those coordinate columns hold no values.' };
+
+  const index = buildRegionIndex(_ws.features, _ws.keyProp);
+  const res = assignRegions(index, xs, ys);
+  if (!res.assigned) {
+    // Nothing placed is a failure, not a dataset of empty cells. Say which failure it looks like.
+    return {
+      ok: false,
+      message: res.suspectSwapped
+        ? `No case fell inside any region — but they do when the columns are swapped. Try “${yPick[0]}” as longitude and “${xPick[0]}” as latitude.`
+        : 'No case fell inside any region. Check that the coordinates and the boundary file use the same coordinate system (this expects plain longitude/latitude).',
+    };
+  }
+
+  const meta = (await app.data.getVariableMeta()) || [];
+  const metaByName = Object.fromEntries(meta.map((m) => [m.name, m]));
+  const columns = {};
+  // Plain arrays: `getColumns` returns a Float64Array for numeric columns, and every other
+  // caller of `data.create` hands it ordinary arrays.
+  for (const n of colNames) columns[n] = Array.from(colAt(n), (v) => (typeof v === 'number' && Number.isNaN(v) ? null : v));
+  columns[colName] = res.regions;
+  const variables = [
+    ...colNames.map((n) => metaByName[n] || { name: n }),
+    {
+      name: colName,
+      type: 'string',
+      measurementLevel: 'nominal',
+      label: `Region (${_ws.fileName || _ws.keyProp})`,
+    },
+  ];
+  await app.data.create({
+    name: `${_ws.fileName ? _ws.fileName.replace(/\.[^.]+$/, '') : 'Regions'} + ${colName}`,
+    variables,
+    columns,
+  });
+
+  return { ok: true, message: geocodeMessage(res), refresh: ['dataset', 'output'] };
+}
+
+/**
+ * What the user is told after a geocode.
+ *
+ * Every non-zero count is named, because each is a different thing they may need to act on and
+ * an unqualified "done" would hide all three: cases with no coordinates (a data problem), cases
+ * outside every region (a coverage problem, or swapped columns), and cases inside more than one
+ * (an overlapping boundary file, where something was chosen for them). A geocode that reports
+ * only its successes is the shape of a silent wrong answer.
+ *
+ * Exported for unit testing — the verb around it is prompts and a `data.create`, which need a
+ * browser, while this rule is the part that can be wrong.
+ *
+ * @param {ReturnType<typeof assignRegions>} res
+ */
+export function geocodeMessage(res) {
+  const total = res.regions.length;
+  const bits = [`Assigned ${res.assigned.toLocaleString()} of ${total.toLocaleString()} cases to a region.`];
+  if (res.missing) bits.push(`${res.missing.toLocaleString()} had no coordinates.`);
+  if (res.outside) {
+    bits.push(`${res.outside.toLocaleString()} fell outside every region${res.suspectSwapped ? ' — they would fall inside if the longitude and latitude columns were swapped' : ''}.`);
+  }
+  if (res.ambiguous) {
+    bits.push(`${res.ambiguous.toLocaleString()} fell inside more than one region (the first in the file was used) — the boundaries overlap.`);
+  }
+  bits.push('Rows are unchanged; the region column is in a new dataset.');
+  return bits.join(' ');
+}
+
+/** `name`, or `name_2`, `name_3`… so a geocode never silently overwrites a column.
+ * Exported for unit testing. */
+export function uniqueName(name, taken) {
+  const used = new Set(taken || []);
+  if (!used.has(name)) return name;
+  for (let i = 2; i < 1000; i += 1) if (!used.has(`${name}_${i}`)) return `${name}_${i}`;
+  return `${name}_${Date.now()}`;
+}
+
 export async function filterToSelection(app) {
   if (!_ws) return { ok: false, message: 'Workspace not mounted.' };
   if (!_ws.selected.size) return { ok: false, message: 'No regions selected.' };
@@ -1012,4 +1151,259 @@ function wsGeometryToPath(geom, project) {
   if (geom.type === 'Polygon') return geom.coordinates.map(ring).join('');
   if (geom.type === 'MultiPolygon') return geom.coordinates.flatMap((p) => p.map(ring)).join('');
   return '';
+}
+
+// --- point-in-polygon geocoding ----------------------------------------------
+//
+// Given boundaries already loaded in the workspace and a dataset with longitude/latitude
+// columns, work out which region each case falls in. The everyday need behind it: survey or
+// admin data arrives with coordinates and no area codes, and every areal analysis in this
+// plugin — choropleth, Moran's I by region, "analyse selection" — needs a region column that
+// nobody has.
+//
+// ## Hand-rolled rather than Turf
+//
+// The TODO said "pure JS via Turf.js". Even-odd ray casting with holes and multipolygons is
+// about forty lines, and a dependency here is not forty lines: a plugin runs in a sandboxed
+// opaque-origin iframe, so an external import means a CSP allowance, an entry in core/assets.js,
+// a runtime host for the offline cache, and a line in the air-gap vendor script — carried
+// forever, for arithmetic that fits on a screen and can be tested exhaustively. Same test the
+// owner applied to vendoring and to hand-rolling statistics: judge a dependency by what
+// maintaining it costs.
+//
+// ## What the geometry does and does not claim
+//
+// Coordinates are treated as planar. That is correct for point-in-polygon on data of the scale
+// this is for (a country, a state, a city) and wrong across the antimeridian or at a pole,
+// where a ring's coordinates wrap. Those are not silently handled: a polygon crossing the
+// antimeridian has coordinates outside [-180, 180] or a bbox spanning the globe, and the caller
+// reports what it could not place rather than guessing.
+
+/**
+ * Is `(x, y)` inside this ring? Even-odd ray casting.
+ *
+ * The comparison `(yi > y) !== (yj > y)` is half-open by construction, and that is the property
+ * that matters for geocoding rather than an implementation detail: a case sitting exactly on the
+ * border between two counties is counted by **exactly one** of them. The naive `>=` form counts
+ * it in both, which would put the same respondent in two regions and inflate both.
+ *
+ * @param {number} x @param {number} y @param {Array<[number, number]>} ring
+ */
+export function pointInRing(x, y, ring) {
+  if (!Array.isArray(ring) || ring.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+    const a = ring[i];
+    const b = ring[j];
+    if (!a || !b) continue;
+    const xi = a[0];
+    const yi = a[1];
+    const xj = b[0];
+    const yj = b[1];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/**
+ * Inside the outer ring and not inside any hole — GeoJSON's ring convention, where rings after
+ * the first are interior. Getting this wrong is not a rounding error: it would place every case
+ * in an enclave (Lesotho inside South Africa, a lake inside a county) in the surrounding region.
+ *
+ * @param {number} x @param {number} y @param {Array<Array<[number, number]>>} rings
+ */
+export function pointInPolygonRings(x, y, rings) {
+  if (!Array.isArray(rings) || !rings.length) return false;
+  if (!pointInRing(x, y, rings[0])) return false;
+  for (let i = 1; i < rings.length; i += 1) if (pointInRing(x, y, rings[i])) return false;
+  return true;
+}
+
+/** Inside a GeoJSON Polygon or MultiPolygon. Any other geometry type has no interior. */
+export function pointInGeometry(x, y, geom) {
+  if (!geom) return false;
+  if (geom.type === 'Polygon') return pointInPolygonRings(x, y, geom.coordinates);
+  if (geom.type === 'MultiPolygon') {
+    return (geom.coordinates || []).some((rings) => pointInPolygonRings(x, y, rings));
+  }
+  return false;
+}
+
+/** Bounding box of a Polygon/MultiPolygon as `[minX, minY, maxX, maxY]`, or null. */
+export function geometryBbox(geom) {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const walk = (node) => {
+    if (!Array.isArray(node)) return;
+    if (typeof node[0] === 'number' && typeof node[1] === 'number') {
+      if (node[0] < minX) minX = node[0];
+      if (node[0] > maxX) maxX = node[0];
+      if (node[1] < minY) minY = node[1];
+      if (node[1] > maxY) maxY = node[1];
+      return;
+    }
+    for (const child of node) walk(child);
+  };
+  if (geom?.type === 'Polygon' || geom?.type === 'MultiPolygon') walk(geom.coordinates);
+  return Number.isFinite(minX) ? [minX, minY, maxX, maxY] : null;
+}
+
+/**
+ * A grid index over the features' bounding boxes.
+ *
+ * Without one this is O(points × regions × vertices): 10,000 respondents against 3,000 census
+ * tracts is tens of millions of ring walks, which is the difference between "instant" and "the
+ * tab is frozen". With it, a point tests only the few regions whose bbox shares its cell.
+ *
+ * @param {Array<object>} features GeoJSON features
+ * @param {string} keyProp the property holding each region's id
+ * @returns {{cells: Map<string, number[]>, size: number, bbox: number[]|null,
+ *            keys: Array<string>, geoms: Array<object>, boxes: Array<number[]|null>}}
+ */
+export function buildRegionIndex(features, keyProp) {
+  const list = Array.isArray(features) ? features : [];
+  const geoms = [];
+  const keys = [];
+  const boxes = [];
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const f of list) {
+    const box = geometryBbox(f?.geometry);
+    geoms.push(f?.geometry ?? null);
+    const raw = keyProp ? f?.properties?.[keyProp] : null;
+    keys.push(raw == null ? '' : String(raw));
+    boxes.push(box);
+    if (!box) continue;
+    if (box[0] < minX) minX = box[0];
+    if (box[1] < minY) minY = box[1];
+    if (box[2] > maxX) maxX = box[2];
+    if (box[3] > maxY) maxY = box[3];
+  }
+  const bbox = Number.isFinite(minX) ? [minX, minY, maxX, maxY] : null;
+  // Roughly one cell per region, capped: a finer grid costs memory for no gain once cells hold
+  // one polygon each, and a coarser one degenerates to a linear scan.
+  const size = Math.max(1, Math.min(64, Math.ceil(Math.sqrt(geoms.length || 1))));
+  const cells = new Map();
+  const index = { cells, size, bbox, keys, geoms, boxes };
+  if (!bbox) return index;
+  for (let i = 0; i < boxes.length; i += 1) {
+    const box = boxes[i];
+    if (!box) continue;
+    const [c0, r0] = cellOf(index, box[0], box[1]);
+    const [c1, r1] = cellOf(index, box[2], box[3]);
+    for (let c = c0; c <= c1; c += 1) {
+      for (let r = r0; r <= r1; r += 1) {
+        const k = `${c}:${r}`;
+        if (!cells.has(k)) cells.set(k, []);
+        cells.get(k).push(i);
+      }
+    }
+  }
+  return index;
+}
+
+/** Grid cell containing a coordinate, clamped to the grid. */
+function cellOf(index, x, y) {
+  const [minX, minY, maxX, maxY] = index.bbox;
+  const w = maxX - minX || 1;
+  const h = maxY - minY || 1;
+  const c = Math.min(index.size - 1, Math.max(0, Math.floor(((x - minX) / w) * index.size)));
+  const r = Math.min(index.size - 1, Math.max(0, Math.floor(((y - minY) / h) * index.size)));
+  return [c, r];
+}
+
+/**
+ * Which region each point falls in.
+ *
+ * Reports rather than decides, which is the whole shape of this function:
+ *
+ *  - **`missing`** — the case had no usable coordinates. Not the same as falling outside every
+ *    region, and lumping the two together would hide a column of empty cells.
+ *  - **`outside`** — real coordinates, no region contains them. Legitimate (a respondent
+ *    outside the boundary file's coverage) and also what a swapped lat/long column looks like,
+ *    hence `suspectSwapped`.
+ *  - **`ambiguous`** — more than one region contains the point, because boundary files overlap
+ *    more often than they should. The first match in file order wins, and the count is
+ *    surfaced so the user knows a choice was made for them.
+ *
+ * @param {ReturnType<typeof buildRegionIndex>} index
+ * @param {ArrayLike<number>} xs longitudes
+ * @param {ArrayLike<number>} ys latitudes
+ * @returns {{regions: Array<string|null>, assigned: number, missing: number, outside: number,
+ *            ambiguous: number, suspectSwapped: boolean}}
+ */
+export function assignRegions(index, xs, ys) {
+  const n = Math.min(xs?.length ?? 0, ys?.length ?? 0);
+  const regions = new Array(n).fill(null);
+  let assigned = 0;
+  let missing = 0;
+  let outside = 0;
+  let ambiguous = 0;
+  const outsideAt = [];
+  for (let i = 0; i < n; i += 1) {
+    const x = coord(xs[i]);
+    const y = coord(ys[i]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) { missing += 1; continue; }
+    const hits = regionsAt(index, x, y);
+    if (!hits.length) {
+      outside += 1;
+      if (outsideAt.length < 200) outsideAt.push(i); // a sample is enough to test the swap
+      continue;
+    }
+    if (hits.length > 1) ambiguous += 1;
+    regions[i] = index.keys[hits[0]];
+    assigned += 1;
+  }
+  // A swapped pair of columns is the single most common way this goes wrong, and it looks
+  // exactly like "my boundary file does not cover these cases". Re-test a sample the other way
+  // round; if that places most of them, say so rather than handing back an empty column.
+  let suspectSwapped = false;
+  // Only when the columns as given are placing almost NOTHING, and the other way round places
+  // most of it. A looser rule cries wolf on a file that genuinely does not cover every case:
+  // half in, half out, and the out half happening to land somewhere when flipped is not evidence.
+  if (outside > 0 && assigned / (assigned + outside) < 0.1) {
+    let swapped = 0;
+    for (const i of outsideAt) {
+      if (regionsAt(index, coord(ys[i]), coord(xs[i])).length) swapped += 1;
+    }
+    suspectSwapped = outsideAt.length > 0 && swapped / outsideAt.length > 0.7;
+  }
+  return { regions, assigned, missing, outside, ambiguous, suspectSwapped };
+}
+
+/**
+ * A coordinate, or NaN when there isn't one.
+ *
+ * `Number()` alone will not do, and the difference is a wrong answer rather than an error:
+ * `Number(null)` is **0**, so a case with a missing coordinate would be geocoded to whichever
+ * region contains the point (0, 0) — off the coast of Africa for lon/lat data, or a real region
+ * in a projected file. `Number('')` and `Number(' ')` are 0 too, and `Number(true)` is 1. The
+ * app's own numeric columns arrive as NaN for missing, so this only bites through a string
+ * column or a caller passing plain arrays; both are easy to reach and neither should silently
+ * place a case somewhere.
+ */
+function coord(v) {
+  if (v == null || typeof v === 'boolean') return NaN;
+  if (typeof v === 'string' && v.trim() === '') return NaN;
+  return Number(v);
+}
+
+/** Every region containing a point, in file order. Exported for the ambiguity tests. */
+export function regionsAt(index, x, y) {
+  const out = [];
+  if (!index?.bbox || !Number.isFinite(x) || !Number.isFinite(y)) return out;
+  const [minX, minY, maxX, maxY] = index.bbox;
+  if (x < minX || x > maxX || y < minY || y > maxY) return out;
+  const [c, r] = cellOf(index, x, y);
+  for (const i of index.cells.get(`${c}:${r}`) || []) {
+    const box = index.boxes[i];
+    if (!box || x < box[0] || x > box[2] || y < box[1] || y > box[3]) continue;
+    if (pointInGeometry(x, y, index.geoms[i])) out.push(i);
+  }
+  // Cell membership is by bbox, so the candidates within a cell are already in file order.
+  return out;
 }
