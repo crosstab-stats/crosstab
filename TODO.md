@@ -761,15 +761,15 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       and makes the source greppable and readable. `core/rehome.js`, whose two were in a
       comment and therefore inert, was fixed the same way on 2026-08-20. 606 tests.
 
-> **These FIVE entries are ONE piece of work** (noted 2026-09-28, extended 2026-09-29): #161,
+> **These SIX entries are ONE piece of work** (noted 2026-09-28, extended 2026-09-29): #161,
 > #167, #181's third follow-on (*"the launcher should reuse the manager component instead of
 > its own rail"*), the launcher half of #171 (its Projects rail still renders TWO lists —
 > `listProjects()` at `core/launcher.js:346` and `listProjectLocations()` at :382 — while the
-> sidebar has rendered one since August), and the plugin-picker duplication below. Each one
+> sidebar has rendered one since August), and the two duplication entries below (the plugin picker, the project list). Each one
 > rewrites part of the launcher. #181 already says it: *"do the three together, deliberately,
 > not as a follow-on"*, or the launcher gets rebuilt twice. **Parked on the owner**, who is
 > weighing the launcher's shape and has said the sidebar grouping is part of the same redesign —
-> so this is one decision, not five tasks, and it is theirs to make before any of it is buildable.
+> so this is one decision, not six tasks, and it is theirs to make before any of it is buildable.
 >
 > The pattern across all five: the launcher renders its own copy of something the app already
 > renders elsewhere — the project list, the plugin picker — and the copies have drifted. What the
@@ -947,6 +947,59 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       cluster, and it is the one that most clearly wants a shared COMPONENT rather than a tidier
       copy — which means it should be written once, by whoever rebuilds the launcher's rail, and
       not twice.
+
+- [ ] **…and the same question for the PROJECT list, where there are three renderings, not two
+      (owner, 2026-09-29).** Raised as the parallel to the plugin-picker entry above: *"perhaps the
+      projects sidebar in launcher and the projects sidebar in the active view should reuse the
+      same tool. This case is weaker, as there is significant difference in functionality between
+      the two, but at least worth considering."*
+
+      **Worth considering, and on inspection the case is STRONGER than it looks** — because half
+      of it was already won and the launcher simply has not caught up.
+
+      Three surfaces render a project list:
+
+      | | source | shape |
+      | --- | --- | --- |
+      | launcher rail (`ctl__projects`) | `listProjects()` **+** `listProjectLocations()`, two loops | two row shapes: bare name for local, glyph + "Reopen" for a location |
+      | sidebar Projects zone (`app.js#projectsZone`) | `listRecentProjects(5)` → `listAllProjects()` | ONE row shape, location as an attribute via `describe()`, inline rename for local |
+      | project manager (`project-manager.js`, #173) | `listAllProjects()` | ONE row shape + the verb set, computed per row by `verbsFor(row)` |
+
+      **The data layer is already unified.** #171 built `listAllProjects()` in August and the
+      sidebar and the manager both read it. Only the launcher is still on the old split pair —
+      which is exactly the bug already filed as #171's launcher half. So this is not "unify three
+      things"; it is "the third one never migrated".
+
+      **And most of the 'significant difference in functionality' is host context or a parameter,
+      not a different job:**
+
+      | apparent difference | what it actually is |
+      | --- | --- |
+      | launcher seeds the plugin picker from a project's `activePlugins` on click | **host context.** A shared list emits "this row was chosen"; the launcher's host seeds the picker that happens to sit beside it. |
+      | launcher defers opening when `backend.needsGesture` | **a backend property**, askable from either surface. Not a rendering difference. |
+      | sidebar capped at 5 and excludes the open project | **a parameter.** |
+      | sidebar has inline rename, launcher does not | **a capability gap with no stated reason** — the same lottery as the plugin picker. |
+      | manager has the destructive verbs, sidebar deliberately does not | **a deliberate policy, and the right one** (delete sat one hover from the row that opens the thing). Also already expressed as a parameter: `verbsFor(row)` computes the permitted set per row and context. |
+      | launcher's two row shapes | **a bug**, already filed. |
+
+      So the component the manager already has — one row shape, location as an attribute, a
+      per-context verb set — is close to the shared thing. #181's third follow-on says the same
+      from the other direction: *"the launcher should reuse the manager component instead of its
+      own rail"*, and notes the real cost, which is that `project-manager.js` is written as a
+      `<dialog>` that resolves a promise on close, so the rail/list rendering has to be extracted
+      from the dialog shell first.
+
+      **Where the case IS weaker, and it is worth saying.** In cold-start the two surfaces have
+      genuinely different jobs: the launcher rail is *"which of these do I open"*, the sidebar is
+      *"what else is around while I work"* — hence the cap at five and the exclusion of the open
+      project, which are contents-panel decisions rather than list decisions. But that distinction
+      only holds at cold start: the rail is rendered in `reopen` mode too (no gate on it in
+      `launcher.js:343`), so **mid-session a user has two project switchers with different
+      capabilities**, which is the same shape as the plugin-picker lottery and not a difference in
+      job at all.
+
+      Same conclusion as the entry above: extract the list, let each host decide what surrounds it
+      and which verbs it permits, and do it once — as part of the launcher rebuild, not before it.
 
 - [x] **#162 — DONE (2026-09-27). User-defined plugin presets.** The picker curated on one
       axis, `Recommended for <discipline>`, so the motivating case — *qualitative psychology
