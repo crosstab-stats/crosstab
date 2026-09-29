@@ -761,15 +761,19 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       and makes the source greppable and readable. `core/rehome.js`, whose two were in a
       comment and therefore inert, was fixed the same way on 2026-08-20. 606 tests.
 
-> **These four entries are ONE piece of work** (noted 2026-09-28 while triaging): #161,
+> **These FIVE entries are ONE piece of work** (noted 2026-09-28, extended 2026-09-29): #161,
 > #167, #181's third follow-on (*"the launcher should reuse the manager component instead of
-> its own rail"*) and the launcher half of #171 (its Projects rail still renders TWO lists —
+> its own rail"*), the launcher half of #171 (its Projects rail still renders TWO lists —
 > `listProjects()` at `core/launcher.js:346` and `listProjectLocations()` at :382 — while the
-> sidebar has rendered one since August). Each one rewrites the launcher's list. #181 already
-> says it: *"do the three together, deliberately, not as a follow-on"*, or the launcher gets
-> rebuilt twice. **Parked on the owner**, who is still weighing the launcher's shape and has
-> said the sidebar grouping is part of the same redesign — so this is one decision, not four
-> tasks, and it is theirs to make before any of it is buildable.
+> sidebar has rendered one since August), and the plugin-picker duplication below. Each one
+> rewrites part of the launcher. #181 already says it: *"do the three together, deliberately,
+> not as a follow-on"*, or the launcher gets rebuilt twice. **Parked on the owner**, who is
+> weighing the launcher's shape and has said the sidebar grouping is part of the same redesign —
+> so this is one decision, not five tasks, and it is theirs to make before any of it is buildable.
+>
+> The pattern across all five: the launcher renders its own copy of something the app already
+> renders elsewhere — the project list, the plugin picker — and the copies have drifted. What the
+> cluster wants is **shared components with a mode**, not five tidier duplicates.
 
 - [ ] **#161 — the launcher's "Start CrossTab" button is superfluous; clicking a
       source/project should just go (user request, 2026-08-19).** Today the rail
@@ -868,6 +872,63 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         never *erase that folder* — the same honest-scope-boundary the sharing and
         encryption work draws. Two verbs, worded differently, not one.
 
+
+- [ ] **The launcher's plugin picker and Edit ▸ Plugins are the same surface, built twice
+      (owner, 2026-09-29).** *"The center section of the launcher is functionally almost identical
+      to the modal that comes up with Edit|Plugins. And yet one is a two-column layout and one is
+      a single list. One uses the (i) glyph for 'what this does' and the other uses a magnifying
+      glass for 'what this does'… I'd like to unify these two, if possible. They both have a main
+      purpose of 'adjust the plugins'."*
+
+      **The divergence is worse than cosmetic, and it is the shape that has already cost this
+      project three bugs** — #177's tooltip that existed on one picker and not the other, #171's
+      project list rendered twice, #185's deploy issues counted twice. Two renderings of one list
+      is the thing `var-toolbar.js` was written to end, and it has quietly regrown one layer up.
+
+      **Verified inventory (2026-09-29), because an entry that misstates this is worse than none:**
+
+      | | launcher centre (`ctl__*`) | Edit ▸ Plugins (`ct-plugins__*`) |
+      | --- | --- | --- |
+      | layout | two-column grid (`ctl__grid` + `ctl__catgroup`) | single list (`ct-plugins__list` + `__section`) |
+      | "what this does" | **`ⓘ`** (`ctl__pluginwhat`, launcher.js:492) | **`🔍`** (`ct-plugin__howto`, plugin-manager.js:1182) |
+      | search + discipline filter | yes | yes |
+      | category grouping | yes | yes |
+      | Select all / None | **yes** | no |
+      | presets (save, rename, delete, export, import) | **yes** (7 controls) | no |
+      | offline pre-cache of the selection | **yes** | no |
+      | + Create new… | no | **yes** |
+      | + Add from file… | no | **yes** |
+      | + Add from URL… | no | **yes** |
+
+      Two class hierarchies, two renderers, two glyphs for one verb, and five capabilities that
+      exist on exactly one of the two surfaces for no stated reason.
+
+      **The owner's read, which is the design brief:** one component whose purpose is "adjust the
+      plugins". The make-new / add-from-file / add-from-URL verbs can hang off it as buttons, and
+      the owner is *not* persuaded they should be launcher-excluded at all — *"an argument I'm not
+      entirely convinced of yet."* So the default is that everything appears on both, and anything
+      omitted needs a reason written down.
+
+      **The one real difference to reconcile, recorded so it is not discovered late.** The two
+      surfaces act on different lifecycle states ([[plugin-lifecycle-terms]]). The launcher picks
+      a **desired activated set before boot** — nothing is running yet, and the preset system is
+      about "start like this". Edit ▸ Plugins mutates the **live** set, so ticking a box activates
+      or deactivates a plugin in a session with data already loaded and a workspace possibly
+      mounted. That is a genuine semantic difference, and it argues for **one component with a
+      mode**, not for two components: the list, the search, the filters, the grouping, the glyph
+      and the presets are identical in both, and only the commit action differs.
+
+      Two consequences worth deciding at the same time:
+      - **Presets in-session** would then come for free, and they are arguably more useful there
+        (*"switch me to the qualitative set"*) than at launch. It also pairs with #162's handbook
+        idea and #185's site-provided plugin directory.
+      - **Select all / None in-session** needs thought rather than inheritance: selecting all
+        at launch is a download, but in-session it is dozens of activations at once.
+
+      **Do it with the rest of the launcher work, not before it.** This is the fifth entry in that
+      cluster, and it is the one that most clearly wants a shared COMPONENT rather than a tidier
+      copy — which means it should be written once, by whoever rebuilds the launcher's rail, and
+      not twice.
 
 - [x] **#162 — DONE (2026-09-27). User-defined plugin presets.** The picker curated on one
       axis, `Recommended for <discipline>`, so the motivating case — *qualitative psychology
