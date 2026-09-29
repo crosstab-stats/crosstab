@@ -6145,28 +6145,42 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       its absence is also why `tidyLPA` was never an option. A `flexmix` Gaussian mixture is the
       same model by another route.
 
-      **The R is validated against local R 4.6.0 by a committed script** —
-      `spike/validate-mixture-R.R`, which exits non-zero on failure. It makes two KINDS of
-      assertion, and the distinction matters because the first version of this entry blurred them:
+      **The R returns EXACTLY what desktop R returns**, which is the test the owner asked for
+      after pushing back on a weaker claim: *"What I can't accept is the functions returning
+      something other than what desktop R returns. Build a new test that takes the same data and
+      same seed and runs it through the standard desktop R function. Compare those results. If
+      they are exact we are good."* `spike/compare-desktop-r.mjs` does that — same data, same
+      seed, same machine — and **26 fields across the three models come back bit-identical**
+      (`max |diff| = 0.000e+00`, exact zero, not "small"): AIC, BIC, G² and log-likelihood at every
+      k, class shares, profile centres, per-case assignments, posterior probabilities, and every
+      lavaan estimate, SE, z, p and fit index.
 
-      - **Exact identities**, which hold to floating point whatever the sample looks like, and are
-        the real tests because they cannot pass by luck: AIC and BIC against
-        `-2logL + npar·{2, log n}` — including that the plugin's own `npar` formula for flexmix,
-        which does not expose one, reproduces flexmix's BIC to the last decimal; posterior rows
-        summing to 1; the modal class being the argmax of the posterior; item-response
-        probabilities summing to 1 within every class; poLCA's `npar` and residual df against the
-        cell count; lavaan's `z` against `est/se`; and every growth loading being **fixed** rather
-        than estimated, which is the whole claim of the model. 27 such checks pass.
-      - **Recovery within sampling error**, reported in standard errors against an explicit
-        tolerance (|z| < 4). This is a smoke test with a known answer: it catches "the wrong field
-        was extracted", because a wiring error gives nonsense rather than a near miss. It does NOT
-        certify numerical accuracy — poLCA, flexmix and lavaan do the estimating, not us.
+      It stays honest two ways. The plugin's R is **extracted from the plugin at run time** by
+      stubbing `webr.run`, so the comparison cannot drift from what ships; and it is **proven able
+      to fail** — changing one growth loading in the reference is caught immediately. (Changing
+      poLCA's `nrep` from 10 to 5 is not caught, and that is correct: checked directly on
+      deliberately weakly-separated data at nrep = 2, 5, 10, 20, the log-likelihood moves in the
+      ninth decimal and BIC not at all. It is insurance against a bad start, not a knob.)
 
-      **An estimate is never equal to the parameter that generated the data**, and the first
-      version of this entry said "recovered .341 (true .333)", which implied otherwise. Everything
-      lands 0.04–2.4 SE out depending on the seed — that is what correct behaviour looks like, and a
-      mixture model returning .33333 exactly would be evidence it was ignoring the data. 42 headless
-      tests besides.
+      **Writing it found a real bug.** The pipeline seeded once and then fitted k = 1, 2, 3 in a
+      loop, so the k = 2 fit began wherever k = 1 left the RNG stream — not from the seed. That
+      made it differ from the single call a statistician would type, and worse, asking for "up to
+      4 classes" could change the 2-class answer read when asking for 3. Each fit is now seeded
+      individually.
+
+      `spike/validate-mixture-R.R` remains alongside it for the things a comparison cannot check:
+      27 **exact identities** that hold whatever the sample looks like (AIC/BIC against
+      `-2logL + npar·{2, log n}` — including that the plugin's own `npar` formula for flexmix,
+      which exposes none, reproduces flexmix's BIC to the last decimal; posterior rows summing to
+      1; the modal class being the posterior's argmax; poLCA's df against the cell count; lavaan's
+      `z` against `est/se`; every growth loading being FIXED rather than estimated), plus
+      parameter recovery reported in standard errors.
+
+      **An estimate is never equal to the parameter that generated the data** — recovery lands
+      0.04–2.4 SE out depending on the seed, which is what correct looks like, and an earlier
+      version of this entry wrongly implied otherwise by writing "recovered .341 (true .333)".
+      That is a separate question from the one above, and only the desktop comparison is exact.
+      42 headless tests besides.
 
   - [x] **Latent growth curve — in `builtin-sem`, deliberately.** The entry offered "builtin-sem or
         its own plugin"; the WebR lavaan patch decided it. `parallel::detectCores()` returns NA

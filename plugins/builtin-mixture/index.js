@@ -141,9 +141,14 @@ export async function lca(app, { items, classes, seed, save }) {
     ncat <- sapply(d, function(v) length(unique(v[!is.na(v)])))
     if (any(ncat < 2)) stop("one or more indicators take only a single value")
     f <- as.formula(paste0("cbind(", paste(vv, collapse = ","), ") ~ 1"))
-    set.seed(${seedVal})
     fits <- list(); rows <- list()
     for (k in 1:${kMax}) {
+      # Seeded before EVERY fit, not once before the sweep. Two reasons, and the second is the
+      # one that bites: each k's random starts then depend only on the seed, so (a) the k you
+      # care about is identical to what a statistician gets typing that one call into R with the
+      # same seed, and (b) asking for "up to 4 classes" cannot change the 2-class answer you
+      # read last time you asked for 3.
+      set.seed(${seedVal})
       fit <- try(poLCA(f, d, nclass = k, nrep = if (k == 1) 1 else 10, verbose = FALSE,
                        maxiter = 5000), silent = TRUE)
       if (inherits(fit, "try-error")) next
@@ -263,9 +268,12 @@ export async function lpa(app, { items, classes, seed, save }) {
     d <- d[stats::complete.cases(d), , drop = FALSE]
     if (nrow(d) < 20) stop("too few complete cases for a mixture model")
     X <- as.matrix(d)
-    set.seed(${seedVal})
     fits <- list(); rows <- list()
     for (k in 1:${kMax}) {
+      # Seeded per fit — see the note in the LCA tool. A backtick here would close the template
+      # literal this R lives in. flexmix draws its own random initialisation, so
+      # without this the k you asked about depends on how many other k's preceded it.
+      set.seed(${seedVal})
       fit <- try(flexmix(X ~ 1, k = k, model = FLXMCmvnorm(diagonal = TRUE),
                          control = list(iter.max = 1000, minprior = 0)), silent = TRUE)
       if (inherits(fit, "try-error") || is.null(fit) || fit@k < 1) next
