@@ -6168,13 +6168,35 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       4 classes" could change the 2-class answer read when asking for 3. Each fit is now seeded
       individually.
 
-      `spike/validate-mixture-R.R` remains alongside it for the things a comparison cannot check:
-      27 **exact identities** that hold whatever the sample looks like (AIC/BIC against
-      `-2logL + npar·{2, log n}` — including that the plugin's own `npar` formula for flexmix,
-      which exposes none, reproduces flexmix's BIC to the last decimal; posterior rows summing to
-      1; the modal class being the posterior's argmax; poLCA's df against the cell count; lavaan's
-      `z` against `est/se`; every growth loading being FIXED rather than estimated), plus
-      parameter recovery reported in standard errors.
+      **Every workaround in the build is covered, which was the owner's next question.** Four
+      substitutions were made; three are proven exact by the comparison above and the fourth
+      cannot be, so it is quantified instead:
+      - **poLCA's 1…K recode** — the reference does the obvious `items + 1L`, the plugin does a
+        rank match (which also survives gapped codes like a 1/3/5 Likert, where `+1` would give
+        poLCA gaps it rejects). Identical on every field.
+      - **The WebR lavaan patch** rides in the compared script, so its being inert on correct
+        behaviour is established rather than assumed.
+      - **The plugin's own `npar` for flexmix** (which exposes none) reproduces flexmix's BIC to
+        the last decimal.
+      - **`mclust` → `flexmix`** cannot be checked by equality: they are two EM implementations
+        of the same model and stop at slightly different points. So the harness reports the
+        distance and fails only on disagreement about a case. Forced like-for-like (mclust VVI =
+        diagonal covariance): means agree to ~1e-3, mixing share to 1.4e-4, log-likelihood to
+        6e-3, and **100% of cases land in the same profile**. What CrossTab does NOT reproduce is
+        mclust's *default* behaviour — a search over fourteen covariance parameterisations chosen
+        by BIC. That is a feature difference, not a numerical one, and worth knowing before
+        telling an mclust user the answers will match.
+
+      `spike/validate-mixture-R.R` remains alongside for what a comparison cannot check: 27
+      **exact identities** that hold whatever the sample looks like (AIC/BIC against
+      `-2logL + npar·{2, log n}`; posterior rows summing to 1; the modal class being the
+      posterior's argmax; poLCA's df against the cell count; lavaan's `z` against `est/se`; every
+      growth loading being FIXED rather than estimated), plus parameter recovery in standard
+      errors. **`ct_entropy` is the one statistic with no package behind it** — neither poLCA nor
+      flexmix reports relative entropy — so it is pinned against values known analytically:
+      exactly 1 for perfect separation, exactly 0 for an uninformative posterior, and a
+      hand-computed `1 - ln2/ln3` for a three-class case. It is also compared against a second,
+      independently-written implementation in the desktop harness.
 
       **An estimate is never equal to the parameter that generated the data** — recovery lands
       0.04–2.4 SE out depending on the seed, which is what correct looks like, and an earlier

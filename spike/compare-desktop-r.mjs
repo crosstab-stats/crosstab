@@ -121,16 +121,24 @@ names(items) <- c("q1","q2","q3","q4")`;
 // with the seed set before each — matching the pipeline's sweep.
 const LCA_REFERENCE = `
   suppressMessages(library(poLCA))
+  # Relative entropy, written per-row and then averaged — deliberately not the plugin's
+  # single-sum expression, so the two are independent statements of the same quantity.
+  ref_entropy <- function(post) {
+    k <- ncol(post); if (is.null(k) || k < 2) return(NA_real_)
+    rows <- apply(post, 1, function(r) { p <- pmax(r, 1e-12); -sum(r * log(p)) })
+    1 - mean(rows) / log(k)
+  }
   d <- items + 1L
   f <- cbind(q1, q2, q3, q4) ~ 1
-  aic <- bic <- g2 <- numeric(0)
+  aic <- bic <- g2 <- ent <- numeric(0)
   for (k in 1:3) {
     set.seed(${SEED})
     fit <- poLCA(f, d, nclass = k, nrep = if (k == 1) 1 else 10, verbose = FALSE, maxiter = 5000)
     aic <- c(aic, fit$aic); bic <- c(bic, fit$bic); g2 <- c(g2, fit$Gsq)
+    ent <- c(ent, if (k > 1) ref_entropy(fit$posterior) else NA_real_)
     if (k == 3) best <- fit
   }
-  list(cmpAic = aic, cmpBic = bic, cmpG2 = g2, share = best$P,
+  list(cmpAic = aic, cmpBic = bic, cmpG2 = g2, cmpEnt = ent, share = best$P,
        assign = best$predclass, maxPost = apply(best$posterior, 1, max),
        k = 3, n = nrow(d))`;
 
@@ -143,18 +151,26 @@ names(items) <- c("anx","dep","som")`;
 
 const LPA_REFERENCE = `
   suppressMessages(library(flexmix))
+  # Relative entropy, written per-row and then averaged — deliberately not the plugin's
+  # single-sum expression, so the two are independent statements of the same quantity.
+  ref_entropy <- function(post) {
+    k <- ncol(post); if (is.null(k) || k < 2) return(NA_real_)
+    rows <- apply(post, 1, function(r) { p <- pmax(r, 1e-12); -sum(r * log(p)) })
+    1 - mean(rows) / log(k)
+  }
   X <- as.matrix(items[stats::complete.cases(items), , drop = FALSE])
-  aic <- bic <- ll <- numeric(0)
+  aic <- bic <- ll <- ent <- numeric(0)
   for (k in 1:3) {
     set.seed(${SEED})
     fit <- flexmix(X ~ 1, k = k, model = FLXMCmvnorm(diagonal = TRUE),
                    control = list(iter.max = 1000, minprior = 0))
     aic <- c(aic, AIC(fit)); bic <- c(bic, BIC(fit)); ll <- c(ll, as.numeric(logLik(fit)))
+    ent <- c(ent, if (fit@k > 1) ref_entropy(flexmix::posterior(fit)) else NA_real_)
     if (k == 3) best <- fit
   }
   pars <- parameters(best)
   cen <- as.matrix(pars[grepl("^center", rownames(pars)), , drop = FALSE])
-  list(cmpAic = aic, cmpBic = bic, cmpLL = ll, share = as.numeric(best@prior),
+  list(cmpAic = aic, cmpBic = bic, cmpLL = ll, cmpEnt = ent, share = as.numeric(best@prior),
        cenVals = as.numeric(cen), assign = flexmix::clusters(best),
        maxPost = apply(flexmix::posterior(best), 1, max), k = best@k, n = nrow(X))`;
 
@@ -188,6 +204,47 @@ const [lcaR, lpaR, growthR] = await Promise.all([
   generatedR(growth, { waves: ['w1', 'w2', 'w3', 'w4'], quadratic: 'no' }),
 ]);
 
+
+// ---------------------------------------------------------------------------
+// The one substitution that cannot be checked by equality
+// ---------------------------------------------------------------------------
+//
+// LPA normally runs on mclust, which is NOT built for WebR. flexmix's diagonal Gaussian mixture
+// is the same MODEL by a different implementation, so "identical" is the wrong bar: two EM
+// implementations stop at slightly different points. What matters is whether the substitution
+// changes a user's conclusions, so this reports the distance rather than asserting equality, and
+// fails only if the two disagree about which profile a case belongs to.
+//
+// mclust is forced to VVI (diagonal covariance, varying volume and shape) so this is
+// like-for-like. Note what CrossTab therefore does NOT offer: mclust's default is a search over
+// fourteen covariance parameterisations chosen by BIC, and that search is not reproduced here.
+const MCLUST_BLOCK = `
+cat("\n=== LPA substitution: flexmix (ships) vs mclust VVI (unavailable in WebR) ===\n")
+if (!requireNamespace("mclust", quietly = TRUE)) {
+  cat("  SKIPPED    mclust is not installed locally; install it to run this check\n")
+} else {
+  suppressMessages(library(mclust))
+  Xs <- as.matrix(items)
+  set.seed(${SEED})
+  fxs <- flexmix(Xs ~ 1, k = 2, model = FLXMCmvnorm(diagonal = TRUE),
+                 control = list(iter.max = 1000, minprior = 0))
+  cf <- parameters(fxs)[grepl("^center", rownames(parameters(fxs))), , drop = FALSE]
+  mcs <- Mclust(Xs, G = 2, modelNames = "VVI", verbose = FALSE)
+  bf <- which.max(colMeans(cf)); bm <- which.max(colMeans(mcs$parameters$mean))
+  for (j in seq_len(ncol(Xs))) {
+    cat(sprintf("  mean %-5s          flexmix %-12.6f mclust %-12.6f diff %.2e\n",
+        colnames(Xs)[j], cf[j, bf], mcs$parameters$mean[j, bm],
+        abs(cf[j, bf] - mcs$parameters$mean[j, bm])))
+  }
+  cat(sprintf("  share               flexmix %-12.6f mclust %-12.6f diff %.2e\n",
+      fxs@prior[bf], mcs$parameters$pro[bm], abs(fxs@prior[bf] - mcs$parameters$pro[bm])))
+  cat(sprintf("  logLik              flexmix %-12.4f mclust %-12.4f diff %.2e\n",
+      as.numeric(logLik(fxs)), mcs$loglik, abs(as.numeric(logLik(fxs)) - mcs$loglik)))
+  agree <- mean((flexmix::clusters(fxs) == bf) == (mcs$classification == bm))
+  report("classification", agree == 1,
+         sprintf("%.4f of cases put in the same profile", agree))
+}`;
+
 const driver = `
 .libPaths(c(${JSON.stringify(RLIB)}, .libPaths()))
 options(warn = 1)
@@ -197,11 +254,13 @@ report <- function(field, ok, detail) {
   else { cat(sprintf("  DIFFERS    %-12s %s\\n", field, detail)); fails <<- fails + 1 }
 }
 ${block('LCA — poLCA', LCA_SETUP, lcaR, LCA_REFERENCE,
-  ['k', 'n', 'cmpAic', 'cmpBic', 'cmpG2', 'share', 'assign', 'maxPost'])}
+  ['k', 'n', 'cmpAic', 'cmpBic', 'cmpG2', 'cmpEnt', 'share', 'assign', 'maxPost'])}
 ${block('LPA — flexmix', LPA_SETUP, lpaR, LPA_REFERENCE,
-  ['k', 'n', 'cmpAic', 'cmpBic', 'cmpLL', 'share', 'cenVals', 'assign', 'maxPost'])}
+  ['k', 'n', 'cmpAic', 'cmpBic', 'cmpLL', 'cmpEnt', 'share', 'cenVals', 'assign', 'maxPost'])}
 ${block('Latent growth curve — lavaan', GROWTH_SETUP, growthR, GROWTH_REFERENCE,
   ['n', 'mEst', 'mSe', 'mZ', 'mP', 'vEst', 'vSe', 'vP', 'fitVals'])}
+${LPA_SETUP}
+${MCLUST_BLOCK}
 
 cat("\\n================================================\\n")
 if (fails == 0) cat("EVERY FIELD IDENTICAL to desktop R\\n") else cat(sprintf("%d FIELD(S) DIFFER\\n", fails))

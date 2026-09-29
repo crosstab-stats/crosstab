@@ -103,6 +103,24 @@ recov(fit2$probs[[1]][hi, 2], P1[1], sqrt(P1[1] * (1 - P1[1]) / N1), "item1 P(1)
 recov(fit2$probs[[1]][lo, 2], P2[1], sqrt(P2[1] * (1 - P2[1]) / N2), "item1 P(1) | low class")
 recov(fit2$probs[[3]][hi, 2], P1[3], sqrt(P1[3] * (1 - P1[3]) / N1), "item3 P(1) | high class")
 
+cat("\n-- hand-rolled entropy, against values known analytically --\n")
+# `ct_entropy` is the one statistic here with no package behind it: neither poLCA nor flexmix
+# reports relative entropy, and Mplus users expect it. So it is checked where the answer is
+# certain rather than merely plausible.
+ct_entropy <- function(post) {
+  k <- ncol(post); if (is.null(k) || k < 2) return(NA_real_)
+  p <- pmax(post, 1e-12); 1 - (-sum(post * log(p))) / (nrow(post) * log(k))
+}
+exact(ct_entropy(matrix(c(1,0, 1,0, 0,1), ncol = 2, byrow = TRUE)), 1,
+      "perfect separation is exactly 1")
+exact(ct_entropy(matrix(c(.5,.5, .5,.5), ncol = 2, byrow = TRUE)), 0,
+      "a posterior carrying no information is exactly 0")
+# Three classes, every row (.5, .5, 0): each row contributes ln 2, so E = 1 - ln2/ln3.
+exact(ct_entropy(matrix(rep(c(.5,.5,0), 4), ncol = 3, byrow = TRUE)), 1 - log(2)/log(3),
+      "a hand-computed three-class case (1 - ln2/ln3)")
+ok(ct_entropy(fit2$posterior) > 0 && ct_entropy(fit2$posterior) < 1,
+   "and a real posterior lands strictly between them")
+
 cat("\n=============== 2. LPA (flexmix) ===============\n")
 suppressMessages(library(flexmix))
 set.seed(20260929)
