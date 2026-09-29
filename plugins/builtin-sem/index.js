@@ -65,6 +65,15 @@ export const manifest = {
       ],
     },
     {
+      label: 'Latent growth curve…',
+      run: 'growth',
+      order: 35,
+      inputs: [
+        { name: 'waves', kind: 'variables', label: 'The same measure at each occasion, earliest first', hint: 'One column per wave, in time order — the order IS the time axis.', multiple: true, types: ['numeric'] },
+        { name: 'quadratic', kind: 'choice', label: 'Add a quadratic (curved) term?', hint: 'A straight line assumes a constant rate of change; a quadratic lets the rate itself change.', options: [{ value: 'no', label: 'No — linear change' }, { value: 'yes', label: 'Yes — allow curvature' }], default: 'no' },
+      ],
+    },
+    {
       label: 'Structural equation model (syntax)…',
       run: 'sem',
       order: 40,
@@ -193,6 +202,140 @@ export async function sem(app, { vars, model }) {
     'Estimates are standardized. `=~` measurement (loadings), `~` structural (regressions), `~~` (co)variances. ' +
       'Use the same variable names in the model syntax as in the dataset.',
   );
+}
+
+// --- Latent growth curve ------------------------------------------------------
+
+/**
+ * Latent growth curve modelling (#141): how a measure changes over repeated occasions, as an
+ * intercept and a slope that vary between people.
+ *
+ * **Why it lives in builtin-sem rather than the mixture plugin.** It is a lavaan model, and
+ * lavaan needs the WebR patch at the top of this file — `parallel::detectCores()` returns NA
+ * under WebR, which trips lavaan's own option validation. Putting the growth curve in a second
+ * plugin would have meant a second copy of that workaround, which is the shape that has already
+ * produced a diverged tooltip, a wrong origin label and a double-counted deploy issue in this
+ * codebase. One copy, one owner.
+ *
+ * **What it reports, and why each piece.** Mplus users read four things off a growth model, and
+ * a wrapper that gives fewer is not a substitute:
+ *  - the **mean** intercept and slope — the average starting point and the average rate of change;
+ *  - their **variances** — whether people differ in where they start and how fast they move,
+ *    which is the entire reason to fit this instead of a repeated-measures ANOVA;
+ *  - their **covariance** — whether starting higher goes with changing faster;
+ *  - **fit**, because a growth curve with fixed loadings is a strong claim about the shape of
+ *    change and can be badly wrong.
+ *
+ * Occasion spacing is `0, 1, 2, …` over the variables in the order given. That is the default
+ * every textbook starts from and it is stated in the output, because unequally spaced waves
+ * (baseline, 6 months, 2 years) need different loadings and would otherwise be silently modelled
+ * as equally spaced — the slope would be in units of "wave", not of time.
+ *
+ * @param {object} app
+ * @param {{waves: string[], quadratic?: string}} inputs
+ */
+export async function growth(app, { waves, quadratic }) {
+  const names = Array.isArray(waves) ? waves : waves ? [waves] : [];
+  const quad = String(quadratic ?? 'no') === 'yes';
+  if (names.length < 3) {
+    await app.results.appendError(
+      'A latent growth curve needs at least three occasions — with two, the slope and the '
+      + 'residuals cannot both be identified.',
+    );
+    return;
+  }
+  if (quad && names.length < 4) {
+    await app.results.appendError('A quadratic growth curve needs at least four occasions.');
+    return;
+  }
+  const meta = metaMap(await app.data.getVariableMeta());
+
+  // Loadings are FIXED, not estimated: that is what makes the latent variables an intercept and
+  // a slope rather than two arbitrary factors.
+  const rCode = `
+    ${LAVAAN_PRELUDE}
+    d <- as.data.frame(waves)
+    names(d) <- paste0("t", seq_len(ncol(d)))
+    tt <- seq_len(ncol(d)) - 1
+    mod <- paste0(
+      "i =~ ", paste(sprintf("1*%s", names(d)), collapse = " + "), "\\n",
+      "s =~ ", paste(sprintf("%d*%s", tt, names(d)), collapse = " + "),
+      ${quad ? `paste0("\\nq =~ ", paste(sprintf("%d*%s", tt^2, names(d)), collapse = " + "))` : '""'}
+    )
+    fit <- growth(mod, data = d)
+    ok <- isTRUE(lavInspect(fit, "converged"))
+    pe <- parameterEstimates(fit)
+    fac <- c("i", "s"${quad ? ', "q"' : ''})
+    mn <- pe[pe$op == "~1" & pe$lhs %in% fac, ]
+    vc <- pe[pe$op == "~~" & pe$lhs %in% fac & pe$rhs %in% fac, ]
+    fm <- fitMeasures(fit, c("chisq","df","pvalue","cfi","tli","rmsea","srmr","aic","bic"))
+    list(
+      ok = ok, n = lavInspect(fit, "nobs"),
+      mLhs = mn$lhs, mEst = mn$est, mSe = mn$se, mZ = mn$z, mP = mn$pvalue,
+      vLhs = vc$lhs, vRhs = vc$rhs, vEst = vc$est, vSe = vc$se, vP = vc$pvalue,
+      fitNames = names(fm), fitVals = unname(fm)
+    )`;
+
+  const { result } = await app.webr.run(rCode);
+  if (!result) throw new Error('R returned no result');
+  const r = flat(result);
+  if (!r.num('ok')) {
+    await app.results.appendError(
+      'The growth model did not converge. With few occasions or little between-person variation '
+      + 'there may be nothing for a random slope to explain; try dropping the quadratic term, or '
+      + 'a repeated-measures ANOVA instead.',
+    );
+    return;
+  }
+
+  const FULL = { i: 'Intercept (starting level)', s: 'Slope (change per occasion)', q: 'Quadratic (curvature)' };
+  await app.results.beginAnalysis('Latent growth curve');
+  await app.results.appendText(
+    `Occasions, in order: ${names.map((nm) => labelOf(meta.get(nm), nm)).join(' → ')}. Modelled at times `
+    + `${names.map((_, i) => i).join(', ')} — equally spaced. N = ${f(r.num('n'), 0)}.`,
+  );
+
+  const mLhs = r.strs('mLhs');
+  await app.results.appendTable({
+    columns: ['', 'Mean', 'SE', 'z', 'Sig.'],
+    rows: mLhs.map((k, i) => [
+      FULL[k] || k, f(r.nums('mEst')[i], 3), f(r.nums('mSe')[i], 3), f(r.nums('mZ')[i], 2), fmtP(r.nums('mP')[i]),
+    ]),
+    rowHeaders: true,
+  }, { caption: 'Growth factor means' });
+
+  const vLhs = r.strs('vLhs');
+  const vRhs = r.strs('vRhs');
+  await app.results.appendTable({
+    columns: ['', 'Estimate', 'SE', 'Sig.'],
+    rows: vLhs.map((k, i) => [
+      k === vRhs[i] ? `Variance of ${(FULL[k] || k).toLowerCase()}` : `Covariance ${k}–${vRhs[i]}`,
+      f(r.nums('vEst')[i], 3), f(r.nums('vSe')[i], 3), fmtP(r.nums('vP')[i]),
+    ]),
+    rowHeaders: true,
+  }, { caption: 'Growth factor variances and covariances' });
+
+  const fn = r.strs('fitNames');
+  const fv = r.nums('fitVals');
+  const pick = (k, d = 3) => { const i = fn.indexOf(k); return i < 0 ? '—' : f(fv[i], d); };
+  await app.results.appendTable({
+    columns: ['χ²', 'df', 'p', 'CFI', 'TLI', 'RMSEA', 'SRMR', 'AIC', 'BIC'],
+    rows: [[pick('chisq', 2), pick('df', 0), pick('pvalue'), pick('cfi'), pick('tli'), pick('rmsea'), pick('srmr'), pick('aic', 1), pick('bic', 1)]],
+  }, { caption: 'Model fit' });
+
+  // The reading, spelled out. A significant variance is the finding that justifies the model at
+  // all, and it is the one an Mplus table does not label for you.
+  const varOf = (k) => { const i = vLhs.findIndex((x, j) => x === k && vRhs[j] === k); return i < 0 ? null : { est: r.nums('vEst')[i], p: r.nums('vP')[i] }; };
+  const vs = varOf('s');
+  const notes = [
+    'A significant **mean slope** says the group changes on average; a significant **slope variance** says individuals differ in how much — which is what a growth curve adds over a repeated-measures ANOVA.',
+  ];
+  if (vs && Number.isFinite(vs.p) && vs.p >= 0.05) {
+    notes.push('Here the slope variance is **not** significant: on this evidence everyone changes at much the same rate, and a simpler model may say the same thing.');
+  }
+  notes.push('Loadings are fixed, so the fit indices test the assumed SHAPE of change. Unequally spaced occasions (baseline, 6 months, 2 years) need loadings to match the real spacing — otherwise the slope is per *occasion*, not per unit of time.');
+  await app.results.appendText(notes.join(' '));
+  await app.results.endAnalysis();
 }
 
 // --- helpers -----------------------------------------------------------------

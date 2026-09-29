@@ -186,6 +186,9 @@ const BUILTIN_PLUGINS = [
   './plugins/builtin-doe/index.js',
   './plugins/builtin-sna/index.js',
   './plugins/builtin-spatial/index.js',
+  // Latent class / profile analysis (#141) — the Mplus mixture-model gap. poLCA + flexmix,
+  // both with tiny dependency closures in WebR (checked against its repo index, not guessed).
+  './plugins/builtin-mixture/index.js',
   // Reference workspace plugin (#93): proves the manifest→tab→sandboxed UI→state
   // loop. Off by default; enable in Edit ▸ Plugins to see the workspace tab.
   './plugins/builtin-hello-workspace/index.js',

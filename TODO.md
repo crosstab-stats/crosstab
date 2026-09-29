@@ -6120,6 +6120,92 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
       `ggprism` is a styling reference, not a dependency: the engine renders SVG in JS.
 
+- [~] **#141 — Mplus parity: LATENT GROWTH CURVES, LCA AND LPA SHIPPED (2026-09-29).** Gerontology
+      faculty driver. The three models that account for most of why a department buys an Mplus
+      licence are in; growth mixture models are not, and the two feasibility guesses in the
+      original entry both turned out to be wrong in the useful direction.
+
+      **Feasibility was settled by READING WebR's binary repo index, not by probing.** The
+      `PACKAGES` file for R 4.6 lists 22,741 packages with their dependencies, so the question
+      "will this load" reduces to "how big is the closure" — no session to poison, no cumulative
+      `.so` exhaustion to mistake for an absent package ([[webr-package-feasibility]]):
+
+      | package | closure | verdict |
+      | --- | --- | --- |
+      | `poLCA` | **3** (poLCA, scatterplot3d, MASS) | LCA — shipped |
+      | `flexmix` | **4** (flexmix, lattice, modeltools, nnet) | LPA — shipped |
+      | `lavaan` | 6 — already in use | growth curves — shipped, no new dependency |
+      | `lcmm` | 14 | GMM looks feasible; **not built** |
+      | `depmixS4` | 17 | latent transition — the entry said "almost certainly not feasible"; it is **available** |
+      | `mclust` | — | **not built for WebR at all** |
+      | `tidyLPA` | 115, and needs mclust | ruled out |
+      | `blavaan` | — | absent, as expected (needs Stan) |
+
+      `mclust` being missing is the finding that shaped the build: it is the usual LPA engine, and
+      its absence is also why `tidyLPA` was never an option. A `flexmix` Gaussian mixture is the
+      same model by another route.
+
+      **The R was validated against local R 4.6.0 on data simulated with a known structure**, not
+      just run to see if it errored. LCA recovered class shares .659/.341 against a true .667/.333
+      and item probabilities .912/.143 against .90/.15. LPA recovered centres (−.05, .04, −.05) and
+      (3.03, 2.50, 3.52) against (0,0,0) and (3, 2.5, 3.5). The growth model recovered a mean
+      intercept of 9.91 and slope of 1.49 against 10 and 1.5, variances 4.30 and 0.39 against 4 and
+      0.36, and put the intercept–slope covariance at p = .33 against a true zero. 42 tests.
+
+  - [x] **Latent growth curve — in `builtin-sem`, deliberately.** The entry offered "builtin-sem or
+        its own plugin"; the WebR lavaan patch decided it. `parallel::detectCores()` returns NA
+        under WebR and trips lavaan's own option validation, so `builtin-sem` carries a prelude
+        that patches it — and a second plugin would have meant a second copy of that workaround,
+        which is the shape that produced a diverged tooltip, a wrong origin label and a
+        double-counted deploy issue inside one week.
+
+        Reports the mean intercept and slope, their **variances** (the reason to fit this instead
+        of a repeated-measures ANOVA, and the report says so when the slope variance is not
+        significant), their covariance, and fit — because fixed loadings are a strong claim about
+        the shape of change. The assumed spacing (`0, 1, 2, …` over the variables in the order
+        given) is **stated in the output**: unequally spaced waves modelled this way give a slope
+        per *occasion* rather than per unit of time, silently. Optional quadratic term.
+
+  - [x] **LCA and LPA — `plugins/builtin-mixture/`.** Four decisions worth keeping:
+
+        **It fits every k from 1 up and compares them.** Choosing the number of classes IS the
+        analysis — nobody knows it in advance, and the Mplus workflow is to read BIC, entropy and
+        the smallest class against each other. The comparison table comes with the rule for
+        reading it (BIC is the one to trust; entropy below ~0.8 means the classes overlap; a class
+        under 5% is usually the model fitting a handful of odd cases; and the statistics do not
+        decide). The validation run demonstrates why that guidance is not padding: on the LPA data
+        **AIC preferred k = 3 over the true k = 2**, while BIC got it right.
+
+        **The random seed is an input and is reported.** Both engines use random starts, so an
+        unseeded mixture model replays to a different answer — which a recorded, re-runnable log
+        cannot live with.
+
+        **poLCA's 1…K requirement is handled by recoding, and the mapping is printed** in the
+        user's own value labels. It refuses anything else, so the most ordinary data there is
+        (0/1 items) would have failed with "Error in poLCA"; and recoding silently is exactly what
+        #187 was about.
+
+        **Class membership saves to a NEW dataset**, because assigning people to classes and then
+        analysing them is the point. A plugin's data surface is read-only apart from `data.create`
+        ([[no-inplace-replace]]). If the model dropped incomplete cases the vectors are shorter
+        than the dataset, and it **refuses to write** rather than attach classes to the wrong rows.
+
+        *Found by the tests:* the guidance paragraph said "2 classs" — `kind + 's'` does not
+        pluralise "class". In the one sentence the whole comparison table hangs on.
+
+  - [ ] **Growth mixture models (`lcmm`) — not built, and now known to be feasible** (closure 14).
+        The remaining Mplus headline. It is latent classes *of growth trajectories*, so it wants
+        the growth-curve wrapper and the mixture plugin to meet; decide where it lives before
+        building, because the answer is not obvious the way the other three were.
+  - [ ] **Latent transition analysis — worth a probe after all.** The original entry said LTA was
+        "almost certainly not WASM-feasible" and told a future reader not to spend a probe on it.
+        `depmixS4` is in the repo with a closure of 17, so that advice was wrong. Not built, but no
+        longer ruled out.
+  - **Bayesian SEM stays out:** `blavaan` needs Stan/JAGS and is absent from the repo, which
+    confirms the original call.
+
+      Original:
+
 - [ ] **#141 — Mplus parity (latent mixture models).** Gerontology faculty driver.
       CrossTab already covers roughly 40% of Mplus's territory (SEM/CFA, EFA,
       multilevel, mediation, survival, mixed ANOVA) but misses the latent-variable
