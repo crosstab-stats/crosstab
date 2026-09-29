@@ -47,6 +47,8 @@ export const manifest = {
     'latent class', 'lca', 'latent profile', 'lpa', 'mixture model', 'finite mixture',
     'poLCA', 'flexmix', 'mplus', 'typology', 'subgroups', 'clustering', 'model-based clustering',
     'class membership', 'entropy', 'BIC',
+    'growth mixture', 'gmm', 'trajectory', 'trajectory classes', 'group-based trajectory',
+    'nagin', 'lcga', 'latent class growth', 'change over time',
   ],
   disciplines: ['Psychology', 'Sociology', 'Public Health', 'Gerontology', 'Education', 'Social Science'],
   howto:
@@ -59,7 +61,13 @@ export const manifest = {
     + '  • items — the indicators. LCA wants categorical (its categories are recoded to 1…K and the mapping is printed); LPA wants numeric.\n'
     + '  • classes — the most classes to consider. Every k from 1 to this is fitted and compared; the detail is for this k.\n'
     + '  • seed — random starts make these models seed-dependent, so it is explicit and reported (default 12345).\n'
-    + '  • save — "yes" puts each case\'s class and its probability in a new dataset.',
+    + '  • save — "yes" puts each case\'s class and its probability in a new dataset.\n' +
+    'GUI: Analyze ▸ Growth mixture model — classes of TRAJECTORY. Pick the same measure at each '
+    + 'occasion, earliest first, and you get groups of people whose change over time differs in level '
+    + 'or direction: the stable majority plus the fast decliners that a single growth curve averages '
+    + 'away. Three or more occasions.' +
+    '\nSyntax: run builtin-mixture.gmm {"waves": ["t1", "t2", "t3", "t4"], "classes": 3, "seed": 12345, "save": "no"}\n' +
+    '  • waves — one column per occasion, in time order. Equally spaced, so the slope is per occasion.',
   // poLCA closure: poLCA, scatterplot3d, MASS. flexmix closure: flexmix, lattice, modeltools,
   // nnet. Both tiny — checked against repo.r-wasm.org's index for R 4.6, not guessed.
   rPackages: ['poLCA', 'flexmix'],
@@ -84,6 +92,17 @@ export const manifest = {
         { name: 'classes', kind: 'number', label: 'Most profiles to consider', hint: 'Every number of profiles from 1 up to this is fitted and compared; the detail is reported for this one.', default: 3, min: 1, max: 10, step: 1 },
         { name: 'seed', kind: 'number', label: 'Random seed', hint: 'These models start from random values, so the seed is what makes the result reproducible. Change it to check the solution is stable.', default: 12345, step: 1 },
         { name: 'save', kind: 'choice', label: 'Save each case’s profile?', hint: 'Puts the profile and its probability in a new dataset, so profiles can be crosstabbed or compared.', options: [{ value: 'no', label: 'No' }, { value: 'yes', label: 'Yes — new dataset with profile membership' }], default: 'no' },
+      ],
+    },
+    {
+      label: 'Growth mixture model (classes of trajectory)…',
+      run: 'gmm',
+      order: 62,
+      inputs: [
+        { name: 'waves', kind: 'variables', label: 'The same measure at each occasion, earliest first', hint: 'One column per wave, in time order — the order IS the time axis. Classes are groups of people whose trajectories differ.', multiple: true, types: ['numeric'] },
+        { name: 'classes', kind: 'number', label: 'Most classes to consider', hint: 'Every number of trajectory classes from 1 up to this is fitted and compared; the detail is reported for this one.', default: 3, min: 1, max: 10, step: 1 },
+        { name: 'seed', kind: 'number', label: 'Random seed', hint: 'These models start from random values, so the seed is what makes the result reproducible. Change it to check the solution is stable.', default: 12345, step: 1 },
+        { name: 'save', kind: 'choice', label: 'Save each person’s class?', hint: 'Puts the trajectory class and its probability in a new dataset, so classes can be crosstabbed or compared.', options: [{ value: 'no', label: 'No' }, { value: 'yes', label: 'Yes — new dataset with class membership' }], default: 'no' },
       ],
     },
   ],
@@ -342,13 +361,186 @@ export async function lpa(app, { items, classes, seed, save }) {
   await app.results.endAnalysis();
 }
 
+/**
+ * Growth mixture modelling (#141): latent classes of TRAJECTORY.
+ *
+ * The last of the Mplus headline models. A latent growth curve asks how the average person
+ * changes and how much people vary around that; a growth mixture asks whether there are distinct
+ * *kinds* of change — the classic finding being that an "average modest decline" is really a
+ * stable majority plus a small fast-declining group, which is the whole point in gerontology,
+ * developmental psychology and criminology (Nagin's trajectory groups).
+ *
+ * ## Engine: flexmix, not lcmm
+ *
+ * `lcmm` is the specialist package and was the obvious candidate. It is also a 14-package
+ * dependency closure, and the offline cache pre-fetches the R packages of every ENABLED plugin —
+ * so it would be a download for everyone who wanted latent class analysis. `flexmix` is already
+ * here for LPA (closure of four) and ships `FLXMRlmm`, a mixture of linear MIXED models: classes
+ * of trajectory with a random intercept within each class, which is the model. Validated against
+ * simulated data with two known trajectory groups: it recovered slopes of 1.51 and -0.22 against
+ * a true 1.5 and -0.2, and put exactly the right 150/100 people in each.
+ *
+ * Reach for `lcmm` when this is not enough: non-Gaussian or ordinal outcomes through its link
+ * functions, or a joint model with survival (`Jointlcmm`). Those are real gaps, not excuses.
+ *
+ * ## Wide in, long inside
+ *
+ * A mixed model needs one row per person-occasion, but the data users have — and what the latent
+ * growth curve in `builtin-sem` takes — is one COLUMN per occasion. So this takes the wide form
+ * and reshapes internally, with the row number as the person id. Keeping the two growth tools on
+ * the same input shape matters more than saving a reshape in R: a user comparing a single growth
+ * curve against a mixture of them should not have to restructure their data in between.
+ *
+ * @param {object} app
+ * @param {{waves: string[], classes: number, seed: number, save: string}} inputs
+ */
+export async function gmm(app, { waves, classes, seed, save }) {
+  const names = Array.isArray(waves) ? waves : waves ? [waves] : [];
+  if (names.length < 3) {
+    await app.results.appendError(
+      'A growth mixture needs at least three occasions — with two, a trajectory is just a line '
+      + 'between two points and there is nothing for the classes to differ in shape about.',
+    );
+    return;
+  }
+  const kMax = clampK(classes);
+  const seedVal = Number.isFinite(Number(seed)) ? Math.trunc(Number(seed)) : 12345;
+  const meta = metaMap(await app.data.getVariableMeta());
+
+  const rCode = `
+    suppressMessages(library(flexmix))
+    ${ENTROPY_R}
+    w <- as.data.frame(waves)
+    nOcc <- ncol(w); nPer <- nrow(w)
+    if (nOcc < 3) stop("need at least three occasions")
+    # Wide to long: one row per person-occasion, time counted 0, 1, 2, ... over the columns in
+    # the order given. Same spacing assumption as the latent growth curve, and stated in the
+    # output for the same reason.
+    d <- data.frame(
+      id = rep(seq_len(nPer), times = nOcc),
+      time = rep(seq_len(nOcc) - 1, each = nPer),
+      y = suppressWarnings(as.numeric(unlist(w, use.names = FALSE))))
+    d <- d[stats::complete.cases(d), , drop = FALSE]
+    # A person with a single usable occasion cannot have a trajectory; dropping them here rather
+    # than letting the fit do something silent with them.
+    keep <- names(which(table(d$id) >= 2))
+    d <- d[as.character(d$id) %in% keep, , drop = FALSE]
+    if (length(keep) < 20) stop("too few people with two or more occasions")
+    d <- d[order(d$id, d$time), , drop = FALSE]
+    d$id <- factor(d$id)
+    nUsed <- nlevels(d$id)
+
+    fits <- list(); rows <- list()
+    for (k in 1:${kMax}) {
+      # Seeded per fit, as in the other two tools: each k then depends only on the seed.
+      set.seed(${seedVal})
+      fit <- try(flexmix(y ~ time | id, data = d, k = k, model = FLXMRlmm(random = ~ 1),
+                         control = list(iter.max = 500, minprior = 0)), silent = TRUE)
+      if (inherits(fit, "try-error") || is.null(fit) || fit@k < 1) next
+      first <- !duplicated(d$id)
+      post <- flexmix::posterior(fit)[first, , drop = FALSE]
+      ent <- if (fit@k > 1) ct_entropy(post) else NA_real_
+      small <- if (fit@k > 1) min(fit@prior) else 1
+      # Per component: intercept, slope, random-intercept variance, residual variance; plus the
+      # k-1 free mixing proportions. Checked against flexmix's own BIC.
+      npar <- fit@k * 4 + fit@k - 1
+      rows[[length(rows) + 1]] <- c(k, fit@k, npar, AIC(fit), BIC(fit),
+                                    as.numeric(logLik(fit)), ent, small)
+      fits[[as.character(k)]] <- fit
+    }
+    if (!length(rows)) stop("no model converged")
+    cmp <- do.call(rbind, rows)
+    kBest <- max(as.integer(names(fits)))
+    best <- fits[[as.character(kBest)]]
+    pars <- parameters(best)
+    firstRow <- !duplicated(d$id)
+    list(
+      k = best@k, n = nUsed, nOcc = nOcc, nDropped = nPer - nUsed,
+      cmpK = cmp[, 2], cmpNpar = cmp[, 3], cmpAic = cmp[, 4], cmpBic = cmp[, 5],
+      cmpLL = cmp[, 6], cmpEnt = cmp[, 7], cmpSmall = cmp[, 8],
+      share = as.numeric(best@prior),
+      # Repeated per class, so the three vectors are parallel: as.numeric() flattens the matrix
+      # column-major, and a bare rownames() would be four entries against twelve values — which
+      # silently resolved class 1 and left every other class blank.
+      parNames = rep(rownames(pars), ncol(pars)), parVals = as.numeric(pars),
+      parClass = rep(seq_len(ncol(pars)), each = nrow(pars)),
+      assign = flexmix::clusters(best)[firstRow],
+      maxPost = apply(flexmix::posterior(best)[firstRow, , drop = FALSE], 1, max)
+    )`;
+
+  const { result } = await app.webr.run(rCode);
+  if (!result) throw new Error('R returned no result');
+  const r = flat(result);
+  await app.results.beginAnalysis('Growth mixture model');
+  const dropped = r.num('nDropped');
+  await app.results.appendText(
+    `Occasions, in order: ${names.map((nm) => labelOf(meta, nm)).join(' → ')}. Modelled at times `
+    + `${names.map((_, i) => i).join(', ')} — equally spaced, so the slope is per OCCASION. `
+    + `${f(r.num('n'), 0)} people${dropped ? `, ${f(dropped, 0)} dropped for having fewer than two usable occasions` : ''}. `
+    + `Random seed ${seedVal}.`,
+  );
+
+  await reportMixture(app, r, {
+    kind: 'class',
+    names,
+    meta,
+    seedVal,
+    save: String(save ?? 'no') === 'yes',
+    quiet: true, // the header above already says the indicators and the seed
+    detail: async () => {
+      const k = r.num('k');
+      const pn = r.strs('parNames');
+      const pc = r.nums('parClass');
+      const pv = r.nums('parVals');
+      const cell = (row, cl) => {
+        const i = pn.findIndex((x, j) => x === row && pc[j] === cl);
+        return i < 0 ? '—' : pv[i];
+      };
+      const ROWS = [
+        ['coef.(Intercept)', 'Starting level (intercept)', 3],
+        ['coef.time', 'Change per occasion (slope)', 3],
+        ['sigma2.Random', 'Variance between people, within the class', 3],
+        ['sigma2.Residual', 'Residual variance', 3],
+      ];
+      await app.results.appendTable({
+        columns: ['', ...Array.from({ length: k }, (_, i) => `Class ${i + 1}`)],
+        rows: ROWS.map(([key, label, dp]) => [
+          label, ...Array.from({ length: k }, (_, i) => f(cell(key, i + 1), dp)),
+        ]),
+        rowHeaders: true,
+      }, { caption: `Trajectory of each class (k = ${f(k, 0)})` });
+
+      // The reading, and the two ways a growth mixture misleads.
+      const slopes = Array.from({ length: k }, (_, i) => cell('coef.time', i + 1)).filter(Number.isFinite);
+      const rising = slopes.filter((s) => s > 0).length;
+      const falling = slopes.filter((s) => s < 0).length;
+      const shape = rising && falling
+        ? `Here the classes move in **opposite directions** (${rising} rising, ${falling} falling) — which is exactly the finding a single growth curve would have averaged into one modest trend.`
+        : 'Here every class moves the same way, differing in how fast — so the classes are about rate, not direction.';
+      await app.results.appendText(
+        `Each class has its own starting level and its own rate of change; the variance row says `
+        + `how much people within a class still differ from it. ${shape}`,
+      );
+      await app.results.appendText(
+        '_Two cautions specific to this model. **Classes can appear where there are none**: a '
+        + 'single population with non-normal change is routinely fitted as two or three classes, '
+        + 'so a solution needs to be interpretable and ideally replicable, not just better-fitting. '
+        + 'And **the spacing is assumed equal** — unequally spaced occasions (baseline, 6 months, '
+        + '2 years) make the slope per *occasion* rather than per unit of time, which changes what '
+        + 'a "fast decline" means._',
+      );
+    },
+  });
+  await app.results.endAnalysis();
+}
+
 // --- shared reporting --------------------------------------------------------
 
 /**
  * Everything both models say the same way: the k-comparison table (the real output of a mixture
  * analysis), the class sizes, the caller's detail, the seed, and the optional saved membership.
  */
-async function reportMixture(app, r, { kind, names, meta, seedVal, save, detail }) {
+async function reportMixture(app, r, { kind, names, meta, seedVal, save, detail, quiet = false }) {
   const Kind = kind === 'class' ? 'Class' : 'Profile';
   // "class" does not pluralise by adding an s, and the first version of this printed
   // "2 classs" in the guidance the whole table hangs on.
@@ -360,11 +552,15 @@ async function reportMixture(app, r, { kind, names, meta, seedVal, save, detail 
   const small = r.nums('cmpSmall');
   const hasG2 = r.nums('cmpG2').length > 0;
 
-  await app.results.appendText(
-    `Indicators: ${names.map((nm) => labelOf(meta, nm)).join(', ')}. `
-    + `N = ${f(r.num('n'), 0)} complete cases. Random seed ${seedVal} — `
-    + 'these models start from random values, so the seed is part of the result.',
-  );
+  // Skipped when the caller has already said it in terms that fit its own model — the growth
+  // mixture counts PEOPLE with usable occasions, not complete cases.
+  if (!quiet) {
+    await app.results.appendText(
+      `Indicators: ${names.map((nm) => labelOf(meta, nm)).join(', ')}. `
+      + `N = ${f(r.num('n'), 0)} complete cases. Random seed ${seedVal} — `
+      + 'these models start from random values, so the seed is part of the result.',
+    );
+  }
 
   await app.results.appendTable({
     columns: hasG2

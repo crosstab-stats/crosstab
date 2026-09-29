@@ -6149,7 +6149,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
       `ggprism` is a styling reference, not a dependency: the engine renders SVG in JS.
 
-- [~] **#141 — Mplus parity: LATENT GROWTH CURVES, LCA AND LPA SHIPPED (2026-09-29).** Gerontology
+- [x] **#141 — DONE (2026-09-29). Mplus parity: latent growth curves, LCA, LPA and growth mixture models.** Gerontology faculty driver. All four headline models are in, and the two feasibility guesses in the original entry were both wrong in the useful direction.
       faculty driver. The three models that account for most of why a department buys an Mplus
       licence are in; growth mixture models are not, and the two feasibility guesses in the
       original entry both turned out to be wrong in the useful direction.
@@ -6162,9 +6162,9 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       | package | closure | verdict |
       | --- | --- | --- |
       | `poLCA` | **3** (poLCA, scatterplot3d, MASS) | LCA — shipped |
-      | `flexmix` | **4** (flexmix, lattice, modeltools, nnet) | LPA — shipped |
+      | `flexmix` | **4** (flexmix, lattice, modeltools, nnet) | LPA **and** growth mixtures — shipped |
       | `lavaan` | 6 — already in use | growth curves — shipped, no new dependency |
-      | `lcmm` | 14 | GMM looks feasible; **not built** |
+      | `lcmm` | 14 | GMM — **not needed**, `flexmix` does it (see below) |
       | `depmixS4` | 17 | latent transition — the entry said "almost certainly not feasible"; it is **available** |
       | `mclust` | — | **not built for WebR at all** |
       | `tidyLPA` | 115, and needs mclust | ruled out |
@@ -6274,14 +6274,47 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         *Found by the tests:* the guidance paragraph said "2 classs" — `kind + 's'` does not
         pluralise "class". In the one sentence the whole comparison table hangs on.
 
-  - [ ] **Growth mixture models (`lcmm`) — not built, and now known to be feasible** (closure 14).
-        The remaining Mplus headline. It is latent classes *of growth trajectories*, so it wants
-        the growth-curve wrapper and the mixture plugin to meet; decide where it lives before
-        building, because the answer is not obvious the way the other three were.
-  - [ ] **Latent transition analysis — worth a probe after all.** The original entry said LTA was
-        "almost certainly not WASM-feasible" and told a future reader not to spend a probe on it.
-        `depmixS4` is in the repo with a closure of 17, so that advice was wrong. Not built, but no
-        longer ruled out.
+  - [x] **Growth mixture models — DONE, and `lcmm` was not needed.** The decision looked like
+        "where does it live" and was really "which engine", which changed the answer entirely.
+        `lcmm` is the specialist package and a **14-package closure**; `flexmix` was already here
+        for LPA (closure of four) and ships **`FLXMRlmm`**, a mixture of linear MIXED models —
+        classes of trajectory with a random intercept within each class, which IS the model. So
+        the last headline model added **no new R package at all**, which matters because the
+        offline cache pre-fetches the packages of every enabled plugin: `lcmm` would have been a
+        download for everyone who only wanted latent class analysis. It lands in
+        `builtin-mixture` beside LPA, sharing the whole comparison-table / entropy / seed /
+        class-saving machinery, which is what dissolved the "where" question.
+
+        **Wide in, long inside.** A mixed model needs one row per person-occasion; the data users
+        have — and what the growth curve in `builtin-sem` takes — is one column per occasion. It
+        reshapes internally with the row number as the person id, so a user comparing one growth
+        curve against a mixture of them never restructures their data. A person with fewer than
+        two usable occasions is dropped and **counted in the output**, because one point is not a
+        trajectory.
+
+        Reports each class's starting level, rate of change and within-class variance, and names
+        the finding the model exists for: when classes move in **opposite** directions, that is
+        precisely what a single growth curve averages into one modest trend. Two cautions are
+        stated rather than left to be known — a single population with non-normal change is
+        routinely fitted as two or three spurious classes, and the equal-spacing assumption makes
+        the slope per *occasion* rather than per unit of time.
+
+        *Found by the headless tests, and only by them:* `parNames` came back as four row names
+        against twelve values, so class 1 resolved and every other class printed as a dash. The
+        desktop comparison could not have caught it — the R was correct and `parVals` matched
+        exactly; the indexing on the JS side was wrong. Two harnesses, two different failure
+        modes.
+
+        **Reach for `lcmm` when this is not enough:** non-Gaussian or ordinal outcomes via its
+        link functions, or a joint model with survival (`Jointlcmm`). Real gaps, recorded as such.
+
+  - [ ] **Latent transition analysis — no longer ruled out, and not built.** The original entry
+        told a future reader not to spend a probe on it: *"almost certainly not WASM-feasible."*
+        `depmixS4` is in the WebR repo with a closure of 17, so that advice was wrong. LTA is
+        classes at two or more time points plus the probabilities of moving between them — a
+        different question from a growth mixture (which classifies whole trajectories), and a
+        genuinely wanted one in developmental work. Nobody has asked for it yet, so it sits here
+        as a known-feasible option rather than a commitment.
   - **Bayesian SEM stays out:** `blavaan` needs Stan/JAGS and is absent from the repo, which
     confirms the original call.
 

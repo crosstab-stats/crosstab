@@ -157,6 +157,51 @@ for (j in seq_len(ncol(X))) {
 }
 recov(fx@prior[big], n2 / n, sqrt((n1/n) * (n2/n) / n), "share, raised profile")
 
+cat("\n=============== 2b. Growth mixture (flexmix FLXMRlmm) ===============\n")
+# Classes of TRAJECTORY. lcmm is the specialist package and a 14-package closure; flexmix was
+# already a dependency and ships FLXMRlmm, a mixture of linear MIXED models, which is the model.
+set.seed(20260929)
+G1 <- 150; G2 <- 100; TT <- 5; B0 <- 10; B1a <- 1.5; B1b <- -0.2; RI <- 1.2; RES <- 0.8
+mkg <- function(n, b1) { ri <- rnorm(n, 0, RI)
+  sapply(0:(TT-1), function(t) B0 + ri + b1 * t + rnorm(n, 0, RES)) }
+wv <- as.data.frame(rbind(mkg(G1, B1a), mkg(G2, B1b)))
+names(wv) <- paste0("t", seq_len(TT))
+dl <- data.frame(id = rep(seq_len(nrow(wv)), times = TT),
+                 time = rep(seq_len(TT) - 1, each = nrow(wv)),
+                 y = unlist(wv, use.names = FALSE))
+dl <- dl[order(dl$id, dl$time), ]; dl$id <- factor(dl$id)
+set.seed(12345)
+gm <- flexmix(y ~ time | id, data = dl, k = 2, model = FLXMRlmm(random = ~ 1),
+              control = list(iter.max = 500, minprior = 0))
+gp <- parameters(gm)
+firstRow <- !duplicated(dl$id)
+
+cat("\n-- exact identities --\n")
+exact(sum(gm@prior), 1, "mixing proportions sum to 1")
+# Per component: intercept, slope, random-intercept variance, residual variance; plus k-1 mixing.
+gnpar <- gm@k * 4 + gm@k - 1
+exact(BIC(gm), -2 * as.numeric(logLik(gm)) + gnpar * log(nrow(dl)),
+      "the plugin npar formula reproduces flexmix BIC (n = ROWS, not people)")
+exact(nrow(gp), 4, "four parameters per class, named")
+ok(identical(rownames(gp), c("coef.(Intercept)", "coef.time", "sigma2.Random", "sigma2.Residual")),
+   "and the row names are the ones the plugin indexes by")
+ok(all(tapply(flexmix::clusters(gm), dl$id, function(v) length(unique(v)) == 1)),
+   "every occasion of a person gets the SAME class (a trajectory belongs to a person)")
+exact(sum(firstRow), nrow(wv), "one class per person after reducing by first row")
+
+cat("\n-- recovery within sampling error --\n")
+# Component labels are arbitrary; orient by slope.
+rise <- which.max(gp["coef.time", ]); flat <- 3 - rise
+recov(gp["coef.time", rise], B1a, RES / sqrt(G1 * TT), "slope, rising class")
+recov(gp["coef.time", flat], B1b, RES / sqrt(G2 * TT), "slope, flat class")
+recov(gp["coef.(Intercept)", rise], B0, RI / sqrt(G1), "intercept, rising class")
+recov(gp["sigma2.Random", rise], RI^2, RI^2 * sqrt(2 / G1), "random-intercept variance")
+recov(gp["sigma2.Residual", rise], RES^2, RES^2 * sqrt(2 / (G1 * TT)), "residual variance")
+recov(gm@prior[rise], G1 / (G1 + G2), sqrt(0.6 * 0.4 / (G1 + G2)), "share, rising class")
+ok(sum(flexmix::clusters(gm)[firstRow] == rise) == G1,
+   sprintf("and it puts exactly the right %d people in it", G1))
+
+
 cat("\n=============== 3. Latent growth curve (lavaan) ===============\n")
 suppressMessages(library(lavaan))
 set.seed(20260929)

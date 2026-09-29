@@ -33,7 +33,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { lca, lpa, manifest } from '../plugins/builtin-mixture/index.js';
+import { gmm, lca, lpa, manifest } from '../plugins/builtin-mixture/index.js';
 
 /** An R list in the shape webR hands back. */
 const rList = (obj) => ({
@@ -340,18 +340,24 @@ test('only the two packages that were verified are declared', () => {
   assert.deepEqual(manifest.rPackages, ['poLCA', 'flexmix']);
 });
 
-test('both tools are on the menu with the inputs they need', () => {
+test('all three tools are on the menu with the inputs they need', () => {
   const byRun = Object.fromEntries(manifest.menu.map((m) => [m.run, m]));
-  assert.deepEqual(Object.keys(byRun).sort(), ['lca', 'lpa']);
-  for (const run of ['lca', 'lpa']) {
+  assert.deepEqual(Object.keys(byRun).sort(), ['gmm', 'lca', 'lpa']);
+  // The same four questions in the same order everywhere — a user who has run one has learnt
+  // all three. Only the FIRST input's name differs, because a growth mixture's indicators are
+  // occasions of one measure rather than separate measures.
+  for (const [run, first] of [['lca', 'items'], ['lpa', 'items'], ['gmm', 'waves']]) {
     const names = byRun[run].inputs.map((i) => i.name);
-    assert.deepEqual(names, ['items', 'classes', 'seed', 'save'], `${run} inputs`);
+    assert.deepEqual(names, [first, 'classes', 'seed', 'save'], `${run} inputs`);
     assert.equal(byRun[run].inputs.find((i) => i.name === 'seed').default, 12345, 'a default seed');
     assert.ok(byRun[run].inputs.every((i) => i.hint), `${run} has an unhinted input`);
   }
   // LCA takes categorical indicators, so it must NOT filter the picker to numeric.
   assert.equal(byRun.lca.inputs[0].types, undefined);
   assert.deepEqual(byRun.lpa.inputs[0].types, ['numeric']);
+  assert.deepEqual(byRun.gmm.inputs[0].types, ['numeric']);
+  // The order the menu reads in: indicators, then profiles, then trajectories.
+  assert.deepEqual(manifest.menu.map((m) => m.order), [60, 61, 62]);
 });
 
 test('it is findable by the words someone leaving Mplus would type', () => {
@@ -361,4 +367,148 @@ test('it is findable by the words someone leaving Mplus would type', () => {
   assert.match(manifest.howto, /run builtin-mixture\.lca/);
   assert.match(manifest.howto, /run builtin-mixture\.lpa/);
   assert.ok(manifest.disciplines.includes('Gerontology'), 'the faculty who asked for it');
+});
+
+// =============================================================================
+// Growth mixture models — classes of TRAJECTORY
+// =============================================================================
+
+/**
+ * The last Mplus headline model, and the engine choice is the interesting part. `lcmm` is the
+ * specialist package and a 14-package dependency closure; `flexmix` was already here for LPA
+ * (closure of four) and ships `FLXMRlmm`, a mixture of linear MIXED models — classes of
+ * trajectory with a random intercept within each class, which is the model. So a growth mixture
+ * added **no new R package at all**, which matters because the offline cache pre-fetches the
+ * packages of every enabled plugin.
+ *
+ * The fixture is a real run against local R on two simulated trajectory groups (150 rising at
+ * +1.5 per occasion, 100 flat at −0.2), and it happens to illustrate the model's own hazard: BIC
+ * picks the true k = 2, while k = 3 splits off a 4.45% class that is an artefact.
+ */
+const GMM_RESULT = rList({
+  k: 3, n: 250, nOcc: 5, nDropped: 0,
+  cmpK: [1, 2, 3], cmpNpar: [4, 9, 14],
+  cmpAic: [5241.938, 4056.427, 4056.606],
+  cmpBic: [5262.461, 4102.605, 4128.438],
+  cmpLL: [-2616.969, -2019.213, -2014.303],
+  cmpEnt: [NaN, 0.9969, 0.9307], cmpSmall: [1, 0.4009, 0.0445],
+  share: [0.5554, 0.4001, 0.0445],
+  // Repeated per class, parallel to parVals/parClass — the bug this fixture caught was a bare
+  // four-entry rownames() against twelve values, which left every class but the first blank.
+  parNames: [
+    'coef.(Intercept)', 'coef.time', 'sigma2.Random', 'sigma2.Residual',
+    'coef.(Intercept)', 'coef.time', 'sigma2.Random', 'sigma2.Residual',
+    'coef.(Intercept)', 'coef.time', 'sigma2.Random', 'sigma2.Residual',
+  ],
+  parVals: [9.6436, 1.5524, 1.7544, 0.6406, 9.8655, -0.224, 1.245, 0.6786, 11.1881, 0.9802, 1.6754, 0.596],
+  parClass: [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3],
+  assign: [1, 1, 2, 3], maxPost: [0.9736, 0.994, 0.9996, 0.9735],
+});
+const GMM_IN = { waves: ['t1', 't2', 't3', 't4', 't5'], classes: 3, seed: 12345, save: 'no' };
+const WAVE_META = [{ name: 't1', label: 'Baseline' }, { name: 't2', label: 'Year 1' },
+  { name: 't3', label: 'Year 2' }, { name: 't4', label: 'Year 3' }, { name: 't5', label: 'Year 4' }];
+
+/** GMM_RESULT with some fields replaced. */
+function withGmm(over) {
+  const base = Object.fromEntries(GMM_RESULT.names.map((n, i) => [n, GMM_RESULT.values[i].values]));
+  return rList({ ...base, ...over });
+}
+
+test('a growth mixture takes WIDE data and reshapes it, so both growth tools ask the same thing', async () => {
+  // A mixed model needs one row per person-occasion; the data users have — and what the latent
+  // growth curve in builtin-sem takes — is one column per occasion. Reshaping internally means a
+  // user comparing one growth curve against a mixture of them never restructures their data.
+  const { rCode } = await invoke(gmm, GMM_IN, GMM_RESULT);
+  assert.match(rCode, /rep\(seq_len\(nPer\), times = nOcc\)/, 'the person id');
+  assert.match(rCode, /rep\(seq_len\(nOcc\) - 1, each = nPer\)/, 'time 0, 1, 2, … over the columns');
+  assert.match(rCode, /flexmix\(y ~ time \| id/, 'grouped by person, so the class belongs to a person');
+  assert.match(rCode, /FLXMRlmm\(random = ~ 1\)/, 'a random intercept within each class');
+});
+
+test('a person with fewer than two occasions is dropped, and counted', async () => {
+  // One point is not a trajectory. Dropping them in the open beats letting the fit do something
+  // silent with them.
+  const { rCode } = await invoke(gmm, GMM_IN, GMM_RESULT);
+  assert.match(rCode, /table\(d\$id\) >= 2/);
+  const { texts } = await invoke(gmm, GMM_IN, withGmm({ n: 240, nDropped: 10 }), { meta: WAVE_META });
+  assert.match(texts[0], /240 people, 10 dropped for having fewer than two usable occasions/);
+});
+
+test('fewer than three occasions is refused with the reason', async () => {
+  const { errors, rCode } = await invoke(gmm, { ...GMM_IN, waves: ['t1', 't2'] }, GMM_RESULT);
+  assert.match(errors[0], /at least three occasions/);
+  assert.match(errors[0], /just a line between two points/);
+  assert.equal(rCode, '');
+});
+
+test('the occasions, their spacing and the seed are stated up front', async () => {
+  const { texts } = await invoke(gmm, GMM_IN, GMM_RESULT, { meta: WAVE_META });
+  assert.match(texts[0], /Baseline → Year 1 → Year 2 → Year 3 → Year 4/);
+  assert.match(texts[0], /Modelled at times 0, 1, 2, 3, 4 — equally spaced, so the slope is per OCCASION/);
+  assert.match(texts[0], /Random seed 12345/);
+  // ...and the generic header is suppressed rather than printed alongside it.
+  assert.equal(texts.filter((t) => /complete cases/.test(t)).length, 0);
+});
+
+test('each class reports its own level, rate, and within-class spread', async () => {
+  const { tables } = await invoke(gmm, GMM_IN, GMM_RESULT, { meta: WAVE_META });
+  const t = tables.find((x) => /Trajectory of each class/.test(x.caption));
+  assert.deepEqual(t.columns, ['', 'Class 1', 'Class 2', 'Class 3']);
+  assert.deepEqual(t.rows.map((r) => r[0]), [
+    'Starting level (intercept)',
+    'Change per occasion (slope)',
+    'Variance between people, within the class',
+    'Residual variance',
+  ]);
+  // Class 1 rises at +1.55, class 2 falls at −0.22 — the two simulated groups.
+  assert.deepEqual(t.rows[1].slice(1), ['1.552', '-0.224', '0.980']);
+  assert.equal(t.rows[2][1], '1.754', 'the random-intercept variance is reported, not hidden');
+});
+
+test('classes moving in OPPOSITE directions is called out — it is the whole finding', async () => {
+  // The canonical growth-mixture result: an "average modest decline" that is really a stable
+  // majority plus a fast-declining group. A single growth curve averages exactly that away.
+  const { texts } = await invoke(gmm, GMM_IN, GMM_RESULT, { meta: WAVE_META });
+  const note = texts.find((x) => /opposite directions/.test(x));
+  assert.ok(note, 'the direction split is not mentioned');
+  assert.match(note, /2 rising, 1 falling/);
+  assert.match(note, /a single growth curve would have averaged into one modest trend/);
+});
+
+test('classes all moving the same way say so instead', async () => {
+  const same = withGmm({
+    parVals: [9.6, 1.5, 1.7, 0.6, 9.8, 0.4, 1.2, 0.6, 11.1, 0.9, 1.6, 0.5],
+  });
+  const { texts } = await invoke(gmm, GMM_IN, same, { meta: WAVE_META });
+  assert.ok(texts.some((x) => /every class moves the same way, differing in how fast/.test(x)));
+  assert.equal(texts.some((x) => /opposite directions/.test(x)), false);
+});
+
+test('the two ways a growth mixture misleads are both stated', async () => {
+  const { texts } = await invoke(gmm, GMM_IN, GMM_RESULT, { meta: WAVE_META });
+  const caution = texts.find((x) => /Classes can appear where there are none/.test(x));
+  assert.ok(caution, 'the spurious-classes caution is missing');
+  assert.match(caution, /single population with non-normal change/);
+  assert.match(caution, /spacing is assumed equal/);
+});
+
+test('it shares the k-comparison machinery rather than reimplementing it', async () => {
+  // Same table, same reading guidance, same tiny-class rule as LCA and LPA — and this fixture
+  // exercises all of it: BIC is lowest at the true k = 2, and k = 3 splits off 4.45%.
+  const { tables, texts } = await invoke(gmm, GMM_IN, GMM_RESULT, { meta: WAVE_META });
+  assert.ok(tables.some((t) => /Choosing the number of class/.test(t.caption)));
+  assert.ok(texts.some((t) => /lowest at 2 classes/.test(t)));
+  assert.ok(texts.some((t) => /under 5% of cases/.test(t)), 'the 4.45% class must be flagged');
+  assert.ok(texts.some((t) => /Re-run with 2/.test(t)));
+});
+
+test('growth mixtures added NO new R package', () => {
+  // The engine decision: lcmm is the specialist and a 14-package closure; flexmix was already
+  // here and ships FLXMRlmm. The offline cache pre-fetches every enabled plugin's packages, so
+  // this is a download avoided for everyone who only wanted latent class analysis.
+  assert.deepEqual(manifest.rPackages, ['poLCA', 'flexmix']);
+  assert.ok(manifest.keywords.includes('growth mixture'));
+  assert.ok(manifest.keywords.includes('trajectory'));
+  assert.ok(manifest.keywords.includes('nagin'), 'group-based trajectory modelling by its other name');
+  assert.match(manifest.howto, /run builtin-mixture\.gmm/);
 });

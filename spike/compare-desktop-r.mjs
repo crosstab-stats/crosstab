@@ -55,7 +55,7 @@ import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { lca, lpa } from '../plugins/builtin-mixture/index.js';
+import { gmm, lca, lpa } from '../plugins/builtin-mixture/index.js';
 import { growth } from '../plugins/builtin-sem/index.js';
 
 const RSCRIPT = process.env.RSCRIPT || 'C:/Program Files/R/R-4.6.0/bin/Rscript.exe';
@@ -174,6 +174,46 @@ const LPA_REFERENCE = `
        cenVals = as.numeric(cen), assign = flexmix::clusters(best),
        maxPost = apply(flexmix::posterior(best), 1, max), k = best@k, n = nrow(X))`;
 
+const GMM_SETUP = `
+set.seed(20260929)
+mkg <- function(n, b0, b1) { ri <- rnorm(n, 0, 1.2)
+  sapply(0:4, function(t) b0 + ri + b1 * t + rnorm(n, 0, 0.8)) }
+waves <- as.data.frame(rbind(mkg(150, 10, 1.5), mkg(100, 10, -0.2)))
+names(waves) <- paste0("t", 1:5)`;
+
+// What a statistician types for a growth mixture: reshape to long by hand, then one flexmix call
+// per k with a random intercept. The reshape is the part most likely to differ, so it is written
+// out longhand here rather than borrowed.
+const GMM_REFERENCE = `
+  suppressMessages(library(flexmix))
+  ref_entropy <- function(post) {
+    k <- ncol(post); if (is.null(k) || k < 2) return(NA_real_)
+    rows <- apply(post, 1, function(r) { p <- pmax(r, 1e-12); -sum(r * log(p)) })
+    1 - mean(rows) / log(k)
+  }
+  nOcc <- ncol(waves); nPer <- nrow(waves)
+  d <- data.frame(id = rep(seq_len(nPer), times = nOcc),
+                  time = rep(seq_len(nOcc) - 1, each = nPer),
+                  y = unlist(waves, use.names = FALSE))
+  d <- d[stats::complete.cases(d), , drop = FALSE]
+  d <- d[order(d$id, d$time), , drop = FALSE]
+  d$id <- factor(d$id)
+  aic <- bic <- ll <- ent <- numeric(0)
+  for (k in 1:3) {
+    set.seed(${SEED})
+    fit <- flexmix(y ~ time | id, data = d, k = k, model = FLXMRlmm(random = ~ 1),
+                   control = list(iter.max = 500, minprior = 0))
+    first <- !duplicated(d$id)
+    aic <- c(aic, AIC(fit)); bic <- c(bic, BIC(fit)); ll <- c(ll, as.numeric(logLik(fit)))
+    ent <- c(ent, if (fit@k > 1) ref_entropy(flexmix::posterior(fit)[first, , drop = FALSE]) else NA_real_)
+    if (k == 3) { best <- fit; bfirst <- first }
+  }
+  list(cmpAic = aic, cmpBic = bic, cmpLL = ll, cmpEnt = ent,
+       share = as.numeric(best@prior), parVals = as.numeric(parameters(best)),
+       assign = flexmix::clusters(best)[bfirst],
+       maxPost = apply(flexmix::posterior(best)[bfirst, , drop = FALSE], 1, max),
+       k = best@k, n = nlevels(d$id))`;
+
 const GROWTH_SETUP = `
 set.seed(20260929)
 int <- rnorm(400, 10, 2); slp <- rnorm(400, 1.5, 0.6)
@@ -198,9 +238,10 @@ const GROWTH_REFERENCE = `
 
 // ---------------------------------------------------------------------------
 
-const [lcaR, lpaR, growthR] = await Promise.all([
+const [lcaR, lpaR, gmmR, growthR] = await Promise.all([
   generatedR(lca, { items: ['q1', 'q2', 'q3', 'q4'], classes: 3, seed: SEED, save: 'no' }),
   generatedR(lpa, { items: ['anx', 'dep', 'som'], classes: 3, seed: SEED, save: 'no' }),
+  generatedR(gmm, { waves: ['t1', 't2', 't3', 't4', 't5'], classes: 3, seed: SEED, save: 'no' }),
   generatedR(growth, { waves: ['w1', 'w2', 'w3', 'w4'], quadratic: 'no' }),
 ]);
 
@@ -257,6 +298,8 @@ ${block('LCA — poLCA', LCA_SETUP, lcaR, LCA_REFERENCE,
   ['k', 'n', 'cmpAic', 'cmpBic', 'cmpG2', 'cmpEnt', 'share', 'assign', 'maxPost'])}
 ${block('LPA — flexmix', LPA_SETUP, lpaR, LPA_REFERENCE,
   ['k', 'n', 'cmpAic', 'cmpBic', 'cmpLL', 'cmpEnt', 'share', 'cenVals', 'assign', 'maxPost'])}
+${block('Growth mixture — flexmix FLXMRlmm', GMM_SETUP, gmmR, GMM_REFERENCE,
+  ['k', 'n', 'cmpAic', 'cmpBic', 'cmpLL', 'cmpEnt', 'share', 'parVals', 'assign', 'maxPost'])}
 ${block('Latent growth curve — lavaan', GROWTH_SETUP, growthR, GROWTH_REFERENCE,
   ['n', 'mEst', 'mSe', 'mZ', 'mP', 'vEst', 'vSe', 'vP', 'fitVals'])}
 ${LPA_SETUP}
