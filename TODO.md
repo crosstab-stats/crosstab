@@ -3518,9 +3518,26 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       What remains unexercised is only a multi-file plugin in ordinary use — which will happen
       the first time anyone writes one.
 
-  - [ ] **Nested layouts (`./lib/util.js`)** — refused with a message today. Needs per-module
-        specifier rewriting so two same-named specifiers in different directories cannot
-        collide on one literal key.
+  - **Nested layouts (`./lib/util.js`) — INTENTIONALLY NOT HAPPENING** (owner, 2026-09-29:
+        *"skip it. Mark as intentionally not happening, plugins can get creative with their
+        naming instead."*). Not a backlog item; the flat rule is the design.
+
+        The constraint is real rather than an unfinished corner. A plugin entry reaches the
+        sandbox as source text and is imported from a `blob:` URL — the only way to get an ES
+        module into an opaque-origin frame — and a `blob:` URL has an **opaque path**, so a
+        relative specifier cannot be resolved as a URL at all. The import map therefore matches
+        the specifier as a **literal string**, which is unambiguous while every module is a
+        sibling and collides the moment it is not: `./deep.js` inside `lib/a.js` and `./deep.js`
+        inside `viz/b.js` are one key, and one would silently shadow the other.
+
+        Supporting it would mean per-module resolution contexts — in practice rewriting each
+        module's own import statements to generated keys before building its blob, which is
+        parsing and rewriting SOURCE rather than scanning it. A different and larger job than what
+        shipped, carried forever, to save a plugin author from writing `lib-util.js` instead of
+        `lib/util.js`. The workaround costs a naming convention and nothing else.
+
+        The refusal message says so in those terms rather than "not supported yet", because a
+        plugin author reading it needs the answer, not a promise.
 
       **The original entry, kept because the two corrections in it are the record of how this
       was got wrong twice:**

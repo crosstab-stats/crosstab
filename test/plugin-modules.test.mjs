@@ -100,6 +100,19 @@ test('an unsupported layout is named in the issue, not silently skipped', async 
   assert.match(issues[0].why, /lib\/deep\.js/, 'the message has to name the file');
 });
 
+test('the message offers the workaround, and does not promise a feature', async () => {
+  // Nested layouts are INTENTIONALLY not happening (owner, 2026-09-29) — a `blob:` URL has an
+  // opaque path, so the import map matches a specifier as a literal string, and `./deep.js` in
+  // two directories would be one key with one silently shadowing the other. Supporting it means
+  // rewriting every module's imports to generated keys: a permanent cost to save an author from
+  // writing `lib-util.js`. So the message must tell them what to do instead, and must NOT say
+  // "yet", which reads as a promise and would send someone to wait for it.
+  const { issues } = await collectModuleClosure("import './lib/deep.js';", reader({}));
+  assert.match(issues[0].why, /by design/);
+  assert.match(issues[0].why, /Name the file flat instead/);
+  assert.equal(/not supported yet|coming soon|planned/i.test(issues[0].why), false);
+});
+
 // =============================================================================
 // Walking the graph
 // =============================================================================

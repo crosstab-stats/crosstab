@@ -24,9 +24,15 @@
  * That is not laziness, it is the consequence of how the frame's import map matches. A `blob:`
  * base makes a relative specifier unresolvable as a URL, so the map matches it as a LITERAL
  * STRING; two modules in different directories both written `./deep.js` would therefore be
- * one key and collide. Rather than ship a nested layout that is subtly wrong, a non-flat
- * specifier is refused by name, with the reason. Nested support needs per-module rewriting,
- * which is a separate piece of work.
+ * one key and collide — one silently shadowing the other, which is the kind of wrong nobody
+ * notices until it bites. So a non-flat specifier is refused by name, with the reason and the
+ * workaround.
+ *
+ * **This is the end state, not a staging post** (owner's call, 2026-09-29). Supporting nested
+ * paths would mean per-module resolution contexts — rewriting each module's own imports to
+ * generated keys before building its blob, which is parsing and rewriting SOURCE rather than
+ * scanning it. That is a permanent cost to save an author from writing `lib-util.js` instead of
+ * `lib/util.js`. Plugins get creative with their naming instead.
  *
  * Pure module: the fetching is injected, so every rule here is testable without a network or
  * a browser.
@@ -105,7 +111,8 @@ export async function collectModuleClosure(entrySource, readModule) {
         issues.push({
           specifier: spec,
           why: `${fromLabel} imports “${spec}”. A plugin's modules must sit beside its entry `
-            + '(“./name.js”) — subdirectories and “../” are not supported yet.',
+            + '(“./name.js”) — subdirectories and “../” are not supported, by design. Name the '
+            + 'file flat instead (“lib-util.js” rather than “lib/util.js”).',
         });
         continue;
       }
