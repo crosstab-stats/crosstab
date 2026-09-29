@@ -2802,12 +2802,41 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         millions of ring walks, which is the difference between instant and a frozen tab. 5,000
         cases against 400 regions runs in single-digit milliseconds. 28 tests.
 
-        **Deliberately not handled:** coordinates are planar, which is right for
-        point-in-polygon at the scale this is for (a country, a state, a city) and wrong across
-        the antimeridian or at a pole, where a ring's coordinates wrap. Not silently wrong —
-        those cases land in the `outside` count rather than in a neighbouring region. Projected
-        coordinate systems are the user's to reconcile: the failure message says so rather than
-        guessing at a datum.
+        **Checked against `sf`, which is the authority** (`spike/compare-geo-sf.mjs`, exits
+        non-zero on disagreement). Hand-rolled arithmetic only earns its dependency saving if it
+        is right, and the owner made it a standing rule: *"it's good to check ourselves any time
+        we need to hand-roll or modify a standard R library."* Against `sf::st_within` on planar
+        geometry, over 4,000 points across squares with a shared border, a concave L, a donut
+        with its enclave as a separate region, and a two-part island: **every interior point
+        agrees, same region and same count** — including the 92 in the enclave and the 1,722
+        outside everything.
+
+        **Boundary points are where the two deliberately differ, and the harness states it as
+        three separate facts.** `sf` follows DE-9IM: a point on an edge is within NEITHER
+        neighbour and intersects BOTH — the first drops a case on a county line, the second
+        double-counts it, and neither is usable for geocoding. The half-open rule gives: never
+        more than one (the load-bearing property, since a double count is a wrong NUMBER);
+        exactly one along a shared edge, and it is one `sf` agrees the point touches; and at a
+        VERTEX, sometimes none — 2 of 9 tested — which lands in the visible `outside` count, and
+        which `sf::st_within` also puts in none, so it is a tie-breaking difference rather than a
+        containment one.
+
+        **The planar assumption is now measured rather than asserted.** `sf` 1.x uses s2 for a
+        geographic CRS, where an edge between two lon/lat points is a great-circle arc that bows
+        poleward — which is why the comparison forces planar geometry on both sides. The gap is
+        quadratic in edge length: a 10° edge bows **11.4 km**, 1° bows **121 m**, 0.1° bows
+        **1.2 m**, 0.01° bows **1 cm**. Any real boundary file has vertices a few hundred metres
+        apart, so the two models sit millimetres apart and a case would have to fall within that
+        of a border to be assigned differently. A continent-sized polygon is the one place it
+        would matter, and nobody geocodes against one.
+
+        *(Finding the s2 default is what the comparison was for: the first run showed 16
+        "disagreements" that were nothing of the kind — sf was answering a spherical question.)*
+
+        **Still not handled:** the antimeridian and the poles, where a ring's coordinates wrap.
+        Not silently wrong — those cases land in the `outside` count rather than in a neighbouring
+        region. Projected coordinate systems are the user's to reconcile: the failure message says
+        so rather than guessing at a datum.
 
 - [x] **Plugin data as first-class citizens (#146).** *Built.*
       Workspace blobs promoted from opaque side-cars to host-managed, independently
