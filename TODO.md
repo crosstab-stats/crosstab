@@ -998,6 +998,58 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       capabilities**, which is the same shape as the plugin-picker lottery and not a difference in
       job at all.
 
+      **The sidebar is four zones, and only ONE of them is the launcher's analog** (owner,
+      2026-09-29): *"in active workspaces the sidebar has effectively three sections. There's the
+      top where the open project sits… There's the middle section that is the cap-at-5 list of
+      other projects, the closest analog to the launcher's sidebar. And then there's the bottom
+      half where 'building blocks' lives, which has no launcher (or even project manager)
+      parallel. And maybe it shouldn't? Maybe it should also be in Project Manager (how else are
+      you to clean up old data)? To be decided."*
+
+      In render order (`app.js:2574-2578`) there are four, the second conditional:
+
+      1. **`#projectZone`** — the open project: rename, and a detailed row per dataset and per
+         plugin-data slot. No launcher analog and shouldn't have one; the launcher has no open
+         project to describe.
+      2. **`#recycleZone`** — binned datasets and items, rendered only when the bin is non-empty.
+         Worth naming because it is the *other* place destructive verbs already live in the
+         sidebar, and any "where do consequences go" answer has to account for it.
+      3. **`#projectsZone`** — the capped recents list. **This is the only zone the launcher's rail
+         is an analog of**, which narrows the unification above: it is one zone against one rail,
+         not "the sidebar" against "the launcher".
+      4. **`#blocksZone`** — building blocks.
+
+      **On blocks, the question is not whether cleanup exists — it does — but that it is the
+      affordance #173 removed from the project rows.** Each block row already carries
+      `onDelete: () => this.library.deleteBlock(b.id)` with the title *"Delete building block"*,
+      on the same row whose click adds the block to the current project. That is precisely the
+      shape #173 fixed for projects: *"delete sat one hover from the row that opens the thing."*
+      So the honest statement is that blocks kept the pattern projects were rescued from.
+
+      **The structural argument for moving them, which is stronger than the cleanup one.** The
+      sidebar is a contents panel for the **open project**. A building block is not part of the
+      open project — it is a **machine-level library** the project draws from, and the app says so
+      itself: *"Building blocks live on one machine, so the link won't resolve for anyone else"*
+      (`app.js:101`). Blocks are therefore the one zone in that panel that is not about the thing
+      the panel is about, which is also exactly why they have no launcher or manager parallel.
+      `project-manager.js` mentions blocks **zero times**, and it is the app's only machine-level
+      surface — the one that lists everything this device knows about, wherever it lives.
+
+      **The split this suggests, mirroring what #173 already decided for projects:**
+      - **Sidebar keeps the gestures that need the project in view** — the drop target (*"drag a
+        dataset or a map layer here to reuse it across projects"*) and click-to-add. A
+        project→library promotion needs both ends visible, so moving blocks wholesale to a modal
+        would lose the feature that makes them usable.
+      - **Manager gains the management** — delete, rename, the version an item is on, and which
+        projects link to it. That is where consequences can be stated, and it answers the owner's
+        question properly: cleaning up old data becomes a deliberate act in a surface built for
+        it, not a hover away from "add this to my project".
+
+      Also unresolved and worth deciding at the same time: a block's **version** is shown as a
+      badge (`v3`) and a linked dataset can offer "update available", but nothing lists *which
+      projects link to a block* — so deleting one is currently a decision made blind. That is the
+      same information the manager would need anyway, which is another reason it belongs there.
+
       Same conclusion as the entry above: extract the list, let each host decide what surrounds it
       and which verbs it permits, and do it once — as part of the launcher rebuild, not before it.
 
