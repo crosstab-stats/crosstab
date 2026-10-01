@@ -192,7 +192,7 @@ export class PluginManager {
       path: ['Edit'],
       label: 'Plugins…',
       order: 40,
-      command: () => this.#showDialog(),
+      command: () => void this.#showDialog(),
     });
   }
 
@@ -200,12 +200,118 @@ export class PluginManager {
    * anything that hits a "you don't have that plugin" wall can offer the way out
    * rather than just naming it (#156). */
   openDialog() {
-    this.#showDialog();
+    void this.#showDialog();
   }
 
   /** Give the manager a handle on the creator (for Create / Edit actions). */
   attachCreator(creator) {
     this.#creator = creator;
+  }
+
+  /** The attached creator, or null. The picker shows Create / Edit / Copy only when
+   * there is one — it renders the same rows on two surfaces and cannot assume. */
+  get creator() {
+    return this.#creator;
+  }
+
+  /**
+   * Ask for a URL and add the plugin there. Resolves the new load key, or null if the
+   * user cancelled; throws with the URL already in the message.
+   *
+   * The prompt lives here rather than in the picker because the picker is mounted twice
+   * and "how do you add a plugin from a URL" is one answer (#177's lesson).
+   */
+  async addFromUrlPrompt() {
+    const url = await this.#promptUrl();
+    if (!url) return null;
+    try {
+      return await this.addFromUrl(url);
+    } catch (err) {
+      throw new Error(`Couldn’t add ${url}: ${err.message}`);
+    }
+  }
+
+  /** Pick a file and add the plugin in it. Resolves the new load key, or null. */
+  async addFromFilePrompt() {
+    const file = await pickFile();
+    if (!file) return null;
+    try {
+      return await this.addFromFile(file);
+    } catch (err) {
+      throw new Error(`Couldn’t add ${file.name}: ${err.message}`);
+    }
+  }
+
+  /** The creator spec for "make an editable copy of this plugin" — a fresh manifest id
+   * (the original's is taken) and a "(copy)" name. */
+  async prepareFork(key) {
+    const p = this.list().find((x) => x.key === key);
+    const source = await this.getSource(key);
+    const copyName = `${p?.name || 'Plugin'} (copy)`;
+    return { name: copyName, fromName: p?.name, source: forkSource(source, copyName) };
+  }
+
+  /** The creator spec for editing an authored plugin in place. Async because the source
+   * is read from OPFS rather than carried in the index (#150). */
+  async prepareEdit(key) {
+    const entry = await this.getEntry(key).catch(() => null);
+    if (!entry) throw new Error('Could not read that plugin’s source.');
+    if (entry.source == null) {
+      throw new Error('That plugin’s source is missing from storage — it cannot be edited.');
+    }
+    return { key: entry.key, name: entry.name, source: entry.source };
+  }
+
+  /** Export a plugin to a file the user can share — a `.js` module, or a `.ctplugin`
+   * package when it declares assets (#102). */
+  async exportToFile(key) {
+    const out = await this.exportPlugin(key);
+    if (out.blob) downloadBlob(out.blob, out.filename);
+    else downloadText(out.filename, out.text);
+  }
+
+  /**
+   * Live bulk toggle, behind the picker's per-section "Select all" / "None" and its
+   * in-session preset switch.
+   *
+   * Activation is unconditional and pooled. **Deactivation refuses any plugin holding data
+   * in the open project** and names it instead of switching it off: the single-row path asks
+   * a three-way question about that data (#118), and firing that once per plugin would be a
+   * prompt storm about decisions the user can only make one plugin at a time. Naming them
+   * keeps the promise — nothing silently discards work — without the storm.
+   *
+   * @param {string[]} keys load keys
+   * @param {boolean} enabled
+   * @returns {Promise<{changed: string[], held: string[]}>} `held` = NAMES left as they were
+   */
+  async setManyEnabled(keys, enabled) {
+    const byKey = new Map(this.list().map((p) => [p.key, p]));
+    const changed = [];
+    const held = [];
+    const todo = [];
+    for (const key of keys || []) {
+      const p = byKey.get(key);
+      if (!p || p.enabled === enabled) continue;
+      if (!enabled && this.#projectDataIds(p).length) {
+        held.push(p.name);
+        continue;
+      }
+      todo.push(p);
+    }
+    // Deactivations first (cheap, and they free the slots the activations want), then the
+    // activations pooled — the same order and reasoning as applyActivatedSet.
+    for (const p of todo) {
+      if (enabled) continue;
+      await this.setEnabled(p.key, false);
+      this.#project?.dropPlugin?.({ key: p.key, id: p.id });
+      changed.push(p.key);
+    }
+    if (enabled) {
+      const want = todo.map((p) => p.key);
+      await this.#runPool(want, (key) => this.setEnabled(key, true));
+      changed.push(...want);
+    }
+    return { changed, held };
   }
 
   /** Every known plugin as a load descriptor (built-ins first, then user). */
@@ -784,7 +890,7 @@ export class PluginManager {
    *
    * @returns {Promise<boolean>} whether deactivation proceeded.
    */
-  async #deactivateFromPicker(p) {
+  async deactivateFromPicker(p) {
     const dataIds = this.#projectDataIds(p);
     if (!dataIds.length) {
       // No project data — deactivate and drop it from the project's plugin set (b).
@@ -971,330 +1077,22 @@ export class PluginManager {
     });
   }
 
-  // --- dialog ----------------------------------------------------------------
-
-  #showDialog() {
-    const dialog = document.createElement('dialog');
-    dialog.className = 'ct-dialog ct-dialog--wide';
-    const form = document.createElement('form');
-    form.method = 'dialog';
-    form.className = 'ct-dialog__form';
-    form.innerHTML = `
-      <h2 class="ct-dialog__title">Plugins</h2>
-      <p class="ct-dialog__hint">Toggle, add, or remove plugins — changes are live and
-        saved across sessions. <strong>Added plugins run sandboxed</strong> (no network
-        of their own) but can read the data you load here, so only add ones you trust.</p>
-      <p class="ct-dialog__hint">Looking for a particular analysis? Search for it by name
-        — <em>Kaplan–Meier</em>, <em>Hosmer–Lemeshow</em>, <em>Levene</em> — and the plugin that
-        adds it is listed, switched on or off.</p>
-      <div class="ct-plugins__add">
-        <button type="button" class="ct-plugins__addbtn" data-act="create">+ Create new…</button>
-        <button type="button" class="ct-plugins__addbtn" data-act="url">+ Add from URL…</button>
-        <button type="button" class="ct-plugins__addbtn" data-act="file">+ Add from file…</button>
-      </div>
-      <div class="ct-plugins__filters">
-        <select class="ct-plugins__discipline" aria-label="Field / discipline"></select>
-        <input type="search" class="ct-plugins__search" placeholder="Search plugins or analyses…" aria-label="Search plugins or analyses" autocomplete="off">
-      </div>
-      <div class="ct-plugins__err" role="alert" hidden></div>
-      <div class="ct-plugins"></div>
-      <menu class="ct-dialog__buttons"><button value="close" type="submit" class="ct-dialog__primary">Done</button></menu>`;
-    const box = form.querySelector('.ct-plugins');
-    const search = form.querySelector('.ct-plugins__search');
-    const discSel = form.querySelector('.ct-plugins__discipline');
-    const errEl = form.querySelector('.ct-plugins__err');
-    const setErr = (msg) => {
-      errEl.textContent = msg || '';
-      errEl.hidden = !msg;
-    };
-
-    // Discipline filter: pin the plugins a field recommends to the top — the same
-    // self-declared `disciplines` the launcher's picker uses.
-    const disciplines = [...new Set(this.list().flatMap((p) => p.disciplines || []))].sort();
-    discSel.replaceChildren(new Option('All disciplines', 'All'));
-    for (const d of disciplines) discSel.append(new Option(d, d));
-
-    // Which action labels the current query matched, per plugin key — so a row can name the
-    // analysis that answered the search rather than just turning up in the list (#183).
-    let hits = new Map();
-    const renderGroups = (list) => {
-      for (const group of groupByCategory(list)) {
-        box.append(el('div', group.category, 'ct-plugins__cat'));
-        const ul = el('ul', null, 'ct-plugins__list');
-        for (const p of group.items) ul.append(this.#row(p, renderList, setErr, hits.get(p.key) || []));
-        box.append(ul);
-      }
-    };
-    const renderList = () => {
-      const q = search.value.trim();
-      const disc = discSel.value;
-      hits = new Map();
-      const items = this.list().filter((p) => {
-        const m = matchPlugin(p, q);
-        if (m.hit && m.items.length) hits.set(p.key, m.items);
-        return m.hit;
-      });
-      box.replaceChildren();
-      if (items.length === 0) {
-        box.append(el('p', 'No plugins match your search.', 'ct-plugins__empty'));
-        return;
-      }
-      // A query that named an ANALYSIS is a stronger signal than the discipline dropdown, so
-      // it takes precedence: the plugins that actually PROVIDE what was typed lead, the rest
-      // follow. Searching "levene" used to reach only `builtin-compare` (the word is in its
-      // keywords) while `builtin-assumptions`, which has the actual Levene's test, was
-      // invisible — now both appear and the one that answers the question is first.
-      const providers = items.filter((pl) => hits.has(pl.key));
-      if (q && providers.length && providers.length < items.length) {
-        box.append(el('div', 'Adds what you searched for', 'ct-plugins__section'));
-        renderGroups(providers);
-        box.append(el('div', 'Other matches', 'ct-plugins__section'));
-        renderGroups(items.filter((pl) => !hits.has(pl.key)));
-        return;
-      }
-      if (disc && disc !== 'All') {
-        const pinned = items.filter((p) => (p.disciplines || []).includes(disc));
-        const rest = items.filter((p) => !(p.disciplines || []).includes(disc));
-        if (pinned.length) {
-          box.append(el('div', `Recommended for ${disc}`, 'ct-plugins__section'));
-          renderGroups(pinned);
-        }
-        box.append(el('div', pinned.length ? 'All other plugins' : 'All plugins', 'ct-plugins__section'));
-        renderGroups(rest);
-      } else {
-        renderGroups(items);
-      }
-    };
-    discSel.addEventListener('change', renderList);
-
-    form.querySelector('[data-act="create"]').addEventListener('click', () => {
-      setErr('');
-      if (!this.#creator) {
-        setErr('The plugin creator is unavailable.');
-        return;
-      }
-      this.#creator.open(null, renderList);
-    });
-    form.querySelector('[data-act="url"]').addEventListener('click', async () => {
-      setErr('');
-      const url = await this.#promptUrl();
-      if (!url) return;
-      try {
-        await this.addFromUrl(url);
-      } catch (err) {
-        setErr(`Couldn’t add ${url}: ${err.message}`);
-      }
-      renderList();
-    });
-    form.querySelector('[data-act="file"]').addEventListener('click', async () => {
-      setErr('');
-      const file = await pickFile();
-      if (!file) return;
-      try {
-        await this.addFromFile(file);
-      } catch (err) {
-        setErr(`Couldn’t add ${file.name}: ${err.message}`);
-      }
-      renderList();
-    });
-    search.addEventListener('input', renderList);
-    renderList();
-
-    dialog.append(form);
-    dialog.addEventListener('close', () => dialog.remove());
-    document.body.append(dialog);
-    dialog.showModal();
-    search.focus();
-  }
+  // --- the picker -------------------------------------------------------------
 
   /**
-   * One plugin's row. `matched` is the action labels the current search touched (#183) — empty
-   * when there is no query, or when the query matched the plugin's own name rather than one of
-   * its analyses.
+   * Edit ▸ Plugins. The screen itself is {@link PluginPicker} in its `live` mode — the SAME
+   * component the launcher mounts in its centre column, after the owner called the two
+   * “almost identical” and asked for one module (2026-10-01). What was here was a second
+   * renderer of the same catalogue, which is how the two drifted into different layouts,
+   * different glyphs for one verb, and five capabilities on exactly one surface each.
    */
-  #row(p, refresh, setErr, matched = []) {
-    const li = el('li', null, 'ct-plugin');
-    // The left side is a COLUMN so the matched-analysis line can sit under the name without
-    // breaking the row's name-vs-controls layout.
-    const lead = el('span', null, 'ct-plugin__lead');
-
-    const label = el('label', null, 'ct-plugin__main');
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.checked = p.enabled;
-    cb.addEventListener('change', async () => {
-      cb.disabled = true;
-      setErr('');
-      try {
-        if (cb.checked) {
-          await this.setEnabled(p.key, true);
-        } else {
-          // Deactivating via the picker: if the plugin has saved project data, ask
-          // before discarding it (#118). A cancel restores the checkbox unchanged.
-          const proceeded = await this.#deactivateFromPicker(p);
-          if (!proceeded) {
-            cb.checked = true;
-            cb.disabled = false;
-            return;
-          }
-        }
-      } catch (err) {
-        setErr(`Toggle failed: ${err.message}`);
-      }
-      refresh();
-    });
-    label.append(cb, el('span', p.name, 'ct-plugin__name'));
-    // What this plugin adds, on hover — the launcher has had this since #138 and the plugin
-    // manager did not, though both render the same catalogue (#177). One definition now.
-    const adds = addsTooltip(p);
-    if (adds) label.title = adds;
-    // Version badge next to the name — defaults to "1" when the manifest declares
-    // none (all built-ins). A visible confirmation that a freshly-deployed plugin
-    // file actually loaded: bump the manifest's `version` and watch this change (#91).
-    label.append(el('span', `v${p.version ?? '1'}`, 'ct-plugin__ver'));
-
-    const right = el('span', null, 'ct-plugin__right');
-    const metaText = p.enabled ? (p.activated ? originMeta(p) : 'failed') : 'disabled';
-    right.append(el('span', metaText, 'ct-plugin__meta'));
-
-    // Version-mismatch badge (warn-and-allow): a loaded plugin whose apiVersion
-    // differs from the engine's is flagged red — it still runs, but a changed/removed
-    // API may fail. Only shown once activated (compat is known only after load).
-    if (p.activated && (p.apiCompat === 'older' || p.apiCompat === 'newer')) {
-      const badge = el('span', p.apiCompat === 'older' ? '⚠ old API' : '⚠ new API', 'ct-plugin__compat');
-      badge.title =
-        p.apiCompat === 'older'
-          ? 'Built for an older version of CrossTab — may not work correctly.'
-          : 'Built for a newer version of CrossTab — may not work correctly.';
-      badge.style.cssText =
-        'color:#fff;background:#c0392b;font-size:11px;font-weight:600;padding:1px 6px;' +
-        'border-radius:8px;margin-left:6px;cursor:help;white-space:nowrap;';
-      right.append(badge);
-    }
-
-    // What this plugin adds, and how to use it. On EVERY row now, because it is the only path
-    // to that answer on a touch screen — the row tooltip needs a hovering pointer (owner, on a
-    // phone, 2026-09-26) and is silent to a keyboard and a screen reader besides.
-    {
-      const how = document.createElement('button');
-      how.type = 'button';
-      how.className = 'ct-plugin__howto';
-      how.textContent = '🔍';
-      how.title = 'What this plugin adds, and how to use it';
-      how.setAttribute('aria-label', `What ${p.name} adds, and how to use it`);
-      how.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.#showAbout(p);
-      });
-      right.append(how);
-    }
-
-    // Network grant: shown only when the user has allowed this plugin web access;
-    // click to revoke (it'll be asked again next time it fetches).
-    if (p.webAllowed && p.id) {
-      const wb = document.createElement('button');
-      wb.type = 'button';
-      wb.className = 'ct-plugin__web';
-      wb.textContent = '🌐';
-      wb.title = 'Network access allowed — click to revoke';
-      wb.addEventListener('click', () => {
-        setErr('');
-        this.revokeWeb(p.id);
-        refresh();
-      });
-      right.append(wb);
-    }
-
-    // Fork: open the editor pre-filled with a copy of this plugin's source as a
-    // *new* plugin. Available on every row (built-ins are the worked examples).
-    if (this.#creator) {
-      const fork = document.createElement('button');
-      fork.type = 'button';
-      fork.className = 'ct-plugin__fork';
-      fork.textContent = '⧉';
-      fork.title = 'Make an editable copy';
-      fork.addEventListener('click', async () => {
-        setErr('');
-        try {
-          const source = await this.getSource(p.key);
-          const copyName = `${p.name} (copy)`;
-          this.#creator.open({ name: copyName, fromName: p.name, source: forkSource(source, copyName) }, refresh);
-        } catch (err) {
-          setErr(`Couldn’t copy ${p.name}: ${err.message}`);
-        }
-      });
-      right.append(fork);
-    }
-    // Export the plugin's source to a .js file — the same format "From file" loads,
-    // so a creator can share a plugin a project expects (the missing-plugin case, #102).
-    {
-      const exp = document.createElement('button');
-      exp.type = 'button';
-      exp.className = 'ct-plugin__export';
-      exp.textContent = '⬇';
-      exp.title = 'Export this plugin to a file (shareable; re-add with “From file”). Multi-file plugins export as a .ctplugin package.';
-      exp.addEventListener('click', async () => {
-        setErr('');
-        try {
-          const out = await this.exportPlugin(p.key);
-          if (out.blob) downloadBlob(out.blob, out.filename);
-          else downloadText(out.filename, out.text);
-        } catch (err) {
-          setErr(`Couldn’t export ${p.name}: ${err.message}`);
-        }
-      });
-      right.append(exp);
-    }
-    if (p.editable && this.#creator) {
-      const ed = document.createElement('button');
-      ed.type = 'button';
-      ed.className = 'ct-plugin__edit';
-      ed.textContent = '✎';
-      ed.title = 'Edit this plugin';
-      ed.addEventListener('click', async () => {
-        setErr('');
-        // Async now: the source is read from OPFS rather than carried in the index (#150).
-        const entry = await this.getEntry(p.key).catch(() => null);
-        if (!entry) { setErr('Could not read that plugin’s source.'); return; }
-        if (entry.source == null) { setErr('That plugin’s source is missing from storage — it cannot be edited.'); return; }
-        this.#creator.open({ key: entry.key, name: entry.name, source: entry.source }, refresh);
-      });
-      right.append(ed);
-    }
-    if (p.removable) {
-      const rm = document.createElement('button');
-      rm.type = 'button';
-      rm.className = 'ct-plugin__rm';
-      rm.textContent = '✕';
-      rm.title = 'Remove this plugin';
-      rm.addEventListener('click', async () => {
-        setErr('');
-        try {
-          await this.removePlugin(p.key);
-        } catch (err) {
-          setErr(`Remove failed: ${err.message}`);
-        }
-        refresh();
-      });
-      right.append(rm);
-    }
-
-    lead.append(label);
-    // Name the analysis that answered the search, right next to the box that enables it —
-    // that is the whole of "what do I enable to do X?".
-    if (matched.length) {
-      lead.append(el('span', `adds: ${matched.join(' · ')}`, 'ct-plugin__hit'));
-    }
-    li.append(lead, right);
-    return li;
-  }
-
-  /** Modal showing a plugin's author-written how-to (the 🔍 on its row). Plain text
-   * (rendered via textContent — never HTML — so an authored note can't inject markup),
-   * line breaks preserved. */
-  /** The touch-reachable "what does this add?" panel — see {@link openPluginAbout}. */
-  #showAbout(p) {
-    openPluginAbout(p);
+  async #showDialog() {
+    // Imported on demand, and that is deliberate: the picker is UI over this manager, so the
+    // dependency runs picker -> manager. A static import here would make it a cycle and pull
+    // the picker (and its download/preset chain) into every context that only wants the
+    // manager - the headless tests among them.
+    const { openPluginModal } = await import('./plugin-picker.js');
+    openPluginModal(this);
   }
 
   /** A nested prompt for a plugin URL. Resolves the trimmed URL, or null. */
@@ -1565,20 +1363,6 @@ export function matchPlugin(p, q) {
 export function addsTooltip(p) {
   const menu = (p?.menu || []).filter(Boolean);
   return menu.length ? `${p.name} adds:\n• ${menu.join('\n• ')}` : '';
-}
-
-/** Group plugins into category sections, BOTH categories and the plugins within
- * each sorted alphabetically — predictable for discovery (matches the launcher). */
-function groupByCategory(items) {
-  const byCat = new Map();
-  for (const p of items) {
-    const c = p.category || 'Other';
-    if (!byCat.has(c)) byCat.set(c, []);
-    byCat.get(c).push(p);
-  }
-  return [...byCat.keys()]
-    .sort((a, b) => a.localeCompare(b))
-    .map((c) => ({ category: c, items: byCat.get(c).sort((x, y) => (x.name || '').localeCompare(y.name || '')) }));
 }
 
 function readJSON(key, fallback) {

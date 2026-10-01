@@ -22,15 +22,11 @@ import { formatBuildTime, latestBuildTime, runningBuildStamp, stampMs } from './
 // The caveats dialog moved to help.js so the Help menu and this footer open the SAME
 // one (#182) — it used to be unreachable the moment a project opened.
 import { showCaveats, showGettingAround } from './help.js';
-// The “what you get” hover text is shared with the plugin manager so the two pickers cannot
-// drift again — they render the same catalogue, and this line is where they did (#177).
-import { addsTooltip, openPluginAbout } from './plugin-manager.js';
+// The plugin screen is not the launcher's own: it is the SAME component Edit ▸ Plugins mounts
+// (owner, 2026-10-01). Two renderings of one catalogue is where #177's missing tooltip came
+// from, and where five capabilities ended up on exactly one surface each.
+import { PluginPicker } from './plugin-picker.js';
 import { deployConfig } from './deploy-config.js';
-import {
-  deletePreset, exportPresetFile, listPresets, parsePresetFile, presetExists, presetFileName,
-  presetFromSelection, renamePreset, resolvePreset, savePreset,
-} from './plugin-presets.js';
-import { downloadFile } from './export-service.js';
 
 /** Curated-core analysis plugins, pre-selected on a fresh "Start blank". */
 const CORE_IDS = new Set([
@@ -64,8 +60,8 @@ export class Launcher {
   #plugins; #datasets; #bus; #projects; #offline; #workspaceStore; #itemStore; #assetStore;
   #root = null;
   /** Selected plugin keys (the checked set). @type {Set<string>} */
-  #selected = new Set();
-  #discipline = 'All';
+  /** The plugin picker mounted in the centre column — the authority on what Start applies. */
+  #picker = null;
   #pendingSource = null; // source key chosen this session, applied on Start
   #pendingProject = null; // { id } when a saved project is chosen instead of a source
   /**
@@ -286,9 +282,6 @@ export class Launcher {
     void initUpdateArea(overlay);
 
     const indicator = overlay.querySelector('.ctl__indicator');
-    const listBox = overlay.querySelector('.ctl__plugins');
-    const discSel = overlay.querySelector('.ctl__discipline');
-    const searchEl = overlay.querySelector('.ctl__search');
 
     // Prime the catalog (probe any uncataloged manifests), showing progress —
     // this is the "loading screen builds the plugin list as they load" bit.
@@ -300,21 +293,17 @@ export class Launcher {
 
     const list = this.#plugins.list();
     // Seed the selection: remembered (enabled) once seen; curated core on first run.
-    this.#selected = localStorage.getItem(LS_SEEN)
+    const seed = localStorage.getItem(LS_SEEN)
       ? new Set(list.filter((p) => p.enabled).map((p) => p.key))
       : this.#defaultSelection(list);
 
-    // Discipline dropdown options = union of declared disciplines.
-    const disciplines = [...new Set(list.flatMap((p) => p.disciplines || []))].sort();
-    discSel.innerHTML =
-      `<option value="All">All disciplines</option>` +
-      disciplines.map((d) => `<option value="${esc(d)}">${esc(d)}</option>`).join('');
-
-    const rerender = () => this.#renderPlugins(listBox, list, searchEl.value.trim().toLowerCase());
-    discSel.addEventListener('change', () => { this.#discipline = discSel.value; rerender(); });
-    this.#wirePresets(overlay, list, rerender);
-    searchEl.addEventListener('input', rerender);
-    rerender();
+    // `select` mode: nothing is running yet, so a tick edits a DESIRED set that Start (or
+    // "Apply changes", reopened over a session) commits. The loading indicator is handed over
+    // as the picker's lead control, which is exactly where it used to sit.
+    this.#picker = new PluginPicker({
+      plugins: this.#plugins, mode: 'select', selected: seed, headLead: indicator,
+    });
+    this.#picker.mount(overlay.querySelector('.ctl__picker'));
 
     // Library sources.
     overlay.querySelectorAll('[data-source]').forEach((btn) => {
@@ -330,8 +319,7 @@ export class Launcher {
         if (preset) {
           const want = this.#defaultSelection(list);
           preset.plugins.forEach((id) => { const m = list.find((p) => p.id === id); if (m) want.add(m.key); });
-          this.#selected = want;
-          rerender();
+          this.#picker.setSelected(want);
         }
       });
     });
@@ -365,10 +353,9 @@ export class Launcher {
               // with no way for the user to know it was there to look for.
               const mentioned = new Set(p.activePlugins);
               const speaksFor = (x) => mentioned.has(x.key) || (x.id && mentioned.has(x.id));
-              this.#selected = new Set(
+              this.#picker.setSelected(
                 list.filter((x) => (speaksFor(x) ? true : x.activated)).map((x) => x.key),
               );
-              rerender();
             }
           });
           projBox.append(btn);
@@ -430,226 +417,10 @@ export class Launcher {
     return new Promise((resolve) => { this.#resolve = resolve; });
   }
 
-  #renderPlugins(box, list, query) {
-    const match = (p) => !query || [p.name, p.category, ...(p.keywords || [])].join(' ').toLowerCase().includes(query);
-    const visible = list.filter(match);
-    const pinnedActive = this.#discipline !== 'All';
-    const isPinned = (p) => pinnedActive && (p.disciplines || []).includes(this.#discipline);
-    const pinned = visible.filter(isPinned);
-    const rest = visible.filter((p) => !isPinned(p));
-    box.replaceChildren();
-    if (pinned.length) {
-      box.append(this.#section(`Recommended for ${this.#discipline}`, pinned, box, list));
-    }
-    box.append(this.#section(pinned.length ? 'All other plugins' : 'All plugins', rest, box, list));
-  }
-
-  /** A pinned/unpinned section: a header with scoped select-all/none + the grid. */
-  #section(title, items, box, fullList) {
-    const wrap = el('div', null, 'ctl__section');
-    const head = el('div', null, 'ctl__sectionhead');
-    head.append(el('span', title, 'ctl__sectiontitle'));
-    const keys = items.map((p) => p.key);
-    const all = el('button', 'Select all', 'ctl__linkbtn');
-    const none = el('button', 'None', 'ctl__linkbtn');
-    all.type = none.type = 'button';
-    all.addEventListener('click', () => { keys.forEach((k) => this.#selected.add(k)); this.#renderPlugins(box, fullList, ''); });
-    none.addEventListener('click', () => { keys.forEach((k) => this.#selected.delete(k)); this.#renderPlugins(box, fullList, ''); });
-    head.append(all, none);
-    wrap.append(head);
-
-    const grid = el('div', null, 'ctl__grid');
-    for (const group of groupByCategory(items)) {
-      // Keep a category label with its plugins in one column block, so a
-      // single-plugin category doesn't float its lone row beside the header.
-      const g = el('div', null, 'ctl__catgroup');
-      g.append(el('div', group.category, 'ctl__cat'));
-      for (const p of group.items) g.append(this.#pluginRow(p));
-      grid.append(g);
-    }
-    if (!items.length) grid.append(el('div', 'None.', 'ctl__cat'));
-    wrap.append(grid);
-    return wrap;
-  }
-
-  #pluginRow(p) {
-    // The row is a wrapper, not just the label: the details button has to sit OUTSIDE the
-    // <label>, or tapping it would toggle the checkbox the label is bound to.
-    const row = el('div', null, 'ctl__pluginrow');
-    const label = el('label', null, 'ctl__plugin');
-    // Hover text: what this plugin adds, so you can see *why* it is recommended. Kept for
-    // pointers, but it cannot be the only path — there is no hover on a phone, which is the
-    // whole reason for the button below (owner, 2026-09-26).
-    const adds = addsTooltip(p);
-    if (adds) label.title = adds;
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.checked = this.#selected.has(p.key);
-    cb.addEventListener('change', () => {
-      if (cb.checked) this.#selected.add(p.key); else this.#selected.delete(p.key);
-    });
-    label.append(cb, el('span', p.name, 'ctl__pluginname'));
-    const what = el('button', 'ⓘ', 'ctl__pluginwhat');
-    what.type = 'button';
-    what.title = 'What this plugin adds';
-    what.setAttribute('aria-label', `What ${p.name} adds`);
-    what.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      openPluginAbout(p);
-    });
-    row.append(label, what);
-    return row;
-  }
-
-  /**
-   * The preset controls: a dropdown of saved plugin sets, plus Save / Rename / Delete (#162).
-   *
-   * They live in the centre head beside the discipline and filter controls, NOT beside the
-   * `Select all` / `None` links, which are rendered per SECTION and whose select-all is scoped
-   * to that section's keys. A preset spans the whole picker, so putting it in a section header
-   * would be claiming a scope it does not have.
-   *
-   * Choosing a preset applies it immediately — this screen is a chooser, and a second
-   * confirmation gesture would be the same superfluous step #161 objects to elsewhere.
-   */
-  #wirePresets(overlay, list, rerender) {
-    const sel = overlay.querySelector('.ctl__preset');
-    const note = overlay.querySelector('.ctl__presetnote');
-    const saveBtn = overlay.querySelector('.ctl__presetsave');
-    const exportBtn = overlay.querySelector('.ctl__presetexport');
-    const importBtn = overlay.querySelector('.ctl__presetimport');
-    const fileInput = overlay.querySelector('.ctl__presetfile');
-    const renameBtn = overlay.querySelector('.ctl__presetrename');
-    const delBtn = overlay.querySelector('.ctl__presetdel');
-    if (!sel) return;
-
-    const say = (msg, warn = false) => {
-      note.textContent = msg || '';
-      note.hidden = !msg;
-      note.classList.toggle('is-warn', !!warn);
-    };
-
-    const fill = (keep = '') => {
-      const presets = listPresets();
-      sel.replaceChildren();
-      sel.append(new Option('Plugin preset…', ''));
-      for (const p of presets) sel.append(new Option(p.name, p.name));
-      sel.value = presets.some((p) => p.name === keep) ? keep : '';
-      const chosen = !!sel.value;
-      renameBtn.hidden = !chosen;
-      delBtn.hidden = !chosen;
-      exportBtn.hidden = !chosen;
-      sel.hidden = presets.length === 0; // nothing saved yet: just the Save link
-    };
-
-    sel.addEventListener('change', () => {
-      const preset = listPresets().find((p) => p.name === sel.value);
-      renameBtn.hidden = !preset;
-      delBtn.hidden = !preset;
-      exportBtn.hidden = !preset;
-      if (!preset) return say('');
-      // Infra (codecs/importers/exporters) is unioned in rather than left to the preset: one
-      // saved before a codec existed must not leave someone unable to open that file type.
-      const { keys, missing } = resolvePreset(preset, list, { infraCategories: DEFAULT_ON_CATEGORIES });
-      this.#selected = keys;
-      rerender();
-      // Missing plugins are REPORTED, never quietly dropped — the user picked them.
-      say(
-        missing.length
-          ? `${missing.length} plugin${missing.length === 1 ? '' : 's'} in “${preset.name}” ${missing.length === 1 ? 'is' : 'are'} not installed here: ${missing.join(', ')}`
-          : `“${preset.name}” applied — ${keys.size} plugins selected.`,
-        missing.length > 0,
-      );
-    });
-
-    saveBtn.addEventListener('click', async () => {
-      const plugins = presetFromSelection(list, this.#selected);
-      if (!plugins.length) return say('Nothing is selected to save.', true);
-      const name = await promptText({
-        title: 'Save plugin preset',
-        hint: `${plugins.length} plugin${plugins.length === 1 ? '' : 's'} selected. Presets are yours, on this device, and work with any start choice.`,
-        label: 'Preset name',
-        value: sel.value || '',
-        confirm: 'Save',
-      });
-      if (!name) return;
-      // Overwrite is offered rather than silently making a second preset with the same name.
-      if (presetExists(name) && !confirm(`Replace the preset “${name}”?`)) return;
-      try {
-        savePreset(name, plugins);
-        fill(name);
-        say(`Saved “${name}” — ${plugins.length} plugins.`);
-      } catch (err) {
-        say(err.message, true);
-      }
-    });
-
-    renameBtn.addEventListener('click', async () => {
-      const from = sel.value;
-      if (!from) return;
-      const to = await promptText({
-        title: 'Rename preset', label: 'New name', value: from, confirm: 'Rename',
-      });
-      if (!to || to === from) return;
-      try {
-        renamePreset(from, to);
-        fill(to);
-        say(`Renamed to “${to}”.`);
-      } catch (err) {
-        say(err.message, true);
-      }
-    });
-
-    delBtn.addEventListener('click', () => {
-      const name = sel.value;
-      if (!name || !confirm(`Delete the preset “${name}”? The plugins stay as they are.`)) return;
-      deletePreset(name);
-      fill('');
-      say(`Deleted “${name}”.`);
-    });
-
-    // Export / import a preset as a small JSON file (#162 phase 2). The use the owner named
-    // is a course handbook whose chapter one says "import this file to enable the plugins
-    // you'll need" — so the file is a teaching artefact, and importing has to be one step.
-    exportBtn.addEventListener('click', () => {
-      const preset = listPresets().find((p) => p.name === sel.value);
-      if (!preset) return;
-      downloadFile(presetFileName(preset.name), 'application/json', exportPresetFile(preset));
-      say(`Exported “${preset.name}” — hand that file to anyone running CrossTab.`);
-    });
-
-    importBtn.addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', async () => {
-      const file = fileInput.files && fileInput.files[0];
-      fileInput.value = ''; // so the same file can be picked again after a fix
-      if (!file) return;
-      let preset;
-      try {
-        preset = parsePresetFile(await file.text());
-      } catch (err) {
-        return say(err.message, true);
-      }
-      // A file cannot bring plugins with it — it names them. So importing is safe in a way
-      // worth being plain about: it selects from what this install already has, and says what
-      // it could not find.
-      if (presetExists(preset.name) && !confirm(`Replace your preset “${preset.name}” with the one in this file?`)) return;
-      savePreset(preset.name, preset.plugins);
-      fill(preset.name);
-      // Apply it straight away: "import this file to enable the plugins you'll need" is one
-      // step, not two.
-      const { keys, missing } = resolvePreset(preset, list, { infraCategories: DEFAULT_ON_CATEGORIES });
-      this.#selected = keys;
-      rerender();
-      say(
-        missing.length
-          ? `Imported “${preset.name}” and selected ${keys.size} plugins. Not installed here: ${missing.join(', ')}`
-          : `Imported “${preset.name}” — ${keys.size} plugins selected.`,
-        missing.length > 0,
-      );
-    });
-
-    fill('');
+  /** What the picker currently has ticked — empty before it is mounted, which is the only
+   * state where the launcher has no screen to be authoritative about. */
+  #chosenKeys() {
+    return this.#picker ? this.#picker.selected : new Set();
   }
 
   /** Diff the desired selection against current load state and apply live — the
@@ -699,7 +470,7 @@ export class Launcher {
         // plugin set is still authoritative (applied last); the project's own plugin
         // restore is skipped.
         await this.#projects.openProject(this.#pendingProject.id, { applyPlugins: false });
-        await this.#applySelection(this.#selected);
+        await this.#applySelection(this.#chosenKeys());
       } else {
         if (this.#pendingSource || !reopen) {
           // Load data + seed workspace state BEFORE activating plugins, so a
@@ -712,7 +483,7 @@ export class Launcher {
           if (this.#projects?.loadingSeed) await this.#projects.loadingSeed(doLoad);
           else await doLoad();
         }
-        await this.#applySelection(this.#selected);
+        await this.#applySelection(this.#chosenKeys());
       }
       markSeen();
     } catch (err) {
@@ -741,6 +512,7 @@ export class Launcher {
     this.#pendingSource = null;
     this.#pendingProject = null;
     this.#pendingBackend = null;
+    this.#picker = null; // a reopen builds a fresh one from the catalogue as it is then
     const r = this.#resolve; this.#resolve = null;
     r?.();
   }
@@ -822,7 +594,7 @@ export class Launcher {
       };
       // Packages for the *selected* (ticked) plugins — they aren't loaded until
       // Start, so we resolve them by key here.
-      const selectedPackages = () => this.#plugins.rPackagesForKeys([...this.#selected]);
+      const selectedPackages = () => this.#plugins.rPackagesForKeys([...this.#chosenKeys()]);
 
       if (status.enabled) {
         const size = status.bytes ? ` · ~${(status.bytes / 1048576).toFixed(0)} MB` : '';
@@ -912,26 +684,12 @@ function markSeen() {
 
 /** Group plugins into category sections, BOTH categories and the plugins within
  * each sorted alphabetically — predictable for discovery. */
-function groupByCategory(items) {
-  const byCat = new Map();
-  for (const p of items) {
-    const c = p.category || 'Other';
-    if (!byCat.has(c)) byCat.set(c, []);
-    byCat.get(c).push(p);
-  }
-  return [...byCat.keys()]
-    .sort((a, b) => a.localeCompare(b))
-    .map((c) => ({ category: c, items: byCat.get(c).sort((x, y) => x.name.localeCompare(y.name)) }));
-}
 
 function el(tag, text, className) {
   const e = document.createElement(tag);
   if (text != null) e.textContent = text;
   if (className) e.className = className;
   return e;
-}
-function esc(s) {
-  return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
 /**
@@ -1061,20 +819,8 @@ function SHELL_HTML(reopen) {
           <div class="ctl__projects"></div>
         </aside>
         <section class="ctl__center">
-          <div class="ctl__centerhead">
-            <span class="ctl__indicator">Loading…</span>
-            <select class="ctl__discipline" aria-label="Field / discipline"></select>
-            <select class="ctl__preset" aria-label="Plugin preset" hidden></select>
-            <button type="button" class="ctl__linkbtn ctl__presetsave">Save preset…</button>
-            <button type="button" class="ctl__linkbtn ctl__presetrename" hidden>Rename</button>
-            <button type="button" class="ctl__linkbtn ctl__presetdel" hidden>Delete</button>
-            <button type="button" class="ctl__linkbtn ctl__presetexport" hidden>Export…</button>
-            <button type="button" class="ctl__linkbtn ctl__presetimport">Import…</button>
-            <input type="file" class="ctl__presetfile" accept=".json,application/json" hidden>
-            <input type="search" class="ctl__search" placeholder="Filter plugins…" autocomplete="off">
-          </div>
-          <p class="ctl__presetnote" hidden></p>
-          <div class="ctl__plugins"></div>
+          <span class="ctl__indicator">Loading…</span>
+          <div class="ctl__picker"></div>
         </section>
         <aside class="ctl__about">
           <div class="ctl__railhead">About</div>
@@ -1157,34 +903,11 @@ function injectStyles() {
     .ctl__source:hover { background: #eef5fb; }
     .ctl__source.is-active { border-color: var(--accent, #2572a5); background: #e6f0fa; font-weight: 600; }
     .ctl__center { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 16px; }
-    .ctl__centerhead { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; }
     .ctl__indicator { font-size: 12px; color: #646e77; flex: none; min-width: 92px; }
-    .ctl__discipline, .ctl__search { font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--line, #d8dde2); border-radius: 6px; }
-    .ctl__search { flex: 1; min-width: 0; }
-    .ctl__plugins { flex: 1; overflow-y: auto; border: 1px solid var(--line, #d8dde2); border-radius: 8px; background: #fff; padding: 8px 10px; }
-    .ctl__section { margin: 0 0 10px; }
-    .ctl__sectionhead { display: flex; align-items: center; gap: 8px; position: sticky; top: -8px;
-      background: #fff; padding: 6px 0 4px; border-bottom: 1px solid var(--line, #d8dde2); margin: 0 0 6px; }
-    .ctl__sectiontitle { font-size: 12px; font-weight: 700; color: #41505e; flex: 1; }
-    .ctl__linkbtn { font: inherit; font-size: 12px; background: none; border: 0; color: var(--accent, #2572a5); cursor: pointer; padding: 2px 4px; }
-    .ctl__linkbtn:hover { text-decoration: underline; }
-    .ctl__preset { font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--line, #d8dde2); border-radius: 6px; max-width: 180px; }
-    /* What a preset just did, or why it could not: a saved set that quietly applies fewer
-       plugins than it names would be the one failure worth avoiding here (#162). */
-    .ctl__presetnote { margin: -4px 0 8px; font-size: 12px; color: #41505e; }
-    .ctl__presetnote.is-warn { color: #8a5a00; }
-    .ctl__grid { columns: 2; column-gap: 22px; }
-    .ctl__catgroup { break-inside: avoid; -webkit-column-break-inside: avoid; display: block; }
-    .ctl__cat { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: #6c7882;
-      margin: 6px 0 2px; break-inside: avoid; }
-    .ctl__pluginrow { display: flex; align-items: center; gap: 4px; break-inside: avoid; }
-    .ctl__plugin { display: flex; align-items: center; gap: 7px; padding: 3px 2px; font-size: 13.5px; cursor: pointer; flex: 1; min-width: 0; }
-    /* The touch/keyboard path to “what does this add?” — the row's title needs a pointer. */
-    .ctl__pluginwhat { font: inherit; font-size: 13px; line-height: 1; color: #6c7882; background: none;
-      border: 0; cursor: pointer; padding: 4px 6px; border-radius: 4px; flex: none; }
-    .ctl__pluginwhat:hover, .ctl__pluginwhat:focus-visible { color: var(--accent, #2572a5); background: #eef4fa; }
-    .ctl__plugin:hover { background: #f4f8fc; }
-    .ctl__pluginname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* The plugin picker styles itself (core/plugin-picker.js) — the launcher only gives it
+       the column. The rules that used to live here were the launcher-side half of one
+       screen built twice. */
+    .ctl__picker { flex: 1; min-height: 0; display: flex; flex-direction: column; }
     .ctl__about .ctl__howto { display: block; font: inherit; font-size: 13px; color: var(--accent, #2572a5); background: none; border: 0; cursor: pointer; padding: 0; }
     .ctl__about .ctl__howto:hover { text-decoration: underline; }
     .ctl__about .ctl__caveats { margin-top: 6px; }
@@ -1242,45 +965,6 @@ function injectStyles() {
  * @param {{title: string, label: string, hint?: string, value?: string, confirm?: string}} opts
  * @returns {Promise<string|null>} the trimmed text, or null if cancelled
  */
-function promptText({ title, label, hint = '', value = '', confirm: confirmLabel = 'OK' }) {
-  return new Promise((resolve) => {
-    const d = document.createElement('dialog');
-    d.className = 'ct-dialog';
-    const form = el('form', null, 'ct-dialog__form');
-    form.method = 'dialog';
-    form.append(el('h2', title, 'ct-dialog__title'));
-    if (hint) form.append(el('p', hint, 'ct-dialog__hint'));
-    const lab = el('label', null, 'ct-field');
-    lab.append(document.createTextNode(label));
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.value = value;
-    input.autocomplete = 'off';
-    input.style.cssText = 'width:100%; margin-top:4px;';
-    lab.append(input);
-    form.append(lab);
-    const menu = el('menu', null, 'ct-dialog__buttons');
-    const cancel = el('button', 'Cancel', null);
-    cancel.value = 'cancel';
-    cancel.type = 'submit';
-    const ok = el('button', confirmLabel, 'ct-dialog__primary');
-    ok.value = 'ok';
-    ok.type = 'submit';
-    menu.append(cancel, ok);
-    form.append(menu);
-    d.append(form);
-    d.addEventListener('close', () => {
-      const text = d.returnValue === 'ok' ? input.value.trim() : '';
-      d.remove();
-      resolve(text || null);
-    });
-    document.body.append(d);
-    d.showModal();
-    input.focus();
-    input.select();
-  });
-}
-
 /** Where this copy is served from, when the deployment did not name itself. */
 function hostLabel() {
   try {

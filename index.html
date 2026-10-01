@@ -682,52 +682,13 @@
         flex: 0 0 auto; align-self: center; padding: 0 10px 0 4px;
         color: #646e77; font-size: 13px; white-space: nowrap;
       }
-      /* Plugin manager dialog */
-      .ct-plugins__add { display: flex; gap: 8px; margin: 0 0 8px; }
-      .ct-plugins__addbtn {
-        font: inherit; font-size: 13px; padding: 6px 12px; cursor: pointer;
-        background: #fff; border: 1px solid var(--accent); color: var(--accent); border-radius: 6px;
-      }
-      .ct-plugins__addbtn:hover { background: #f0f7ff; }
+      /* The plugin picker (launcher centre AND Edit ▸ Plugins) styles itself from
+         core/plugin-picker.js, because one component cannot depend on which host page
+         loaded its CSS. All that is left here is the "add from URL" prompt. */
       .ct-plugins__urlinput {
         width: 100%; box-sizing: border-box; font: inherit; margin: 0 0 4px;
         padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px;
       }
-      .ct-plugins__err {
-        background: #fdf3f2; color: #7a201a; font-size: 12px; padding: 7px 10px;
-        border: 1px solid #f0d8d5; border-radius: 6px; margin: 0 0 8px;
-      }
-      .ct-plugin__right { display: flex; align-items: center; gap: 8px; flex: none; }
-      .ct-plugin__rm {
-        border: 0; background: none; color: #b3424a; cursor: pointer; font-size: 13px;
-        width: 22px; height: 22px; border-radius: 4px; line-height: 1;
-      }
-      .ct-plugin__rm:hover { background: #fdecec; }
-      .ct-plugin__edit {
-        border: 0; background: none; color: var(--accent); cursor: pointer; font-size: 13px;
-        width: 22px; height: 22px; border-radius: 4px; line-height: 1;
-      }
-      .ct-plugin__edit:hover { background: #eaf3fb; }
-      .ct-plugin__fork {
-        border: 0; background: none; color: #6b7480; cursor: pointer; font-size: 13px;
-        width: 22px; height: 22px; border-radius: 4px; line-height: 1;
-      }
-      .ct-plugin__fork:hover { background: #eef1f4; color: #3a424c; }
-      .ct-plugin__export {
-        border: 0; background: none; color: #6b7480; cursor: pointer; font-size: 13px;
-        width: 22px; height: 22px; border-radius: 4px; line-height: 1;
-      }
-      .ct-plugin__export:hover { background: #eef1f4; color: #3a424c; }
-      .ct-plugin__web {
-        border: 0; background: none; cursor: pointer; font-size: 12px;
-        width: 22px; height: 22px; border-radius: 4px; line-height: 1; filter: grayscale(0.2);
-      }
-      .ct-plugin__web:hover { background: #fdecec; }
-      .ct-plugin__howto {
-        border: 0; background: none; cursor: pointer; font-size: 12px;
-        width: 22px; height: 22px; border-radius: 4px; line-height: 1;
-      }
-      .ct-plugin__howto:hover { background: #eef1f4; }
 
       /* Plugin creator dialog */
       .ct-creator { max-width: 760px; width: 90vw; }
@@ -783,32 +744,6 @@
         background: #eef7ee; color: #1e5b2a; border: 1px solid #cfe6cf;
       }
       .ct-creator__status--err { background: #fdf3f2; color: #7a201a; border-color: #f0d8d5; }
-      .ct-plugins__search {
-        width: 100%; box-sizing: border-box; font: inherit; margin: 0 0 8px;
-        padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px;
-      }
-      /* discipline filter row (pin plugins a field recommends to the top) */
-      .ct-plugins__filters { display: flex; gap: 8px; margin: 0 0 8px; }
-      .ct-plugins__filters .ct-plugins__search { margin: 0; flex: 1; width: auto; }
-      .ct-plugins__discipline {
-        font: inherit; padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px;
-        flex: none; max-width: 48%;
-      }
-      .ct-plugins__section {
-        font-size: 12px; font-weight: 700; color: #41505e;
-        padding: 12px 2px 4px; border-top: 1px solid var(--line); margin: 8px 0 2px;
-      }
-      .ct-plugins { max-height: 320px; overflow: auto; }
-      .ct-plugins__cat {
-        font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #646e77;
-        font-weight: 700; padding: 10px 2px 3px; position: sticky; top: 0; background: var(--panel, #fff);
-      }
-      .ct-plugins__list { list-style: none; margin: 0; padding: 0; }
-      .ct-plugins__empty { color: #646e77; padding: 12px 2px; }
-      .ct-plugin {
-        display: flex; align-items: center; justify-content: space-between; gap: 12px;
-        padding: 7px 4px; border-bottom: 1px solid var(--line);
-      }
       /* #180: where the floated (selected) variables end. The picker can label its
          "Selected" group with a heading; a grid and a dense table cannot, so the boundary
          is a rule instead — down the left edge of the first unselected column, and under
@@ -816,13 +751,6 @@
       .grid th.is-floatedge, .grid td.is-floatedge { border-left: 2px solid var(--accent, #2572a5); }
       .vargrid__row.is-floatedge > * { border-top: 2px solid var(--accent, #2572a5); }
 
-      .ct-plugin__lead { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-      .ct-plugin__main { display: flex; align-items: center; gap: 9px; cursor: pointer; font-size: 14px; }
-      /* Which of this plugin's analyses matched the search (#183). */
-      .ct-plugin__hit { font-size: 12px; color: var(--accent, #2572a5); padding-left: 25px; }
-      .ct-plugin__name { color: #1a1a1a; }
-      .ct-plugin__ver { font: 11px ui-monospace, Menlo, monospace; color: #6b7682; background: #eef1f4; border-radius: 4px; padding: 0 5px; flex: none; }
-      .ct-plugin__meta { font: 11px ui-monospace, Menlo, monospace; color: #687381; }
 
       /* Compute / Recode dialogs */
       .ct-cr__expr { font: 12px ui-monospace, Menlo, monospace; resize: vertical; }

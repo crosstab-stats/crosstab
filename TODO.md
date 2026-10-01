@@ -761,19 +761,28 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       and makes the source greppable and readable. `core/rehome.js`, whose two were in a
       comment and therefore inert, was fixed the same way on 2026-08-20. 606 tests.
 
-> **These SIX entries are ONE piece of work** (noted 2026-09-28, extended 2026-09-29): #161,
-> #167, #181's third follow-on (*"the launcher should reuse the manager component instead of
-> its own rail"*), the launcher half of #171 (its Projects rail still renders TWO lists —
-> `listProjects()` at `core/launcher.js:346` and `listProjectLocations()` at :382 — while the
-> sidebar has rendered one since August), and the two duplication entries below (the plugin picker, the project list). Each one
-> rewrites part of the launcher. #181 already says it: *"do the three together, deliberately,
-> not as a follow-on"*, or the launcher gets rebuilt twice. **Parked on the owner**, who is
-> weighing the launcher's shape and has said the sidebar grouping is part of the same redesign —
-> so this is one decision, not six tasks, and it is theirs to make before any of it is buildable.
+> **These entries are ONE piece of work** (noted 2026-09-28, extended 2026-09-29; one of the six
+> shipped 2026-10-01): #161, #167, #181's third follow-on (*"the launcher should reuse the manager
+> component instead of its own rail"*), the launcher half of #171 (its Projects rail still renders
+> TWO lists — `listProjects()` at `core/launcher.js:346` and `listProjectLocations()` at :382 —
+> while the sidebar has rendered one since August), and the project-list duplication entry below.
+> Each one rewrites part of the launcher. #181 already says it: *"do the three together,
+> deliberately, not as a follow-on"*, or the launcher gets rebuilt twice. **Parked on the owner**,
+> who is weighing the launcher's shape and has said the sidebar grouping is part of the same
+> redesign — so this is one decision, not several tasks, and it is theirs to make before the rest
+> of it is buildable.
 >
-> The pattern across all five: the launcher renders its own copy of something the app already
+> The pattern across all of them: the launcher renders its own copy of something the app already
 > renders elsewhere — the project list, the plugin picker — and the copies have drifted. What the
-> cluster wants is **shared components with a mode**, not five tidier duplicates.
+> cluster wants is **shared components with a mode**, not tidier duplicates.
+>
+> **The plugin picker is now exactly that** (`core/plugin-picker.js`, 2026-10-01) — one component,
+> `select` mode for the launcher and `live` mode for Edit ▸ Plugins. It is the worked example for
+> the rest of the cluster, and it was buildable ahead of the launcher decision because the owner
+> settled its shape directly: *"more of a realignment to consolidate the pieces we have."* The
+> project list is the same move with a harder first step — `project-manager.js` is written as a
+> `<dialog>` resolving a promise on close, so its list rendering has to come out of the shell
+> before anything can share it.
 
 - [ ] **#161 — the launcher's "Start CrossTab" button is superfluous; clicking a
       source/project should just go (user request, 2026-08-19).** Today the rail
@@ -872,81 +881,79 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         never *erase that folder* — the same honest-scope-boundary the sharing and
         encryption work draws. Two verbs, worded differently, not one.
 
+- [x] **DONE (2026-10-01) — the launcher's plugin picker and Edit ▸ Plugins are now one module.**
+      Raised 2026-09-29 (*"The center section of the launcher is functionally almost identical to
+      the modal that comes up with Edit|Plugins… I'd like to unify these two"*) and settled by the
+      owner's direction two days later:
 
-- [ ] **The launcher's plugin picker and Edit ▸ Plugins are the same surface, built twice
-      (owner, 2026-09-29).** *"The center section of the launcher is functionally almost identical
-      to the modal that comes up with Edit|Plugins. And yet one is a two-column layout and one is
-      a single list. One uses the (i) glyph for 'what this does' and the other uses a magnifying
-      glass for 'what this does'… I'd like to unify these two, if possible. They both have a main
-      purpose of 'adjust the plugins'."*
+      > *"I don't think a whole-cloth rewrite is required, but more of a realignment to consolidate
+      > the pieces we have. For example, I like the 'plugin' section in the launcher, two columns,
+      > filter box with disciplines, preset support. I just think we need to fold in the few items
+      > that Edit|Plugins has (load from file/url and the support for the additional icons on each
+      > row) and make that entire plugin UI a module that Edit|Plugins can also call as a
+      > standalone modal."*
 
-      **The divergence is worse than cosmetic, and it is the shape that has already cost this
-      project three bugs** — #177's tooltip that existed on one picker and not the other, #171's
-      project list rendered twice, #185's deploy issues counted twice. Two renderings of one list
-      is the thing `var-toolbar.js` was written to end, and it has quietly regrown one layer up.
+      **`core/plugin-picker.js` is that module** (~770 lines), mounted by both hosts:
 
-      **Verified inventory (2026-09-29), because an entry that misstates this is worse than none:**
+      - the **launcher** mounts it into `.ctl__picker` in `select` mode and hands it the
+        "Cataloguing plugins…" indicator as its lead control, so the filter row looks as it did;
+      - **Edit ▸ Plugins** is now `openPluginModal(plugins)` — a dialog shell with the same
+        component inside it in `live` mode.
 
-      | | launcher centre (`ctl__*`) | Edit ▸ Plugins (`ct-plugins__*`) |
-      | --- | --- | --- |
-      | layout | two-column grid (`ctl__grid` + `ctl__catgroup`) | single list (`ct-plugins__list` + `__section`) |
-      | "what this does" | **`ⓘ`** (`ctl__pluginwhat`, launcher.js:492) | **`🔍`** (`ct-plugin__howto`, plugin-manager.js:1182) |
-      | search + discipline filter | yes | yes |
-      | category grouping | yes | yes |
-      | Select all / None | **yes** | no |
-      | presets (save, rename, delete, export, import) | **yes** (7 controls) | no |
-      | offline pre-cache of the selection | **yes** | no |
-      | + Create new… | no | **yes** |
-      | + Add from file… | no | **yes** |
-      | + Add from URL… | no | **yes** |
+      The launcher's **layout** won (two-column grid, category blocks, per-section Select all /
+      None, presets); the manager's **row** won (version badge, provenance, the action icons, and
+      the analysis-aware search that finds *Levene* via the plugin that has the test, #183). Every
+      capability now appears on **both** surfaces — the owner was explicitly unconvinced authoring
+      should be launcher-excluded (*"an argument I'm not entirely convinced of yet"*), so the
+      default became "everything, unless a reason is written down", and nothing needed one.
 
-      Two class hierarchies, two renderers, two glyphs for one verb, and five capabilities that
-      exist on exactly one of the two surfaces for no stated reason.
+      **What was decided while merging, since the two halves disagreed:**
 
-      **The owner's read, which is the design brief:** one component whose purpose is "adjust the
-      plugins". The make-new / add-from-file / add-from-URL verbs can hang off it as buttons, and
-      the owner is *not* persuaded they should be launcher-excluded at all — *"an argument I'm not
-      entirely convinced of yet."* So the default is that everything appears on both, and anything
-      omitted needs a reason written down.
+      - **One glyph for one verb: `ⓘ`.** Both surfaces already called the same
+        `openPluginAbout()`; the manager's `🔍` read as "search" next to an actual search box.
+      - **`rowMeta()` says nothing for a healthy built-in.** Printing `built-in` on fifty rows was
+        noise *and* it cost the width the action icons need in a two-column grid. Provenance is
+        stated when it is **not** ours (a trust question), and live mode still shows the two states
+        that contradict the checkbox — `failed` (on but never loaded) and `disabled`.
+      - **Presets work in-session now**, which the launcher-only version made awkward: *"switch me
+        to the qualitative set"* mid-project is the natural use, and #162's course-handbook import
+        no longer implies a restart. Live-mode apply states the counts and asks first.
+      - **Bulk in live mode is guarded, not inherited.** `PluginManager.setManyEnabled()` activates
+        in a pool, and on deactivation **refuses any plugin holding data in the open project**,
+        naming it — because the single-row path asks a three-way question about that data (#118),
+        and firing it once per plugin would be a prompt storm about decisions a user can only make
+        one at a time. Over 8 live changes at once, the section links confirm.
+      - **The dependency runs picker → manager.** `#showDialog()` reaches the picker through a
+        `await import()`, so the manager does not pull the picker's download/preset chain into
+        every context that only wants the catalogue — the headless tests among them.
+      - **The picker injects its own CSS.** A component cannot depend on which host page loaded its
+        stylesheet, and that is part of how these two drifted visually in the first place.
 
-      **There is no lifecycle difference — the argument I raised against this was wrong, and the
-      owner corrected it with a fact I had not checked.** I claimed the two surfaces act on
-      different states: the launcher choosing a desired set *before boot*, Edit ▸ Plugins mutating
-      the *live* one, which would make them one component with a mode. The owner: *"the launcher
-      is also callable mid-cycle from the logo in the upper left corner and has an 'apply changes'
-      button when launched that way, so it also acts as a 'mutate existing behaviour' mode in
-      addition to the 'set behaviour for new work' mode."*
+      **Decisions extracted and tested** — `test/plugin-picker.test.mjs`, 16 tests, same reasoning
+      as #173: `rowActions()` (which icons, and the signature has no `mode` parameter, so there is
+      no per-surface filtering left to drift), `rowMeta()`, `pickerSections()` (search vs
+      discipline precedence, and the heading that would promise a section above it).
 
-      Confirmed in the code. `core/app.js:2019` opens it from the brand click with
-      `{ reopen: true }`; `launcher.js:1092` swaps the primary button to **"Apply changes"** and
-      adds "← Back to project"; and in `#start(reopen)` with no new data source chosen, the whole
-      body reduces to `#applySelection(this.#selected)` — applying plugins to the live session and
-      nothing else. **That is Edit ▸ Plugins' job, done by the launcher, today.**
+      **Net:** −759 / +155 across `launcher.js`, `plugin-manager.js` and `index.html` (the
+      duplicate renderer, its 33 dead CSS rules, and a second copy of `groupByCategory` and
+      `promptText`), suite 1315 → 1331.
 
-      So the correction makes unification simpler rather than harder, in three ways:
+      **Browser-verified** on the dev server: launcher mounts 65 rows in two columns with the
+      indicator inline; searching *levene* leads with Assumption Checks and the `adds:` line (the
+      launcher's old substring match could not find it at all); discipline pinning; section
+      Select all / None scoped to its own section (19 → 37); Start applied exactly the 37 ticked;
+      the modal at 900px with the same grid, provenance and `disabled` notes, a live toggle
+      37 → 38 and back, `Activate 28 plugins now?` on a large bulk with a decline changing
+      nothing, and a full in-session preset round trip (save from the live set → apply →
+      *"Switch to … 1 to activate, 0 to deactivate"* → restored). One flaw found and fixed in the
+      pass: a declined action left the previous action's status line standing, which reads as a
+      report of what just happened — `#clearStatus()` now runs before every action.
 
-      - **The mode already exists**, and it exists in the surface with the RICHER feature set.
-        This is not "add a mode to a shared component"; it is "Edit ▸ Plugins is a subset of
-        something already built", and the shared component inherits `reopen` rather than needing a
-        new concept.
-      - **Presets are already available in-session** — via the logo — so the asymmetry is worse
-        than "launch-time vs session-time". The same session-time job is offered through two doors,
-        and **which door you walk through decides whether you can use a preset or add a plugin
-        from a URL**. That is a capability lottery, not a cosmetic difference.
-      - **"Select all" in-session is not a new risk** introduced by unifying. The launcher already
-        permits it in reopen mode, so it is existing behaviour to verify (dozens of activations at
-        once, and what that does to a session with a workspace mounted), not a question to settle
-        before starting.
-
-      What remains genuinely different is only the **commit action's side effects**: the launcher's
-      Apply can also load a data source or open a project, because its rail offers those. Edit ▸
-      Plugins cannot. That is a difference in what else the dialog contains, not in what the plugin
-      list means.
-
-      **Do it with the rest of the launcher work, not before it.** This is the fifth entry in that
-      cluster, and it is the one that most clearly wants a shared COMPONENT rather than a tidier
-      copy — which means it should be written once, by whoever rebuilds the launcher's rail, and
-      not twice.
+      **Left for the launcher rebuild, deliberately:** the launcher's "Apply changes" still commits
+      through `applyActivatedSet()`, which has no #118 question — unticking a workspace plugin
+      there deactivates it and keeps its data (the safe default) but offers no way to delete it, so
+      that one path is quieter than the modal's. Worth folding in when the launcher's commit action
+      is next touched.
 
 - [ ] **…and the same question for the PROJECT list, where there are three renderings, not two
       (owner, 2026-09-29).** Raised as the parallel to the plugin-picker entry above: *"perhaps the
