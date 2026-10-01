@@ -761,6 +761,45 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       and makes the source greppable and readable. `core/rehome.js`, whose two were in a
       comment and therefore inert, was fixed the same way on 2026-08-20. 606 tests.
 
+- [ ] **The phone layout is unusable, and the cause is that the app has NO responsive breakpoint
+      at all (owner, 2026-10-01).** Found while testing the unified plugin picker: *"phone
+      interface is still a hot mess but that's out of scope for the moment. It does load and run,
+      just completely unusable on such a small screen."*
+
+      **One mechanism, two places: fixed-width rails inside flex rows, with nothing to stack
+      them.** `index.html` declares `width=device-width, initial-scale=1`, so a phone really is
+      laid out at ~390 CSS px — there is no zoomed-out desktop view to hide behind.
+
+      - **the launcher** — `.ctl__body { display: flex }` with `.ctl__library` and `.ctl__about`
+        both at `flex: 0 0 200px`: **400px of fixed rails on a 390px screen**. `.ctl__center` has
+        `min-width: 0`, so the thing that gets crushed to nothing is the plugin list, the one part
+        you actually came to use.
+      - **the app shell** — `main { display: flex }` with `.sidebar { width: 240px; flex: 0 0
+        240px }`: the sidebar takes 240 of 390px before the data grid is given any.
+      - **dialogs are the least-bad part.** `.ct-dialog` is `max-width: 420px; width: 92vw`, and
+        the wide variants (640px, and the picker's 900px) all cap at `9xvw`, so they shrink.
+
+      **The app contains exactly ONE layout media query** — `core/plugin-picker.js`'s
+      `max-width: 880px` → one column, added 2026-10-01. The only other `@media` anywhere are two
+      `@media print` blocks (`core/output-export.js`, `builtin-html-export`) and a
+      `prefers-color-scheme` in `oauth-callback.html`. So this is not a layout that regressed: it
+      was never written.
+
+      **Scope, stated honestly:** the *engine* is verified on iPhone and iPad (Milestone 3, done) —
+      WebR, DuckDB, import, analyses. This entry is layout only, which is exactly why it "loads and
+      runs" while being unusable.
+
+      **What it needs:** under ~700px the two rails become either collapsed drawers or stacked
+      sections, in **two** files. The picker's grid already does the right thing, so it is the
+      worked example. Deferred at the owner's direction — but it belongs **with the launcher
+      redesign**, because one of the two offenders is the launcher's own body and that cluster is
+      already rewriting it.
+
+      Worth checking at the same time, since it is the same measurement: **WCAG 2.2 AA includes
+      1.4.10 Reflow** (usable at 320px with no two-dimensional scrolling). The 2026-08-05
+      accessibility pass covered contrast and keyboard parity, not reflow — so the "AA, 0 failures"
+      claim does not currently cover this, and fixing the layout is what makes it true.
+
 > **These entries are ONE piece of work** (noted 2026-09-28, extended 2026-09-29; one of the six
 > shipped 2026-10-01): #161, #167, #181's third follow-on (*"the launcher should reuse the manager
 > component instead of its own rail"*), the launcher half of #171 (its Projects rail still renders
