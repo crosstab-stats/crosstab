@@ -36,9 +36,11 @@ test('buildManifest strips a source op’s Parquet bytes to a file ref (kept), n
 });
 
 test('buildManifest carries the non-log scalars and defaults them when omitted', () => {
-  const full = buildManifest({ name: 'P', savedAt: 1, bundle: { log: [], activeId: 2, activePlugins: ['p'], datasetMeta: { 2: { libraryLink: { id: 'b', version: 1 } } }, collabId: 'c', collabSecret: 's' } });
+  const full = buildManifest({ name: 'P', savedAt: 1, bundle: { log: [], activeId: 2, activePlugins: ['p'], datasetMeta: { 2: { note: 'x' } }, collabId: 'c', collabSecret: 's' } });
   assert.deepEqual(full.activePlugins, ['p']);
-  assert.deepEqual(full.datasetMeta, { 2: { libraryLink: { id: 'b', version: 1 } } });
+  // Carried verbatim. Nothing WRITES datasetMeta since the building-block link was removed
+  // (2026-10-02) — the channel is kept because old saves carry one and merge unions it.
+  assert.deepEqual(full.datasetMeta, { 2: { note: 'x' } });
   assert.equal(full.collabId, 'c');
 
   const bare = buildManifest({ name: 'P', savedAt: 1, bundle: { log: [] } });

@@ -10,7 +10,7 @@ import { ensureCollabIdentity, roomFor, inviteLinkFor, parseInviteLink, deriveRo
 import { buildManifest } from '../core/project-store.js';
 import { mergeProjects, buildMergers } from '../core/collab-sync.js';
 
-const bundle = (extra = {}) => ({ activeId: 1, activePlugins: null, workspaces: null, output: null, datasets: [{ id: 1, name: 'ds1', libraryLink: null, state: { sources: [{ id: 's1', meta: [{ name: 'x' }], label: 'f', combine: 'base' }], transforms: [], order: ['s'] } }], ...extra });
+const bundle = (extra = {}) => ({ activeId: 1, activePlugins: null, workspaces: null, output: null, datasets: [{ id: 1, name: 'ds1', state: { sources: [{ id: 's1', meta: [{ name: 'x' }], label: 'f', combine: 'base' }], transforms: [], order: ['s'] } }], ...extra });
 
 test('ensureCollabIdentity mints once, then is stable', () => {
   const first = ensureCollabIdentity(null);

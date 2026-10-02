@@ -11,7 +11,7 @@
  * updates `project.json` (see {@link ProjectStore#save} `writeSourcesFor`).
  *
  * Because the project holds independent copies of its datasets, autosaving them
- * is safe — it never touches the shared building-block library.
+ * is safe — a project owns its own copy of every dataset in it.
  */
 
 import { CoreEvents } from './event-bus.js';
@@ -31,6 +31,7 @@ import { isAuthError } from './storage-driver.js';
 import { showConflictDialog } from './conflict-ui.js';
 import { FolderBackend, OpfsBackend } from './storage-backend.js';
 import { showEncryptionSettings } from './encryption-settings.js';
+import { copyBundle, copyName, datasetSlice, describeSlice } from './dataset-copy.js';
 import { ensureCollabIdentity, roomFor, inviteLinkFor } from './live-invite.js';
 
 const DEBOUNCE_MS = 800;
@@ -553,6 +554,10 @@ export class ProjectSync {
     // verbs on this project and the fourth was an app-wide default — four lines for one
     // subject, and three of them wrong at any given moment. They are now two tabs behind
     // this entry, which offers only the verbs the current state actually allows.
+    // Replaces the library's 'Save dataset to library…' (same slot): hand ONE dataset over as
+    // a project — source plus the steps that cleaned it, which is the form reproducibility
+    // wants and the form a building block could not take.
+    this.#menus.register({ id: 'core:proj-copy-ds', path: ['File'], label: 'Copy dataset to a new project…', order: 20, command: () => void this.copyDatasetPrompt() });
     this.#menus.register({ id: 'core:encryption-settings', path: ['File'], label: 'Encryption settings…', order: 8, command: () => void showEncryptionSettings({ projects: this }) });
     this.#bus.on(CoreEvents.DATA_CHANGED, (s) => this.#onChange(s));
     this.#bus.on(DATASETS_CHANGED, () => this.#onChange(null));
@@ -930,6 +935,127 @@ export class ProjectSync {
    * same shape `#save` persists. Public so the `.crosstab` exporter can write a FAITHFUL
    * clone (raw log, preserving op ids + row ids) rather than a lossy re-synthesised
    * snapshot, so a bundle hand-off can then co-author (shared op/row identity). */
+  /**
+   * Ask for a name, then {@link ProjectSync#copyDatasetToProject}. The dataset row's ⧉ and
+   * File ▸ Copy dataset to a new project… both land here; with no id it takes the active
+   * dataset, which is what a menu item acting on "the data" has always meant here.
+   *
+   * The hint states what travels, because the whole value of this over exporting a file is
+   * that the cleaning comes with it — and what does NOT travel is the part someone handing
+   * work to a student needs to be sure of.
+   *
+   * @param {number|string} [datasetId]
+   */
+  async copyDatasetPrompt(datasetId) {
+    const ds = datasetId == null ? this.#datasets.active : this.#datasets.get(datasetId);
+    if (!ds) {
+      this.#results.appendError('Copy dataset to a new project: there is no dataset to copy.');
+      return;
+    }
+    let taken = [];
+    try {
+      taken = (await this.#opfs.list()).map((p) => p.name);
+    } catch {
+      /* no catalog — the name just won't be de-duplicated */
+    }
+    const slice = datasetSlice((await this.#snapshot(true)).log, ds.id);
+    const { steps } = describeSlice(slice);
+    const form = await this.#ui.showForm({
+      title: 'Copy dataset to a new project',
+      hint: `A new project containing only “${ds.name}”: its original source plus the `
+        + `${steps} step${steps === 1 ? '' : 's'} that cleaned it, so whoever opens it can see `
+        + 'what was done and re-run it. Analyses, output, codings and your plugin set stay here. '
+        + 'You keep working where you are — the copy appears in the Projects list.',
+      fields: [{ name: 'name', label: 'New project name', value: copyName(ds.name, taken) }],
+      okLabel: 'Create',
+    });
+    const name = form?.name?.trim();
+    if (!name) return;
+    await this.copyDatasetToProject(ds.id, name);
+  }
+
+  /**
+   * Copy ONE dataset into a new project — the building-block library's replacement
+   * (2026-10-02), and the one piece of it the owner wanted kept:
+   *
+   *   *"copy the original source plus the relevant log actions to a new project … the
+   *   cleaned data would still be in the form of 'original source data + actions taken to
+   *   clean it' which reproducibility likes (and which building blocks lacked)."*
+   *
+   * **It does not switch projects.** The point is preparing something to hand over, so
+   * taking the user out of what they were doing would be the wrong move entirely — the copy
+   * is written straight to local storage and shows up in the sidebar's Projects list. Which
+   * is also why this writes through `#opfs` rather than `#store`: `#store` is bound to the
+   * OPEN project, and in folder mode its id is the sentinel `'.'`, so saving a second
+   * project through it would overwrite the folder's own.
+   *
+   * Follows the same at-rest policy as any other new local project (#144): if the policy
+   * says protect, it pre-mints the id and asks for a passphrase; skipping leaves this one
+   * plaintext, exactly as {@link ProjectSync#fullSave} does.
+   *
+   * @param {number|string} datasetId
+   * @param {string} name  the new project's name
+   * @returns {Promise<?string>} the new project's id, or null if it could not be written
+   */
+  async copyDatasetToProject(datasetId, name) {
+    const ds = this.#datasets.get(datasetId);
+    if (!ds) {
+      this.#results.appendError('Copy to a new project: that dataset is no longer here.');
+      return null;
+    }
+    // A full snapshot, because the copy needs the source BYTES — the dirty-set shortcut
+    // autosave uses would hand us envelopes with no Parquet for anything unchanged.
+    const whole = await this.#snapshot(true);
+    const slice = datasetSlice(whole.log, datasetId);
+    const summary = describeSlice(slice);
+    if (!summary.sources) {
+      this.#results.appendError(
+        `“${ds.name}” has no data to copy — a project needs at least the source the cleaning was done to.`,
+      );
+      return null;
+    }
+    if (summary.missingBytes.length) {
+      // Refusing beats writing a project whose `load` points at a file nobody wrote.
+      this.#results.appendError(
+        `Can't copy “${ds.name}” yet: the data for ${summary.missingBytes.join(', ')} hasn't arrived on `
+        + 'this machine. It is still syncing from a co-author — try again once the dataset is complete.',
+      );
+      return null;
+    }
+    const bundle = copyBundle(whole, datasetId);
+    let id;
+    if (shouldEncrypt('local')) {
+      const pass = await passphraseFor('local-new');
+      if (pass) {
+        id = crypto.randomUUID();
+        try {
+          await this.#opfs.unlock(pass, id); // mints per-project meta + key
+        } catch (err) {
+          this.#results.appendError(`Couldn’t protect the copy — writing it unprotected: ${err.message}`);
+          this.#opfs.lock();
+          id = undefined;
+        }
+      }
+    }
+    try {
+      const newId = await this.#opfs.save({ id, name, savedAt: Date.now(), bundle });
+      this.#results.appendText(
+        `Copied **${ds.name}** into a new project, **${name}** — the original source plus `
+        + `${summary.steps} cleaning step${summary.steps === 1 ? '' : 's'}, which is what makes it `
+        + 'reproducible rather than just a file. It is in the Projects list; open it to export or '
+        + 'share it. Nothing else came with it: no analyses, output, codings or plugin set.',
+      );
+      this.#bus.emit(PROJECT_CHANGED); // the sidebar's Projects list has a new row
+      return newId;
+    } catch (err) {
+      console.error('[project] dataset copy failed', err);
+      this.#results.appendError(`Copy to a new project failed: ${err.message}`);
+      return null;
+    } finally {
+      this.#opfs.lock(); // never leave a key loaded on the listing store
+    }
+  }
+
   async exportSnapshot() {
     return this.#snapshot(true);
   }
@@ -950,7 +1076,6 @@ export class ProjectSync {
     for (const ds of [...this.#datasets.all(), ...this.#datasets.binnedStores()]) {
       const { ops } = await ds.rawExport({ includeParquet: all || dirty.has(ds.id) });
       log.push(...ops);
-      datasetMeta[ds.id] = { libraryLink: ds.libraryLink ?? null };
     }
     log.push(...this.#datasets.orphanDataOps()); // purged datasets' ops stay in the log
     const analysisLog = this.#getAnalysisLog ? this.#getAnalysisLog() : null; // raw analysis ops

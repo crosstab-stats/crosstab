@@ -50,9 +50,7 @@ import { UndoCoordinator } from './undo-coordinator.js';
 import { runRScript, registerRScriptRunner } from './r-script.js';
 import { CodecService } from './codec-service.js';
 import { PluginCreator } from './plugin-creator.js';
-import { DatasetStore } from './dataset-store.js';
 import { debug, isDebug, setDebug, saveLog, installErrorCapture } from './debug.js';
-import { DatasetLibrary, LIBRARY_CHANGED } from './library.js';
 import { ProjectStore } from './project-store.js';
 import { ProjectSync, PROJECT_CHANGED } from './project-sync.js';
 import { DataView, VariableView, HistoryPanel } from './data-views.js';
@@ -68,54 +66,6 @@ import { WorkspaceManager } from './workspace-manager.js';
 import { PluginPackageStore } from './plugin-package-store.js';
 import { AssetStore, createAssetService, ASSETS_CHANGED } from './asset-store.js';
 import { makeZip, readZipEntries } from './zip.js';
-
-/**
- * Ask what to do about datasets linked to a **building block** when a project leaves
- * this machine (#149 A9).
- *
- * The choice is narrower than it first looks, and worth stating plainly in the dialog:
- * a bundle always carries every dataset's own sources, so the DATA travels either way —
- * there is no "embed vs reference" size trade-off. All that's at stake is the
- * `libraryLink` badge and its Pull-update button.
- *
- * And that link is local by construction. A block's id is a `crypto.randomUUID()` minted
- * on whichever machine first saved it, and there is no mechanism to share a block
- * between machines at all, so a recipient's library will not contain that id — not even
- * if they independently imported the identical file. Keeping the link is therefore only
- * useful for a copy coming back to THIS machine (an archive you re-import yourself).
- *
- * @param {string[]} names  linked dataset names, for the prompt.
- * @returns {Promise<boolean|null>} true = keep links, false = drop them, null = cancel.
- */
-function askLinkedBlocks(names) {
-  const list = names.length === 1 ? `“${names[0]}”` : `${names.length} datasets`;
-  return new Promise((resolve) => {
-    const dialog = document.createElement('dialog');
-    dialog.className = 'ct-dialog';
-    dialog.innerHTML = `
-      <form method="dialog" class="ct-dialog__form">
-        <h2 class="ct-dialog__title">Linked building blocks</h2>
-        <p class="ct-dialog__hint">${list} ${names.length === 1 ? 'is' : 'are'} linked to a
-          building block in your library. The data is included in the export either way —
-          this only affects the “linked” badge and its update button.</p>
-        <p class="ct-dialog__hint">Building blocks live on one machine, so the link
-          <strong>won’t resolve for anyone else</strong>. Keep it only if this copy is
-          coming back to this computer.</p>
-        <menu class="ct-dialog__buttons">
-          <button value="cancel" type="submit">Cancel</button>
-          <button value="keep" type="submit">Keep the links</button>
-          <button value="drop" type="submit" class="ct-dialog__primary">Drop the links</button>
-        </menu>
-      </form>`;
-    dialog.addEventListener('close', () => {
-      const v = dialog.returnValue;
-      dialog.remove();
-      resolve(v === 'drop' ? false : v === 'keep' ? true : null);
-    });
-    document.body.append(dialog);
-    dialog.showModal();
-  });
-}
 
 /**
  * URLs of the built-in plugins to load at startup. These load through the exact
@@ -660,11 +610,10 @@ export async function boot(mounts) {
     results: results.api,
     bus,
   });
-  const datasetStore = new DatasetStore();
-  // NOTE: the recycle bin used to be a second DatasetStore rooted at OPFS `recycle/` —
-  // a full byte-for-byte copy of every deleted dataset, in a store that couldn't follow
-  // the project into a bundle, a folder, or a peer. It is now a projection over the
-  // project's own log (#149 A8); nothing is copied and there is no second store.
+  // NOTE: the recycle bin used to be a second store rooted at OPFS `recycle/` — a full
+  // byte-for-byte copy of every deleted dataset, in a store that couldn't follow the
+  // project into a bundle, a folder, or a peer. It is now a projection over the project's
+  // own log (#149 A8); nothing is copied and there is no second store.
 
   // The service bundle the plugin broker dispatches against. `data`/`results`/
   // `menus`/`ui` expose only their published `api` slices, never the full class
@@ -985,8 +934,8 @@ export async function boot(mounts) {
   // If the R runtime crashes (out of memory), offer a restart instead of leaving
   // the session silently broken until a page reload.
   bus.on(CoreEvents.WEBR_CRASHED, () => offerRestartR(webr, results.api));
-  // (The sidebar project manager is created below, once the library + project
-  // services it drives exist.)
+  // (The sidebar project manager is created below, once the project services it
+  // drives exist.)
 
   // Tabbed workspace: Data View (grid) / Variable View / Output (results pane).
   // `workspaceTabs` is the runtime add/remove-tab surface plugin workspaces use.
@@ -1071,22 +1020,6 @@ export async function boot(mounts) {
   // The runner that executes an R script into the Output pane — registered so the run
   // is a recorded, replayable analysis step (#137), re-run on replay/undo.
   registerRScriptRunner({ pluginActions, results: results.api, webr, datasets });
-
-  // Dataset library (OPFS), tier 2: reusable building blocks — explicit
-  // "Save dataset to library" / "Add dataset from library". No autosave here;
-  // the project tier (below) owns autosave.
-  const library = new DatasetLibrary({
-    items: itemStore,
-    assets: assetStore,
-    collections: () => [...CORE_COLLECTIONS, ...declaredCollections(plugins?.list() ?? [], ownerToken)],
-    datasetStore,
-    data: datasets,
-    ui,
-    menus,
-    results: results.api,
-    bus,
-  });
-  library.activate();
 
   // Projects (OPFS): the living-document tier — autosaves the whole working set.
   const projStatus = document.createElement('span');
@@ -1516,23 +1449,6 @@ export async function boot(mounts) {
           const got = await assetStore.get(a.id);
           if (got?.bytes) assets.push({ id: a.id, bytes: got.bytes });
         }
-        // Linked building blocks (#149 A9). A block's id is a random UUID minted on the
-        // machine that first saved it, and there is no way to share a block between
-        // machines at all — so a `libraryLink` is meaningless to anyone but its author,
-        // and stale even for them once the block is gone. The DATA is in the bundle
-        // either way (the faithful-clone tier carries every dataset's sources), so this
-        // is purely about whether the recipient sees a dangling "linked to v3" badge and
-        // a Pull-update button that can't work. Default: drop it.
-        const linked = datasets.all().filter((d) => d.libraryLink);
-        if (linked.length) {
-          const keep = await askLinkedBlocks(linked.map((d) => d.name));
-          if (keep === null) return; // cancelled
-          if (!keep) {
-            snapshot.datasetMeta = Object.fromEntries(
-              Object.entries(snapshot.datasetMeta ?? {}).map(([k, v]) => [k, { ...v, libraryLink: null }]),
-            );
-          }
-        }
         const blob = await exportProjectBundle({ datasets, bundle: snapshot, projectName: name, plugins: activePlugins, collab, assets });
         downloadBlob(blob, `${slug(name) || 'crosstab-project'}.crosstab`);
         results.api.appendText(`Exported **${name}** as a .crosstab bundle (${(blob.size / 1048576).toFixed(1)} MB).`);
@@ -1718,10 +1634,10 @@ export async function boot(mounts) {
     pluginActions,
   });
 
-  // The sidebar project manager (active project + datasets, other projects,
-  // building blocks). Created here, after the services it drives exist.
+  // The sidebar project manager: the open project and its datasets, plus the other
+  // projects. Created here, after the services it drives exist.
   new ProjectSidebar(mounts.sidebar, {
-    datasets, projects, library, bus,
+    datasets, projects, bus,
     workspaceStore, itemStore, assetStore, sweepAssets, memoStore, orphanedMemos, selection,
     pluginList: () => (plugins ? plugins.list() : []),
     makeBackend, openBackend,
@@ -1920,7 +1836,7 @@ export async function boot(mounts) {
   // `dataStore` kept as an alias to the manager (it delegates to the active
   // dataset) so console pokes / older references keep working. Exposed before the
   // launcher so the launcher (and dev tooling) can use the engine.
-  const engine = { bus, datasets, itemStore, memoStore, assetRefSources, sweepAssets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, datasetStore, library, projects, assetStore, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager, codecs, analysisLog, pluginActions, undoCoordinator, projectLog };
+  const engine = { bus, datasets, itemStore, memoStore, assetRefSources, sweepAssets, dataStore: datasets, duckdb, webr, results, menus, importers, exporters, projects, assetStore, loader, plugins, pluginCreator, services, workspaceStore, workspaceManager, codecs, analysisLog, pluginActions, undoCoordinator, projectLog };
   /**
    * Console debugging: dump the FULL one true log — every op across all tiers
    * (collection, data, analysis), including the `retract`/`reorder` tombstones and
@@ -2492,21 +2408,18 @@ class ProjectSidebar {
   /** asset id → byte size, so a reclaim can report how much it frees. @type {Map<string,number>} */
   #assetBytes = new Map();
   #token = 0;
-  #drag = null; // { kind: 'dataset'|'block', id }
 
   /**
    * @param {HTMLElement} host
    * @param {Object} deps
    * @param {import('./dataset-manager.js').DatasetManager} deps.datasets
    * @param {import('./project-sync.js').ProjectSync} deps.projects
-   * @param {import('./library.js').DatasetLibrary} deps.library
    * @param {EventBus} deps.bus
    */
-  constructor(host, { datasets, projects, library, bus, workspaceStore, itemStore, assetStore, sweepAssets, memoStore, orphanedMemos, selection, pluginList, makeBackend, openBackend, openManager }) {
+  constructor(host, { datasets, projects, bus, workspaceStore, itemStore, assetStore, sweepAssets, memoStore, orphanedMemos, selection, pluginList, makeBackend, openBackend, openManager }) {
     this.host = host;
     this.datasets = datasets;
     this.projects = projects;
-    this.library = library;
     this.wsStore = workspaceStore ?? null;
     this.itemStore = itemStore ?? null;
     this.assetStore = assetStore ?? null;
@@ -2527,7 +2440,6 @@ class ProjectSidebar {
     bus.on(SELECTION_CHANGED, () => this.render()); // …and which of them is selected (#153)
     bus.on(ASSETS_CHANGED, () => this.render()); // …and stored files, however they change
     bus.on(CoreEvents.DATA_CHANGED, () => this.render());
-    bus.on(LIBRARY_CHANGED, () => this.render());
     bus.on(CoreEvents.WORKSPACE_CHANGED, () => this.render());
     bus.on(PROJECT_CHANGED, ({ name } = {}) => {
       this.projectName = name;
@@ -2539,18 +2451,12 @@ class ProjectSidebar {
   async render() {
     // Reads the project + block catalogs (async); keep only the latest render.
     const token = ++this.#token;
-    let blocks = []; // local projects now arrive through the merged index (#171)
     let recents = [];
     try {
       // One index, most-recently-opened first, the open one already excluded.
       recents = (await this.projects.listRecentProjects?.(SIDEBAR_RECENTS)) ?? [];
     } catch {
       /* no index — the rest of the sidebar still renders */
-    }
-    try {
-      blocks = await this.library.list();
-    } catch {
-      /* OPFS unavailable */
     }
     // What the project is carrying, for the inventory line. Read here (async) so the
     // DOM build below stays synchronous.
@@ -2568,20 +2474,16 @@ class ProjectSidebar {
     const binned = this.datasets.binnedList();
     if (token !== this.#token) return; // superseded by a newer render
 
-    // Block id → current version, so a linked dataset can show "update available".
-    const blockVer = new Map(blocks.map((b) => [b.id, b.version ?? 1]));
-
     this.host.replaceChildren();
-    this.host.append(this.#projectZone(blockVer));
+    this.host.append(this.#projectZone());
     const binnedItems = this.itemStore?.binned() ?? [];
     if (binned.length || binnedItems.length) this.host.append(this.#recycleZone(binned, binnedItems));
     this.host.append(this.#projectsZone(recents));
-    this.host.append(this.#blocksZone(blocks));
   }
 
   // --- zone 1: active project + its datasets ---------------------------------
 
-  #projectZone(blockVer) {
+  #projectZone() {
     const frag = document.createDocumentFragment();
     // With no project open (#158) the zone is a prompt, not a project with a blank name:
     // no rename, no delete, no "+ Add dataset" for a project that doesn't exist.
@@ -2620,11 +2522,9 @@ class ProjectSidebar {
 
     const list = document.createElement('ul');
     list.className = 'proj__datasets';
-    // The datasets list is a drop target for building blocks (add to project).
-    this.#dropTarget(list, 'block', (id) => this.library.addBlockToProject(id));
     const hidden = this.#hiddenWsIds();
     const items = this.datasets.list();
-    for (const it of items) list.append(this.#datasetRow(it, items.length, blockVer, hidden));
+    for (const it of items) list.append(this.#datasetRow(it, items.length, hidden));
     frag.append(list);
 
     // Project-scoped content — item collections first, then workspace blobs. Both get a
@@ -2769,14 +2669,6 @@ class ProjectSidebar {
       // picking a map layer does not deselect the dataset you are analysing.
       active: !!this.selection?.isActive(decl.owner, decl.id, rec.id),
       onOpen: this.selection ? () => this.selection.set(decl.owner, decl.id, rec.id) : null,
-      // Portability is DECLARED, not inferred (#153). It was briefly unconditional,
-      // which quietly made memos draggable to the library — a note whose anchor points
-      // into the project it was written in. Being listed as a row and being meaningful
-      // in another project are different questions, and only the collection's author
-      // can answer the second.
-      drag: decl.portable
-        ? { kind: 'record', id: `${decl.owner}\u0000${decl.id}\u0000${rec.id}` }
-        : null,
       summary: summary == null ? null : String(summary),
       onRename: field ? (v) => { if (v) this.itemStore.put(decl.owner, decl.id, rec.id, { [field]: v }); } : null,
       onDelete: () => this.itemStore.remove(decl.owner, decl.id, rec.id),
@@ -2873,26 +2765,23 @@ class ProjectSidebar {
    *
    * Sharing the builder also makes the user's actual requirement structural rather than
    * maintained by hand — *however items in a project are displayed should match how items
-   * in building blocks are displayed* — and turns flat-vs-grouped into one switch applied
-   * to both, instead of a commitment.
+   * anywhere else are displayed* (the owner, when the library was still the other place they
+   * appeared) — and turns flat-vs-grouped into one switch applied to both, instead of a
+   * commitment.
    *
    * Genuine subordination still exists (CAQDAS coding really does belong to its dataset),
    * so `nested` indents the row while keeping its treatment identical.
    */
   #contentRow({
-    name, title, nested = false, active = false, badge = null, summary = null,
+    name, title, nested = false, active = false, summary = null,
     onOpen = null, onRename = null, onDelete = null, deleteTitle = 'Remove',
-    memoAnchor = null, drag = null,
+    onCopy = null, copyTitle = 'Copy',
+    memoAnchor = null,
   }) {
     const li = document.createElement('li');
     li.className = 'proj__ds'
       + (active ? ' proj__ds--active' : '')
       + (nested ? ' proj__ds--nested' : '');
-    if (drag) {
-      li.draggable = true;
-      li.addEventListener('dragstart', (e) => this.#startDrag(e, drag.kind, drag.id));
-      li.addEventListener('dragend', () => (this.#drag = null));
-    }
     if (onOpen) li.addEventListener('click', onOpen);
     else li.style.cursor = 'default';
 
@@ -2919,12 +2808,6 @@ class ProjectSidebar {
     }
     li.append(nameEl);
 
-    if (badge) {
-      const b = el('span', badge.text, badge.onClick ? 'proj__ds-update' : 'proj__ds-link');
-      if (badge.title) b.title = badge.title;
-      if (badge.onClick) b.addEventListener('click', (e) => { e.stopPropagation(); badge.onClick(); });
-      li.append(b);
-    }
     if (summary != null && summary !== '') li.append(el('span', String(summary), 'proj__ds-rows'));
 
     if (onRename) {
@@ -2933,6 +2816,11 @@ class ProjectSidebar {
         this.#inlineRename(li, nameEl, name, onRename);
       }, 'proj__ds-x'));
     }
+    // Copy sits BEFORE delete: it is the constructive verb, and the two should not be
+    // adjacent-and-identical at the end of the row where a mis-aim is destructive.
+    if (onCopy) {
+      li.append(iconBtn('⧉', copyTitle, (e) => { e.stopPropagation(); onCopy(); }, 'proj__ds-x'));
+    }
     if (onDelete) {
       li.append(iconBtn('✕', deleteTitle, (e) => { e.stopPropagation(); onDelete(); }, 'proj__ds-x'));
     }
@@ -2940,27 +2828,19 @@ class ProjectSidebar {
     return li;
   }
 
-  #datasetRow(it, count, blockVer, hidden) {
-    let badge = null;
-    if (it.libraryLink) {
-      const linkedV = it.libraryLink.version;
-      const latest = blockVer?.get(it.libraryLink.id);
-      badge = latest != null && latest > linkedV
-        ? { text: `↑v${latest}`, title: `Update from v${linkedV} to v${latest}`, onClick: () => void this.library.pullLatest(it.id) }
-        : { text: `v${linkedV}`, title: 'Linked to a building block' };
-    }
+  #datasetRow(it, count, hidden) {
     const li = this.#contentRow({
       name: it.name,
-      title: 'Double-click to rename · drag to Building Blocks',
+      title: 'Double-click to rename',
       active: it.active,
-      badge,
       summary: it.rowCount.toLocaleString(),
       onOpen: () => { if (!it.active) this.datasets.setActive(it.id); },
       onRename: (v) => this.datasets.rename(it.id, v),
       onDelete: () => void this.#deleteDataset(it),
       deleteTitle: count <= 1 ? 'Remove — resets to a fresh empty dataset' : 'Remove from project',
+      onCopy: () => void this.projects.copyDatasetPrompt?.(it.id),
+      copyTitle: 'Copy to a new project — the source plus the steps that cleaned it',
       memoAnchor: { kind: 'dataset', target: `ds:${it.id}` },
-      drag: { kind: 'dataset', id: it.id },
     });
 
     const frag = document.createDocumentFragment();
@@ -3013,7 +2893,7 @@ class ProjectSidebar {
    * what these rows contain. Before #152 a blob WAS the coding, which is why it was
    * listed; now the coding is item records and the blob holds only config (which column
    * holds the documents, a per-dataset layer linkage). Config is not content: you do not
-   * name it, reuse it, annotate it, or promote it to a building block. Giving it a row
+   * name it, reuse it, annotate it, or hand it to anyone. Giving it a row
    * equal to a dataset would overstate it.
    *
    * OPEN (#153): whether these should appear at all now. The visibility they used to
@@ -3342,81 +3222,7 @@ class ProjectSidebar {
     return frag;
   }
 
-  // --- zone 3: building blocks -----------------------------------------------
-
-  #blocksZone(blocks) {
-    const frag = document.createDocumentFragment();
-    const sub = el('div', 'Building blocks', 'proj__sub proj__sub--zone');
-    frag.append(sub);
-    const list = document.createElement('ul');
-    list.className = 'proj__datasets';
-    // Drop a dataset here to promote it to a building block (v1).
-    this.#dropTarget(list, 'dataset', (id) => this.library.promoteToBlock(id));
-    this.#dropTarget(list, 'record', (key) => {
-      const [owner, collection, recId] = String(key).split('\u0000');
-      if (owner && collection && recId) void this.library.promoteRecordToBlock(owner, collection, recId);
-    });
-    if (blocks.length === 0) {
-      list.append(el('li', 'Drag a dataset or a map layer here to reuse it across projects.', 'proj__empty'));
-    }
-    // Blocks go through the SAME builder as project content, which is the user's actual
-    // requirement: however an item looks in a project is how it looks in the library.
-    for (const b of blocks) {
-      // One list, two kinds — the user's call. The badge is what keeps it readable
-      // without splitting into sections that would then have to be kept in step with the
-      // project list.
-      const kindLabel = b.kind === 'record'
-        ? (this.#collectionDecls().find((d) => d.id === b.collection)?.label ?? b.collection ?? 'Record')
-        : null;
-      list.append(this.#contentRow({
-        name: b.name,
-        title: kindLabel
-          ? `${kindLabel} · click to add to the current project`
-          : 'Click to add to the current project · drag onto Datasets',
-        badge: { text: kindLabel ? `${kindLabel} · v${b.version ?? 1}` : `v${b.version ?? 1}`, title: 'Block version' },
-        onOpen: () => void this.library.addBlockToProject(b.id),
-        onDelete: () => void this.library.deleteBlock(b.id),
-        deleteTitle: 'Delete building block',
-        drag: { kind: 'block', id: b.id },
-      }));
-    }
-    frag.append(list);
-    return frag;
-  }
-
-  // --- drag + inline-rename helpers ------------------------------------------
-
-  #startDrag(e, kind, id) {
-    this.#drag = { kind, id };
-    e.dataTransfer.effectAllowed = 'copy';
-    e.dataTransfer.setData('text/plain', JSON.stringify(this.#drag));
-  }
-
-  /** Make `el` accept a drag of `kind`, calling `onDrop(id)` when one lands. */
-  #dropTarget(elm, kind, onDrop) {
-    elm.addEventListener('dragover', (e) => {
-      if (this.#drag?.kind === kind) {
-        e.preventDefault();
-        elm.classList.add('proj__drop');
-      }
-    });
-    elm.addEventListener('dragleave', () => elm.classList.remove('proj__drop'));
-    elm.addEventListener('drop', (e) => {
-      elm.classList.remove('proj__drop');
-      let payload = this.#drag;
-      if (!payload) {
-        try {
-          payload = JSON.parse(e.dataTransfer.getData('text/plain'));
-        } catch {
-          return;
-        }
-      }
-      if (payload?.kind !== kind) return;
-      e.preventDefault();
-      void onDrop(payload.id);
-      this.#drag = null;
-    });
-  }
+  // --- inline-rename helper --------------------------------------------------
 
   /** Swap a name element for an input; commit on Enter/blur, cancel on Esc. */
   #inlineRename(parent, nameEl, current, onCommit, beforeClass) {

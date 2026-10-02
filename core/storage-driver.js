@@ -64,6 +64,12 @@
  *   the new ones, never a partial write.
  * @property {boolean} canStream  `writeStream` genuinely streams; false means the
  *   caller should expect it to buffer, and avoid handing it multi-GB blobs.
+ * @property {boolean} sharedRoot  Every instance of this driver addresses the SAME bytes,
+ *   so two stores built independently are two writers of one catalog and must serialise
+ *   with each other, not merely with themselves. True for OPFS, which is origin-wide:
+ *   `new ProjectStore()` anywhere in the app opens the identical root. A handle- or
+ *   account-scoped driver is per-location and says false. Declared rather than inferred
+ *   for the reason the rest of this list is.
  */
 
 /**
@@ -93,6 +99,7 @@ export const DEFAULT_CAPABILITIES = Object.freeze({
   externallySynced: true,
   atomicWrite: false,
   canStream: false,
+  sharedRoot: false,
 });
 
 /** A driver's declared capabilities, with anything unstated defaulted. */
@@ -275,9 +282,10 @@ export class OpfsDriver extends HandleDriver {
   }
 
   /** Private to this origin and this tab's browser profile: many projects, and nobody
-   * else writing them. */
+   * else writing them — but every ProjectStore in the tab opens this same root, so they
+   * are all writers of one catalog (`sharedRoot`). */
   get capabilities() {
-    return { flat: false, externallySynced: false, atomicWrite: true, canStream: true };
+    return { flat: false, externallySynced: false, atomicWrite: true, canStream: true, sharedRoot: true };
   }
 
   get available() {

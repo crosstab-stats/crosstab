@@ -1096,14 +1096,109 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       projects link to a block* — so deleting one is currently a decision made blind. That is the
       same information the manager would need anyway, which is another reason it belongs there.
 
-      **Read the entry below first.** Everything here about where block MANAGEMENT belongs
-      presumes building blocks are a feature worth keeping, and the owner has since put that in
-      question (2026-10-01). If the answer is no, this zone does not move — it goes.
+      **SETTLED 2026-10-02: the zone went rather than moved.** Everything here about where block
+      MANAGEMENT belongs presumed building blocks were worth keeping; the owner pulled the feature
+      instead, so `#blocksZone` no longer exists and the sidebar is three zones, not four. The
+      rest of this entry stands for the remaining zones.
 
       Same conclusion as the entry above: extract the list, let each host decide what surrounds it
       and which verbs it permits, and do it once — as part of the launcher rebuild, not before it.
 
-- [ ] **IDEAS, NOT A PLAN — "why do we even have that lever?" Does the building-block library
+- [x] **DONE (2026-10-02) — the building-block library is REMOVED, replaced by "copy dataset to
+      a new project".** The owner pulled it after the provenance check above: *"I'm sold. Before
+      we get too far down this rabbit hole let's just pull it."* Plus the replacement, which is
+      the better shape for the need the library was invented for:
+
+      > *"How about as a compromise we leave behind a 'copy dataset to a new project' function?
+      > It could scan the log for any modifications on that dataset, then copy the original source
+      > plus the relevant log actions to a new project. This would give the ability to prep a
+      > dataset for distribution to students, but the cleaned data would still be in the form of
+      > 'original source data + actions taken to clean it' which reproducibility likes (and which
+      > building blocks lacked)."*
+
+      **Gone:** `core/library.js`, `core/dataset-store.js`, the sidebar's Building Blocks zone,
+      `File ▸ Save dataset to library… / Add dataset from library…`, `libraryLink` with its
+      version badge and Pull-update button, the export-time "keep the links?" prompt, and 33
+      lines of CSS. The drag plumbing went too (`#startDrag`/`#dropTarget`, the `drag` row
+      option): the library's two zones were the only drop targets, so a draggable row would have
+      been an affordance leading nowhere — and the replacement is a BUTTON, which is the first
+      time this gesture is reachable from a keyboard.
+
+      **Scope decision (owner, asked before cutting):** record blocks went with it — *"pull
+      everything now, replace the codebook case later"*. See the follow-up entry below; that is a
+      real capability with a privacy boundary and it now has no equivalent.
+
+      **Kept, deliberately:** the OPFS `datasets/` directory is NOT deleted. It is only orphaned.
+      A block whose project was since deleted holds the only copy of that data, and silently
+      erasing it during an upgrade is not a thing a pre-release tool should do. It costs nothing
+      to leave.
+
+      **The replacement** — `core/dataset-copy.js` (pure) + `ProjectSync#copyDatasetToProject`,
+      reached from the dataset row's **⧉** and `File ▸ Copy dataset to a new project…`:
+
+      - It is a **slice of the one-true-log**, not a new artefact type: a dataset's ops already
+        ARE "the original source plus what was done to it". No new format, no second store.
+      - `belongsTo` matches `coll/ds:<id>` exactly and `ds:<id>/` by prefix — **the trailing
+        slash is the whole guard**, or `ds:1` claims `ds:12`'s transforms and the copy carries a
+        second dataset's cleaning into a project that has no such dataset.
+      - **Nothing from any other tier travels**: no analyses, output, codings, map layers, assets,
+        plugin set, sharing, or project name. A copy prepared for a student must not smuggle coded
+        passages of participant data, which is the one that actually matters.
+      - **Undone and retracted ops DO travel.** The fold hides them, so the data is identical, and
+        a tidied log would misrepresent what was done — a spammy full log beats compaction. They
+        are excluded from the step COUNT the user is shown, because a count including work the
+        author backed out of would overstate the cleaning.
+      - **Op ids, HLC stamps and the dataset id are preserved, not re-minted** (as #166 decided
+        for record blocks): op identity is the merge key, so a copy can later be recognised as
+        shared ancestry, and the `src_<opId>.parquet` sidecar names line up.
+      - **The co-authoring identity is NOT carried** — a copy is not the same room; carrying it
+        would put two different projects in one live session.
+      - **It does not switch projects.** You are preparing something to hand over, so it is
+        written straight to local storage and appears in the Projects list. Which is also why it
+        writes through `#opfs` and never `#store`: `#store` is bound to the OPEN project, and in
+        folder mode its id is the sentinel `'.'`, so a second save through it would overwrite the
+        folder's own project.
+      - It follows the same at-rest policy as any new local project (#144), and **refuses** when a
+        live source's bytes have not arrived from a co-author yet — a `load` pointing at a file
+        nobody wrote opens empty with nothing saying why.
+
+      **A latent bug this surfaced, worth more than the feature.** The copy failed the first time
+      with *"A FileSystemHandle cannot be moved while it is locked"*: `ProjectStore#acquire`
+      serialised each instance against **itself**, but the app holds TWO stores over the same
+      OPFS root (the open project's, and the one the project list reads through), and both rewrite
+      `projects/catalog.json` by temp-then-rename. So any autosave overlapping any catalog write
+      could lose one — this feature just made it reproducible. Fixed by a declared capability,
+      `sharedRoot`, with the queue keyed by the storage rather than the instance; OPFS declares
+      it true, everything handle- or account-scoped stays per-instance. Declared, not inferred
+      from `kind`, which is the rule that driver layer exists to keep.
+
+      Suite 1331 → 1343 (`dataset-copy` 15, `store-lock` 5, minus the 3 record-block tests whose
+      module is gone). Browser-verified end to end: clean a dataset (rename, recode, filter,
+      compute), copy it **while an autosave is in flight**, then open the copy — 30 rows, every
+      cleaned variable, all five steps in History, output empty, no analyses.
+
+- [ ] **Replace the codebook case the library used to serve: a CODES-ONLY codebook export
+      (owner, 2026-10-02).** Chosen scope when the library was pulled — *"pull everything now,
+      replace the codebook case later"* — so this is an accepted gap, not an oversight.
+
+      **What was lost.** A CAQDAS codebook (or a map layer) could be promoted to a block and
+      added to another project, and that path carried a real privacy boundary: a promoted codebook
+      took its **codes** and refused its **codings**, because codings are passages of real
+      participant data and the point of sharing a codebook is handing it to someone else. It also
+      preserved record ids rather than re-minting them (#166), so a later merge recognised two
+      projects' shared codebook as common ancestry instead of duplicating every code.
+
+      **Why `.qdpx` is not the replacement.** REFI-QDA import and export both exist
+      (`builtin-caqdas`, `export-qdpx`), but a `.qdpx` is a whole QDA project — sources and
+      codings included. "Hand you my codebook, not my interviews" has no path today.
+
+      **What it needs:** a codes-only export/import pair (a file, not a library), obeying the same
+      boundary — `childTravels` in `core/collections.js` is where that rule lives, and
+      `test/composition.test.mjs` still pins it. Preserve record ids on import for the merge
+      reason. Worth asking the qualitative users first how a colleague's codebook reaches them
+      today, which is the same question the library should have been built from.
+
+- [x] **ANSWERED 2026-10-02 (the library was pulled — see the two entries above) — "why do we even have that lever?" Does the building-block library
       earn its keep? (owner, 2026-10-01).** Raised while deciding how much block support the
       launcher should carry, and it reframes everything below it:
 

@@ -49,8 +49,8 @@
  *   its segments are per-dataset (they anchor to `__ct_rid` row ids that belong to one
  *   dataset and are meaningless in another). Workspace-level scope cannot express that —
  *   it is all-or-nothing — which is why this exists per collection.
- * @property {boolean} [portable=false] May a record be saved to the building-block
- *   library and reused in other projects? **Opt-in**, because meaningfulness outside its
+ * @property {boolean} [portable=false] May a record LEAVE this project — be exported,
+ *   or handed to someone else? **Opt-in**, because meaningfulness outside its
  *   project is a property only the collection's author knows. A map layer travels; a memo
  *   does not — its anchor points at something in the project it was written in, so a copy
  *   elsewhere is a note about nothing. Nothing about a record's SHAPE reveals which it is,
@@ -190,9 +190,9 @@ export function assetRefDecls(decls) {
 }
 
 /**
- * May this child record travel inside a building block? (#163's second guard.)
+ * May this child record travel when its parent leaves the project? (#163's second guard.)
  *
- * A block exists to be handed to other people, so anything bound to a DATASET cannot go:
+ * The parent is being handed to other people, so anything bound to a DATASET cannot go:
  * it refers to rows that will not exist in the recipient's project, and in the case that
  * motivated the rule those rows are passages of real participant data.
  *

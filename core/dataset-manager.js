@@ -220,7 +220,6 @@ export class DatasetManager {
         name: c.name,
         rowCount: ds?.rowCount ?? 0,
         active: c.id === this.#activeId,
-        libraryLink: ds?.libraryLink ?? null,
       };
     });
   }
@@ -557,7 +556,7 @@ export class DatasetManager {
    * never re-materialised. Other tiers (analysis, workspace) are restored by their own
    * subsystems from the same shared log. An empty log yields one fresh blank dataset.
    *
-   * @param {{log?: object[], activeId?: number, datasetMeta?: Record<string, {libraryLink?: object}>}} bundle
+   * @param {{log?: object[], activeId?: number}} bundle
    */
   async loadBundle({ log = [], activeId, datasetMeta = {}, empty = false }) {
     for (const ds of this.#datasets.values()) await ds.dispose();
@@ -594,7 +593,6 @@ export class DatasetManager {
     for (const { id, name } of [...members, ...binMembers]) {
       const into = binMembers.some((b) => b.id === id) ? this.#binned : this.#datasets;
       const ds = new DataStore(this.#bus, this.#duckdb, { id, name, log: this.#log });
-      ds.libraryLink = datasetMeta?.[id]?.libraryLink ?? datasetMeta?.[String(id)]?.libraryLink ?? null;
       into.set(id, ds);
       try {
         await ds.rawRestore(byId.get(String(id)) ?? []); // materialise sources + fold, ids preserved

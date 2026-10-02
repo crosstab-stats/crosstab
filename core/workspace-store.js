@@ -10,8 +10,7 @@
  *  - **slot** is the plugin-chosen sub-key within a workspace. A CAQDAS workspace
  *    stores one blob per dataset → one default slot. A spatial workspace stores
  *    separate boundary sets (US counties, voting districts, …) each in its own
- *    slot, so each can be independently renamed, deleted, or promoted to a
- *    building block.
+ *    slot, so each can be independently renamed or deleted.
  *  - **dataset key** is either the active dataset id (for dataset-scoped
  *    workspaces like CAQDAS) or the {@link NO_DS} sentinel (for project-scoped
  *    workspaces like spatial boundaries, which are independent of the survey data).
@@ -22,8 +21,8 @@
  * ## Slot lifecycle
  * Plugins create, rename, and delete slots freely via `app.state`. The host
  * renders each slot as its own line in the project sidebar, so the user can
- * manage them individually — renaming a boundary set, deleting one without
- * affecting the others, or eventually marking one as a reusable building block.
+ * manage them individually — renaming a boundary set, or deleting one without
+ * affecting the others.
  *
  * Properties preserved:
  *  - **Opaque**: the host never reads the value; the plugin owns its schema.

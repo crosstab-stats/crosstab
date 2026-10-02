@@ -5,7 +5,6 @@
  * A *project* is the whole working set: every open dataset (each its own
  * immutable sources + transform log) plus which one is active. It's a living
  * document — saved as one self-contained bundle and autosaved as you work. (The
- * other tier, the reusable building-block dataset library, is {@link DatasetStore}.)
  *
  *   projects/
  *     catalog.json                 — the browse index (one summary per project)
@@ -28,6 +27,13 @@ import { deriveKey, encryptWithKey, decryptWithKey, isEnveloped, newSalt, DEFAUL
 import { liveOps } from './op-log.js';
 
 const ROOT = 'projects';
+
+/**
+ * Write queues for drivers that declare `sharedRoot` — keyed by the storage they share, so
+ * every ProjectStore built over the same root serialises against the others. Module level
+ * because that is the scope the sharing has: per-instance state cannot see a sibling.
+ */
+const SHARED_TAILS = new Map();
 const CATALOG = 'catalog.json';
 
 /** Subdirectory holding media asset bytes inside a project (`assets/<id>.bin`). */
@@ -428,11 +434,20 @@ export class ProjectStore {
 
   /** Acquire the mutex; returns a release fn. */
   async #acquire() {
-    const prev = this.#tail;
+    // A driver whose instances address the same bytes needs ONE queue between them, not one
+    // each. OPFS is that case: the open project autosaves through its own store while the
+    // project list reads through a second, and both rewrite `projects/catalog.json` by
+    // temp-then-rename. Two per-instance queues let those interleave, and the loser got
+    // "A FileSystemHandle cannot be moved while it is locked" — found the first time a
+    // dataset copy was written while an autosave was in flight (2026-10-02).
+    const shared = this.capabilities.sharedRoot ? `${this.#driver.kind}:${ROOT}` : null;
+    const prev = shared ? (SHARED_TAILS.get(shared) ?? Promise.resolve()) : this.#tail;
     let release;
-    this.#tail = new Promise((r) => {
+    const mine = new Promise((r) => {
       release = r;
     });
+    if (shared) SHARED_TAILS.set(shared, mine);
+    else this.#tail = mine;
     await prev;
     return release;
   }
@@ -465,7 +480,7 @@ export class ProjectStore {
    * @param {string} [project.id] - Entry id (minted if absent).
    * @param {string} project.name
    * @param {number} project.savedAt - epoch ms
-   * @param {{activeId: number, datasets: Array<{id: number, name: string, state: import('./dataset-store.js').DatasetState}>}} project.bundle
+   * @param {{activeId: number, datasets: Array<{id: number, name: string, state: object}>}} project.bundle
    * @param {{writeSourcesFor?: Set<number>}} [opts] - Dataset ids whose Parquet
    *   sources to (re)write; omit to write them all (a full save).
    * @returns {Promise<string>} the project id.

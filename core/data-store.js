@@ -140,13 +140,6 @@ export class DataStore {
    * (Legacy of the pre-projects model; projects now own autosave — kept harmless.) */
   binding = null;
 
-  /** Link to a building-block library entry this dataset is the working copy of:
-   * `{ id, version }` or null. Set when added from / promoted to the library, so
-   * an explicit re-save UPDATES that block (bumping its version) instead of
-   * duplicating, and the sidebar can show "linked to V<n>". Persisted in the
-   * project bundle. (Version *propagation/pull* is a later feature.) */
-  libraryLink = null;
-
   /**
    * The project's **single** operation log (see docs/ARCHITECTURE-unified-log.md).
    * This dataset does NOT own a private log — its history is the slice of the shared
