@@ -14,17 +14,63 @@
  * "Analyze ▸ Regression" without coordinating.
  */
 
+import { recordError } from './debug.js';
+
 /**
  * @typedef {Object} MenuItem
  * @property {string[]} path - Menu hierarchy this item lives under, top-level
  *   first, e.g. `['Analyze', 'Descriptive Statistics']`. An empty array places
  *   the item directly on the menubar (rare).
  * @property {string} label - Visible item text, e.g. `'Frequencies…'`.
- * @property {() => void} command - Invoked when the item is chosen.
+ * @property {() => any} command - Invoked when the item is chosen. **Return the promise**
+ *   when the work is async: a command written `() => void doThing()` discards it, so a
+ *   rejection cannot be reported and the item looks like it did nothing.
  * @property {string} [id] - Stable id (defaults to `path.join('/')+'/'+label`).
  *   Registering the same id again replaces the previous item.
  * @property {number} [order=100] - Sort weight within its submenu (lower first).
  */
+
+/**
+ * Invoke a menu item's command and make a failure VISIBLE.
+ *
+ * Exists because of a bug report that is the whole argument for it (owner, 2026-10-02):
+ * *"I opened a project, selected a dataset, attempted File|Copy Dataset and nothing
+ * happened."* The command called a method that had been renamed, so it threw a TypeError —
+ * which the shell caught and wrote to the console. On screen: nothing. A broken menu item
+ * and an item that genuinely does nothing are then indistinguishable, and the only person
+ * who finds out is whoever opens devtools.
+ *
+ * Two failure shapes, because most commands here are async:
+ *  - a **synchronous throw** (a bad call, a missing method) — caught here;
+ *  - a **rejected promise** — not caught by `try`, so it is handled when the command
+ *    returns its promise. A command written `() => void doThing()` discards it and stays
+ *    silent; that is why `command` should return what it calls.
+ *
+ * Also records the error for the Help-menu bug report, so a user who says "nothing
+ * happened" is carrying the stack without having to reproduce it.
+ *
+ * @param {{id?: string, label?: string, command: () => any}} item
+ * @param {(item: object, err: any) => void} [report] told about a failure, after the console
+ * @returns {Promise<void>|void}
+ */
+export function runCommand(item, report) {
+  const fail = (err) => {
+    console.error(`Menu command "${item?.id ?? item?.label}" failed`, err);
+    recordError(err, `menu:${item?.id ?? item?.label ?? '?'}`);
+    try {
+      report?.(item, err);
+    } catch {
+      /* reporting a failure must never be a second failure */
+    }
+  };
+  try {
+    const out = item.command();
+    if (out && typeof out.then === 'function') return Promise.resolve(out).catch(fail);
+  } catch (err) {
+    fail(err);
+  }
+  return undefined;
+}
 
 /**
  * Internal tree node. Either a submenu (has `children`) or a leaf (has `item`).
@@ -51,11 +97,18 @@ export class MenuShell {
   /** Currently open top-level menu element, if any. @type {HTMLElement|null} */
   #openMenu = null;
 
+  /** Told when a command fails, so the user hears about it. @type {?Function} */
+  #onError = null;
+
   /**
    * @param {HTMLElement} host - Container for the menubar (e.g. a `<nav>`).
+   * @param {{onError?: (item: object, err: any) => void}} [opts] - how to REPORT a failed
+   *   command. Without it a failure reaches the console and nowhere else, which is how a
+   *   broken menu item came to look like one that simply does nothing.
    */
-  constructor(host) {
+  constructor(host, { onError } = {}) {
     this.#host = host;
+    this.#onError = typeof onError === 'function' ? onError : null;
     // Close any open menu when clicking elsewhere or pressing Escape.
     document.addEventListener('click', (e) => {
       if (!this.#host.contains(e.target)) this.#closeOpenMenu();
@@ -196,11 +249,7 @@ export class MenuShell {
     el.addEventListener('click', (e) => {
       e.stopPropagation();
       this.#closeOpenMenu();
-      try {
-        node.item.command();
-      } catch (err) {
-        console.error(`Menu command "${node.item.id}" threw`, err);
-      }
+      void runCommand(node.item, this.#onError);
     });
     return el;
   }

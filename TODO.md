@@ -1293,6 +1293,23 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       **Deliberately not done:** duplicating a RECORD inside one project. It needs re-minted
       record ids and every child re-pointed, and #166 already noted that a divergent copy is a
       different act from an add. The picker offers the duplicate for datasets only.
+
+      **Bug found by the owner on the pushed build, and the lesson behind it (2026-10-02):**
+      *“I opened a project, selected a dataset, attempted File|Copy Dataset and nothing
+      happened.”* The menu registration still called `copyDatasetPrompt()`, renamed to
+      `copyPrompt()` an hour earlier — so the command threw a TypeError. I had verified the
+      method and the sidebar’s ⧉, never the menu item, and a one-line grep for the old name
+      would have caught it. **Verify the ENTRY POINT, not the function it calls.**
+
+      The reason it presented as *nothing* is worth more than the typo: `MenuShell` caught
+      command errors and wrote them to the console, so a broken item and an item that does
+      nothing were indistinguishable to anyone without devtools open. Fixed generically —
+      `runCommand(item, report)` is now extracted and exported, reports to the results pane
+      via an injected reporter, records the error for the Help-menu bug report, and handles a
+      **rejected promise** as well as a synchronous throw (most commands here are async, so
+      that was the bigger hole). The `MenuItem` contract now says to RETURN the promise;
+      `() => void doThing()` discards it and stays unobservable, which is pinned as a test
+      rather than left as a surprise. 6 tests in `test/menu-command.test.mjs`; suite 1374.
 - [x] **ANSWERED 2026-10-02 (the library was pulled — see the two entries above) — "why do we even have that lever?" Does the building-block library
       earn its keep? (owner, 2026-10-01).** Raised while deciding how much block support the
       launcher should carry, and it reframes everything below it:

@@ -564,7 +564,14 @@ export async function boot(mounts) {
     { preloadPackages: [] }, // built-in plugins declare their own R deps
   );
   const results = new ResultsPane(mounts.results, { bus });
-  const menus = new MenuShell(mounts.menubar);
+  // A menu command that fails says so. It used to reach the console and nowhere else,
+  // which made a broken item (File ▸ Copy dataset…, after a rename) indistinguishable from
+  // one that does nothing — reported as exactly that (owner, 2026-10-02).
+  const menus = new MenuShell(mounts.menubar, {
+    onError: (item, err) => results.api.appendError?.(
+      `“${item?.label ?? 'That menu item'}” failed: ${err?.message || err}`,
+    ),
+  });
   const ui = new UiService(datasets);
   // Offered at a SWAP (the moment coding would otherwise be orphaned) and from the Data
   // menu (for an import to a NEW dataset, where nothing detaches but the user may still

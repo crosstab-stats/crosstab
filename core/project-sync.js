@@ -576,7 +576,7 @@ export class ProjectSync {
     // Replaces BOTH of the library's items (same slot): hand ONE dataset over as a project,
     // new or existing — source plus the steps that cleaned it, which is the form
     // reproducibility wants and the form a building block could not take.
-    this.#menus.register({ id: 'core:proj-copy-ds', path: ['File'], label: 'Copy dataset…', order: 20, command: () => void this.copyDatasetPrompt() });
+    this.#menus.register({ id: 'core:proj-copy-ds', path: ['File'], label: 'Copy dataset…', order: 20, command: () => this.copyPrompt({ kind: 'dataset' }) });
     this.#menus.register({ id: 'core:encryption-settings', path: ['File'], label: 'Encryption settings…', order: 8, command: () => void showEncryptionSettings({ projects: this }) });
     this.#bus.on(CoreEvents.DATA_CHANGED, (s) => this.#onChange(s));
     this.#bus.on(DATASETS_CHANGED, () => this.#onChange(null));
