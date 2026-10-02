@@ -1024,7 +1024,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       | launcher seeds the plugin picker from a project's `activePlugins` on click | **host context.** A shared list emits "this row was chosen"; the launcher's host seeds the picker that happens to sit beside it. |
       | launcher defers opening when `backend.needsGesture` | **a backend property**, askable from either surface. Not a rendering difference. |
       | sidebar capped at 5 and excludes the open project | **a parameter.** |
-      | sidebar has inline rename, launcher does not | **a capability gap with no stated reason** — the same lottery as the plugin picker. |
+      | sidebar has inline rename, launcher does not | **SETTLED — not a gap (owner, 2026-10-01):** *"the rename capabilities in the active project need not be duplicated in the launcher."* Rename belongs to the project you are IN, not to a list of ones you might open. So the shared list takes rename as a per-host verb, exactly as `verbsFor(row)` already models the destructive ones — and the launcher simply does not pass it. |
       | manager has the destructive verbs, sidebar deliberately does not | **a deliberate policy, and the right one** (delete sat one hover from the row that opens the thing). Also already expressed as a parameter: `verbsFor(row)` computes the permitted set per row and context. |
       | launcher's two row shapes | **a bug**, already filed. |
 
@@ -1096,8 +1096,126 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       projects link to a block* — so deleting one is currently a decision made blind. That is the
       same information the manager would need anyway, which is another reason it belongs there.
 
+      **Read the entry below first.** Everything here about where block MANAGEMENT belongs
+      presumes building blocks are a feature worth keeping, and the owner has since put that in
+      question (2026-10-01). If the answer is no, this zone does not move — it goes.
+
       Same conclusion as the entry above: extract the list, let each host decide what surrounds it
       and which verbs it permits, and do it once — as part of the launcher rebuild, not before it.
+
+- [ ] **IDEAS, NOT A PLAN — "why do we even have that lever?" Does the building-block library
+      earn its keep? (owner, 2026-10-01).** Raised while deciding how much block support the
+      launcher should carry, and it reframes everything below it:
+
+      > *"Part of me is asking the more fundamental question of 'why do we even HAVE that lever?'
+      > Do we even really need building blocks at all? It is one of those things that sounds like a
+      > useful feature to me, a math major, rather than being a thing asked for by the faculty who
+      > are actually teaching the classes. And it's not like this is a feature that already exists
+      > in SPSS or STATA or R that we're trying to copy. So I don't want to charge ahead polishing
+      > what might not even be needed at all."*
+
+      **Nothing below should be built until that question is answered.** Recorded as ideas so the
+      thinking isn't lost, not as a queue.
+
+      **The provenance check supports the suspicion.** The library arrived as *"Two-tier
+      persistence: Projects + building-block library"* — an architectural decision, listed among
+      built items with no user request attached. Every later owner comment about blocks has been
+      feedback on how the existing thing behaves (*"match how items in building blocks are
+      displayed"*), never a request for the capability.
+
+      **Four verified arguments AGAINST it:**
+
+      1. **It cannot do the obvious teaching job.** *"Here's the cleaned dataset for the course"* is
+         distribution to thirty students, and a block is addressable only by a locally-minted
+         random UUID — A9c already records that a shared block is *impossible, not merely
+         unsupported*. The things that DO serve that job all exist: export a file, a `.crosstab`
+         bundle, an invite link, or the deployment's own provided directory (#185).
+      2. **There is already a competitor for it inside the app, and it is the one faculty teach.**
+         In SPSS/Stata/R culture, "reuse a cleaned extract" is a **script plus the raw file**, not a
+         binary artefact with a version counter — and CrossTab has that: the do-file/syntax editor,
+         `.ctscript`, and best-effort `.do`/`.sps` import *and* export (#132–#134, #176), where Run
+         rebuilds the data. Reproducibility culture actively prefers the script, because it shows
+         what was done.
+      3. **The bytes exist twice** on the machine (library copy + the project's own sidecars) —
+         already measured in A9c and accepted as the cost of the template model.
+      4. **Its only real user is one person, on one device, across several of their own projects.**
+         That is a narrow enough audience to be worth naming out loud.
+
+      **The strongest argument FOR it, stated fairly:** a browser app has no shared filesystem.
+      `use "C:\data\gss_clean.dta"` is free on the desktop; in CrossTab every project is its own
+      OPFS sandbox, so without a library "the file in a folder" means re-picking it through a file
+      dialog and re-running the cleaning every time. The library is the browser's substitute for *a
+      folder of cleaned data files*. That need is real and platform-created, not invented.
+
+      **But there may be a better substitute, and it is worth evaluating BEFORE polishing this
+      one: a remembered DATA folder.** `core/project-locations.js` already remembers folder handles
+      across sessions for folder-backed projects. Pointed at a data folder instead, it would give
+      "my cleaned extracts, reachable from any project" with **no duplicate bytes**, the files
+      staying the user's own, and — because that folder can be in Dropbox or OneDrive — it would
+      also solve the distribution problem blocks structurally cannot. If that is the right shape,
+      the library is not under-built; it is the wrong mechanism.
+
+      **What would settle it — the question to ask faculty, not ourselves.** Not *"would a library
+      of reusable datasets be useful?"* (everyone says yes). Ask instead: *"when you reuse a
+      cleaned extract across two pieces of work, what do you do today?"* If the answer is "I keep
+      `gss_clean.dta` in a folder and `use` it" → the remembered-folder shape wins. If it is "I
+      re-run my cleaning do-file" → the script wins and blocks are redundant. If it is "I hand
+      students a file" → neither blocks nor folders matter and this is a distribution feature.
+
+      **If it survives, the ideas, in dependency order:**
+
+      - **(a) Work on a block directly, as a REAL project — not a pseudo-project.** Owner's
+        suggestion was a pseudo-project wrapper per block, giving blocks a history via that
+        project's log. Checked, and the wrapper is the part to drop: `ProjectSync` holds exactly
+        ONE binding (`#binding`/`#open`/`#dirty` are singletons) and `#loadProject` tears down and
+        rebuilds eight tiers in a strict order that has already caused two data-loss bugs — so a
+        block's pseudo-project cannot open *beside* the user's work, which is the one thing the
+        wrapper promised. It would also be a hidden project that three list surfaces plus
+        `?launch=` must filter out (`listAllProjects()` is unfiltered; `FOLDER_PROJECT_ID = '.'`
+        is a flat-mode sentinel, not a precedent), and it would put a log and a folded recipe in
+        charge of the same bytes — with autosave marching the block to v40 while someone types.
+        The real-project version is ~15 lines over existing public methods (`newProject()` +
+        `library.#add(id)` + a default name from the block and version), gives a genuine log for
+        free, and needs nothing hidden. Remember the workshop project's id on the catalogue entry
+        via the existing `retag()` so the history stays findable from the block.
+      - **(b) Keep the versions we already number — the actual gap.** `#saveImpl` overwrites
+        `manifest.json`, so v4 replaces v3 with no record, and `load(id)` only ever returns the
+        latest. **Correction to an earlier claim in this file's thinking:** this is *not* a data
+        risk — the owner is right that a project holds its own copy of the bytes
+        (`ProjectStore#writeSources` writes `src_<opId>.parquet` per source op), so a project on
+        v3 keeps working forever even if the block is bumped or deleted. What is actually missing
+        is **comparison and reproducibility**: there is no way to see what changed in v4 (so "pull
+        or not?" is asked blind), no way to add v3 to a *different* project, and the counter is
+        unfalsifiable (re-saving identical data still yields v4). Writing `manifest-v<n>.json`
+        alongside rather than overwriting buys the diff cheaply — manifests are inline JSON;
+        sources are the only big part and rarely change between versions. This is also the
+        prerequisite for rename, inspect, and which-projects-link-to-this.
+      - **(c) Blocks in the launcher rail — under "Start from", NOT as a section of Projects.**
+        The rail already means "what am I starting from?", and its existing members are hard-coded
+        building blocks (`makeDemoDataset` and friends are canonical reusable datasets that happen
+        to ship with the app). Under *Projects*, one list's click would mean two things — resume
+        this vs create something containing this — and a block has no analyses, output or work to
+        resume. Two launcher-specific constraints, both checked: a **record block needs its
+        declaring plugin ticked** (it adds fine — records land in the project's log — but is
+        invisible until the plugin activates; `PRESETS['demo-spatial']` is the precedent and
+        `declaredCollections()` carries `pluginId`, readable from the primed catalogue at cold
+        start, whereas `ownerToken()` is `'builtin'` for every built-in and so cannot identify the
+        plugin); and **no OPFS ⇒ no library**, so the group must be absent, not an empty heading.
+        Do it with the rail rebuild: blocks are unbounded, the rail caps nothing today, and the
+        390px phone problem lands on the same rail.
+      - **Two actions, not one, and they are not a capability lottery.** The test is what a second
+        click gives you: "new project from BlockA" twice → two projects (right: one per piece of
+        work); "work on BlockA" twice → must be the SAME workshop, or edits fork across
+        half-finished projects and the next version is a coin toss. One-to-many vs one-to-one is a
+        difference in state, not a label. Only the first belongs in the launcher — editing a block
+        has consequences for every project that later pulls, and the launcher is where someone is
+        trying to get *into* work, not administer a library.
+
+      **Two sharp edges worth fixing whatever the verdict, because they are wrong today rather
+      than merely thin:** dragging the same dataset onto the Building Blocks zone twice creates a
+      SECOND block (`promoteToBlock` never passes an id) and silently repoints the dataset's link
+      at it; and if a block is deleted, a still-linked dataset's "update" **forks** a new block at
+      v1 instead of saying the original is gone.
 
 - [x] **#162 — DONE (2026-09-27). User-defined plugin presets.** The picker curated on one
       axis, `Recommended for <discipline>`, so the motivating case — *qualitative psychology
