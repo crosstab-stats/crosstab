@@ -26,6 +26,7 @@
  */
 
 import { CoreEvents } from './event-bus.js';
+import { duplicateName } from './copy-to-project.js';
 import { formatVarRef } from './var-ref.js';
 import { DataStore } from './data-store.js';
 import { ProjectLog } from './project-log.js';
@@ -315,6 +316,38 @@ export class DatasetManager {
     if (activate || this.#activeId === null) this.#activeId = id;
     this.#bus.emit(DATASETS_CHANGED, this.list());
     return ds;
+  }
+
+  /**
+   * Duplicate a dataset **inside this project** — a second, independent dataset holding the
+   * same data and the same cleaning (owner, 2026-10-02).
+   *
+   * The counterpart to copying one to another project, and the opposite decision about
+   * identity. A cross-project copy PRESERVES op ids, so the two can be recognised as shared
+   * ancestry and merged later. Two copies in ONE log must not share identity at all: one
+   * id appearing twice is the same op by the merge's definition, so an edit to either would
+   * fold onto both and undo would hit both. So everything is re-minted — a fresh dataset id
+   * from `newDatasetId()` and fresh ops under its own `ds:<new>/…` targets.
+   *
+   * `restoreState` already does the re-minting (it appends through the normal write path
+   * rather than replaying stored envelopes), so this is deliberately thin: the honest work
+   * was deciding WHICH way identity goes, not the mechanics.
+   *
+   * The recipe is the FOLDED one, which is right here: a duplicate is of the dataset as it
+   * stands, not of the author's route to it. The original keeps the full history.
+   *
+   * @param {number|string} id
+   * @returns {Promise<?DataStore>} the new dataset, or null if the source is gone
+   */
+  async duplicate(id) {
+    const src = this.#datasets.get(id);
+    if (!src) return null;
+    const state = await src.exportState({ includeParquet: true });
+    const taken = this.list().map((d) => d.name);
+    const dup = this.add(duplicateName(src.name, taken), { activate: true });
+    await dup.restoreState(state);
+    this.#bus.emit(DATASETS_CHANGED, this.list());
+    return dup;
   }
 
   /** Switch the active dataset and refresh the UI onto it. */

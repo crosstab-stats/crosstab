@@ -141,9 +141,24 @@ export class ProjectLog {
    * @returns {import('./op-log.js').Op}
    */
   append(body) {
-    const op = makeOp(body, { hlc: this.#hlc.tick(), author: body.author ?? this.#author() });
+    const op = this.mint(body);
     this.#ops.push(op);
     return op;
+  }
+
+  /**
+   * Stamp an op **without** adding it to this log — for an op destined for ANOTHER
+   * project (copying a codebook records which plugin owns it, in the destination's log).
+   *
+   * The clock still ticks, and must: the stamp has to be monotonic for us whether or not
+   * we keep the op, or a later op of ours could sort before one we already sent away.
+   * {@link ProjectLog#append} is this plus the push, so there is one minting rule.
+   *
+   * @param {{target:string, owner:string, type:string, payload?:object, reads?:string[], author?:object}} body
+   * @returns {import('./op-log.js').Op}
+   */
+  mint(body) {
+    return makeOp(body, { hlc: this.#hlc.tick(), author: body.author ?? this.#author() });
   }
 
   /**

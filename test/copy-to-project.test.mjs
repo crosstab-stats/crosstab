@@ -1,7 +1,10 @@
 /**
- * @file dataset-copy.test.mjs
- * "Copy dataset" — the building-block library's replacement (2026-10-02), to a NEW project or
- * into an EXISTING one (the second half replaces "add building block to a project").
+ * @file copy-to-project.test.mjs
+ * "Copy X to another project" — the building-block library's replacement (2026-10-02).
+ *
+ * Three destinations (a new project, this project as a duplicate, another project) and two
+ * kinds of X (a dataset, a plugin record such as a codebook or a map layer). The record half
+ * is what finally replaces the one thing the library did that nothing else could.
  *
  * The owner's framing is the specification: *"copy the original source plus the relevant log
  * actions to a new project … the cleaned data would still be in the form of 'original source
@@ -12,9 +15,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  belongsTo, copyBundle, copyName, copyTargets, datasetIdTaken, datasetSlice, describeSlice,
-  unionById,
-} from '../core/dataset-copy.js';
+  assetIdsOf, belongsTo, copyBundle, copyName, copyTargets, datasetIdTaken, datasetSlice,
+  describeSlice, duplicateName, ownerPluginOp, recordSlice, travellingChildren, unionById,
+} from '../core/copy-to-project.js';
+import { normalizeCollection } from '../core/collections.js';
+import { itemTarget } from '../core/item-store.js';
 
 let n = 0;
 /** An op with an HLC that sorts in creation order. */
@@ -281,4 +286,131 @@ test('a project whose size the catalog does not know still gets a usable label',
 test('no projects at all is an empty list, not a crash', () => {
   assert.deepEqual(copyTargets([]), { options: [], elsewhere: 0 });
   assert.deepEqual(copyTargets(null), { options: [], elsewhere: 0 });
+});
+// --- copying a plugin RECORD (a codebook, a map layer) -----------------------
+//
+// The generalisation the owner asked for (2026-10-02): *"once 'copy X to existing project'
+// exists it can be generalized to 'copy codebook to existing/new' … to replace the one real
+// thing building blocks were giving us which we no longer have."* What is under test is the
+// boundary — which children come, which are refused, and what the destination is told.
+
+const OWNER = 'builtin-caqdas';
+const DECLS = [
+  { id: 'codebooks', owner: OWNER, portable: true },
+  { id: 'codes', owner: OWNER, parent: { collection: 'codebooks', field: 'codebookId' } },
+  // A coding depends on a code but is not PART of the codebook, so it is not a child here.
+  { id: 'segments', owner: OWNER, parent: { collection: 'codes', field: 'codeId' } },
+  // Declared dataset-scoped: refused even as a child of codebooks.
+  { id: 'notes', owner: OWNER, scope: 'dataset', parent: { collection: 'codebooks', field: 'codebookId' } },
+  { id: 'boundarySets', owner: 'builtin-spatial', portable: true, assetRefs: ['geojson'] },
+].map((d) => ({ ...normalizeCollection(d), owner: d.owner }));
+const rec = (id, fields, scope = null) => ({ id, fields, scope });
+
+test('a codebook takes its CODES, and never its codings', () => {
+  // The privacy boundary, and the reason it is composition rather than a list of exceptions:
+  // codings are passages of real participant data, and `childrenOf` simply never sees them.
+  const { take, withheld } = travellingChildren(
+    DECLS, { owner: OWNER, collection: 'codebooks', id: 'bk1' },
+    (c) => ({
+      codes: [rec('c1', { name: 'waiting', codebookId: 'bk1' }), rec('c2', { name: 'other', codebookId: 'bk2' })],
+      segments: [rec('s1', { quote: 'we had to wait', codeId: 'c1' })],
+      notes: [],
+    })[c] ?? [],
+  );
+  assert.deepEqual(take.map((k) => `${k.collection}/${k.rec.id}`), ['codes/c1'],
+    'only this book’s codes');
+  assert.equal(withheld, 0);
+});
+
+test('a child bound to a DATASET is refused and COUNTED, not silently dropped', () => {
+  // "Your codebook went without 2 records" is a thing the sender has to be told; the
+  // alternative is them assuming it travelled.
+  const { take, withheld } = travellingChildren(
+    DECLS, { owner: OWNER, collection: 'codebooks', id: 'bk1' },
+    (c) => ({
+      codes: [rec('c1', { codebookId: 'bk1' }), rec('c2', { codebookId: 'bk1' }, { dsId: 7 })],
+      notes: [rec('n1', { codebookId: 'bk1' })],
+      segments: [],
+    })[c] ?? [],
+  );
+  assert.deepEqual(take.map((k) => k.rec.id), ['c1']);
+  assert.equal(withheld, 2, 'the dataset-scoped record AND the dataset-scoped collection');
+});
+
+test('a mis-declared child is still harmless — the record’s own scope is the second guard', () => {
+  // #163's reason for two refusals: the declaration states intent, the record's resolved
+  // scope is evidence. A plugin that wrongly declares its codings as composing children
+  // still cannot leak one that is dataset-bound.
+  const { take, withheld } = travellingChildren(
+    DECLS, { owner: OWNER, collection: 'codes', id: 'c1' },
+    () => [rec('s1', { codeId: 'c1', quote: 'private' }, { dsId: 3 })],
+  );
+  assert.deepEqual(take, []);
+  assert.equal(withheld, 1);
+});
+
+test('only assets the collection DECLARED as refs are gathered', () => {
+  // The host cannot read a plugin's schema; it reads the declaration. So a field holding
+  // something ref-shaped but undeclared is not swept up.
+  const records = [
+    { collection: 'boundarySets', rec: rec('b1', { geojson: 'asset:aaa', backup: 'asset:zzz' }) },
+  ];
+  assert.deepEqual(assetIdsOf(records, DECLS, 'builtin-spatial'), ['aaa']);
+});
+
+test('a field holding several refs yields all of them, once each', () => {
+  const records = [
+    { collection: 'boundarySets', rec: rec('b1', { geojson: '["asset:aaa","asset:bbb"]' }) },
+    { collection: 'boundarySets', rec: rec('b2', { geojson: 'asset:aaa' }) },
+  ];
+  assert.deepEqual(assetIdsOf(records, DECLS, 'builtin-spatial').sort(), ['aaa', 'bbb']);
+});
+
+test('another owner’s declarations are not consulted', () => {
+  const records = [{ collection: 'boundarySets', rec: rec('b1', { geojson: 'asset:aaa' }) }];
+  assert.deepEqual(assetIdsOf(records, DECLS, OWNER), [], 'owner is part of the address');
+});
+
+test('the record slice matches EXACT targets, never a prefix', () => {
+  // The difference from a dataset: a dataset owns an address space, a record is one address.
+  // A prefix match would take the entire collection — every codebook in the project.
+  const t = (coll, id) => `item:${OWNER} ${coll} ${id}`;
+  const log = [
+    op(t('codebooks', 'bk1'), 'put', { name: 'Wave 1' }),
+    op(t('codebooks', 'bk10'), 'put', { name: 'A DIFFERENT book' }),
+    op(t('codes', 'c1'), 'put', { name: 'waiting' }),
+    op(t('codes', 'c9'), 'put', { name: 'someone else’s code' }),
+    op('asset:aaa', 'addAsset', { size: 1 }),
+    op('asset:zzz', 'addAsset', { size: 2 }),
+    op('ds:1/var:age', 'recode', {}),
+  ];
+  const got = recordSlice(log, [t('codebooks', 'bk1'), t('codes', 'c1')], ['aaa']);
+  assert.deepEqual(got.map((o) => o.target), [t('codebooks', 'bk1'), t('codes', 'c1'), 'asset:aaa']);
+});
+
+test('the owning plugin is recorded as an activation op the destination already understands', () => {
+  // Without it a copied codebook is rows in a tier nothing there reads. Recording it means
+  // the existing machinery does the rest: applyProjectPlugins switches the plugin on, and
+  // when it is not installed the missing-plugin path remembers the association (#102).
+  const spec = ownerPluginOp('./plugins/builtin-caqdas/index.js');
+  assert.equal(spec.target, 'plugin:./plugins/builtin-caqdas/index.js');
+  assert.equal(spec.type, 'activatePlugin');
+  assert.deepEqual(spec.payload, { key: './plugins/builtin-caqdas/index.js' });
+  assert.equal(spec.id, undefined, 'a SPEC — the caller’s log stamps it, this module has no clock');
+});
+
+test('no owner known means no op rather than a broken one', () => {
+  assert.equal(ownerPluginOp(null), null);
+  assert.equal(ownerPluginOp(''), null);
+});
+
+// --- duplicating inside one project ------------------------------------------
+
+test('a duplicate is named as one, and numbers itself after the first', () => {
+  // Two datasets with the same name in one sidebar are indistinguishable, which matters
+  // more here than for projects: you are about to analyse one of them.
+  assert.equal(duplicateName('Demo data', []), 'Demo data (copy)');
+  assert.equal(duplicateName('Demo data', ['Demo data', 'Demo data (copy)']), 'Demo data (copy 2)');
+  assert.equal(duplicateName('Demo data', ['demo DATA (COPY)']), 'Demo data (copy 2)');
+  assert.equal(duplicateName('', []), 'Dataset (copy)');
 });

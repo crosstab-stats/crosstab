@@ -1,6 +1,7 @@
 /**
- * @file dataset-copy.js
- * **Copy one dataset into a new project** — the replacement for the building-block library,
+ * @file copy-to-project.js
+ * **Copy a thing into another project** — a dataset, or a plugin record (a codebook, a map
+ * layer). Originally dataset-only — the replacement for the building-block library,
  * which was removed on 2026-10-02.
  *
  * ## Why this shape
@@ -55,6 +56,9 @@
  */
 
 import { liveOps, opIds, orderByHlc, STRUCTURAL_OPS } from './op-log.js';
+import { assetRefDecls, childrenOf, childTravels } from './collections.js';
+import { refsIn } from './asset-refs.js';
+import { pluginTarget } from './plugin-state.js';
 
 /**
  * Does this op belong to dataset `id`?
@@ -265,6 +269,130 @@ function defaultStamp(row) {
   }
 }
 
+// --- plugin records: a codebook, a map layer, anything declared portable --------------
+
+/**
+ * Which of a record's children may travel with it, and how many were held back.
+ *
+ * Two declared rules do the work, and both are the plugin author's to make, not ours:
+ *
+ *  - **composition** — `childrenOf` gives only the collections that are PART of the
+ *    parent. CAQDAS codes compose into a codebook; codings merely depend on a code, so
+ *    they are not children here and never travel. That is the privacy boundary, and it is
+ *    load-bearing: codings are passages of real participant data.
+ *  - **scope** — `childTravels` refuses anything bound to a DATASET even if the
+ *    declaration says otherwise, because such a record points at rows the recipient does
+ *    not have. A mis-declared `parent` therefore stays harmless.
+ *
+ * Withheld children are COUNTED and returned, never silently dropped: "your codebook went
+ * without 142 codings" is a thing the sender should be told, because the alternative is
+ * them assuming it did travel.
+ *
+ * @param {Array<object>} decls normalised collection declarations (with `owner`)
+ * @param {{owner: string, collection: string, id: string}} ref the parent record
+ * @param {(collection: string) => Array<object>} listChildren records of a child collection
+ * @returns {{take: Array<{collection: string, rec: object}>, withheld: number}}
+ */
+export function travellingChildren(decls, ref, listChildren) {
+  const take = [];
+  let withheld = 0;
+  for (const kid of childrenOf(decls, ref.owner, ref.collection)) {
+    for (const rec of listChildren(kid.id) ?? []) {
+      // A child belongs to THIS parent only if its declared parent field says so.
+      if (String(rec?.fields?.[kid.parent.field] ?? '') !== String(ref.id)) continue;
+      if (!childTravels(kid, rec)) {
+        withheld += 1;
+        continue;
+      }
+      take.push({ collection: kid.id, rec });
+    }
+  }
+  return { take, withheld };
+}
+
+/**
+ * Every asset id a set of records points at, via the fields their collections DECLARE as
+ * asset refs. Declared rather than scanned: the host cannot read a plugin's schema, but it
+ * knows which fields hold refs, so it gathers exactly those bytes and nothing else.
+ *
+ * @param {Array<{collection: string, rec: object}>} records
+ * @param {Array<object>} decls
+ * @param {string} owner
+ * @returns {string[]} unique asset ids
+ */
+export function assetIdsOf(records, decls, owner) {
+  const byCollection = new Map();
+  for (const d of assetRefDecls(decls ?? [])) {
+    if (d.owner !== owner) continue;
+    if (!byCollection.has(d.collection)) byCollection.set(d.collection, []);
+    byCollection.get(d.collection).push(d.field);
+  }
+  const out = new Set();
+  for (const { collection, rec } of records ?? []) {
+    for (const field of byCollection.get(collection) ?? []) {
+      for (const id of refsIn(rec?.fields?.[field])) out.add(id);
+    }
+  }
+  return [...out];
+}
+
+/**
+ * The ops that constitute a record copy: every `item:` op addressing one of `targets`, plus
+ * the `addAsset` ops for the assets those records reference.
+ *
+ * Sliced by EXACT target rather than by prefix, which is the difference from the dataset
+ * case: a dataset owns an address space (`ds:7/…`), while a record is one address and its
+ * children are addresses elsewhere in the same tier. A prefix match would take the whole
+ * collection.
+ *
+ * @param {object[]} log the project's one-true-log
+ * @param {Iterable<string>} targets item targets to take
+ * @param {Iterable<string>} assetIds asset ids whose `addAsset` ops to take
+ */
+export function recordSlice(log, targets, assetIds) {
+  const want = new Set(targets);
+  const assets = new Set([...(assetIds ?? [])].map((id) => `asset:${id}`));
+  return (log ?? []).filter((op) => want.has(op.target) || assets.has(op.target));
+}
+
+/**
+ * The op SPEC that tells the destination which plugin owns what it just received.
+ *
+ * Without it a copied codebook is rows in a tier nothing reads: the records are there, and
+ * the destination has no idea it needs `builtin-caqdas` to show them. Recording it as a
+ * plugin-activation op means the existing machinery does the rest — `applyProjectPlugins`
+ * switches the plugin on when the project opens, and when it is not installed at all the
+ * missing-plugin path (#102) remembers the association until it is.
+ *
+ * A SPEC, not an op: the caller's log stamps it with an id and an HLC, because a minted op
+ * needs a clock and this module has none.
+ *
+ * @param {string} pluginKeyOrId  load key preferred; a manifest id also resolves (#157)
+ * @returns {?{target: string, owner: string, type: string, payload: object}}
+ */
+export function ownerPluginOp(pluginKeyOrId) {
+  if (!pluginKeyOrId) return null;
+  return {
+    target: pluginTarget(pluginKeyOrId),
+    owner: 'core',
+    type: 'activatePlugin',
+    payload: { key: pluginKeyOrId },
+  };
+}
+
+/**
+ * What a record copy will carry, for the confirmation the user sees. `withheld` is the
+ * number the privacy boundary held back — stated, because silence would read as "all of it
+ * came".
+ */
+export function describeRecord({ children, assetIds, withheld }) {
+  return {
+    children: children?.length ?? 0,
+    assets: assetIds?.length ?? 0,
+    withheld: withheld ?? 0,
+  };
+}
+
 /**
  * A default name for the copy. The dataset's own name, because that is what the recipient
  * is being handed; the user can rename the project in the sidebar.
@@ -278,6 +406,26 @@ export function copyName(datasetName, taken = []) {
   if (!used.has(base.toLowerCase())) return base;
   for (let n = 2; n < 500; n += 1) {
     const candidate = `${base} (${n})`;
+    if (!used.has(candidate.toLowerCase())) return candidate;
+  }
+  return base;
+}
+
+/**
+ * A duplicate's name: "X (copy)", then "X (copy 2)" and so on. Separate from
+ * {@link copyName} because the suffixes mean different things — that one de-duplicates a
+ * PROJECT name against other projects, this one says outright that a dataset is a copy of
+ * the one beside it, which is the only way to tell them apart in a sidebar list.
+ *
+ * @param {string} name the source dataset's name
+ * @param {string[]} taken names already in this project
+ */
+export function duplicateName(name, taken = []) {
+  const base = `${String(name || 'Dataset').trim() || 'Dataset'} (copy)`;
+  const used = new Set((taken ?? []).map((n) => String(n).trim().toLowerCase()));
+  if (!used.has(base.toLowerCase())) return base;
+  for (let n = 2; n < 500; n += 1) {
+    const candidate = `${String(name).trim()} (copy ${n})`;
     if (!used.has(candidate.toLowerCase())) return candidate;
   }
   return base;

@@ -1227,55 +1227,72 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       dataset id and the op ids, because two copies in ONE log must not share identity (the
       opposite of the cross-project case, where sharing it is the point).
 
-- [ ] **Generalise "copy X to a new/existing project" from datasets to PLUGIN DATA — the
-      owner's route to replacing what building blocks actually gave us (2026-10-02).**
-      Supersedes the codes-only-codebook entry this replaces:
+- [x] **DONE (2026-10-02) — "copy X to another project" generalised to plugin data, plus
+      "duplicate into this project".** The owner's route to replacing what the building-block
+      library actually gave us, and it landed as one verb rather than three features:
 
       > *"Once 'copy X to existing project' exists it can be generalized to 'copy codebook to
       > existing/new' or 'copy spatial boundaries to existing/new' or 'copy X data from plugin to
       > existing/new' to replace the one real thing building blocks were giving us which we no
-      > longer have."*
+      > longer have."* … *"include recording the plugin owner of the data so the destination
+      > knows what to do with it. And once that lands also wire up the 'duplicate dataset into
+      > this project' method — it will need to make a new unique ID for the source as well as
+      > re-minting all the relevant ops as new ops on the new source."*
 
-      Right, and the dataset case has already proved the mechanism: **slice the log by what the
-      thing is, union it into the destination by op id.** Nothing about that is dataset-specific.
-      What changes per kind is only *which ops constitute the thing* — and for plugin data that
-      question is already answered by the declarations, which is what makes this cheap:
+      `core/dataset-copy.js` → **`core/copy-to-project.js`**, because it is not dataset-only any
+      more. One dialog, three destinations (**a new project · this project as a duplicate ·
+      another project**) and two kinds of subject (a dataset, a plugin record). The kinds share
+      the picker, the union, the encryption handling and every refusal; only the slice builder
+      branches, which is what made this cheap.
 
-      - **the record and its children** — `childrenOf(decls, owner, collection)` gives the
-        composing collections (codes compose into a codebook; codings do not), and
-        **`childTravels`** is the privacy guard: anything bound to a DATASET cannot go, because it
-        refers to rows the recipient does not have, and in the case that motivated the rule those
-        rows are passages of real participant data. `test/composition.test.mjs` still pins both.
-      - **its bytes** — a record's `assetRefs` fields name the assets it points at (declared, so
-        the host can gather exactly those and nothing else). Those travel as `asset:` ops plus the
-        bytes; asset ids are content hashes, so two projects adopting the same layer do not
-        duplicate the file.
-      - **`portable`** on the collection declaration is already the opt-in for "may leave this
-        project", and its doc was rewritten for exactly this when the library went.
+      **What constitutes a record copy — all four rules were already declared, so none had to be
+      invented:**
+      - **composition** (`childrenOf`) — codes compose into a codebook; codings merely depend on
+        a code, so they are not children and never travel. **That is the privacy boundary**, and
+        the browser pass proved it on real data: the codebook and both codes arrived, zero
+        segments did.
+      - **scope** (`childTravels`) — anything bound to a DATASET is refused even when the
+        declaration says otherwise, because it points at rows the recipient does not have. A
+        mis-declared `parent` therefore stays harmless.
+      - **assets** (`assetRefs` + `refsIn`) — only fields the collection DECLARED as refs are
+        gathered, so the host never guesses at a plugin's schema; bytes go to the destination's
+        own `assets/` dir via `writeAsset`.
+      - **portability** (`portable`) — the ⧉ appears on a record row exactly where the collection
+        opted in. The same gate that used to allow dragging it to the library.
 
-      **Preserve record ids, do not re-mint** (#166 settled this for the same reason the dataset
-      copy keeps op ids): identity is what lets a later pull or merge recognise two projects'
-      shared codebook as common ancestry instead of duplicating every code. #166 also found that
-      adopting the same block twice should be a no-op — which `unionById` now gives for free.
+      **Withheld records are counted and stated**, in the picker before and the result after —
+      *"1 record stayed here: it is tied to a dataset, so it refers to rows the other project does
+      not have."* Silence would read as "all of it came".
 
-      **What it buys, in the owner's terms:** the one real capability the library removal cost —
-      hand a colleague your codebook without your interviews, or reuse a boundary set across
-      projects — with no second store, no version counter, and no machine-local UUID that cannot
-      travel. It also closes the gap recorded in [[first-class-plugin-data]], where a boundary set
-      currently has no reuse path at all.
+      **Recording the owner** needed a new primitive: `ProjectLog#mint(body)` stamps an op
+      WITHOUT adding it to our log, because the op is destined for the destination's. The clock
+      still ticks (a stamp must be monotonic for us whether or not we keep the op), and `append`
+      is now `mint` plus the push, so there is one minting rule. The op is a plain
+      `activatePlugin`, so the existing machinery does the rest: `applyProjectPlugins` switches
+      the plugin on when the project opens, and the missing-plugin path (#102) remembers the
+      association when it is not installed. Verified: opening the destination had
+      `builtin-caqdas` activated with the codebook listed in its sidebar.
+      The owner token could NOT have done this job — `ownerToken()` returns `builtin` for every
+      built-in — so `#pluginKeyFor(decl)` resolves it from the collection's `pluginId` instead.
 
-      **Shape it as one verb with a kind, not three features.** The row already has ⧉; a
-      collection row and a workspace-slot row should carry the same button, and
-      `copyDatasetPrompt` becomes `copyPrompt(thing)` where `thing` is `{kind: 'dataset'|'record',
-      …}`. The destination picker, the union, the encryption handling and every refusal are
-      already generic — only the slice builder branches.
+      **Duplicate into this project** is the opposite decision about identity, and that was the
+      only real thinking in it: a cross-project copy PRESERVES op ids so the two can be merged
+      later; two copies in ONE log must not share identity at all, because one id appearing twice
+      IS the same op by the merge's definition — an edit would fold onto both and undo would hit
+      both. So `DatasetManager#duplicate` re-mints everything, and `restoreState` already does
+      exactly that (it appends through the normal write path rather than replaying envelopes), so
+      the method is four lines. It takes the FOLDED recipe, which is right: a duplicate is of the
+      dataset as it stands, not of the author's route to it. Verified: new dataset id, **zero
+      shared op ids**, same 12 rows, and renaming a variable in the copy left the original
+      untouched.
 
-      **Still unresolved, and worth deciding before building:** a dataset copy carries data a
-      recipient can read on their own; a codebook copy is only useful if the plugin that owns it
-      is installed and activated there. So the copy has to either record the owning plugin so the
-      destination can ask for it (the missing-plugin path, #102, already exists), or refuse when
-      the owner is not installed. The first is better and is the same information
-      `declaredCollections()` already carries (`pluginId` per collection).
+      Suite 1358 → 1368. Four prose bugs found in the browser pass and fixed: a stray period
+      mid-sentence, and three singular/plural agreement errors in sentences that only ever read
+      correctly for one count.
+
+      **Deliberately not done:** duplicating a RECORD inside one project. It needs re-minted
+      record ids and every child re-pointed, and #166 already noted that a divergent copy is a
+      different act from an add. The picker offers the duplicate for datasets only.
 - [x] **ANSWERED 2026-10-02 (the library was pulled — see the two entries above) — "why do we even have that lever?" Does the building-block library
       earn its keep? (owner, 2026-10-01).** Raised while deciding how much block support the
       launcher should carry, and it reframes everything below it:

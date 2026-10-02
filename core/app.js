@@ -1232,6 +1232,11 @@ export async function boot(mounts) {
     },
     getItemOps: () => itemStore.ops(),
     applyItemOps: (ops) => itemStore.restoreOps(ops),
+    // Reading a record and its children, for "copy this codebook / map layer to another
+    // project" — the generalisation of the dataset copy (2026-10-02). The declarations
+    // come from the same place every other generic behaviour reads them.
+    items: itemStore,
+    collections: () => [...CORE_COLLECTIONS, ...declaredCollections(plugins?.list() ?? [], ownerToken)],
     getWorkspaceOps: () => workspaceStore.ops(),
     applyWorkspaces: async (ops, { refresh = false } = {}) => {
       // A non-refresh apply IS the project boundary: it remounts every workspace. Bump
@@ -2602,6 +2607,20 @@ class ProjectSidebar {
   }
 
   /**
+   * Which installed plugin DECLARED this collection — the load key when we can see it, else
+   * the manifest id, both of which the project's plugin tier resolves (#157).
+   *
+   * Needed because the owner token cannot answer it: `ownerToken` returns `builtin` for
+   * every built-in, so a copied codebook carrying only its owner would not say which plugin
+   * the destination has to switch on. The collection id does say, via the declaration.
+   */
+  #pluginKeyFor(decl) {
+    if (!decl?.pluginId) return null;
+    const match = (this.pluginList() ?? []).find((p) => p.id === decl.pluginId);
+    return match?.key ?? decl.pluginId;
+  }
+
+  /**
    * One collection's section: a row per record (`sidebar: 'list'`) or a single summary
    * line (`'count'`). The count mode exists because CAQDAS segments run to thousands and
    * would drown the sidebar — the point is visibility that "this project has data here",
@@ -2673,6 +2692,21 @@ class ProjectSidebar {
       onRename: field ? (v) => { if (v) this.itemStore.put(decl.owner, decl.id, rec.id, { [field]: v }); } : null,
       onDelete: () => this.itemStore.remove(decl.owner, decl.id, rec.id),
       deleteTitle: 'Remove from project',
+      // Copy is offered exactly where the collection DECLARED it may leave the project —
+      // the same `portable` opt-in that used to gate dragging it to the library. The
+      // plugin that owns the collection is passed along, so the destination knows what it
+      // needs in order to read what it just received.
+      onCopy: decl.portable
+        ? () => void this.projects.copyPrompt?.({
+          kind: 'record',
+          owner: decl.owner,
+          collection: decl.id,
+          id: rec.id,
+          name: recordLabel(decl, rec),
+          pluginKey: this.#pluginKeyFor(decl),
+        })
+        : null,
+      copyTitle: `Copy this ${decl.label ?? 'item'} to another project`,
       // Records are annotatable for the same reason datasets are: they have a target.
       // Withholding it was an oversight, not a decision (#153). The exception is memos
       // themselves — #148 settled that memos are FLAT rather than threaded, so offering
@@ -2838,7 +2872,7 @@ class ProjectSidebar {
       onRename: (v) => this.datasets.rename(it.id, v),
       onDelete: () => void this.#deleteDataset(it),
       deleteTitle: count <= 1 ? 'Remove — resets to a fresh empty dataset' : 'Remove from project',
-      onCopy: () => void this.projects.copyDatasetPrompt?.(it.id),
+      onCopy: () => void this.projects.copyPrompt?.({ kind: 'dataset', id: it.id }),
       copyTitle: 'Copy to another project — the source plus the steps that cleaned it',
       memoAnchor: { kind: 'dataset', target: `ds:${it.id}` },
     });

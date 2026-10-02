@@ -32,8 +32,10 @@ import { showConflictDialog } from './conflict-ui.js';
 import { FolderBackend, OpfsBackend } from './storage-backend.js';
 import { showEncryptionSettings } from './encryption-settings.js';
 import {
-  copyBundle, copyName, copyTargets, datasetIdTaken, datasetSlice, describeSlice, unionById,
-} from './dataset-copy.js';
+  assetIdsOf, copyBundle, copyName, copyTargets, datasetIdTaken, datasetSlice, describeSlice,
+  ownerPluginOp, recordSlice, travellingChildren, unionById,
+} from './copy-to-project.js';
+import { itemTarget } from './item-store.js';
 import { ensureCollabIdentity, roomFor, inviteLinkFor } from './live-invite.js';
 
 const DEBOUNCE_MS = 800;
@@ -41,6 +43,9 @@ const DEBOUNCE_MS = 800;
 /** The “a new one” choice in the copy-destination picker. A plain word is unmistakable here
  * because every project id is a UUID — no escape, no sentinel character to mangle. */
 const NEW_PROJECT = 'new';
+
+/** The “duplicate it here” choice. Same reasoning as NEW_PROJECT: ids are UUIDs. */
+const DUPLICATE = 'duplicate';
 
 /** Bus event: the current project's name/binding changed (drives the sidebar header). */
 export const PROJECT_CHANGED = 'project:changed';
@@ -196,6 +201,12 @@ export class ProjectSync {
   /** Byte-level access to the asset store, for live gap-fill (#155).
    * `{ held(), read(id), store(id, bytes, meta) }`. */
   #assetBytes = null;
+
+  /** The item tier, for reading a record and its children when copying one. */
+  #items = null;
+
+  /** Collection declarations — which children compose, which fields hold asset refs. */
+  #collections = () => [];
   /** The live ASSET exchange (the sibling of #liveExchange, which carries Parquet). */
   #liveAssetExchange = null;
   /** () => the item tier's ops, and the restore hook (#152 Layer 1). */
@@ -371,7 +382,7 @@ export class ProjectSync {
    * @param {(keys: string[]) => Promise<void>} [deps.applyActivePlugins] - Restore
    *   a project's saved plugin set on open.
    */
-  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getAssetOps, applyAssetOps, assetBytes, getItemOps, applyItemOps, projectLog, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, materializeAnalyses, applyProjectPlugins, getPluginStates, pluginIdentities, getMergers, getSurfaces }) {
+  constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, items, collections, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getAssetOps, applyAssetOps, assetBytes, getItemOps, applyItemOps, projectLog, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, materializeAnalyses, applyProjectPlugins, getPluginStates, pluginIdentities, getMergers, getSurfaces }) {
     this.#store = projectStore;
     this.#datasets = datasets;
     this.#ui = ui;
@@ -390,6 +401,8 @@ export class ProjectSync {
     this.#getAssetOps = getAssetOps ?? null;
     this.#applyAssetOps = applyAssetOps ?? null;
     this.#assetBytes = assetBytes ?? null;
+    this.#items = items ?? null;
+    this.#collections = collections ?? (() => []);
     this.#getItemOps = getItemOps ?? null;
     this.#applyItemOps = applyItemOps ?? null;
     this.#getOutput = getOutput ?? null;
@@ -942,21 +955,22 @@ export class ProjectSync {
    * clone (raw log, preserving op ids + row ids) rather than a lossy re-synthesised
    * snapshot, so a bundle hand-off can then co-author (shared op/row identity). */
   /**
-   * Ask where the copy should go, then do it. The dataset row’s ⧉ and
-   * File ▸ Copy dataset to a new project… both land here; with no id it takes the active
-   * dataset, which is what a menu item acting on “the data” has always meant here.
+   * Ask where a copy should go, then do it — for a dataset OR a plugin record (a codebook,
+   * a map layer). One dialog, one verb, three destinations: a new project, this project (a
+   * duplicate), or another project.
    *
-   * ONE dialog for both destinations, because they are one decision: a new project or an
-   * existing one. The hint states what travels, since the value of this over exporting a file
-   * is that the cleaning comes with it — and what does NOT travel is the part someone handing
-   * work to a student needs to be sure of.
+   * The kinds share everything except which ops constitute the thing, which is the whole
+   * reason this generalised instead of growing a second feature (owner, 2026-10-02).
    *
-   * @param {number|string} [datasetId]
+   * @param {{kind?: 'dataset'|'record', id?: number|string, owner?: string,
+   *          collection?: string, name?: string, pluginKey?: string}} [thing]
+   *   omit for the active dataset.
    */
-  async copyDatasetPrompt(datasetId) {
-    const ds = datasetId == null ? this.#datasets.active : this.#datasets.get(datasetId);
-    if (!ds) {
-      this.#results.appendError('Copy dataset: there is no dataset to copy.');
+  async copyPrompt(thing = {}) {
+    const isRecord = thing.kind === 'record';
+    const ds = isRecord ? null : (thing.id == null ? this.#datasets.active : this.#datasets.get(thing.id));
+    if (!isRecord && !ds) {
+      this.#results.appendError('Copy: there is no dataset to copy.');
       return;
     }
     let rows = [];
@@ -966,44 +980,266 @@ export class ProjectSync {
       /* no index — "a new project" is still offered */
     }
     const { options, elsewhere } = copyTargets(rows);
-    const taken = rows.map((p) => p.name);
-    const { steps } = describeSlice(datasetSlice((await this.#snapshot(true)).log, ds.id));
-    const form = await this.#ui.showForm({
-      title: 'Copy dataset',
-      hint: `“${ds.name}” plus the ${steps} step${steps === 1 ? '' : 's'} that cleaned it — the `
+    const subject = isRecord ? (thing.name || thing.collection) : ds.name;
+    let hint;
+    if (isRecord) {
+      const p = this.#recordPayload(thing);
+      const kids = p.take.length;
+      hint = `“${subject}” and the ${kids} item${kids === 1 ? '' : 's'} that ${kids === 1 ? 'makes' : 'make'} `
+        + 'it up. It travels with its ids, so if both projects change it the two can be '
+        + 'merged rather than duplicated. The plugin that owns it is recorded, so the other '
+        + 'project knows what it needs.'
+        + (p.withheld
+          ? ` ${p.withheld} record${p.withheld === 1 ? '' : 's'} will NOT go — `
+            + `${p.withheld === 1 ? 'it is' : 'they are'} tied to a dataset, so `
+            + `${p.withheld === 1 ? 'it points' : 'they point'} at rows the other project does not have.`
+          : '');
+    } else {
+      const { steps } = describeSlice(datasetSlice((await this.#snapshot(true)).log, ds.id));
+      hint = `“${subject}” plus the ${steps} step${steps === 1 ? '' : 's'} that cleaned it — the `
         + 'original source and what was done to it, so whoever opens it can see and re-run the '
-        + 'cleaning. It goes as a copy: later edits on either side stay separate. Analyses, '
-        + 'output, codings and your plugin set do not travel.'
-        + (elsewhere ? ` (${elsewhere} project${elsewhere === 1 ? '' : 's'} stored in a folder or `
-          + 'cloud account cannot receive a copy yet — open it and copy from there.)' : ''),
+        + 'cleaning. Analyses, output, codings and your plugin set do not travel.';
+    }
+    if (elsewhere) {
+      hint += ` (${elsewhere} project${elsewhere === 1 ? '' : 's'} stored in a folder or cloud `
+        + 'account cannot receive a copy yet — open it and copy from there.)';
+    }
+    const destinations = [{ value: NEW_PROJECT, label: '＋ A new project' }];
+    // Duplicating inside this project is offered for a DATASET only. A second copy in ONE
+    // log must not share op ids with the first, so it re-mints everything — which is the
+    // opposite of what every cross-project copy wants, and for a record it would also have
+    // to re-mint the record ids and re-point every child. Filed, not faked.
+    if (!isRecord) destinations.push({ value: DUPLICATE, label: '⧉ This project (a duplicate)' });
+    destinations.push(...options);
+
+    const form = await this.#ui.showForm({
+      title: isRecord ? 'Copy item' : 'Copy dataset',
+      hint,
       fields: [
-        {
-          name: 'target',
-          label: 'Copy to',
-          type: 'select',
-          value: NEW_PROJECT,
-          options: [{ value: NEW_PROJECT, label: '＋ A new project' }, ...options],
-        },
+        { name: 'target', label: 'Copy to', type: 'select', value: NEW_PROJECT, options: destinations },
         {
           name: 'name',
           label: 'New project name',
           hint: 'used only when creating one',
-          value: copyName(ds.name, taken),
+          value: copyName(subject, rows.map((p) => p.name)),
         },
       ],
       okLabel: 'Copy',
     });
     if (!form) return;
+    if (form.target === DUPLICATE) {
+      await this.#datasets.duplicate(ds.id);
+      return;
+    }
     if (form.target && form.target !== NEW_PROJECT) {
-      await this.copyDatasetIntoProject(ds.id, form.target);
+      if (isRecord) await this.copyRecordIntoProject(thing, form.target);
+      else await this.copyDatasetIntoProject(ds.id, form.target);
       return;
     }
     const name = form.name?.trim();
     if (!name) {
-      this.#results.appendError('Copy dataset: a new project needs a name.');
+      this.#results.appendError('Copy: a new project needs a name.');
       return;
     }
-    await this.copyDatasetToProject(ds.id, name);
+    if (isRecord) await this.copyRecordToProject(thing, name);
+    else await this.copyDatasetToProject(ds.id, name);
+  }
+
+  /**
+   * What copying a plugin RECORD will carry: the record, the children that compose into
+   * it and are allowed to travel, the assets they point at, and the plugin that owns the
+   * lot. Both record-copy paths build it the same way.
+   *
+   * @param {{owner: string, collection: string, id: string, name?: string, pluginKey?: string}} ref
+   */
+  #recordPayload(ref) {
+    const decls = this.#collections();
+    const parent = this.#items?.get(ref.owner, ref.collection, ref.id) ?? null;
+    const { take, withheld } = travellingChildren(
+      decls, ref, (coll) => this.#items?.list(ref.owner, coll) ?? [],
+    );
+    const records = [{ collection: ref.collection, rec: parent }, ...take];
+    const assetIds = assetIdsOf(records, decls, ref.owner);
+    const targets = [
+      itemTarget(ref.owner, ref.collection, ref.id),
+      ...take.map((k) => itemTarget(ref.owner, k.collection, k.rec.id)),
+    ];
+    return { parent, take, withheld, assetIds, targets, decls };
+  }
+
+  /**
+   * The ops for a record copy, with the owning plugin recorded.
+   *
+   * The plugin op is MINTED here rather than copied, because no such op may exist in this
+   * project (the plugin can be on by default) and the destination still has to be told —
+   * a copied codebook with nothing naming `builtin-caqdas` is rows in a tier that nothing
+   * there reads.
+   */
+  #recordOps(ref, payload, log) {
+    const ops = recordSlice(log, payload.targets, payload.assetIds);
+    const spec = ownerPluginOp(ref.pluginKey);
+    return spec && this.#log ? [...ops, this.#log.mint(spec)] : ops;
+  }
+
+  /** Copy the asset bytes a record needs into another project. Content-addressed, so a
+   * destination that already holds the file is written again rather than compared — the
+   * bytes are identical by construction and the write is idempotent. */
+  async #copyAssets(targetId, assetIds) {
+    if (!assetIds.length || !this.#assetBytes) return [];
+    const failed = [];
+    for (const id of assetIds) {
+      try {
+        const bytes = await this.#assetBytes.read(id);
+        if (!bytes) { failed.push(id); continue; }
+        await this.#opfs.writeAsset(targetId, id, new Blob([bytes]));
+      } catch (err) {
+        console.error('[project] asset copy failed', id, err);
+        failed.push(id);
+      }
+    }
+    return failed;
+  }
+
+  /** The subject of the sentence: what is being copied and how much is inside it. No
+   * trailing punctuation — the caller finishes the sentence with the destination. */
+  #recordPhrase(ref, payload) {
+    const kids = payload.take.length;
+    return `**${ref.name || ref.collection}** (${kids} item${kids === 1 ? '' : 's'} inside it`
+      + (payload.assetIds.length
+        ? `, ${payload.assetIds.length} file${payload.assetIds.length === 1 ? '' : 's'})`
+        : ')');
+  }
+
+  /** What did NOT go, as its own sentence. Empty when everything did — saying “0 records
+   * stayed” would be noise, but saying nothing when some DID stay would be a lie. */
+  #recordNotes(payload, failed) {
+    const parts = [];
+    if (payload.withheld) {
+      const one = payload.withheld === 1;
+      parts.push(`${payload.withheld} record${one ? '' : 's'} stayed here: `
+        + `${one ? 'it is' : 'they are'} tied to a dataset, so ${one ? 'it refers' : 'they refer'} to rows `
+        + 'the other project does not have.');
+    }
+    if (failed.length) parts.push(`${failed.length} file(s) could not be read and did not go.`);
+    return parts.length ? ` ${parts.join(' ')}` : '';
+  }
+
+  /**
+   * Copy a plugin record (a codebook, a map layer) into an EXISTING project — the
+   * generalisation of the dataset copy, and what finally replaces the one thing the
+   * building-block library did that nothing else could (owner, 2026-10-02).
+   *
+   * @param {{owner: string, collection: string, id: string, name?: string, pluginKey?: string}} ref
+   * @param {string} targetId
+   */
+  async copyRecordIntoProject(ref, targetId) {
+    if (!this.#items) {
+      this.#results.appendError('Copy: plugin data is unavailable in this session.');
+      return false;
+    }
+    const payload = this.#recordPayload(ref);
+    if (!payload.parent) {
+      this.#results.appendError('Copy: that item is no longer here.');
+      return false;
+    }
+    if (String(this.#binding?.id) === String(targetId) && this.#backend?.kind === 'opfs') {
+      this.#results.appendError('That project is the one you have open — it already has this.');
+      return false;
+    }
+    try {
+      if (await this.#opfs.hasEncryption(targetId)) {
+        const pass = await passphraseFor('unlock');
+        if (!pass) return false;
+        try {
+          await this.#opfs.unlock(pass, targetId);
+        } catch {
+          this.#results.appendError('Wrong passphrase — nothing was copied.');
+          return false;
+        }
+      }
+      const manifest = await this.#opfs.readManifest(targetId);
+      if (!manifest) {
+        this.#results.appendError('That project could not be found — it may have been deleted.');
+        return false;
+      }
+      const whole = await this.#snapshot(true);
+      const ops = this.#recordOps(ref, payload, whole.log);
+      const failed = await this.#copyAssets(targetId, payload.assetIds);
+      await this.#opfs.writeManifest(targetId, {
+        ...manifest,
+        savedAt: Date.now(),
+        log: unionById(manifest.log, ops),
+      });
+      this.#results.appendText(
+        `Copied ${this.#recordPhrase(ref, payload)} into **${manifest.name}**.`
+        + this.#recordNotes(payload, failed)
+        + ' Its ids came with it, so a later update can be merged rather than duplicated.',
+      );
+      this.#bus.emit(PROJECT_CHANGED);
+      return true;
+    } catch (err) {
+      console.error('[project] record copy failed', err);
+      this.#results.appendError(`Copy into that project failed: ${err.message}`);
+      return false;
+    } finally {
+      this.#opfs.lock();
+    }
+  }
+
+  /** Copy a plugin record into a NEW project. The project has no dataset of its own —
+   * opening it yields a blank one beside the copied item, which is the honest shape for
+   * "here is my codebook". */
+  async copyRecordToProject(ref, name) {
+    if (!this.#items) {
+      this.#results.appendError('Copy: plugin data is unavailable in this session.');
+      return null;
+    }
+    const payload = this.#recordPayload(ref);
+    if (!payload.parent) {
+      this.#results.appendError('Copy: that item is no longer here.');
+      return null;
+    }
+    let id;
+    if (shouldEncrypt('local')) {
+      const pass = await passphraseFor('local-new');
+      if (pass) {
+        id = crypto.randomUUID();
+        try {
+          await this.#opfs.unlock(pass, id);
+        } catch (err) {
+          this.#results.appendError(`Couldn’t protect the copy — writing it unprotected: ${err.message}`);
+          this.#opfs.lock();
+          id = undefined;
+        }
+      }
+    }
+    try {
+      const whole = await this.#snapshot(true);
+      const ops = this.#recordOps(ref, payload, whole.log);
+      const newId = await this.#opfs.save({
+        id,
+        name,
+        savedAt: Date.now(),
+        bundle: {
+          log: ops, activeId: null, activePlugins: null, output: [], analysisLog: [],
+          collabId: null, collabSecret: null,
+        },
+      });
+      const failed = await this.#copyAssets(newId, payload.assetIds);
+      this.#results.appendText(
+        `Copied ${this.#recordPhrase(ref, payload)} into a new project, **${name}**.`
+        + this.#recordNotes(payload, failed)
+        + ' It is in the Projects list.',
+      );
+      this.#bus.emit(PROJECT_CHANGED);
+      return newId;
+    } catch (err) {
+      console.error('[project] record copy failed', err);
+      this.#results.appendError(`Copy to a new project failed: ${err.message}`);
+      return null;
+    } finally {
+      this.#opfs.lock();
+    }
   }
 
   /**
