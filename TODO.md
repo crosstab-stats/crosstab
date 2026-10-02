@@ -1177,27 +1177,105 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       compute), copy it **while an autosave is in flight**, then open the copy — 30 rows, every
       cleaned variable, all five steps in History, output empty, no analyses.
 
-- [ ] **Replace the codebook case the library used to serve: a CODES-ONLY codebook export
-      (owner, 2026-10-02).** Chosen scope when the library was pulled — *"pull everything now,
-      replace the codebook case later"* — so this is an accepted gap, not an oversight.
+      **EXTENDED the same day: copy into an EXISTING project too (owner, 2026-10-02).**
 
-      **What was lost.** A CAQDAS codebook (or a map layer) could be promoted to a block and
-      added to another project, and that path carried a real privacy boundary: a promoted codebook
-      took its **codes** and refused its **codings**, because codings are passages of real
-      participant data and the point of sharing a codebook is handing it to someone else. It also
-      preserved record ids rather than re-minting them (#166), so a later merge recognised two
-      projects' shared codebook as common ancestry instead of duplicating every code.
+      > *"What about extending the 'copy dataset' we just built to allow copying into an existing
+      > project? Reason: it fully replaces the 'add building block to an existing project'
+      > functionality we no longer have."*
 
-      **Why `.qdpx` is not the replacement.** REFI-QDA import and export both exist
-      (`builtin-caqdas`, `export-qdpx`), but a `.qdpx` is a whole QDA project — sources and
-      codings included. "Hand you my codebook, not my interviews" has no path today.
+      Done, and it needed no new merge semantics — which is the strongest sign the shape is
+      right. `unionById` adds the slice to the destination's log **by op id**, which is exactly
+      what receiving a co-author's ops already does, so two properties fall out rather than being
+      argued for: it is **idempotent** (copy the same dataset twice and the second changes
+      nothing) and **order-independent** (HLC stamps decide the fold, not array position).
 
-      **What it needs:** a codes-only export/import pair (a file, not a library), obeying the same
-      boundary — `childTravels` in `core/collections.js` is where that rule lives, and
-      `test/composition.test.mjs` still pins it. Preserve record ids on import for the merge
-      reason. Worth asking the qualitative users first how a colleague's codebook reaches them
-      today, which is the same question the library should have been built from.
+      Mechanically it reuses what was already there: `writeSourcesOnly(id, {log: slice},
+      new Set([dsId]))` lands only the copied dataset's Parquet — the destination's own sources
+      are already on its disk and this process never held their bytes — then `writeManifest`,
+      which also refreshes the catalog summary, so the dataset count in the project list is right
+      without a second pass. A protected destination is unlocked the same way opening one is
+      (`hasEncryption` → `passphraseFor('unlock')` → `unlock`), and the key is dropped in a
+      `finally` so the listing store never keeps one.
 
+      **Three refusals, each for a stated reason:**
+      - **the open project** — writing under a live session would be overwritten by its next
+        autosave. The picker excludes it and the method re-checks, because the open project can
+        change between the form opening and being answered. Message points at the right verb:
+        *"to have two copies here, duplicate the dataset instead"* (which does not exist yet —
+        see below).
+      - **a destination already holding a DIFFERENT dataset with that id** — `newDatasetId()` is
+        48 bits of CSPRNG precisely so concurrent peers never collide, so this means the
+        destination is a copy of this same project; merging would fuse two histories of one id.
+      - **a source whose bytes have not arrived** from a co-author yet.
+
+      **One UI flaw found in the browser and fixed:** the picker listed four indistinguishable
+      *"Untitled project"* rows. In a destination list that is not cosmetic — an unchoosable
+      option is a wrong write — so duplicates (and only duplicates) now carry their dataset count
+      and last-opened time. The stamp is injectable, so the rule is tested without depending on
+      the test machine's locale.
+
+      `showForm` gained a `type: 'select'` field for the destination picker — additive to the
+      declared contract, so plugins get it too; `.ct-field select` was already styled.
+
+      Suite 1348 → 1358. Browser-verified: a dataset copied into a new project, a SECOND dataset
+      copied into that same project (catalog shows 2, both open with the right rows, variables and
+      steps, output empty), a re-copy changing nothing, and the open-project refusal firing with
+      its message.
+
+      **Follow-up this leaves open:** *duplicate a dataset within the current project*. The
+      refusal message names it, and the machinery is the same slice — only it has to re-mint the
+      dataset id and the op ids, because two copies in ONE log must not share identity (the
+      opposite of the cross-project case, where sharing it is the point).
+
+- [ ] **Generalise "copy X to a new/existing project" from datasets to PLUGIN DATA — the
+      owner's route to replacing what building blocks actually gave us (2026-10-02).**
+      Supersedes the codes-only-codebook entry this replaces:
+
+      > *"Once 'copy X to existing project' exists it can be generalized to 'copy codebook to
+      > existing/new' or 'copy spatial boundaries to existing/new' or 'copy X data from plugin to
+      > existing/new' to replace the one real thing building blocks were giving us which we no
+      > longer have."*
+
+      Right, and the dataset case has already proved the mechanism: **slice the log by what the
+      thing is, union it into the destination by op id.** Nothing about that is dataset-specific.
+      What changes per kind is only *which ops constitute the thing* — and for plugin data that
+      question is already answered by the declarations, which is what makes this cheap:
+
+      - **the record and its children** — `childrenOf(decls, owner, collection)` gives the
+        composing collections (codes compose into a codebook; codings do not), and
+        **`childTravels`** is the privacy guard: anything bound to a DATASET cannot go, because it
+        refers to rows the recipient does not have, and in the case that motivated the rule those
+        rows are passages of real participant data. `test/composition.test.mjs` still pins both.
+      - **its bytes** — a record's `assetRefs` fields name the assets it points at (declared, so
+        the host can gather exactly those and nothing else). Those travel as `asset:` ops plus the
+        bytes; asset ids are content hashes, so two projects adopting the same layer do not
+        duplicate the file.
+      - **`portable`** on the collection declaration is already the opt-in for "may leave this
+        project", and its doc was rewritten for exactly this when the library went.
+
+      **Preserve record ids, do not re-mint** (#166 settled this for the same reason the dataset
+      copy keeps op ids): identity is what lets a later pull or merge recognise two projects'
+      shared codebook as common ancestry instead of duplicating every code. #166 also found that
+      adopting the same block twice should be a no-op — which `unionById` now gives for free.
+
+      **What it buys, in the owner's terms:** the one real capability the library removal cost —
+      hand a colleague your codebook without your interviews, or reuse a boundary set across
+      projects — with no second store, no version counter, and no machine-local UUID that cannot
+      travel. It also closes the gap recorded in [[first-class-plugin-data]], where a boundary set
+      currently has no reuse path at all.
+
+      **Shape it as one verb with a kind, not three features.** The row already has ⧉; a
+      collection row and a workspace-slot row should carry the same button, and
+      `copyDatasetPrompt` becomes `copyPrompt(thing)` where `thing` is `{kind: 'dataset'|'record',
+      …}`. The destination picker, the union, the encryption handling and every refusal are
+      already generic — only the slice builder branches.
+
+      **Still unresolved, and worth deciding before building:** a dataset copy carries data a
+      recipient can read on their own; a codebook copy is only useful if the plugin that owns it
+      is installed and activated there. So the copy has to either record the owning plugin so the
+      destination can ask for it (the missing-plugin path, #102, already exists), or refuse when
+      the owner is not installed. The first is better and is the same information
+      `declaredCollections()` already carries (`pluginId` per collection).
 - [x] **ANSWERED 2026-10-02 (the library was pulled — see the two entries above) — "why do we even have that lever?" Does the building-block library
       earn its keep? (owner, 2026-10-01).** Raised while deciding how much block support the
       launcher should carry, and it reframes everything below it:

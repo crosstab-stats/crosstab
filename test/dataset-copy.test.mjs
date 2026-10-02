@@ -1,6 +1,7 @@
 /**
  * @file dataset-copy.test.mjs
- * "Copy dataset to a new project" — the building-block library's replacement (2026-10-02).
+ * "Copy dataset" — the building-block library's replacement (2026-10-02), to a NEW project or
+ * into an EXISTING one (the second half replaces "add building block to a project").
  *
  * The owner's framing is the specification: *"copy the original source plus the relevant log
  * actions to a new project … the cleaned data would still be in the form of 'original source
@@ -11,7 +12,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  belongsTo, copyBundle, copyName, datasetSlice, describeSlice,
+  belongsTo, copyBundle, copyName, copyTargets, datasetIdTaken, datasetSlice, describeSlice,
+  unionById,
 } from '../core/dataset-copy.js';
 
 let n = 0;
@@ -174,4 +176,109 @@ test('an unnamed dataset still yields a usable project name', () => {
   assert.equal(copyName('', []), 'Dataset');
   assert.equal(copyName('   ', []), 'Dataset');
   assert.equal(copyName(undefined, ['Dataset']), 'Dataset (2)');
+});
+
+// --- copying into an EXISTING project ----------------------------------------
+//
+// The owner's extension (2026-10-02): *"what about extending the 'copy dataset' we just built
+// to allow copying into an existing project? It fully replaces the 'add building block to an
+// existing project' functionality we no longer have."* It is the same slice, unioned into the
+// destination's log by op id — which is what receiving a co-author's ops already does.
+
+test('copying in is a union by op id — the destination keeps everything it had', () => {
+  const log = fixture();
+  const theirs = [op('coll/ds:9', 'addDataset', { id: 9, name: 'Their data' }), src(9, 'theirs.csv')];
+  const merged = unionById(theirs, datasetSlice(log, 1));
+  assert.deepEqual(merged.slice(0, 2).map((o) => o.target), ['coll/ds:9', 'ds:9/data'],
+    'their ops keep their positions');
+  assert.deepEqual(merged.slice(2).map((o) => o.target),
+    ['coll/ds:1', 'ds:1/data', 'ds:1/var:age', 'ds:1/rows']);
+});
+
+test('copying the same dataset twice is a no-op the second time', () => {
+  // Idempotence falls out of the merge key rather than being argued for, which is the whole
+  // reason this is a union and not an append.
+  const log = fixture();
+  const slice = datasetSlice(log, 1);
+  const once = unionById([], slice);
+  const twice = unionById(once, slice);
+  assert.deepEqual(twice.map((o) => o.id), once.map((o) => o.id));
+});
+
+test('a destination already holding a DIFFERENT dataset with that id is refused', () => {
+  // 48 bits of CSPRNG means this is a deliberate act — most likely the destination is a copy
+  // of this same project. Merging would fuse two histories of one id.
+  const slice = datasetSlice(fixture(), 1);
+  const theirs = [op('coll/ds:1', 'addDataset', { id: 1, name: 'Something else entirely' })];
+  assert.equal(datasetIdTaken(theirs, slice, 1), true);
+});
+
+test('a destination that already has THIS dataset (same ops) is not a collision', () => {
+  // Re-copying is allowed and idempotent; only a rival id is a problem.
+  const slice = datasetSlice(fixture(), 1);
+  assert.equal(datasetIdTaken(slice, slice, 1), false);
+  assert.equal(datasetIdTaken([], slice, 1), false);
+});
+
+test('unionById tolerates an absent log on either side', () => {
+  assert.deepEqual(unionById(null, null), []);
+  assert.deepEqual(unionById(undefined, [op('ds:1/x', 'recode')]).length, 1);
+});
+
+// --- which projects can receive one ------------------------------------------
+
+const projectRow = (over = {}) => ({
+  key: 'opfs:p1', name: 'A project', kind: 'opfs', projectId: 'p1', isOpen: false, ...over,
+});
+
+test('the open project is not offered — that would be "duplicate here", a different verb', () => {
+  // Also the practical reason: writing under a live session would be overwritten by its next
+  // autosave, so offering it would be offering a silent no-op.
+  const { options } = copyTargets([projectRow(), projectRow({ projectId: 'p2', name: 'Open one', isOpen: true })]);
+  assert.deepEqual(options, [{ value: 'p1', label: 'A project' }]);
+});
+
+test('folder and cloud projects are counted out loud, not silently dropped', () => {
+  // They need their backend connected (sometimes a user gesture) before anything can be
+  // written, which is separate work — so the form says so rather than looking complete.
+  const { options, elsewhere } = copyTargets([
+    projectRow(),
+    { key: 'loc:1', name: 'In Dropbox', kind: 'dropbox', projectId: null, isOpen: false },
+    { key: 'loc:2', name: 'In a folder', kind: 'folder', projectId: null, isOpen: false },
+  ]);
+  assert.deepEqual(options.map((o) => o.label), ['A project']);
+  assert.equal(elsewhere, 2);
+});
+
+test('identically-named destinations are told apart — an unchoosable option is a wrong write', () => {
+  // Found in the browser: a dev session had four "Untitled project" rows in the picker, and
+  // nothing to pick between them. In a destination list that is not cosmetic — choosing the
+  // wrong one writes a dataset into the wrong project.
+  const { options } = copyTargets([
+    projectRow({ projectId: 'a', name: 'Untitled project', datasetCount: 2, lastOpenedAt: 1 }),
+    projectRow({ projectId: 'b', name: 'Untitled project', datasetCount: 5, lastOpenedAt: 2 }),
+    projectRow({ projectId: 'c', name: 'Course pack', datasetCount: 1, lastOpenedAt: 3 }),
+  ], { stamp: (r) => `t${r.lastOpenedAt}` });
+  assert.equal(new Set(options.map((o) => o.label)).size, options.length, 'every label distinct');
+  assert.deepEqual(options.map((o) => o.label), [
+    'Untitled project — 2 datasets, t1',
+    'Untitled project — 5 datasets, t2',
+    'Course pack',
+  ], 'and ONLY the duplicates carry the extra detail');
+});
+
+test('a project whose size the catalog does not know still gets a usable label', () => {
+  const { options } = copyTargets([
+    projectRow({ projectId: 'a', name: 'Same', datasetCount: null, lastOpenedAt: 0, savedAt: 0 }),
+    projectRow({ projectId: 'b', name: 'Same', datasetCount: 1, lastOpenedAt: 5 }),
+  ], { stamp: (r) => (r.lastOpenedAt ? 'then' : 'never opened') });
+  assert.deepEqual(options.map((o) => o.label), [
+    'Same — unknown size, never opened',
+    'Same — 1 dataset, then',
+  ]);
+});
+
+test('no projects at all is an empty list, not a crash', () => {
+  assert.deepEqual(copyTargets([]), { options: [], elsewhere: 0 });
+  assert.deepEqual(copyTargets(null), { options: [], elsewhere: 0 });
 });

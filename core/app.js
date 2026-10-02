@@ -2839,7 +2839,7 @@ class ProjectSidebar {
       onDelete: () => void this.#deleteDataset(it),
       deleteTitle: count <= 1 ? 'Remove — resets to a fresh empty dataset' : 'Remove from project',
       onCopy: () => void this.projects.copyDatasetPrompt?.(it.id),
-      copyTitle: 'Copy to a new project — the source plus the steps that cleaned it',
+      copyTitle: 'Copy to another project — the source plus the steps that cleaned it',
       memoAnchor: { kind: 'dataset', target: `ds:${it.id}` },
     });
 

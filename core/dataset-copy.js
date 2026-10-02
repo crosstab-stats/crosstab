@@ -37,10 +37,24 @@
  * or co-authoring identity, no project name ops. Those belong to the project you are working
  * in, not to the dataset, and a copy prepared for someone else should not smuggle them.
  *
- * Pure: no DOM, no store, no async. {@link ProjectSync#copyDatasetToProject} applies it.
+ * ## New project, or an existing one
+ *
+ * The owner extended it the day after:
+ *
+ *   *"What about extending the ‘copy dataset’ we just built to allow copying into an existing
+ *   project? It fully replaces the ‘add building block to an existing project’ functionality we
+ *   no longer have. Also, once ‘copy X to existing project’ exists it can be generalized to
+ *   ‘copy codebook to existing/new’ or ‘copy spatial boundaries to existing/new’."*
+ *
+ * Copying INTO a project is the same slice, unioned into that project’s log by op id — which
+ * is what receiving a co-author’s ops already does, so it needs no new merge semantics and is
+ * idempotent for free. See {@link unionById}.
+ *
+ * Pure: no DOM, no store, no async. `ProjectSync#copyDatasetToProject` /
+ * `#copyDatasetIntoProject` apply it.
  */
 
-import { liveOps, orderByHlc, STRUCTURAL_OPS } from './op-log.js';
+import { liveOps, opIds, orderByHlc, STRUCTURAL_OPS } from './op-log.js';
 
 /**
  * Does this op belong to dataset `id`?
@@ -143,6 +157,112 @@ export function copyBundle(bundle, id) {
     collabId: null,
     collabSecret: null,
   };
+}
+
+/**
+ * Union `incoming` ops into an existing project's `log`, by op id.
+ *
+ * This is the whole of "copy into an existing project", and it is safe for the same reason
+ * co-authoring is: the log is merged by op identity, so adding ops that the destination has
+ * never seen is exactly what receiving a peer's work already does. Two consequences worth
+ * stating, because they are properties rather than luck:
+ *
+ *  - **Idempotent.** Copying the same dataset into the same project twice changes nothing
+ *    the second time — the ids are already there. (`#addRecordBlock` had to argue for this
+ *    behaviour; here it falls out of the merge key.)
+ *  - **Order-independent.** Ops carry HLC stamps, so where they land in the array does not
+ *    decide anything; every reader folds in HLC order. Appending keeps the diff readable.
+ *
+ * A dataset id collision would be the one real hazard — two different datasets merged into
+ * one — and it cannot happen by accident: `newDatasetId()` is 48 bits of CSPRNG precisely so
+ * that two peers minting concurrently never collide. {@link datasetIdTaken} covers the
+ * deliberate case anyway, because "cannot happen" is not a thing to find out by writing.
+ *
+ * @param {object[]} log the destination's log
+ * @param {object[]} incoming the slice to add
+ * @returns {object[]} a new array; the destination's own ops keep their positions
+ */
+export function unionById(log, incoming) {
+  const have = new Set(opIds(log ?? []));
+  return [...(log ?? []), ...(incoming ?? []).filter((op) => !have.has(op.id))];
+}
+
+/**
+ * Does `log` already describe a dataset with this id *other than* via the ops we are about
+ * to add? A true here means the copy would merge two different datasets into one, so the
+ * caller refuses rather than writing something unopenable.
+ *
+ * @param {object[]} log the destination's log
+ * @param {object[]} incoming the slice to add
+ * @param {number|string} id
+ */
+export function datasetIdTaken(log, incoming, id) {
+  const mine = new Set(opIds(incoming ?? []));
+  return (log ?? []).some((op) => belongsTo(op, id) && !mine.has(op.id));
+}
+
+/**
+ * Which projects can receive a copy, as `showForm` select options.
+ *
+ * Two exclusions, both deliberate:
+ *  - **the open project** — copying a dataset into the project you are in is *duplicate
+ *    within this project*, a different verb with a different name, and offering it here
+ *    would make one control mean two things;
+ *  - **anything not in local storage** — a folder or remote project needs its backend
+ *    connected (and sometimes a user gesture) before anything can be written to it, which
+ *    is a separate piece of work. Named in the UI rather than silently missing.
+ *
+ * @param {Array<{key: string, name: string, kind: string, projectId: ?string, isOpen: boolean}>} rows
+ *   from `listAllProjects()`
+ * @returns {{options: Array<{value: string, label: string}>, elsewhere: number}}
+ *   `elsewhere` counts the non-local projects left out, so the form can say so.
+ */
+export function copyTargets(rows, { stamp = defaultStamp } = {}) {
+  const offered = [];
+  let elsewhere = 0;
+  for (const r of rows ?? []) {
+    if (r.kind !== 'opfs' || !r.projectId) {
+      elsewhere += 1;
+      continue;
+    }
+    if (r.isOpen) continue; // the project you are in — see above
+    offered.push(r);
+  }
+  // Projects are not forced to have distinct names, and "Untitled project" happens four times
+  // over in a dev session. In a DESTINATION picker that is not cosmetic: identical options are
+  // unchoosable, and picking the wrong one writes into the wrong project. So duplicates — and
+  // only duplicates — carry what tells them apart.
+  const counts = new Map();
+  for (const r of offered) counts.set(r.name, (counts.get(r.name) ?? 0) + 1);
+  const options = offered.map((r) => ({
+    value: r.projectId,
+    label: counts.get(r.name) > 1
+      ? `${r.name} — ${datasetsPhrase(r.datasetCount)}, ${stamp(r)}`
+      : r.name,
+  }));
+  return { options, elsewhere };
+}
+
+/** "2 datasets" / "1 dataset", or an honest shrug when the catalog has no count. */
+function datasetsPhrase(n) {
+  const count = Number(n);
+  return Number.isFinite(count) && count > 0
+    ? `${count} dataset${count === 1 ? '' : 's'}`
+    : 'unknown size';
+}
+
+/**
+ * When a project was last touched, as a short local string. Injectable so the labelling rule
+ * above can be tested without depending on the test machine's locale or timezone.
+ */
+function defaultStamp(row) {
+  const t = Number(row?.lastOpenedAt || row?.savedAt);
+  if (!Number.isFinite(t) || t <= 0) return 'never opened';
+  try {
+    return new Date(t).toLocaleString();
+  } catch {
+    return String(t);
+  }
 }
 
 /**

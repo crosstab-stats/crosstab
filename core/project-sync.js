@@ -31,10 +31,16 @@ import { isAuthError } from './storage-driver.js';
 import { showConflictDialog } from './conflict-ui.js';
 import { FolderBackend, OpfsBackend } from './storage-backend.js';
 import { showEncryptionSettings } from './encryption-settings.js';
-import { copyBundle, copyName, datasetSlice, describeSlice } from './dataset-copy.js';
+import {
+  copyBundle, copyName, copyTargets, datasetIdTaken, datasetSlice, describeSlice, unionById,
+} from './dataset-copy.js';
 import { ensureCollabIdentity, roomFor, inviteLinkFor } from './live-invite.js';
 
 const DEBOUNCE_MS = 800;
+
+/** The “a new one” choice in the copy-destination picker. A plain word is unmistakable here
+ * because every project id is a UUID — no escape, no sentinel character to mangle. */
+const NEW_PROJECT = 'new';
 
 /** Bus event: the current project's name/binding changed (drives the sidebar header). */
 export const PROJECT_CHANGED = 'project:changed';
@@ -554,10 +560,10 @@ export class ProjectSync {
     // verbs on this project and the fourth was an app-wide default — four lines for one
     // subject, and three of them wrong at any given moment. They are now two tabs behind
     // this entry, which offers only the verbs the current state actually allows.
-    // Replaces the library's 'Save dataset to library…' (same slot): hand ONE dataset over as
-    // a project — source plus the steps that cleaned it, which is the form reproducibility
-    // wants and the form a building block could not take.
-    this.#menus.register({ id: 'core:proj-copy-ds', path: ['File'], label: 'Copy dataset to a new project…', order: 20, command: () => void this.copyDatasetPrompt() });
+    // Replaces BOTH of the library's items (same slot): hand ONE dataset over as a project,
+    // new or existing — source plus the steps that cleaned it, which is the form
+    // reproducibility wants and the form a building block could not take.
+    this.#menus.register({ id: 'core:proj-copy-ds', path: ['File'], label: 'Copy dataset…', order: 20, command: () => void this.copyDatasetPrompt() });
     this.#menus.register({ id: 'core:encryption-settings', path: ['File'], label: 'Encryption settings…', order: 8, command: () => void showEncryptionSettings({ projects: this }) });
     this.#bus.on(CoreEvents.DATA_CHANGED, (s) => this.#onChange(s));
     this.#bus.on(DATASETS_CHANGED, () => this.#onChange(null));
@@ -936,12 +942,13 @@ export class ProjectSync {
    * clone (raw log, preserving op ids + row ids) rather than a lossy re-synthesised
    * snapshot, so a bundle hand-off can then co-author (shared op/row identity). */
   /**
-   * Ask for a name, then {@link ProjectSync#copyDatasetToProject}. The dataset row's ⧉ and
+   * Ask where the copy should go, then do it. The dataset row’s ⧉ and
    * File ▸ Copy dataset to a new project… both land here; with no id it takes the active
-   * dataset, which is what a menu item acting on "the data" has always meant here.
+   * dataset, which is what a menu item acting on “the data” has always meant here.
    *
-   * The hint states what travels, because the whole value of this over exporting a file is
-   * that the cleaning comes with it — and what does NOT travel is the part someone handing
+   * ONE dialog for both destinations, because they are one decision: a new project or an
+   * existing one. The hint states what travels, since the value of this over exporting a file
+   * is that the cleaning comes with it — and what does NOT travel is the part someone handing
    * work to a student needs to be sure of.
    *
    * @param {number|string} [datasetId]
@@ -949,29 +956,154 @@ export class ProjectSync {
   async copyDatasetPrompt(datasetId) {
     const ds = datasetId == null ? this.#datasets.active : this.#datasets.get(datasetId);
     if (!ds) {
-      this.#results.appendError('Copy dataset to a new project: there is no dataset to copy.');
+      this.#results.appendError('Copy dataset: there is no dataset to copy.');
       return;
     }
-    let taken = [];
+    let rows = [];
     try {
-      taken = (await this.#opfs.list()).map((p) => p.name);
+      rows = await this.listAllProjects();
     } catch {
-      /* no catalog — the name just won't be de-duplicated */
+      /* no index — "a new project" is still offered */
     }
-    const slice = datasetSlice((await this.#snapshot(true)).log, ds.id);
-    const { steps } = describeSlice(slice);
+    const { options, elsewhere } = copyTargets(rows);
+    const taken = rows.map((p) => p.name);
+    const { steps } = describeSlice(datasetSlice((await this.#snapshot(true)).log, ds.id));
     const form = await this.#ui.showForm({
-      title: 'Copy dataset to a new project',
-      hint: `A new project containing only “${ds.name}”: its original source plus the `
-        + `${steps} step${steps === 1 ? '' : 's'} that cleaned it, so whoever opens it can see `
-        + 'what was done and re-run it. Analyses, output, codings and your plugin set stay here. '
-        + 'You keep working where you are — the copy appears in the Projects list.',
-      fields: [{ name: 'name', label: 'New project name', value: copyName(ds.name, taken) }],
-      okLabel: 'Create',
+      title: 'Copy dataset',
+      hint: `“${ds.name}” plus the ${steps} step${steps === 1 ? '' : 's'} that cleaned it — the `
+        + 'original source and what was done to it, so whoever opens it can see and re-run the '
+        + 'cleaning. It goes as a copy: later edits on either side stay separate. Analyses, '
+        + 'output, codings and your plugin set do not travel.'
+        + (elsewhere ? ` (${elsewhere} project${elsewhere === 1 ? '' : 's'} stored in a folder or `
+          + 'cloud account cannot receive a copy yet — open it and copy from there.)' : ''),
+      fields: [
+        {
+          name: 'target',
+          label: 'Copy to',
+          type: 'select',
+          value: NEW_PROJECT,
+          options: [{ value: NEW_PROJECT, label: '＋ A new project' }, ...options],
+        },
+        {
+          name: 'name',
+          label: 'New project name',
+          hint: 'used only when creating one',
+          value: copyName(ds.name, taken),
+        },
+      ],
+      okLabel: 'Copy',
     });
-    const name = form?.name?.trim();
-    if (!name) return;
+    if (!form) return;
+    if (form.target && form.target !== NEW_PROJECT) {
+      await this.copyDatasetIntoProject(ds.id, form.target);
+      return;
+    }
+    const name = form.name?.trim();
+    if (!name) {
+      this.#results.appendError('Copy dataset: a new project needs a name.');
+      return;
+    }
     await this.copyDatasetToProject(ds.id, name);
+  }
+
+  /**
+   * Copy a dataset into an **existing** project — the replacement for "add building block to
+   * a project", which is the half the library's removal left without a path.
+   *
+   * It is the same slice, unioned into that project's log by op id. No new merge semantics:
+   * adding ops a project has never seen is exactly what receiving a co-author's work does,
+   * which is also why it is idempotent — copy the same dataset twice and the second changes
+   * nothing.
+   *
+   * Only the copied dataset's Parquet is written (`writeSourcesOnly` with the dataset id),
+   * because the destination's own sources are already on its disk and this process never
+   * held their bytes. Then `writeManifest`, which also refreshes the catalog summary — so
+   * the dataset count in the project list is right without a second pass.
+   *
+   * The destination must not be open: writing under a live session would be overwritten by
+   * its next autosave. The picker excludes it, and this re-checks, because by the time the
+   * form is answered the open project may have changed.
+   *
+   * @param {number|string} datasetId
+   * @param {string} targetId  an OPFS project id
+   * @returns {Promise<boolean>} whether anything was written
+   */
+  async copyDatasetIntoProject(datasetId, targetId) {
+    const ds = this.#datasets.get(datasetId);
+    if (!ds) {
+      this.#results.appendError('Copy to a project: that dataset is no longer here.');
+      return false;
+    }
+    if (String(this.#binding?.id) === String(targetId) && this.#backend?.kind === 'opfs') {
+      this.#results.appendError(
+        'That project is the one you have open — copying into it would be overwritten by its '
+        + 'next autosave. To have two copies here, duplicate the dataset instead.',
+      );
+      return false;
+    }
+    const whole = await this.#snapshot(true); // full: the copy needs the source BYTES
+    const slice = datasetSlice(whole.log, datasetId);
+    const summary = describeSlice(slice);
+    if (!summary.sources) {
+      this.#results.appendError(`“${ds.name}” has no data to copy.`);
+      return false;
+    }
+    if (summary.missingBytes.length) {
+      this.#results.appendError(
+        `Can't copy “${ds.name}” yet: the data for ${summary.missingBytes.join(', ')} hasn't `
+        + 'arrived on this machine. Try again once the dataset is complete.',
+      );
+      return false;
+    }
+    try {
+      // Encryption first, exactly as opening a protected project does: the meta is
+      // plaintext, so this doubles as the reachability check before asking for a secret.
+      if (await this.#opfs.hasEncryption(targetId)) {
+        const pass = await passphraseFor('unlock');
+        if (!pass) return false;
+        try {
+          await this.#opfs.unlock(pass, targetId);
+        } catch {
+          this.#results.appendError('Wrong passphrase — nothing was copied.');
+          return false;
+        }
+      }
+      const manifest = await this.#opfs.readManifest(targetId);
+      if (!manifest) {
+        this.#results.appendError('That project could not be found — it may have been deleted.');
+        return false;
+      }
+      if (datasetIdTaken(manifest.log, slice, datasetId)) {
+        // 48 bits of CSPRNG says this is a deliberate act, not an accident — most likely the
+        // destination is a copy of THIS project. Merging would fuse two histories of one id.
+        this.#results.appendError(
+          `“${manifest.name}” already has a different dataset with the same internal id, so `
+          + 'copying would merge the two. Copy it to a new project instead.',
+        );
+        return false;
+      }
+      const merged = {
+        ...manifest,
+        savedAt: Date.now(),
+        log: unionById(manifest.log, slice),
+      };
+      await this.#opfs.writeSourcesOnly(targetId, { log: slice }, new Set([Number(datasetId)]));
+      await this.#opfs.writeManifest(targetId, merged);
+      this.#results.appendText(
+        `Copied **${ds.name}** into **${manifest.name}** — the original source plus `
+        + `${summary.steps} cleaning step${summary.steps === 1 ? '' : 's'}. It is a copy: editing `
+        + 'it there will not change this one. Nothing else went with it (no analyses, output, '
+        + 'codings or plugin set).',
+      );
+      this.#bus.emit(PROJECT_CHANGED);
+      return true;
+    } catch (err) {
+      console.error('[project] copy into project failed', err);
+      this.#results.appendError(`Copy into that project failed: ${err.message}`);
+      return false;
+    } finally {
+      this.#opfs.lock(); // never leave a key loaded on the listing store
+    }
   }
 
   /**

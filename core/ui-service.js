@@ -476,7 +476,8 @@ export class UiService {
    * @param {Object} [options]
    * @param {string} [options.title='Form']
    * @param {string} [options.hint]
-   * @param {Array<{name: string, label?: string, type?: 'text'|'password'|'number', value?: string, placeholder?: string, hint?: string, step?: number|string, min?: number|string, max?: number|string}>} [options.fields]
+   * @param {Array<{name: string, label?: string, type?: 'text'|'password'|'number'|'select', value?: string, placeholder?: string, hint?: string, step?: number|string, min?: number|string, max?: number|string, options?: Array<{value: string, label?: string}>}>} [options.fields]
+   *   A 'select' field takes `options` and resolves to the chosen `value`.
    *   For `type:'number'`, `step` defaults to `'any'` (accepts decimals); pass an
    *   explicit `step`/`min`/`max` to constrain (e.g. `step:1` for integers).
    * @param {string} [options.okLabel='OK']
@@ -489,6 +490,20 @@ export class UiService {
       dialog.className = 'ct-dialog';
       const fieldHtml = fields
         .map((f) => {
+          if (f.type === 'select') {
+            // A one-of-many choice. Exists because "copy this into which project?" is a
+            // pick from a list the host knows, and a free-text field for it would be a
+            // name the user has to get exactly right.
+            const opts = (f.options ?? [])
+              .map((o) => `<option value="${attr(String(o.value))}"${String(o.value) === String(f.value ?? '') ? ' selected' : ''}>${esc(o.label ?? o.value)}</option>`)
+              .join('');
+            return `
+            <label class="ct-field">${esc(f.label ?? f.name)}${
+              f.hint ? ` <span class="ct-hint">${esc(f.hint)}</span>` : ''
+            }
+              <select name="${attr(f.name)}">${opts}</select>
+            </label>`;
+          }
           const type = f.type === 'password' ? 'password' : f.type === 'number' ? 'number' : 'text';
           // Number inputs default to `step="any"` so a fractional value (e.g. a test
           // proportion of 0.892) isn't rejected against the browser's step=1 grid,
@@ -524,7 +539,8 @@ export class UiService {
         const out = {};
         if (ok) {
           for (const f of fields) {
-            const el = dialog.querySelector(`input[name="${attr(f.name)}"]`);
+            const sel = f.type === 'select' ? 'select' : 'input';
+            const el = dialog.querySelector(`${sel}[name="${attr(f.name)}"]`);
             out[f.name] = el ? el.value : '';
           }
         }
