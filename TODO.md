@@ -1104,7 +1104,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       Same conclusion as the entry above: extract the list, let each host decide what surrounds it
       and which verbs it permits, and do it once — as part of the launcher rebuild, not before it.
 
-- [x] **DONE (2026-10-02) — the building-block library is REMOVED, replaced by "copy dataset to
+- [x] **DONE + owner-verified in the app (2026-10-02) — the building-block library is REMOVED, replaced by "copy dataset to
       a new project".** The owner pulled it after the provenance check above: *"I'm sold. Before
       we get too far down this rabbit hole let's just pull it."* Plus the replacement, which is
       the better shape for the need the library was invented for:
@@ -1222,12 +1222,13 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       steps, output empty), a re-copy changing nothing, and the open-project refusal firing with
       its message.
 
-      **Follow-up this leaves open:** *duplicate a dataset within the current project*. The
-      refusal message names it, and the machinery is the same slice — only it has to re-mint the
-      dataset id and the op ids, because two copies in ONE log must not share identity (the
-      opposite of the cross-project case, where sharing it is the point).
+      **The follow-up this left open was built the same day** — *duplicate a dataset within the
+      current project*, now a third destination in the same picker rather than a separate verb.
+      It re-mints the dataset id and every op id, because two copies in ONE log must not share
+      identity (the opposite of the cross-project case, where sharing it is the point). See the
+      entry below.
 
-- [x] **DONE (2026-10-02) — "copy X to another project" generalised to plugin data, plus
+- [x] **DONE + owner-verified in the app (2026-10-02) — "copy X to another project" generalised to plugin data, plus
       "duplicate into this project".** The owner's route to replacing what the building-block
       library actually gave us, and it landed as one verb rather than three features:
 
@@ -1310,6 +1311,11 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       that was the bigger hole). The `MenuItem` contract now says to RETURN the promise;
       `() => void doThing()` discards it and stays unobservable, which is pinned as a test
       rather than left as a surprise. 6 tests in `test/menu-command.test.mjs`; suite 1374.
+
+      **Then confirmed by the owner in the app** — which is what actually closes this. My own
+      browser pass had said the same thing about the version whose menu item was broken, so the
+      check that counts is the one made by someone using it, not the one made by whoever wrote it.
+
 - [x] **ANSWERED 2026-10-02 (the library was pulled — see the two entries above) — "why do we even have that lever?" Does the building-block library
       earn its keep? (owner, 2026-10-01).** Raised while deciding how much block support the
       launcher should carry, and it reframes everything below it:
