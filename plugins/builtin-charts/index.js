@@ -1349,7 +1349,7 @@ export function chartKinds(lib) {
       ...(hasMarks
         ? [{ id: 'censorMarks', label: model.markLabel || 'Event marks', type: 'check', group: 'Chart', default: true }]
         : []),
-      { id: 'lineWidth', label: 'Line width', type: 'number', min: 1, max: 5, step: 0.5, group: 'Style', default: 2 },
+      { id: 'lineWidth', label: 'Line width', type: 'number', min: 0.25, step: 0.5, group: 'Style', default: 2 },
       gridlinesControl(),
       paletteControl(multi),
       legendControl(multi, 'right'),
@@ -2403,8 +2403,10 @@ export function chartKinds(lib) {
           options: [['single', 'One cloud'], ['clustered', 'Grouped by theme']],
         }] : []),
         { id: 'maxWords', label: 'Max words', type: 'number', min: 10, max: 400, step: 10, group: 'Chart', default: 120 },
-        { id: 'minSize', label: 'Smallest text', type: 'number', min: 6, max: 24, step: 1, group: 'Style', default: 11 },
-        { id: 'maxSize', label: 'Largest text', type: 'number', min: 16, max: 90, step: 2, group: 'Style', default: 44 },
+        // Text sizes, so no ceiling (see the size-control note in the stdlib). `maxWords`
+        // above keeps its cap: that one is a loop count, not a look.
+        { id: 'minSize', label: 'Smallest text', type: 'number', min: 1, step: 1, group: 'Style', default: 11 },
+        { id: 'maxSize', label: 'Largest text', type: 'number', min: 1, step: 2, group: 'Style', default: 44 },
         // Hidden when the caller supplied colours: offering a palette that cannot take
         // effect is worse than offering nothing (see the gridlines lesson — a control
         // with no visible effect reads as broken).

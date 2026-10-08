@@ -62,6 +62,33 @@ export function colorFor(view, key, i) {
 // chartUiSpec filters the nulls, so a kind can list them unconditionally.
 
 /**
+ * ## When a size control gets a `max`
+ *
+ * It does not, unless exceeding it would break something rather than look bad.
+ * `setControlValue` clamps to the declared range, so a `max` is not a hint — it
+ * silently rewrites what the user typed, and the panel then shows the rewritten
+ * number as though they had asked for it. Reported from the other end: *"I type 25
+ * and it auto resets to 18"* (owner, 2026-10-07).
+ *
+ * Every text size on a chart is handed straight to {@link text}, so there is nothing
+ * downstream to protect: a 1234567px title renders in under a millisecond, emits no
+ * NaN, and is simply clipped by the viewBox. That is the user's own work looking
+ * wrong in a way they can see and undo, which is not ours to prevent.
+ *
+ * So a cap survives here only when passing it changes **the canvas's dimensions, a
+ * loop count, or a proportion that is bounded by its own definition** — `rowHeight`
+ * and `panelHeight` multiply into the SVG's height, `maxWords` and `yTickCount` are
+ * iteration counts, `violinWidth` is a fraction of a band. Those are resource and
+ * arithmetic limits, not taste.
+ *
+ * A `min` stays on every size, because below it the output is invalid rather than
+ * ugly: a negative emits `font-size="-5"`, which is not a legal SVG attribute, and
+ * the renderers resolve sizes with `?? default` / `|| default`, so a stored 0 would
+ * come back as the default with no indication it had been ignored. `min: 1` keeps
+ * both states unreachable.
+ */
+
+/**
  * Palette chooser.
  * @param {boolean} multi - more than one item takes a colour. Passed in rather than
  *   looked up: the builders used to call `colorItemCount(model)`, which reached back
@@ -111,7 +138,7 @@ export function legendFormatControls(multi = true) {
   if (!multi) return [];
   const dep = { control: 'legend', notEquals: 'none' };
   return [
-    { id: 'legendSize', label: 'Text size', type: 'number', min: 7, max: 24, step: 0.5, group: 'Legend', default: 11, visibleWhen: dep },
+    { id: 'legendSize', label: 'Text size', type: 'number', min: 1, step: 0.5, group: 'Legend', default: 11, visibleWhen: dep },
     { id: 'legendBold', label: 'Bold', type: 'check', group: 'Legend', default: false, visibleWhen: dep },
     { id: 'legendItalic', label: 'Italic', type: 'check', group: 'Legend', default: false, visibleWhen: dep },
   ];
@@ -151,12 +178,37 @@ export function legendGap(view, place, multi = true) {
   return place === 'top' ? size * 1.8 : size * 2.4;
 }
 
-/** The legend's text size. Its default, and the number the frames reserve space
- * against, live in one place so the two cannot disagree and clip the text. */
+/**
+ * The legend's text size, in one place so every layer agrees on it.
+ *
+ * This used to re-validate to `[7, 24]` and return the default outside that range —
+ * which was not a clamp but a LIE: the control happily accepted 40 and stored it,
+ * the panel displayed 40, and the SVG came out with `font-size="11"`. A second
+ * validator behind a control is always that, because the two can only ever agree by
+ * coincidence. Now the control owns the range and this owns the default.
+ */
 export function legendSizeOf(view) {
   const n = Number(view && view.legendSize);
-  return Number.isFinite(n) && n >= 7 && n <= 24 ? n : 11;
+  return Number.isFinite(n) && n > 0 ? n : 11;
 }
+
+/**
+ * The legend box's width — the measure the entry text WRAPS to.
+ *
+ * The legend is its own layer, so this is not a reservation taken out of the plot:
+ * growing it does not shrink the chart, it just makes the legend bigger (and, past
+ * the plot's own inset, overlapping — see {@link legendBlock}). Wrapping to it is
+ * what replaced a hard 26-character ellipsis that truncated at the DEFAULT text
+ * size, so a long value label lost its tail no matter how much room was going spare.
+ */
+export function legendWidthOf(view) {
+  const n = Number(view && view.legendWidth);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_LEGEND_W;
+}
+
+/** The legend layer's default width, and the plot's default right-hand inset when a
+ * legend sits there. One constant, so the default chart has them flush. */
+export const DEFAULT_LEGEND_W = 150;
 
 /** Value-labels toggle. */
 export function valueLabelsControl(label = 'Value labels') {
@@ -212,7 +264,7 @@ export function titleControls(model) {
       id: 'titleText', label: 'Title', type: 'text', group: 'Titles & axes',
       placeholder: '(no title)', default: model.title || '',
     },
-    { id: 'titleSize', label: 'Title size', type: 'number', min: 8, max: 28, step: 1, group: 'Titles & axes', default: 15 },
+    { id: 'titleSize', label: 'Title size', type: 'number', min: 1, step: 1, group: 'Titles & axes', default: 15 },
     { id: 'titleBold', label: 'Title bold', type: 'check', group: 'Titles & axes', default: true },
     { id: 'titleItalic', label: 'Title italic', type: 'check', group: 'Titles & axes', default: false },
   ];
@@ -242,7 +294,7 @@ export function axisControls(axis, model, { defaultTitle, defaultFrom } = {}) {
       placeholder: '(no title)', default: modelTitle || defaultTitle || '',
       ...(defaultFrom ? { defaultFrom } : {}),
     },
-    { id: `${p}TitleSize`, label: `${upper} title size`, type: 'number', min: 8, max: 22, step: 1, group: 'Titles & axes', default: 12 },
+    { id: `${p}TitleSize`, label: `${upper} title size`, type: 'number', min: 1, step: 1, group: 'Titles & axes', default: 12 },
     { id: `${p}TitleBold`, label: `${upper} title bold`, type: 'check', group: 'Titles & axes', default: false },
     { id: `${p}TitleItalic`, label: `${upper} title italic`, type: 'check', group: 'Titles & axes', default: false },
     // No default: blank means "auto", and a number here is an explicit override.
@@ -284,7 +336,7 @@ export function showPointsControl({ default: dflt = true } = {}) {
 export function pointSizeControl({ default: dflt = 3, visibleWhen } = {}) {
   return {
     id: 'pointSize', label: 'Point size', type: 'number', group: 'Style',
-    min: 1, max: 10, step: 0.5, default: dflt, ...(visibleWhen ? { visibleWhen } : {}),
+    min: 0.5, step: 0.5, default: dflt, ...(visibleWhen ? { visibleWhen } : {}),
   };
 }
 
@@ -306,7 +358,12 @@ export function pointSizeControl({ default: dflt = 3, visibleWhen } = {}) {
 export function rowHeightControl({ default: dflt = 22 } = {}) {
   return {
     id: 'rowHeight', label: 'Row height', type: 'number', group: 'Style',
-    min: 14, max: 48, step: 2, default: dflt,
+    // One of the few caps that survives the size-control note above: this one
+    // multiplies into the SVG's own height (`height = mTop + rows * rowHeight + mBottom`),
+    // so it is a canvas dimension rather than a matter of taste — a forest plot of 300
+    // studies at an unbounded row height asks the browser for a document tens of
+    // thousands of units tall. 48 was still taste, though, so it is 200 now.
+    min: 2, max: 200, step: 2, default: dflt,
   };
 }
 
@@ -366,12 +423,10 @@ export function valueMeasureControl(options, dflt = 'count') {
 export function valueLabelFormatControls() {
   const dep = { control: 'valueLabels', truthy: true };
   return [
-    // Up to 28, the same ceiling the chart TITLE has. It was 18 — the lowest cap of any
-    // text control, below the legend's 24 and the axis titles' 22 — with no reason on
-    // record, and a pie with two slices has obvious room for more (owner, 2026-10-07:
-    // “I type 25 and it auto resets to 18”). Nothing downstream assumes a size; every
-    // consumer passes it straight to text().
-    { id: 'valueLabelSize', label: 'Label size', type: 'number', min: 6, max: 28, step: 0.5, group: 'Labels', default: 9.5, visibleWhen: dep },
+    // No ceiling — see the size-control note above. This was the cap that got noticed
+    // (18, the lowest of any text control, with no reason on record), but raising it to
+    // match its siblings would only have moved the surprise further out.
+    { id: 'valueLabelSize', label: 'Label size', type: 'number', min: 1, step: 0.5, group: 'Labels', default: 9.5, visibleWhen: dep },
     { id: 'valueLabelBold', label: 'Labels bold', type: 'check', group: 'Labels', default: false, visibleWhen: dep },
     { id: 'valueLabelItalic', label: 'Labels italic', type: 'check', group: 'Labels', default: false, visibleWhen: dep },
   ];

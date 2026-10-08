@@ -185,26 +185,48 @@ test('every kind exposes only declarative descriptors — no closures survive', 
   }
 });
 
-test('no TEXT size is capped below its siblings without a reason', () => {
-  // Value labels were capped at 18 while the legend went to 24, the axis titles to 22 and
-  // the chart title to 28 — so a pie with two slices and obvious room refused to go past
-  // 18 ("I type 25 and it auto resets to 18", owner on an iPhone, 2026-10-07). None of
-  // these numbers is load-bearing: every consumer passes the size straight to text(), so
-  // a cap is a judgement about taste and the user is the one entitled to make it.
-  const caps = new Map();
+/**
+ * The cap a user can hit by typing is not a hint — `setControlValue` clamps, so it
+ * REWRITES the number and the panel then shows the rewrite as if it had been asked for
+ * ("I type 25 and it auto resets to 18", owner on an iPhone, 2026-10-07).
+ *
+ * A text size has nothing downstream to protect: it goes straight to `text()`, and a
+ * title of 1234567 renders in under a millisecond with no NaN in the output — it is
+ * just clipped. So the rule is that a `max` survives only where passing it changes the
+ * canvas's dimensions, a loop count, or a proportion bounded by its own definition.
+ * These two tests are that rule, in both directions.
+ */
+const SIZE_IS_A_DIMENSION = new Set([
+  'rowHeight', // × rows = the SVG's own height
+  'panelHeight', // × panels = the SVG's own height
+]);
+
+test('no text size carries a ceiling the user can hit', () => {
+  const capped = [];
   for (const kind of KINDS) {
     for (const c of chartUiSpec(MODELS[kind]).controls) {
-      if (c.type !== 'number' || !/size$/i.test(c.id) || !Number.isFinite(c.max)) continue;
-      // Not text: a mark radius lives on its own scale.
-      if (c.id === 'pointSize' || c.id === 'rowHeight') continue;
-      caps.set(c.id, Math.max(caps.get(c.id) ?? 0, c.max));
+      if (c.type !== 'number' || !Number.isFinite(c.max)) continue;
+      if (!/size$/i.test(c.id) || SIZE_IS_A_DIMENSION.has(c.id)) continue;
+      capped.push(`${kind}.${c.id} (max ${c.max})`);
     }
   }
-  assert.ok(caps.size >= 3, `expected several text-size controls, saw ${[...caps.keys()]}`);
-  assert.equal(caps.get('valueLabelSize'), 28, 'the same ceiling as the chart title');
-  for (const [id, cap] of caps) {
-    assert.ok(cap >= 22, `${id} caps at ${cap}, well below its siblings — deliberate, or a leftover?`);
+  assert.deepEqual(capped, [],
+    `these clamp what the user typed for no reason downstream: ${capped.join(', ')}`);
+});
+
+test('every size still has a FLOOR, because below it the output is invalid', () => {
+  // The asymmetry is the point. A negative emits `font-size="-5"`, which is not a legal
+  // SVG attribute value, and the renderers resolve with `|| default`, so a stored 0 comes
+  // back as the default with nothing to say it was ignored. `min >= something positive`
+  // keeps both states unreachable — that is a correctness cap, not a taste one.
+  const bad = [];
+  for (const kind of KINDS) {
+    for (const c of chartUiSpec(MODELS[kind]).controls) {
+      if (c.type !== 'number' || !/size$/i.test(c.id)) continue;
+      if (!Number.isFinite(c.min) || c.min <= 0) bad.push(`${kind}.${c.id} (min ${c.min})`);
+    }
   }
+  assert.deepEqual(bad, [], `a size that can reach 0 or below: ${bad.join(', ')}`);
 });
 
 test('THE GATE: every descriptor survives structuredClone', () => {
