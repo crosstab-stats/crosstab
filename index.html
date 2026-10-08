@@ -887,6 +887,38 @@
         border-top: 0; margin-top: 0; padding-top: 0;
       }
       [data-screen="small"] .tab { padding: 11px 13px; }
+      /* --- touch targets (owner, on the phone: "it seems a little tiny") -----------
+         These are CSS pixels, which on iOS equal points — so 44 here IS Apple's 44pt
+         guideline, not 44 device pixels; the phone's 3x display renders it at the same
+         physical size. The unit was never the problem. What was wrong is that only the
+         header's CONTAINER was 44 tall: measured in the small layout, the CrossTab brand
+         was 24px, the ☰ button 40, and the sidebar's row icons 18x16 — which fails even
+         WCAG 2.5.8's 24x24 minimum, never mind the 44 Apple asks for. A row of three
+         adjacent 18px icons where one of them is a destructive ✕ is the worst version of
+         that. Sizing the CONTROLS, not their containers. */
+      [data-screen="small"] .brand {
+        min-height: 44px; display: inline-flex; align-items: center;
+        padding: 0 8px; margin: 0 -4px; font-size: 17px;
+      }
+      [data-screen="small"] .menu__button--all { min-height: 44px; font-size: 16px; }
+      /* A row is a tap target in its own right (it switches the active dataset), and its
+         icons sit inside it, so both need the size. */
+      [data-screen="small"] .proj__ds { min-height: 44px; }
+      [data-screen="small"] .proj__ds-x,
+      [data-screen="small"] .proj__memo,
+      [data-screen="small"] .ctp__act {
+        min-width: 44px; min-height: 44px;
+        display: inline-flex; align-items: center; justify-content: center;
+        font-size: 15px;
+      }
+      [data-screen="small"] .proj__add,
+      [data-screen="small"] .proj__name,
+      [data-screen="small"] .ctp__addbtn,
+      [data-screen="small"] .ctp__linkbtn { min-height: 44px; }
+      /* The picker's checkbox is the control you aim at most in the launcher, and a 13px
+         box with a 13.5px label beside it is a poor target even with the row as backup. */
+      [data-screen="small"] .ctp__main { min-height: 44px; font-size: 15px; }
+      [data-screen="small"] .ctp__main input[type="checkbox"] { width: 20px; height: 20px; }
 
       /* :not([hidden]) is load-bearing. `.view[hidden] { display: none }` lives 600 lines up
          and has the SAME specificity as this rule, so a later `display: flex` here simply
