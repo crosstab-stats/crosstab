@@ -887,6 +887,23 @@
         border-top: 0; margin-top: 0; padding-top: 0;
       }
       [data-screen="small"] .tab { padding: 11px 13px; }
+      /* Breathing room at the top (owner, running it as a Home Screen app, 2026-10-07:
+         "iPhone doesn't have the Safari chrome but does have a slight haze at the top…
+         perhaps we should include a slight buffer at the very top to avoid collision").
+
+         Two things were touching. A 44px control inside a 44px bar fills it exactly, so the
+         ☰ chip's border sat flush on both edges and read as clipped — that one shows in the
+         browser too. And in standalone there is no browser chrome between iOS's translucent
+         status overlay and the app, so the bar is the first thing under it. */
+      [data-screen="small"] header { padding-top: 8px; padding-bottom: 8px; row-gap: 8px; }
+
+      /* `display-mode` is NOT a width query and switches no layout — it asks how the app was
+         LAUNCHED. Installed to the Home Screen, iOS hands us the whole screen and its status
+         overlay sits directly on our first pixel, so the safe-area inset gets a few px of
+         margin for the haze. In a browser tab this rule does not apply at all. */
+      @media (display-mode: standalone) {
+        body { padding-top: calc(env(safe-area-inset-top) + 8px); }
+      }
       /* --- touch targets (owner, on the phone: "it seems a little tiny") -----------
          These are CSS pixels, which on iOS equal points — so 44 here IS Apple's 44pt
          guideline, not 44 device pixels; the phone's 3x display renders it at the same
