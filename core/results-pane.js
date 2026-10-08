@@ -227,6 +227,16 @@ const RESULTS_STYLES = `
   .results-chart__srow { display: flex; align-items: center; gap: 6px; }
   .results-chart__swatch { width: 28px; height: 22px; padding: 0; border: 1px solid #d8dee4; border-radius: 4px; background: none; cursor: pointer; flex: 0 0 auto; }
   .results-chart__sname { flex: 1; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* The legend entry's own wording. An INPUT rather than a label, because a 60-character
+     value label is what the data handed the user, not something they chose — so this is
+     the escape hatch no sizing control can be. The placeholder carries the original, so
+     emptying the box reverts to it. 16px on purpose: iOS Safari zooms the whole page when
+     a focused control is smaller, which is how the plugin filter box earned its own fix. */
+  .results-chart__srename {
+    flex: 1; min-width: 0; font: inherit; font-size: 16px; padding: 3px 6px;
+    border: 1px solid var(--line, #d8dee4); border-radius: 4px; background: #fff;
+  }
+  .results-chart__srename::placeholder { color: #8a949e; font-style: italic; }
   .results-chart__ord {
     font: inherit; font-size: 12px; width: 24px; height: 22px; line-height: 1; flex: 0 0 auto;
     background: #fff; border: 1px solid #d8dee4; border-radius: 4px; cursor: pointer; color: #555;

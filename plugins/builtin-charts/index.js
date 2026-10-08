@@ -84,10 +84,13 @@ export function chartKinds(lib) {
   const {
     PALETTES, DEFAULT_PALETTE, colorFor, paletteControl, legendControl,
     valueLabelsControl, gridlinesControl, hasRawValues, pointOverlayControl,
-    legendFormatControls, legendMargin, legendGap,
+    legendFormatControls, plotRightInset, plotVerticalInset,
     errorBarsControl, titleControls, axisControls, valueLabelFormatControls,
     pointSizeControl, showPointsControl, markControl, summaryControl, valueMeasureControl,
-    rowHeightControl,
+    rowHeightControl, plotSizeControl,
+    // The three layers: plot rect, floating legend, title on top. See the "Insets, not
+    // reservations" note in the stdlib for why none of them takes room from the others.
+    canvasBox, scalePlot, titleBlock,
     W, H, FONT, AXIS, GRID, errorSvg, text, r, esc, clip, fmtNum,
     computeStats, errorBounds, jitterOffsets, minorTicks, niceTicks, niceNum,
     legendBlock, ordered, svgOpen, svgOpenH, chartAltText,
@@ -174,6 +177,7 @@ export function chartKinds(lib) {
       }] : []),
       pointOverlayControl(model),
       errorBarsControl(model),
+      plotSizeControl(),
       gridlinesControl(),
       paletteControl(multi),
       legendControl(multi, 'right'),
@@ -276,20 +280,21 @@ export function chartKinds(lib) {
     const xTitle = view.xAxisTitle ?? model.axes?.x?.title;
     const yTitle = view.yAxisTitle ?? model.axes?.y?.title;
 
-    const mRight = legendMargin(series.map((x) => x.label || x.key), view, { none: 18 });
-    const mTop = (chartTitle ? 34 : 14) + legendGap(view, 'top', series.length > 1);
+    const mRight = plotRightInset(view, { none: 18 });
+    const mTop = (chartTitle ? 34 : 14) + plotVerticalInset(view, 'top', series.length > 1);
     const rotate = cats.length > 6 || Math.max(0, ...cats.map((c) => (c.label || c.key).length)) > 6;
     const longestX = Math.max(0, ...cats.map((c) => (c.label || c.key).length));
-    const mBottom = (rotate ? Math.min(120, 28 + longestX * 6) : 40) + (xTitle ? 16 : 0) + legendGap(view, 'bottom', series.length > 1);
+    const mBottom = (rotate ? Math.min(120, 28 + longestX * 6) : 40) + (xTitle ? 16 : 0) + plotVerticalInset(view, 'bottom', series.length > 1);
     const mLeft = 56 + (yTitle ? 16 : 0);
 
-    const box = { x0: mLeft, x1: W - mRight, y0: H - mBottom, y1: mTop };
+    const canvas = canvasBox();
+    const box = scalePlot({ x0: mLeft, x1: W - mRight, y0: H - mBottom, y1: mTop }, view);
     const plotW = box.x1 - box.x0;
     const plotH = box.y0 - box.y1;
     const yScale = (v) => box.y0 - ((v - yMin) / (yMax - yMin || 1)) * plotH;
 
+    // The title is the TOP layer and goes on at the end, not here.
     const out = [svgOpen(chartAltText(model, view, `${cats.length} categories, ${series.length} series.`, 'Chart'))];
-    if (chartTitle) out.push(text(W / 2, 20, esc(chartTitle), { size: view.titleSize || 15, weight: view.titleBold !== false ? 600 : 400, italic: !!view.titleItalic, anchor: 'middle', fill: '#222' }));
 
     for (const t of ticks) {
       const y = yScale(t);
@@ -338,10 +343,13 @@ export function chartKinds(lib) {
       out.push(`<text x="14" y="${r(my)}" font-size="${yts}" fill="#333" text-anchor="middle" transform="rotate(-90 14 ${r(my)})"${ytw}${yti}>${esc(yTitle)}</text>`);
     }
 
+    // Layer order, bottom to top: plot (above), legend, title. `key` travels with each
+    // item so the user's own legend wording (view.legendLabels) can be found.
     if (series.length > 1) {
-      const items = series.map((s, i) => ({ label: s.label || s.key, color: colorFor(view, s.key, i) }));
-      out.push(legendBlock(items, view.legend, box, view));
+      const items = series.map((s, i) => ({ key: s.key, label: s.label || s.key, color: colorFor(view, s.key, i) }));
+      out.push(legendBlock(items, view.legend, box, view, canvas));
     }
+    out.push(titleBlock(chartTitle, view, canvas, box));
 
     out.push('</svg>');
     return out.join('');
@@ -522,6 +530,7 @@ export function chartKinds(lib) {
         default: 4,
         ...(hasMark ? { visibleWhen: { control: 'mark', notEquals: 'line' } } : {}),
       }),
+      plotSizeControl(),
       gridlinesControl(),
       // The shared wording, not a scatter-specific "Point labels": one control id means one
       // thing in the panel, and the reader learns it once (chart-options-consistency).
@@ -575,16 +584,17 @@ export function chartKinds(lib) {
     const xTitle = view.xAxisTitle ?? model.axes?.x?.title;
     const yTitle = view.yAxisTitle ?? model.axes?.y?.title;
 
-    const mRight = legendMargin((groups || []).map((g) => g.label || g.key), view, { none: 18 });
+    const mRight = plotRightInset(view, { none: 18 });
     const mTop = chartTitle ? 34 : 16;
     const mBottom = 42 + (xTitle ? 16 : 0);
     const mLeft = 56 + (yTitle ? 16 : 0);
-    const box = { x0: mLeft, x1: W - mRight, y0: H - mBottom, y1: mTop };
+    const canvas = canvasBox();
+    const box = scalePlot({ x0: mLeft, x1: W - mRight, y0: H - mBottom, y1: mTop }, view);
     const xScale = (x) => box.x0 + ((x - xMin) / (xMax - xMin || 1)) * (box.x1 - box.x0);
     const yScale = (y) => box.y0 - ((y - yMin) / (yMax - yMin || 1)) * (box.y0 - box.y1);
 
+    // The title is the TOP layer and goes on at the end, not here.
     const out = [svgOpen(chartAltText(model, view, `${pts.length} points.`, 'Scatter plot'))];
-    if (chartTitle) out.push(text(W / 2, 20, esc(chartTitle), { size: view.titleSize || 15, weight: view.titleBold !== false ? 600 : 400, italic: !!view.titleItalic, anchor: 'middle', fill: '#222' }));
 
     for (const t of yticks) {
       const y = yScale(t);
@@ -724,10 +734,12 @@ export function chartKinds(lib) {
       out.push(`<text x="14" y="${r(my)}" font-size="${yts}" fill="#333" text-anchor="middle" transform="rotate(-90 14 ${r(my)})"${ytw}${yti}>${esc(yTitle)}</text>`);
     }
 
+    // Layer order, bottom to top: plot (above), legend, title.
     if (groups && groups.length > 1) {
-      const items = groups.map((g, i) => ({ label: g.label || g.key, color: colorFor(view, g.key, i) }));
-      out.push(legendBlock(items, view.legend, box, view));
+      const items = groups.map((g, i) => ({ key: g.key, label: g.label || g.key, color: colorFor(view, g.key, i) }));
+      out.push(legendBlock(items, view.legend, box, view, canvas));
     }
+    out.push(titleBlock(chartTitle, view, canvas, box));
 
     out.push('</svg>');
     return out.join('');
@@ -759,6 +771,7 @@ export function chartKinds(lib) {
         // `wrap` rather than clamp: 370° is a legitimate way to type 10°, and clamping it
         // to 360 would silently mean "no rotation" instead.
         { id: 'pieRotation', group: 'Chart', label: 'Rotate (°)', type: 'number', min: 0, max: 360, step: 15, wrap: 360, default: 0 },
+        plotSizeControl(),
         paletteControl(multi),
         legendControl(multi, 'right'),
         ...legendFormatControls(multi),
@@ -795,20 +808,22 @@ export function chartKinds(lib) {
     const slices = ordered(model.slices, view.seriesOrder).filter((s) => Number.isFinite(s.value) && s.value > 0);
     const total = slices.reduce((a, s) => a + s.value, 0) || 1;
 
-    const mRight = legendMargin(slices.map((x) => x.label || x.key), view, { none: 24 });
-    const mTop = model.title ? 38 : 18;
-    const cx = (24 + (W - mRight)) / 2;
-    const cy = mTop + (H - mTop - 24) / 2;
-    const radius = Math.min((W - mRight - 24) / 2, (H - mTop - 24) / 2) - 6;
-
-    const out = [svgOpen(chartAltText(model, view, `${slices.length} slices.`, 'Pie chart'))];
     const title = view.titleText ?? model.title;
-    if (title) {
-      out.push(text(W / 2, 22, esc(title), {
-        size: view.titleSize || 15, weight: view.titleBold !== false ? 600 : 400,
-        italic: !!view.titleItalic, anchor: 'middle', fill: '#222',
-      }));
-    }
+    const mRight = plotRightInset(view, { none: 24 });
+    // `title`, not `model.title`: clearing the title box used to leave its band behind,
+    // so the pie stayed pushed down with nothing above it.
+    const mTop = title ? 38 : 18;
+    // The pie already centred itself in whatever the legend left over, so making the
+    // rect explicit is the same arithmetic — it is just a layer now, and plotSize can
+    // move it.
+    const canvas = canvasBox();
+    const box = scalePlot({ x0: 24, x1: W - mRight, y0: H - 24, y1: mTop }, view);
+    const cx = (box.x0 + box.x1) / 2;
+    const cy = (box.y0 + box.y1) / 2;
+    const radius = Math.min((box.x1 - box.x0) / 2, (box.y0 - box.y1) / 2) - 6;
+
+    // The title is the TOP layer and goes on at the end, not here.
+    const out = [svgOpen(chartAltText(model, view, `${slices.length} slices.`, 'Pie chart'))];
 
     let ang = -90 + (view.pieRotation || 0); // start at top, + rotation, clockwise
     const items = [];
@@ -841,12 +856,13 @@ export function chartKinds(lib) {
           weight: view.valueLabelBold === false ? 400 : 600, italic: !!view.valueLabelItalic,
         }));
       }
-      items.push({ label: `${s.label || s.key}`, color });
+      items.push({ key: s.key, label: `${s.label || s.key}`, color });
       ang = a1;
     });
 
-    const box = { x0: 24, x1: W - mRight, y0: H - 24, y1: mTop };
-    if (slices.length > 1) out.push(legendBlock(items, view.legend, box, view));
+    // Layer order, bottom to top: plot (above), legend, title.
+    if (slices.length > 1) out.push(legendBlock(items, view.legend, box, view, canvas));
+    out.push(titleBlock(title, view, canvas, box));
 
     out.push('</svg>');
     return out.join('');
@@ -903,6 +919,7 @@ export function chartKinds(lib) {
       ...(reps.length > 1
         ? [{ id: 'replicateMeans', label: 'Replicate means', type: 'check', group: 'Chart', default: true }]
         : []),
+      plotSizeControl(),
       gridlinesControl(),
       paletteControl(multi),
       legendControl(multi, 'right'),
@@ -1088,6 +1105,7 @@ export function chartKinds(lib) {
       },
       showPointsControl({ default: true }),
       summaryControl([['mean', 'Mean per condition'], ['none', 'None']], 'mean'),
+      plotSizeControl(),
       gridlinesControl(),
       paletteControl(true),
       legendControl(true, 'none'),
@@ -1203,6 +1221,7 @@ export function chartKinds(lib) {
       { id: 'showMean', label: 'Mark the mean', type: 'check', group: 'Chart', default: false },
       { id: 'boxWidth', label: 'Box width', type: 'number', min: 0.2, max: 1, step: 0.1, group: 'Chart', default: 0.7 },
       pointSizeControl({ default: 3, visibleWhen: { control: 'showPoints', truthy: true } }),
+      plotSizeControl(),
       gridlinesControl(),
       paletteControl(multi),
       legendControl(multi, 'none'),
@@ -1350,6 +1369,7 @@ export function chartKinds(lib) {
         ? [{ id: 'censorMarks', label: model.markLabel || 'Event marks', type: 'check', group: 'Chart', default: true }]
         : []),
       { id: 'lineWidth', label: 'Line width', type: 'number', min: 0.25, step: 0.5, group: 'Style', default: 2 },
+      plotSizeControl(),
       gridlinesControl(),
       paletteControl(multi),
       legendControl(multi, 'right'),
@@ -1523,15 +1543,10 @@ export function chartKinds(lib) {
       const xHi = hi + pad;
       const xScale = (v) => box.x0 + ((ax.fwd(v) - xLo) / (xHi - xLo || 1)) * (box.x1 - box.x0);
 
+      // The title is the TOP layer; it goes on in close(), below.
+      const canvas = canvasBox(height);
       const out = [svgOpenH(height, chartAltText(model, view,
         `${plural(rows.length, 'study', 'studies')}${summary ? ', with a pooled summary' : ''}.`, 'Forest plot'))];
-      if (title) {
-        out.push(text(W / 2, 21, esc(title), {
-          size: view.titleSize || 15, weight: view.titleBold !== false ? 600 : 400,
-          italic: !!view.titleItalic, anchor: 'middle', fill: '#222',
-        }));
-      }
-
       // Column headings.
       const headY = mTop - 6;
       out.push(text(12, headY, esc(model.labelHeading || 'Study'), { size: 10.5, fill: '#555', weight: 600 }));
@@ -1606,6 +1621,8 @@ export function chartKinds(lib) {
         out.push(text((box.x0 + box.x1) / 2, height - 6, esc(xTitle),
           { size: view.xAxisTitleSize || 12, anchor: 'middle', fill: '#333' }));
       }
+      // The title, last — this kind has no legend, so it is the only layer over the plot.
+      out.push(titleBlock(title, view, canvas, box));
       out.push('</svg>');
       return out.join('');
     },
@@ -1705,17 +1722,10 @@ export function chartKinds(lib) {
       const xHi = userMax ? rawHi : rawHi + pad;
       const xScale = (v) => box.x0 + ((v - xLo) / (xHi - xLo || 1)) * (box.x1 - box.x0);
 
+      // The title is the TOP layer; it goes on at the end, not here.
+      const canvas = canvasBox(height);
       const out = [svgOpenH(height, chartAltText(model, view,
         `${plural(rows.length, 'input', 'inputs')}, widest swing first.`, 'Tornado diagram'))];
-      if (title) {
-        out.push(text(W / 2, 21, esc(title), {
-          size: view.titleSize || 15,
-          weight: view.titleBold !== false ? 600 : 400,
-          italic: !!view.titleItalic,
-          anchor: 'middle',
-          fill: '#222',
-        }));
-      }
 
       for (const t of niceTicks(xLo, xHi, 5)) {
         if (t < xLo || t > xHi) continue;
@@ -1758,6 +1768,8 @@ export function chartKinds(lib) {
         out.push(`<text x="${r((box.x0 + box.x1) / 2)}" y="${r(height - 4)}" font-size="${xts}" fill="#333" text-anchor="middle"${xtw}${xti}>${esc(xTitle)}</text>`);
       }
 
+      // The title, last — this kind has no legend, so it is the only layer over the plot.
+      out.push(titleBlock(title, view, canvas, box));
       out.push('</svg>');
       return out.join('');
     },
@@ -1899,34 +1911,6 @@ export function chartKinds(lib) {
       }
     }
     return out;
-  }
-
-  /** Like {@link legendBlock} but keyed by MARKER rather than a colour swatch, so it
-   * still distinguishes the entries when the figure is printed in black and white. */
-  function markerLegend(items, place, box) {
-    if (!items.length || place === 'none') return '';
-    const out = [];
-    if (place === 'right') {
-      let ly = box.y1 + 10;
-      const lx = box.x1 + 20;
-      for (const it of items) {
-        out.push(markerSvg(it.shape, lx, ly, 4, it.color));
-        out.push(text(lx + 12, ly + 4, esc(clip(it.label, 24)), { size: 11, fill: '#333' }));
-        ly += 19;
-      }
-    } else {
-      const gap = 18;
-      const widths = items.map((it) => 16 + clip(it.label, 22).length * 6.2 + gap);
-      const total = widths.reduce((a, b) => a + b, 0) - gap;
-      let lx = (box.x0 + box.x1) / 2 - total / 2;
-      const ly = place === 'top' ? box.y1 - 16 : box.y0 + 38;
-      items.forEach((it, i) => {
-        out.push(markerSvg(it.shape, lx + 5, ly - 3, 4, it.color));
-        out.push(text(lx + 15, ly + 1, esc(clip(it.label, 22)), { size: 11, fill: '#333' }));
-        lx += widths[i];
-      });
-    }
-    return out.join('');
   }
 
   /** Consecutive same-phase runs of a panel's points, in session order. */
@@ -2097,9 +2081,9 @@ export function chartKinds(lib) {
     // legend survives mono, because the markers still differ — that is the whole reason
     // measures are encoded by marker rather than colour.
     const showLegend = multiSeries ? seriesKeys.length > 1 : (!view.mono && phaseList.length > 1);
-    const legendRow = legendGap(view, 'bottom', showLegend);
+    const legendRow = plotVerticalInset(view, 'bottom', showLegend);
     const mBottom = 34 + (xTitle ? 18 : 0) + legendRow;
-    const mRight = legendMargin(phaseList.map((p) => p.label || p.key), showLegend ? view : {});
+    const mRight = plotRightInset(showLegend ? view : {});
     // Row labels. Published SCED figures stack TWO rotated captions to the left of the y
     // axis — outer: the antecedent the behaviour is scored against ("Newcomer's Arrival"),
     // inner: the behaviour itself ("Acknowledging and Complimenting Others"). Both need
@@ -2124,13 +2108,9 @@ export function chartKinds(lib) {
 
     const xScale = (x) => mLeft + ((x - xMin) / (xMax - xMin || 1)) * ((W - mRight) - mLeft);
 
+    // The title is the TOP layer; it goes on at the end, not here.
+    const canvas = canvasBox(totalH);
     const out = [svgOpenH(totalH, chartAltText(model, view, `${panels.length} ${panels.length === 1 ? "case" : "cases"}, ${multiSeries ? seriesKeys.length + " measures" : phaseList.length + " phases"}.`, 'Single-case design chart'))];
-    if (chartTitle) {
-      out.push(text(W / 2, 21, esc(chartTitle), {
-        size: view.titleSize || 15, weight: view.titleBold !== false ? 600 : 400,
-        italic: !!view.titleItalic, anchor: 'middle', fill: '#222',
-      }));
-    }
 
     // Shared Y domain (default) — panels are only comparable when the scale is.
     const yMinUser = Number.isFinite(view.yAxisMin);
@@ -2289,17 +2269,23 @@ export function chartKinds(lib) {
       out.push(`<text x="14" y="${r(my)}" font-size="${s}" fill="#333" text-anchor="middle" transform="rotate(-90 14 ${r(my)})"${w}${it}>${esc(yTitle)}</text>`);
     }
 
+    // Layer order, bottom to top: panels (above), legend, title.
+    const plotRect = { x0: mLeft, x1: W - mRight, y0: lastBaseline + (xTitle ? 18 : 0), y1: mTop + topPad };
     if (showLegend) {
-      const box = { x0: mLeft, x1: W - mRight, y0: lastBaseline + (xTitle ? 18 : 0), y1: mTop + topPad };
       if (multiSeries) {
-        out.push(markerLegend(seriesKeys.map((s) => ({
-          label: s.label || s.key, color: colorOfSeries(s.key), shape: markerOfSeries(s.key),
-        })), view.legend, box));
+        // The same legend every other kind gets — only the glyph differs, so it comes
+        // in as a swatch hook rather than as a second implementation.
+        out.push(legendBlock(seriesKeys.map((s) => ({
+          key: s.key, label: s.label || s.key, color: colorOfSeries(s.key), shape: markerOfSeries(s.key),
+        })), view.legend, plotRect, view, canvas, {
+          swatch: (x, y, sz, it) => markerSvg(it.shape, x + sz / 2, y + sz / 2, Math.max(2, sz * 0.48), it.color),
+        }));
       } else {
-        const items = phaseList.map((p, i) => ({ label: p.label || p.key, color: colorFor(view, p.key, i) }));
-        out.push(legendBlock(items, view.legend, box, view));
+        const items = phaseList.map((p, i) => ({ key: p.key, label: p.label || p.key, color: colorFor(view, p.key, i) }));
+        out.push(legendBlock(items, view.legend, plotRect, view, canvas));
       }
     }
+    out.push(titleBlock(chartTitle, view, canvas, plotRect));
 
     out.push('</svg>');
     return out.join('');
@@ -2435,12 +2421,8 @@ export function chartKinds(lib) {
       const bounds = { x0: 4, x1: W - 4, y0: mTop, y1: H - 6 };
       const out = [svgOpen(chartAltText(model, view,
         `${plural(words.length, 'word')}${themes.length > 1 ? `, ${plural(themes.length, 'theme')}` : ''}.`, 'Word cloud'))];
-      if (title) {
-        out.push(text(W / 2, 21, esc(title), {
-          size: view.titleSize || 15, weight: view.titleBold !== false ? 600 : 400,
-          italic: !!view.titleItalic, anchor: 'middle', fill: '#222',
-        }));
-      }
+      // The title is the TOP layer; it goes on at the end, not here.
+      const canvas = canvasBox();
 
       const counts = words.map((w) => w.count);
       const lo = Math.min(...counts);
@@ -2508,10 +2490,14 @@ export function chartKinds(lib) {
         });
       }
 
+      // Layer order, bottom to top: the cloud (above), legend, title. `key` travels
+      // with each item so a user-edited legend label can be found.
+      const plotRect = { x0: bounds.x0, x1: bounds.x1 - 8, y0: bounds.y1, y1: bounds.y0 };
       if (view.legend !== 'none' && themes.length > 1 && !authored) {
-        out.push(legendBlock(themes.map((t, i) => ({ label: t.label, color: colorFor(view, t.key, i) })),
-          view.legend, { x0: bounds.x0, x1: bounds.x1 - 8, y0: bounds.y1, y1: bounds.y0 }, view));
+        out.push(legendBlock(themes.map((t, i) => ({ key: t.key, label: t.label, color: colorFor(view, t.key, i) })),
+          view.legend, plotRect, view, canvas));
       }
+      out.push(titleBlock(title, view, canvas, plotRect));
       out.push('</svg>');
       return out.join('');
     },
@@ -2672,6 +2658,7 @@ export function chartKinds(lib) {
         { id: 'normalCurve', label: 'Normal curve', type: 'check', group: 'Chart', default: false },
         { id: 'showStats', label: 'Show mean, SD and N', type: 'check', group: 'Chart', default: false },
         { id: 'barGap', label: 'Gap between bars', type: 'number', group: 'Chart', min: 0, max: 0.5, step: 0.05, default: 0 },
+        plotSizeControl(),
         gridlinesControl(),
         paletteControl(false),
         valueLabelsControl(),

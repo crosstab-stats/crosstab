@@ -108,13 +108,15 @@ export function legendControl(multi = true, fallback = 'right') {
   return multi ? {
     id: 'legend', label: 'Placement', type: 'select', group: 'Legend', structural: true,
     default: fallback,
+    // Every placement floats now \u2014 the legend is its own layer and no longer takes
+    // room out of the plot (see plotRightInset). The first three sit where the plot's
+    // default insets leave a gap, so they look the same as they always did; the
+    // `inside-*` four aim at a corner of the plot on purpose. The difference between
+    // the two groups is now only WHERE, not whether anything is reserved.
     options: [
       ['right', 'Right of the chart'],
       ['top', 'Above the chart'],
       ['bottom', 'Below the chart'],
-      // Inside the plot: no margin is reserved, so the chart keeps its full
-      // width and the legend sits over it. Worth having exactly where a corner
-      // is empty, which is a judgement only the reader can make.
       ['inside-tl', 'Inside \u2014 top left'],
       ['inside-tr', 'Inside \u2014 top right'],
       ['inside-bl', 'Inside \u2014 bottom left'],
@@ -139,43 +141,173 @@ export function legendFormatControls(multi = true) {
   const dep = { control: 'legend', notEquals: 'none' };
   return [
     { id: 'legendSize', label: 'Text size', type: 'number', min: 1, step: 0.5, group: 'Legend', default: 11, visibleWhen: dep },
+    // The legend's own width, and the measure its text wraps to. Steps of 10 so the
+    // spinner is the +/- the owner asked for, while typing still works for a big jump.
+    // No ceiling: past the plot's inset it simply overlaps, which is the point.
+    { id: 'legendWidth', label: 'Legend width', type: 'number', min: 30, step: 10, group: 'Legend', default: DEFAULT_LEGEND_W, visibleWhen: dep },
+    { id: 'legendPlate', label: 'Backing panel', type: 'check', group: 'Legend', default: true, visibleWhen: dep },
     { id: 'legendBold', label: 'Bold', type: 'check', group: 'Legend', default: false, visibleWhen: dep },
     { id: 'legendItalic', label: 'Italic', type: 'check', group: 'Legend', default: false, visibleWhen: dep },
   ];
 }
 
 /**
- * The right-hand margin a legend needs, or the margin to use when it needs none.
+ * How much of the canvas the plot layer takes.
  *
- * There were FIVE copies of this sum — in the two shared frames and hand-written
- * again in the categorical, scatter, pie and SCED renderers — each with its own
- * floor and ceiling (18/20/24, 200/220) and all of them multiplying by a
- * hard-coded 7px per character. That constant was the legend's font size baked
- * into a number, so the moment the size became adjustable every one of them
- * would reserve room for 11px text and clip anything larger off the canvas.
- *
- * @param {Array<string>} labels - the legend entries' text
- * @param {object} view
- * @param {{none?: number}} [opts] - margin when there is no right-hand legend
+ * Every kind shows it, because every kind now has layers that can overlap and this is
+ * the lever that resolves it: nothing reserves space from the plot any more, so when
+ * the title or legend needs more room, the user takes it from here rather than from a
+ * cap we chose for them.
  */
-export function legendMargin(labels, view, { none = 20 } = {}) {
-  const items = (labels || []).filter((l) => l != null);
-  if (!view || view.legend !== 'right' || items.length < 2) return none;
-  const size = legendSizeOf(view);
-  const longest = Math.max(0, ...items.map((l) => String(l).length));
-  return Math.min(260, Math.max(70, longest * size * 0.62 + size * 1.1 + 22));
+export function plotSizeControl() {
+  return {
+    id: 'plotSize', label: 'Plot size (%)', type: 'number', group: 'Chart',
+    min: 10, step: 5, default: 100,
+  };
 }
 
 /**
- * Extra room above or below the plot for a legend placed there — again scaled by
- * the text rather than by a constant that assumed one size.
+ * ## Insets, not reservations
  *
- * @param {object} view @param {'top'|'bottom'} place @param {boolean} multi
+ * Charts are drawn in three LAYERS — plot at the bottom, legend over it, title over
+ * both — and the two functions below are the plot layer's own margins. They are
+ * deliberately constants: what they are *not* any more is a measurement of the
+ * legend's text.
+ *
+ * The old `legendMargin` measured the longest label, multiplied by the font size, and
+ * took that out of the plot's width. Three things came of it. The plot got narrower
+ * every time a label got longer, which is the data deciding the composition. The sum
+ * had a `Math.min(260, …)` ceiling, so past a point it stopped reserving and started
+ * clipping instead — and at the DEFAULT text size, with 45-character labels, it was
+ * already at that ceiling. And the whole thing was a cap the user could neither see
+ * nor reach: the only control over it was the legend's text size, which they had
+ * independent reasons to set.
+ *
+ * So the plot keeps an inset that leaves room for a *default-sized* legend and
+ * nothing more. Grow the legend past it and the layers overlap, which is a thing the
+ * user can see and decide about — "to the extent possible, let people make mistakes"
+ * (owner, 2026-10-08). Want the room back? Shrink the plot (`plotSize`).
  */
-export function legendGap(view, place, multi = true) {
+
+/** The plot layer's right-hand inset: room for a default-width legend, or `none`. */
+export function plotRightInset(view, { none = 20 } = {}) {
+  if (!view || view.legend !== 'right') return none;
+  return DEFAULT_LEGEND_W + LEGEND_GUTTER + 6;
+}
+
+/** The plot layer's extra top/bottom inset when a legend is placed there. */
+export function plotVerticalInset(view, place, multi = true) {
   if (!multi || !view || view.legend !== place) return 0;
-  const size = legendSizeOf(view);
-  return place === 'top' ? size * 1.8 : size * 2.4;
+  // Sized for the DEFAULT legend text, not the current size — see the note above.
+  return place === 'top' ? 20 : 26;
+}
+
+/**
+ * @deprecated Use {@link plotRightInset}. Kept because the stdlib's source is shipped
+ * into the plugin sandbox and a chart plugin that was written against the old name
+ * must keep rendering; it forwards, so there is one implementation and the two cannot
+ * drift. The `labels` argument is ignored — that is the point of the change.
+ */
+export function legendMargin(labels, view, opts) {
+  return plotRightInset(view, opts);
+}
+
+/** @deprecated Use {@link plotVerticalInset}. Forwards, for the reason above. */
+export function legendGap(view, place, multi = true) {
+  return plotVerticalInset(view, place, multi);
+}
+
+/** The whole drawing surface, in the same shape as a kind's plot `box`. Charts whose
+ * height grows with the data (see {@link svgOpenH}) pass their own height. */
+export function canvasBox(h = H) {
+  return { x0: 0, x1: W, y0: h, y1: 0 };
+}
+
+/** The chart title's text size. */
+export function titleSizeOf(view) {
+  const n = Number(view && view.titleSize);
+  return Number.isFinite(n) && n > 0 ? n : 15;
+}
+
+/** The plot layer's default top inset — room for a default-sized title. A constant,
+ * for the same reason the legend's inset is one. */
+export const TITLE_BAND = 34;
+
+/**
+ * The title layer: drawn LAST, so it is over both the legend and the plot.
+ *
+ * The baseline was a hard-coded `y=21` inside a 34-unit band, which is why the title
+ * had a ceiling of 28 that looked arbitrary and was not: at 28 the tops of the letters
+ * sit at about y=1.4, and one point more took them off the canvas. So the cap was
+ * really the fixed baseline wearing a disguise. Deriving the baseline from the size
+ * fixes the cause, and the title then grows downwards — over the plot, if it is big
+ * enough, which is allowed.
+ *
+ * The plate is AUTOMATIC, and deliberately not a control. These figures are exported
+ * into papers and slides, where a translucent panel behind a title sitting on white
+ * reads as leftover UI chrome rather than as part of the chart — so at the default
+ * size, where the title is nowhere near the data, there is no plate at all. It appears
+ * only once the title has actually grown down into the plot layer, which is the one
+ * case where it is legibility rather than decoration.
+ *
+ * Not a control for a concrete reason: "Titles & axes" is already a 16-row section and
+ * chart-groups.test.mjs holds that as a cap ("if a section grows past this, it wants
+ * splitting"). A toggle for this belongs in the same pass that splits the section.
+ *
+ * @param {object} [plot] - the plot layer's rect, to detect the overlap. Omitted means
+ *   "assume no overlap", so a kind that has not been layered yet keeps a bare title.
+ */
+export function titleBlock(title, view = {}, canvas = canvasBox(), plot = null) {
+  if (!title) return '';
+  const size = titleSizeOf(view);
+  const x = (canvas.x0 + canvas.x1) / 2;
+  // Derived from the size, where it used to be the constant y=21 — which is exactly why
+  // the title had a ceiling of 28: at 28 the tops of the letters sat at y≈1.4, and one
+  // point more put them off the canvas. 0.82em keeps the cap height inside the top edge
+  // at any size.
+  //
+  // The 8.7 is chosen so that `8.7 + 15 * 0.82` is 21.0 — the baseline the shared frames
+  // and four of the five hand-laid-out kinds already used. So a chart at the DEFAULT
+  // title size renders byte-identically to before, and only a title the user has
+  // actually resized moves. (The hand-rolled kinds had drifted to 20, 21 and 22; they
+  // agree now, which is a 1-unit shift on three of them.)
+  const y = 8.7 + size * 0.82;
+  const out = [];
+  if (plot && y + size * 0.25 > plot.y1) {
+    const w = Math.min(canvas.x1 - canvas.x0, String(title).length * size * 0.56 + 16);
+    out.push(`<rect class="ct-title-plate" x="${r(x - w / 2)}" y="${r(y - size * 0.95)}" width="${r(w)}" height="${r(size * 1.3)}" rx="4" `
+      + `fill="#fff" fill-opacity="0.92" stroke="${GRID}" stroke-width="1"/>`);
+  }
+  out.push(text(x, y, esc(title), {
+    size, weight: view.titleBold !== false ? 600 : 400,
+    italic: !!view.titleItalic, anchor: 'middle', fill: '#222',
+  }));
+  return out.join('');
+}
+
+/**
+ * Resize the plot layer about its own centre. `plotSize` is a percentage; 100 is the
+ * layout the insets describe.
+ *
+ * This is the control that makes overlapping layers a choice rather than a trap: the
+ * legend and title no longer take width out of the plot, so when the user wants room
+ * for a big one, THIS is how they get it. Scaling the rect rather than applying an SVG
+ * `transform` is deliberate — a transform would shrink the axis tick labels along with
+ * everything else, so "make the plot a bit smaller" would quietly cost legibility.
+ * Handing the kind a smaller rect keeps every run of text at the size it was set to.
+ */
+export function scalePlot(box, view) {
+  const pct = Number(view && view.plotSize);
+  if (!Number.isFinite(pct) || pct === 100 || pct <= 0) return box;
+  const f = pct / 100;
+  const cx = (box.x0 + box.x1) / 2;
+  const cy = (box.y0 + box.y1) / 2;
+  return {
+    x0: cx + (box.x0 - cx) * f,
+    x1: cx + (box.x1 - cx) * f,
+    y0: cy + (box.y0 - cy) * f,
+    y1: cy + (box.y1 - cy) * f,
+  };
 }
 
 /**
@@ -454,8 +586,29 @@ export function errorSvg(msg) {
     + `<text x="12" y="44" font-size="13" fill="#b00">${esc(msg)}</text></svg>`;
 }
 
-export function text(x, y, content, { size = 12, anchor = 'start', fill = '#000', weight, italic } = {}) {
-  return `<text x="${r(x)}" y="${r(y)}" font-size="${size}" fill="${fill}" text-anchor="${anchor}"${weight ? ` font-weight="${weight}"` : ''}${italic ? ' font-style="italic"' : ''}>${content}</text>`;
+export function text(x, y, content, { size = 12, anchor = 'start', fill = '#000', weight, italic, cls } = {}) {
+  return `<text${cls ? ` class="${cls}"` : ''} x="${r(x)}" y="${r(y)}" font-size="${size}" fill="${fill}" text-anchor="${anchor}"${weight ? ` font-weight="${weight}"` : ''}${italic ? ' font-style="italic"' : ''}>${content}</text>`;
+}
+
+/**
+ * One run of text that may need more than one line.
+ *
+ * A wrapped entry is ONE `<text>` carrying a `<tspan>` per line, which is how SVG
+ * says it: the lines stay a single addressable node, a screen reader reads them as
+ * one phrase rather than as three unrelated fragments, and anything walking the
+ * markup still sees one entry per entry.
+ *
+ * A single line emits a plain `<text>`, byte-identical to what {@link text} produced
+ * before wrapping existed — so the default rendering of every chart is unchanged.
+ *
+ * @param {string[]} lines - already wrapped (see {@link wrapToWidth}); NOT escaped here
+ * @param {number} lineH - baseline-to-baseline pitch
+ */
+export function textLines(x, y, lines, lineH, opts = {}) {
+  const ls = (lines || []).map((l) => esc(l));
+  if (ls.length <= 1) return text(x, y, ls[0] ?? '', opts);
+  const spans = ls.map((l, i) => `<tspan x="${r(x)}" dy="${i === 0 ? 0 : r(lineH)}">${l}</tspan>`).join('');
+  return text(x, y, spans, opts);
 }
 
 export function r(n) { return Math.round(n * 100) / 100; }
@@ -549,56 +702,157 @@ export function niceNum(range, round) {
 
 /** A legend (right column, or a centred top/bottom row). `items` = [{label,color}].
  * `box` = {x0,x1,y0,y1} plot rect. */
-export function legendBlock(items, place, box, view = {}) {
+export function legendBlock(items, place, box, view = {}, canvas = canvasBox(), { swatch } = {}) {
   if (!items.length || place === 'none') return '';
   const size = legendSizeOf(view);
-  const opts = { size, fill: '#333', weight: view.legendBold ? 600 : undefined, italic: !!view.legendItalic };
+  const opts = { size, fill: '#333', weight: view.legendBold ? 600 : undefined, italic: !!view.legendItalic, cls: 'ct-legend-text' };
   // Everything scales off the text, so a 20px legend does not draw 12px swatches
-  // on 19px rows. The character width is the same 0.62em the frames reserve by.
+  // on 19px rows.
   const sw = Math.round(size * 1.1); // swatch
-  const rowH = Math.round(size * 1.75); // line pitch
+  const lineH = Math.round(size * 1.45); // pitch WITHIN one wrapped entry
+  const rowGap = Math.round(size * 0.3); // extra pitch BETWEEN entries
   const chW = size * 0.62;
   const out = [];
 
+  const width = legendWidthOf(view);
+  // Characters that fit one line: the box, less the swatch column and both pads.
+  const perLine = Math.max(4, Math.floor((width - sw - 5 - 8) / chW));
+  const entries = items.map((it) => ({ ...it, lines: wrapToWidth(legendLabelOf(view, it), perLine) }));
+
   const inside = place.indexOf('inside-') === 0;
   if (place === 'right' || inside) {
-    const rows = items.map((it) => clip(it.label, 26));
-    const boxW = sw + 5 + Math.max(0, ...rows.map((t) => t.length * chW)) + 8;
-    const boxH = rows.length * rowH + 6;
+    const boxH = entries.reduce((a, e) => a + e.lines.length * lineH + rowGap, 0) + 8;
     let lx;
     let ly;
     if (inside) {
       const pad = 8;
-      lx = place.charAt(place.length - 1) === 'l' ? box.x0 + pad + 4 : box.x1 - boxW - pad + 4;
+      lx = place.charAt(place.length - 1) === 'l' ? box.x0 + pad + 4 : box.x1 - width - pad + 4;
       ly = place.indexOf('inside-t') === 0 ? box.y1 + pad : box.y0 - boxH - pad + 3;
-      // A plate, because inside means over the data: without it a legend on a
-      // dark bar is unreadable, which would make the option a trap.
-      out.push(
-        `<rect x="${r(lx - 4)}" y="${r(ly - 3)}" width="${r(boxW)}" height="${r(boxH)}" rx="4" ` +
-          `fill="#fff" fill-opacity="0.82" stroke="${GRID}" stroke-width="1"/>`,
-      );
     } else {
-      lx = box.x1 + 14;
+      // Anchored to the CANVAS, not to `box.x1 + 14`. That is the whole difference
+      // between a layer and a reservation: the legend sits where the legend sits,
+      // and the plot's own right-hand inset (plotRightInset) is a separate default
+      // that happens to clear it. Widen one and they overlap; that is allowed.
+      lx = canvas.x1 - width - LEGEND_GUTTER;
+      // Vertically it still lines up with the top of the plot — a layout
+      // relationship, not a budget, so it tracks the plot if that is resized.
       ly = box.y1 + 4;
     }
-    for (const it of items) {
-      out.push(`<rect x="${r(lx)}" y="${r(ly)}" width="${sw}" height="${sw}" rx="2" fill="${it.color}"/>`);
-      out.push(text(lx + sw + 5, ly + sw - 1, esc(clip(it.label, 26)), opts));
-      ly += rowH;
+    out.push(legendPlate(lx, ly, width, boxH, view, inside));
+    for (const e of entries) {
+      out.push(swatchAt(swatch, lx, ly, sw, e));
+      out.push(textLines(lx + sw + 5, ly + sw - 1, e.lines, lineH, opts));
+      ly += e.lines.length * lineH + rowGap;
     }
   } else {
     const gap = 16;
-    const widths = items.map((it) => sw + 4 + clip(it.label, 22).length * chW + gap);
+    const widths = entries.map((e) => sw + 4 + Math.max(...e.lines.map((l) => l.length)) * chW + gap);
     const totalW = widths.reduce((a, b) => a + b, 0) - gap;
+    const tallest = Math.max(...entries.map((e) => e.lines.length));
     let lx = (box.x0 + box.x1) / 2 - totalW / 2;
-    const ly = place === 'top' ? box.y1 - rowH + 3 : box.y0 + rowH + 22;
-    for (let i = 0; i < items.length; i++) {
-      out.push(`<rect x="${r(lx)}" y="${r(ly - sw + 1)}" width="${sw}" height="${sw}" rx="2" fill="${items[i].color}"/>`);
-      out.push(text(lx + sw + 4, ly + 1, esc(clip(items[i].label, 22)), opts));
+    const ly = place === 'top' ? box.y1 - tallest * lineH + 3 : box.y0 + lineH + 22;
+    out.push(legendPlate(lx - 4, ly - sw + 1, totalW + 8, tallest * lineH + 8, view, false));
+    entries.forEach((e, i) => {
+      out.push(swatchAt(swatch, lx, ly - sw + 1, sw, e));
+      out.push(textLines(lx + sw + 4, ly + 1, e.lines, lineH, opts));
       lx += widths[i];
-    }
+    });
   }
   return out.join('');
+}
+
+/**
+ * One legend entry's key: a colour chip by default, or whatever the kind draws.
+ *
+ * The `swatch` hook exists because the SCED chart had a whole second legend —
+ * `markerLegend` — cloned to draw a marker glyph instead of a square. It had drifted
+ * into ignoring every legend control there is: size, bold, italic, the width and the
+ * label overrides were all hard-coded in the copy, so on a multi-measure chart those
+ * controls were on screen and did nothing. One legend, one set of behaviour, and the
+ * glyph is the only thing a kind gets to vary.
+ */
+function swatchAt(swatch, x, y, size, item) {
+  if (typeof swatch === 'function') return swatch(x, y, size, item);
+  return `<rect x="${r(x)}" y="${r(y)}" width="${size}" height="${size}" rx="2" fill="${item.color}"/>`;
+}
+
+/** Gap between the legend layer and the canvas edge. */
+export const LEGEND_GUTTER = 10;
+
+/**
+ * The legend's backing plate.
+ *
+ * This used to be drawn only for the `inside-*` placements, with the reason on
+ * record: *"without it a legend on a dark bar is unreadable, which would make the
+ * option a trap."* Floating is now the DEFAULT rather than an opt-in, so that trap
+ * would be the default too — hence the plate everywhere, and at 0.92 rather than the
+ * 0.82 that was tuned for a placement the user had deliberately chosen. 0.82 over a
+ * saturated bar leaves #333 text at roughly 3.5:1; 0.92 keeps it past WCAG 1.4.3's
+ * 4.5:1 whatever happens to be behind it.
+ *
+ * Off via `legendPlate: false`, for a legend that sits on white anyway and where the
+ * outline is one more line in an exported figure.
+ */
+function legendPlate(x, y, w, h, view, _inside) {
+  if (view.legendPlate === false) return '';
+  // Classed so that a reader of the markup — an export filter, a test counting the
+  // chart's own marks — can tell the chrome from the data.
+  return `<rect class="ct-legend-plate" x="${r(x - 4)}" y="${r(y - 3)}" width="${r(w)}" height="${r(h)}" rx="4" `
+    + `fill="#fff" fill-opacity="0.92" stroke="${GRID}" stroke-width="1"/>`;
+}
+
+/**
+ * The text for one legend entry: the user's override if they typed one, else the
+ * model's own label.
+ *
+ * The escape hatch for the thing no sizing control can fix — a 60-character legend
+ * entry is not a choice the user made, it is the value label the DATA handed them.
+ * Wrapping stops it being clipped; this lets them say "Strongly agree" instead.
+ */
+export function legendLabelOf(view, item) {
+  const over = view && view.legendLabels && view.legendLabels[item.key];
+  // An EMPTY override means "no override", not "an entry with no text". The box in the
+  // controls panel is empty-with-a-placeholder, so clearing it is how the user reverts
+  // to the data's own label — if '' were a state of its own, reverting would instead
+  // leave a swatch with nothing beside it, and there would be no way back at all.
+  // (The title boxes read '' as explicit emptiness, because for a title that IS a
+  // thing someone wants.)
+  return over ? String(over) : (item.label ?? item.key ?? '');
+}
+
+/**
+ * Break `s` into lines of at most `perLine` characters, on word boundaries.
+ *
+ * Replaces `clip(label, 26)`, a hard ellipsis that fired at the DEFAULT text size —
+ * a 45-character value label lost its tail with 200px of canvas going spare, and no
+ * amount of resizing brought it back. A wrapped legend grows downwards, which costs
+ * nothing: it is a floating layer with no neighbour to push.
+ *
+ * A single word longer than the line is split rather than left to overflow, because
+ * a chemical name or a URL has no spaces to break on.
+ *
+ * NOT the same function as `wrapLabel` inside builtin-charts, which wraps the SCED
+ * chart's rotated case captions: that one takes a `maxLines` and ellipsises what will
+ * not fit, because a caption has to stay inside a panel's height. This one has no
+ * ceiling, because a legend is a floating layer with nothing below it to push. The
+ * two are one function with an optional bound and should be consolidated — filed in
+ * TODO.md rather than done here, because that rewrite lands on the SCED captions and
+ * this change had already touched every kind.
+ */
+export function wrapToWidth(s, perLine) {
+  const str = String(s ?? '');
+  const n = Math.max(1, Math.floor(perLine) || 1);
+  if (!str) return [''];
+  const lines = [];
+  let line = '';
+  for (const word of str.split(/\s+/).filter(Boolean)) {
+    if (!line) line = word;
+    else if (line.length + 1 + word.length <= n) line += ` ${word}`;
+    else { lines.push(line); line = word; }
+    while (line.length > n) { lines.push(line.slice(0, n)); line = line.slice(n); }
+  }
+  if (line) lines.push(line);
+  return lines.length ? lines : [''];
 }
 
 /** Map an ordered list of keys back to model items, skipping any missing, then
@@ -679,22 +933,20 @@ export function bandFrame(model, view, { allValues, bands, legendItems = [], alt
   const yHi = yMaxUser ? view.yAxisMax : yticks[yticks.length - 1];
 
   const showLegend = view.legend !== 'none' && legendItems.length > 1;
-  const mRight = legendMargin(legendItems.map((i) => i.label), showLegend ? view : {});
-  const mTop = (title ? 34 : 16) + legendGap(view, 'top', showLegend);
-  const mBottom = 46 + (xTitle ? 16 : 0) + legendGap(view, 'bottom', showLegend);
+  const mRight = plotRightInset(showLegend ? view : {});
+  const mTop = (title ? TITLE_BAND : 16) + plotVerticalInset(view, 'top', showLegend);
+  const mBottom = 46 + (xTitle ? 16 : 0) + plotVerticalInset(view, 'bottom', showLegend);
   const mLeft = 56 + (yTitle ? 16 : 0);
-  const box = { x0: mLeft, x1: W - mRight, y0: H - mBottom, y1: mTop };
+  const canvas = canvasBox();
+  const box = scalePlot({ x0: mLeft, x1: W - mRight, y0: H - mBottom, y1: mTop }, view);
   const yScale = (v) => box.y0 - ((v - yLo) / (yHi - yLo || 1)) * (box.y0 - box.y1);
   const band = (box.x1 - box.x0) / Math.max(1, bands);
   const centre = (i) => box.x0 + band * (i + 0.5);
 
+  // The plot layer. The title is NOT pushed here — it is the top layer and goes on
+  // last, in close(), so a title large enough to reach the data sits over it rather
+  // than under it.
   const out = [svgOpen(chartAltText(model, view, alt, noun))];
-  if (title) {
-    out.push(text(W / 2, 21, esc(title), {
-      size: view.titleSize || 15, weight: view.titleBold !== false ? 600 : 400,
-      italic: !!view.titleItalic, anchor: 'middle', fill: '#222',
-    }));
-  }
   for (const t of yticks) {
     if (t < yLo - 1e-9 || t > yHi + 1e-9) continue;
     const y = yScale(t);
@@ -721,7 +973,9 @@ export function bandFrame(model, view, { allValues, bands, legendItems = [], alt
       const my = (box.y0 + box.y1) / 2;
       out.push(`<text x="14" y="${r(my)}" font-size="${view.yAxisTitleSize || 12}" fill="#333" text-anchor="middle" transform="rotate(-90 14 ${r(my)})">${esc(yTitle)}</text>`);
     }
-    if (showLegend) out.push(legendBlock(legendItems, view.legend, box, view));
+    // Layer order, bottom to top: plot (above), legend, title.
+    if (showLegend) out.push(legendBlock(legendItems, view.legend, box, view, canvas));
+    out.push(titleBlock(title, view, canvas, box));
     out.push('</svg>');
     return out.join('');
   };
@@ -821,22 +1075,18 @@ export function xyFrame(model, view, { xValues, yValues, legendItems = [], alt, 
   const ys = span(yValues, 'yAxisMin', 'yAxisMax', yTickCount);
 
   const showLegend = view.legend !== 'none' && legendItems.length > 1;
-  const mRight = legendMargin(legendItems.map((i) => i.label), showLegend ? view : {});
-  const mTop = (title ? 34 : 16) + legendGap(view, 'top', showLegend);
-  const mBottom = 44 + (xTitle ? 16 : 0) + legendGap(view, 'bottom', showLegend);
+  const mRight = plotRightInset(showLegend ? view : {});
+  const mTop = (title ? TITLE_BAND : 16) + plotVerticalInset(view, 'top', showLegend);
+  const mBottom = 44 + (xTitle ? 16 : 0) + plotVerticalInset(view, 'bottom', showLegend);
   const mLeft = 56 + (yTitle ? 16 : 0);
-  const box = { x0: mLeft, x1: W - mRight, y0: H - mBottom, y1: mTop };
+  const canvas = canvasBox();
+  const box = scalePlot({ x0: mLeft, x1: W - mRight, y0: H - mBottom, y1: mTop }, view);
 
   const xScale = (v) => box.x0 + ((v - xs.lo) / (xs.hi - xs.lo || 1)) * (box.x1 - box.x0);
   const yScale = (v) => box.y0 - ((v - ys.lo) / (ys.hi - ys.lo || 1)) * (box.y0 - box.y1);
 
+  // The title is the top layer; it goes on last, in close().
   const out = [svgOpen(chartAltText(model, view, alt, noun))];
-  if (title) {
-    out.push(text(W / 2, 21, esc(title), {
-      size: view.titleSize || 15, weight: view.titleBold !== false ? 600 : 400,
-      italic: !!view.titleItalic, anchor: 'middle', fill: '#222',
-    }));
-  }
   for (const t of ys.ticks) {
     if (t < ys.lo - 1e-9 || t > ys.hi + 1e-9) continue;
     const y = yScale(t);
@@ -867,7 +1117,9 @@ export function xyFrame(model, view, { xValues, yValues, legendItems = [], alt, 
       const my = (box.y0 + box.y1) / 2;
       out.push(`<text x="14" y="${r(my)}" font-size="${view.yAxisTitleSize || 12}" fill="#333" text-anchor="middle" transform="rotate(-90 14 ${r(my)})">${esc(yTitle)}</text>`);
     }
-    if (showLegend) out.push(legendBlock(legendItems, view.legend, box, view));
+    // Layer order, bottom to top: plot (above), legend, title.
+    if (showLegend) out.push(legendBlock(legendItems, view.legend, box, view, canvas));
+    out.push(titleBlock(title, view, canvas, box));
     out.push('</svg>');
     return out.join('');
   };

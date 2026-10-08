@@ -6,11 +6,13 @@
  * title, axis titles and value labels all could — so a chart enlarged for a
  * slide kept one bit of 11px text looking like an oversight.
  *
- * The part worth pinning is not that the size applies, but that the LAYOUT
- * follows it. The frames reserve a right-hand margin by measuring the legend's
- * labels, and that measurement used a hard-coded 7px per character, correct only
- * while the size was fixed at 11. Reserving too little clips the text off the
- * canvas — which looks like a rendering bug, not like a setting.
+ * It is now a floating LAYER, and that is what most of this file pins. The plot used
+ * to hand the legend a right-hand margin measured from the longest label, capped at
+ * 260 — so the data decided the composition, and past the cap the text was clipped
+ * instead (at the DEFAULT size, with 45-character labels, it was already there).
+ * Nothing is reserved any more: the legend has its own width, wraps to it, and
+ * overlaps the plot if the user makes it big enough. Room is bought back with
+ * `plotSize`, not taken automatically.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -31,11 +33,19 @@ const MODEL = {
 };
 
 const draw = (view = {}) => renderChart(MODEL, { ...defaultView(MODEL), ...view });
-/** The legend's own text nodes — the series labels, wherever they were drawn. */
-const legendText = (svg) =>
-  [...svg.matchAll(/<text[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]).filter((t) => /ern region$/.test(t));
+/**
+ * The legend's entries, one string each, with any wrapped lines rejoined.
+ *
+ * A wrapped entry is a single `<text>` holding one `<tspan>` per line, so an entry is
+ * still one node however it was broken — which is the reason it is built that way.
+ */
+const legendEntries = (svg) =>
+  [...svg.matchAll(/<text class="ct-legend-text"[^>]*>(.*?)<\/text>/g)]
+    .map((m) => m[1].replace(/<tspan[^>]*>/g, ' ').replace(/<\/tspan>/g, '').trim().replace(/\s+/g, ' '));
+/** Alias kept for the assertions that only care about which entries were drawn. */
+const legendText = legendEntries;
 const legendFontSizes = (svg) =>
-  [...svg.matchAll(/<text[^>]*font-size="([\d.]+)"[^>]*>[^<]*ern region<\/text>/g)].map((m) => +m[1]);
+  [...svg.matchAll(/<text class="ct-legend-text"[^>]*font-size="([\d.]+)"/g)].map((m) => +m[1]);
 /** The x where the plot area ends — everything right of it is legend margin. */
 const plotRight = (svg) => {
   // The x-axis rule runs the width of the plot box.
@@ -53,23 +63,63 @@ test('the legend draws its series, and defaults to 11px', () => {
 test('size, bold and italic reach the legend text', () => {
   const svg = draw({ legendSize: 18, legendBold: true, legendItalic: true });
   assert.deepEqual(legendFontSizes(svg), [18, 18]);
-  const bold = [...svg.matchAll(/<text[^>]*font-weight="600"[^>]*font-style="italic"[^>]*>([^<]*)</g)].map((m) => m[1]);
-  assert.ok(bold.includes('Northern region'), 'the legend should be bold and italic');
+  // At 18px the label no longer fits the default 150-wide legend, so it WRAPS — which
+  // is the new behaviour in one line: it used to be cut to "Northern regio…" and now
+  // the entry grows downwards instead. Rejoined, the words are all still there.
+  assert.deepEqual(legendEntries(svg), ['Northern region', 'Southern region']);
+  const styled = [...svg.matchAll(/<text class="ct-legend-text"[^>]*font-weight="600"[^>]*font-style="italic"/g)];
+  assert.equal(styled.length, 2, 'both entries should be bold and italic');
 });
 
-test('a bigger legend gets more room, not a clipped one', () => {
-  // The whole point of the size control is undone if the frame keeps reserving
-  // space for 11px text: the labels simply run off the canvas.
+test('a long label WRAPS rather than losing its tail', () => {
+  // The thing the old hard `clip(label, 26)` could not do at any size or any width.
+  const long = {
+    ...MODEL,
+    series: [
+      { key: 'a', label: 'Strongly agree with the proposition as stated', values: [30, 10] },
+      { key: 'b', label: 'Somewhat disagree with the proposition', values: [10, 30] },
+    ],
+  };
+  const svg = renderChart(long, { ...defaultView(long), legend: 'right' });
+  assert.deepEqual(legendEntries(svg), [
+    'Strongly agree with the proposition as stated',
+    'Somewhat disagree with the proposition',
+  ], 'every word survives');
+  assert.ok(!svg.includes('…'), 'and nothing was ellipsised');
+  // Several lines means several tspans, inside ONE text node per entry.
+  assert.ok((svg.match(/<tspan/g) || []).length >= 4, 'the entries were broken into lines');
+});
+
+test('a wider legend fits more per line — and does NOT shrink the plot', () => {
+  // Both halves matter. The first is that the control does something; the second is
+  // that it is a layer, so buying the legend more room is not paid for by the data.
+  const narrow = draw({ legendWidth: 80 });
+  const wide = draw({ legendWidth: 400 });
+  const lines = (svg) => (svg.match(/<tspan/g) || []).length;
+  assert.ok(lines(narrow) > lines(wide), 'a narrow legend wraps more');
+  assert.equal(plotRight(narrow), plotRight(wide), 'the plot keeps its width either way');
+});
+
+test('THE LAYER CONTRACT: legend text size does not move the plot', () => {
+  // The inversion. The plot used to give up width as the legend's text grew, so the
+  // data's own area depended on a font setting — and because the reservation was
+  // capped at 260, past that point it stopped giving and started clipping anyway.
   const small = draw({ legendSize: 9 });
   const large = draw({ legendSize: 22 });
-  assert.ok(plotRight(large) < plotRight(small), 'the plot must give up width to a larger legend');
-  // And the text still fits: its start plus its length stays on the canvas.
-  const startOf = (svg) => {
-    const m = svg.match(/<text x="([\d.]+)"[^>]*font-size="([\d.]+)"[^>]*>Northern region</);
-    return { x: +m[1], size: +m[2] };
-  };
-  const { x, size } = startOf(large);
-  assert.ok(x + 'Northern region'.length * size * 0.62 <= CANVAS, 'the legend must not run off the canvas');
+  assert.equal(plotRight(large), plotRight(small), 'the plot is the same size either way');
+  // The text stays on the canvas because it wraps to the legend's width, not because
+  // something measured it and took the room from somewhere else.
+  const starts = [...large.matchAll(/<text class="ct-legend-text" x="([\d.]+)"/g)].map((m) => +m[1]);
+  assert.ok(starts.length, 'the legend drew something');
+  for (const x of starts) assert.ok(x < CANVAS, `a legend entry started off-canvas at ${x}`);
+});
+
+test('plotSize is how the user buys the room back', () => {
+  // With nothing reserved automatically, this is the lever that resolves an overlap —
+  // so it has to actually move the plot's edge.
+  const full = draw({ plotSize: 100 });
+  const small = draw({ plotSize: 70 });
+  assert.ok(plotRight(small) < plotRight(full), 'a smaller plot really is smaller');
 });
 
 test('inside placements sit over the plot and reserve no margin', () => {
@@ -79,15 +129,24 @@ test('inside placements sit over the plot and reserve no margin', () => {
     const svg = draw({ legend });
     assert.deepEqual(legendText(svg), ['Northern region', 'Southern region'], legend);
     assert.ok(plotRight(svg) > plotRight(outside), `${legend} should give the plot its width back`);
-    // Over the data means over a bar, so the text needs a plate behind it.
-    assert.match(svg, /fill="#fff" fill-opacity="0\.82"/, `${legend} should draw a backing plate`);
+    // Over the data means over a bar, so the text needs a plate behind it. Every
+    // placement carries one now — floating is the default, so what used to be the
+    // trap for one opt-in placement would otherwise be the trap for all of them —
+    // and at 0.92 rather than 0.82, which keeps #333 past WCAG 1.4.3's 4.5:1 over a
+    // saturated bar instead of landing around 3.5:1.
+    assert.match(svg, /class="ct-legend-plate"[^>]*fill-opacity="0\.92"/, `${legend} should draw a backing plate`);
   }
+});
+
+test('the backing panel can be switched off', () => {
+  assert.ok(draw({ legend: 'right' }).includes('ct-legend-plate'), 'on by default');
+  assert.ok(!draw({ legend: 'right', legendPlate: false }).includes('ct-legend-plate'), 'and off on request');
 });
 
 test('the four corners are actually four different corners', () => {
   const at = (legend) => {
     const svg = draw({ legend });
-    const m = svg.match(/<text x="([\d.]+)" y="([\d.]+)"[^>]*>Northern region</);
+    const m = svg.match(/<text class="ct-legend-text" x="([\d.]+)" y="([\d.]+)"/);
     return { x: +m[1], y: +m[2] };
   };
   const tl = at('inside-tl');

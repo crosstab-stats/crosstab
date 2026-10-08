@@ -103,6 +103,12 @@ test('a control shared by several kinds is built in ONE place', () => {
     'valueLabelSize', 'valueLabelBold', 'valueLabelItalic',
     'titleText', 'titleSize', 'titleBold', 'titleItalic',
     'legendSize', 'legendBold', 'legendItalic',
+    // The legend is a floating LAYER, so these two are how the user sizes it and
+    // keeps it readable over the plot — both from legendFormatControls.
+    'legendWidth', 'legendPlate',
+    // How much of the canvas the plot layer takes. Every kind has it, because nothing
+    // reserves space from the plot any more, so this is the lever that buys room back.
+    'plotSize',
     'pointOverlay', 'errorBars',
     // A row per item, on the forest plot and the tornado diagram.
     'rowHeight',

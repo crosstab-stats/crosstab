@@ -250,6 +250,11 @@ function buildControl(ctl, view, changed) {
  * (when `viewForColor` is given) and ▲▼ reorder buttons. Mutates `order` in place. */
 function reorderList(items, order, viewForColor, showOrder, paint, onChange, refocus = () => {}) {
   const by = new Map(items.map((it) => [it.key, it]));
+  // The colour items ARE the legend entries, so this list is where their wording gets
+  // edited. Only where there is a legend to edit: `showOrder` is the kind's `multi`,
+  // and the category-order list passes no view at all (those are axis labels, not
+  // legend entries, and renaming them here would rename the wrong thing).
+  const renameable = !!viewForColor && showOrder;
   const list = elem('div', 'results-chart__series');
 
 
@@ -269,10 +274,32 @@ function reorderList(items, order, viewForColor, showOrder, paint, onChange, ref
       row.append(color);
     }
 
-    const name = elem('span', 'results-chart__sname');
-    name.textContent = it.label || key;
-    name.title = it.label || key;
-    row.append(name);
+    if (renameable) {
+      // The legend entry's wording, editable in place. The box is EMPTY with the
+      // model's label as its placeholder, so clearing it reverts to the data's own
+      // label rather than storing a blank — one override, and one way to undo it.
+      // (The title boxes pre-fill instead, because there "explicitly no title" is a
+      // state someone wants; "a swatch with no text beside it" is not.)
+      const rename = elem('input', 'results-chart__srename');
+      rename.type = 'text';
+      rename.value = (viewForColor.legendLabels && viewForColor.legendLabels[key]) || '';
+      rename.placeholder = it.label || key;
+      rename.title = `Legend label for ${it.label || key}`;
+      rename.setAttribute('aria-label', rename.title);
+      rename.addEventListener('change', () => {
+        if (!viewForColor.legendLabels) viewForColor.legendLabels = {};
+        const typed = rename.value.trim();
+        if (typed) viewForColor.legendLabels[key] = typed;
+        else delete viewForColor.legendLabels[key];
+        onChange();
+      });
+      row.append(rename);
+    } else {
+      const name = elem('span', 'results-chart__sname');
+      name.textContent = it.label || key;
+      name.title = it.label || key;
+      row.append(name);
+    }
 
     if (showOrder) {
       row.append(

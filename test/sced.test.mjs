@@ -494,7 +494,10 @@ const MULTI = {
 const markers = (svg) => ({
   circles: (svg.match(/<circle/g) || []).length,
   polygons: (svg.match(/<polygon/g) || []).length,
-  rects: (svg.match(/<rect(?! x="0" y="0")/g) || []).length,
+  // The chart's own marks only: the canvas fill, and the legend's backing plate, are
+  // chrome. The plate is new — the legend became a floating layer, so it carries one
+  // at every placement rather than only the `inside-*` ones.
+  rects: (svg.match(/<rect(?! x="0" y="0")(?! class="ct-legend-plate")/g) || []).length,
 });
 
 test('a panel can hold several measures, and panels may differ in how many', () => {

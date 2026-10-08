@@ -10,6 +10,39 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
+- [ ] **The `tornado` chart kind is unreachable in the app (found 2026-10-08).**
+      `plugins/builtin-charts/index.js` builds `kinds['tornado']` but the plugin's own
+      `manifest.charts.kinds` list does not name it, and that list is what the host
+      registers from — so the kind has never been reachable in the running app. Confirmed
+      live: activating builtin-charts registers **12** kinds, not 13.
+
+      It has been that way since the commit that introduced it (`24b8efc`, "the
+      sensitivity figures become chart models; new `tornado` kind"), which added the kind
+      and not the manifest entry. Tests do not see it because `chart-kinds-harness.mjs`
+      registers everything `chartKinds()` returns, bypassing the manifest — so the kind is
+      fully tested and completely unavailable.
+
+      Two things to do, and the second matters more: add `'tornado'` to the list, and make
+      the harness assert that what it registers MATCHES the manifest, so the next kind
+      cannot be written, tested and shipped dead. Filed rather than fixed on the spot
+      because adding it makes a new chart type appear in the UI, which is a product
+      decision and not a loose end from the layer work.
+
+- [ ] **Two functions named `wrapLabel` (found 2026-10-08).** `wrapToWidth` in the charts
+      stdlib wraps a legend entry with no ceiling; `wrapLabel` inside builtin-charts wraps
+      the SCED chart's rotated case captions with a `maxLines` and an ellipsis, because
+      those have to fit a panel's height. They are one function with an optional bound.
+      They were left separate deliberately: unifying them changes how the SCED captions
+      break (the stdlib version hard-splits a long word, the plugin's lets it overflow),
+      and the layer change had already touched every kind.
+
+- [ ] **"Titles & axes" wants splitting (16 rows).** `chart-groups.test.mjs` holds 16 as a
+      cap with the note "if a section grows past this, it wants splitting", and it is now
+      exactly at it — which is why the chart title's backing panel had to become automatic
+      instead of a toggle. Splitting it into Title / X axis / Y axis would make room, and
+      a `titlePlate` control is the first thing to add once there is any.
+
+
 - [x] **#174 — DONE (2026-09-12). The gaps a real intro-soc methods class falls into
       (user, 2026-09-11).** Source: `sample-data/Sarabia_GSS2014_MODULES_ON_IMMIGRATION_…_STUDENT_VERSION.pdf`
       — Heidy Sarabia, PhD, 17 labs of SPSS coursework on GSS 2014, handed to students as
