@@ -29,7 +29,8 @@ await import('./chart-kinds-harness.mjs');
 const { defaultView, renderChart } = await import('../core/chart-renderer.js');
 const {
   wrapToWidth, legendLabelOf, legendSizeOf, legendWidthOf, titleSizeOf, titleBlock,
-  scalePlot, plotRightInset, plotVerticalInset, legendMargin, legendGap, canvasBox,
+  scalePlot, plotRightInset, plotVerticalInset, legendMargin, legendGap, designBox,
+  canvasSizeOf, designOrigin,
   textLines, H, DEFAULT_LEGEND_W,
 } = await import('../core/charts/stdlib.js');
 
@@ -210,7 +211,7 @@ test('THE DEFAULT CHART IS UNCHANGED: no plate-free legend, no wrapping, no refl
 test('the title gets a backing panel only once it reaches the plot', () => {
   // Automatic, and deliberately not a control: at the default size a plate behind a
   // title on empty white reads as leftover UI in an exported figure.
-  const canvas = canvasBox();
+  const canvas = designBox();
   const plot = { x0: 56, x1: 554, y0: 414, y1: 34 };
   assert.ok(!titleBlock('T', { titleSize: 15 }, canvas, plot).includes('ct-title-plate'));
   assert.ok(titleBlock('T', { titleSize: 90 }, canvas, plot).includes('ct-title-plate'),
@@ -404,22 +405,63 @@ test('a drag survives the pointer leaving the handle', () => {
   assert.ok(DRAG_SRC.includes('life.abort()'), 'and torn down if the panel closes mid-drag');
 });
 
-test('the figure frame takes its shape from the drawing, so there is no dead band', () => {
-  // THE OTHER BUG: the frame was a fixed 420px tall whatever its width, so a 720x460
-  // chart in a 488px-wide pane was letterboxed with 55px of white above and below —
-  // inside the figure's border, outside the viewBox, and therefore impossible to drag
-  // anything into. Measured after the fix: 55px of dead band became 1px.
-  assert.match(PANE_SRC, /#fitHolderToViewBox\(holder\)\s*\{/, 'the helper should exist');
-  assert.match(PANE_SRC, /holder\.style\.aspectRatio/, 'and set the frame from the viewBox');
-  // Read from the markup, not assumed: forest and SCED charts grow with the data, so
-  // their shape differs per dataset.
-  assert.match(PANE_SRC, /getAttribute\('viewBox'\)/);
+test('the frame resizes the CANVAS, and is freeform in both axes', () => {
+  // THE OTHER BUG, and its sequel. The frame was a fixed 420px tall whatever its width,
+  // so a 720x460 chart in a 488px pane was letterboxed with 55px of white above and
+  // below — inside the figure's border, outside the viewBox, impossible to drag into.
+  // The first fix locked the frame to the drawing's ratio, which took away freeform
+  // resizing ("it used to be xy freeform, now it's locked-ratio drag"). The real answer
+  // was that resizing should size the CANVAS rather than the chart: "If they want
+  // overlapping elements in a small canvas, with parts being clipped due to oversized
+  // elements, that is their choice" (owner, 2026-10-08).
+  assert.match(PANE_SRC, /#watchCanvasSize\(/, 'the frame has to feed its size to the view');
+  assert.match(PANE_SRC, /item\.view\.canvasW = w/, 'as a canvas size the renderer can use');
+  assert.match(PANE_SRC, /ResizeObserver/);
   const css = PANE_SRC.slice(PANE_SRC.indexOf('.results-chart .results-plot__svg {'));
   const rule = css.slice(0, css.indexOf('}'));
   assert.ok(!/height:\s*\d+px/.test(rule), `a fixed height reintroduces the band: ${rule.trim()}`);
-  assert.match(rule, /aspect-ratio:/);
-  assert.match(rule, /resize:\s*horizontal/,
-    'dragging the frame taller only ever added dead band, so width is the only axis that means anything');
+  assert.match(rule, /resize:\s*both/, 'freeform in both axes');
+  assert.match(rule, /aspect-ratio:/, 'which only supplies the first height, before the user picks one');
+});
+
+test('the canvas is separate from the chart: resizing one does not resize the other', () => {
+  const small = { canvasW: 400, canvasH: 300 };
+  const big = { canvasW: 1400, canvasH: 1000 };
+  assert.deepEqual(canvasSizeOf({}), { w: 720, h: 460 }, 'the design size is the default');
+  assert.deepEqual(canvasSizeOf(small), { w: 400, h: 300 });
+  // The viewBox follows the canvas...
+  const wide = renderChart(MODEL, { ...defaultView(MODEL), ...big });
+  assert.match(wide, /viewBox="0 0 1400 1000"/);
+  // ...while the chart inside it is laid out at exactly the same size as ever. The plot
+  // area of a chart on a huge canvas is the plot area of one on a small canvas; what
+  // changed is how much empty room surrounds it.
+  const plotWidth = (svg) => {
+    const xs = [...svg.matchAll(/<line x1="([\d.]+)" y1="([\d.]+)" x2="([\d.]+)" y2=""/g)].map((m) => +m[3] - +m[1]);
+    return Math.round(Math.max(...xs));
+  };
+  const normal = renderChart(MODEL, defaultView(MODEL));
+  assert.equal(plotWidth(wide), plotWidth(normal), 'a bigger canvas must not stretch the chart');
+});
+
+test('the composition is CENTRED on the canvas, not stranded in a corner', () => {
+  // Growing the canvas should add room on every side of what the user already has.
+  const o = designOrigin({ canvasW: 1120, canvasH: 760 });
+  assert.deepEqual(o, { x: 200, y: 150 });
+  assert.deepEqual(designOrigin({}), { x: 0, y: 0 }, 'and no offset at the design size');
+  // Negative when the canvas is smaller: the chart overhangs and clips, as intended.
+  assert.ok(designOrigin({ canvasW: 400, canvasH: 300 }).x < 0);
+  const svg = renderChart(MODEL, { ...defaultView(MODEL), canvasW: 1120, canvasH: 760 });
+  assert.match(svg, /<g class="ct-design" transform="translate\(200 150\)">/);
+  assert.equal((svg.match(/<\/g>/g) || []).length, (svg.match(/<g[ >]/g) || []).length, 'groups balance');
+});
+
+test('a junk canvas size falls back to the design size rather than drawing nothing', () => {
+  for (const bad of [{ canvasW: 0 }, { canvasW: -5 }, { canvasW: NaN }, { canvasW: 'wide' }]) {
+    assert.equal(canvasSizeOf(bad).w, 720, JSON.stringify(bad));
+  }
+  const svg = renderChart(MODEL, { ...defaultView(MODEL), canvasW: -10, canvasH: 0 });
+  assert.match(svg, /viewBox="0 0 720 460"/);
+  assert.ok(!/NaN/.test(svg));
 });
 
 test('every chart holder that receives markup is fitted to it', () => {
@@ -429,4 +471,20 @@ test('every chart holder that receives markup is fitted to it', () => {
   // attributes to the right cause.
   const fits = (PANE_SRC.match(/#fitHolderToViewBox\(holder\)/g) || []).length;
   assert.ok(fits >= 4, `expected the helper plus every call site, saw ${fits}`);
+});
+
+test('the frame observers are stopped when the pane is cleared', () => {
+  // A ResizeObserver holds a strong reference to what it watches, so one per chart with
+  // no teardown means a cleared pane keeps every frame it ever showed.
+  assert.match(PANE_SRC, /#frameWatchers = new Set\(\)/);
+  assert.match(PANE_SRC, /for \(const stop of this\.#frameWatchers\) stop\(\)/);
+});
+
+test('a saved canvas size is restored, not recomputed', () => {
+  // The size is the user's choice, so it survives a reopen — and the frame has to be
+  // put back to it, or the figure would redraw at the right shape inside a frame of the
+  // wrong one, which is the letterbox bug again from the other direction.
+  assert.match(PANE_SRC, /item\.view\.canvasW > 0 && item\.view\.canvasH > 0/);
+  assert.match(PANE_SRC, /holder\.style\.aspectRatio = ''/,
+    'and the first-height hint must get out of the way once there is a real size');
 });

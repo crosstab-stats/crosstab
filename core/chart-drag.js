@@ -210,12 +210,35 @@ export function mountLayerDrag(holder, item, onCommit) {
     for (const [name, h] of handles) if (!seen.has(name)) h.hidden = true;
   };
 
+  /**
+   * A layer's box in CANVAS coordinates, with any offset it already carries removed —
+   * i.e. where it would sit if it had never been dragged.
+   *
+   * Measured from the rendered geometry rather than from `getBBox()`, which reports
+   * DESIGN coordinates: the whole composition lives inside a `ct-design` group that
+   * centres it on the canvas, so a bbox and the canvas are in two different spaces and
+   * clamping one against the other would be off by that centring offset — and the
+   * offset is not constant, it changes every time the user resizes the frame.
+   */
+  const baseRectOf = (svg, g, name) => {
+    const m = svg.getScreenCTM();
+    const r = g.getBoundingClientRect();
+    const cur = layerOffsetOf(item.view, name);
+    if (!m || Math.abs(m.a) < 1e-6 || Math.abs(m.d) < 1e-6) return g.getBBox();
+    return {
+      x: (r.left - m.e) / m.a - cur.x,
+      y: (r.top - m.f) / m.d - cur.y,
+      width: r.width / m.a,
+      height: r.height / m.d,
+    };
+  };
+
   /** Write one layer's offset and tell the pane to redraw and mark itself dirty. */
   const commit = (name, offset) => {
     const svg = svgOf();
     const g = svg && svg.querySelector(`.ct-layer--${name}`);
     if (!g) return;
-    const raw = clampOffset(offset, g.getBBox(), canvasOf(svg));
+    const raw = clampOffset(offset, baseRectOf(svg, g, name), canvasOf(svg));
     // Rounded before storing. A drag divides a pixel delta by the render scale, so it
     // naturally produces things like 91.71974522292993 — which the markup rounds to 2dp
     // anyway, and which would otherwise sit in the saved project forever as noise in the

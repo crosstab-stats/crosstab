@@ -217,9 +217,17 @@ export function legendGap(view, place, multi = true) {
   return plotVerticalInset(view, place, multi);
 }
 
-/** The whole drawing surface, in the same shape as a kind's plot `box`. Charts whose
- * height grows with the data (see {@link svgOpenH}) pass their own height. */
-export function canvasBox(h = H) {
+/**
+ * The DESIGN box — the `W` x `designH` rectangle a kind composes itself in, in the same
+ * shape as its plot `box`. Charts whose height grows with the data (see
+ * {@link svgOpenH}) pass their own height.
+ *
+ * Not the canvas. Layout and anchoring happen here — the title centres on it, the
+ * legend hangs off its right edge — and {@link svgOpenH} then places the whole
+ * composition on the canvas. Keeping the two apart is what lets the user resize the
+ * canvas to any shape without the chart inside it changing size.
+ */
+export function designBox(h = H) {
   return { x0: 0, x1: W, y0: h, y1: 0 };
 }
 
@@ -298,7 +306,7 @@ export const TITLE_BAND = 34;
  * @param {object} [plot] - the plot layer's rect, to detect the overlap. Omitted means
  *   "assume no overlap", so a kind that has not been layered yet keeps a bare title.
  */
-export function titleBlock(title, view = {}, canvas = canvasBox(), plot = null) {
+export function titleBlock(title, view = {}, canvas = designBox(), plot = null) {
   if (!title) return '';
   const size = titleSizeOf(view);
   const x = (canvas.x0 + canvas.x1) / 2;
@@ -743,7 +751,7 @@ export function niceNum(range, round) {
 
 /** A legend (right column, or a centred top/bottom row). `items` = [{label,color}].
  * `box` = {x0,x1,y0,y1} plot rect. */
-export function legendBlock(items, place, box, view = {}, canvas = canvasBox(), { swatch } = {}) {
+export function legendBlock(items, place, box, view = {}, canvas = designBox(), { swatch } = {}) {
   if (!items.length || place === 'none') return '';
   const size = legendSizeOf(view);
   const opts = { size, fill: '#333', weight: view.legendBold ? 600 : undefined, italic: !!view.legendItalic, cls: 'ct-legend-text' };
@@ -906,8 +914,58 @@ export function ordered(items, order) {
   return out;
 }
 
-export function svgOpen(label) {
-  return svgOpenH(H, label);
+export function svgOpen(label, view) {
+  return svgOpenH(H, label, view);
+}
+
+/**
+ * ## The canvas is not the chart
+ *
+ * `W` x `H` is the chart's DESIGN size — the space its own layout is composed in, and
+ * the thing every renderer below still measures against. The CANVAS is separate: it is
+ * how much room the figure is given, and the user sets it by dragging the frame.
+ *
+ * Resizing the canvas therefore does not resize anything in the chart. A bigger canvas
+ * is the same chart with more space around it, which is the room the layers get dragged
+ * out into; a smaller one clips. In the owner's words (2026-10-08): *"resizing the
+ * bounding box… should resize only the canvas on which the layered elements can be
+ * positioned/sized… If they want overlapping elements in a small canvas, with parts
+ * being clipped due to oversized elements, that is their choice."*
+ *
+ * This is also why the frame can be dragged to any shape again. Before, the viewBox was
+ * fixed at 720x460 and `preserveAspectRatio` centred it in whatever box it was given —
+ * so a freeform resize changed nothing but the width of the blank margin, and that
+ * margin was the unreachable "buffer" at the top of the figure. Now the viewBox IS the
+ * frame, so there is no margin to be stranded in.
+ */
+
+/** The canvas the figure is drawn on: the user's size if they set one, else the
+ * design size. `designH` is the kind's own height (see {@link svgOpenH}). */
+export function canvasSizeOf(view, designH = H) {
+  const w = Number(view && view.canvasW);
+  const h = Number(view && view.canvasH);
+  return {
+    w: Number.isFinite(w) && w > 0 ? w : W,
+    h: Number.isFinite(h) && h > 0 ? h : designH,
+  };
+}
+
+/**
+ * Where the design box sits on the canvas: centred.
+ *
+ * Centred rather than pinned to a corner because enlarging the canvas should add room
+ * on every side of the composition the user already has, not strand it in the top left.
+ * Negative when the canvas is smaller than the design — the chart then overhangs and
+ * clips, which is the stated intent.
+ */
+export function designOrigin(view, designH = H) {
+  const c = canvasSizeOf(view, designH);
+  return { x: (c.w - W) / 2, y: (c.h - designH) / 2 };
+}
+
+/** Close what {@link svgOpenH} opened: the design group, then the SVG. */
+export function svgClose() {
+  return '</g></svg>';
 }
 
 /**
@@ -920,12 +978,19 @@ export function svgOpen(label) {
  * survives {@link module:core/sanitize-html} on the way into the results pane and is
  * what SVG's own accessibility mapping expects.
  */
-export function svgOpenH(h, label) {
+export function svgOpenH(h, label, view) {
   const role = label ? ' role="img"' : '';
   const title = label ? `<title>${esc(label)}</title>` : '';
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${r(h)}" font-family="${FONT}"${role}>`
+  const c = canvasSizeOf(view, h);
+  const o = designOrigin(view, h);
+  // Everything the kind draws goes inside ONE design group, offset to centre the
+  // composition on the canvas. Doing it here rather than in each renderer means no kind
+  // has to know the canvas exists: they lay out in design coordinates exactly as before,
+  // and the group puts the result in the right place. Paired with {@link svgClose}.
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${r(c.w)} ${r(c.h)}" font-family="${FONT}"${role}>`
     + title
-    + `<rect x="0" y="0" width="${W}" height="${r(h)}" fill="#ffffff"/>`;
+    + `<rect x="0" y="0" width="${r(c.w)}" height="${r(c.h)}" fill="#ffffff"/>`
+    + `<g class="ct-design" transform="translate(${r(o.x)} ${r(o.y)})">`;
 }
 
 /**
@@ -978,7 +1043,7 @@ export function bandFrame(model, view, { allValues, bands, legendItems = [], alt
   const mTop = (title ? TITLE_BAND : 16) + plotVerticalInset(view, 'top', showLegend);
   const mBottom = 46 + (xTitle ? 16 : 0) + plotVerticalInset(view, 'bottom', showLegend);
   const mLeft = 56 + (yTitle ? 16 : 0);
-  const canvas = canvasBox();
+  const canvas = designBox();
   const box = scalePlot({ x0: mLeft, x1: W - mRight, y0: H - mBottom, y1: mTop }, view);
   const yScale = (v) => box.y0 - ((v - yLo) / (yHi - yLo || 1)) * (box.y0 - box.y1);
   const band = (box.x1 - box.x0) / Math.max(1, bands);
@@ -988,7 +1053,7 @@ export function bandFrame(model, view, { allValues, bands, legendItems = [], alt
   // is the top layer and goes on last, so a title large enough to reach the data sits
   // over it rather than under it. The background rect stays outside the group,
   // deliberately: it is the canvas, not part of anything that can be dragged.
-  const out = [svgOpen(chartAltText(model, view, alt, noun)), layerOpen('plot', view)];
+  const out = [svgOpen(chartAltText(model, view, alt, noun), view), layerOpen('plot', view)];
   for (const t of yticks) {
     if (t < yLo - 1e-9 || t > yHi + 1e-9) continue;
     const y = yScale(t);
@@ -1020,7 +1085,7 @@ export function bandFrame(model, view, { allValues, bands, legendItems = [], alt
     out.push(LAYER_CLOSE);
     if (showLegend) out.push(legendBlock(legendItems, view.legend, box, view, canvas));
     out.push(titleBlock(title, view, canvas, box));
-    out.push('</svg>');
+    out.push(svgClose());
     return out.join('');
   };
 
@@ -1123,14 +1188,14 @@ export function xyFrame(model, view, { xValues, yValues, legendItems = [], alt, 
   const mTop = (title ? TITLE_BAND : 16) + plotVerticalInset(view, 'top', showLegend);
   const mBottom = 44 + (xTitle ? 16 : 0) + plotVerticalInset(view, 'bottom', showLegend);
   const mLeft = 56 + (yTitle ? 16 : 0);
-  const canvas = canvasBox();
+  const canvas = designBox();
   const box = scalePlot({ x0: mLeft, x1: W - mRight, y0: H - mBottom, y1: mTop }, view);
 
   const xScale = (v) => box.x0 + ((v - xs.lo) / (xs.hi - xs.lo || 1)) * (box.x1 - box.x0);
   const yScale = (v) => box.y0 - ((v - ys.lo) / (ys.hi - ys.lo || 1)) * (box.y0 - box.y1);
 
   // The title is the top layer; it goes on last, in close(). The plot layer opens here.
-  const out = [svgOpen(chartAltText(model, view, alt, noun)), layerOpen('plot', view)];
+  const out = [svgOpen(chartAltText(model, view, alt, noun), view), layerOpen('plot', view)];
   for (const t of ys.ticks) {
     if (t < ys.lo - 1e-9 || t > ys.hi + 1e-9) continue;
     const y = yScale(t);
@@ -1166,7 +1231,7 @@ export function xyFrame(model, view, { xValues, yValues, legendItems = [], alt, 
     out.push(LAYER_CLOSE);
     if (showLegend) out.push(legendBlock(legendItems, view.legend, box, view, canvas));
     out.push(titleBlock(title, view, canvas, box));
-    out.push('</svg>');
+    out.push(svgClose());
     return out.join('');
   };
 

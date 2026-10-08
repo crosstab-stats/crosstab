@@ -90,7 +90,7 @@ export function chartKinds(lib) {
     rowHeightControl, plotSizeControl,
     // The three layers: plot rect, floating legend, title on top. See the "Insets, not
     // reservations" note in the stdlib for why none of them takes room from the others.
-    canvasBox, scalePlot, titleBlock, layerOpen, LAYER_CLOSE,
+    designBox, scalePlot, titleBlock, layerOpen, LAYER_CLOSE, svgClose,
     W, H, FONT, AXIS, GRID, errorSvg, text, r, esc, clip, fmtNum,
     computeStats, errorBounds, jitterOffsets, minorTicks, niceTicks, niceNum,
     legendBlock, ordered, svgOpen, svgOpenH, chartAltText,
@@ -287,7 +287,7 @@ export function chartKinds(lib) {
     const mBottom = (rotate ? Math.min(120, 28 + longestX * 6) : 40) + (xTitle ? 16 : 0) + plotVerticalInset(view, 'bottom', series.length > 1);
     const mLeft = 56 + (yTitle ? 16 : 0);
 
-    const canvas = canvasBox();
+    const canvas = designBox();
     const box = scalePlot({ x0: mLeft, x1: W - mRight, y0: H - mBottom, y1: mTop }, view);
     const plotW = box.x1 - box.x0;
     const plotH = box.y0 - box.y1;
@@ -296,7 +296,7 @@ export function chartKinds(lib) {
     // The title is the TOP layer and goes on at the end, not here. The plot layer opens
     // here; the background rect from svgOpen stays outside it (it is the canvas, not a
     // draggable thing).
-    const out = [svgOpen(chartAltText(model, view, `${cats.length} categories, ${series.length} series.`, 'Chart')), layerOpen('plot', view)];
+    const out = [svgOpen(chartAltText(model, view, `${cats.length} categories, ${series.length} series.`, 'Chart'), view), layerOpen('plot', view)];
 
     for (const t of ticks) {
       const y = yScale(t);
@@ -355,7 +355,7 @@ export function chartKinds(lib) {
     }
     out.push(titleBlock(chartTitle, view, canvas, box));
 
-    out.push('</svg>');
+    out.push(svgClose());
     return out.join('');
   }
 
@@ -592,13 +592,13 @@ export function chartKinds(lib) {
     const mTop = chartTitle ? 34 : 16;
     const mBottom = 42 + (xTitle ? 16 : 0);
     const mLeft = 56 + (yTitle ? 16 : 0);
-    const canvas = canvasBox();
+    const canvas = designBox();
     const box = scalePlot({ x0: mLeft, x1: W - mRight, y0: H - mBottom, y1: mTop }, view);
     const xScale = (x) => box.x0 + ((x - xMin) / (xMax - xMin || 1)) * (box.x1 - box.x0);
     const yScale = (y) => box.y0 - ((y - yMin) / (yMax - yMin || 1)) * (box.y0 - box.y1);
 
     // The title is the TOP layer and goes on at the end, not here; the plot layer opens here.
-    const out = [svgOpen(chartAltText(model, view, `${pts.length} points.`, 'Scatter plot')), layerOpen('plot', view)];
+    const out = [svgOpen(chartAltText(model, view, `${pts.length} points.`, 'Scatter plot'), view), layerOpen('plot', view)];
 
     for (const t of yticks) {
       const y = yScale(t);
@@ -746,7 +746,7 @@ export function chartKinds(lib) {
     }
     out.push(titleBlock(chartTitle, view, canvas, box));
 
-    out.push('</svg>');
+    out.push(svgClose());
     return out.join('');
   }
 
@@ -821,14 +821,14 @@ export function chartKinds(lib) {
     // The pie already centred itself in whatever the legend left over, so making the
     // rect explicit is the same arithmetic — it is just a layer now, and plotSize can
     // move it.
-    const canvas = canvasBox();
+    const canvas = designBox();
     const box = scalePlot({ x0: 24, x1: W - mRight, y0: H - 24, y1: mTop }, view);
     const cx = (box.x0 + box.x1) / 2;
     const cy = (box.y0 + box.y1) / 2;
     const radius = Math.min((box.x1 - box.x0) / 2, (box.y0 - box.y1) / 2) - 6;
 
     // The title is the TOP layer and goes on at the end, not here; the plot layer opens here.
-    const out = [svgOpen(chartAltText(model, view, `${slices.length} slices.`, 'Pie chart')), layerOpen('plot', view)];
+    const out = [svgOpen(chartAltText(model, view, `${slices.length} slices.`, 'Pie chart'), view), layerOpen('plot', view)];
 
     let ang = -90 + (view.pieRotation || 0); // start at top, + rotation, clockwise
     const items = [];
@@ -870,7 +870,7 @@ export function chartKinds(lib) {
     if (slices.length > 1) out.push(legendBlock(items, view.legend, box, view, canvas));
     out.push(titleBlock(title, view, canvas, box));
 
-    out.push('</svg>');
+    out.push(svgClose());
     return out.join('');
   }
 
@@ -1550,9 +1550,9 @@ export function chartKinds(lib) {
       const xScale = (v) => box.x0 + ((ax.fwd(v) - xLo) / (xHi - xLo || 1)) * (box.x1 - box.x0);
 
       // The title is the TOP layer; it goes on in close(), below.
-      const canvas = canvasBox(height);
+      const canvas = designBox(height);
       const out = [svgOpenH(height, chartAltText(model, view,
-        `${plural(rows.length, 'study', 'studies')}${summary ? ', with a pooled summary' : ''}.`, 'Forest plot')), layerOpen('plot', view)];
+        `${plural(rows.length, 'study', 'studies')}${summary ? ', with a pooled summary' : ''}.`, 'Forest plot'), view), layerOpen('plot', view)];
       // Column headings.
       const headY = mTop - 6;
       out.push(text(12, headY, esc(model.labelHeading || 'Study'), { size: 10.5, fill: '#555', weight: 600 }));
@@ -1630,7 +1630,7 @@ export function chartKinds(lib) {
       // The title, last — this kind has no legend, so it is the only layer over the plot.
       out.push(LAYER_CLOSE);
       out.push(titleBlock(title, view, canvas, box));
-      out.push('</svg>');
+      out.push(svgClose());
       return out.join('');
     },
   });
@@ -1730,9 +1730,9 @@ export function chartKinds(lib) {
       const xScale = (v) => box.x0 + ((v - xLo) / (xHi - xLo || 1)) * (box.x1 - box.x0);
 
       // The title is the TOP layer; it goes on at the end, not here.
-      const canvas = canvasBox(height);
+      const canvas = designBox(height);
       const out = [svgOpenH(height, chartAltText(model, view,
-        `${plural(rows.length, 'input', 'inputs')}, widest swing first.`, 'Tornado diagram')), layerOpen('plot', view)];
+        `${plural(rows.length, 'input', 'inputs')}, widest swing first.`, 'Tornado diagram'), view), layerOpen('plot', view)];
 
       for (const t of niceTicks(xLo, xHi, 5)) {
         if (t < xLo || t > xHi) continue;
@@ -1778,7 +1778,7 @@ export function chartKinds(lib) {
       // The title, last — this kind has no legend, so it is the only layer over the plot.
       out.push(LAYER_CLOSE);
       out.push(titleBlock(title, view, canvas, box));
-      out.push('</svg>');
+      out.push(svgClose());
       return out.join('');
     },
   });
@@ -2117,8 +2117,8 @@ export function chartKinds(lib) {
     const xScale = (x) => mLeft + ((x - xMin) / (xMax - xMin || 1)) * ((W - mRight) - mLeft);
 
     // The title is the TOP layer; it goes on at the end, not here.
-    const canvas = canvasBox(totalH);
-    const out = [svgOpenH(totalH, chartAltText(model, view, `${panels.length} ${panels.length === 1 ? "case" : "cases"}, ${multiSeries ? seriesKeys.length + " measures" : phaseList.length + " phases"}.`, 'Single-case design chart')), layerOpen('plot', view)];
+    const canvas = designBox(totalH);
+    const out = [svgOpenH(totalH, chartAltText(model, view, `${panels.length} ${panels.length === 1 ? "case" : "cases"}, ${multiSeries ? seriesKeys.length + " measures" : phaseList.length + " phases"}.`, 'Single-case design chart'), view), layerOpen('plot', view)];
 
     // Shared Y domain (default) — panels are only comparable when the scale is.
     const yMinUser = Number.isFinite(view.yAxisMin);
@@ -2296,7 +2296,7 @@ export function chartKinds(lib) {
     }
     out.push(titleBlock(chartTitle, view, canvas, plotRect));
 
-    out.push('</svg>');
+    out.push(svgClose());
     return out.join('');
   }
 
@@ -2429,9 +2429,9 @@ export function chartKinds(lib) {
       const mTop = title ? 34 : 8;
       const bounds = { x0: 4, x1: W - 4, y0: mTop, y1: H - 6 };
       const out = [svgOpen(chartAltText(model, view,
-        `${plural(words.length, 'word')}${themes.length > 1 ? `, ${plural(themes.length, 'theme')}` : ''}.`, 'Word cloud')), layerOpen('plot', view)];
+        `${plural(words.length, 'word')}${themes.length > 1 ? `, ${plural(themes.length, 'theme')}` : ''}.`, 'Word cloud'), view), layerOpen('plot', view)];
       // The title is the TOP layer; it goes on at the end, not here.
-      const canvas = canvasBox();
+      const canvas = designBox();
 
       const counts = words.map((w) => w.count);
       const lo = Math.min(...counts);
@@ -2508,7 +2508,7 @@ export function chartKinds(lib) {
           view.legend, plotRect, view, canvas));
       }
       out.push(titleBlock(title, view, canvas, plotRect));
-      out.push('</svg>');
+      out.push(svgClose());
       return out.join('');
     },
   });
