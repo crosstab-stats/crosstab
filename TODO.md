@@ -826,7 +826,77 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       [[output-outlives-its-maker]] says must not change under the reader, so probably **no** for
       saved output and yes only for live rendering. Decide deliberately rather than by default.
 
-- [ ] **"Small screen" mode — a layout the USER owns: detected as a default, never as an
+- [x] **BUILT (2026-10-07) — "small screen" mode: a layout the user owns, detected as a
+      default and never as an override.** Three stages, one commit each, each browser-verified
+      at a true 426px viewport before the next began.
+
+      **Stage 1 — the state and who decides** (`core/screen-mode.js`). One state,
+      `data-screen="small"|"full"` on the root, and that module is the only thing that sets
+      it; **no CSS anywhere keys off viewport width**. The preference is tri-state, so
+      "first load" means *no stored preference*: unset lets the viewport supply a default
+      (which is what keeps 1.4.10 satisfiable), and any explicit choice then wins forever —
+      including `full` while still narrow, which is the case the owner's objection is about.
+      `resolveScreenMode()` is pure and carries the whole policy; `?screen=small|full`
+      overrides everything without writing the stored preference; a one-line dismissible note
+      says so when the viewport chose, because a first-timer does not know the mode exists.
+      `Edit ▸ ☑ Small screen mode` uses the existing debug-toggle idiom.
+
+      **Stage 2a — the sidebar becomes the Project tab.** The element is re-parented, not
+      rebuilt, so `ProjectSidebar` keeps its host, listeners and content; it travels in a
+      wrapper because `removeTab` destroys the pane it is given. `addTab` gained `atStart` so
+      the tab sits where its counterpart does (the sidebar is at the left edge in the full
+      layout). The tab strip now scrolls at **any** width — that was already a latent bug with
+      several workspace tabs open, and a tab you cannot reach is a view you cannot reach.
+
+      **Stage 2b — the menubar collapses to one ☰ button.** Nine menus at 426px wrapped to
+      four rows: 81px of bar under a 167px header. Now 40px and a 44px header. Every menu
+      becomes a labelled group inside the single panel, drawn by the **same** `#renderSubmenu`
+      that draws nested submenus, so there is no second rendering to keep in step. The panel
+      anchors to `nav.menubar` (already the positioned ancestor) rather than to the button,
+      which is what stops a 392px panel starting at x=96 and running off a 426px screen.
+
+      **Stage 3 — the launcher stacks** in the owner's order (header, About, Projects with
+      demos, plugins). About is a button opening the rail as a modal, because the pitch plus
+      How-to plus Caveats plus hosted-by plus the offline controls plus the install hint, as a
+      block, would push Start two screens down. The rail element MOVES into the modal, so its
+      live offline controls keep working and there is no second copy of the About content.
+      Start needs no sticky rule — the body is the scroller and the footer sits outside it.
+      The picker stops being its own scroll container: one scroller beats a list that traps a
+      touch drag, which is the mobile behaviour this whole feature exists to avoid.
+
+      **The acceptance criterion, measured rather than asserted.** *"Fully functional, just a
+      repositioning/resize"* became a check: enumerate every reachable command in both modes
+      and diff them. **53 and 53, empty symmetric difference.** Nothing is hidden, removed or
+      simplified; the mode is furniture moving.
+
+      **Two bugs found by building it, both of a class worth remembering:**
+      - The note's "use the full layout" button set the attribute and told nobody, so the
+        layout read `full` while the sidebar sat in the Project tab and the menubar stayed
+        collapsed. Notification is now part of `applyScreenMode` rather than a step each
+        caller remembers — which is the [[guard-means-missing-state]] move: the state that
+        should not exist is "mode changed, surfaces not told". Six tests pin the contract,
+        including that applying the SAME mode notifies nobody.
+      - Restoring the About rail depended on the dialog's `close` event, and a missed event
+        would have cost the About column for the session. Now idempotent and driven from both
+        the Done button and the event. The test environment proved the point: the tab was
+        hidden, the event never fired, and the handler was correct once dispatched.
+
+      Suite 1374 → 1390. Measured before and after at 426px: the workspace went from 186px of
+      426 under a 167px header, to the full 426 under 44px.
+
+      **Left open, deliberately:**
+      - **The grid keeps two-dimensional scrolling**, and should: 1.4.10 exempts content that
+        needs a 2-D layout for its meaning and names data tables as the example. Turning 900
+        columns into stacked cards would be the "mobile friendly" redesign the owner objects
+        to.
+      - **Not yet checked on real hardware.** Everything above was measured in a 426px iframe
+        because the extension's window resize would not take on this window; a real phone adds
+        touch targets, the on-screen keyboard shrinking the viewport, and iOS Safari's
+        dynamic toolbars. Worth a pass on the owner's iPhone before this is called done.
+      - **No height term in the threshold.** A landscape phone is short rather than narrow;
+        the rule is width-only until someone actually hits that.
+
+- [x] **The design behind it (kept for the reasoning) — "small screen" mode, a layout the USER owns: detected as a default, never as an
       override (owner, 2026-10-01 and 2026-10-07).** Raised while testing the unified plugin picker — *"phone interface is still a
       hot mess… it does load and run, just completely unusable on such a small screen"* — and then
       given its defining constraint:
