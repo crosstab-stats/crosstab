@@ -900,7 +900,22 @@
         min-height: 44px; display: inline-flex; align-items: center;
         padding: 0 8px; margin: 0 -4px; font-size: 17px;
       }
-      [data-screen="small"] .menu__button--all { min-height: 44px; font-size: 16px; }
+      /* 44px of INVISIBLE target is still "a little tiny" to look at, which is what the
+         owner was reporting after the size fix landed: transparent, borderless and regular
+         weight, the ☰ read as a caption rather than the control that opens the whole menu.
+         A chip makes the target visible, and the glyph is sized above the label so it reads
+         as an icon instead of punctuation. */
+      [data-screen="small"] .menu__button--all {
+        display: inline-flex; align-items: center; gap: 8px;
+        min-height: 44px; padding: 0 14px;
+        font-size: 16px; font-weight: 600;
+        border: 1px solid rgba(255, 255, 255, .38); border-radius: 8px;
+      }
+      [data-screen="small"] .menu__button--all:hover,
+      [data-screen="small"] .menu__button--all[aria-expanded="true"] {
+        background: rgba(255, 255, 255, .16);
+      }
+      .menu__burger { font-size: 21px; line-height: 1; }
       /* A row is a tap target in its own right (it switches the active dataset), and its
          icons sit inside it, so both need the size. */
       [data-screen="small"] .proj__ds { min-height: 44px; }

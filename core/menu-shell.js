@@ -227,7 +227,15 @@ export class MenuShell {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'menu__button menu__button--all';
-    button.textContent = '☰ Menu';
+    // The glyph is its own element so it can be sized independently of the label: at the
+    // same 16px as the word it read as punctuation, and the owner's verdict on a 44px but
+    // transparent, borderless, regular-weight control was "that menu still looks small".
+    // Hidden from assistive tech, which gets the word.
+    const burger = document.createElement('span');
+    burger.className = 'menu__burger';
+    burger.setAttribute('aria-hidden', 'true');
+    burger.textContent = '☰';
+    button.append(burger, document.createTextNode('Menu'));
     button.setAttribute('role', 'menuitem');
     button.setAttribute('aria-haspopup', 'true');
     button.setAttribute('aria-expanded', 'false');
