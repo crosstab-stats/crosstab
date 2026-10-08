@@ -564,3 +564,31 @@ test('a canvas resize keeps the ZOOM, so the contents do not change size', () =>
   assert.ok(keys.includes('setCanvas(at.w, at.h, shown *'),
     'the keyboard resize scales the drawn width in step too');
 });
+
+test('the whole grip sits INSIDE the figure, so nothing can clip its glyph', () => {
+  // Reported: "the canvas grabber visual is gone. Was a blue angle last patch now I
+  // just move the mouse around the corner looking for the pointer change to find it."
+  //
+  // It was centred ON the figure's corner, and a figure spanning the full pane has its
+  // corner exactly on the result block's scroll-clipping edge — so the outer half, the
+  // half carrying the glyph, was cut off while the inner half stayed hittable. Worst of
+  // both: an invisible target that still worked if you found it. Positioning by the
+  // grip's own far corner puts all 44px inside the figure.
+  assert.ok(DRAG_SRC.includes('base.right - br.left - GRIP_PX'), 'anchored by its own corner');
+  assert.ok(DRAG_SRC.includes('base.bottom - br.top - GRIP_PX'));
+  const css = PANE_SRC.slice(PANE_SRC.indexOf('.ct-drag__grip {'));
+  const rule = css.slice(0, css.indexOf('}'));
+  assert.ok(!/transform:\s*translate/.test(rule), 'and not shifted back out over the edge');
+  // The size is known in two places; they have to agree or the grip hangs off.
+  assert.match(DRAG_SRC, /GRIP_PX = 44/);
+  assert.match(rule, /width:\s*44px/);
+});
+
+test('the overlay re-measures once the layout has settled', () => {
+  // Opening the panel changes the pane's height, which can add or remove its scrollbar,
+  // which changes the figure's width. Measured at mount, every outline sat 15px off its
+  // layer. The ResizeObserver catches it only in a tab that is rendering; a timeout
+  // holds in a background one too.
+  assert.match(DRAG_SRC, /const settle = setTimeout\(sync, 0\)/);
+  assert.match(DRAG_SRC, /clearTimeout\(settle\)/, 'and is cleared when the overlay goes');
+});

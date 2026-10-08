@@ -225,11 +225,12 @@ const RESULTS_STYLES = `
      a mouse, but the native CSS resizer is NOT touch-draggable on iOS — confirmed on a
      real iPhone — so on a phone the canvas could not be sized at all. This one is a
      real button using the same pointer-events path as the layer handles, which is why
-     it works under a finger. Anchored on the frame's corner by sync(); the translate
-     centres it over that corner so it reads as part of the frame rather than as
-     something floating next to it. */
+     it works under a finger. sync() puts its bottom-right ON the figure's, so the whole
+     44px target is inside the figure: centred on the corner, the outer half fell outside
+     the result block's scroll clipping and the glyph simply vanished. Keep this 44 and
+     GRIP_PX in chart-drag.js agreeing. */
   .ct-drag__grip {
-    position: absolute; transform: translate(-50%, -50%);
+    position: absolute;
     width: 44px; height: 44px; padding: 0; pointer-events: auto;
     border: 0; background: transparent; cursor: nwse-resize;
     touch-action: none; z-index: 20;

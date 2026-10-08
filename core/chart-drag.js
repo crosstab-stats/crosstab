@@ -126,6 +126,10 @@ export function movedLayers(view) {
  * or negative size has no geometry for anything else to be measured against. */
 export const MIN_CANVAS = 80;
 
+/** The grip's size, here and in the stylesheet — it has to be known in both, because
+ * the grip is positioned by its own far corner so that none of it is ever clipped. */
+export const GRIP_PX = 44;
+
 /** The canvas a resize drag arrives at. Pure, because it is the one bit of arithmetic
  * in the grip and the rest is browser measurement. */
 export function resizedCanvas(start, dx, dy) {
@@ -185,7 +189,13 @@ export function mountLayerDrag(holder, item, onCommit) {
   grip.className = 'ct-drag__grip';
   grip.setAttribute('aria-label', 'Resize the canvas. Arrow keys to adjust.');
   grip.title = 'Drag to resize the canvas';
-  overlay.append(grip);
+  // A SIBLING of the overlay, not a child. The overlay is clipped (`overflow: hidden`)
+  // so that a layer dragged off the canvas cannot grow the page's scroll — and the grip
+  // is centred ON the figure's corner, so half of it, including the corner glyph, fell
+  // outside that clip and vanished. The hit area survived, which is the worst version:
+  // "I just move the mouse around the corner looking for the pointer change to find it."
+  // Nothing about the grip needs clipping; it is always exactly at the corner.
+  frame.append(grip);
 
   /**
    * Resize the canvas, in CHART UNITS.
@@ -344,9 +354,15 @@ export function mountLayerDrag(holder, item, onCommit) {
       h.style.height = `${r.height}px`;
     }
     for (const [name, h] of handles) if (!seen.has(name)) h.hidden = true;
-    // The grip sits on the figure's own corner.
-    grip.style.left = `${base.width}px`;
-    grip.style.top = `${base.height}px`;
+    // The grip's own bottom-right corner is put ON the figure's, so the whole target
+    // sits INSIDE the figure. Centring it on the corner looked tidier and was not:
+    // the figure spans the full pane, so its corner is exactly the scroll container's
+    // clipping edge, and the outer half of the grip — the half carrying the glyph —
+    // was cut off, leaving a target you could only find by hunting for the cursor to
+    // change. Measured against the block because the grip lives outside the clipped
+    // overlay.
+    grip.style.left = `${base.right - br.left - GRIP_PX}px`;
+    grip.style.top = `${base.bottom - br.top - GRIP_PX}px`;
   };
 
   /** Write one layer's offset and tell the pane to redraw and mark itself dirty. */
@@ -439,11 +455,20 @@ export function mountLayerDrag(holder, item, onCommit) {
   if (ro) ro.observe(holder);
 
   sync();
+  // ...and again once this layout pass has settled. Opening the panel changes the
+  // pane's height, which can add or remove its scrollbar, which changes the figure's
+  // width — so the measurements taken during the mount can be stale by the time anyone
+  // sees them, and the outlines sit a dozen pixels off their layers. The ResizeObserver
+  // above would catch it, but only in a tab that is actually rendering; a timeout holds
+  // in a background tab too, and costs one measurement.
+  const settle = setTimeout(sync, 0);
 
   return {
     sync,
     destroy() {
       life.abort();
+      clearTimeout(settle);
+      grip.remove();
       mo.disconnect();
       if (ro) ro.disconnect();
       overlay.remove();
