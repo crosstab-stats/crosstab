@@ -51,6 +51,7 @@ import { runRScript, registerRScriptRunner } from './r-script.js';
 import { CodecService } from './codec-service.js';
 import { PluginCreator } from './plugin-creator.js';
 import { debug, isDebug, setDebug, saveLog, installErrorCapture } from './debug.js';
+import { currentScreenMode, initScreenMode, showAutoNote, toggleScreenMode } from './screen-mode.js';
 import { ProjectStore } from './project-store.js';
 import { ProjectSync, PROJECT_CHANGED } from './project-sync.js';
 import { DataView, VariableView, HistoryPanel } from './data-views.js';
@@ -504,6 +505,11 @@ export async function boot(mounts) {
   // First thing in boot, because the errors most worth catching are the ones that
   // happen while the rest of this function is still running.
   installErrorCapture();
+  // Which layout: full, or the small-screen arrangement. BEFORE any rendering, because every
+  // layout rule keys off the attribute this sets and a later flip would be a visible reflow.
+  // The viewport only supplies a DEFAULT — see core/screen-mode.js for why that is not a
+  // media query and why an explicit choice is never overridden.
+  const screen = initScreenMode();
 
   // --- core services ---------------------------------------------------------
   const bus = new EventBus();
@@ -1825,6 +1831,30 @@ export async function boot(mounts) {
     order: 41,
     command: () => pluginCreator.open(null),
   });
+  // Small-screen mode (owner, 2026-10-07): the user owns the layout. Same checkbox idiom as
+  // the debug toggle below — the glyph is the CURRENT state, clicking flips it — and the same
+  // re-register trick, because a label is not reactive.
+  const registerScreenToggle = () => {
+    menus.register({
+      id: 'core:screen-mode',
+      path: ['Edit'],
+      label: (currentScreenMode() === 'small' ? '☑' : '☐') + ' Small screen mode',
+      order: 45,
+      command: () => {
+        toggleScreenMode();
+        registerScreenToggle();
+        // The arrangement changed under every surface that measures itself.
+        bus.emit(CoreEvents.SCREEN_MODE_CHANGED);
+      },
+    });
+  };
+  registerScreenToggle();
+  // Say so when the VIEWPORT turned it on, because a first-time visitor does not know the
+  // mode exists, that it was chosen for them, or where to undo it.
+  if (screen.auto) {
+    showAutoNote(document.querySelector('header'), { onFull: () => registerScreenToggle() });
+  }
+
   const registerDebugToggle = () => {
     menus.register({
       id: 'core:debug-toggle',

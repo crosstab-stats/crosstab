@@ -40,6 +40,10 @@ export const CoreEvents = Object.freeze({
   ANALYSIS_FINISHED: 'analysis:finished',
   /** A recoverable error surfaced that the UI may want to show. Payload: Error. */
   ERROR: 'app:error',
+  /** The layout arrangement changed — small-screen mode was toggled. Surfaces that measure
+   * themselves (the grid’s virtualiser, the tab strip, the sidebar) re-render on it. No
+   * payload: the mode is read from the root element, which stays the one source of truth. */
+  SCREEN_MODE_CHANGED: 'screen:mode',
   /** The active (loaded) plugin set changed — a plugin was enabled/disabled or a
    * set was applied. Lets the project autosave re-record its `activePlugins`. No
    * payload. */

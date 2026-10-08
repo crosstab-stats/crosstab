@@ -52,6 +52,7 @@
         gap: 16px;
         padding: 0 12px;
         min-height: 44px; /* comfortable touch target on iPad */
+        flex-wrap: wrap; /* so the small-screen note can take a line of its own */
       }
       /* A real <button>, not a wordmark: this is the only route back to the launcher.
          Reset the UA button chrome so it still reads as the brand. */
@@ -95,6 +96,25 @@
         font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
         color: #646e77; padding: 6px 12px 2px;
       }
+
+      /* The one-line note shown when the VIEWPORT turned small-screen mode on. Said once,
+         dismissible, and it carries the way out rather than just announcing itself. */
+      .screennote {
+        flex: 1 0 100%; margin: 0 -12px; /* a full-bleed strip under the bar */
+        display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+        background: #1f3243; color: var(--bar-fg); font-size: 12.5px;
+        padding: 6px 10px; border-top: 1px solid rgba(255,255,255,.14);
+      }
+      .screennote__btn {
+        font: inherit; font-size: 12.5px; background: none; color: #9fd0f0;
+        border: 1px solid rgba(159,208,240,.5); border-radius: 6px; padding: 2px 8px; cursor: pointer;
+      }
+      .screennote__btn:hover { background: rgba(159,208,240,.12); }
+      .screennote__x {
+        font: inherit; background: none; border: 0; color: var(--bar-fg);
+        cursor: pointer; margin-left: auto; padding: 2px 4px; opacity: .75;
+      }
+      .screennote__x:hover { opacity: 1; }
 
       /* --- main layout --- */
       main { flex: 1; display: flex; min-height: 0; }
