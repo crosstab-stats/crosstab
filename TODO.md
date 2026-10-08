@@ -826,45 +826,73 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       [[output-outlives-its-maker]] says must not change under the reader, so probably **no** for
       saved output and yes only for live rendering. Decide deliberately rather than by default.
 
-- [ ] **The phone layout is unusable, and the cause is that the app has NO responsive breakpoint
-      at all (owner, 2026-10-01).** Found while testing the unified plugin picker: *"phone
-      interface is still a hot mess but that's out of scope for the moment. It does load and run,
-      just completely unusable on such a small screen."*
+- [ ] **"Small screen" mode — an OPT-IN layout, never a detected one (owner, 2026-10-01 and
+      2026-10-07).** Raised while testing the unified plugin picker — *"phone interface is still a
+      hot mess… it does load and run, just completely unusable on such a small screen"* — and then
+      given its defining constraint:
 
-      **One mechanism, two places: fixed-width rails inside flex rows, with nothing to stack
-      them.** `index.html` declares `width=device-width, initial-scale=1`, so a phone really is
-      laid out at ~390 CSS px — there is no zoomed-out desktop view to hide behind.
+      > *"But I don't want it to be forced. I hate it when sites detect a small screen and then
+      > force you into their shite 'mobile friendly' design when the real site would work fine. So
+      > it needs to be a toggle the user can turn on and off. And it might be helpful on more than
+      > just phones so maybe call it 'small screen' mode or something like that. And it should be
+      > fully functional, just a repositioning/resize of elements."*
 
-      - **the launcher** — `.ctl__body { display: flex }` with `.ctl__library` and `.ctl__about`
-        both at `flex: 0 0 200px`: **400px of fixed rails on a 390px screen**. `.ctl__center` has
-        `min-width: 0`, so the thing that gets crushed to nothing is the plugin list, the one part
-        you actually came to use.
-      - **the app shell** — `main { display: flex }` with `.sidebar { width: 240px; flex: 0 0
-        240px }`: the sidebar takes 240 of 390px before the data grid is given any.
-      - **dialogs are the least-bad part.** `.ct-dialog` is `max-width: 420px; width: 92vw`, and
-        the wide variants (640px, and the picker's 900px) all cap at `9xvw`, so they shrink.
+      **That reverses the mechanism I had recommended here**, and for a good reason. My earlier
+      note said "under ~700px the two rails become drawers or stacked sections" — i.e. media
+      queries, which is exactly the forced switch the owner is objecting to. So:
 
-      **The app contains exactly ONE layout media query** — `core/plugin-picker.js`'s
-      `max-width: 880px` → one column, added 2026-10-01. The only other `@media` anywhere are two
-      `@media print` blocks (`core/output-export.js`, `builtin-html-export`) and a
-      `prefers-color-scheme` in `oauth-callback.html`. So this is not a layout that regressed: it
-      was never written.
+      - **No `@media` width queries.** The layout is driven by a **user-set state** — a
+        `data-screen="small"` attribute on the root element — and every rule is written against
+        it. Simpler than breakpoints, deterministic, and testable without resizing anything.
+      - **Consequence worth catching now:** `core/plugin-picker.js` holds the app's ONLY layout
+        media query (`max-width: 880px` → one column, added 2026-10-01). Left as it is, it would
+        be the one thing in the app that still switches itself. It should read the same state.
+      - **No device language anywhere in the UI** — not "mobile", not "phone". The owner's reason
+        is that it helps beyond phones: a narrow window, a split screen, a tablet in portrait, a
+        projector at a seminar.
 
-      **Scope, stated honestly:** the *engine* is verified on iPhone and iPad (Milestone 3, done) —
-      WebR, DuckDB, import, analyses. This entry is layout only, which is exactly why it "loads and
-      runs" while being unusable.
+      **Acceptance criterion, in the owner's words: "fully functional, just a repositioning/resize
+      of elements."** No feature removal, no simplified variant, nothing hidden to save space.
+      That is testable rather than aspirational: **the set of reachable commands and controls in
+      small-screen mode must equal the desktop set** — enumerate the menu registry and the
+      rendered controls in both states and diff them. Write that test with the feature.
 
-      **What it needs:** under ~700px the two rails become either collapsed drawers or stacked
-      sections, in **two** files. The picker's grid already does the right thing, so it is the
-      worked example. Deferred at the owner's direction — but it belongs **with the launcher
-      redesign**, because one of the two offenders is the launcher's own body and that cluster is
-      already rewriting it.
+      **What actually has to move** (all verified 2026-10-01; `index.html` declares
+      `width=device-width, initial-scale=1`, so a phone really is laying out at ~390 CSS px):
+      - **the launcher** — `.ctl__body` is a flex row with `.ctl__library` and `.ctl__about` both
+        at `flex: 0 0 200px`: **400px of fixed rails on a 390px screen**, and `.ctl__center` has
+        `min-width: 0`, so the part that collapses to nothing is the plugin list, the thing you
+        came for;
+      - **the app shell** — `main` is a flex row with `.sidebar` at a fixed 240px, so the sidebar
+        takes 240 of 390 before the data grid gets any;
+      - **dialogs are already fine** — `.ct-dialog` is `max-width: 420px; width: 92vw`, and the
+        wide variants all cap in `vw`.
 
-      Worth checking at the same time, since it is the same measurement: **WCAG 2.2 AA includes
-      1.4.10 Reflow** (usable at 320px with no two-dimensional scrolling). The 2026-08-05
-      accessibility pass covered contrast and keyboard parity, not reflow — so the "AA, 0 failures"
-      claim does not currently cover this, and fixing the layout is what makes it true.
+      **The bootstrapping problem, which needs solving first:** if the desktop layout is unusable
+      at 390px, how does someone reach the toggle to turn it on? Two things are needed, and the
+      first is a prerequisite rather than a detail:
+      - **a home that works in the broken state.** `Edit ▸ ☑ Small screen mode`, using the
+        existing stateful-toggle idiom (`core:debug-toggle` in `app.js:1828` — the glyph shows the
+        current state, clicking flips it), but only once the menubar itself is confirmed usable at
+        390px. Check that before committing to the location.
+      - **an escape hatch that needs no UI at all** — a `?screen=small` URL flag, with `?launch=`
+        as precedent. It also makes the mode drivable headlessly, which is how it gets tested.
+      - **persistence in `localStorage`**, for the same reason `core/var-order.js` gives for the
+        variable-order preference: it describes this reader and this device, not the data.
 
+      **The one real tension, recorded rather than resolved: WCAG 2.2 AA 1.4.10 Reflow** expects
+      content to be usable at 320px *without the user having to find a setting*. An opt-in mode
+      satisfies the owner's requirement but does **not** by itself satisfy 1.4.10, so the
+      accessibility record stays as it is (contrast and keyboard pass; reflow open —
+      [[accessibility-baseline]]). The compromise that satisfies both is **offer, don't force**: on
+      a narrow viewport, a one-time dismissible prompt ("this window is narrow — switch to small
+      screen mode?") with the toggle always available and the choice remembered. An offer is not a
+      force, which is the distinction the owner's objection actually turns on — but it is their
+      call, so it stays a question here.
+
+      **Scope note:** the engine is already verified on iPhone and iPad (Milestone 3) — WebR,
+      DuckDB, import, analyses. This is layout only, which is exactly why it "loads and runs"
+      while being unusable.
 > **These entries are ONE piece of work** (noted 2026-09-28, extended 2026-09-29; one of the six
 > shipped 2026-10-01): #161, #167, #181's third follow-on (*"the launcher should reuse the manager
 > component instead of its own rail"*), the launcher half of #171 (its Projects rail still renders
@@ -875,6 +903,10 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 > who is weighing the launcher's shape and has said the sidebar grouping is part of the same
 > redesign — so this is one decision, not several tasks, and it is theirs to make before the rest
 > of it is buildable.
+>
+> **Overlaps “small screen” mode above:** that entry has to reposition the launcher’s two 200px
+> rails, and this cluster rewrites them anyway. Whichever is built second should inherit the
+> other’s layout decision rather than relitigate it.
 >
 > The pattern across all of them: the launcher renders its own copy of something the app already
 > renders elsewhere — the project list, the plugin picker — and the copies have drifted. What the
