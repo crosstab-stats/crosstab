@@ -892,18 +892,22 @@
          perhaps we should include a slight buffer at the very top to avoid collision").
 
          Two things were touching. A 44px control inside a 44px bar fills it exactly, so the
-         ☰ chip's border sat flush on both edges and read as clipped — that one shows in the
-         browser too. And in standalone there is no browser chrome between iOS's translucent
-         status overlay and the app, so the bar is the first thing under it. */
-      [data-screen="small"] header { padding-top: 8px; padding-bottom: 8px; row-gap: 8px; }
+         ☰ chip's border sat flush on both edges and read as clipped — that one shows in a
+         browser tab too, and the header padding below is its fix. The other is iOS-specific:
+         installed to the Home Screen there is no browser chrome between the system's
+         translucent status overlay and our first pixel.
 
-      /* `display-mode` is NOT a width query and switches no layout — it asks how the app was
-         LAUNCHED. Installed to the Home Screen, iOS hands us the whole screen and its status
-         overlay sits directly on our first pixel, so the safe-area inset gets a few px of
-         margin for the haze. In a browser tab this rule does not apply at all. */
-      @media (display-mode: standalone) {
-        body { padding-top: calc(env(safe-area-inset-top) + 8px); }
-      }
+         The cushion is a MULTIPLE of the safe-area inset rather than a flat addition behind
+         a `display-mode: standalone` query, which is both simpler and more correct:
+           - browser tab, any platform — inset is 0, so the cushion is 0 and nothing moves;
+           - iOS installed — inset is the status bar, so the cushion scales with it;
+           - ANDROID installed — Chrome paints the status bar as its own opaque strip in
+             theme_color and starts content below it, so the inset is 0 and Android gets no
+             padding it has no use for. A flat +8px in standalone would have added it anyway.
+         It also needs no media query at all, which keeps the promise that nothing in this
+         app's layout is decided by asking the device about itself. */
+      body { padding-top: calc(env(safe-area-inset-top) * 1.18); }
+      [data-screen="small"] header { padding-top: 8px; padding-bottom: 8px; row-gap: 8px; }
       /* --- touch targets (owner, on the phone: "it seems a little tiny") -----------
          These are CSS pixels, which on iOS equal points — so 44 here IS Apple's 44pt
          guideline, not 44 device pixels; the phone's 3x display renders it at the same
