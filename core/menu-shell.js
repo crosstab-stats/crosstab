@@ -15,6 +15,7 @@
  */
 
 import { recordError } from './debug.js';
+import { currentScreenMode } from './screen-mode.js';
 
 /**
  * @typedef {Object} MenuItem
@@ -155,8 +156,14 @@ export class MenuShell {
     this.#host.setAttribute('role', 'menubar');
 
     const topLevel = [...this.#tree.children.values()].sort(byTopLevel);
-    for (const node of topLevel) {
-      this.#host.append(this.#renderTopLevel(node));
+    // Small-screen arrangement: the whole bar collapses to one button. Not a separate menu
+    // — the same tree, drawn by the same group renderer (see #renderHamburger).
+    if (currentScreenMode() === 'small') {
+      this.#host.append(this.#renderHamburger(topLevel));
+    } else {
+      for (const node of topLevel) {
+        this.#host.append(this.#renderTopLevel(node));
+      }
     }
     // Roving tabindex: the whole menubar is ONE tab stop, and arrows move within it.
     // Previously every button — and every item of an open menu, which for Regression
@@ -198,6 +205,54 @@ export class MenuShell {
   }
 
   // --- rendering -------------------------------------------------------------
+
+  /**
+   * The whole menubar as ONE button, for the small-screen arrangement.
+   *
+   * Sixteen top-level menus at 426px wrap to four rows and take 81px of a 836px screen —
+   * measured, not guessed — and the header with them reaches 167px before anything useful
+   * is on screen. Collapsing keeps the bar one row tall, which matters most exactly where
+   * space is tightest.
+   *
+   * **Nothing is removed**, which is the owner's criterion: every top-level menu becomes a
+   * labelled GROUP inside the single panel, drawn by the same {@link MenuShell#renderSubmenu}
+   * that already draws nested submenus. So the full tree is present, the open/close and
+   * keyboard machinery is the machinery that was already there, and there is no second
+   * rendering of the menu to keep in step with the first.
+   */
+  #renderHamburger(topLevel) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'menu menu--all';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'menu__button menu__button--all';
+    button.textContent = '☰ Menu';
+    button.setAttribute('role', 'menuitem');
+    button.setAttribute('aria-haspopup', 'true');
+    button.setAttribute('aria-expanded', 'false');
+
+    const panel = document.createElement('div');
+    panel.className = 'menu__panel menu__panel--all';
+    panel.setAttribute('role', 'menu');
+    panel.hidden = true;
+    for (const node of topLevel) {
+      // A top-level menu with a single leaf (rare, but possible) still reads correctly as a
+      // one-item group; a leaf registered directly on the menubar stays a leaf.
+      panel.append(node.item ? this.#renderLeaf(node) : this.#renderSubmenu(node));
+    }
+
+    button.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = !panel.hidden;
+      this.#closeOpenMenu();
+      this.#focusTop(button);
+      if (!isOpen) this.#open(wrapper);
+    });
+
+    wrapper.append(button, panel);
+    return wrapper;
+  }
 
   /** Render a top-level menu button plus its dropdown panel. */
   #renderTopLevel(node) {

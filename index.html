@@ -848,6 +848,25 @@
       /* The sidebar becomes the Project TAB — the same element, re-parented, so it keeps
          its content and listeners (see arrangeShell). As a pane it fills the workspace
          instead of being a fixed 240px column. */
+      /* The whole menubar collapses to one ☰ button (see MenuShell#renderHamburger). The
+         panel then holds every menu as a group, so it is long: give it the width it needs and
+         let it scroll within itself rather than growing the page. */
+      /* Anchored to the MENUBAR, not to the button: `nav.menubar` is already the positioned
+         ancestor, so dropping the wrapper out of the positioning chain lets the panel span the
+         bar instead of starting at the button and running off the right edge (measured: 392px
+         of panel from x=96 on a 426px screen). */
+      [data-screen="small"] .menu--all { position: static; }
+      [data-screen="small"] .menu__panel--all {
+        left: 0; right: 0; min-width: 0; width: auto;
+        max-height: calc(100vh - 96px);
+      }
+      [data-screen="small"] .menu__panel--all .menu__group + .menu__group {
+        border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px;
+      }
+      /* Touch targets: the same items, a little taller, which is a resize and not a redesign. */
+      [data-screen="small"] .menu__item { padding: 11px 12px; }
+      [data-screen="small"] .tab { padding: 11px 13px; }
+
       [data-screen="small"] .shell__projectpane { display: flex; min-height: 0; flex: 1; }
       [data-screen="small"] .shell__projectpane > .sidebar {
         width: auto; flex: 1; border-right: 0; min-width: 0;

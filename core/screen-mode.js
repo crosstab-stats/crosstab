@@ -57,6 +57,26 @@ export const SMALL_MAX_PX = 720;
 /** @typedef {'small'|'full'} ScreenMode */
 
 /**
+ * Who to tell when the mode changes.
+ *
+ * Here rather than at the call sites because a mode that is SET without the surfaces being
+ * told is a state that should not exist: the attribute would say small while the sidebar sat
+ * in <main> and the menubar stayed expanded. That bug was real for about ten minutes — the
+ * note's "use the full layout" button changed the attribute and notified nobody — and it was
+ * only ever possible because notifying was a separate step somebody had to remember.
+ *
+ * @type {Set<(mode: ScreenMode) => void>}
+ */
+const listeners = new Set();
+
+/** Subscribe to mode changes. Returns a disposer. */
+export function onScreenModeChange(fn) {
+  if (typeof fn !== 'function') return () => {};
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
+/**
  * Resolve the mode from the three things that can have an opinion, in order of authority.
  *
  * Pure, and the whole policy lives here — every rule in this file's header is one case below,
@@ -128,10 +148,18 @@ export function currentScreenMode(doc = globalThis.document) {
  * @param {{persist?: boolean, doc?: Document}} [opts] `persist` records it as the user's
  *   CHOICE; boot and the `?screen=` flag pass false, because neither is one.
  */
-export function applyScreenMode(mode, { persist = false, doc = globalThis.document } = {}) {
+export function applyScreenMode(mode, { persist = false, doc = globalThis.document, notify = true } = {}) {
   const value = mode === 'small' ? 'small' : 'full';
+  const changed = doc?.documentElement?.dataset?.screen !== value;
   if (doc?.documentElement) doc.documentElement.dataset.screen = value;
   if (persist) saveScreenMode(value);
+  // Every mutator goes through here, so nothing can change the layout without the surfaces
+  // hearing about it. `notify: false` is for boot, where there is nothing subscribed yet.
+  if (notify && changed) {
+    for (const fn of listeners) {
+      try { fn(value); } catch (err) { console.error('[screen-mode] listener failed', err); }
+    }
+  }
   return value;
 }
 
@@ -148,7 +176,7 @@ export function initScreenMode({ win = globalThis, doc = globalThis.document } =
   const urlFlag = urlScreenFlag(win);
   const narrow = narrowViewport(win);
   const mode = resolveScreenMode({ stored, narrowViewport: narrow, urlFlag });
-  applyScreenMode(mode, { doc }); // never persist a derived value
+  applyScreenMode(mode, { doc, notify: false }); // never persist a derived value; nothing is listening yet
   return { mode, auto: mode === 'small' && stored === null && urlFlag !== 'small' && urlFlag !== 'full' };
 }
 

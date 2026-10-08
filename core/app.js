@@ -51,7 +51,9 @@ import { runRScript, registerRScriptRunner } from './r-script.js';
 import { CodecService } from './codec-service.js';
 import { PluginCreator } from './plugin-creator.js';
 import { debug, isDebug, setDebug, saveLog, installErrorCapture } from './debug.js';
-import { currentScreenMode, initScreenMode, showAutoNote, toggleScreenMode } from './screen-mode.js';
+import {
+  currentScreenMode, initScreenMode, onScreenModeChange, showAutoNote, toggleScreenMode,
+} from './screen-mode.js';
 import { ProjectStore } from './project-store.js';
 import { ProjectSync, PROJECT_CHANGED } from './project-sync.js';
 import { DataView, VariableView, HistoryPanel } from './data-views.js';
@@ -1844,19 +1846,22 @@ export async function boot(mounts) {
       path: ['Edit'],
       label: (currentScreenMode() === 'small' ? '☑' : '☐') + ' Small screen mode',
       order: 45,
-      command: () => {
-        toggleScreenMode();
-        registerScreenToggle();
-        // The arrangement changed under every surface that measures itself.
-        bus.emit(CoreEvents.SCREEN_MODE_CHANGED);
-      },
+      command: () => toggleScreenMode(),
     });
   };
   registerScreenToggle();
+  // One subscription for every consequence of a mode change, so no caller has to remember
+  // them: the ☑/☐ label is not reactive, the menubar is a different shape in each mode, and
+  // the surfaces that measure themselves have to re-measure.
+  onScreenModeChange(() => {
+    registerScreenToggle();
+    menus.render();
+    bus.emit(CoreEvents.SCREEN_MODE_CHANGED);
+  });
   // Say so when the VIEWPORT turned it on, because a first-time visitor does not know the
   // mode exists, that it was chosen for them, or where to undo it.
   if (screen.auto) {
-    showAutoNote(document.querySelector('header'), { onFull: () => registerScreenToggle() });
+    showAutoNote(document.querySelector('header'));
   }
 
   const registerDebugToggle = () => {

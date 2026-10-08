@@ -13,7 +13,9 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveScreenMode, SMALL_MAX_PX } from '../core/screen-mode.js';
+import {
+  applyScreenMode, onScreenModeChange, resolveScreenMode, SMALL_MAX_PX,
+} from '../core/screen-mode.js';
 
 // --- unset: the viewport supplies a default ----------------------------------
 
@@ -83,4 +85,75 @@ test('the threshold is well above the WCAG floor, and says why in one number', (
   // trigger is where the FULL layout fails, not where the criterion is measured.
   assert.equal(SMALL_MAX_PX, 720);
   assert.ok(SMALL_MAX_PX > 320);
+});
+
+// --- applying a mode tells the surfaces --------------------------------------
+//
+// This section exists because of a bug that lived for about ten minutes: the note's
+// "use the full layout" button set the attribute and notified nobody, so the layout said
+// `full` while the sidebar sat inside the Project tab and the menubar stayed collapsed.
+// It was only possible because notifying was a separate step a caller had to remember, so
+// the fix was to make it part of applying — and these pin that.
+
+/** A document stand-in: the attribute is all `applyScreenMode` touches. */
+const fakeDoc = (initial = 'full') => ({ documentElement: { dataset: { screen: initial } } });
+
+test('applying a different mode notifies every listener', () => {
+  const doc = fakeDoc('full');
+  const seen = [];
+  const off = onScreenModeChange((m) => seen.push(m));
+  applyScreenMode('small', { doc });
+  off();
+  assert.deepEqual(seen, ['small']);
+  assert.equal(doc.documentElement.dataset.screen, 'small');
+});
+
+test('applying the SAME mode notifies nobody — a no-op must not re-render the app', () => {
+  const doc = fakeDoc('small');
+  const seen = [];
+  const off = onScreenModeChange(() => seen.push('x'));
+  applyScreenMode('small', { doc });
+  off();
+  assert.deepEqual(seen, []);
+});
+
+test('boot applies without notifying, because nothing has subscribed yet', () => {
+  const doc = fakeDoc('full');
+  const seen = [];
+  const off = onScreenModeChange(() => seen.push('x'));
+  applyScreenMode('small', { doc, notify: false });
+  off();
+  assert.deepEqual(seen, []);
+  assert.equal(doc.documentElement.dataset.screen, 'small', 'but the mode is still applied');
+});
+
+test('one broken listener does not stop the others', () => {
+  // The listeners are the app re-arranging itself; a throw in the first must not leave the
+  // menubar expanded in a small layout.
+  const doc = fakeDoc('full');
+  const seen = [];
+  const realError = console.error;
+  console.error = () => {};
+  const offA = onScreenModeChange(() => { throw new Error('boom'); });
+  const offB = onScreenModeChange((m) => seen.push(m));
+  try {
+    assert.doesNotThrow(() => applyScreenMode('small', { doc }));
+  } finally {
+    console.error = realError;
+    offA(); offB();
+  }
+  assert.deepEqual(seen, ['small']);
+});
+
+test('a non-function subscription is ignored rather than breaking the next apply', () => {
+  const off = onScreenModeChange(null);
+  assert.equal(typeof off, 'function');
+  const doc = fakeDoc('full');
+  assert.doesNotThrow(() => applyScreenMode('small', { doc }));
+});
+
+test('an unknown mode value lands on full rather than writing nonsense to the root', () => {
+  const doc = fakeDoc('small');
+  assert.equal(applyScreenMode('tiny', { doc }), 'full');
+  assert.equal(doc.documentElement.dataset.screen, 'full');
 });
