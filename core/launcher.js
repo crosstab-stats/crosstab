@@ -398,6 +398,7 @@ export class Launcher {
       }
     }
 
+    overlay.querySelector('.ctl__aboutbtn')?.addEventListener('click', () => this.#openAbout(overlay));
     overlay.querySelector('.ctl__howto').addEventListener('click', () => showGettingAround());
     overlay.querySelector('.ctl__caveats').addEventListener('click', () => showCaveats());
     this.#renderHosted(overlay);
@@ -531,6 +532,52 @@ export class Launcher {
    * the two, so a dropped field gets its own line, tappable for the details. (Tappable, not a
    * tooltip — see the hover lesson from #177.)
    */
+  /**
+   * The About rail as a modal — the small-screen arrangement of the third column.
+   *
+   * The owner's order for the stacked launcher is *header, about, projects (with demos),
+   * plugins*, with About as a **button that opens a modal** rather than a block in the
+   * stack: it holds the pitch, How-to, Caveats, the hosted-by line, the offline pre-cache
+   * controls and the install hint, and all of that between the header and the projects
+   * would push Start two screens down.
+   *
+   * The rail ELEMENT is moved, not copied. `#renderOffline` and friends closed over their
+   * boxes when the launcher opened, so a moved node keeps its progress bars and its live
+   * controls — and there is no second copy of the About content to drift from the first.
+   * It goes back where it came from on close, so toggling the mode mid-session is safe.
+   *
+   * The dialog lives INSIDE the launcher overlay, which keeps it in the same top-layer
+   * stack and keeps `overlay.querySelector('.ctl__offline')` true for anything that looks
+   * later.
+   */
+  #openAbout(overlay) {
+    const rail = overlay.querySelector('.ctl__about');
+    if (!rail) return;
+    const home = rail.parentElement;
+    const next = rail.nextSibling;
+    const dialog = document.createElement('dialog');
+    dialog.className = 'ctl__aboutmodal';
+    const head = el('div', null, 'ctl__aboutmodalbar');
+    head.append(el('span', 'About CrossTab', 'ctl__aboutmodaltitle'));
+    const close = el('button', 'Done', 'ctl__start ctl__aboutdone');
+    close.type = 'button';
+    head.append(close);
+    dialog.append(head, rail);
+    // Put the rail back before the dialog goes, so the full layout always has its column.
+    // Idempotent, and driven from BOTH the button and the close event, because losing the
+    // event would otherwise lose the About column for the rest of the session — and a
+    // `close` event is exactly the thing that goes missing (a backgrounded tab swallows it;
+    // the Escape key, a form submit and a script `close()` are three different paths into it).
+    const restore = () => {
+      if (rail.parentElement === dialog) home.insertBefore(rail, next);
+      dialog.remove();
+    };
+    dialog.addEventListener('close', restore);
+    close.addEventListener('click', () => { dialog.close(); restore(); });
+    overlay.append(dialog);
+    dialog.showModal();
+  }
+
   #renderHosted(overlay) {
     const box = overlay.querySelector('.ctl__hosted');
     if (!box) return;
@@ -808,6 +855,7 @@ function SHELL_HTML(reopen) {
         <button type="button" class="ctl__update" title="Re-fetch the latest files from the server and reload into them. Useful as an installed app (Home Screen), where there's no browser refresh button.">Check for updates</button>
       </div>
       <div class="ctl__body">
+        <button type="button" class="ctl__aboutbtn">About CrossTab, offline use &amp; how to →</button>
         <aside class="ctl__library">
           <div class="ctl__railhead">Start from</div>
           <button type="button" class="ctl__source" data-source="blank">Start blank</button>
@@ -954,7 +1002,58 @@ function injectStyles() {
     .ctl__landingfine { margin: 0; font-size: 12px; color: #687381; line-height: 1.45; }
     .ctl__openfolder { font-size: 16px; padding: 12px 32px; }
     .ctl__link { font: inherit; font-size: 13px; background: none; border: 0; color: var(--accent, #2572a5); cursor: pointer; padding: 2px 4px; }
-    .ctl__link:hover { text-decoration: underline; }`;
+    .ctl__link:hover { text-decoration: underline; }
+    /* --- small-screen arrangement (core/screen-mode.js) ---------------------------
+       The three columns stack in the owner's order: header, About (a button, opening the
+       rail as a modal), Projects-with-demos, then the plugin picker. The BODY scrolls
+       rather than the card, which is what keeps Start visible without a sticky rule —
+       the footer is outside the scroller. */
+    .ctl__aboutbtn { display: none; }
+    [data-screen="small"] .ctl__card {
+      width: 100vw; max-width: 100vw; max-height: 100vh; border-radius: 0;
+    }
+    [data-screen="small"] .ctl__header { padding: 12px 14px; }
+    [data-screen="small"] .ctl__brand { font-size: 21px; }
+    [data-screen="small"] .ctl__body { flex-direction: column; overflow-y: auto; }
+    [data-screen="small"] .ctl__library,
+    [data-screen="small"] .ctl__center { flex: none; padding: 12px 14px; }
+    [data-screen="small"] .ctl__library { border-right: 0; border-bottom: 1px solid var(--line, #d8dde2); }
+    /* The rail moves into the modal when it is opened; hidden here so it is not ALSO a
+       block in the stack. Nothing is lost: the button is the way in. */
+    [data-screen="small"] .ctl__about { display: none; }
+    [data-screen="small"] .ctl__aboutbtn {
+      display: block; width: 100%; text-align: left; font: inherit; font-size: 13.5px;
+      padding: 11px 14px; border: 0; border-bottom: 1px solid var(--line, #d8dde2);
+      background: #eef4fa; color: var(--accent, #2572a5); cursor: pointer;
+    }
+    /* The picker stops being its own scroll container: ONE scroller (the body) rather than a
+       list that traps a touch drag inside itself, which is the mobile behaviour this feature
+       exists to avoid. The list then sizes to its content and the page scrolls past it; the
+       section headers stick to the body scrollport instead of a box that no longer scrolls. */
+    [data-screen="small"] .ctl__picker { min-height: 0; }
+    [data-screen="small"] .ctp__list {
+      overflow: visible; max-height: none; min-height: 0; border: 0; padding: 0;
+    }
+    [data-screen="small"] .ctp__sectionhead { top: 0; }
+    /* Full bleed: the overlay padding is a desktop nicety that costs 32px of 426. */
+    [data-screen="small"] .ctl { padding: 0; }
+    [data-screen="small"] .ctl__footer { padding: 10px 14px; }
+    [data-screen="small"] .ctl__start { width: 100%; }
+    /* The About rail, as a modal. */
+    .ctl__aboutmodal {
+      border: 0; border-radius: 12px; padding: 0; width: min(560px, 94vw);
+      max-height: 88vh; overflow: auto; background: var(--bg, #f7f8fa);
+      box-shadow: 0 24px 70px rgba(0,0,0,.4);
+    }
+    .ctl__aboutmodal::backdrop { background: rgba(20,28,38,.55); }
+    .ctl__aboutmodalbar {
+      display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+      background: var(--bar, #2c3e50); color: var(--bar-fg, #ecf0f1);
+      position: sticky; top: 0; z-index: 1;
+    }
+    .ctl__aboutmodaltitle { font-weight: 700; flex: 1; }
+    .ctl__aboutdone { padding: 7px 14px; font-size: 14px; }
+    .ctl__aboutmodal .ctl__about { display: block; border-left: 0; padding: 14px; }`;
   document.head.append(s);
 }
 
