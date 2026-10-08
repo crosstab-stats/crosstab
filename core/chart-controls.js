@@ -28,13 +28,19 @@
  */
 
 import { uiSpecFromSpec, colorFor, controlValue, setControlValue, controlVisible } from './chart-renderer.js';
+import { mountLayerDrag, hasMovedLayers, resetLayerPositions } from './chart-drag.js';
 
 /**
  * @param {{model: import('./chart-renderer.js').ChartModel, view: import('./chart-renderer.js').ViewState}} item
  * @param {() => void} onChange - called after any control changes the view (host re-renders).
+ * @param {{holder?: HTMLElement}} [opts] - `holder` is the element whose innerHTML is the
+ *   chart's SVG. Given one, opening this panel also puts draggable outlines over the
+ *   chart's three layers (see chart-drag.js) — the panel being open IS the edit mode,
+ *   so there is no separate thing to switch on, and a reader of a finished figure
+ *   never sees them.
  * @returns {HTMLElement}
  */
-export function buildChartControls(item, onChange) {
+export function buildChartControls(item, onChange, { holder } = {}) {
   const { model, view } = item;
   const wrap = elem('div', 'results-chart__controls');
 
@@ -43,9 +49,20 @@ export function buildChartControls(item, onChange) {
   toggle.textContent = '⚙ Chart options';
   const panel = elem('div', 'results-chart__opts');
   panel.hidden = true;
+
+  // The drag outlines live and die with the panel. Mounted lazily so a chart whose
+  // options are never opened costs nothing, and torn down on close so the observers
+  // it installs are not left watching a figure nobody is editing.
+  let drag = null;
+  const setDragVisible = (on) => {
+    if (on && !drag && holder) drag = mountLayerDrag(holder, item, () => { onChange(); paint(); });
+    else if (!on && drag) { drag.destroy(); drag = null; }
+  };
+
   toggle.addEventListener('click', () => {
     panel.hidden = !panel.hidden;
     toggle.classList.toggle('is-open', !panel.hidden);
+    setDragVisible(!panel.hidden);
   });
   wrap.append(toggle, panel);
 
@@ -113,9 +130,37 @@ export function buildChartControls(item, onChange) {
       // effective value.
       if (!controlVisible(ctl, view, spec.controls)) continue;
       into(ctl.group || 'Chart', buildControl(ctl, view, () => {
+        // Picking a PLACEMENT is asking for that placement's position, so it discards
+        // whatever the layer had been dragged to. Without this, choosing "Above the
+        // chart" on a legend that had been moved would appear to do nothing, and the
+        // dropdown would read as broken.
+        if (ctl.id === 'legend' && view.layerOffsets) delete view.layerOffsets.legend;
         if (ctl.structural || depended.has(ctl.id)) paint();
         onChange();
       }));
+    }
+
+    // 1a. How the outlines work. In the PANEL rather than over the figure: anchored
+    //     under the chart it sat on top of the "Chart options" button, and the figure
+    //     has no spare room to give it. Only when there are outlines to explain.
+    if (holder) {
+      into('Chart', buildControl({
+        type: 'note', group: 'Chart',
+        label: 'Drag a dotted outline on the chart to move it. Arrow keys nudge, Shift+arrow further.',
+      }, view, () => {}), 0);
+    }
+
+    // 1b. Undo for the drag overlay. Shown only once something HAS been moved — like
+    //     "Reset colours" below, an always-present reset for a thing nobody has
+    //     touched is a row of noise. It is also the way back from a layer dragged
+    //     somewhere unhelpful, which is why the drag itself keeps part of every layer
+    //     on the canvas rather than relying on this.
+    if (hasMovedLayers(view)) {
+      into('Chart', textBtn('Reset positions', () => {
+        resetLayerPositions(view);
+        paint();
+        onChange();
+      }), 0);
     }
 
     // 2. Colour + order list for the kind's colour items (series / slices / groups).

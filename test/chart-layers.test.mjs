@@ -268,3 +268,111 @@ for (const model of ABSURD) {
     }
   });
 }
+
+// --- the layers are addressable, and movable ---------------------------------
+
+const { LAYERS, layerOpen, layerOffsetOf, LAYER_CLOSE } = await import('../core/charts/stdlib.js');
+const { clampOffset, MIN_ON_CANVAS, hasMovedLayers, resetLayerPositions } = await import('../core/chart-drag.js');
+
+test('every kind emits all three layers as addressable groups', async () => {
+  // This is what the drag overlay attaches to. A kind that forgets a group does not
+  // break — it just silently cannot be adjusted, which is the kind of gap nobody
+  // notices until they reach for the thing that is missing.
+  const { KIND_NAMES } = await import('./chart-kinds-harness.mjs');
+  const svg = renderChart(MODEL, { ...defaultView(MODEL), legend: 'right' });
+  for (const name of LAYERS) {
+    assert.ok(svg.includes(`ct-layer--${name}`), `no ${name} layer in the markup`);
+  }
+  assert.equal((svg.match(/<g /g) || []).length, (svg.match(/<\/g>/g) || []).length,
+    'the groups must balance or the SVG is malformed');
+  assert.ok(KIND_NAMES.length >= 12, 'and there are kinds to check');
+});
+
+test('the layer identity rides on CLASS, because the sanitiser strips data attributes', () => {
+  // sanitize-html.js allows class/role/aria-* and drops everything else, and every
+  // chart passes through it on the way into the results pane — so a `data-layer`
+  // attribute would simply not arrive. Pinning this because the mistake is invisible:
+  // the chart still renders, and only the dragging quietly stops working.
+  const open = layerOpen('legend', { layerOffsets: { legend: { x: 5, y: -3 } } });
+  assert.ok(!open.includes('data-'), 'no data attribute may be load-bearing here');
+  assert.match(open, /class="ct-layer ct-layer--legend"/);
+  assert.match(open, /transform="translate\(5 -3\)"/);
+});
+
+test('an unmoved layer emits no transform at all', () => {
+  // So an untouched chart's markup is exactly what it was before layers could move.
+  assert.equal(layerOpen('plot', {}), '<g class="ct-layer ct-layer--plot">');
+  assert.equal(layerOpen('plot', { layerOffsets: { plot: { x: 0, y: 0 } } }), '<g class="ct-layer ct-layer--plot">');
+  assert.equal(LAYER_CLOSE, '</g>');
+});
+
+test('a junk offset is read as unmoved rather than written into the markup', () => {
+  for (const bad of [undefined, null, {}, { x: NaN, y: 'left' }, { x: Infinity, y: 2 }]) {
+    const got = layerOffsetOf({ layerOffsets: { title: bad } }, 'title');
+    assert.ok(Number.isFinite(got.x) && Number.isFinite(got.y), `offset ${JSON.stringify(bad)} → ${JSON.stringify(got)}`);
+  }
+  assert.deepEqual(layerOffsetOf({ layerOffsets: { title: { x: Infinity, y: 2 } } }, 'title'), { x: 0, y: 2 },
+    'one bad axis does not discard the other');
+});
+
+test('dragging a layer moves it, and moves nothing else', () => {
+  const moved = renderChart(MODEL, { ...defaultView(MODEL), legend: 'right', layerOffsets: { title: { x: -40, y: 120 } } });
+  assert.match(moved, /class="ct-layer ct-layer--title" transform="translate\(-40 120\)"/);
+  assert.match(moved, /class="ct-layer ct-layer--plot">/, 'the plot was not asked to move');
+  assert.match(moved, /class="ct-layer ct-layer--legend">/, 'nor the legend');
+});
+
+test('THE CLAMP: a layer can always be dragged back, because some of it stays on', () => {
+  // Not a taste cap — the project's rule is that a limit earns its place by preventing
+  // something broken. A layer dragged entirely off the canvas has nothing left to grab,
+  // and "Reset positions" undoing one careless drag would be a trap, not a feature.
+  const canvas = { width: 720, height: 460 };
+  const legend = { x: 560, y: 38, width: 150, height: 46 };
+  const far = clampOffset({ x: 10000, y: 10000 }, legend, canvas);
+  assert.ok(legend.x + far.x <= canvas.width - MIN_ON_CANVAS, 'its leading edge stays on');
+  assert.ok(legend.y + far.y <= canvas.height - MIN_ON_CANVAS);
+  const back = clampOffset({ x: -10000, y: -10000 }, legend, canvas);
+  assert.ok(legend.x + legend.width + back.x >= MIN_ON_CANVAS, 'its trailing edge stays on');
+  assert.ok(legend.y + legend.height + back.y >= MIN_ON_CANVAS);
+});
+
+test('the clamp leaves an ordinary drag completely alone', () => {
+  const canvas = { width: 720, height: 460 };
+  const legend = { x: 560, y: 38, width: 150, height: 46 };
+  assert.deepEqual(clampOffset({ x: -120, y: 60 }, legend, canvas), { x: -120, y: 60 });
+});
+
+test('a layer BIGGER than the canvas can still be moved', () => {
+  // The plot layer is most of the canvas, so a keep-this-much-on-screen rule written
+  // carelessly makes its allowed range empty and pins it in place — a control that
+  // silently does nothing, which is the failure this project keeps coming back to.
+  const canvas = { width: 720, height: 460 };
+  const plot = { x: 0, y: 0, width: 720, height: 460 };
+  const left = clampOffset({ x: -200, y: 0 }, plot, canvas);
+  assert.ok(left.x < 0, `a full-canvas plot should still move left, got ${left.x}`);
+  const right = clampOffset({ x: 200, y: 0 }, plot, canvas);
+  assert.ok(right.x > 0, `…and right, got ${right.x}`);
+});
+
+test('a zero-sized layer does not divide by its own emptiness', () => {
+  // An empty title or a hidden legend has a 0x0 box; the clamp must still return a
+  // number rather than NaN, which would reach the markup as transform="translate(NaN)".
+  const got = clampOffset({ x: 30, y: 30 }, { x: 0, y: 0, width: 0, height: 0 }, { width: 720, height: 460 });
+  assert.ok(Number.isFinite(got.x) && Number.isFinite(got.y), JSON.stringify(got));
+});
+
+test('reset puts everything back, and the button knows when to appear', () => {
+  const view = { layerOffsets: { title: { x: 4, y: 0 } } };
+  assert.equal(hasMovedLayers(view), true);
+  resetLayerPositions(view);
+  assert.equal(hasMovedLayers(view), false);
+  assert.equal(hasMovedLayers({}), false, 'an untouched chart offers no reset');
+  assert.equal(hasMovedLayers({ layerOffsets: { plot: { x: 0, y: 0 } } }), false,
+    'and neither does one dragged exactly back to where it started');
+});
+
+test('a dragged chart still renders without NaN at absurd offsets', () => {
+  const svg = renderChart(MODEL, { ...defaultView(MODEL), layerOffsets: { plot: { x: 1e6, y: -1e6 } } });
+  assert.ok(!/NaN|Infinity/.test(svg));
+  assert.ok(svg.startsWith('<svg'));
+});

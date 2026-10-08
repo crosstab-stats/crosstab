@@ -171,6 +171,46 @@ const RESULTS_STYLES = `
   }
   .results-chart .results-plot__svg svg { width: 100%; height: 100%; display: block; max-width: none; }
   .results-chart .results-plot__save { position: static; opacity: 1; margin-top: 6px; }
+  /* The drag overlay (chart-drag.js). A SIBLING of the figure, not a child: the pane
+     re-renders by assigning holder.innerHTML, which would destroy anything parented
+     inside. Inert except for the handles, so the figure's own resize grip stays
+     reachable underneath. */
+  .ct-drag { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
+  /* The outline IS the target — grab anywhere inside it. Transparent rather than
+     tinted so the figure underneath is still the thing being judged while it moves. */
+  .ct-drag__handle {
+    position: absolute; pointer-events: auto; box-sizing: border-box;
+    background: transparent; border: 1.5px dashed var(--accent, #2572a5);
+    border-radius: 3px; padding: 0; cursor: grab;
+    /* Without this a touch-drag scrolls the pane instead of moving the layer. */
+    touch-action: none;
+  }
+  /* The HIT area is bigger than the outline. Measured live: a default-size title's layer
+     is 13px tall and a legend's 30px, so the outline alone would be a 13px drag target —
+     under WCAG 2.5.8's 24px and far under the 44px this app settled on for touch when it
+     grew a small-screen mode. The pseudo-element adds 16px all round without moving the
+     dotted line, so what you see is still the layer's true extent and what you can grab
+     is a thumb-sized area. Overlaps resolve by the handles' z-index, which is the layer
+     order: title over legend over chart. */
+  .ct-drag__handle::after { content: ''; position: absolute; inset: -16px; }
+  .ct-drag__handle:hover { background: rgba(37, 114, 165, 0.06); }
+  .ct-drag__handle:focus-visible { outline: 2px solid var(--accent, #2572a5); outline-offset: 2px; }
+  .ct-drag__handle.is-dragging { cursor: grabbing; background: rgba(37, 114, 165, 0.1); }
+  /* Names the layer you have hold of — but only on hover or focus. Shown always, it
+     covered the thing being positioned: a default title's outline is 13px tall and the
+     legend's 30px, so the tag was wider and taller than its own layer and hid the text
+     whose placement you were trying to judge. The button already carries the accessible
+     name, so nothing is lost by keeping it out of the way until asked for. */
+  .ct-drag__tag {
+    position: absolute; top: -1px; left: -1px; padding: 1px 5px;
+    font: 11px/1.4 inherit; letter-spacing: .02em;
+    background: var(--accent, #2572a5); color: #fff; border-radius: 2px 0 3px 0;
+    pointer-events: none; white-space: nowrap;
+    opacity: 0; transition: opacity .1s;
+  }
+  .ct-drag__handle:hover .ct-drag__tag,
+  .ct-drag__handle:focus-visible .ct-drag__tag,
+  .ct-drag__handle.is-dragging .ct-drag__tag { opacity: 1; }
   /* A static chart is a real result, not an error — so this reads as a quiet note, not
      a warning. #646e77 on #fff measures 5.20:1, past WCAG 1.4.3's 4.5:1 at this size.
      The left rule is decorative (1.56:1, same as the chart gridlines): it groups the
@@ -720,7 +760,7 @@ export class ResultsPane {
       this.#bus?.emit?.('output:edited');
     };
     ready.then(() => {
-      if (item.spec) block.insertBefore(buildChartControls(item, onEdit), save);
+      if (item.spec) block.insertBefore(buildChartControls(item, onEdit, { holder }), save);
     });
     return block;
   }

@@ -28,12 +28,14 @@ const APP = readFileSync(new URL('../core/app.js', import.meta.url), 'utf8');
 test('a chart-control change emits an edit, not just a repaint', () => {
   // The control panel is handed a callback; before the fix it was `rerender`,
   // which only redrew. Whatever it is handed now has to emit.
-  const handed = RESULTS.match(/buildChartControls\(item,\s*(\w+)\)/);
+  // Tolerant of further arguments on purpose — the panel also takes the figure's holder
+  // now, for the drag overlay — so this keeps testing the callback and not the arity.
+  const handed = RESULTS.match(/buildChartControls\(item,\s*(\w+)\s*[,)]/);
   assert.ok(handed, 'the controls panel should still be built with a callback');
   const name = handed[1];
   assert.notEqual(name, 'rerender', 'a bare rerender saves nothing — that was the bug');
   // …and that callback emits the edit event.
-  const body = RESULTS.slice(RESULTS.indexOf(`const ${name} = `), RESULTS.indexOf(`buildChartControls(item, ${name})`));
+  const body = RESULTS.slice(RESULTS.indexOf(`const ${name} = `), RESULTS.indexOf(`buildChartControls(item, ${name}`));
   assert.match(body, /output:edited/, `${name} should emit 'output:edited'`);
 });
 

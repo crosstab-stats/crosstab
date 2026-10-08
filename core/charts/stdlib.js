@@ -223,6 +223,47 @@ export function canvasBox(h = H) {
   return { x0: 0, x1: W, y0: h, y1: 0 };
 }
 
+/**
+ * ## The layers are addressable
+ *
+ * Each layer is emitted as a `<g class="ct-layer ct-layer--plot|legend|title">`, which
+ * is what lets the host put a dotted outline round it and let the user drag it
+ * (core/chart-drag.js). The class carries the identity rather than a `data-layer`
+ * attribute for a specific reason: every chart SVG goes through
+ * {@link module:core/sanitize-html} on its way into the results pane, and that
+ * allowlist passes `class`, `role` and `aria-*` and strips everything else — a
+ * `data-` attribute would simply not arrive.
+ *
+ * Being a real group also means the host does not have to do any geometry: once the
+ * markup is in the document, `getBoundingClientRect()` gives a layer's on-screen box
+ * and `getScreenCTM()` gives the scale, both already accounting for the letterboxing
+ * that `preserveAspectRatio` applies inside the user's resizable frame.
+ *
+ * The position itself is one `translate` on the group, so a dragged plot takes its
+ * axes, gridlines and marks with it and no renderer has to thread an offset through
+ * its coordinates.
+ */
+export const LAYERS = ['plot', 'legend', 'title'];
+
+/** One layer's user-set offset, in viewBox units. Absent or junk means unmoved. */
+export function layerOffsetOf(view, name) {
+  const o = view && view.layerOffsets && view.layerOffsets[name];
+  const x = Number(o && o.x);
+  const y = Number(o && o.y);
+  return { x: Number.isFinite(x) ? x : 0, y: Number.isFinite(y) ? y : 0 };
+}
+
+/** Open a layer group. The transform is omitted when there is no offset, so an
+ * untouched chart's markup is exactly what it was before layers were addressable. */
+export function layerOpen(name, view) {
+  const { x, y } = layerOffsetOf(view, name);
+  const t = x || y ? ` transform="translate(${r(x)} ${r(y)})"` : '';
+  return `<g class="ct-layer ct-layer--${name}"${t}>`;
+}
+
+/** Close a layer group. A constant, so the open/close pair cannot drift. */
+export const LAYER_CLOSE = '</g>';
+
 /** The chart title's text size. */
 export function titleSizeOf(view) {
   const n = Number(view && view.titleSize);
@@ -282,7 +323,7 @@ export function titleBlock(title, view = {}, canvas = canvasBox(), plot = null) 
     size, weight: view.titleBold !== false ? 600 : 400,
     italic: !!view.titleItalic, anchor: 'middle', fill: '#222',
   }));
-  return out.join('');
+  return layerOpen('title', view) + out.join('') + LAYER_CLOSE;
 }
 
 /**
@@ -758,7 +799,7 @@ export function legendBlock(items, place, box, view = {}, canvas = canvasBox(), 
       lx += widths[i];
     });
   }
-  return out.join('');
+  return layerOpen('legend', view) + out.join('') + LAYER_CLOSE;
 }
 
 /**
@@ -943,10 +984,11 @@ export function bandFrame(model, view, { allValues, bands, legendItems = [], alt
   const band = (box.x1 - box.x0) / Math.max(1, bands);
   const centre = (i) => box.x0 + band * (i + 0.5);
 
-  // The plot layer. The title is NOT pushed here — it is the top layer and goes on
-  // last, in close(), so a title large enough to reach the data sits over it rather
-  // than under it.
-  const out = [svgOpen(chartAltText(model, view, alt, noun))];
+  // The plot layer opens here and closes in close(). The title is NOT pushed here — it
+  // is the top layer and goes on last, so a title large enough to reach the data sits
+  // over it rather than under it. The background rect stays outside the group,
+  // deliberately: it is the canvas, not part of anything that can be dragged.
+  const out = [svgOpen(chartAltText(model, view, alt, noun)), layerOpen('plot', view)];
   for (const t of yticks) {
     if (t < yLo - 1e-9 || t > yHi + 1e-9) continue;
     const y = yScale(t);
@@ -973,7 +1015,9 @@ export function bandFrame(model, view, { allValues, bands, legendItems = [], alt
       const my = (box.y0 + box.y1) / 2;
       out.push(`<text x="14" y="${r(my)}" font-size="${view.yAxisTitleSize || 12}" fill="#333" text-anchor="middle" transform="rotate(-90 14 ${r(my)})">${esc(yTitle)}</text>`);
     }
-    // Layer order, bottom to top: plot (above), legend, title.
+    // Layer order, bottom to top: plot, legend, title. The plot group closes first —
+    // everything after it is a layer that sits OVER it.
+    out.push(LAYER_CLOSE);
     if (showLegend) out.push(legendBlock(legendItems, view.legend, box, view, canvas));
     out.push(titleBlock(title, view, canvas, box));
     out.push('</svg>');
@@ -1085,8 +1129,8 @@ export function xyFrame(model, view, { xValues, yValues, legendItems = [], alt, 
   const xScale = (v) => box.x0 + ((v - xs.lo) / (xs.hi - xs.lo || 1)) * (box.x1 - box.x0);
   const yScale = (v) => box.y0 - ((v - ys.lo) / (ys.hi - ys.lo || 1)) * (box.y0 - box.y1);
 
-  // The title is the top layer; it goes on last, in close().
-  const out = [svgOpen(chartAltText(model, view, alt, noun))];
+  // The title is the top layer; it goes on last, in close(). The plot layer opens here.
+  const out = [svgOpen(chartAltText(model, view, alt, noun)), layerOpen('plot', view)];
   for (const t of ys.ticks) {
     if (t < ys.lo - 1e-9 || t > ys.hi + 1e-9) continue;
     const y = yScale(t);
@@ -1117,7 +1161,9 @@ export function xyFrame(model, view, { xValues, yValues, legendItems = [], alt, 
       const my = (box.y0 + box.y1) / 2;
       out.push(`<text x="14" y="${r(my)}" font-size="${view.yAxisTitleSize || 12}" fill="#333" text-anchor="middle" transform="rotate(-90 14 ${r(my)})">${esc(yTitle)}</text>`);
     }
-    // Layer order, bottom to top: plot (above), legend, title.
+    // Layer order, bottom to top: plot, legend, title. The plot group closes first —
+    // everything after it is a layer that sits OVER it.
+    out.push(LAYER_CLOSE);
     if (showLegend) out.push(legendBlock(legendItems, view.legend, box, view, canvas));
     out.push(titleBlock(title, view, canvas, box));
     out.push('</svg>');

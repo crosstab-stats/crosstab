@@ -1,0 +1,302 @@
+/**
+ * @file chart-drag.js
+ * Drag the three chart layers — plot, legend, title — into place by hand.
+ *
+ * The positions the renderers choose are defaults, and defaults are a guess about
+ * composition. Every automatic rule we have tried has been wrong for somebody: the
+ * legend's old right-hand margin was measured off the longest label (so the data
+ * decided how much canvas the data got), and the title sat in a fixed band whose size
+ * was really a cap on the title's own size. The owner's verdict on the result,
+ * 2026-10-08: *"the placement of these elements is way off from ideal. But again, this
+ * is just my aesthetic preference."* Which is the point — it is an aesthetic judgement,
+ * so the person whose figure it is should be making it.
+ *
+ * ## How it attaches to an opaque figure
+ *
+ * A chart arrives as an SVG *string* from a kind that may live in a sandboxed plugin,
+ * so the host knows nothing about where anything was drawn. What makes this possible is
+ * that each layer is emitted as a `<g class="ct-layer ct-layer--…">` (see `LAYERS` in
+ * charts/stdlib.js). Once that markup is in the document the browser answers every
+ * geometric question for us:
+ *
+ *   - `getBoundingClientRect()` on the group gives its on-screen box, already including
+ *     the letterboxing `preserveAspectRatio` applies inside the user's resizable frame.
+ *     No aspect-ratio arithmetic here, which is where this would otherwise go wrong.
+ *   - `getScreenCTM()` on the `<svg>` gives the scale, to turn a pointer delta in CSS
+ *     pixels into the viewBox units the view stores.
+ *
+ * The class, not a `data-` attribute, carries the layer's identity: chart markup passes
+ * through sanitize-html.js on its way into the pane, and that allowlist keeps `class`,
+ * `role` and `aria-*` and drops everything else.
+ *
+ * ## Why the overlay is a sibling of the figure
+ *
+ * `ResultsPane`'s re-render does `holder.innerHTML = item.svg`, which destroys every
+ * child of the holder. So the outlines live in a sibling layer positioned over it, and
+ * re-measure when the markup changes (a `MutationObserver`) or the frame is resized (a
+ * `ResizeObserver`). Anything parented inside the holder would silently vanish on the
+ * first control change.
+ *
+ * ## Why a commit happens on release, not during the drag
+ *
+ * Writing the view re-renders, and a render can cross a postMessage boundary to a
+ * plugin — `ResultsPane` already sequence-guards replies because they land out of
+ * order. Committing per pointermove would mean a round trip per frame. So a drag moves
+ * the group's own `transform` locally at pointer speed and writes the view once, on
+ * release.
+ *
+ * ## Keyboard, not as polish
+ *
+ * Each outline is a real `<button>` that nudges with the arrow keys. Drag-only
+ * positioning fails WCAG 2.1.1 (Keyboard) and 2.5.7 (Dragging Movements) outright, and
+ * it is also the only way to do this on a phone, where a one-unit drag is not a
+ * gesture anyone can make. It doubles as the fine adjustment after a rough drag.
+ */
+
+import { LAYERS, layerOffsetOf } from './charts/stdlib.js';
+
+/**
+ * Viewbox units of a layer that must stay on the canvas.
+ *
+ * Not a taste cap — the project's rule is that a limit earns its place only by
+ * preventing something broken rather than something ugly, and a layer dragged entirely
+ * off the canvas is a layer with nothing left to grab. "Reset positions" is the other
+ * way back, but needing it to undo one drag would be a trap.
+ */
+export const MIN_ON_CANVAS = 24;
+
+/** How far an arrow key moves a layer, and how far Shift+arrow moves it. */
+export const NUDGE = 1;
+export const NUDGE_FAR = 10;
+
+/** Human names, for the outline's label and its accessible name. */
+const LAYER_NAMES = { plot: 'chart', legend: 'legend', title: 'title' };
+
+/**
+ * Clamp an offset so at least {@link MIN_ON_CANVAS} of the layer stays on the canvas.
+ *
+ * Pure, and exported for its own test: it is the one piece of arithmetic here that a
+ * browser cannot be asked to do, because it is a policy and not a measurement.
+ *
+ * @param {{x:number,y:number}} offset - the proposed offset, in viewBox units
+ * @param {{x:number,y:number,width:number,height:number}} bbox - the layer's own
+ *   untransformed box (`getBBox()`), in the same units
+ * @param {{width:number,height:number}} canvas - the viewBox's size
+ */
+export function clampOffset(offset, bbox, canvas) {
+  const fit = (o, lo, size, extent) => {
+    if (!Number.isFinite(o)) return 0;
+    // A layer wider than the canvas can always be moved: its own size must never make
+    // the allowed range empty, so the keep-on-screen margin shrinks to fit.
+    const keep = Math.min(MIN_ON_CANVAS, size || 0, extent);
+    const min = keep - lo - (size || 0); // trailing edge no further left than `keep`
+    const max = extent - keep - lo; // leading edge no further right than extent-keep
+    return Math.min(max, Math.max(min, o));
+  };
+  return {
+    x: fit(offset.x, bbox.x, bbox.width, canvas.width),
+    y: fit(offset.y, bbox.y, bbox.height, canvas.height),
+  };
+}
+
+/** The view's offset map, created on demand. */
+function offsetsOf(view) {
+  if (!view.layerOffsets) view.layerOffsets = {};
+  return view.layerOffsets;
+}
+
+/** Has the user moved anything? Drives whether "Reset positions" is worth showing. */
+export function hasMovedLayers(view) {
+  return LAYERS.some((n) => {
+    const o = layerOffsetOf(view, n);
+    return o.x !== 0 || o.y !== 0;
+  });
+}
+
+/** Put every layer back where the renderer would have placed it. */
+export function resetLayerPositions(view) {
+  delete view.layerOffsets;
+}
+
+/**
+ * Show draggable outlines over a chart's layers.
+ *
+ * @param {HTMLElement} holder - the element whose innerHTML is the chart's SVG
+ * @param {{view: object}} item - the chart item; its `view` is written on commit
+ * @param {() => void} onCommit - called after a move is written to the view
+ * @returns {{destroy: () => void, sync: () => void}}
+ */
+export function mountLayerDrag(holder, item, onCommit) {
+  const doc = holder.ownerDocument;
+  const frame = holder.parentElement || holder;
+
+  const overlay = doc.createElement('div');
+  overlay.className = 'ct-drag';
+  // Inert except for the handles themselves, so the figure's own resize grip and
+  // anything else beneath stays reachable.
+  overlay.setAttribute('aria-hidden', 'false');
+  // The how-to lives in the options panel (chart-controls.js), not here. Anchored under
+  // the figure it landed on top of the "Chart options" button, and the figure has no
+  // spare room of its own to give it — the panel does, and it opens directly below.
+  frame.append(overlay);
+
+  /** layer name → its handle button. Built once; only geometry changes after that. */
+  const handles = new Map();
+
+  const svgOf = () => holder.querySelector('svg');
+
+  /** The viewBox's own size, which is the unit system the offsets are stored in. */
+  const canvasOf = (svg) => {
+    const vb = (svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+    return vb.length === 4 && vb.every(Number.isFinite)
+      ? { width: vb[2], height: vb[3] }
+      : { width: svg.clientWidth || 1, height: svg.clientHeight || 1 };
+  };
+
+  /** CSS pixels per viewBox unit, as the browser is actually drawing it. */
+  const scaleOf = (svg) => {
+    const m = typeof svg.getScreenCTM === 'function' ? svg.getScreenCTM() : null;
+    return {
+      x: m && Math.abs(m.a) > 1e-6 ? m.a : 1,
+      y: m && Math.abs(m.d) > 1e-6 ? m.d : 1,
+    };
+  };
+
+  const handleFor = (name) => {
+    let h = handles.get(name);
+    if (h) return h;
+    h = doc.createElement('button');
+    h.type = 'button';
+    h.className = `ct-drag__handle ct-drag__handle--${name}`;
+    // The layer order is also the hit order: a title over the legend over the plot, so
+    // grabbing where two outlines overlap grabs the one drawn on top.
+    h.style.zIndex = String(10 + LAYERS.indexOf(name));
+    const label = doc.createElement('span');
+    label.className = 'ct-drag__tag';
+    label.textContent = LAYER_NAMES[name] || name;
+    h.append(label);
+    h.setAttribute('aria-label', `Move the ${LAYER_NAMES[name] || name}. Arrow keys to nudge.`);
+    wire(h, name);
+    overlay.append(h);
+    handles.set(name, h);
+    return h;
+  };
+
+  /** Position every handle over its layer. Cheap enough to run on any change. */
+  const sync = () => {
+    const svg = svgOf();
+    if (!svg) return;
+    const base = frame.getBoundingClientRect();
+    const seen = new Set();
+    for (const g of svg.querySelectorAll('.ct-layer')) {
+      const name = LAYERS.find((n) => g.classList.contains(`ct-layer--${n}`));
+      if (!name) continue;
+      seen.add(name);
+      const h = handleFor(name);
+      const r = g.getBoundingClientRect();
+      // An empty layer (no title set, no legend shown) has a zero-sized box and gets
+      // no outline — an invisible 0×0 target would be a tab stop that does nothing.
+      if (r.width < 1 || r.height < 1) { h.hidden = true; continue; }
+      h.hidden = false;
+      h.style.left = `${r.left - base.left}px`;
+      h.style.top = `${r.top - base.top}px`;
+      h.style.width = `${r.width}px`;
+      h.style.height = `${r.height}px`;
+    }
+    for (const [name, h] of handles) if (!seen.has(name)) h.hidden = true;
+  };
+
+  /** Write one layer's offset and tell the pane to redraw and mark itself dirty. */
+  const commit = (name, offset) => {
+    const svg = svgOf();
+    const g = svg && svg.querySelector(`.ct-layer--${name}`);
+    if (!g) return;
+    const raw = clampOffset(offset, g.getBBox(), canvasOf(svg));
+    // Rounded before storing. A drag divides a pixel delta by the render scale, so it
+    // naturally produces things like 91.71974522292993 — which the markup rounds to 2dp
+    // anyway, and which would otherwise sit in the saved project forever as noise in the
+    // one field that differs between two saves of an unchanged chart.
+    const clamped = { x: round(raw.x), y: round(raw.y) };
+    if (clamped.x === 0 && clamped.y === 0) delete offsetsOf(item.view)[name];
+    else offsetsOf(item.view)[name] = clamped;
+    onCommit();
+  };
+
+  function wire(h, name) {
+    let drag = null;
+
+    h.addEventListener('pointerdown', (e) => {
+      if (e.button != null && e.button !== 0) return;
+      const svg = svgOf();
+      const g = svg && svg.querySelector(`.ct-layer--${name}`);
+      if (!g) return;
+      e.preventDefault();
+      const from = layerOffsetOf(item.view, name);
+      drag = {
+        id: e.pointerId, g, scale: scaleOf(svg), from,
+        x0: e.clientX, y0: e.clientY,
+        left: parseFloat(h.style.left) || 0, top: parseFloat(h.style.top) || 0,
+        moved: false, at: from,
+      };
+      try { h.setPointerCapture(e.pointerId); } catch { /* not all pointers capture */ }
+      h.classList.add('is-dragging');
+    });
+
+    h.addEventListener('pointermove', (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const dxPx = e.clientX - drag.x0;
+      const dyPx = e.clientY - drag.y0;
+      if (!drag.moved && Math.abs(dxPx) + Math.abs(dyPx) < 2) return; // a click, not a drag
+      drag.moved = true;
+      drag.at = { x: drag.from.x + dxPx / drag.scale.x, y: drag.from.y + dyPx / drag.scale.y };
+      // Local only: the group moves with the pointer and the view is left alone until
+      // release, so one drag costs one render rather than one per frame.
+      drag.g.setAttribute('transform', `translate(${round(drag.at.x)} ${round(drag.at.y)})`);
+      h.style.left = `${drag.left + dxPx}px`;
+      h.style.top = `${drag.top + dyPx}px`;
+    });
+
+    const end = (e) => {
+      if (!drag || (e && e.pointerId != null && e.pointerId !== drag.id)) return;
+      const { moved, at } = drag;
+      drag = null;
+      h.classList.remove('is-dragging');
+      // An un-moved press is a plain click — leave the view untouched rather than
+      // writing an identical offset and spending a render on it.
+      if (moved) commit(name, at);
+      else sync();
+    };
+    h.addEventListener('pointerup', end);
+    h.addEventListener('pointercancel', end);
+
+    h.addEventListener('keydown', (e) => {
+      const step = e.shiftKey ? NUDGE_FAR : NUDGE;
+      const by = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+      if (!by) return;
+      e.preventDefault();
+      const from = layerOffsetOf(item.view, name);
+      commit(name, { x: from.x + by[0], y: from.y + by[1] });
+    });
+  }
+
+  // The figure is replaced wholesale on every control change, and resized by dragging
+  // its grip — so re-measure on both rather than hoping to be told.
+  const mo = new MutationObserver(() => sync());
+  mo.observe(holder, { childList: true, subtree: true });
+  const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => sync()) : null;
+  if (ro) ro.observe(holder);
+
+  sync();
+
+  return {
+    sync,
+    destroy() {
+      mo.disconnect();
+      if (ro) ro.disconnect();
+      overlay.remove();
+      handles.clear();
+    },
+  };
+}
+
+function round(n) { return Math.round(n * 100) / 100; }
