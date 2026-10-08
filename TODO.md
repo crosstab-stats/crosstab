@@ -826,6 +826,47 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       [[output-outlives-its-maker]] says must not change under the reader, so probably **no** for
       saved output and yes only for live rendering. Decide deliberately rather than by default.
 
+- [ ] **Collaboration on WebKit (Safari / iPhone / iPad) — three separate gaps, none of them
+      urgent (owner, 2026-10-07: *"we will eventually need collab support on WebKit devices so
+      let's flag that… but it can chill for now"*).** Filed so it is not rediscovered the hard
+      way; nothing here is broken today, and two of the three are unverified rather than known
+      bad.
+
+      **1. The FOLDER transport is Chromium-only, structurally.** `showDirectoryPicker` is
+      guarded in three places (`project-sync.js:565`, `:1953`, `storage-backend.js:113`) and
+      WebKit does not implement it, so a Safari user never sees folder projects at all. #143's
+      whole sharing story — drop the folder in Dropbox, both people hold it, folder-sync merges
+      — has **no answer on an iPad**. It degrades rather than breaks, which is why nobody has
+      hit it, but "share this with my colleague who works on an iPad" currently has no
+      folder-shaped answer. The live transport and `.crosstab` bundles are what is left.
+
+      **2. `atomicWrite: true` became a claim the driver can no longer always honour
+      (2026-10-07).** Today's `move()` fix falls back to writing in place on an engine whose
+      rename does not work, which is what makes saving work on WebKit at all — but it means the
+      temp-then-rename guarantee is conditional now while the capability is still declared
+      statically by `OpfsDriver` and `FsaFolderDriver`.
+
+      **It is latent, not broken: nothing in production reads the flag** (four drivers declare
+      it, four tests assert it, no consumer). That is exactly the hazard worth recording — the
+      FIRST consumer will believe it, and the obvious first consumer is folder-sync, whose
+      peer-safety argument is *"the driver's write is atomic (temp + rename), so a peer polling
+      `project.json` mid-write never reads a torn file."* On an engine using the fallback that
+      sentence stops being true. **Fix when it gets a reader:** have the driver downgrade the
+      declared capability once it has discovered rename does not work, rather than asserting it
+      up front — the same "probe by attempt, not by existence" lesson the fallback itself came
+      from.
+
+      **3. Live co-authoring is UNVERIFIED on WebKit, not known broken.** It is trystero over
+      MQTT (`core/live-sync.js`, loaded from CDN per `core/assets.js`), i.e. WebRTC, which iOS
+      Safari does have. So it may simply work. Nobody has tried, and the things that would bite
+      are iOS-shaped: a backgrounded tab suspending the peer connection, and the CDN import
+      versus the air-gap/offline path.
+
+      **What would settle it** — a Mac/iPhone pair on one project with Go live: does the room
+      join, do ops flow both ways, and does **gap-fill** work, since that moves Parquet source
+      bytes over the wire and is the part most likely to meet a platform limit. Until someone
+      runs that, treat live-on-WebKit as unknown rather than supported.
+
 - [x] **BUILT (2026-10-07) — "small screen" mode: a layout the user owns, detected as a
       default and never as an override.** Three stages, one commit each, each browser-verified
       at a true 426px viewport before the next began.
