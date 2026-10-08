@@ -22,6 +22,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 
 await import('./chart-kinds-harness.mjs');
 
@@ -375,4 +376,57 @@ test('a dragged chart still renders without NaN at absurd offsets', () => {
   const svg = renderChart(MODEL, { ...defaultView(MODEL), layerOffsets: { plot: { x: 1e6, y: -1e6 } } });
   assert.ok(!/NaN|Infinity/.test(svg));
   assert.ok(svg.startsWith('<svg'));
+});
+
+// --- the two bugs the browser found ------------------------------------------
+//
+// Both were reported together ("a rather large buffer at the top preventing me from
+// dragging the title", owner, 2026-10-08) and turned out to be unrelated. Neither is
+// reachable from Node — one is pointer-event routing, the other is CSS layout — so
+// these guard the source, which is this repo's idiom for DOM code it cannot run
+// (see output-edit-autosave.test.mjs).
+
+const DRAG_SRC = await readFile(new URL('../core/chart-drag.js', import.meta.url), 'utf8');
+const PANE_SRC = await readFile(new URL('../core/results-pane.js', import.meta.url), 'utf8');
+
+test('a drag survives the pointer leaving the handle', () => {
+  // THE BUG: move/up were bound to the handle itself and setPointerCapture was wrapped
+  // in a silent try/catch. Measured in Chrome, pointermove stops arriving at the handle
+  // once the pointer is outside it — so a title whose outline is 14px tall broke after
+  // 14px of travel and sprang back. Binding to the document makes the drag independent
+  // of whether capture took.
+  const down = DRAG_SRC.slice(DRAG_SRC.indexOf("addEventListener('pointerdown'"), DRAG_SRC.indexOf('const onMove'));
+  for (const type of ['pointermove', 'pointerup', 'pointercancel']) {
+    assert.ok(down.includes(`doc.addEventListener('${type}'`),
+      `${type} must be bound to the document for the drag to outlive the handle`);
+  }
+  assert.ok(DRAG_SRC.includes("doc.removeEventListener('pointermove'"), 'and unbound when the drag ends');
+  assert.ok(DRAG_SRC.includes('life.abort()'), 'and torn down if the panel closes mid-drag');
+});
+
+test('the figure frame takes its shape from the drawing, so there is no dead band', () => {
+  // THE OTHER BUG: the frame was a fixed 420px tall whatever its width, so a 720x460
+  // chart in a 488px-wide pane was letterboxed with 55px of white above and below —
+  // inside the figure's border, outside the viewBox, and therefore impossible to drag
+  // anything into. Measured after the fix: 55px of dead band became 1px.
+  assert.match(PANE_SRC, /#fitHolderToViewBox\(holder\)\s*\{/, 'the helper should exist');
+  assert.match(PANE_SRC, /holder\.style\.aspectRatio/, 'and set the frame from the viewBox');
+  // Read from the markup, not assumed: forest and SCED charts grow with the data, so
+  // their shape differs per dataset.
+  assert.match(PANE_SRC, /getAttribute\('viewBox'\)/);
+  const css = PANE_SRC.slice(PANE_SRC.indexOf('.results-chart .results-plot__svg {'));
+  const rule = css.slice(0, css.indexOf('}'));
+  assert.ok(!/height:\s*\d+px/.test(rule), `a fixed height reintroduces the band: ${rule.trim()}`);
+  assert.match(rule, /aspect-ratio:/);
+  assert.match(rule, /resize:\s*horizontal/,
+    'dragging the frame taller only ever added dead band, so width is the only axis that means anything');
+});
+
+test('every chart holder that receives markup is fitted to it', () => {
+  // The live render, the first paint from a saved project, and the FROZEN block a
+  // chart falls back to when its plugin is gone. Miss one and a reopened figure comes
+  // back letterboxed while a fresh one does not — the kind of difference nobody
+  // attributes to the right cause.
+  const fits = (PANE_SRC.match(/#fitHolderToViewBox\(holder\)/g) || []).length;
+  assert.ok(fits >= 4, `expected the helper plus every call site, saw ${fits}`);
 });

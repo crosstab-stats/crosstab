@@ -164,9 +164,20 @@ const RESULTS_STYLES = `
      the chart visible everywhere; the viewBox keeps it undistorted as it scales;
      max-width:100% stops a drag from spilling past the pane (no scrollbar). */
   .results-chart { position: relative; box-sizing: border-box; max-width: 100%; }
+  /* The frame takes its SHAPE from the drawing inside it (fitHolderToViewBox sets
+     aspect-ratio from the SVG's own viewBox after every render). It used to be a fixed
+     420px tall whatever the pane's width, so in a 488px-wide pane a 720x460 chart was
+     letterboxed with 55px of dead white above and below it — space that looks like part
+     of the figure and is outside the viewBox entirely, so nothing can be drawn or
+     dragged into it. Reported as a 'rather large buffer at the top' once the layers
+     became draggable and someone tried to use it.
+     Horizontal-only resizing, for the same reason: dragging the frame taller only added
+     more of that dead band, since the drawing scales to fit and centres. Width is the
+     only dimension where a resize means anything. */
   .results-chart .results-plot__svg {
-    width: min(100%, 672px); height: 420px; max-width: 100%; max-height: 78vh;
-    resize: both; overflow: hidden; box-sizing: border-box;
+    width: min(100%, 672px); height: auto; aspect-ratio: 720 / 460;
+    max-width: 100%; max-height: 78vh;
+    resize: horizontal; overflow: hidden; box-sizing: border-box;
     border: 1px solid #e3e7eb; border-radius: 6px; background: #fff;
   }
   .results-chart .results-plot__svg svg { width: 100%; height: 100%; display: block; max-width: none; }
@@ -645,6 +656,22 @@ export class ResultsPane {
   }
 
   /**
+   * Give the frame the same shape as the drawing inside it.
+   *
+   * Read from the SVG's own viewBox rather than assumed, because the kinds whose height
+   * grows with the data (a forest plot gains a row per study, a SCED chart a panel per
+   * case) are a different shape on every dataset. Without this the frame keeps whatever
+   * height the CSS gave it and `preserveAspectRatio` centres the drawing inside, leaving
+   * dead white bands that look like part of the figure but lie outside the coordinate
+   * space — so nothing renders there and no layer can be dragged there.
+   */
+  #fitHolderToViewBox(holder) {
+    const svg = holder.querySelector('svg');
+    const vb = (svg && svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+    if (vb.length === 4 && vb[2] > 0 && vb[3] > 0) holder.style.aspectRatio = `${vb[2]} / ${vb[3]}`;
+  }
+
+  /**
    * Append a **data-driven chart** (`app.results.appendChart`). Unlike
    * {@link ResultsPane#appendPlot} — which takes a finished SVG baked in R — the
    * plugin hands a structured {@link ChartModel} (categories + series + values), and
@@ -732,10 +759,14 @@ export class ResultsPane {
       // sanitise either way, like every other fragment.
       item.svg = sanitizeHtml(svg);
       holder.innerHTML = item.svg;
+      this.#fitHolderToViewBox(holder);
     };
     // Paint whatever the project saved straight away, so a reopened chart is visible
     // before its provider has answered — then the live render replaces it.
-    if (item.svg) holder.innerHTML = sanitizeHtml(item.svg);
+    if (item.svg) {
+      holder.innerHTML = sanitizeHtml(item.svg);
+      this.#fitHolderToViewBox(holder);
+    }
     rerender();
 
     const save = document.createElement('div');
@@ -842,6 +873,7 @@ export class ResultsPane {
     holder.className = 'results-plot__svg';
     // Saved SVG comes from an untrusted project file — same sanitising as appendPlot.
     holder.innerHTML = sanitizeHtml(item.svg || '');
+    this.#fitHolderToViewBox(holder);
     block.append(holder);
 
     const handle = this.#chartHandle(item);

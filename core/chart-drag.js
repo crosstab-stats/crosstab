@@ -129,6 +129,10 @@ export function resetLayerPositions(view) {
 export function mountLayerDrag(holder, item, onCommit) {
   const doc = holder.ownerDocument;
   const frame = holder.parentElement || holder;
+  // Everything attached to the document is tied to this, so closing the panel part-way
+  // through a drag cannot leave a listener behind watching for a move that will never
+  // come.
+  const life = new AbortController();
 
   const overlay = doc.createElement('div');
   overlay.className = 'ct-drag';
@@ -238,11 +242,21 @@ export function mountLayerDrag(holder, item, onCommit) {
         left: parseFloat(h.style.left) || 0, top: parseFloat(h.style.top) || 0,
         moved: false, at: from,
       };
+      // Capture if we can, but do NOT depend on it. Measured in Chrome: once the
+      // pointer leaves the handle, pointermove stops arriving at the handle — so a
+      // title whose outline is 14px tall broke after 14px of travel and sprang back
+      // to where it started, which is exactly what "I drag up and it bounces back
+      // down" looks like. The document listeners below are what actually make a drag
+      // longer than the handle work; the capture is a bonus when it takes.
       try { h.setPointerCapture(e.pointerId); } catch { /* not all pointers capture */ }
+      const opts = { signal: life.signal };
+      doc.addEventListener('pointermove', onMove, opts);
+      doc.addEventListener('pointerup', end, opts);
+      doc.addEventListener('pointercancel', end, opts);
       h.classList.add('is-dragging');
     });
 
-    h.addEventListener('pointermove', (e) => {
+    const onMove = (e) => {
       if (!drag || e.pointerId !== drag.id) return;
       const dxPx = e.clientX - drag.x0;
       const dyPx = e.clientY - drag.y0;
@@ -254,20 +268,21 @@ export function mountLayerDrag(holder, item, onCommit) {
       drag.g.setAttribute('transform', `translate(${round(drag.at.x)} ${round(drag.at.y)})`);
       h.style.left = `${drag.left + dxPx}px`;
       h.style.top = `${drag.top + dyPx}px`;
-    });
+    };
 
-    const end = (e) => {
+    function end(e) {
       if (!drag || (e && e.pointerId != null && e.pointerId !== drag.id)) return;
       const { moved, at } = drag;
       drag = null;
+      doc.removeEventListener('pointermove', onMove);
+      doc.removeEventListener('pointerup', end);
+      doc.removeEventListener('pointercancel', end);
       h.classList.remove('is-dragging');
       // An un-moved press is a plain click — leave the view untouched rather than
       // writing an identical offset and spending a render on it.
       if (moved) commit(name, at);
       else sync();
-    };
-    h.addEventListener('pointerup', end);
-    h.addEventListener('pointercancel', end);
+    }
 
     h.addEventListener('keydown', (e) => {
       const step = e.shiftKey ? NUDGE_FAR : NUDGE;
@@ -291,6 +306,7 @@ export function mountLayerDrag(holder, item, onCommit) {
   return {
     sync,
     destroy() {
+      life.abort();
       mo.disconnect();
       if (ro) ro.disconnect();
       overlay.remove();
