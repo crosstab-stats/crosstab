@@ -108,6 +108,45 @@ export const capabilitiesOf = (driver) => Object.freeze({
   ...(driver?.capabilities ?? {}),
 });
 
+/**
+ * Rename `tmp` over `name` within `dir`, however this engine spells it.
+ *
+ * `typeof handle.move === 'function'` is not a capability check — WebKit **exposes** move
+ * and implements only the two-argument `move(destinationDirectory, name)` form, so the
+ * one-argument rename throws `TypeError: Not enough arguments` on iOS. The symptom was
+ * "Save project failed: Not enough arguments" on the owner's iPhone (2026-10-07), from a
+ * branch that had already decided the API was available.
+ *
+ * So this probes by ATTEMPT, which is the only honest way to detect a partly-implemented
+ * API: the short form, then the spec's long form, then give up and let the caller write
+ * directly. Returns whether the rename happened.
+ *
+ * @param {FileSystemDirectoryHandle} dir
+ * @param {FileSystemFileHandle} tfh  the temp file
+ * @param {string} name  the destination name within `dir`
+ * @returns {Promise<boolean>}
+ */
+async function renameOver(dir, tfh, name) {
+  if (typeof tfh.move !== 'function') return false;
+  try {
+    await tfh.move(name); // Chromium: rename within the directory, overwriting
+    return true;
+  } catch (err) {
+    if (!(err instanceof TypeError)) throw err; // a real failure (blocked extension, quota)
+  }
+  try {
+    await tfh.move(dir, name); // WebKit wants the destination directory as well
+    return true;
+  } catch (err) {
+    if (!(err instanceof TypeError)) throw err;
+  }
+  return false; // move exists in name only — the caller falls back to a direct write
+}
+
+/** Exposed for tests: the engine-shape probe above is a DECISION, and the bug it fixes was
+ * invisible to every check that is not an attempt. */
+export const __renameOverForTests = renameOver;
+
 /** Non-empty path segments. */
 function segs(path) {
   return String(path).split('/').filter(Boolean);
@@ -155,23 +194,23 @@ class HandleDriver {
     const parts = segs(path);
     const name = parts.pop();
     const dir = await this.#dirOf(parts, true);
-    // Atomic: write a temp file, then rename over the target, so a peer polling the
-    // real path over a sync folder never reads a half-written file. Fall back to a
-    // direct write where `move()` isn't available.
+    // Atomic where the engine allows it: write a temp file, then rename over the target,
+    // so a peer polling the real path over a sync folder never reads a half-written file.
+    // Where rename is unavailable (see renameOver) fall back to writing in place.
     const tmp = `${name}.tmp`;
     const tfh = await dir.getFileHandle(tmp, { create: true });
     let w = await tfh.createWritable();
     try { await w.write(bytes); } finally { await w.close(); }
-    if (typeof tfh.move === 'function') {
-      try {
-        await tfh.move(name); // rename within the dir (overwrites)
-      } catch (err) {
-        // e.g. the File System Access API blocks the target extension. Don't leave an
-        // orphan `.tmp` behind — clean it up, then surface the failure.
-        try { await dir.removeEntry(tmp); } catch { /* best effort */ }
-        throw err;
-      }
-    } else {
+    let renamed = false;
+    try {
+      renamed = await renameOver(dir, tfh, name);
+    } catch (err) {
+      // A real failure (e.g. the File System Access API blocks the target extension).
+      // Don't leave an orphan `.tmp` behind — clean it up, then surface it.
+      try { await dir.removeEntry(tmp); } catch { /* best effort */ }
+      throw err;
+    }
+    if (!renamed) {
       const fh = await dir.getFileHandle(name, { create: true });
       w = await fh.createWritable();
       try { await w.write(bytes); } finally { await w.close(); }
@@ -180,7 +219,7 @@ class HandleDriver {
   }
 
   /**
-   * Write a Blob/File by **streaming** it — same atomic temp-then-rename as
+   * Write a Blob/File by **streaming** it — same temp-then-rename as
    * {@link HandleDriver#write}, but the bytes never sit in RAM as one buffer. This is
    * the media path: a multi-GB movie must reach the project without being materialised
    * (and without hitting the browser's single-blob read wall).
@@ -198,17 +237,20 @@ class HandleDriver {
       try { await dir.removeEntry(tmp); } catch { /* nothing partial to clean */ }
       throw err;
     }
-    if (typeof tfh.move === 'function') {
-      try {
-        await tfh.move(name);
-      } catch (err) {
-        try { await dir.removeEntry(tmp); } catch { /* best effort */ }
-        throw err;
-      }
-    } else {
+    let renamed = false;
+    try {
+      renamed = await renameOver(dir, tfh, name);
+    } catch (err) {
+      try { await dir.removeEntry(tmp); } catch { /* best effort */ }
+      throw err;
+    }
+    if (!renamed) {
+      // Stream the temp file into place rather than buffering it, for the same reason the
+      // write above streamed: this path exists for files too big to hold.
       const fh = await dir.getFileHandle(name, { create: true });
       const w = await fh.createWritable();
-      try { await (await dir.getFileHandle(tmp)).getFile().then((f) => f.stream().pipeTo(w)); } finally { /* w closed by pipeTo */ }
+      const file = await tfh.getFile();
+      await file.stream().pipeTo(w); // pipeTo closes the writable
       try { await dir.removeEntry(tmp); } catch { /* best effort */ }
     }
   }
