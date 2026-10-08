@@ -200,9 +200,16 @@ export function mountLayerDrag(holder, item, onCommit) {
    * from the viewBox (fitHolderToViewBox) after the redraw, so there is one direction of
    * travel — canvas to frame — instead of two that have to be kept agreeing.
    */
-  const setCanvas = (w, h) => {
+  const setCanvas = (w, h, shownW) => {
     item.view.canvasW = Math.max(MIN_CANVAS, Math.round(w));
     item.view.canvasH = Math.max(MIN_CANVAS, Math.round(h));
+    // The canvas is in chart units; `frameW` is how wide it is DRAWN, in CSS pixels.
+    // Storing both is what makes the grip behave. With only the units, the figure
+    // stayed pinned to the pane's width, so a bigger canvas was paid for by shrinking
+    // everything on it: "as though the canvas enlarged then suddenly zoomed out to fit
+    // back in the previously allocated space" (owner, 2026-10-08). Growing the drawn
+    // width in step keeps the zoom, which is what dragging a canvas out should mean.
+    if (Number.isFinite(shownW) && shownW > 0) item.view.frameW = Math.max(MIN_CANVAS, Math.round(shownW));
     onCommit();
   };
 
@@ -221,7 +228,10 @@ export function mountLayerDrag(holder, item, onCommit) {
       e.stopPropagation();
       const svg = svgOf();
       const now = currentCanvas();
-      rs = { id: e.pointerId, ...now, scale: scaleOf(svg), x0: e.clientX, y0: e.clientY, at: null };
+      rs = {
+        id: e.pointerId, ...now, scale: scaleOf(svg), shownW: holder.getBoundingClientRect().width,
+        x0: e.clientX, y0: e.clientY, at: null,
+      };
       try { grip.setPointerCapture(e.pointerId); } catch { /* capture is a bonus */ }
       const opts = { signal: life.signal };
       doc.addEventListener('pointermove', onResize, opts);
@@ -236,7 +246,12 @@ export function mountLayerDrag(holder, item, onCommit) {
       // the render scale is the same conversion a layer drag makes, and it uses only
       // the matrix's scale — never its translation, which is what made the old clamp
       // misbehave on iOS.
-      rs.at = resizedCanvas(rs, (e.clientX - rs.x0) / rs.scale.x, (e.clientY - rs.y0) / rs.scale.y);
+      const dx = e.clientX - rs.x0;
+      const dy = e.clientY - rs.y0;
+      rs.at = resizedCanvas(rs, dx / rs.scale.x, dy / rs.scale.y);
+      // The drawn figure grows by the same pixels the pointer moved, so the zoom is
+      // unchanged and everything on the canvas keeps the size it looks on screen.
+      rs.at.shownW = Math.max(MIN_CANVAS, rs.shownW + dx);
     }
 
     function endResize(e) {
@@ -249,7 +264,7 @@ export function mountLayerDrag(holder, item, onCommit) {
       grip.classList.remove('is-dragging');
       // Redrawn once, on release: a render may cross postMessage to a plugin, so one
       // per pointermove would be a round trip per frame.
-      if (at) setCanvas(at.w, at.h);
+      if (at) setCanvas(at.w, at.h, at.shownW);
       else sync();
     }
 
@@ -258,8 +273,12 @@ export function mountLayerDrag(holder, item, onCommit) {
       const by = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
       if (!by) return;
       e.preventDefault();
-      const at = resizedCanvas(currentCanvas(), by[0], by[1]);
-      setCanvas(at.w, at.h);
+      const now = currentCanvas();
+      const at = resizedCanvas(now, by[0], by[1]);
+      // Same deal as the drag: grow the drawn figure in step, or a keyboard resize
+      // quietly zooms out instead of enlarging the canvas.
+      const shown = holder.getBoundingClientRect().width;
+      setCanvas(at.w, at.h, shown * (at.w / (now.w || 1)));
     });
   }
 
@@ -298,7 +317,16 @@ export function mountLayerDrag(holder, item, onCommit) {
   const sync = () => {
     const svg = svgOf();
     if (!svg) return;
-    const base = frame.getBoundingClientRect();
+    // The overlay is sized to the FIGURE rather than stretched across the block. Once
+    // the canvas can be drawn wider than the pane the figure overflows, and an overlay
+    // covering only the block would clip the handles for everything past its edge — it
+    // has `overflow: hidden`, so that an off-canvas layer cannot grow the page scroll.
+    const base = holder.getBoundingClientRect();
+    const br = frame.getBoundingClientRect();
+    overlay.style.left = `${base.left - br.left}px`;
+    overlay.style.top = `${base.top - br.top}px`;
+    overlay.style.width = `${base.width}px`;
+    overlay.style.height = `${base.height}px`;
     const seen = new Set();
     for (const g of svg.querySelectorAll('.ct-layer')) {
       const name = LAYERS.find((n) => g.classList.contains(`ct-layer--${n}`));
@@ -316,11 +344,9 @@ export function mountLayerDrag(holder, item, onCommit) {
       h.style.height = `${r.height}px`;
     }
     for (const [name, h] of handles) if (!seen.has(name)) h.hidden = true;
-    // The grip sits on the frame's corner, not the drawing's — it sizes the canvas,
-    // and the canvas IS the frame.
-    const fr = holder.getBoundingClientRect();
-    grip.style.left = `${fr.right - base.left}px`;
-    grip.style.top = `${fr.bottom - base.top}px`;
+    // The grip sits on the figure's own corner.
+    grip.style.left = `${base.width}px`;
+    grip.style.top = `${base.height}px`;
   };
 
   /** Write one layer's offset and tell the pane to redraw and mark itself dirty. */

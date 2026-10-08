@@ -163,16 +163,17 @@ const RESULTS_STYLES = `
      A fixed default height (not aspect-ratio, which older iPad Safari lacks) keeps
      the chart visible everywhere; the viewBox keeps it undistorted as it scales;
      max-width:100% stops a drag from spilling past the pane (no scrollbar). */
-  .results-chart { position: relative; box-sizing: border-box; max-width: 100%; }
-  /* The frame takes its SHAPE from the chart's viewBox, which is the canvas the user
-     sized with the grip in the options overlay (chart-drag.js). One direction of travel:
-     canvas to frame. It carried a native CSS resizer until an iPhone proved that corner
-     is not touch-draggable — and the native one could only ever set PIXELS, while the
-     canvas is measured in chart units, so the two had to be kept agreeing. aspect-ratio
-     here is the whole mechanism rather than a first guess. */
+  .results-chart { position: relative; box-sizing: border-box; }
+  /* The frame's SHAPE comes from the chart's viewBox (the canvas, in chart units) and
+     its drawn WIDTH from view.frameW, both set by the grip in the options overlay
+     (chart-drag.js). One direction of travel: canvas to frame.
+     No max-width, deliberately. A canvas drawn wider than the pane overflows and the
+     block scrolls — which is the point, because capping it meant a bigger canvas could
+     only be paid for by shrinking everything on it, and on a phone there is no more
+     screen to find. It carried a native CSS resizer until an iPhone proved that corner
+     is not touch-draggable. */
   .results-chart .results-plot__svg {
     width: min(100%, 672px); height: auto; aspect-ratio: 720 / 460;
-    max-width: 100%;
     overflow: hidden; box-sizing: border-box;
     border: 1px solid #e3e7eb; border-radius: 6px; background: #fff;
   }
@@ -187,7 +188,7 @@ const RESULTS_STYLES = `
      would otherwise give the pane a scrollable region reaching out to meet it. Clipped
      here, a layer that is half off is still half grabbable, and one that is fully off is
      recovered with its Reset button. */
-  .ct-drag { position: absolute; inset: 0; pointer-events: none; z-index: 5; overflow: hidden; }
+  .ct-drag { position: absolute; pointer-events: none; z-index: 5; overflow: hidden; }
   /* The outline IS the target — grab anywhere inside it. Transparent rather than
      tinted so the figure underneath is still the thing being judged while it moves. */
   .ct-drag__handle {
@@ -690,10 +691,16 @@ export class ResultsPane {
    * dead white bands that look like part of the figure but lie outside the coordinate
    * space — so nothing renders there and no layer can be dragged there.
    */
-  #fitHolderToViewBox(holder) {
+  #fitHolderToViewBox(holder, view) {
     const svg = holder.querySelector('svg');
     const vb = (svg && svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
     if (vb.length === 4 && vb[2] > 0 && vb[3] > 0) holder.style.aspectRatio = `${vb[2]} / ${vb[3]}`;
+    // How wide the canvas is DRAWN. Unset until the grip is used, in which case the
+    // CSS default fits the pane. Once set it is honoured even past the pane's width —
+    // the block scrolls — because on a phone the alternative is that enlarging the
+    // canvas can only ever shrink its contents, there being no more screen to use.
+    const w = view && Number(view.frameW);
+    holder.style.width = Number.isFinite(w) && w > 0 ? `${w}px` : '';
   }
 
   /**
@@ -784,13 +791,13 @@ export class ResultsPane {
       // sanitise either way, like every other fragment.
       item.svg = sanitizeHtml(svg);
       holder.innerHTML = item.svg;
-      this.#fitHolderToViewBox(holder);
+      this.#fitHolderToViewBox(holder, item.view);
     };
     // Paint whatever the project saved straight away, so a reopened chart is visible
     // before its provider has answered — then the live render replaces it.
     if (item.svg) {
       holder.innerHTML = sanitizeHtml(item.svg);
-      this.#fitHolderToViewBox(holder);
+      this.#fitHolderToViewBox(holder, item.view);
     }
     rerender();
 
@@ -898,7 +905,7 @@ export class ResultsPane {
     holder.className = 'results-plot__svg';
     // Saved SVG comes from an untrusted project file — same sanitising as appendPlot.
     holder.innerHTML = sanitizeHtml(item.svg || '');
-    this.#fitHolderToViewBox(holder);
+    this.#fitHolderToViewBox(holder, item.view);
     block.append(holder);
 
     const handle = this.#chartHandle(item);

@@ -424,18 +424,21 @@ test('a drag survives the pointer leaving the handle', () => {
 });
 
 test('the frame follows the canvas, and nothing travels the other way', () => {
-  // The letterbox bug, and its two sequels. The frame was a fixed 420px tall whatever
-  // its width, so a 720x460 chart in a 488px pane was letterboxed with 55px of dead
-  // white — inside the figure's border, outside the viewBox, impossible to drag into.
-  // Locking the frame to the drawing's ratio fixed that but took away freeform resizing;
-  // mapping the frame's PIXELS onto the canvas restored it but could not work on iOS,
-  // where the native resizer is not touch-draggable, and would have made a phone's
-  // canvas narrower than the chart's own 720-unit design on first touch.
+  // Four attempts at this, each fixing the last. (1) A fixed 420px-tall frame
+  // letterboxed a 720x460 chart with 55px of dead white — inside the figure's border,
+  // outside the viewBox, impossible to drag into. (2) Locking the frame to the
+  // drawing's ratio fixed the band but took away freeform resizing. (3) Mapping the
+  // frame's PIXELS onto the canvas restored it, but the native resizer cannot be
+  // touched on iOS and a phone's canvas would have fallen below the chart's own
+  // 720-unit design on first touch. (4) A grip working in units fixed that and left
+  // the figure pinned to the pane's width, so growing the canvas shrank its contents
+  // instead — "as though the canvas enlarged then suddenly zoomed out".
   //
-  // So the canvas is measured in chart units and set by the grip, and the frame takes
-  // its shape from the viewBox. One direction of travel, nothing to keep agreeing.
-  assert.match(PANE_SRC, /#fitHolderToViewBox\(holder\)\s*\{/);
-  assert.match(PANE_SRC, /holder\.style\.aspectRatio/);
+  // So the chart carries two numbers: the canvas in chart units, and how wide it is
+  // DRAWN. The frame reads both and nothing reads the frame.
+  assert.match(PANE_SRC, /#fitHolderToViewBox\(holder, view\)\s*\{/);
+  assert.match(PANE_SRC, /holder\.style\.aspectRatio/, 'shape from the viewBox');
+  assert.match(PANE_SRC, /view\.frameW/, 'drawn width from the view');
   assert.match(PANE_SRC, /getAttribute\('viewBox'\)/, 'read from the markup: forest and SCED charts differ per dataset');
   const css = PANE_SRC.slice(PANE_SRC.indexOf('.results-chart .results-plot__svg {'));
   const rule = css.slice(0, css.indexOf('}'));
@@ -443,8 +446,10 @@ test('the frame follows the canvas, and nothing travels the other way', () => {
   assert.match(rule, /aspect-ratio:/);
   assert.ok(!/resize:/.test(rule),
     'the native CSS resizer sets pixels and cannot be touched on iOS — the grip replaced it');
+  assert.ok(!/max-width/.test(rule),
+    'a capped width means a bigger canvas can only be paid for by shrinking its contents');
   assert.ok(!PANE_SRC.includes('ResizeObserver'),
-    'and nothing maps the frame back onto the canvas any more');
+    'and nothing maps the frame back onto the canvas');
 });
 
 test('the canvas is separate from the chart: resizing one does not resize the other', () => {
@@ -492,8 +497,8 @@ test('every chart holder that receives markup is fitted to it', () => {
   // chart falls back to when its plugin is gone. Miss one and a reopened figure comes
   // back letterboxed while a fresh one does not — the kind of difference nobody
   // attributes to the right cause.
-  const fits = (PANE_SRC.match(/#fitHolderToViewBox\(holder\)/g) || []).length;
-  assert.ok(fits >= 4, `expected the helper plus every call site, saw ${fits}`);
+  const fits = (PANE_SRC.match(/#fitHolderToViewBox\(holder, item\.view\)/g) || []).length;
+  assert.ok(fits >= 3, `expected every call site, saw ${fits}`);
 });
 
 test('the canvas is part of the view, so it is saved and restored like any setting', () => {
@@ -540,4 +545,22 @@ test('a resize drag cannot produce a canvas with no geometry', () => {
   assert.deepEqual(resizedCanvas({ w: 500.4, h: 400.6 }, 0.3, 0.2), { w: 501, h: 401 });
   // And junk in gives the starting size back rather than NaN.
   assert.deepEqual(resizedCanvas({ w: 500, h: 400 }, NaN, undefined), { w: 500, h: 400 });
+});
+
+test('a canvas resize keeps the ZOOM, so the contents do not change size', () => {
+  // The reported failure: "I drag to enlarge canvas, when I let go the canvas is
+  // relatively unchanged but all contents shrink. As though the canvas enlarged then
+  // suddenly zoomed out to fit back in the previously allocated space."
+  //
+  // It did exactly that. The canvas was stored in chart units while the figure's drawn
+  // width stayed pinned to the pane, so more units in the same pixels is a zoom-out.
+  // The fix is that a resize writes BOTH: the canvas, and how wide it is drawn.
+  const resize = DRAG_SRC.slice(DRAG_SRC.indexOf('function onResize'));
+  assert.ok(resize.includes('rs.shownW + dx'),
+    'the drawn figure must grow by the same pixels the pointer moved');
+  assert.match(DRAG_SRC, /item\.view\.frameW = /, 'and that width has to be stored');
+  // Both paths — pointer and keyboard — or one of them silently zooms instead.
+  const keys = DRAG_SRC.slice(DRAG_SRC.indexOf("grip.addEventListener('keydown'"));
+  assert.ok(keys.includes('setCanvas(at.w, at.h, shown *'),
+    'the keyboard resize scales the drawn width in step too');
 });
