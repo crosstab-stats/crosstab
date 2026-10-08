@@ -82,7 +82,11 @@ export const manifest = {
     'Syntax: run builtin-compare.paired {"x1": "pre", "x2": "post"}\n' +
     '  • x1 / x2 — two numeric measures on the same cases.\n' +
     'Syntax: run builtin-compare.oneway {"y": "score", "g": "group", "groups": ["A", "B", "C"]}\n' +
-    '  • y — numeric outcome; g — factor; groups — optional subset of groups to include (default all); Tukey post-hoc.\n' +
+    '  • y — numeric outcome; g — factor; groups — optional subset of groups to include (default all).\n' +
+    '  • One-way output follows SPSS block for block: Descriptives, Test of Homogeneity of Variances\n' +
+    '    (Levene, mean-centred), ANOVA, ANOVA Effect Sizes (η², ε², ω²), Robust Tests (Welch and\n' +
+    '    Brown-Forsythe), Tukey post-hoc. SPSS adds 95% CIs on the effect sizes and a random-effects\n' +
+    '    ω²; we print point estimates. SPSS only prints its Tukey table when Post Hoc is ticked.\n' +
     '  • Every test takes an optional weight — a survey weight read as a frequency weight, so N and df follow its sum.',
   rPackages: [],
   menu: [
@@ -382,7 +386,8 @@ export async function oneway(app, { y: yName, g: gName, groups, weight }) {
     gmean <- wmean(y, w)
     ssb <- sum(gn * (gm - gmean)^2)
     ssw <- sum((gn - 1) * gv)
-    df1 <- nlevels(g) - 1; df2 <- sum(gn) - nlevels(g)
+    k <- nlevels(g)
+    df1 <- k - 1; df2 <- sum(gn) - k
     msb <- ssb / df1; msw <- ssw / df2
     Fval <- msb / msw
     p <- pf(Fval, df1, df2, lower.tail = FALSE)
@@ -390,7 +395,7 @@ export async function oneway(app, { y: yName, g: gName, groups, weight }) {
     # Tukey HSD, from the same weighted quantities: the studentised-range interval
     # around each pairwise difference. ptukey/qtukey are base R, so the p-values
     # and the critical value are not hand-rolled — only the inputs are weighted.
-    k <- nlevels(g); comps <- character(0)
+    comps <- character(0)
     tdiff <- numeric(0); tlo <- numeric(0); tup <- numeric(0); tp <- numeric(0)
     if (k >= 2) for (a in 1:(k - 1)) for (b in (a + 1):k) {
       d <- gm[b] - gm[a]
@@ -402,9 +407,61 @@ export async function oneway(app, { y: yName, g: gName, groups, weight }) {
       tup <- c(tup, d + qtukey(.95, k, df2) * se)
       tp  <- c(tp, ptukey(q, k, df2, lower.tail = FALSE))
     }
+    # --- Levene's test, mean-centred ------------------------------------------
+    # The same variant the independent-samples t-test above reports, which is the one
+    # SPSS prints and the one an answer key will say: a one-way ANOVA on the absolute
+    # deviation from each group's own mean. (The Assumptions plugin runs the
+    # median-centred Brown-Forsythe variant, which is more robust and gives a slightly
+    # different F — the footnote below says which is which.)
+    z    <- abs(y - gm[as.character(g)])
+    zm   <- wmean(z, w)
+    zgm  <- sapply(lvs, function(q) wmean(z[g == q], w[g == q]))
+    zgv  <- sapply(lvs, function(q) wvar(z[g == q], w[g == q]))
+    lssb <- sum(gn * (zgm - zm)^2)
+    lssw <- sum((gn - 1) * zgv)
+    levF <- if (lssw > 0) (lssb / df1) / (lssw / df2) else NA_real_
+    levP <- if (is.na(levF)) NA_real_ else pf(levF, df1, df2, lower.tail = FALSE)
+
+    # --- Robust tests, for when Levene says the variances differ ---------------
+    # Welch and Brown-Forsythe both need every group to have a positive variance and
+    # at least two cases; with a constant group the weights are infinite, so the pair
+    # is reported as missing rather than as a number nobody could reproduce.
+    robust_ok <- all(is.finite(gv)) && all(gv > 0) && all(gn > 1) && k >= 2
+    welF <- NA_real_; welDf2 <- NA_real_; welP <- NA_real_
+    bfF  <- NA_real_; bfDf2  <- NA_real_; bfP  <- NA_real_
+    if (robust_ok) {
+      wi    <- gn / gv
+      swi   <- sum(wi)
+      ybarW <- sum(wi * gm) / swi
+      lam   <- sum((1 - wi / swi)^2 / (gn - 1)) / (k^2 - 1)
+      welF   <- (sum(wi * (gm - ybarW)^2) / df1) / (1 + 2 * (k - 2) * lam)
+      welDf2 <- 1 / (3 * lam)
+      welP   <- pf(welF, df1, welDf2, lower.tail = FALSE)
+
+      ci_   <- (1 - gn / sum(gn)) * gv
+      bfF   <- ssb / sum(ci_)
+      cw    <- ci_ / sum(ci_)
+      bfDf2 <- 1 / sum(cw^2 / (gn - 1))
+      bfP   <- pf(bfF, df1, bfDf2, lower.tail = FALSE)
+    }
+
+    # --- Effect sizes ----------------------------------------------------------
+    # eta^2 is the share of total variance between groups and is biased upward;
+    # epsilon^2 and omega^2 subtract the within-groups noise the F test already
+    # measured, so they are the ones to quote. SPSS prints the same three (plus a
+    # random-effects omega^2) with confidence intervals; these are the point
+    # estimates only — see the footnote.
+    sst  <- ssb + ssw
+    eta2 <- ssb / sst
+    eps2 <- (ssb - df1 * msw) / sst
+    om2  <- (ssb - df1 * msw) / (sst + msw)
+
     list(levels = lvs, gn = gn, gmean = gm, gsd = gsd,
          df1 = df1, df2 = df2, ssb = ssb, ssw = ssw, msb = msb, msw = msw,
-         Fval = Fval, p = p, eta2 = ssb / (ssb + ssw),
+         Fval = Fval, p = p, eta2 = eta2, eps2 = eps2, om2 = om2,
+         levF = levF, levP = levP,
+         welF = welF, welDf2 = welDf2, welP = welP,
+         bfF = bfF, bfDf2 = bfDf2, bfP = bfP,
          tukComp = comps, tukDiff = tdiff, tukLo = tlo, tukUp = tup, tukP = tp)`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
@@ -423,6 +480,21 @@ export async function oneway(app, { y: yName, g: gName, groups, weight }) {
   const ssw = r.n1('ssw');
   const df1 = r.n1('df1');
   const df2 = r.n1('df2');
+
+  // SPSS's order, so the two outputs can be read side by side: Descriptives, then
+  // homogeneity, then the ANOVA, then effect sizes, then the robust tests, then the
+  // post-hoc comparisons.
+  if (Number.isFinite(r.n1('levF'))) {
+    await app.results.appendTable(
+      {
+        columns: ['', 'Levene Statistic', 'df1', 'df2', 'Sig.'],
+        rows: [['Based on Mean', f(r.n1('levF'), 3), int(df1), int(df2), fmtP(r.n1('levP'))]],
+        rowHeaders: true,
+      },
+      { caption: `Test of Homogeneity of Variances — ${label(meta, yName)}${ws}` },
+    );
+  }
+
   await app.results.appendTable(
     {
       columns: ['', 'Sum of Squares', 'df', 'Mean Square', 'F', 'Sig.'],
@@ -435,7 +507,32 @@ export async function oneway(app, { y: yName, g: gName, groups, weight }) {
     },
     { caption: `ANOVA${ws}` },
   );
-  await app.results.appendText(`Effect size: η² = ${f(r.n1('eta2'), 3)}.`);
+  await app.results.appendTable(
+    {
+      columns: ['', 'Point Estimate'],
+      rows: [
+        ['Eta-squared', f(r.n1('eta2'), 3)],
+        ['Epsilon-squared', f(r.n1('eps2'), 3)],
+        ['Omega-squared (fixed-effect)', f(r.n1('om2'), 3)],
+      ],
+      rowHeaders: true,
+    },
+    { caption: `ANOVA Effect Sizes${ws}` },
+  );
+
+  if (Number.isFinite(r.n1('welF'))) {
+    await app.results.appendTable(
+      {
+        columns: ['', 'Statistic', 'df1', 'df2', 'Sig.'],
+        rows: [
+          ['Welch', f(r.n1('welF'), 3), int(df1), f(r.n1('welDf2'), 3), fmtP(r.n1('welP'))],
+          ['Brown-Forsythe', f(r.n1('bfF'), 3), int(df1), f(r.n1('bfDf2'), 3), fmtP(r.n1('bfP'))],
+        ],
+        rowHeaders: true,
+      },
+      { caption: `Robust Tests of Equality of Means — ${label(meta, yName)}${ws}` },
+    );
+  }
 
   const comp = r.str('tukComp');
   if (comp.length) {
@@ -450,6 +547,18 @@ export async function oneway(app, { y: yName, g: gName, groups, weight }) {
       { caption: `Post-hoc (Tukey HSD)${ws}` },
     );
   }
+  await app.results.appendText(
+    "**Levene's test** asks whether the groups' spreads are equal. If its Sig. is above "
+    + '.05 read the ANOVA above; if it is below, read **Welch** instead, which does not '
+    + 'assume equal variances (Brown-Forsythe is the same idea with a different '
+    + 'correction). This Levene is mean-centred, matching the t-test above and SPSS; the '
+    + 'Assumptions plugin runs the median-centred variant and will give a slightly '
+    + 'different F.\n\n'
+    + '**η²** is the share of total variance lying between groups and is biased upward; '
+    + '**ε²** and **ω²** subtract the within-group noise and are the ones to quote. SPSS '
+    + 'prints these three with 95% confidence intervals and adds a random-effects ω²; '
+    + 'these are the point estimates only.',
+  );
   await weightNote(app, weight);
 }
 
