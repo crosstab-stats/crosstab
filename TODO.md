@@ -761,6 +761,71 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       and makes the source greppable and readable. `core/rehome.js`, whose two were in a
       comment and therefore inert, was fixed the same way on 2026-08-20. 606 tests.
 
+- [ ] **Let the reader choose whether a variable shows its NAME or its LABEL — the other half
+      of the variable-order preference (owner, 2026-10-07).**
+
+      > *"It would be nice to be able to see the variable names in the grid view. Currently it
+      > lists the variable description and only puts the variable name in the hover tip; it'd be
+      > nice to be able to select what it shows in the column header for when you're searching
+      > for a specific variable by name."*
+
+      **Verified, and it is worse than a missing preference — the name is HOVER-ONLY.** The grid
+      header renders `m.label || m.name` (`core/data-views.js:467`), so a labelled variable never
+      shows its name; the name appears only in `th.title` (`:454`). A `title` needs a pointer that
+      can rest somewhere, so on a phone, for a keyboard user and for a screen reader **the name
+      is not on screen at all**. That is the fourth instance of the standing rule — *if hover or
+      a keyboard is the only way to reach it, it is not shipped* — after the plugin tooltips, the
+      History row controls, and keyboard-only Alt+↑/↓.
+
+      **The asymmetry that makes it a bug rather than a nicety:** you can already FIND and SORT by
+      name but not SEE it. `filterVars` matches name or label (`core/var-toolbar.js:155`), and the
+      order select already offers *Name (A–Z)* alongside *Label (A–Z)* (`VAR_ORDER_OPTIONS`). So
+      the toolbar treats name-vs-label as a dimension the reader controls, and then the header
+      picks one for them.
+
+      **The precedent is already in the repo, and its own comment makes the case.**
+      `core/var-order.js` is the same family of preference, and it says:
+
+      > *"a preference that only one of them honoured would be worse than none: the user sets
+      > 'alphabetical' somewhere and then meets file order somewhere else, with nothing on screen
+      > explaining why. So the choice lives here, once, and all three read it."* … *"stored in
+      > `localStorage` rather than in the project because it describes how this reader likes to
+      > hunt for a variable, not anything about the data — the same reasoning that puts SPSS's
+      > equivalent under Edit ▸ Options ▸ Variable Lists."*
+
+      **SPSS's Variable Lists option has two halves: display (names vs labels) and order. We
+      built order and not display.** So this is not a new mechanism — it is a sibling preference
+      in the same module, surfaced in `makeVarToolbar` beside the order select, read by all three
+      surfaces at render. Doing it anywhere narrower (the grid only) is the exact failure
+      var-order's comment warns about.
+
+      **One surface has already solved it:** the variable picker shows **both** — the label in a
+      `<span>` and the name in a `<code>` next to it (`core/ui-service.js:211-214`). So the grid
+      header is the diverged surface, not a gap across the app.
+
+      **Two candidate designs:**
+      - **(a) Show both in the header**, picker-style. No setting to find, and the picker is
+        evidence it reads fine. Cost is width, which is the real objection: grid columns are
+        already narrow, and a long label plus a name would wrap or truncate.
+      - **(b) A three-way control — Label · Name · Both** — in the shared toolbar, defaulting to
+        Label (today's behaviour). **Recommended**, because the owner asked to *"select what it
+        shows"*, and it makes (a) one of the available answers rather than a decision imposed on
+        everyone with narrow columns.
+
+      Either way **keep the other one in `th.title`**, so hovering still answers — the fix is that
+      the name stops being hover-*only*.
+
+      **Today's workaround, for the record:** Variable View lists name and label in separate
+      columns, so the answer is two clicks away. That is why this is a papercut rather than a
+      blocker — but it is a papercut hit every time someone hunts a variable by name in a wide
+      dataset, which is the normal way to work with one.
+
+      **Open, worth deciding with it:** should the choice also govern how results tables quote
+      variables (a crosstab's row/column headings)? Consistency says yes; it is a different
+      surface family and a saved table's headings are an artefact that
+      [[output-outlives-its-maker]] says must not change under the reader, so probably **no** for
+      saved output and yes only for live rendering. Decide deliberately rather than by default.
+
 - [ ] **The phone layout is unusable, and the cause is that the app has NO responsive breakpoint
       at all (owner, 2026-10-01).** Found while testing the unified plugin picker: *"phone
       interface is still a hot mess but that's out of scope for the moment. It does load and run,
