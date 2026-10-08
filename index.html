@@ -867,7 +867,14 @@
       [data-screen="small"] .menu__item { padding: 11px 12px; }
       [data-screen="small"] .tab { padding: 11px 13px; }
 
-      [data-screen="small"] .shell__projectpane { display: flex; min-height: 0; flex: 1; }
+      /* :not([hidden]) is load-bearing. `.view[hidden] { display: none }` lives 600 lines up
+         and has the SAME specificity as this rule, so a later `display: flex` here simply
+         wins and the pane shows through whichever tab is selected — which is what it did
+         (owner, on the phone: "Project tab isn't hiding properly behind other tabs"). The
+         same trap the .ct-gridhost comment two hundred lines up warns about, approached from
+         the other side: there the fix was to avoid an inline style, here it is to not match
+         while hidden. */
+      [data-screen="small"] .shell__projectpane:not([hidden]) { display: flex; min-height: 0; flex: 1; }
       [data-screen="small"] .shell__projectpane > .sidebar {
         width: auto; flex: 1; border-right: 0; min-width: 0;
       }
