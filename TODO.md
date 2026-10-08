@@ -826,8 +826,8 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       [[output-outlives-its-maker]] says must not change under the reader, so probably **no** for
       saved output and yes only for live rendering. Decide deliberately rather than by default.
 
-- [ ] **"Small screen" mode — an OPT-IN layout, never a detected one (owner, 2026-10-01 and
-      2026-10-07).** Raised while testing the unified plugin picker — *"phone interface is still a
+- [ ] **"Small screen" mode — a layout the USER owns: detected as a default, never as an
+      override (owner, 2026-10-01 and 2026-10-07).** Raised while testing the unified plugin picker — *"phone interface is still a
       hot mess… it does load and run, just completely unusable on such a small screen"* — and then
       given its defining constraint:
 
@@ -868,7 +868,8 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       - **dialogs are already fine** — `.ct-dialog` is `max-width: 420px; width: 92vw`, and the
         wide variants all cap in `vw`.
 
-      **The bootstrapping problem, which needs solving first:** if the desktop layout is unusable
+      **The bootstrapping problem — mostly dissolved by the resolution above, kept because the
+      menubar part still stands:** if the desktop layout is unusable
       at 390px, how does someone reach the toggle to turn it on? Two things are needed, and the
       first is a prerequisite rather than a detail:
       - **a home that works in the broken state.** `Edit ▸ ☑ Small screen mode`, using the
@@ -880,15 +881,55 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       - **persistence in `localStorage`**, for the same reason `core/var-order.js` gives for the
         variable-order preference: it describes this reader and this device, not the data.
 
-      **The one real tension, recorded rather than resolved: WCAG 2.2 AA 1.4.10 Reflow** expects
-      content to be usable at 320px *without the user having to find a setting*. An opt-in mode
-      satisfies the owner's requirement but does **not** by itself satisfy 1.4.10, so the
-      accessibility record stays as it is (contrast and keyboard pass; reflow open —
-      [[accessibility-baseline]]). The compromise that satisfies both is **offer, don't force**: on
-      a narrow viewport, a one-time dismissible prompt ("this window is narrow — switch to small
-      screen mode?") with the toggle always available and the choice remembered. An offer is not a
-      force, which is the distinction the owner's objection actually turns on — but it is their
-      call, so it stays a question here.
+      **RESOLVED (owner, 2026-10-07): detect as a DEFAULT, never as an override.**
+
+      > *"What if the media query auto switches small-screen on for first load but is just
+      > setting the toggle which the user can turn off themselves?"*
+
+      That satisfies both sides, and the reason is precise: 1.4.10 is about the **default
+      presentation** at 320px. A first-time visitor on a narrow screen gets a reflowed layout
+      without having to find anything, so the criterion is met — while anyone who prefers the
+      full layout turns it off once and is never asked again. Nothing is ever *overridden*; a
+      viewport only supplies the initial value.
+
+      Five details decide whether it actually behaves that way:
+
+      - **The preference is TRI-STATE: unset / on / off.** "First load" must mean *no stored
+        preference*, not *first ever* — otherwise clearing storage or a new device re-forces it.
+        Unset ⇒ derive from the viewport. Once the toggle is touched, that value wins forever,
+        **including `off` while still narrow**, which is the whole of the owner's objection.
+      - **It is `matchMedia` in JS, not a CSS `@media` rule.** The distinction matters: if any CSS
+        keyed off width as well, the two mechanisms would disagree the moment someone switched the
+        mode off at 390px — rails stacked by the attribute, grid one-columned by the query, and no
+        way to get the full layout back. So width is read ONCE at boot to set the attribute, and
+        the attribute is the only thing any rule reads. One source of truth.
+      - **Evaluate at load only, not on resize** (while unset). Reflowing the whole app under
+        someone's hands mid-task is the same violence as detecting it in the first place, and the
+        toggle is right there. A deliberate decision, not an omission.
+      - **Say so when it fires.** A one-line dismissible note on first auto-activation — *"Small
+        screen layout is on; turn it off in Edit ▸ Small screen mode"* — because a first-time
+        visitor does not know the mode exists, that it was chosen for them, or where to undo it.
+        An offer-shaped notice *after* the fact, which costs nothing and answers "why does it look
+        like this?" before it is asked.
+      - **`?screen=small|full` sets the session value WITHOUT writing the stored preference.** It
+        stays a test tool and an escape hatch rather than something that silently changes a saved
+        setting.
+
+      **This also dissolves the bootstrapping problem below**, which was listed as a prerequisite:
+      there is no longer a chicken-and-egg about reaching the toggle from an unusable layout,
+      because the first thing a narrow screen renders is already usable. The menubar still has to
+      work at 390px — it is where the off switch lives — but that is part of the mode's own job
+      now, not a separate piece of work to finish first.
+
+      **The resolution itself is a pure function and should be tested as one:**
+      `resolveScreenMode({ stored, narrowViewport, urlFlag })` → `'small' | 'full'`. Every rule
+      above is a case in it — unset+narrow, unset+wide, stored-off+narrow (the one that matters),
+      stored-on+wide, flag-overrides-both, and flag-does-not-persist.
+
+      **Threshold:** start at **720px**, not the 320px WCAG floor — 400px of launcher rails plus a
+      240px sidebar stop working long before 320. Width only to begin with; a landscape phone is
+      short rather than narrow, so a `max-height` term may earn its place later, but guessing at it
+      now would be inventing a rule nobody has hit.
 
       **Scope note:** the engine is already verified on iPhone and iPad (Milestone 3) — WebR,
       DuckDB, import, analyses. This is layout only, which is exactly why it "loads and runs"
