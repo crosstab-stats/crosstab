@@ -183,7 +183,12 @@ const RESULTS_STYLES = `
      re-renders by assigning holder.innerHTML, which would destroy anything parented
      inside. Inert except for the handles, so the figure's own resize grip stays
      reachable underneath. */
-  .ct-drag { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
+  /* overflow:hidden because a layer may now be dragged clean off the canvas and its
+     outline goes with it — an absolutely-positioned handle thousands of pixels out
+     would otherwise give the pane a scrollable region reaching out to meet it. Clipped
+     here, a layer that is half off is still half grabbable, and one that is fully off is
+     recovered with its Reset button. */
+  .ct-drag { position: absolute; inset: 0; pointer-events: none; z-index: 5; overflow: hidden; }
   /* The outline IS the target — grab anywhere inside it. Transparent rather than
      tinted so the figure underneath is still the thing being judged while it moves. */
   .ct-drag__handle {

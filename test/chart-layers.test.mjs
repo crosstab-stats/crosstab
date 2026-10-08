@@ -27,6 +27,12 @@ import { readFile } from 'node:fs/promises';
 await import('./chart-kinds-harness.mjs');
 
 const { defaultView, renderChart } = await import('../core/chart-renderer.js');
+
+// Read up front: node:test starts a top-level test the moment it is registered, so a
+// const declared further down is still in its temporal dead zone when the first one runs.
+const DRAG_SRC = await readFile(new URL('../core/chart-drag.js', import.meta.url), 'utf8');
+const PANE_SRC = await readFile(new URL('../core/results-pane.js', import.meta.url), 'utf8');
+const CONTROLS_SRC = await readFile(new URL('../core/chart-controls.js', import.meta.url), 'utf8');
 const {
   wrapToWidth, legendLabelOf, legendSizeOf, legendWidthOf, titleSizeOf, titleBlock,
   scalePlot, plotRightInset, plotVerticalInset, legendMargin, legendGap, designBox,
@@ -274,7 +280,7 @@ for (const model of ABSURD) {
 // --- the layers are addressable, and movable ---------------------------------
 
 const { LAYERS, layerOpen, layerOffsetOf, LAYER_CLOSE } = await import('../core/charts/stdlib.js');
-const { clampOffset, MIN_ON_CANVAS, hasMovedLayers, resetLayerPositions } = await import('../core/chart-drag.js');
+const { hasMovedLayers, movedLayers, resetLayerPositions, resetLayerPosition, layerName } = await import('../core/chart-drag.js');
 
 test('every kind emits all three layers as addressable groups', async () => {
   // This is what the drag overlay attaches to. A kind that forgets a group does not
@@ -324,43 +330,54 @@ test('dragging a layer moves it, and moves nothing else', () => {
   assert.match(moved, /class="ct-layer ct-layer--legend">/, 'nor the legend');
 });
 
-test('THE CLAMP: a layer can always be dragged back, because some of it stays on', () => {
-  // Not a taste cap — the project's rule is that a limit earns its place by preventing
-  // something broken. A layer dragged entirely off the canvas has nothing left to grab,
-  // and "Reset positions" undoing one careless drag would be a trap, not a feature.
-  const canvas = { width: 720, height: 460 };
-  const legend = { x: 560, y: 38, width: 150, height: 46 };
-  const far = clampOffset({ x: 10000, y: 10000 }, legend, canvas);
-  assert.ok(legend.x + far.x <= canvas.width - MIN_ON_CANVAS, 'its leading edge stays on');
-  assert.ok(legend.y + far.y <= canvas.height - MIN_ON_CANVAS);
-  const back = clampOffset({ x: -10000, y: -10000 }, legend, canvas);
-  assert.ok(legend.x + legend.width + back.x >= MIN_ON_CANVAS, 'its trailing edge stays on');
-  assert.ok(legend.y + legend.height + back.y >= MIN_ON_CANVAS);
+test('NOTHING constrains where a layer may be put', () => {
+  // There was a clamp that kept 24 units of every layer on the canvas. It went on the
+  // owner's instruction — "remove all guards on drag location. Put a 'reset to default'
+  // button in the relevant chart option control to recover if an element is dragged off
+  // the canvas" (2026-10-08) — and because it was causing the thing it was meant to
+  // prevent: dead zones on an iPhone that a layer refused to be dragged into.
+  //
+  // The clamp needed a layer's position in canvas coordinates, which it got by mixing
+  // getScreenCTM()'s TRANSLATION with getBoundingClientRect(). On iOS those disagree
+  // whenever the visual viewport is offset from the layout viewport — pinch-zoom, the
+  // collapsing URL bar, the keyboard. The drag itself only uses the matrix's SCALE,
+  // which no offset changes, so the layer tracked the finger and then refused to be put
+  // down in places that looked perfectly fine.
+  const src = DRAG_SRC;
+  for (const gone of ['clampOffset', 'MIN_ON_CANVAS', 'baseRectOf']) {
+    assert.ok(!src.includes(gone), `${gone} should be gone, not left dormant`);
+  }
+  assert.ok(!src.includes('getScreenCTM().e') && !src.includes('m.e'),
+    'and nothing should depend on the matrix TRANSLATION, only its scale');
+  // Absurd offsets render: off the canvas is a place a layer is allowed to be.
+  for (const off of [{ x: -5000, y: -5000 }, { x: 9000, y: 9000 }]) {
+    const svg = renderChart(MODEL, { ...defaultView(MODEL), layerOffsets: { title: off } });
+    assert.ok(svg.includes(`transform="translate(${off.x} ${off.y})"`), JSON.stringify(off));
+    assert.ok(!/NaN/.test(svg));
+  }
 });
 
-test('the clamp leaves an ordinary drag completely alone', () => {
-  const canvas = { width: 720, height: 460 };
-  const legend = { x: 560, y: 38, width: 150, height: 46 };
-  assert.deepEqual(clampOffset({ x: -120, y: 60 }, legend, canvas), { x: -120, y: 60 });
+test('RECOVERY IS PER LAYER, since one careless drag must not cost the others', () => {
+  const view = { layerOffsets: { title: { x: 9000, y: 9000 }, legend: { x: -20, y: 5 } } };
+  assert.deepEqual(movedLayers(view), ['legend', 'title'], 'in layer order, whatever order they moved in');
+  resetLayerPosition(view, 'title');
+  assert.deepEqual(view.layerOffsets, { legend: { x: -20, y: 5 } }, 'the legend keeps its placement');
+  assert.deepEqual(movedLayers(view), ['legend']);
+  resetLayerPositions(view);
+  assert.deepEqual(movedLayers(view), []);
+  // Safe on a view that has never been touched.
+  assert.doesNotThrow(() => resetLayerPosition({}, 'title'));
+  assert.deepEqual(movedLayers({}), []);
 });
 
-test('a layer BIGGER than the canvas can still be moved', () => {
-  // The plot layer is most of the canvas, so a keep-this-much-on-screen rule written
-  // carelessly makes its allowed range empty and pins it in place — a control that
-  // silently does nothing, which is the failure this project keeps coming back to.
-  const canvas = { width: 720, height: 460 };
-  const plot = { x: 0, y: 0, width: 720, height: 460 };
-  const left = clampOffset({ x: -200, y: 0 }, plot, canvas);
-  assert.ok(left.x < 0, `a full-canvas plot should still move left, got ${left.x}`);
-  const right = clampOffset({ x: 200, y: 0 }, plot, canvas);
-  assert.ok(right.x > 0, `…and right, got ${right.x}`);
-});
-
-test('a zero-sized layer does not divide by its own emptiness', () => {
-  // An empty title or a hidden legend has a 0x0 box; the clamp must still return a
-  // number rather than NaN, which would reach the markup as transform="translate(NaN)".
-  const got = clampOffset({ x: 30, y: 30 }, { x: 0, y: 0, width: 0, height: 0 }, { width: 720, height: 460 });
-  assert.ok(Number.isFinite(got.x) && Number.isFinite(got.y), JSON.stringify(got));
+test('a layer is named the same by its outline and by the button that resets it', () => {
+  // The tag on the dotted outline says "chart"; a button offering to reset "plot"
+  // position would read as a different thing.
+  assert.equal(layerName('plot'), 'chart');
+  assert.equal(layerName('legend'), 'legend');
+  assert.equal(layerName('title'), 'title');
+  assert.equal(layerName('unknown'), 'unknown', 'and an unknown layer is not called undefined');
+  assert.match(CONTROLS_SRC, /Reset \$\{layerName\(name\)\} position/);
 });
 
 test('reset puts everything back, and the button knows when to appear', () => {
@@ -387,8 +404,6 @@ test('a dragged chart still renders without NaN at absurd offsets', () => {
 // these guard the source, which is this repo's idiom for DOM code it cannot run
 // (see output-edit-autosave.test.mjs).
 
-const DRAG_SRC = await readFile(new URL('../core/chart-drag.js', import.meta.url), 'utf8');
-const PANE_SRC = await readFile(new URL('../core/results-pane.js', import.meta.url), 'utf8');
 
 test('a drag survives the pointer leaving the handle', () => {
   // THE BUG: move/up were bound to the handle itself and setPointerCapture was wrapped

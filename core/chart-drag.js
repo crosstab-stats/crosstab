@@ -55,49 +55,38 @@
 
 import { LAYERS, layerOffsetOf } from './charts/stdlib.js';
 
-/**
- * Viewbox units of a layer that must stay on the canvas.
- *
- * Not a taste cap — the project's rule is that a limit earns its place only by
- * preventing something broken rather than something ugly, and a layer dragged entirely
- * off the canvas is a layer with nothing left to grab. "Reset positions" is the other
- * way back, but needing it to undo one drag would be a trap.
- */
-export const MIN_ON_CANVAS = 24;
-
 /** How far an arrow key moves a layer, and how far Shift+arrow moves it. */
 export const NUDGE = 1;
 export const NUDGE_FAR = 10;
 
-/** Human names, for the outline's label and its accessible name. */
+/** Human names, for the outline's tag and its accessible name. */
 const LAYER_NAMES = { plot: 'chart', legend: 'legend', title: 'title' };
 
+/** What to call a layer in the interface. One place, so an outline's tag and the button
+ * that resets it cannot end up calling the same thing by two names. */
+export function layerName(n) { return LAYER_NAMES[n] || n; }
+
 /**
- * Clamp an offset so at least {@link MIN_ON_CANVAS} of the layer stays on the canvas.
+ * ## Nothing constrains where a layer may go
  *
- * Pure, and exported for its own test: it is the one piece of arithmetic here that a
- * browser cannot be asked to do, because it is a policy and not a measurement.
+ * There was a clamp that kept 24 units of every layer on the canvas, on the grounds
+ * that a layer with nothing left to grab is unrecoverable. It went, for two reasons.
  *
- * @param {{x:number,y:number}} offset - the proposed offset, in viewBox units
- * @param {{x:number,y:number,width:number,height:number}} bbox - the layer's own
- *   untransformed box (`getBBox()`), in the same units
- * @param {{width:number,height:number}} canvas - the viewBox's size
+ * The owner's, which is the deciding one: *"remove all guards on drag location. Put a
+ * 'reset to default' button in the relevant chart option control to recover if an
+ * element is dragged off the canvas"* (2026-10-08). The recovery exists, so the guard
+ * was buying nothing that the reset does not already buy.
+ *
+ * And a bug it was causing, reported as dead zones on an iPhone that a layer refused to
+ * be dragged into. The clamp needed the layer's position in canvas coordinates, which it
+ * got by mixing `getScreenCTM()`'s TRANSLATION with `getBoundingClientRect()` — and on
+ * iOS those two disagree whenever the visual viewport is offset from the layout
+ * viewport, which is to say whenever the page is pinch-zoomed, the URL bar is
+ * collapsing, or the keyboard is up. The drag itself was unaffected because it only uses
+ * the matrix's SCALE, which no viewport offset changes; so the layer tracked the finger
+ * perfectly and then refused to be put down in places that looked fine. Deleting the
+ * clamp deletes the only thing that needed those coordinates.
  */
-export function clampOffset(offset, bbox, canvas) {
-  const fit = (o, lo, size, extent) => {
-    if (!Number.isFinite(o)) return 0;
-    // A layer wider than the canvas can always be moved: its own size must never make
-    // the allowed range empty, so the keep-on-screen margin shrinks to fit.
-    const keep = Math.min(MIN_ON_CANVAS, size || 0, extent);
-    const min = keep - lo - (size || 0); // trailing edge no further left than `keep`
-    const max = extent - keep - lo; // leading edge no further right than extent-keep
-    return Math.min(max, Math.max(min, o));
-  };
-  return {
-    x: fit(offset.x, bbox.x, bbox.width, canvas.width),
-    y: fit(offset.y, bbox.y, bbox.height, canvas.height),
-  };
-}
 
 /** The view's offset map, created on demand. */
 function offsetsOf(view) {
@@ -107,15 +96,30 @@ function offsetsOf(view) {
 
 /** Has the user moved anything? Drives whether "Reset positions" is worth showing. */
 export function hasMovedLayers(view) {
-  return LAYERS.some((n) => {
-    const o = layerOffsetOf(view, n);
-    return o.x !== 0 || o.y !== 0;
-  });
+  return movedLayers(view).length > 0;
 }
 
 /** Put every layer back where the renderer would have placed it. */
 export function resetLayerPositions(view) {
   delete view.layerOffsets;
+}
+
+/**
+ * Put ONE layer back, leaving the others where the user put them.
+ *
+ * With no clamp, the way a layer gets lost is a single careless drag — and resetting
+ * all three to recover from that would throw away the two that were placed on purpose.
+ */
+export function resetLayerPosition(view, name) {
+  if (view && view.layerOffsets) delete view.layerOffsets[name];
+}
+
+/** Which layers have been moved — what the reset buttons are offered for. */
+export function movedLayers(view) {
+  return LAYERS.filter((n) => {
+    const o = layerOffsetOf(view, n);
+    return o.x !== 0 || o.y !== 0;
+  });
 }
 
 /**
@@ -149,14 +153,6 @@ export function mountLayerDrag(holder, item, onCommit) {
 
   const svgOf = () => holder.querySelector('svg');
 
-  /** The viewBox's own size, which is the unit system the offsets are stored in. */
-  const canvasOf = (svg) => {
-    const vb = (svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
-    return vb.length === 4 && vb.every(Number.isFinite)
-      ? { width: vb[2], height: vb[3] }
-      : { width: svg.clientWidth || 1, height: svg.clientHeight || 1 };
-  };
-
   /** CSS pixels per viewBox unit, as the browser is actually drawing it. */
   const scaleOf = (svg) => {
     const m = typeof svg.getScreenCTM === 'function' ? svg.getScreenCTM() : null;
@@ -177,9 +173,9 @@ export function mountLayerDrag(holder, item, onCommit) {
     h.style.zIndex = String(10 + LAYERS.indexOf(name));
     const label = doc.createElement('span');
     label.className = 'ct-drag__tag';
-    label.textContent = LAYER_NAMES[name] || name;
+    label.textContent = layerName(name);
     h.append(label);
-    h.setAttribute('aria-label', `Move the ${LAYER_NAMES[name] || name}. Arrow keys to nudge.`);
+    h.setAttribute('aria-label', `Move the ${layerName(name)}. Arrow keys to nudge.`);
     wire(h, name);
     overlay.append(h);
     handles.set(name, h);
@@ -210,42 +206,17 @@ export function mountLayerDrag(holder, item, onCommit) {
     for (const [name, h] of handles) if (!seen.has(name)) h.hidden = true;
   };
 
-  /**
-   * A layer's box in CANVAS coordinates, with any offset it already carries removed —
-   * i.e. where it would sit if it had never been dragged.
-   *
-   * Measured from the rendered geometry rather than from `getBBox()`, which reports
-   * DESIGN coordinates: the whole composition lives inside a `ct-design` group that
-   * centres it on the canvas, so a bbox and the canvas are in two different spaces and
-   * clamping one against the other would be off by that centring offset — and the
-   * offset is not constant, it changes every time the user resizes the frame.
-   */
-  const baseRectOf = (svg, g, name) => {
-    const m = svg.getScreenCTM();
-    const r = g.getBoundingClientRect();
-    const cur = layerOffsetOf(item.view, name);
-    if (!m || Math.abs(m.a) < 1e-6 || Math.abs(m.d) < 1e-6) return g.getBBox();
-    return {
-      x: (r.left - m.e) / m.a - cur.x,
-      y: (r.top - m.f) / m.d - cur.y,
-      width: r.width / m.a,
-      height: r.height / m.d,
-    };
-  };
-
   /** Write one layer's offset and tell the pane to redraw and mark itself dirty. */
   const commit = (name, offset) => {
-    const svg = svgOf();
-    const g = svg && svg.querySelector(`.ct-layer--${name}`);
-    if (!g) return;
-    const raw = clampOffset(offset, baseRectOf(svg, g, name), canvasOf(svg));
-    // Rounded before storing. A drag divides a pixel delta by the render scale, so it
-    // naturally produces things like 91.71974522292993 — which the markup rounds to 2dp
-    // anyway, and which would otherwise sit in the saved project forever as noise in the
-    // one field that differs between two saves of an unchanged chart.
-    const clamped = { x: round(raw.x), y: round(raw.y) };
-    if (clamped.x === 0 && clamped.y === 0) delete offsetsOf(item.view)[name];
-    else offsetsOf(item.view)[name] = clamped;
+    // Rounded, and otherwise taken as given — see the note above on why there is no
+    // clamp. A drag divides a pixel delta by the render scale, so it naturally produces
+    // things like 91.71974522292993, which the markup rounds to 2dp anyway and which
+    // would otherwise sit in the saved project forever as noise in the one field that
+    // differs between two saves of an unchanged chart.
+    const at = { x: round(offset.x), y: round(offset.y) };
+    if (!Number.isFinite(at.x) || !Number.isFinite(at.y)) return;
+    if (at.x === 0 && at.y === 0) delete offsetsOf(item.view)[name];
+    else offsetsOf(item.view)[name] = at;
     onCommit();
   };
 

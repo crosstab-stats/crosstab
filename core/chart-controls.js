@@ -28,7 +28,7 @@
  */
 
 import { uiSpecFromSpec, colorFor, controlValue, setControlValue, controlVisible } from './chart-renderer.js';
-import { mountLayerDrag, hasMovedLayers, resetLayerPositions } from './chart-drag.js';
+import { mountLayerDrag, movedLayers, resetLayerPositions, resetLayerPosition, layerName } from './chart-drag.js';
 
 /**
  * @param {{model: import('./chart-renderer.js').ChartModel, view: import('./chart-renderer.js').ViewState}} item
@@ -155,8 +155,20 @@ export function buildChartControls(item, onChange, { holder } = {}) {
     //     touched is a row of noise. It is also the way back from a layer dragged
     //     somewhere unhelpful, which is why the drag itself keeps part of every layer
     //     on the canvas rather than relying on this.
-    if (hasMovedLayers(view)) {
-      into('Chart', textBtn('Reset positions', () => {
+    //     Per LAYER as well as all-at-once, because nothing now stops a layer being
+    //     dragged clean off the canvas — that guard was removed deliberately, and this
+    //     is the recovery it was traded for. One careless drag must not cost the two
+    //     elements that were placed on purpose.
+    const moved = movedLayers(view);
+    for (const name of moved) {
+      into('Chart', textBtn(`Reset ${layerName(name)} position`, () => {
+        resetLayerPosition(view, name);
+        paint();
+        onChange();
+      }), 0);
+    }
+    if (moved.length > 1) {
+      into('Chart', textBtn('Reset all positions', () => {
         resetLayerPositions(view);
         paint();
         onChange();
