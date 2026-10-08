@@ -89,3 +89,60 @@ export function labelForValue(meta, code) {
   const hit = vl[code] ?? vl[String(code)] ?? (Number.isFinite(Number(code)) ? vl[Number(code)] : undefined);
   return hit != null && hit !== '' ? String(hit) : null;
 }
+/**
+ * The MISSING column's text: designated missing codes, short enough to read.
+ *
+ * A GSS year declares codes like −100 … −10 for one variable, and the Variable View was
+ * printing all ninety-one of them, so a single row grew taller than the screen and the
+ * table looked broken (owner, on an iPhone, 2026-10-07). The cell is a SUMMARY — the
+ * editor beside it still holds the exact list — so it can afford to say the same thing in
+ * one line.
+ *
+ * Two things it does that a plain truncation would not:
+ *
+ *  - **Collapses consecutive runs**, so "−100, −99, … , −10" becomes `-100 to -10`. That is
+ *    not just shorter, it is a better description: those codes were almost certainly
+ *    declared as a span in the first place, and `splitMissing` enumerated it because small
+ *    integer spans are cheaper to compare than a BETWEEN. One line, nothing lost.
+ *  - **Includes declared RANGES**, which the column used to omit entirely — a variable whose
+ *    missing is `[[-999999, 0]]` showed an empty cell, which reads as "nothing is missing
+ *    here" when the opposite is true.
+ *
+ * @param {number[]} [values] discrete designated codes
+ * @param {Array<[number, number]>} [ranges] declared spans, inclusive
+ * @param {{max?: number}} [opts] how many groups to show before eliding
+ * @returns {string}
+ */
+export function summariseMissing(values, ranges, { max = 6 } = {}) {
+  const nums = (values ?? []).filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+  const groups = [];
+  let i = 0;
+  while (i < nums.length) {
+    let j = i;
+    // A run only when every step is exactly 1 — "8, 9, 10" is a span, "8, 10, 12" is not.
+    while (j + 1 < nums.length && Number.isInteger(nums[j + 1]) && nums[j + 1] === nums[j] + 1) j += 1;
+    // Two in a row is not worth a word: "-9, -8" is shorter than "-9 to -8" and clearer.
+    if (j - i >= 2) groups.push(`${nums[i]} to ${nums[j]}`);
+    else for (let k = i; k <= j; k += 1) groups.push(String(nums[k]));
+    i = j + 1;
+  }
+  // Count the ranges that SURVIVE, not the ones handed in: a dropped [NaN, 0] must not
+  // inflate the total, or the cell claims codes it is not showing and cannot show.
+  let kept = 0;
+  for (const r of Array.isArray(ranges) ? ranges : []) {
+    const [lo, hi] = Array.isArray(r) ? r : [];
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) continue;
+    groups.push(`${lo} to ${hi}`);
+    kept += 1;
+  }
+  if (!groups.length) return '';
+  const shown = groups.slice(0, max);
+  const elided = groups.length > max;
+  // The count is what keeps the summary honest: it says how much was folded away, so a
+  // short cell never implies a short list.
+  const total = nums.length + kept;
+  const folded = elided || groups.length < total;
+  return shown.join(', ')
+    + (elided ? ', …' : '')
+    + (folded ? ` (${total} code${total === 1 ? '' : 's'})` : '');
+}

@@ -19,7 +19,7 @@ import { spssToScript } from './spss-import.js';
 import { scriptToStata, scriptToSpss, scriptFileName } from './script-export.js';
 import { floatSelected, loadVarOrder, saveVarOrder, sortVars } from './var-order.js';
 import { makeVarToolbar, filterVars, getWorkspaceFilter, setWorkspaceFilter } from './var-toolbar.js';
-import { labelForValue } from './var-role.js';
+import { labelForValue, summariseMissing } from './var-role.js';
 
 /** Syntax editor metrics: the textarea uses a FIXED line-height so the step gutter
  * can place each marker at `PAD + lineIndex * LINE_H` (and the textarea is no-wrap,
@@ -791,7 +791,7 @@ export class VariableView {
       tr.append(el('td', m.type));
       tr.append(el('td', m.measurementLevel || ''));
       tr.append(el('td', summariseLabels(m.valueLabels)));
-      tr.append(el('td', (m.missingValues || []).join(', ')));
+      tr.append(el('td', summariseMissing(m.missingValues, m.missingRanges)));
       tr.addEventListener('click', () => this.#openEditor(m));
       frag.append(tr);
     });

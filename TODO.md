@@ -761,6 +761,21 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       and makes the source greppable and readable. `core/rehome.js`, whose two were in a
       comment and therefore inert, was fixed the same way on 2026-08-20. 606 tests.
 
+- [ ] **The variable editor cannot see or edit declared missing RANGES (found 2026-10-07).**
+      Noticed while fixing the Variable View's MISSING column, which now summarises codes and —
+      newly — shows declared ranges at all. The editor behind that same row still reads and
+      writes only `missingValues`: its input is `(meta.missingValues || []).join(', ')` and its
+      save is `missingValues: parseMissing(...)`, so for a variable whose missing is
+      `[[-999999, 0]]` the field opens EMPTY beside a cell that says `-999999 to 0`.
+
+      Two consequences, the second worse than the first: you cannot edit a range, and saving
+      the dialog after touching anything else writes a `missingValues` list that silently does
+      not mention the range — whether that DROPS the range depends on whether the patch is
+      merged or replaces the metadata, which is the thing to check first.
+
+      Ranges come from SPSS/Stata `MISSING VALUES x (LO THRU 0)` via `splitMissing`, so this
+      only bites on imported files — which is to say, on real data rather than demo data.
+
 - [ ] **Let the reader choose whether a variable shows its NAME or its LABEL — the other half
       of the variable-order preference (owner, 2026-10-07).**
 
