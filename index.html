@@ -865,6 +865,27 @@
       }
       /* Touch targets: the same items, a little taller, which is a resize and not a redesign. */
       [data-screen="small"] .menu__item { padding: 11px 12px; }
+      /* Collapsible sections in the ☰ panel. The heading becomes a real button, so it is
+         bigger, tappable and reachable by keyboard — and reads as a control rather than a
+         caption, which a plain uppercase label did not. */
+      [data-screen="small"] .menu__group-toggle {
+        display: flex; align-items: center; gap: 8px; width: 100%;
+        background: none; border: 0; cursor: pointer; text-align: left;
+        font: inherit; font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
+        color: #41505e; padding: 12px; border-radius: 4px;
+      }
+      [data-screen="small"] .menu__group-toggle:hover,
+      [data-screen="small"] .menu__group-toggle[aria-expanded="true"] { background: #eef4fa; }
+      [data-screen="small"] .menu__group-toggle[aria-expanded="true"] { color: #1a1a1a; font-weight: 700; }
+      .menu__caret { display: inline-block; transition: transform .12s ease; font-size: 10px; }
+      [aria-expanded="true"] > .menu__caret { transform: rotate(90deg); }
+      /* Indent a section's items so the heading reads as their parent. */
+      [data-screen="small"] .menu__group-toggle + .menu__flyout .menu__item { padding-left: 26px; }
+      /* The separators between top-level sections were doing the work of telling groups
+         apart; collapsed headings do that themselves, so the rules only add noise. */
+      [data-screen="small"] .menu__panel--all .menu__group + .menu__group {
+        border-top: 0; margin-top: 0; padding-top: 0;
+      }
       [data-screen="small"] .tab { padding: 11px 13px; }
 
       /* :not([hidden]) is load-bearing. `.view[hidden] { display: none }` lives 600 lines up

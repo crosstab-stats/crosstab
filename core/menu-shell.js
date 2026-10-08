@@ -315,14 +315,50 @@ export class MenuShell {
     group.className = 'menu__group';
     group.setAttribute('role', 'group');
 
-    const label = document.createElement('div');
-    label.className = 'menu__group-label';
-    label.textContent = node.label;
-
     const flyout = document.createElement('div');
     flyout.className = 'menu__flyout';
     this.#renderChildrenInto(flyout, node);
 
+    // In the small-screen arrangement every menu is a group inside ONE panel, so a flat
+    // panel is 53 items of scrolling (owner, on the phone: "one long scrolling list is a bit
+    // rough"). Collapsed groups turn that into nine taps-worth of headings that fit on the
+    // screen at once. An ACCORDION rather than free toggling, because the point is that the
+    // panel cannot grow back into a long scroll: opening one closes its siblings.
+    if (currentScreenMode() === 'small') {
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'menu__group-label menu__group-toggle';
+      toggle.setAttribute('role', 'menuitem');
+      toggle.setAttribute('aria-haspopup', 'true');
+      toggle.setAttribute('aria-expanded', 'false');
+      toggle.tabIndex = -1;
+      toggle.append(nodeLabelWithCaret(node.label));
+      flyout.hidden = true;
+      toggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const open = toggle.getAttribute('aria-expanded') === 'true';
+        // Siblings within this panel only: a nested group closing its parent's other
+        // sections would make a two-level menu unusable.
+        for (const sib of group.parentElement?.children ?? []) {
+          const sibToggle = sib.querySelector?.(':scope > .menu__group-toggle');
+          const sibFlyout = sib.querySelector?.(':scope > .menu__flyout');
+          if (sibToggle && sibFlyout) {
+            sibToggle.setAttribute('aria-expanded', 'false');
+            sibFlyout.hidden = true;
+          }
+        }
+        if (!open) {
+          toggle.setAttribute('aria-expanded', 'true');
+          flyout.hidden = false;
+        }
+      });
+      group.append(toggle, flyout);
+      return group;
+    }
+
+    const label = document.createElement('div');
+    label.className = 'menu__group-label';
+    label.textContent = node.label;
     group.append(label, flyout);
     return group;
   }
@@ -504,6 +540,18 @@ function makeNode(label, order) {
 }
 
 /** Sort comparator: ascending order weight, then label A→Z. */
+/** A group heading with its open/closed caret. The caret is its own span so the glyph can
+ * rotate on expand without a second text node, and so a translator never sees it. */
+function nodeLabelWithCaret(label) {
+  const frag = document.createDocumentFragment();
+  const caret = document.createElement('span');
+  caret.className = 'menu__caret';
+  caret.setAttribute('aria-hidden', 'true');
+  caret.textContent = '▸';
+  frag.append(caret, document.createTextNode(label));
+  return frag;
+}
+
 function byOrderThenLabel(a, b) {
   return a.order - b.order || a.label.localeCompare(b.label);
 }
