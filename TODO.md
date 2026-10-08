@@ -889,10 +889,22 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         needs a 2-D layout for its meaning and names data tables as the example. Turning 900
         columns into stacked cards would be the "mobile friendly" redesign the owner objects
         to.
-      - **Not yet checked on real hardware.** Everything above was measured in a 426px iframe
-        because the extension's window resize would not take on this window; a real phone adds
-        touch targets, the on-screen keyboard shrinking the viewport, and iOS Safari's
-        dynamic toolbars. Worth a pass on the owner's iPhone before this is called done.
+      - **iPhone pass done (owner, 2026-10-07): three findings, all fixed.** *"Start CrossTab
+        button is a bit too low, header is a tad too high"* turned out to be ONE cause — the
+        launcher is a `<dialog>` at `inset: 0`, so it escapes the safe-area padding `<body>`
+        already carries, and `100vh` on iOS is the LARGE viewport (the height with the
+        toolbars retracted). The card was therefore taller than the visible area and hung off
+        both ends. Now sized in `dvh` and padded by `env(safe-area-inset-*)`, so it is exactly
+        the region you can see and touch; the header is tightened a little besides.
+        *"When typing into the filter the screen zooms. Could it auto-unzoom?"* — not
+        reliably: there is no API to reset the zoom, and the usual trick (`maximum-scale=1`)
+        disables pinch-zoom for everyone and fails WCAG 1.4.4. The TRIGGER is preventable
+        though: iOS zooms only when a focused control's text is under 16px, and the picker's
+        search and selects were 13px. All controls are 16px in small mode, so it never fires
+        and pinch-zoom stays available. Capped dialog height in `dvh` while there — a dialog
+        had no `max-height` at all, so a long one could take its buttons off the bottom.
+        **Still unverified on hardware:** whether the on-screen keyboard shifts the launcher
+        now that it is `dvh`, and whether 44px touch targets are right for a real thumb.
       - **No height term in the threshold.** A landscape phone is short rather than narrow;
         the rule is width-only until someone actually hits that.
 

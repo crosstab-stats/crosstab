@@ -881,7 +881,17 @@
 
       /* Dialogs already cap in vw; what they need is not to sit against the edges, and
          for a wide one to stop reserving width it cannot have. */
-      [data-screen="small"] .ct-dialog { width: 94vw; max-width: 94vw; }
+      /* A dialog had no max-height at all, so a long one could run past the bottom of a
+         phone and take its buttons with it. dvh rather than vh: on iOS, vh is the viewport
+         with the toolbars retracted, which is not the part you can see. */
+      [data-screen="small"] .ct-dialog {
+        width: 94vw; max-width: 94vw;
+        max-height: 88vh; max-height: 88dvh; overflow: auto;
+      }
+      /* Same reason as the launcher: 16px controls, so focusing one does not zoom the page. */
+      [data-screen="small"] input,
+      [data-screen="small"] select,
+      [data-screen="small"] textarea { font-size: 16px; }
       [data-screen="small"] .ct-dialog__form { padding: 14px; }
       [data-screen="small"] .ct-dialog__buttons { flex-wrap: wrap; }
     </style>

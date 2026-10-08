@@ -1010,7 +1010,7 @@ function injectStyles() {
        the footer is outside the scroller. */
     .ctl__aboutbtn { display: none; }
     [data-screen="small"] .ctl__card {
-      width: 100vw; max-width: 100vw; max-height: 100vh; border-radius: 0;
+      width: 100%; max-width: 100%; border-radius: 0; /* height comes from the overlay below */
     }
     [data-screen="small"] .ctl__header { padding: 12px 14px; }
     [data-screen="small"] .ctl__brand { font-size: 21px; }
@@ -1035,8 +1035,32 @@ function injectStyles() {
       overflow: visible; max-height: none; min-height: 0; border: 0; padding: 0;
     }
     [data-screen="small"] .ctp__sectionhead { top: 0; }
-    /* Full bleed: the overlay padding is a desktop nicety that costs 32px of 426. */
-    [data-screen="small"] .ctl { padding: 0; }
+    /* iOS, measured on the owner's iPhone (2026-10-07): the header sat too high and Start
+       too low, which is ONE cause. The launcher is a <dialog> at inset:0, so it escapes the
+       safe-area padding <body> already carries, and 100vh on iOS is the LARGE viewport — the
+       height with the toolbars retracted. The card was therefore taller than the visible
+       area and hung off both ends. Sizing to dvh and padding by the insets makes the card
+       exactly the region you can actually see and touch. */
+    [data-screen="small"] .ctl {
+      height: 100vh; height: 100dvh;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right)
+               env(safe-area-inset-bottom) env(safe-area-inset-left);
+    }
+    [data-screen="small"] .ctl__card { max-height: 100%; }
+    /* The header is the first thing between you and the app, and on a phone it was most of
+       the screen. Same content, tighter — the version line and the update button are the
+       parts that can afford to be small. */
+    [data-screen="small"] .ctl__tagline,
+    [data-screen="small"] .ctl__prerelease { font-size: 12px; }
+    [data-screen="small"] .ctl__build,
+    [data-screen="small"] .ctl__updatestatus { font-size: 11px; }
+    [data-screen="small"] .ctl__update { padding: 5px 10px; font-size: 12px; }
+    /* iOS zooms the page when a focused control's text is under 16px, and there is no API to
+       zoom back out. The usual trick is maximum-scale=1 in the viewport meta, which kills
+       pinch-zoom for everyone and fails WCAG 1.4.4 — so prevent the trigger instead. */
+    [data-screen="small"] input,
+    [data-screen="small"] select,
+    [data-screen="small"] textarea { font-size: 16px; }
     [data-screen="small"] .ctl__footer { padding: 10px 14px; }
     [data-screen="small"] .ctl__start { width: 100%; }
     /* The About rail, as a modal. */
