@@ -833,6 +833,38 @@
         animation: busy-spin .7s linear infinite;
       }
       @keyframes busy-spin { to { transform: rotate(360deg); } }
+      /* --- small-screen arrangement (core/screen-mode.js) ---------------------
+         Every rule here keys off `data-screen="small"` on <html> and NOTHING keys off
+         viewport width: the user owns the mode, so the layout must not re-decide behind
+         them. A repositioning and a resize only — no control is removed, hidden or
+         simplified, which is the owner's acceptance criterion and a test in the suite.
+
+         The tab strip scrolls at ANY width, not just here: it was already a latent bug
+         with several workspace tabs open, and a tab you cannot reach is a view you cannot
+         reach. */
+      .tabs { overflow-x: auto; scrollbar-width: thin; }
+      .tabs::-webkit-scrollbar { height: 6px; }
+
+      /* The sidebar becomes the Project TAB — the same element, re-parented, so it keeps
+         its content and listeners (see arrangeShell). As a pane it fills the workspace
+         instead of being a fixed 240px column. */
+      [data-screen="small"] .shell__projectpane { display: flex; min-height: 0; flex: 1; }
+      [data-screen="small"] .shell__projectpane > .sidebar {
+        width: auto; flex: 1; border-right: 0; min-width: 0;
+      }
+
+      /* The data grid keeps two-dimensional scrolling, deliberately: WCAG 1.4.10 exempts
+         content that needs a 2-D layout for its meaning, and a data table is the example
+         it gives. Turning 900 columns into stacked cards would be the "mobile friendly
+         redesign" this whole feature exists to avoid. */
+      [data-screen="small"] .ct-vartools { flex-wrap: wrap; }
+      [data-screen="small"] .ct-vartools__q { flex: 1 1 100%; min-width: 0; }
+
+      /* Dialogs already cap in vw; what they need is not to sit against the edges, and
+         for a wide one to stop reserving width it cannot have. */
+      [data-screen="small"] .ct-dialog { width: 94vw; max-width: 94vw; }
+      [data-screen="small"] .ct-dialog__form { padding: 14px; }
+      [data-screen="small"] .ct-dialog__buttons { flex-wrap: wrap; }
     </style>
   </head>
 

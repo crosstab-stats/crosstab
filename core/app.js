@@ -962,6 +962,10 @@ export async function boot(mounts) {
     // Keep the grid's header checkboxes in step when selection changes elsewhere
     // (e.g. the sidebar) — both surfaces drive the one shared selection.
     bus.on(CoreEvents.SELECTION_CHANGED, () => dataView.syncSelection());
+    // Where the sidebar lives depends on the layout, and it moves on every toggle.
+    const shellDeps = { sidebar: mounts.sidebar, main: mounts.sidebar?.parentElement, tabs: workspaceTabs };
+    arrangeShell(screen.mode, shellDeps);
+    bus.on(CoreEvents.SCREEN_MODE_CHANGED, () => arrangeShell(currentScreenMode(), shellDeps));
   }
 
   // Edit ▸ Undo / Redo — routed through the coordinator so a single Undo acts on
@@ -2319,6 +2323,42 @@ function wireBusyIndicator(bus, el) {
  *   `viewHistory` is optional.
  * @param {{dataView: DataView, variableView: VariableView, historyView: ?HistoryView, results: HTMLElement}} views
  */
+/**
+ * Move the sidebar between its two homes as the layout mode changes (#small-screen).
+ *
+ * **Full:** the sidebar sits beside the workspace, 240px of it, as it always has.
+ * **Small:** 240px of a 414px screen is most of the screen, so it becomes a **Project tab**
+ * in the strip that already exists. The owner's call, and the reason is that it needs no new
+ * concepts: no drawer, no scrim, no focus trap, and it is keyboard-reachable for free because
+ * the tab strip already is.
+ *
+ * The sidebar ELEMENT is the same one in both arrangements — it is only re-parented, so
+ * `ProjectSidebar` keeps its host, its listeners and its rendered content, and nothing has to
+ * know the layout changed. It travels inside a wrapper rather than being the tab's pane
+ * directly, because `removeTab` destroys the pane it is given and this one has to survive
+ * going back to the full layout.
+ *
+ * @param {'small'|'full'} mode
+ * @param {{sidebar: HTMLElement, main: HTMLElement, tabs: {addTab: Function, removeTab: Function, show: Function, activeView: Function}}} deps
+ */
+function arrangeShell(mode, { sidebar, main, tabs }) {
+  if (!sidebar || !main || !tabs) return;
+  const inTab = sidebar.parentElement?.classList?.contains('shell__projectpane');
+  if (mode === 'small' && !inTab) {
+    const pane = document.createElement('div');
+    pane.className = 'shell__projectpane';
+    pane.append(sidebar);
+    tabs.addTab({ view: 'project', title: 'Project', pane, atStart: true });
+    return;
+  }
+  if (mode === 'full' && inTab) {
+    // Rescue the sidebar before removeTab deletes the pane around it, and put it back where
+    // the full layout expects it: first child of <main>, ahead of the workspace.
+    main.insertBefore(sidebar, main.firstChild);
+    tabs.removeTab('project');
+  }
+}
+
 function wireWorkspaceTabs(bus, mounts, { dataView, variableView, results, rConsole, resultsPane }) {
   // Built-in panes by view name; workspace plugins add/remove entries at runtime.
   const panels = new Map([
@@ -2401,7 +2441,7 @@ function wireWorkspaceTabs(bus, mounts, { dataView, variableView, results, rCons
     activeView: () => current,
     /** Add a runtime tab. `view` = unique data-view key; `pane` = the view element
      * (the workspace manager mounts the plugin iframe into it). */
-    addTab({ view, title, pane, onShow: hook }) {
+    addTab({ view, title, pane, onShow: hook, atStart = false }) {
       if (panels.has(view)) return;
       pane.classList.add('view');
       pane.hidden = true;
@@ -2414,7 +2454,10 @@ function wireWorkspaceTabs(bus, mounts, { dataView, variableView, results, rCons
       btn.setAttribute('role', 'tab');
       btn.dataset.view = view;
       btn.textContent = title;
-      mounts.tabs.insertBefore(btn, clearBtn || null);
+      // `atStart` keeps a tab where its full-layout counterpart sits: the Project tab is the
+      // sidebar, which lives at the LEFT edge in the full arrangement, so putting it last
+      // here would move the furniture rather than reposition it.
+      mounts.tabs.insertBefore(btn, atStart ? mounts.tabs.firstChild : (clearBtn || null));
     },
     removeTab(view) {
       mounts.tabs.querySelector(`.tab[data-view="${CSS.escape(view)}"]`)?.remove();
