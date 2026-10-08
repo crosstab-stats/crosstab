@@ -122,6 +122,20 @@ export function movedLayers(view) {
   });
 }
 
+/** The smallest canvas the grip will make. A floor, not a preference: a frame of zero
+ * or negative size has no geometry for anything else to be measured against. */
+export const MIN_CANVAS = 80;
+
+/** The canvas a resize drag arrives at. Pure, because it is the one bit of arithmetic
+ * in the grip and the rest is browser measurement. */
+export function resizedCanvas(start, dx, dy) {
+  const n = (v) => (Number.isFinite(v) ? v : 0);
+  return {
+    w: Math.max(MIN_CANVAS, Math.round(n(start.w) + n(dx))),
+    h: Math.max(MIN_CANVAS, Math.round(n(start.h) + n(dy))),
+  };
+}
+
 /**
  * Show draggable outlines over a chart's layers.
  *
@@ -150,6 +164,104 @@ export function mountLayerDrag(holder, item, onCommit) {
 
   /** layer name → its handle button. Built once; only geometry changes after that. */
   const handles = new Map();
+
+  /**
+   * The canvas's own resize grip.
+   *
+   * The frame already has `resize: both`, and on a desktop that is the familiar thing
+   * to reach for — but the native CSS resizer is not touch-draggable on iOS, confirmed
+   * on a real iPhone, so there the canvas could not be sized at all. This is the same
+   * technique the layer handles use and it works on touch for the same reason: pointer
+   * events with `touch-action: none`, routed through the document so the drag survives
+   * the pointer leaving the grip.
+   *
+   * It writes the view directly rather than leaning on the frame's ResizeObserver. That
+   * path still serves the native grip, but it is the one link in this feature I have
+   * never been able to exercise — observer delivery is tied to the rendering lifecycle,
+   * and an automated tab is occluded — so the touch route does not depend on it.
+   */
+  const grip = doc.createElement('button');
+  grip.type = 'button';
+  grip.className = 'ct-drag__grip';
+  grip.setAttribute('aria-label', 'Resize the canvas. Arrow keys to adjust.');
+  grip.title = 'Drag to resize the canvas';
+  overlay.append(grip);
+
+  /**
+   * Resize the canvas, in CHART UNITS.
+   *
+   * Units, not CSS pixels, and that distinction is the whole design. A phone's figure is
+   * about 360px wide while the chart composes itself in a 720-unit space, so equating
+   * the two would have made the first touch of this grip shrink the canvas below the
+   * chart and clip it — an accident, not a choice. In units the canvas starts out
+   * exactly fitting the chart, and only leaves it if the user drags inward on purpose.
+   *
+   * It also means nothing here writes an inline pixel size. The frame takes its shape
+   * from the viewBox (fitHolderToViewBox) after the redraw, so there is one direction of
+   * travel — canvas to frame — instead of two that have to be kept agreeing.
+   */
+  const setCanvas = (w, h) => {
+    item.view.canvasW = Math.max(MIN_CANVAS, Math.round(w));
+    item.view.canvasH = Math.max(MIN_CANVAS, Math.round(h));
+    onCommit();
+  };
+
+  /** The canvas the chart is currently drawn on, read back from its own markup. */
+  const currentCanvas = () => {
+    const svg = svgOf();
+    const vb = (svg && svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+    return vb.length === 4 && vb[2] > 0 && vb[3] > 0 ? { w: vb[2], h: vb[3] } : { w: 720, h: 460 };
+  };
+
+  {
+    let rs = null;
+    grip.addEventListener('pointerdown', (e) => {
+      if (e.button != null && e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const svg = svgOf();
+      const now = currentCanvas();
+      rs = { id: e.pointerId, ...now, scale: scaleOf(svg), x0: e.clientX, y0: e.clientY, at: null };
+      try { grip.setPointerCapture(e.pointerId); } catch { /* capture is a bonus */ }
+      const opts = { signal: life.signal };
+      doc.addEventListener('pointermove', onResize, opts);
+      doc.addEventListener('pointerup', endResize, opts);
+      doc.addEventListener('pointercancel', endResize, opts);
+      grip.classList.add('is-dragging');
+    });
+
+    function onResize(e) {
+      if (!rs || e.pointerId !== rs.id) return;
+      // The pointer delta is in CSS pixels; the canvas is in chart units. Dividing by
+      // the render scale is the same conversion a layer drag makes, and it uses only
+      // the matrix's scale — never its translation, which is what made the old clamp
+      // misbehave on iOS.
+      rs.at = resizedCanvas(rs, (e.clientX - rs.x0) / rs.scale.x, (e.clientY - rs.y0) / rs.scale.y);
+    }
+
+    function endResize(e) {
+      if (!rs || (e && e.pointerId != null && e.pointerId !== rs.id)) return;
+      const at = rs.at;
+      rs = null;
+      doc.removeEventListener('pointermove', onResize);
+      doc.removeEventListener('pointerup', endResize);
+      doc.removeEventListener('pointercancel', endResize);
+      grip.classList.remove('is-dragging');
+      // Redrawn once, on release: a render may cross postMessage to a plugin, so one
+      // per pointermove would be a round trip per frame.
+      if (at) setCanvas(at.w, at.h);
+      else sync();
+    }
+
+    grip.addEventListener('keydown', (e) => {
+      const step = e.shiftKey ? 50 : 10;
+      const by = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+      if (!by) return;
+      e.preventDefault();
+      const at = resizedCanvas(currentCanvas(), by[0], by[1]);
+      setCanvas(at.w, at.h);
+    });
+  }
 
   const svgOf = () => holder.querySelector('svg');
 
@@ -204,6 +316,11 @@ export function mountLayerDrag(holder, item, onCommit) {
       h.style.height = `${r.height}px`;
     }
     for (const [name, h] of handles) if (!seen.has(name)) h.hidden = true;
+    // The grip sits on the frame's corner, not the drawing's — it sizes the canvas,
+    // and the canvas IS the frame.
+    const fr = holder.getBoundingClientRect();
+    grip.style.left = `${fr.right - base.left}px`;
+    grip.style.top = `${fr.bottom - base.top}px`;
   };
 
   /** Write one layer's offset and tell the pane to redraw and mark itself dirty. */

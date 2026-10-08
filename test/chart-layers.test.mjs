@@ -280,7 +280,10 @@ for (const model of ABSURD) {
 // --- the layers are addressable, and movable ---------------------------------
 
 const { LAYERS, layerOpen, layerOffsetOf, LAYER_CLOSE } = await import('../core/charts/stdlib.js');
-const { hasMovedLayers, movedLayers, resetLayerPositions, resetLayerPosition, layerName } = await import('../core/chart-drag.js');
+const {
+  hasMovedLayers, movedLayers, resetLayerPositions, resetLayerPosition, layerName,
+  resizedCanvas, MIN_CANVAS,
+} = await import('../core/chart-drag.js');
 
 test('every kind emits all three layers as addressable groups', async () => {
   // This is what the drag overlay attaches to. A kind that forgets a group does not
@@ -420,23 +423,28 @@ test('a drag survives the pointer leaving the handle', () => {
   assert.ok(DRAG_SRC.includes('life.abort()'), 'and torn down if the panel closes mid-drag');
 });
 
-test('the frame resizes the CANVAS, and is freeform in both axes', () => {
-  // THE OTHER BUG, and its sequel. The frame was a fixed 420px tall whatever its width,
-  // so a 720x460 chart in a 488px pane was letterboxed with 55px of white above and
-  // below — inside the figure's border, outside the viewBox, impossible to drag into.
-  // The first fix locked the frame to the drawing's ratio, which took away freeform
-  // resizing ("it used to be xy freeform, now it's locked-ratio drag"). The real answer
-  // was that resizing should size the CANVAS rather than the chart: "If they want
-  // overlapping elements in a small canvas, with parts being clipped due to oversized
-  // elements, that is their choice" (owner, 2026-10-08).
-  assert.match(PANE_SRC, /#watchCanvasSize\(/, 'the frame has to feed its size to the view');
-  assert.match(PANE_SRC, /item\.view\.canvasW = w/, 'as a canvas size the renderer can use');
-  assert.match(PANE_SRC, /ResizeObserver/);
+test('the frame follows the canvas, and nothing travels the other way', () => {
+  // The letterbox bug, and its two sequels. The frame was a fixed 420px tall whatever
+  // its width, so a 720x460 chart in a 488px pane was letterboxed with 55px of dead
+  // white — inside the figure's border, outside the viewBox, impossible to drag into.
+  // Locking the frame to the drawing's ratio fixed that but took away freeform resizing;
+  // mapping the frame's PIXELS onto the canvas restored it but could not work on iOS,
+  // where the native resizer is not touch-draggable, and would have made a phone's
+  // canvas narrower than the chart's own 720-unit design on first touch.
+  //
+  // So the canvas is measured in chart units and set by the grip, and the frame takes
+  // its shape from the viewBox. One direction of travel, nothing to keep agreeing.
+  assert.match(PANE_SRC, /#fitHolderToViewBox\(holder\)\s*\{/);
+  assert.match(PANE_SRC, /holder\.style\.aspectRatio/);
+  assert.match(PANE_SRC, /getAttribute\('viewBox'\)/, 'read from the markup: forest and SCED charts differ per dataset');
   const css = PANE_SRC.slice(PANE_SRC.indexOf('.results-chart .results-plot__svg {'));
   const rule = css.slice(0, css.indexOf('}'));
   assert.ok(!/height:\s*\d+px/.test(rule), `a fixed height reintroduces the band: ${rule.trim()}`);
-  assert.match(rule, /resize:\s*both/, 'freeform in both axes');
-  assert.match(rule, /aspect-ratio:/, 'which only supplies the first height, before the user picks one');
+  assert.match(rule, /aspect-ratio:/);
+  assert.ok(!/resize:/.test(rule),
+    'the native CSS resizer sets pixels and cannot be touched on iOS — the grip replaced it');
+  assert.ok(!PANE_SRC.includes('ResizeObserver'),
+    'and nothing maps the frame back onto the canvas any more');
 });
 
 test('the canvas is separate from the chart: resizing one does not resize the other', () => {
@@ -488,18 +496,48 @@ test('every chart holder that receives markup is fitted to it', () => {
   assert.ok(fits >= 4, `expected the helper plus every call site, saw ${fits}`);
 });
 
-test('the frame observers are stopped when the pane is cleared', () => {
-  // A ResizeObserver holds a strong reference to what it watches, so one per chart with
-  // no teardown means a cleared pane keeps every frame it ever showed.
-  assert.match(PANE_SRC, /#frameWatchers = new Set\(\)/);
-  assert.match(PANE_SRC, /for \(const stop of this\.#frameWatchers\) stop\(\)/);
+test('the canvas is part of the view, so it is saved and restored like any setting', () => {
+  // Nothing has to put the frame back to a remembered pixel size: the canvas is a view
+  // field, the chart redraws at it, and the frame takes its shape from the result.
+  const view = { ...defaultView(MODEL), canvasW: 900, canvasH: 300 };
+  assert.match(renderChart(MODEL, view), /viewBox="0 0 900 300"/);
+  assert.deepEqual(canvasSizeOf(view), { w: 900, h: 300 });
 });
 
-test('a saved canvas size is restored, not recomputed', () => {
-  // The size is the user's choice, so it survives a reopen — and the frame has to be
-  // put back to it, or the figure would redraw at the right shape inside a frame of the
-  // wrong one, which is the letterbox bug again from the other direction.
-  assert.match(PANE_SRC, /item\.view\.canvasW > 0 && item\.view\.canvasH > 0/);
-  assert.match(PANE_SRC, /holder\.style\.aspectRatio = ''/,
-    'and the first-height hint must get out of the way once there is a real size');
+
+test('the canvas has a grip that works under a finger', () => {
+  // The frame used to carry CSS `resize: both`, but the native resizer is not
+  // touch-draggable on iOS — confirmed on a real iPhone, where the canvas could not be
+  // sized at all. This is a real button on the same path the layer handles use, which
+  // is the one proven to work on touch.
+  assert.match(DRAG_SRC, /ct-drag__grip/);
+  const grip = DRAG_SRC.slice(DRAG_SRC.indexOf("grip.addEventListener('pointerdown'"));
+  for (const type of ['pointermove', 'pointerup', 'pointercancel']) {
+    assert.ok(grip.includes(`doc.addEventListener('${type}'`),
+      `${type} must go through the document, as for the layer handles`);
+  }
+  assert.match(DRAG_SRC, /grip\.addEventListener\('keydown'/, 'and arrow keys, for a keyboard');
+  // In chart UNITS. A phone's figure is ~360px wide while the chart composes itself in
+  // 720 units, so a pixel-for-unit grip would have clipped the chart on first touch.
+  assert.ok(grip.includes('/ rs.scale.x') && grip.includes('/ rs.scale.y'),
+    'the pointer delta must be converted by the render scale');
+  assert.ok(!DRAG_SRC.includes('holder.style.width'),
+    'and nothing should write a pixel size: the frame follows the viewBox');
+  const css = PANE_SRC.slice(PANE_SRC.indexOf('.ct-drag__grip {'));
+  const rule = css.slice(0, css.indexOf('}'));
+  assert.match(rule, /touch-action:\s*none/, 'or a touch-drag scrolls the pane instead');
+  assert.match(rule, /width:\s*44px/, 'and 44px, the touch target this app settled on');
+});
+
+test('a resize drag cannot produce a canvas with no geometry', () => {
+  // A floor rather than a preference: at zero or negative there is nothing for the
+  // layers to be measured against. Everything above it is allowed, including shapes
+  // that clip the chart — that is the point of the canvas being separate.
+  assert.deepEqual(resizedCanvas({ w: 500, h: 400 }, 120, -60), { w: 620, h: 340 });
+  assert.deepEqual(resizedCanvas({ w: 500, h: 400 }, -9000, -9000), { w: MIN_CANVAS, h: MIN_CANVAS });
+  assert.deepEqual(resizedCanvas({ w: 500, h: 400 }, 0, 0), { w: 500, h: 400 });
+  // Rounded, so the canvas never lands on a fraction of a pixel.
+  assert.deepEqual(resizedCanvas({ w: 500.4, h: 400.6 }, 0.3, 0.2), { w: 501, h: 401 });
+  // And junk in gives the starting size back rather than NaN.
+  assert.deepEqual(resizedCanvas({ w: 500, h: 400 }, NaN, undefined), { w: 500, h: 400 });
 });

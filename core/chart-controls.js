@@ -146,7 +146,7 @@ export function buildChartControls(item, onChange, { holder } = {}) {
     if (holder) {
       into('Chart', buildControl({
         type: 'note', group: 'Chart',
-        label: 'Drag a dotted outline on the chart to move it. Arrow keys nudge, Shift+arrow further.',
+        label: 'Drag a dotted outline to move it, or the corner to resize the canvas. Arrow keys adjust, Shift+arrow further.',
       }, view, () => {}), 0);
     }
 

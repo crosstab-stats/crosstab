@@ -164,17 +164,16 @@ const RESULTS_STYLES = `
      the chart visible everywhere; the viewBox keeps it undistorted as it scales;
      max-width:100% stops a drag from spilling past the pane (no scrollbar). */
   .results-chart { position: relative; box-sizing: border-box; max-width: 100%; }
-  /* Dragging this frame resizes the CANVAS the chart is drawn on — it does not resize
-     the chart. A bigger frame is the same figure with more room around it, which is the
-     space the title/legend/plot get dragged out into; a smaller one clips. So the grip
-     is freeform in both axes again, and there is no letterboxing to strand a dead band
-     at the top, because the viewBox is now the frame rather than a fixed 720x460 shape
-     being centred inside it. aspect-ratio only supplies the FIRST height, before the
-     user has expressed a size of their own. */
+  /* The frame takes its SHAPE from the chart's viewBox, which is the canvas the user
+     sized with the grip in the options overlay (chart-drag.js). One direction of travel:
+     canvas to frame. It carried a native CSS resizer until an iPhone proved that corner
+     is not touch-draggable — and the native one could only ever set PIXELS, while the
+     canvas is measured in chart units, so the two had to be kept agreeing. aspect-ratio
+     here is the whole mechanism rather than a first guess. */
   .results-chart .results-plot__svg {
     width: min(100%, 672px); height: auto; aspect-ratio: 720 / 460;
     max-width: 100%;
-    resize: both; overflow: hidden; box-sizing: border-box;
+    overflow: hidden; box-sizing: border-box;
     border: 1px solid #e3e7eb; border-radius: 6px; background: #fff;
   }
   .results-chart .results-plot__svg svg { width: 100%; height: 100%; display: block; max-width: none; }
@@ -221,6 +220,29 @@ const RESULTS_STYLES = `
     pointer-events: none; white-space: nowrap;
     opacity: 0; transition: opacity .1s;
   }
+  /* The canvas's resize grip. The frame's own CSS resizer corner is still there for
+     a mouse, but the native CSS resizer is NOT touch-draggable on iOS — confirmed on a
+     real iPhone — so on a phone the canvas could not be sized at all. This one is a
+     real button using the same pointer-events path as the layer handles, which is why
+     it works under a finger. Anchored on the frame's corner by sync(); the translate
+     centres it over that corner so it reads as part of the frame rather than as
+     something floating next to it. */
+  .ct-drag__grip {
+    position: absolute; transform: translate(-50%, -50%);
+    width: 44px; height: 44px; padding: 0; pointer-events: auto;
+    border: 0; background: transparent; cursor: nwse-resize;
+    touch-action: none; z-index: 20;
+  }
+  /* 44px of target, a small visible corner. The L of the corner is drawn rather than
+     filled so it does not sit on top of the figure it belongs to. */
+  .ct-drag__grip::before {
+    content: ''; position: absolute; right: 9px; bottom: 9px; width: 13px; height: 13px;
+    border-right: 2.5px solid var(--accent, #2572a5);
+    border-bottom: 2.5px solid var(--accent, #2572a5);
+    border-bottom-right-radius: 3px;
+  }
+  .ct-drag__grip:hover::before, .ct-drag__grip.is-dragging::before { right: 7px; bottom: 7px; width: 17px; height: 17px; }
+  .ct-drag__grip:focus-visible { outline: 2px solid var(--accent, #2572a5); outline-offset: -6px; border-radius: 6px; }
   .ct-drag__handle:hover .ct-drag__tag,
   .ct-drag__handle:focus-visible .ct-drag__tag,
   .ct-drag__handle.is-dragging .ct-drag__tag { opacity: 1; }
@@ -328,10 +350,6 @@ export class ResultsPane {
   /** Plot handle → its SVG holder element, for {@link ResultsPane#updatePlot}. */
   #plots = new Map();
 
-  /** Teardowns for the per-chart frame observers. A ResizeObserver keeps a strong
-   *  reference to what it watches, so without this a cleared pane would hold every
-   *  chart frame it ever showed. */
-  #frameWatchers = new Set();
 
   /** Host hook called once a run's id is known: `(sectionEl, runId) => void` (#152).
    * The pane stays ignorant of memos — it just says "this DOM section is that run". */
@@ -673,50 +691,9 @@ export class ResultsPane {
    * space — so nothing renders there and no layer can be dragged there.
    */
   #fitHolderToViewBox(holder) {
-    // Only while the user has not sized the frame themselves. Once they drag the grip
-    // an inline height is set, the canvas follows it, and the two already agree — but a
-    // stale aspect-ratio left behind would fight the next drag.
-    if (holder.style.height) { holder.style.aspectRatio = ''; return; }
     const svg = holder.querySelector('svg');
     const vb = (svg && svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
     if (vb.length === 4 && vb[2] > 0 && vb[3] > 0) holder.style.aspectRatio = `${vb[2]} / ${vb[3]}`;
-  }
-
-  /**
-   * Let the frame's size BE the chart's canvas.
-   *
-   * The grip writes an inline width/height; this reads it back and stores it on the
-   * view, so the figure is redrawn on a canvas of exactly that shape. That is what
-   * makes a freeform resize mean something: before, the viewBox was a fixed 720x460
-   * that `preserveAspectRatio` centred inside whatever box it was given, so dragging
-   * the frame taller only widened a blank margin — and that margin was the unreachable
-   * band at the top of the figure. Here the viewBox IS the box, so no margin exists.
-   *
-   * Debounced to the end of a drag: a resize fires per frame and a redraw may cross
-   * postMessage to a plugin.
-   */
-  #watchCanvasSize(holder, item, rerender) {
-    if (typeof ResizeObserver !== 'function') return () => {};
-    let timer = 0;
-    const ro = new ResizeObserver(() => {
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        // Only once the user has actually dragged the grip. Reflowing the pane changes
-        // the measured width too, and treating that as a deliberate canvas size would
-        // bake the window's width into the saved figure.
-        if (!holder.style.height) return;
-        const w = Math.round(holder.clientWidth);
-        const h = Math.round(holder.clientHeight);
-        if (!(w > 0 && h > 0)) return;
-        if (item.view.canvasW === w && item.view.canvasH === h) return;
-        item.view.canvasW = w;
-        item.view.canvasH = h;
-        rerender();
-        this.#bus?.emit?.('output:edited');
-      }, 140);
-    });
-    ro.observe(holder);
-    return () => { clearTimeout(timer); ro.disconnect(); };
   }
 
   /**
@@ -815,14 +792,7 @@ export class ResultsPane {
       holder.innerHTML = sanitizeHtml(item.svg);
       this.#fitHolderToViewBox(holder);
     }
-    // A saved canvas size is a size the user chose, so put the frame back at it.
-    if (item.view && item.view.canvasW > 0 && item.view.canvasH > 0) {
-      holder.style.width = `${item.view.canvasW}px`;
-      holder.style.height = `${item.view.canvasH}px`;
-      holder.style.aspectRatio = '';
-    }
     rerender();
-    this.#frameWatchers.add(this.#watchCanvasSize(holder, item, rerender));
 
     const save = document.createElement('div');
     save.className = 'results-plot__save';
@@ -1079,8 +1049,6 @@ export class ResultsPane {
 
   /** Remove all output and reset to the empty state. */
   clear() {
-    for (const stop of this.#frameWatchers) stop();
-    this.#frameWatchers.clear();
     this.#content.replaceChildren();
     this.#currentSection = null;
     this.#pendingSection = null;
