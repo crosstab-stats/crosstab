@@ -185,6 +185,28 @@ test('every kind exposes only declarative descriptors — no closures survive', 
   }
 });
 
+test('no TEXT size is capped below its siblings without a reason', () => {
+  // Value labels were capped at 18 while the legend went to 24, the axis titles to 22 and
+  // the chart title to 28 — so a pie with two slices and obvious room refused to go past
+  // 18 ("I type 25 and it auto resets to 18", owner on an iPhone, 2026-10-07). None of
+  // these numbers is load-bearing: every consumer passes the size straight to text(), so
+  // a cap is a judgement about taste and the user is the one entitled to make it.
+  const caps = new Map();
+  for (const kind of KINDS) {
+    for (const c of chartUiSpec(MODELS[kind]).controls) {
+      if (c.type !== 'number' || !/size$/i.test(c.id) || !Number.isFinite(c.max)) continue;
+      // Not text: a mark radius lives on its own scale.
+      if (c.id === 'pointSize' || c.id === 'rowHeight') continue;
+      caps.set(c.id, Math.max(caps.get(c.id) ?? 0, c.max));
+    }
+  }
+  assert.ok(caps.size >= 3, `expected several text-size controls, saw ${[...caps.keys()]}`);
+  assert.equal(caps.get('valueLabelSize'), 28, 'the same ceiling as the chart title');
+  for (const [id, cap] of caps) {
+    assert.ok(cap >= 22, `${id} caps at ${cap}, well below its siblings — deliberate, or a leftover?`);
+  }
+});
+
 test('THE GATE: every descriptor survives structuredClone', () => {
   // This is what makes a chart kind in a sandboxed plugin possible at all. A descriptor
   // has to cross postMessage intact; anything unclonable here is a closure or a live

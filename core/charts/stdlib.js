@@ -366,7 +366,12 @@ export function valueMeasureControl(options, dflt = 'count') {
 export function valueLabelFormatControls() {
   const dep = { control: 'valueLabels', truthy: true };
   return [
-    { id: 'valueLabelSize', label: 'Label size', type: 'number', min: 6, max: 18, step: 0.5, group: 'Labels', default: 9.5, visibleWhen: dep },
+    // Up to 28, the same ceiling the chart TITLE has. It was 18 — the lowest cap of any
+    // text control, below the legend's 24 and the axis titles' 22 — with no reason on
+    // record, and a pie with two slices has obvious room for more (owner, 2026-10-07:
+    // “I type 25 and it auto resets to 18”). Nothing downstream assumes a size; every
+    // consumer passes it straight to text().
+    { id: 'valueLabelSize', label: 'Label size', type: 'number', min: 6, max: 28, step: 0.5, group: 'Labels', default: 9.5, visibleWhen: dep },
     { id: 'valueLabelBold', label: 'Labels bold', type: 'check', group: 'Labels', default: false, visibleWhen: dep },
     { id: 'valueLabelItalic', label: 'Labels italic', type: 'check', group: 'Labels', default: false, visibleWhen: dep },
   ];
