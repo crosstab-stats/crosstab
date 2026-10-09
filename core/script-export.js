@@ -59,23 +59,23 @@ function bail(why) {
  * concatenation — plus every function not listed at all.
  */
 const FUNCS = {
-  abs: { stata: 'abs', spss: 'ABS', arity: [1] },
-  sqrt: { stata: 'sqrt', spss: 'SQRT', arity: [1] },
-  ln: { stata: 'ln', spss: 'LN', arity: [1] },
+  abs: { stata: 'abs', spss: 'ABS', r: 'abs', arity: [1] },
+  sqrt: { stata: 'sqrt', spss: 'SQRT', r: 'sqrt', arity: [1] },
+  ln: { stata: 'ln', spss: 'LN', r: 'log', arity: [1] },
   // DuckDB's log() is base-10 (ln() is the natural one), which is why both map here.
-  log: { stata: 'log10', spss: 'LG10', arity: [1] },
-  log10: { stata: 'log10', spss: 'LG10', arity: [1] },
-  exp: { stata: 'exp', spss: 'EXP', arity: [1] },
-  round: { stata: 'round', spss: 'RND', arity: [1] },
-  floor: { stata: 'floor', spss: null, arity: [1] },
-  ceil: { stata: 'ceil', spss: null, arity: [1] },
-  ceiling: { stata: 'ceil', spss: null, arity: [1] },
+  log: { stata: 'log10', spss: 'LG10', r: 'log10', arity: [1] },
+  log10: { stata: 'log10', spss: 'LG10', r: 'log10', arity: [1] },
+  exp: { stata: 'exp', spss: 'EXP', r: 'exp', arity: [1] },
+  round: { stata: 'round', spss: 'RND', r: 'round', arity: [1] },
+  floor: { stata: 'floor', spss: null, r: 'floor', arity: [1] },
+  ceil: { stata: 'ceil', spss: null, r: 'ceiling', arity: [1] },
+  ceiling: { stata: 'ceil', spss: null, r: 'ceiling', arity: [1] },
   // Row-wise in both languages (Stata's min()/max() and SPSS's MIN()/MAX() take a list).
-  least: { stata: 'min', spss: 'MIN', arity: null },
-  greatest: { stata: 'max', spss: 'MAX', arity: null },
-  upper: { stata: 'upper', spss: 'UPCASE', arity: [1] },
-  lower: { stata: 'lower', spss: 'LOWER', arity: [1] },
-  length: { stata: 'strlen', spss: 'LENGTH', arity: [1] },
+  least: { stata: 'min', spss: 'MIN', r: 'pmin', arity: null },
+  greatest: { stata: 'max', spss: 'MAX', r: 'pmax', arity: null },
+  upper: { stata: 'upper', spss: 'UPCASE', r: 'toupper', arity: [1] },
+  lower: { stata: 'lower', spss: 'LOWER', r: 'tolower', arity: [1] },
+  length: { stata: 'strlen', spss: 'LENGTH', r: 'nchar', arity: [1] },
 };
 
 const STATA = {
@@ -125,6 +125,28 @@ const SPSS = {
   fn: (f) => FUNCS[f]?.spss ?? null,
 };
 
+const R = {
+  id: 'r',
+  label: 'R',
+  comment: (t) => `# ${String(t).replace(/\s+$/, '')}`,
+  /** R names: letters, digits, . and _, not starting with a digit or `.`+digit. Anything
+   * else is still legal if backticked, which `varName` falls back to — unlike SPSS and
+   * Stata, R has no name it cannot express, so nothing has to bail here. */
+  validName: (n) => /^[A-Za-z.][A-Za-z0-9._]*$/.test(n) && !/^\.[0-9]/.test(n),
+  str: (s) => JSON.stringify(String(s)),   // R and JSON agree on double-quoted string escaping
+  and: '&',
+  or: '|',
+  not: '!',
+  eq: '==',
+  ne: '!=',
+  isNull: (v) => `is.na(${v})`,
+  notNull: (v) => `!is.na(${v})`,
+  inList: (v, args) => `${v} %in% c(${args.join(', ')})`,
+  inRange: (v, lo, hi) => `(${v} >= ${lo} & ${v} <= ${hi})`,
+  sysmis: 'NA',
+  fn: (f) => FUNCS[f]?.r ?? null,
+};
+
 // =============================================================================
 // Public API
 // =============================================================================
@@ -145,9 +167,26 @@ export function scriptToSpss(text) {
   return translate(text, SPSS);
 }
 
+/**
+ * CrossTab script → a runnable R script.
+ *
+ * The reason this dialect is worth more than the other two: CrossTab's analyses already
+ * RUN in R, so the exported script is not a translation into a language the app does
+ * not speak — it is the same engine, written the way a person would write it. The
+ * audience is faculty moving a methods course to R who are stuck on the base language:
+ * load the data here, run the analysis here, export, and read what the script that
+ * produced it looks like (owner, 2026-10-09).
+ *
+ * @param {string} text CrossTab script text (what the Syntax editor holds).
+ */
+export function scriptToR(text) {
+  return translate(text, R);
+}
+
 /** The filename an export should be offered under. */
 export function scriptFileName(dialect, base = 'analysis') {
-  return `${base}.${dialect === 'spss' ? 'sps' : 'do'}`;
+  const ext = dialect === 'spss' ? 'sps' : dialect === 'r' ? 'R' : 'do';
+  return `${base}.${ext}`;
 }
 
 /**
@@ -161,7 +200,7 @@ export function scriptFileName(dialect, base = 'analysis') {
 function translate(text, D) {
   const lines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n');
   const body = [];
-  const ctx = { labelSets: new Set(), labelSetByLabels: new Map(), needsExecute: false, sawFilter: false, sawWeight: false };
+  const ctx = { labelSets: new Set(), labelSetByLabels: new Map(), needsExecute: false, sawFilter: false, sawWeight: false, sawAnalysis: false };
   let statements = 0;
   let translated = 0;
   let skipped = 0;
@@ -197,11 +236,34 @@ function translate(text, D) {
     body.push('EXECUTE.');
   }
 
+  // R is the one dialect where the script can stand entirely on its own: it reads the
+  // data, builds the frame every later line edits, and loads what the analyses need.
+  // SPSS and Stata assume the dataset is already open in the application; a .R file is
+  // handed to someone who has only the file.
+  if (D.id === 'r') {
+    const pre = [
+      D.comment('--- 1. Load the data -------------------------------------------------'),
+      D.comment('Export your data from CrossTab (File ▸ Export data…) and point this at it.'),
+      D.comment('A .sav or .dta needs haven: install.packages("haven"); haven::read_sav(path)'),
+      'd <- read.csv("your-data.csv", stringsAsFactors = FALSE)',
+      '',
+      D.comment('--- 2. Prepare the data ----------------------------------------------'),
+    ];
+    const first = body.findIndex((l) => l !== '');
+    body.splice(first < 0 ? 0 : first, 0, ...pre);
+    if (ctx.sawAnalysis) {
+      body.push('');
+      body.push(D.comment('Every result above prints to the console; assign one to keep it.'));
+    }
+  }
+
   const head = [
     `Exported from CrossTab — best-effort ${D.label} translation.`,
     `${translated} of ${statements} statement${statements === 1 ? '' : 's'} translated` +
       (skipped ? `; ${skipped} left as comments — search “not translated”.` : '.'),
-    'The data is NOT in this file: open your dataset first, then run this.',
+    D.id === 'r'
+      ? 'Edit the read.csv() path at the top, then run the file top to bottom.'
+      : 'The data is NOT in this file: open your dataset first, then run this.',
   ];
   if (skipped) head.push('Read every commented line: those steps have NOT been applied.');
   // A weight is the input most likely to change the numbers, so the one place the two
@@ -311,6 +373,19 @@ function transCompute(op, D, ctx) {
     return ok([`${verb} ${name} = ${renderExpr(tokens, D)}`]);
   }
 
+  if (D.id === 'r') {
+    // `with(d, …)` evaluates bare column names against the frame, so the shared
+    // expression renderer works unchanged — no R-specific `d$` pass to keep in step.
+    // A CASE needs no statement block either: R's ifelse() is an expression, which is
+    // why this branch is three lines where SPSS's is twenty.
+    if (!kase) return ok([`d$${op.name} <- with(d, ${renderExpr(tokens, D)})`]);
+    let expr = kase.otherwise ? renderExpr(kase.otherwise, D) : 'NA';
+    for (const b of [...kase.branches].reverse()) {
+      expr = `ifelse(${renderExpr(b.when, D)}, ${renderExpr(b.then, D)}, ${expr})`;
+    }
+    return ok([`d$${op.name} <- with(d, ${expr})`]);
+  }
+
   ctx.needsExecute = true;
   if (!kase) return ok([`COMPUTE ${name} = ${renderExpr(tokens, D)}.`]);
 
@@ -416,6 +491,10 @@ function transFilter(op, D, ctx) {
   const expr = renderExpr(tokenize(op.expr), D);
   ctx.sawFilter = true;
   if (D.id === 'stata') return ok([`keep if ${expr}`]);
+  // `subset` evaluates bare column names against the frame, which is why the shared
+  // expression renderer needs no R-specific pass — and it drops NA rows, matching
+  // SELECT IF rather than R's own `d[cond, ]`, which keeps them as rows of NA.
+  if (D.id === 'r') return ok([`d <- subset(d, ${expr})`]);
   ctx.needsExecute = true;
   return ok([`SELECT IF (${expr}).`]);
 }
@@ -424,6 +503,7 @@ function transFilter(op, D, ctx) {
 function transDrop(op, D) {
   const names = (op.names || []).map((n) => varName(n, D));
   if (!names.length) bail('drop with no variables');
+  if (D.id === 'r') return ok([`d[c(${(op.names || []).map((n) => D.str(n)).join(', ')})] <- NULL`]);
   return ok(D.id === 'stata' ? [`drop ${names.join(' ')}`] : [`DELETE VARIABLES ${names.join(' ')}.`]);
 }
 
@@ -432,6 +512,11 @@ function transKeep(op, D, line) {
   const names = (op.names || []).map((n) => varName(n, D));
   if (!names.length) bail('keep with no variables');
   if (D.id === 'stata') return ok([`keep ${names.join(' ')}`]);
+  // R can express keep-only directly, where SPSS cannot — one of the few places the
+  // R translation is simpler than the other two rather than harder.
+  if (D.id === 'r') {
+    return ok([`d <- d[, c(${(op.names || []).map((n) => D.str(n)).join(', ')}), drop = FALSE]`]);
+  }
   // SPSS can only do this by writing a new file (SAVE /KEEP) or by deleting the
   // complement, and we do not know the complement — so say so rather than guess.
   return notTranslated(
@@ -445,6 +530,7 @@ function transKeep(op, D, line) {
 function transRename(op, D) {
   const from = varName(op.from, D);
   const to = varName(op.to, D);
+  if (D.id === 'r') return ok([`names(d)[names(d) == ${D.str(op.from)}] <- ${D.str(op.to)}`]);
   return ok(D.id === 'stata' ? [`rename ${from} ${to}`] : [`RENAME VARIABLES (${from} = ${to}).`]);
 }
 
@@ -456,6 +542,7 @@ function transSetCell(op, D, ctx) {
   const note = D.comment('CrossTab manual cell edit — it addresses a row number, so it only');
   const note2 = D.comment('lands on the same case if the data is in the same order.');
   if (D.id === 'stata') return ok([note, note2, `replace ${col} = ${value} in ${row}`]);
+  if (D.id === 'r') return ok([note, note2, `d[${row}, ${D.str(op.column)}] <- ${value}`]);
   ctx.needsExecute = true;
   return ok([note, note2, `IF ($CASENUM = ${row}) ${col} = ${value}.`]);
 }
@@ -466,6 +553,16 @@ function transSetVariable(op, D, ctx, line) {
   const p = op.patch || {};
 
   if ('label' in p) {
+    // Base R has no variable labels. `attr(x, "label")` is the convention haven, labelled
+    // and the tidyverse read and write, so it is the one that survives a round trip
+    // through read_sav() — said in a comment rather than silently emitted as if base R
+    // understood it.
+    if (D.id === 'r') {
+      return ok([
+        D.comment('base R has no variable labels; this is the haven/labelled convention'),
+        `attr(d$${op.name}, "label") <- ${D.str(String(p.label ?? ''))}`,
+      ]);
+    }
     return ok(
       D.id === 'stata'
         ? [`label variable ${name} ${D.str(String(p.label ?? ''))}`]
@@ -476,6 +573,17 @@ function transSetVariable(op, D, ctx, line) {
   if ('valueLabels' in p && p.valueLabels) {
     const pairs = Object.entries(p.valueLabels);
     if (!pairs.length) bail('value labels with no codes');
+    if (D.id === 'r') {
+      // A labelled code in R is a factor: levels are the codes, labels are the text.
+      // This CHANGES the column's type, which is what R users expect of a labelled
+      // categorical — and why the comment says so rather than leaving it to be noticed.
+      const codes = pairs.map(([code]) => recodeValue(code, D)).join(', ');
+      const labs = pairs.map(([, lbl]) => D.str(String(lbl))).join(', ');
+      return ok([
+        D.comment(`labelled codes become a factor in R — ${op.name} is categorical after this`),
+        `d$${op.name} <- factor(d$${op.name}, levels = c(${codes}), labels = c(${labs}))`,
+      ]);
+    }
     if (D.id === 'spss') {
       const body = pairs.map(([code, lbl]) => `${recodeValue(code, D)} ${D.str(String(lbl))}`).join(' ');
       return ok([`VALUE LABELS ${name} ${body}.`]);
@@ -502,6 +610,10 @@ function transSetVariable(op, D, ctx, line) {
   }
 
   if ('type' in p) {
+    if (D.id === 'r') {
+      const fn = p.type === 'numeric' ? 'as.numeric' : p.type === 'string' ? 'as.character' : 'factor';
+      return ok([`d$${op.name} <- ${fn}(d$${op.name})`]);
+    }
     if (p.type === 'numeric') {
       return ok(D.id === 'stata' ? [`destring ${name}, replace`] : [`ALTER TYPE ${name} (F8.2).`]);
     }
@@ -515,10 +627,29 @@ function transSetVariable(op, D, ctx, line) {
 
   if ('measurementLevel' in p) {
     if (D.id === 'spss') return ok([`VARIABLE LEVEL ${name} (${String(p.measurementLevel).toUpperCase()}).`]);
+    if (D.id === 'r') {
+      // Nominal/ordinal/scale is a claim about meaning. R carries it in the TYPE —
+      // an ordered factor for ordinal — so the only faithful thing is to say so.
+      return ok([D.comment(
+        `measurement level (${p.measurementLevel}) has no R equivalent; `
+        + `an ordinal variable is an ordered factor: factor(d$${op.name}, ordered = TRUE)`,
+      )]);
+    }
     return notTranslated(line, 'Stata has no measurement level', D);
   }
 
   if ('missingValues' in p) {
+    if (D.id === 'r') {
+      const mv = (p.missingValues || []).map((v) => literal(v, D));
+      // R has ONE missing value, NA — there is no user-missing tier to declare, so the
+      // only faithful translation is to convert the codes. That is destructive in a way
+      // the SPSS original is not, which is what the comment is for.
+      if (!mv.length) return ok([D.comment(`no user-missing codes declared for ${op.name}`)]);
+      return ok([
+        D.comment('R has no user-missing tier — these codes become NA, which cannot be undone'),
+        `d$${op.name}[d$${op.name} %in% c(${mv.join(', ')})] <- NA`,
+      ]);
+    }
     const mv = p.missingValues || [];
     if (D.id === 'spss') {
       const body = mv.map((v) => recodeValue(v, D)).join(', ');
@@ -793,12 +924,85 @@ function crosstabExtras(i) {
 }
 
 /**
+ * The R spelling of each analysis — the line a tutor would put on a slide.
+ *
+ * Kept in its own table rather than threaded into ANALYSES above because it answers a
+ * different question. The Stata and SPSS columns exist so somebody can carry on in the
+ * tool they already use; this one exists so somebody can LEARN the tool, which is why
+ * it prefers the idiom over the closest mechanical equivalent (`aov()` and `TukeyHSD()`
+ * rather than a hand-rolled sum of squares) and why it is willing to print more than
+ * one line per analysis.
+ *
+ * `d` is the frame the preamble builds. `w` is spelled out per call because R has no
+ * global weight — the thing SPSS has and Stata does not.
+ */
+const R_ANALYSES = {
+  'builtin-frequencies.run': (i, D) => asList(i.vars).map((v) => `table(d$${v}, useNA = "ifany")`),
+  'builtin-descriptives.run': (i, D) => [`summary(d[, c(${asList(i.vars).map((v) => D.str(v)).join(', ')})])`],
+  'builtin-crosstabs.run': (i, D) => [
+    `tbl <- table(d$${i.rowvar}, d$${i.colvar})`,
+    'tbl',
+    'prop.table(tbl, 1)   # row percentages',
+    'chisq.test(tbl)',
+  ],
+  'builtin-regression.run': (i, D) => [
+    `fit <- lm(${i.dv} ~ ${asList(i.ivs).join(' + ')}, data = d)`,
+    'summary(fit)',
+    'anova(fit)',
+  ],
+  'builtin-logistic.run': (i, D) => [
+    `fit <- glm(${i.dv} ~ ${asList(i.ivs).join(' + ')}, data = d, family = binomial)`,
+    'summary(fit)',
+    'exp(cbind(OR = coef(fit), confint(fit)))   # odds ratios',
+  ],
+  'builtin-correlation.run': (i, D) => [
+    `cor(d[, c(${asList(i.vars).map((v) => D.str(v)).join(', ')})], use = "pairwise.complete.obs"`
+      + `${i.method && i.method !== 'pearson' ? `, method = ${D.str(i.method)}` : ''})`,
+  ],
+  'builtin-compare.oneSample': (i, D) => [`t.test(d$${i.x}, mu = ${numLit(i.mu)})`],
+  'builtin-compare.independent': (i, D) => [
+    `t.test(${i.y} ~ ${i.g}, data = d, var.equal = TRUE)   # Levene first; drop var.equal for Welch`,
+  ],
+  'builtin-compare.paired': (i, D) => [`t.test(d$${i.x1}, d$${i.x2}, paired = TRUE)`],
+  'builtin-compare.oneway': (i, D) => [
+    `fit <- aov(${i.y} ~ factor(${i.g}), data = d)`,
+    'summary(fit)',
+    'TukeyHSD(fit)',
+    `bartlett.test(${i.y} ~ factor(${i.g}), data = d)   # homogeneity of variances`,
+  ],
+  'builtin-anova.factorial': (i, D) => {
+    const facs = asList(i.facs);
+    if (facs.length < 2) bail('a factorial ANOVA needs two or more factors');
+    return [
+      `fit <- aov(${i.dv} ~ ${facs.map((f) => `factor(${f})`).join(' * ')}, data = d)`,
+      'summary(fit)',
+      D.comment('CrossTab reports Type III sums of squares; aov() gives Type I.'),
+      D.comment('For Type III: car::Anova(fit, type = 3) with contr.sum contrasts.'),
+    ];
+  },
+};
+
+/** The weight note R needs, since it has no global weight to turn on. */
+function rWeightNote(w, D) {
+  return isEmpty(w)
+    ? []
+    : [D.comment(`CrossTab weighted this by ${w}; R has no global weight — pass weights= to the`),
+       D.comment('model, or use the survey package for a real survey design.')];
+}
+
+/**
  * Translate one `run pluginId.fn {…}` line.
  * @param {{pluginId:string, run:string, inputs?:object}} a
  */
 function transAnalysis(a, D, ctx, line) {
   const spec = ANALYSES[`${a.pluginId}.${a.run}`];
-  const emit = spec && spec[D.id];
+  // R's spellings live in their own table (see R_ANALYSES) — same keys, so the
+  // "options this translator does not account for" guard below still applies, which is
+  // the check that stops a silently-different model being handed to a student.
+  const emit = D.id === 'r'
+    ? (R_ANALYSES[`${a.pluginId}.${a.run}`]
+      && ((i, DD, cx) => ({ lines: [...rWeightNote(i.weight, DD), ...R_ANALYSES[`${a.pluginId}.${a.run}`](i, DD, cx)] })))
+    : spec && spec[D.id];
   if (!emit) {
     // Either nothing has ever translated this analysis, or only the other language has a
     // verified spelling. Say which, and keep the line verbatim in the comment.
@@ -816,7 +1020,10 @@ function transAnalysis(a, D, ctx, line) {
     );
   }
   const { lines, dropped } = emit(inputs, D, ctx);
+  if (D.id === 'r') ctx.sawAnalysis = true;
   const out = [];
+  // The label the user gave the run, so a long script says which result is which.
+  if (D.id === 'r' && a.label) out.push(D.comment(`--- ${a.label} ---`));
   if (dropped && dropped.length) out.push(D.comment(`The next command leaves out ${dropped.join('; ')}.`));
   out.push(...lines);
   return ok(out);

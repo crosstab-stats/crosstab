@@ -16,7 +16,7 @@ import { serializeProject, parse } from './crosstab-syntax.js';
 import { openSyntaxGuide } from './syntax-guide.js';
 import { stataToScript } from './stata-import.js';
 import { spssToScript } from './spss-import.js';
-import { scriptToStata, scriptToSpss, scriptFileName } from './script-export.js';
+import { scriptToStata, scriptToSpss, scriptFileName, scriptToR } from './script-export.js';
 import { floatSelected, loadVarOrder, saveVarOrder, sortVars, loadVarDisplay, saveVarDisplay, varDisplay } from './var-order.js';
 import { makeVarToolbar, filterVars, getWorkspaceFilter, setWorkspaceFilter } from './var-toolbar.js';
 import { labelForValue, summariseMissing } from './var-role.js';
@@ -1705,6 +1705,7 @@ export class HistoryPanel {
         ${choice('ctscript', 'CrossTab syntax (.ctscript)', 'Lossless — imports back into this editor exactly as it is.', true)}
         ${choice('stata', 'Stata do-file (.do)', 'Best-effort translation, checked by round-tripping it back through the importer.', false)}
         ${choice('spss', 'SPSS syntax (.sps)', 'Best-effort translation, checked by round-tripping it back through the importer.', false)}
+        ${choice('r', 'R script (.R)', 'A runnable script: reads your data, repeats the preparation, then the analyses as a tutor would write them.', false)}
         </fieldset>
         ${
           draft
@@ -1721,7 +1722,10 @@ export class HistoryPanel {
     const summary = dialog.querySelector('[data-role="summary"]');
     const done = new Map(); // translate each dialect at most once
     const translateTo = (fmt) => {
-      if (!done.has(fmt)) done.set(fmt, fmt === 'spss' ? scriptToSpss(text) : scriptToStata(text));
+      if (!done.has(fmt)) {
+        const fn = fmt === 'spss' ? scriptToSpss : fmt === 'r' ? scriptToR : scriptToStata;
+        done.set(fmt, fn(text));
+      }
       return done.get(fmt);
     };
     const render = () => {
