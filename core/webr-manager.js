@@ -25,6 +25,7 @@
  */
 
 import { CoreEvents } from './event-bus.js';
+import { capturing, noteR } from './r-capture.js';
 import { parseVarRef } from './var-ref.js';
 import { getAssets } from './assets.js';
 import { debug } from './debug.js';
@@ -464,6 +465,14 @@ export class WebRManager {
       try {
         const env = {};
         let prelude = '';
+        // The audit mirror of `prelude`: the same bindings, written so a person can read
+        // them a year from now. The real prelude reads a Parquet file out of WebR's
+        // in-memory filesystem, which records nothing a reader can use — the path is a
+        // temp name and the bytes are gone with the session. What an auditor needs is
+        // which columns were bound, from which dataset, under which names, so that the
+        // code below them can be followed. See r-capture.js for why any of this is kept.
+        const wantMirror = capturing();
+        let mirror = '';
         if (injectInputs) {
           // New plugin API: bind each declared input into R under its own name —
           // a single-variable input → a vector, a multi → a data.frame, a scalar
@@ -488,12 +497,30 @@ export class WebRManager {
               frame: symbol,
               dataset: dsName || null,
             });
+            if (wantMirror) {
+              const from = dsName ? `dataset ${JSON.stringify(dsName)}` : 'the active dataset';
+              mirror += `# ${symbol} <- ${from}, columns: ${cols.join(', ')}\n`;
+              // Worth its own line because it changes what the numbers mean: codes the
+              // dataset designates as missing are already NA before the plugin's code
+              // runs, unless that analysis opted out (Frequencies does, to report them).
+              if (!keepMissing) mirror += `#   (values designated missing are NA here)\n`;
+            }
           }
-          prelude += buildInputAliases(injectInputs, frames);
+          const aliases = buildInputAliases(injectInputs, frames);
+          prelude += aliases;
+          mirror += aliases;
         } else if (injectData) {
           // Raw dataset bind (r-console / manual R) stays raw — the escape hatch.
           prelude = await this.#buildInjection(webR, env, variables);
+          if (wantMirror) {
+            const cols = variables ? `, columns: ${[].concat(variables).join(', ')}` : '';
+            mirror += `# df <- the active dataset${cols}\n`;
+          }
         }
+
+        // Offered BEFORE evaluation, not after: the source of a run that goes on to throw
+        // is exactly what a reader needs, and recording it afterwards would lose it.
+        if (wantMirror) noteR(mirror + code);
 
         const capture = await shelter.captureR(prelude + code, {
           env,

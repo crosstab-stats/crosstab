@@ -178,9 +178,13 @@ export function scriptToSpss(text) {
  * produced it looks like (owner, 2026-10-09).
  *
  * @param {string} text CrossTab script text (what the Syntax editor holds).
+ * @param {{analyses?: import('./analysis-log.js').AnalysisEntry[]}} [opts] the analysis
+ *   log entries behind that text. Optional, and the export is complete without them —
+ *   they carry the two things the syntax text cannot: each run's label, and the R it
+ *   actually evaluated (see exactBlock).
  */
-export function scriptToR(text) {
-  return translate(text, R);
+export function scriptToR(text, opts = {}) {
+  return translate(text, R, opts);
 }
 
 /** The filename an export should be offered under. */
@@ -197,10 +201,19 @@ export function scriptFileName(dialect, base = 'analysis') {
  * Each line is re-parsed with the REAL parser rather than a private copy of it, so the
  * export can never disagree with what Run would do.
  */
-function translate(text, D) {
+function translate(text, D, opts = {}) {
   const lines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n');
   const body = [];
-  const ctx = { labelSets: new Set(), labelSetByLabels: new Map(), needsExecute: false, sawFilter: false, sawWeight: false, sawAnalysis: false };
+  const ctx = {
+    labelSets: new Set(),
+    labelSetByLabels: new Map(),
+    needsExecute: false,
+    sawFilter: false,
+    sawWeight: false,
+    sawAnalysis: false,
+    sawExact: false,
+    sources: sourceIndex(opts.analyses),
+  };
   let statements = 0;
   let translated = 0;
   let skipped = 0;
@@ -266,6 +279,12 @@ function translate(text, D) {
       : 'The data is NOT in this file: open your dataset first, then run this.',
   ];
   if (skipped) head.push('Read every commented line: those steps have NOT been applied.');
+  // Said once at the top rather than repeated under every analysis: the commented R is a
+  // record of what ran, not a second copy of the script to run.
+  if (ctx.sawExact) {
+    head.push('Under each result is the R CrossTab actually ran, commented. That is there to be');
+    head.push('read, not run — it binds its own data, and may differ from the line above it.');
+  }
   // A weight is the input most likely to change the numbers, so the one place the two
   // languages do not line up exactly has to be said out loud rather than left to be found.
   if (ctx.sawWeight) {
@@ -937,50 +956,121 @@ function crosstabExtras(i) {
  * global weight — the thing SPSS has and Stata does not.
  */
 const R_ANALYSES = {
-  'builtin-frequencies.run': (i, D) => asList(i.vars).map((v) => `table(d$${v}, useNA = "ifany")`),
-  'builtin-descriptives.run': (i, D) => [`summary(d[, c(${asList(i.vars).map((v) => D.str(v)).join(', ')})])`],
+  'builtin-frequencies.run': (i, D) => rVars(i.vars, D).map((v) => `table(d$${v}, useNA = "ifany")`),
+  'builtin-descriptives.run': (i, D) => [`summary(d[, c(${rVars(i.vars, D).map((v) => D.str(v)).join(', ')})])`],
   'builtin-crosstabs.run': (i, D) => [
-    `tbl <- table(d$${i.rowvar}, d$${i.colvar})`,
+    `tbl <- table(d$${rVar(i.rowvar, D)}, d$${rVar(i.colvar, D)})`,
     'tbl',
     'prop.table(tbl, 1)   # row percentages',
     'chisq.test(tbl)',
   ],
   'builtin-regression.run': (i, D) => [
-    `fit <- lm(${i.dv} ~ ${asList(i.ivs).join(' + ')}, data = d)`,
+    `fit <- lm(${rVar(i.dv, D)} ~ ${rVars(i.ivs, D).join(' + ')}, data = d)`,
     'summary(fit)',
     'anova(fit)',
   ],
   'builtin-logistic.run': (i, D) => [
-    `fit <- glm(${i.dv} ~ ${asList(i.ivs).join(' + ')}, data = d, family = binomial)`,
+    `fit <- glm(${rVar(i.dv, D)} ~ ${rVars(i.ivs, D).join(' + ')}, data = d, family = binomial)`,
     'summary(fit)',
     'exp(cbind(OR = coef(fit), confint(fit)))   # odds ratios',
   ],
   'builtin-correlation.run': (i, D) => [
-    `cor(d[, c(${asList(i.vars).map((v) => D.str(v)).join(', ')})], use = "pairwise.complete.obs"`
+    `cor(d[, c(${rVars(i.vars, D).map((v) => D.str(v)).join(', ')})], use = "pairwise.complete.obs"`
       + `${i.method && i.method !== 'pearson' ? `, method = ${D.str(i.method)}` : ''})`,
   ],
-  'builtin-compare.oneSample': (i, D) => [`t.test(d$${i.x}, mu = ${numLit(i.mu)})`],
+  'builtin-compare.oneSample': (i, D) => [`t.test(d$${rVar(i.x, D)}, mu = ${numLit(i.mu)})`],
   'builtin-compare.independent': (i, D) => [
-    `t.test(${i.y} ~ ${i.g}, data = d, var.equal = TRUE)   # Levene first; drop var.equal for Welch`,
+    `t.test(${rVar(i.y, D)} ~ ${rVar(i.g, D)}, data = d, var.equal = TRUE)`
+      + '   # Levene first; drop var.equal for Welch',
   ],
-  'builtin-compare.paired': (i, D) => [`t.test(d$${i.x1}, d$${i.x2}, paired = TRUE)`],
+  'builtin-compare.paired': (i, D) => [`t.test(d$${rVar(i.x1, D)}, d$${rVar(i.x2, D)}, paired = TRUE)`],
   'builtin-compare.oneway': (i, D) => [
-    `fit <- aov(${i.y} ~ factor(${i.g}), data = d)`,
+    `fit <- aov(${rVar(i.y, D)} ~ factor(${rVar(i.g, D)}), data = d)`,
     'summary(fit)',
     'TukeyHSD(fit)',
-    `bartlett.test(${i.y} ~ factor(${i.g}), data = d)   # homogeneity of variances`,
+    `bartlett.test(${rVar(i.y, D)} ~ factor(${rVar(i.g, D)}), data = d)   # homogeneity of variances`,
   ],
   'builtin-anova.factorial': (i, D) => {
-    const facs = asList(i.facs);
+    const facs = rVars(i.facs, D);
     if (facs.length < 2) bail('a factorial ANOVA needs two or more factors');
     return [
-      `fit <- aov(${i.dv} ~ ${facs.map((f) => `factor(${f})`).join(' * ')}, data = d)`,
+      `fit <- aov(${rVar(i.dv, D)} ~ ${facs.map((f) => `factor(${f})`).join(' * ')}, data = d)`,
       'summary(fit)',
       D.comment('CrossTab reports Type III sums of squares; aov() gives Type I.'),
       D.comment('For Type III: car::Anova(fit, type = 3) with contr.sum contrasts.'),
     ];
   },
 };
+
+/**
+ * The R an analysis ACTUALLY evaluated, as a comment block under the idiomatic line.
+ *
+ * This is the half the owner asked for alongside the idiom: the tutor's version as live
+ * code, and the engine's version recorded beneath it. They can legitimately differ, and
+ * where they do, this is the only place a reader can find out why —
+ *
+ *   - the weighted procedures avoid `t.test`/`aov` on purpose, because those take
+ *     ANALYTIC weights and CrossTab's are FREQUENCY weights;
+ *   - the factorial reports Type III where `aov()` gives Type I;
+ *   - the one-way computes from weighted group statistics rather than from the frame.
+ *
+ * Commented, never live: it binds its own vectors (`y <- df[["prestg10"]]`) from a frame
+ * this script does not build, so pasting it in would not run. Saying that once, here, is
+ * cheaper than a reader discovering it by running the file.
+ *
+ * @param {{rSource?: string[], rSourceDropped?: number}} entry the analysis log entry.
+ */
+function exactBlock(entry, D) {
+  const runs = Array.isArray(entry?.rSource) ? entry.rSource.filter(Boolean) : [];
+  if (!runs.length) return [];
+  // An empty comment, without the trailing space `# ${''}` would leave behind.
+  const rule = D.comment('').replace(/\s+$/, '');
+  const out = [
+    rule,
+    D.comment(runs.length > 1
+      ? `The ${runs.length} R evaluations CrossTab ran for this result, verbatim —`
+      : 'The R CrossTab ran for this result, verbatim —'),
+    D.comment('recorded for audit. It binds its own data, so it does not run in this file.'),
+  ];
+  runs.forEach((src, n) => {
+    if (n) out.push(rule);
+    for (const l of String(src).replace(/\r\n?/g, '\n').replace(/\n+$/, '').split('\n')) {
+      out.push(D.comment(`  ${l}`).replace(/\s+$/, ''));
+    }
+  });
+  if (entry.rSourceDropped) {
+    out.push(D.comment(`  … and ${entry.rSourceDropped} further evaluation(s), past the record size cap.`));
+  }
+  // One blank line, so a long run of analyses does not read as one block of comments.
+  out.push('');
+  return out;
+}
+
+/**
+ * Pair each `run` line with the log entry it came from, so the exporter can reach what
+ * the SYNTAX TEXT cannot carry: the label the user gave the run, and the R it evaluated.
+ *
+ * Keyed by identity (`plugin.fn` plus the inputs JSON) rather than by position, because
+ * the text may have been hand-edited in the Syntax editor between being generated and
+ * being exported. An edited line simply finds no entry and loses its extras, which is
+ * right — the recorded source described the line as it was.
+ */
+function sourceIndex(analyses) {
+  const byKey = new Map();
+  for (const e of analyses || []) {
+    if (!e || !e.pluginId) continue;
+    const key = `${e.pluginId}.${e.run}|${JSON.stringify(e.inputs ?? {})}`;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(e);
+  }
+  return {
+    /** The next unclaimed entry for this parsed analysis, or null. */
+    claim(a) {
+      const queue = byKey.get(`${a.pluginId}.${a.run}|${JSON.stringify(a.inputs ?? {})}`);
+      return queue && queue.length ? queue.shift() : null;
+    },
+  };
+}
 
 /** The weight note R needs, since it has no global weight to turn on. */
 function rWeightNote(w, D) {
@@ -995,6 +1085,11 @@ function rWeightNote(w, D) {
  * @param {{pluginId:string, run:string, inputs?:object}} a
  */
 function transAnalysis(a, D, ctx, line) {
+  // Claimed FIRST, before any bail below, so one untranslatable analysis cannot throw the
+  // rest of the script out of step with the log.
+  const entry = ctx.sources ? ctx.sources.claim(a) : null;
+  const exact = D.id === 'r' ? exactBlock(entry, D) : [];
+  if (exact.length) ctx.sawExact = true;
   const spec = ANALYSES[`${a.pluginId}.${a.run}`];
   // R's spellings live in their own table (see R_ANALYSES) — same keys, so the
   // "options this translator does not account for" guard below still applies, which is
@@ -1009,7 +1104,11 @@ function transAnalysis(a, D, ctx, line) {
     const why = spec
       ? `no ${D.label} spelling is round-trip verified for it`
       : `no ${D.label} spelling is declared for it`;
-    return notTranslated(line, `analysis (${a.pluginId}.${a.run}) — ${why}; run it by hand`, D);
+    const res = notTranslated(line, `analysis (${a.pluginId}.${a.run}) — ${why}; run it by hand`, D);
+    // The case where the recorded source earns the most: there is no idiomatic spelling
+    // for this analysis, so the R that ran is the only account of it this file can give.
+    // That is also exactly the plugin an auditor is least likely to have.
+    return exact.length ? { ...res, lines: [...res.lines, ...exact] } : res;
   }
   const inputs = a.inputs || {};
   const unaccounted = Object.keys(inputs).filter((k) => !spec.keys.includes(k) && !isEmpty(inputs[k]));
@@ -1022,11 +1121,21 @@ function transAnalysis(a, D, ctx, line) {
   const { lines, dropped } = emit(inputs, D, ctx);
   if (D.id === 'r') ctx.sawAnalysis = true;
   const out = [];
-  // The label the user gave the run, so a long script says which result is which.
-  if (D.id === 'r' && a.label) out.push(D.comment(`--- ${a.label} ---`));
+  // The label the user gave the run, so a long script says which result is which. It comes
+  // from the LOG ENTRY, not from `a`: the syntax line carries the label as a trailing
+  // comment, and the parser strips comments before handing the statement over — so `a.label`
+  // was always undefined here and this heading never actually printed.
+  const label = entry?.label ?? a.label;
+  if (D.id === 'r' && label) out.push(D.comment(`--- ${stripTrailingEllipsis(label)} ---`));
   if (dropped && dropped.length) out.push(D.comment(`The next command leaves out ${dropped.join('; ')}.`));
   out.push(...lines);
+  out.push(...exact);
   return ok(out);
+}
+
+/** Menu labels end in an ellipsis ("One-way ANOVA…"); a heading should not. */
+function stripTrailingEllipsis(s) {
+  return String(s).replace(/\s*(?:\u2026|\.\.\.)\s*$/, '');
 }
 
 /** An input with no value: absent, blank, or an empty list. */
@@ -1037,6 +1146,29 @@ function isEmpty(v) {
 /** An input as an array, whether it arrived as one or as a bare value. */
 function asList(v) {
   return Array.isArray(v) ? v.filter((x) => !isEmpty(x)) : isEmpty(v) ? [] : [v];
+}
+
+/**
+ * The one variable a single-variable input slot holds, validated as a name in `D`.
+ *
+ * Interpolating the slot directly reads fine and works for the single variable these
+ * slots actually carry — a one-element array stringifies without its brackets. It fails
+ * silently for anything else: two variables become `a,b`, and a name needing quoting
+ * becomes broken code. Both produce a script that looks right and does not run, which is
+ * the one outcome this exporter is built to avoid.
+ */
+function rVar(v, D) {
+  const list = asList(v);
+  if (!list.length) bail('an input that should name a variable arrived empty');
+  if (list.length > 1) {
+    bail(`one variable expected here, but the run carries ${list.length} (${list.join(', ')})`);
+  }
+  return varName(list[0], D);
+}
+
+/** Every variable in a multi-variable slot, each validated. */
+function rVars(v, D) {
+  return asList(v).map((x) => varName(x, D));
 }
 
 /** A space-separated, dialect-validated variable list. */

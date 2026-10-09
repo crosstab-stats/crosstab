@@ -20,6 +20,7 @@ import { CoreEvents } from './event-bus.js';
 import { datasetsNamed, parseVarRef } from './var-ref.js';
 import { registerRemoteChartKind, unregisterChartKind } from './chart-renderer.js';
 import { newOpId } from './merge.js';
+import { collectR } from './r-capture.js';
 
 export class PluginActions {
   #loader;
@@ -448,6 +449,17 @@ export class PluginActions {
       );
     }, 45000);
     let ok = false;
+    // Collect the R this run evaluates, so the result carries the code that produced it
+    // (#r-capture). Opened around the whole invocation because a plugin may evaluate more
+    // than once — a package check, then the model.
+    //
+    // Only a LIVE run persists what this collects: `run()` reads it off the entry just
+    // before `record()`. A replay deliberately does not write it back, because replays
+    // happen when a project is opened, and appending to the log on open is the clobber
+    // this project has already been bitten by (see workspace-state-persistence). The cost
+    // is that projects saved before this existed never gain a source, and the R export
+    // falls back to the idiomatic line alone for them — which is what it did anyway.
+    const capture = collectR();
     try {
       if (e.host) {
         // A host action (e.g. "Run R script", #137) — no plugin/sandbox; the runner
@@ -466,10 +478,21 @@ export class PluginActions {
       this.#results.appendError(`${e.label}: ${err.message}`);
       console.error(`[${e.host ? 'host' : 'plugin'} ${e.pluginId}]`, err);
     } finally {
+      capture.dispose();
       clearTimeout(watchdog);
       if (!e.host) this.#loader.clearActiveInputs(e.pluginId);
       this.#results.endAnalysis();
       this.#bus.emit(CoreEvents.ANALYSIS_FINISHED, { plugin: e.pluginId });
+    }
+    // The R that produced this result, for the log entry and the R export. Set on the
+    // entry (not returned) because every caller of #execute already holds `e`, and only
+    // the two that record it will persist it.
+    if (ok) {
+      const got = capture.take();
+      if (got) {
+        e.rSource = got.runs;
+        if (got.dropped) e.rSourceDropped = got.dropped;
+      }
     }
     // A run that reached across datasets says so, in the output (#179).
     //

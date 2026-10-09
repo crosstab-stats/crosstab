@@ -621,6 +621,16 @@
       .ct-dialog__form { padding: 20px; }
       .ct-dialog__title { margin: 0 0 4px; font-size: 18px; }
       .ct-dialog__hint { margin: 0 0 12px; color: #5a6470; }
+      /* Recorded source shown read-only in a dialog (the R an analysis ran). Scrolls in
+         both directions rather than wrapping: a wrapped R line reads as two statements,
+         and this is a record people are asked to check. */
+      .ct-source {
+        margin: 0 0 12px; padding: 10px 12px; max-height: 45vh; overflow: auto;
+        background: #f6f8fa; border: 1px solid var(--line); border-radius: 6px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px; line-height: 1.5; color: #24292f; white-space: pre; tab-size: 2;
+      }
+      .ct-source:focus-visible { outline: 2px solid #2563eb; outline-offset: 1px; }
       /* Plain bulleted list inside a dialog (e.g. the missing-plugins warning). */
       .ct-dialog__list { margin: 0 0 16px; padding: 0 0 0 20px; max-height: 40vh; overflow-y: auto; }
       .ct-dialog__list li { margin: 0 0 6px; line-height: 1.4; }

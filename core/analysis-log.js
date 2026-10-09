@@ -32,6 +32,13 @@
  * @property {object} inputs     - the gathered input values (the replayable params).
  * @property {number|string} [datasetId] - the dataset this run analysed, so a
  *   destructive re-import of that dataset clears only its own analyses.
+ * @property {string[]} [rSource] - the R this run actually evaluated, one entry per
+ *   evaluation, each already carrying a readable note of how the data was bound. Present
+ *   only for runs that used R, and only for runs recorded live (see PluginActions#execute).
+ *   This is the PROVENANCE of the numbers: it lets a project be audited by someone who
+ *   does not have the plugin that produced them, and gives the R export its exact-code
+ *   half. Persisted deliberately — the owner's call, 2026-10-09.
+ * @property {number} [rSourceDropped] - evaluations omitted at the size cap, if any.
  */
 
 import { newOpId } from './merge.js';

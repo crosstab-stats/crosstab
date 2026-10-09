@@ -10,37 +10,37 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
-- [ ] **R export, half two: fold in the EXACT R each analysis ran, as a comment under the
-      idiomatic line (owner's pick, 2026-10-09).**
+- [x] **R export, half two: the EXACT R each analysis ran — DONE 2026-10-09.** Recorded on
+      the analysis, persisted in the project, shown in History, and folded into the R export
+      as a comment under the idiomatic line.
 
-      Half one shipped (`scriptToR`): loads, transforms and analyses in the idiom a tutor
-      would write, verified by executing the output in R 4.6.0. The owner chose
-      *"idiomatic, with the exact code alongside it"* — so each analysis should also carry
-      the R that actually produced the number, commented out beneath.
+      **The decision this needed, and how it went.** Whether to persist the captured R or
+      keep it session-scoped. Persisted, on the owner's call, for a reason better than the
+      export: *"if someone opens a bundle that used plugins they don't have the base R is
+      right there for them to see during an audit."* A project outlives the plugin that
+      produced its numbers, and a reader of such a bundle previously saw a table and an
+      attribution line and nothing else — the same gap [[output-outlives-its-maker]] closes
+      for how a result is drawn, now closed for how it was computed.
 
-      **Why it is worth the plumbing.** The two can legitimately differ: our weighted
-      procedures deliberately avoid `t.test`/`aov` (those take ANALYTIC, not frequency,
-      weights), the factorial reports Type III where `aov()` gives Type I, and the one-way
-      computes from weighted group statistics. A student who runs the idiomatic line and
-      gets a different number has no way to see why. The exact code is that answer.
+      Which is why it is also surfaced in the **History panel** (an `R` button per analysis)
+      and not only in the export: needing to export a file to find out what a bundle
+      computed is a workaround, not an audit trail.
 
-      **What it needs.** The R already exists as text at run time — each plugin hands a
-      string to `webr.run`, and the host generates the binding prelude as R
-      (`y <- df[["prestg10"]]`, webr-manager.js). Neither is captured. So:
-      1. `WebRManager#run` records the code it was given, tagged to the analysis in flight.
-      2. The analysis log entry carries it (it IS the provenance of the number, which is
-         the same argument [[one-true-log-explicit-ops]] makes for everything else).
-      3. `scriptToR` emits it commented under the idiomatic line.
+      `core/r-capture.js` holds the sink; `WebRManager#run` offers each evaluation along
+      with a readable mirror of the data binding (the real prelude reads a Parquet file out
+      of the in-memory FS, which records nothing a reader can use). A LIVE run persists it;
+      a replay deliberately does not write it back, because replays happen on project open.
 
-      **Decide first:** whether the captured R is PERSISTED in the project (predictable,
-      survives a reopen, grows the log and the merge payload) or session-scoped (free, but
-      the comments vanish after a reload, which reads as a bug). Persisting looks right —
-      a result's provenance belongs with the result — but it puts R source into the op log,
-      so it is worth a deliberate decision rather than a default.
+      Measured cost: the one-way ANOVA records ~6.4 KB (137 lines) per run, capped at 32 KB
+      and 24 evaluations per analysis, and the cap says in the file when it truncated.
 
-      Also still open: `a.label` is not reaching `transAnalysis`, so the per-analysis
-      `# --- Label ---` heading never prints. Small, and worth fixing with this.
-
+      Two bugs fell out of building it, both fixed with it:
+      - the per-analysis `# --- Label ---` heading never printed — `analysisToLine` writes
+        the label as a trailing comment and the parser strips comments before the exporter
+        sees the statement, so `a.label` was always undefined. It comes off the log entry now.
+      - `R_ANALYSES` interpolated input slots straight into source (`${i.y}`). Correct for
+        the one variable those slots carry, silently `a,b` for two and broken for a name
+        needing quotes. Now `rVar`/`rVars`, which validate and bail.
 
 - [x] **SPSS parity for the seven procedures a psych methods course uses — DONE
       (2026-10-08).** A Psychology faculty member named the list: correlations,

@@ -1141,6 +1141,18 @@ export class HistoryView {
           () => this.#moveAnalysis(entry, at + 1)),
         ctlBtn('✕', 'Remove this analysis from the history', busy, () => this.#removeAnalysis(idx)),
       );
+      // The R this result came from, if it was recorded. Shown here rather than only in the
+      // R export because the point of keeping it is reading a project you did not run: a
+      // bundle can arrive with results from a plugin you do not have, and having to export a
+      // file to find out what was computed is not an audit trail, it is a workaround.
+      // Absent — not disabled — when there is nothing to show, since a disabled button
+      // would imply the source exists and is merely out of reach (guard-means-missing-state).
+      if (Array.isArray(entry.rSource) && entry.rSource.length) {
+        ctl.insertBefore(
+          ctlBtn('R', 'Show the R this analysis ran', false, () => this.#showAnalysisSource(entry)),
+          ctl.firstChild,
+        );
+      }
       li.append(ctl);
     }
     return li;
@@ -1168,6 +1180,74 @@ export class HistoryView {
       this.#movingAnalysis = null;
       this.render();
     }
+  }
+
+  /**
+   * Show the R an analysis actually evaluated.
+   *
+   * Read-only, and deliberately plain: this is a record of what ran, not an editor. The
+   * source is written with `textContent`, never markup — it is R that came from a plugin,
+   * and the one job here is to display it exactly as it was without it ever being parsed
+   * as HTML.
+   */
+  #showAnalysisSource(entry) {
+    const runs = (entry.rSource || []).filter(Boolean);
+    if (!runs.length) return;
+    const dialog = document.createElement('dialog');
+    dialog.className = 'ct-dialog';
+    const form = document.createElement('form');
+    form.method = 'dialog';
+    form.className = 'ct-dialog__form';
+
+    const title = el('h2', `R source — ${String(entry.label || 'Analysis').replace(/…\s*$/, '')}`, 'ct-dialog__title');
+    const hint = el(
+      'p',
+      `${entry.pluginName || 'A plugin'} ran this to produce the result. It binds its own data, so`
+        + ' it is a record of what was computed rather than a script to run as-is.',
+      'ct-dialog__hint',
+    );
+    form.append(title, hint);
+
+    runs.forEach((src, n) => {
+      if (runs.length > 1) form.append(el('p', `Evaluation ${n + 1} of ${runs.length}`, 'ct-dialog__hint'));
+      const pre = document.createElement('pre');
+      pre.className = 'ct-source';
+      pre.tabIndex = 0; // scrollable region, so a keyboard can reach and scroll it
+      pre.textContent = String(src).replace(/\s+$/, '');
+      form.append(pre);
+    });
+    if (entry.rSourceDropped) {
+      form.append(el('p', `${entry.rSourceDropped} further evaluation(s) were past the record size cap and not kept.`, 'ct-dialog__hint'));
+    }
+
+    const menu = document.createElement('menu');
+    menu.className = 'ct-dialog__buttons';
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.textContent = 'Copy';
+    copy.addEventListener('click', async () => {
+      const text = runs.join('\n\n');
+      try {
+        await navigator.clipboard.writeText(text);
+        copy.textContent = 'Copied';
+      } catch {
+        // Clipboard access can be refused (permissions, insecure context). Say so instead
+        // of leaving a button that silently did nothing; the text is selectable regardless.
+        copy.textContent = 'Select and copy';
+      }
+    });
+    const close = document.createElement('button');
+    close.type = 'submit';
+    close.value = 'close';
+    close.className = 'ct-dialog__primary';
+    close.textContent = 'Close';
+    menu.append(copy, close);
+    form.append(menu);
+
+    dialog.append(form);
+    dialog.addEventListener('close', () => dialog.remove());
+    document.body.append(dialog);
+    dialog.showModal();
   }
 
   #removeAnalysis(idx) {
@@ -1705,7 +1785,7 @@ export class HistoryPanel {
         ${choice('ctscript', 'CrossTab syntax (.ctscript)', 'Lossless — imports back into this editor exactly as it is.', true)}
         ${choice('stata', 'Stata do-file (.do)', 'Best-effort translation, checked by round-tripping it back through the importer.', false)}
         ${choice('spss', 'SPSS syntax (.sps)', 'Best-effort translation, checked by round-tripping it back through the importer.', false)}
-        ${choice('r', 'R script (.R)', 'A runnable script: reads your data, repeats the preparation, then the analyses as a tutor would write them.', false)}
+        ${choice('r', 'R script (.R)', 'A runnable script: reads your data, repeats the preparation, then the analyses as a tutor would write them — with the R CrossTab ran recorded beneath each one.', false)}
         </fieldset>
         ${
           draft
@@ -1720,11 +1800,15 @@ export class HistoryPanel {
       </form>`;
     const form = dialog.querySelector('form');
     const summary = dialog.querySelector('[data-role="summary"]');
+    // The R dialect is also handed the analysis log, which carries what the script TEXT
+    // cannot: each run's label, and the R that run actually evaluated. Matching is by
+    // identity inside the exporter, so a hand-edited draft line simply finds no entry.
+    const analyses = this.#analysisLog?.entries?.() ?? [];
     const done = new Map(); // translate each dialect at most once
     const translateTo = (fmt) => {
       if (!done.has(fmt)) {
-        const fn = fmt === 'spss' ? scriptToSpss : fmt === 'r' ? scriptToR : scriptToStata;
-        done.set(fmt, fn(text));
+        if (fmt === 'r') done.set(fmt, scriptToR(text, { analyses }));
+        else done.set(fmt, (fmt === 'spss' ? scriptToSpss : scriptToStata)(text));
       }
       return done.get(fmt);
     };
