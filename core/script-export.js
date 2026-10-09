@@ -289,6 +289,8 @@ function translateStatement(line, D, ctx) {
       return transSetCell(op, D, ctx);
     case 'setVariable':
       return transSetVariable(op, D, ctx, line);
+    case 'setWeight':
+      return transSetWeight(op, D, ctx);
     default:
       return notTranslated(line, `unsupported step "${op.type}"`, D);
   }
@@ -860,6 +862,33 @@ function stataWeight(w, D, ctx) {
   if (isEmpty(w)) return '';
   ctx.sawWeight = true;
   return ` [fweight=${varName(w, D)}]`;
+}
+
+/**
+ * The DATASET's weight (Transform ▸ Weight cases…), which is the one place CrossTab and
+ * SPSS mean exactly the same thing: a global mode.
+ *
+ * It is emitted even though every weighted analysis below already brackets itself with
+ * its own WEIGHT BY / WEIGHT OFF. The brackets are what make each command correct; this
+ * line is what makes the file SAY what the project was set to, so a reader of the
+ * syntax is not left to infer a standing setting from a repeated one. A later
+ * `WEIGHT OFF.` from a bracketed analysis does turn this one off — harmless, because
+ * nothing after it relies on the global mode.
+ */
+function transSetWeight(op, D, ctx) {
+  // Stata has no global weight at all — weighting is per command, which is what
+  // `stataWeight` already attaches to each analysis. Emitting SPSS's mode statement into
+  // a .do file would be a syntax error dressed as a translation, so it becomes a note.
+  if (D.id !== 'spss') {
+    return {
+      lines: [D.comment(op.name
+        ? `CrossTab weights this dataset by ${op.name}; Stata weights per command, so each analysis below carries it`
+        : 'CrossTab weighting turned off here')],
+    };
+  }
+  if (!op.name) return { lines: ['WEIGHT OFF.'] };
+  ctx.sawWeight = true;
+  return { lines: [`WEIGHT BY ${varName(op.name, D)}.`] };
 }
 
 /** SPSS has no per-command weight — `WEIGHT BY` is a global mode — so bracket the command

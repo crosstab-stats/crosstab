@@ -31,6 +31,8 @@
  *     set type NAME = numeric|string|factor
  *     set measure NAME = nominal|ordinal|scale
  *     set missing NAME = v1, v2   (or `none`)
+ *     weight by NAME                           (the dataset's frequency weight)
+ *     weight off
  *   Analyses:
  *     run pluginId.fn {json-inputs}            # Label
  *
@@ -42,7 +44,7 @@ const TYPES = new Set(['numeric', 'string', 'factor']);
 const MEASURES = new Set(['nominal', 'ordinal', 'scale']);
 /** Op types that count as a "data transform" (what getTransforms returns) — used to
  * position analyses in the timeline by how many transforms preceded them. */
-const TRANSFORM_TYPES = new Set(['setVariable', 'setCell', 'computeVar', 'recodeVar', 'filterCases', 'dropVars', 'keepVars', 'renameVar']);
+const TRANSFORM_TYPES = new Set(['setVariable', 'setCell', 'computeVar', 'recodeVar', 'filterCases', 'dropVars', 'keepVars', 'renameVar', 'setWeight']);
 
 // =============================================================================
 // SERIALIZE  (timeline → text)
@@ -219,6 +221,10 @@ function opToLines(op) {
       return recodeToLines(op);
     case 'setVariable':
       return setVarToLines(op);
+    case 'setWeight':
+      // SPSS spells it `WEIGHT BY x.` / `WEIGHT OFF.`, and a script that cannot say
+      // which weight was in force does not reproduce the numbers it claims to.
+      return [op.name ? `weight by ${ident(op.name)}` : 'weight off'];
     default:
       return null; // unknown op kind: skip (kept in the live log, not shown)
   }
@@ -449,6 +455,7 @@ function parseLine(line) {
 
   // set type|measure|missing NAME = …
   if (/^set\s+(type|measure|missing)\b/i.test(line)) return parseSet(line);
+  if (/^weight\b/i.test(line)) return parseWeight(line);
 
   throw new Error(`unrecognised command: ${line.split(/\s+/)[0]}`);
 }
@@ -532,6 +539,14 @@ function parseSet(line) {
 
 function setVar(name, patch) {
   return { type: 'setVariable', name, patch };
+}
+
+/** `weight by NAME` / `weight off` — SPSS's WEIGHT BY, in this dialect. */
+function parseWeight(line) {
+  if (/^weight\s+off\s*$/i.test(line)) return { type: 'setWeight', name: null };
+  const m = line.match(/^weight\s+by\s+(.+)$/i);
+  if (!m) throw new Error('weight: expected `weight by NAME` or `weight off`');
+  return { type: 'setWeight', name: readIdent(m[1].trim()) };
 }
 
 // --- parsing helpers ---

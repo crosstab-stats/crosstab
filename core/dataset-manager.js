@@ -676,6 +676,13 @@ export class DatasetManager {
   get rowCount() {
     return this.active?.rowCount ?? 0;
   }
+  /** The active dataset's frequency weight. Delegated like the rest of this section:
+   * Variable View and the gather flow are both handed the MANAGER where the JSDoc says
+   * DataStore, so a getter that exists only on the store reads as undefined and the
+   * weight silently goes unmarked. */
+  get weightVar() {
+    return this.active?.weightVar ?? null;
+  }
   get binding() {
     return this.active?.binding ?? null;
   }

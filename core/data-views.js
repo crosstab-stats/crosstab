@@ -797,15 +797,21 @@ export class VariableView {
       ? `${shown.length.toLocaleString()} of ${this.metas.length.toLocaleString()}`
       : `${this.metas.length.toLocaleString()} variable${this.metas.length === 1 ? '' : 's'}`;
 
+    // Which column is the frequency weight. The status bar says a weight is ON; this
+    // says WHICH, in the one list that is about the variables themselves — so finding it
+    // does not mean opening Transform ▸ Weight cases… to be told.
+    const weight = this.store.weightVar;
+
     const frag = document.createDocumentFragment();
     shown.forEach((m, i) => {
       const tr = document.createElement('tr');
       tr.className = 'vargrid__row';
+      if (m.name === weight) tr.classList.add('is-weight');
       // A rule under the last floated row, where the picker would put its next group
       // heading. Only drawn when there IS a boundary (see floatSelected).
       if (floated && i === floated) tr.classList.add('is-floatedge');
-      tr.title = 'Click to edit';
-      tr.append(openerCellFor(m, () => this.#openEditor(m)));
+      tr.title = m.name === weight ? 'The frequency weight. Click to edit.' : 'Click to edit';
+      tr.append(openerCellFor(m, () => this.#openEditor(m), m.name === weight));
       tr.append(el('td', m.label || ''));
       tr.append(el('td', m.type));
       tr.append(el('td', m.measurementLevel || ''));
@@ -2111,7 +2117,7 @@ function elWrap(tag, child) {
 
 /** Row-opener cell: the variable name as a real button, so the editor this row
  * opens on click is reachable without a mouse. */
-function openerCellFor(meta, onOpen) {
+function openerCellFor(meta, onOpen, isWeight = false) {
   const td = document.createElement('td');
   const btn = document.createElement('button');
   btn.type = 'button';
@@ -2119,7 +2125,16 @@ function openerCellFor(meta, onOpen) {
   const code = document.createElement('code');
   code.textContent = meta.name;
   btn.append(code);
-  btn.setAttribute('aria-label', `Edit variable ${meta.label ? `${meta.label} (${meta.name})` : meta.name}`);
+  // A chip rather than only a row colour: colour alone is not information a screen
+  // reader or a colourblind reader receives (WCAG 1.4.1), and this one changes what
+  // every analysis does.
+  if (isWeight) {
+    const chip = document.createElement('span');
+    chip.className = 'vargrid__weight';
+    chip.textContent = '⚖ weight';
+    btn.append(chip);
+  }
+  btn.setAttribute('aria-label', `Edit variable ${meta.label ? `${meta.label} (${meta.name})` : meta.name}${isWeight ? ' — the frequency weight' : ''}`);
   btn.addEventListener('click', (e) => { e.stopPropagation(); onOpen(); });
   td.append(btn);
   return td;

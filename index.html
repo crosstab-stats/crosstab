@@ -420,6 +420,16 @@
         font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #646e77;
       }
       .vargrid code { font: 12px ui-monospace, Menlo, monospace; color: #1a1a1a; }
+      /* The frequency weight, in the list that is about the variables themselves. The
+         chip carries the meaning and the tint only reinforces it — colour alone is not
+         information a colourblind or screen-reader user receives (WCAG 1.4.1), and this
+         is a variable that silently changes the N of every analysis. */
+      .vargrid__row.is-weight { background: #fbf6e9; }
+      .vargrid__weight {
+        margin-left: 7px; padding: 1px 6px; border-radius: 10px;
+        font: 11px/1.5 inherit; letter-spacing: .01em;
+        background: #efe3c4; color: #6b541b; white-space: nowrap;
+      }
       .vargrid__row { cursor: pointer; }
       /* The variable name is a button (keyboard route to the row's editor) but should
          look exactly like the code text it replaced. */
