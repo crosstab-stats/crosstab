@@ -395,13 +395,16 @@ export async function oneway(app, { y: yName, g: gName, groups, weight }) {
     # Tukey HSD, from the same weighted quantities: the studentised-range interval
     # around each pairwise difference. ptukey/qtukey are base R, so the p-values
     # and the critical value are not hand-rolled — only the inputs are weighted.
-    comps <- character(0)
+    # The two sides are returned SEPARATELY rather than pasted into one string: the
+    # host has the value labels and R does not, so pasting here is what printed "1-0"
+    # in the post-hoc table while the descriptives above it said "high school".
+    tukI <- character(0); tukJ <- character(0); tse <- numeric(0)
     tdiff <- numeric(0); tlo <- numeric(0); tup <- numeric(0); tp <- numeric(0)
     if (k >= 2) for (a in 1:(k - 1)) for (b in (a + 1):k) {
       d <- gm[b] - gm[a]
       se <- sqrt(msw / 2 * (1 / gn[a] + 1 / gn[b]))
       q <- abs(d) / se
-      comps <- c(comps, paste0(lvs[b], "-", lvs[a]))
+      tukI <- c(tukI, lvs[b]); tukJ <- c(tukJ, lvs[a]); tse <- c(tse, se)
       tdiff <- c(tdiff, d)
       tlo <- c(tlo, d - qtukey(.95, k, df2) * se)
       tup <- c(tup, d + qtukey(.95, k, df2) * se)
@@ -462,7 +465,8 @@ export async function oneway(app, { y: yName, g: gName, groups, weight }) {
          levF = levF, levP = levP,
          welF = welF, welDf2 = welDf2, welP = welP,
          bfF = bfF, bfDf2 = bfDf2, bfP = bfP,
-         tukComp = comps, tukDiff = tdiff, tukLo = tlo, tukUp = tup, tukP = tp)`;
+         tukI = tukI, tukJ = tukJ, tukSE = tse,
+         tukDiff = tdiff, tukLo = tlo, tukUp = tup, tukP = tp)`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
@@ -534,17 +538,34 @@ export async function oneway(app, { y: yName, g: gName, groups, weight }) {
     );
   }
 
-  const comp = r.str('tukComp');
-  if (comp.length) {
+  const tukI = r.str('tukI');
+  if (tukI.length) {
+    const tukJ = r.str('tukJ');
+    const diff = r.num('tukDiff');
+    const tp = r.num('tukP');
+    // SPSS's column set, and its star: the mean difference is flagged when the Tukey-
+    // adjusted p clears .05, with the footnote that says so. The difference carries
+    // the star, not the p, because that is where a reader looks for it.
+    const starred = (v, i) => `${f(v, 3)}${tp[i] < 0.05 ? '*' : ''}`;
     await app.results.appendTable(
       {
-        columns: ['Comparison', 'Mean diff.', '95% CI', 'Sig. (adj.)'],
-        rows: comp.map((c, i) => [
-          c, f(r.num('tukDiff')[i], 3), ci(r.num('tukLo')[i], r.num('tukUp')[i]), fmtP(r.num('tukP')[i]),
+        columns: ['(I) Group', '(J) Group', 'Mean Difference (I-J)', 'Std. Error', 'Sig.', '95% Confidence Interval'],
+        rows: tukI.map((a, i) => [
+          valueLabel(meta, gName, a),
+          valueLabel(meta, gName, tukJ[i]),
+          starred(diff[i], i),
+          f(r.num('tukSE')[i], 3),
+          fmtP(tp[i]),
+          ci(r.num('tukLo')[i], r.num('tukUp')[i]),
         ]),
         rowHeaders: true,
       },
-      { caption: `Post-hoc (Tukey HSD)${ws}` },
+      { caption: `Multiple Comparisons — ${label(meta, yName)}${ws}` },
+    );
+    await app.results.appendText(
+      '\* The mean difference is significant at the 0.05 level. Each pair is listed **once**, '
+      + 'as (I) minus (J); SPSS lists every pair twice, the second being the same difference '
+      + 'with its sign flipped.',
     );
   }
   await app.results.appendText(

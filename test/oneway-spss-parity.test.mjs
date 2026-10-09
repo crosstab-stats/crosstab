@@ -37,8 +37,27 @@ test("the output follows SPSS's block order", () => {
     'ANOVA',
     'ANOVA Effect Sizes',
     'Robust Tests of Equality of Means —',
-    'Post-hoc (Tukey HSD)',
+    'Multiple Comparisons —',
   ]);
+});
+
+test('the post-hoc table names its groups, and carries the SPSS columns', () => {
+  // It printed "1-0" and "4-3" — the raw factor codes — in the same output where the
+  // Descriptives table above it said "less than high school". R has the levels and the
+  // host has the value labels, so pasting the two sides together in R was the bug: the
+  // sides come back separately now and the host labels each one.
+  assert.ok(!/paste0\(lvs\[b\], "-", lvs\[a\]\)/.test(ONEWAY), 'R must not paste the pair itself');
+  assert.match(ONEWAY, /tukI <- c\(tukI, lvs\[b\]\); tukJ <- c\(tukJ, lvs\[a\]\)/);
+  assert.ok(ONEWAY.includes('valueLabel(meta, gName, a)'), 'the (I) side is labelled');
+  assert.ok(ONEWAY.includes('valueLabel(meta, gName, tukJ[i])'), 'and the (J) side');
+  // Std. Error was computed for the interval already and simply not shown.
+  assert.match(ONEWAY, /tukSE/);
+  assert.ok(ONEWAY.includes("'Std. Error'"));
+  // SPSS's star on the difference, and the footnote that explains it.
+  assert.match(ONEWAY, /tp\[i\] < 0\.05 \? '\*' : ''/);
+  assert.match(ONEWAY, /significant at the 0\.05 level/);
+  // And the honest note about why there are half as many rows.
+  assert.match(ONEWAY, /SPSS lists every pair twice/);
 });
 
 test('the effect sizes are a TABLE, and there are three of them', () => {
