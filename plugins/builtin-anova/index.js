@@ -26,6 +26,11 @@ export const manifest = {
     'GUI: Comparison ▸ Factorial ANOVA, pick an outcome and 2+ factors; you get an SS/df/MS/F table with partial η² per term. Or Comparison ▸ Repeated-measures ANOVA for a within-subjects factor given as several numeric columns.\n' +
     'Syntax: run builtin-anova.factorial {"dv": "score", "facs": ["group", "time"]}\n' +
     'Syntax: run builtin-anova.repeated {"vars": ["time1", "time2", "time3"]}\n' +
+    "  • Repeated-measures output follows SPSS: Descriptive Statistics, Mauchly's Test of\n" +
+    '    Sphericity (W, approx. chi-square, df, Sig. and the three epsilons), then Tests of\n' +
+    '    Within-Subjects Effects with the Sphericity Assumed / Greenhouse-Geisser / Huynh-Feldt\n' +
+    '    / Lower-bound rows. With only two conditions sphericity cannot be violated, so no test\n' +
+    '    is run and the single row stands.\n' +
     '  • dv — the numeric outcome to compare; facs — two or more grouping factors.\n' +
     '  • vars — the repeated-measure columns (same people at each time/condition).',
   rPackages: [],
@@ -112,11 +117,58 @@ export async function repeated(app, { vars }) {
     cond <- factor(rep(seq_len(k), each = n))
     fit <- aov(val ~ cond + Error(subj / cond))
     ss <- summary(fit); ws <- ss[[length(ss)]][[1]]
+
+    # --- Sphericity -----------------------------------------------------------
+    # The assumption this design stands on, and the one a methods course spends the
+    # lesson on: with three or more conditions the F above is only valid if the
+    # variances of all the pairwise DIFFERENCES are equal. Printing the F without
+    # saying whether that holds is the part that was missing.
+    #
+    # mauchly.test and anova.mlm are both base stats, so nothing here is hand-rolled
+    # except the two epsilons — which anova.mlm computes but exposes only inside its
+    # printed heading, never as data. Those are checked against that heading in
+    # scripts/validation/sphericity-reference.R.
+    mauW <- NA_real_; mauChi <- NA_real_; mauDf <- NA_real_; mauP <- NA_real_
+    ggE <- NA_real_; hfE <- NA_real_; lbE <- NA_real_
+    ggP <- NA_real_; hfP <- NA_real_; lbP <- NA_real_
+    if (k > 2 && n > k) {
+      m <- as.matrix(d)
+      mlm <- stats::lm(m ~ 1)
+      idata <- data.frame(cond = factor(seq_len(k)))
+      dcon <- k - 1
+      # An orthonormal basis for the contrasts orthogonal to the unit vector — the
+      # space sphericity is a claim about.
+      C  <- qr.Q(qr(cbind(1, stats::contr.poly(k))))[, -1, drop = FALSE]
+      Sc <- t(C) %*% stats::cov(m) %*% C
+      lam <- eigen(Sc, symmetric = TRUE, only.values = TRUE)$values
+      ggE <- sum(lam)^2 / (dcon * sum(lam^2))
+      hfE <- min(1, (n * dcon * ggE - 2) / (dcon * (n - 1 - dcon * ggE)))
+      lbE <- 1 / dcon
+      mau <- try(stats::mauchly.test(mlm, X = ~1, idata = idata), silent = TRUE)
+      if (!inherits(mau, "try-error")) {
+        mauW <- unname(mau$statistic)
+        # SPSS reports the chi-square approximation; mauchly.test's own p uses a finer
+        # expansion and differs in the far tail. The approximation is the one with a
+        # df column next to it, which is what a student is reading.
+        mauChi <- -(n - 1 - (2 * dcon^2 + dcon + 2) / (6 * dcon)) * log(mauW)
+        mauDf  <- dcon * (dcon + 1) / 2 - 1
+        mauP   <- stats::pchisq(mauChi, mauDf, lower.tail = FALSE)
+      }
+      sph <- try(stats::anova(mlm, X = ~1, idata = idata, test = "Spherical"), silent = TRUE)
+      if (!inherits(sph, "try-error")) {
+        ggP <- sph[1, "G-G Pr"]; hfP <- sph[1, "H-F Pr"]
+      }
+      lbP <- stats::pf(ws["cond", "F value"], ws["cond", "Df"] * lbE, ws["Residuals", "Df"] * lbE,
+                       lower.tail = FALSE)
+    }
+
     list(
       means = colMeans(d), sds = apply(d, 2, sd), n = n, k = k,
       ssCond = ws["cond", "Sum Sq"], dfCond = ws["cond", "Df"], msCond = ws["cond", "Mean Sq"],
       F = ws["cond", "F value"], p = ws["cond", "Pr(>F)"],
-      ssRes = ws["Residuals", "Sum Sq"], dfRes = ws["Residuals", "Df"], msRes = ws["Residuals", "Mean Sq"]
+      ssRes = ws["Residuals", "Sum Sq"], dfRes = ws["Residuals", "Df"], msRes = ws["Residuals", "Mean Sq"],
+      mauW = mauW, mauChi = mauChi, mauDf = mauDf, mauP = mauP,
+      ggE = ggE, hfE = hfE, lbE = lbE, ggP = ggP, hfP = hfP, lbP = lbP
     )`;
 
   const r = flat((await app.webr.run(rCode)).result);
@@ -133,18 +185,75 @@ export async function repeated(app, { vars }) {
 
   const ssCond = r.n1('ssCond');
   const ssRes = r.n1('ssRes');
+  const dfCond = r.n1('dfCond');
+  const dfRes = r.n1('dfRes');
+  const Fv = r.n1('F');
+  const ggE = r.n1('ggE');
+  const hfE = r.n1('hfE');
+  const lbE = r.n1('lbE');
+  const tested = Number.isFinite(r.n1('mauW'));
+
+  if (tested) {
+    await app.results.appendTable(
+      {
+        columns: ["Mauchly's W", 'Approx. Chi-Square', 'df', 'Sig.',
+          'ε Greenhouse-Geisser', 'ε Huynh-Feldt', 'ε Lower-bound'],
+        rows: [[
+          f(r.n1('mauW'), 3), f(r.n1('mauChi'), 3), int(r.n1('mauDf')), fmtP(r.n1('mauP')),
+          f(ggE, 3), f(hfE, 3), f(lbE, 3),
+        ]],
+        rowHeaders: false,
+      },
+      { caption: "Mauchly's Test of Sphericity" },
+    );
+  }
+
+  // SPSS's four rows per effect: the uncorrected test, then the same F read against
+  // degrees of freedom multiplied by each epsilon. The sums of squares and F do not
+  // change — only what they are judged against, which is the whole idea of the
+  // correction and the thing a four-row table makes visible that a footnote does not.
+  const row = (name, eps, p) => [
+    name,
+    f(ssCond, 3), f(dfCond * eps, 3), f(ssCond / (dfCond * eps), 3), f(Fv, 3), fmtP(p),
+    f(ssCond / (ssCond + ssRes), 3),
+  ];
+  const resRow = (name, eps) => [name, f(ssRes, 3), f(dfRes * eps, 3), f(ssRes / (dfRes * eps), 3), '', '', ''];
+  const effect = [row('Sphericity Assumed', 1, r.n1('p'))];
+  const resid = [resRow('Sphericity Assumed', 1)];
+  if (tested) {
+    effect.push(row('Greenhouse-Geisser', ggE, r.n1('ggP')));
+    effect.push(row('Huynh-Feldt', hfE, r.n1('hfP')));
+    effect.push(row('Lower-bound', lbE, r.n1('lbP')));
+    resid.push(resRow('Greenhouse-Geisser', ggE), resRow('Huynh-Feldt', hfE), resRow('Lower-bound', lbE));
+  }
   await app.results.appendTable(
     {
       columns: ['Source', 'Sum of Squares', 'df', 'Mean Square', 'F', 'Sig.', 'Partial η²'],
       rows: [
-        ['Condition (within)', f(ssCond, 3), int(r.n1('dfCond')), f(r.n1('msCond'), 3), f(r.n1('F'), 3), fmtP(r.n1('p')), f(ssCond / (ssCond + ssRes), 3)],
-        ['Residual', f(ssRes, 3), int(r.n1('dfRes')), f(r.n1('msRes'), 3), '', '', ''],
+        ...effect.map((e, i) => [`Condition (within) — ${e[0]}`, ...e.slice(1)]),
+        ...resid.map((e) => [`Residual — ${e[0]}`, ...e.slice(1)]),
       ],
       rowHeaders: true,
     },
     { caption: 'Tests of Within-Subjects Effects' },
   );
-  await app.results.appendText('Sphericity is assumed (no Greenhouse–Geisser correction). With only two levels, sphericity is not an issue.');
+
+  if (tested) {
+    await app.results.appendText(
+      "**Mauchly's test** asks whether the variances of all the pairwise differences "
+      + 'between conditions are equal — the assumption this design rests on. If its Sig. '
+      + 'is above .05, read the **Sphericity Assumed** row; if it is below, read '
+      + '**Greenhouse-Geisser** (the conservative choice, and the usual one) or '
+      + '**Huynh-Feldt** when ε is above about .75. The correction multiplies the degrees '
+      + 'of freedom by ε, leaving F unchanged and making it harder to clear — '
+      + 'Lower-bound is the most severe case, ε = 1/(k−1).',
+    );
+  } else {
+    await app.results.appendText(
+      'With only two conditions there is a single difference, so sphericity cannot be '
+      + 'violated and no correction applies.',
+    );
+  }
 }
 
 // --- helpers -----------------------------------------------------------------
