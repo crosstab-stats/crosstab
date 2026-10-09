@@ -195,8 +195,13 @@
       /* the open project: present so the list is complete, inert because there is nothing
          to do to it from here */
       .ctpm__rowmain:disabled { cursor: default; opacity: .85; }
-      .ctpm__name { font-weight: 600; color: #1a1a1a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .ctpm__where { font-size: 13px; color: #646e77; white-space: nowrap; }
+      /* The NAME is what the row is for, so it gets the space and the location gives way:
+         both can ellipsise, but `flex: 1 1 auto` against `0 1 auto` decides which goes
+         first when there is not enough room for both. */
+      .ctpm__name { font-weight: 600; color: #1a1a1a; flex: 1 1 auto; min-width: 0;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .ctpm__where { font-size: 13px; color: #646e77; flex: 0 1 auto; min-width: 0;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .ctpm__acts { display: flex; gap: 4px; padding-right: 8px; }
       /* Same metrics as `.ct-dialog__buttons button`, because it is the same kind of
          thing — a button in a dialog. */
@@ -955,6 +960,24 @@
          box with a 13.5px label beside it is a poor target even with the row as backup. */
       [data-screen="small"] .ctp__main { min-height: 44px; font-size: 15px; }
       [data-screen="small"] .ctp__main input[type="checkbox"] { width: 20px; height: 20px; }
+
+      /* Manage projects: the row is a name, where it lives, and three buttons on ONE
+         line, and the buttons do not shrink. On a phone they take the width and the
+         name is squeezed to a character or two — reported as a project list that could
+         not fit its project names, with the name showing as "2".
+         So the row stacks: name, then location, then the buttons across the full width.
+         The name gets a whole line to ellipsise into instead of ~10px. */
+      [data-screen="small"] .ctpm__row { flex-wrap: wrap; align-items: stretch; padding: 4px 0; }
+      [data-screen="small"] .ctpm__rowmain {
+        flex: 1 0 100%; flex-direction: column; align-items: flex-start; gap: 2px;
+        min-height: 44px; padding: 6px 8px;
+      }
+      [data-screen="small"] .ctpm__acts { flex: 1 0 100%; padding: 0 8px 4px; gap: 6px; }
+      [data-screen="small"] .ctpm__act { flex: 1; min-height: 44px; }
+      /* Five tabs across a phone wrap "Store in" onto two lines and leave the row
+         ragged; they scroll sideways instead, each staying on one line. */
+      [data-screen="small"] .ctpm__tabs { overflow-x: auto; flex-wrap: nowrap; }
+      [data-screen="small"] .ctpm__tab { white-space: nowrap; min-height: 44px; }
 
       /* :not([hidden]) is load-bearing. `.view[hidden] { display: none }` lives 600 lines up
          and has the SAME specificity as this rule, so a later `display: flex` here simply
