@@ -10,6 +10,45 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
+- [x] **SPSS parity for the seven procedures a psych methods course uses — DONE
+      (2026-10-08).** A Psychology faculty member named the list: correlations,
+      independent and paired t-tests, one-way ANOVA, repeated-measures ANOVA, 2x2
+      factorial ANOVA, single-predictor linear regression. All seven existed; none of
+      them lined up with SPSS block for block, and one was giving different NUMBERS.
+
+      - **One-way ANOVA** gained the Test of Homogeneity of Variances (Levene,
+        mean-centred), an ANOVA Effect Sizes table (η², ε², ω² — it printed η² as a
+        sentence), and Robust Tests (Welch, Brown-Forsythe). The missing Levene was the
+        bad one: the *t-test* in the same plugin printed it, and the one-way is where
+        the choice it drives actually arises.
+      - **Post-hoc table** printed raw factor codes (`1-0`) where the Descriptives
+        table above it printed value labels, because R was pasting the pair together.
+        Plus Std. Error, the significance star and SPSS's (I)/(J) columns.
+      - **Repeated measures** tested sphericity instead of asserting it: Mauchly's W
+        with the three epsilons, and the Sphericity Assumed / Greenhouse-Geisser /
+        Huynh-Feldt / Lower-bound rows.
+      - **Factorial ANOVA** was reporting **Type I** sums of squares where SPSS reports
+        Type III. Invisible on balanced data, and on GSS-shaped 2x2 data a main effect
+        moves from 641 to 419. Also gained cell descriptives and Levene across cells.
+      - **Paired t-test** gained Paired Samples Correlations; **regression** split its
+        Model Summary from an ANOVA table and gained Std. Error of the Estimate.
+
+      Every statistic diffed against desktop R, running the R the plugin actually emits
+      rather than a retyping of it — `scripts/validation/{oneway-spss-parity,
+      sphericity-reference,factorial-type3,paired-and-regression}.R`. Structural tests
+      pin the block ORDER so a later edit cannot quietly drop or shuffle one.
+
+      **Differences that remain are deliberate** and each is stated in its own output's
+      footnote — if one of these is reported as a bug, it is not:
+      no confidence intervals on the one-way effect sizes (needs noncentral-F inversion
+      and there is no local authority to check it against); one Levene row where SPSS
+      prints four; no Intercept row on the factorial; the post-hoc table listing each
+      pair once where SPSS lists it twice with the sign flipped.
+
+      Open, and the owner's call: whether to mirror SPSS's doubled post-hoc rows. It is
+      a lookup-vs-redundancy trade, not a correctness one.
+
+
 - [ ] **The `tornado` chart kind is unreachable in the app (found 2026-10-08).**
       `plugins/builtin-charts/index.js` builds `kinds['tornado']` but the plugin's own
       `manifest.charts.kinds` list does not name it, and that list is what the host
