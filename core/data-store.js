@@ -166,6 +166,9 @@ export class DataStore {
    * reliable cleanup — these are files, not tables. @type {Set<string>} */
   #wideFiles = new Set();
 
+  /** @type {string|null} the folded frequency weight — see {@link DataStore#weightVar}. */
+  #weightVar = null;
+
   /** DERIVED: source ops the last {@link DataStore#rederive} had to skip because this
    * peer holds no bytes for them (undone past a released generation, restored without
    * them, or awaiting gap-fill). Surfaced on the DATA_CHANGED summary so the UI can say
@@ -823,6 +826,10 @@ export class DataStore {
     /** @type {Map<string, VariableMeta>} */
     const byName = new Map();
     let sql = null;
+    // The frequency weight, as SPSS's WEIGHT BY: a property of the DATASET, not of a
+    // variable and not of the reader, so it is folded from the log like everything else
+    // and travels with the project.
+    let weightVar = null;
 
     const addSourceFile = () => {
       if (multiStacked && !byName.has(SOURCE_COL)) {
@@ -884,6 +891,11 @@ export class DataStore {
             `SELECT ${['C.*', ...joinedSel].join(', ')} FROM (${sql}) AS C ` +
             `${jt} JOIN ${quoteIdent(op.src.table)} AS J ON ${cond}`;
         }
+      } else if (op.type === 'setWeight') {
+        // No SQL: the weight does not change the data, only what every analysis is
+        // offered as its weight. Cleared when the named column is gone, so dropping a
+        // variable cannot leave a dangling weight behind.
+        weightVar = op.name == null ? null : String(op.name);
       } else if (op.type === 'setVariable') {
         applyPatch(byName.get(op.name), op.patch);
         // The only op with a *data* effect: retype-to-numeric casts the column now.
@@ -952,6 +964,10 @@ export class DataStore {
 
     this.#variables = [...byName.values()];
     this.#byName = byName;
+    // A weight naming a column that no longer exists is no weight at all — dropping or
+    // renaming the column silently un-sets it rather than leaving every analysis
+    // pre-filled with something that cannot be resolved.
+    this.#weightVar = weightVar && byName.has(weightVar) ? weightVar : null;
 
     if (sql === null) {
       await this.#duckdb.query(`DROP VIEW IF EXISTS ${quoteIdent(this.#view)}`);
@@ -1022,6 +1038,36 @@ export class DataStore {
    * @param {Partial<VariableMeta>} patch
    * @returns {Promise<void>}
    */
+  /**
+   * The dataset's frequency weight, or null.
+   *
+   * SPSS's Data ▸ Weight Cases, and the reason this exists: every analysis that takes a
+   * weight was making the reader find it in a list of 900 variables, every single run
+   * (owner, 2026-10-09: *"CrossTab is making me set the weights every run"*).
+   *
+   * It only ever PRE-FILLS the picker. The weight that an analysis actually ran with is
+   * whatever the reader confirmed, and that is what gets recorded in the log — so
+   * changing this later cannot retroactively alter what an old result claims to be.
+   */
+  get weightVar() { return this.#weightVar ?? null; }
+
+  /**
+   * Set or clear the dataset's frequency weight.
+   *
+   * An op rather than a field, like every other change to a dataset: it belongs in the
+   * project, it survives a reopen, it merges, and it undoes.
+   *
+   * @param {string|null} name - a variable in this dataset, or null to weight nothing
+   */
+  async setWeight(name) {
+    const next = name == null || name === '' ? null : String(name);
+    if (next !== null && !this.#byName.has(next)) {
+      throw new Error(`setWeight: unknown variable "${next}"`);
+    }
+    if (next === this.weightVar) return;
+    await this.#appendGuarded('setWeight', { name: next }, 'weight');
+  }
+
   async updateVariable(name, patch) {
     if (!this.#byName.has(name)) throw new Error(`updateVariable: unknown variable "${name}"`);
 
@@ -1465,6 +1511,10 @@ export class DataStore {
         return `var:${t.from}`;
       case 'setCell':
         return `cell:${t.column}:${t.rid}`;
+      case 'setWeight':
+        // One weight per dataset, so two peers setting it are editing the same thing and
+        // must collide rather than both "winning" into an undefined order.
+        return 'weight';
       case 'dropVars':
       case 'keepVars':
         return 'schema';

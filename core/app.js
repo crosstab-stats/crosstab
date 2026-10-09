@@ -1025,6 +1025,45 @@ export async function boot(mounts) {
   // open project datasets by key (all four join types) (#121).
   new DatasetOps({ datasets, menus, results: results.api, ui }).activate();
 
+  // Transform ▸ Weight cases… — SPSS's Data ▸ Weight Cases. Set the frequency weight
+  // once and every analysis that takes one opens with it already ticked, instead of
+  // making the reader find it in a 900-variable list on every single run. It only ever
+  // PRE-FILLS: the picker still opens, the weight is visible there, and what the reader
+  // confirms is what gets recorded — so this cannot reach back and change what an
+  // existing result claims to have used.
+  menus.register({
+    id: 'core:weight-cases',
+    path: ['Transform'],
+    label: 'Weight cases…',
+    order: 85,
+    command: async () => {
+      const ds = datasets.active;
+      // The same answer the analysis path gives: name the missing step rather than
+      // opening an empty dialog or doing nothing visible (plugin-actions.js).
+      if (!ds) {
+        results.api.appendError('Weight cases: open or start a project first — there is no data to weight.');
+        return;
+      }
+      const current = ds.weightVar;
+      const picked = await ui.selectVariables({
+        title: 'Weight cases',
+        hint: current
+          ? `Currently weighting by ${current}. Choose a different variable, or cancel to leave it as it is.`
+          : 'Choose the frequency weight. Every analysis that takes a weight will open with it already selected; you can still untick it for one run.',
+        multiple: false,
+        types: ['numeric'],
+        optional: true,
+        preselect: current ? [current] : undefined,
+        okLabel: 'Weight by this',
+      });
+      // `null` is cancel — leave it alone. An EMPTY selection is "weight by nothing",
+      // which is how the weight gets turned off; those are different answers and the
+      // optional picker is what distinguishes them.
+      if (picked === null) return;
+      await ds.setWeight(picked[0] ?? null);
+    },
+  });
+
   // Transform ▸ Run R script… — an interop lane (#136): run a user's .R against the
   // active data in the persistent R session (available as `data`), show output +
   // plots, then optionally import a resulting data frame as a new dataset. R runs in
@@ -1926,6 +1965,7 @@ export async function boot(mounts) {
   // Connectivity indicator in the status bar — most useful on a field device, where
   // it tells the user why an online importer is quiet and confirms "you're cached."
   if (mounts.status) wireConnectivityIndicator(mounts.status, offline);
+  if (mounts.status) wireWeightIndicator(mounts.status, datasets, bus);
   // Deployment problems are read from deployConfig() by whoever needs them — not passed
   // around, because two copies of one list is how they got reported twice (#185).
   const launcher = new Launcher({
@@ -2216,6 +2256,38 @@ function wireStatusLine(bus, el, webr) {
  * @param {HTMLElement} statusEl - The status line (we append a sibling span).
  * @param {import('./offline.js').OfflineManager} offline
  */
+/**
+ * Say so, permanently, when a weight is on.
+ *
+ * SPSS puts "Weight On" in its status bar and that is not decoration: a setting that
+ * silently changes the N and the degrees of freedom of every analysis you run is the
+ * one piece of state that must never be invisible. The pre-filled picker shows it at
+ * the moment of use; this is for the rest of the time, so nobody reads a weighted table
+ * as an unweighted one.
+ *
+ * @param {HTMLElement} statusEl - The status line (we append a sibling span).
+ * @param {object} datasets - the dataset manager
+ * @param {object} bus
+ */
+function wireWeightIndicator(statusEl, datasets, bus) {
+  const el = document.createElement('span');
+  el.id = 'weight-status';
+  el.className = 'lib-status';
+  (statusEl.parentElement || statusEl).append(el);
+  const paint = () => {
+    const w = datasets.active?.weightVar ?? null;
+    el.hidden = !w;
+    el.textContent = w ? `⚖ Weighted by ${w}` : '';
+    el.title = w
+      ? `Every analysis that takes a weight opens with ${w} selected. Transform ▸ Weight cases… to change it.`
+      : '';
+  };
+  // DATA_CHANGED covers all of it: setting the weight is an op, switching datasets
+  // re-renders, and dropping the column the weight names un-sets it in the fold.
+  bus.on(CoreEvents.DATA_CHANGED, paint);
+  paint();
+}
+
 function wireConnectivityIndicator(statusEl, offline) {
   const el = document.createElement('span');
   el.id = 'net-status';

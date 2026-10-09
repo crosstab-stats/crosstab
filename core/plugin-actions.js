@@ -938,12 +938,30 @@ async function gatherInputs(ui, specs, item, data) {
     const hint = hintFor(spec); // explicit manifest hint, else a sensible default
 
     if (kind === 'variables') {
+      // The dataset's frequency weight pre-fills the weight picker — SPSS's WEIGHT BY,
+      // which you set once rather than hunting for in a 900-variable list every run
+      // (owner, 2026-10-09). Two properties make this safe rather than spooky:
+      //
+      //  1. It PRE-TICKS; it does not decide. The picker still opens, the weight is
+      //     visible in it, and unticking is one click — so a run without the weight
+      //     stays as easy as it was.
+      //  2. What the reader confirmed is what gets recorded. `gathered` is the object
+      //     written into the log (see #run), so an analysis records the weight it
+      //     actually used. Changing the dataset's weight later cannot reach back and
+      //     alter what an old result claims.
+      //
+      // `role: 'weight'` is the explicit marker; `name === 'weight'` is the convention
+      // every built-in already follows, honoured so none of them had to be edited and
+      // so third-party plugins written the same way get it too.
+      const wantsWeight = spec.role === 'weight' || spec.name === 'weight';
+      const dsWeight = wantsWeight && !spec.multiple ? (data?.active?.weightVar ?? null) : null;
       const res = await ui.selectVariables({
         title,
         hint,
         multiple: !!spec.multiple,
         types: spec.types,
         optional: !!spec.optional,
+        preselect: dsWeight ? [dsWeight] : undefined,
         exclude: spec.unique ? takenUnique.slice() : undefined,
       });
       if (res === null) {
