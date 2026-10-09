@@ -518,8 +518,14 @@
       }
       .history-hint { color: #646e77; font-size: 13px; line-height: 1.5; padding: 4px 12px 0; max-width: 48ch; }
 
-      /* variable metadata editor (recode) */
-      .ct-edit { min-width: 380px; }
+      /* variable metadata editor (recode), and every plugin dialog raised through
+         ui-service's showForm. `min(380px, 100%)` rather than a flat 380px because this
+         sits on the FORM INSIDE the dialog: a child's min-width outranks the parent's
+         max-width, so a flat value kept the form at 380px inside a 299px dialog at a
+         320px viewport and the dialog scrolled sideways as well as down — two-dimensional
+         scrolling on a form, which WCAG 1.4.10 does not exempt. It failed below ~404px,
+         so a 390px phone was inside the range (measured 2026-10-09). */
+      .ct-edit { min-width: min(380px, 100%); }
       .ct-field { display: flex; flex-direction: column; gap: 4px; margin: 0 0 12px; font-size: 13px; }
       .ct-field input, .ct-field select, .ct-field textarea {
         font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;

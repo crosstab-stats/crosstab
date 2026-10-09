@@ -971,7 +971,7 @@ function promptImportUrl(exts) {
         <label class="ct-dialog__row">
           <span>URL</span>
           <input type="url" class="ct-url__input" placeholder="https://…" autocomplete="off"
-            spellcheck="false" style="flex:1 1 auto; min-width:340px;" />
+            spellcheck="false" style="flex:1 1 auto; min-width:min(340px, 100%);" />
         </label>
         <menu class="ct-dialog__buttons">
           <button value="cancel" type="button" class="ct-url__cancel">Cancel</button>

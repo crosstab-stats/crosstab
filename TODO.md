@@ -1092,6 +1092,20 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         now that it is `dvh`, and whether 44px touch targets are right for a real thumb.
       - **No height term in the threshold.** A landscape phone is short rather than narrow;
         the rule is width-only until someone actually hits that.
+      - **One measured reflow leak, FIXED 2026-10-09 (owner authorised).** Small-screen mode
+        caps a dialog at `94vw`, and a fixed `min-width` on a child defeats that cap —
+        a child's `min-width` outranks an ancestor's `max-width`. Two places did it:
+        `.ct-edit { min-width: 380px }` (the variable metadata editor, the rehome dialog,
+        and every plugin dialog raised through `ui-service`'s `showForm`) and the
+        import-from-URL input at `340px`. Measured overshoot for the first: **320px → 81px,
+        375px → 29px, 390px → 15px, clean above ~404px** — so it failed on a phone, and
+        failed subtly enough to read as a cramped dialog rather than a defect, which is how
+        it survived the iPhone pass. Both now `min-width: min(Npx, 100%)`, and
+        `test/reflow-min-width.test.mjs` scans every source for a flat `min-width` over
+        320px so the next one fails at authoring time. The scan is a source grep rather than
+        a rendered check for a practical reason worth recording: **Chrome on Windows will not
+        make a window narrower than ~535 CSS px**, so even the live verification had to force
+        the dialog's width to measure the overshoot at all.
 
 - [x] **The design behind it (kept for the reasoning) — "small screen" mode, a layout the USER owns: detected as a default, never as an
       override (owner, 2026-10-01 and 2026-10-07).** Raised while testing the unified plugin picker — *"phone interface is still a
