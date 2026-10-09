@@ -10,6 +10,38 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
+- [ ] **R export, half two: fold in the EXACT R each analysis ran, as a comment under the
+      idiomatic line (owner's pick, 2026-10-09).**
+
+      Half one shipped (`scriptToR`): loads, transforms and analyses in the idiom a tutor
+      would write, verified by executing the output in R 4.6.0. The owner chose
+      *"idiomatic, with the exact code alongside it"* — so each analysis should also carry
+      the R that actually produced the number, commented out beneath.
+
+      **Why it is worth the plumbing.** The two can legitimately differ: our weighted
+      procedures deliberately avoid `t.test`/`aov` (those take ANALYTIC, not frequency,
+      weights), the factorial reports Type III where `aov()` gives Type I, and the one-way
+      computes from weighted group statistics. A student who runs the idiomatic line and
+      gets a different number has no way to see why. The exact code is that answer.
+
+      **What it needs.** The R already exists as text at run time — each plugin hands a
+      string to `webr.run`, and the host generates the binding prelude as R
+      (`y <- df[["prestg10"]]`, webr-manager.js). Neither is captured. So:
+      1. `WebRManager#run` records the code it was given, tagged to the analysis in flight.
+      2. The analysis log entry carries it (it IS the provenance of the number, which is
+         the same argument [[one-true-log-explicit-ops]] makes for everything else).
+      3. `scriptToR` emits it commented under the idiomatic line.
+
+      **Decide first:** whether the captured R is PERSISTED in the project (predictable,
+      survives a reopen, grows the log and the merge payload) or session-scoped (free, but
+      the comments vanish after a reload, which reads as a bug). Persisting looks right —
+      a result's provenance belongs with the result — but it puts R source into the op log,
+      so it is worth a deliberate decision rather than a default.
+
+      Also still open: `a.label` is not reaching `transAnalysis`, so the per-analysis
+      `# --- Label ---` heading never prints. Small, and worth fixing with this.
+
+
 - [x] **SPSS parity for the seven procedures a psych methods course uses — DONE
       (2026-10-08).** A Psychology faculty member named the list: correlations,
       independent and paired t-tests, one-way ANOVA, repeated-measures ANOVA, 2x2
