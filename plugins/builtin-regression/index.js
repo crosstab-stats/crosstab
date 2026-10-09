@@ -21,7 +21,9 @@ export const manifest = {
   keywords: ['lm', 'linear', 'ols', 'regression', 'vif', 'residuals', 'diagnostics', 'cook'],
   howto:
     'GUI: Regression ▸ Linear, then pick one outcome and one or more predictors. ' +
-    'You get an SPSS-style Model Summary + Coefficients (with VIF) and residual diagnostic plots.\n' +
+    "You get SPSS's blocks in its order — Model Summary (R, R², adjusted R², Std. Error of the " +
+    'Estimate), the ANOVA table testing the model, and Coefficients (with VIF) — plus residual ' +
+    'diagnostic plots SPSS does not print.\n' +
     'Syntax: run builtin-regression.run {"dv": "income", "ivs": ["age", "education"]}\n' +
     '  • dv — the numeric outcome to explain.\n' +
     '  • ivs — one or more predictor variables.',
@@ -81,7 +83,13 @@ export async function run(app, { dv: dvName, ivs: ivNames }) {
     list(
       terms = rownames(co), estimate = co[, 1], se = co[, 2], t = co[, 3], p = co[, 4],
       ciLo = ci[, 1], ciHi = ci[, 2], vifNames = colnames(X), vif = unname(vifv),
-      r2 = s$r.squared, adjr2 = s$adj.r.squared,
+      r2 = s$r.squared, adjr2 = s$adj.r.squared, sigma = s$sigma,
+      # The regression / residual / total partition behind the F. SPSS prints this as
+      # its own ANOVA table; the F itself was already here, folded into Model Summary,
+      # but with no sums of squares to show where it came from.
+      ssReg = sum((fitv - mean(fitv))^2), ssRes = sum(res^2),
+      dfReg = if (is.null(fst)) NA_real_ else unname(fst[2]),
+      dfResid = if (is.null(fst)) NA_real_ else unname(fst[3]),
       fstat = if (is.null(fst)) NA_real_ else unname(fst[1]),
       fdf1  = if (is.null(fst)) NA_real_ else unname(fst[2]),
       fdf2  = if (is.null(fst)) NA_real_ else unname(fst[3]),
@@ -100,15 +108,33 @@ export async function run(app, { dv: dvName, ivs: ivNames }) {
 
   await app.results.appendTable(
     {
-      columns: ['R', 'R Square', 'Adj. R Square', 'F', 'df1', 'df2', 'Sig.', 'N'],
+      columns: ['R', 'R Square', 'Adj. R Square', 'Std. Error of the Estimate', 'N'],
       rows: [
         [
           f(Math.sqrt(Math.max(0, m.r2)), 3), f(m.r2, 3), f(m.adjr2, 3),
-          f(m.fstat, 3), f(m.fdf1, 0), f(m.fdf2, 0), fmtP(m.fp), f(m.n, 0),
+          f(m.sigma, 3), f(m.n, 0),
         ],
       ],
     },
     { caption: `Model Summary — dependent: ${labelOf(meta.get(dvName), dvName)}` },
+  );
+
+  // SPSS splits what used to be one row in two: Model Summary describes the fit, and a
+  // separate ANOVA table tests it and shows the partition the F comes from. The F was
+  // always here — it was in the summary row with no sums of squares beside it, which is
+  // the one part of a regression a methods course reads aloud.
+  const ssTotal = m.ssReg + m.ssRes;
+  await app.results.appendTable(
+    {
+      columns: ['', 'Sum of Squares', 'df', 'Mean Square', 'F', 'Sig.'],
+      rows: [
+        ['Regression', f(m.ssReg, 3), f(m.dfReg, 0), f(m.ssReg / m.dfReg, 3), f(m.fstat, 3), fmtP(m.fp)],
+        ['Residual', f(m.ssRes, 3), f(m.dfResid, 0), f(m.ssRes / m.dfResid, 3), '', ''],
+        ['Total', f(ssTotal, 3), f(m.dfReg + m.dfResid, 0), '', '', ''],
+      ],
+      rowHeaders: true,
+    },
+    { caption: `ANOVA — dependent: ${labelOf(meta.get(dvName), dvName)}` },
   );
 
   const vifByTerm = {};

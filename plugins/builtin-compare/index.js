@@ -80,7 +80,8 @@ export const manifest = {
     'Syntax: run builtin-compare.independent {"y": "score", "g": "group", "g1": "A", "g2": "B"}\n' +
     '  • y — numeric outcome; g — grouping variable; g1 / g2 — the two groups to compare (the difference is g1 − g2). Omit g1/g2 and it uses the first two groups.\n' +
     'Syntax: run builtin-compare.paired {"x1": "pre", "x2": "post"}\n' +
-    '  • x1 / x2 — two numeric measures on the same cases.\n' +
+    '  • x1 / x2 — two numeric measures on the same cases. Output follows SPSS: Paired\n' +
+    "    Statistics, Paired Samples Correlations, then the test with Cohen's d.\n" +
     'Syntax: run builtin-compare.oneway {"y": "score", "g": "group", "groups": ["A", "B", "C"]}\n' +
     '  • y — numeric outcome; g — factor; groups — optional subset of groups to include (default all).\n' +
     '  • One-way output follows SPSS block for block: Descriptives, Test of Homogeneity of Variances\n' +
@@ -325,8 +326,22 @@ export async function paired(app, { x1: n1, x2: n2, weight }) {
     n <- sum(w); md <- wmean(d, w); sdd <- wsd(d, w)
     se <- sdd / sqrt(n); df <- n - 1
     t <- md / se; tq <- qt(.975, df)
+    # The correlation between the two measures — SPSS's Paired Samples Correlations
+    # table, which it prints between the descriptives and the test. It is not decoration:
+    # a paired test is worth running precisely BECAUSE the two measures are related, and
+    # r is what says how much the pairing bought. The weighted form is the same
+    # covariance over the same weighted means the rest of this block already uses.
+    v1 <- wvar(x1, w); v2 <- wvar(x2, w)
+    cov12 <- if (all(w == 1)) stats::cov(x1, x2) else
+      sum(w * (x1 - wmean(x1, w)) * (x2 - wmean(x2, w))) / (n - 1)
+    rPair <- if (v1 > 0 && v2 > 0) cov12 / sqrt(v1 * v2) else NA_real_
+    # Significance of r, from the same n the test uses.
+    rT <- if (is.na(rPair) || abs(rPair) >= 1 || n <= 2) NA_real_ else
+      rPair * sqrt((n - 2) / (1 - rPair^2))
+    rP <- if (is.na(rT)) NA_real_ else 2 * pt(-abs(rT), n - 2)
+
     list(n = n, m1 = wmean(x1, w), m2 = wmean(x2, w), sd1 = wsd(x1, w), sd2 = wsd(x2, w),
-         diff = md, sddiff = sdd, t = t, df = df,
+         diff = md, sddiff = sdd, t = t, df = df, rPair = rPair, rP = rP,
          p = 2 * pt(-abs(t), df), lo = md - tq * se, hi = md + tq * se)`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
@@ -343,6 +358,19 @@ export async function paired(app, { x1: n1, x2: n2, weight }) {
     },
     { caption: `Paired Statistics${ws}` },
   );
+  if (Number.isFinite(r.n1('rPair'))) {
+    await app.results.appendTable(
+      {
+        columns: ['', 'N', 'Correlation', 'Sig.'],
+        rows: [[
+          `${label(meta, n1)} & ${label(meta, n2)}`,
+          int(r.n1('n')), f(r.n1('rPair'), 3), fmtP(r.n1('rP')),
+        ]],
+        rowHeaders: true,
+      },
+      { caption: `Paired Samples Correlations${ws}` },
+    );
+  }
   await app.results.appendTable(
     {
       columns: ['Mean diff.', 'SD diff.', 't', 'df', 'Sig. (2-tailed)', "Cohen's d", '95% CI of diff.'],
