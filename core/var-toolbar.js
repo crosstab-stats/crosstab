@@ -62,7 +62,7 @@
  * DOM-free so the sort and the preference stay headlessly testable.
  */
 
-import { VAR_ORDER_OPTIONS } from './var-order.js';
+import { VAR_ORDER_OPTIONS, VAR_DISPLAY_OPTIONS } from './var-order.js';
 
 /** How long to wait after the last keystroke before filtering. */
 const DEBOUNCE_MS = 100;
@@ -95,11 +95,17 @@ export function setWorkspaceFilter(q) {
  * @param {(q: string) => void} opts.onFilter - called with the text, debounced
  * @param {string} opts.order - initial {@link module:core/var-order} order
  * @param {(v: string) => void} opts.onOrder - called with the chosen order
+ * @param {string} [opts.display] - initial {@link module:core/var-order} display mode.
+ *   Omit to leave the control out: Variable View has Name and Label as separate columns,
+ *   so it has nothing to choose between and the control would be inert there.
+ * @param {(v: string) => void} [opts.onDisplay] - called with the chosen display
  * @param {'bar'|'dialog'} [opts.variant='bar'] - `bar` is a panel toolbar (its own
  *   background and bottom rule); `dialog` sits inside a modal and brings none.
  * @returns {{el: HTMLElement, filterInput: HTMLInputElement, orderSelect: HTMLSelectElement}}
  */
-export function makeVarToolbar({ filter = '', onFilter, order, onOrder, variant = 'bar' }) {
+export function makeVarToolbar({
+  filter = '', onFilter, order, onOrder, display, onDisplay, variant = 'bar',
+}) {
   const el = document.createElement('div');
   el.className = `ct-vartools ct-vartools--${variant === 'dialog' ? 'dialog' : 'bar'}`;
 
@@ -136,8 +142,29 @@ export function makeVarToolbar({ filter = '', onFilter, order, onOrder, variant 
   }
   orderSelect.addEventListener('change', () => onOrder(orderSelect.value));
 
+  // Display sits beside order because they are the two halves of one question — what a
+  // list of variables looks like — and SPSS files them together for the same reason
+  // (Edit ▸ Options ▸ Variable Lists). Offered only where a surface shows ONE of the
+  // two; see the `display` param.
+  let displaySelect = null;
+  if (display !== undefined && typeof onDisplay === 'function') {
+    displaySelect = document.createElement('select');
+    displaySelect.className = 'ct-vartools__display';
+    displaySelect.setAttribute('aria-label', 'Show variable names or labels');
+    displaySelect.title = 'Show each variable by its label, its name, or both';
+    for (const [v, text] of VAR_DISPLAY_OPTIONS) {
+      const o = document.createElement('option');
+      o.value = v;
+      o.textContent = text;
+      if (v === display) o.selected = true;
+      displaySelect.append(o);
+    }
+    displaySelect.addEventListener('change', () => onDisplay(displaySelect.value));
+  }
+
   el.append(filterInput, orderSelect);
-  return { el, filterInput, orderSelect };
+  if (displaySelect) el.append(displaySelect);
+  return { el, filterInput, orderSelect, displaySelect };
 }
 
 /**

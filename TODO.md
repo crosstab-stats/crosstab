@@ -848,8 +848,33 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       Ranges come from SPSS/Stata `MISSING VALUES x (LO THRU 0)` via `splitMissing`, so this
       only bites on imported files — which is to say, on real data rather than demo data.
 
-- [ ] **Let the reader choose whether a variable shows its NAME or its LABEL — the other half
-      of the variable-order preference (owner, 2026-10-07).**
+- [x] **DONE (2026-10-09). Let the reader choose whether a variable shows its NAME or its
+      LABEL — the other half of the variable-order preference (owner, 2026-10-07).**
+
+      Shipped as recommended: a three-way **Show labels / Show names / Show both** beside the
+      order select in the shared toolbar, stored in `localStorage` next to the order
+      (`crosstab.varlist.display`), defaulting to `label` so an unset preference changes
+      nothing. `varDisplay(meta, mode)` returns both parts, so the one not on screen is always
+      still in the tooltip — the fix is that the name stops being hover-ONLY, not that the
+      label takes its turn at being unreachable.
+
+      Read by the two surfaces that show ONE of the two: the Data grid's header and the
+      picker. **Variable View is deliberately exempt** — it has Name and Label as separate
+      columns, so it has nothing to choose between and an inert control there would be worse
+      than none.
+
+      One thing the plan got wrong, caught by measuring rather than by looking: `both` cannot
+      copy the picker's side-by-side layout. At the grid's 120px default column the label was
+      clipped to ~20px while the name held its width, which shows you neither. It stacks in a
+      column header — label over name — which costs one line of header height and gives the
+      label 84px instead of 20.
+
+      **The open question is answered: NO, results tables keep quoting variables as they
+      always did.** A saved table's headings are an artefact and
+      [[output-outlives-its-maker]] says they must not change under the reader — a crosstab
+      saved last week would otherwise re-render with different headings because of a
+      preference set today. Live rendering was not treated as a special case either: one rule
+      for output is easier to explain than two.
 
       > *"It would be nice to be able to see the variable names in the grid view. Currently it
       > lists the variable description and only puts the variable name in the hover tip; it'd be

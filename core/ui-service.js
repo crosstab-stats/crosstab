@@ -32,7 +32,7 @@
  * @property {string} [okLabel='OK']
  */
 
-import { loadVarOrder, saveVarOrder, sortVars } from './var-order.js';
+import { loadVarOrder, saveVarOrder, sortVars, loadVarDisplay, saveVarDisplay, varDisplay } from './var-order.js';
 import { makeVarToolbar, filterVars } from './var-toolbar.js';
 import { isCategorical, isQuantitative } from './var-role.js';
 
@@ -146,11 +146,18 @@ export class UiService {
       // (var-toolbar.js) — including the rule that Enter belongs to the box and
       // must not reach this dialog's primary button mid-query.
       let query = '';
+      // This list has always shown BOTH — the label, then the name in a <code>. That is
+      // now one of three choices rather than the only one, so a reader who set "names"
+      // in the grid meets names here too. `both` is what it did before, so an unset
+      // preference changes nothing.
+      let display = loadVarDisplay();
       const bar = makeVarToolbar({
         variant: 'dialog',
         order: loadVarOrder(),
+        display,
         onFilter: (q) => { query = q; render(); },
         onOrder: (v) => { saveVarOrder(v); render(); },
+        onDisplay: (v) => { display = v; saveVarDisplay(v); render(); },
       });
       dialog.querySelector('.ct-vartools-slot').replaceWith(bar.el);
       const order = bar.orderSelect;
@@ -208,11 +215,17 @@ export class UiService {
             }
           }
         });
+        const shown = varDisplay(m, display);
         const span = document.createElement('span');
-        span.textContent = m.label ?? m.name;
-        const code = document.createElement('code');
-        code.textContent = m.name;
-        label.append(input, span, code);
+        span.textContent = shown.primary;
+        label.append(input, span);
+        if (display === 'both' && shown.secondary) {
+          const code = document.createElement('code');
+          code.textContent = shown.secondary;
+          label.append(code);
+        }
+        // Whichever is not on screen stays one hover away, as in the grid header.
+        label.title = [m.name, m.label].filter(Boolean).join(' · ');
         // Which dataset, when it is not this one. The `code` already shows the qualified
         // reference, but a name is read as a name — the badge is what makes the difference
         // visible at a glance rather than something to notice in the punctuation.

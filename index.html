@@ -334,7 +334,8 @@
         font: inherit; padding: 5px 8px; border: 1px solid var(--line);
         border-radius: 6px; flex: 1 1 28ch; min-width: 28ch; max-width: 340px;
       }
-      .ct-vartools__order {
+      .ct-vartools__order,
+      .ct-vartools__display {
         font: inherit; font-size: 13px; padding: 5px 8px; flex: none;
         border: 1px solid var(--line); border-radius: 6px; background: #fff;
       }
@@ -348,6 +349,16 @@
       .colhead { display: flex; align-items: center; gap: 6px; cursor: pointer; overflow: hidden; }
       .colhead__check { flex: none; margin: 0; }
       .colhead__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      /* "Show both" in a column header: label over name, not label beside name. The
+         picker puts them side by side and has the width for it; a 120px grid column does
+         not — measured there, the label was clipped to ~20px while the name held its own,
+         which shows you neither. Stacking costs one line of header height and makes both
+         readable at any column width. */
+      .colhead__stack { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+      .colhead__name {
+        font: 11.5px ui-monospace, Menlo, Consolas, monospace; color: #646e77;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
 
       /* data grid (Data View) — 2-D virtualised, fixed column widths */
       /* border-collapse:SEPARATE (not collapse): with collapse, a sticky header's

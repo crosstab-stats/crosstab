@@ -17,7 +17,7 @@ import { openSyntaxGuide } from './syntax-guide.js';
 import { stataToScript } from './stata-import.js';
 import { spssToScript } from './spss-import.js';
 import { scriptToStata, scriptToSpss, scriptFileName } from './script-export.js';
-import { floatSelected, loadVarOrder, saveVarOrder, sortVars } from './var-order.js';
+import { floatSelected, loadVarOrder, saveVarOrder, sortVars, loadVarDisplay, saveVarDisplay, varDisplay } from './var-order.js';
 import { makeVarToolbar, filterVars, getWorkspaceFilter, setWorkspaceFilter } from './var-toolbar.js';
 import { labelForValue, summariseMissing } from './var-role.js';
 
@@ -88,11 +88,17 @@ export class DataView {
     // is the app-wide preference in var-order.js: a 900-column grid is exactly as
     // hard to search as a 900-row dialog list, so one setting governs both.
     this.order = loadVarOrder();
+    // The other half of the same preference: what a column is CALLED. The header showed
+    // `label || name`, so a labelled variable never showed its name anywhere on screen —
+    // it was in the `title`, which a phone, a keyboard and a screen reader cannot reach.
+    this.display = loadVarDisplay();
     const bar = makeVarToolbar({
       filter: this.filter,
       order: this.order,
+      display: this.display,
       onFilter: (q) => { this.filter = q; setWorkspaceFilter(q); this.#applyFilter(); },
       onOrder: (v) => { this.order = v; saveVarOrder(v); this.#applyFilter(); },
+      onDisplay: (v) => { this.display = v; saveVarDisplay(v); this.#applyFilter(); },
     });
     this.toolbar = bar.el;
     this.filterInput = bar.filterInput;
@@ -451,7 +457,9 @@ export class DataView {
     th.dataset.col = m.name;
     th.dataset.row = '-1';
     th.tabIndex = -1;
-    th.title = `${m.name} · ${m.type}${m.measurementLevel ? ` · ${m.measurementLevel}` : ''}`;
+    // The tooltip still carries BOTH, whichever is on screen: the fix is that the name
+    // stops being hover-only, not that the label takes its place there.
+    th.title = [m.name, m.label, m.type, m.measurementLevel].filter(Boolean).join(' · ');
     // Where the floated (selected) block ends. A grid cannot carry a "Selected" group
     // heading the way the picker does, so the boundary is a rule down the edge instead
     // of a label (#180).
@@ -464,8 +472,19 @@ export class DataView {
     cb.checked = isSelected;
     cb.dataset.var = m.name;
     cb.addEventListener('change', () => this.#toggle(m.name, cb.checked));
-    const span = el('span', m.label || m.name, 'colhead__label');
-    wrap.append(cb, span);
+    const shown = varDisplay(m, this.display);
+    const span = el('span', shown.primary, 'colhead__label');
+    // `both` is the variable picker's treatment — label, then the name — but a column is
+    // not a dialog row. Measured at the grid's 120px default: side by side, the label was
+    // clipped to about 20px while the name held its width, so you could read neither.
+    // Stacked, each gets the column's full width and the header grows a line instead.
+    if (this.display === 'both' && shown.secondary) {
+      const stack = el('span', '', 'colhead__stack');
+      stack.append(span, el('code', shown.secondary, 'colhead__name'));
+      wrap.append(cb, stack);
+    } else {
+      wrap.append(cb, span);
+    }
     th.append(wrap);
     return th;
   }

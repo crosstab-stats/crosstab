@@ -1,6 +1,11 @@
 /**
  * @file var-order.js
- * How variables are ORDERED in every list that shows them.
+ * How variables are NAMED and ORDERED in every list that shows them.
+ *
+ * Two preferences, kept together because SPSS keeps them together for the same reason:
+ * Edit ▸ Options ▸ Variable Lists has exactly these two halves — *display* (names or
+ * labels) and *order*. The file name predates the first half; renaming it would churn
+ * every importer for no behavioural gain, so the scope is stated here instead.
  *
  * CrossTab shows its variables in three places — the Data grid's columns,
  * Variable View's rows, and the picker every analysis opens
@@ -27,6 +32,8 @@
 /** Storage key. Was `crosstab.varpicker.sort` while only the picker honoured it. */
 const KEY = 'crosstab.varlist.sort';
 const LEGACY_KEY = 'crosstab.varpicker.sort';
+/** Storage key for the display half. */
+const DISPLAY_KEY = 'crosstab.varlist.display';
 
 /**
  * @typedef {'file'|'file-desc'|'name'|'name-desc'|'label'|'label-desc'} VarOrder
@@ -74,6 +81,78 @@ export function loadVarOrder() {
 export function saveVarOrder(value) {
   if (!VAR_ORDERS.includes(value)) return;
   try { globalThis.localStorage?.setItem(KEY, value); } catch { /* storage unavailable */ }
+}
+
+/**
+ * @typedef {'label'|'name'|'both'} VarDisplay
+ *
+ * What a surface calls a variable when it has room for one thing.
+ *
+ * The Data grid's header showed `label || name`, so a labelled variable never showed
+ * its name anywhere on screen — the name lived in a `title`, which needs a pointer that
+ * can rest somewhere, so on a phone, for a keyboard user and for a screen reader it was
+ * not reachable at all (owner, 2026-10-07: *"it'd be nice to be able to select what it
+ * shows in the column header for when you're searching for a specific variable by
+ * name"*).
+ *
+ * The asymmetry that made it a bug rather than a nicety: the toolbar already lets you
+ * FIND by name (`filterVars` matches either) and SORT by name, and then the header
+ * picked one for you.
+ *
+ * `both` is the variable picker's long-standing treatment — label, then the name in a
+ * `<code>` — offered to the other surfaces rather than invented for them.
+ */
+
+/** The display modes a surface may offer, in the order they are offered. */
+export const VAR_DISPLAYS = /** @type {VarDisplay[]} */ (['label', 'name', 'both']);
+
+/** `[value, label]` pairs for a `<select>`. */
+export const VAR_DISPLAY_OPTIONS = [
+  ['label', 'Show labels'],
+  ['name', 'Show names'],
+  ['both', 'Show both'],
+];
+
+/** The remembered display, defaulting to `label` — what every surface did before the
+ * choice existed, so an unset preference changes nothing. */
+export function loadVarDisplay() {
+  try {
+    const v = globalThis.localStorage?.getItem(DISPLAY_KEY);
+    return VAR_DISPLAYS.includes(v) ? v : 'label';
+  } catch {
+    return 'label'; // storage disabled (private mode, sandboxed frame)
+  }
+}
+
+/** Remember the display. Failing to persist is not worth interrupting anyone for. */
+export function saveVarDisplay(value) {
+  if (!VAR_DISPLAYS.includes(value)) return;
+  try { globalThis.localStorage?.setItem(DISPLAY_KEY, value); } catch { /* storage unavailable */ }
+}
+
+/**
+ * What to put on screen for one variable, and what to leave for the tooltip.
+ *
+ * Returns both parts so no surface has to re-derive the fallbacks, and so the one not
+ * shown is always still reachable on hover — the fix is that a name stops being
+ * hover-ONLY, not that a label becomes hover-only in its place.
+ *
+ * An unlabelled variable shows its name under every mode: there is nothing else to
+ * show, and a blank header would be worse than a redundant one. For the same reason
+ * `both` collapses to a single part when the label and the name are the same string.
+ *
+ * @param {{name: string, label?: string}} meta
+ * @param {VarDisplay} mode
+ * @returns {{primary: string, secondary: string}} `secondary` is '' when there is
+ *   nothing more to say.
+ */
+export function varDisplay(meta, mode) {
+  const name = String(meta?.name ?? '');
+  const label = String(meta?.label ?? '').trim();
+  if (!label || label === name) return { primary: name, secondary: '' };
+  if (mode === 'name') return { primary: name, secondary: label };
+  if (mode === 'both') return { primary: label, secondary: name };
+  return { primary: label, secondary: name };
 }
 
 /**
