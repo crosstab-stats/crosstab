@@ -877,6 +877,19 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       not mention the range — whether that DROPS the range depends on whether the patch is
       merged or replaces the metadata, which is the thing to check first.
 
+      **Checked, 2026-10-09: it MERGES, so nothing is dropped.** `applyPatch`
+      (data-store.js) walks a fixed key list and skips any key absent from the patch, and
+      `missingRanges` is in that list — so a save from this dialog, which never mentions the
+      key, leaves the range exactly as it was. The severity is therefore lower than filed:
+      **no data loss, but the range is invisible and uneditable from the only UI that edits
+      missing values.** `missingRanges` appears in `data-views.js` exactly once, in the
+      Variable View cell (`summariseMissing`) — the editor does not read or write it at all.
+
+      The sharpest symptom is the one to fix for: clear the Missing values box intending to
+      remove every missing declaration, save, and the variable still treats a whole span as
+      missing with nothing on screen in the dialog to say so. That reads as the app ignoring
+      you, which is worse than an error.
+
       Ranges come from SPSS/Stata `MISSING VALUES x (LO THRU 0)` via `splitMissing`, so this
       only bites on imported files — which is to say, on real data rather than demo data.
 
