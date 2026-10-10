@@ -349,7 +349,7 @@ export class Launcher {
     // evidence — see project-list.js.
     if (this.#projects) {
       let rows = [];
-      try { rows = await this.#projects.listAllProjects(); } catch { rows = []; }
+      try { rows = await this.#projects.listProjects(); } catch { rows = []; }
       const projBox = overlay.querySelector('.ctl__projects');
       if (projBox) {
         const head = overlay.querySelector('.ctl__railhead--projects');
@@ -465,9 +465,14 @@ export class Launcher {
       return false;
     }
     const want = String(name).trim().toLowerCase();
-    const match = saved.find((p) => String(p.name).trim().toLowerCase() === want);
+    // Local projects only: this opens by id, and a remembered location has none — it is
+    // reached through its backend. A `?launch=<name>` that matched a folder project would
+    // otherwise find it and then fail to open it.
+    const match = saved.find(
+      (p) => p.kind === 'opfs' && String(p.name).trim().toLowerCase() === want,
+    );
     if (!match) return false;
-    await this.#projects.openProject(match.id); // full restore (data + its plugins)
+    await this.#projects.openProject(match.projectId); // full restore (data + its plugins)
     markSeen();
     return true;
   }

@@ -51,7 +51,7 @@ export const TABS = Object.freeze([
  * Extracted so the rules are testable without a DOM: which verbs apply to a project is a
  * decision, and it is the kind that quietly rots when it lives inside a render function.
  *
- * @param {object} row  from `ProjectSync#listAllProjects`
+ * @param {object} row  from `ProjectSync#listProjects`
  * @returns {Array<{id: string, label: string, danger?: boolean}>}
  */
 export function projectActions(row) {
@@ -197,7 +197,7 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
       body.replaceChildren(el('div', 'ctpm__loading', 'Loading…'));
       let rows = [];
       try {
-        rows = await projects.listAllProjects();
+        rows = await projects.listProjects();
       } catch (err) {
         debug('project', 'manager list failed', err);
       }

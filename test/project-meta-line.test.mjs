@@ -6,7 +6,7 @@
  *
  * The sidebar's Recent projects list rendered the name and nothing else, so five projects
  * nobody had bothered to name read as five identical rows. The obvious fix — show the
- * dataset count, which `listAllProjects()` already carried — does not actually work, and
+ * dataset count, which the project list already carried — does not actually work, and
  * the owner said why (2026-10-10):
  *
  *   *"that kind of user is probably also doing small projects where they all have exactly
@@ -76,7 +76,7 @@ test('an empty project does not claim 0 rows either', () => {
 });
 
 test('nulls are not numbers — a remembered location never written is just a date', () => {
-  // listAllProjects fills these with null rather than 0 when it does not know.
+  // listProjects fills these with null rather than 0 when it does not know.
   assert.equal(line({ savedAt: NOW, datasetCount: null, rowCount: null }), 'just now');
 });
 
@@ -129,11 +129,12 @@ test('the roomy surface gets the full timestamp instead', () => {
 // Both surfaces use this one function
 // =============================================================================
 
-test('the Open-project modal no longer interpolates a possibly-null count', () => {
-  // It used to build `${entry.datasetCount} dataset…` directly, which would have read
-  // "null datasets" the first time it was handed a remembered location.
+test('nothing interpolates a possibly-null count any more', () => {
+  // The Open-project browse modal used to build `${entry.datasetCount} dataset…` directly,
+  // which would have read "null datasets" the first time it saw a remembered location. It
+  // briefly went through this formatter instead — and then turned out to be unreachable
+  // (superseded by the project manager in #173) and was deleted outright.
   const src = readFileSync('core/project-sync.js', 'utf8');
-  assert.match(src, /meta\.textContent = projectMetaLine\(entry, \{ absoluteDate: true \}\)/);
   assert.doesNotMatch(src, /\$\{entry\.datasetCount\} dataset/);
 });
 

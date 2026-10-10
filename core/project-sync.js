@@ -1008,7 +1008,7 @@ export class ProjectSync {
     }
     let rows = [];
     try {
-      rows = await this.listAllProjects();
+      rows = await this.listProjects();
     } catch {
       /* no index — "a new project" is still offered */
     }
@@ -1583,19 +1583,6 @@ export class ProjectSync {
    *   picker has already applied the (possibly tweaked) selection.
    */
   async openProject(id, { applyPlugins = true } = {}) {
-    if (id == null) {
-      let entries;
-      try {
-        // The local catalog, not the live store — with a remote project open, asking the
-        // live store would offer you the contents of Dropbox to browse.
-        entries = await this.listProjects();
-      } catch (err) {
-        this.#results.appendError(`Open project failed: ${err.message}`);
-        return;
-      }
-      this.#showBrowseModal(entries);
-      return;
-    }
     // Local storage is a backend like any other, so this is the same flow everything else
     // takes: probe on a throwaway store, decrypt, adopt, load. The passphrase handling
     // that used to live here inline is now the shared one.
@@ -2333,13 +2320,15 @@ export class ProjectSync {
     this.#lastManifest = await this.#store.readManifest(FOLDER_PROJECT_ID);
   }
 
-  /** Remembered project locations — folders and remote alike (sidebar + launcher). */
-  listProjectLocations() {
-    return listLocations();
-  }
-
   /**
    * **Every project this device knows about, wherever it lives** (#171).
+   *
+   * The only project list there is. It used to be one of three: an OPFS-only `listProjects`,
+   * a locations-only `listProjectLocations`, and this. Callers had to know which storage a
+   * project sat on before they could ask about it, which is exactly the knowledge the
+   * backend abstraction exists to remove — and the launcher, the one surface that walked
+   * both of the old pair, proved the cost by rendering them as two different kinds of row.
+   * Those two are gone (2026-10-10) and this took the obvious name.
    *
    * The one list. Until now the app kept two and rendered them separately — the local
    * catalog and the location registry — which is why a project moved to Dropbox vanished
@@ -2360,7 +2349,7 @@ export class ProjectSync {
    *   datasetCount: (number|null), entry: (object|null), isOpen: boolean,
    * }>>}
    */
-  async listAllProjects() {
+  async listProjects() {
     const out = [];
 
     // Local projects, from the store's own catalog.
@@ -2429,7 +2418,7 @@ export class ProjectSync {
 
   /** The `n` most recently worked on, excluding whichever is open now. */
   async listRecentProjects(n = 5) {
-    return (await this.listAllProjects()).filter((p) => !p.isOpen).slice(0, n);
+    return (await this.listProjects()).filter((p) => !p.isOpen).slice(0, n);
   }
 
   /** @deprecated Name kept while call sites migrate; it never meant folders only. */
@@ -3102,15 +3091,6 @@ export class ProjectSync {
     return this.#binding?.name ?? null;
   }
 
-  /** Summaries of all saved projects (for the sidebar's Projects zone). */
-  listProjects() {
-    // Always the OPFS (in-browser) projects. The live store is whatever the open project
-    // sits on, so asking IT would query Dropbox for the list of your local projects —
-    // which is what happened while this was keyed on the folder flow rather than on
-    // whether the live store is the local one.
-    return (this.#store.capabilities?.flat ? this.#opfs : this.#store).list();
-  }
-
   /** Registry id of the open folder project (null if not in a folder). */
   get activeFolderId() {
     return this.#activeLocationId;
@@ -3296,84 +3276,6 @@ export class ProjectSync {
       okLabel: 'Save',
     });
     return form?.name?.trim() || null;
-  }
-
-  #showBrowseModal(entries) {
-    const dialog = document.createElement('dialog');
-    dialog.className = 'ct-dialog';
-    const form = document.createElement('form');
-    form.method = 'dialog';
-    form.className = 'ct-dialog__form';
-    const h2 = document.createElement('h2');
-    h2.className = 'ct-dialog__title';
-    h2.textContent = 'Open project';
-    form.append(h2);
-
-    if (entries.length === 0) {
-      const p = document.createElement('p');
-      p.className = 'ct-dialog__hint';
-      p.textContent = 'No saved projects yet. Use File ▸ Save project.';
-      form.append(p);
-    } else {
-      const list = document.createElement('ul');
-      list.className = 'ct-dialog__vars ct-lib__list';
-      for (const e of entries) list.append(this.#entryRow(e, dialog));
-      form.append(list);
-    }
-
-    const menu = document.createElement('menu');
-    menu.className = 'ct-dialog__buttons';
-    const close = document.createElement('button');
-    close.type = 'submit';
-    close.value = 'cancel';
-    close.textContent = 'Close';
-    menu.append(close);
-    form.append(menu);
-    dialog.append(form);
-    dialog.addEventListener('close', () => dialog.remove());
-    document.body.append(dialog);
-    dialog.showModal();
-  }
-
-  #entryRow(entry, dialog) {
-    const li = document.createElement('li');
-    li.className = 'ct-lib__row';
-    const info = document.createElement('div');
-    info.className = 'ct-lib__info';
-    const name = document.createElement('div');
-    name.className = 'ct-lib__name';
-    name.textContent = entry.name;
-    const meta = document.createElement('div');
-    meta.className = 'ct-lib__meta';
-    // Shared with the sidebar's Recent list, so the same project cannot describe itself two
-    // different ways depending on which list you opened. It also drops any part it does not
-    // know — this line used to interpolate `datasetCount` unconditionally, which would have
-    // read "null datasets" the moment this modal was fed a remembered location.
-    meta.textContent = projectMetaLine(entry, { absoluteDate: true });
-    info.append(name, meta);
-
-    const actions = document.createElement('div');
-    actions.className = 'ct-lib__actions';
-    const open = document.createElement('button');
-    open.type = 'button';
-    open.className = 'ct-dialog__primary';
-    open.textContent = 'Open';
-    open.addEventListener('click', () => {
-      dialog.close('cancel');
-      void this.openProject(entry.id);
-    });
-    const del = document.createElement('button');
-    del.type = 'button';
-    del.className = 'ct-lib__delete';
-    del.textContent = 'Delete';
-    del.addEventListener('click', async () => {
-      del.disabled = true;
-      await this.#delete(entry.id);
-      li.remove();
-    });
-    actions.append(open, del);
-    li.append(info, actions);
-    return li;
   }
 
   #setStatus(state, nameOverride) {

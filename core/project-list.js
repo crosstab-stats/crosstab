@@ -5,9 +5,10 @@
  * ## Why this exists
  *
  * Three surfaces drew a project list: the launcher's rail, the sidebar's Recent zone, and
- * the project manager. The data layer was unified in August (#171, `listAllProjects()`),
- * and the sidebar and the manager both moved onto it — the launcher never did, and kept
- * its own pair of loops over `listProjects()` + `listProjectLocations()`. The visible cost
+ * the project manager. The data layer was unified in August (#171) and the sidebar and the
+ * manager both moved onto it — the launcher never did, and kept its own pair of loops over
+ * the two superseded calls it replaced (an OPFS-only list and a locations-only one, both
+ * since deleted). The visible cost
  * was that the first screen of the app showed **one list that was secretly two**: local
  * projects as a bare name, remembered locations as a glyph plus a name, in a single
  * undifferentiated column, with no date and no size while the data carried both.
@@ -53,7 +54,7 @@ export function describeProjectRow(row, makeBackend) {
 /**
  * Build the list.
  *
- * @param {Array<object>} rows from `ProjectSync#listAllProjects` (or a slice of it).
+ * @param {Array<object>} rows from `ProjectSync#listProjects` (or a slice of it).
  * @param {object} opts
  * @param {(entry: object) => object|null} [opts.makeBackend] to let a location describe itself.
  * @param {(row: object) => void} opts.onPick what a click on a row means to this host.

@@ -1386,10 +1386,14 @@ export async function boot(mounts) {
   // "not right now" — the room is derived from the manifest, so every co-holder can
   // still walk back in, and so can you on the next open. This records a decision on the
   // log instead, where it merges and travels.
-  /** Remembered WebDAV locations, from the one registry that holds every location. */
+  /** Remembered WebDAV locations, from the one project list there is. */
   const savedWebDav = async () => {
     try {
-      return (await projects.listProjectLocations()).filter((e) => e.kind === 'webdav');
+      // The rows carry their registry `entry`, which is what a caller reconnecting a
+      // location actually needs; the row itself is the list's shape, not the registry's.
+      return (await projects.listProjects())
+        .filter((r) => r.kind === 'webdav' && r.entry)
+        .map((r) => r.entry);
     } catch {
       return [];
     }

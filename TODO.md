@@ -1336,6 +1336,17 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 > before anything can share it.
 
 - [ ] **#161 — the launcher's "Start CrossTab" button is superfluous; clicking a
+
+      **EVIDENCE AGAINST, 2026-10-10 — the owner, now testing small-screen mode on an
+      iPhone: *"I'm still undecided on the value of the start button. even more so now
+      that I'm actively testing in small screen on the iphone, I've tapped the wrong
+      project more than once. maybe having a second tap to confirm isn't such a bad
+      thing."*** So the two-gesture commit is not simply friction: on a touch target you
+      can fat-finger it is a confirm step, and the cost of getting it wrong (loading the
+      wrong project over your session) is high. Deliberately NOT resolved while the
+      project list was unified around it — the question stays open, but it is no longer
+      "this is superfluous", it is "is a confirm worth a tap". Any future removal has to
+      answer the phone case.
       source/project should just go (user request, 2026-08-19).** Today the rail
       buttons (`[data-source]`, saved projects, remembered folders) only set
       `#pendingSource` / `#pendingProject` / `#pendingFolder` and paint `is-active`;
@@ -1506,116 +1517,35 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       that one path is quieter than the modal's. Worth folding in when the launcher's commit action
       is next touched.
 
-- [ ] **…and the same question for the PROJECT list, where there are three renderings, not two
-      (owner, 2026-09-29).** Raised as the parallel to the plugin-picker entry above: *"perhaps the
-      projects sidebar in launcher and the projects sidebar in the active view should reuse the
-      same tool. This case is weaker, as there is significant difference in functionality between
-      the two, but at least worth considering."*
+- [x] **DONE (2026-10-10). The PROJECT list is one renderer, and one function.** Raised as
+      the parallel to the plugin-picker entry above, with the caveat that *"this case is
+      weaker"*. On inspection the case was stronger: half of it had already been won in
+      August (#171) and the launcher simply never migrated.
 
-      **Worth considering, and on inspection the case is STRONGER than it looks** — because half
-      of it was already won and the launcher simply has not caught up.
+      `core/project-list.js` is the shared row; the sidebar and the launcher rail both
+      render through it. What is deliberately NOT shared is what a click MEANS — the
+      sidebar opens at once, the launcher stages a pick that Start commits (see #161
+      below, which this did NOT resolve and should not have).
 
-      Three surfaces render a project list:
+      **The redundancy underneath it went too, which was the owner's question rather than
+      the original entry's:** *"why even have two 'list the projects' functions?"* No
+      reason — one was OPFS-only, one locations-only, so a caller had to know which storage
+      a project sat on before it could ask about it, which is the knowledge the backend
+      abstraction exists to remove. Tracing the callers also turned up that the **"Open
+      project" browse modal is unreachable** (nothing calls `openProject(null)`; the
+      project manager superseded it in #173). So: modal deleted, `openProjectByName`
+      repointed, both old functions removed, and `listAllProjects` took the obvious name.
 
-      | | source | shape |
-      | --- | --- | --- |
-      | launcher rail (`ctl__projects`) | `listProjects()` **+** `listProjectLocations()`, two loops | two row shapes: bare name for local, glyph + "Reopen" for a location |
-      | sidebar Projects zone (`app.js#projectsZone`) | `listRecentProjects(5)` → `listAllProjects()` | ONE row shape, location as an attribute via `describe()`, inline rename for local |
-      | project manager (`project-manager.js`, #173) | `listAllProjects()` | ONE row shape + the verb set, computed per row by `verbsFor(row)` |
+      The rail widened 200px → 240px to match the sidebar, because it is now the same
+      component and at 200px the metadata line wrapped. "Manage projects…" is on the rail
+      too (#167's core ask), using the same closure the File menu builds.
 
-      **The data layer is already unified.** #171 built `listAllProjects()` in August and the
-      sidebar and the manager both read it. Only the launcher is still on the old split pair —
-      which is exactly the bug already filed as #171's launcher half. So this is not "unify three
-      things"; it is "the third one never migrated".
+      **Stale parts of the original entry, corrected:** it described the sidebar as FOUR
+      zones and asked whether building-blocks cleanup belonged in Project Manager. Building
+      blocks were removed 2026-10-02 — there are three zones, and only `#projectsZone` was
+      ever the launcher's analog.
 
-      **And most of the 'significant difference in functionality' is host context or a parameter,
-      not a different job:**
-
-      | apparent difference | what it actually is |
-      | --- | --- |
-      | launcher seeds the plugin picker from a project's `activePlugins` on click | **host context.** A shared list emits "this row was chosen"; the launcher's host seeds the picker that happens to sit beside it. |
-      | launcher defers opening when `backend.needsGesture` | **a backend property**, askable from either surface. Not a rendering difference. |
-      | sidebar capped at 5 and excludes the open project | **a parameter.** |
-      | sidebar has inline rename, launcher does not | **SETTLED — not a gap (owner, 2026-10-01):** *"the rename capabilities in the active project need not be duplicated in the launcher."* Rename belongs to the project you are IN, not to a list of ones you might open. So the shared list takes rename as a per-host verb, exactly as `verbsFor(row)` already models the destructive ones — and the launcher simply does not pass it. |
-      | manager has the destructive verbs, sidebar deliberately does not | **a deliberate policy, and the right one** (delete sat one hover from the row that opens the thing). Also already expressed as a parameter: `verbsFor(row)` computes the permitted set per row and context. |
-      | launcher's two row shapes | **a bug**, already filed. |
-
-      So the component the manager already has — one row shape, location as an attribute, a
-      per-context verb set — is close to the shared thing. #181's third follow-on says the same
-      from the other direction: *"the launcher should reuse the manager component instead of its
-      own rail"*, and notes the real cost, which is that `project-manager.js` is written as a
-      `<dialog>` that resolves a promise on close, so the rail/list rendering has to be extracted
-      from the dialog shell first.
-
-      **Where the case IS weaker, and it is worth saying.** In cold-start the two surfaces have
-      genuinely different jobs: the launcher rail is *"which of these do I open"*, the sidebar is
-      *"what else is around while I work"* — hence the cap at five and the exclusion of the open
-      project, which are contents-panel decisions rather than list decisions. But that distinction
-      only holds at cold start: the rail is rendered in `reopen` mode too (no gate on it in
-      `launcher.js:343`), so **mid-session a user has two project switchers with different
-      capabilities**, which is the same shape as the plugin-picker lottery and not a difference in
-      job at all.
-
-      **The sidebar is four zones, and only ONE of them is the launcher's analog** (owner,
-      2026-09-29): *"in active workspaces the sidebar has effectively three sections. There's the
-      top where the open project sits… There's the middle section that is the cap-at-5 list of
-      other projects, the closest analog to the launcher's sidebar. And then there's the bottom
-      half where 'building blocks' lives, which has no launcher (or even project manager)
-      parallel. And maybe it shouldn't? Maybe it should also be in Project Manager (how else are
-      you to clean up old data)? To be decided."*
-
-      In render order (`app.js:2574-2578`) there are four, the second conditional:
-
-      1. **`#projectZone`** — the open project: rename, and a detailed row per dataset and per
-         plugin-data slot. No launcher analog and shouldn't have one; the launcher has no open
-         project to describe.
-      2. **`#recycleZone`** — binned datasets and items, rendered only when the bin is non-empty.
-         Worth naming because it is the *other* place destructive verbs already live in the
-         sidebar, and any "where do consequences go" answer has to account for it.
-      3. **`#projectsZone`** — the capped recents list. **This is the only zone the launcher's rail
-         is an analog of**, which narrows the unification above: it is one zone against one rail,
-         not "the sidebar" against "the launcher".
-      4. **`#blocksZone`** — building blocks.
-
-      **On blocks, the question is not whether cleanup exists — it does — but that it is the
-      affordance #173 removed from the project rows.** Each block row already carries
-      `onDelete: () => this.library.deleteBlock(b.id)` with the title *"Delete building block"*,
-      on the same row whose click adds the block to the current project. That is precisely the
-      shape #173 fixed for projects: *"delete sat one hover from the row that opens the thing."*
-      So the honest statement is that blocks kept the pattern projects were rescued from.
-
-      **The structural argument for moving them, which is stronger than the cleanup one.** The
-      sidebar is a contents panel for the **open project**. A building block is not part of the
-      open project — it is a **machine-level library** the project draws from, and the app says so
-      itself: *"Building blocks live on one machine, so the link won't resolve for anyone else"*
-      (`app.js:101`). Blocks are therefore the one zone in that panel that is not about the thing
-      the panel is about, which is also exactly why they have no launcher or manager parallel.
-      `project-manager.js` mentions blocks **zero times**, and it is the app's only machine-level
-      surface — the one that lists everything this device knows about, wherever it lives.
-
-      **The split this suggests, mirroring what #173 already decided for projects:**
-      - **Sidebar keeps the gestures that need the project in view** — the drop target (*"drag a
-        dataset or a map layer here to reuse it across projects"*) and click-to-add. A
-        project→library promotion needs both ends visible, so moving blocks wholesale to a modal
-        would lose the feature that makes them usable.
-      - **Manager gains the management** — delete, rename, the version an item is on, and which
-        projects link to it. That is where consequences can be stated, and it answers the owner's
-        question properly: cleaning up old data becomes a deliberate act in a surface built for
-        it, not a hover away from "add this to my project".
-
-      Also unresolved and worth deciding at the same time: a block's **version** is shown as a
-      badge (`v3`) and a linked dataset can offer "update available", but nothing lists *which
-      projects link to a block* — so deleting one is currently a decision made blind. That is the
-      same information the manager would need anyway, which is another reason it belongs there.
-
-      **SETTLED 2026-10-02: the zone went rather than moved.** Everything here about where block
-      MANAGEMENT belongs presumed building blocks were worth keeping; the owner pulled the feature
-      instead, so `#blocksZone` no longer exists and the sidebar is three zones, not four. The
-      rest of this entry stands for the remaining zones.
-
-      Same conclusion as the entry above: extract the list, let each host decide what surrounds it
-      and which verbs it permits, and do it once — as part of the launcher rebuild, not before it.
-
+      Suite 1583 → 1594.
 - [x] **DONE + owner-verified in the app (2026-10-02) — the building-block library is REMOVED, replaced by "copy dataset to
       a new project".** The owner pulled it after the provenance check above: *"I'm sold. Before
       we get too far down this rabbit hole let's just pull it."* Plus the replacement, which is

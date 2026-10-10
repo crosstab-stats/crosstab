@@ -2,12 +2,13 @@
  * @file project-list-shared.test.mjs
  * One renderer for every list of projects.
  *
- * Three surfaces drew a project list. The data layer was unified in August (#171,
- * `listAllProjects()`); the sidebar and the project manager both moved onto it and the
- * launcher never did, keeping its own pair of loops over `listProjects()` +
- * `listProjectLocations()`. The visible cost was that the first screen of the app showed
+ * Three surfaces drew a project list. The data layer was unified in August (#171); the
+ * sidebar and the project manager both moved onto it and the launcher never did, keeping
+ * its own pair of loops over the two calls that unification superseded — an OPFS-only list
+ * and a locations-only one. The visible cost was that the first screen of the app showed
  * **one list that was secretly two** — local projects as a bare name, remembered locations
- * as a glyph plus a name — with no date and no size while the data carried both.
+ * as a glyph plus a name — with no date and no size while the data carried both. Both old
+ * functions are now deleted, so there is one way to ask.
  *
  * These are source-level assertions rather than render tests because there is no DOM here
  * (the project runs `node --test` with no jsdom). What they protect is the thing that
@@ -31,11 +32,22 @@ test('both surfaces render through the shared component', () => {
 });
 
 test('the launcher no longer walks two lists of its own', () => {
-  // The rail's old pair. `openProjectByName` still uses listProjects for now — that is the
-  // only survivor, and it goes in the follow-up that deletes the function.
+  // Its old pair — an OPFS-only list and a locations-only one — are gone entirely now, so
+  // there is only one call anything can make.
   const rail = launcher.slice(launcher.indexOf('// Saved projects in the rail'));
-  assert.doesNotMatch(rail, /listProjectLocations\(\)/);
-  assert.match(rail, /listAllProjects\(\)/);
+  assert.match(rail, /listProjects\(\)/);
+  assert.doesNotMatch(launcher, /listProjectLocations/);
+});
+
+test('there is exactly ONE project-list function left', () => {
+  // The redundancy the owner spotted: "why even have two 'list the projects' functions?"
+  // Answer, after tracing it — no reason. One was OPFS-only, one locations-only, and
+  // callers had to know which storage a project sat on before they could ask about it,
+  // which is the knowledge the backend abstraction exists to remove.
+  assert.doesNotMatch(sync, /listAllProjects|listProjectLocations\(\) \{/);
+  assert.match(sync, /^  async listProjects\(\) \{/m);
+  // And the dead "Open project" browse modal it fed, superseded by the manager in #173.
+  assert.doesNotMatch(sync, /#showBrowseModal|#entryRow/);
 });
 
 test('the unified row carries activePlugins, or the picker seeding dies silently', () => {

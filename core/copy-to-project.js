@@ -217,7 +217,7 @@ export function datasetIdTaken(log, incoming, id) {
  *    is a separate piece of work. Named in the UI rather than silently missing.
  *
  * @param {Array<{key: string, name: string, kind: string, projectId: ?string, isOpen: boolean}>} rows
- *   from `listAllProjects()`
+ *   from `listProjects()`
  * @returns {{options: Array<{value: string, label: string}>, elsewhere: number}}
  *   `elsewhere` counts the non-local projects left out, so the form can say so.
  */
