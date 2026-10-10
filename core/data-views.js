@@ -857,8 +857,8 @@ export class VariableView {
             <select name="measure">${['', 'nominal', 'ordinal', 'scale'].map((t) => opt(t, meta.measurementLevel || '')).join('')}</select>
           </label>
         </div>
-        <label class="ct-field">Missing values <span class="ct-hint">comma-separated codes treated as missing</span>
-          <input name="missing" type="text" value="${attr((meta.missingValues || []).join(', '))}">
+        <label class="ct-field">Missing values <span class="ct-hint">one per line, or comma-separated</span>
+          <textarea name="missing" rows="2">${esc((meta.missingValues || []).join(', '))}</textarea>
         </label>
         <label class="ct-field">Value labels <span class="ct-hint">one <code>code = label</code> per line</span>
           <textarea name="labels" rows="4">${esc(labelLines)}</textarea>
@@ -2258,9 +2258,25 @@ function hspacer(tag, widthPx) {
 }
 
 /** Parse a comma-separated missing-codes string into numbers (or strings). */
-function parseMissing(text) {
+/**
+ * The missing-value codes a user typed, from either shape they might arrive in.
+ *
+ * Commas OR newlines, because the field is two lines rather than one (owner, 2026-10-09:
+ * *"we can give missing a second line… and pasting from a column list we got in an email
+ * might be handy"*). A GSS-style variable carries thirty-odd codes, which in a single-line
+ * input meant scrubbing sideways through a value you could not see the end of — not a
+ * reflow failure (a control scrolling its own value is native behaviour, not layout), but
+ * a bad field, and an odd one next to Value labels, which was already a textarea.
+ *
+ * Two lines rather than four: enough to see that a long list IS long and to paste into,
+ * without giving a secondary field the weight of the one below it.
+ *
+ * Exported for the tests — the dialog that owns it is not constructible headlessly, and
+ * the paste shapes are exactly the part worth pinning.
+ */
+export function parseMissing(text) {
   return String(text)
-    .split(',')
+    .split(/[,\r\n]+/)
     .map((s) => s.trim())
     .filter((s) => s !== '')
     .map((s) => {
