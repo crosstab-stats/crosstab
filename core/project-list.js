@@ -34,7 +34,7 @@
  * settled 2026-10-01). Both are arguments, not branches in here.
  */
 
-import { projectMetaLine } from './project-sync.js';
+import { projectMetaLine } from './project-meta.js';
 
 /**
  * How a row describes where it lives.

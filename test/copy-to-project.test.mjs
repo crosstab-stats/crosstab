@@ -259,28 +259,42 @@ test('identically-named destinations are told apart — an unchoosable option is
   // Found in the browser: a dev session had four "Untitled project" rows in the picker, and
   // nothing to pick between them. In a destination list that is not cosmetic — choosing the
   // wrong one writes a dataset into the wrong project.
+  // The detail now comes from the ONE project-metadata formatter the sidebar, the launcher
+  // rail and the project manager all use, so a project is described in the same words
+  // wherever it is listed. `now` is injected for the same reason the old `stamp` hook was:
+  // so the expectation does not depend on when the test runs.
+  const NOW = 1760000000000;
+  const DAY = 86400000;
   const { options } = copyTargets([
-    projectRow({ projectId: 'a', name: 'Untitled project', datasetCount: 2, lastOpenedAt: 1 }),
-    projectRow({ projectId: 'b', name: 'Untitled project', datasetCount: 5, lastOpenedAt: 2 }),
-    projectRow({ projectId: 'c', name: 'Course pack', datasetCount: 1, lastOpenedAt: 3 }),
-  ], { stamp: (r) => `t${r.lastOpenedAt}` });
+    projectRow({ projectId: 'a', name: 'Untitled project', datasetCount: 2, savedAt: NOW - DAY }),
+    projectRow({ projectId: 'b', name: 'Untitled project', datasetCount: 5, savedAt: NOW - 2 * DAY }),
+    projectRow({ projectId: 'c', name: 'Course pack', datasetCount: 1, savedAt: NOW - 3 * DAY }),
+  ], { now: NOW });
   assert.equal(new Set(options.map((o) => o.label)).size, options.length, 'every label distinct');
   assert.deepEqual(options.map((o) => o.label), [
-    'Untitled project — 2 datasets, t1',
-    'Untitled project — 5 datasets, t2',
+    'Untitled project — 1 day ago · 2 datasets',
+    'Untitled project — 2 days ago · 5 datasets',
     'Course pack',
   ], 'and ONLY the duplicates carry the extra detail');
 });
 
-test('a project whose size the catalog does not know still gets a usable label', () => {
+test('a project the catalog knows nothing about is still told apart from its twin', () => {
+  // The sharp end of this list: choosing the wrong option writes into the wrong project, so
+  // two same-named rows MUST be distinguishable. A row with no size and no date produces an
+  // empty metadata line, so it falls back to its id — which is unique by construction.
+  //
+  // The code this replaced printed "unknown size, never opened", which is honest and yet
+  // says exactly the same thing for both rows. Honest and useless is still useless here.
+  const NOW = 1760000000000;
   const { options } = copyTargets([
-    projectRow({ projectId: 'a', name: 'Same', datasetCount: null, lastOpenedAt: 0, savedAt: 0 }),
-    projectRow({ projectId: 'b', name: 'Same', datasetCount: 1, lastOpenedAt: 5 }),
-  ], { stamp: (r) => (r.lastOpenedAt ? 'then' : 'never opened') });
+    projectRow({ projectId: 'aaaaaaaa-1', name: 'Same', datasetCount: null, savedAt: 0 }),
+    projectRow({ projectId: 'bbbbbbbb-2', name: 'Same', datasetCount: 1, savedAt: NOW }),
+  ], { now: NOW });
   assert.deepEqual(options.map((o) => o.label), [
-    'Same — unknown size, never opened',
-    'Same — 1 dataset, then',
+    'Same — id aaaaaa',
+    'Same — just now · 1 dataset',
   ]);
+  assert.equal(new Set(options.map((o) => o.label)).size, 2, 'distinct, which is the point');
 });
 
 test('no projects at all is an empty list, not a crash', () => {

@@ -1546,6 +1546,35 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       ever the launcher's analog.
 
       Suite 1583 → 1594.
+
+      **Follow-up the same day — all FOUR surfaces now speak with one voice.** The owner:
+      *"should the project manager, which opens to just a list of recent projects, also use
+      the same function?"* Answered in two halves, because they pull apart:
+
+      - **No to the row component.** The manager's row is a button plus a verb group, with
+        the open project's row deliberately INERT; copy-to-project's is an option in a
+        `<select>`. Teaching one component disabled rows, verb slots and three interaction
+        models is where a shared thing becomes a configuration surface and costs more than
+        the duplication it removes.
+      - **Yes to the metadata**, and it was worse than the question assumed: a FOURTH
+        renderer existed in `copy-to-project.js`, with a private `datasetsPhrase()`
+        ("unknown size") and a private `stamp()` keyed off `lastOpenedAt` — which is no
+        longer the date any other list shows. Three spellings of one sentence.
+
+      `core/project-meta.js` now owns `projectMetaLine` (moved out of project-sync so
+      copy-to-project can import it without closing a cycle), and its `absoluteDate` boolean
+      became `date: 'relative' | 'absolute' | 'none'`. The manager's open row uses `'none'` —
+      "Open now · 2 datasets, 56 rows", because a timestamp is the weakest thing that slot
+      could say about the project you are inside, while its size still distinguishes it.
+
+      **One defect the unification introduced and the existing tests caught:** a project the
+      catalog knows nothing about yields an EMPTY metadata line, so copy-to-project rendered
+      `"Same — "` — and, worse, identically for both twins. In a destination picker
+      "distinct" is a correctness property (picking wrong writes into the wrong project), so
+      it falls back to the project id. The old code's "unknown size, never opened" was
+      honest and said exactly the same thing for both rows.
+
+      Suite 1594 → 1595.
 - [x] **DONE + owner-verified in the app (2026-10-02) — the building-block library is REMOVED, replaced by "copy dataset to
       a new project".** The owner pulled it after the provenance check above: *"I'm sold. Before
       we get too far down this rabbit hole let's just pull it."* Plus the replacement, which is

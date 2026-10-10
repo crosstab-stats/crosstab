@@ -36,7 +36,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { projectMetaLine } from '../core/project-sync.js';
+import { projectMetaLine } from '../core/project-meta.js';
 
 const DAY = 86400000;
 const NOW = 1760000000000; // fixed, so "3 days ago" is not a function of when tests run
@@ -117,12 +117,21 @@ test('a timestamp from the future does not read as negative time', () => {
   assert.match(future, /\d{4}/);
 });
 
-test('the roomy surface gets the full timestamp instead', () => {
-  // The Open-project modal has width the sidebar does not, and a precise time is more
-  // useful when you are deliberately comparing versions.
-  const got = line({ savedAt: NOW - 3 * DAY, datasetCount: 1 }, { absoluteDate: true });
+test('a roomy surface can ask for the full timestamp', () => {
+  // A precise time is more useful when someone is deliberately comparing versions, and a
+  // wide dialog has the room for it.
+  const got = line({ savedAt: NOW - 3 * DAY, datasetCount: 1 }, { date: 'absolute' });
   assert.doesNotMatch(got, /days ago/);
   assert.match(got, /1 dataset$/);
+});
+
+test('and a row with something better to say in that slot can drop the date', () => {
+  // The project manager's OPEN row says "Open now", which beats any timestamp about the
+  // project you are currently inside — but its SIZE still distinguishes it from the others
+  // called "Untitled project".
+  const got = line({ savedAt: NOW - 3 * DAY, datasetCount: 2, rowCount: 90 }, { date: 'none' });
+  assert.equal(got, '2 datasets, 90 rows');
+  assert.equal(line({ savedAt: NOW, datasetCount: null, rowCount: null }, { date: 'none' }), '');
 });
 
 // =============================================================================
@@ -138,12 +147,19 @@ test('nothing interpolates a possibly-null count any more', () => {
   assert.doesNotMatch(src, /\$\{entry\.datasetCount\} dataset/);
 });
 
-test('the shared row renderer uses it, so every list agrees', () => {
-  // It moved: the sidebar no longer calls this itself, it renders through
-  // project-list.js — which the launcher's rail uses too. One call site, three surfaces.
-  const src = readFileSync('core/project-list.js', 'utf8');
-  assert.match(src, /projectMetaLine\(row\)/);
-  assert.match(src, /import \{ projectMetaLine \} from '\.\/project-sync\.js'/);
-  const app = readFileSync('core/app.js', 'utf8');
-  assert.match(app, /renderProjectList\(recents, \{/, 'and the sidebar goes through it');
+test('every surface that lists projects uses this one formatter', () => {
+  // Four of them, and before 2026-10-10 three wrote their own version of the same sentence.
+  // The owner's reason for unifying them is the better statement of it than "deduplicate":
+  // "one surface to fix instead of four", and a single voice for the app.
+  const importsIt = /import \{ projectMetaLine \} from '\.\/project-meta\.js'/;
+  const listSrc = readFileSync('core/project-list.js', 'utf8');   // sidebar + launcher rail
+  assert.match(listSrc, importsIt);
+  assert.match(listSrc, /projectMetaLine\(row\)/);
+  const manager = readFileSync('core/project-manager.js', 'utf8');
+  assert.match(manager, importsIt);
+  assert.match(manager, /projectMetaLine\(row, \{ date: 'none' \}\)/, 'open row keeps "Open now"');
+  const copy = readFileSync('core/copy-to-project.js', 'utf8');
+  assert.match(copy, importsIt);
+  // And the private spellings it replaced are gone, not merely bypassed.
+  assert.doesNotMatch(copy, /function datasetsPhrase|function defaultStamp/);
 });

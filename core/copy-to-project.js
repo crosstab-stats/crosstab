@@ -56,6 +56,7 @@
  */
 
 import { liveOps, opIds, orderByHlc, STRUCTURAL_OPS } from './op-log.js';
+import { projectMetaLine } from './project-meta.js';
 import { assetRefDecls, childrenOf, childTravels } from './collections.js';
 import { refsIn } from './asset-refs.js';
 import { pluginTarget } from './plugin-state.js';
@@ -221,7 +222,7 @@ export function datasetIdTaken(log, incoming, id) {
  * @returns {{options: Array<{value: string, label: string}>, elsewhere: number}}
  *   `elsewhere` counts the non-local projects left out, so the form can say so.
  */
-export function copyTargets(rows, { stamp = defaultStamp } = {}) {
+export function copyTargets(rows, { now = Date.now() } = {}) {
   const offered = [];
   let elsewhere = 0;
   for (const r of rows ?? []) {
@@ -240,33 +241,30 @@ export function copyTargets(rows, { stamp = defaultStamp } = {}) {
   for (const r of offered) counts.set(r.name, (counts.get(r.name) ?? 0) + 1);
   const options = offered.map((r) => ({
     value: r.projectId,
-    label: counts.get(r.name) > 1
-      ? `${r.name} — ${datasetsPhrase(r.datasetCount)}, ${stamp(r)}`
-      : r.name,
+    // One formatter, so a duplicate name is told apart in the SAME words the sidebar, the
+    // launcher and the manager use. This had a private `datasetsPhrase()` and a private
+    // `stamp()` keyed off `lastOpenedAt` — which, since 2026-10-10, is not the date any
+    // other list shows.
+    label: counts.get(r.name) > 1 ? `${r.name} — ${discriminator(r, now)}` : r.name,
   }));
   return { options, elsewhere };
 }
 
-/** "2 datasets" / "1 dataset", or an honest shrug when the catalog has no count. */
-function datasetsPhrase(n) {
-  const count = Number(n);
-  return Number.isFinite(count) && count > 0
-    ? `${count} dataset${count === 1 ? '' : 's'}`
-    : 'unknown size';
-}
-
 /**
- * When a project was last touched, as a short local string. Injectable so the labelling rule
- * above can be tested without depending on the test machine's locale or timezone.
+ * What tells two same-named destinations apart.
+ *
+ * Normally the shared metadata line. But this is a DESTINATION picker: picking the wrong
+ * option writes a dataset into the wrong project, so "distinct" is a correctness property
+ * here, not a nicety — and a project whose catalog entry knows neither its size nor when it
+ * was saved produces an empty line, which would render as a dangling "Name — " and, worse,
+ * read identically to its twin.
+ *
+ * So the last resort is the project id, which is unique by construction. The code this
+ * replaced said "unknown size, never opened" in that case — honest, but it said exactly the
+ * same thing for both rows, which is the one thing this list must never do.
  */
-function defaultStamp(row) {
-  const t = Number(row?.lastOpenedAt || row?.savedAt);
-  if (!Number.isFinite(t) || t <= 0) return 'never opened';
-  try {
-    return new Date(t).toLocaleString();
-  } catch {
-    return String(t);
-  }
+function discriminator(row, now) {
+  return projectMetaLine(row, { now }) || `id ${String(row.projectId ?? '').slice(0, 6)}`;
 }
 
 // --- plugin records: a codebook, a map layer, anything declared portable --------------

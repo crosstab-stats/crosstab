@@ -36,6 +36,7 @@
  */
 
 import { debug } from './debug.js';
+import { projectMetaLine } from './project-meta.js';
 
 /** Tabs, in order. `verb` is what the tab does to the row you click. */
 export const TABS = Object.freeze([
@@ -299,7 +300,17 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
         const main = el('button', 'ctpm__rowmain');
         main.type = 'button';
         main.append(el('span', 'ctpm__name', `${what.glyph ? `${what.glyph} ` : ''}${row.name}`));
-        main.append(el('span', 'ctpm__where', row.isOpen ? 'Open now' : what.detail));
+        // Where it lives, when it was last worked on, how big it is — the same sentence the
+        // launcher rail and the sidebar say, from the same formatter. This row used to show
+        // only the location, so the same project described itself differently depending on
+        // which of four lists you were looking at.
+        //
+        // The open one keeps "Open now" and drops the date: a timestamp is the weakest thing
+        // that slot could say about the project you are currently inside. Its SIZE still
+        // earns its place, because that is what distinguishes it from the others by name.
+        main.append(el('span', 'ctpm__where', row.isOpen
+          ? ['Open now', projectMetaLine(row, { date: 'none' })].filter(Boolean).join(' · ')
+          : [what.detail, projectMetaLine(row)].filter(Boolean).join(' · ')));
         // Clicking the open project's NAME used to close it — a destructive-ish action on
         // the one target nobody aims at deliberately. The row is inert; Close is a button.
         if (row.isOpen) main.disabled = true;
