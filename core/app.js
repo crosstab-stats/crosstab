@@ -55,7 +55,7 @@ import {
   currentScreenMode, initScreenMode, onScreenModeChange, showAutoNote, toggleScreenMode,
 } from './screen-mode.js';
 import { ProjectStore } from './project-store.js';
-import { ProjectSync, PROJECT_CHANGED } from './project-sync.js';
+import { ProjectSync, PROJECT_CHANGED, projectMetaLine } from './project-sync.js';
 import { DataView, VariableView, HistoryPanel } from './data-views.js';
 import { RConsole } from './r-console.js';
 import { PluginLoader } from './loader.js';
@@ -3375,7 +3375,10 @@ class ProjectSidebar {
           ?? { kind: 'unknown', glyph: '📍', label: p.name, detail: 'cannot reconnect' });
       const label = p.name || what.label;
       const li = document.createElement('li');
-      li.className = `proj__ds proj__ds--${what.kind}`;
+      // Stacked, because this row carries a second line. The dataset rows in the zone above
+      // use the same `.proj__ds` treatment and must stay single-line, so the direction is a
+      // modifier rather than a change to the shared rule.
+      li.className = `proj__ds proj__ds--stacked proj__ds--${what.kind}`;
       li.title = `Open ${label}${what.detail ? ` (${what.detail})` : ''}`;
       const open = () => void this.#openProjectRow(p);
       li.addEventListener('click', open);
@@ -3392,9 +3395,19 @@ class ProjectSidebar {
         name.addEventListener('dblclick', (e) => { e.stopPropagation(); rename(); });
       }
       li.append(name);
-      // WHERE, beside the name: two copies of one project can legitimately coexist, and
-      // without this the list shows the same name twice with no way to tell them apart.
-      if (what.detail) li.append(el('span', what.detail, 'proj__ds-where'));
+      // The second line: where it lives, when it was last worked on, and how big it is.
+      //
+      // All three are here for one reason — a list of names does not identify anything when
+      // the names are "Untitled project" five times over, which is the common case for
+      // somebody who has not bothered naming their work. WHERE already earned its place
+      // (two copies of one project can legitimately coexist); date and size are the owner's
+      // addition, and discriminate far better than the dataset count does, since small
+      // projects nearly all hold exactly one.
+      //
+      // Absent parts are simply dropped rather than shown as zero or "unknown" — a project
+      // saved before row counts were recorded says less, instead of saying something false.
+      const meta = [what.detail, projectMetaLine(p)].filter(Boolean).join(' · ');
+      if (meta) li.append(el('span', meta, 'proj__ds-meta'));
       list.append(li);
     }
     frag.append(list);

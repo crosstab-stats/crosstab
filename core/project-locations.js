@@ -134,11 +134,24 @@ async function writeRegistry(arr) {
 /**
  * Remember (or update) a folder project. Dedupes by `isSameEntry`, so re-saving the same
  * folder refreshes its name and time rather than stacking a duplicate.
+ *
+ * **`savedAt` is stamped only when the caller passes one**, which it does after a WRITE.
+ * It used to be stamped on every call — and the only caller was the open path, so for a
+ * folder project `savedAt` silently meant "last opened", contradicting this file's own
+ * description of it. Project lists are ordered and labelled by it as *last worked on*, so
+ * an open that stamped it made merely looking at a project indistinguishable from working
+ * on one (owner, 2026-10-10).
+ *
+ * `lastOpenedAt` is still stamped every time, and is deliberately kept even though nothing
+ * currently reads it: it is the cheap half of a possible "sort by recently opened" that
+ * every OS file manager and M365's home page offers, and it cannot be backfilled later.
+ *
  * @param {FileSystemDirectoryHandle} handle
- * @param {{name?: string, savedAt?: number}} [meta]
+ * @param {{name?: string, savedAt?: number, datasetCount?: number, rowCount?: number}} [meta]
  * @returns {Promise<string>} the registry entry id
  */
-export async function rememberFolder(handle, { name, savedAt } = {}) {
+export async function rememberFolder(handle, meta = {}) {
+  const { name, savedAt } = meta;
   const reg = await readRegistry();
   for (const e of reg) {
     try {
@@ -146,7 +159,8 @@ export async function rememberFolder(handle, { name, savedAt } = {}) {
         e.handle = handle; // refresh the handle (permissions/identity)
         e.kind = 'folder';
         if (name != null) e.name = name;
-        e.savedAt = savedAt ?? Date.now();
+        if (savedAt != null) e.savedAt = savedAt;
+        applyStats(e, meta);
         e.lastOpenedAt = Date.now();
         await writeRegistry(reg);
         return e.id;
@@ -154,12 +168,31 @@ export async function rememberFolder(handle, { name, savedAt } = {}) {
     } catch { /* stale handle — skip */ }
   }
   const id = globalThis.crypto.randomUUID();
-  reg.push({
+  const entry = {
     id, kind: 'folder', handle, name: name ?? handle.name,
     savedAt: savedAt ?? Date.now(), lastOpenedAt: Date.now(),
-  });
+  };
+  applyStats(entry, meta);
+  reg.push(entry);
   await writeRegistry(reg);
   return id;
+}
+
+/**
+ * Carry a project's size onto its registry entry.
+ *
+ * A remembered location has no readable manifest from a list — reaching the folder needs a
+ * permission gesture, which a list cannot ask for. But CrossTab writes this entry while the
+ * project is OPEN and every dataset is in memory, so the numbers are free at exactly the
+ * moment they are knowable. Recording them here is the same move as stamping `kindProvider`
+ * on a chart at write time: ask while the thing that knows is still there.
+ *
+ * Only ever overwrites with a real number, so a caller that does not know (an open, a
+ * rename) leaves the last known size standing rather than blanking it.
+ */
+function applyStats(entry, { datasetCount, rowCount } = {}) {
+  if (Number.isFinite(datasetCount)) entry.datasetCount = datasetCount;
+  if (Number.isFinite(rowCount)) entry.rowCount = rowCount;
 }
 
 /**
@@ -171,10 +204,11 @@ export async function rememberFolder(handle, { name, savedAt } = {}) {
  *
  * @param {'dropbox'|'webdav'} kind
  * @param {object} config  projected through {@link PUBLIC_CONFIG}; secrets are dropped
- * @param {{name?: string, savedAt?: number}} [meta]
+ * @param {{name?: string, savedAt?: number, datasetCount?: number, rowCount?: number}} [meta]
  * @returns {Promise<string|null>} the entry id, or null for an unknown kind
  */
-export async function rememberRemote(kind, config, { name, savedAt } = {}) {
+export async function rememberRemote(kind, config, meta = {}) {
+  const { name, savedAt } = meta;
   if (!PUBLIC_CONFIG[kind]) return null;
   const cfg = publicConfig(kind, config);
   const key = remoteKey(kind, cfg);
@@ -184,7 +218,10 @@ export async function rememberRemote(kind, config, { name, savedAt } = {}) {
   entry.config = cfg;
   if (name != null) entry.name = name;
   entry.name = entry.name || kind;
-  entry.savedAt = savedAt ?? Date.now();
+  // Only on a write — see rememberFolder. A new entry gets one so it is never undefined.
+  if (savedAt != null) entry.savedAt = savedAt;
+  else if (!found) entry.savedAt = Date.now();
+  applyStats(entry, meta);
   // Every successful open re-remembers, so for a remote location this is genuinely "last
   // opened", where `savedAt` means the last time we WROTE.
   entry.lastOpenedAt = Date.now();
@@ -193,7 +230,8 @@ export async function rememberRemote(kind, config, { name, savedAt } = {}) {
   return entry.id;
 }
 
-/** All remembered locations, most-recent first, whatever their kind. */
+/** All remembered locations, most recently WORKED ON first, whatever their kind.
+ * (`savedAt`, not `lastOpenedAt` — see rememberFolder for why opening must not reorder.) */
 export async function listLocations() {
   return (await readRegistry())
     .map(normalize)

@@ -681,12 +681,45 @@ export class ProjectSync {
    * idempotent, so a retry is safe (#91). A second failure propagates to the caller. */
   async #attemptSave(fn) {
     try {
-      return await fn();
+      const out = await fn();
+      await this.#stampLocation();
+      return out;
     } catch (err) {
       console.warn('[project] save attempt failed — retrying once:', err?.message || err);
       await new Promise((r) => setTimeout(r, 250));
-      return fn();
+      const out = await fn();
+      await this.#stampLocation();
+      return out;
     }
+  }
+
+  /**
+   * After a successful write to a remembered location, record WHEN and HOW BIG.
+   *
+   * Every save funnels through {@link ProjectSync#attemptSave}, so this is the one place
+   * that means "we just wrote" — as against the open path, which must not touch `savedAt`.
+   *
+   * An OPFS project needs nothing here: its catalog summary is rebuilt inside `store.save`
+   * from the manifest, which now carries the row count. A location has no readable manifest
+   * from a list, so its registry entry keeps its own copy.
+   *
+   * Never allowed to fail a save: the project is written either way, and a stale list entry
+   * is a cosmetic loss next to an error on a save that actually succeeded.
+   */
+  async #stampLocation() {
+    const mark = this.#backend?.remember?.();
+    if (!mark) return;
+    const meta = {
+      name: this.activeName || mark.name,
+      savedAt: Date.now(),
+      datasetCount: this.#datasets.list?.().length ?? 0,
+      rowCount: this.projectRowCount(),
+    };
+    try {
+      this.#activeLocationId = mark.handle
+        ? await rememberFolder(mark.handle, meta)
+        : await rememberRemote(mark.kind, mark.config, meta);
+    } catch { /* the bytes are safely written; the list entry is a convenience */ }
   }
 
   /** Write the whole project (all datasets' sources + logs) and (re)bind. */
@@ -1480,7 +1513,30 @@ export class ProjectSync {
     return {
       log, activeId: this.#datasets.activeId, activePlugins, output, datasetMeta,
       collabId: this.#collabId, collabSecret: this.#collabSecret, // #148 — persist the live-room identity
+      // How big this project is, captured here because here is where it is knowable. A
+      // saved project's row count cannot be recovered from its log — `addDataset` carries
+      // only `{id, name}` — and counting it later would mean loading every dataset to draw
+      // a list. In memory at save time it is free. See {@link ProjectSync#projectRowCount}.
+      rowCount: this.projectRowCount(),
     };
+  }
+
+  /**
+   * Total rows across every live dataset — the project's "how big is it" number.
+   *
+   * Shown beside a project in the lists, because the thing that tells two projects apart
+   * is rarely the dataset COUNT (the owner's observation, 2026-10-10: a user with five
+   * "Untitled project" rows almost certainly has one dataset in each, so "1 dataset" five
+   * times discriminates nothing). Size does: a 56-row pilot and a 5,456-row main study are
+   * obviously different things.
+   *
+   * Binned datasets are excluded: they are in the bin, so they are not what the project
+   * currently IS, and including them would make a row count jump when something was deleted.
+   */
+  projectRowCount() {
+    let n = 0;
+    for (const d of this.#datasets.list?.() ?? []) n += Number(d.rowCount) || 0;
+    return n;
   }
 
   // --- new / open -----------------------------------------------------------
@@ -1912,8 +1968,12 @@ export class ProjectSync {
     const mark = backend.remember?.();
     if (mark) {
       try {
+        // NO `savedAt` here: this is the OPEN path, and stamping it made "last worked on"
+        // mean "last glanced at" for every folder project — so a fat-fingered tap on the
+        // wrong row both relabelled it and jumped it up the list (owner, 2026-10-10).
+        // `lastOpenedAt` is still stamped inside remember*(), and kept deliberately.
         this.#activeLocationId = mark.handle
-          ? await rememberFolder(mark.handle, { name: this.activeName || mark.name, savedAt: Date.now() })
+          ? await rememberFolder(mark.handle, { name: this.activeName || mark.name })
           : await rememberRemote(mark.kind, mark.config, { name: this.activeName || mark.name });
       } catch { /* the project is open; the list entry is a convenience */ }
     }
@@ -2315,6 +2375,7 @@ export class ProjectSync {
           savedAt: p.savedAt ?? 0,
           lastOpenedAt: p.lastOpenedAt ?? p.savedAt ?? 0,
           datasetCount: p.datasetCount ?? null,
+          rowCount: Number.isFinite(p.rowCount) ? p.rowCount : null,
           entry: null,
           isOpen: this.#backend?.kind === 'opfs' && String(this.#binding?.id) === String(p.id),
         });
@@ -2332,17 +2393,31 @@ export class ProjectSync {
           locationId: e.id,
           savedAt: e.savedAt ?? 0,
           lastOpenedAt: e.lastOpenedAt ?? e.savedAt ?? 0,
-          datasetCount: null,
+          // Recorded on the registry entry when the project was last written — a list
+          // cannot reach into a folder, but it does not have to: see rememberFolder.
+          datasetCount: Number.isFinite(e.datasetCount) ? e.datasetCount : null,
+          rowCount: Number.isFinite(e.rowCount) ? e.rowCount : null,
           entry: e,
           isOpen: this.#activeLocationId === e.id,
         });
       }
     } catch { /* no registry — the local ones still stand */ }
 
-    return out.sort((a, b) => (b.lastOpenedAt || 0) - (a.lastOpenedAt || 0));
+    // By `savedAt` — "most recently WORKED ON", not "most recently glanced at".
+    //
+    // It used to sort by `lastOpenedAt`, which meant an accidental tap on the wrong row
+    // (easy on a phone) silently promoted that project to the top of Recent and pushed a
+    // real one down. The owner's distinction, 2026-10-10: *"people might think 'the one I
+    // was working on last week' rather than 'the one I quickly glanced at last week'."*
+    //
+    // `lastOpenedAt` is still recorded on every row and deliberately kept, even though
+    // nothing reads it today — every OS file manager and M365's home page offer a
+    // recently-OPENED list, so it is worth having if that is ever asked for. It cannot be
+    // reconstructed after the fact, which is the only reason to keep writing it now.
+    return out.sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
   }
 
-  /** The `n` most recently opened, excluding whichever is open now. */
+  /** The `n` most recently worked on, excluding whichever is open now. */
   async listRecentProjects(n = 5) {
     return (await this.listAllProjects()).filter((p) => !p.isOpen).slice(0, n);
   }
@@ -3203,6 +3278,7 @@ export class ProjectSync {
 
   // --- UI helpers -----------------------------------------------------------
 
+
   async #promptName(title, suggested) {
     const form = await this.#ui.showForm({
       title,
@@ -3259,8 +3335,11 @@ export class ProjectSync {
     name.textContent = entry.name;
     const meta = document.createElement('div');
     meta.className = 'ct-lib__meta';
-    const when = entry.savedAt ? new Date(entry.savedAt).toLocaleString() : '';
-    meta.textContent = `${entry.datasetCount} dataset${entry.datasetCount === 1 ? '' : 's'}${when ? ` · ${when}` : ''}`;
+    // Shared with the sidebar's Recent list, so the same project cannot describe itself two
+    // different ways depending on which list you opened. It also drops any part it does not
+    // know — this line used to interpolate `datasetCount` unconditionally, which would have
+    // read "null datasets" the moment this modal was fed a remembered location.
+    meta.textContent = projectMetaLine(entry, { absoluteDate: true });
     info.append(name, meta);
 
     const actions = document.createElement('div');
@@ -3346,4 +3425,60 @@ function confirmDialog({ title, message, okLabel = 'OK', danger = false } = {}) 
     document.body.append(dialog);
     dialog.showModal();
   });
+}
+
+/**
+ * How a project describes itself in a list: when it was last worked on, and how big it is.
+ *
+ * ## Why these two facts
+ *
+ * The job of this line is to tell apart rows whose NAMES do not. The owner's observation
+ * (2026-10-10) is that the dataset count mostly cannot: somebody with five "Untitled
+ * project" rows is almost certainly doing small one-dataset work, so "1 dataset" five times
+ * discriminates nothing. Date and size do — "5 Oct, 5,456 rows" against "6 Jul, 56 rows" is
+ * the difference between the main study and the pilot, at a glance.
+ *
+ * ## What it leaves out
+ *
+ * Every part is optional and simply absent when unknown, never rendered as a zero. A
+ * project saved before row counts were recorded has none, and a remembered location not
+ * written since has none either; "0 rows" would be a lie, while a date on its own is merely
+ * less helpful. Shared by the sidebar's Recent list and the Open-project modal so one
+ * project cannot describe itself two ways depending on which list you opened.
+ *
+ * @param {{savedAt?: number, datasetCount?: number|null, rowCount?: number|null}} entry
+ * @param {{absoluteDate?: boolean, now?: number}} [opts] `absoluteDate` for a roomy surface
+ *   (the modal); the default is relative-under-a-week, which is when "which one was I just
+ *   in" is the question being asked.
+ */
+export function projectMetaLine(entry, { absoluteDate = false, now = Date.now() } = {}) {
+  const parts = [];
+  const when = Number(entry?.savedAt) || 0;
+  if (when) parts.push(absoluteDate ? new Date(when).toLocaleString() : relativeDay(when, now));
+  const size = [];
+  const ds = entry?.datasetCount;
+  if (Number.isFinite(ds)) size.push(`${ds} dataset${ds === 1 ? '' : 's'}`);
+  const rows = entry?.rowCount;
+  if (Number.isFinite(rows) && rows > 0) size.push(`${rows.toLocaleString()} row${rows === 1 ? '' : 's'}`);
+  if (size.length) parts.push(size.join(', '));
+  return parts.join(' \u00b7 ');
+}
+
+/**
+ * A date a person can act on: relative while that is the more useful answer, absolute once
+ * it stops being. "3 days ago" beats a date when you are hunting for what you had open this
+ * week; past that, "5 Oct 2026" is the form people actually remember.
+ */
+function relativeDay(ts, now) {
+  const abs = () => new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  const ms = now - ts;
+  if (ms < 0) return abs(); // a clock skew or a file from the future: do not say "in -3 days"
+  const mins = Math.floor(ms / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min${mins === 1 ? '' : 's'} ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days} day${days === 1 ? '' : 's'} ago`;
+  return abs();
 }

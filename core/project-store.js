@@ -459,7 +459,13 @@ export class ProjectStore {
     // Flat (folder) mode: exactly one project, derived from its manifest (no catalog).
     if (this.#flat) {
       const m = await this.readManifest(FOLDER_PROJECT_ID);
-      return m ? [{ id: FOLDER_PROJECT_ID, name: m.name, savedAt: m.savedAt, datasetCount: countDatasets(m), activePlugins: m.activePlugins ?? null }] : [];
+      return m
+        ? [{
+          id: FOLDER_PROJECT_ID, name: m.name, savedAt: m.savedAt,
+          datasetCount: countDatasets(m), rowCount: m.rowCount,
+          activePlugins: m.activePlugins ?? null,
+        }]
+        : [];
     }
     const release = await this.#acquire();
     try {
@@ -532,6 +538,11 @@ export class ProjectStore {
         name,
         savedAt,
         datasetCount: countDatasets(manifest),
+        // Carried across when this write did not supply one, exactly as lastOpenedAt is:
+        // the summary is rebuilt from scratch each save, so anything not re-stated is lost.
+        rowCount: Number.isFinite(manifest.rowCount)
+          ? manifest.rowCount
+          : (idx >= 0 ? cat.entries[idx].rowCount : undefined),
         activePlugins: manifest.activePlugins,
       };
       if (idx >= 0) cat.entries[idx] = summary;
@@ -638,6 +649,9 @@ export class ProjectStore {
         name: manifest.name,
         savedAt: manifest.savedAt,
         datasetCount: countDatasets(manifest),
+        rowCount: Number.isFinite(manifest.rowCount)
+          ? manifest.rowCount
+          : (idx >= 0 ? cat.entries[idx].rowCount : undefined),
         activePlugins: manifest.activePlugins ?? null,
       };
       if (idx >= 0) cat.entries[idx] = summary;
@@ -958,6 +972,10 @@ export function buildManifest({ name, savedAt, bundle }) {
   return {
     name,
     savedAt,
+    // Travels with the project rather than living only in this device's catalog: it is a
+    // fact about the data, so a project copied to another machine should still be able to
+    // say how big it is without being opened.
+    ...(Number.isFinite(bundle.rowCount) ? { rowCount: bundle.rowCount } : {}),
     activeId: bundle.activeId,
     activePlugins: Array.isArray(bundle.activePlugins) ? bundle.activePlugins : null,
     output: Array.isArray(bundle.output) ? bundle.output : null,

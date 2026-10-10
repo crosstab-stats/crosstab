@@ -10,6 +10,60 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
+- [x] **DONE (2026-10-10). A project row says when it was last worked on and how big it
+      is — and opening one no longer counts as working on it.**
+
+      Started as "the sidebar shows the dataset count the data layer already carries". The
+      owner rejected the premise, and was right: *"that kind of user is probably also doing
+      small projects where they all have exactly one dataset, 5 'untitled project' in a row
+      isn't much different from five 'untitled project - 1 dataset' in a row."* **A
+      discriminator has to vary across the things it discriminates.** Date and row count do.
+
+      Rows now read `just now · 2 datasets, 5,456 rows`. Shared formatter
+      (`projectMetaLine`) across the sidebar and the Open-project modal, so one project
+      cannot describe itself two ways depending on which list you opened.
+
+      **Row counts had to be captured, not computed.** A saved project's row count cannot
+      be recovered from its log — `addDataset` carries only `{id, name}` — and counting it
+      later would mean loading every dataset to draw a list. In memory at save time it is
+      free, so `#snapshot` puts it on the bundle and `buildManifest` into the manifest, where
+      it travels with the project rather than living only in this device's catalog.
+
+      **Remembered locations get the same numbers**, which I had wrongly said was impossible
+      (*"no manifest without connecting"*). The owner: *"those don't magically show up in the
+      list at random, they are put there while they are open."* Exactly — the registry is
+      OURS and is written while the project is open, so `rememberFolder`/`rememberRemote`
+      carry `datasetCount`/`rowCount` the same way they already carried the name. I had
+      conflated *reading the folder later* with *recording what we knew at the time* — the
+      very principle I had just applied to row counts.
+
+      **The sort and the label moved from `lastOpenedAt` to `savedAt`.** I had argued for
+      last-opened on "show the key you sort by" grounds; the owner's objection was better:
+      *"if a person accidentally clicks the wrong project… people might think 'the one I was
+      working on last week' rather than 'the one I quickly glanced at last week'."* And it
+      was worse than described — the list was SORTED by it, so a mis-tap promoted that
+      project to the top and pushed a real one down. Verified fixed: opening a project at
+      position 3 leaves it at position 3 with `savedAt` untouched.
+
+      A related bug fell out: `rememberFolder` was only ever called from `#afterAttach`,
+      stamping `savedAt: Date.now()` — so for folder projects `savedAt` meant "last opened",
+      contradicting the field's own doc comment. It is stamped on write now, from
+      `#attemptSave`, which is the single funnel every save passes through.
+
+      **`lastOpenedAt` is still recorded everywhere, deliberately**, though nothing reads it
+      (owner: every OS file manager and M365's home page offer a recently-OPENED list, and
+      it cannot be backfilled later).
+
+      Widths measured rather than guessed, since the sidebar is 215px of usable width: the
+      line is 197px at 11px, and the worst realistic case (`12 Dec 2026 · 12 datasets,
+      1,234,567 rows`) is 202px — 12px would not fit. It wraps rather than truncating.
+      Pre-existing projects degrade to the date and dataset count; nothing ever renders
+      `0 rows` or `null datasets` (the modal's old unguarded `${entry.datasetCount}` would
+      have printed the latter the first time it saw a location).
+
+      Suite 1569 → 1583.
+
+
 - [x] **R export, half two: the EXACT R each analysis ran — DONE 2026-10-09.** Recorded on
       the analysis, persisted in the project, shown in History, and folded into the R export
       as a comment under the idiomatic line.

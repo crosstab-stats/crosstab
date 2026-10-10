@@ -149,6 +149,20 @@
         border: 0; padding: 0; color: inherit; cursor: pointer;
       }
       .proj__ds-rows { font: 12px ui-monospace, Menlo, monospace; color: #646e77; }
+      /* A row that carries a second line (the Recent projects list). The dataset rows above
+         share `.proj__ds` and must stay on one line, so this is a modifier. */
+      .proj__ds--stacked { flex-direction: column; align-items: stretch; gap: 2px; }
+      /* Measured against the 215px of usable sidebar width: a typical line
+         ("5 Oct 2026 · 1 dataset, 5,456 rows") is 164px at 11px, and the worst realistic
+         case ("12 Dec 2026 · 12 datasets, 1,234,567 rows") is 202px — so it fits, and 12px
+         would not. It WRAPS rather than truncating: an unusual row costing a third line is
+         better than one quietly hiding a digit, which is the one thing this line exists to
+         show. `white-space: normal` is explicit because `.proj__ds-name` beside it sets
+         nowrap and these rules sit close enough to be read as a pair. */
+      .proj__ds-meta {
+        font-size: 11px; line-height: 1.35; color: #646e77;
+        white-space: normal; overflow-wrap: anywhere;
+      }
       /* row action icons (✎ rename, ✕ remove) — visible, darken on hover */
       .proj__ds-x { border: 0; background: none; color: #646e77; cursor: pointer; font-size: 12px; padding: 0 3px; border-radius: 4px; }
       .proj__ds-x:hover:not(:disabled) { color: #1a1a1a; background: #dfe5ea; }
