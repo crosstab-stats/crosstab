@@ -58,7 +58,7 @@ export const manifest = {
     'forest plot', 'kaplan-meier', 'survival curve', 'single-case', 'sced'],
   howto:
     'Draws every figure in CrossTab. It has no menu of its own — other plugins compute the numbers and hand them here to be drawn.\n' +
-    'Eight plugins depend on it: Plots, Survival (Kaplan–Meier), Meta-analysis (forest), SCED, Factor, Time series, Text analytics and CAQDAS (word clouds).\n' +
+    'Nine plugins depend on it: Plots, Survival (Kaplan–Meier), Meta-analysis (forest), SCED, Factor, Time series, Text analytics, CAQDAS (word clouds) and Decisions (sensitivity, tornado).\n' +
     'Switch it off and: existing charts still SHOW their saved figure, but the ⚙ Chart options panel goes; and a NEW analysis reports which chart type is missing instead of drawing one.\n' +
     '  • Same rule as everywhere else — a result stays readable without the plugin that made it; you just cannot make or re-style another one.',
   // The declarative section. `kinds` is the list the host registers by name; `via` is
@@ -66,7 +66,14 @@ export const manifest = {
   // the loader is explicit that a plugin can only do what a manifest section allows.
   charts: {
     via: 'chartKinds',
-    kinds: ['categorical', 'scatter', 'pie', 'violin', 'dots', 'paired', 'box', 'histogram', 'steps', 'forest', 'sced', 'wordcloud'],
+    // `tornado` was missing here from the commit that introduced the kind (24b8efc) until
+    // 2026-10-10, and this list — not `chartKinds()` — is what the host registers from. So
+    // Decisions' sensitivity analysis offered a Tornado mode whose figure nothing could
+    // draw: "Send to Output" produced a block reading "No active plugin can draw a
+    // 'tornado' chart", advice nobody could act on, since the only renderer is the one in
+    // this same file. Adding a kind means adding it in BOTH places; the harness now
+    // asserts that rather than trusting it.
+    kinds: ['categorical', 'scatter', 'pie', 'violin', 'dots', 'paired', 'box', 'histogram', 'steps', 'forest', 'sced', 'tornado', 'wordcloud'],
   },
 };
 

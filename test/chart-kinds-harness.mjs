@@ -20,7 +20,7 @@
  * Import this for its side effect, before anything that touches the registry.
  */
 const lib = await import('../core/charts/stdlib.js');
-const { chartKinds } = await import('../plugins/builtin-charts/index.js');
+const { chartKinds, manifest } = await import('../plugins/builtin-charts/index.js');
 const { registerChartKind } = await import('../core/chart-renderer.js');
 
 export const KINDS = chartKinds(lib);
@@ -29,5 +29,17 @@ for (const [name, kd] of Object.entries(KINDS)) {
   registerChartKind(name, kd);
 }
 
-/** Every kind name the plugin supplies. */
+/** Every kind name the plugin BUILDS. */
 export const KIND_NAMES = Object.keys(KINDS);
+
+/**
+ * Every kind name the plugin DECLARES — which is the list the host actually registers
+ * from, and the one these tests bypass.
+ *
+ * Exported because the gap between the two is a real failure mode rather than a
+ * theoretical one: `tornado` was built, fully covered by these tests, and unreachable in
+ * the running app for months, because this harness registers `chartKinds()` directly and
+ * never looks at the manifest. A kind can therefore be written, tested and shipped dead,
+ * and every test still passes. `chart-manifest-parity.test.mjs` closes that.
+ */
+export const MANIFEST_KINDS = manifest.charts.kinds.slice();

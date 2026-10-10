@@ -81,24 +81,44 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       a lookup-vs-redundancy trade, not a correctness one.
 
 
-- [ ] **The `tornado` chart kind is unreachable in the app (found 2026-10-08).**
-      `plugins/builtin-charts/index.js` builds `kinds['tornado']` but the plugin's own
-      `manifest.charts.kinds` list does not name it, and that list is what the host
-      registers from — so the kind has never been reachable in the running app. Confirmed
-      live: activating builtin-charts registers **12** kinds, not 13.
+- [x] **DONE (2026-10-10). The `tornado` chart kind was unreachable — and it was a BROKEN
+      FEATURE, not a dormant kind.** Filed 2026-10-08 as "add it is a product decision";
+      that was wrong, and the owner caught it: *"I thought you added it in one of the
+      plugins? Is it really not used anywhere?"*
 
-      It has been that way since the commit that introduced it (`24b8efc`, "the
-      sensitivity figures become chart models; new `tornado` kind"), which added the kind
-      and not the manifest entry. Tests do not see it because `chart-kinds-harness.mjs`
-      registers everything `chartKinds()` returns, bypassing the manifest — so the kind is
-      fully tested and completely unavailable.
+      It is used. `builtin-decisions` offers **Tornado** in the Mode dropdown of its
+      sensitivity analysis and publishes `tornadoModel(...)` through `appendChart`. But
+      `plugins/builtin-charts/index.js` built `kinds['tornado']` while its own
+      `manifest.charts.kinds` did not name it — and the manifest is what the host registers
+      from. So the published figure hit `chartBlockMode` with no registered kind and no
+      saved SVG, landed in `pending`, and rendered as *"No active plugin can draw a
+      'tornado' chart. Enable one in Edit ▸ Plugins and this figure will appear."* Advice
+      nobody could act on: the only tornado renderer in the project is the one in
+      builtin-charts itself. That way since `24b8efc`, the commit that introduced the kind.
 
-      Two things to do, and the second matters more: add `'tornado'` to the list, and make
-      the harness assert that what it registers MATCHES the manifest, so the next kind
-      cannot be written, tested and shipped dead. Filed rather than fixed on the spot
-      because adding it makes a new chart type appear in the UI, which is a product
-      decision and not a loose end from the layer work.
+      **The filing was wrong because it was made from one side.** Looking at builtin-charts
+      alone, a kind the manifest does not name reads as an unfinished addition, and adding
+      it reads as a product call. One grep for `tornado` across `plugins/` would have shown
+      a consumer and settled it. Worth remembering as a shape: *"unused" is a claim about
+      the whole repo, and cannot be checked from inside one file.*
 
+      Fixed: `'tornado'` added to the manifest (12 kinds → 13, verified live), and the
+      `howto` now names Decisions among the dependants — it was already one (it emits
+      `scatter` too) and the list said eight.
+
+      **The half that matters more is the guard.** `chart-kinds-harness.mjs` registers
+      whatever `chartKinds()` returns, bypassing the manifest — right for testing the kind
+      BODIES (Node has no sandbox) but it means the tests exercise a registration path the
+      app never takes. `tornado` was fully covered and completely unavailable with a green
+      suite throughout. `chart-manifest-parity.test.mjs` now diffs built against declared in
+      both directions, and was watched failing: re-remove the string and 3 of its 5 tests go
+      red.
+
+      Verified end to end rather than by registry count alone — a real `tornadoModel` figure
+      appended to Output renders `chartMode: "live"`, rows ordered by swing (360/180/80),
+      the `base 1,000` marker, and `role="img"` with a descriptive title.
+
+      Suite 1564 → 1569.
 - [ ] **Two functions named `wrapLabel` (found 2026-10-08).** `wrapToWidth` in the charts
       stdlib wraps a legend entry with no ceiling; `wrapLabel` inside builtin-charts wraps
       the SCED chart's rotated case captions with a `maxLines` and an ellipsis, because
