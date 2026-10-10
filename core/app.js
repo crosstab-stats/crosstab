@@ -70,6 +70,7 @@ import { WorkspaceManager } from './workspace-manager.js';
 import { PluginPackageStore } from './plugin-package-store.js';
 import { AssetStore, createAssetService, ASSETS_CHANGED } from './asset-store.js';
 import { makeZip, readZipEntries } from './zip.js';
+import { escapeHtml } from './text.js';
 
 /**
  * URLs of the built-in plugins to load at startup. These load through the exact
@@ -210,12 +211,12 @@ function promptNetworkDialog(name, url) {
     d.innerHTML = `
       <form method="dialog" class="ct-dialog__form">
         <h2 class="ct-dialog__title">Allow network access?</h2>
-        <p class="ct-dialog__hint">The plugin <strong>${escapeText(name)}</strong> wants to
+        <p class="ct-dialog__hint">The plugin <strong>${escapeHtml(name)}</strong> wants to
           fetch from the site below. This is the only way it can send data off your device —
           allow it only if you trust this plugin. If you allow, CrossTab remembers your choice
           <strong>for this site only</strong>; a different host will ask again. Revoke any time
           in Edit ▸ Plugins….</p>
-        <p class="ct-dialog__hint" style="word-break:break-all"><code>${escapeText(url)}</code></p>
+        <p class="ct-dialog__hint" style="word-break:break-all"><code>${escapeHtml(url)}</code></p>
         <menu class="ct-dialog__buttons">
           <button value="allow" type="submit">Allow</button>
           <button value="block" type="submit" class="ct-dialog__primary">Block</button>
@@ -249,7 +250,7 @@ function promptWebDav(saved, { move = false } = {}) {
     const d = document.createElement('dialog');
     d.className = 'ct-dialog ct-dialog--wide';
     const options = saved
-      .map((c, i) => `<option value="${i}">${escapeText(c.name || c.config?.url || 'Saved location')}</option>`)
+      .map((c, i) => `<option value="${i}">${escapeHtml(c.name || c.config?.url || 'Saved location')}</option>`)
       .join('');
     d.innerHTML = `
       <form method="dialog" class="ct-dialog__form">
@@ -314,9 +315,9 @@ function promptDropbox(saved, { move = false } = {}) {
           its <strong>app key</strong> below. The app key is not a secret; the app
           <em>secret</em> is, and is not used here.</p>
         <p><label>App key<br><input name="appKey" required style="width:100%"
-          value="${escapeText(saved.appKey ?? '')}" placeholder="abcdefghijklmno"></label></p>
+          value="${escapeHtml(saved.appKey ?? '')}" placeholder="abcdefghijklmno"></label></p>
         <p><label>Folder<br><input name="basePath" style="width:100%"
-          value="${escapeText(saved.basePath ?? '')}" placeholder="/CrossTab/my-study"></label></p>
+          value="${escapeHtml(saved.basePath ?? '')}" placeholder="/CrossTab/my-study"></label></p>
         <p class="ct-dialog__hint">${move
           ? 'The folder must be empty or not yet exist — CrossTab will not write over a project already there. It is created if missing.'
           : 'The folder CrossTab should open the project from.'}</p>
@@ -346,8 +347,8 @@ function promptPassword(title, hint) {
     d.className = 'ct-dialog';
     d.innerHTML = `
       <form method="dialog" class="ct-dialog__form">
-        <h2 class="ct-dialog__title">${escapeText(title)}</h2>
-        <p class="ct-dialog__hint">${escapeText(hint)}</p>
+        <h2 class="ct-dialog__title">${escapeHtml(title)}</h2>
+        <p class="ct-dialog__hint">${escapeHtml(hint)}</p>
         <p><input name="password" type="password" autocomplete="current-password"
           style="width:100%" placeholder="App password"></p>
         <menu class="ct-dialog__buttons">
@@ -374,11 +375,6 @@ function promptPassword(title, hint) {
  */
 const SIDEBAR_RECENTS = 5;
 
-/** Minimal text escape for the few interpolations above. */
-function escapeText(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
 /**
  * After opening a shared `.crosstab` bundle, warn about analyses/plugins it used
  * that aren't installed here (#102). Built-ins are always present, so these are
@@ -394,9 +390,9 @@ function showMissingPluginsDialog(missing) {
   const items = missing
     .map((p) => {
       const where = p.url
-        ? `<code style="word-break:break-all">${escapeText(p.url)}</code>`
-        : `<span class="ct-dialog__hint">${escapeText(originText(p.origin))}</span>`;
-      return `<li><strong>${escapeText(p.name || 'Unnamed plugin')}</strong> — ${where}</li>`;
+        ? `<code style="word-break:break-all">${escapeHtml(p.url)}</code>`
+        : `<span class="ct-dialog__hint">${escapeHtml(originText(p.origin))}</span>`;
+      return `<li><strong>${escapeHtml(p.name || 'Unnamed plugin')}</strong> — ${where}</li>`;
     })
     .join('');
   d.innerHTML = `

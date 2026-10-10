@@ -30,6 +30,7 @@ import { downloadFile } from './export-service.js';
 import { describeChart, renderChartAsync, viewFromSpec, getChartKind } from './chart-renderer.js';
 import { CoreEvents } from './event-bus.js';
 import { buildChartControls } from './chart-controls.js';
+import { escapeHtml } from './text.js';
 
 /** Canonical stylesheet applied inside the shadow root. Kept inline so the pane
  * is self-contained and has no external CSS dependency. */
@@ -1725,8 +1726,7 @@ function tableToTsv(spec) {
  * so rich editors — email, Word, Google Docs — paste it back as aligned columns with
  * its title, instead of the tab-collapsed mush a plain-text paste becomes. */
 function tableToHtml(spec) {
-  const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-  const cellHtml = (v) => (Array.isArray(v) ? v : [v]).map(fmtCellValue).filter((s) => s !== '').map(esc).join('<br>');
+  const cellHtml = (v) => (Array.isArray(v) ? v : [v]).map(fmtCellValue).filter((s) => s !== '').map(escapeHtml).join('<br>');
   const cellStyle = 'border:1px solid #ccc;padding:3px 8px;text-align:left';
   const ncols = spec.columns?.length || (spec.rows?.[0]?.length ?? 1);
   const out = ['<table style="border-collapse:collapse;font-family:sans-serif;font-size:13px">'];
@@ -1736,10 +1736,10 @@ function tableToHtml(spec) {
   // title vanished. A header cell spanning every column travels with the table and
   // always renders — an SPSS-style titled table.
   if (spec.caption) {
-    head.push(`<tr><th colspan="${ncols}" style="${cellStyle};font-weight:bold;font-size:14px;background:#f2f2f2">${esc(spec.caption)}</th></tr>`);
+    head.push(`<tr><th colspan="${ncols}" style="${cellStyle};font-weight:bold;font-size:14px;background:#f2f2f2">${escapeHtml(spec.caption)}</th></tr>`);
   }
   if (spec.columns?.length) {
-    head.push('<tr>' + spec.columns.map((c) => `<th style="${cellStyle};font-weight:bold">${esc(c)}</th>`).join('') + '</tr>');
+    head.push('<tr>' + spec.columns.map((c) => `<th style="${cellStyle};font-weight:bold">${escapeHtml(c)}</th>`).join('') + '</tr>');
   }
   if (head.length) out.push('<thead>' + head.join('') + '</thead>');
   out.push('<tbody>');
@@ -1923,8 +1923,6 @@ function savePlotPng(holder, handle) {
  * @returns {string} HTML
  */
 function renderMiniMarkdown(md) {
-  const escape = (s) =>
-    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   // `_underscore_` emphasis as well as `*asterisk*`: three callers already wrote
   // it that way (Frequencies' mode-tie note, the ACF bound, "the script ran with
@@ -1932,7 +1930,7 @@ function renderMiniMarkdown(md) {
   // Emphasis requires a boundary on both sides, so `WTSSNR_2` and `my_var_name`
   // stay the identifiers they are rather than turning into italics.
   const inline = (s) =>
-    escape(s)
+    escapeHtml(s)
       .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
       .replace(/\*([^*]+)\*/g, '<em>$1</em>')

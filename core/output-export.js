@@ -27,6 +27,7 @@
  */
 
 import { downloadFile } from './export-service.js';
+import { escapeHtml } from './text.js';
 
 export class OutputExportService {
   /** The results-pane host element (carries the open shadow root) — for print. */
@@ -266,11 +267,6 @@ ${clone.outerHTML}
   }
 }
 
-// --- helpers ---------------------------------------------------------------
-
-function escapeHtml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
 function escapeAttr(s) {
   return escapeHtml(s).replace(/"/g, '&quot;');
 }

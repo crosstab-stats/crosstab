@@ -10,6 +10,57 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
+- [ ] **A plugin stdlib — the shared vocabulary stops at the sandbox boundary (owner,
+      2026-10-10).** Filed out of the duplication audit, which fixed the core half and
+      could not fix this one.
+
+      **The problem, concretely.** A plugin runs in a sandboxed iframe and cannot import
+      from `core/`. So every helper core now shares, a plugin must still write out:
+
+      - `filenameFor()` is **byte-identical in three places** — `core/output-export.js`,
+        `builtin-docx-export`, `builtin-html-export`.
+      - HTML escaping: `builtin-html-export` had the **attribute-unsafe** version and was
+        interpolating it into `src="…"` and `alt="…"` of a file people then share. Fixed
+        in place 2026-10-10, but only because someone looked. `builtin-caqdas` carries two
+        more copies (`&<>"` — safe for double-quoted attributes, no `'`), and
+        `builtin-decisions` a third.
+      - `esc`/`el` shapes recur across most plugins that build any markup.
+
+      **Why this is not just tidiness.** The audit's finding was that duplicates drift
+      silently and the drift is invisible until someone reads all the copies — and the two
+      worst instances were both in ESCAPING, where the drift is a security property. Core
+      now has one `escapeHtml` and a test that fails if a fourteenth copy appears. Plugins
+      have no such floor, and third-party plugins never will unless we give them one.
+
+      **The precedent already exists.** `core/charts/stdlib.js` is shipped AS SOURCE into
+      the sandbox for chart kinds (#131) — the mechanism is proven, it is just scoped to
+      drawing. The question is whether a second, general module rides the same path.
+
+      **The discussion to have before building it — what goes in?** The charter matters
+      more than the code, because a plugin stdlib is a PUBLIC API: third-party plugins will
+      pin to it, so anything added is close to permanent, and anything wrong is a breaking
+      change. Candidates, roughly in order of how clearly they qualify:
+
+      1. **`escapeHtml`** — unambiguous. Every caller wants the same answer and the wrong
+         answer is a vulnerability.
+      2. **`filenameFor` / slug** — three identical copies already; the only argument
+         against is that an exporter might want its own naming, which it can still do.
+      3. **`stripEllipsis`, number/date formatting** — the "one voice" argument from the
+         project-metadata work. Formatting is where an app's voice actually lives.
+      4. **`el()` DOM helper** — nine copies in core alone. Tempting, but it is three lines
+         and a plugin's markup is its own business; this is the first candidate where
+         "everyone wants the same answer" stops being obviously true.
+      5. **Anything stateful or host-touching** — almost certainly NOT. That is what the
+         `app.*` service API is for, and it crosses postMessage for a reason.
+
+      Open questions: how it is versioned (a plugin written against v1 running on a build
+      that ships v2); whether it is injected like the chart stdlib or fetched as a module;
+      whether built-ins and third-party plugins get the same one (they should, or the
+      built-ins are privileged in a way [[deploy-settings]] says they must not be); and
+      whether `sanitizeHtml` belongs in it or stays host-side (it is the host's defence
+      against the plugin, so: stays host-side).
+
+
 - [x] **DONE (2026-10-10). A project row says when it was last worked on and how big it
       is — and opening one no longer counts as working on it.**
 

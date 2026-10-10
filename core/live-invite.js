@@ -22,13 +22,11 @@
  * content, not participation.
  */
 
+import { b64url } from './oauth-pkce.js';
+
 const APP_NS = 'crosstab-collab-v1';
 
 /** base64url (no padding) — URL-fragment-safe, unlike standard base64. */
-function b64url(bytes) {
-  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
 /**
  * The opaque broker topic for a project — `SHA-256(APP_NS ‖ uuid)` as 128-bit hex.
  * Stable for a project (derived from its UUID), unguessable, and namespaced so it

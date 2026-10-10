@@ -36,7 +36,7 @@
  */
 
 /** Base64url — no padding, URL-safe alphabet, as the spec requires. */
-function b64url(bytes) {
+export function b64url(bytes) {
   let s = '';
   for (const b of bytes) s += String.fromCharCode(b);
   return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');

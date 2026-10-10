@@ -40,6 +40,8 @@
  * String VALUEs are double-quoted; numbers are bare.
  */
 
+import { stripEllipsis } from './text.js';
+
 const TYPES = new Set(['numeric', 'string', 'factor']);
 const MEASURES = new Set(['nominal', 'ordinal', 'scale']);
 /** Op types that count as a "data transform" (what getTransforms returns) — used to
@@ -325,9 +327,6 @@ function num(n) {
   return Number.isFinite(Number(n)) ? String(Number(n)) : '0';
 }
 
-function stripEllipsis(s) {
-  return String(s ?? '').replace(/…\s*$/, '').trim();
-}
 
 // =============================================================================
 // PARSE  (text → ops)

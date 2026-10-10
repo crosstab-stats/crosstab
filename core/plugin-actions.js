@@ -21,6 +21,7 @@ import { datasetsNamed, parseVarRef } from './var-ref.js';
 import { registerRemoteChartKind, unregisterChartKind } from './chart-renderer.js';
 import { newOpId } from './merge.js';
 import { collectR } from './r-capture.js';
+import { stripEllipsis } from './text.js';
 
 export class PluginActions {
   #loader;
@@ -1215,7 +1216,3 @@ function composeTitle(label, role) {
   return role ? `${base} — ${role}` : base;
 }
 
-/** Strip a trailing ellipsis (…/...) from a menu label for use as a heading. */
-function stripEllipsis(s) {
-  return String(s ?? '').replace(/\s*(…|\.\.\.)\s*$/, '');
-}

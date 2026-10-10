@@ -25,6 +25,8 @@
  */
 
 /** Files we manage in the folder. Names are stable so re-saving is idempotent. */
+import { escapeHtml } from './text.js';
+
 export const SHORTCUT_HTML = 'Open in CrossTab.html'; // double-click → browser → app
 export const SHORTCUT_README = 'HOW TO OPEN.txt';
 
@@ -36,15 +38,10 @@ export function openFolderUrl(origin, pathname) {
   return `${base}?launch=open-folder`;
 }
 
-/** Escape a string for safe use inside a double-quoted HTML attribute / text node. */
-function esc(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
 /** A self-contained HTML redirect. Double-clicking opens the default browser, which
  * meta-refreshes to the app (with a visible fallback link if refresh is blocked). */
 export function htmlShortcut(url) {
-  const u = esc(url);
+  const u = escapeHtml(url);
   return [
     '<!doctype html>',
     '<html lang="en">',

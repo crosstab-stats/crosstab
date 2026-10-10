@@ -14,8 +14,8 @@
  */
 
 import { planRowMap, planRehome, gatherRehome, applyRehome } from './rehome.js';
+import { escapeHtml } from './text.js';
 
-const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 /**
  * Ask, then do. Resolves to a result summary, or null if the user cancelled.
@@ -46,10 +46,10 @@ export async function openRehomeDialog({ fromId, toId, deps, reason }) {
   dialog.innerHTML = `
     <form method="dialog" class="ct-dialog__form ct-edit">
       <h2 class="ct-dialog__title">Bring coding and analyses across?</h2>
-      <p class="ct-dialog__hint">${esc(reason
+      <p class="ct-dialog__hint">${escapeHtml(reason
         || `“${fromName}” has work attached that is not part of the data itself.`)}</p>
       <label class="ct-field">Move to
-        <select name="to">${targets.map((d) => `<option value="${esc(d.id)}"${String(d.id) === String(toId) ? ' selected' : ''}>${esc(d.name)}</option>`).join('')}</select>
+        <select name="to">${targets.map((d) => `<option value="${escapeHtml(d.id)}"${String(d.id) === String(toId) ? ' selected' : ''}>${escapeHtml(d.name)}</option>`).join('')}</select>
       </label>
       <label class="ct-field">What to do
         <select name="mode">
@@ -98,7 +98,7 @@ export async function openRehomeDialog({ fromId, toId, deps, reason }) {
     const bNames = new Set(b.map((v) => v.name));
     const shared = a.map((v) => v.name).filter((n) => bNames.has(n));
     keySel.innerHTML = '<option value="">Row position (works when the rows are unchanged)</option>'
-      + shared.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+      + shared.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
   };
 
   let current = null;

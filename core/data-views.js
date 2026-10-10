@@ -20,6 +20,7 @@ import { scriptToStata, scriptToSpss, scriptFileName, scriptToR } from './script
 import { floatSelected, loadVarOrder, saveVarOrder, sortVars, loadVarDisplay, saveVarDisplay, varDisplay } from './var-order.js';
 import { makeVarToolbar, filterVars, getWorkspaceFilter, setWorkspaceFilter } from './var-toolbar.js';
 import { labelForValue, summariseMissing } from './var-role.js';
+import { escapeHtml, stripEllipsis } from './text.js';
 
 /** Syntax editor metrics: the textarea uses a FIXED line-height so the step gutter
  * can place each marker at `PAD + lineIndex * LINE_H` (and the textarea is no-wrap,
@@ -845,9 +846,9 @@ export class VariableView {
     dialog.innerHTML = `
       <form method="dialog" class="ct-dialog__form ct-edit">
         <h2 class="ct-dialog__title">Edit variable</h2>
-        <p class="ct-dialog__hint"><code>${esc(meta.name)}</code></p>
+        <p class="ct-dialog__hint"><code>${escapeHtml(meta.name)}</code></p>
         <label class="ct-field">Label
-          <input name="label" type="text" value="${attr(meta.label || '')}">
+          <input name="label" type="text" value="${escapeHtml(meta.label || '')}">
         </label>
         <div class="ct-row">
           <label class="ct-field">Type
@@ -858,10 +859,10 @@ export class VariableView {
           </label>
         </div>
         <label class="ct-field">Missing values <span class="ct-hint">one per line, or comma-separated; a span is <code>-99 to -90</code></span>
-          <textarea name="missing" rows="2">${esc(formatMissingSpec(meta))}</textarea>
+          <textarea name="missing" rows="2">${escapeHtml(formatMissingSpec(meta))}</textarea>
         </label>
         <label class="ct-field">Value labels <span class="ct-hint">one <code>code = label</code> per line</span>
-          <textarea name="labels" rows="4">${esc(labelLines)}</textarea>
+          <textarea name="labels" rows="4">${escapeHtml(labelLines)}</textarea>
         </label>
         <menu class="ct-dialog__buttons">
           <button value="cancel" type="submit">Cancel</button>
@@ -1117,7 +1118,7 @@ export class HistoryView {
     const mk = el('span', '∑', 'history__marker');
     mk.style.color = 'var(--accent, #2572a5)';
     const body = el('span', null, 'history__body');
-    body.append(el('span', String(entry.label || 'Analysis').replace(/…\s*$/, ''), 'history__title'));
+    body.append(el('span', stripEllipsis(entry.label || 'Analysis'), 'history__title'));
     const detail = entry.pluginName || '';
     if (detail) body.append(el('span', detail, 'history__detail'));
     row.append(mk, body);
@@ -1204,7 +1205,7 @@ export class HistoryView {
     form.method = 'dialog';
     form.className = 'ct-dialog__form';
 
-    const title = el('h2', `R source — ${String(entry.label || 'Analysis').replace(/…\s*$/, '')}`, 'ct-dialog__title');
+    const title = el('h2', `R source — ${stripEllipsis(entry.label || 'Analysis')}`, 'ct-dialog__title');
     const hint = el(
       'p',
       `${entry.pluginName || 'A plugin'} ran this to produce the result. It binds its own data, so`
@@ -2061,7 +2062,7 @@ function highlightScriptLine(line) {
   let i = 0;
   let firstWord = true; // only the leading verb is a "command"
   const push = (cls, text) => {
-    out += cls ? `<span class="tk-${cls}">${esc(text)}</span>` : esc(text);
+    out += cls ? `<span class="tk-${cls}">${escapeHtml(text)}</span>` : escapeHtml(text);
   };
   while (i < n) {
     const c = s[i];
@@ -2363,16 +2364,6 @@ function parseLabels(text) {
     if (code !== '') out[code] = label;
   }
   return out;
-}
-
-/** HTML-escape for text content. */
-function esc(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-/** Escape for an HTML attribute value. */
-function attr(s) {
-  return esc(s).replace(/"/g, '&quot;');
 }
 
 /** Compact "1=Male; 2=Female" summary (truncated) for the Variable View. */

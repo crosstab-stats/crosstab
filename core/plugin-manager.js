@@ -29,6 +29,8 @@ import { deployConfig } from './deploy-config.js';
 import { CoreEvents } from './event-bus.js';
 import { packPlugin, unpackPlugin, looksLikeZip } from './plugin-package.js';
 import { ownerToken } from './workspace-store.js';
+import { escapeHtml } from './text.js';
+import { downloadBlob } from './project-bundle.js';
 
 const LS_DISABLED = 'crosstab.plugins.disabled';
 const LS_CATALOG = 'crosstab.plugins.catalog';
@@ -1203,12 +1205,6 @@ function randHex(n) {
   return crypto.randomUUID().replace(/-/g, '').slice(0, n);
 }
 
-/** Escape text for safe interpolation into a dialog's innerHTML (plugin names are
- * user/author-supplied). */
-function escapeHtml(s) {
-  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-}
-
 /** Prepare a forked plugin's source so it loads as a *distinct* plugin: give the
  * manifest a fresh `id` (required — the original's id is already taken) and the
  * "(copy)" display name. Both target the first matching manifest literal; the
@@ -1230,18 +1226,6 @@ function forkSource(source, copyName) {
 /** Download `text` as a file (used to export a plugin's source). */
 function downloadText(filename, text) {
   downloadBlob(new Blob([text], { type: 'text/javascript;charset=utf-8' }), filename);
-}
-
-/** Download a Blob as a file (used to export a `.ctplugin` package). */
-function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.append(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
 /** Every asset a manifest declares (top-level `assets` + each codec's `assets`) —

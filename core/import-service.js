@@ -102,6 +102,9 @@ import { passphraseFor } from './at-rest.js';
  *   plugin — no importer is privileged.
  */
 
+import { escapeHtml } from './text.js';
+import { looksLikeZip as looksLikeZipBytes } from './plugin-package.js';
+
 export class ImportService {
   /** @type {import('./menu-shell.js').MenuShell} */
   #menus;
@@ -935,9 +938,13 @@ function filenameFromResponse(res, url) {
 }
 
 /** True if the Blob starts with the ZIP local-file-header signature (`PK`). */
+/**
+ * A Blob-shaped wrapper over the ONE PK-magic check (`plugin-package.js`), which takes
+ * bytes. This used to be a second copy of the two-byte comparison — the same question
+ * asked twice, so only the reading of the bytes differs now.
+ */
 async function looksLikeZip(blob) {
-  const head = new Uint8Array(await blob.slice(0, 2).arrayBuffer());
-  return head[0] === 0x50 && head[1] === 0x4b;
+  return looksLikeZipBytes(new Uint8Array(await blob.slice(0, 2).arrayBuffer()));
 }
 
 /** True if the file begins with the self-contained encrypted-export magic (#144),
@@ -965,7 +972,7 @@ function promptImportUrl(exts) {
     dialog.innerHTML = `
       <form method="dialog" class="ct-dialog__form">
         <h2 class="ct-dialog__title">Import from a web address</h2>
-        <p class="ct-dialog__hint">Paste a direct link to a data file (${escapeText(list)}) — or a
+        <p class="ct-dialog__hint">Paste a direct link to a data file (${escapeHtml(list)}) — or a
           <code>.zip</code> containing one. The site must allow cross-origin downloads (most
           “raw”/open-data links do); if it doesn’t, download the file and use <strong>Import data…</strong>.</p>
         <label class="ct-dialog__row">
@@ -999,10 +1006,6 @@ function promptImportUrl(exts) {
   });
 }
 
-/** Minimal text escape for the one interpolation in the URL prompt. */
-function escapeText(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
 
 /**
  * Ask how an import should combine with the loaded data. Resolves to

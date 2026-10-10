@@ -106,8 +106,23 @@ ${body}
 </html>`;
 }
 
+/**
+ * Escape so the result is text wherever it lands, attributes included.
+ *
+ * It used to escape only `& < >`, while line 69 interpolates it into `src="…"` and
+ * `alt="…"` — and `alt` carries plugin-supplied image metadata. A quote closed the
+ * attribute early, which in a file people SHARE and open is worse than a broken layout.
+ * Found in the duplication audit, 2026-10-10: core had the same bug in `app.js` and
+ * thirteen other spellings of this function besides.
+ *
+ * Core now has one `escapeHtml` in `core/text.js`, but a plugin runs in a sandbox and
+ * cannot import from core — hence the copy. That constraint is filed as the case for a
+ * plugin stdlib; until then this must stay correct on its own.
+ */
 function esc(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[c]);
 }
 
 function filenameFor(title, ext) {

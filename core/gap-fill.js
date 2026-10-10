@@ -29,6 +29,8 @@
  * channel (messages tagged `t:'need'`/`'src-chunk'`, which LiveDoc ignores).
  */
 
+import { sha256hex } from './crypto-envelope.js';
+
 const DEFAULT_CHUNK = 256 * 1024; // 256 KiB
 
 /** The stable key for a source ref — its op id, else a dataset+file fallback. */
@@ -103,12 +105,6 @@ export function reassemble(chunks) {
   let off = 0;
   for (const c of chunks) { out.set(c, off); off += c.length; }
   return out;
-}
-
-/** SHA-256 of bytes as a hex string (integrity check). */
-export async function sha256hex(bytes) {
-  const digest = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', bytes));
-  return [...digest].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 /**

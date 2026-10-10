@@ -30,6 +30,7 @@
  */
 
 import { liveOps } from './op-log.js';
+import { sha256hex } from './crypto-envelope.js';
 
 /** Bus event: the media-asset tier changed (an asset was added or forgotten), so the
  * project is dirty and should autosave. */
@@ -359,13 +360,6 @@ export function dataUriToBlob(uri) {
     ? Uint8Array.from(atob(raw), (c) => c.charCodeAt(0))
     : new TextEncoder().encode(decodeURIComponent(raw));
   return new Blob([bytes], { type });
-}
-
-/** SHA-256 hex of bytes — the asset id / content hash. Needs a secure context
- * (HTTPS or localhost), which the app already requires for COOP/COEP. */
-async function sha256hex(bytes) {
-  const buf = await crypto.subtle.digest('SHA-256', bytes);
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 /** Defensive filename guard: ids are lowercase hex, but never let a crafted ref

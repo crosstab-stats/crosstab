@@ -191,3 +191,17 @@ export async function decryptSelfContained(passphrase, bytes) {
     throw new Error('decrypt failed — wrong passphrase or corrupted file');
   }
 }
+
+/**
+ * SHA-256 of some bytes, as lowercase hex.
+ *
+ * Here with the other crypto primitives rather than in a caller, because two had written
+ * it out separately: the asset store (content-addressing an asset) and the gap-fill
+ * transfer (checking a chunk arrived intact). Identical both times, which is the point —
+ * a hash with two implementations is a hash whose callers can one day disagree about what
+ * a given file IS.
+ */
+export async function sha256hex(bytes) {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  return [...digest].map((b) => b.toString(16).padStart(2, '0')).join('');
+}

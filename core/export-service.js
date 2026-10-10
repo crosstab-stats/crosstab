@@ -33,6 +33,7 @@
 import { showFormatPicker, showSaveAsDialog, groupFor, byGroupThenOrder } from './format-picker.js';
 import { shouldEncrypt, passphraseFor } from './at-rest.js';
 import { encryptSelfContained } from './crypto-envelope.js';
+import { stripEllipsis } from './text.js';
 
 /**
  * @typedef {Object} ExporterSpec
@@ -195,7 +196,7 @@ export class ExportService {
     // fixed by the chosen format.
     const ext = (spec.extensions && spec.extensions[0]) || '';
     const filename = await showSaveAsDialog({
-      title: `Export ${spec.label.replace(/…\s*$/, '')}`,
+      title: `Export ${stripEllipsis(spec.label)}`,
       defaultName: 'export',
       extension: ext,
     });

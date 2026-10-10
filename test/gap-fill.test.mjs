@@ -5,7 +5,9 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { refKey, sourceRefs, missingSources, assetRefs, missingAssets, chunk, reassemble, sha256hex, BlobExchange } from '../core/gap-fill.js';
+import { refKey, sourceRefs, missingSources, assetRefs, missingAssets, chunk, reassemble, BlobExchange } from '../core/gap-fill.js';
+// sha256hex moved to crypto-envelope.js on 2026-10-10: the asset store had its own copy.
+import { sha256hex } from '../core/crypto-envelope.js';
 
 // A source op in the flat one-true-log (the shape sourceRefs now reads).
 const loadOp = (id, dsId, file) => ({ id, hlc: { wall: 0, counter: 0 }, target: `ds:${dsId}/source:${id}`, owner: 'core', type: 'load', payload: { src: { meta: [{ name: 'x' }], label: 'f', file } }, reads: [] });

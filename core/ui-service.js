@@ -35,6 +35,7 @@
 import { loadVarOrder, saveVarOrder, sortVars, loadVarDisplay, saveVarDisplay, varDisplay } from './var-order.js';
 import { makeVarToolbar, filterVars } from './var-toolbar.js';
 import { isCategorical, isQuantitative } from './var-role.js';
+import { escapeHtml } from './text.js';
 
 export class UiService {
   /** @type {import('./data-store.js').DataStore} */
@@ -128,14 +129,14 @@ export class UiService {
       dialog.className = 'ct-dialog';
       dialog.innerHTML = `
         <form method="dialog" class="ct-dialog__form">
-          <h2 class="ct-dialog__title">${esc(title)}</h2>
-          ${hint ? `<p class="ct-dialog__hint">${esc(hint)}</p>` : ''}
+          <h2 class="ct-dialog__title">${escapeHtml(title)}</h2>
+          ${hint ? `<p class="ct-dialog__hint">${escapeHtml(hint)}</p>` : ''}
           <div class="ct-vartools-slot"></div>
           <p class="ct-vartools__count ct-vartools__count--dialog" role="status" aria-live="polite"></p>
           <ul class="ct-dialog__vars"></ul>
           <menu class="ct-dialog__buttons">
             <button value="cancel" type="submit">Cancel</button>
-            <button value="ok" type="submit" class="ct-dialog__primary">${esc(okLabel)}</button>
+            <button value="ok" type="submit" class="ct-dialog__primary">${escapeHtml(okLabel)}</button>
           </menu>
         </form>`;
 
@@ -508,13 +509,13 @@ export class UiService {
             // pick from a list the host knows, and a free-text field for it would be a
             // name the user has to get exactly right.
             const opts = (f.options ?? [])
-              .map((o) => `<option value="${attr(String(o.value))}"${String(o.value) === String(f.value ?? '') ? ' selected' : ''}>${esc(o.label ?? o.value)}</option>`)
+              .map((o) => `<option value="${escapeHtml(String(o.value))}"${String(o.value) === String(f.value ?? '') ? ' selected' : ''}>${escapeHtml(o.label ?? o.value)}</option>`)
               .join('');
             return `
-            <label class="ct-field">${esc(f.label ?? f.name)}${
-              f.hint ? ` <span class="ct-hint">${esc(f.hint)}</span>` : ''
+            <label class="ct-field">${escapeHtml(f.label ?? f.name)}${
+              f.hint ? ` <span class="ct-hint">${escapeHtml(f.hint)}</span>` : ''
             }
-              <select name="${attr(f.name)}">${opts}</select>
+              <select name="${escapeHtml(f.name)}">${opts}</select>
             </label>`;
           }
           const type = f.type === 'password' ? 'password' : f.type === 'number' ? 'number' : 'text';
@@ -524,27 +525,27 @@ export class UiService {
           // A field may still declare an explicit step/min/max for integer-only cases.
           const numAttrs =
             type === 'number'
-              ? ` step="${attr(f.step != null ? String(f.step) : 'any')}"${
-                  f.min != null ? ` min="${attr(String(f.min))}"` : ''
-                }${f.max != null ? ` max="${attr(String(f.max))}"` : ''}`
+              ? ` step="${escapeHtml(f.step != null ? String(f.step) : 'any')}"${
+                  f.min != null ? ` min="${escapeHtml(String(f.min))}"` : ''
+                }${f.max != null ? ` max="${escapeHtml(String(f.max))}"` : ''}`
               : '';
           return `
-            <label class="ct-field">${esc(f.label ?? f.name)}${
-              f.hint ? ` <span class="ct-hint">${esc(f.hint)}</span>` : ''
+            <label class="ct-field">${escapeHtml(f.label ?? f.name)}${
+              f.hint ? ` <span class="ct-hint">${escapeHtml(f.hint)}</span>` : ''
             }
-              <input name="${attr(f.name)}" type="${type}" value="${attr(f.value ?? '')}"
-                     placeholder="${attr(f.placeholder ?? '')}"${numAttrs} autocomplete="off">
+              <input name="${escapeHtml(f.name)}" type="${type}" value="${escapeHtml(f.value ?? '')}"
+                     placeholder="${escapeHtml(f.placeholder ?? '')}"${numAttrs} autocomplete="off">
             </label>`;
         })
         .join('');
       dialog.innerHTML = `
         <form method="dialog" class="ct-dialog__form ct-edit">
-          <h2 class="ct-dialog__title">${esc(title)}</h2>
-          ${hint ? `<p class="ct-dialog__hint">${esc(hint)}</p>` : ''}
+          <h2 class="ct-dialog__title">${escapeHtml(title)}</h2>
+          ${hint ? `<p class="ct-dialog__hint">${escapeHtml(hint)}</p>` : ''}
           ${fieldHtml}
           <menu class="ct-dialog__buttons">
             <button value="cancel" type="submit">Cancel</button>
-            <button value="ok" type="submit" class="ct-dialog__primary">${esc(okLabel)}</button>
+            <button value="ok" type="submit" class="ct-dialog__primary">${escapeHtml(okLabel)}</button>
           </menu>
         </form>`;
       dialog.addEventListener('close', () => {
@@ -553,7 +554,7 @@ export class UiService {
         if (ok) {
           for (const f of fields) {
             const sel = f.type === 'select' ? 'select' : 'input';
-            const el = dialog.querySelector(`${sel}[name="${attr(f.name)}"]`);
+            const el = dialog.querySelector(`${sel}[name="${escapeHtml(f.name)}"]`);
             out[f.name] = el ? el.value : '';
           }
         }
@@ -658,15 +659,4 @@ function fitsRole(m, types) {
   return false;
 }
 
-/** HTML-escape text content. */
-function esc(s) {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
 
-/** Escape for an HTML attribute value. */
-function attr(s) {
-  return esc(s).replace(/"/g, '&quot;');
-}

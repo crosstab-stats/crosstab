@@ -32,6 +32,7 @@
  */
 
 import { parse } from './crosstab-syntax.js';
+import { stripEllipsis } from './text.js';
 
 /** Banners and breadcrumbs our own .do/.sps importers write into a script. See
  * {@link commentThrough} for why an export drops them instead of passing them on. */
@@ -1126,17 +1127,13 @@ function transAnalysis(a, D, ctx, line) {
   // comment, and the parser strips comments before handing the statement over — so `a.label`
   // was always undefined here and this heading never actually printed.
   const label = entry?.label ?? a.label;
-  if (D.id === 'r' && label) out.push(D.comment(`--- ${stripTrailingEllipsis(label)} ---`));
+  if (D.id === 'r' && label) out.push(D.comment(`--- ${stripEllipsis(label)} ---`));
   if (dropped && dropped.length) out.push(D.comment(`The next command leaves out ${dropped.join('; ')}.`));
   out.push(...lines);
   out.push(...exact);
   return ok(out);
 }
 
-/** Menu labels end in an ellipsis ("One-way ANOVA…"); a heading should not. */
-function stripTrailingEllipsis(s) {
-  return String(s).replace(/\s*(?:\u2026|\.\.\.)\s*$/, '');
-}
 
 /** An input with no value: absent, blank, or an empty list. */
 function isEmpty(v) {

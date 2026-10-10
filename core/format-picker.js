@@ -41,6 +41,8 @@
  * @param {string} [opts.emptyText] - Shown when there are no entries at all.
  * @param {FormatEntry[]} opts.entries
  */
+import { stripEllipsis } from './text.js';
+
 export function showFormatPicker({ title, hint, emptyText, entries }) {
   const dialog = document.createElement('dialog');
   dialog.className = 'ct-dialog ct-dialog--wide ct-fmt';
@@ -110,7 +112,7 @@ export function showFormatPicker({ title, hint, emptyText, entries }) {
         row.className = 'ct-fmt__row';
         const name = document.createElement('span');
         name.className = 'ct-fmt__name';
-        name.textContent = e.label.replace(/…\s*$/, '');
+        name.textContent = stripEllipsis(e.label);
         row.append(name);
         if (e.extensions && e.extensions.length) {
           const ext = document.createElement('span');
@@ -188,7 +190,7 @@ export function chooseFormat({ title, hint, entries }) {
       row.className = 'ct-fmt__row';
       const name = document.createElement('span');
       name.className = 'ct-fmt__name';
-      name.textContent = e.label.replace(/…\s*$/, '');
+      name.textContent = stripEllipsis(e.label);
       row.append(name);
       if (e.extensions && e.extensions.length) {
         const ext = document.createElement('span');

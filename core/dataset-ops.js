@@ -17,6 +17,8 @@
 
 /** Join types offered everywhere (here + the import dialog), labelled so the
  * "outer" variants read explicitly. Order: most common first. */
+import { escapeHtml } from './text.js';
+
 export const JOIN_TYPES = [
   { value: 'left', label: 'Left outer — keep all rows from this dataset' },
   { value: 'inner', label: 'Inner — keep only matched rows' },
@@ -158,7 +160,7 @@ export class DatasetOps {
       vars
         .map((m) => {
           const lbl = m.label && m.label !== m.name ? `${m.label} (${m.name})` : m.name;
-          return `<option value="${attr(m.name)}"${m.name === selectedName ? ' selected' : ''}>${esc(lbl)}</option>`;
+          return `<option value="${escapeHtml(m.name)}"${m.name === selectedName ? ' selected' : ''}>${escapeHtml(lbl)}</option>`;
         })
         .join('');
 
@@ -167,15 +169,15 @@ export class DatasetOps {
       d.className = 'ct-dialog';
       d.innerHTML = `
         <form method="dialog" class="ct-dialog__form">
-          <h2 class="ct-dialog__title">Join “${esc(other.name)}” into “${esc(active.name)}”</h2>
+          <h2 class="ct-dialog__title">Join “${escapeHtml(other.name)}” into “${escapeHtml(active.name)}”</h2>
           <p class="ct-dialog__hint">Match rows by a key column on each side. Columns from
-            “${esc(other.name)}” are added; a name that clashes gets an “ (${esc(other.name)})” suffix.</p>
-          <label class="ct-dialog__row"><span>Key in “${esc(active.name)}”</span>
+            “${escapeHtml(other.name)}” are added; a name that clashes gets an “ (${escapeHtml(other.name)})” suffix.</p>
+          <label class="ct-dialog__row"><span>Key in “${escapeHtml(active.name)}”</span>
             <select name="left">${optionsFor(leftVars, common)}</select></label>
-          <label class="ct-dialog__row"><span>Key in “${esc(other.name)}”</span>
+          <label class="ct-dialog__row"><span>Key in “${escapeHtml(other.name)}”</span>
             <select name="right">${optionsFor(rightVars, common)}</select></label>
           <label class="ct-dialog__row"><span>Join type</span>
-            <select name="jtype">${JOIN_TYPES.map((t) => `<option value="${t.value}">${esc(t.label)}</option>`).join('')}</select></label>
+            <select name="jtype">${JOIN_TYPES.map((t) => `<option value="${t.value}">${escapeHtml(t.label)}</option>`).join('')}</select></label>
           <menu class="ct-dialog__buttons">
             <button value="cancel" type="submit">Cancel</button>
             <button value="ok" type="submit" class="ct-dialog__primary">Join</button>
@@ -193,11 +195,4 @@ export class DatasetOps {
       d.showModal();
     });
   }
-}
-
-function esc(s) {
-  return String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
-}
-function attr(s) {
-  return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 }
