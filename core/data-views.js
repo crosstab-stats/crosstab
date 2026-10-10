@@ -857,8 +857,8 @@ export class VariableView {
             <select name="measure">${['', 'nominal', 'ordinal', 'scale'].map((t) => opt(t, meta.measurementLevel || '')).join('')}</select>
           </label>
         </div>
-        <label class="ct-field">Missing values <span class="ct-hint">one per line, or comma-separated</span>
-          <textarea name="missing" rows="2">${esc((meta.missingValues || []).join(', '))}</textarea>
+        <label class="ct-field">Missing values <span class="ct-hint">one per line, or comma-separated; a span is <code>-99 to -90</code></span>
+          <textarea name="missing" rows="2">${esc(formatMissingSpec(meta))}</textarea>
         </label>
         <label class="ct-field">Value labels <span class="ct-hint">one <code>code = label</code> per line</span>
           <textarea name="labels" rows="4">${esc(labelLines)}</textarea>
@@ -878,7 +878,12 @@ export class VariableView {
         label: form.label.value.trim(),
         type: form.type.value,
         measurementLevel: form.measure.value || undefined,
-        missingValues: parseMissing(form.missing.value),
+        // BOTH keys, always — including when a list is empty. `applyPatch` deletes a key
+        // whose value is an empty array, so sending both is what lets this dialog CLEAR a
+        // declared range. Sending only `missingValues` (which is what it used to do) left
+        // the range untouched and invisible: you cleared the box, saved, and the variable
+        // went on treating a whole span as missing with nothing on screen to say why.
+        ...splitMissingSpec(form.missing.value),
         valueLabels: parseLabels(form.labels.value),
       };
       try {
@@ -2259,30 +2264,92 @@ function hspacer(tag, widthPx) {
 
 /** Parse a comma-separated missing-codes string into numbers (or strings). */
 /**
- * The missing-value codes a user typed, from either shape they might arrive in.
+ * A span, as the Missing values field writes and reads it: `-99 to -90`.
  *
- * Commas OR newlines, because the field is two lines rather than one (owner, 2026-10-09:
- * *"we can give missing a second line… and pasting from a column list we got in an email
- * might be handy"*). A GSS-style variable carries thirty-odd codes, which in a single-line
- * input meant scrubbing sideways through a value you could not see the end of — not a
- * reflow failure (a control scrolling its own value is native behaviour, not layout), but
- * a bad field, and an odd one next to Value labels, which was already a textarea.
+ * `to` is the word the Variable View cell already uses (`summariseMissing`), so the
+ * editor speaks back what the reader was shown rather than inventing a second notation.
+ * `thru` and `through` are accepted on input because SPSS spells it `LO THRU 0` and that
+ * is what someone converting a syntax file will type; only `to` is ever written out.
  *
- * Two lines rather than four: enough to see that a long list IS long and to paste into,
- * without giving a secondary field the weight of the one below it.
- *
- * Exported for the tests — the dialog that owns it is not constructible headlessly, and
- * the paste shapes are exactly the part worth pinning.
+ * Deliberately NOT a bare hyphen: `-99 - -90` is ambiguous with the minus signs that
+ * every missing code in practice carries.
  */
-export function parseMissing(text) {
-  return String(text)
-    .split(/[,\r\n]+/)
-    .map((s) => s.trim())
-    .filter((s) => s !== '')
-    .map((s) => {
-      const n = Number(s);
-      return s !== '' && Number.isFinite(n) ? n : s;
-    });
+const SPAN = /^(-?[0-9.]+(?:e[-+]?[0-9]+)?)\s+(?:to|thru|through)\s+(-?[0-9.]+(?:e[-+]?[0-9]+)?)$/i;
+
+/**
+ * The Missing values field's text, split into the two things the metadata holds:
+ * discrete codes (`missingValues`) and inclusive spans (`missingRanges`).
+ *
+ * ## Why one field for two keys
+ *
+ * They are one idea to the user — "what counts as missing" — and were two only because
+ * the editor could not see spans at all. A variable imported from SPSS/Stata with
+ * `MISSING VALUES income (LO THRU 0)` opened with an EMPTY box beside a Variable View
+ * cell reading `-999999 to 0`, and nothing in the dialog could edit or remove it
+ * (found 2026-10-07, fixed 2026-10-09).
+ *
+ * ## Shapes it accepts
+ *
+ * Commas or newlines between entries, because the field is two lines and a column pasted
+ * out of an email is a likely input. A span is `A to B`. Anything else is a discrete
+ * code, numeric where it parses as a number and a string otherwise — string variables
+ * have string missing codes ("NA", "refused"), and `Number()` would turn those into NaN,
+ * which compares equal to nothing and would match no rows at all.
+ *
+ * ## The normalisations, each for a reason
+ *
+ * - **`A to A` is a code, not a span.** `splitMissing` on import already does this; a
+ *   one-value range is just a longer way to write the value.
+ * - **Reversed bounds are swapped.** `designatedMissingSql` emits `BETWEEN lo AND hi` and
+ *   skips the range entirely when `hi < lo`, so `0 to -99` would type as accepted and then
+ *   silently match nothing. Swapping is what the user meant; dropping it is a trap.
+ * - **A span with a non-numeric end is kept as a plain code.** It is almost certainly a
+ *   string code that happens to contain the word, and inventing a NaN range would
+ *   quietly match nothing.
+ *
+ * @param {string} text
+ * @returns {{missingValues: Array<number|string>, missingRanges: Array<[number, number]>}}
+ */
+export function splitMissingSpec(text) {
+  const missingValues = [];
+  const missingRanges = [];
+  for (const raw of String(text).split(/[,\r\n]+/)) {
+    const tok = raw.trim();
+    if (tok === '') continue;
+    const m = tok.match(SPAN);
+    if (m) {
+      let lo = Number(m[1]);
+      let hi = Number(m[2]);
+      if (Number.isFinite(lo) && Number.isFinite(hi)) {
+        if (lo > hi) [lo, hi] = [hi, lo];
+        if (lo === hi) missingValues.push(lo);
+        else missingRanges.push([lo, hi]);
+        continue;
+      }
+    }
+    const n = Number(tok);
+    missingValues.push(Number.isFinite(n) ? n : tok);
+  }
+  return { missingValues, missingRanges };
+}
+
+/**
+ * The inverse: what the field shows when the dialog opens.
+ *
+ * **Not `summariseMissing`**, which is the Variable View cell's renderer and would be the
+ * obvious thing to reuse. It compresses a run of consecutive codes for display — `8, 9,
+ * 10` becomes `8 to 10` — and that is right for a cell and wrong here, because the next
+ * Save would read it back as a SPAN. A span covers everything between its ends, so three
+ * discrete codes would silently become a declaration that 8.5 is missing too. Round-trip
+ * fidelity is the whole job of this function; brevity is the other one's.
+ */
+export function formatMissingSpec(meta) {
+  const parts = (meta?.missingValues || []).map((v) => String(v));
+  for (const r of meta?.missingRanges || []) {
+    const [lo, hi] = Array.isArray(r) ? r : [];
+    if (Number.isFinite(lo) && Number.isFinite(hi)) parts.push(`${lo} to ${hi}`);
+  }
+  return parts.join(', ');
 }
 
 /** Parse a "code = label" per-line textarea into a `{code: label}` map. */

@@ -865,34 +865,40 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       and makes the source greppable and readable. `core/rehome.js`, whose two were in a
       comment and therefore inert, was fixed the same way on 2026-08-20. 606 tests.
 
-- [ ] **The variable editor cannot see or edit declared missing RANGES (found 2026-10-07).**
-      Noticed while fixing the Variable View's MISSING column, which now summarises codes and —
-      newly — shows declared ranges at all. The editor behind that same row still reads and
-      writes only `missingValues`: its input is `(meta.missingValues || []).join(', ')` and its
-      save is `missingValues: parseMissing(...)`, so for a variable whose missing is
-      `[[-999999, 0]]` the field opens EMPTY beside a cell that says `-999999 to 0`.
+- [x] **DONE (2026-10-09). The variable editor can see and edit declared missing RANGES.**
+      Found 2026-10-07 while fixing the Variable View's MISSING column: the cell read
+      `-999999 to 0` and the editor behind that same row opened with an EMPTY box, because
+      ranges live in `missingRanges` and the dialog read and wrote only `missingValues`.
 
-      Two consequences, the second worse than the first: you cannot edit a range, and saving
-      the dialog after touching anything else writes a `missingValues` list that silently does
-      not mention the range — whether that DROPS the range depends on whether the patch is
-      merged or replaces the metadata, which is the thing to check first.
+      **Not data loss** — `applyPatch` merges by key list and skips absent keys, so the
+      range survived an unmentioning save. The symptom was worse to live with than an
+      error: clear the box intending to remove every missing declaration, save, and the
+      variable goes on treating a whole span as missing with nothing on screen to say why.
+      Verified both ways in the browser — the old one-key patch left `[[-999999, 0]]` in
+      place with two values still reading NaN; the two-key patch clears it and they come
+      back as real values.
 
-      **Checked, 2026-10-09: it MERGES, so nothing is dropped.** `applyPatch`
-      (data-store.js) walks a fixed key list and skips any key absent from the patch, and
-      `missingRanges` is in that list — so a save from this dialog, which never mentions the
-      key, leaves the range exactly as it was. The severity is therefore lower than filed:
-      **no data loss, but the range is invisible and uneditable from the only UI that edits
-      missing values.** `missingRanges` appears in `data-views.js` exactly once, in the
-      Variable View cell (`summariseMissing`) — the editor does not read or write it at all.
+      **One field, not two.** Codes and spans are one idea to the reader — *what counts as
+      missing* — and were two keys' worth of state behind one control only by accident. The
+      Missing values box now takes both: `-1, -999999 to 0`, with `to` because that is the
+      word `summariseMissing` already shows in the cell, so the editor speaks back what the
+      reader was shown. `thru`/`through` are accepted on input (SPSS writes `LO THRU 0`) and
+      never written out. `splitMissingSpec` on save, `formatMissingSpec` on open.
 
-      The sharpest symptom is the one to fix for: clear the Missing values box intending to
-      remove every missing declaration, save, and the variable still treats a whole span as
-      missing with nothing on screen in the dialog to say so. That reads as the app ignoring
-      you, which is worse than an error.
+      **The trap worth knowing, since reusing it was the obvious move:** `summariseMissing`
+      is NOT usable for the field. It compresses consecutive codes for display — `8, 9, 10`
+      becomes `8 to 10` — which is right for a cell and wrong for an editor, because the
+      next Save would read it back as a SPAN and silently declare 8.5 missing too. The
+      editor round-trips; the cell summarises. Pinned by a test.
 
-      Ranges come from SPSS/Stata `MISSING VALUES x (LO THRU 0)` via `splitMissing`, so this
-      only bites on imported files — which is to say, on real data rather than demo data.
+      Three normalisations, each for a reason rather than for tidiness: `A to A` becomes a
+      code; reversed bounds are swapped (`designatedMissingSql` emits `BETWEEN lo AND hi`
+      and skips the range when `hi < lo`, so `0 to -99` would have typed as accepted and
+      matched nothing); a span with a non-numeric end stays a plain string code rather than
+      becoming a NaN range. A bare hyphen is deliberately not span syntax — `-99 - -90` is
+      ambiguous, and in practice every missing code is negative.
 
+      Suite 1551 → 1564.
 - [x] **DONE (2026-10-09). Let the reader choose whether a variable shows its NAME or its
       LABEL — the other half of the variable-order preference (owner, 2026-10-07).**
 
