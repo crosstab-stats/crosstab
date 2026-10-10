@@ -137,8 +137,12 @@ test('the Open-project modal no longer interpolates a possibly-null count', () =
   assert.doesNotMatch(src, /\$\{entry\.datasetCount\} dataset/);
 });
 
-test('the sidebar uses it too, so one project cannot describe itself two ways', () => {
-  const src = readFileSync('core/app.js', 'utf8');
-  assert.match(src, /projectMetaLine\(p\)/);
-  assert.match(src, /import \{ ProjectSync, PROJECT_CHANGED, projectMetaLine \}/);
+test('the shared row renderer uses it, so every list agrees', () => {
+  // It moved: the sidebar no longer calls this itself, it renders through
+  // project-list.js — which the launcher's rail uses too. One call site, three surfaces.
+  const src = readFileSync('core/project-list.js', 'utf8');
+  assert.match(src, /projectMetaLine\(row\)/);
+  assert.match(src, /import \{ projectMetaLine \} from '\.\/project-sync\.js'/);
+  const app = readFileSync('core/app.js', 'utf8');
+  assert.match(app, /renderProjectList\(recents, \{/, 'and the sidebar goes through it');
 });

@@ -55,7 +55,8 @@ import {
   currentScreenMode, initScreenMode, onScreenModeChange, showAutoNote, toggleScreenMode,
 } from './screen-mode.js';
 import { ProjectStore } from './project-store.js';
-import { ProjectSync, PROJECT_CHANGED, projectMetaLine } from './project-sync.js';
+import { ProjectSync, PROJECT_CHANGED } from './project-sync.js';
+import { renderProjectList } from './project-list.js';
 import { DataView, VariableView, HistoryPanel } from './data-views.js';
 import { RConsole } from './r-console.js';
 import { PluginLoader } from './loader.js';
@@ -1970,6 +1971,10 @@ export async function boot(mounts) {
   // around, because two copies of one list is how they got reported twice (#185).
   const launcher = new Launcher({
     plugins, datasets, bus, projects, offline, workspaceStore, itemStore, assetStore, makeBackend, openBackend,
+    // The SAME closure the File menu uses, so "Manage projects…" on the launcher is that
+    // dialog rather than a launcher-shaped copy of it (#167). Defined above, well before
+    // this line, so there is nothing to defer.
+    openManager,
   });
   engine.launcher = launcher;
   const launchFlag = new URLSearchParams(location.search).get('launch');
@@ -3360,69 +3365,18 @@ class ProjectSidebar {
   #projectsZone(recents) {
     const frag = document.createDocumentFragment();
     frag.append(el('div', 'Recent projects', 'proj__sub proj__sub--zone'));
-    if (!recents.length) {
-      frag.append(el('div', 'No other saved projects.', 'proj__empty'));
-      return frag;
-    }
-    const list = document.createElement('ul');
-    list.className = 'proj__datasets';
-    for (const p of recents) {
-      // Each row describes where it lives. A local project has no backend to ask, and
-      // needs none: "this browser" is the absence of a location marker.
-      const what = p.kind === 'opfs'
-        ? { kind: 'opfs', glyph: '', label: p.name, detail: '' }
-        : (this.makeBackend?.(p.entry)?.describe()
-          ?? { kind: 'unknown', glyph: '📍', label: p.name, detail: 'cannot reconnect' });
-      const label = p.name || what.label;
-      const li = document.createElement('li');
-      // Stacked, because this row carries a second line. The dataset rows in the zone above
-      // use the same `.proj__ds` treatment and must stay single-line, so the direction is a
-      // modifier rather than a change to the shared rule.
-      li.className = `proj__ds proj__ds--stacked proj__ds--${what.kind}`;
-      li.title = `Open ${label}${what.detail ? ` (${what.detail})` : ''}`;
-      const open = () => void this.#openProjectRow(p);
-      li.addEventListener('click', open);
-
-      const name = el('button', what.glyph ? `${what.glyph} ${label}` : label, 'proj__ds-name');
-      name.type = 'button';
-      name.setAttribute('aria-label', `Open ${label}${what.detail ? ` (${what.detail})` : ''}`);
-      name.addEventListener('click', (e) => { e.stopPropagation(); open(); });
-      // Renaming in place still works for a local project, where the catalog owns the
-      // name. A remembered location's name comes from the project inside it, so it is
-      // renamed by opening it — not from this list.
-      if (p.kind === 'opfs') {
-        const rename = () => this.#inlineRename(li, name, p.name, (v) => this.projects.renameProject(p.projectId, v));
-        name.addEventListener('dblclick', (e) => { e.stopPropagation(); rename(); });
-      }
-      li.append(name);
-      // The second line: where it lives, when it was last worked on, and how big it is.
-      //
-      // All three are here for one reason — a list of names does not identify anything when
-      // the names are "Untitled project" five times over, which is the common case for
-      // somebody who has not bothered naming their work. WHERE already earned its place
-      // (two copies of one project can legitimately coexist); date and size are the owner's
-      // addition, and discriminate far better than the dataset count does, since small
-      // projects nearly all hold exactly one.
-      //
-      // Absent parts are simply dropped rather than shown as zero or "unknown" — a project
-      // saved before row counts were recorded says less, instead of saying something false.
-      const meta = [what.detail, projectMetaLine(p)].filter(Boolean).join(' · ');
-      if (meta) li.append(el('span', meta, 'proj__ds-meta'));
-      list.append(li);
-    }
-    frag.append(list);
-
-    // Destructive verbs are deliberately NOT here. Delete and forget used to sit one
-    // hover away from the row that opens the thing, which is a poor place for "this is
-    // gone" — they belong in the manager, where consequences can be stated (#173).
-    // Rendered only once there is a manager to open — a button that does nothing is
-    // worse than an absent one.
-    if (this.openManager) {
-      const more = el('button', 'Manage projects…', 'proj__add');
-      more.type = 'button';
-      more.addEventListener('click', () => void this.openManager());
-      frag.append(more);
-    }
+    // One renderer, shared with the launcher's rail — see project-list.js for why the row
+    // is lifted out and what deliberately is not shared (what a click means, chiefly).
+    frag.append(renderProjectList(recents, {
+      makeBackend: this.makeBackend,
+      onPick: (p) => void this.#openProjectRow(p),
+      // Renaming in place still works for a local project, where the catalog owns the name.
+      // The launcher passes no rename: it belongs to the project you are IN, not to a list
+      // of ones you might open (settled 2026-10-01).
+      onRename: (p, li, nameEl) =>
+        this.#inlineRename(li, nameEl, p.name, (v) => this.projects.renameProject(p.projectId, v)),
+      emptyText: 'No other saved projects.',
+    }));
     return frag;
   }
 

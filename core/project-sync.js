@@ -2376,6 +2376,11 @@ export class ProjectSync {
           lastOpenedAt: p.lastOpenedAt ?? p.savedAt ?? 0,
           datasetCount: p.datasetCount ?? null,
           rowCount: Number.isFinite(p.rowCount) ? p.rowCount : null,
+          // The plugin set this project last had active. The launcher seeds its picker from
+          // it on a pick, so you can see and adjust the selection before Start — a feature
+          // the old OPFS-only list carried and this one did not, which would have silently
+          // stopped working the moment the launcher moved onto it.
+          activePlugins: Array.isArray(p.activePlugins) ? p.activePlugins : null,
           entry: null,
           isOpen: this.#backend?.kind === 'opfs' && String(this.#binding?.id) === String(p.id),
         });
@@ -2397,6 +2402,11 @@ export class ProjectSync {
           // cannot reach into a folder, but it does not have to: see rememberFolder.
           datasetCount: Number.isFinite(e.datasetCount) ? e.datasetCount : null,
           rowCount: Number.isFinite(e.rowCount) ? e.rowCount : null,
+          // A location's plugin set lives in the project inside it, which a list cannot read.
+          // Null rather than empty: "we do not know" and "it had none" are different claims,
+          // and seeding a picker from the second when the truth is the first would silently
+          // switch a project's plugins off.
+          activePlugins: null,
           entry: e,
           isOpen: this.#activeLocationId === e.id,
         });

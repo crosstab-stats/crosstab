@@ -15,6 +15,7 @@
  */
 
 import { makeDemoDataset, makeQualDemoDataset, makeSpatialDemoDataset } from './demo-data.js';
+import { renderProjectList, markPickedProject } from './project-list.js';
 import { newItemId } from './item-store.js';
 // The build stamp moved to its own module when the Help menu's bug report needed the
 // same answer (#175) — two readers, one definition of "which build is running".
@@ -76,6 +77,9 @@ export class Launcher {
    * because reconnecting needs credential dialogs the launcher has no business owning. */
   #makeBackend = null;
   #openBackend = null;
+  /** Open the project manager. Supplied by app.js, which hands over the SAME closure the
+   * File menu uses — so managing projects with none open is that dialog, not a copy. */
+  #openManager = null;
   #resolve = null;
   #onKey = null; // Escape-to-dismiss handler, active only while reopened over a session
 
@@ -95,7 +99,7 @@ export class Launcher {
    * @param {import('./asset-store.js').AssetStore} [deps.assetStore] - Stores demo
    *   geometry as asset bytes, the same way a loaded file is stored.
    */
-  constructor({ plugins, datasets, bus, projects, offline, workspaceStore, itemStore, assetStore, makeBackend, openBackend }) {
+  constructor({ plugins, datasets, bus, projects, offline, workspaceStore, itemStore, assetStore, makeBackend, openBackend, openManager }) {
     this.#plugins = plugins;
     this.#datasets = datasets;
     this.#bus = bus;
@@ -103,6 +107,7 @@ export class Launcher {
     this.#offline = offline ?? null;
     this.#makeBackend = makeBackend ?? null;
     this.#openBackend = openBackend ?? null;
+    this.#openManager = openManager ?? null;
     this.#workspaceStore = workspaceStore ?? null;
     this.#itemStore = itemStore ?? null;
     this.#assetStore = assetStore ?? null;
@@ -314,6 +319,10 @@ export class Launcher {
         this.#pendingProject = null;
         this.#pendingBackend = null;
         overlay.querySelectorAll('.ctl__source').forEach((b) => b.classList.toggle('is-active', b === btn));
+        // The project rows are not `.ctl__source` buttons any more, so the toggle above no
+        // longer reaches them — and a cleared pick that still LOOKS picked is the worst of
+        // both: Start would open the demo while the screen says otherwise.
+        markPickedProject(overlay.querySelector('.ctl__projects'), null);
         // A demo/blank choice seeds its preset's plugin selection (user can tweak).
         const preset = Object.values(PRESETS).find((p) => p.source === btn.dataset.source);
         if (preset) {
@@ -326,74 +335,85 @@ export class Launcher {
     // On first open, default the source to Blank so Start always works.
     if (!reopen) overlay.querySelector('[data-source="blank"]')?.classList.add('is-active');
 
-    // Saved projects in the rail: open one (its data + plugin set). Picking a
-    // project seeds the picker from what it had active, so the user still sees and
-    // can tweak the selection before Start.
+    // Saved projects in the rail — the SAME rows, through the SAME renderer the sidebar
+    // uses (project-list.js).
+    //
+    // This was two hand-rolled loops over two different list calls, so the first screen of
+    // the app showed one list that was secretly two: local projects as a bare name,
+    // remembered folders as a glyph plus a name, in one undifferentiated column, with no
+    // date and no size while the data carried both. The data layer was unified in August
+    // (#171) and this is the surface that never migrated.
+    //
+    // What stays launcher-shaped is what a click MEANS: here it stages a pick that Start
+    // commits, rather than opening at once. That difference was challenged and kept, on
+    // evidence — see project-list.js.
     if (this.#projects) {
-      let saved = [];
-      try { saved = await this.#projects.listProjects(); } catch { saved = []; }
+      let rows = [];
+      try { rows = await this.#projects.listAllProjects(); } catch { rows = []; }
       const projBox = overlay.querySelector('.ctl__projects');
-      if (saved.length && projBox) {
-        overlay.querySelector('.ctl__railhead--projects')?.removeAttribute('hidden');
-        for (const p of saved) {
-          const btn = el('button', p.name, 'ctl__source ctl__source--project');
-          btn.type = 'button';
-          btn.dataset.project = p.id;
-          btn.title = `Open project: ${p.name}`;
-          btn.addEventListener('click', () => {
-            this.#pendingProject = { id: p.id };
+      if (projBox) {
+        const head = overlay.querySelector('.ctl__railhead--projects');
+        if (rows.length || this.#openManager) head?.removeAttribute('hidden');
+        projBox.append(renderProjectList(rows, {
+          makeBackend: this.#makeBackend,
+          onPick: (row) => {
+            // One pick at a time, across the data sources too: they are mutually exclusive
+            // choices about what Start is going to do.
+            overlay.querySelectorAll('.ctl__source').forEach((b) => b.classList.remove('is-active'));
+            markPickedProject(projBox, row.key);
             this.#pendingSource = null;
-            overlay.querySelectorAll('.ctl__source').forEach((b) => b.classList.toggle('is-active', b === btn));
-            if (Array.isArray(p.activePlugins)) {
+
+            if (row.kind === 'opfs') {
+              this.#pendingProject = { id: row.projectId };
+              this.#pendingBackend = null;
+            } else {
+              // A location reopens through its backend. Constructing one has no side
+              // effects — only connect() prompts — so this is safe while merely picking,
+              // and it is what keeps the launcher from naming a storage kind at all.
+              const backend = this.#makeBackend?.(row.entry);
+              if (!backend) return; // an entry this build cannot reconstruct
+              this.#pendingProject = null;
+              // Deferred to Start whether or not this backend demands a gesture. A folder's
+              // write-permission re-grant must happen inside one and fails SILENTLY without
+              // it (storage-backend.js); Start is that gesture. One path, so there is no
+              // second one to get subtly wrong.
+              this.#pendingBackend = backend;
+            }
+
+            // Seed the picker from what this project had active, so the selection is
+            // visible and adjustable before Start.
+            //
+            // A location cannot say — its plugin set lives in the project inside it, which
+            // a list cannot read — and `activePlugins` is null rather than empty there, so
+            // this correctly leaves the current selection alone instead of clearing it.
+            if (Array.isArray(row.activePlugins)) {
               // The project's saved set is authoritative about the plugins it MENTIONS —
-              // including the user having turned a codec off. It says nothing at all
-              // about a plugin that did not exist when it was written, and treating that
-              // silence as "off" is the inference #157 removed everywhere else: a
-              // built-in shipped after this project was last saved would arrive invisible,
-              // with no way for the user to know it was there to look for.
-              const mentioned = new Set(p.activePlugins);
+              // including the user having turned a codec off. It says nothing at all about
+              // a plugin that did not exist when it was written, and treating that silence
+              // as "off" is the inference #157 removed everywhere else: a built-in shipped
+              // after this project was last saved would arrive invisible, with no way for
+              // the user to know it was there to look for.
+              const mentioned = new Set(row.activePlugins);
               const speaksFor = (x) => mentioned.has(x.key) || (x.id && mentioned.has(x.id));
               this.#picker.setSelected(
                 list.filter((x) => (speaksFor(x) ? true : x.activated)).map((x) => x.key),
               );
             }
-          });
-          projBox.append(btn);
-        }
-      }
-      // Remembered folder projects (#143): one-click reopen of any picked folder.
-      // Reconnecting needs a write-permission re-grant, which happens on the Start
-      // click (the required user gesture). Shown even if the OPFS rail is empty.
-      if (projBox && this.#makeBackend) {
-        let locations = [];
-        try { locations = await this.#projects.listProjectLocations(); } catch { locations = []; }
-        if (locations.length) overlay.querySelector('.ctl__railhead--projects')?.removeAttribute('hidden');
-        for (const loc of locations) {
-          // The backend describes itself. Constructing one has no side effects — only
-          // `connect()` prompts — so this is safe to do while merely drawing a list, and
-          // it is what keeps the launcher from naming a storage kind at all.
-          const backend = this.#makeBackend(loc);
-          if (!backend) continue; // an entry this build cannot reconstruct
-          const what = backend.describe();
-          const btn = el('button', `${what.glyph} ${loc.name || what.label}`,
-            `ctl__source ctl__source--project ctl__source--folder ctl__source--${what.kind}`);
-          btn.type = 'button';
-          btn.title = `Reopen ${loc.name || what.label}${what.detail ? ` (${what.detail})` : ''}`;
-          btn.addEventListener('click', () => {
-            // Deferred only when the backend says a gesture is required — the Start click
-            // IS that gesture. Anything else opens now and dismisses the launcher itself,
-            // since there is nothing a later click would add.
-            if (backend.needsGesture) {
-              this.#pendingBackend = backend;
-              this.#pendingProject = null;
-              this.#pendingSource = null;
-              overlay.querySelectorAll('.ctl__source').forEach((b) => b.classList.toggle('is-active', b === btn));
-              return;
-            }
-            this.#close();
-            void this.#openBackend?.(backend);
-          });
-          projBox.append(btn);
+          },
+        }));
+
+        // Managing projects should not require opening one first (#167): "having to start a
+        // project to delete or rename a saved project seems odd". It is the same dialog the
+        // File menu opens, with the same verbs — `projectActions` keys off `row.isOpen`,
+        // which is simply false for every row when nothing is open, so each one correctly
+        // offers Open / Rename / Delete.
+        if (this.#openManager) {
+          const manage = document.createElement('button');
+          manage.type = 'button';
+          manage.className = 'ctl__manage';
+          manage.textContent = 'Manage projects…';
+          manage.addEventListener('click', () => { void this.#openManager('recents'); });
+          projBox.append(manage);
         }
       }
     }
@@ -938,6 +958,12 @@ function injectStyles() {
     .ctl__update.is-update:hover { background: #357cb0; }
     .ctl__body { display: flex; min-height: 0; flex: 1; }
     .ctl__library, .ctl__about { flex: 0 0 200px; padding: 16px; overflow-y: auto; }
+    /* The projects rail is wider than the About rail, and matches the workspace
+       sidebar (240px) exactly — because since 2026-10-10 it is the SAME component.
+       At 200px it had 152px of usable width and the project line wrapped to two,
+       making every row three lines tall; 240px gives 208px, which the longest
+       realistic line (202px) clears. Measured, not guessed. */
+    .ctl__library { flex-basis: 240px; }
     .ctl__about { border-left: 1px solid var(--line, #d8dde2); font-size: 13px; color: #41505e; }
     .ctl__about p { margin: 0 0 10px; }
     .ctl__library { border-right: 1px solid var(--line, #d8dde2); }
@@ -946,6 +972,21 @@ function injectStyles() {
     .ctl__railhead--projects { margin-top: 16px; }
     .ctl__source--project { font-size: 13px; }
     .ctl__projects:empty { display: none; }
+    /* The rail borrows the shared project row (project-list.js), which is styled globally
+       in index.html as .proj__ds* rules. Only the picked state is launcher-specific: this
+       STAGES a choice that Start commits, which the sidebar's does not, so it needs the
+       same "this is what Start will do" emphasis the source buttons carry. */
+    .ctl__projects .proj__ds { border: 1px solid transparent; }
+    .ctl__projects .proj__ds.is-picked {
+      border-color: var(--accent, #2572a5); background: #e6f0fa;
+    }
+    .ctl__projects .proj__ds.is-picked .proj__ds-name { font-weight: 700; }
+    .ctl__manage {
+      display: block; width: 100%; text-align: left; font: inherit; font-size: 13px;
+      margin-top: 6px; padding: 8px 10px; border: 1px dashed var(--line, #d8dde2);
+      border-radius: 8px; background: none; color: #41505e; cursor: pointer;
+    }
+    .ctl__manage:hover { background: #eef5fb; color: #1a1a1a; }
     .ctl__source { display: block; width: 100%; text-align: left; font: inherit; font-size: 14px;
       padding: 10px 12px; margin: 0 0 6px; border: 1px solid var(--line, #d8dde2); border-radius: 8px; background: #fff; cursor: pointer; }
     .ctl__source:hover { background: #eef5fb; }
