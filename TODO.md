@@ -47,9 +47,36 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
          against is that an exporter might want its own naming, which it can still do.
       3. **`stripEllipsis`, number/date formatting** — the "one voice" argument from the
          project-metadata work. Formatting is where an app's voice actually lives.
-      4. **`el()` DOM helper** — nine copies in core alone. Tempting, but it is three lines
-         and a plugin's markup is its own business; this is the first candidate where
-         "everyone wants the same answer" stops being obviously true.
+      4. **`el()` DOM helper — YES, and it is the sharpest case of the three** (revised
+         2026-10-10 after actually counting; the first draft of this entry ranked it as the
+         doubtful one, on the assumption that three lines cannot hurt anyone).
+
+         **509 call sites**, and FOUR signatures — two of which take the same three
+         arguments in opposite order:
+
+         | spelling | where | calls |
+         | --- | --- | --- |
+         | `el(tag, text, className)` | app, data-views, launcher, compute-recode | 145 |
+         | `el(tag, cls, text)` | help, encryption-settings, **builtin-caqdas** | 236 |
+         | `el(tag, className)` | builtin-spatial | 9 |
+         | `el(t, c)` | builtin-decisions | 119 |
+
+         So `el('div', 'warning', 'Careful')` yields either a div classed `warning` reading
+         "Careful", or one classed `Careful` reading "warning", depending on which file you
+         are in. **Both render, one is nonsense, nothing errors and no test fails.** Copying
+         a line between modules — the normal thing to do with a helper this small — silently
+         inverts it. There is a quieter split too: core's version always assigns
+         `textContent` (so no text CLEARS it), help's only assigns when non-null.
+
+         Note which spelling wins by weight: CAQDAS's 205 calls make `(tag, cls, text)` the
+         majority across the repo, and it is the one core mostly does not use.
+
+         **Ship it as an options object**, not a third positional order:
+         `el('div', { class: 'proj__empty', text: 'No project open' })`. It cannot be
+         ordered wrong, it is self-describing at the call site, and — the practical part —
+         it lets the existing positional copies coexist during migration instead of
+         requiring 509 sites to flip at once. With 509 calls and a SILENT failure mode, a
+         big-bang rename is the riskiest change on this list.
       5. **Anything stateful or host-touching** — almost certainly NOT. That is what the
          `app.*` service API is for, and it crosses postMessage for a reason.
 
