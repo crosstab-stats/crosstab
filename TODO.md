@@ -90,9 +90,26 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       derive.** The prerequisite is therefore plumbing the mode across the boundary (at mount,
       and on change) — not CSS.
 
-      *Not measured:* how badly a pane actually breaks at 390px. The pane is an opaque-origin
-      iframe, so the host page cannot read into its contentDocument — that needs a device or
-      devtools, not a script.
+      **MEASURED NOW, on hardware (owner, iPhone, 2026-10-10): "caqdas on the phone is
+      unusable".** The screenshot shows the CAQDAS pane rendering its three columns —
+      document list, document text, codebook — side by side at ~390px. The middle column is
+      squeezed to roughly one character per line ("The / sta / wer / wor / kin / and …") and
+      the codebook panel runs off the right edge entirely. So this is not a latent gap: the
+      largest qualitative workspace in the app is unusable on a phone today, while the host
+      around it reflows correctly.
+
+      That also settles the priority question between the two parts of the stdlib. Part 1 is
+      the tidier win; **part 2 is the one with a user who cannot do their work.**
+
+      (Still not inspectable from a script: the pane is an opaque-origin iframe, so the host
+      page cannot read into its contentDocument. Measurement needs a device or devtools —
+      which is how this one was found.)
+
+      **Found alongside it but NOT part of this — fixed 2026-10-10.** The same screenshot
+      showed the view tab strip clipping its active tab once a workspace tab was added. That
+      one was host-side: `.tabs` scrolls, but `.tab` had no `flex-shrink: 0`, so the tabs
+      squeezed rather than overflowing and the strip never had anything to scroll. Separate
+      fault, separate fix — see `test/tab-strip-narrow.test.mjs`.
 
       **Three ways across the boundary, increasing in strength:**
       1. **Tokens as source** — accent/line/radius as a plain object the plugin's own CSS

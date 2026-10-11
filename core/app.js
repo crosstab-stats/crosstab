@@ -2484,7 +2484,14 @@ function wireWorkspaceTabs(bus, mounts, { dataView, variableView, results, rCons
     if (!panels.has(name)) return;
     current = name;
     for (const b of mounts.tabs.querySelectorAll('.tab')) {
-      b.setAttribute('aria-selected', String(b.dataset.view === name));
+      const selected = b.dataset.view === name;
+      b.setAttribute('aria-selected', String(selected));
+      // Bring it into view when the strip is scrolled. Opening a workspace appends a
+      // tab at the END, so on a narrow screen the tab you just activated is exactly the
+      // one off the right edge — selected, underlined, and half visible.
+      // `inline: 'nearest'` scrolls the strip only when it has to, so switching between
+      // two already-visible tabs does not jump the row around.
+      if (selected) b.scrollIntoView?.({ inline: 'nearest', block: 'nearest' });
     }
     for (const [key, panel] of panels) if (panel) panel.hidden = key !== name;
     syncClearBtn(name);
