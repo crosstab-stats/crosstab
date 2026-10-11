@@ -115,3 +115,19 @@ test('the CSS template holds no backtick, which once silently ate the stylesheet
   const backticks = (launcher.slice(open, close).match(/`/g) || []).length;
   assert.equal(backticks, 2, 'only the template literal’s own delimiters');
 });
+
+test('the sidebar keeps its "Manage projects…" button under the list', () => {
+  // Lost in a33f537 and not noticed for a day: #projectsZone was rewritten to use the
+  // shared row renderer, and this button sat between the list and the `return`, so the
+  // whole span went. Nothing renders a button that is not there, so no test failed and
+  // nothing looked wrong — the owner spotted it on a phone (2026-10-11).
+  //
+  // It is the only place a project can be renamed or deleted from the sidebar: the rows
+  // themselves deliberately carry no destructive verbs (#173), so losing this left the
+  // zone with no way to manage anything at all.
+  const zone = app.slice(app.indexOf('#projectsZone(recents) {'));
+  const body = zone.slice(0, zone.indexOf('\n  }'));
+  assert.match(body, /if \(this\.openManager\)/, 'rendered only when there is a manager to open');
+  assert.match(body, /text: 'Manage projects…'/);
+  assert.match(body, /this\.openManager\(\)/);
+});

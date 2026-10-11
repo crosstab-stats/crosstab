@@ -3385,6 +3385,23 @@ class ProjectSidebar {
         this.#inlineRename(li, nameEl, p.name, (v) => this.projects.renameProject(p.projectId, v)),
       emptyText: 'No other saved projects.',
     }));
+
+    // Destructive verbs are deliberately NOT in the rows above. Delete and forget used to
+    // sit one hover away from the row that opens the thing, which is a poor place for
+    // "this is gone" — they belong in the manager, where consequences can be stated (#173).
+    // Rendered only once there is a manager to open: a button that does nothing is worse
+    // than an absent one.
+    //
+    // This was dropped by accident in a33f537, when #projectsZone was rewritten to use the
+    // shared row renderer — the button sat between the list and the return, and the whole
+    // span was replaced. It is the only thing that cut lost, and it was invisible because
+    // nothing renders a button that is not there (owner, on a phone, 2026-10-11).
+    if (this.openManager) {
+      const more = el('button', { text: 'Manage projects…', class: 'proj__add' });
+      more.type = 'button';
+      more.addEventListener('click', () => void this.openManager());
+      frag.append(more);
+    }
     return frag;
   }
 
