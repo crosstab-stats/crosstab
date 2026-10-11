@@ -231,7 +231,16 @@ export function el(tag, opts = {}) {
 export const TOKENS = {
   accent: '#2572a5',
   line: '#d8dde2',
+  // A quieter rule than `line`, for dividers INSIDE a panel rather than its edges. Added
+  // when CAQDAS was migrated (2026-10-10): it had been drawing control borders and list
+  // dividers in two different greys, and flattening them to one token would have thrown
+  // away a real distinction to make the migration tidier.
+  lineSoft: '#e6eaee',
   panel: '#f7f9fb',
+  // The colour a pane's content sits ON. Separate from `panel` because they diverge the
+  // moment there is a dark theme — and a plugin writing `#fff` is writing the one value
+  // that cannot survive one.
+  surface: '#ffffff',
   text: '#1a1a1a',
   muted: '#646e77',
   danger: '#b03030',
@@ -263,7 +272,9 @@ export const BASE_CSS = `
 :root {
   --ct-accent: ${TOKENS.accent};
   --ct-line: ${TOKENS.line};
+  --ct-line-soft: ${TOKENS.lineSoft};
   --ct-panel: ${TOKENS.panel};
+  --ct-surface: ${TOKENS.surface};
   --ct-text: ${TOKENS.text};
   --ct-muted: ${TOKENS.muted};
   --ct-danger: ${TOKENS.danger};

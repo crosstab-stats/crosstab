@@ -154,7 +154,7 @@ const MAX_DOCS = 10000; // v1 cap; virtualise for larger corpora later.
 
 const STYLES = `
 :host, body { margin: 0; }
-.caqdas { display: flex; flex-direction: column; height: 100%; min-height: 460px; font: 14px system-ui, sans-serif; color: #1a1a1a; }
+.caqdas { display: flex; flex-direction: column; height: 100%; min-height: 460px; font: 14px system-ui, sans-serif; color: var(--ct-text); }
 /* Drift reporting (#166): a coding whose anchor no longer lands cleanly. Amber, not
    red — nothing is broken and nothing was lost, but the user has to know before they
    trust the highlight. */
@@ -170,45 +170,45 @@ const STYLES = `
 .caqdas__driftrow .why { color: #8a6d3b; font-size: 12px; }
 .caqdas__segtools { display: flex; align-items: center; gap: 6px; padding: 6px 0; }
 .caqdas__segwarn { padding: 4px 0; font-size: 12px; color: #8a6d3b; }
-.caqdas__bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid #e2e6ea; flex-wrap: wrap; }
+.caqdas__bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--ct-line-soft); flex-wrap: wrap; }
 .caqdas__bar label { color: #555; }
-.caqdas__bar select, .caqdas__btn { font: inherit; padding: 5px 9px; border: 1px solid #ccd2d8; border-radius: 6px; background: #fff; }
+.caqdas__bar select, .caqdas__btn { font: inherit; padding: 5px 9px; border: 1px solid var(--ct-line); border-radius: 6px; background: var(--ct-surface); }
 .caqdas__btn { cursor: pointer; background: #f3f6fa; }
 .caqdas__btn:hover { background: #e9eff6; }
-.caqdas__btn--primary { background: #2f6fb0; color: #fff; border-color: #2f6fb0; }
-.caqdas__paint { display: none; align-items: center; gap: 10px; padding: 6px 12px; background: #2f6fb0; color: #fff; font-size: 13px; }
+.caqdas__btn--primary { background: var(--ct-accent); color: #fff; border-color: var(--ct-accent); }
+.caqdas__paint { display: none; align-items: center; gap: 10px; padding: 6px 12px; background: var(--ct-accent); color: #fff; font-size: 13px; }
 .caqdas__paint.is-on { display: flex; }
 .caqdas__paint .stop { margin-left: auto; cursor: pointer; border: 1px solid rgba(255,255,255,.6); background: transparent; color: #fff; font: inherit; border-radius: 6px; padding: 2px 8px; }
 .caqdas__body { display: flex; flex: 1; min-height: 0; }
-.caqdas__docs { width: 230px; border-right: 1px solid #e2e6ea; overflow: auto; flex: none; }
+.caqdas__docs { width: 230px; border-right: 1px solid var(--ct-line-soft); overflow: auto; flex: none; }
 .caqdas__doc { padding: 8px 12px; border-bottom: 1px solid #f0f2f4; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .caqdas__doc:hover { background: #f5f8fb; }
 .caqdas__doc.is-active { background: #e6f0fa; font-weight: 500; }
-.caqdas__doc .n { color: #8a93a0; font-size: 12px; margin-right: 6px; }
-.caqdas__doc .c { color: #2f6fb0; font-size: 11px; float: right; }
+.caqdas__doc .n { color: var(--ct-muted); font-size: 12px; margin-right: 6px; }
+.caqdas__doc .c { color: var(--ct-accent); font-size: 11px; float: right; }
 .caqdas__text { flex: 1; overflow: auto; padding: 16px 20px; white-space: pre-wrap; line-height: 1.7; min-width: 0; }
 .caqdas__text mark { border-radius: 2px; padding: 0 1px; cursor: pointer; }
-.caqdas__empty { color: #99a1ab; font-style: italic; padding: 24px; }
-.caqdas__codes { width: 240px; border-left: 1px solid #e2e6ea; overflow: auto; flex: none; padding: 8px; }
-.caqdas__codes h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: #7a8590; margin: 6px 6px 4px; }
-.caqdas__hint { font-size: 12px; color: #8a93a0; margin: 0 6px 10px; line-height: 1.4; transition: color .15s; }
+.caqdas__empty { color: var(--ct-muted); font-style: italic; padding: 24px; }
+.caqdas__codes { width: 240px; border-left: 1px solid var(--ct-line-soft); overflow: auto; flex: none; padding: 8px; }
+.caqdas__codes h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--ct-muted); margin: 6px 6px 4px; }
+.caqdas__hint { font-size: 12px; color: var(--ct-muted); margin: 0 6px 10px; line-height: 1.4; transition: color .15s; }
 .caqdas__code { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; cursor: pointer; }
 .caqdas__code:hover { background: #f5f8fb; }
-.caqdas__code.is-armed { outline: 2px solid #2f6fb0; outline-offset: -2px; background: #eef5fb; }
+.caqdas__code.is-armed { outline: 2px solid var(--ct-accent); outline-offset: -2px; background: #eef5fb; }
 .caqdas__code .pb { cursor: pointer; border: 0; background: none; font: inherit; padding: 0 4px; opacity: .45; }
 .caqdas__code:hover .pb { opacity: .8; }
 .caqdas__code .pb.is-on { opacity: 1; }
 .caqdas__sw { width: 14px; height: 14px; border-radius: 3px; flex: none; }
 .caqdas__code .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.caqdas__code .ct { color: #8a93a0; font-size: 12px; }
-.caqdas__code .x { cursor: pointer; color: #b04a4a; border: 0; background: none; font: inherit; padding: 0 4px; }
+.caqdas__code .ct { color: var(--ct-muted); font-size: 12px; }
+.caqdas__code .x { cursor: pointer; color: var(--ct-danger); border: 0; background: none; font: inherit; padding: 0 4px; }
 .caqdas__newcode { display: flex; gap: 6px; padding: 8px 6px; }
-.caqdas__newcode input { flex: 1; min-width: 0; font: inherit; padding: 5px 8px; border: 1px solid #ccd2d8; border-radius: 6px; }
-.caqdas__menu { position: absolute; z-index: 20; background: #fff; border: 1px solid #ccd2d8; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 6px; min-width: 270px; max-width: 340px; max-height: 340px; overflow: auto; }
+.caqdas__newcode input { flex: 1; min-width: 0; font: inherit; padding: 5px 8px; border: 1px solid var(--ct-line); border-radius: 6px; }
+.caqdas__menu { position: absolute; z-index: 20; background: var(--ct-surface); border: 1px solid var(--ct-line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 6px; min-width: 270px; max-width: 340px; max-height: 340px; overflow: auto; }
 .caqdas__menu button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: none; font: inherit; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
 .caqdas__menu button:hover { background: #eef5fb; }
 .caqdas__menu .row { display: flex; gap: 6px; padding: 6px 4px 2px; border-top: 1px solid #eef0f2; margin-top: 4px; }
-.caqdas__menu .row input { flex: 1; min-width: 0; font: inherit; padding: 5px 8px; border: 1px solid #ccd2d8; border-radius: 6px; }
+.caqdas__menu .row input { flex: 1; min-width: 0; font: inherit; padding: 5px 8px; border: 1px solid var(--ct-line); border-radius: 6px; }
 /* --- codebook manager: a real modal overlay, this plugin's first ------------------
    Everything else here is a positioned div dismissed by a document click, which is fine
    for a six-item menu and hopeless for a panel with a multi-select list, a paste area
@@ -216,64 +216,64 @@ const STYLES = `
    iframe (a plugin cannot reach the host's <dialog>, and allow-scripts denies it
    window.prompt/alert/confirm — see the file header). */
 .caqdas__scrim { position: fixed; inset: 0; z-index: 40; background: rgba(20,26,32,.42); display: flex; align-items: center; justify-content: center; padding: 24px; }
-.caqdas__mgr { background: #fff; border-radius: 10px; box-shadow: 0 18px 48px rgba(0,0,0,.28); width: min(880px, 100%); max-height: 100%; display: flex; flex-direction: column; overflow: hidden; }
-.caqdas__mgrhead { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid #e6eaee; }
+.caqdas__mgr { background: var(--ct-surface); border-radius: 10px; box-shadow: 0 18px 48px rgba(0,0,0,.28); width: min(880px, 100%); max-height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+.caqdas__mgrhead { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--ct-line-soft); }
 .caqdas__mgrtitle { font-weight: 700; font-size: 15px; margin-right: auto; }
 .caqdas__mgrbody { display: flex; min-height: 0; flex: 1; }
-.caqdas__mgrside { width: 210px; border-right: 1px solid #e6eaee; padding: 10px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
+.caqdas__mgrside { width: 210px; border-right: 1px solid var(--ct-line-soft); padding: 10px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
 .caqdas__mgrmain { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .caqdas__mgrbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 10px 12px; border-bottom: 1px solid #eef0f2; }
 .caqdas__mgrlist { flex: 1; overflow: auto; padding: 4px 0; min-height: 220px; }
-.caqdas__mgrfoot { padding: 10px 14px; border-top: 1px solid #e6eaee; display: flex; gap: 8px; align-items: center; }
+.caqdas__mgrfoot { padding: 10px 14px; border-top: 1px solid var(--ct-line-soft); display: flex; gap: 8px; align-items: center; }
 .caqdas__bookbtn { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; border: 1px solid transparent; background: none; font: inherit; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
 .caqdas__bookbtn:hover { background: #f2f5f8; }
 .caqdas__bookbtn.is-active { background: #eef5fb; border-color: #b7d4ea; font-weight: 600; }
-.caqdas__bookn { margin-left: auto; color: #8b949c; font-size: 11px; font-weight: 400; }
+.caqdas__bookn { margin-left: auto; color: var(--ct-muted); font-size: 11px; font-weight: 400; }
 .caqdas__mgrrow { display: flex; align-items: center; gap: 8px; padding: 5px 12px; }
 .caqdas__mgrrow:hover { background: #f7f9fb; }
-.caqdas__mgrrow input[type=text] { font: inherit; padding: 4px 7px; border: 1px solid #d8dee4; border-radius: 6px; min-width: 0; }
+.caqdas__mgrrow input[type=text] { font: inherit; padding: 4px 7px; border: 1px solid var(--ct-line); border-radius: 6px; min-width: 0; }
 .caqdas__mgrname { flex: 2 1 0; }
 .caqdas__mgrtheme { flex: 1 1 0; }
-.caqdas__mgrcount { width: 46px; text-align: right; color: #8b949c; font-size: 11px; }
+.caqdas__mgrcount { width: 46px; text-align: right; color: var(--ct-muted); font-size: 11px; }
 .caqdas__mgrempty { padding: 28px 14px; text-align: center; color: #7b848c; font-size: 13px; }
-.caqdas__paste { width: 100%; box-sizing: border-box; font: 12px/1.45 ui-monospace, Menlo, monospace; padding: 8px; border: 1px solid #d8dee4; border-radius: 6px; resize: vertical; min-height: 120px; }
-.caqdas__mgrnote { font-size: 12px; color: #646e77; margin: 0 0 8px; line-height: 1.45; }
-.caqdas__sel { color: #646e77; font-size: 12px; margin-right: auto; }
-.caqdas__group { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #9aa3ab; font-weight: 600; margin: 16px 6px 2px; }
+.caqdas__paste { width: 100%; box-sizing: border-box; font: 12px/1.45 ui-monospace, Menlo, monospace; padding: 8px; border: 1px solid var(--ct-line); border-radius: 6px; resize: vertical; min-height: 120px; }
+.caqdas__mgrnote { font-size: 12px; color: var(--ct-muted); margin: 0 0 8px; line-height: 1.45; }
+.caqdas__sel { color: var(--ct-muted); font-size: 12px; margin-right: auto; }
+.caqdas__group { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ct-muted); font-weight: 600; margin: 16px 6px 2px; }
 .caqdas__group--none { font-weight: 500; font-style: italic; text-transform: none; letter-spacing: 0; color: #b3bac1; }
 .caqdas__code .caqdas__iconbtn { cursor: pointer; border: 0; background: none; font: inherit; padding: 0 3px; opacity: .4; }
 .caqdas__code:hover .caqdas__iconbtn { opacity: .8; }
 .caqdas__code .caqdas__iconbtn.has { opacity: .95; }
 .caqdas__details { display: flex; flex-direction: column; gap: 6px; margin: 0 6px 8px; }
-.caqdas__details .caqdas__grpinp { font: inherit; font-size: 12px; padding: 5px 8px; border: 1px solid #ccd2d8; border-radius: 6px; }
-.caqdas__details .caqdas__memo { font: inherit; font-size: 12px; padding: 6px 8px; border: 1px solid #ccd2d8; border-radius: 6px; resize: vertical; }
+.caqdas__details .caqdas__grpinp { font: inherit; font-size: 12px; padding: 5px 8px; border: 1px solid var(--ct-line); border-radius: 6px; }
+.caqdas__details .caqdas__memo { font: inherit; font-size: 12px; padding: 6px 8px; border: 1px solid var(--ct-line); border-radius: 6px; resize: vertical; }
 .caqdas__retrhead { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .caqdas__retrhead h3 { margin: 0; }
-.caqdas__retr { border: 1px solid #e2e6ea; border-radius: 6px; padding: 8px 10px; margin: 8px 0; cursor: pointer; }
+.caqdas__retr { border: 1px solid var(--ct-line-soft); border-radius: 6px; padding: 8px 10px; margin: 8px 0; cursor: pointer; }
 .caqdas__retr:hover { background: #f5f8fb; }
-.caqdas__retr .rl { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #7a8590; margin-bottom: 3px; }
+.caqdas__retr .rl { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--ct-muted); margin-bottom: 3px; }
 .caqdas__retr .rl > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .caqdas__retr .rl .caqdas__segrm { flex: 0 0 auto; font-size: 13px; line-height: 1; }
 mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 .caqdas__seghead { display: flex; align-items: center; gap: 8px; padding: 4px 4px 2px; }
 .caqdas__seghead .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.caqdas__segrm { border: 0; background: none; font: inherit; color: #b04a4a; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
+.caqdas__segrm { border: 0; background: none; font: inherit; color: var(--ct-danger); cursor: pointer; padding: 2px 6px; border-radius: 6px; }
 .caqdas__segrm:hover { background: #fbeaea; }
-.caqdas__segmemo { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; padding: 6px 8px; border: 1px solid #ccd2d8; border-radius: 6px; resize: vertical; margin: 0 0 6px; }
+.caqdas__segmemo { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; padding: 6px 8px; border: 1px solid var(--ct-line); border-radius: 6px; resize: vertical; margin: 0 0 6px; }
 /* memo/annotation thread (#148) */
 .caqdas__thread { display: flex; flex-direction: column; gap: 6px; margin: 0 0 8px; min-width: 0; }
 .caqdas__notes { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto; overflow-x: hidden; }
-.caqdas__notesempty { font-size: 12px; color: #99a1ab; font-style: italic; }
+.caqdas__notesempty { font-size: 12px; color: var(--ct-muted); font-style: italic; }
 .caqdas__note { background: #f6f8fa; border: 1px solid #e3e8ee; border-radius: 6px; padding: 5px 7px; min-width: 0; }
 .caqdas__note--legacy { background: #fbfaf3; }
 .caqdas__noterow { display: flex; align-items: center; gap: 6px; margin: 0 0 3px; min-width: 0; }
 .caqdas__notechip { flex: none; width: 18px; height: 18px; border-radius: 50%; color: #fff; font-size: 9px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
 .caqdas__notewho { font-size: 11px; font-weight: 600; color: #41505e; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.caqdas__notemeta { font-size: 10.5px; color: #9aa3ab; font-style: italic; margin: 0 0 2px; }
-.caqdas__notedel { flex: none; border: 0; background: none; color: #b04a4a; cursor: pointer; font-size: 11px; padding: 0 2px; }
+.caqdas__notemeta { font-size: 10.5px; color: var(--ct-muted); font-style: italic; margin: 0 0 2px; }
+.caqdas__notedel { flex: none; border: 0; background: none; color: var(--ct-danger); cursor: pointer; font-size: 11px; padding: 0 2px; }
 .caqdas__notebody { font-size: 12px; color: #2c3742; white-space: pre-wrap; word-break: break-word; }
 .caqdas__noteadd { display: flex; flex-direction: column; gap: 4px; }
-.caqdas__noteinput { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; padding: 6px 8px; border: 1px solid #ccd2d8; border-radius: 6px; resize: vertical; }
+.caqdas__noteinput { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; padding: 6px 8px; border: 1px solid var(--ct-line); border-radius: 6px; resize: vertical; }
 .caqdas__noteadd .caqdas__btn { align-self: flex-end; font-size: 12px; padding: 3px 10px; }
 /* --- media (image) coding --- */
 .caqdas__imgwrap { position: relative; display: inline-block; max-width: 100%; margin: 0 auto; line-height: 0; }
@@ -282,8 +282,8 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 .caqdas__region { position: absolute; border: 2px solid; box-sizing: border-box; pointer-events: none; }
 .caqdas__region .caqdas__rlabel { position: absolute; top: -18px; left: -2px; font-size: 10px; line-height: 14px; padding: 0 4px; border-radius: 3px 3px 0 0; color: #fff; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 .caqdas__region.has-memo { box-shadow: 0 0 0 2px rgba(0,0,0,.35) inset; }
-.caqdas__regionsel { position: absolute; border: 2px dashed #2f6fb0; background: rgba(47,111,176,.12); box-sizing: border-box; pointer-events: none; }
-.caqdas__mediahint { font-size: 12px; color: #8a93a0; padding: 8px 20px 0; }
+.caqdas__regionsel { position: absolute; border: 2px dashed var(--ct-accent); background: rgba(47,111,176,.12); box-sizing: border-box; pointer-events: none; }
+.caqdas__mediahint { font-size: 12px; color: var(--ct-muted); padding: 8px 20px 0; }
 /* --- media (audio/video) coding: player + timeline lanes --- */
 .caqdas__audioel { width: 100%; max-width: 640px; display: block; margin: 8px 20px 0; }
 .caqdas__vidwrap { position: relative; display: inline-block; max-width: calc(100% - 40px); margin: 8px 20px 0; line-height: 0; }
@@ -294,7 +294,7 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 .caqdas__trackbox.is-active { box-shadow: 0 0 0 1px rgba(0,0,0,.4), 0 0 0 3px rgba(255,255,255,.35); }
 .caqdas__trackbox.is-editing { pointer-events: auto; cursor: move; }
 .caqdas__trackbox.is-editing .caqdas__rlabel { pointer-events: none; }
-.caqdas__handle { position: absolute; width: 11px; height: 11px; background: #fff; border: 1px solid #2f6fb0; box-sizing: border-box; border-radius: 2px; }
+.caqdas__handle { position: absolute; width: 11px; height: 11px; background: var(--ct-surface); border: 1px solid var(--ct-accent); box-sizing: border-box; border-radius: 2px; }
 .caqdas__h-nw { left: -6px; top: -6px; cursor: nwse-resize; }
 .caqdas__h-ne { right: -6px; top: -6px; cursor: nesw-resize; }
 .caqdas__h-se { right: -6px; bottom: -6px; cursor: nwse-resize; }
@@ -308,18 +308,18 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 .caqdas__tracktb .caqdas__btn { font-size: 12px; padding: 3px 8px; }
 .caqdas__lanebar.is-track { box-shadow: inset 0 0 0 1px rgba(255,255,255,.6); border-radius: 5px; }
 .caqdas__mediactrl { display: flex; align-items: center; gap: 6px; padding: 8px 20px 0; }
-.caqdas__speedlabel { font-size: 12px; color: #7a8590; margin-right: 2px; }
-.caqdas__speedbtn { font: inherit; font-size: 12px; padding: 2px 8px; border: 1px solid #ccd2d8; border-radius: 6px; background: #fff; cursor: pointer; }
-.caqdas__speedbtn.is-on { background: #2f6fb0; color: #fff; border-color: #2f6fb0; }
-.caqdas__transport { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 20px; background: #eef2f6; border-top: 1px solid #e2e6ea; border-bottom: 1px solid #e2e6ea; }
-.caqdas__ctlbtn { font: inherit; font-size: 12px; padding: 3px 9px; border: 1px solid #ccd2d8; border-radius: 6px; background: #fff; cursor: pointer; }
-.caqdas__ctlbtn.is-on { background: #2f6fb0; color: #fff; border-color: #2f6fb0; }
+.caqdas__speedlabel { font-size: 12px; color: var(--ct-muted); margin-right: 2px; }
+.caqdas__speedbtn { font: inherit; font-size: 12px; padding: 2px 8px; border: 1px solid var(--ct-line); border-radius: 6px; background: var(--ct-surface); cursor: pointer; }
+.caqdas__speedbtn.is-on { background: var(--ct-accent); color: #fff; border-color: var(--ct-accent); }
+.caqdas__transport { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 20px; background: #eef2f6; border-top: 1px solid var(--ct-line-soft); border-bottom: 1px solid var(--ct-line-soft); }
+.caqdas__ctlbtn { font: inherit; font-size: 12px; padding: 3px 9px; border: 1px solid var(--ct-line); border-radius: 6px; background: var(--ct-surface); cursor: pointer; }
+.caqdas__ctlbtn.is-on { background: var(--ct-accent); color: #fff; border-color: var(--ct-accent); }
 .caqdas__playbtn { min-width: 40px; font-size: 12px; }
 .caqdas__regionbtn { margin-left: auto; }
 .caqdas__timeline { padding: 6px 20px 16px; }
-.caqdas__tltrack { position: relative; height: 22px; background: #eef1f4; border: 1px solid #e2e6ea; border-radius: 4px; cursor: crosshair; overflow: hidden; touch-action: none; }
-.caqdas__tlsel { position: absolute; top: 0; bottom: 0; background: rgba(47,111,176,.18); border-left: 2px solid #2f6fb0; border-right: 2px solid #2f6fb0; box-sizing: border-box; pointer-events: none; }
-.caqdas__playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #b04a4a; pointer-events: none; }
+.caqdas__tltrack { position: relative; height: 22px; background: #eef1f4; border: 1px solid var(--ct-line-soft); border-radius: 4px; cursor: crosshair; overflow: hidden; touch-action: none; }
+.caqdas__tlsel { position: absolute; top: 0; bottom: 0; background: rgba(47,111,176,.18); border-left: 2px solid var(--ct-accent); border-right: 2px solid var(--ct-accent); box-sizing: border-box; pointer-events: none; }
+.caqdas__playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--ct-danger); pointer-events: none; }
 .caqdas__scrub { position: absolute; top: 0; bottom: 0; width: 16px; margin-left: -8px; cursor: ew-resize; z-index: 3; touch-action: none; }
 .caqdas__scrub::before { content: ''; position: absolute; top: 1px; bottom: 1px; left: 5px; width: 6px; background: rgba(176,74,74,.28); border-radius: 3px; }
 .caqdas__scrub:hover::before { background: rgba(176,74,74,.5); }
@@ -331,7 +331,7 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 .caqdas__lanebar { position: absolute; top: 1px; bottom: 1px; min-width: 3px; border-radius: 3px; cursor: pointer; opacity: .85; }
 .caqdas__lanebar:hover { opacity: 1; }
 .caqdas__lanebar.has-memo { box-shadow: inset 0 0 0 2px rgba(0,0,0,.35); }
-.caqdas__lanesempty { font-size: 12px; color: #99a1ab; font-style: italic; padding: 4px 0; }
+.caqdas__lanesempty { font-size: 12px; color: var(--ct-muted); font-style: italic; padding: 4px 0; }
 
 /* ===========================================================================
    SMALL-SCREEN MODE
@@ -354,7 +354,7 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 [data-screen="small"] .caqdas__docs,
 [data-screen="small"] .caqdas__codes {
   width: auto; flex: none; max-height: 34vh;
-  border-left: 0; border-right: 0; border-bottom: 1px solid #e2e6ea;
+  border-left: 0; border-right: 0; border-bottom: 1px solid var(--ct-line-soft);
 }
 /* The text is why the pane exists, so it takes what is left and never collapses below
    something readable. */
@@ -444,12 +444,21 @@ export const workspace = {
     root.textContent = '';
     // (tag, cls, text). The text is set as textContent, never innerHTML: what flows
     // through here includes code names and quoted participant passages.
-    const el = (tag, cls, text) => {
+    // The host's element helper (app.std.el), which takes an OPTIONS OBJECT rather than
+    // positional arguments. That is the whole reason it is shared: the four positional
+    // copies across this app took the same three arguments in two different orders, so a
+    // line copied between files silently swapped an element's class with its text — both
+    // render, one is nonsense, and nothing errors.
+    //
+    // The fallback is not decoration: a build that failed to serve the stdlib must not take
+    // the coding workspace down with it. Text is set with textContent, never innerHTML —
+    // what flows through here includes code names and quoted participant passages.
+    const el = app.std?.el ?? ((tag, opts = {}) => {
       const e = document.createElement(tag);
-      if (cls) e.className = cls;
-      if (text != null) e.textContent = text;
+      if (opts.class) e.className = opts.class;
+      if (opts.text != null) e.textContent = String(opts.text);
       return e;
-    };
+    });
 
     // --- memos / annotation threads (#148 step 3) ----------------------------
     // Flat, chronological, author-stamped notes anchored to a segment or code by id.
@@ -474,76 +483,76 @@ export const workspace = {
      * author-stamped list + an add-note box. `onChange` refreshes any has-note markers. */
     function renderThread(anchorKind, anchorObj, onChange) {
       const anchorId = anchorIdOf(anchorObj);
-      const wrap = el('div', 'caqdas__thread');
-      const list = el('div', 'caqdas__notes');
+      const wrap = el('div', { class: 'caqdas__thread' });
+      const list = el('div', { class: 'caqdas__notes' });
       const rebuild = () => {
         list.replaceChildren();
         const legacy = typeof anchorObj.memo === 'string' && anchorObj.memo.trim();
         if (legacy) {
-          const n = el('div', 'caqdas__note caqdas__note--legacy');
-          const meta = el('div', 'caqdas__notemeta'); meta.textContent = 'earlier note';
-          const body = el('div', 'caqdas__notebody'); body.textContent = anchorObj.memo;
+          const n = el('div', { class: 'caqdas__note caqdas__note--legacy' });
+          const meta = el('div', { class: 'caqdas__notemeta' }); meta.textContent = 'earlier note';
+          const body = el('div', { class: 'caqdas__notebody' }); body.textContent = anchorObj.memo;
           n.append(meta, body); list.append(n);
         }
         for (const note of memosFor(anchorId)) {
           const a = note.author || {};
-          const n = el('div', 'caqdas__note');
-          const row = el('div', 'caqdas__noterow');
-          const chip = el('span', 'caqdas__notechip'); chip.textContent = a.initials || '·';
+          const n = el('div', { class: 'caqdas__note' });
+          const row = el('div', { class: 'caqdas__noterow' });
+          const chip = el('span', { class: 'caqdas__notechip' }); chip.textContent = a.initials || '·';
           chip.style.background = a.color || '#8a94a0'; chip.title = a.name || a.initials || 'Unknown';
-          const who = el('span', 'caqdas__notewho'); who.textContent = a.name || a.initials || 'Unknown';
+          const who = el('span', { class: 'caqdas__notewho' }); who.textContent = a.name || a.initials || 'Unknown';
           row.append(chip, who);
           if (me && a.authorId === me.authorId) {
-            const del = el('button', 'caqdas__notedel'); del.textContent = '✕'; del.title = 'Delete your note';
+            const del = el('button', { class: 'caqdas__notedel' }); del.textContent = '✕'; del.title = 'Delete your note';
             del.addEventListener('click', (e) => { e.stopPropagation(); deleteMemo(note.id); rebuild(); onChange?.(); });
             row.append(del);
           }
-          const body = el('div', 'caqdas__notebody'); body.textContent = note.text;
+          const body = el('div', { class: 'caqdas__notebody' }); body.textContent = note.text;
           n.append(row, body); list.append(n);
         }
-        if (!list.children.length) { const e0 = el('div', 'caqdas__notesempty'); e0.textContent = 'No notes yet.'; list.append(e0); }
+        if (!list.children.length) { const e0 = el('div', { class: 'caqdas__notesempty' }); e0.textContent = 'No notes yet.'; list.append(e0); }
       };
       rebuild();
-      const addRow = el('div', 'caqdas__noteadd');
-      const ta = el('textarea', 'caqdas__noteinput'); ta.rows = 2; ta.placeholder = 'Add a note…';
+      const addRow = el('div', { class: 'caqdas__noteadd' });
+      const ta = el('textarea', { class: 'caqdas__noteinput' }); ta.rows = 2; ta.placeholder = 'Add a note…';
       ta.addEventListener('click', (e) => e.stopPropagation());
       ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); post(); } });
-      const btn = el('button', 'caqdas__btn'); btn.textContent = 'Add note';
+      const btn = el('button', { class: 'caqdas__btn' }); btn.textContent = 'Add note';
       const post = () => { if (!ta.value.trim()) return; addMemo(anchorKind, anchorId, ta.value); ta.value = ''; rebuild(); onChange?.(); };
       btn.addEventListener('click', (e) => { e.stopPropagation(); post(); });
       addRow.append(ta, btn);
       wrap.append(list, addRow);
       return wrap;
     }
-    const wrap = el('div', 'caqdas');
+    const wrap = el('div', { class: 'caqdas' });
 
-    const bar = el('div', 'caqdas__bar');
+    const bar = el('div', { class: 'caqdas__bar' });
     const colLabel = el('label'); colLabel.textContent = 'Documents column:';
     const colSel = el('select');
     const labelLabel = el('label'); labelLabel.textContent = 'Label by:';
     const labelSel = el('select');
     labelSel.title = 'Column that identifies each document (e.g. a filename or participant id) — used in the document list and the segments export.';
-    const freqBtn = el('button', 'caqdas__btn'); freqBtn.textContent = 'Code frequency';
-    const expBtn = el('button', 'caqdas__btn'); expBtn.textContent = 'Segments → Output';
-    const cloudBtn = el('button', 'caqdas__btn'); cloudBtn.textContent = 'Word cloud';
+    const freqBtn = el('button', { class: 'caqdas__btn' }); freqBtn.textContent = 'Code frequency';
+    const expBtn = el('button', { class: 'caqdas__btn' }); expBtn.textContent = 'Segments → Output';
+    const cloudBtn = el('button', { class: 'caqdas__btn' }); cloudBtn.textContent = 'Word cloud';
     cloudBtn.title = 'Word cloud of the coded passages — grouped and coloured by your codebook themes.';
     bar.append(colLabel, colSel, labelLabel, labelSel, freqBtn, expBtn, cloudBtn);
 
     // Paint-mode banner (shown while a code is armed).
-    const paintBanner = el('div', 'caqdas__paint');
+    const paintBanner = el('div', { class: 'caqdas__paint' });
     const paintMsg = el('span');
-    const stopBtn = el('button', 'stop'); stopBtn.textContent = 'Stop (Esc)';
+    const stopBtn = el('button', { class: 'stop' }); stopBtn.textContent = 'Stop (Esc)';
     paintBanner.append(paintMsg, stopBtn);
 
-    const body = el('div', 'caqdas__body');
-    const docList = el('div', 'caqdas__docs');
-    const textPane = el('div', 'caqdas__text');
+    const body = el('div', { class: 'caqdas__body' });
+    const docList = el('div', { class: 'caqdas__docs' });
+    const textPane = el('div', { class: 'caqdas__text' });
     // The transcript, INSIDE the pane. Character offsets are derived by WALKING TEXT
     // NODES, so they are the document's offsets only while the walked container holds
     // nothing but the document — and the drift banner shares this pane. Null whenever the
     // pane is showing something that is not a transcript (retrieve list, media, empty).
     let transcript = null;
-    const codePane = el('div', 'caqdas__codes');
+    const codePane = el('div', { class: 'caqdas__codes' });
     body.append(docList, textPane, codePane);
 
     wrap.append(bar, paintBanner, body);
@@ -666,16 +675,16 @@ export const workspace = {
     function renderDocList() {
       docList.textContent = '';
       if (!docs.length) {
-        const e = el('div', 'caqdas__empty');
+        const e = el('div', { class: 'caqdas__empty' });
         e.textContent = state.textColumn ? 'No rows.' : 'Pick a column of documents (text or media) to begin.';
         docList.append(e);
         return;
       }
       docs.forEach((d, i) => {
-        const row = el('div', 'caqdas__doc' + (d.rid === activeRid ? ' is-active' : ''));
-        const n = el('span', 'n'); n.textContent = d.label || '#' + (i + 1);
+        const row = el('div', { class: 'caqdas__doc' + (d.rid === activeRid ? ' is-active' : '') });
+        const n = el('span', { class: 'n' }); n.textContent = d.label || '#' + (i + 1);
         const cnt = segsFor(d.rid).length;
-        const c = el('span', 'c'); if (cnt) c.textContent = cnt + '▮';
+        const c = el('span', { class: 'c' }); if (cnt) c.textContent = cnt + '▮';
         const preview = d.kind === 'media' ? '▸ media' : (d.text.slice(0, 40) || '(empty)');
         const t = document.createTextNode(' ' + preview);
         row.append(n, c, t);
@@ -697,21 +706,21 @@ export const workspace = {
       if (!segs.length) return;
       const lost = segs.filter((x) => !isPlaced(x)).length;
       const moved = segs.length - lost;
-      const bar = el('div', 'caqdas__drift');
+      const bar = el('div', { class: 'caqdas__drift' });
       const bits = [];
       if (lost) bits.push(`${lost} coding${lost === 1 ? '' : 's'} no longer match${lost === 1 ? 'es' : ''} this document`);
       if (moved) bits.push(`${moved} approximate match${moved === 1 ? '' : 'es'}`);
       // A bare count says something is off without answering the only question the
       // researcher actually has, which is whether to trust the highlight in front of them.
-      const msg = el('span', 'caqdas__driftmsg');
-      msg.append(el('div', 'caqdas__drifthead', `⚠ Coding drift — ${bits.join(' · ')}`));
-      msg.append(el('div', 'caqdas__drifthint', lost && moved
+      const msg = el('span', { class: 'caqdas__driftmsg' });
+      msg.append(el('div', { class: 'caqdas__drifthead', text: `⚠ Coding drift — ${bits.join(' · ')}` }));
+      msg.append(el('div', { class: 'caqdas__drifthint', text: lost && moved
         ? 'The text these codings quote has changed since they were made.'
         : lost
           ? 'Their quoted text is no longer in this document, so nothing is highlighted for them.'
-          : 'The quoted text was edited, so each highlight is the closest match — check it still covers what you meant.'));
+          : 'The quoted text was edited, so each highlight is the closest match — check it still covers what you meant.' }));
       bar.append(msg);
-      const show = el('button', 'caqdas__btn');
+      const show = el('button', { class: 'caqdas__btn' });
       show.textContent = lost ? 'Review' : 'Details';
       show.title = 'List the codings whose anchor no longer lands cleanly';
       show.addEventListener('click', () => { reviewDoc = reviewDoc === doc.rid ? null : doc.rid; renderText(); });
@@ -719,20 +728,20 @@ export const workspace = {
       textPane.append(bar);
       if (reviewDoc !== doc.rid) return;
       for (const sg of segs) {
-        const row = el('div', 'caqdas__driftrow');
+        const row = el('div', { class: 'caqdas__driftrow' });
         const code = codeById(sg.codeId);
-        const sw = el('span', 'caqdas__sw'); sw.style.backgroundColor = code ? code.color : '#ccc';
-        row.append(sw, el('span', 'nm', code ? code.name : '(code)'));
-        row.append(el('span', 'q', sg.quote || ''));
-        row.append(el('span', 'why', sg.reason || sg.status));
+        const sw = el('span', { class: 'caqdas__sw' }); sw.style.backgroundColor = code ? code.color : '#ccc';
+        row.append(sw, el('span', { class: 'nm', text: code ? code.name : '(code)' }));
+        row.append(el('span', { class: 'q', text: sg.quote || '' }));
+        row.append(el('span', { class: 'why', text: sg.reason || sg.status }));
         // Re-anchoring is a USER action, which is the whole point: the resolver reports,
         // the human decides. Select the correct passage first, then press this.
-        const fix = el('button', 'caqdas__btn');
+        const fix = el('button', { class: 'caqdas__btn' });
         fix.textContent = 'Re-anchor to selection';
         fix.title = 'Select the correct passage in the transcript, then click this';
         fix.addEventListener('click', () => void reanchorToSelection(sg));
         row.append(fix);
-        const rm = el('button', 'caqdas__segrm'); rm.textContent = '✕';
+        const rm = el('button', { class: 'caqdas__segrm' }); rm.textContent = '✕';
         rm.title = 'Remove this coding';
         rm.addEventListener('click', () => void removeCoding(sg));
         row.append(rm);
@@ -745,10 +754,10 @@ export const workspace = {
       transcript = null;
       if (retrieveCodeId) { renderRetrieve(); return; }
       const doc = docs.find((d) => d.rid === activeRid);
-      if (!doc) { const e = el('div', 'caqdas__empty'); e.textContent = 'Select a document.'; textPane.append(e); return; }
+      if (!doc) { const e = el('div', { class: 'caqdas__empty' }); e.textContent = 'Select a document.'; textPane.append(e); return; }
       if (doc.kind === 'media') { void renderMedia(doc); return; }
       renderDriftBanner(doc);
-      transcript = el('div', 'caqdas__transcript');
+      transcript = el('div', { class: 'caqdas__transcript' });
       textPane.append(transcript);
       // Only codings whose anchor still LANDS are drawn. An orphan has no position, and
       // painting it at its last known offsets is precisely the confident-but-wrong
@@ -785,28 +794,28 @@ export const workspace = {
     // item to jump to its document.
     function renderRetrieve() {
       const code = codeById(retrieveCodeId);
-      const head = el('div', 'caqdas__retrhead');
-      const back = el('button', 'caqdas__btn'); back.textContent = '← Back';
+      const head = el('div', { class: 'caqdas__retrhead' });
+      const back = el('button', { class: 'caqdas__btn' }); back.textContent = '← Back';
       back.addEventListener('click', () => { retrieveCodeId = null; renderText(); });
       const h = el('h3'); h.textContent = code ? `Coded “${code.name}”` : 'Coded segments';
       head.append(back, h); textPane.append(head);
       const segs = state.segments.filter((s) => s.codeId === retrieveCodeId);
-      if (!segs.length) { const e = el('div', 'caqdas__empty'); e.textContent = 'No passages carry this code yet.'; textPane.append(e); return; }
+      if (!segs.length) { const e = el('div', { class: 'caqdas__empty' }); e.textContent = 'No passages carry this code yet.'; textPane.append(e); return; }
       for (const s of segs) {
-        const item = el('div', 'caqdas__retr');
-        const rl = el('div', 'rl');
+        const item = el('div', { class: 'caqdas__retr' });
+        const rl = el('div', { class: 'rl' });
         const lab = el('span'); lab.textContent = docLabel(s.doc); rl.append(lab);
         // Delete this coding straight from the list — faster than finding the
         // highlight in the transcript and removing it there. Removes only THIS
         // segment (the code itself stays in the codebook).
-        const rm = el('button', 'caqdas__segrm'); rm.textContent = '✕'; rm.title = 'Remove this coding and its notes';
+        const rm = el('button', { class: 'caqdas__segrm' }); rm.textContent = '✕'; rm.title = 'Remove this coding and its notes';
         rm.addEventListener('click', (e) => { e.stopPropagation(); void removeCoding(s); });
         rl.append(rm);
         item.append(rl);
         const tx = el('div'); tx.textContent = s.quote ?? ''; item.append(tx);
         // A coding whose anchor no longer lands is still listed — it keeps its code and
         // its notes — but it says so rather than pretending to point somewhere.
-        if (isUnsure(s)) item.append(el('div', 'caqdas__segwarn', `⚠ ${s.reason || s.status}`));
+        if (isUnsure(s)) item.append(el('div', { class: 'caqdas__segwarn', text: `⚠ ${s.reason || s.status}` }));
         item.addEventListener('click', () => { activeRid = s.doc; retrieveCodeId = null; renderDocList(); renderText(); });
         textPane.append(item);
       }
@@ -822,7 +831,7 @@ export const workspace = {
       textPane.textContent = '';
       imageSel = null; timeSel = null;
       currentOverlay = null; currentTimeline = null; currentLanes = null; currentMediaEl = null; currentMedium = null;
-      const loading = el('div', 'caqdas__empty'); loading.textContent = 'Loading media…';
+      const loading = el('div', { class: 'caqdas__empty' }); loading.textContent = 'Loading media…';
       textPane.append(loading);
       const token = ++mediaLoadToken;
       let blob = null;
@@ -831,7 +840,7 @@ export const workspace = {
       if (mediaObjectUrl) { URL.revokeObjectURL(mediaObjectUrl); mediaObjectUrl = null; }
       textPane.textContent = '';
       if (!blob) {
-        const e = el('div', 'caqdas__empty');
+        const e = el('div', { class: 'caqdas__empty' });
         e.textContent = 'Media unavailable — this asset isn’t in the browser’s store on this device.';
         textPane.append(e);
         return;
@@ -842,18 +851,18 @@ export const workspace = {
       if (kind === 'image') renderImage(doc);
       else if (kind === 'audio' || kind === 'video') renderTimeMedia(doc, kind);
       else {
-        const e = el('div', 'caqdas__empty'); e.textContent = 'This media type isn’t supported for coding.';
+        const e = el('div', { class: 'caqdas__empty' }); e.textContent = 'This media type isn’t supported for coding.';
         textPane.append(e);
       }
     }
 
     /** Render an image doc: the picture + a region overlay (the 2-D selector). */
     function renderImage(doc) {
-      const hint = el('div', 'caqdas__mediahint');
+      const hint = el('div', { class: 'caqdas__mediahint' });
       hint.textContent = 'Drag on the image to draw a region, then click a code to tag it (right-click, or 🖌 to paint). Click a region to memo or remove it.';
-      const wrap = el('div', 'caqdas__imgwrap');
-      const img = el('img', 'caqdas__img');
-      const overlay = el('div', 'caqdas__overlay');
+      const wrap = el('div', { class: 'caqdas__imgwrap' });
+      const img = el('img', { class: 'caqdas__img' });
+      const overlay = el('div', { class: 'caqdas__overlay' });
       currentOverlay = overlay;
       wrap.append(img, overlay);
       img.addEventListener('load', () => drawRegions(overlay, doc));
@@ -879,8 +888,8 @@ export const workspace = {
       // Video gets a frame overlay for spatiotemporal (region-over-time) coding.
       let playerNode = mediaEl, overlay = null;
       if (isVideo) {
-        const wrap = el('div', 'caqdas__vidwrap');
-        overlay = el('div', 'caqdas__vidoverlay'); // pointer-events:none until "Region" mode is on
+        const wrap = el('div', { class: 'caqdas__vidwrap' });
+        overlay = el('div', { class: 'caqdas__vidoverlay' }); // pointer-events:none until "Region" mode is on
         currentVideoOverlay = overlay;
         wrap.append(mediaEl, overlay);
         playerNode = wrap;
@@ -890,9 +899,9 @@ export const workspace = {
       // Transport bar — a clear off-frame strip (play/pause for video + speed [+ ✎ Region]).
       // For video it sits right above the ruler so the whole frame is free for drawing;
       // for audio it's a plain speed row alongside the native controls.
-      const ctrl = el('div', isVideo ? 'caqdas__transport' : 'caqdas__mediactrl');
+      const ctrl = el('div', { class: isVideo ? 'caqdas__transport' : 'caqdas__mediactrl' });
       if (isVideo) {
-        const playBtn = el('button', 'caqdas__ctlbtn caqdas__playbtn'); playBtn.textContent = '▶'; playBtn.title = 'Play / pause';
+        const playBtn = el('button', { class: 'caqdas__ctlbtn caqdas__playbtn' }); playBtn.textContent = '▶'; playBtn.title = 'Play / pause';
         const syncPlay = () => { playBtn.textContent = mediaEl.paused ? '▶' : '⏸'; };
         playBtn.addEventListener('click', () => { if (mediaEl.paused) mediaEl.play(); else mediaEl.pause(); });
         mediaEl.addEventListener('play', syncPlay);
@@ -901,19 +910,19 @@ export const workspace = {
         mediaEl.addEventListener('click', () => { if (!overlay.classList.contains('is-drawing')) { if (mediaEl.paused) mediaEl.play(); else mediaEl.pause(); } });
         ctrl.append(playBtn);
       }
-      const sl = el('span', 'caqdas__speedlabel'); sl.textContent = 'Speed';
+      const sl = el('span', { class: 'caqdas__speedlabel' }); sl.textContent = 'Speed';
       ctrl.append(sl);
       const speedBtns = [];
       for (const rate of [0.5, 1, 1.5, 2]) {
-        const b = el('button', 'caqdas__ctlbtn caqdas__speedbtn' + (rate === 1 ? ' is-on' : ''));
+        const b = el('button', { class: 'caqdas__ctlbtn caqdas__speedbtn' + (rate === 1 ? ' is-on' : '') });
         b.textContent = rate + '×';
         b.addEventListener('click', () => { mediaEl.playbackRate = rate; speedBtns.forEach((x) => x.classList.toggle('is-on', x === b)); });
         speedBtns.push(b); ctrl.append(b);
       }
       if (isVideo) {
         // Volume / mute (lost with the native controls).
-        const volBtn = el('button', 'caqdas__ctlbtn'); volBtn.title = 'Mute / unmute';
-        const vol = el('input', 'caqdas__vol'); vol.type = 'range'; vol.min = '0'; vol.max = '1'; vol.step = '0.05'; vol.value = '1'; vol.title = 'Volume';
+        const volBtn = el('button', { class: 'caqdas__ctlbtn' }); volBtn.title = 'Mute / unmute';
+        const vol = el('input', { class: 'caqdas__vol' }); vol.type = 'range'; vol.min = '0'; vol.max = '1'; vol.step = '0.05'; vol.value = '1'; vol.title = 'Volume';
         const syncVol = () => { volBtn.textContent = mediaEl.muted || mediaEl.volume === 0 ? '🔇' : '🔊'; };
         volBtn.addEventListener('click', () => {
           mediaEl.muted = !mediaEl.muted;
@@ -925,28 +934,28 @@ export const workspace = {
         ctrl.append(volBtn, vol);
         // "Region" mode: while on, the overlay captures drawing; while off, the frame
         // plays normally (click to play/pause) and the overlay just shows tracked boxes.
-        const dt = el('button', 'caqdas__ctlbtn caqdas__regionbtn'); dt.textContent = '✎ Region';
+        const dt = el('button', { class: 'caqdas__ctlbtn caqdas__regionbtn' }); dt.textContent = '✎ Region';
         dt.title = 'Draw region-over-time boxes on the frame';
         dt.addEventListener('click', () => dt.classList.toggle('is-on', overlay.classList.toggle('is-drawing')));
         ctrl.append(dt);
       }
 
-      const hint = el('div', 'caqdas__mediahint');
+      const hint = el('div', { class: 'caqdas__mediahint' });
       hint.textContent = isVideo
         ? 'Play/scrub with the controls below the frame (or click the frame to play/pause; drag the ruler thumb to scrub). Time coding: drag the ruler → pick a code. Region-over-time: turn on ✎ Region, draw a box on a subject, pick a code, then scrub and drag/resize the box (or ⦿ Auto-track) to add keyframes — nudge a drifted box back on target with its handles.'
         : 'Drag on the timeline to select a span, then click a code to tag it (right-click, or 🖌 to paint). Click a coding bar to memo/remove; click the ruler to seek.';
 
-      const trackToolbar = el('div', 'caqdas__tracktb'); trackToolbar.style.display = 'none';
+      const trackToolbar = el('div', { class: 'caqdas__tracktb' }); trackToolbar.style.display = 'none';
       trackToolbarEl = trackToolbar;
 
-      const timeline = el('div', 'caqdas__timeline');
+      const timeline = el('div', { class: 'caqdas__timeline' });
       currentTimeline = timeline;
-      const track = el('div', 'caqdas__tltrack');
-      const tlsel = el('div', 'caqdas__tlsel'); tlsel.style.display = 'none';
-      const playhead = el('div', 'caqdas__playhead');
-      const scrub = el('div', 'caqdas__scrub'); // draggable thumb over the playhead (scrub)
+      const track = el('div', { class: 'caqdas__tltrack' });
+      const tlsel = el('div', { class: 'caqdas__tlsel' }); tlsel.style.display = 'none';
+      const playhead = el('div', { class: 'caqdas__playhead' });
+      const scrub = el('div', { class: 'caqdas__scrub' }); // draggable thumb over the playhead (scrub)
       track.append(tlsel, playhead, scrub);
-      const lanes = el('div', 'caqdas__lanes');
+      const lanes = el('div', { class: 'caqdas__lanes' });
       currentLanes = lanes;
       timeline.append(track, lanes);
 
@@ -1035,11 +1044,11 @@ export const workspace = {
       for (const s of segs) {
         const code = codeById(s.codeId);
         const color = code ? code.color : '#888';
-        const box = el('div', 'caqdas__region' + (hasNotes(s) ? ' has-memo' : ''));
+        const box = el('div', { class: 'caqdas__region' + (hasNotes(s) ? ' has-memo' : '') });
         positionPct(box, s.region);
         box.style.borderColor = color;
         box.style.backgroundColor = hexToRgba(color, 0.18);
-        const lbl = el('span', 'caqdas__rlabel');
+        const lbl = el('span', { class: 'caqdas__rlabel' });
         lbl.textContent = code ? code.name : '(code)';
         lbl.style.backgroundColor = color;
         box.append(lbl);
@@ -1063,7 +1072,7 @@ export const workspace = {
         try { overlay.setPointerCapture(e.pointerId); } catch { /* ok */ }
         start = norm(e);
         imageSel = null;
-        selEl = el('div', 'caqdas__regionsel');
+        selEl = el('div', { class: 'caqdas__regionsel' });
         overlay.append(selEl);
         positionPct(selEl, { x: start.x, y: start.y, w: 0, h: 0 });
       });
@@ -1154,7 +1163,7 @@ export const workspace = {
       }
       const ids = [...byCode.keys()].sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
       if (!ids.length) {
-        const e = el('div', 'caqdas__lanesempty');
+        const e = el('div', { class: 'caqdas__lanesempty' });
         e.textContent = 'No codings yet — drag on the ruler above, then click a code.';
         lanesEl.append(e);
         return;
@@ -1162,12 +1171,12 @@ export const workspace = {
       for (const cid of ids) {
         const code = codeById(cid);
         const color = code ? code.color : '#888';
-        const lane = el('div', 'caqdas__lane');
-        const label = el('span', 'caqdas__lanelabel'); label.textContent = code ? code.name : '(code)'; label.style.color = color;
+        const lane = el('div', { class: 'caqdas__lane' });
+        const label = el('span', { class: 'caqdas__lanelabel' }); label.textContent = code ? code.name : '(code)'; label.style.color = color;
         lane.append(label);
-        const strip = el('div', 'caqdas__lanestrip');
+        const strip = el('div', { class: 'caqdas__lanestrip' });
         for (const s of byCode.get(cid)) {
-          const bar = el('div', 'caqdas__lanebar' + (hasNotes(s) ? ' has-memo' : '') + (s.keys ? ' is-track' : ''));
+          const bar = el('div', { class: 'caqdas__lanebar' + (hasNotes(s) ? ' has-memo' : '') + (s.keys ? ' is-track' : '') });
           bar.style.left = (s.tStart / dur) * 100 + '%';
           bar.style.width = Math.max(0.4, ((s.tEnd - s.tStart) / dur) * 100) + '%';
           bar.style.backgroundColor = color;
@@ -1267,7 +1276,7 @@ export const workspace = {
         try { overlay.setPointerCapture(e.pointerId); } catch { /* ok */ }
         overlay.querySelectorAll('.caqdas__regionsel').forEach((n) => n.remove());
         start = norm(e); videoSel = null;
-        selEl = el('div', 'caqdas__regionsel'); overlay.append(selEl);
+        selEl = el('div', { class: 'caqdas__regionsel' }); overlay.append(selEl);
         positionPct(selEl, { x: start.x, y: start.y, w: 0, h: 0 });
       });
       overlay.addEventListener('pointermove', (e) => { if (start) positionPct(selEl, rectOf(start, norm(e))); });
@@ -1393,11 +1402,11 @@ export const workspace = {
         if (!r) continue;
         const code = codeById(s.codeId);
         const color = code ? code.color : '#888';
-        const box = el('div', 'caqdas__trackbox' + (s === activeTrack ? ' is-active' : ''));
+        const box = el('div', { class: 'caqdas__trackbox' + (s === activeTrack ? ' is-active' : '') });
         positionPct(box, r);
         box.style.borderColor = color;
         box.style.backgroundColor = hexToRgba(color, 0.12);
-        const lbl = el('span', 'caqdas__rlabel'); lbl.textContent = code ? code.name : '(code)'; lbl.style.backgroundColor = color;
+        const lbl = el('span', { class: 'caqdas__rlabel' }); lbl.textContent = code ? code.name : '(code)'; lbl.style.backgroundColor = color;
         box.append(lbl);
         overlay.append(box);
         // The active track's box is directly editable while in ✎ Region mode: drag to
@@ -1412,7 +1421,7 @@ export const workspace = {
     function attachBoxEditing(box, seg, overlay) {
       box.classList.add('is-editing');
       for (const h of ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']) {
-        const hd = el('div', 'caqdas__handle caqdas__h-' + h);
+        const hd = el('div', { class: 'caqdas__handle caqdas__h-' + h });
         hd.addEventListener('pointerdown', (e) => startEdit(e, h));
         box.append(hd);
       }
@@ -1467,20 +1476,20 @@ export const workspace = {
       trackToolbarEl.style.display = 'flex';
       const code = codeById(activeTrack.codeId);
       const n = activeTrack.keys.length;
-      const label = el('span', 'caqdas__tracklabel');
+      const label = el('span', { class: 'caqdas__tracklabel' });
       label.textContent = `⦿ ${code ? code.name : '?'} · ${n} keyframe${n === 1 ? '' : 's'}`;
       if (code) label.style.color = code.color;
-      const trackBtn = el('button', 'caqdas__btn');
+      const trackBtn = el('button', { class: 'caqdas__btn' });
       trackBtn.textContent = tracking ? '■ Stop' : '⦿ Auto-track ▶';
       trackBtn.title = 'Follow the box forward frame-by-frame (rough — correct any drift by re-drawing)';
       trackBtn.addEventListener('click', () => { if (tracking) tracking = false; else void trackForward(activeTrack, currentMediaEl); });
-      const delBtn = el('button', 'caqdas__btn'); delBtn.textContent = '⌫ keyframe';
+      const delBtn = el('button', { class: 'caqdas__btn' }); delBtn.textContent = '⌫ keyframe';
       delBtn.title = 'Delete the keyframe at the current time';
       delBtn.addEventListener('click', () => deleteKeyframeAt(activeTrack, currentMediaEl?.currentTime || 0));
-      const rmBtn = el('button', 'caqdas__btn'); rmBtn.textContent = '🗑 track';
+      const rmBtn = el('button', { class: 'caqdas__btn' }); rmBtn.textContent = '🗑 track';
       rmBtn.title = 'Remove this whole tracked region';
       rmBtn.addEventListener('click', () => removeTrack(activeTrack));
-      const doneBtn = el('button', 'caqdas__btn caqdas__btn--primary'); doneBtn.textContent = '✓ Done';
+      const doneBtn = el('button', { class: 'caqdas__btn caqdas__btn--primary' }); doneBtn.textContent = '✓ Done';
       doneBtn.addEventListener('click', () => { activeTrack = null; renderTrackToolbar(); drawTrackBoxes(currentVideoOverlay, docActive(), currentMediaEl?.currentTime || 0); });
       trackToolbarEl.append(label, trackBtn, delBtn, rmBtn, doneBtn);
     }
@@ -1553,8 +1562,8 @@ export const workspace = {
 
     /** Open the manager. Returns nothing; it owns its own teardown. */
     function openManager() {
-      const scrim = el('div', 'caqdas__scrim');
-      const panel = el('div', 'caqdas__mgr');
+      const scrim = el('div', { class: 'caqdas__scrim' });
+      const panel = el('div', { class: 'caqdas__mgr' });
       // The scrim is the modal boundary: a click on it (but not inside the panel)
       // closes, Escape closes, and focus is trapped until it does.
       scrim.addEventListener('mousedown', (e) => { if (e.target === scrim) close(); });
@@ -1582,18 +1591,18 @@ export const workspace = {
       /** Codes selected for a bulk action, by id. Cleared whenever the book changes. */
       let picked = new Set();
 
-      const head = el('div', 'caqdas__mgrhead');
-      const title = el('div', 'caqdas__mgrtitle'); title.textContent = 'Codebook manager';
-      const closeBtn = el('button', 'caqdas__btn'); closeBtn.textContent = 'Done';
+      const head = el('div', { class: 'caqdas__mgrhead' });
+      const title = el('div', { class: 'caqdas__mgrtitle' }); title.textContent = 'Codebook manager';
+      const closeBtn = el('button', { class: 'caqdas__btn' }); closeBtn.textContent = 'Done';
       closeBtn.addEventListener('click', close);
       head.append(title, closeBtn);
 
-      const bodyEl = el('div', 'caqdas__mgrbody');
-      const side = el('div', 'caqdas__mgrside');
-      const main = el('div', 'caqdas__mgrmain');
-      const bar = el('div', 'caqdas__mgrbar');
-      const list = el('div', 'caqdas__mgrlist');
-      const foot = el('div', 'caqdas__mgrfoot');
+      const bodyEl = el('div', { class: 'caqdas__mgrbody' });
+      const side = el('div', { class: 'caqdas__mgrside' });
+      const main = el('div', { class: 'caqdas__mgrmain' });
+      const bar = el('div', { class: 'caqdas__mgrbar' });
+      const list = el('div', { class: 'caqdas__mgrlist' });
+      const foot = el('div', { class: 'caqdas__mgrfoot' });
       main.append(bar, list, foot);
       bodyEl.append(side, main);
       panel.append(head, bodyEl);
@@ -1603,12 +1612,12 @@ export const workspace = {
       // --- the codebook list (left) --------------------------------------------
       function renderBooks() {
         side.textContent = '';
-        const h = el('div', 'caqdas__group'); h.textContent = 'Codebooks';
+        const h = el('div', { class: 'caqdas__group' }); h.textContent = 'Codebooks';
         side.append(h);
         for (const b of state.codebooks) {
-          const btn = el('button', 'caqdas__bookbtn' + (b.id === state.codebookId ? ' is-active' : ''));
+          const btn = el('button', { class: 'caqdas__bookbtn' + (b.id === state.codebookId ? ' is-active' : '') });
           const nm = el('span'); nm.textContent = b.name || '(unnamed)';
-          const n = el('span', 'caqdas__bookn');
+          const n = el('span', { class: 'caqdas__bookn' });
           n.textContent = state.codes.filter((c) => c.codebookId === b.id).length;
           btn.append(nm, n);
           btn.addEventListener('click', () => {
@@ -1620,7 +1629,7 @@ export const workspace = {
           });
           side.append(btn);
         }
-        const add = el('button', 'caqdas__btn');
+        const add = el('button', { class: 'caqdas__btn' });
         add.textContent = '＋ New codebook';
         add.style.marginTop = '8px';
         add.addEventListener('click', () => {
@@ -1651,7 +1660,7 @@ export const workspace = {
         nameInp.addEventListener('input', () => { if (book) { book.name = nameInp.value; save(); renderBooks(); } });
         bar.append(nameInp);
 
-        const del = el('button', 'caqdas__btn');
+        const del = el('button', { class: 'caqdas__btn' });
         del.textContent = 'Delete codebook';
         // Never leave codings orphaned: a segment whose code is gone renders as "(code)"
         // and cannot be repaired. Deleting the last book is refused outright rather than
@@ -1673,12 +1682,12 @@ export const workspace = {
         });
         bar.append(del);
 
-        const imp = el('button', 'caqdas__btn'); imp.textContent = '⇪ Paste codes…';
+        const imp = el('button', { class: 'caqdas__btn' }); imp.textContent = '⇪ Paste codes…';
         imp.title = 'Add many codes at once from a pasted list or CSV';
         imp.addEventListener('click', showPaste);
         bar.append(imp);
 
-        const exp = el('button', 'caqdas__btn'); exp.textContent = '⇩ Copy as CSV';
+        const exp = el('button', { class: 'caqdas__btn' }); exp.textContent = '⇩ Copy as CSV';
         exp.title = 'Copy this codebook to the clipboard as CSV';
         exp.addEventListener('click', () => copyCsv(exp));
         bar.append(exp);
@@ -1689,7 +1698,7 @@ export const workspace = {
         list.textContent = '';
         const mine = codesInBook(state);
         if (!mine.length) {
-          const e = el('div', 'caqdas__mgrempty');
+          const e = el('div', { class: 'caqdas__mgrempty' });
           e.textContent = 'No codes in this codebook yet. Add them in the coding panel, or paste a list.';
           list.append(e);
           renderFoot();
@@ -1698,7 +1707,7 @@ export const workspace = {
         const counts = {};
         for (const sg of state.segments) counts[sg.codeId] = (counts[sg.codeId] || 0) + 1;
 
-        const hdr = el('div', 'caqdas__mgrrow');
+        const hdr = el('div', { class: 'caqdas__mgrrow' });
         const all = el('input'); all.type = 'checkbox';
         all.checked = mine.every((c) => picked.has(c.id));
         all.title = 'Select all';
@@ -1706,16 +1715,16 @@ export const workspace = {
           picked = all.checked ? new Set(mine.map((c) => c.id)) : new Set();
           renderList();
         });
-        const hn = el('span', 'caqdas__mgrname'); hn.textContent = 'Code';
+        const hn = el('span', { class: 'caqdas__mgrname' }); hn.textContent = 'Code';
         hn.style.color = '#8b949c'; hn.style.fontSize = '11px';
-        const ht = el('span', 'caqdas__mgrtheme'); ht.textContent = 'Theme';
+        const ht = el('span', { class: 'caqdas__mgrtheme' }); ht.textContent = 'Theme';
         ht.style.color = '#8b949c'; ht.style.fontSize = '11px';
-        const hc = el('span', 'caqdas__mgrcount'); hc.textContent = 'Uses';
+        const hc = el('span', { class: 'caqdas__mgrcount' }); hc.textContent = 'Uses';
         hdr.append(all, el('span'), hn, ht, hc);
         list.append(hdr);
 
         for (const code of mine) {
-          const row = el('div', 'caqdas__mgrrow');
+          const row = el('div', { class: 'caqdas__mgrrow' });
           const cb = el('input'); cb.type = 'checkbox'; cb.checked = picked.has(code.id);
           cb.addEventListener('change', () => {
             if (cb.checked) picked.add(code.id); else picked.delete(code.id);
@@ -1727,16 +1736,16 @@ export const workspace = {
           col.title = 'Colour';
           col.addEventListener('input', () => { code.color = col.value; save(); });
 
-          const nm = el('input', 'caqdas__mgrname'); nm.type = 'text'; nm.value = code.name;
+          const nm = el('input', { class: 'caqdas__mgrname' }); nm.type = 'text'; nm.value = code.name;
           nm.title = 'Rename';
           nm.addEventListener('input', () => { code.name = nm.value; save(); });
 
-          const th = el('input', 'caqdas__mgrtheme'); th.type = 'text'; th.value = code.group || '';
+          const th = el('input', { class: 'caqdas__mgrtheme' }); th.type = 'text'; th.value = code.group || '';
           th.placeholder = 'theme';
           th.setAttribute('list', 'caqdas-themes');
           th.addEventListener('input', () => { code.group = th.value; save(); });
 
-          const ct = el('span', 'caqdas__mgrcount'); ct.textContent = counts[code.id] || 0;
+          const ct = el('span', { class: 'caqdas__mgrcount' }); ct.textContent = counts[code.id] || 0;
           row.append(cb, col, nm, th, ct);
           list.append(row);
         }
@@ -1755,7 +1764,7 @@ export const workspace = {
       function renderFoot() {
         foot.textContent = '';
         const n = picked.size;
-        const lbl = el('span', 'caqdas__sel');
+        const lbl = el('span', { class: 'caqdas__sel' });
         lbl.textContent = n ? `${n} selected` : 'Select codes for bulk actions';
         foot.append(lbl);
         if (!n) return;
@@ -1783,14 +1792,14 @@ export const workspace = {
         mv.addEventListener('change', () => { if (mv.value) copyTo(mv.value, true); });
         foot.append(mv);
 
-        const merge = el('button', 'caqdas__btn');
+        const merge = el('button', { class: 'caqdas__btn' });
         merge.textContent = 'Merge';
         merge.disabled = n < 2;
         merge.title = n < 2 ? 'Select two or more codes to merge' : 'Fold the selected codes into the first, keeping every coding';
         merge.addEventListener('click', mergePicked);
         foot.append(merge);
 
-        const del = el('button', 'caqdas__btn');
+        const del = el('button', { class: 'caqdas__btn' });
         del.textContent = 'Delete';
         del.addEventListener('click', deletePicked);
         foot.append(del);
@@ -1855,25 +1864,25 @@ export const workspace = {
       function showPaste() {
         list.textContent = '';
         foot.textContent = '';
-        const note = el('p', 'caqdas__mgrnote');
+        const note = el('p', { class: 'caqdas__mgrnote' });
         note.textContent = 'One code per line. Optionally "name, theme, #colour" — a plain list of names works too. '
           + 'Existing names are skipped, so you can paste the same sheet twice safely.';
-        const ta = el('textarea', 'caqdas__paste');
+        const ta = el('textarea', { class: 'caqdas__paste' });
         ta.placeholder = 'Trust, Relational, #8ecae6\nDelay, Process\nAmbivalence';
         const wrap = el('div'); wrap.style.padding = '12px';
         wrap.append(note, ta);
         list.append(wrap);
 
-        const cancel = el('button', 'caqdas__btn'); cancel.textContent = 'Cancel';
+        const cancel = el('button', { class: 'caqdas__btn' }); cancel.textContent = 'Cancel';
         cancel.addEventListener('click', () => renderAll());
-        const go = el('button', 'caqdas__btn'); go.textContent = 'Add codes';
+        const go = el('button', { class: 'caqdas__btn' }); go.textContent = 'Add codes';
         go.addEventListener('click', () => {
           const added = addCodesFromText(state, ta.value);
           save();
           renderAll();
           if (!added) note.textContent = 'Nothing added — every name was already in this codebook.';
         });
-        const sp = el('span', 'caqdas__sel'); sp.textContent = '';
+        const sp = el('span', { class: 'caqdas__sel' }); sp.textContent = '';
         foot.append(sp, cancel, go);
         ta.focus();
       }
@@ -1893,16 +1902,16 @@ export const workspace = {
       function showText(csv) {
         list.textContent = '';
         const wrap = el('div'); wrap.style.padding = '12px';
-        const note = el('p', 'caqdas__mgrnote');
+        const note = el('p', { class: 'caqdas__mgrnote' });
         note.textContent = 'Copy this text (the clipboard was not available).';
-        const ta = el('textarea', 'caqdas__paste'); ta.value = csv; ta.readOnly = true;
+        const ta = el('textarea', { class: 'caqdas__paste' }); ta.value = csv; ta.readOnly = true;
         wrap.append(note, ta);
         list.append(wrap);
         ta.select();
         foot.textContent = '';
-        const back = el('button', 'caqdas__btn'); back.textContent = 'Back';
+        const back = el('button', { class: 'caqdas__btn' }); back.textContent = 'Back';
         back.addEventListener('click', () => renderAll());
-        foot.append(el('span', 'caqdas__sel'), back);
+        foot.append(el('span', { class: 'caqdas__sel' }), back);
       }
 
       function renderAll() { renderBooks(); renderBar(); renderList(); }
@@ -1941,14 +1950,14 @@ export const workspace = {
       const h = el('h3'); h.textContent = 'Codebook';
       // The manager lives behind a button, not permanently beside the transcript: the
       // panel's job is coding, and bulk editing is a different job done occasionally.
-      const mgrBtn = el('button', 'caqdas__btn');
+      const mgrBtn = el('button', { class: 'caqdas__btn' });
       mgrBtn.textContent = '⚙';
       mgrBtn.title = 'Codebook manager — rename, recolour, merge, bulk-add, and move codes between codebooks';
       mgrBtn.style.cssText = 'float:right; padding:2px 8px;';
       mgrBtn.addEventListener('click', openManager);
       h.append(mgrBtn);
       codePane.append(h);
-      const hint = el('div', 'caqdas__hint');
+      const hint = el('div', { class: 'caqdas__hint' });
       hint.textContent = 'Select a passage, then click a code to apply it (right-click, or 🖌 to paint). 🔍 lists a code’s segments; ✎ opens its memo + theme group.';
       codePane.append(hint);
       const counts = {};
@@ -1966,20 +1975,20 @@ export const workspace = {
         // Every section gets a header so its boundary is unambiguous — including a
         // muted "No theme" header for ungrouped codes when themes are in play (else
         // an ungrouped code reads as part of the theme above it).
-        if (g) { const gh = el('div', 'caqdas__group'); gh.textContent = g; codePane.append(gh); }
-        else if (hasThemes) { const gh = el('div', 'caqdas__group caqdas__group--none'); gh.textContent = 'No theme'; codePane.append(gh); }
+        if (g) { const gh = el('div', { class: 'caqdas__group' }); gh.textContent = g; codePane.append(gh); }
+        else if (hasThemes) { const gh = el('div', { class: 'caqdas__group caqdas__group--none' }); gh.textContent = 'No theme'; codePane.append(gh); }
         for (const code of groups.get(g)) {
-          const r = el('div', 'caqdas__code' + (armed === code.id ? ' is-armed' : ''));
+          const r = el('div', { class: 'caqdas__code' + (armed === code.id ? ' is-armed' : '') });
           r.title = 'Click to code the selected passage';
-          const sw = el('span', 'caqdas__sw'); sw.style.backgroundColor = code.color;
-          const nm = el('span', 'nm'); nm.textContent = code.name;
+          const sw = el('span', { class: 'caqdas__sw' }); sw.style.backgroundColor = code.color;
+          const nm = el('span', { class: 'nm' }); nm.textContent = code.name;
           if (code.memo) nm.title = code.memo;
-          const ct = el('span', 'ct'); ct.textContent = counts[code.id] || 0;
-          const rb = el('button', 'caqdas__iconbtn'); rb.textContent = '🔍'; rb.title = 'Show every passage coded with this';
+          const ct = el('span', { class: 'ct' }); ct.textContent = counts[code.id] || 0;
+          const rb = el('button', { class: 'caqdas__iconbtn' }); rb.textContent = '🔍'; rb.title = 'Show every passage coded with this';
           rb.addEventListener('click', (e) => { e.stopPropagation(); retrieveCodeId = code.id; renderText(); });
-          const mb = el('button', 'caqdas__iconbtn' + (hasNotes(code) ? ' has' : '')); mb.textContent = '✎'; mb.title = 'Notes + theme group (code details)';
+          const mb = el('button', { class: 'caqdas__iconbtn' + (hasNotes(code) ? ' has' : '') }); mb.textContent = '✎'; mb.title = 'Notes + theme group (code details)';
           mb.addEventListener('click', (e) => { e.stopPropagation(); memoOpen.has(code.id) ? memoOpen.delete(code.id) : memoOpen.add(code.id); renderCodes(); });
-          const pb = el('button', 'pb' + (armed === code.id ? ' is-on' : ''));
+          const pb = el('button', { class: 'pb' + (armed === code.id ? ' is-on' : '') });
           pb.textContent = '🖌';
           pb.title = 'Paint mode: arm this code so selecting passages auto-applies it';
           pb.addEventListener('click', (e) => { e.stopPropagation(); setArmed(code.id); });
@@ -1988,7 +1997,7 @@ export const workspace = {
           let vb = null;
           if (activeIsMedia) {
             const hidden = hiddenCodes.has(code.id);
-            vb = el('button', 'caqdas__iconbtn' + (hidden ? '' : ' has'));
+            vb = el('button', { class: 'caqdas__iconbtn' + (hidden ? '' : ' has') });
             vb.textContent = hidden ? '◌' : '👁';
             vb.title = hidden ? 'Show this code’s regions' : 'Hide this code’s regions';
             vb.addEventListener('click', (e) => {
@@ -1998,7 +2007,7 @@ export const workspace = {
               renderCodes();
             });
           }
-          const x = el('button', 'x'); x.textContent = '✕'; x.title = 'Delete code + its segments';
+          const x = el('button', { class: 'x' }); x.textContent = '✕'; x.title = 'Delete code + its segments';
           x.addEventListener('click', (e) => {
             e.stopPropagation();
             if (activeCodeId === code.id) activeCodeId = null;
@@ -2044,8 +2053,8 @@ export const workspace = {
           codePane.append(r);
           // ✎ details: theme group + analytic memo, both persisted on the code.
           if (memoOpen.has(code.id)) {
-            const panel = el('div', 'caqdas__details');
-            const gi = el('input', 'caqdas__grpinp'); gi.placeholder = 'theme / group'; gi.value = code.group || '';
+            const panel = el('div', { class: 'caqdas__details' });
+            const gi = el('input', { class: 'caqdas__grpinp' }); gi.placeholder = 'theme / group'; gi.value = code.group || '';
             gi.addEventListener('input', () => { code.group = gi.value; save(); });
             gi.addEventListener('blur', renderCodes);
             panel.append(gi, renderThread('code', code, renderCodes)); // author-stamped notes thread (#148)
@@ -2054,9 +2063,9 @@ export const workspace = {
         }
       }
       // inline "new code"
-      const nc = el('div', 'caqdas__newcode');
+      const nc = el('div', { class: 'caqdas__newcode' });
       const inp = el('input'); inp.placeholder = 'New code…';
-      const add = el('button', 'caqdas__btn'); add.textContent = '＋';
+      const add = el('button', { class: 'caqdas__btn' }); add.textContent = '＋';
       add.setAttribute('aria-label', 'Add code'); add.title = 'Add code';
       const commit = () => {
         const name = inp.value.trim();
@@ -2315,7 +2324,7 @@ export const workspace = {
 
     function openAssignMenu(span, evt) {
       closeMenu();
-      menu = el('div', 'caqdas__menu');
+      menu = el('div', { class: 'caqdas__menu' });
       const choose = (codeId) => {
         closeMenu();
         if (span && span.kind === 'region') void addRegionSegment(codeId, span.region);
@@ -2325,13 +2334,13 @@ export const workspace = {
       };
       for (const code of codesInBook(state)) {
         const b = el('button');
-        const sw = el('span', 'caqdas__sw'); sw.style.backgroundColor = code.color;
+        const sw = el('span', { class: 'caqdas__sw' }); sw.style.backgroundColor = code.color;
         const nm = document.createTextNode(code.name);
         b.append(sw, nm);
         b.addEventListener('click', (e) => { e.stopPropagation(); choose(code.id); });
         menu.append(b);
       }
-      const row = el('div', 'row');
+      const row = el('div', { class: 'row' });
       const inp = el('input'); inp.placeholder = 'New code from selection…';
       row.append(inp);
       const mk = () => {
@@ -2358,20 +2367,20 @@ export const workspace = {
     // easy to lose a coding by accident) and gives segment-level analytic notes.
     function openSegmentMenu(covering, evt) {
       closeMenu();
-      menu = el('div', 'caqdas__menu');
+      menu = el('div', { class: 'caqdas__menu' });
       for (const seg of covering) {
         const code = codeById(seg.codeId);
-        const head = el('div', 'caqdas__seghead');
-        const sw = el('span', 'caqdas__sw'); sw.style.backgroundColor = code ? code.color : '#ccc';
-        const nm = el('span', 'nm'); nm.textContent = code ? code.name : '(code)';
-        const rm = el('button', 'caqdas__segrm'); rm.textContent = 'Remove'; rm.title = 'Remove this coding and its notes';
+        const head = el('div', { class: 'caqdas__seghead' });
+        const sw = el('span', { class: 'caqdas__sw' }); sw.style.backgroundColor = code ? code.color : '#ccc';
+        const nm = el('span', { class: 'nm' }); nm.textContent = code ? code.name : '(code)';
+        const rm = el('button', { class: 'caqdas__segrm' }); rm.textContent = 'Remove'; rm.title = 'Remove this coding and its notes';
         rm.addEventListener('click', (e) => { e.stopPropagation(); void removeCoding(seg); });
         head.append(sw, nm, rm); menu.append(head);
 
         // Adjust, rather than delete-and-redo. Both keep the segment id, so the notes
         // thread below survives the edit — which is the whole reason these exist.
-        const tools = el('div', 'caqdas__segtools');
-        const move = el('button', 'caqdas__btn');
+        const tools = el('div', { class: 'caqdas__segtools' });
+        const move = el('button', { class: 'caqdas__btn' });
         move.textContent = '⇔ Re-anchor to selection';
         move.title = 'Select the correct passage, then click this — the coding keeps its notes';
         move.addEventListener('click', (e) => { e.stopPropagation(); void reanchorToSelection(seg); });
@@ -2390,7 +2399,7 @@ export const workspace = {
         menu.append(tools);
 
         if (isUnsure(seg)) {
-          menu.append(el('div', 'caqdas__segwarn', `⚠ ${seg.reason || seg.status}`));
+          menu.append(el('div', { class: 'caqdas__segwarn', text: `⚠ ${seg.reason || seg.status}` }));
         }
         menu.append(renderThread('segment', seg, refreshView)); // author-stamped notes thread (#148)
       }

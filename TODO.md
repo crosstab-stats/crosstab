@@ -94,12 +94,23 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       - **`builtin-spatial` and `builtin-decisions` are NOT reflowed.** They have the same
         structural problem for the same reason and now have the same tools; CAQDAS was the
         one with evidence. Do them when someone hits them, or opportunistically.
-      - **The `el()` migration has not started.** 509 positional call sites across core and
-        plugins; the options-object version ships in the stdlib and the two can coexist, so
-        this is incremental whenever a file is being touched anyway.
-      - **Theming is still latent.** CAQDAS keeps its own literal hex for everything except
-        the new rules. The tokens exist now, so a dark mode becomes a migration rather than
-        a rewrite — but nothing follows the host's palette yet.
+      - **`el()` migration: CAQDAS DONE (2026-10-10), the rest open.** Its 197 calls now
+        pass an options object; 159 were positional and were rewritten by a depth-aware
+        argument parser rather than a regex (arguments contain ternaries, template literals
+        and nested calls). Verified by rendering: the document list draws `#1` in muted grey
+        beside each title with the active row highlighted — a class/text swap would have put
+        row numbers in the class attribute and been obvious. **~310 positional calls remain**
+        in core and the other plugins; the two forms coexist, so this stays incremental.
+      - **Theming: CAQDAS DONE, the rest open.** Its structural palette (57 literals) now
+        reads from `--ct-text`/`--ct-line`/`--ct-line-soft`/`--ct-accent`/`--ct-muted`/
+        `--ct-danger`/`--ct-surface`. Two tokens were ADDED for it rather than flattening a
+        real distinction: `lineSoft` (CAQDAS draws control borders and list dividers in
+        different greys) and `surface` (white backgrounds are the thing a dark theme must
+        change, and are not the same idea as `panel`). Colours the plugin genuinely owns —
+        the amber drift warning, the accent-derived hover tints, white text on a painted
+        code chip — are deliberately left literal.
+      - **Still no actual theme.** The tokens have one set of values. A dark mode is now a
+        migration rather than a rewrite, for CAQDAS at least.
       - **Not checked on hardware.** The stacking was confirmed in a desktop browser with
         the mode forced. How it actually feels under a thumb — touch targets, the on-screen
         keyboard over a 40vh text column — wants a phone.
