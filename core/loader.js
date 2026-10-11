@@ -59,7 +59,7 @@ import { assetRefDecls, declaredCollections } from './collections.js';
  * feature-detects carries on.
  */
 let pluginStdlibPromise = null;
-function pluginStdlibSource() {
+export function pluginStdlibSource() {
   if (!pluginStdlibPromise) {
     pluginStdlibPromise = fetch(new URL('./plugin-stdlib.js', import.meta.url))
       .then((r) => (r.ok ? r.text() : ''))

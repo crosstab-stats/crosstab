@@ -55,72 +55,54 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         rather than twice.
       - `STDLIB_VERSION` is not load-bearing yet — nothing reads it. It exists because it
         cannot be added retrospectively to builds already shipped.
-- [ ] **Plugin stdlib, part 2: the DESIGN SYSTEM — and the small-screen hole it closes
-      (owner, 2026-10-10).** The bigger commitment, and it has a forcing argument part 1
-      does not.
+- [x] **DONE (2026-10-10). Plugin stdlib, part 2: the screen mode crosses the sandbox, and
+      a pane can reflow.** The gap: a workspace pane is a separate opaque-origin document
+      and inherits nothing, and the mode was never sent — `onScreenModeChange` had exactly
+      one subscriber (the host re-laying-out itself) and no plugin had a single layout
+      `@media` query. CAQDAS therefore laid out identically at 1400px and 390px: 470px of
+      fixed rails (230px document list + 240px codebook) left the text column nothing, so it
+      squeezed to about one character per line. The owner's word was "unusable".
 
-      **Workspace plugins cannot reflow, and cannot fix it themselves.** Verified: screen
-      mode is **never sent across the boundary** (no data-screen / screenMode anywhere in the
-      broker, workspace-manager or loader), `onScreenModeChange` has **exactly one subscriber**
-      (app.js:1896 — the host re-laying-out itself), and **no plugin contains a single layout
-      @media query**; the only @media in all of plugins/ is `@media print` in html-export.
+      **The chain**: `broker.sendScreen(mode)` → frame mirrors it to `data-screen` on its
+      own root → plugin CSS keys off the SAME selector the host uses. Sent at mount (before
+      anything renders, so there is no flinch) and again on every toggle.
 
-      So a CAQDAS coding pane, a Spatial map or a Decisions tree lays out identically at
-      1400px and at 390px. The host reflows AROUND the iframe and the document inside it never
-      hears that anything changed. It was never going to be caught either — small-screen
-      mode's acceptance test was "enumerate every reachable COMMAND in both modes, 53 vs 53",
-      and a pane's internal layout is not a command.
+      **Posted, never measured.** The mode is a user's CHOICE: a pane keyed to its own
+      iframe width would override someone who deliberately picked the full layout on a
+      narrow screen, which is the objection small-screen mode exists to answer.
 
-      **And a plugin cannot simply add its own media query**, which is what makes this a
-      stdlib problem rather than three plugin bugs. `screen-mode.js` is explicit that *no CSS
-      anywhere keys off viewport width*, because the mode is a USER'S CHOICE and not a
-      measurement — a plugin keyed to its own iframe width would override someone who
-      deliberately chose the full layout on a narrow screen, which is the exact objection the
-      whole feature was built around. **The host owns state that plugin UI needs and cannot
-      derive.** The prerequisite is therefore plumbing the mode across the boundary (at mount,
-      and on change) — not CSS.
+      **A gap part 1 left, found while doing this:** the workspace mount path is NOT the one
+      in loader.js, and it called `sendLoad(source)` with one argument — so the pane plugins,
+      the ones that build the most UI and need it most, were the only plugins NOT receiving
+      `app.std`. Fixed here.
 
-      **MEASURED NOW, on hardware (owner, iPhone, 2026-10-10): "caqdas on the phone is
-      unusable".** The screenshot shows the CAQDAS pane rendering its three columns —
-      document list, document text, codebook — side by side at ~390px. The middle column is
-      squeezed to roughly one character per line ("The / sta / wer / wor / kin / and …") and
-      the codebook panel runs off the right edge entirely. So this is not a latent gap: the
-      largest qualitative workspace in the app is unusable on a phone today, while the host
-      around it reflows correctly.
+      **The stdlib gained the styling half**: `TOKENS`, `BASE_CSS` (tokens as custom
+      properties, `.ct-btn`/`.ct-field`/`.ct-row`/`.ct-split`, and the small-screen rules),
+      `injectStdlibStyles()`, and `screenMode()`. A `.ct-split` stacks itself in small mode,
+      so a plugin gets reflow by USING the component rather than implementing it — which is
+      the argument for shipping components rather than only tokens.
 
-      That also settles the priority question between the two parts of the stdlib. Part 1 is
-      the tidier win; **part 2 is the one with a user who cannot do their work.**
+      **CAQDAS is migrated and verified visually**: the pane now renders toolbar, document
+      list, document text, then the codebook full-width beneath, instead of three squeezed
+      columns. Its rails lose their fixed widths and gain bounded heights; the text column
+      keeps `min-height: 40vh` because it is why the pane exists; controls get 16px (stops
+      iOS zooming on focus) and a 44px touch target.
 
-      (Still not inspectable from a script: the pane is an opaque-origin iframe, so the host
-      page cannot read into its contentDocument. Measurement needs a device or devtools —
-      which is how this one was found.)
+      Suite 1632 → 1648.
 
-      **Found alongside it but NOT part of this — fixed 2026-10-10.** The same screenshot
-      showed the view tab strip clipping its active tab once a workspace tab was added. That
-      one was host-side: `.tabs` scrolls, but `.tab` had no `flex-shrink: 0`, so the tabs
-      squeezed rather than overflowing and the strip never had anything to scroll. Separate
-      fault, separate fix — see `test/tab-strip-narrow.test.mjs`.
-
-      **Three ways across the boundary, increasing in strength:**
-      1. **Tokens as source** — accent/line/radius as a plain object the plugin's own CSS
-         interpolates. Same shipping mechanism as part 1, nearly free.
-      2. **A base stylesheet** the plugin injects — this is what gives real button TYPES
-         (.ct-btn, .ct-btn--danger, .ct-field, lists), and it is where small-screen awareness
-         would live: the shared elements key off the mode the host sent, so a plugin gets
-         reflow by USING them rather than by implementing it.
-      3. **Custom properties pushed in at mount**, so the host's theme reaches the pane live.
-
-      Precedent for (2): `results.getStyles()` already hands the host's canonical results
-      stylesheet to export plugins so an HTML export reproduces the look.
-
-      **The argument for going past tokens to a real stylesheet is theming.** CAQDAS hardcodes
-      #ccd2d8 borders and 6px radii by hand; those can never follow a dark mode or a
-      high-contrast setting. Latent today — visibly stale the moment the host themes.
-
-      **The caveat.** A shipped stylesheet is a public API with a sharper pinning problem than
-      the functions: change .ct-btn and every third-party plugin's buttons change underneath
-      them. That is arguably the point of a design system, but it has to be a deliberate
-      commitment rather than something that accretes.
+      **Left deliberately:**
+      - **`builtin-spatial` and `builtin-decisions` are NOT reflowed.** They have the same
+        structural problem for the same reason and now have the same tools; CAQDAS was the
+        one with evidence. Do them when someone hits them, or opportunistically.
+      - **The `el()` migration has not started.** 509 positional call sites across core and
+        plugins; the options-object version ships in the stdlib and the two can coexist, so
+        this is incremental whenever a file is being touched anyway.
+      - **Theming is still latent.** CAQDAS keeps its own literal hex for everything except
+        the new rules. The tokens exist now, so a dark mode becomes a migration rather than
+        a rewrite — but nothing follows the host's palette yet.
+      - **Not checked on hardware.** The stacking was confirmed in a desktop browser with
+        the mode forced. How it actually feels under a thumb — touch targets, the on-screen
+        keyboard over a 40vh text column — wants a phone.
 - [x] **DONE (2026-10-10). A project row says when it was last worked on and how big it
       is — and opening one no longer counts as working on it.**
 

@@ -485,6 +485,23 @@ export class PluginBroker {
 
   // --- internals -------------------------------------------------------------
 
+  /**
+   * Tell the frame which layout the user is in.
+   *
+   * Fire-and-forget: there is nothing to wait for, and a frame that has not finished
+   * its handshake will be told again at mount. The frame turns it into
+   * `data-screen` on its own documentElement, so a plugin's CSS keys off exactly the
+   * selector the host's does — see plugin-host.html.
+   *
+   * Sent rather than measured because the mode is a USER'S CHOICE, not a viewport
+   * width: a plugin reading its own iframe width would override someone who
+   * deliberately picked the full layout on a narrow screen, which is the objection
+   * small-screen mode was built around (core/screen-mode.js).
+   */
+  sendScreen(mode) {
+    this.#post({ t: 'screen', mode });
+  }
+
   #post(message) {
     // Opaque-origin iframe: target origin must be "*"; authentication is by the
     // source check on the receiving side, not by origin string.

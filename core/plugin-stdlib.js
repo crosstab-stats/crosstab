@@ -214,3 +214,120 @@ export function el(tag, opts = {}) {
   for (const c of opts.children ?? []) e.append(c);
   return e;
 }
+
+// =============================================================================
+// Styling
+// =============================================================================
+
+/**
+ * The host's design tokens, for a plugin that writes its own CSS.
+ *
+ * A plugin pane is a separate document in an opaque-origin iframe, so it inherits
+ * nothing — not the stylesheet, not the custom properties, not the font stack. Every
+ * workspace plugin has therefore hand-matched the host's look with literal hex: CAQDAS
+ * carries `#ccd2d8` borders and `6px` radii copied by eye. That is invisible today and
+ * visibly stale the moment the host grows a dark or high-contrast theme.
+ */
+export const TOKENS = {
+  accent: '#2572a5',
+  line: '#d8dde2',
+  panel: '#f7f9fb',
+  text: '#1a1a1a',
+  muted: '#646e77',
+  danger: '#b03030',
+  radius: '6px',
+  font: '14px system-ui, -apple-system, "Segoe UI", sans-serif',
+};
+
+/**
+ * A base stylesheet for a plugin pane: the tokens as custom properties, a few primitives,
+ * and — the part that cannot be done any other way — **small-screen rules**.
+ *
+ * ## Why the reflow lives here
+ *
+ * The host decides the layout mode; it is a USER'S CHOICE, not a viewport width, and a
+ * pane keyed to its own iframe width would override someone who deliberately picked the
+ * full layout on a narrow screen. The host posts the decision and the frame mirrors it to
+ * `data-screen` on its root, so these rules key off exactly the selector the host's own
+ * stylesheet uses. A plugin gets reflow by USING these classes rather than by
+ * implementing it, which is the whole point of shipping components rather than tokens.
+ *
+ * ## What is deliberately not here
+ *
+ * Anything resembling a layout framework. These are the primitives a pane needs to stop
+ * being unusable on a phone — a stack that stacks, a row that wraps, controls that meet
+ * the 44px touch target and the 16px font that stops iOS zooming on focus. A plugin's
+ * actual design remains its own.
+ */
+export const BASE_CSS = `
+:root {
+  --ct-accent: ${TOKENS.accent};
+  --ct-line: ${TOKENS.line};
+  --ct-panel: ${TOKENS.panel};
+  --ct-text: ${TOKENS.text};
+  --ct-muted: ${TOKENS.muted};
+  --ct-danger: ${TOKENS.danger};
+  --ct-radius: ${TOKENS.radius};
+}
+html, body { margin: 0; }
+body { font: ${TOKENS.font}; color: var(--ct-text); }
+
+.ct-btn {
+  font: inherit; padding: 5px 9px; border: 1px solid var(--ct-line);
+  border-radius: var(--ct-radius); background: #fff; color: inherit; cursor: pointer;
+}
+.ct-btn:hover { background: #eef5fb; }
+.ct-btn--primary { background: var(--ct-accent); border-color: var(--ct-accent); color: #fff; }
+.ct-btn--danger { color: var(--ct-danger); }
+.ct-btn:disabled { opacity: .5; cursor: default; }
+
+.ct-field { font: inherit; padding: 5px 8px; border: 1px solid var(--ct-line); border-radius: var(--ct-radius); }
+
+/* A row of controls. Wraps rather than overflowing: a control you cannot see is a
+   control you do not have, and a pane has no horizontal scrollbar to rescue it. */
+.ct-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* Panes side by side at full width, stacked when the user is in small-screen mode.
+   min-width:0 on the children because a flex item defaults to min-content and a long
+   unbroken word would otherwise push the row wider than the pane. */
+.ct-split { display: flex; flex: 1; min-height: 0; }
+.ct-split > * { min-width: 0; }
+
+[data-screen="small"] .ct-split { flex-direction: column; }
+[data-screen="small"] .ct-split > * { width: auto !important; flex: none; }
+
+/* Touch targets and the 16px that stops iOS zooming the viewport on focus — the same
+   two rules the host applies to itself in small-screen mode. */
+[data-screen="small"] .ct-btn,
+[data-screen="small"] .ct-field { font-size: 16px; min-height: 44px; }
+[data-screen="small"] button, [data-screen="small"] select,
+[data-screen="small"] input, [data-screen="small"] textarea { font-size: 16px; }
+`;
+
+/**
+ * Put {@link BASE_CSS} into a document, once.
+ *
+ * Idempotent by id, because a plugin that re-renders its pane should not accumulate
+ * stylesheets. Returns the element so a caller can inspect or remove it.
+ */
+export function injectStdlibStyles(doc = globalThis.document, css = BASE_CSS) {
+  const ID = 'ct-stdlib-styles';
+  const existing = doc.getElementById(ID);
+  if (existing) return existing;
+  const style = doc.createElement('style');
+  style.id = ID;
+  style.textContent = css;
+  doc.head.append(style);
+  return style;
+}
+
+/**
+ * Which layout the user is in: `'small'` or `'full'`.
+ *
+ * Read from the attribute the host posted, never measured. Defaults to `'full'` when
+ * nothing has been posted — a plugin on an older host gets the layout it has always had,
+ * rather than guessing from a width and getting it wrong in the one case that matters.
+ */
+export function screenMode(doc = globalThis.document) {
+  return doc?.documentElement?.getAttribute('data-screen') === 'small' ? 'small' : 'full';
+}

@@ -333,6 +333,16 @@
               break;
             }
 
+            case 'screen':
+              // The host's layout decision, mirrored onto THIS document's root so a
+              // plugin's stylesheet can use the same `[data-screen="small"]` selector the
+              // host uses. An iframe inherits no CSS from its parent, so without this a
+              // workspace pane cannot know, and cannot ask.
+              if (msg.mode === 'small' || msg.mode === 'full') {
+                document.documentElement.setAttribute('data-screen', msg.mode);
+              }
+              break;
+
             case 'activate':
               try {
                 // Handshake only: build + keep the app proxy. Declarative plugins

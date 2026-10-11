@@ -24,6 +24,8 @@ import { declaredCollections, assetRefDecls } from './collections.js';
 import { textRef, mediaRef, resolveAnchor } from './anchors.js';
 import { scopedAssetList } from './asset-store.js';
 import { debug } from './debug.js';
+import { currentScreenMode, onScreenModeChange } from './screen-mode.js';
+import { pluginStdlibSource } from './loader.js';
 
 /**
  * The op-log targets a record DEPENDS ON, read off its declared anchor fields.
@@ -85,6 +87,19 @@ export class WorkspaceManager {
     // mount; a dataset switch re-mounts (see app.js), binding to the new one.
     this.#activeDatasetId = activeDatasetId ?? (() => null);
     this.#onError = onError ?? ((e) => console.error('[workspace]', e));
+
+    // A workspace pane is a separate document and inherits nothing from the host, so the
+    // layout choice has to be POSTED to each live frame — at mount (see #start) and again
+    // whenever the user toggles it. Without this a pane lays out identically at 1400px and
+    // at 390px while the host reflows around it.
+    //
+    // Posted rather than measured on purpose: the mode is a USER'S CHOICE, not a viewport
+    // width. A pane keyed to its own iframe width would override someone who deliberately
+    // picked the full layout on a narrow screen — the objection small-screen mode exists to
+    // answer (core/screen-mode.js).
+    onScreenModeChange((mode) => {
+      for (const entry of this.#mounted.values()) entry.broker?.sendScreen?.(mode);
+    });
   }
 
   /**
@@ -418,7 +433,14 @@ export class WorkspaceManager {
     lc.advance('caged');
     await broker.whenReady();  // the GUEST says its runtime is up — no deadline
     const source = await fetchSource(plugin.url);
-    const manifest = await broker.sendLoad(source);
+    // A workspace plugin gets the stdlib too. This path is NOT the one in loader.js, and
+    // passing only `source` here is how the pane plugins — CAQDAS, Spatial, Decisions —
+    // came to be the ones without `app.std`, despite being the plugins that build the most
+    // UI and so need it most.
+    const manifest = await broker.sendLoad(source, null, null, await pluginStdlibSource());
+    // Before anything renders: the pane lays out for the mode the user is actually in, not
+    // for the default and then a reflow.
+    broker.sendScreen(currentScreenMode());
     lc.advance('loaded');
     const identity = {
       id: manifest.id,

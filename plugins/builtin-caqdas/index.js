@@ -332,6 +332,40 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 .caqdas__lanebar:hover { opacity: 1; }
 .caqdas__lanebar.has-memo { box-shadow: inset 0 0 0 2px rgba(0,0,0,.35); }
 .caqdas__lanesempty { font-size: 12px; color: #99a1ab; font-style: italic; padding: 4px 0; }
+
+/* ===========================================================================
+   SMALL-SCREEN MODE
+
+   The host posts its layout decision and the frame mirrors it onto this document's root,
+   so these rules key off the same [data-screen="small"] selector the host's own
+   stylesheet uses. Deliberately NOT a media query: the mode is a user's CHOICE, and a
+   pane measuring its own iframe width would override someone who picked the full layout
+   on a narrow screen.
+
+   What was wrong (owner's iPhone, 2026-10-10 - 'caqdas on the phone is unusable'): the
+   body is a flex ROW holding a 230px document list, a flexible text column and a 240px
+   codebook. 470px of fixed rails at a 390px viewport left the text column nothing, so it
+   squeezed to roughly one character per line while the codebook ran off the edge.
+   =========================================================================== */
+[data-screen="small"] .caqdas { min-height: 0; }
+[data-screen="small"] .caqdas__body { flex-direction: column; }
+/* The rails stop being rails: full width, bounded in HEIGHT instead, so the three panes
+   share the screen rather than one of them owning all of it. */
+[data-screen="small"] .caqdas__docs,
+[data-screen="small"] .caqdas__codes {
+  width: auto; flex: none; max-height: 34vh;
+  border-left: 0; border-right: 0; border-bottom: 1px solid #e2e6ea;
+}
+/* The text is why the pane exists, so it takes what is left and never collapses below
+   something readable. */
+[data-screen="small"] .caqdas__text { flex: 1 1 auto; min-height: 40vh; padding: 12px 14px; }
+/* 16px stops iOS zooming the viewport when a control takes focus; 44px is the touch
+   target. The same two rules the host applies to itself in small-screen mode. */
+[data-screen="small"] .caqdas__bar select,
+[data-screen="small"] .caqdas__btn,
+[data-screen="small"] .caqdas__newcode input { font-size: 16px; min-height: 44px; }
+[data-screen="small"] .caqdas__doc { padding: 12px; }
+[data-screen="small"] .caqdas__lanelabel { flex-basis: 84px; }
 `;
 
 export const workspace = {
@@ -394,6 +428,10 @@ export const workspace = {
     };
 
     // --- shell ---------------------------------------------------------------
+    // The host's base sheet first (tokens + the shared small-screen conventions), then
+    // this plugin's own on top. `app.std` arrives with the plugin source; a build that
+    // failed to serve it just means no base sheet, and the rules below still stand.
+    app.std?.injectStdlibStyles?.(document);
     try {
       const sheet = new CSSStyleSheet();
       sheet.replaceSync(STYLES);
