@@ -38,6 +38,7 @@ import { formatBuildTime, runningBuildStamp } from './build-stamp.js';
 import { deployConfig, supportLinks } from './deploy-config.js';
 
 export { DEFAULT_REPO as REPO } from './deploy-config.js';
+import { el } from './plugin-stdlib.js';
 
 /** Ceiling for the assembled URL. Under the ~8 KB most browsers and proxies allow, with
  * room for the origin and the query scaffolding. */
@@ -196,14 +197,6 @@ export function bugReportUrl(diag) {
   body = `${body.slice(0, Math.max(0, Math.floor(room / 3)))}\n\n_(Report truncated.)_`;
   return { url: make(body), clipped: true };
 }
-
-const el = (tag, cls, text) => {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  if (text != null) e.textContent = text;
-  return e;
-};
-
 /**
  * "Caveats & limits" — an honest list of the structural limits of running a whole stats
  * stack in a browser.
@@ -292,15 +285,15 @@ async function openBugReport(deps) {
   const diag = await collectDiagnostics(deps);
   const d = document.createElement('dialog');
   d.className = 'ct-dialog ct-dialog--wide';
-  const form = el('div', 'ct-dialog__form');
-  form.append(el('h2', 'ct-dialog__title', 'Report a bug'));
+  const form = el('div', { class: 'ct-dialog__form' });
+  form.append(el('h2', { class: 'ct-dialog__title', text: 'Report a bug' }));
   // The hint must name the real destination: telling a department's user their report goes to
   // "the public CrossTab repository" when it goes to their own help desk would be a lie the UI
   // tells on our behalf.
   const route = supportLinks();
-  form.append(el('p', 'ct-dialog__hint', bugRouteHint(route)));
+  form.append(el('p', { class: 'ct-dialog__hint', text: bugRouteHint(route) }));
 
-  const pre = el('pre', 'help__diag');
+  const pre = el('pre', { class: 'help__diag' });
   pre.textContent = [
     `App build: ${diag.build}`,
     diag.install ? `Install: ${diag.install}` : '',
@@ -314,9 +307,8 @@ async function openBugReport(deps) {
     diag.error ? `\nLast error:\n${diag.error}` : '',
   ].filter(Boolean).join('\n');
   form.append(pre);
-  form.append(el('p', 'help__note',
-    'Only the counts above are included — never your variable names, values or file '
-    + 'names. The issue will be public, so have a look before you submit.'));
+  form.append(el('p', { class: 'help__note', text: 'Only the counts above are included — never your variable names, values or file '
+    + 'names. The issue will be public, so have a look before you submit.' }));
 
   // Where this deployment wants reports. The stock build is a prefilled GitHub issue; a
   // department can point at its own tracker or take mail instead (#185, which is where #175's
@@ -325,8 +317,8 @@ async function openBugReport(deps) {
   const github = isGitHubIssues(links.issues);
   const who = links.siteName ? `${links.siteName}` : null;
 
-  const buttons = el('menu', 'ct-dialog__buttons');
-  const cancel = el('button', null, 'Cancel');
+  const buttons = el('menu', { class: 'ct-dialog__buttons' });
+  const cancel = el('button', { text: 'Cancel' });
   cancel.type = 'button';
   cancel.addEventListener('click', () => d.close());
   buttons.append(cancel);
@@ -334,7 +326,7 @@ async function openBugReport(deps) {
   // Copy is always offered: it is the one route that works whatever the destination is, and
   // for a custom tracker it is how the details get there at all (we cannot prefill a form we
   // have never seen).
-  const copy = el('button', null, 'Copy report');
+  const copy = el('button', { text: 'Copy report' });
   copy.type = 'button';
   copy.addEventListener('click', async () => {
     const body = bugReportBody(diag);
@@ -354,7 +346,7 @@ async function openBugReport(deps) {
   buttons.append(copy);
 
   if (github) {
-    const plain = el('button', null, 'Open without diagnostics');
+    const plain = el('button', { text: 'Open without diagnostics' });
     plain.type = 'button';
     plain.addEventListener('click', () => {
       d.close();
@@ -364,7 +356,7 @@ async function openBugReport(deps) {
   }
 
   if (links.email) {
-    const mail = el('button', 'ct-dialog__primary', 'Email support…');
+    const mail = el('button', { class: 'ct-dialog__primary', text: 'Email support…' });
     mail.type = 'button';
     mail.addEventListener('click', () => {
       d.close();
@@ -377,7 +369,7 @@ async function openBugReport(deps) {
     buttons.append(mail);
   }
 
-  const go = el('button', links.email ? null : 'ct-dialog__primary', github ? 'Open GitHub issue' : 'Open issue tracker');
+  const go = el('button', { class: links.email ? null : 'ct-dialog__primary', text: github ? 'Open GitHub issue' : 'Open issue tracker' });
   go.type = 'button';
   go.addEventListener('click', () => {
     d.close();

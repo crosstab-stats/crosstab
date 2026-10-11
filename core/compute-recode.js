@@ -12,6 +12,7 @@
 import { makeVarToolbar, filterVars } from './var-toolbar.js';
 import { loadVarOrder, saveVarOrder, sortVars } from './var-order.js';
 import { varNameError } from './data-store.js';
+import { el } from './plugin-stdlib.js';
 
 export class ComputeRecode {
   #data;
@@ -137,7 +138,7 @@ export class ComputeRecode {
     if (!input) return;
     const ok = dialog.querySelector('button[value="ok"]');
     const taken = new Set(this.#vars().map((m) => m.name));
-    const msg = el('p', '', 'ct-cr__nameerr');
+    const msg = el('p', { class: 'ct-cr__nameerr' });
     msg.setAttribute('role', 'alert');
     msg.hidden = true;
     (input.closest('.ct-field') || input.parentElement).append(msg);
@@ -205,7 +206,7 @@ export class ComputeRecode {
         paletteEl.append(sep);
       }
       for (const m of bottom) paletteEl.append(chip(m));
-      if (!top.length && !bottom.length) paletteEl.append(el('span', 'No variable matches that filter.', 'ct-hint'));
+      if (!top.length && !bottom.length) paletteEl.append(el('span', { text: 'No variable matches that filter.', class: 'ct-hint' }));
     };
     render();
   }
@@ -364,7 +365,7 @@ export class ComputeRecode {
     elseRow.kind.value = 'copy';
     elseRow.sync();
     const elseWrap = dialog.querySelector('.ct-cr__else');
-    elseWrap.append(el('span', 'All other values →', 'ct-cr__elselabel'), elseRow.el);
+    elseWrap.append(el('span', { text: 'All other values →', class: 'ct-cr__elselabel' }), elseRow.el);
 
     // Default the measure from the rules, live: a map onto discrete values is a
     // set of categories; anything that copies the original through is still a
@@ -561,13 +562,13 @@ export class ComputeRecode {
 /** One recode rule: a "from" matcher and a "to" target. Returns `{el, read()}`
  * where read() yields `{from, value?|lo,hi, to}` or null if incomplete. */
 function makeRuleRow(onRemove) {
-  const wrap = el('div', null, 'ct-cr__rule');
+  const wrap = el('div', { class: 'ct-cr__rule' });
 
   const matcher = makeFromControls();
   const from = matcher.kind;
   const fromInputs = matcher.el;
 
-  const arrow = el('span', '→', 'ct-cr__arrow');
+  const arrow = el('span', { text: '→', class: 'ct-cr__arrow' });
   const to = makeToControls();
 
   // The value label for this rule's new value ("1 = Agree"), typed here rather
@@ -576,7 +577,7 @@ function makeRuleRow(onRemove) {
   const lbl = inputEl('label (optional)', 'ct-cr__tolabel', 'Label for the new value');
   // The input sits in its own cell so hiding it doesn't collapse the grid column
   // and slide the remove button under the reader's cursor.
-  const lblCell = el('span', null, 'ct-cr__tolabelcell');
+  const lblCell = el('span', { class: 'ct-cr__tolabelcell' });
   lblCell.append(lbl);
   const syncLabel = () => { lbl.hidden = to.kind.value !== 'value'; };
   to.kind.addEventListener('change', syncLabel);
@@ -621,8 +622,8 @@ function makeFromControls() {
   const val = inputEl('value', 'ct-cr__val', 'Old value');
   const lo = inputEl('low', 'ct-cr__lo', 'Range low');
   const hi = inputEl('high', 'ct-cr__hi', 'Range high');
-  const wrap = el('span', null, 'ct-cr__frominputs');
-  const dash = el('span', '–', 'ct-cr__dash');
+  const wrap = el('span', { class: 'ct-cr__frominputs' });
+  const dash = el('span', { text: '–', class: 'ct-cr__dash' });
   wrap.append(val, lo, dash, hi);
 
   const sync = () => {
@@ -648,7 +649,7 @@ function makeFromControls() {
 /** The "to" half of a rule (or the else row): a kind select + value input.
  * Returns `{el, kind, sync, read()}`. */
 function makeToControls() {
-  const wrap = el('span', null, 'ct-cr__to');
+  const wrap = el('span', { class: 'ct-cr__to' });
   const kind = document.createElement('select');
   kind.className = 'ct-cr__tokind';
   kind.setAttribute('aria-label', 'Replace with');
@@ -670,7 +671,7 @@ function makeToControls() {
 /** One value-matcher row for the Count dialog: the "from" half of a recode rule
  * plus a remove button. Returns `{el, read()}`. */
 function makeMatchRow(onRemove) {
-  const wrap = el('div', null, 'ct-cr__match');
+  const wrap = el('div', { class: 'ct-cr__match' });
   const from = makeFromControls();
   const rm = document.createElement('button');
   rm.type = 'button';
@@ -745,15 +746,6 @@ function matchSql(q, t, meta) {
   const n = Number(raw);
   if (raw !== '' && Number.isFinite(n)) return `TRY_CAST(${q} AS DOUBLE) = ${n}`;
   return `CAST(${q} AS VARCHAR) = '${raw.replace(/'/g, "''")}'`;
-}
-
-// --- small DOM/SQL helpers ---------------------------------------------------
-
-function el(tag, text, className) {
-  const e = document.createElement(tag);
-  if (text != null) e.textContent = text;
-  if (className) e.className = className;
-  return e;
 }
 
 function inputEl(placeholder, className, label) {

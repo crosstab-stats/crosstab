@@ -94,13 +94,15 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       - **`builtin-spatial` and `builtin-decisions` are NOT reflowed.** They have the same
         structural problem for the same reason and now have the same tools; CAQDAS was the
         one with evidence. Do them when someone hits them, or opportunistically.
-      - **`el()` migration: CAQDAS DONE (2026-10-10), the rest open.** Its 197 calls now
-        pass an options object; 159 were positional and were rewritten by a depth-aware
-        argument parser rather than a regex (arguments contain ternaries, template literals
-        and nested calls). Verified by rendering: the document list draws `#1` in muted grey
-        beside each title with the active row highlighted — a class/text swap would have put
-        row numbers in the class attribute and been obvious. **~310 positional calls remain**
-        in core and the other plugins; the two forms coexist, so this stays incremental.
+      - **`el()` migration: COMPLETE (2026-10-11).** All **612 call sites** across core and
+        every plugin now use the options form; **331 were positional** and were rewritten
+        from each file's OWN definition rather than a guess, because the four signatures
+        included two mirror images and getting one file's family wrong silently swaps class
+        with text. Core imports `el` from `plugin-stdlib.js`; plugins take `app.std.el` with
+        a fallback on the same signature. `builtin-spatial` needed a module-scope binding
+        that `mount()` upgrades, since `app` does not exist where its helper lives.
+        `test/el-signature.test.mjs` refuses the positional shape repo-wide — the only real
+        defence, since a swap renders fine and throws nothing.
       - **Theming: CAQDAS DONE, the rest open.** Its structural palette (57 literals) now
         reads from `--ct-text`/`--ct-line`/`--ct-line-soft`/`--ct-accent`/`--ct-muted`/
         `--ct-danger`/`--ct-surface`. Two tokens were ADDED for it rather than flattening a

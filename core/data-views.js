@@ -21,6 +21,7 @@ import { floatSelected, loadVarOrder, saveVarOrder, sortVars, loadVarDisplay, sa
 import { makeVarToolbar, filterVars, getWorkspaceFilter, setWorkspaceFilter } from './var-toolbar.js';
 import { labelForValue, summariseMissing } from './var-role.js';
 import { escapeHtml, stripEllipsis } from './text.js';
+import { el } from './plugin-stdlib.js';
 
 /** Syntax editor metrics: the textarea uses a FIXED line-height so the step gutter
  * can place each marker at `PAD + lineIndex * LINE_H` (and the textarea is no-wrap,
@@ -221,7 +222,7 @@ export class DataView {
       this.tbody.replaceChildren();
       // Distinguish "no data" from "filter matched nothing".
       if (nCols === 0 && this.metas.length > 0) {
-        const td = el('td', 'No columns match the filter.');
+        const td = el('td', { text: 'No columns match the filter.' });
         td.style.cssText = 'width:auto;max-width:none;color:#646e77;';
         this.tbody.append(elWrap('tr', td));
       }
@@ -288,7 +289,7 @@ export class DataView {
     // Header: corner + left spacer + visible column headers + right spacer. Each
     // header carries a checkbox tied to the variable selection.
     const htr = document.createElement('tr');
-    htr.append(el('th', '', 'corner'));
+    htr.append(el('th', { class: 'corner' }));
     if (leftW > 0) htr.append(hspacer('th', leftW));
     for (const m of winMetas) htr.append(this.#headerCell(m, selected.has(m.name)));
     if (rightW > 0) htr.append(hspacer('th', rightW));
@@ -474,14 +475,14 @@ export class DataView {
     cb.dataset.var = m.name;
     cb.addEventListener('change', () => this.#toggle(m.name, cb.checked));
     const shown = varDisplay(m, this.display);
-    const span = el('span', shown.primary, 'colhead__label');
+    const span = el('span', { text: shown.primary, class: 'colhead__label' });
     // `both` is the variable picker's treatment — label, then the name — but a column is
     // not a dialog row. Measured at the grid's 120px default: side by side, the label was
     // clipped to about 20px while the name held its width, so you could read neither.
     // Stacked, each gets the column's full width and the header grows a line instead.
     if (this.display === 'both' && shown.secondary) {
-      const stack = el('span', '', 'colhead__stack');
-      stack.append(span, el('code', shown.secondary, 'colhead__name'));
+      const stack = el('span', { class: 'colhead__stack' });
+      stack.append(span, el('code', { text: shown.secondary, class: 'colhead__name' }));
       wrap.append(cb, stack);
     } else {
       wrap.append(cb, span);
@@ -529,7 +530,7 @@ export class DataView {
   #rowEl(num, row, winMetas, leftW, rightW) {
     const tr = document.createElement('tr');
     // The row number is the row's HEADER, not data — it is what identifies the case.
-    const rowHead = el('th', String(num), 'rownum');
+    const rowHead = el('th', { text: String(num), class: 'rownum' });
     rowHead.scope = 'row';
     tr.append(rowHead);
     tr.setAttribute('role', 'row');
@@ -540,15 +541,15 @@ export class DataView {
       let td;
       const edge = !!this.floatBoundary && m.name === this.floatBoundary;
       if (v === null || v === undefined) {
-        td = el('td', '·', 'na cell');
+        td = el('td', { text: '·', class: 'na cell' });
       } else if (labelForValue(m, v) !== null) {
         // A value label is a fact about a CODE, not about the variable's storage, so
         // this no longer gates on `factor` (#188). A weight whose missing codes are
         // labelled now reads properly and stays selectable as a weight.
-        td = el('td', labelForValue(m, v), 'cell');
+        td = el('td', { text: labelForValue(m, v), class: 'cell' });
         td.title = String(v); // raw code on hover
       } else {
-        td = el('td', String(v), m.type === 'numeric' ? 'num cell' : 'cell');
+        td = el('td', { text: String(v), class: m.type === 'numeric' ? 'num cell' : 'cell' });
       }
       // Double-click to edit — stored as a sparse override transform keyed by the
       // row's stable id (`row.__rid`), so the edit survives appends/reordering.
@@ -609,23 +610,23 @@ export class DataView {
   /** A tiny context menu: existing notes, then add. Closes on any outside click. */
   #cellMenu(e, td, anchor, column, rid) {
     document.querySelector('.cellmenu')?.remove();
-    const menu = el('div', null, 'cellmenu');
+    const menu = el('div', { class: 'cellmenu' });
     menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;z-index:9999;`
       + 'background:#fff;border:1px solid #c8d0d8;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.18);'
       + 'font-size:12px;min-width:220px;max-width:340px;padding:4px 0;';
     const close = () => { menu.remove(); document.removeEventListener('mousedown', onDoc, true); };
     const onDoc = (ev) => { if (!menu.contains(ev.target)) close(); };
 
-    const head = el('div', `${column} · row id ${rid}`, null);
+    const head = el('div', { text: `${column} · row id ${rid}` });
     head.style.cssText = 'padding:4px 10px;color:#687381;border-bottom:1px solid #e4e9ee;';
     menu.append(head);
 
     for (const m of this.memos.list(anchor)) {
       const line = document.createElement('div');
       line.style.cssText = 'padding:4px 10px;display:flex;gap:6px;align-items:flex-start;';
-      const txt = el('span', `${m.author?.initials ? `${m.author.initials}: ` : ''}${m.text}`, null);
+      const txt = el('span', { text: `${m.author?.initials ? `${m.author.initials}: ` : ''}${m.text}` });
       txt.style.cssText = 'flex:1;color:#33404d;';
-      const del = el('button', '✕', null);
+      const del = el('button', { text: '✕' });
       del.type = 'button';
       del.title = 'Delete this memo';
       del.style.cssText = 'border:0;background:none;color:#687381;cursor:pointer;';
@@ -634,7 +635,7 @@ export class DataView {
       menu.append(line);
     }
 
-    const add = el('button', this.memos.countFor(anchor) ? '＋ Add another memo' : '💬 Add memo…', null);
+    const add = el('button', { text: this.memos.countFor(anchor) ? '＋ Add another memo' : '💬 Add memo…' });
     add.type = 'button';
     add.style.cssText = 'display:block;width:100%;text-align:left;padding:6px 10px;border:0;background:none;cursor:pointer;color:#2b6cb0;';
     add.addEventListener('click', () => {
@@ -773,7 +774,7 @@ export class VariableView {
     table.className = 'vargrid';
     const head = document.createElement('tr');
     for (const h of ['Name', 'Label', 'Type', 'Measure', 'Value labels', 'Missing']) {
-      head.append(el('th', h));
+      head.append(el('th', { text: h }));
     }
     table.append(elWrap('thead', head));
     this.tbody = document.createElement('tbody');
@@ -813,16 +814,16 @@ export class VariableView {
       if (floated && i === floated) tr.classList.add('is-floatedge');
       tr.title = m.name === weight ? 'The frequency weight. Click to edit.' : 'Click to edit';
       tr.append(openerCellFor(m, () => this.#openEditor(m), m.name === weight));
-      tr.append(el('td', m.label || ''));
-      tr.append(el('td', m.type));
-      tr.append(el('td', m.measurementLevel || ''));
-      tr.append(el('td', summariseLabels(m.valueLabels)));
-      tr.append(el('td', summariseMissing(m.missingValues, m.missingRanges)));
+      tr.append(el('td', { text: m.label || '' }));
+      tr.append(el('td', { text: m.type }));
+      tr.append(el('td', { text: m.measurementLevel || '' }));
+      tr.append(el('td', { text: summariseLabels(m.valueLabels) }));
+      tr.append(el('td', { text: summariseMissing(m.missingValues, m.missingRanges) }));
       tr.addEventListener('click', () => this.#openEditor(m));
       frag.append(tr);
     });
     if (shown.length === 0) {
-      const td = el('td', `No variables match “${this.filter.trim()}”.`);
+      const td = el('td', { text: `No variables match “${this.filter.trim()}”.` });
       td.colSpan = 6;
       td.style.cssText = 'color:#646e77;';
       frag.append(elWrap('tr', td));
@@ -1028,8 +1029,8 @@ export class HistoryView {
     const itemRows = this.itemHistory ? this.itemHistory() : [];
     if (itemRows.length) {
       const groups = [...new Set(itemRows.map((r) => r.group).filter(Boolean))];
-      const sub = el('li', null, 'history__step history__step--applied');
-      sub.append(el('span', groups.join(' · ') || 'Records', 'history__body'));
+      const sub = el('li', { class: 'history__step history__step--applied' });
+      sub.append(el('span', { text: groups.join(' · ') || 'Records', class: 'history__body' }));
       sub.title = 'Not steps in the data pipeline — rewinding the data does not undo these';
       sub.style.opacity = '0.7';
       ol.append(sub);
@@ -1047,11 +1048,7 @@ export class HistoryView {
     this.host.replaceChildren(ol);
     if (applied.length === 0 && future.length === 0 && itemRows.length === 0) {
       this.host.append(
-        el(
-          'p',
-          'No data yet. Importing, then recoding/computing/editing in this dataset appears here as steps you can rewind to, reorder, or remove.',
-          'history-hint',
-        ),
+        el('p', { text: 'No data yet. Importing, then recoding/computing/editing in this dataset appears here as steps you can rewind to, reorder, or remove.', class: 'history-hint' }),
       );
     }
   }
@@ -1065,13 +1062,13 @@ export class HistoryView {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'history__btn';
-    btn.append(el('span', String(marker), 'history__marker'));
-    const body = el('span', null, 'history__body');
-    body.append(el('span', title, 'history__title'));
-    if (detail) body.append(el('span', detail, 'history__detail'));
+    btn.append(el('span', { text: String(marker), class: 'history__marker' }));
+    const body = el('span', { class: 'history__body' });
+    body.append(el('span', { text: title, class: 'history__title' }));
+    if (detail) body.append(el('span', { text: detail, class: 'history__detail' }));
     btn.append(body);
     if (state === 'current') {
-      btn.append(el('span', 'current', 'history__badge'));
+      btn.append(el('span', { text: 'current', class: 'history__badge' }));
     }
     // The body always rewinds to this step (even the current one is harmlessly
     // re-applied); reorder/delete live in the controls so they don't trigger it.
@@ -1080,7 +1077,7 @@ export class HistoryView {
     li.append(btn);
 
     if (canUp || canDown || canDelete) {
-      const ctl = el('span', null, 'history__ctl');
+      const ctl = el('span', { class: 'history__ctl' });
       ctl.append(
         ctlBtn('▲', 'Move up', !canUp, () => this.#move(index, index - 1)),
         ctlBtn('▼', 'Move down', !canDown, () => this.#move(index, index + 1)),
@@ -1113,16 +1110,16 @@ export class HistoryView {
   #analysisStep(entry, idx, isCurrent = false) {
     const li = document.createElement('li');
     li.className = 'history__step history__step--analysis';
-    const row = el('span', null, 'history__btn');
+    const row = el('span', { class: 'history__btn' });
     row.style.cursor = 'default';
-    const mk = el('span', '∑', 'history__marker');
+    const mk = el('span', { text: '∑', class: 'history__marker' });
     mk.style.color = 'var(--accent, #2572a5)';
-    const body = el('span', null, 'history__body');
-    body.append(el('span', stripEllipsis(entry.label || 'Analysis'), 'history__title'));
+    const body = el('span', { class: 'history__body' });
+    body.append(el('span', { text: stripEllipsis(entry.label || 'Analysis'), class: 'history__title' }));
     const detail = entry.pluginName || '';
-    if (detail) body.append(el('span', detail, 'history__detail'));
+    if (detail) body.append(el('span', { text: detail, class: 'history__detail' }));
     row.append(mk, body);
-    if (isCurrent) row.append(el('span', 'current', 'history__badge'));
+    if (isCurrent) row.append(el('span', { text: 'current', class: 'history__badge' }));
     li.append(row);
     if (this.analysisLog) {
       // ▲/▼ move the analysis one DATA step, which is what its position means: `at` is how
@@ -1139,7 +1136,7 @@ export class HistoryView {
       const at = Number.isFinite(entry.at) ? entry.at : this.store.getTransforms?.().length ?? 0;
       const total = this.store.getTransforms?.().length ?? 0;
       const busy = !!this.pluginActions && this.#movingAnalysis === entry.runId;
-      const ctl = el('span', null, 'history__ctl');
+      const ctl = el('span', { class: 'history__ctl' });
       ctl.append(
         ctlBtn('▲', 'Run this one data step earlier', !this.pluginActions || busy || at <= 0,
           () => this.#moveAnalysis(entry, at - 1)),
@@ -1205,17 +1202,13 @@ export class HistoryView {
     form.method = 'dialog';
     form.className = 'ct-dialog__form';
 
-    const title = el('h2', `R source — ${stripEllipsis(entry.label || 'Analysis')}`, 'ct-dialog__title');
-    const hint = el(
-      'p',
-      `${entry.pluginName || 'A plugin'} ran this to produce the result. It binds its own data, so`
-        + ' it is a record of what was computed rather than a script to run as-is.',
-      'ct-dialog__hint',
-    );
+    const title = el('h2', { text: `R source — ${stripEllipsis(entry.label || 'Analysis')}`, class: 'ct-dialog__title' });
+    const hint = el('p', { text: `${entry.pluginName || 'A plugin'} ran this to produce the result. It binds its own data, so`
+        + ' it is a record of what was computed rather than a script to run as-is.', class: 'ct-dialog__hint' });
     form.append(title, hint);
 
     runs.forEach((src, n) => {
-      if (runs.length > 1) form.append(el('p', `Evaluation ${n + 1} of ${runs.length}`, 'ct-dialog__hint'));
+      if (runs.length > 1) form.append(el('p', { text: `Evaluation ${n + 1} of ${runs.length}`, class: 'ct-dialog__hint' }));
       const pre = document.createElement('pre');
       pre.className = 'ct-source';
       pre.tabIndex = 0; // scrollable region, so a keyboard can reach and scroll it
@@ -1223,7 +1216,7 @@ export class HistoryView {
       form.append(pre);
     });
     if (entry.rSourceDropped) {
-      form.append(el('p', `${entry.rSourceDropped} further evaluation(s) were past the record size cap and not kept.`, 'ct-dialog__hint'));
+      form.append(el('p', { text: `${entry.rSourceDropped} further evaluation(s) were past the record size cap and not kept.`, class: 'ct-dialog__hint' }));
     }
 
     const menu = document.createElement('menu');
@@ -1340,17 +1333,17 @@ export class HistoryPanel {
   }
 
   #build() {
-    const panel = el('div', null, 'history-panel');
-    const head = el('div', null, 'history-panel__head');
-    head.append(el('span', 'History', 'history-panel__title'));
+    const panel = el('div', { class: 'history-panel' });
+    const head = el('div', { class: 'history-panel__head' });
+    head.append(el('span', { text: 'History', class: 'history-panel__title' }));
     const close = ctlBtn('✕', 'Close', false, () => this.close());
     close.className = 'history-panel__close';
     head.append(close);
 
     // Toolbar: one-click "collect imports" — pull all data-loading steps to the
     // top, before the transforms (the clean "load, then process" order).
-    const toolbar = el('div', null, 'history-panel__toolbar');
-    const collect = el('button', '↑ Collect imports', 'history-panel__action');
+    const toolbar = el('div', { class: 'history-panel__toolbar' });
+    const collect = el('button', { text: '↑ Collect imports', class: 'history-panel__action' });
     collect.type = 'button';
     collect.title = 'Move all data-loading steps (import, append, join) above the transforms';
     collect.addEventListener('click', async () => {
@@ -1367,7 +1360,7 @@ export class HistoryPanel {
     // editor, because the script exists in both views — having to switch to Syntax to reach
     // "save my steps to a file" made a file operation look like a syntax feature.
     if (this.#analysisLog && this.#pluginActions) {
-      const exportBtn = el('button', '⬇ Export', 'history-panel__action');
+      const exportBtn = el('button', { text: '⬇ Export', class: 'history-panel__action' });
       exportBtn.type = 'button';
       exportBtn.title = 'Save this script — .ctscript (lossless), or a best-effort Stata .do / SPSS .sps';
       exportBtn.addEventListener('click', () => this.#exportScript());
@@ -1376,7 +1369,7 @@ export class HistoryPanel {
       fileInput.accept = '.ctscript,.txt,.do,.sps,text/plain';
       fileInput.style.display = 'none';
       fileInput.addEventListener('change', () => this.#importScript(fileInput));
-      const importBtn = el('button', '⬆ Import', 'history-panel__action');
+      const importBtn = el('button', { text: '⬆ Import', class: 'history-panel__action' });
       importBtn.type = 'button';
       importBtn.title =
         'Load a .ctscript file — or a Stata .do / SPSS .sps file (best-effort translation) — as a draft to review and Run';
@@ -1386,7 +1379,7 @@ export class HistoryPanel {
 
     // Syntax mode toggle — only when the editor deps are wired (#134).
     if (this.#analysisLog && this.#pluginActions) {
-      const synBtn = el('button', '✎ Syntax', 'history-panel__action');
+      const synBtn = el('button', { text: '✎ Syntax', class: 'history-panel__action' });
       synBtn.type = 'button';
       synBtn.title = 'View and edit the whole analysis as an editable script (CrossTab syntax), then Run to rebuild';
       synBtn.addEventListener('click', () => this.#toggleSyntax());
@@ -1394,9 +1387,9 @@ export class HistoryPanel {
       this.#syntaxBtn = synBtn;
     }
 
-    this.#errEl = el('div', null, 'history-panel__err');
+    this.#errEl = el('div', { class: 'history-panel__err' });
     this.#errEl.hidden = true;
-    const content = el('div', null, 'history-panel__content');
+    const content = el('div', { class: 'history-panel__content' });
     this.#contentEl = content;
     panel.append(head, toolbar, this.#errEl, content);
     if (this.#analysisLog && this.#pluginActions) {
@@ -1419,32 +1412,28 @@ export class HistoryPanel {
    * with the step it maps to, kept aligned by a fixed line-height + no-wrap textarea.
    * Hidden until the Syntax toggle is on. */
   #buildEditor() {
-    const wrap = el('div', null, 'history-panel__syntax');
+    const wrap = el('div', { class: 'history-panel__syntax' });
     // Visibility is controlled via style.display (NOT the `hidden` attribute) because
     // the inline `display:flex` below would override `[hidden]`'s display:none and
     // leak the editor into the Steps view. Starts hidden; #toggleSyntax flips it.
     wrap.style.cssText = 'flex:1 1 auto; min-height:0; flex-direction:column; gap:8px; padding:8px 10px;';
     wrap.style.display = 'none';
 
-    const hint = el(
-      'p',
-      'Edit the script freely like a text file, then Run to rebuild the dataset and re-run the ' +
+    const hint = el('p', { text: 'Edit the script freely like a text file, then Run to rebuild the dataset and re-run the ' +
         'analyses. Alt+↑ / Alt+↓ moves the line you are on, so steps reorder here too — no need ' +
         'to switch to Steps. The left margin labels each line with the step it maps to. Lines ' +
         'starting with # are comments; 🔒 marks a data source (re-import to change it). ' +
-        'Expressions are SQL.',
-      'history-panel__synhint',
-    );
+        'Expressions are SQL.', class: 'history-panel__synhint' });
     hint.style.cssText = 'margin:0; font-size:12px; color:#6a7480; line-height:1.4;';
 
-    const row = el('div', null, 'history-panel__synrow');
+    const row = el('div', { class: 'history-panel__synrow' });
     row.style.cssText = 'display:flex; gap:8px;';
-    const run = el('button', '▶ Run', 'history-panel__action');
+    const run = el('button', { text: '▶ Run', class: 'history-panel__action' });
     run.type = 'button';
     run.title = 'Rebuild the dataset from this script and re-run the analyses';
     run.style.cssText = 'background:var(--accent,#2572a5); color:#fff; border-color:var(--accent,#2572a5);';
     run.addEventListener('click', () => void this.#runScript());
-    const refresh = el('button', '↻ Refresh', 'history-panel__action');
+    const refresh = el('button', { text: '↻ Refresh', class: 'history-panel__action' });
     refresh.type = 'button';
     refresh.title = 'Discard edits and reload the script from the current state';
     refresh.addEventListener('click', () => {
@@ -1453,26 +1442,26 @@ export class HistoryPanel {
       if (this.#dirty && !confirm('Discard your unsaved script edits and reload from the current state?')) return;
       this.#fillEditor();
     });
-    const guide = el('button', '❓ Syntax guide', 'history-panel__action');
+    const guide = el('button', { text: '❓ Syntax guide', class: 'history-panel__action' });
     guide.type = 'button';
     guide.title = 'Open the CrossTab syntax reference and the list of plugin calls';
     guide.addEventListener('click', () => openSyntaxGuide({ pluginActions: this.#pluginActions }));
     // "Unsaved edits" indicator — the textarea is a draft until you Run; this makes
     // that visible so a draft never feels silently lost.
-    const dirtyHint = el('span', '', 'history-panel__dirty');
+    const dirtyHint = el('span', { class: 'history-panel__dirty' });
     dirtyHint.style.cssText = 'margin-left:auto; align-self:center; font-size:12px; color:#b06a00;';
     dirtyHint.hidden = true;
     this.#dirtyHint = dirtyHint;
     row.append(run, refresh, guide, dirtyHint);
 
     // body: gutter (clips) | textarea (the editable script)
-    const body = el('div', null, 'history-panel__synbody');
+    const body = el('div', { class: 'history-panel__synbody' });
     body.style.cssText = 'flex:1 1 auto; min-height:0; display:flex; border:1px solid var(--line,#d8dee4); border-radius:6px; overflow:hidden;';
 
-    const gutter = el('div', null, 'history-panel__gutter');
+    const gutter = el('div', { class: 'history-panel__gutter' });
     gutter.style.cssText =
       'flex:0 0 172px; position:relative; overflow:hidden; background:#fafbfc; border-right:1px solid var(--line,#d8dee4);';
-    const gutterInner = el('div', null, 'history-panel__gutterinner');
+    const gutterInner = el('div', { class: 'history-panel__gutterinner' });
     gutterInner.style.cssText = 'position:absolute; top:0; left:0; right:0; will-change:transform;';
     gutter.append(gutterInner);
     this.#gutter = gutter;
@@ -1490,12 +1479,12 @@ export class HistoryPanel {
     // operators like -> from being fused into a glyph.
     const GLYPH = 'font-feature-settings:"zero" 1; font-variant-ligatures:none;';
 
-    const taWrap = el('div', null, 'history-panel__tawrap');
+    const taWrap = el('div', { class: 'history-panel__tawrap' });
     taWrap.style.cssText = 'position:relative; flex:1 1 auto; min-width:0; overflow:hidden;';
 
-    const backdrop = el('div', null, 'history-panel__backdrop');
+    const backdrop = el('div', { class: 'history-panel__backdrop' });
     backdrop.style.cssText = 'position:absolute; inset:0; overflow:hidden; pointer-events:none;';
-    const backdropInner = el('div', null, 'history-panel__code');
+    const backdropInner = el('div', { class: 'history-panel__code' });
     backdropInner.style.cssText =
       `position:absolute; top:0; left:0; min-width:100%; box-sizing:border-box; will-change:transform; ` +
       `white-space:pre; tab-size:2; ${FONT} ${GLYPH} padding:${SYN_PAD}px 8px;`;
@@ -1627,13 +1616,13 @@ export class HistoryPanel {
       });
       if (!info) continue; // blank or plain comment
       if (info.kind !== 'analysis' && info.kind !== 'dataset') stepNo += 1;
-      const marker = el('div', null, `history-panel__gmark is-${info.kind}`);
+      const marker = el('div', { class: `history-panel__gmark is-${info.kind}` });
       marker.style.cssText =
         `position:absolute; left:0; right:0; height:${SYN_LINE_H}px; top:${SYN_PAD + i * SYN_LINE_H}px; ` +
         'display:flex; gap:5px; align-items:center; padding:0 6px 0 8px; overflow:hidden; white-space:nowrap;';
-      const mk = el('span', info.kind === 'analysis' ? '∑' : info.kind === 'source' ? '🔒' : info.kind === 'dataset' ? '▤' : String(stepNo), 'history__marker');
+      const mk = el('span', { text: info.kind === 'analysis' ? '∑' : info.kind === 'source' ? '🔒' : info.kind === 'dataset' ? '▤' : String(stepNo), class: 'history__marker' });
       mk.style.cssText = 'flex:0 0 auto; opacity:.7; font-size:11px;' + (info.kind === 'analysis' ? 'color:var(--accent,#2572a5);' : '');
-      const title = el('span', info.title, 'history__title');
+      const title = el('span', { text: info.title, class: 'history__title' });
       title.style.cssText =
         'flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; '
         + `font-size:12px;${info.kind === 'source' ? 'color:#9aa4ae;' : ''}`;
@@ -1657,7 +1646,7 @@ export class HistoryPanel {
       // view without a keyboard (Alt+↑/↓ needs one).
       if (info.kind !== 'source' && info.kind !== 'dataset') {
         const lineIndex = i;
-        const controls = el('span', null, 'history-panel__gctl');
+        const controls = el('span', { class: 'history-panel__gctl' });
         controls.append(
           ctlBtn('▲', 'Move this line up', lineIndex === 0, () => this.#moveGutterLine(lineIndex, -1)),
           ctlBtn('▼', 'Move this line down', lineIndex >= lines.length - 1, () => this.#moveGutterLine(lineIndex, 1)),
@@ -2136,14 +2125,6 @@ function classifyScriptLine(rawLine, describe) {
   if (d) return { kind: 'transform', title: d.title, detail: d.detail };
   return { kind: 'transform', title: trimmed.split(/\s+/)[0] || 'step', detail: '' };
 }
-
-function el(tag, text, className) {
-  const e = document.createElement(tag);
-  if (text != null) e.textContent = text;
-  if (className) e.className = className;
-  return e;
-}
-
 /** Character offset of the first character of line `index`. */
 export function lineStartOffset(value, index) {
   const lines = String(value ?? '').split('\n');

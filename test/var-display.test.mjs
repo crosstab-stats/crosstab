@@ -131,5 +131,7 @@ test('"both" STACKS in a column header rather than sitting inline', () => {
   // the name held its own — which shows you neither. Stacked, the label got 84px and
   // the name was not clipped at all.
   assert.match(GRID, /colhead__stack/);
-  assert.match(GRID, /stack\.append\(span, el\('code', shown\.secondary, 'colhead__name'\)\)/);
+  // `el()` moved to an options object on 2026-10-11 — one helper had four positional
+  // orders across the app, two of them mirror images. Same two arguments, now named.
+  assert.match(GRID, /stack\.append\(span, el\('code', { text: shown\.secondary, class: 'colhead__name' }\)\)/);
 });

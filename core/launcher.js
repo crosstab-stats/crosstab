@@ -28,6 +28,7 @@ import { showCaveats, showGettingAround } from './help.js';
 // from, and where five capabilities ended up on exactly one surface each.
 import { PluginPicker } from './plugin-picker.js';
 import { deployConfig } from './deploy-config.js';
+import { el } from './plugin-stdlib.js';
 
 /** Curated-core analysis plugins, pre-selected on a fresh "Start blank". */
 const CORE_IDS = new Set([
@@ -582,9 +583,9 @@ export class Launcher {
     const next = rail.nextSibling;
     const dialog = document.createElement('dialog');
     dialog.className = 'ctl__aboutmodal';
-    const head = el('div', null, 'ctl__aboutmodalbar');
-    head.append(el('span', 'About CrossTab', 'ctl__aboutmodaltitle'));
-    const close = el('button', 'Done', 'ctl__start ctl__aboutdone');
+    const head = el('div', { class: 'ctl__aboutmodalbar' });
+    head.append(el('span', { text: 'About CrossTab', class: 'ctl__aboutmodaltitle' }));
+    const close = el('button', { text: 'Done', class: 'ctl__start ctl__aboutdone' });
     close.type = 'button';
     head.append(close);
     dialog.append(head, rail);
@@ -616,20 +617,16 @@ export class Launcher {
 
     box.replaceChildren();
     box.hidden = false;
-    box.append(el('div', 'This install', 'ctl__railhead'));
+    box.append(el('div', { text: 'This install', class: 'ctl__railhead' }));
 
     const who = cfg.siteName || hostLabel();
-    const line = el('p', null);
+    const line = el('p');
     line.append(document.createTextNode('Hosted by '));
-    line.append(el('span', who, 'ctl__hostedwho'));
+    line.append(el('span', { text: who, class: 'ctl__hostedwho' }));
     box.append(line);
 
     if (issues.length) {
-      const warn = el(
-        'button',
-        `⚠ ${issues.length} deployment setting${issues.length === 1 ? ' was' : 's were'} ignored — see why`,
-        'ctl__hostedwarn',
-      );
+      const warn = el('button', { text: `⚠ ${issues.length} deployment setting${issues.length === 1 ? ' was' : 's were'} ignored — see why`, class: 'ctl__hostedwarn' });
       warn.type = 'button';
       warn.addEventListener('click', () => showDeployIssues(issues));
       box.append(warn);
@@ -644,14 +641,14 @@ export class Launcher {
 
     const draw = (status) => {
       box.replaceChildren();
-      box.append(el('div', 'Offline', 'ctl__railhead'));
+      box.append(el('div', { text: 'Offline', class: 'ctl__railhead' }));
       // Everything caches as you use it (#92): the app shell and each analysis's R
       // engine/packages are kept the first time they're fetched — no opt-in. So the
       // control below is only about PRE-caching the toolkit ahead of time (for stuff
       // you haven't run yet — a flight, an air-gapped machine).
-      box.append(el('div', '✓ Works offline automatically', 'ctl__offlineok'));
-      box.append(el('p', 'CrossTab and every analysis you run are cached as you use them — so whatever you’ve used already works with no connection. Pre-cache the rest (analyses you haven’t opened yet) for a flight or an air-gapped machine:', 'ctl__offlinehint'));
-      const prog = el('div', '', 'ctl__offlineprog');
+      box.append(el('div', { text: '✓ Works offline automatically', class: 'ctl__offlineok' }));
+      box.append(el('p', { text: 'CrossTab and every analysis you run are cached as you use them — so whatever you’ve used already works with no connection. Pre-cache the rest (analyses you haven’t opened yet) for a flight or an air-gapped machine:', class: 'ctl__offlinehint' }));
+      const prog = el('div', { class: 'ctl__offlineprog' });
 
       // Run enable() for the chosen scope; disable the buttons + stream progress.
       const run = async (opts, btns) => {
@@ -671,13 +668,13 @@ export class Launcher {
       if (status.enabled) {
         const size = status.bytes ? ` · ~${(status.bytes / 1048576).toFixed(0)} MB` : '';
         const files = status.count ? ` (${status.count} files${size})` : '';
-        box.append(el('div', `✓ Full toolkit pre-cached for offline${files}`, 'ctl__offlineok'));
+        box.append(el('div', { text: `✓ Full toolkit pre-cached for offline${files}`, class: 'ctl__offlineok' }));
         // Smart caching: the worker keeps caching new packages/assets as you use
         // features. Offer the plan-ahead "cache the whole toolkit" top-up too.
-        box.append(el('p', 'More gets cached automatically as you use features. Or top up the full toolkit now:', 'ctl__offlinehint'));
-        const allBtn = el('button', '⬇ Cache all plugins', 'ctl__offlinebtn');
+        box.append(el('p', { text: 'More gets cached automatically as you use features. Or top up the full toolkit now:', class: 'ctl__offlinehint' }));
+        const allBtn = el('button', { text: '⬇ Cache all plugins', class: 'ctl__offlinebtn' });
         allBtn.type = 'button';
-        const rm = el('button', 'Remove offline data', 'ctl__offlinealt');
+        const rm = el('button', { text: 'Remove offline data', class: 'ctl__offlinealt' });
         rm.type = 'button';
         allBtn.addEventListener('click', () => run({ allPlugins: true }, [allBtn, rm]));
         rm.addEventListener('click', async () => {
@@ -689,10 +686,10 @@ export class Launcher {
       } else {
         // Primary action caches the plugins you've selected (the set you'll actually
         // load); the subordinate link extends that to every plugin in the catalogue.
-        const btn = el('button', '⬇ Pre-cache selected plugins', 'ctl__offlinebtn');
+        const btn = el('button', { text: '⬇ Pre-cache selected plugins', class: 'ctl__offlinebtn' });
         btn.type = 'button';
         btn.title = 'Download the selected plugins and their R packages now, so they work with no connection.';
-        const allBtn = el('button', 'Or pre-cache all plugins (larger download)', 'ctl__offlinealt');
+        const allBtn = el('button', { text: 'Or pre-cache all plugins (larger download)', class: 'ctl__offlinealt' });
         allBtn.type = 'button';
         allBtn.title = 'Also cache plugins you haven’t selected — a bigger download.';
         btn.addEventListener('click', () => run({ packages: selectedPackages() }, [btn, allBtn]));
@@ -752,16 +749,6 @@ export class Launcher {
 
 function markSeen() {
   try { localStorage.setItem(LS_SEEN, '1'); } catch { /* storage off */ }
-}
-
-/** Group plugins into category sections, BOTH categories and the plugins within
- * each sorted alphabetically — predictable for discovery. */
-
-function el(tag, text, className) {
-  const e = document.createElement(tag);
-  if (text != null) e.textContent = text;
-  if (className) e.className = className;
-  return e;
 }
 
 /**
@@ -1151,28 +1138,28 @@ function hostLabel() {
 function showDeployIssues(issues) {
   const d = document.createElement('dialog');
   d.className = 'ct-dialog';
-  const form = el('form', null, 'ct-dialog__form');
+  const form = el('form', { class: 'ct-dialog__form' });
   form.method = 'dialog';
-  form.append(el('h2', 'Deployment settings that were ignored', 'ct-dialog__title'));
-  form.append(el('p', 'CrossTab read this install’s settings but could not use these. Everything else '
-    + 'applied, and anything ignored fell back to the built-in default.', 'ct-dialog__hint'));
-  const ul = el('ul', null, 'ctl__issuelist');
+  form.append(el('h2', { text: 'Deployment settings that were ignored', class: 'ct-dialog__title' }));
+  form.append(el('p', { text: 'CrossTab read this install’s settings but could not use these. Everything else '
+    + 'applied, and anything ignored fell back to the built-in default.', class: 'ct-dialog__hint' }));
+  const ul = el('ul', { class: 'ctl__issuelist' });
   ul.style.cssText = 'margin:0 0 14px; padding-left:20px; line-height:1.6; font-size:13px;';
   for (const i of issues) {
-    const li = el('li', null);
-    li.append(el('code', i.field, null));
+    const li = el('li');
+    li.append(el('code', { text: i.field }));
     li.append(document.createTextNode(` — ${i.why}`));
     // Where to go and change it. Without this the user is hunting a key by eye through a file
     // full of commented-out examples of the same key (owner, 2026-09-27).
     const at = i.line ? `${i.file || 'deploy.json'} line ${i.line}` : i.file || 'deploy.json';
-    li.append(el('span', ` (${at})`, 'ctl__issuewhere'));
+    li.append(el('span', { text: ` (${at})`, class: 'ctl__issuewhere' }));
     ul.append(li);
   }
   form.append(ul);
-  form.append(el('p', 'Fix those lines and reload. docs/DEPLOY.md lists every field and what it '
-    + 'accepts.', 'ct-dialog__hint'));
-  const menu = el('menu', null, 'ct-dialog__buttons');
-  const close = el('button', 'Close', 'ct-dialog__primary');
+  form.append(el('p', { text: 'Fix those lines and reload. docs/DEPLOY.md lists every field and what it '
+    + 'accepts.', class: 'ct-dialog__hint' }));
+  const menu = el('menu', { class: 'ct-dialog__buttons' });
+  const close = el('button', { text: 'Close', class: 'ct-dialog__primary' });
   close.value = 'cancel';
   close.type = 'submit';
   menu.append(close);

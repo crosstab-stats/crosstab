@@ -37,6 +37,7 @@
 
 import { debug } from './debug.js';
 import { projectMetaLine } from './project-meta.js';
+import { el } from './plugin-stdlib.js';
 
 /** Tabs, in order. `verb` is what the tab does to the row you click. */
 export const TABS = Object.freeze([
@@ -139,14 +140,6 @@ export function storeVerb(currentKind) {
     ? { label: 'Move here', note: 'The copy in this browser will be removed.' }
     : { label: 'Copy here', note: 'The current copy stays where it is and stops receiving changes.' };
 }
-
-const el = (tag, cls, text) => {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  if (text != null) e.textContent = text;
-  return e;
-};
-
 /**
  * Open the project manager.
  *
@@ -163,9 +156,9 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
   return new Promise((resolve) => {
     const dialog = document.createElement('dialog');
     dialog.className = 'ct-dialog ct-dialog--wide ctpm';
-    const tabBar = el('div', 'ctpm__tabs');
-    const body = el('div', 'ctpm__body');
-    const close = el('button', 'ct-dialog__primary', 'Done');
+    const tabBar = el('div', { class: 'ctpm__tabs' });
+    const body = el('div', { class: 'ctpm__body' });
+    const close = el('button', { class: 'ct-dialog__primary', text: 'Done' });
     close.type = 'button';
     close.addEventListener('click', () => dialog.close());
     // The shared containers, not hand-rolled equivalents. `.ct-dialog__form` carries the
@@ -174,8 +167,8 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
     // is what makes a primary button look primary: the accent colour and the sizing are
     // both defined as `.ct-dialog__buttons .ct-dialog__primary`, so outside that container
     // the class does nothing and you get a raw browser button, left-aligned.
-    const shell = el('div', 'ct-dialog__form ctpm__shell');
-    const footer = el('menu', 'ct-dialog__buttons ctpm__footer');
+    const shell = el('div', { class: 'ct-dialog__form ctpm__shell' });
+    const footer = el('menu', { class: 'ct-dialog__buttons ctpm__footer' });
     footer.append(close);
 
     let active = TABS.some((t) => t.id === tab) ? tab : 'recents';
@@ -184,18 +177,18 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
     const render = async () => {
       tabBar.replaceChildren();
       for (const t of TABS) {
-        const b = el('button', `ctpm__tab${t.id === active ? ' is-active' : ''}`, t.label);
+        const b = el('button', { class: `ctpm__tab${t.id === active ? ' is-active' : ''}`, text: t.label });
         b.type = 'button';
         b.addEventListener('click', () => { active = t.id; void render(); });
         tabBar.append(b);
       }
       if (exporters.length) {
-        const b = el('button', `ctpm__tab${active === 'export' ? ' is-active' : ''}`, 'Export');
+        const b = el('button', { class: `ctpm__tab${active === 'export' ? ' is-active' : ''}`, text: 'Export' });
         b.type = 'button';
         b.addEventListener('click', () => { active = 'export'; void render(); });
         tabBar.append(b);
       }
-      body.replaceChildren(el('div', 'ctpm__loading', 'Loading…'));
+      body.replaceChildren(el('div', { class: 'ctpm__loading', text: 'Loading…' }));
       let rows = [];
       try {
         rows = await projects.listProjects();
@@ -285,21 +278,21 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
 
     /** A flat list of projects — Recents and Manage differ only in which verbs show. */
     function renderList(rows, { verb }) {
-      const list = el('div', 'ctpm__list');
+      const list = el('div', { class: 'ctpm__list' });
       // The open project is SHOWN, marked, in every tab. Filtering it out made the list
       // look like it had forgotten the thing you are working on, and made rows jump
       // position depending on what happened to be open.
       const shown = verb === 'manage' ? rows : rows.slice(0, 8);
       if (!shown.length) {
-        body.append(el('div', 'ctpm__empty', 'No projects yet. Open one, or start a new one.'));
+        body.append(el('div', { class: 'ctpm__empty', text: 'No projects yet. Open one, or start a new one.' }));
         return;
       }
       for (const row of shown) {
         const what = describeRow(row);
-        const item = el('div', `ctpm__row${row.isOpen ? ' is-open' : ''}`);
-        const main = el('button', 'ctpm__rowmain');
+        const item = el('div', { class: `ctpm__row${row.isOpen ? ' is-open' : ''}` });
+        const main = el('button', { class: 'ctpm__rowmain' });
         main.type = 'button';
-        main.append(el('span', 'ctpm__name', `${what.glyph ? `${what.glyph} ` : ''}${row.name}`));
+        main.append(el('span', { class: 'ctpm__name', text: `${what.glyph ? `${what.glyph} ` : ''}${row.name}` }));
         // Where it lives, when it was last worked on, how big it is — the same sentence the
         // launcher rail and the sidebar say, from the same formatter. This row used to show
         // only the location, so the same project described itself differently depending on
@@ -308,18 +301,18 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
         // The open one keeps "Open now" and drops the date: a timestamp is the weakest thing
         // that slot could say about the project you are currently inside. Its SIZE still
         // earns its place, because that is what distinguishes it from the others by name.
-        main.append(el('span', 'ctpm__where', row.isOpen
+        main.append(el('span', { class: 'ctpm__where', text: row.isOpen
           ? ['Open now', projectMetaLine(row, { date: 'none' })].filter(Boolean).join(' · ')
-          : [what.detail, projectMetaLine(row)].filter(Boolean).join(' · ')));
+          : [what.detail, projectMetaLine(row)].filter(Boolean).join(' · ') }));
         // Clicking the open project's NAME used to close it — a destructive-ish action on
         // the one target nobody aims at deliberately. The row is inert; Close is a button.
         if (row.isOpen) main.disabled = true;
         else main.addEventListener('click', () => void act('open', row));
         item.append(main);
         if (verb === 'manage') {
-          const acts = el('div', 'ctpm__acts');
+          const acts = el('div', { class: 'ctpm__acts' });
           for (const a of projectActions(row)) {
-            const b = el('button', `ctpm__act${a.danger ? ' is-danger' : ''}`, a.label);
+            const b = el('button', { class: `ctpm__act${a.danger ? ' is-danger' : ''}`, text: a.label });
             b.type = 'button';
             b.addEventListener('click', () => void act(a.id, row));
             acts.append(b);
@@ -333,9 +326,9 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
 
     /** Open / Store in: providers down the left, their projects or destinations right. */
     function renderRail(rows, { mode }) {
-      const wrap = el('div', 'ctpm__split');
-      const rail = el('div', 'ctpm__rail');
-      const pane = el('div', 'ctpm__pane');
+      const wrap = el('div', { class: 'ctpm__split' });
+      const rail = el('div', { class: 'ctpm__rail' });
+      const pane = el('div', { class: 'ctpm__pane' });
       const shown = providersFor(providers, mode);
       let chosen = shown[0]?.kind ?? 'opfs';
 
@@ -345,8 +338,8 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
         if (!provider) return;
         if (mode === 'store') {
           const verb = storeVerb(projects.describeLocation?.()?.kind ?? 'opfs');
-          pane.append(el('p', 'ctpm__hint', verb.note));
-          const go = el('button', 'ct-dialog__primary', `${verb.label} — ${provider.label}`);
+          pane.append(el('p', { class: 'ctpm__hint', text: verb.note }));
+          const go = el('button', { class: 'ct-dialog__primary', text: `${verb.label} — ${provider.label}` });
           go.type = 'button';
           go.addEventListener('click', async () => {
             const backend = await provider.chooseDestination?.();
@@ -362,8 +355,8 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
         // not a place with an index) says what it is instead of reporting an empty list
         // — "No projects known here yet" would imply some could appear later.
         if (provider.enumerable === false) {
-          if (provider.hint) pane.append(el('p', 'ctpm__hint', provider.hint));
-          const go = el('button', 'proj__add', provider.newLabel ?? 'Choose a file…');
+          if (provider.hint) pane.append(el('p', { class: 'ctpm__hint', text: provider.hint }));
+          const go = el('button', { class: 'proj__add', text: provider.newLabel ?? 'Choose a file…' });
           go.type = 'button';
           go.addEventListener('click', async () => {
             dialog.close();
@@ -374,22 +367,22 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
         }
         const mine = rows.filter((r) => r.kind === provider.kind);
         for (const row of mine) {
-          const b = el('button', 'ctpm__rowmain');
+          const b = el('button', { class: 'ctpm__rowmain' });
           b.type = 'button';
-          b.append(el('span', 'ctpm__name', row.name));
+          b.append(el('span', { class: 'ctpm__name', text: row.name }));
           if (row.isOpen) {
             // Present but inert, for the same reason as the list: a complete picture beats
             // a shorter one, and there is nothing to do to the project you are in.
-            b.append(el('span', 'ctpm__where', 'Open now'));
+            b.append(el('span', { class: 'ctpm__where', text: 'Open now' }));
             b.disabled = true;
           } else {
             b.addEventListener('click', () => void act('open', row));
           }
           pane.append(b);
         }
-        if (!mine.length) pane.append(el('p', 'ctpm__hint', `No projects known here yet.`));
+        if (!mine.length) pane.append(el('p', { class: 'ctpm__hint', text: `No projects known here yet.` }));
         if (provider.chooseExisting) {
-          const add = el('button', 'proj__add', provider.newLabel ?? 'Somewhere else…');
+          const add = el('button', { class: 'proj__add', text: provider.newLabel ?? 'Somewhere else…' });
           add.type = 'button';
           add.addEventListener('click', async () => {
             const backend = await provider.chooseExisting();
@@ -402,7 +395,7 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
       };
 
       for (const p of shown) {
-        const b = el('button', `ctpm__railitem${p.kind === chosen ? ' is-active' : ''}`, `${p.glyph} ${p.label}`);
+        const b = el('button', { class: `ctpm__railitem${p.kind === chosen ? ' is-active' : ''}`, text: `${p.glyph} ${p.label}` });
         b.type = 'button';
         b.addEventListener('click', () => {
           chosen = p.kind;
@@ -425,10 +418,10 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
       // promoted, and the other formats keep equal billing.
       const group = (title, hint, items) => {
         if (!items.length) return;
-        body.append(el('h3', 'ctpm__grouphead', title));
-        body.append(el('p', 'ctpm__hint', hint));
+        body.append(el('h3', { class: 'ctpm__grouphead', text: title }));
+        body.append(el('p', { class: 'ctpm__hint', text: hint }));
         for (const x of items) {
-          const b = el('button', 'proj__add', x.label);
+          const b = el('button', { class: 'proj__add', text: x.label });
           b.type = 'button';
           b.addEventListener('click', () => { dialog.close(); void x.run(); });
           body.append(b);

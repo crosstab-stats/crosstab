@@ -31,6 +31,7 @@ import { packPlugin, unpackPlugin, looksLikeZip } from './plugin-package.js';
 import { ownerToken } from './workspace-store.js';
 import { escapeHtml } from './text.js';
 import { downloadBlob } from './project-bundle.js';
+import { el } from './plugin-stdlib.js';
 
 const LS_DISABLED = 'crosstab.plugins.disabled';
 const LS_CATALOG = 'crosstab.plugins.catalog';
@@ -1147,21 +1148,21 @@ export function openPluginAbout(p) {
   const adds = (p?.menu || []).filter(Boolean);
   const dialog = document.createElement('dialog');
   dialog.className = 'ct-dialog ct-dialog--wide';
-  const form = el('form', null, 'ct-dialog__form');
+  const form = el('form', { class: 'ct-dialog__form' });
   form.method = 'dialog';
-  form.append(el('h2', String(p?.name ?? 'Plugin'), 'ct-dialog__title'));
+  form.append(el('h2', { text: String(p?.name ?? 'Plugin'), class: 'ct-dialog__title' }));
 
   if (adds.length) {
-    form.append(el('p', `Adds ${adds.length} item${adds.length === 1 ? '' : 's'} to the menus:`, 'ct-dialog__hint'));
-    const ul = el('ul', null, 'ct-about__adds');
+    form.append(el('p', { text: `Adds ${adds.length} item${adds.length === 1 ? '' : 's'} to the menus:`, class: 'ct-dialog__hint' }));
+    const ul = el('ul', { class: 'ct-about__adds' });
     ul.style.cssText = 'margin:0 0 14px; padding-left:20px; line-height:1.6; font-size:14px; color:#2a323a;';
-    for (const label of adds) ul.append(el('li', label));
+    for (const label of adds) ul.append(el('li', { text: label }));
     form.append(ul);
   }
 
   if (p?.howto) {
-    if (adds.length) form.append(el('h3', 'How to use it', 'ct-about__h'));
-    const body = el('div', null, 'ct-howto');
+    if (adds.length) form.append(el('h3', { text: 'How to use it', class: 'ct-about__h' }));
+    const body = el('div', { class: 'ct-howto' });
     body.style.cssText =
       'white-space:pre-wrap; line-height:1.5; font-size:14px; color:#2a323a; max-height:50vh; overflow:auto; margin:0 0 16px;';
     body.textContent = p.howto;
@@ -1172,17 +1173,13 @@ export function openPluginAbout(p) {
   // plugins (a chart-kind provider, say) legitimately add no menu items of their own.
   if (!adds.length && !p?.howto) {
     form.append(
-      el(
-        'p',
-        'This plugin adds no menu items of its own and carries no usage note — it is likely '
-          + 'infrastructure another plugin depends on.',
-        'ct-dialog__hint',
-      ),
+      el('p', { text: 'This plugin adds no menu items of its own and carries no usage note — it is likely '
+          + 'infrastructure another plugin depends on.', class: 'ct-dialog__hint' }),
     );
   }
 
-  const menu = el('menu', null, 'ct-dialog__buttons');
-  const close = el('button', 'Close', 'ct-dialog__primary');
+  const menu = el('menu', { class: 'ct-dialog__buttons' });
+  const close = el('button', { text: 'Close', class: 'ct-dialog__primary' });
   close.value = 'cancel';
   close.type = 'submit';
   menu.append(close);
@@ -1192,14 +1189,6 @@ export function openPluginAbout(p) {
   document.body.append(dialog);
   dialog.showModal();
 }
-
-function el(tag, text, className) {
-  const e = document.createElement(tag);
-  if (text != null) e.textContent = text;
-  if (className) e.className = className;
-  return e;
-}
-
 /** A short, collision-resistant hex token. */
 function randHex(n) {
   return crypto.randomUUID().replace(/-/g, '').slice(0, n);

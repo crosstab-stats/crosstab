@@ -71,6 +71,7 @@ import { PluginPackageStore } from './plugin-package-store.js';
 import { AssetStore, createAssetService, ASSETS_CHANGED } from './asset-store.js';
 import { makeZip, readZipEntries } from './zip.js';
 import { escapeHtml } from './text.js';
+import { el } from './plugin-stdlib.js';
 
 /**
  * URLs of the built-in plugins to load at startup. These load through the exact
@@ -2662,9 +2663,9 @@ class ProjectSidebar {
     // With no project open (#158) the zone is a prompt, not a project with a blank name:
     // no rename, no delete, no "+ Add dataset" for a project that doesn't exist.
     if (this.projects && !this.projects.hasProject) {
-      const empty = el('div', '', 'proj__empty');
-      empty.append(el('div', 'No project open', 'proj__name'));
-      const hint = el('div', 'Open one from the list below, or start a new one from the CrossTab menu.', 'proj__hint');
+      const empty = el('div', { class: 'proj__empty' });
+      empty.append(el('div', { text: 'No project open', class: 'proj__name' }));
+      const hint = el('div', { text: 'Open one from the list below, or start a new one from the CrossTab menu.', class: 'proj__hint' });
       hint.style.cssText = 'font-size:12px; color:#6b7378; margin-top:4px;';
       empty.append(hint);
       const frag0 = document.createDocumentFragment();
@@ -2673,7 +2674,7 @@ class ProjectSidebar {
     }
     const head = document.createElement('div');
     head.className = 'proj__head';
-    const name = el('span', this.projectName || 'Unsaved project', 'proj__name');
+    const name = el('span', { text: this.projectName || 'Unsaved project', class: 'proj__name' });
     // Rename inline (like a dataset), always — double-click the name or click ✎.
     // A never-saved project names+saves itself on commit (renameActive), so this
     // is never the Save modal; it matches every other ✎ in the sidebar.
@@ -2692,7 +2693,7 @@ class ProjectSidebar {
     head.append(delBtn);
     frag.append(head);
 
-    frag.append(el('div', 'Datasets', 'proj__sub'));
+    frag.append(el('div', { text: 'Datasets', class: 'proj__sub' }));
 
     const list = document.createElement('ul');
     list.className = 'proj__datasets';
@@ -2709,13 +2710,13 @@ class ProjectSidebar {
     for (const decl of this.#collectionDecls()) {
       const section = this.#collectionSection(decl, null);
       if (!section) continue;
-      frag.append(el('div', decl.label, 'proj__sub'));
+      frag.append(el('div', { text: decl.label, class: 'proj__sub' }));
       frag.append(section);
     }
     if (this.wsStore) {
       const projectBlobs = this.wsStore.listForDataset(null).filter((b) => !hidden.has(b.wsId));
       if (projectBlobs.length) {
-        frag.append(el('div', 'Plugin data', 'proj__sub'));
+        frag.append(el('div', { text: 'Plugin data', class: 'proj__sub' }));
         const blobList = document.createElement('ul');
         blobList.className = 'proj__datasets';
         const wsTitles = this.#wsIdTitles();
@@ -2725,14 +2726,14 @@ class ProjectSidebar {
     }
     const orphans = this.orphanedMemos?.() ?? [];
     if (orphans.length) {
-      frag.append(el('div', 'Notes with no home', 'proj__sub'));
+      frag.append(el('div', { text: 'Notes with no home', class: 'proj__sub' }));
       const ul = document.createElement('ul');
       ul.className = 'proj__datasets';
       for (const m of orphans) {
         const li = document.createElement('li');
         li.className = 'proj__blob';
         const txt = m.text.length > 40 ? `${m.text.slice(0, 39)}…` : m.text;
-        const name = el('span', txt, 'proj__blob-name');
+        const name = el('span', { text: txt, class: 'proj__blob-name' });
         name.title = `The ${m.anchor?.kind ?? 'thing'} this note was written about is gone. `
           + 'Kept because the note is often the only record of why.';
         name.style.opacity = '0.75';
@@ -2822,7 +2823,7 @@ class ProjectSidebar {
 
     const frag = document.createDocumentFragment();
     if (decl.sidebar === 'count') {
-      const line = el('li', `${decl.label} · ${recs.length}`, 'proj__blob');
+      const line = el('li', { text: `${decl.label} · ${recs.length}`, class: 'proj__blob' });
       line.title = `${recs.length} ${decl.label.toLowerCase()} in this project`;
       const ul = document.createElement('ul');
       ul.className = 'proj__datasets';
@@ -2895,10 +2896,10 @@ class ProjectSidebar {
   #assetsSection(assets) {
     if (!assets || !assets.count) return null;
     const frag = document.createDocumentFragment();
-    frag.append(el('div', 'Stored files', 'proj__sub'));
+    frag.append(el('div', { text: 'Stored files', class: 'proj__sub' }));
     const ul = document.createElement('ul');
     ul.className = 'proj__datasets';
-    const li = el('li', `${assets.count} file${assets.count === 1 ? '' : 's'} · ${fmtBytes(assets.bytes)}`, 'proj__blob');
+    const li = el('li', { text: `${assets.count} file${assets.count === 1 ? '' : 's'} · ${fmtBytes(assets.bytes)}`, class: 'proj__blob' });
     li.title = 'Media, geometry and other bytes stored inside this project';
     ul.append(li);
     frag.append(ul);
@@ -2995,8 +2996,8 @@ class ProjectSidebar {
     // own click for the mouse (the whole row stays a target), and this stops
     // propagation so the action does not fire twice.
     const nameEl = onOpen
-      ? el('button', shown, 'proj__ds-name')
-      : el('span', shown, 'proj__ds-name');
+      ? el('button', { text: shown, class: 'proj__ds-name' })
+      : el('span', { text: shown, class: 'proj__ds-name' });
     if (onOpen) {
       nameEl.type = 'button';
       nameEl.addEventListener('click', (e) => { e.stopPropagation(); onOpen(); });
@@ -3011,7 +3012,7 @@ class ProjectSidebar {
     }
     li.append(nameEl);
 
-    if (summary != null && summary !== '') li.append(el('span', String(summary), 'proj__ds-rows'));
+    if (summary != null && summary !== '') li.append(el('span', { text: String(summary), class: 'proj__ds-rows' }));
 
     if (onRename) {
       li.append(iconBtn('✎', 'Rename', (e) => {
@@ -3112,7 +3113,7 @@ class ProjectSidebar {
     const text = label ? `${wsTitle}: ${label}`
       : slotSuffix ? `${wsTitle}: ${slotSuffix}`
       : wsTitle;
-    const name = el('span', text, 'proj__blob-name');
+    const name = el('span', { text: text, class: 'proj__blob-name' });
     name.title = 'Double-click to rename';
     const renameAction = (v) => {
       this.wsStore.setLabel(blob.owner, blob.wsId, blob.slotId, dsId, v || null);
@@ -3204,7 +3205,7 @@ class ProjectSidebar {
     const li = document.createElement('li');
     li.className = 'proj__blob';
     const label = decl ? recordLabel(decl, rec) : rec.id;
-    const name = el('span', label, 'proj__blob-name');
+    const name = el('span', { text: label, class: 'proj__blob-name' });
     name.title = `${decl?.label ?? rec.collection} — deleted, still recoverable`;
     li.append(name);
     li.append(iconBtn('⤺', 'Restore', (e) => {
@@ -3240,7 +3241,7 @@ class ProjectSidebar {
       const line = document.createElement('div');
       line.className = 'proj__memo';
       const who = m.author?.initials ? `${m.author.initials}: ` : '';
-      line.append(el('span', `${who}${m.text}`, 'proj__memo-text'));
+      line.append(el('span', { text: `${who}${m.text}`, class: 'proj__memo-text' }));
       const del = iconBtn('✕', 'Delete this memo', (e) => {
         e.stopPropagation();
         this.memoStore.remove(m.id);
@@ -3290,7 +3291,7 @@ class ProjectSidebar {
 
   #recycleZone(binned, binnedItems = []) {
     const frag = document.createDocumentFragment();
-    frag.append(el('div', 'Recently deleted', 'proj__sub proj__sub--zone'));
+    frag.append(el('div', { text: 'Recently deleted', class: 'proj__sub proj__sub--zone' }));
     const list = document.createElement('ul');
     list.className = 'proj__datasets';
     if (binnedItems.length) {
@@ -3302,11 +3303,11 @@ class ProjectSidebar {
     for (const e of binned) {
       const li = document.createElement('li');
       li.className = 'proj__ds proj__ds--trash';
-      const name = el('span', e.name, 'proj__ds-name');
+      const name = el('span', { text: e.name, class: 'proj__ds-name' });
       name.title = `Deleted ${new Date(e.deletedAt).toLocaleString()} · ${(e.rowCount || 0).toLocaleString()} rows`;
       name.style.color = '#687381';
       li.append(name);
-      li.append(el('span', (e.rowCount || 0).toLocaleString(), 'proj__ds-rows'));
+      li.append(el('span', { text: (e.rowCount || 0).toLocaleString(), class: 'proj__ds-rows' }));
       const restore = iconBtn('↩', 'Restore this dataset', (ev) => {
         ev.stopPropagation();
         void this.#restoreDataset(e);
@@ -3371,7 +3372,7 @@ class ProjectSidebar {
    */
   #projectsZone(recents) {
     const frag = document.createDocumentFragment();
-    frag.append(el('div', 'Recent projects', 'proj__sub proj__sub--zone'));
+    frag.append(el('div', { text: 'Recent projects', class: 'proj__sub proj__sub--zone' }));
     // One renderer, shared with the launcher's rail — see project-list.js for why the row
     // is lifted out and what deliberately is not shared (what a click means, chiefly).
     frag.append(renderProjectList(recents, {
@@ -3418,14 +3419,6 @@ class ProjectSidebar {
     input.select();
     void beforeClass;
   }
-}
-
-/** A small text element: `el(tag, text, className)`. */
-function el(tag, text, className) {
-  const e = document.createElement(tag);
-  e.textContent = text ?? '';
-  if (className) e.className = className;
-  return e;
 }
 
 /** A small icon button. */

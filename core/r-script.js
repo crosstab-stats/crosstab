@@ -18,6 +18,8 @@
  *    touch the DB or the real disk. The import step is the only R→CrossTab path.
  */
 
+import { el } from './plugin-stdlib.js';
+
 const FILE_ACCEPT = '.R,.r,.txt,text/plain';
 
 /** Enumerate data.frames in the R global env → {names[], nrow[], ncol[]}. */
@@ -106,14 +108,14 @@ async function offerImport({ webr, datasets, runId = null }) {
   const dialog = document.createElement('dialog');
   dialog.className = 'ct-dialog';
   dialog.style.cssText = 'max-width:520px; width:92vw;';
-  const form = el('form', null, 'ct-dialog__form');
+  const form = el('form', { class: 'ct-dialog__form' });
   form.method = 'dialog';
-  form.append(el('h2', 'Import a result as a dataset', 'ct-dialog__title'));
-  const hint = el('p', 'Your R script produced these data frames. Import one as a new CrossTab dataset (optional).');
+  form.append(el('h2', { text: 'Import a result as a dataset', class: 'ct-dialog__title' }));
+  const hint = el('p', { text: 'Your R script produced these data frames. Import one as a new CrossTab dataset (optional).' });
   hint.style.cssText = 'margin:0 0 14px; font-size:13px; color:#5a6470; line-height:1.5;';
   form.append(hint);
 
-  const row = el('div', null);
+  const row = el('div');
   row.style.cssText = 'display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0 0 12px;';
   const select = document.createElement('select');
   select.style.cssText = 'font:inherit; font-size:13px; padding:6px 8px; border:1px solid var(--line,#d8dee4); border-radius:6px;';
@@ -135,12 +137,12 @@ async function offerImport({ webr, datasets, runId = null }) {
   msg.style.cssText = 'font-size:12.5px; margin:0 0 12px; min-height:16px;';
   form.append(msg);
 
-  const menu = el('menu', null, 'ct-dialog__buttons');
+  const menu = el('menu', { class: 'ct-dialog__buttons' });
   menu.style.cssText = 'display:flex; justify-content:flex-end; gap:8px; margin:0; padding:0;';
-  const close = el('button', 'Done');
+  const close = el('button', { text: 'Done' });
   close.type = 'submit';
   close.value = 'cancel';
-  const importBtn = el('button', 'Import', 'ct-dialog__primary');
+  const importBtn = el('button', { text: 'Import', class: 'ct-dialog__primary' });
   importBtn.type = 'button';
   importBtn.style.cssText = 'background:var(--accent,#2572a5); color:#fff; border:1px solid var(--accent,#2572a5); border-radius:6px; padding:6px 14px; cursor:pointer;';
   importBtn.addEventListener('click', async () => {
@@ -218,12 +220,6 @@ function bitmapToPng(img) {
   }
 }
 
-function el(tag, text, className) {
-  const e = document.createElement(tag);
-  if (text != null) e.textContent = text;
-  if (className) e.className = className;
-  return e;
-}
 
 /** A double-quoted R string literal. */
 function rStr(s) {

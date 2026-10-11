@@ -49,6 +49,7 @@ import {
   presetFromSelection, renamePreset, resolvePreset, savePreset,
 } from './plugin-presets.js';
 import { downloadFile } from './export-service.js';
+import { el } from './plugin-stdlib.js';
 
 /** File-I/O categories a preset always unions in — see the launcher's copy of this list. */
 const INFRA_CATEGORIES = new Set(['Import', 'Export', 'Data']);
@@ -219,11 +220,11 @@ export class PluginPicker {
   mount(container) {
     injectStyles();
     this.#list = this.#plugins.list();
-    const root = el('div', null, 'ctp');
+    const root = el('div', { class: 'ctp' });
     this.#root = root;
 
     // --- filter row -----------------------------------------------------
-    const head = el('div', null, 'ctp__head');
+    const head = el('div', { class: 'ctp__head' });
     if (this.#headLead) head.append(this.#headLead);
     this.#discSel = document.createElement('select');
     this.#discSel.className = 'ctp__discipline';
@@ -250,13 +251,13 @@ export class PluginPicker {
 
     root.append(this.#buildAddRow());
 
-    this.#noteEl = el('p', null, 'ctp__note');
+    this.#noteEl = el('p', { class: 'ctp__note' });
     this.#noteEl.hidden = true;
     this.#noteEl.setAttribute('role', 'status');
-    this.#errEl = el('div', null, 'ctp__err');
+    this.#errEl = el('div', { class: 'ctp__err' });
     this.#errEl.hidden = true;
     this.#errEl.setAttribute('role', 'alert');
-    this.#listBox = el('div', null, 'ctp__list');
+    this.#listBox = el('div', { class: 'ctp__list' });
     root.append(this.#noteEl, this.#errEl, this.#listBox);
 
     container.append(root);
@@ -309,19 +310,19 @@ export class PluginPicker {
     this.#hits = hits;
     this.#listBox.replaceChildren();
     if (!sections.length) {
-      this.#listBox.append(el('p', 'No plugins match your search.', 'ctp__empty'));
+      this.#listBox.append(el('p', { text: 'No plugins match your search.', class: 'ctp__empty' }));
       return;
     }
     for (const sec of sections) this.#listBox.append(this.#section(sec));
   }
 
   #section({ title, items }) {
-    const wrap = el('div', null, 'ctp__section');
-    const head = el('div', null, 'ctp__sectionhead');
-    head.append(el('span', title, 'ctp__sectiontitle'));
+    const wrap = el('div', { class: 'ctp__section' });
+    const head = el('div', { class: 'ctp__sectionhead' });
+    head.append(el('span', { text: title, class: 'ctp__sectiontitle' }));
     const keys = items.map((p) => p.key);
-    const all = el('button', 'Select all', 'ctp__linkbtn');
-    const none = el('button', 'None', 'ctp__linkbtn');
+    const all = el('button', { text: 'Select all', class: 'ctp__linkbtn' });
+    const none = el('button', { text: 'None', class: 'ctp__linkbtn' });
     all.type = none.type = 'button';
     // Scoped to THIS section's keys, which is why they live in the section header and the
     // presets do not: a preset spans the whole picker.
@@ -330,16 +331,16 @@ export class PluginPicker {
     head.append(all, none);
     wrap.append(head);
 
-    const grid = el('div', null, 'ctp__grid');
+    const grid = el('div', { class: 'ctp__grid' });
     for (const group of groupByCategory(items)) {
       // Keep a category label with its plugins in one column block, so a single-plugin
       // category doesn't float its lone row beside the header.
-      const g = el('div', null, 'ctp__catgroup');
-      g.append(el('div', group.category, 'ctp__cat'));
+      const g = el('div', { class: 'ctp__catgroup' });
+      g.append(el('div', { text: group.category, class: 'ctp__cat' }));
       for (const p of group.items) g.append(this.#row(p));
       grid.append(g);
     }
-    if (!items.length) grid.append(el('div', 'None.', 'ctp__cat'));
+    if (!items.length) grid.append(el('div', { text: 'None.', class: 'ctp__cat' }));
     wrap.append(grid);
     return wrap;
   }
@@ -347,32 +348,32 @@ export class PluginPicker {
   #row(p) {
     // The row is a wrapper, not just the label: the action buttons have to sit OUTSIDE the
     // <label>, or tapping one would toggle the checkbox the label is bound to.
-    const row = el('div', null, 'ctp__row');
-    const lead = el('span', null, 'ctp__lead');
-    const label = el('label', null, 'ctp__main');
+    const row = el('div', { class: 'ctp__row' });
+    const lead = el('span', { class: 'ctp__lead' });
+    const label = el('label', { class: 'ctp__main' });
     const adds = addsTooltip(p);
     if (adds) label.title = adds; // a good quick read with a pointer; never the only path
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.checked = this.#mode === 'live' ? !!p.enabled : this.#selected.has(p.key);
     cb.addEventListener('change', () => void this.#toggle(p, cb));
-    label.append(cb, el('span', p.name, 'ctp__name'));
+    label.append(cb, el('span', { text: p.name, class: 'ctp__name' }));
     // Version badge: a visible confirmation that a freshly-deployed plugin file actually
     // loaded — bump the manifest's `version` and watch this change (#91).
-    label.append(el('span', `v${p.version ?? '1'}`, 'ctp__ver'));
+    label.append(el('span', { text: `v${p.version ?? '1'}`, class: 'ctp__ver' }));
     lead.append(label);
     // Name the analysis that answered the search, right next to the box that enables it —
     // that is the whole of "what do I enable to do X?" (#183).
     const matched = this.#hits.get(p.key) || [];
-    if (matched.length) lead.append(el('span', `adds: ${matched.join(' · ')}`, 'ctp__hit'));
+    if (matched.length) lead.append(el('span', { text: `adds: ${matched.join(' · ')}`, class: 'ctp__hit' }));
 
-    const right = el('span', null, 'ctp__right');
+    const right = el('span', { class: 'ctp__right' });
     const meta = rowMeta(p, this.#mode);
-    if (meta) right.append(el('span', meta, 'ctp__meta'));
+    if (meta) right.append(el('span', { text: meta, class: 'ctp__meta' }));
     // Version-mismatch badge (warn-and-allow). Live mode only: compat is known after load.
     if (this.#mode === 'live' && p.activated
         && (p.apiCompat === 'older' || p.apiCompat === 'newer')) {
-      const badge = el('span', p.apiCompat === 'older' ? '⚠ old API' : '⚠ new API', 'ctp__compat');
+      const badge = el('span', { text: p.apiCompat === 'older' ? '⚠ old API' : '⚠ new API', class: 'ctp__compat' });
       badge.title = p.apiCompat === 'older'
         ? 'Built for an older version of CrossTab — may not work correctly.'
         : 'Built for a newer version of CrossTab — may not work correctly.';
@@ -395,7 +396,7 @@ export class PluginPicker {
       remove: ['✕', 'Remove this plugin', `Remove ${p.name}`],
     };
     const [glyph, title, aria] = SPEC[act];
-    const btn = el('button', glyph, `ctp__act ctp__act--${act}`);
+    const btn = el('button', { text: glyph, class: `ctp__act ctp__act--${act}` });
     btn.type = 'button';
     btn.title = title;
     btn.setAttribute('aria-label', aria);
@@ -501,9 +502,9 @@ export class PluginPicker {
   // --- add / create ----------------------------------------------------------
 
   #buildAddRow() {
-    const wrap = el('div', null, 'ctp__add');
+    const wrap = el('div', { class: 'ctp__add' });
     const mk = (text, fn) => {
-      const b = el('button', text, 'ctp__addbtn');
+      const b = el('button', { text: text, class: 'ctp__addbtn' });
       b.type = 'button';
       b.addEventListener('click', () => void fn());
       return b;
@@ -569,7 +570,7 @@ export class PluginPicker {
     sel.setAttribute('aria-label', 'Plugin preset');
     sel.hidden = true;
     const mkLink = (text, hidden = false) => {
-      const b = el('button', text, 'ctp__linkbtn');
+      const b = el('button', { text: text, class: 'ctp__linkbtn' });
       b.type = 'button';
       b.hidden = hidden;
       return b;
@@ -750,21 +751,18 @@ export function openPluginModal(plugins) {
   injectStyles();
   const dialog = document.createElement('dialog');
   dialog.className = 'ct-dialog ct-dialog--wide ctp-dialog';
-  const form = el('form', null, 'ct-dialog__form');
+  const form = el('form', { class: 'ct-dialog__form' });
   form.method = 'dialog';
-  form.append(el('h2', 'Plugins', 'ct-dialog__title'));
-  form.append(el('p',
-    'Toggle, add, or remove plugins — changes are live and saved across sessions. Added '
+  form.append(el('h2', { text: 'Plugins', class: 'ct-dialog__title' }));
+  form.append(el('p', { text: 'Toggle, add, or remove plugins — changes are live and saved across sessions. Added '
     + 'plugins run sandboxed (no network of their own) but can read the data you load here, '
-    + 'so only add ones you trust.', 'ct-dialog__hint'));
-  form.append(el('p',
-    'Looking for a particular analysis? Search for it by name — Kaplan–Meier, '
-    + 'Hosmer–Lemeshow, Levene — and the plugin that adds it is listed, switched on or off.',
-    'ct-dialog__hint'));
-  const body = el('div', null, 'ctp-dialog__body');
+    + 'so only add ones you trust.', class: 'ct-dialog__hint' }));
+  form.append(el('p', { text: 'Looking for a particular analysis? Search for it by name — Kaplan–Meier, '
+    + 'Hosmer–Lemeshow, Levene — and the plugin that adds it is listed, switched on or off.', class: 'ct-dialog__hint' }));
+  const body = el('div', { class: 'ctp-dialog__body' });
   form.append(body);
-  const menu = el('menu', null, 'ct-dialog__buttons');
-  const done = el('button', 'Done', 'ct-dialog__primary');
+  const menu = el('menu', { class: 'ct-dialog__buttons' });
+  const done = el('button', { text: 'Done', class: 'ct-dialog__primary' });
   done.type = 'submit';
   done.value = 'close';
   menu.append(done);
@@ -790,11 +788,11 @@ export function promptText({ title, label, hint = '', value = '', confirm: confi
   return new Promise((resolve) => {
     const d = document.createElement('dialog');
     d.className = 'ct-dialog';
-    const form = el('form', null, 'ct-dialog__form');
+    const form = el('form', { class: 'ct-dialog__form' });
     form.method = 'dialog';
-    form.append(el('h2', title, 'ct-dialog__title'));
-    if (hint) form.append(el('p', hint, 'ct-dialog__hint'));
-    const lab = el('label', null, 'ct-field');
+    form.append(el('h2', { text: title, class: 'ct-dialog__title' }));
+    if (hint) form.append(el('p', { text: hint, class: 'ct-dialog__hint' }));
+    const lab = el('label', { class: 'ct-field' });
     lab.append(document.createTextNode(label));
     const input = document.createElement('input');
     input.type = 'text';
@@ -803,11 +801,11 @@ export function promptText({ title, label, hint = '', value = '', confirm: confi
     input.style.cssText = 'width:100%; margin-top:4px;';
     lab.append(input);
     form.append(lab);
-    const menu = el('menu', null, 'ct-dialog__buttons');
-    const cancel = el('button', 'Cancel', null);
+    const menu = el('menu', { class: 'ct-dialog__buttons' });
+    const cancel = el('button', { text: 'Cancel' });
     cancel.value = 'cancel';
     cancel.type = 'submit';
-    const ok = el('button', confirmLabel, 'ct-dialog__primary');
+    const ok = el('button', { text: confirmLabel, class: 'ct-dialog__primary' });
     ok.value = 'ok';
     ok.type = 'submit';
     menu.append(cancel, ok);
@@ -824,14 +822,6 @@ export function promptText({ title, label, hint = '', value = '', confirm: confi
     input.select();
   });
 }
-
-function el(tag, text, className) {
-  const e = document.createElement(tag);
-  if (text != null) e.textContent = text;
-  if (className) e.className = className;
-  return e;
-}
-
 let stylesInjected = false;
 /**
  * One stylesheet for one component. Injected rather than written into index.html because the

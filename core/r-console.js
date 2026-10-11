@@ -14,6 +14,8 @@
  * terminal. Output is R-generated text, inserted as text nodes (no HTML).
  */
 
+import { el } from './plugin-stdlib.js';
+
 export class RConsole {
   #host;
   #webr;
@@ -179,12 +181,12 @@ export class RConsole {
       ? meta.filter((m) => m.name.toLowerCase().includes(q) || (m.label || '').toLowerCase().includes(q))
       : meta;
     if (!meta.length) {
-      this.#varsBox.append(el('span', 'No data loaded.', 'rc-vars__empty'));
+      this.#varsBox.append(el('span', { text: 'No data loaded.', class: 'rc-vars__empty' }));
     } else if (!shown.length) {
-      this.#varsBox.append(el('span', 'No variables match the filter.', 'rc-vars__empty'));
+      this.#varsBox.append(el('span', { text: 'No variables match the filter.', class: 'rc-vars__empty' }));
     } else {
       for (const m of shown) {
-        const label = el('label', null, 'rc-var');
+        const label = el('label', { class: 'rc-var' });
         const cb = document.createElement('input');
         cb.type = 'checkbox';
         cb.value = m.name;
@@ -194,7 +196,7 @@ export class RConsole {
           else this.#checked.delete(m.name);
           this.#rebind();
         });
-        label.append(cb, el('span', m.label || m.name));
+        label.append(cb, el('span', { text: m.label || m.name }));
         label.title = m.label ? `${m.label} (${m.name})` : m.name;
         this.#varsBox.append(label);
       }
@@ -321,7 +323,7 @@ export class RConsole {
   /** Append a text block just above the prompt (so the prompt stays inline, right
    * after the latest output) and scroll to it. */
   #append(text, cls) {
-    const div = el('div', text, cls);
+    const div = el('div', { text: text, class: cls });
     if (cls === 'rc-cmd') div.textContent = `> ${text}`;
     this.#term.insertBefore(div, this.#prompt);
     this.#term.scrollTop = this.#term.scrollHeight;
@@ -337,11 +339,4 @@ export class RConsole {
     this.#term.insertBefore(canvas, this.#prompt);
     this.#term.scrollTop = this.#term.scrollHeight;
   }
-}
-
-function el(tag, text, cls) {
-  const e = document.createElement(tag);
-  if (text != null) e.textContent = text;
-  if (cls) e.className = cls;
-  return e;
 }

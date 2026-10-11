@@ -360,6 +360,7 @@ let _ws = null; // module-level workspace state (fresh per iframe mount)
 
 export const workspace = {
   async mount(app, root) {
+    el = app.std?.el ?? el; // upgrade the module binding to the host's one helper
     _ws = {
       features: [], regionKeys: [], pathEls: [],
       keyProp: null, dataColumn: null, shadeColumn: null,
@@ -397,19 +398,19 @@ export const workspace = {
     document.adoptedStyleSheets = [sheet];
 
     root.innerHTML = '';
-    const mapPane = el('div', 'map-pane');
+    const mapPane = el('div', { class: 'map-pane' });
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('viewBox', '0 0 800 500');
     svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
     _ws.svgEl = svg;
     mapPane.append(svg);
-    const status = el('div', 'status');
+    const status = el('div', { class: 'status' });
     status.textContent = 'Load a GeoJSON boundary file to begin.';
     _ws.statusEl = status;
     mapPane.append(status);
 
-    const listPane = el('div', 'list-pane');
-    const listHeader = el('div', 'list-header');
+    const listPane = el('div', { class: 'list-pane' });
+    const listHeader = el('div', { class: 'list-header' });
     const title = document.createElement('strong');
     title.textContent = 'Regions';
     const btnAll = document.createElement('button');
@@ -419,7 +420,7 @@ export const workspace = {
     btnNone.className = 'sm'; btnNone.textContent = 'None';
     btnNone.addEventListener('click', () => wsSelectAll(false));
     listHeader.append(title, btnAll, btnNone);
-    const listBody = el('div', 'list-body');
+    const listBody = el('div', { class: 'list-body' });
     _ws.listEl = listBody;
     listPane.append(listHeader, listBody);
     root.append(mapPane, listPane);
@@ -896,11 +897,20 @@ export async function exportMap() {
 
 // --- workspace rendering helpers ---------------------------------------------
 
-function el(tag, className) {
+/**
+ * The host's element helper, once mount() has one; this shape until then.
+ *
+ * A binding rather than a declaration because this sits at module scope, where `app`
+ * does not exist — mount() assigns `app.std.el` over it. The signature is the stdlib's
+ * either way, so no call site can tell which it got, and a build that fails to serve
+ * the stdlib still draws its map.
+ */
+let el = (tag, opts = {}) => {
   const e = document.createElement(tag);
-  if (className) e.className = className;
+  if (opts.class) e.className = opts.class;
+  if (opts.text != null) e.textContent = String(opts.text);
   return e;
-}
+};
 
 function wsRenderMap() {
   const svg = _ws.svgEl;
@@ -937,12 +947,12 @@ function wsRenderList() {
   const sorted = _ws.regionKeys.map((k, i) => ({ key: k, idx: i }))
     .sort((a, b) => a.key.localeCompare(b.key, undefined, { numeric: true }));
   for (const { key, idx } of sorted) {
-    const row = el('label', 'region-row');
+    const row = el('label', { class: 'region-row' });
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.checked = _ws.selected.has(key);
     cb.addEventListener('change', () => wsToggleRegion(key));
-    const swatch = el('span', 'swatch');
+    const swatch = el('span', { class: 'swatch' });
     swatch.style.background = _ws.pathEls[idx]?.getAttribute('fill') || '#d5dbe2';
     swatch.dataset.idx = idx;
     const lbl = document.createElement('span');
@@ -1028,7 +1038,7 @@ function wsRebuildSetLinks(app, sets) {
   const old = _ws.root.querySelector('.set-links');
   if (old) old.remove();
   if (sets.length < 2) return;
-  const links = el('div', 'set-links');
+  const links = el('div', { class: 'set-links' });
   links.textContent = 'Switch boundaries: ';
   for (let i = 0; i < sets.length; i++) {
     if (i > 0) links.append(document.createTextNode(' · '));

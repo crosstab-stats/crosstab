@@ -38,6 +38,7 @@
  */
 
 import { getEncryptionPolicy, setEncryptionPolicy } from './at-rest.js';
+import { el } from './plugin-stdlib.js';
 
 /** Tabs, in order. The project is first because it is what a reader came to change. */
 export const ENC_TABS = Object.freeze([
@@ -92,14 +93,6 @@ export function projectEncryptionOffer(state) {
     actions: [{ id: 'protect', label: 'Set a passphrase…' }],
   };
 }
-
-const el = (tag, cls, text) => {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  if (text != null) e.textContent = text;
-  return e;
-};
-
 /**
  * Show the encryption dialog.
  *
@@ -126,11 +119,11 @@ export async function showEncryptionSettings({ projects = null, tab = 'project' 
   return new Promise((resolve) => {
     const dialog = document.createElement('dialog');
     dialog.className = 'ct-dialog ct-encset';
-    const shell = el('div', 'ct-dialog__form');
-    const tabBar = el('div', 'ctpm__tabs');
-    const body = el('div', 'ct-encset__body');
-    const footer = el('menu', 'ct-dialog__buttons');
-    const done = el('button', 'ct-dialog__primary', 'Done');
+    const shell = el('div', { class: 'ct-dialog__form' });
+    const tabBar = el('div', { class: 'ctpm__tabs' });
+    const body = el('div', { class: 'ct-encset__body' });
+    const footer = el('menu', { class: 'ct-dialog__buttons' });
+    const done = el('button', { class: 'ct-dialog__primary', text: 'Done' });
     done.type = 'button';
     done.addEventListener('click', () => dialog.close());
     footer.append(done);
@@ -143,12 +136,12 @@ export async function showEncryptionSettings({ projects = null, tab = 'project' 
 
     const renderProject = () => {
       const offer = projectEncryptionOffer(state);
-      body.append(el('p', 'ct-encset__status', offer.status));
-      body.append(el('p', 'ct-encset__sub', offer.detail));
+      body.append(el('p', { class: 'ct-encset__status', text: offer.status }));
+      body.append(el('p', { class: 'ct-encset__sub', text: offer.detail }));
       if (offer.actions.length) {
-        const row = el('div', 'ct-encset__actions');
+        const row = el('div', { class: 'ct-encset__actions' });
         for (const a of offer.actions) {
-          const b = el('button', `proj__add${a.danger ? ' is-danger' : ''}`, a.label);
+          const b = el('button', { class: `proj__add${a.danger ? ' is-danger' : ''}`, text: a.label });
           b.type = 'button';
           b.addEventListener('click', () => {
             if (a.id === 'protect') run(projects.protectProject);
@@ -159,15 +152,14 @@ export async function showEncryptionSettings({ projects = null, tab = 'project' 
         }
         body.append(row);
       }
-      body.append(el('p', 'ct-dialog__warning ct-encset__warn',
-        '⚠ No recovery: a forgotten passphrase can’t be reset by anyone, and the project can’t be '
+      body.append(el('p', { class: 'ct-dialog__warning ct-encset__warn', text: '⚠ No recovery: a forgotten passphrase can’t be reset by anyone, and the project can’t be '
         + 'opened without it. Protection covers data at rest — it does not protect a project while '
-        + 'it’s open in an unlocked session.'));
+        + 'it’s open in an unlocked session.' }));
     };
 
     const renderDefaults = () => {
       const policy = getEncryptionPolicy();
-      const label = el('label', 'ct-encset__row');
+      const label = el('label', { class: 'ct-encset__row' });
       const box = document.createElement('input');
       box.type = 'checkbox';
       box.className = 'ct-encset__local';
@@ -176,27 +168,24 @@ export async function showEncryptionSettings({ projects = null, tab = 'project' 
       box.addEventListener('change', () => setEncryptionPolicy({ local: box.checked }));
       const text = el('span');
       text.append(
-        el('span', 'ct-encset__label', 'Encrypt new projects on this device by default'),
-        el('span', 'ct-encset__sub',
-          'When on, each new project asks you to set its own passphrase. The data is then stored '
-          + 'encrypted in this browser. You’ll need the passphrase to open it.'),
+        el('span', { class: 'ct-encset__label', text: 'Encrypt new projects on this device by default' }),
+        el('span', { class: 'ct-encset__sub', text: 'When on, each new project asks you to set its own passphrase. The data is then stored '
+          + 'encrypted in this browser. You’ll need the passphrase to open it.' }),
       );
       label.append(box, text);
       body.append(label);
       // The scope disclaimer is the load-bearing sentence on this tab: it is the one
       // thing that stops the switch reading as "protect what I am looking at".
-      body.append(el('p', 'ct-encset__scope',
-        'This changes what happens to projects you make from now on. It does not protect, '
-        + 'unprotect or alter any project that already exists — for those, use the “This project” tab.'));
-      body.append(el('p', 'ct-encset__note',
-        'Files you export and projects you move to a folder are encrypted by default already — you '
-        + 'choose per file/folder whether to set a passphrase or leave it unprotected at that moment.'));
+      body.append(el('p', { class: 'ct-encset__scope', text: 'This changes what happens to projects you make from now on. It does not protect, '
+        + 'unprotect or alter any project that already exists — for those, use the “This project” tab.' }));
+      body.append(el('p', { class: 'ct-encset__note', text: 'Files you export and projects you move to a folder are encrypted by default already — you '
+        + 'choose per file/folder whether to set a passphrase or leave it unprotected at that moment.' }));
     };
 
     const render = () => {
       tabBar.replaceChildren();
       for (const t of ENC_TABS) {
-        const b = el('button', `ctpm__tab${t.id === active ? ' is-active' : ''}`, t.label);
+        const b = el('button', { class: `ctpm__tab${t.id === active ? ' is-active' : ''}`, text: t.label });
         b.type = 'button';
         b.addEventListener('click', () => { active = t.id; render(); });
         tabBar.append(b);
@@ -206,7 +195,7 @@ export async function showEncryptionSettings({ projects = null, tab = 'project' 
       else renderDefaults();
     };
 
-    shell.append(el('h2', 'ct-dialog__title', 'Encryption settings'), tabBar, body, footer);
+    shell.append(el('h2', { class: 'ct-dialog__title', text: 'Encryption settings' }), tabBar, body, footer);
     injectStyles();
     dialog.append(shell);
     dialog.addEventListener('close', () => { dialog.remove(); resolve(); });

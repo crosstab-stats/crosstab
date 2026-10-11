@@ -83,24 +83,33 @@ export const workspace = {
     } catch {
       const s = document.createElement('style'); s.textContent = STYLES; document.head.append(s);
     }
-    const el = (t, c) => { const e = document.createElement(t); if (c) e.className = c; return e; };
+    // The host's helper (app.std.el), which takes an options object. Positional was the
+    // problem: four copies of this across the app, two taking the same arguments in
+    // opposite order. The fallback keeps the workspace alive on a build that failed to
+    // serve the stdlib.
+    const el = app.std?.el ?? ((tag, opts = {}) => {
+      const e = document.createElement(tag);
+      if (opts.class) e.className = opts.class;
+      if (opts.text != null) e.textContent = String(opts.text);
+      return e;
+    });
     const inputCell = (value, type, onInput, cls) => {
-      const td = el('td', cls);
+      const td = el('td', { class: cls });
       const inp = el('input'); inp.type = type; inp.value = value ?? '';
       inp.addEventListener('input', () => onInput(inp.value));
       td.append(inp); return td;
     };
     root.textContent = '';
 
-    const wrap = el('div', 'ds');
-    const bar = el('div', 'ds__bar');
+    const wrap = el('div', { class: 'ds' });
+    const bar = el('div', { class: 'ds__bar' });
     const lab = el('label'); lab.textContent = 'Tool:';
     const sel = el('select');
     for (const [v, label] of TOOLS) { const o = el('option'); o.value = v; o.textContent = label; sel.append(o); }
     sel.value = state.tool;
     sel.addEventListener('change', () => { state.tool = sel.value; save(); render(); });
     bar.append(lab, sel);
-    const body = el('div', 'ds__body');
+    const body = el('div', { class: 'ds__body' });
     wrap.append(bar, body);
     root.append(wrap);
 
@@ -111,11 +120,11 @@ export const workspace = {
     function renderICER() {
       body.textContent = '';
       const t = state.icer;
-      const hint = el('p', 'ds__hint');
+      const hint = el('p', { class: 'ds__hint' });
       hint.textContent = 'Enter each option’s total cost and effect (e.g. QALYs). Computes the cost-effectiveness frontier and the incremental cost-effectiveness ratio (ICER) of each non-dominated option vs the next-cheaper one, judged against your willingness-to-pay.';
       body.append(hint);
 
-      const wtpRow = el('div', 'ds__row');
+      const wtpRow = el('div', { class: 'ds__row' });
       const wl = el('label'); wl.textContent = 'Willingness-to-pay per unit effect:';
       const wi = el('input'); wi.type = 'number'; wi.value = t.wtp; wi.style.width = '140px';
       wi.addEventListener('input', () => { t.wtp = num(wi.value) ?? 0; save(); });
@@ -132,17 +141,17 @@ export const workspace = {
         tr.append(inputCell(r.name, 'text', (v) => { r.name = v; save(); }));
         tr.append(inputCell(r.cost, 'number', (v) => { r.cost = v; save(); }, 'num'));
         tr.append(inputCell(r.effect, 'number', (v) => { r.effect = v; save(); }, 'num'));
-        const dtd = el('td'); const del = el('button', 'del'); del.textContent = '✕'; del.setAttribute('aria-label', 'Remove this option'); del.title = 'Remove this option';
+        const dtd = el('td'); const del = el('button', { class: 'del' }); del.textContent = '✕'; del.setAttribute('aria-label', 'Remove this option'); del.title = 'Remove this option';
         del.addEventListener('click', () => { t.rows.splice(i, 1); save(); renderICER(); });
         dtd.append(del); tr.append(dtd); tb.append(tr);
       });
       table.append(tb); body.append(table);
 
-      const add = el('button', 'ds__btn'); add.textContent = '＋ Add option';
+      const add = el('button', { class: 'ds__btn' }); add.textContent = '＋ Add option';
       add.addEventListener('click', () => { t.rows.push({ name: '', cost: '', effect: '' }); save(); renderICER(); });
-      const go = el('button', 'ds__btn ds__btn--go'); go.textContent = 'Compute → Output';
+      const go = el('button', { class: 'ds__btn ds__btn--go' }); go.textContent = 'Compute → Output';
       go.addEventListener('click', () => runICER());
-      const actions = el('div', 'ds__row'); actions.append(add, go); body.append(actions);
+      const actions = el('div', { class: 'ds__row' }); actions.append(add, go); body.append(actions);
     }
 
     async function runICER() {
@@ -166,7 +175,7 @@ export const workspace = {
     function renderMatrix() {
       body.textContent = '';
       const m = state.matrix;
-      const hint = el('p', 'ds__hint');
+      const hint = el('p', { class: 'ds__hint' });
       hint.textContent = 'Score each option against weighted criteria. The recommendation is the weighted average score (weights are normalised), ranked high-to-low.';
       body.append(hint);
 
@@ -182,12 +191,12 @@ export const workspace = {
         nameTd.querySelector('input').addEventListener('blur', renderMatrix);
         tr.append(nameTd);
         tr.append(inputCell(c.weight, 'number', (v) => { c.weight = v; save(); }, 'num'));
-        const dtd = el('td'); const del = el('button', 'del'); del.textContent = '✕'; del.setAttribute('aria-label', 'Remove this criterion'); del.title = 'Remove this criterion';
+        const dtd = el('td'); const del = el('button', { class: 'del' }); del.textContent = '✕'; del.setAttribute('aria-label', 'Remove this criterion'); del.title = 'Remove this criterion';
         del.addEventListener('click', () => { m.criteria.splice(i, 1); for (const o of m.options) o.scores.splice(i, 1); save(); renderMatrix(); });
         dtd.append(del); tr.append(dtd); ctb.append(tr);
       });
       ct.append(ctb); body.append(ct);
-      const addC = el('button', 'ds__btn'); addC.textContent = '＋ Add criterion';
+      const addC = el('button', { class: 'ds__btn' }); addC.textContent = '＋ Add criterion';
       addC.addEventListener('click', () => { m.criteria.push({ name: '', weight: 1 }); save(); renderMatrix(); });
       body.append(addC);
 
@@ -203,16 +212,16 @@ export const workspace = {
         m.criteria.forEach((c, ci) => {
           tr.append(inputCell(o.scores[ci], 'number', (v) => { o.scores[ci] = v; save(); }, 'num'));
         });
-        const dtd = el('td'); const del = el('button', 'del'); del.textContent = '✕'; del.setAttribute('aria-label', 'Remove this option'); del.title = 'Remove this option';
+        const dtd = el('td'); const del = el('button', { class: 'del' }); del.textContent = '✕'; del.setAttribute('aria-label', 'Remove this option'); del.title = 'Remove this option';
         del.addEventListener('click', () => { m.options.splice(oi, 1); save(); renderMatrix(); });
         dtd.append(del); tr.append(dtd); otb.append(tr);
       });
       ot.append(otb); body.append(ot);
-      const addO = el('button', 'ds__btn'); addO.textContent = '＋ Add option';
+      const addO = el('button', { class: 'ds__btn' }); addO.textContent = '＋ Add option';
       addO.addEventListener('click', () => { m.options.push({ name: '', scores: [] }); save(); renderMatrix(); });
-      const go = el('button', 'ds__btn ds__btn--go'); go.textContent = 'Compute → Output';
+      const go = el('button', { class: 'ds__btn ds__btn--go' }); go.textContent = 'Compute → Output';
       go.addEventListener('click', () => runMatrix());
-      const actions = el('div', 'ds__row'); actions.append(addO, go); body.append(actions);
+      const actions = el('div', { class: 'ds__row' }); actions.append(addO, go); body.append(actions);
     }
 
     async function runMatrix() {
@@ -232,10 +241,10 @@ export const workspace = {
       body.append(viewToggle('npv', renderNPV));
       if (state.sens.npv.view === 'sens') { renderSensFor('npv', renderNPV); return; }
       const t = state.npv;
-      const hint = el('p', 'ds__hint');
+      const hint = el('p', { class: 'ds__hint' });
       hint.textContent = 'Enter cost and benefit per period (period 0 = today). Future flows are discounted at your rate; reports NPV, benefit-cost ratio, and the discounted payback period.';
       body.append(hint);
-      const rRow = el('div', 'ds__row');
+      const rRow = el('div', { class: 'ds__row' });
       const rl = el('label'); rl.textContent = 'Discount rate (%):';
       const ri = el('input'); ri.type = 'number'; ri.value = t.rate; ri.style.width = '100px';
       ri.addEventListener('input', () => { t.rate = num(ri.value) ?? 0; save(); });
@@ -249,16 +258,16 @@ export const workspace = {
         const ptd = el('td'); ptd.textContent = String(i); tr.append(ptd);
         tr.append(inputCell(r.cost, 'number', (v) => { r.cost = v; save(); }, 'num'));
         tr.append(inputCell(r.benefit, 'number', (v) => { r.benefit = v; save(); }, 'num'));
-        const dtd = el('td'); const del = el('button', 'del'); del.textContent = '✕'; del.setAttribute('aria-label', 'Remove this row'); del.title = 'Remove this row';
+        const dtd = el('td'); const del = el('button', { class: 'del' }); del.textContent = '✕'; del.setAttribute('aria-label', 'Remove this row'); del.title = 'Remove this row';
         del.addEventListener('click', () => { t.rows.splice(i, 1); save(); renderNPV(); });
         dtd.append(del); tr.append(dtd); tb.append(tr);
       });
       table.append(tb); body.append(table);
-      const add = el('button', 'ds__btn'); add.textContent = '＋ Add period';
+      const add = el('button', { class: 'ds__btn' }); add.textContent = '＋ Add period';
       add.addEventListener('click', () => { t.rows.push({ cost: '', benefit: '' }); save(); renderNPV(); });
-      const go = el('button', 'ds__btn ds__btn--go'); go.textContent = 'Compute → Output';
+      const go = el('button', { class: 'ds__btn ds__btn--go' }); go.textContent = 'Compute → Output';
       go.addEventListener('click', () => runNPV());
-      const a = el('div', 'ds__row'); a.append(add, go); body.append(a);
+      const a = el('div', { class: 'ds__row' }); a.append(add, go); body.append(a);
     }
     async function runNPV() {
       const t = state.npv; const res = computeNPV(t.rows, t.rate);
@@ -275,7 +284,7 @@ export const workspace = {
       body.append(viewToggle('ev', renderEV));
       if (state.sens.ev.view === 'sens') { renderSensFor('ev', renderEV); return; }
       const m = state.ev;
-      const hint = el('p', 'ds__hint');
+      const hint = el('p', { class: 'ds__hint' });
       hint.textContent = 'List scenarios with probabilities, then each option’s payoff under each. Computes expected value (probabilities normalised), worst case (maximin), and maximum regret (minimax-regret).';
       body.append(hint);
       body.append(Object.assign(el('h3'), { textContent: 'Scenarios' }));
@@ -288,12 +297,12 @@ export const workspace = {
         nameTd.querySelector('input').addEventListener('blur', renderEV);
         tr.append(nameTd);
         tr.append(inputCell(s.prob, 'number', (v) => { s.prob = v; save(); }, 'num'));
-        const dtd = el('td'); const del = el('button', 'del'); del.textContent = '✕'; del.setAttribute('aria-label', 'Remove this scenario'); del.title = 'Remove this scenario';
+        const dtd = el('td'); const del = el('button', { class: 'del' }); del.textContent = '✕'; del.setAttribute('aria-label', 'Remove this scenario'); del.title = 'Remove this scenario';
         del.addEventListener('click', () => { m.scenarios.splice(i, 1); for (const o of m.options) o.payoffs.splice(i, 1); save(); renderEV(); });
         dtd.append(del); tr.append(dtd); stb.append(tr);
       });
       st.append(stb); body.append(st);
-      const addS = el('button', 'ds__btn'); addS.textContent = '＋ Add scenario';
+      const addS = el('button', { class: 'ds__btn' }); addS.textContent = '＋ Add scenario';
       addS.addEventListener('click', () => { m.scenarios.push({ name: '', prob: '' }); save(); renderEV(); });
       body.append(addS);
       body.append(Object.assign(el('h3'), { textContent: 'Options & payoffs' }));
@@ -304,16 +313,16 @@ export const workspace = {
       m.options.forEach((o, oi) => {
         const tr = el('tr'); tr.append(inputCell(o.name, 'text', (v) => { o.name = v; save(); }));
         m.scenarios.forEach((s, si) => { tr.append(inputCell(o.payoffs[si], 'number', (v) => { o.payoffs[si] = v; save(); }, 'num')); });
-        const dtd = el('td'); const del = el('button', 'del'); del.textContent = '✕'; del.setAttribute('aria-label', 'Remove this option'); del.title = 'Remove this option';
+        const dtd = el('td'); const del = el('button', { class: 'del' }); del.textContent = '✕'; del.setAttribute('aria-label', 'Remove this option'); del.title = 'Remove this option';
         del.addEventListener('click', () => { m.options.splice(oi, 1); save(); renderEV(); });
         dtd.append(del); tr.append(dtd); otb.append(tr);
       });
       ot.append(otb); body.append(ot);
-      const addO = el('button', 'ds__btn'); addO.textContent = '＋ Add option';
+      const addO = el('button', { class: 'ds__btn' }); addO.textContent = '＋ Add option';
       addO.addEventListener('click', () => { m.options.push({ name: '', payoffs: [] }); save(); renderEV(); });
-      const go = el('button', 'ds__btn ds__btn--go'); go.textContent = 'Compute → Output';
+      const go = el('button', { class: 'ds__btn ds__btn--go' }); go.textContent = 'Compute → Output';
       go.addEventListener('click', () => runEV());
-      const a = el('div', 'ds__row'); a.append(addO, go); body.append(a);
+      const a = el('div', { class: 'ds__row' }); a.append(addO, go); body.append(a);
     }
     async function runEV() {
       const m = state.ev; const res = computeEV(m.scenarios, m.options);
@@ -333,12 +342,12 @@ export const workspace = {
       body.append(viewToggle('tree', renderTree));
       if (state.sens.tree.view === 'sens') { renderSensFor('tree', renderTree); return; }
       const t = state.tree;
-      const hint = el('p', 'ds__hint');
+      const hint = el('p', { class: 'ds__hint' });
       hint.textContent = 'Build the tree as an outline: ▢ decision (pick the best branch), ○ chance (probability-weighted), △ terminal (a payoff). Put a probability on each child of a chance node. “Compute” folds back the expected value, the optimal choice, and a tree diagram.';
       body.append(hint);
       const treeBox = el('div'); body.append(treeBox);
       const drawNode = (node, parent, idx, parentKind, depth) => {
-        const row = el('div', 'ds__row'); row.style.marginLeft = depth * 22 + 'px';
+        const row = el('div', { class: 'ds__row' }); row.style.marginLeft = depth * 22 + 'px';
         const kindSel = el('select');
         for (const [v, l] of [['decision', '▢ decision'], ['chance', '○ chance'], ['terminal', '△ terminal']]) { const o = el('option'); o.value = v; o.textContent = l; kindSel.append(o); }
         kindSel.value = node.kind;
@@ -359,12 +368,12 @@ export const workspace = {
           vi.addEventListener('input', () => { node.payoff = vi.value; save(); });
           row.append(vl, vi);
         } else {
-          const addb = el('button', 'ds__btn'); addb.textContent = '＋ child'; addb.style.padding = '2px 7px';
+          const addb = el('button', { class: 'ds__btn' }); addb.textContent = '＋ child'; addb.style.padding = '2px 7px';
           addb.addEventListener('click', () => { (node.children ||= []).push({ id: uid(), kind: 'terminal', label: '', payoff: 0, prob: '', children: [] }); save(); renderTree(); });
           row.append(addb);
         }
         if (parent) {
-          const del = el('button', 'del'); del.textContent = '✕'; del.setAttribute('aria-label', 'Remove this branch'); del.title = 'Remove this branch';
+          const del = el('button', { class: 'del' }); del.textContent = '✕'; del.setAttribute('aria-label', 'Remove this branch'); del.title = 'Remove this branch';
           del.addEventListener('click', () => { parent.children.splice(idx, 1); save(); renderTree(); });
           row.append(del);
         }
@@ -372,7 +381,7 @@ export const workspace = {
         if (node.kind !== 'terminal') (node.children || []).forEach((c, i) => drawNode(c, node, i, node.kind, depth + 1));
       };
       drawNode(t.root, null, 0, null, 0);
-      const go = el('button', 'ds__btn ds__btn--go'); go.textContent = 'Compute → Output'; go.style.marginTop = '10px';
+      const go = el('button', { class: 'ds__btn ds__btn--go' }); go.textContent = 'Compute → Output'; go.style.marginTop = '10px';
       go.addEventListener('click', () => runTree());
       body.append(go);
     }
@@ -394,9 +403,9 @@ export const workspace = {
     // A segmented Build | Sensitivity switch for the model tools that support it.
     function viewToggle(modelKey, rerender) {
       const cfg = state.sens[modelKey];
-      const seg = el('div', 'ds__seg');
+      const seg = el('div', { class: 'ds__seg' });
       for (const [v, l] of [['build', 'Build'], ['sens', 'Sensitivity']]) {
-        const b = el('button', 'ds__segbtn' + (cfg.view === v ? ' is-on' : ''));
+        const b = el('button', { class: 'ds__segbtn' + (cfg.view === v ? ' is-on' : '') });
         b.textContent = l;
         b.addEventListener('click', () => { if (cfg.view !== v) { cfg.view = v; save(); rerender(); } });
         seg.append(b);
@@ -410,7 +419,7 @@ export const workspace = {
     function renderSensFor(modelKey, rerender) {
       const cfg = state.sens[modelKey];
       const model = SENS_MODELS[modelKey];
-      const hint = el('p', 'ds__hint');
+      const hint = el('p', { class: 'ds__hint' });
       hint.textContent = 'Vary one input and watch the result move — this is where a decision earns trust. One-way traces the outcome across a range and marks the break-even threshold + where the recommendation flips; Tornado ranks every input by how much it swings the result. Drag the slider for a live read; “Send to Output” snapshots the chart.';
       body.append(hint);
 
@@ -418,7 +427,7 @@ export const workspace = {
       if (!params.some((p) => p.key === cfg.param)) cfg.param = params[0]?.key || '';
       const param = params.find((p) => p.key === cfg.param) || params[0];
 
-      const row1 = el('div', 'ds__row');
+      const row1 = el('div', { class: 'ds__row' });
       const tl = el('label'); tl.textContent = 'Mode:';
       const modeSel = el('select');
       for (const [v, l] of [['oneway', 'One-way (line)'], ['tornado', 'Tornado']]) { const o = el('option'); o.value = v; o.textContent = l; modeSel.append(o); }
@@ -427,10 +436,10 @@ export const workspace = {
       row1.append(tl, modeSel);
       body.append(row1);
 
-      if (!param) { const e = el('p', 'ds__hint'); e.textContent = 'Add inputs in the Build view first.'; body.append(e); return; }
+      if (!param) { const e = el('p', { class: 'ds__hint' }); e.textContent = 'Add inputs in the Build view first.'; body.append(e); return; }
 
       const chart = el('div'); chart.style.cssText = 'margin: 10px 0; overflow: auto;';
-      const summary = el('div', 'ds__hint'); summary.style.marginTop = '0';
+      const summary = el('div', { class: 'ds__hint' }); summary.style.marginTop = '0';
       // TWO renderings of one exploration, on purpose. `currentSvg` is the INSTRUMENT: it
       // redraws on every slider frame and carries a live marker for where the parameter sits
       // right now. `currentModel()` is the FIGURE that "Send to Output" publishes — a chart
@@ -443,7 +452,7 @@ export const workspace = {
       let currentModel = () => null;
 
       if (cfg.mode === 'tornado') {
-        const sp = el('div', 'ds__row');
+        const sp = el('div', { class: 'ds__row' });
         const spl = el('label'); spl.textContent = 'Vary each input by ±%:';
         const spi = el('input'); spi.type = 'number'; spi.value = Math.round((cfg.spread ?? 0.5) * 100); spi.style.width = '80px';
         const baseline = model.evalAt(state, param.key, param.base).y;
@@ -460,7 +469,7 @@ export const workspace = {
         sp.append(spl, spi); body.append(sp, chart, summary);
         redrawT();
       } else {
-        const r2 = el('div', 'ds__row');
+        const r2 = el('div', { class: 'ds__row' });
         const pl = el('label'); pl.textContent = 'Parameter:';
         const paramSel = el('select');
         for (const p of params) { const o = el('option'); o.value = p.key; o.textContent = p.label; paramSel.append(o); }
@@ -470,14 +479,14 @@ export const workspace = {
 
         const base = param.base;
         if (cfg.lo == null || cfg.hi == null) { const span = base === 0 ? 1 : Math.abs(base) * 0.5; cfg.lo = base - span; cfg.hi = base + span; }
-        const r3 = el('div', 'ds__row');
+        const r3 = el('div', { class: 'ds__row' });
         const lol = el('label'); lol.textContent = 'From:';
         const loi = el('input'); loi.type = 'number'; loi.value = cfg.lo; loi.style.width = '90px';
         const hil = el('label'); hil.textContent = 'To:';
         const hii = el('input'); hii.type = 'number'; hii.value = cfg.hi; hii.style.width = '90px';
         r3.append(lol, loi, hil, hii); body.append(r3);
 
-        const r4 = el('div', 'ds__row');
+        const r4 = el('div', { class: 'ds__row' });
         const slider = el('input'); slider.type = 'range'; slider.style.flex = '1';
         const readout = el('span'); readout.style.minWidth = '210px';
         r4.append(slider, readout); body.append(r4, chart, summary);
@@ -511,7 +520,7 @@ export const workspace = {
         setBounds(); slider.value = String(base); redraw();
       }
 
-      const go = el('button', 'ds__btn ds__btn--go'); go.textContent = 'Send to Output'; go.style.marginTop = '10px';
+      const go = el('button', { class: 'ds__btn ds__btn--go' }); go.textContent = 'Send to Output'; go.style.marginTop = '10px';
       go.addEventListener('click', async () => {
         const figure = currentModel(); // not `chart`: that name is the live preview container
         if (!figure) return;
