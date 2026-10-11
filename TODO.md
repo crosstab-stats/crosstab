@@ -10,84 +10,110 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
-- [ ] **A plugin stdlib — the shared vocabulary stops at the sandbox boundary (owner,
-      2026-10-10).** Filed out of the duplication audit, which fixed the core half and
-      could not fix this one.
+- [ ] **Plugin stdlib, part 1: the UTILITY library (owner, 2026-10-10).** The smaller half,
+      and the one to do first — small, versionable, low blast radius.
 
-      **The problem, concretely.** A plugin runs in a sandboxed iframe and cannot import
-      from `core/`. So every helper core now shares, a plugin must still write out:
+      **Why it exists.** A plugin runs in a sandboxed iframe and cannot import from `core/`,
+      so every helper core shares, a plugin writes out again. The duplication audit found our
+      OWN plugins proving the point:
 
-      - `filenameFor()` is **byte-identical in three places** — `core/output-export.js`,
+      - `filenameFor()` **byte-identical in three places** — `core/output-export.js`,
         `builtin-docx-export`, `builtin-html-export`.
-      - HTML escaping: `builtin-html-export` had the **attribute-unsafe** version and was
-        interpolating it into `src="…"` and `alt="…"` of a file people then share. Fixed
-        in place 2026-10-10, but only because someone looked. `builtin-caqdas` carries two
-        more copies (`&<>"` — safe for double-quoted attributes, no `'`), and
-        `builtin-decisions` a third.
-      - `esc`/`el` shapes recur across most plugins that build any markup.
+      - HTML escaping: `builtin-html-export` had the **attribute-unsafe** version feeding
+        `src` and `alt` of a file people SHARE (fixed in place 2026-10-10, but only because
+        someone looked). `builtin-caqdas` carries two more copies, `builtin-decisions` a third.
+      - `el()`: **509 call sites, four signatures**, two of which take the same three
+        arguments in opposite order — detail below.
 
-      **Why this is not just tidiness.** The audit's finding was that duplicates drift
-      silently and the drift is invisible until someone reads all the copies — and the two
-      worst instances were both in ESCAPING, where the drift is a security property. Core
-      now has one `escapeHtml` and a test that fails if a fourteenth copy appears. Plugins
-      have no such floor, and third-party plugins never will unless we give them one.
+      **Contents, in order of how clearly they qualify.** The bar is "every caller wants the
+      same answer, and a divergent copy is a defect" — not "more than one caller needs it".
 
-      **The precedent already exists.** `core/charts/stdlib.js` is shipped AS SOURCE into
-      the sandbox for chart kinds (#131) — the mechanism is proven, it is just scoped to
-      drawing. The question is whether a second, general module rides the same path.
-
-      **The discussion to have before building it — what goes in?** The charter matters
-      more than the code, because a plugin stdlib is a PUBLIC API: third-party plugins will
-      pin to it, so anything added is close to permanent, and anything wrong is a breaking
-      change. Candidates, roughly in order of how clearly they qualify:
-
-      1. **`escapeHtml`** — unambiguous. Every caller wants the same answer and the wrong
-         answer is a vulnerability.
-      2. **`filenameFor` / slug** — three identical copies already; the only argument
-         against is that an exporter might want its own naming, which it can still do.
-      3. **`stripEllipsis`, number/date formatting** — the "one voice" argument from the
-         project-metadata work. Formatting is where an app's voice actually lives.
-      4. **`el()` DOM helper — YES, and it is the sharpest case of the three** (revised
-         2026-10-10 after actually counting; the first draft of this entry ranked it as the
-         doubtful one, on the assumption that three lines cannot hurt anyone).
-
-         **509 call sites**, and FOUR signatures — two of which take the same three
-         arguments in opposite order:
+      1. **escapeHtml** — unambiguous: the wrong answer is a vulnerability.
+      2. **filenameFor / slug** — three identical copies already.
+      3. **Formatters** (rows(5456) gives "5,456 rows"; when(ts) gives "3 days ago"; the
+         missing dash). Pure functions, no DOM, no host state. This is where the app's VOICE
+         lives: the host says *3 days ago · 2 datasets, 5,456 rows* and a plugin writing its
+         own panel can currently only guess at matching it.
+      4. **el() — yes, and it is the sharpest case** (revised after counting; the first draft
+         ranked it last, assuming three lines cannot hurt anyone):
 
          | spelling | where | calls |
          | --- | --- | --- |
-         | `el(tag, text, className)` | app, data-views, launcher, compute-recode | 145 |
-         | `el(tag, cls, text)` | help, encryption-settings, **builtin-caqdas** | 236 |
-         | `el(tag, className)` | builtin-spatial | 9 |
-         | `el(t, c)` | builtin-decisions | 119 |
+         | el(tag, text, className) | app, data-views, launcher, compute-recode | 145 |
+         | el(tag, cls, text) | help, encryption-settings, **builtin-caqdas** | 236 |
+         | el(tag, className) | builtin-spatial | 9 |
+         | el(t, c) | builtin-decisions | 119 |
 
-         So `el('div', 'warning', 'Careful')` yields either a div classed `warning` reading
-         "Careful", or one classed `Careful` reading "warning", depending on which file you
-         are in. **Both render, one is nonsense, nothing errors and no test fails.** Copying
-         a line between modules — the normal thing to do with a helper this small — silently
-         inverts it. There is a quieter split too: core's version always assigns
-         `textContent` (so no text CLEARS it), help's only assigns when non-null.
+         So the same call yields either a div classed `warning` reading "Careful", or one
+         classed `Careful` reading "warning", depending on which file you are in. **Both
+         render, one is nonsense, nothing errors and no test fails.** CAQDAS's 205 calls make
+         (tag, cls, text) the majority spelling across the repo — the one core mostly does not
+         use. Core's version always assigns textContent (so no text CLEARS it); help's only
+         assigns when non-null.
 
-         Note which spelling wins by weight: CAQDAS's 205 calls make `(tag, cls, text)` the
-         majority across the repo, and it is the one core mostly does not use.
+         **Ship it as an options object** — el('div', { class: 'x', text: 'y' }) — which
+         cannot be ordered wrong, is self-describing, and lets the positional copies coexist
+         during migration instead of flipping 509 sites at once. With a silent failure mode, a
+         big-bang rename is the riskiest change on either list.
+      5. **Nothing stateful or host-touching.** That is what the app.* service API is for, and
+         it crosses postMessage for a reason. sanitizeHtml stays host-side too — it is the
+         host's defence AGAINST the plugin.
 
-         **Ship it as an options object**, not a third positional order:
-         `el('div', { class: 'proj__empty', text: 'No project open' })`. It cannot be
-         ordered wrong, it is self-describing at the call site, and — the practical part —
-         it lets the existing positional copies coexist during migration instead of
-         requiring 509 sites to flip at once. With 509 calls and a SILENT failure mode, a
-         big-bang rename is the riskiest change on this list.
-      5. **Anything stateful or host-touching** — almost certainly NOT. That is what the
-         `app.*` service API is for, and it crosses postMessage for a reason.
+      **The mechanism is already proven:** `core/charts/stdlib.js` is shipped AS SOURCE into
+      the sandbox for chart kinds (#131). This rides the same path.
 
-      Open questions: how it is versioned (a plugin written against v1 running on a build
-      that ships v2); whether it is injected like the chart stdlib or fetched as a module;
-      whether built-ins and third-party plugins get the same one (they should, or the
-      built-ins are privileged in a way [[deploy-settings]] says they must not be); and
-      whether `sanitizeHtml` belongs in it or stays host-side (it is the host's defence
-      against the plugin, so: stays host-side).
+      **Open:** versioning (a plugin written against v1 on a build shipping v2); injected vs
+      fetched; and built-ins and third-party plugins must get the SAME one, or built-ins are
+      privileged in a way [[deploy-settings]] says they must not be.
+- [ ] **Plugin stdlib, part 2: the DESIGN SYSTEM — and the small-screen hole it closes
+      (owner, 2026-10-10).** The bigger commitment, and it has a forcing argument part 1
+      does not.
 
+      **Workspace plugins cannot reflow, and cannot fix it themselves.** Verified: screen
+      mode is **never sent across the boundary** (no data-screen / screenMode anywhere in the
+      broker, workspace-manager or loader), `onScreenModeChange` has **exactly one subscriber**
+      (app.js:1896 — the host re-laying-out itself), and **no plugin contains a single layout
+      @media query**; the only @media in all of plugins/ is `@media print` in html-export.
 
+      So a CAQDAS coding pane, a Spatial map or a Decisions tree lays out identically at
+      1400px and at 390px. The host reflows AROUND the iframe and the document inside it never
+      hears that anything changed. It was never going to be caught either — small-screen
+      mode's acceptance test was "enumerate every reachable COMMAND in both modes, 53 vs 53",
+      and a pane's internal layout is not a command.
+
+      **And a plugin cannot simply add its own media query**, which is what makes this a
+      stdlib problem rather than three plugin bugs. `screen-mode.js` is explicit that *no CSS
+      anywhere keys off viewport width*, because the mode is a USER'S CHOICE and not a
+      measurement — a plugin keyed to its own iframe width would override someone who
+      deliberately chose the full layout on a narrow screen, which is the exact objection the
+      whole feature was built around. **The host owns state that plugin UI needs and cannot
+      derive.** The prerequisite is therefore plumbing the mode across the boundary (at mount,
+      and on change) — not CSS.
+
+      *Not measured:* how badly a pane actually breaks at 390px. The pane is an opaque-origin
+      iframe, so the host page cannot read into its contentDocument — that needs a device or
+      devtools, not a script.
+
+      **Three ways across the boundary, increasing in strength:**
+      1. **Tokens as source** — accent/line/radius as a plain object the plugin's own CSS
+         interpolates. Same shipping mechanism as part 1, nearly free.
+      2. **A base stylesheet** the plugin injects — this is what gives real button TYPES
+         (.ct-btn, .ct-btn--danger, .ct-field, lists), and it is where small-screen awareness
+         would live: the shared elements key off the mode the host sent, so a plugin gets
+         reflow by USING them rather than by implementing it.
+      3. **Custom properties pushed in at mount**, so the host's theme reaches the pane live.
+
+      Precedent for (2): `results.getStyles()` already hands the host's canonical results
+      stylesheet to export plugins so an HTML export reproduces the look.
+
+      **The argument for going past tokens to a real stylesheet is theming.** CAQDAS hardcodes
+      #ccd2d8 borders and 6px radii by hand; those can never follow a dark mode or a
+      high-contrast setting. Latent today — visibly stale the moment the host themes.
+
+      **The caveat.** A shipped stylesheet is a public API with a sharper pinning problem than
+      the functions: change .ct-btn and every third-party plugin's buttons change underneath
+      them. That is arguably the point of a design system, but it has to be a deliberate
+      commitment rather than something that accretes.
 - [x] **DONE (2026-10-10). A project row says when it was last worked on and how big it
       is — and opening one no longer counts as working on it.**
 
