@@ -63,6 +63,7 @@
 
         /** Source text of the host's chart-drawing stdlib, sent with 'load'. */
         let stdlibSource = null;
+        let std = null; // the general plugin stdlib, imported once at load
 
         /** Debug logging gate — set to true when the host sends `debug: true`
          * in the activate message. Plugins read `app.debug` to gate their own
@@ -189,6 +190,12 @@
           // user, fetch (gated). No menus/importers/exporters/events registration.
           return Object.freeze({
             plugin: Object.freeze(identity),
+            // The ONE synchronous, local namespace on `app`. Every other one below is an
+            // async postMessage proxy to the host; these are pure functions running in
+            // this frame, so making a plugin `await` an escaper would be absurd.
+            //
+            // Undefined when the source did not arrive — feature-detect (`app.std?.el`).
+            std,
             data: makeNamespace('data', [
               'getDataFrame', 'getColumns', 'getRows', 'getVariableMeta',
               'getSelectedVariables', 'getRowCount', 'getTransforms', 'getHistory', 'create',
@@ -292,6 +299,20 @@
             case 'load':
               setStep('loading');
               stdlibSource = msg.stdlib || null;
+              // The general stdlib (plugin-stdlib.js), as source. Blobbed and imported
+              // HERE rather than handed over as an object, because functions cannot cross
+              // postMessage — and in THIS realm, because a blob URL minted in the host's
+              // realm is not fetchable from an opaque origin.
+              //
+              // Never fatal: a build that fails to serve it leaves `app.std` undefined and
+              // a plugin that feature-detects carries on. The alternative — refusing to
+              // load the plugin — would turn a missing convenience into a dead feature.
+              if (msg.std) {
+                const url = URL.createObjectURL(new Blob([msg.std], { type: 'text/javascript' }));
+                try { std = await import(url); }
+                catch (err) { std = null; console.warn('[plugin-host] stdlib failed to load', err); }
+                finally { URL.revokeObjectURL(url); }
+              }
               await importPlugin(msg.code, msg.rid, msg.modules);
               break;
 

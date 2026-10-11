@@ -264,11 +264,18 @@ export class PluginBroker {
    *   frame — the frame imports it itself, exactly as it does the plugin's own source.
    * @returns {Promise<import('./loader.js').PluginManifest>}
    */
-  sendLoad(code, stdlib, modules = null) {
+  sendLoad(code, stdlib, modules = null, std = null) {
     // `modules` is the plugin's own files by name (#multi-file): the frame blobs them and
     // builds an import map, because a blob URL minted HERE carries the host's origin and the
     // sandbox is opaque. Omitted for the single-file case, which is every built-in today.
-    this.#post({ t: 'load', code, stdlib, ...(modules && Object.keys(modules).length ? { modules } : {}) });
+    // `std` is the GENERAL plugin stdlib's source (plugin-stdlib.js), handed to every
+    // plugin — unlike `stdlib`, which is the chart drawing library and only matters to a
+    // plugin declaring a `charts` section.
+    this.#post({
+      t: 'load', code, stdlib,
+      ...(std ? { std } : {}),
+      ...(modules && Object.keys(modules).length ? { modules } : {}),
+    });
     // Bound the wait: a malicious/broken plugin that imports but never posts
     // {t:'manifest'} would otherwise leave this broker (and its live sandbox)
     // attached forever — a capability leak on the probe path especially, where

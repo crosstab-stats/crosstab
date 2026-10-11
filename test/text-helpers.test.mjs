@@ -96,7 +96,9 @@ const CORE = readdirSync('core').filter((f) => f.endsWith('.js')).map((f) => `co
 test('no core module defines its own HTML escaper', () => {
   const offenders = [];
   for (const f of CORE) {
-    if (f === 'core/text.js' || f === 'core/sanitize-html.js') continue;
+    // plugin-stdlib.js IS the implementation (text.js re-exports it, and the sandbox
+    // imports it as source); sanitize-html.js does a different job entirely.
+    if (f === 'core/plugin-stdlib.js' || f === 'core/text.js' || f === 'core/sanitize-html.js') continue;
     const src = readFileSync(f, 'utf8');
     // The shape every one of the sixteen took: a replace over the HTML metacharacters.
     if (/replace\(\s*\/\[?&[^)]*\/g?\s*,/.test(src) && /&amp;/.test(src)) offenders.push(f);
@@ -105,7 +107,7 @@ test('no core module defines its own HTML escaper', () => {
 });
 
 test('no core module strips a trailing ellipsis by hand', () => {
-  const offenders = CORE.filter((f) => f !== 'core/text.js')
+  const offenders = CORE.filter((f) => f !== 'core/text.js' && f !== 'core/plugin-stdlib.js')
     .filter((f) => /replace\(\/(?:…|\\\.\\\.\\\.)/.test(readFileSync(f, 'utf8')));
   assert.deepEqual(offenders, [], 'import stripEllipsis from core/text.js instead');
 });

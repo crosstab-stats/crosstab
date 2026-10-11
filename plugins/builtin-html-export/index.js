@@ -33,18 +33,19 @@ export const manifest = {
  * @returns {Promise<{filename: string, mimeType: string, data: string}>}
  */
 export async function exportHtml(app, { title }) {
+  const { esc, filenameFor } = lib(app);
   const model = await app.results.getModel();
   const css = await app.results.getStyles();
   return {
     filename: filenameFor(title, 'html'),
     mimeType: 'text/html;charset=utf-8',
-    data: buildHtml(model, css, title),
+    data: buildHtml(model, css, title, esc),
   };
 }
 
 /** Render the result model into a standalone HTML document, reusing the pane's
  * canonical stylesheet so the report matches the on-screen output. */
-function buildHtml(model, css, title) {
+function buildHtml(model, css, title, esc) {
   const safeTitle = esc(title || 'CrossTab Output');
   const when = new Date().toLocaleString();
 
@@ -107,30 +108,21 @@ ${body}
 }
 
 /**
- * Escape so the result is text wherever it lands, attributes included.
+ * The host's stdlib, or a local stand-in.
  *
- * It used to escape only `& < >`, while line 69 interpolates it into `src="…"` and
- * `alt="…"` — and `alt` carries plugin-supplied image metadata. A quote closed the
- * attribute early, which in a file people SHARE and open is worse than a broken layout.
- * Found in the duplication audit, 2026-10-10: core had the same bug in `app.js` and
- * thirteen other spellings of this function besides.
- *
- * Core now has one `escapeHtml` in `core/text.js`, but a plugin runs in a sandbox and
- * cannot import from core — hence the copy. That constraint is filed as the case for a
- * plugin stdlib; until then this must stay correct on its own.
+ * `app.std` is handed to every plugin (core/plugin-stdlib.js, shipped as source into the
+ * sandbox), so escaping, filenames and formatting read the same here as everywhere else.
+ * The fallbacks exist because a plugin must not break on a build that failed to serve it —
+ * and because they document what this plugin actually needs from the host.
  */
-function esc(s) {
-  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  })[c]);
-}
-
-function filenameFor(title, ext) {
-  const base =
-    String(title || 'crosstab-output')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 60) || 'crosstab-output';
-  return `${base}.${ext}`;
+function lib(app) {
+  const std = app && app.std;
+  return {
+    esc: (std && std.escapeHtml) || ((s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[c])),
+    filenameFor: (std && std.filenameFor) || ((t, e) => `${String(t || 'crosstab-output')
+      .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60)
+      || 'crosstab-output'}.${e}`),
+  };
 }

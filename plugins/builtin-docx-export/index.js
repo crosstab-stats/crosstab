@@ -40,6 +40,7 @@ const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingm
  * @returns {Promise<{filename: string, mimeType: string, data: Uint8Array}>}
  */
 export async function exportDocx(app, { title }) {
+  const { filenameFor } = lib(app);
   {
     const model = await app.results.getModel();
 
@@ -216,12 +217,22 @@ function firstLine(s) {
   return String(s).split('\n').find((l) => l.trim()) ?? String(s);
 }
 
-function filenameFor(title, ext) {
-  const base =
-    String(title || 'crosstab-output')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 60) || 'crosstab-output';
-  return `${base}.${ext}`;
+/**
+ * The host's stdlib, or a local stand-in.
+ *
+ * `app.std` is handed to every plugin (core/plugin-stdlib.js, shipped as source into the
+ * sandbox), so escaping, filenames and formatting read the same here as everywhere else.
+ * The fallbacks exist because a plugin must not break on a build that failed to serve it —
+ * and because they document what this plugin actually needs from the host.
+ */
+function lib(app) {
+  const std = app && app.std;
+  return {
+    esc: (std && std.escapeHtml) || ((s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[c])),
+    filenameFor: (std && std.filenameFor) || ((t, e) => `${String(t || 'crosstab-output')
+      .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60)
+      || 'crosstab-output'}.${e}`),
+  };
 }

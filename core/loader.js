@@ -45,6 +45,29 @@ import { assetRefDecls, declaredCollections } from './collections.js';
  * A failure here is not fatal — a plugin with no `charts` section never looks at it, and
  * one that does gets a clear error from the frame instead of a broken import.
  */
+/**
+ * The general plugin stdlib's SOURCE, fetched once and cached.
+ *
+ * Travels the same way, and for the same reasons, as the chart stdlib below: a module
+ * cannot be structured-cloned, and a blob URL minted in this realm is not fetchable from
+ * an opaque-origin frame — so the text goes over and the frame blobs it in its own realm.
+ *
+ * Unlike the chart library this is handed to EVERY plugin rather than only to those
+ * declaring a `charts` section, because it carries what any plugin might need (escaping,
+ * filenames, the app's formatting voice) and there is no useful declaration to gate it
+ * behind. A failure here is not fatal: `app.std` is simply absent, and a plugin that
+ * feature-detects carries on.
+ */
+let pluginStdlibPromise = null;
+function pluginStdlibSource() {
+  if (!pluginStdlibPromise) {
+    pluginStdlibPromise = fetch(new URL('./plugin-stdlib.js', import.meta.url))
+      .then((r) => (r.ok ? r.text() : ''))
+      .catch(() => '');
+  }
+  return pluginStdlibPromise;
+}
+
 let chartStdlibPromise = null;
 function chartStdlibSource() {
   if (!chartStdlibPromise) {
@@ -427,7 +450,7 @@ export class PluginLoader {
       // A multi-file plugin has to be READABLE as well as runnable: without its modules the
       // probe's import fails and the plugin cannot even be catalogued.
       const modules = await this.#moduleClosure(code, label, opts);
-      const manifest = await broker.sendLoad(code, await chartStdlibSource(), modules);
+      const manifest = await broker.sendLoad(code, await chartStdlibSource(), modules, await pluginStdlibSource());
       if (!manifest || typeof manifest.id !== 'string') {
         throw new Error(`Plugin at ${label} exported no valid manifest`);
       }
@@ -475,7 +498,7 @@ export class PluginLoader {
       await loaded;             // the frame's own load/error — not a clock
       await broker.whenReady(); // …and the guest's own ready signal
       const modules = await this.#moduleClosure(code, label, { entryUrl, assets });
-      const manifest = await broker.sendLoad(code, await chartStdlibSource(), modules);
+      const manifest = await broker.sendLoad(code, await chartStdlibSource(), modules, await pluginStdlibSource());
 
       if (!manifest || typeof manifest.id !== 'string') {
         throw new Error(`Plugin at ${label} exported no valid manifest`);

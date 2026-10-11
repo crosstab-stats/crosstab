@@ -10,61 +10,51 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
-- [ ] **Plugin stdlib, part 1: the UTILITY library (owner, 2026-10-10).** The smaller half,
-      and the one to do first — small, versionable, low blast radius.
+- [x] **DONE (2026-10-10). Plugin stdlib, part 1: the utility library.** `app.std`, shipped
+      as source into the sandbox. Built first on the owner's call — pre-release, so part 2's
+      "a user cannot work" is not yet a real constraint, this half proves the delivery
+      mechanism at lower risk, and part 2 will want the formatters anyway.
 
-      **Why it exists.** A plugin runs in a sandboxed iframe and cannot import from `core/`,
-      so every helper core shares, a plugin writes out again. The duplication audit found our
-      OWN plugins proving the point:
+      **What ships:** `escapeHtml`, `stripEllipsis`, `slug`/`filenameFor`, `formatNumber`,
+      `formatCount`, `formatWhen`, `joinMeta`, `el`, and `STDLIB_VERSION`.
 
-      - `filenameFor()` **byte-identical in three places** — `core/output-export.js`,
-        `builtin-docx-export`, `builtin-html-export`.
-      - HTML escaping: `builtin-html-export` had the **attribute-unsafe** version feeding
-        `src` and `alt` of a file people SHARE (fixed in place 2026-10-10, but only because
-        someone looked). `builtin-caqdas` carries two more copies, `builtin-decisions` a third.
-      - `el()`: **509 call sites, four signatures**, two of which take the same three
-        arguments in opposite order — detail below.
+      **It is the host's implementation, not a copy for plugins.** `core/text.js` re-exports
+      from `plugin-stdlib.js`, so the host's ~74 escaping call sites exercise exactly the
+      code plugins get. Solving a duplication problem by adding an eighteenth copy of the
+      escaper would have been the joke writing itself.
 
-      **Contents, in order of how clearly they qualify.** The bar is "every caller wants the
-      same answer, and a divergent copy is a defect" — not "more than one caller needs it".
+      **Delivery rides the proven path** (the chart stdlib's): host fetches the text, posts
+      it with `load`, the frame blob-imports it in ITS realm — a blob URL minted in the
+      host's realm is not fetchable from an opaque origin. It lands on `app.std`, and since
+      `app` is already the first argument to every invoked plugin function, **no manifest
+      section had to be invented** and every plugin shape gets it. `app.std` is the one
+      SYNCHRONOUS, local namespace on `app`; everything else there is an async postMessage
+      proxy, and making a plugin `await` an escaper would be absurd.
 
-      1. **escapeHtml** — unambiguous: the wrong answer is a vulnerability.
-      2. **filenameFor / slug** — three identical copies already.
-      3. **Formatters** (rows(5456) gives "5,456 rows"; when(ts) gives "3 days ago"; the
-         missing dash). Pure functions, no DOM, no host state. This is where the app's VOICE
-         lives: the host says *3 days ago · 2 datasets, 5,456 rows* and a plugin writing its
-         own panel can currently only guess at matching it.
-      4. **el() — yes, and it is the sharpest case** (revised after counting; the first draft
-         ranked it last, assuming three lines cannot hurt anyone):
+      **`el()` ships as an options object** — `el('div', { class, text })` — so the four
+      incompatible positional orders can coexist with it while callers migrate, instead of
+      flipping 509 call sites at once under a silent failure mode.
 
-         | spelling | where | calls |
-         | --- | --- | --- |
-         | el(tag, text, className) | app, data-views, launcher, compute-recode | 145 |
-         | el(tag, cls, text) | help, encryption-settings, **builtin-caqdas** | 236 |
-         | el(tag, className) | builtin-spatial | 9 |
-         | el(t, c) | builtin-decisions | 119 |
+      **Proved end to end, not inferred:** a scratch plugin loaded through
+      `loader.activateSource` reported all ten exports present, with `escapeHtml('a"b')`
+      giving `a&quot;b`, `filenameFor('My Report!!','html')` giving `my-report.html`,
+      `formatCount(5456,'row')` giving `5,456 rows`, and `el('div',{class:'c',text:'t'})`
+      producing class `c` / text `t`. `builtin-html-export` and `builtin-docx-export` are
+      migrated; the HTML exporter was then driven through the real invoke path with a
+      hostile title and escaped it fully, quotes included.
 
-         So the same call yields either a div classed `warning` reading "Careful", or one
-         classed `Careful` reading "warning", depending on which file you are in. **Both
-         render, one is nonsense, nothing errors and no test fails.** CAQDAS's 205 calls make
-         (tag, cls, text) the majority spelling across the repo — the one core mostly does not
-         use. Core's version always assigns textContent (so no text CLEARS it); help's only
-         assigns when non-null.
+      Each migrated plugin keeps a **local fallback**. Not belt-and-braces: a build that
+      failed to serve the stdlib would otherwise take every migrated plugin down with it,
+      and the fallback doubles as documentation of what that plugin needs from the host.
 
-         **Ship it as an options object** — el('div', { class: 'x', text: 'y' }) — which
-         cannot be ordered wrong, is self-describing, and lets the positional copies coexist
-         during migration instead of flipping 509 sites at once. With a silent failure mode, a
-         big-bang rename is the riskiest change on either list.
-      5. **Nothing stateful or host-touching.** That is what the app.* service API is for, and
-         it crosses postMessage for a reason. sanitizeHtml stays host-side too — it is the
-         host's defence AGAINST the plugin.
+      Suite 1613 → 1632.
 
-      **The mechanism is already proven:** `core/charts/stdlib.js` is shipped AS SOURCE into
-      the sandbox for chart kinds (#131). This rides the same path.
-
-      **Open:** versioning (a plugin written against v1 on a build shipping v2); injected vs
-      fetched; and built-ins and third-party plugins must get the SAME one, or built-ins are
-      privileged in a way [[deploy-settings]] says they must not be.
+      **Left for whoever does part 2 or the next migration:**
+      - `builtin-caqdas` (2 escaper copies, 205 `el` calls) and `builtin-decisions` (1 copy,
+        119 calls) are NOT migrated. They are the big ones, and worth doing alongside part 2
+        rather than twice.
+      - `STDLIB_VERSION` is not load-bearing yet — nothing reads it. It exists because it
+        cannot be added retrospectively to builds already shipped.
 - [ ] **Plugin stdlib, part 2: the DESIGN SYSTEM — and the small-screen hole it closes
       (owner, 2026-10-10).** The bigger commitment, and it has a forcing argument part 1
       does not.
