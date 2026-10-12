@@ -341,6 +341,91 @@ export function rStr(s) {
 }
 
 // =============================================================================
+// Reading an R result — where a missing statistic must stay missing
+// =============================================================================
+
+/*
+ * `flat()` / `normalizeResult()` existed in 45 plugins, and the copies disagreed about
+ * both WHAT THEY RETURN and WHAT A MISSING VALUE IS. Three defects, found 2026-10-12:
+ *
+ * 1. **`num` meant two different types.** A numeric SCALAR in 28 plugins, a numeric
+ *    VECTOR in 10. Same spelling, opposite type — the `el()` mirror image again, except
+ *    here it is the data path, so the failure is a wrong number rather than a wrong style.
+ *    `str` was overloaded too: a vector in builtin-agreement, a scalar in builtin-epi.
+ *
+ * 2. **12 copies turned a missing number into `0`.** WebR's `toJs()` renders R's `NA` and
+ *    `NaN` alike as JS `null`, and `[null].map(Number)` is `[0]`. So a statistic R could
+ *    not compute printed as `0.000` — a finding — instead of the em dash that means "not
+ *    computed". Confirmed in the live app: a regression with a perfectly collinear
+ *    predictor printed **`VIF 0.00`**, which is impossible, since a VIF is never below 1.
+ *
+ * 3. **20 copies turned a missing string into the literal text `"null"`**, because
+ *    `String(null)` is `'null'`. A row label read `null` rather than being blank.
+ *
+ * `Inf` and `-Inf` are NOT affected: they survive `toJs()` as JS infinities and are
+ * already non-finite, so they reach the em dash on their own. (They look like `null` if
+ * you inspect a result with `JSON.stringify`, which is a trap in the console, not a bug.)
+ */
+
+/**
+ * Turn a WebR result into named accessors.
+ *
+ * Bound as `flat` at most call sites, which is what the 45 local copies were called; the
+ * implementation is this one.
+ *
+ * ## The names
+ *
+ * | accessor | returns | missing becomes |
+ * |---|---|---|
+ * | `nums(k)` | `number[]` | `NaN` per element |
+ * | `num1(k)` | `number` | `NaN` |
+ * | `strs(k)` | `string[]` | `''` per element |
+ * | `str1(k)` | `string` | `''` (or `opts.missing`) |
+ *
+ * **Plural is a vector, `1` is a scalar, and `num`/`str` deliberately do not exist.**
+ * Retiring the two overloaded names is the point: a line copied from a plugin that
+ * predates this throws `r.num is not a function` immediately, rather than silently
+ * handing back a scalar where a vector was expected. A migration whose misses are loud
+ * is worth more than one whose names look familiar.
+ *
+ * `missing` on `str1` is for builtin-epi, whose `lv()` renders an absent factor attribute
+ * as `?` and therefore needs to tell absent from empty.
+ *
+ * @param {any} result - `app.webr.run()`'s `result`: `{names, values}`, or a plain object.
+ */
+export function unpackR(result) {
+  const byName = {};
+  if (result && Array.isArray(result.names) && Array.isArray(result.values)) {
+    result.names.forEach((n, i) => { byName[n] = result.values[i]; });
+  } else {
+    Object.assign(byName, result ?? {});
+  }
+  // An R vector arrives as `{type, values}`; a bare scalar may arrive unwrapped, and a
+  // one-element vector is indistinguishable from a scalar in R anyway.
+  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
+  const one = (k) => {
+    const a = arr(byName[k]);
+    return a.length ? a[0] : null;
+  };
+  return {
+    /** Does the result carry this name at all? Distinct from carrying it as NA. */
+    has: (k) => Object.prototype.hasOwnProperty.call(byName, k),
+    /** The underlying value, for a caller shaping fields of its own. */
+    raw: (k) => byName[k],
+    nums: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
+    strs: (k) => arr(byName[k]).map((x) => (x == null ? '' : String(x))),
+    num1: (k) => {
+      const v = one(k);
+      return v == null ? NaN : Number(v);
+    },
+    str1: (k, { missing = '' } = {}) => {
+      const v = one(k);
+      return v == null ? missing : String(v);
+    },
+  };
+}
+
+// =============================================================================
 // DOM
 // =============================================================================
 
