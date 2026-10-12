@@ -179,6 +179,153 @@ export function joinMeta(parts) {
 }
 
 // =============================================================================
+// Statistical reporting — one convention for numbers that end up in a paper
+// =============================================================================
+
+/*
+ * These came out of a drift scan of the 60 compute plugins on 2026-10-12. They are here
+ * for a sharper reason than the formatters above: the copies had **already diverged in
+ * output a reader can see**, and output is what these plugins exist to produce.
+ *
+ *   fmtP     32 copies,  5 variants, THREE different spellings of the same p-value
+ *   rStr     32 copies,  2 variants — and the fix lived in 2 of them
+ *   f        38 copies,  4 variants (cosmetic; all four agreed)
+ *   metaMap  34 copies,  3 variants, one of them a different signature
+ *   labelOf  27 copies,  3 variants, one of them a different signature
+ *   ci       18 copies,  3 variants, 3 dp in thirteen and 4 dp in three
+ *
+ * Nobody decided any of that. Each file got a helper when it was written, and whichever
+ * convention its author happened to type became that plugin's house style. The el() sweep
+ * never reached here, because none of these plugins draw any DOM.
+ */
+
+/**
+ * What a results table prints when there is no value: an em dash.
+ *
+ * Shared by the formatters below so the blank cell is one decision rather than six. Every
+ * copy they replace already used this character — the one thing all 32 `fmtP` variants
+ * agreed on.
+ */
+const EMPTY = '\u2014';
+
+/**
+ * A p-value as a journal expects it.
+ *
+ * **Three spellings were in the tree**: `< .001` in thirty plugins, `<.001` in
+ * builtin-sced, `< 0.001` in builtin-spatial. The same session could print all three
+ * depending on which menu item you ran, and someone pasting two of our tables into one
+ * manuscript would be fixing it by hand.
+ *
+ * The settled form is **three decimals, and `< .001` below the floor** — with the space
+ * and without the leading zero, which is what thirty of the thirty-two copies already
+ * said. Spatial's `< 0.001` and SCED's `<.001` are the two that moved.
+ *
+ * It reports `< .001` rather than a run of zeros because `0.000` claims a precision the
+ * test does not have, and reads as "exactly zero", which no p-value is.
+ *
+ * **One inconsistency is preserved deliberately**: an ordinary value keeps its leading
+ * zero (`0.034`), while the floor drops it (`< .001`). Strict APA drops it in both — a p
+ * cannot exceed 1, so the zero carries no information, and SPSS's Sig. column prints
+ * `.034`. Every copy in the tree used `toFixed(3)`, so `0.034` is the app's existing
+ * house style across every results table; changing it is a visible change to all of
+ * them, which is the owner's call rather than a tidy-up to slip into a refactor. Filed in
+ * TODO.md. If it is taken, this function is the one place it changes.
+ */
+export function fmtP(p) {
+  if (!Number.isFinite(p)) return EMPTY;
+  return p < 0.001 ? '< .001' : p.toFixed(3);
+}
+
+/** The same value mid-sentence: `p < .001` / `p = 0.034`, for a results note rather than a
+ * table cell. Was already identical in builtin-causal, builtin-mediation, builtin-meta. */
+export function fmtPInline(p) {
+  if (!Number.isFinite(p)) return `p = ${EMPTY}`;
+  return p < 0.001 ? 'p < .001' : `p = ${p.toFixed(3)}`;
+}
+
+/**
+ * A number to a fixed number of decimals, or the em dash when there is nothing to show.
+ *
+ * Bound as `f` at most call sites — these dense table-building plugins read better with a
+ * one-letter formatter, and renaming 38 plugins' worth of call sites would be a large
+ * diff for no behavioural gain. The alias is local; the implementation is this one.
+ *
+ * **Not finite is a first-class answer here.** R hands back `NaN` for a statistic it could
+ * not compute and `null` for one it never reached, and a results table still has to print
+ * something; `0` and `NaN` would both read as findings.
+ */
+export function fixed(n, d) {
+  return Number.isFinite(n) ? n.toFixed(d) : EMPTY;
+}
+
+/** A count: rounded, no decimals, no thousands separator — degrees of freedom and cell
+ * counts sit inside statistical tables, where `1,024` is read as a decimal in much of the
+ * world. `formatNumber` is the one for counts in prose. Bound as `int` at call sites. */
+export function rounded(x) {
+  return Number.isFinite(x) ? String(Math.round(x)) : EMPTY;
+}
+
+/**
+ * A confidence interval as one cell: `[-0.214, 1.038]`.
+ *
+ * `d` defaults to 3 because that is what thirteen of the eighteen copies used. The three
+ * that used 4 (margins, meta, trend) were not wrong — a marginal effect or a trend slope
+ * can be small enough that 3 dp prints `[0.000, 0.001]` — so the precision stays the
+ * caller's choice rather than being flattened to a majority vote.
+ */
+export function ci(lo, hi, d = 3) {
+  return Number.isFinite(lo) && Number.isFinite(hi) ? `[${lo.toFixed(d)}, ${hi.toFixed(d)}]` : EMPTY;
+}
+
+/**
+ * How a variable is named to the reader: `Household income (hhinc)`.
+ *
+ * Both halves earn their place — the label is what the analyst understands, the column
+ * name is what they will look for in the data editor and in the exported script. A
+ * variable with no label is just its name, never `undefined (hhinc)`.
+ *
+ * `qualify: false` gives the bare label, for somewhere the column name would be noise:
+ * builtin-var uses it for plot series names, where `Label (col)` in a legend is clutter.
+ * That copy was a real distinction, not drift, and survives as an option.
+ *
+ * **Takes the resolved meta ENTRY, not the map** — `labelOf(metaMap(meta).get(name), name)`.
+ * builtin-mixture's copy took the map and resolved internally, which is the same
+ * mirror-image hazard `el()` had: pass the wrong one of the two and you silently get the
+ * bare column name, because `undefined?.label` is falsy and the fallback is `name`.
+ */
+export function labelOf(meta, name, { qualify = true } = {}) {
+  if (!meta?.label) return name;
+  return qualify ? `${meta.label} (${name})` : String(meta.label);
+}
+
+/** Variable metadata as a Map keyed by column name, which is how every caller wants it —
+ * `app.data.getVariableMeta()` hands back an array. Tolerates a missing list rather than
+ * throwing, since a plugin can be invoked before any dataset is open. */
+export function metaMap(meta) {
+  return new Map((meta ?? []).map((m) => [m.name, m]));
+}
+
+/**
+ * A JavaScript string as an R string literal, quotes included.
+ *
+ * Every R-generating plugin needs this, because a variable name or a value label is the
+ * user's own text and goes straight into code we then evaluate. Thirty copies escaped the
+ * backslash and the double quote. **Two — builtin-mediation and builtin-sem — also
+ * escaped the newline, and they were the right ones**: a raw newline inside the literal is
+ * legal R but splits the generated line, which breaks anything that reads that code a line
+ * at a time. The captured R we persist for audit is exactly that, and so is the
+ * `# df <- …` comment prelude, where a newline in a column name would push the rest of
+ * the comment onto a live code line. The carriage return goes the same way, since a label
+ * pasted from Windows-authored data carries one.
+ *
+ * So the superset wins. This is the one helper here whose variants were not a matter of
+ * taste: twenty-eight plugins were missing a fix that two had already made locally.
+ */
+export function rStr(s) {
+  return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r')}"`;
+}
+
+// =============================================================================
 // DOM
 // =============================================================================
 

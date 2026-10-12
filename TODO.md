@@ -1510,44 +1510,65 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       click reopens the launcher.
 
 
-- [ ] **#167 — the launcher should INCLUDE project management (user, 2026-08-19).**
+- [x] **DONE (2026-10-12). #167 — the launcher manages projects too (user, 2026-08-19).**
       *Title corrected 2026-08-24: this was written up as "belongs in the launcher", which
       reads as exclusive and is not what was asked. The sidebar keeps its verbs; the
-      launcher gains them. Nor does it pull against #161's "simplify the launcher flow" —
-      the owner's words: tangential goals, not opposing ones.* "Having
-      to start a project to delete or rename a saved project seems odd." It is: rename and
-      delete live in the SIDEBAR's other-projects zone (app.js ~2786–2794), which only
-      exists once a project is open. The launcher already lists the same projects
-      (launcher.js ~314) — it has the list and none of the verbs, so managing your
-      projects means first opening one you did not want.
+      launcher gains them.* The ask: "Having to start a project to delete or rename a saved
+      project seems odd." It was — rename and delete lived only in the sidebar's
+      other-projects zone, which does not exist until a project is open, so managing your
+      projects meant first opening one you did not want.
 
-      **This is a follow-on from #158, not a new capability.** Managing projects while
-      none is open was impossible when a project existed from boot; making "no project
-      open" a real state is what makes this a sensible place to put these.
+      **Closed by the project-list unification (2026-10-10/11) rather than by a launcher
+      feature**, which is why it sat open past the work that finished it:
 
-      Wanted on the launcher's Projects rail: **rename**, **delete**, and probably
-      **duplicate** (the natural home for "fork this codebook/project" once #166's
-      copy-on-add lands). Plus a way to see what a project IS before opening it — date,
-      dataset count — since a rail of names is a poor way to find the right one.
+      - **One row renderer, not three.** The entry's own warning — *"Do not build a third
+        rendering"* — was honoured: `core/project-list.js` (`describeProjectRow`,
+        `renderProjectList`) draws the row for the sidebar, the launcher, AND the project
+        manager. The sidebar's bespoke `<li>` is gone.
+      - **The verbs arrive as a dialog, not as a second manager.** The launcher's Projects
+        rail carries **Manage projects…** (`launcher.js` ~411), which opens the same
+        `project-manager.js` the live app opens, on the `recents` tab. Rename and
+        delete/remove therefore reach the launcher without a second implementation of
+        either.
+      - **You can see what a project IS before opening it.** `core/project-meta.js`
+        (`projectMetaLine`) puts last-worked-on date, dataset count and row count on every
+        row, on all three surfaces — the entry asked for exactly this, and for the same
+        reason ("a rail of names is a poor way to find the right one").
 
-      **Do not build a third rendering.** The sidebar rows already bypass the shared
-      `#contentRow` builder (their own comment says why: the `<li>` holds its own
-      rename/delete buttons so it cannot itself be one). A launcher copy would make three
-      places that draw a project row and two that can manage one. Factor the row first,
-      then use it in both — same argument that made items-in-a-project and
-      items-in-a-block share a builder.
+      **Both "things to get right" are in**, verified in `project-manager.js`:
+      - **Delete confirms and says what it destroys.** `removalOffer`/`confirmRemoval`
+        replaced the silent `deleteProject`: an OPFS project says the data goes with the
+        list entry and cannot be undone.
+      - **A folder project's delete means something different, and is worded differently.**
+        Not "Delete" but **"Remove … from the list?"** — *"The list entry goes; the files
+        stay where they are unless you say otherwise. That location is yours rather than
+        the app's."* Erasing the files is a separate opt-in checkbox, defaulted OFF on the
+        owner's call, because that should be an affirmative act and never a left-alone
+        default. Two verbs, worded differently, as asked.
 
-      **Two things to get right:**
-      - **`deleteProject` does not confirm** — it deletes and, if the project was active,
-        silently starts a new one (project-sync.js ~2283). On the sidebar that sits behind
-        a small ✕ next to a project you are not in; on a launcher rail, where the rows are
-        big click-to-open targets, an unconfirmed adjacent delete is a trap. Confirm, and
-        say what is being destroyed.
-      - **A folder project's delete means something different.** The launcher lists
-        remembered FOLDER projects beside OPFS ones, but a folder is the user's own
-        directory in Dropbox/OneDrive. "Delete" there must mean *forget this shortcut*,
-        never *erase that folder* — the same honest-scope-boundary the sharing and
-        encryption work draws. Two verbs, worded differently, not one.
+      **Not built: duplicate.** Filed as its own item below — it was the one verb in this
+      entry that is a new capability rather than a relocation of an existing one, and
+      closing #167 on the other four should not bury it.
+
+- [ ] **Duplicate a project (carved out of #167, 2026-10-12).** The remaining verb from
+      #167: "fork this project" from the row's menu, alongside Rename and Delete/Remove.
+      Wanted as the natural home for forking a codebook or a half-built analysis without
+      opening it first.
+
+      **Why it was not done with the rest:** rename and delete already existed and only
+      needed a surface that reaches them from the launcher. Duplicate does not exist
+      anywhere, and it is not a trivial copy — it has to decide what a fork INCLUDES
+      (datasets, the op log, workspace blobs, plugin records) and what a fresh identity
+      means for the log (a duplicated project that keeps the original's op ids is a
+      collaboration hazard, per [[one-true-log-explicit-ops]]). It also wants #166's
+      copy-on-add semantics settled first.
+
+      Two things already in place that it should use: `removalOffer`'s pattern of saying
+      plainly what the action will do, and the kind distinction — duplicating an OPFS
+      project means a new OPFS project, while duplicating a FOLDER project has to ask
+      where the copy goes, since the app does not get to pick a directory on the user's
+      disk.
+
 
 - [x] **DONE (2026-10-01) — the launcher's plugin picker and Edit ▸ Plugins are now one module.**
       Raised 2026-09-29 (*"The center section of the launcher is functionally almost identical to

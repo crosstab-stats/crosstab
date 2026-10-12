@@ -11,6 +11,15 @@
  * as the vector `dv` and the predictors as the data.frame `ivs`.
  */
 
+/**
+ * The host's reporting formatters, from core/plugin-stdlib.js.
+ *
+ * Read from the sandbox global rather than `app.std` because these are module-scope
+ * helpers and `app` exists only inside an invoked function. One implementation, because
+ * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
+ */
+const { labelOf, fmtP, ci, rStr } = globalThis.ctStd;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-regression',
@@ -199,18 +208,9 @@ export async function run(app, { dv: dvName, ivs: ivNames }) {
 
 // --- helpers -----------------------------------------------------------------
 
-function labelOf(meta, name) {
-  return meta?.label ? `${meta.label} (${name})` : name;
-}
-
 function prettyTerm(term) {
   const m = /^factor\(`?(.+?)`?\)(.*)$/.exec(term);
   return m ? `${m[1]}${m[2] ? ` = ${m[2]}` : ''}` : term.replace(/`/g, '');
-}
-
-function fmtP(p) {
-  if (!Number.isFinite(p)) return '—';
-  return p < 0.001 ? '< .001' : p.toFixed(3);
 }
 
 function normalizeResult(rList) {
@@ -255,13 +255,4 @@ function normalizeResult(rList) {
     qqSlope: scalar(byName.qqSlope),
     qqInt: scalar(byName.qqInt),
   };
-}
-
-/** Format a 95% CI like "[lo, hi]". */
-function ci(lo, hi) {
-  return Number.isFinite(lo) && Number.isFinite(hi) ? `[${lo.toFixed(3)}, ${hi.toFixed(3)}]` : '—';
-}
-
-function rStr(s) {
-  return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }

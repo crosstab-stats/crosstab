@@ -195,6 +195,8 @@
             // this frame, so making a plugin `await` an escaper would be absurd.
             //
             // Undefined when the source did not arrive — feature-detect (`app.std?.el`).
+            // The same namespace is on the frame global as `ctStd`, for module-scope code
+            // that cannot see `app`; this is the one callers inside a function should use.
             std,
             data: makeNamespace('data', [
               'getDataFrame', 'getColumns', 'getRows', 'getVariableMeta',
@@ -304,15 +306,35 @@
               // postMessage — and in THIS realm, because a blob URL minted in the host's
               // realm is not fetchable from an opaque origin.
               //
-              // Never fatal: a build that fails to serve it leaves `app.std` undefined and
-              // a plugin that feature-detects carries on. The alternative — refusing to
-              // load the plugin — would turn a missing convenience into a dead feature.
+              // Not fatal by itself: a plugin that feature-detects (`app.std?.el`) carries
+              // on, and refusing to load would turn a missing convenience into a dead
+              // feature. But it is no longer only a convenience — see `ctStd` below.
               if (msg.std) {
                 const url = URL.createObjectURL(new Blob([msg.std], { type: 'text/javascript' }));
                 try { std = await import(url); }
                 catch (err) { std = null; console.warn('[plugin-host] stdlib failed to load', err); }
                 finally { URL.revokeObjectURL(url); }
               }
+              // Also on the frame's global, under a name a plugin can read at MODULE
+              // scope — which `app.std` cannot reach, because `app` only exists inside an
+              // invoked function.
+              //
+              // That matters for the reporting formatters (fmtP, rStr, fixed, ci, int,
+              // labelOf). They are module-scope helpers in 36 plugins, some of which
+              // export nineteen entry points; binding them per entry point would be a
+              // hundred insertion sites where a missed one silently keeps a local copy —
+              // the exact drift being removed. Read once at the top of a module instead.
+              //
+              // Assigned BEFORE importPlugin(), because a module body runs on import and
+              // reads this during evaluation. Frozen so one plugin cannot reshape the
+              // library for the next one in a shared frame.
+              //
+              // A migrated plugin now FAILS TO LOAD if this is absent, loudly and with
+              // this frame named, rather than printing numbers in its own conventions.
+              // For output that ends up in a paper that is the better failure: core
+              // imports the same file for `el`, so a stdlib that cannot be served means
+              // the host did not boot either.
+              globalThis.ctStd = std ? Object.freeze({ ...std }) : undefined;
               await importPlugin(msg.code, msg.rid, msg.modules);
               break;
 
