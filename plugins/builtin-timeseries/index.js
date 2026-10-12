@@ -20,7 +20,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, rounded: int, metaMap } = globalThis.ctStd;
+const { fmtP, fixed: f, rounded: int, metaMap, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -96,7 +96,7 @@ export async function correlogram(app, { series, maxlag }) {
       lbStat = unname(lb$statistic), lbDf = unname(lb$parameter), lbP = lb$p.value)`;
   const r = flat((await app.webr.run(rCode)).result);
   const seriesLabel = label(meta, series);
-  await app.results.appendText(`**Correlogram — ${seriesLabel}** (N = ${int(r.n1('n'))})`);
+  await app.results.appendText(`**Correlogram — ${seriesLabel}** (N = ${int(r.num1('n'))})`);
   const round3 = (v) => Math.round(v * 1000) / 1000;
   const corrChart = (title, seriesLbl, vals, lags) => ({
     kind: 'categorical',
@@ -106,11 +106,11 @@ export async function correlogram(app, { series, maxlag }) {
     axes: { x: { title: 'Lag' }, y: { title: 'Correlation' } },
     view: { mark: 'bar', legend: 'none' },
   });
-  const acf = r.num('acf');
-  const pacf = r.num('pacf');
-  if (acf.length) await app.results.appendChart(corrChart(`ACF — ${seriesLabel}`, 'ACF', acf, r.num('acfLag')));
-  if (pacf.length) await app.results.appendChart(corrChart(`PACF — ${seriesLabel}`, 'Partial ACF', pacf, r.num('pacfLag')));
-  const ci = r.n1('ci');
+  const acf = r.nums('acf');
+  const pacf = r.nums('pacf');
+  if (acf.length) await app.results.appendChart(corrChart(`ACF — ${seriesLabel}`, 'ACF', acf, r.nums('acfLag')));
+  if (pacf.length) await app.results.appendChart(corrChart(`PACF — ${seriesLabel}`, 'Partial ACF', pacf, r.nums('pacfLag')));
+  const ci = r.num1('ci');
   if (Number.isFinite(ci)) {
     await app.results.appendText(`_95% significance bound ≈ ±${round3(ci)}; bars beyond it indicate autocorrelation._`);
   }
@@ -118,9 +118,9 @@ export async function correlogram(app, { series, maxlag }) {
     {
       columns: ['', 'Value'],
       rows: [
-        ['Ljung–Box Q', f(r.n1('lbStat'), 3)],
-        ['df', int(r.n1('lbDf'))],
-        ['Sig.', fmtP(r.n1('lbP'))],
+        ['Ljung–Box Q', f(r.num1('lbStat'), 3)],
+        ['df', int(r.num1('lbDf'))],
+        ['Sig.', fmtP(r.num1('lbP'))],
       ],
       rowHeaders: true,
     },
@@ -142,12 +142,12 @@ export async function stationarity(app, { series }) {
     {
       columns: ['Test', 'Statistic', 'Sig.', 'Null hypothesis'],
       rows: [
-        ['Augmented Dickey–Fuller', f(r.n1('adfStat'), 3), fmtP(r.n1('adfP')), 'unit root (non-stationary)'],
-        ['KPSS', f(r.n1('kpssStat'), 3), fmtP(r.n1('kpssP')), 'stationary'],
+        ['Augmented Dickey–Fuller', f(r.num1('adfStat'), 3), fmtP(r.num1('adfP')), 'unit root (non-stationary)'],
+        ['KPSS', f(r.num1('kpssStat'), 3), fmtP(r.num1('kpssP')), 'stationary'],
       ],
       rowHeaders: true,
     },
-    { caption: `Stationarity — ${label(meta, series)} (N = ${int(r.n1('n'))})` },
+    { caption: `Stationarity — ${label(meta, series)} (N = ${int(r.num1('n'))})` },
   );
   await app.results.appendText('Stationary if ADF is significant (p < .05, reject unit root) **and** KPSS is not (p > .05). The two have opposite nulls, so they cross-check each other. (p-values are clipped to the tests’ tables at the extremes.)');
 }
@@ -167,8 +167,8 @@ export async function decompose(app, { series, frequency }) {
     plot(fit); dev.off()
     list(svg = .d(), n = length(x))`;
   const r = flat((await app.webr.run(rCode)).result);
-  await app.results.appendText(`**STL Decomposition — ${label(meta, series)}** (frequency ${freq}, N = ${int(r.n1('n'))})`);
-  if (/<svg[\s>]/i.test(r.s1('svg'))) await app.results.appendPlot(stripSize(r.s1('svg')), { title: `STL Decomposition — ${label(meta, series)}` });
+  await app.results.appendText(`**STL Decomposition — ${label(meta, series)}** (frequency ${freq}, N = ${int(r.num1('n'))})`);
+  if (/<svg[\s>]/i.test(r.str1('svg'))) await app.results.appendPlot(stripSize(r.str1('svg')), { title: `STL Decomposition — ${label(meta, series)}` });
 }
 
 export async function arima(app, { series, h, frequency }) {
@@ -192,16 +192,16 @@ export async function arima(app, { series, h, frequency }) {
     {
       columns: ['', 'Value'],
       rows: [
-        ['Model (p,d,q)(P,D,Q)', r.s1('order')],
-        ['AIC', f(r.n1('aic'), 2)],
+        ['Model (p,d,q)(P,D,Q)', r.str1('order')],
+        ['AIC', f(r.num1('aic'), 2)],
       ],
       rowHeaders: true,
     },
     { caption: `ARIMA — ${label(meta, series)}` },
   );
-  const point = r.num('point');
-  const lo = r.num('lo');
-  const hi = r.num('hi');
+  const point = r.nums('point');
+  const lo = r.nums('lo');
+  const hi = r.nums('hi');
   await app.results.appendTable(
     {
       columns: ['Step', 'Forecast', '95% Low', '95% High'],
@@ -210,7 +210,7 @@ export async function arima(app, { series, h, frequency }) {
     },
     { caption: 'Forecast' },
   );
-  if (/<svg[\s>]/i.test(r.s1('svg'))) await app.results.appendPlot(stripSize(r.s1('svg')), { title: `ARIMA forecast — ${label(meta, series)}` });
+  if (/<svg[\s>]/i.test(r.str1('svg'))) await app.results.appendPlot(stripSize(r.str1('svg')), { title: `ARIMA forecast — ${label(meta, series)}` });
 }
 
 // --- helpers -----------------------------------------------------------------
@@ -220,25 +220,4 @@ function label(meta, name) {
 }
 function stripSize(svg) {
   return svg.replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1').replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1');
-}
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList || {});
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    num: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    str: (k) => arr(byName[k]).map((x) => (x == null ? '' : String(x))),
-    n1: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? (a[0] == null ? NaN : Number(a[0])) : NaN;
-    },
-    s1: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? String(a[0] ?? '') : '';
-    },
-  };
 }

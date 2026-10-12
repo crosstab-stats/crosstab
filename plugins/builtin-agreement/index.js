@@ -32,7 +32,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, rounded: int } = globalThis.ctStd;
+const { fixed: f, rounded: int, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -267,21 +267,21 @@ async function compute(app, metric, weight, { bound = false } = {}) {
 }
 
 async function render(app, r, { caption, units, raters, metric, weight, note }) {
-  const n = r.n1('n');
-  const k = r.n1('k');
+  const n = r.num1('n');
+  const k = r.num1('k');
   if (!Number.isFinite(n) || n === 0) {
     await app.results.appendError('No units were scored by every rater, so there is nothing to compare.');
     return;
   }
-  const kappa = r.n1('kappa');
-  const alpha = r.n1('alpha');
+  const kappa = r.num1('kappa');
+  const alpha = r.num1('alpha');
   const kappaLabel = k === 2 ? "Cohen's κ" : "Fleiss' κ";
 
   await app.results.appendTable(
     {
       columns: ['Statistic', 'Value', 'Interpretation'],
       rows: [
-        ['Percent agreement', pct(r.n1('percentAgree')), 'Raw — takes no account of agreement by chance'],
+        ['Percent agreement', pct(r.num1('percentAgree')), 'Raw — takes no account of agreement by chance'],
         [kappaLabel + (k === 2 && weight !== 'unweighted' ? ` (${weight}-weighted)` : ''), f(kappa, 3), benchmarkKappa(kappa)],
         [`Krippendorff's α (${metric})`, f(alpha, 3), benchmarkAlpha(alpha)],
       ],
@@ -300,8 +300,8 @@ async function render(app, r, { caption, units, raters, metric, weight, note }) 
 
   if (note) await app.results.appendText(note);
 
-  const z = r.n1('kappaZ');
-  const p = r.n1('kappaP');
+  const z = r.num1('kappaZ');
+  const p = r.num1('kappaP');
   if (Number.isFinite(p)) {
     await app.results.appendText(
       `κ test against zero: z = ${f(z, 3)}, p = ${fp(p)}. This asks only whether agreement beats chance — `
@@ -337,20 +337,3 @@ function benchmarkAlpha(v) {
 }
 
 const pct = (v) => (Number.isFinite(v) ? `${v.toFixed(1)}%` : '—');
-
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList || {});
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    str: (key) => arr(byName[key]).map(String),
-    n1: (key) => {
-      const a = arr(byName[key]);
-      return a.length ? (a[0] == null ? NaN : Number(a[0])) : NaN;
-    },
-  };
-}

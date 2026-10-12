@@ -15,7 +15,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, rounded: int, metaMap } = globalThis.ctStd;
+const { fmtP, fixed: f, rounded: int, metaMap, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -78,22 +78,22 @@ export async function run(app, { dvs, group }) {
 
   const r = flat((await app.webr.run(rCode)).result);
   const tests = ["Pillai's Trace", "Wilks' Lambda", 'Hotelling–Lawley Trace', "Roy's Largest Root"];
-  const stat = r.num('stat');
-  const aF = r.num('approxF');
-  const df1 = r.num('df1');
-  const df2 = r.num('df2');
-  const p = r.num('p');
+  const stat = r.nums('stat');
+  const aF = r.nums('approxF');
+  const df1 = r.nums('df1');
+  const df2 = r.nums('df2');
+  const p = r.nums('p');
   await app.results.appendTable(
     {
       columns: ['Test', 'Value', 'Approx. F', 'Hypothesis df', 'Error df', 'Sig.'],
       rows: tests.map((t, i) => [t, f(stat[i], 3), f(aF[i], 3), int(df1[i]), int(df2[i]), fmtP(p[i])]),
       rowHeaders: true,
     },
-    { caption: `Multivariate Tests — effect: ${label(meta, group)} (N = ${int(r.n1('n'))})` },
+    { caption: `Multivariate Tests — effect: ${label(meta, group)} (N = ${int(r.num1('n'))})` },
   );
 
-  const uF = r.num('uF');
-  const uP = r.num('uP');
+  const uF = r.nums('uF');
+  const uP = r.nums('uP');
   await app.results.appendTable(
     {
       columns: ['Outcome', 'F', 'Sig.'],
@@ -109,20 +109,4 @@ export async function run(app, { dvs, group }) {
 
 function label(meta, name) {
   return meta.get(name)?.label || name;
-}
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList || {});
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    num: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    n1: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? (a[0] == null ? NaN : Number(a[0])) : NaN;
-    },
-  };
 }

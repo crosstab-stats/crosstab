@@ -33,7 +33,7 @@ const DESIGN_INPUTS = [
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, ci, labelOf, metaMap, rStr } = globalThis.ctStd;
+const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -135,7 +135,7 @@ export async function means(app, { vars, weight, strata, cluster }) {
       rows: terms.map((t, i) => [labelOf(meta.get(t), t), f(mean[i], 3), f(se[i], 3), ci(lo[i], hi[i]), f(uw[i], 3)]),
       rowHeaders: true,
     },
-    { caption: `Weighted Means — ${designCaption(meta, weight, strata, cluster)} (N = ${r.num('n')})` },
+    { caption: `Weighted Means — ${designCaption(meta, weight, strata, cluster)} (N = ${r.num1('n')})` },
   );
   await app.results.appendText(
     'Estimates use the survey weights; standard errors and CIs account for the design (weights' +
@@ -173,7 +173,7 @@ export async function crosstab(app, { rowvar, colvar, weight, strata, cluster })
   const lv = (m, code) => m?.valueLabels?.[code] ?? code;
   const nc = cl.length;
   const rows = rl.map((rr, i) => [lv(meta.get(rowvar), rr), ...cl.map((_, j) => Math.round(counts[i * nc + j] ?? 0)), Math.round(rt[i])]);
-  rows.push(['Total', ...ct.map((v) => Math.round(v)), Math.round(r.num('total'))]);
+  rows.push(['Total', ...ct.map((v) => Math.round(v)), Math.round(r.num1('total'))]);
   await app.results.appendTable(
     { columns: ['', ...cl.map((c) => lv(meta.get(colvar), c)), 'Total'], rows, rowHeaders: true },
     { caption: `Weighted counts — ${labelOf(meta.get(rowvar), rowvar)} × ${labelOf(meta.get(colvar), colvar)}` },
@@ -181,10 +181,10 @@ export async function crosstab(app, { rowvar, colvar, weight, strata, cluster })
   await app.results.appendTable(
     {
       columns: ['', 'F', 'num df', 'den df', 'Sig.'],
-      rows: [['Rao-Scott Chi-Square', f(r.num('Fstat'), 3), f(r.num('ndf'), 2), f(r.num('ddf'), 1), fmtP(r.num('p'))]],
+      rows: [['Rao-Scott Chi-Square', f(r.num1('Fstat'), 3), f(r.num1('ndf'), 2), f(r.num1('ddf'), 1), fmtP(r.num1('p'))]],
       rowHeaders: true,
     },
-    { caption: `Design-Based Test of Independence (N = ${r.num('n')})` },
+    { caption: `Design-Based Test of Independence (N = ${r.num1('n')})` },
   );
   await app.results.appendText('Counts are weighted (sums of survey weights). The Rao-Scott test is the design-corrected analogue of the Pearson chi-square.');
 }
@@ -245,7 +245,7 @@ export async function regression(app, { dv, ivs, yes, family, weight, strata, cl
     {
       caption: `Survey ${logistic ? 'Logistic ' : ''}Regression — outcome: ${labelOf(meta.get(dv), dv)}`
         + `${logistic ? `, modelling ${lvl(meta.get(dv), r.str1('pos'))}` : ''}`
-        + ` (N = ${r.num('n')})`,
+        + ` (N = ${r.num1('n')})`,
     },
   );
   await app.results.appendText(
@@ -288,23 +288,4 @@ function lvl(meta, code) {
 function prettyTerm(term) {
   const m = /^factor\(`?(.+?)`?\)(.*)$/.exec(term);
   return m ? `${m[1]}${m[2] ? ` = ${m[2]}` : ''}` : term.replace(/`/g, '');
-}
-
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList);
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map(Number),
-    strs: (k) => arr(byName[k]).map(String),
-    str1: (k) => { const a = arr(byName[k]); return a.length && a[0] != null ? String(a[0]) : ''; },
-    num: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? Number(a[0]) : NaN;
-    },
-  };
 }

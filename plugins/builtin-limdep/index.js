@@ -20,7 +20,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, labelOf, metaMap, rStr } = globalThis.ctStd;
+const { fmtP, fixed: f, labelOf, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -110,7 +110,7 @@ export async function quantile(app, { y: yName, ivs: ivNames, taus }) {
         ...taus2.map((_, j) => withStars(est[j * nT + i], p[j * nT + i]))]),
       rowHeaders: true,
     },
-    { caption: `Quantile Regression — outcome: ${labelOf(meta.get(yName), yName)} (N = ${r.num('n')})` },
+    { caption: `Quantile Regression — outcome: ${labelOf(meta.get(yName), yName)} (N = ${r.num1('n')})` },
   );
   await app.results.appendText(
     'Each column is a separate regression at that quantile of the outcome. Comparing a predictor\'s coefficient across quantiles shows whether its effect is larger at the bottom vs the top of the distribution (e.g. a policy that helps low earners more than high earners). Stars: * p<.05, ** p<.01.',
@@ -149,7 +149,7 @@ export async function tobit(app, { y: yName, ivs: ivNames, left, right }) {
       rows: terms.map((t, i) => [tobitTerm(t), f(est[i], 4), f(se[i], 4), f(z[i], 2), fmtP(p[i])]),
       rowHeaders: true,
     },
-    { caption: `Tobit Regression — outcome: ${labelOf(meta.get(yName), yName)} (N = ${r.num('n')}; censored: ${r.num('nLeft')} low, ${r.num('nRight')} high)` },
+    { caption: `Tobit Regression — outcome: ${labelOf(meta.get(yName), yName)} (N = ${r.num1('n')}; censored: ${r.num1('nLeft')} low, ${r.num1('nRight')} high)` },
   );
   await app.results.appendText(
     'Tobit models a **latent** outcome that is observed only within the censoring limits; coefficients are on that latent scale (the direction and significance read like OLS). Use it when many cases pile up exactly at a floor or ceiling. `Log(scale)` is the log residual SD.',
@@ -190,7 +190,7 @@ export async function heckman(app, { y: yName, outIv: outNames, sel: selName, se
       rows: terms.map((t2, i) => [`${section(i)}${heckLabel(t2)}`, f(est[i], 4), f(se[i], 4), f(t[i], 2), fmtP(p[i])]),
       rowHeaders: true,
     },
-    { caption: `Heckman Selection — outcome: ${labelOf(meta.get(yName), yName)} (N = ${r.num('n')})` },
+    { caption: `Heckman Selection — outcome: ${labelOf(meta.get(yName), yName)} (N = ${r.num1('n')})` },
   );
   await app.results.appendText(
     'The **selection** equation models who is observed; the **outcome** equation is corrected for that selection. A significant **invMillsRatio** (or **ρ** far from 0) means selection bias was present and OLS on the observed cases alone would be biased. ρ is the correlation between the two equations\' errors.',
@@ -228,22 +228,4 @@ function heckLabel(t) {
 function prettyTerm(term) {
   const m = /^factor\(`?(.+?)`?\)(.*)$/.exec(term);
   return m ? `${m[1]}${m[2] ? ` = ${m[2]}` : ''}` : term.replace(/`/g, '');
-}
-
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList || {});
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    strs: (k) => arr(byName[k]).map((x) => (x == null ? 'NA' : String(x))),
-    num: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? Number(a[0]) : NaN;
-    },
-  };
 }

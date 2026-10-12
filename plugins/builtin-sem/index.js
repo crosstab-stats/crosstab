@@ -44,7 +44,7 @@ if (!isTRUE(getOption("ct.lavaan.patched"))) {
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, labelOf, metaMap, rStr } = globalThis.ctStd;
+const { fmtP, fixed: f, labelOf, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -130,16 +130,16 @@ export async function cfa(app, { items, factorName }) {
     {
       columns: ['', 'Value'],
       rows: [
-        ['χ² (df)', `${f(r.num('chisq'), 2)} (${f(r.num('df'), 0)})`],
-        ['p (χ²)', fmtP(r.num('pval'))],
-        ['CFI', f(r.num('cfi'), 3)],
-        ['TLI', f(r.num('tli'), 3)],
-        ['RMSEA [90% CI]', `${f(r.num('rmsea'), 3)} [${f(r.num('rlo'), 3)}, ${f(r.num('rhi'), 3)}]`],
-        ['SRMR', f(r.num('srmr'), 3)],
+        ['χ² (df)', `${f(r.num1('chisq'), 2)} (${f(r.num1('df'), 0)})`],
+        ['p (χ²)', fmtP(r.num1('pval'))],
+        ['CFI', f(r.num1('cfi'), 3)],
+        ['TLI', f(r.num1('tli'), 3)],
+        ['RMSEA [90% CI]', `${f(r.num1('rmsea'), 3)} [${f(r.num1('rlo'), 3)}, ${f(r.num1('rhi'), 3)}]`],
+        ['SRMR', f(r.num1('srmr'), 3)],
       ],
       rowHeaders: true,
     },
-    { caption: `CFA Fit — ${fac} =~ ${items.length} items (N = ${r.num('n')})` },
+    { caption: `CFA Fit — ${fac} =~ ${items.length} items (N = ${r.num1('n')})` },
   );
 
   const its = r.strs('items'), std = r.nums('std'), se = r.nums('se'), z = r.nums('z'), p = r.nums('p');
@@ -186,16 +186,16 @@ export async function sem(app, { vars, model }) {
     {
       columns: ['', 'Value'],
       rows: [
-        ['χ² (df)', `${f(r.num('chisq'), 2)} (${f(r.num('df'), 0)})`],
-        ['p (χ²)', fmtP(r.num('pval'))],
-        ['CFI', f(r.num('cfi'), 3)],
-        ['TLI', f(r.num('tli'), 3)],
-        ['RMSEA', f(r.num('rmsea'), 3)],
-        ['SRMR', f(r.num('srmr'), 3)],
+        ['χ² (df)', `${f(r.num1('chisq'), 2)} (${f(r.num1('df'), 0)})`],
+        ['p (χ²)', fmtP(r.num1('pval'))],
+        ['CFI', f(r.num1('cfi'), 3)],
+        ['TLI', f(r.num1('tli'), 3)],
+        ['RMSEA', f(r.num1('rmsea'), 3)],
+        ['SRMR', f(r.num1('srmr'), 3)],
       ],
       rowHeaders: true,
     },
-    { caption: `SEM Fit (N = ${r.num('n')})` },
+    { caption: `SEM Fit (N = ${r.num1('n')})` },
   );
   const lhs = r.strs('lhs'), op = r.strs('op'), rhs = r.strs('rhs'), std = r.nums('std'), se = r.nums('se'), z = r.nums('z'), p = r.nums('p');
   const opLabel = { '=~': 'loads', '~': 'on', '~~': 'with' };
@@ -288,7 +288,7 @@ export async function growth(app, { waves, quadratic }) {
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
-  if (!r.num('ok')) {
+  if (!r.num1('ok')) {
     await app.results.appendError(
       'The growth model did not converge. With few occasions or little between-person variation '
       + 'there may be nothing for a random slope to explain; try dropping the quadratic term, or '
@@ -301,7 +301,7 @@ export async function growth(app, { waves, quadratic }) {
   await app.results.beginAnalysis('Latent growth curve');
   await app.results.appendText(
     `Occasions, in order: ${names.map((nm) => labelOf(meta.get(nm), nm)).join(' → ')}. Modelled at times `
-    + `${names.map((_, i) => i).join(', ')} — equally spaced. N = ${f(r.num('n'), 0)}.`,
+    + `${names.map((_, i) => i).join(', ')} — equally spaced. N = ${f(r.num1('n'), 0)}.`,
   );
 
   const mLhs = r.strs('mLhs');
@@ -358,22 +358,4 @@ async function runR(app, rCode) {
 function sanitizeName(s) {
   const n = String(s ?? '').trim().replace(/[^A-Za-z0-9_]/g, '');
   return /^[A-Za-z]/.test(n) ? n : '';
-}
-
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList);
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map(Number),
-    strs: (k) => arr(byName[k]).map(String),
-    num: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? Number(a[0]) : NaN;
-    },
-  };
 }

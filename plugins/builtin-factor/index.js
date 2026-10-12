@@ -16,7 +16,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, rounded: int, rStr } = globalThis.ctStd;
+const { fmtP, fixed: f, rounded: int, rStr, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -117,13 +117,13 @@ export async function run(app, { vars, nfactors, method, rotation }) {
   await app.results.appendTable(
     {
       columns: ['Kaiser-Meyer-Olkin (KMO)', "Bartlett's χ²", 'df', 'Sig.'],
-      rows: [[f(r.n1('kmo'), 3), f(r.n1('bartChi'), 3), int(r.n1('bartDf')), fmtP(r.n1('bartP'))]],
+      rows: [[f(r.num1('kmo'), 3), f(r.num1('bartChi'), 3), int(r.num1('bartDf')), fmtP(r.num1('bartP'))]],
     },
     { caption: 'KMO and Bartlett’s Test' },
   );
 
   // Total Variance Explained (initial eigenvalues).
-  const ev = r.num('ev');
+  const ev = r.nums('ev');
   const total = ev.reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0);
   let cum = 0;
   await app.results.appendTable(
@@ -136,7 +136,7 @@ export async function run(app, { vars, nfactors, method, rotation }) {
       }),
       rowHeaders: true,
     },
-    { caption: `Total Variance Explained — ${int(r.n1('nf'))} factor(s) extracted` },
+    { caption: `Total Variance Explained — ${int(r.num1('nf'))} factor(s) extracted` },
   );
 
   // Scree plot — Layer-2 data model (line over components), host-rendered with live
@@ -155,10 +155,10 @@ export async function run(app, { vars, nfactors, method, rotation }) {
   }
 
   // Factor loadings (rotated), small loadings (|λ| < .30) blanked for legibility.
-  const nItems = r.n1('nItems');
-  const nFac = r.n1('nFac');
-  const load = r.num('loadings'); // column-major: load[j*nItems + i]
-  const items = r.str('items');
+  const nItems = r.num1('nItems');
+  const nFac = r.num1('nFac');
+  const load = r.nums('loadings'); // column-major: load[j*nItems + i]
+  const items = r.strs('items');
   const facCols = Array.from({ length: nFac }, (_, j) => `Factor ${j + 1}`);
   await app.results.appendTable(
     {
@@ -180,25 +180,4 @@ export async function run(app, { vars, nfactors, method, rotation }) {
 
 function label(meta, name) {
   return meta.get(name)?.label || name;
-}
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList || {});
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    num: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    str: (k) => arr(byName[k]).map(String),
-    n1: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? (a[0] == null ? NaN : Number(a[0])) : NaN;
-    },
-    s1: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? String(a[0]) : '';
-    },
-  };
 }

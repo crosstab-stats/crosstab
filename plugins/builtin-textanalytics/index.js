@@ -25,7 +25,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { rStr } = globalThis.ctStd;
+const { rStr, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -157,7 +157,7 @@ export async function wordFrequency(app, { text, stopwords, topn, minlen }) {
     list(words = topf$word, n = topf$n, total = total, nDistinct = nDistinct)`;
   const { result } = await app.webr.run(rCode);
   const r = flat(result);
-  const words = r.strs('words'), counts = r.nums('n'), total = r.num('total');
+  const words = r.strs('words'), counts = r.nums('n'), total = r.num1('total');
   if (!words.length) {
     await app.results.appendText('No words found after filtering. Try keeping stop words or lowering the minimum word length.');
     return;
@@ -168,7 +168,7 @@ export async function wordFrequency(app, { text, stopwords, topn, minlen }) {
       rows: words.map((w, i) => [String(i + 1), w, String(counts[i]), `${((100 * counts[i]) / total).toFixed(2)}%`]),
       rowHeaders: false,
     },
-    { caption: `Word Frequency — ${total.toLocaleString()} word tokens, ${r.num('nDistinct').toLocaleString()} distinct` },
+    { caption: `Word Frequency — ${total.toLocaleString()} word tokens, ${r.num1('nDistinct').toLocaleString()} distinct` },
   );
   // Layer-2 bar chart of the top words (was a horizontal svglite barplot). Vertical
   // bars, host-rendered with live recolour/reorder; capped at 20 like the old plot.
@@ -247,7 +247,7 @@ export async function wordCloud(app, { text, topn, minlen, stopwords, layout, th
     await app.results.appendText('No words found after filtering. Try keeping stop words or lowering the minimum word length.');
     return;
   }
-  const contextual = layout !== 'spiral' && r.num('ok') === 1;
+  const contextual = layout !== 'spiral' && r.num1('ok') === 1;
   const data = { words, freq, x: r.nums('x'), y: r.nums('y'), cl: r.nums('cl').map((v) => Math.round(v)) };
   // Emits a chart MODEL, not a finished picture: the host owns the layout control
   // (one cloud vs grouped by theme), the palette and the persistence. The two word
@@ -276,7 +276,7 @@ export async function wordCloud(app, { text, topn, minlen, stopwords, layout, th
         themed ? [String(i + 1), words[i], String(freq[i]), `Theme ${data.cl[i]}`] : [String(i + 1), words[i], String(freq[i])]),
       rowHeaders: false,
     },
-    { caption: `Word Cloud — top ${tableTop} of ${r.num('nDistinct').toLocaleString()} distinct words (${r.num('total').toLocaleString()} tokens)` },
+    { caption: `Word Cloud — top ${tableTop} of ${r.num1('nDistinct').toLocaleString()} distinct words (${r.num1('total').toLocaleString()} tokens)` },
   );
   await app.results.appendText(
     contextual
@@ -322,7 +322,7 @@ export async function sentiment(app, { text, doc }) {
     ({ result } = await app.webr.run(rCode));
   }
   const r = flat(result);
-  const nPos = r.num('nPos'), nNeg = r.num('nNeg'), tot = nPos + nNeg;
+  const nPos = r.num1('nPos'), nNeg = r.num1('nNeg'), tot = nPos + nNeg;
   if (!tot) {
     await app.results.appendText('No sentiment-bearing words from the Bing lexicon were found in this text.');
     return;
@@ -437,7 +437,7 @@ export async function kwic(app, { text, term, window }) {
       rows: rows.map((rw, i) => [String(rw), `…${left[i]}`, kw[i], `${right[i]}…`]),
       rowHeaders: false,
     },
-    { caption: `Keyword in Context — "${term}" (${r.num('nHits')} occurrences in ${r.num('nDocs')} rows)` },
+    { caption: `Keyword in Context — "${term}" (${r.num1('nHits')} occurrences in ${r.num1('nDocs')} rows)` },
   );
 }
 
@@ -497,7 +497,7 @@ export async function topicModel(app, { text, k, topn }) {
   const rows = [...byTopic.entries()].sort((a, b) => a[0] - b[0]).map(([t, terms]) => [`Topic ${t}`, terms.join(', ')]);
   await app.results.appendTable(
     { columns: ['Topic', `Top ${N} terms`], rows, rowHeaders: true },
-    { caption: `Topic Modeling (LDA, k=${K}) — ${r.num('nDocs')} documents, ${r.num('nTerms')} terms` },
+    { caption: `Topic Modeling (LDA, k=${K}) — ${r.num1('nDocs')} documents, ${r.num1('nTerms')} terms` },
   );
   const dt = r.nums('domTopic'), dn = r.nums('domN');
   if (dt.length) {
@@ -545,14 +545,14 @@ export async function dictionary(app, { text, dict, doc }) {
          g = as.character(byGrpCat$grp), gc = byGrpCat$category, gn = byGrpCat$n)`;
   const { result } = await app.webr.run(rCode);
   const r = flat(result);
-  const cat = r.strs('cat'), n = r.nums('n'), nWords = r.num('nWords');
+  const cat = r.strs('cat'), n = r.nums('n'), nWords = r.num1('nWords');
   if (!cat.length) {
     await app.results.appendText('No dictionary terms matched the text. Check that the dictionary words match the language/spelling in the responses.');
     return;
   }
   await app.results.appendTable(
     { columns: ['Category', 'Matches', '% of words'], rows: cat.map((c, i) => [c, String(n[i]), `${((100 * n[i]) / nWords).toFixed(2)}%`]), rowHeaders: true },
-    { caption: `Content Analysis — ${nWords.toLocaleString()} words scored against ${r.num('nCats')} categories` },
+    { caption: `Content Analysis — ${nWords.toLocaleString()} words scored against ${r.num1('nCats')} categories` },
   );
   if (hasDoc) {
     const g = r.strs('g'), gc = r.strs('gc'), gn = r.nums('gn');
@@ -599,24 +599,3 @@ function cleanSvg(svg) {
 }
 
 
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList || {});
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    strs: (k) => arr(byName[k]).map(String),
-    num: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? Number(a[0]) : NaN;
-    },
-    str1: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? String(a[0]) : '';
-    },
-  };
-}

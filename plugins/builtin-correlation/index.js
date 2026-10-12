@@ -18,7 +18,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { rStr, fmtPInline } = globalThis.ctStd;
+const { rStr, fmtPInline, unpackR } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -256,20 +256,9 @@ export async function partial(app, { vars, controls, type }) {
 // --- helpers -----------------------------------------------------------------
 
 function normalizeResult(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((nm, i) => (byName[nm] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList);
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  const num = (v) => arr(v).map((x) => (x == null ? NaN : Number(x)));
-  const first = (v) => {
-    const a = num(v);
-    return a.length ? a[0] : NaN;
-  };
-  const kArr = num(byName.k);
-  return { k: kArr.length ? kArr[0] : 0, r: num(byName.r), p: num(byName.p), n: num(byName.n), nScalar: first(byName.n), df: first(byName.df) };
+  const r = unpackR(rList);
+  const kArr = r.nums('k');
+  return { k: kArr.length ? kArr[0] : 0, r: r.nums('r'), p: r.nums('p'), n: r.nums('n'), nScalar: r.num1('n'), df: r.num1('df') };
 }
 
 /** Coefficient with significance stars. */

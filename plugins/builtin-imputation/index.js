@@ -14,7 +14,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, ci, labelOf, metaMap, rStr } = globalThis.ctStd;
+const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -105,14 +105,14 @@ export async function run(app, { y: yName, ivs: ivNames, m, model }) {
   );
 
   const mv = r.strs('missVars'), mn = r.nums('missN');
-  const nAll = r.num('nrowAll');
+  const nAll = r.num1('nrowAll');
   await app.results.appendTable(
     {
       columns: ['Variable', 'Missing', '% missing'],
       rows: mv.map((v, i) => [v === '.y' ? labelOf(meta.get(yName), yName) : varName(v, ivNames, meta), String(mn[i]), `${((100 * mn[i]) / nAll).toFixed(1)}%`]),
       rowHeaders: true,
     },
-    { caption: `Missingness (N = ${nAll}; ${r.num('ncc')} complete cases)` },
+    { caption: `Missingness (N = ${nAll}; ${r.num1('ncc')} complete cases)` },
   );
   await app.results.appendText(
     'Estimates are pooled across the imputations by **Rubin\'s rules** (so the SEs include the extra uncertainty from imputing). **FMI** is the fraction of missing information for each coefficient — high FMI means that estimate leans heavily on imputed values. MI assumes data are **missing at random** (MAR) given the variables in the model.',
@@ -129,15 +129,4 @@ function prettyTermTok(term, ivNames, meta) {
   const m = /^V(\d+)(.*)$/.exec(term);
   if (m && ivNames[+m[1] - 1] != null) return `${labelOf(meta.get(ivNames[+m[1] - 1]), ivNames[+m[1] - 1])}${m[2] ? ` = ${m[2]}` : ''}`;
   return term;
-}
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  else Object.assign(byName, rList || {});
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    strs: (k) => arr(byName[k]).map((x) => (x == null ? 'NA' : String(x))),
-    num: (k) => { const a = arr(byName[k]); return a.length ? Number(a[0]) : NaN; },
-  };
 }

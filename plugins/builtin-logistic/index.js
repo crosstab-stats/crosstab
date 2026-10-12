@@ -38,7 +38,7 @@ const CASEWISE_CAP = 500;
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, fmtP, labelOf, rStr } = globalThis.ctStd;
+const { fixed: f, fmtP, labelOf, rStr, unpackR } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -418,60 +418,47 @@ ${needPred ? '    pred <- as.integer(p >= 0.5)\n' : ''}${want.has('class') ? `
 // --- helpers -----------------------------------------------------------------
 
 function normalizeResult(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList);
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  const num = (v) => arr(v).map((x) => (x == null ? NaN : Number(x)));
-  const str = (v) => arr(v).map((x) => (x == null ? '' : String(x)));
-  const scalar = (v) => {
-    const a = arr(v);
-    return a.length ? a[0] : v;
-  };
-  const one = (v) => (v == null ? NaN : Number(scalar(v)));
+  const r = unpackR(rList);
   return {
-    terms: str(byName.terms),
-    termVar: str(byName.termVar),
-    termLevel: str(byName.termLevel),
-    estimate: num(byName.estimate),
-    se: num(byName.se),
-    z: num(byName.z),
-    p: num(byName.p),
-    expb: num(byName.expb),
-    expbLo: num(byName.expbLo),
-    expbHi: num(byName.expbHi),
-    n: one(byName.n),
-    nulldev: one(byName.nulldev),
-    resdev: one(byName.resdev),
-    positive: String(scalar(byName.positive) ?? ''),
-    negative: String(scalar(byName.negative) ?? ''),
-    catVar: str(byName.catVar),
-    catRef: str(byName.catRef),
-    hlChisq: one(byName.hlChisq),
-    hlDf: one(byName.hlDf),
-    hlP: one(byName.hlP),
-    hlBin: str(byName.hlBin),
-    hlO0: num(byName.hlO0),
-    hlE0: num(byName.hlE0),
-    hlO1: num(byName.hlO1),
-    hlE1: num(byName.hlE1),
-    ct00: one(byName.ct00),
-    ct01: one(byName.ct01),
-    ct10: one(byName.ct10),
-    ct11: one(byName.ct11),
-    cwTotal: one(byName.cwTotal),
-    cwRow: num(byName.cwRow),
-    cwObs: num(byName.cwObs),
-    cwPred: num(byName.cwPred),
-    cwGroup: num(byName.cwGroup),
-    cwResid: num(byName.cwResid),
-    cwZ: num(byName.cwZ),
-    plBin: str(byName.plBin),
-    plC0: num(byName.plC0),
-    plC1: num(byName.plC1),
+    terms: r.strs('terms'),
+    termVar: r.strs('termVar'),
+    termLevel: r.strs('termLevel'),
+    estimate: r.nums('estimate'),
+    se: r.nums('se'),
+    z: r.nums('z'),
+    p: r.nums('p'),
+    expb: r.nums('expb'),
+    expbLo: r.nums('expbLo'),
+    expbHi: r.nums('expbHi'),
+    n: r.num1('n'),
+    nulldev: r.num1('nulldev'),
+    resdev: r.num1('resdev'),
+    positive: r.str1('positive'),
+    negative: r.str1('negative'),
+    catVar: r.strs('catVar'),
+    catRef: r.strs('catRef'),
+    hlChisq: r.num1('hlChisq'),
+    hlDf: r.num1('hlDf'),
+    hlP: r.num1('hlP'),
+    hlBin: r.strs('hlBin'),
+    hlO0: r.nums('hlO0'),
+    hlE0: r.nums('hlE0'),
+    hlO1: r.nums('hlO1'),
+    hlE1: r.nums('hlE1'),
+    ct00: r.num1('ct00'),
+    ct01: r.num1('ct01'),
+    ct10: r.num1('ct10'),
+    ct11: r.num1('ct11'),
+    cwTotal: r.num1('cwTotal'),
+    cwRow: r.nums('cwRow'),
+    cwObs: r.nums('cwObs'),
+    cwPred: r.nums('cwPred'),
+    cwGroup: r.nums('cwGroup'),
+    cwResid: r.nums('cwResid'),
+    cwZ: r.nums('cwZ'),
+    plBin: r.strs('plBin'),
+    plC0: r.nums('plC0'),
+    plC1: r.nums('plC1'),
   };
 }
 

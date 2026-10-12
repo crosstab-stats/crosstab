@@ -16,7 +16,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, rounded: int } = globalThis.ctStd;
+const { fixed: f, rounded: int, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -75,11 +75,11 @@ export async function run(app, { vars }) {
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
 
-  const omega = r.n1('omegaTot');
+  const omega = r.num1('omegaTot');
   await app.results.appendTable(
     {
       columns: ["Cronbach's α", "Cronbach's α (standardized)", "McDonald's ω", 'N of Items', 'N'],
-      rows: [[f(r.n1('alpha'), 3), f(r.n1('stdAlpha'), 3), f(omega, 3), int(r.n1('nItems')), int(r.n1('nCases'))]],
+      rows: [[f(r.num1('alpha'), 3), f(r.num1('stdAlpha'), 3), f(omega, 3), int(r.num1('nItems')), int(r.num1('nCases'))]],
     },
     { caption: 'Reliability Statistics' },
   );
@@ -89,16 +89,16 @@ export async function run(app, { vars }) {
     );
   }
 
-  const items = r.str('items');
+  const items = r.strs('items');
   await app.results.appendTable(
     {
       columns: ['Item', 'Mean', 'SD', 'Corrected Item-Total Correlation', "Cronbach's α if Item Deleted"],
       rows: items.map((it, i) => [
         label(meta, it),
-        f(r.num('itemMean')[i], 3),
-        f(r.num('itemSD')[i], 3),
-        f(r.num('itemR')[i], 3),
-        fAlpha(r.num('alphaDrop')[i]),
+        f(r.nums('itemMean')[i], 3),
+        f(r.nums('itemSD')[i], 3),
+        f(r.nums('itemR')[i], 3),
+        fAlpha(r.nums('alphaDrop')[i]),
       ]),
       rowHeaders: true,
     },
@@ -110,23 +110,6 @@ export async function run(app, { vars }) {
 
 function label(meta, name) {
   return meta.get(name)?.label || name;
-}
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList || {});
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    num: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    str: (k) => arr(byName[k]).map(String),
-    n1: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? (a[0] == null ? NaN : Number(a[0])) : NaN;
-    },
-  };
 }
 /** Alpha can't exceed 1; psych's "if deleted" is degenerate for a 2-item scale. */
 const fAlpha = (x) => (Number.isFinite(x) && x <= 1.0001 ? x.toFixed(3) : '—');

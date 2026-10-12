@@ -18,7 +18,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, metaMap, rStr, labelOf: labelOfStd } = globalThis.ctStd;
+const { fmtP, fixed: f, metaMap, rStr, labelOf: labelOfStd, unpackR: flat } = globalThis.ctStd;
 
 /** Bare label, no `(column)` suffix: these become series names in a plot legend, where
  * the column name is clutter. Not drift — a deliberate difference, kept as an option. */
@@ -112,15 +112,15 @@ export async function varModel(app, { series, lag, type, horizon }) {
          gcF = gcF, gcP = gcP, svg = svg)`;
   const r = flat(await runR(app, rCode));
   const disp = r.strs('dispnames');
-  const p = r.num('p');
+  const p = r.num1('p');
 
   await app.results.appendTable(
     {
       columns: ['', 'Value'],
       rows: [
         ['Lag order (p)', `${f(p, 0)}${pFixed >= 1 ? ' (fixed)' : ' (AIC)'}`],
-        ['Observations used', f(r.num('nobs'), 0)],
-        ['Suggested lags — AIC / HQ / SC / FPE', `${r.num('aic')} / ${r.num('hq')} / ${r.num('sc')} / ${r.num('fpe')}`],
+        ['Observations used', f(r.num1('nobs'), 0)],
+        ['Suggested lags — AIC / HQ / SC / FPE', `${r.num1('aic')} / ${r.num1('hq')} / ${r.num1('sc')} / ${r.num1('fpe')}`],
       ],
       rowHeaders: true,
     },
@@ -186,26 +186,4 @@ function varTerm(term, disp, varcols) {
   if (term === 'const') return '(Constant)';
   if (term === 'trend') return 'Trend';
   return term;
-}
-
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList || {});
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    strs: (k) => arr(byName[k]).map((x) => (x == null ? 'NA' : String(x))),
-    num: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? Number(a[0]) : NaN;
-    },
-    str1: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? String(a[0]) : '';
-    },
-  };
 }

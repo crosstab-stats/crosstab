@@ -14,7 +14,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f } = globalThis.ctStd;
+const { fixed: f, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -82,17 +82,17 @@ export async function run(app, { from: fromName, to: toName, directed }) {
     {
       columns: ['', 'Value'],
       rows: [
-        ['Nodes', f(r.num('nodes'), 0)],
-        ['Edges', f(r.num('edges'), 0)],
-        ['Density', f(r.num('density'), 4)],
-        ['Components', f(r.num('ncomp'), 0)],
-        ['Transitivity (clustering)', f(r.num('transitivity'), 4)],
-        ['Avg. path length', f(r.num('apl'), 3)],
-        ['Diameter', f(r.num('diameter'), 0)],
+        ['Nodes', f(r.num1('nodes'), 0)],
+        ['Edges', f(r.num1('edges'), 0)],
+        ['Density', f(r.num1('density'), 4)],
+        ['Components', f(r.num1('ncomp'), 0)],
+        ['Transitivity (clustering)', f(r.num1('transitivity'), 4)],
+        ['Avg. path length', f(r.num1('apl'), 3)],
+        ['Diameter', f(r.num1('diameter'), 0)],
       ],
       rowHeaders: true,
     },
-    { caption: `Network Summary (${r.num('directed') === 1 ? 'directed' : 'undirected'})` },
+    { caption: `Network Summary (${r.num1('directed') === 1 ? 'directed' : 'undirected'})` },
   );
 
   const nm = r.strs('topName'), deg = r.nums('topDeg'), btw = r.nums('topBtw'), clo = r.nums('topClo'), eig = r.nums('topEig');
@@ -113,15 +113,3 @@ export async function run(app, { from: fromName, to: toName, directed }) {
 
 // --- helpers -----------------------------------------------------------------
 function cleanSvg(svg) { return String(svg).replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1').replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1'); }
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  else Object.assign(byName, rList || {});
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    strs: (k) => arr(byName[k]).map((x) => (x == null ? 'NA' : String(x))),
-    num: (k) => { const a = arr(byName[k]); return a.length ? Number(a[0]) : NaN; },
-    str1: (k) => { const a = arr(byName[k]); return a.length ? String(a[0]) : ''; },
-  };
-}

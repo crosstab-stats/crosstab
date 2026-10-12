@@ -30,7 +30,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, labelOf, metaMap, rStr, ci: ciAt } = globalThis.ctStd;
+const { fmtP, fixed: f, labelOf, metaMap, rStr, ci: ciAt, unpackR: flat } = globalThis.ctStd;
 
 /** This plugin reports four decimals: a marginal effect or a trend slope can be small
  * enough that three prints `[0.000, 0.001]`. The precision is the caller's; the
@@ -197,7 +197,7 @@ export async function margins(app, { dv: dvName, ivs: ivNames, yes, family, kind
         // Only the binary families model "a category"; for linear/Poisson there is no
         // positive level and claiming one would be its own small lie.
         + `${binaryFam ? `, modelling ${lvl(meta.get(dvName), r.str1('pos'))}` : ''}`
-        + ` (N = ${r.num('n')})`,
+        + ` (N = ${r.num1('n')})`,
     },
   );
 
@@ -235,23 +235,4 @@ function lvl(meta, code) {
   if (code == null || code === '' || code === 'NA') return '?';
   const v = meta?.valueLabels?.[code] ?? meta?.valueLabels?.[Number(code)];
   return v != null && v !== '' ? String(v) : String(code);
-}
-
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList);
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map(Number),
-    strs: (k) => arr(byName[k]).map(String),
-    str1: (k) => { const a = arr(byName[k]); return a.length && a[0] != null ? String(a[0]) : ''; },
-    num: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? Number(a[0]) : NaN;
-    },
-  };
 }

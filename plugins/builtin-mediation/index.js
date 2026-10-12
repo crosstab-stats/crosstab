@@ -33,7 +33,7 @@ if (!isTRUE(getOption("ct.lavaan.patched"))) {
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fmtPInline, fixed: f, ci, metaMap, rStr } = globalThis.ctStd;
+const { fmtP, fmtPInline, fixed: f, ci, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -129,7 +129,7 @@ export async function mediation(app, { x: xName, m: mName, y: yName, covs: covNa
       rows: lab.map((l, i) => [nameMap[l] || l, f(est[i], 3), f(sev[i], 3), f(z[i], 2), fmtP(p[i]), ci(lo[i], hi[i])]),
       rowHeaders: true,
     },
-    { caption: `Mediation — ${shortLabel(meta, xName)} → ${shortLabel(meta, mName)} → ${shortLabel(meta, yName)} (N = ${r.num('n')}${boot ? ', bootstrap' : ''})` },
+    { caption: `Mediation — ${shortLabel(meta, xName)} → ${shortLabel(meta, mName)} → ${shortLabel(meta, yName)} (N = ${r.num1('n')}${boot ? ', bootstrap' : ''})` },
   );
   await app.results.appendText(
     `The **indirect effect (a × b)** is the part of X's effect that runs through the mediator; a significant indirect effect is the evidence for mediation. **c′** is the remaining direct effect. ` +
@@ -175,7 +175,7 @@ export async function moderation(app, { y: yName, x: xName, w: wName, covs: covN
       rows: terms.map((t, i) => [modTerm(t, meta, xName, wName), f(est[i], 3), f(sev[i], 3), f(tv[i], 2), fmtP(p[i])]),
       rowHeaders: true,
     },
-    { caption: `Moderation — ${shortLabel(meta, yName)} regressed on ${shortLabel(meta, xName)} × ${shortLabel(meta, wName)} (N = ${r.num('n')})` },
+    { caption: `Moderation — ${shortLabel(meta, yName)} regressed on ${shortLabel(meta, xName)} × ${shortLabel(meta, wName)} (N = ${r.num1('n')})` },
   );
 
   const wl = r.strs('wlabels'), lv = r.nums('levels'), sl = r.nums('slope'), sse = r.nums('sslope'), st = r.nums('st'), sp = r.nums('sp');
@@ -218,22 +218,4 @@ function modTerm(term, meta, xName, wName) {
 function prettyTerm(term) {
   const m = /^factor\(`?(.+?)`?\)(.*)$/.exec(term);
   return m ? `${m[1]}${m[2] ? ` = ${m[2]}` : ''}` : term.replace(/`/g, '');
-}
-
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList || {});
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    strs: (k) => arr(byName[k]).map((x) => (x == null ? 'NA' : String(x))),
-    num: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? Number(a[0]) : NaN;
-    },
-  };
 }

@@ -21,7 +21,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, rounded: int, metaMap, rStr } = globalThis.ctStd;
+const { fmtP, fixed: f, rounded: int, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -104,15 +104,15 @@ export async function robust(app, { dv, ivs }) {
          bpStat = unname(bp$statistic), bpDf = unname(bp$parameter), bpP = bp$p.value,
          r2 = summary(fit)$r.squared, n = nrow(d))`;
   const r = flat((await app.webr.run(rCode)).result);
-  await coeffTable(app, meta, r, `Robust (HC1) Coefficients — dependent: ${label(meta, dv)} (N = ${int(r.n1('n'))})`);
+  await coeffTable(app, meta, r, `Robust (HC1) Coefficients — dependent: ${label(meta, dv)} (N = ${int(r.num1('n'))})`);
   await app.results.appendTable(
     {
       columns: ['', 'Value'],
       rows: [
-        ['R Square', f(r.n1('r2'), 3)],
-        ['Breusch–Pagan χ²', f(r.n1('bpStat'), 3)],
-        ['BP df', int(r.n1('bpDf'))],
-        ['BP Sig.', fmtP(r.n1('bpP'))],
+        ['R Square', f(r.num1('r2'), 3)],
+        ['Breusch–Pagan χ²', f(r.num1('bpStat'), 3)],
+        ['BP df', int(r.num1('bpDf'))],
+        ['BP Sig.', fmtP(r.num1('bpP'))],
       ],
       rowHeaders: true,
     },
@@ -143,10 +143,10 @@ export async function iv(app, { dv, endog, instruments, controls }) {
     list(terms = rownames(co), est = co[, 1], se = co[, 2], t = co[, 3], p = co[, 4],
          diagNames = rownames(dg), diagStat = dg[, "statistic"], diagP = dg[, "p-value"], n = nobs(fit))`;
   const r = flat((await app.webr.run(rCode)).result);
-  await coeffTable(app, meta, r, `2SLS Coefficients — dependent: ${label(meta, dv)} (N = ${int(r.n1('n'))})`);
-  const dn = r.str('diagNames');
-  const ds = r.num('diagStat');
-  const dp = r.num('diagP');
+  await coeffTable(app, meta, r, `2SLS Coefficients — dependent: ${label(meta, dv)} (N = ${int(r.num1('n'))})`);
+  const dn = r.strs('diagNames');
+  const ds = r.nums('diagStat');
+  const dp = r.nums('diagP');
   await app.results.appendTable(
     {
       columns: ['Diagnostic', 'Statistic', 'Sig.'],
@@ -177,9 +177,9 @@ export async function panel(app, { dv, ivs, id, time, model }) {
          r2 = unname(s$r.squared["rsq"]), n = length(residuals(fit)))`;
   const r = flat((await app.webr.run(rCode)).result);
   const mdlLabel = { within: 'Fixed effects (within)', random: 'Random effects', pooling: 'Pooled OLS' }[mdl];
-  await coeffTable(app, meta, r, `Panel — ${mdlLabel} — dependent: ${label(meta, dv)} (N = ${int(r.n1('n'))})`);
+  await coeffTable(app, meta, r, `Panel — ${mdlLabel} — dependent: ${label(meta, dv)} (N = ${int(r.num1('n'))})`);
   await app.results.appendTable(
-    { columns: ['', 'Value'], rows: [['R Square', f(r.n1('r2'), 3)]], rowHeaders: true },
+    { columns: ['', 'Value'], rows: [['R Square', f(r.num1('r2'), 3)]], rowHeaders: true },
     { caption: 'Model Fit' },
   );
 }
@@ -187,11 +187,11 @@ export async function panel(app, { dv, ivs, id, time, model }) {
 // --- shared rendering --------------------------------------------------------
 
 async function coeffTable(app, meta, r, caption) {
-  const terms = r.str('terms');
-  const est = r.num('est');
-  const se = r.num('se');
-  const t = r.num('t');
-  const p = r.num('p');
+  const terms = r.strs('terms');
+  const est = r.nums('est');
+  const se = r.nums('se');
+  const t = r.nums('t');
+  const p = r.nums('p');
   await app.results.appendTable(
     {
       columns: ['', 'B', 'Std. Error', 't / z', 'Sig.'],
@@ -225,21 +225,4 @@ function prettyTerm(t) {
 }
 function rNames(names) {
   return `c(${names.map((n) => rStr(n)).join(', ')})`;
-}
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList || {});
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    num: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    str: (k) => arr(byName[k]).map((x) => (x == null ? '' : String(x))),
-    n1: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? (a[0] == null ? NaN : Number(a[0])) : NaN;
-    },
-  };
 }

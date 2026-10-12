@@ -43,7 +43,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, labelOf: labelOfStd, metaMap } = globalThis.ctStd;
+const { fixed: f, labelOf: labelOfStd, metaMap, unpackR: flat } = globalThis.ctStd;
 
 /** Bare label, no `(column)` suffix. This plugin names occasions and indicators in
  * PROSE — "Baseline → Year 1 → Year 2" — where the column name is noise. Its old copy
@@ -245,7 +245,7 @@ export async function lca(app, { items, classes, seed, save }) {
       const pClass = r.nums('pClass');
       const pCat = r.nums('pCat');
       const pVal = r.nums('pVal');
-      const k = r.num('k');
+      const k = r.num1('k');
       const cats = new Map();
       pItem.forEach((it, i) => {
         if (!cats.has(it)) cats.set(it, new Set());
@@ -347,7 +347,7 @@ export async function lpa(app, { items, classes, seed, save }) {
     seedVal,
     save: String(save ?? 'no') === 'yes',
     detail: async () => {
-      const k = r.num('k');
+      const k = r.num1('k');
       const ci = r.strs('cenItem');
       const cc = r.nums('cenClass');
       const cv = r.nums('cenVals');
@@ -487,11 +487,11 @@ export async function gmm(app, { waves, classes, seed, save }) {
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
   await app.results.beginAnalysis('Growth mixture model');
-  const dropped = r.num('nDropped');
+  const dropped = r.num1('nDropped');
   await app.results.appendText(
     `Occasions, in order: ${names.map((nm) => labelOf(meta.get(nm), nm)).join(' → ')}. Modelled at times `
     + `${names.map((_, i) => i).join(', ')} — equally spaced, so the slope is per OCCASION. `
-    + `${f(r.num('n'), 0)} people${dropped ? `, ${f(dropped, 0)} dropped for having fewer than two usable occasions` : ''}. `
+    + `${f(r.num1('n'), 0)} people${dropped ? `, ${f(dropped, 0)} dropped for having fewer than two usable occasions` : ''}. `
     + `Random seed ${seedVal}.`,
   );
 
@@ -503,7 +503,7 @@ export async function gmm(app, { waves, classes, seed, save }) {
     save: String(save ?? 'no') === 'yes',
     quiet: true, // the header above already says the indicators and the seed
     detail: async () => {
-      const k = r.num('k');
+      const k = r.num1('k');
       const pn = r.strs('parNames');
       const pc = r.nums('parClass');
       const pv = r.nums('parVals');
@@ -561,7 +561,7 @@ async function reportMixture(app, r, { kind, names, meta, seedVal, save, detail,
   // "2 classs" in the guidance the whole table hangs on.
   const many = kind === 'class' ? 'classes' : 'profiles';
   const some = (n) => `${f(n, 0)} ${n === 1 ? kind : many}`;
-  const k = r.num('k');
+  const k = r.num1('k');
   const cmpK = r.nums('cmpK');
   const ent = r.nums('cmpEnt');
   const small = r.nums('cmpSmall');
@@ -572,7 +572,7 @@ async function reportMixture(app, r, { kind, names, meta, seedVal, save, detail,
   if (!quiet) {
     await app.results.appendText(
       `Indicators: ${names.map((nm) => labelOf(meta.get(nm), nm)).join(', ')}. `
-      + `N = ${f(r.num('n'), 0)} complete cases. Random seed ${seedVal} — `
+      + `N = ${f(r.num1('n'), 0)} complete cases. Random seed ${seedVal} — `
       + 'these models start from random values, so the seed is part of the result.',
     );
   }
@@ -654,7 +654,7 @@ async function saveMembership(app, r, { kind, Kind, meta }) {
   columns[cname] = assign.map((a) => String(a));
   columns[pname] = post.map((p) => (Number.isFinite(p) ? p : null));
   await app.data.create({
-    name: `${kind === 'class' ? 'Classes' : 'Profiles'} (k = ${f(r.num('k'), 0)})`,
+    name: `${kind === 'class' ? 'Classes' : 'Profiles'} (k = ${f(r.num1('k'), 0)})`,
     variables: [
       ...colNames.map((nm) => byName[nm] || { name: nm }),
       { name: cname, type: 'string', measurementLevel: 'nominal', label: `${Kind} membership (modal)` },
@@ -694,21 +694,4 @@ function uniqueName(name, taken) {
   if (!used.has(name)) return name;
   for (let i = 2; i < 1000; i += 1) if (!used.has(`${name}_${i}`)) return `${name}_${i}`;
   return `${name}_x`;
-}
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList);
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map(Number),
-    strs: (k) => arr(byName[k]).map(String),
-    num: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? Number(a[0]) : NaN;
-    },
-  };
 }

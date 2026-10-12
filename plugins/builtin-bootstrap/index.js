@@ -19,7 +19,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, rounded } = globalThis.ctStd;
+const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, rounded, unpackR } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -171,25 +171,15 @@ export async function run(app, { x: name, reps }) {
 // --- helpers -----------------------------------------------------------------
 
 function normalizeResult(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList);
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  const scalar = (v) => {
-    const a = arr(v);
-    return a.length ? Number(a[0]) : Number(v);
-  };
+  const r = unpackR(rList);
   return {
-    boot: arr(byName.boot).map(Number),
-    observed: scalar(byName.observed),
-    se: scalar(byName.se),
-    ci_lo: scalar(byName.ci_lo),
-    ci_hi: scalar(byName.ci_hi),
-    n: scalar(byName.n),
-    reps: scalar(byName.reps),
+    boot: r.nums('boot'),
+    observed: r.num1('observed'),
+    se: r.num1('se'),
+    ci_lo: r.num1('ci_lo'),
+    ci_hi: r.num1('ci_hi'),
+    n: r.num1('n'),
+    reps: r.num1('reps'),
   };
 }
 
@@ -229,11 +219,11 @@ export async function bootStatistic(app, { x: name, stat, reps }) {
     list(observed = b$t0, se = sd(b$t), lo = bca[1], hi = bca[2], n = n, reps = B)`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
-  const r = flatList(result);
+  const r = unpackR(result);
   await app.results.appendTable(
     {
       columns: [STAT_LABEL[stat] || 'Statistic', 'Bootstrap SE', '95% CI (BCa)', 'N', 'Resamples'],
-      rows: [[f(r.num('observed'), 3), f(r.num('se'), 3), ci(r.num('lo'), r.num('hi')), f(r.num('n'), 0), f(r.num('reps'), 0)]],
+      rows: [[f(r.num1('observed'), 3), f(r.num1('se'), 3), ci(r.num1('lo'), r.num1('hi')), f(r.num1('n'), 0), f(r.num1('reps'), 0)]],
     },
     { caption: `Bootstrap — ${STAT_LABEL[stat] || stat} of ${labelOf(meta.get(name), name)}` },
   );
@@ -260,11 +250,11 @@ export async function bootCorr(app, { x: xName, y: yName, reps }) {
     list(observed = b$t0, se = sd(b$t), lo = bca[1], hi = bca[2], n = nrow(d), reps = B)`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
-  const r = flatList(result);
+  const r = unpackR(result);
   await app.results.appendTable(
     {
       columns: ['Pearson r', 'Bootstrap SE', '95% CI (BCa)', 'N pairs', 'Resamples'],
-      rows: [[f(r.num('observed'), 3), f(r.num('se'), 3), ci(r.num('lo'), r.num('hi')), f(r.num('n'), 0), f(r.num('reps'), 0)]],
+      rows: [[f(r.num1('observed'), 3), f(r.num1('se'), 3), ci(r.num1('lo'), r.num1('hi')), f(r.num1('n'), 0), f(r.num1('reps'), 0)]],
     },
     { caption: `Bootstrap correlation — ${labelOf(meta.get(xName), xName)} & ${labelOf(meta.get(yName), yName)}` },
   );
@@ -305,15 +295,15 @@ export async function permutation(app, { y: yName, group: gName, g1, g2, stat, r
          obs = obs, p = p, reps = B)`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
-  const r = flatList(result);
+  const r = unpackR(result);
   const lv = r.strs('lv');
   const what = stat === 'median' ? 'medians' : 'means';
   await app.results.appendTable(
     {
       columns: ['Group', 'N', stat === 'median' ? 'Median' : 'Mean'],
       rows: [
-        [labelLevel(meta.get(gName), gName, lv[0]), f(r.num('n1'), 0), f(r.num('m1'), 3)],
-        [labelLevel(meta.get(gName), gName, lv[1]), f(r.num('n2'), 0), f(r.num('m2'), 3)],
+        [labelLevel(meta.get(gName), gName, lv[0]), f(r.num1('n1'), 0), f(r.num1('m1'), 3)],
+        [labelLevel(meta.get(gName), gName, lv[1]), f(r.num1('n2'), 0), f(r.num1('m2'), 3)],
       ],
     },
     { caption: `Permutation test — ${labelOf(meta.get(yName), yName)} by ${labelOf(meta.get(gName), gName)}` },
@@ -321,7 +311,7 @@ export async function permutation(app, { y: yName, group: gName, g1, g2, stat, r
   await app.results.appendTable(
     {
       columns: [`Observed difference in ${what}`, 'Permutation p (two-sided)', 'Permutations'],
-      rows: [[f(r.num('obs'), 3), fmtP(r.num('p')), f(r.num('reps'), 0)]],
+      rows: [[f(r.num1('obs'), 3), fmtP(r.num1('p')), f(r.num1('reps'), 0)]],
     },
     { caption: 'Randomization Test' },
   );
@@ -355,17 +345,17 @@ export async function power(app, { n, d, alpha, reps }) {
     list(n = n0, d = d, alpha = alpha, power = power0, reps = B, nstar = nstar)`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
-  const r = flatList(result);
-  const nstar = r.num('nstar');
+  const r = unpackR(result);
+  const nstar = r.num1('nstar');
   await app.results.appendTable(
     {
       columns: ['N per group', "Effect size (d)", 'Alpha', 'Simulated power', 'Simulations'],
-      rows: [[f(r.num('n'), 0), f(r.num('d'), 2), f(r.num('alpha'), 3), f(r.num('power'), 3), f(r.num('reps'), 0)]],
+      rows: [[f(r.num1('n'), 0), f(r.num1('d'), 2), f(r.num1('alpha'), 3), f(r.num1('power'), 3), f(r.num1('reps'), 0)]],
     },
     { caption: 'Power Analysis (simulation) — two-sample t-test' },
   );
   await app.results.appendText(
-    `Estimated by simulating ${r.num('reps').toLocaleString()} studies and counting how often p < α. ` +
+    `Estimated by simulating ${r.num1('reps').toLocaleString()} studies and counting how often p < α. ` +
       (Number.isFinite(nstar)
         ? `To reach **80% power** at this effect size you'd need roughly **${Math.round(nstar)} per group** (≈ ${Math.round(nstar) * 2} total).`
         : 'Increase N (or the effect size) and re-run to reach a higher power.'),
@@ -380,20 +370,3 @@ function labelLevel(meta, name, level) {
 }
 
 /** Flatten an R list (`{names, values}` or plain) into typed accessors. */
-function flatList(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList);
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map(Number),
-    strs: (k) => arr(byName[k]).map(String),
-    num: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? Number(a[0]) : NaN;
-    },
-  };
-}

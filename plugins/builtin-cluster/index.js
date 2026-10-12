@@ -18,7 +18,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, labelOf, metaMap } = globalThis.ctStd;
+const { fixed: f, labelOf, metaMap, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -85,16 +85,16 @@ export async function kmeans(app, { vars, k, standardize }) {
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
-  const kk = r.num('k'), sizes = r.nums('sizes'), vnames = r.strs('vars'), centers = r.nums('centers');
-  const explained = r.num('totss') > 0 ? (100 * r.num('betweenss')) / r.num('totss') : NaN;
+  const kk = r.num1('k'), sizes = r.nums('sizes'), vnames = r.strs('vars'), centers = r.nums('centers');
+  const explained = r.num1('totss') > 0 ? (100 * r.num1('betweenss')) / r.num1('totss') : NaN;
 
   await app.results.appendTable(
     {
       columns: ['Cluster', 'N', '% of cases'],
-      rows: sizes.map((s, i) => [`${i + 1}`, f(s, 0), `${f((100 * s) / r.num('n'), 1)}%`]),
+      rows: sizes.map((s, i) => [`${i + 1}`, f(s, 0), `${f((100 * s) / r.num1('n'), 1)}%`]),
       rowHeaders: true,
     },
-    { caption: `k-means — ${kk} clusters on ${vnames.length} variable${vnames.length === 1 ? '' : 's'} (N = ${r.num('n')})` },
+    { caption: `k-means — ${kk} clusters on ${vnames.length} variable${vnames.length === 1 ? '' : 's'} (N = ${r.num1('n')})` },
   );
 
   // centers flattened column-major: value for variable v, cluster c = v*k + c
@@ -117,22 +117,4 @@ export async function kmeans(app, { vars, k, standardize }) {
 
 function identicalRaw(s) {
   return s === 'raw';
-}
-
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList);
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map(Number),
-    strs: (k) => arr(byName[k]).map(String),
-    num: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? Number(a[0]) : NaN;
-    },
-  };
 }

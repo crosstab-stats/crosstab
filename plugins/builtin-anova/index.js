@@ -20,7 +20,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, rounded: int, metaMap, rStr } = globalThis.ctStd;
+const { fmtP, fixed: f, rounded: int, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -128,14 +128,14 @@ export async function factorial(app, { dv, facs }) {
          grandMean = mean(d$.y), grandSD = stats::sd(d$.y))`;
 
   const r = flat((await app.webr.run(rCode)).result);
-  const terms = r.str('terms');
-  const ss = r.num('ss');
-  const df = r.num('df');
-  const F = r.num('F');
-  const p = r.num('p');
-  const ssRes = r.n1('ssRes');
-  const dfRes = r.n1('dfRes');
-  const ssTot = r.n1('ssTot');
+  const terms = r.strs('terms');
+  const ss = r.nums('ss');
+  const df = r.nums('df');
+  const F = r.nums('F');
+  const p = r.nums('p');
+  const ssRes = r.num1('ssRes');
+  const dfRes = r.num1('dfRes');
+  const ssTot = r.num1('ssTot');
   const msRes = ssRes / dfRes;
   const dispName = (t) => t.split(':').map((part) => {
     const i = tok.indexOf(part.trim());
@@ -144,27 +144,27 @@ export async function factorial(app, { dv, facs }) {
 
   // SPSS's order: the cell means first, because on a 2x2 they are what gets
   // interpreted and the F table only says whether the pattern is real.
-  const cells = r.str('cellName');
+  const cells = r.strs('cellName');
   await app.results.appendTable(
     {
       columns: [facNames.map((n) => label(meta, n)).join(' × '), 'Mean', 'Std. Deviation', 'N'],
       rows: [
         ...cells.map((c, i) => [
           c.split('.').map((lvl, j) => valueLabel(meta, facNames[j], lvl)).join(' × '),
-          f(r.num('cellMean')[i], 3), f(r.num('cellSD')[i], 3), int(r.num('cellN')[i]),
+          f(r.nums('cellMean')[i], 3), f(r.nums('cellSD')[i], 3), int(r.nums('cellN')[i]),
         ]),
-        ['Total', f(r.n1('grandMean'), 3), f(r.n1('grandSD'), 3), int(r.n1('n'))],
+        ['Total', f(r.num1('grandMean'), 3), f(r.num1('grandSD'), 3), int(r.num1('n'))],
       ],
       rowHeaders: true,
     },
     { caption: `Descriptive Statistics — dependent: ${label(meta, dv)}` },
   );
 
-  if (Number.isFinite(r.n1('levF'))) {
+  if (Number.isFinite(r.num1('levF'))) {
     await app.results.appendTable(
       {
         columns: ['', 'Levene Statistic', 'df1', 'df2', 'Sig.'],
-        rows: [['Based on Mean', f(r.n1('levF'), 3), int(r.n1('levDf1')), int(r.n1('levDf2')), fmtP(r.n1('levP'))]],
+        rows: [['Based on Mean', f(r.num1('levF'), 3), int(r.num1('levDf1')), int(r.num1('levDf2')), fmtP(r.num1('levP'))]],
         rowHeaders: true,
       },
       { caption: `Levene's Test of Equality of Error Variances — dependent: ${label(meta, dv)}` },
@@ -185,15 +185,15 @@ export async function factorial(app, { dv, facs }) {
     {
       columns: ['Source', 'Type III Sum of Squares', 'df', 'Mean Square', 'F', 'Sig.', 'Partial η²'],
       rows: [
-        effect('Corrected Model', ssModel, dfModel, r.n1('fModel'), r.n1('pModel'),
+        effect('Corrected Model', ssModel, dfModel, r.num1('fModel'), r.num1('pModel'),
           ssModel / (ssModel + ssRes)),
         ...terms.map((t, i) => effect(dispName(t), ss[i], df[i], F[i], p[i], ss[i] / (ss[i] + ssRes))),
         effect('Error', ssRes, dfRes, NaN, NaN, null),
-        effect('Corrected Total', ssTot, r.n1('n') - 1, NaN, NaN, null),
+        effect('Corrected Total', ssTot, r.num1('n') - 1, NaN, NaN, null),
       ],
       rowHeaders: true,
     },
-    { caption: `Tests of Between-Subjects Effects — dependent: ${label(meta, dv)} (N = ${int(r.n1('n'))})` },
+    { caption: `Tests of Between-Subjects Effects — dependent: ${label(meta, dv)} (N = ${int(r.num1('n'))})` },
   );
 
   await app.results.appendText(
@@ -283,26 +283,26 @@ export async function repeated(app, { vars }) {
     )`;
 
   const r = flat((await app.webr.run(rCode)).result);
-  const means = r.num('means');
-  const sds = r.num('sds');
+  const means = r.nums('means');
+  const sds = r.nums('sds');
   await app.results.appendTable(
     {
       columns: ['Measure', 'Mean', 'SD', 'N'],
-      rows: names.map((nm, i) => [label(meta, nm), f(means[i], 3), f(sds[i], 3), int(r.n1('n'))]),
+      rows: names.map((nm, i) => [label(meta, nm), f(means[i], 3), f(sds[i], 3), int(r.num1('n'))]),
       rowHeaders: true,
     },
     { caption: 'Descriptive Statistics' },
   );
 
-  const ssCond = r.n1('ssCond');
-  const ssRes = r.n1('ssRes');
-  const dfCond = r.n1('dfCond');
-  const dfRes = r.n1('dfRes');
-  const Fv = r.n1('F');
-  const ggE = r.n1('ggE');
-  const hfE = r.n1('hfE');
-  const lbE = r.n1('lbE');
-  const tested = Number.isFinite(r.n1('mauW'));
+  const ssCond = r.num1('ssCond');
+  const ssRes = r.num1('ssRes');
+  const dfCond = r.num1('dfCond');
+  const dfRes = r.num1('dfRes');
+  const Fv = r.num1('F');
+  const ggE = r.num1('ggE');
+  const hfE = r.num1('hfE');
+  const lbE = r.num1('lbE');
+  const tested = Number.isFinite(r.num1('mauW'));
 
   if (tested) {
     await app.results.appendTable(
@@ -310,7 +310,7 @@ export async function repeated(app, { vars }) {
         columns: ["Mauchly's W", 'Approx. Chi-Square', 'df', 'Sig.',
           'ε Greenhouse-Geisser', 'ε Huynh-Feldt', 'ε Lower-bound'],
         rows: [[
-          f(r.n1('mauW'), 3), f(r.n1('mauChi'), 3), int(r.n1('mauDf')), fmtP(r.n1('mauP')),
+          f(r.num1('mauW'), 3), f(r.num1('mauChi'), 3), int(r.num1('mauDf')), fmtP(r.num1('mauP')),
           f(ggE, 3), f(hfE, 3), f(lbE, 3),
         ]],
         rowHeaders: false,
@@ -329,12 +329,12 @@ export async function repeated(app, { vars }) {
     f(ssCond / (ssCond + ssRes), 3),
   ];
   const resRow = (name, eps) => [name, f(ssRes, 3), f(dfRes * eps, 3), f(ssRes / (dfRes * eps), 3), '', '', ''];
-  const effect = [row('Sphericity Assumed', 1, r.n1('p'))];
+  const effect = [row('Sphericity Assumed', 1, r.num1('p'))];
   const resid = [resRow('Sphericity Assumed', 1)];
   if (tested) {
-    effect.push(row('Greenhouse-Geisser', ggE, r.n1('ggP')));
-    effect.push(row('Huynh-Feldt', hfE, r.n1('hfP')));
-    effect.push(row('Lower-bound', lbE, r.n1('lbP')));
+    effect.push(row('Greenhouse-Geisser', ggE, r.num1('ggP')));
+    effect.push(row('Huynh-Feldt', hfE, r.num1('hfP')));
+    effect.push(row('Lower-bound', lbE, r.num1('lbP')));
     resid.push(resRow('Greenhouse-Geisser', ggE), resRow('Huynh-Feldt', hfE), resRow('Lower-bound', lbE));
   }
   await app.results.appendTable(
@@ -382,21 +382,4 @@ function prettyTerm(t) {
       return m ? m[1] : part.replace(/`/g, '').trim();
     })
     .join(' × ');
-}
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList || {});
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    num: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    str: (k) => arr(byName[k]).map((x) => (x == null ? '' : String(x))),
-    n1: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? (a[0] == null ? NaN : Number(a[0])) : NaN;
-    },
-  };
 }

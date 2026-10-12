@@ -44,7 +44,7 @@ test('a degenerate pair reports no correlation rather than a NaN', () => {
   // Zero variance in either measure, or |r| = 1, leaves the t undefined.
   assert.match(PAIRED, /if \(v1 > 0 && v2 > 0\)/);
   assert.match(PAIRED, /abs\(rPair\) >= 1 \|\| n <= 2/);
-  assert.match(PAIRED, /if \(Number\.isFinite\(r\.n1\('rPair'\)\)\)/, 'and the table is gated in JS too');
+  assert.match(PAIRED, /if \(Number\.isFinite\(r\.num1\('rPair'\)\)\)/, 'and the table is gated in JS too');
 });
 
 test('regression splits Model Summary from the ANOVA table, as SPSS does', () => {

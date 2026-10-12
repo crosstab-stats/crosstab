@@ -22,7 +22,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, labelOf, metaMap } = globalThis.ctStd;
+const { fixed: f, labelOf, metaMap, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -96,7 +96,7 @@ export async function correspondence(app, { rowvar: rowName, colvar: colName }) 
       rows: dim.map((d, i) => [String(d), f(sv[i], 4), f(iner[i], 4), `${f(pct[i], 1)}%`, `${f(cum[i], 1)}%`]),
       rowHeaders: true,
     },
-    { caption: `Correspondence Analysis — ${labelOf(meta.get(rowName), rowName)} × ${labelOf(meta.get(colName), colName)} (total inertia = ${f(r.num('totalInertia'), 4)})` },
+    { caption: `Correspondence Analysis — ${labelOf(meta.get(rowName), rowName)} × ${labelOf(meta.get(colName), colName)} (total inertia = ${f(r.num1('totalInertia'), 4)})` },
   );
   const svg = r.str1('svg');
   if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg), { title: 'Correspondence biplot' });
@@ -135,10 +135,10 @@ export async function mds(app, { vars, label: labelName }) {
     {
       columns: ['', 'Value'],
       rows: [
-        ['Objects mapped', f(r.num('n'), 0)],
-        ['Goodness of fit (2-D)', f(r.num('goodness'), 3)],
-        ['Eigenvalue — Dim 1', f(r.num('ev1'), 3)],
-        ['Eigenvalue — Dim 2', f(r.num('ev2'), 3)],
+        ['Objects mapped', f(r.num1('n'), 0)],
+        ['Goodness of fit (2-D)', f(r.num1('goodness'), 3)],
+        ['Eigenvalue — Dim 1', f(r.num1('ev1'), 3)],
+        ['Eigenvalue — Dim 2', f(r.num1('ev2'), 3)],
       ],
       rowHeaders: true,
     },
@@ -153,14 +153,3 @@ export async function mds(app, { vars, label: labelName }) {
 
 // --- helpers -----------------------------------------------------------------
 function cleanSvg(svg) { return String(svg).replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1').replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1'); }
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  else Object.assign(byName, rList || {});
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    num: (k) => { const a = arr(byName[k]); return a.length ? Number(a[0]) : NaN; },
-    str1: (k) => { const a = arr(byName[k]); return a.length ? String(a[0]) : ''; },
-  };
-}

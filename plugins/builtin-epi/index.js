@@ -17,7 +17,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, ci, labelOf, metaMap } = globalThis.ctStd;
+const { fixed: f, ci, labelOf, metaMap, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -76,17 +76,21 @@ export async function run(app, { exposure: expName, outcome: outName, exposed, c
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
-  const a = r.num('a'), b = r.num('b'), c = r.num('c'), d = r.num('d');
+  const a = r.num1('a'), b = r.num1('b'), c = r.num1('c'), d = r.num1('d');
   if ([a, b, c, d].some((x) => !Number.isFinite(x)) || a + b === 0 || c + d === 0) {
     await app.results.appendError('Need a complete 2×2 table — make sure both variables are binary with cases in each group.');
     return;
   }
 
   // Labels come from the levels the RECODE reported, never from a code literal.
-  const lv = (m, code) => (code == null ? '?' : meta.get(m)?.valueLabels?.[code] ?? code);
+  // The absent case renders `?`. This plugin's own `str` accessor returned null for a
+  // missing factor attribute while the shared `str1` returns '', so the guard tests
+  // both rather than relying on which one it is. Not `!code`: a level code of "0" is
+  // falsy-looking and must still be looked up.
+  const lv = (m, code) => (code == null || code === '' ? '?' : meta.get(m)?.valueLabels?.[code] ?? code);
   const expLab = labelOf(meta.get(expName), expName), outLab = labelOf(meta.get(outName), outName);
-  const expPos = r.str('expPos'), expNeg = r.str('expNeg');
-  const outPos = r.str('outPos'), outNeg = r.str('outNeg');
+  const expPos = r.str1('expPos'), expNeg = r.str1('expNeg');
+  const outPos = r.str1('outPos'), outNeg = r.str1('outNeg');
 
   // 2x2 counts table.
   await app.results.appendTable(
@@ -99,7 +103,7 @@ export async function run(app, { exposure: expName, outcome: outName, exposed, c
       ],
       rowHeaders: true,
     },
-    { caption: `2×2 Table — ${expLab} × ${outLab} (N = ${r.num('n')})` },
+    { caption: `2×2 Table — ${expLab} × ${outLab} (N = ${r.num1('n')})` },
   );
 
   const re = a / (a + b), ru = c / (c + d);
@@ -149,13 +153,3 @@ const BIN01_R = `bin01 <- function(v, want = NULL){
   structure(as.integer(ch == pos), pos = pos, neg = neg) }`;
 
 function pct(x) { return Number.isFinite(x) ? `${(100 * x).toFixed(1)}%` : '—'; }
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  else Object.assign(byName, rList || {});
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    num: (k) => { const x = arr(byName[k]); return x.length ? Number(x[0]) : NaN; },
-    str: (k) => { const x = arr(byName[k]); return x.length && x[0] != null ? String(x[0]) : null; },
-  };
-}

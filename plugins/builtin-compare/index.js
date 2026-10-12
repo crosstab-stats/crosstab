@@ -71,7 +71,7 @@ const WEIGHTED_R = `
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, rounded: int, ci, metaMap: metaMapOf } = globalThis.ctStd;
+const { fmtP, fixed: f, rounded: int, ci, metaMap: metaMapOf, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -172,8 +172,8 @@ export async function oneSample(app, { x: name, mu, weight }) {
     {
       columns: ['Test value', 'N', 'Mean', 'SD', 'Mean diff.', 't', 'df', 'Sig. (2-tailed)', "Cohen's d", '95% CI of diff.'],
       rows: [[
-        f(r.n1('mu'), 3), int(r.n1('n')), f(r.n1('mean'), 3), f(r.n1('sd'), 3), f(r.n1('diff'), 3),
-        f(r.n1('t'), 3), fmtDf(r.n1('df')), fmtP(r.n1('p')), f(r.n1('d'), 3), ci(r.n1('lo'), r.n1('hi')),
+        f(r.num1('mu'), 3), int(r.num1('n')), f(r.num1('mean'), 3), f(r.num1('sd'), 3), f(r.num1('diff'), 3),
+        f(r.num1('t'), 3), fmtDf(r.num1('df')), fmtP(r.num1('p')), f(r.num1('d'), 3), ci(r.num1('lo'), r.num1('hi')),
       ]],
     },
     { caption: `One-Sample t-Test — ${label(meta, name)}${wSuffix(meta, weight)}` },
@@ -255,18 +255,18 @@ export async function independent(app, { y: yName, g: gName, g1, g2, weight }) {
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
-  const lv = r.str('levels');
+  const lv = r.strs('levels');
   const ws = wSuffix(meta, weight);
   await app.results.appendTable(
     {
       columns: ['Group', 'N', 'Mean', 'SD'],
-      rows: lv.map((l, i) => [valueLabel(meta, gName, l), int(r.num('n')[i]), f(r.num('mean')[i], 3), f(r.num('sd')[i], 3)]),
+      rows: lv.map((l, i) => [valueLabel(meta, gName, l), int(r.nums('n')[i]), f(r.nums('mean')[i], 3), f(r.nums('sd')[i], 3)]),
       rowHeaders: true,
     },
     { caption: `Group Statistics — ${label(meta, yName)} by ${label(meta, gName)}${ws}` },
   );
 
-  const diff = f(r.n1('diff'), 3);
+  const diff = f(r.num1('diff'), 3);
   await app.results.appendTable(
     {
       columns: [
@@ -283,36 +283,36 @@ export async function independent(app, { y: yName, g: gName, g1, g2, weight }) {
       rows: [
         [
           'Equal variances assumed',
-          f(r.n1('levF'), 3),
-          fmtP(r.n1('levP')),
-          f(r.n1('tp'), 3),
-          fmtDf(r.n1('dfp')),
-          fmtP(r.n1('pp')),
+          f(r.num1('levF'), 3),
+          fmtP(r.num1('levP')),
+          f(r.num1('tp'), 3),
+          fmtDf(r.num1('dfp')),
+          fmtP(r.num1('pp')),
           diff,
-          f(r.n1('sep'), 3),
-          ci(r.n1('plo'), r.n1('phi')),
+          f(r.num1('sep'), 3),
+          ci(r.num1('plo'), r.num1('phi')),
         ],
         [
           'Equal variances not assumed',
           '',
           '',
-          f(r.n1('tw'), 3),
-          fmtDf(r.n1('dfw')),
-          fmtP(r.n1('pw')),
+          f(r.num1('tw'), 3),
+          fmtDf(r.num1('dfw')),
+          fmtP(r.num1('pw')),
           diff,
-          f(r.n1('sew'), 3),
-          ci(r.n1('wlo'), r.n1('whi')),
+          f(r.num1('sew'), 3),
+          ci(r.num1('wlo'), r.num1('whi')),
         ],
       ],
       rowHeaders: true,
     },
     { caption: `Independent-Samples Test${ws}` },
   );
-  const sig = r.n1('levP') < 0.05;
+  const sig = r.num1('levP') < 0.05;
   await app.results.appendText(
-    `Read Levene's test first. Here Sig. = ${fmtP(r.n1('levP'))}, so the variances ` +
+    `Read Levene's test first. Here Sig. = ${fmtP(r.num1('levP'))}, so the variances ` +
       `${sig ? 'differ' : 'can be treated as equal'} — report the **equal variances ` +
-      `${sig ? 'not ' : ''}assumed** row. Cohen's d = ${f(r.n1('d'), 3)} (pooled SD).\n\n` +
+      `${sig ? 'not ' : ''}assumed** row. Cohen's d = ${f(r.num1('d'), 3)} (pooled SD).\n\n` +
       "_Levene's is centred on the group means here, matching SPSS's t-test output. " +
       'Assumptions ▸ Homogeneity of variance runs the median-centred (Brown–Forsythe) ' +
       'variant, which is more robust and will give a slightly different F._',
@@ -360,20 +360,20 @@ export async function paired(app, { x1: n1, x2: n2, weight }) {
     {
       columns: ['', 'N', 'Mean', 'SD'],
       rows: [
-        [label(meta, n1), int(r.n1('n')), f(r.n1('m1'), 3), f(r.n1('sd1'), 3)],
-        [label(meta, n2), int(r.n1('n')), f(r.n1('m2'), 3), f(r.n1('sd2'), 3)],
+        [label(meta, n1), int(r.num1('n')), f(r.num1('m1'), 3), f(r.num1('sd1'), 3)],
+        [label(meta, n2), int(r.num1('n')), f(r.num1('m2'), 3), f(r.num1('sd2'), 3)],
       ],
       rowHeaders: true,
     },
     { caption: `Paired Statistics${ws}` },
   );
-  if (Number.isFinite(r.n1('rPair'))) {
+  if (Number.isFinite(r.num1('rPair'))) {
     await app.results.appendTable(
       {
         columns: ['', 'N', 'Correlation', 'Sig.'],
         rows: [[
           `${label(meta, n1)} & ${label(meta, n2)}`,
-          int(r.n1('n')), f(r.n1('rPair'), 3), fmtP(r.n1('rP')),
+          int(r.num1('n')), f(r.num1('rPair'), 3), fmtP(r.num1('rP')),
         ]],
         rowHeaders: true,
       },
@@ -384,8 +384,8 @@ export async function paired(app, { x1: n1, x2: n2, weight }) {
     {
       columns: ['Mean diff.', 'SD diff.', 't', 'df', 'Sig. (2-tailed)', "Cohen's d", '95% CI of diff.'],
       rows: [[
-        f(r.n1('diff'), 3), f(r.n1('sddiff'), 3), f(r.n1('t'), 3), fmtDf(r.n1('df')), fmtP(r.n1('p')),
-        f(r.n1('diff') / r.n1('sddiff'), 3), ci(r.n1('lo'), r.n1('hi')),
+        f(r.num1('diff'), 3), f(r.num1('sddiff'), 3), f(r.num1('t'), 3), fmtDf(r.num1('df')), fmtP(r.num1('p')),
+        f(r.num1('diff') / r.num1('sddiff'), 3), ci(r.num1('lo'), r.num1('hi')),
       ]],
     },
     { caption: `Paired-Samples t-Test — ${label(meta, n1)} vs ${label(meta, n2)}${ws}` },
@@ -507,29 +507,29 @@ export async function oneway(app, { y: yName, g: gName, groups, weight }) {
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
-  const lv = r.str('levels');
+  const lv = r.strs('levels');
   const ws = wSuffix(meta, weight);
   await app.results.appendTable(
     {
       columns: ['Group', 'N', 'Mean', 'SD'],
-      rows: lv.map((l, i) => [valueLabel(meta, gName, l), int(r.num('gn')[i]), f(r.num('gmean')[i], 3), f(r.num('gsd')[i], 3)]),
+      rows: lv.map((l, i) => [valueLabel(meta, gName, l), int(r.nums('gn')[i]), f(r.nums('gmean')[i], 3), f(r.nums('gsd')[i], 3)]),
       rowHeaders: true,
     },
     { caption: `Descriptives — ${label(meta, yName)} by ${label(meta, gName)}${ws}` },
   );
-  const ssb = r.n1('ssb');
-  const ssw = r.n1('ssw');
-  const df1 = r.n1('df1');
-  const df2 = r.n1('df2');
+  const ssb = r.num1('ssb');
+  const ssw = r.num1('ssw');
+  const df1 = r.num1('df1');
+  const df2 = r.num1('df2');
 
   // SPSS's order, so the two outputs can be read side by side: Descriptives, then
   // homogeneity, then the ANOVA, then effect sizes, then the robust tests, then the
   // post-hoc comparisons.
-  if (Number.isFinite(r.n1('levF'))) {
+  if (Number.isFinite(r.num1('levF'))) {
     await app.results.appendTable(
       {
         columns: ['', 'Levene Statistic', 'df1', 'df2', 'Sig.'],
-        rows: [['Based on Mean', f(r.n1('levF'), 3), int(df1), int(df2), fmtP(r.n1('levP'))]],
+        rows: [['Based on Mean', f(r.num1('levF'), 3), int(df1), int(df2), fmtP(r.num1('levP'))]],
         rowHeaders: true,
       },
       { caption: `Test of Homogeneity of Variances — ${label(meta, yName)}${ws}` },
@@ -540,8 +540,8 @@ export async function oneway(app, { y: yName, g: gName, groups, weight }) {
     {
       columns: ['', 'Sum of Squares', 'df', 'Mean Square', 'F', 'Sig.'],
       rows: [
-        ['Between Groups', f(ssb, 3), int(df1), f(r.n1('msb'), 3), f(r.n1('Fval'), 3), fmtP(r.n1('p'))],
-        ['Within Groups', f(ssw, 3), int(df2), f(r.n1('msw'), 3), '', ''],
+        ['Between Groups', f(ssb, 3), int(df1), f(r.num1('msb'), 3), f(r.num1('Fval'), 3), fmtP(r.num1('p'))],
+        ['Within Groups', f(ssw, 3), int(df2), f(r.num1('msw'), 3), '', ''],
         ['Total', f(ssb + ssw, 3), int(df1 + df2), '', '', ''],
       ],
       rowHeaders: true,
@@ -552,22 +552,22 @@ export async function oneway(app, { y: yName, g: gName, groups, weight }) {
     {
       columns: ['', 'Point Estimate'],
       rows: [
-        ['Eta-squared', f(r.n1('eta2'), 3)],
-        ['Epsilon-squared', f(r.n1('eps2'), 3)],
-        ['Omega-squared (fixed-effect)', f(r.n1('om2'), 3)],
+        ['Eta-squared', f(r.num1('eta2'), 3)],
+        ['Epsilon-squared', f(r.num1('eps2'), 3)],
+        ['Omega-squared (fixed-effect)', f(r.num1('om2'), 3)],
       ],
       rowHeaders: true,
     },
     { caption: `ANOVA Effect Sizes${ws}` },
   );
 
-  if (Number.isFinite(r.n1('welF'))) {
+  if (Number.isFinite(r.num1('welF'))) {
     await app.results.appendTable(
       {
         columns: ['', 'Statistic', 'df1', 'df2', 'Sig.'],
         rows: [
-          ['Welch', f(r.n1('welF'), 3), int(df1), f(r.n1('welDf2'), 3), fmtP(r.n1('welP'))],
-          ['Brown-Forsythe', f(r.n1('bfF'), 3), int(df1), f(r.n1('bfDf2'), 3), fmtP(r.n1('bfP'))],
+          ['Welch', f(r.num1('welF'), 3), int(df1), f(r.num1('welDf2'), 3), fmtP(r.num1('welP'))],
+          ['Brown-Forsythe', f(r.num1('bfF'), 3), int(df1), f(r.num1('bfDf2'), 3), fmtP(r.num1('bfP'))],
         ],
         rowHeaders: true,
       },
@@ -575,11 +575,11 @@ export async function oneway(app, { y: yName, g: gName, groups, weight }) {
     );
   }
 
-  const tukI = r.str('tukI');
+  const tukI = r.strs('tukI');
   if (tukI.length) {
-    const tukJ = r.str('tukJ');
-    const diff = r.num('tukDiff');
-    const tp = r.num('tukP');
+    const tukJ = r.strs('tukJ');
+    const diff = r.nums('tukDiff');
+    const tp = r.nums('tukP');
     // SPSS's column set, and its star: the mean difference is flagged when the Tukey-
     // adjusted p clears .05, with the footnote that says so. The difference carries
     // the star, not the p, because that is where a reader looks for it.
@@ -591,9 +591,9 @@ export async function oneway(app, { y: yName, g: gName, groups, weight }) {
           valueLabel(meta, gName, a),
           valueLabel(meta, gName, tukJ[i]),
           starred(diff[i], i),
-          f(r.num('tukSE')[i], 3),
+          f(r.nums('tukSE')[i], 3),
           fmtP(tp[i]),
-          ci(r.num('tukLo')[i], r.num('tukUp')[i]),
+          ci(r.nums('tukLo')[i], r.nums('tukUp')[i]),
         ]),
         rowHeaders: true,
       },
@@ -649,25 +649,6 @@ function label(meta, name) {
 
 function valueLabel(meta, name, code) {
   return meta.get(name)?.valueLabels?.[code] ?? code;
-}
-
-/** Flatten a WebR tagged-list result into typed accessors. */
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList || {});
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    num: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    str: (k) => arr(byName[k]).map(String),
-    n1: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? Number(a[0]) : NaN;
-    },
-  };
 }
 
 const fmtDf = (d) => (Number.isFinite(d) ? (Number.isInteger(d) ? String(d) : d.toFixed(2)) : '—');

@@ -19,7 +19,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, labelOf, metaMap } = globalThis.ctStd;
+const { fixed: f, labelOf, metaMap, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -86,14 +86,14 @@ export async function inequality(app, { x: xName }) {
     {
       columns: ['Measure', 'Value'],
       rows: [
-        ['Gini coefficient', f(r.num('gini'), 4)],
-        ['Theil index', f(r.num('theil'), 4)],
-        ['Atkinson (ε = 0.5)', f(r.num('atkinson'), 4)],
-        ['Coefficient of variation', f(r.num('cv'), 4)],
+        ['Gini coefficient', f(r.num1('gini'), 4)],
+        ['Theil index', f(r.num1('theil'), 4)],
+        ['Atkinson (ε = 0.5)', f(r.num1('atkinson'), 4)],
+        ['Coefficient of variation', f(r.num1('cv'), 4)],
       ],
       rowHeaders: true,
     },
-    { caption: `Inequality — ${labelOf(meta.get(xName), xName)} (N = ${r.num('n')}, mean = ${f(r.num('mean'), 2)})` },
+    { caption: `Inequality — ${labelOf(meta.get(xName), xName)} (N = ${r.num1('n')}, mean = ${f(r.num1('mean'), 2)})` },
   );
   const svg = r.str1('svg');
   if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg), { title: 'Lorenz curve' });
@@ -126,14 +126,14 @@ export async function segregation(app, { groupA: aName, groupB: bName }) {
     {
       columns: ['Index', 'Value'],
       rows: [
-        ['Dissimilarity (D)', f(r.num('D'), 4)],
-        ['Gini segregation', f(r.num('gseg'), 4)],
-        [`Isolation (${labelOf(meta.get(aName), aName)})`, f(r.num('iso'), 4)],
-        [`Interaction (A with B)`, f(r.num('inter'), 4)],
+        ['Dissimilarity (D)', f(r.num1('D'), 4)],
+        ['Gini segregation', f(r.num1('gseg'), 4)],
+        [`Isolation (${labelOf(meta.get(aName), aName)})`, f(r.num1('iso'), 4)],
+        [`Interaction (A with B)`, f(r.num1('inter'), 4)],
       ],
       rowHeaders: true,
     },
-    { caption: `Segregation — ${labelOf(meta.get(aName), aName)} vs ${labelOf(meta.get(bName), bName)} (${r.num('nUnits')} units; totals ${r.num('TA')} / ${r.num('TB')})` },
+    { caption: `Segregation — ${labelOf(meta.get(aName), aName)} vs ${labelOf(meta.get(bName), bName)} (${r.num1('nUnits')} units; totals ${r.num1('TA')} / ${r.num1('TB')})` },
   );
   await app.results.appendText(
     '**Dissimilarity (D)** is the share of one group that would have to move to even out the distribution (0 = even, 1 = complete segregation; > .6 is high). **Isolation** is the average own-group share in the typical A-member\'s unit; **interaction** is the average exposure to group B. Indices depend on the spatial unit (the modifiable areal unit problem).',
@@ -144,14 +144,4 @@ export async function segregation(app, { groupA: aName, groupB: bName }) {
 
 function cleanSvg(svg) {
   return String(svg).replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1').replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1');
-}
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  else Object.assign(byName, rList || {});
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    num: (k) => { const a = arr(byName[k]); return a.length ? Number(a[0]) : NaN; },
-    str1: (k) => { const a = arr(byName[k]); return a.length ? String(a[0]) : ''; },
-  };
 }

@@ -18,7 +18,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fmtPInline, fixed: f, labelOf, metaMap, rStr, ci: ciAt } = globalThis.ctStd;
+const { fmtP, fmtPInline, fixed: f, labelOf, metaMap, rStr, ci: ciAt, unpackR: flat } = globalThis.ctStd;
 
 /** This plugin reports four decimals: a marginal effect or a trend slope can be small
  * enough that three prints `[0.000, 0.001]`. The precision is the caller's; the
@@ -108,19 +108,19 @@ export async function metaAnalysis(app, { yi: yiName, prec: precName, precType, 
   await app.results.appendTable(
     {
       columns: ['', 'Estimate', 'Std. Error', 'z', 'Sig.', '95% CI'],
-      rows: [['Pooled effect', f(r.num('est'), 4), f(r.num('se'), 4), f(r.num('z'), 2), fmtP(r.num('p')), ci(r.num('lo'), r.num('hi'))]],
+      rows: [['Pooled effect', f(r.num1('est'), 4), f(r.num1('se'), 4), f(r.num1('z'), 2), fmtP(r.num1('p')), ci(r.num1('lo'), r.num1('hi'))]],
       rowHeaders: true,
     },
-    { caption: `Meta-Analysis — ${model === 'FE' ? 'fixed/common effect' : 'random effects (REML)'}, k = ${r.num('k')} studies` },
+    { caption: `Meta-Analysis — ${model === 'FE' ? 'fixed/common effect' : 'random effects (REML)'}, k = ${r.num1('k')} studies` },
   );
   await app.results.appendTable(
     {
       columns: ['', 'Value'],
       rows: [
-        ['Q (heterogeneity)', `${f(r.num('QE'), 2)} (df ${f(r.num('QEdf'), 0)})`],
-        ['p (Q)', fmtP(r.num('QEp'))],
-        ['I²', `${f(r.num('I2'), 1)}%`],
-        ['τ² (between-study variance)', f(r.num('tau2'), 4)],
+        ['Q (heterogeneity)', `${f(r.num1('QE'), 2)} (df ${f(r.num1('QEdf'), 0)})`],
+        ['p (Q)', fmtP(r.num1('QEp'))],
+        ['I²', `${f(r.num1('I2'), 1)}%`],
+        ['τ² (between-study variance)', f(r.num1('tau2'), 4)],
       ],
       rowHeaders: true,
     },
@@ -152,14 +152,14 @@ export async function metaAnalysis(app, { yi: yiName, prec: precName, precType, 
       })),
       summary: {
         label: model === 'FE' ? 'Pooled (fixed effect)' : 'Pooled (random effects)',
-        est: r.num('est'),
-        lo: r.num('lo'),
-        hi: r.num('hi'),
+        est: r.num1('est'),
+        lo: r.num1('lo'),
+        hi: r.num1('hi'),
       },
     });
   }
 
-  if (r.num('hasMods') === 1 || r.strs('mrTerms').length) {
+  if (r.num1('hasMods') === 1 || r.strs('mrTerms').length) {
     const mt = r.strs('mrTerms'), me = r.nums('mrEst'), ms = r.nums('mrSe'), mz = r.nums('mrZ'), mp = r.nums('mrP');
     await app.results.appendTable(
       {
@@ -170,7 +170,7 @@ export async function metaAnalysis(app, { yi: yiName, prec: precName, precType, 
       { caption: 'Meta-Regression (moderators)' },
     );
     await app.results.appendText(
-      `Omnibus test of moderators: QM(${f(r.num('QMdf'), 0)}) = ${f(r.num('QM'), 2)}, ${fmtPInline(r.num('QMp'))}. Residual I² = ${f(r.num('I2res'), 1)}% (heterogeneity left unexplained by the moderators).`,
+      `Omnibus test of moderators: QM(${f(r.num1('QMdf'), 0)}) = ${f(r.num1('QM'), 2)}, ${fmtPInline(r.num1('QMp'))}. Residual I² = ${f(r.num1('I2res'), 1)}% (heterogeneity left unexplained by the moderators).`,
     );
   }
 
@@ -195,26 +195,4 @@ function metaRegTerm(term, mods, meta) {
     return `${labelOf(meta.get(mods[+m[1] - 1]), mods[+m[1] - 1])}${suffix ? ` = ${suffix}` : ''}`;
   }
   return term;
-}
-
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList || {});
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    strs: (k) => arr(byName[k]).map((x) => (x == null ? 'NA' : String(x))),
-    num: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? Number(a[0]) : NaN;
-    },
-    str1: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? String(a[0]) : '';
-    },
-  };
 }

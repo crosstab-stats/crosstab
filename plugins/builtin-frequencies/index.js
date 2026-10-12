@@ -86,7 +86,7 @@ export const WEIGHTED_R = `
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { rStr } = globalThis.ctStd;
+const { rStr, unpackR } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -383,50 +383,34 @@ function fmtNum(n) {
 // --- helpers -----------------------------------------------------------------
 
 function normalizeResult(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList);
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  const scalar = (v) => {
-    const a = arr(v);
-    return a.length ? a[0] : Number(v) || 0;
-  };
-  const num = (v) => {
-    const a = arr(v);
-    const x = a.length ? Number(a[0]) : NaN;
-    return Number.isFinite(x) ? x : NaN;
-  };
-  const str = (v) => {
-    const a = arr(v);
-    return a.length && a[0] != null ? String(a[0]) : '';
-  };
+  const r = unpackR(rList);
+  // `scalar` here defaulted an ABSENT name to 0 rather than NaN, and these are counts
+  // the table prints unconditionally, so that default is kept deliberately.
+  const count = (k) => (r.has(k) ? r.num1(k) : 0);
   return {
-    values: arr(byName.values).map(String),
-    counts: arr(byName.counts).map(Number),
-    percent: arr(byName.percent).map(Number),
-    valid_percent: arr(byName.valid_percent).map(Number),
-    cumulative: arr(byName.cumulative).map(Number),
-    n_total: scalar(byName.n_total),
-    n_valid: scalar(byName.n_valid),
-    n_missing: scalar(byName.n_missing),
-    dropped: scalar(byName.dropped),
-    mean: num(byName.mean),
-    median: num(byName.median),
-    sum: num(byName.sum),
-    sd: num(byName.sd),
-    variance: num(byName.variance),
-    se: num(byName.se),
-    min: num(byName.min),
-    max: num(byName.max),
-    range: num(byName.range),
-    p25: num(byName.p25),
-    p50: num(byName.p50),
-    p75: num(byName.p75),
-    mode_value: str(byName.mode_value),
-    mode_ties: scalar(byName.mode_ties),
-    n_numeric: scalar(byName.n_numeric),
+    values: r.strs('values'),
+    counts: r.nums('counts'),
+    percent: r.nums('percent'),
+    valid_percent: r.nums('valid_percent'),
+    cumulative: r.nums('cumulative'),
+    n_total: count('n_total'),
+    n_valid: count('n_valid'),
+    n_missing: count('n_missing'),
+    dropped: count('dropped'),
+    mean: r.num1('mean'),
+    median: r.num1('median'),
+    sum: r.num1('sum'),
+    sd: r.num1('sd'),
+    variance: r.num1('variance'),
+    se: r.num1('se'),
+    min: r.num1('min'),
+    max: r.num1('max'),
+    range: r.num1('range'),
+    p25: r.num1('p25'),
+    p50: r.num1('p50'),
+    p75: r.num1('p75'),
+    mode_value: r.str1('mode_value'),
+    mode_ties: count('mode_ties'),
+    n_numeric: count('n_numeric'),
   };
 }

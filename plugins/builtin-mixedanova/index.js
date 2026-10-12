@@ -23,7 +23,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, ci, labelOf, metaMap, rStr } = globalThis.ctStd;
+const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -109,7 +109,7 @@ export async function ancova(app, { y: yName, factors: factorNames, covs: covNam
       rows: terms.map((t, i) => [ancTerm(t, factorNames, covNames, meta), f(ss[i], 3), f(df[i], 0), f(F[i], 3), fmtP(p[i]), Number.isFinite(peta[i]) ? f(peta[i], 3) : '']),
       rowHeaders: true,
     },
-    { caption: `ANCOVA (Type III) — outcome: ${labelOf(meta.get(yName), yName)} (N = ${r.num('n')})` },
+    { caption: `ANCOVA (Type III) — outcome: ${labelOf(meta.get(yName), yName)} (N = ${r.num1('n')})` },
   );
 
   const el = r.strs('emmLab'), em = r.nums('emm'), ese = r.nums('emmSe'), elo = r.nums('emmLo'), ehi = r.nums('emmHi');
@@ -160,7 +160,7 @@ export async function mixedAnova(app, { within: withinNames, between: betweenNam
       rows: terms.map((t, i) => [rmTerm(t, betweenName, meta), f(F[i], 3), f(ndf[i], 2), f(ddf[i], 2), fmtP(p[i]), f(ges[i], 3)]),
       rowHeaders: true,
     },
-    { caption: `Repeated-Measures ANOVA — ${levelNames.length} conditions${hasBetween ? `, between: ${labelOf(meta.get(betweenName), betweenName)}` : ''} (N = ${r.num('nsub')} subjects)` },
+    { caption: `Repeated-Measures ANOVA — ${levelNames.length} conditions${hasBetween ? `, between: ${labelOf(meta.get(betweenName), betweenName)}` : ''} (N = ${r.num1('nsub')} subjects)` },
   );
   await app.results.appendText(
     `Within-subject conditions: ${levelNames.join(', ')}. The **within** (cond) effect tests change across conditions; **between** (grp) tests group differences; their **interaction** tests whether the within pattern differs by group. p-values use the **Greenhouse–Geisser** sphericity correction; **generalized η²** is the recommended effect size for these designs. Subjects with any missing condition were dropped (listwise).`,
@@ -190,22 +190,4 @@ function ancTerm(term, factorNames, covNames, meta) {
 function rmTerm(term, betweenName, meta) {
   const map = { cond: 'Within (conditions)', grp: betweenName ? labelOf(meta.get(betweenName), betweenName) : 'Between', 'grp:cond': 'Interaction', 'cond:grp': 'Interaction' };
   return map[term] || term;
-}
-
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList || {});
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    strs: (k) => arr(byName[k]).map((x) => (x == null ? 'NA' : String(x))),
-    num: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? Number(a[0]) : NaN;
-    },
-  };
 }

@@ -15,7 +15,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, labelOf, metaMap, rStr } = globalThis.ctStd;
+const { fmtP, fixed: f, labelOf, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -76,10 +76,10 @@ export async function run(app, { y: yName, ivs: ivNames, cluster: clName }) {
       rows: terms.map((t, i) => [t === '(Intercept)' ? '(Constant)' : prettyTerm(t), f(est[i], 4), f(se[i], 4), f(tv[i], 2), fmtP(p[i]), f(seC[i], 4)]),
       rowHeaders: true,
     },
-    { caption: `Cluster-Robust OLS — outcome: ${labelOf(meta.get(yName), yName)} (N = ${r.num('n')}, clusters = ${r.num('nclust')})` },
+    { caption: `Cluster-Robust OLS — outcome: ${labelOf(meta.get(yName), yName)} (N = ${r.num1('n')}, clusters = ${r.num1('nclust')})` },
   );
   await app.results.appendText(
-    `Standard errors allow for arbitrary correlation within the **${r.num('nclust')}** clusters of ${labelOf(meta.get(clName), clName)} (CR/HC1). Compare them to the classical SEs in the last column — cluster-robust SEs are usually larger, and the difference is the cost of ignoring clustering. With few clusters (< ~40) the asymptotics get shaky; treat p-values cautiously.`,
+    `Standard errors allow for arbitrary correlation within the **${r.num1('nclust')}** clusters of ${labelOf(meta.get(clName), clName)} (CR/HC1). Compare them to the classical SEs in the last column — cluster-robust SEs are usually larger, and the difference is the cost of ignoring clustering. With few clusters (< ~40) the asymptotics get shaky; treat p-values cautiously.`,
   );
 }
 
@@ -88,15 +88,4 @@ export async function run(app, { y: yName, ivs: ivNames, cluster: clName }) {
 function prettyTerm(term) {
   const m = /^factor\(`?(.+?)`?\)(.*)$/.exec(term);
   return m ? `${m[1]}${m[2] ? ` = ${m[2]}` : ''}` : term.replace(/`/g, '');
-}
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  else Object.assign(byName, rList || {});
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    strs: (k) => arr(byName[k]).map((x) => (x == null ? 'NA' : String(x))),
-    num: (k) => { const a = arr(byName[k]); return a.length ? Number(a[0]) : NaN; },
-  };
 }

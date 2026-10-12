@@ -96,8 +96,8 @@ test('a degenerate group yields no robust row rather than a number nobody can re
   // Welch weights are n/variance, so a constant group makes them infinite. Guarded in R
   // and gated in JS — both halves, or an Infinity reaches the table.
   assert.match(ONEWAY, /robust_ok <- all\(is\.finite\(gv\)\) && all\(gv > 0\) && all\(gn > 1\)/);
-  assert.match(ONEWAY, /if \(Number\.isFinite\(r\.n1\('welF'\)\)\)/);
-  assert.match(ONEWAY, /if \(Number\.isFinite\(r\.n1\('levF'\)\)\)/);
+  assert.match(ONEWAY, /if \(Number\.isFinite\(r\.num1\('welF'\)\)\)/);
+  assert.match(ONEWAY, /if \(Number\.isFinite\(r\.num1\('levF'\)\)\)/);
 });
 
 test('the footnote says what to read, and where we stop short of SPSS', () => {

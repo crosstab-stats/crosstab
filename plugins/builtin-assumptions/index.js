@@ -19,7 +19,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, rounded: int, metaMap } = globalThis.ctStd;
+const { fmtP, fixed: f, rounded: int, metaMap, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -114,11 +114,11 @@ export async function normality(app, { vars }) {
       columns: ['Variable', 'N', 'Skewness', 'Kurtosis (excess)', 'Shapiro–Wilk W', 'Sig.'],
       rows: names.map((nm, i) => [
         label(meta, nm),
-        int(r.num('n')[i]),
-        f(r.num('skew')[i], 3),
-        f(r.num('kurt')[i], 3),
-        f(r.num('W')[i], 3),
-        fmtP(r.num('p')[i]),
+        int(r.nums('n')[i]),
+        f(r.nums('skew')[i], 3),
+        f(r.nums('kurt')[i], 3),
+        f(r.nums('W')[i], 3),
+        fmtP(r.nums('p')[i]),
       ]),
       rowHeaders: true,
     },
@@ -127,11 +127,11 @@ export async function normality(app, { vars }) {
   await app.results.appendText('A significant Shapiro–Wilk (p < .05) means the data depart from normal. Read it with the Q–Q plot and the sample size in mind.');
 
   // One chart model per variable, split out of the concatenated points by their index.
-  const qx = r.num('qqx');
-  const qy = r.num('qqy');
-  const qi = r.num('qqi');
-  const slope = r.num('qqSlope');
-  const intercept = r.num('qqInt');
+  const qx = r.nums('qqx');
+  const qy = r.nums('qqy');
+  const qi = r.nums('qqi');
+  const slope = r.nums('qqSlope');
+  const intercept = r.nums('qqInt');
   for (let i = 0; i < names.length; i++) {
     const points = [];
     for (let k = 0; k < qx.length; k++) if (qi[k] === i + 1) points.push({ x: qx[k], y: qy[k] });
@@ -182,10 +182,10 @@ export async function levene(app, { outcome, groups }) {
       rows: [
         [
           `${label(meta, outcome)} by ${label(meta, groups)}`,
-          f(r.n1('F'), 3),
-          int(r.n1('df1')),
-          int(r.n1('df2')),
-          fmtP(r.n1('p')),
+          f(r.num1('F'), 3),
+          int(r.num1('df1')),
+          int(r.num1('df2')),
+          fmtP(r.num1('p')),
         ],
       ],
       rowHeaders: true,
@@ -199,21 +199,4 @@ export async function levene(app, { outcome, groups }) {
 
 function label(meta, name) {
   return meta.get(name)?.label || name;
-}
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList || {});
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    num: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    str: (k) => arr(byName[k]).map((x) => (x == null ? '' : String(x))),
-    n1: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? (a[0] == null ? NaN : Number(a[0])) : NaN;
-    },
-  };
 }

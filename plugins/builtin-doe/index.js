@@ -15,7 +15,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, labelOf, metaMap, rStr } = globalThis.ctStd;
+const { fmtP, fixed: f, labelOf, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -78,7 +78,7 @@ export async function run(app, { y: yName, factors: facNames }) {
       rows: terms.map((t, i) => [doeTerm(t, fac), f(est[i], 4), f(se[i], 4), f(tv[i], 2), fmtP(p[i])]),
       rowHeaders: true,
     },
-    { caption: `Response Surface (second-order) — ${labelOf(meta.get(yName), yName)} (N = ${r.num('n')}, R² = ${f(r.num('r2'), 3)})` },
+    { caption: `Response Surface (second-order) — ${labelOf(meta.get(yName), yName)} (N = ${r.num1('n')}, R² = ${f(r.num1('r2'), 3)})` },
   );
 
   const stat = r.nums('stat'), eig = r.nums('eig');
@@ -102,15 +102,4 @@ function doeTerm(t, fac) {
   fac.forEach((fn, i) => { s = s.replace(new RegExp(`\\bx${i + 1}\\b`, 'g'), fn); });
   if (s === '(Intercept)') return '(Constant)';
   return s.replace(/:/g, ' × ').replace(/I\((.+?)\^2\)/g, '$1²').replace(/\^2/g, '²');
-}
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  else Object.assign(byName, rList || {});
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    strs: (k) => arr(byName[k]).map((x) => (x == null ? 'NA' : String(x))),
-    num: (k) => { const a = arr(byName[k]); return a.length ? Number(a[0]) : NaN; },
-  };
 }

@@ -16,7 +16,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, ci, labelOf, metaMap, rStr } = globalThis.ctStd;
+const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -109,11 +109,11 @@ async function fitCount(app, { dv: dvName, ivs: ivNames }, nb) {
       ]),
       rowHeaders: true,
     },
-    { caption: `${nb ? 'Negative Binomial' : 'Poisson'} Regression — outcome: ${labelOf(meta.get(dvName), dvName)} (N = ${r.num('n')})` },
+    { caption: `${nb ? 'Negative Binomial' : 'Poisson'} Regression — outcome: ${labelOf(meta.get(dvName), dvName)} (N = ${r.num1('n')})` },
   );
-  const disp = r.num('dispersion');
+  const disp = r.num1('dispersion');
   const note = nb
-    ? `Negative binomial (θ = ${f(r.num('theta'), 3)}) allows variance > mean. IRRs are exp(B): an IRR of 1.2 means a 20% higher expected count per unit.`
+    ? `Negative binomial (θ = ${f(r.num1('theta'), 3)}) allows variance > mean. IRRs are exp(B): an IRR of 1.2 means a 20% higher expected count per unit.`
     : `Pearson dispersion = ${f(disp, 2)}. ` +
       (disp > 1.5
         ? '**> 1.5 suggests overdispersion** — the Poisson SEs are likely too small; re-run as **Negative binomial**.'
@@ -127,22 +127,4 @@ async function fitCount(app, { dv: dvName, ivs: ivNames }, nb) {
 function prettyTerm(term) {
   const m = /^factor\(`?(.+?)`?\)(.*)$/.exec(term);
   return m ? `${m[1]}${m[2] ? ` = ${m[2]}` : ''}` : term.replace(/`/g, '');
-}
-
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList);
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map(Number),
-    strs: (k) => arr(byName[k]).map(String),
-    num: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? Number(a[0]) : NaN;
-    },
-  };
 }

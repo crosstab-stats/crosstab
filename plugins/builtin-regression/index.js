@@ -18,7 +18,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, labelOf, fmtP, ci, rStr } = globalThis.ctStd;
+const { fixed: f, labelOf, fmtP, ci, rStr, unpackR } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -213,45 +213,44 @@ function prettyTerm(term) {
 }
 
 function normalizeResult(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList);
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  const scalar = (v) => {
-    const a = arr(v);
-    const first = a.length ? a[0] : v;
-    return first == null ? NaN : Number(first);
-  };
+  const r = unpackR(rList);
   return {
-    terms: arr(byName.terms).map(String),
-    estimate: arr(byName.estimate).map(Number),
-    se: arr(byName.se).map(Number),
-    t: arr(byName.t).map(Number),
-    p: arr(byName.p).map(Number),
-    ciLo: arr(byName.ciLo).map(Number),
-    ciHi: arr(byName.ciHi).map(Number),
-    vifNames: arr(byName.vifNames).map(String),
-    vif: arr(byName.vif).map(Number),
-    r2: scalar(byName.r2),
-    adjr2: scalar(byName.adjr2),
-    fstat: scalar(byName.fstat),
-    fdf1: scalar(byName.fdf1),
-    fdf2: scalar(byName.fdf2),
-    fp: scalar(byName.fp),
-    n: scalar(byName.n),
-    swW: scalar(byName.swW),
-    swP: scalar(byName.swP),
-    dw: scalar(byName.dw),
-    nInf: scalar(byName.nInf),
-    maxCook: scalar(byName.maxCook),
-    fitted: arr(byName.fitted).map(Number),
-    resid: arr(byName.resid).map(Number),
-    qqx: arr(byName.qqx).map(Number),
-    qqy: arr(byName.qqy).map(Number),
-    qqSlope: scalar(byName.qqSlope),
-    qqInt: scalar(byName.qqInt),
+    terms: r.strs('terms'),
+    estimate: r.nums('estimate'),
+    se: r.nums('se'),
+    t: r.nums('t'),
+    p: r.nums('p'),
+    ciLo: r.nums('ciLo'),
+    ciHi: r.nums('ciHi'),
+    vifNames: r.strs('vifNames'),
+    vif: r.nums('vif'),
+    r2: r.num1('r2'),
+    adjr2: r.num1('adjr2'),
+    fstat: r.num1('fstat'),
+    fdf1: r.num1('fdf1'),
+    fdf2: r.num1('fdf2'),
+    fp: r.num1('fp'),
+    // The ANOVA partition and the residual SE. The R has computed these since the
+    // ANOVA table shipped (fe4c4f1), but they were never added to this map, so every
+    // Sum of Squares / df / Mean Square cell and the Std. Error of the Estimate have
+    // rendered as the em dash the whole time. The structure was tested; no test read
+    // a VALUE out of those cells, which is how a table of dashes passed.
+    ssReg: r.num1('ssReg'),
+    ssRes: r.num1('ssRes'),
+    dfReg: r.num1('dfReg'),
+    dfResid: r.num1('dfResid'),
+    sigma: r.num1('sigma'),
+    n: r.num1('n'),
+    swW: r.num1('swW'),
+    swP: r.num1('swP'),
+    dw: r.num1('dw'),
+    nInf: r.num1('nInf'),
+    maxCook: r.num1('maxCook'),
+    fitted: r.nums('fitted'),
+    resid: r.nums('resid'),
+    qqx: r.nums('qqx'),
+    qqy: r.nums('qqy'),
+    qqSlope: r.num1('qqSlope'),
+    qqInt: r.num1('qqInt'),
   };
 }

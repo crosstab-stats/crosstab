@@ -21,7 +21,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, rounded: int, ci, metaMap, rStr } = globalThis.ctStd;
+const { fmtP, fixed: f, rounded: int, ci, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -142,15 +142,15 @@ export async function loglinear(app, { vars, model }) {
     {
       columns: ['', 'Value', 'df', 'Sig.'],
       rows: [
-        ['Likelihood Ratio (G²)', f(r.n1('g2'), 3), int(r.n1('df')), fmtP(r.n1('pg'))],
-        ['Pearson χ²', f(r.n1('pearson'), 3), int(r.n1('df')), fmtP(r.n1('pp'))],
+        ['Likelihood Ratio (G²)', f(r.num1('g2'), 3), int(r.num1('df')), fmtP(r.num1('pg'))],
+        ['Pearson χ²', f(r.num1('pearson'), 3), int(r.num1('df')), fmtP(r.num1('pp'))],
       ],
       rowHeaders: true,
     },
-    { caption: `Log-Linear Goodness-of-Fit — ${modelLabel} model (N = ${int(r.n1('N'))}, ${int(r.n1('nCells'))} cells)` },
+    { caption: `Log-Linear Goodness-of-Fit — ${modelLabel} model (N = ${int(r.num1('N'))}, ${int(r.num1('nCells'))} cells)` },
   );
 
-  const dt = r.str('drTerms'), ddf = r.num('drDf'), dl = r.num('drLrt'), dp = r.num('drP');
+  const dt = r.strs('drTerms'), ddf = r.nums('drDf'), dl = r.nums('drLrt'), dp = r.nums('drP');
   if (dt.length) {
     await app.results.appendTable(
       {
@@ -195,9 +195,9 @@ export async function gof(app, { variable, expected }) {
     list(levels = names(tab), observed = as.integer(tab), expected = unname(ch$expected),
          chisq = unname(ch$statistic), df = unname(ch$parameter), p = ch$p.value)`;
   const r = flat((await app.webr.run(rCode)).result);
-  const levels = r.str('levels');
-  const obs = r.num('observed');
-  const expd = r.num('expected');
+  const levels = r.strs('levels');
+  const obs = r.nums('observed');
+  const expd = r.nums('expected');
   const total = obs.reduce((a, b) => a + b, 0);
   await app.results.appendTable(
     {
@@ -214,9 +214,9 @@ export async function gof(app, { variable, expected }) {
     {
       columns: ['', 'Value'],
       rows: [
-        ['Chi-Square', f(r.n1('chisq'), 3)],
-        ['df', int(r.n1('df'))],
-        ['Asymp. Sig.', fmtP(r.n1('p'))],
+        ['Chi-Square', f(r.num1('chisq'), 3)],
+        ['df', int(r.num1('df'))],
+        ['Asymp. Sig.', fmtP(r.num1('p'))],
       ],
       rowHeaders: true,
     },
@@ -270,9 +270,9 @@ export async function oneProp(app, { variable, p0, category, weight }) {
          ciLo = ciLo, ciHi = ciHi, p = pval, exact = exact,
          levels = levs, counts = as.numeric(counts))`;
   const r = flat((await app.webr.run(rCode)).result);
-  const levels = r.str('levels');
-  const counts = r.num('counts');
-  const exact = r.n1('exact') === 1;
+  const levels = r.strs('levels');
+  const counts = r.nums('counts');
+  const exact = r.num1('exact') === 1;
   const ws = wSuffix(meta, weight);
   // Weighted counts are fractional, so show one decimal — rounding each to a whole
   // number makes the categories appear not to sum to N (sum-of-rounded ≠ rounded-sum).
@@ -285,16 +285,16 @@ export async function oneProp(app, { variable, p0, category, weight }) {
     },
     { caption: `${label(meta, variable)}${ws}` },
   );
-  const lvl = vlab(meta, variable, r.s1('level'));
+  const lvl = vlab(meta, variable, r.str1('level'));
   await app.results.appendTable(
     {
       columns: ['', 'Value'],
       rows: [
-        [`Proportion "${lvl}"`, f(r.n1('phat'), 3)],
-        ['N', cnt(r.n1('n'))],
+        [`Proportion "${lvl}"`, f(r.num1('phat'), 3)],
+        ['N', cnt(r.num1('n'))],
         ['Test proportion', f(test, 3)],
-        ['95% CI', ci(r.n1('ciLo'), r.n1('ciHi'))],
-        [exact ? 'Exact Sig. (binomial)' : 'Asymp. Sig. (2-tailed)', fmtP(r.n1('p'))],
+        ['95% CI', ci(r.num1('ciLo'), r.num1('ciHi'))],
+        [exact ? 'Exact Sig. (binomial)' : 'Asymp. Sig. (2-tailed)', fmtP(r.num1('p'))],
       ],
       rowHeaders: true,
     },
@@ -336,11 +336,11 @@ export async function twoProp(app, { outcome, success, groups, g1, g2 }) {
          chisq = unname(pt$statistic), df = unname(pt$parameter), p = pt$p.value,
          ciLo = pt$conf.int[1], ciHi = pt$conf.int[2])`;
   const r = flat((await app.webr.run(rCode)).result);
-  const grps = r.str('groups');
-  const succ = r.num('succ');
-  const nn = r.num('n');
-  const props = [r.n1('p1'), r.n1('p2')];
-  const succLevel = vlab(meta, outcome, r.s1('succLevel'));
+  const grps = r.strs('groups');
+  const succ = r.nums('succ');
+  const nn = r.nums('n');
+  const props = [r.num1('p1'), r.num1('p2')];
+  const succLevel = vlab(meta, outcome, r.str1('succLevel'));
   await app.results.appendTable(
     {
       columns: ['Group', 'N', `"${succLevel}"`, 'Proportion'],
@@ -354,9 +354,9 @@ export async function twoProp(app, { outcome, success, groups, g1, g2 }) {
       columns: ['', 'Value'],
       rows: [
         ['Difference in proportions', f(props[0] - props[1], 3)],
-        ['Chi-Square (1 df, corrected)', f(r.n1('chisq'), 3)],
-        ['Asymp. Sig.', fmtP(r.n1('p'))],
-        ['95% CI of difference', ci(r.n1('ciLo'), r.n1('ciHi'))],
+        ['Chi-Square (1 df, corrected)', f(r.num1('chisq'), 3)],
+        ['Asymp. Sig.', fmtP(r.num1('p'))],
+        ['95% CI of difference', ci(r.num1('ciLo'), r.num1('ciHi'))],
       ],
       rowHeaders: true,
     },
@@ -376,9 +376,9 @@ export async function mcnemar(app, { v1, v2 }) {
     list(rl = rownames(tab), cl = colnames(tab), counts = as.integer(t(tab)),
          chisq = unname(mc$statistic), df = unname(mc$parameter), p = mc$p.value)`;
   const r = flat((await app.webr.run(rCode)).result);
-  const rl = r.str('rl');
-  const cl = r.str('cl');
-  const counts = r.num('counts'); // row-major: counts[i*2 + j]
+  const rl = r.strs('rl');
+  const cl = r.strs('cl');
+  const counts = r.nums('counts'); // row-major: counts[i*2 + j]
   await app.results.appendTable(
     {
       columns: ['', ...cl.map((c) => vlab(meta, v2, c))],
@@ -391,9 +391,9 @@ export async function mcnemar(app, { v1, v2 }) {
     {
       columns: ['', 'Value'],
       rows: [
-        ["McNemar's Chi-Square (corrected)", f(r.n1('chisq'), 3)],
-        ['df', int(r.n1('df'))],
-        ['Asymp. Sig.', fmtP(r.n1('p'))],
+        ["McNemar's Chi-Square (corrected)", f(r.num1('chisq'), 3)],
+        ['df', int(r.num1('df'))],
+        ['Asymp. Sig.', fmtP(r.num1('p'))],
       ],
       rowHeaders: true,
     },
@@ -422,25 +422,4 @@ function parseProps(s) {
     .split(',')
     .map((x) => Number(x.trim()))
     .filter((x) => Number.isFinite(x) && x > 0);
-}
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList || {});
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    num: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    str: (k) => arr(byName[k]).map((x) => (x == null ? '' : String(x))),
-    n1: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? (a[0] == null ? NaN : Number(a[0])) : NaN;
-    },
-    s1: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? String(a[0] ?? '') : '';
-    },
-  };
 }

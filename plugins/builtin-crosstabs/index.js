@@ -17,7 +17,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { labelOf, fmtP } = globalThis.ctStd;
+const { labelOf, fmtP, unpackR } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -338,47 +338,36 @@ ord_measures <- function(tab){
 // --- helpers -----------------------------------------------------------------
 
 function normalizeResult(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList);
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  const scalar = (v) => {
-    const a = arr(v);
-    const first = a.length ? a[0] : v;
-    return first == null ? NaN : Number(first); // R NA (a null element) → NaN, so it renders "—"/hides
-  };
+  const r = unpackR(rList);
   return {
-    rowLevels: arr(byName.rowLevels).map(String),
-    colLevels: arr(byName.colLevels).map(String),
-    counts: arr(byName.counts).map(Number),
-    rowTotals: arr(byName.rowTotals).map(Number),
-    colTotals: arr(byName.colTotals).map(Number),
-    total: scalar(byName.total),
-    chisq: scalar(byName.chisq),
-    dfree: scalar(byName.dfree),
-    p: scalar(byName.p),
-    minExp: scalar(byName.minExp),
-    pMC: scalar(byName.pMC),
-    pFisher: scalar(byName.pFisher),
-    simB: scalar(byName.simB),
-    cramerV: scalar(byName.cramerV),
-    phi: scalar(byName.phi),
-    gamma: scalar(byName.gamma),
-    taub: scalar(byName.taub),
-    tauc: scalar(byName.tauc),
-    spearman: scalar(byName.spearman),
-    pearson: scalar(byName.pearson),
-    somersSym: scalar(byName.somersSym),
-    somersRC: scalar(byName.somersRC),
-    somersCR: scalar(byName.somersCR),
-    pOrdinal: scalar(byName.pOrdinal),
-    pSpearman: scalar(byName.pSpearman),
-    pPearson: scalar(byName.pPearson),
-    lambdaSym: scalar(byName.lambdaSym),
-    lambdaRC: scalar(byName.lambdaRC),
-    lambdaCR: scalar(byName.lambdaCR),
+    rowLevels: r.strs('rowLevels'),
+    colLevels: r.strs('colLevels'),
+    counts: r.nums('counts'),
+    rowTotals: r.nums('rowTotals'),
+    colTotals: r.nums('colTotals'),
+    total: r.num1('total'),
+    chisq: r.num1('chisq'),
+    dfree: r.num1('dfree'),
+    p: r.num1('p'),
+    minExp: r.num1('minExp'),
+    pMC: r.num1('pMC'),
+    pFisher: r.num1('pFisher'),
+    simB: r.num1('simB'),
+    cramerV: r.num1('cramerV'),
+    phi: r.num1('phi'),
+    gamma: r.num1('gamma'),
+    taub: r.num1('taub'),
+    tauc: r.num1('tauc'),
+    spearman: r.num1('spearman'),
+    pearson: r.num1('pearson'),
+    somersSym: r.num1('somersSym'),
+    somersRC: r.num1('somersRC'),
+    somersCR: r.num1('somersCR'),
+    pOrdinal: r.num1('pOrdinal'),
+    pSpearman: r.num1('pSpearman'),
+    pPearson: r.num1('pPearson'),
+    lambdaSym: r.num1('lambdaSym'),
+    lambdaRC: r.num1('lambdaRC'),
+    lambdaCR: r.num1('lambdaCR'),
   };
 }

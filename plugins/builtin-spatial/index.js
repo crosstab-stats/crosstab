@@ -23,7 +23,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, rStr } = globalThis.ctStd;
+const { fmtP, rStr, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -169,8 +169,8 @@ export async function autocorrelation(app, { value, xcoord, ycoord, k }) {
     await app.results.appendText(err);
     return;
   }
-  const I = r.num('moranI'), E = r.num('moranE'), mp = r.num('moranP');
-  const C = r.num('gearyC'), gp = r.num('gearyP');
+  const I = r.num1('moranI'), E = r.num1('moranE'), mp = r.num1('moranP');
+  const C = r.num1('gearyC'), gp = r.num1('gearyP');
   await app.results.appendTable(
     {
       columns: ['Statistic', 'Value', 'Expected (no autocorrelation)', 'p-value'],
@@ -180,7 +180,7 @@ export async function autocorrelation(app, { value, xcoord, ycoord, k }) {
       ],
       rowHeaders: false,
     },
-    { caption: `Spatial Autocorrelation — ${r.num('n')} cases, k = ${r.num('k')} nearest neighbours` },
+    { caption: `Spatial Autocorrelation — ${r.num1('n')} cases, k = ${r.num1('k')} nearest neighbours` },
   );
   const dir = I > E ? 'positive (similar values cluster together)' : 'negative (neighbours tend to differ — a checkerboard pattern)';
   const sig = mp < 0.05 ? `statistically significant (p = ${fmtP(mp)})` : `not statistically significant (p = ${fmtP(mp)})`;
@@ -236,9 +236,9 @@ export async function lagregression(app, { outcome, preds, xcoord, ycoord, k }) 
       rows: terms.map((t, i) => [t.replace(/^`|`$/g, ''), est[i].toFixed(4), se[i].toFixed(4), fmtP(p[i])]),
       rowHeaders: false,
     },
-    { caption: `Spatial Lag Regression (SAR) — ${r.num('n')} cases` },
+    { caption: `Spatial Lag Regression (SAR) — ${r.num1('n')} cases` },
   );
-  const rho = r.num('rho'), rhoP = r.num('rhoP');
+  const rho = r.num1('rho'), rhoP = r.num1('rhoP');
   await app.results.appendText(
     `**Spatial lag ρ = ${rho.toFixed(3)}** (likelihood-ratio test p = ${fmtP(rhoP)}) — ${rhoP < 0.05 ? 'significant' : 'no significant'} spatial dependence: a case’s outcome ${rho >= 0 ? 'moves with' : 'moves opposite to'} its neighbours’. The coefficients are direct effects; when ρ is significant, total effects also include spillover through the neighbour network.`,
   );
@@ -300,7 +300,7 @@ export async function choropleth(app, { region, value, boundary, keyprop }) {
   }
   const svg = r.str1('svg');
   if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg), { title: 'Choropleth map' });
-  const nMatched = r.num('nMatched'), nRegions = r.num('nRegions'), nData = r.num('nData');
+  const nMatched = r.num1('nMatched'), nRegions = r.num1('nRegions'), nData = r.num1('nData');
   await app.results.appendText(
     `Shaded **${nMatched} of ${nRegions}** regions from **${nData}** data rows.` +
       (nMatched === 0
@@ -317,28 +317,6 @@ function cleanSvg(svg) {
   return String(svg)
     .replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1')
     .replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1');
-}
-
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList || {});
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    strs: (k) => arr(byName[k]).map(String),
-    num: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? Number(a[0]) : NaN;
-    },
-    str1: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? String(a[0]) : '';
-    },
-  };
 }
 
 // === Spatial workspace tab ===================================================

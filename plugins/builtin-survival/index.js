@@ -23,7 +23,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, ci, labelOf, metaMap, rStr } = globalThis.ctStd;
+const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -142,9 +142,9 @@ export async function kaplanMeier(app, { time: timeName, status: statusName, eve
     });
   }
 
-  if (Number.isFinite(r.num('lrChi'))) {
+  if (Number.isFinite(r.num1('lrChi'))) {
     await app.results.appendTable(
-      { columns: ['', 'Chi-Square', 'df', 'Sig.'], rows: [['Log-rank (Mantel–Cox)', f(r.num('lrChi'), 3), f(r.num('lrDf'), 0), fmtP(r.num('lrP'))]], rowHeaders: true },
+      { columns: ['', 'Chi-Square', 'df', 'Sig.'], rows: [['Log-rank (Mantel–Cox)', f(r.num1('lrChi'), 3), f(r.num1('lrDf'), 0), fmtP(r.num1('lrP'))]], rowHeaders: true },
       { caption: 'Test of Equality of Survival Distributions' },
     );
     await app.results.appendText(
@@ -194,16 +194,16 @@ export async function cox(app, { time: timeName, status: statusName, event, pred
     {
       caption: `Cox Proportional Hazards — time: ${labelOf(meta.get(timeName), timeName)}, `
         + `event = ${lvl(meta.get(statusName), r.str1('eventLevel'))} `
-        + `(N = ${r.num('n')}, events = ${r.num('nevent')})`,
+        + `(N = ${r.num1('n')}, events = ${r.num1('nevent')})`,
     },
   );
   await app.results.appendTable(
     {
       columns: ['', 'Value'],
       rows: [
-        ['Concordance (C)', f(r.num('concordance'), 3)],
-        ['Likelihood-ratio test χ² (df)', `${f(r.num('lrTest'), 2)} (${f(r.num('lrDf'), 0)})`],
-        ['p (model)', fmtP(r.num('lrP'))],
+        ['Concordance (C)', f(r.num1('concordance'), 3)],
+        ['Likelihood-ratio test χ² (df)', `${f(r.num1('lrTest'), 2)} (${f(r.num1('lrDf'), 0)})`],
+        ['p (model)', fmtP(r.num1('lrP'))],
       ],
       rowHeaders: true,
     },
@@ -306,26 +306,4 @@ function lvl(meta, code) {
 function prettyTerm(term) {
   const m = /^factor\(`?(.+?)`?\)(.*)$/.exec(term);
   return m ? `${m[1]}${m[2] ? ` = ${m[2]}` : ''}` : term.replace(/`/g, '');
-}
-
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList || {});
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    strs: (k) => arr(byName[k]).map(String),
-    num: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? Number(a[0]) : NaN;
-    },
-    str1: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? String(a[0]) : '';
-    },
-  };
 }

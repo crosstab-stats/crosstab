@@ -25,7 +25,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, ci, labelOf, metaMap, rStr } = globalThis.ctStd;
+const { fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -137,11 +137,11 @@ export async function regression(app, { dv: dvName, ivs: ivNames }) {
       ]),
       rowHeaders: true,
     },
-    { caption: `Bayesian Regression — outcome: ${labelOf(meta.get(dvName), dvName)} (N = ${r.num('n')}, ${r.num('draws')} draws)` },
+    { caption: `Bayesian Regression — outcome: ${labelOf(meta.get(dvName), dvName)} (N = ${r.num1('n')}, ${r.num1('draws')} draws)` },
   );
   await app.results.appendText(
     `Coefficients are **posterior means**; the interval is a **95% credible interval** — given the data and the (weakly informative) default priors, there's a 95% probability the coefficient lies inside it. ` +
-      `A coefficient whose interval excludes 0 is "credibly" non-zero. Residual variance σ² ≈ ${f(r.num('sigma2'), 3)}.`,
+      `A coefficient whose interval excludes 0 is "credibly" non-zero. Residual variance σ² ≈ ${f(r.num1('sigma2'), 3)}.`,
   );
 }
 
@@ -182,14 +182,14 @@ export async function bfTTest(app, { y: yName, group: gName, g1, g2 }) {
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
   const lv = r.strs('lv');
-  const bf = r.num('bf');
+  const bf = r.num1('bf');
 
   await app.results.appendTable(
     {
       columns: ['Group', 'N', 'Mean'],
       rows: [
-        [labelLevel(meta.get(gName), gName, lv[0]), f(r.num('n1'), 0), f(r.num('m1'), 3)],
-        [labelLevel(meta.get(gName), gName, lv[1]), f(r.num('n2'), 0), f(r.num('m2'), 3)],
+        [labelLevel(meta.get(gName), gName, lv[0]), f(r.num1('n1'), 0), f(r.num1('m1'), 3)],
+        [labelLevel(meta.get(gName), gName, lv[1]), f(r.num1('n2'), 0), f(r.num1('m2'), 3)],
       ],
     },
     { caption: `Bayes Factor t-test — ${labelOf(meta.get(yName), yName)} by ${labelOf(meta.get(gName), gName)}` },
@@ -225,11 +225,11 @@ export async function bfCorr(app, { x: xName, y: yName }) {
   await app.results.appendTable(
     {
       columns: ['N', 'Pearson r'],
-      rows: [[f(r.num('n'), 0), f(r.num('r'), 3)]],
+      rows: [[f(r.num1('n'), 0), f(r.num1('r'), 3)]],
     },
     { caption: `Bayes Factor correlation — ${labelOf(meta.get(xName), xName)} & ${labelOf(meta.get(yName), yName)}` },
   );
-  await appendBF(app, r.num('bf'), 'a non-zero correlation');
+  await appendBF(app, r.num1('bf'), 'a non-zero correlation');
 }
 
 // --- Bayesian VAR (BVAR) -----------------------------------------------------
@@ -263,7 +263,7 @@ export async function bvar(app, { series: seriesNames, lags, horizon }) {
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
   const vars = r.strs('vars');
-  const h = r.num('horizon');
+  const h = r.num1('horizon');
   const med = r.nums('med');
   const lo = r.nums('lo');
   const hi = r.nums('hi');
@@ -283,7 +283,7 @@ export async function bvar(app, { series: seriesNames, lags, horizon }) {
   // appendTable calls above are fire-and-forget within forEach; await a final note
   // (ordering is preserved because the host queues appends serially).
   await app.results.appendText(
-    `Bayesian VAR with ${r.num('lags')} lag(s) on ${vars.length} series (${r.num('n')} time points, 2,000 posterior draws). ` +
+    `Bayesian VAR with ${r.num1('lags')} lag(s) on ${vars.length} series (${r.num1('n')} time points, 2,000 posterior draws). ` +
       'Forecasts are posterior medians; the band is a 68% credible interval (≈ ±1 SD). Series are treated in the order selected.',
   );
 }
@@ -332,23 +332,4 @@ function labelLevel(meta, name, level) {
 function prettyTerm(term) {
   const m = /^factor\(`?(.+?)`?\)(.*)$/.exec(term);
   return m ? `${m[1]}${m[2] ? ` = ${m[2]}` : ''}` : term.replace(/`/g, '');
-}
-
-/** Flatten an R list (`{names, values}` or plain) into typed accessors. */
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList);
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map(Number),
-    strs: (k) => arr(byName[k]).map(String),
-    num: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? Number(a[0]) : NaN;
-    },
-  };
 }

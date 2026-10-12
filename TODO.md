@@ -191,6 +191,81 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         lives in `scripts/` because `node --test` treats everything under `test/` as a test
         file.
 
+- [x] **DONE (2026-10-12). Plugin stdlib, part 4: one R-result unpacker — and a real
+      correctness bug closed.** The biggest duplication left after part 3, and the only one
+      whose copies were producing **wrong numbers** rather than inconsistent styling.
+
+      47 copies across 45 plugins, under four different names (`flat`, `normalizeResult`,
+      `flatList`, `plain`). Three defects, each verified before anything was written:
+
+      1. **`num` meant two different TYPES** — a numeric *scalar* in 28 plugins and a
+         numeric *vector* in 10. `str` was overloaded the same way (a vector in
+         builtin-agreement, a scalar in builtin-epi). The `el()` mirror image again, but in
+         the data path, so a line copied between plugins returns the wrong type in silence.
+      2. **12 copies turned a missing number into `0`.** WebR's `toJs()` renders R's `NA`
+         *and* `NaN` alike as JS `null`, and `[null].map(Number)` is `[0]`. A statistic R
+         could not compute printed as `0.000` — a finding — instead of the em dash that
+         means "not computed".
+      3. **20 copies turned a missing string into the literal text `"null"`**, because
+         `String(null)` is `'null'`. A row label read `null` instead of being blank.
+
+      **Defect 2 was demonstrated in the running app, not deduced.** A regression on a
+      perfectly collinear predictor printed **`VIF 0.00`** — impossible, since a VIF is
+      never below 1. R returns `NA` for the aliased term and for the singular VIF; both
+      arrived as `null` and became `0`. It now prints the em dash.
+
+      **And builtin-descriptives had already found this bug and fixed it locally**, with a
+      comment naming it exactly: *"R's NA arrives as null, and `Number(null)` is 0 — which
+      printed a trimmed mean of 0 for a weighted column that deliberately declines to
+      compute one."* One author hit it in real output and fixed one plugin. The same
+      signature as the `rStr` newline fix in part 3.
+
+      **The canonical names are `nums` / `num1` / `strs` / `str1`** — plural is a vector,
+      `1` is a scalar — and **`num` and `str` deliberately do not exist**. Retiring the
+      overloaded names is the point: a line copied from unmigrated code throws
+      `r.num is not a function` on the spot rather than quietly handing back a scalar where
+      a vector was expected. A migration whose misses are loud is worth more than one whose
+      names look familiar. 515 + 26 call sites renamed, each file's map read from **its own
+      definition** rather than assumed.
+
+      `str1` takes a `missing` option, because builtin-epi's `lv()` renders an absent factor
+      attribute as `?` and so must tell absent from empty. Its guard now tests `== null ||
+      === ''` — not `!code`, which would mis-handle a level code of `"0"`.
+
+      **A by-name scan was not enough, again.** It found 45 copies and missed `flatList` in
+      builtin-bootstrap, which is how an `r.num(` survived the first pass. The guard test
+      therefore scans for the **plumbing** (`Array.isArray(v?.values)`), not for names.
+
+      **builtin-descriptives keeps its own `plain()`**, deliberately: its R returns a
+      *nested* list (a list of named vectors, one per group) that `unpackR` does not model,
+      and it is already correct. Rewriting a correct plugin into a shape it does not have
+      is churn with a real chance of breaking it.
+
+      **A second bug fell out of the live check** — see the entry below.
+
+      Suite 1683 → 1701.
+
+- [x] **DONE (2026-10-12). Regression's ANOVA table has been empty since it shipped.**
+      Found while verifying the unpacker fix: every **Sum of Squares**, **df** and **Mean
+      Square** cell, plus Model Summary's **Std. Error of the Estimate**, rendered as an em
+      dash.
+
+      The R computed `ssReg` / `ssRes` / `dfReg` / `dfResid` / `sigma` from the day the
+      ANOVA table landed (`fe4c4f1`), and the tables read `m.ssReg` and friends — but
+      `normalizeResult` never mapped any of them, so all five were `undefined`. Five lines.
+
+      **Why it shipped and survived**: there WAS a test — *"regression splits Model Summary
+      from the ANOVA table, as SPSS does"* — but it asserted captions and column headers
+      only. **Nothing read a value out of a cell**, and a table full of em dashes looks
+      exactly like a table of genuinely missing statistics. That is the trap: the em dash
+      is a legitimate rendering, so an unmapped field degrades into something plausible.
+
+      Now guarded generally: `unpacker-single.test.mjs` asserts that **every field a plugin
+      reads off its unpacked result is actually mapped**, for every field-mapping unpacker.
+      Mutation-checked — removing `ssReg` again makes it fail. Verified live, and the
+      numbers reconcile: SS 13107.171 + 36.530 = 13143.701, df 1 + 58 = 59, and
+      √0.630 = 0.794 for the Std. Error.
+
 - [x] **DONE (2026-10-12). A p-value drops its leading zero.** Raised and settled the
       same day; the owner's call was *"good to be consistent"*.
 
@@ -223,12 +298,10 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       inconsistently — they are maintenance risk rather than visible defects, which is why
       they were not swept with the formatters:
 
-      - **`flat` / `normalizeResult` — 39 copies, 19 variants.** The R-result unpacker:
-        turns WebR's `{names, values}` list into a plain object with `num`/`str`/`n1`
-        accessors. Near-identical everywhere and individually hand-edited, which is the
-        worst combination. The hard part is that each plugin's accessor set has grown to
-        fit its own result shape, so this is a real interface design and not a lift — and
-        a wrong move here breaks every analysis, unlike a formatter.
+      - ~~**`flat` / `normalizeResult`**~~ — **DONE, see part 4 above.** It turned out to
+        be 47 copies under four names, and not an interface design after all: two
+        vocabularies over identical plumbing, with `num` meaning a scalar in 28 plugins and
+        a vector in 10. It also carried the only *correctness* bug of the whole audit.
       - **`prettyTerm` — 13 copies, 3 variants.** Turns an R model term (`factor(x)y`)
         into something readable. The variants differ in which R term shapes they know
         about, so the union is probably right, but each needs reading first.

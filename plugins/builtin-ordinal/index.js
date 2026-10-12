@@ -23,7 +23,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, ci, labelOf, metaMap, rStr } = globalThis.ctStd;
+const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -107,14 +107,14 @@ export async function ordinal(app, { dv: dvName, ivs: ivNames }) {
     {
       columns: ['', 'Value'],
       rows: [
-        ['LR χ² (df)', `${f(r.num('lr'), 2)} (${f(r.num('lrdf'), 0)})`],
-        ['p (model)', fmtP(r.num('lrp'))],
-        ["McFadden's R²", f(r.num('mcfadden'), 3)],
-        ['AIC', f(r.num('aic'), 1)],
+        ['LR χ² (df)', `${f(r.num1('lr'), 2)} (${f(r.num1('lrdf'), 0)})`],
+        ['p (model)', fmtP(r.num1('lrp'))],
+        ["McFadden's R²", f(r.num1('mcfadden'), 3)],
+        ['AIC', f(r.num1('aic'), 1)],
       ],
       rowHeaders: true,
     },
-    { caption: `Ordinal Logistic (Proportional Odds) — outcome: ${labelOf(dvMeta, dvName)} (N = ${r.num('n')})` },
+    { caption: `Ordinal Logistic (Proportional Odds) — outcome: ${labelOf(dvMeta, dvName)} (N = ${r.num1('n')})` },
   );
 
   await app.results.appendTable(
@@ -195,14 +195,14 @@ export async function multinomial(app, { dv: dvName, base, ivs: ivNames }) {
     {
       columns: ['', 'Value'],
       rows: [
-        ['LR χ² (df)', `${f(r.num('lr'), 2)} (${f(r.num('lrdf'), 0)})`],
-        ['p (model)', fmtP(r.num('lrp'))],
-        ["McFadden's R²", f(r.num('mcfadden'), 3)],
-        ['AIC', f(r.num('aic'), 1)],
+        ['LR χ² (df)', `${f(r.num1('lr'), 2)} (${f(r.num1('lrdf'), 0)})`],
+        ['p (model)', fmtP(r.num1('lrp'))],
+        ["McFadden's R²", f(r.num1('mcfadden'), 3)],
+        ['AIC', f(r.num1('aic'), 1)],
       ],
       rowHeaders: true,
     },
-    { caption: `Multinomial Logistic — outcome: ${labelOf(dvMeta, dvName)}, reference = ${lvl(dvMeta, reference)} (N = ${r.num('n')})` },
+    { caption: `Multinomial Logistic — outcome: ${labelOf(dvMeta, dvName)}, reference = ${lvl(dvMeta, reference)} (N = ${r.num1('n')})` },
   );
 
   classes.forEach((cls, ci_) => {
@@ -258,22 +258,4 @@ function erfc(x) {
 function prettyTerm(term) {
   const m = /^factor\(`?(.+?)`?\)(.*)$/.exec(term);
   return m ? `${m[1]}${m[2] ? ` = ${m[2]}` : ''}` : term.replace(/`/g, '');
-}
-
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList);
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map(Number),
-    strs: (k) => arr(byName[k]).map(String),
-    num: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? Number(a[0]) : NaN;
-    },
-  };
 }

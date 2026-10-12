@@ -24,7 +24,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fmtPInline, fixed: f, ci, labelOf, metaMap, rStr } = globalThis.ctStd;
+const { fmtP, fmtPInline, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -113,7 +113,7 @@ export async function did(app, { y: yName, treat: treatName, treated, post: post
          n = nrow(d), iIdx = which(rn == ".t:.p"), tpos = .tpos, ppos = .ppos)`;
   const r = flat(await runR(app, rCode, [bin01R(), ].join('\n')));
   const terms = r.strs('terms'), est = r.nums('est'), se = r.nums('se'), tv = r.nums('t'), p = r.nums('p');
-  const iIdx = r.num('iIdx') - 1;
+  const iIdx = r.num1('iIdx') - 1;
 
   await app.results.appendTable(
     {
@@ -124,7 +124,7 @@ export async function did(app, { y: yName, treat: treatName, treated, post: post
     {
       caption: `Difference-in-Differences — outcome: ${labelOf(meta.get(yName), yName)}, `
         + `treated = ${lvl(meta.get(treatName), r.str1('tpos'))}, `
-        + `after = ${lvl(meta.get(postName), r.str1('ppos'))} (N = ${r.num('n')})`,
+        + `after = ${lvl(meta.get(postName), r.str1('ppos'))} (N = ${r.num1('n')})`,
     },
   );
   if (Number.isFinite(iIdx) && iIdx >= 0) {
@@ -169,9 +169,9 @@ export async function rdd(app, { y: yName, run: runName, cutoff, bw }) {
     {
       columns: ['', 'Value'],
       rows: [
-        ['Bandwidth (h)', f(r.num('h'), 4)],
-        ['Effective N (left / right of cutoff)', `${r.num('nLeft')} / ${r.num('nRight')}`],
-        ['Polynomial order', f(r.num('order'), 0)],
+        ['Bandwidth (h)', f(r.num1('h'), 4)],
+        ['Effective N (left / right of cutoff)', `${r.num1('nLeft')} / ${r.num1('nRight')}`],
+        ['Polynomial order', f(r.num1('order'), 0)],
         ['Kernel', r.str1('kernel')],
       ],
       rowHeaders: true,
@@ -218,13 +218,13 @@ export async function matching(app, { y: yName, treat: treatName, treated, covs:
   await app.results.appendTable(
     {
       columns: ['', 'Estimate', 'Robust SE', 't', 'Sig.', '95% CI'],
-      rows: [['ATT (treated − matched control)', f(r.num('att'), 3), f(r.num('se'), 3), f(r.num('t'), 2), fmtP(r.num('p')), ci(r.num('att') - 1.96 * r.num('se'), r.num('att') + 1.96 * r.num('se'))]],
+      rows: [['ATT (treated − matched control)', f(r.num1('att'), 3), f(r.num1('se'), 3), f(r.num1('t'), 2), fmtP(r.num1('p')), ci(r.num1('att') - 1.96 * r.num1('se'), r.num1('att') + 1.96 * r.num1('se'))]],
       rowHeaders: true,
     },
     {
       caption: `Matching — ATT on ${labelOf(meta.get(yName), yName)}, `
         + `treated = ${lvl(meta.get(treatName), r.str1('tpos'))} `
-        + `(${r.num('nTreatAll')} treated, ${r.num('nMatched')} in matched sample)`,
+        + `(${r.num1('nTreatAll')} treated, ${r.num1('nMatched')} in matched sample)`,
     },
   );
 
@@ -278,26 +278,4 @@ function lvl(meta, code) {
 function prettyTerm(term) {
   const m = /^factor\(`?(.+?)`?\)(.*)$/.exec(term);
   return m ? `${m[1]}${m[2] ? ` = ${m[2]}` : ''}` : term.replace(/`/g, '');
-}
-
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList || {});
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    strs: (k) => arr(byName[k]).map(String),
-    num: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? Number(a[0]) : NaN;
-    },
-    str1: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? String(a[0]) : '';
-    },
-  };
 }

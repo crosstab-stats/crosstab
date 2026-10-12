@@ -14,7 +14,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, labelOf, metaMap, ci: ciAt, fmtPInline } = globalThis.ctStd;
+const { fmtP, fixed: f, labelOf, metaMap, ci: ciAt, fmtPInline, unpackR: flat } = globalThis.ctStd;
 
 /** This plugin reports four decimals: a marginal effect or a trend slope can be small
  * enough that three prints `[0.000, 0.001]`. The precision is the caller's; the
@@ -66,28 +66,20 @@ export async function run(app, { series: sName }) {
     {
       columns: ['', 'Value'],
       rows: [
-        ['Kendall’s tau', f(r.num('tau'), 4)],
-        ['S statistic', f(r.num('S'), 0)],
-        ['z', f(r.num('z'), 3)],
-        ['p (two-sided)', fmtP(r.num('p'))],
-        ["Sen's slope (per step)", f(r.num('slope'), 4)],
-        ['Sen slope 95% CI', ci(r.num('lo'), r.num('hi'))],
+        ['Kendall’s tau', f(r.num1('tau'), 4)],
+        ['S statistic', f(r.num1('S'), 0)],
+        ['z', f(r.num1('z'), 3)],
+        ['p (two-sided)', fmtP(r.num1('p'))],
+        ["Sen's slope (per step)", f(r.num1('slope'), 4)],
+        ['Sen slope 95% CI', ci(r.num1('lo'), r.num1('hi'))],
       ],
       rowHeaders: true,
     },
-    { caption: `Mann-Kendall Trend — ${labelOf(meta.get(sName), sName)} (N = ${r.num('n')})` },
+    { caption: `Mann-Kendall Trend — ${labelOf(meta.get(sName), sName)} (N = ${r.num1('n')})` },
   );
-  const tau = r.num('tau'), p = r.num('p');
+  const tau = r.num1('tau'), p = r.num1('p');
   await app.results.appendText(
     `${p < 0.05 ? `A **significant ${tau > 0 ? 'upward' : 'downward'} monotonic trend** (${fmtPInline(p)}).` : 'No significant monotonic trend (p ≥ .05).'} ` +
       "**Kendall's tau** is the rank correlation with time (−1…1); **Sen's slope** is the median of all pairwise slopes — a robust per-step rate of change, far less sensitive to outliers than an OLS trend. Assumes observations are in time order and roughly evenly spaced.",
   );
-}
-
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  else Object.assign(byName, rList || {});
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return { num: (k) => { const a = arr(byName[k]); return a.length ? Number(a[0]) : NaN; } };
 }

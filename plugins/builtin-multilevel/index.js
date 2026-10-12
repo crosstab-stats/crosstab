@@ -23,7 +23,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, ci, labelOf, metaMap, rStr } = globalThis.ctStd;
+const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -103,7 +103,7 @@ export async function linear(app, { y: yName, fixed: fixedNames, group: groupNam
       rows: terms.map((t, i) => [prettyTerm(t), f(est[i], 3), f(se[i], 3), f(df[i], 1), f(tv[i], 2), fmtP(p[i]), ci(est[i] - 1.96 * se[i], est[i] + 1.96 * se[i])]),
       rowHeaders: true,
     },
-    { caption: `Linear Mixed Model — outcome: ${labelOf(meta.get(yName), yName)} (N = ${r.num('nobs')}, groups = ${r.num('ngrp')})` },
+    { caption: `Linear Mixed Model — outcome: ${labelOf(meta.get(yName), yName)} (N = ${r.num1('nobs')}, groups = ${r.num1('ngrp')})` },
   );
 
   const rg = r.strs('reGrp'), rt = r.strs('reTerm'), rv = r.nums('reVar'), rsd = r.nums('reSd');
@@ -118,13 +118,13 @@ export async function linear(app, { y: yName, fixed: fixedNames, group: groupNam
   await app.results.appendTable(
     {
       columns: ['', 'Value'],
-      rows: [['ICC (intercept)', f(r.num('icc'), 3)], ['AIC', f(r.num('aic'), 1)], ['BIC', f(r.num('bic'), 1)]],
+      rows: [['ICC (intercept)', f(r.num1('icc'), 3)], ['AIC', f(r.num1('aic'), 1)], ['BIC', f(r.num1('bic'), 1)]],
       rowHeaders: true,
     },
     { caption: 'Model Summary' },
   );
   await app.results.appendText(
-    `The **ICC** (${f(r.num('icc'), 3)}) is the share of outcome variance between groups — i.e. how much clustering there is; values well above 0 justify the multilevel model. Fixed-effect p-values use Satterthwaite degrees of freedom (lmerTest).` +
+    `The **ICC** (${f(r.num1('icc'), 3)}) is the share of outcome variance between groups — i.e. how much clustering there is; values well above 0 justify the multilevel model. Fixed-effect p-values use Satterthwaite degrees of freedom (lmerTest).` +
       (slopeName ? ` A random slope for ${labelOf(meta.get(slopeName), slopeName)} lets that effect vary across groups.` : ''),
   );
 }
@@ -169,15 +169,15 @@ export async function logistic(app, { y: yName, yes, fixed: fixedNames, group: g
     {
       caption: `Logistic Mixed Model — outcome: ${labelOf(meta.get(yName), yName)}, `
         + `modelling ${lvl(meta.get(yName), r.str1('ypos'))} `
-        + `(N = ${r.num('nobs')}, groups = ${r.num('ngrp')})`,
+        + `(N = ${r.num1('nobs')}, groups = ${r.num1('ngrp')})`,
     },
   );
   await app.results.appendTable(
     {
       columns: ['', 'Value'],
       rows: [
-        [`Random intercept variance (${labelOf(meta.get(groupName), groupName)})`, f(r.num('gvar'), 4)],
-        ['Latent-scale ICC', f(r.num('icc'), 3)],
+        [`Random intercept variance (${labelOf(meta.get(groupName), groupName)})`, f(r.num1('gvar'), 4)],
+        ['Latent-scale ICC', f(r.num1('icc'), 3)],
       ],
       rowHeaders: true,
     },
@@ -214,23 +214,4 @@ function lvl(meta, code) {
 function prettyTerm(term) {
   const m = /^factor\(`?(.+?)`?\)(.*)$/.exec(term);
   return m ? `${m[1]}${m[2] ? ` = ${m[2]}` : ''}` : term.replace(/`/g, '');
-}
-
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList || {});
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    strs: (k) => arr(byName[k]).map((x) => (x == null ? 'NA' : String(x))),
-    str1: (k) => { const a = arr(byName[k]); return a.length && a[0] != null ? String(a[0]) : ''; },
-    num: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? Number(a[0]) : NaN;
-    },
-  };
 }

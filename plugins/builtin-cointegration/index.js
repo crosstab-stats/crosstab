@@ -20,7 +20,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, labelOf, metaMap, rStr } = globalThis.ctStd;
+const { fmtP, fixed: f, labelOf, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -117,7 +117,7 @@ export async function cointegration(app, { series, ecdet, K }) {
       rows: rlab.map((lab, i) => [lab, f(stat[i], 2), f(c10[i], 2), f(c5[i], 2), f(c1[i], 2), stat[i] > c5[i] ? 'yes' : 'no']),
       rowHeaders: true,
     },
-    { caption: `Johansen Cointegration (trace) — ${nm.join(', ')} (N = ${r.num('nobs')})` },
+    { caption: `Johansen Cointegration (trace) — ${nm.join(', ')} (N = ${r.num1('nobs')})` },
   );
 
   const beta = r.nums('beta'), adj = r.nums('adj');
@@ -172,15 +172,15 @@ export async function garch(app, { series: sName, q, p, dist }) {
       rows: terms.map((t, i) => [garchTerm(t), f(est[i], 5), f(se[i], 5), f(tv[i], 2), fmtP(pv[i])]),
       rowHeaders: true,
     },
-    { caption: `GARCH(${Q},${P}) — ${labelOf(meta.get(sName), sName)} (N = ${r.num('n')}, ${cd})` },
+    { caption: `GARCH(${Q},${P}) — ${labelOf(meta.get(sName), sName)} (N = ${r.num1('n')}, ${cd})` },
   );
   await app.results.appendTable(
     {
       columns: ['', 'Value'],
       rows: [
-        ['Persistence (Σα + Σβ)', f(r.num('persist'), 4)],
-        ['Log-likelihood', f(r.num('ll'), 2)],
-        ['AIC', f(r.num('aic'), 2)],
+        ['Persistence (Σα + Σβ)', f(r.num1('persist'), 4)],
+        ['Log-likelihood', f(r.num1('ll'), 2)],
+        ['AIC', f(r.num1('aic'), 2)],
       ],
       rowHeaders: true,
     },
@@ -215,26 +215,4 @@ function garchTerm(t) {
   if (t === 'shape') return 'shape (df/ν)';
   if (t === 'skew') return 'skew';
   return t;
-}
-
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList || {});
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    strs: (k) => arr(byName[k]).map((x) => (x == null ? 'NA' : String(x))),
-    num: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? Number(a[0]) : NaN;
-    },
-    str1: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? String(a[0]) : '';
-    },
-  };
 }

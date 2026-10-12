@@ -14,7 +14,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f } = globalThis.ctStd;
+const { fixed: f, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -83,11 +83,11 @@ export async function run(app, { species }) {
       rows: site.map((s, i) => [String(s), f(rich[i], 0), f(shan[i], 3), f(simp[i], 3), f(inv[i], 2), f(even[i], 3)]),
       rowHeaders: true,
     },
-    { caption: `Diversity Indices — ${r.num('nSpec')} species across ${r.num('nSites')} sites` },
+    { caption: `Diversity Indices — ${r.num1('nSpec')} species across ${r.num1('nSites')} sites` },
   );
   const svg = r.str1('svg');
   if (svg && /<svg[\s>]/i.test(svg)) {
-    const stress = r.num('stress');
+    const stress = r.num1('stress');
     const title = Number.isFinite(stress) ? `NMDS ordination (stress = ${Number(stress.toFixed(3))})` : 'NMDS ordination';
     await app.results.appendPlot(cleanSvg(svg), { title });
   }
@@ -98,14 +98,3 @@ export async function run(app, { species }) {
 
 // --- helpers -----------------------------------------------------------------
 function cleanSvg(svg) { return String(svg).replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1').replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1'); }
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  else Object.assign(byName, rList || {});
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    nums: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    num: (k) => { const a = arr(byName[k]); return a.length ? Number(a[0]) : NaN; },
-    str1: (k) => { const a = arr(byName[k]); return a.length ? String(a[0]) : ''; },
-  };
-}

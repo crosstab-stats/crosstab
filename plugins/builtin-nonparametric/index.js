@@ -20,7 +20,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, rounded: int, metaMap: metaMapOf } = globalThis.ctStd;
+const { fmtP, fixed: f, rounded: int, metaMap: metaMapOf, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -109,11 +109,11 @@ export async function mannWhitney(app, { y: yName, g: gName, g1, g2 }) {
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
-  const lv = r.str('levels');
+  const lv = r.strs('levels');
   await app.results.appendTable(
     {
       columns: ['Group', 'N', 'Mean Rank', 'Sum of Ranks'],
-      rows: lv.map((l, i) => [valueLabel(meta, gName, l), int(r.num('n')[i]), f(r.num('meanRank')[i], 2), f(r.num('sumRank')[i], 2)]),
+      rows: lv.map((l, i) => [valueLabel(meta, gName, l), int(r.nums('n')[i]), f(r.nums('meanRank')[i], 2), f(r.nums('sumRank')[i], 2)]),
       rowHeaders: true,
     },
     { caption: `Ranks — ${label(meta, yName)} by ${label(meta, gName)}` },
@@ -121,7 +121,7 @@ export async function mannWhitney(app, { y: yName, g: gName, g1, g2 }) {
   await app.results.appendTable(
     {
       columns: ['Mann-Whitney U', 'Wilcoxon W', 'Z', 'Asymp. Sig. (2-tailed)', 'Effect size r'],
-      rows: [[f(r.n1('U'), 1), f(r.n1('W'), 1), f(r.n1('Z'), 3), fmtP(r.n1('p')), f(r.n1('r'), 3)]],
+      rows: [[f(r.num1('U'), 1), f(r.num1('W'), 1), f(r.num1('Z'), 3), fmtP(r.num1('p')), f(r.num1('r'), 3)]],
     },
     { caption: 'Mann-Whitney U Test' },
   );
@@ -159,9 +159,9 @@ export async function wilcoxon(app, { x1: n1, x2: n2 }) {
     {
       columns: ['', 'N', 'Mean Rank', 'Sum of Ranks'],
       rows: [
-        ['Negative ranks', int(r.n1('nNeg')), f(r.n1('mrNeg'), 2), f(r.n1('srNeg'), 2)],
-        ['Positive ranks', int(r.n1('nPos')), f(r.n1('mrPos'), 2), f(r.n1('srPos'), 2)],
-        ['Ties', int(r.n1('ties')), '', ''],
+        ['Negative ranks', int(r.num1('nNeg')), f(r.num1('mrNeg'), 2), f(r.num1('srNeg'), 2)],
+        ['Positive ranks', int(r.num1('nPos')), f(r.num1('mrPos'), 2), f(r.num1('srPos'), 2)],
+        ['Ties', int(r.num1('ties')), '', ''],
       ],
       rowHeaders: true,
     },
@@ -170,7 +170,7 @@ export async function wilcoxon(app, { x1: n1, x2: n2 }) {
   await app.results.appendTable(
     {
       columns: ['Z', 'Asymp. Sig. (2-tailed)', 'Effect size r'],
-      rows: [[f(r.n1('Z'), 3), fmtP(r.n1('p')), f(r.n1('r'), 3)]],
+      rows: [[f(r.num1('Z'), 3), fmtP(r.num1('p')), f(r.num1('r'), 3)]],
     },
     { caption: `Wilcoxon Signed-Rank Test — ${label(meta, n1)} vs ${label(meta, n2)}` },
   );
@@ -195,11 +195,11 @@ export async function kruskal(app, { y: yName, g: gName }) {
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
-  const lv = r.str('levels');
+  const lv = r.strs('levels');
   await app.results.appendTable(
     {
       columns: ['Group', 'N', 'Mean Rank'],
-      rows: lv.map((l, i) => [valueLabel(meta, gName, l), int(r.num('n')[i]), f(r.num('meanRank')[i], 2)]),
+      rows: lv.map((l, i) => [valueLabel(meta, gName, l), int(r.nums('n')[i]), f(r.nums('meanRank')[i], 2)]),
       rowHeaders: true,
     },
     { caption: `Ranks — ${label(meta, yName)} by ${label(meta, gName)}` },
@@ -207,7 +207,7 @@ export async function kruskal(app, { y: yName, g: gName }) {
   await app.results.appendTable(
     {
       columns: ['Kruskal-Wallis H', 'df', 'Asymp. Sig.', 'Effect size ε²'],
-      rows: [[f(r.n1('H'), 3), int(r.n1('df')), fmtP(r.n1('p')), f(r.n1('eps2'), 3)]],
+      rows: [[f(r.num1('H'), 3), int(r.num1('df')), fmtP(r.num1('p')), f(r.num1('eps2'), 3)]],
     },
     { caption: 'Kruskal-Wallis Test' },
   );
@@ -225,21 +225,4 @@ function label(meta, name) {
 }
 function valueLabel(meta, name, code) {
   return meta.get(name)?.valueLabels?.[code] ?? code;
-}
-function flat(rList) {
-  const byName = {};
-  if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
-    rList.names.forEach((n, i) => (byName[n] = rList.values[i]));
-  } else {
-    Object.assign(byName, rList || {});
-  }
-  const arr = (v) => (v == null ? [] : Array.isArray(v?.values) ? v.values : [].concat(v));
-  return {
-    num: (k) => arr(byName[k]).map((x) => (x == null ? NaN : Number(x))),
-    str: (k) => arr(byName[k]).map(String),
-    n1: (k) => {
-      const a = arr(byName[k]);
-      return a.length ? Number(a[0]) : NaN;
-    },
-  };
 }
