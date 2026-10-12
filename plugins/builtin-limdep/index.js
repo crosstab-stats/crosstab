@@ -13,6 +13,15 @@
  *    problem), reporting the inverse-Mills term and ρ.
  */
 
+/**
+ * The host's reporting formatters, from core/plugin-stdlib.js.
+ *
+ * Read from the sandbox global rather than `app.std` because these are module-scope
+ * helpers and `app` exists only inside an invoked function. One implementation, because
+ * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
+ */
+const { fmtP, fixed: f, labelOf, metaMap, rStr } = globalThis.ctStd;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-limdep',
@@ -216,30 +225,9 @@ function heckLabel(t) {
   return prettyTerm(t);
 }
 
-function metaMap(meta) {
-  return new Map(meta.map((m) => [m.name, m]));
-}
-
-function labelOf(meta, name) {
-  return meta?.label ? `${meta.label} (${name})` : name;
-}
-
 function prettyTerm(term) {
   const m = /^factor\(`?(.+?)`?\)(.*)$/.exec(term);
   return m ? `${m[1]}${m[2] ? ` = ${m[2]}` : ''}` : term.replace(/`/g, '');
-}
-
-function f(n, d) {
-  return Number.isFinite(n) ? n.toFixed(d) : '—';
-}
-
-function fmtP(p) {
-  if (!Number.isFinite(p)) return '—';
-  return p < 0.001 ? '< .001' : p.toFixed(3);
-}
-
-function rStr(s) {
-  return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
 function flat(rList) {

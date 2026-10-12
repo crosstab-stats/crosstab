@@ -11,6 +11,19 @@
  * impulse-response grid.
  */
 
+/**
+ * The host's reporting formatters, from core/plugin-stdlib.js.
+ *
+ * Read from the sandbox global rather than `app.std` because these are module-scope
+ * helpers and `app` exists only inside an invoked function. One implementation, because
+ * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
+ */
+const { fmtP, fixed: f, metaMap, rStr, labelOf: labelOfStd } = globalThis.ctStd;
+
+/** Bare label, no `(column)` suffix: these become series names in a plot legend, where
+ * the column name is clutter. Not drift — a deliberate difference, kept as an option. */
+const labelOf = (meta, name) => labelOfStd(meta, name, { qualify: false });
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-var',
@@ -173,27 +186,6 @@ function varTerm(term, disp, varcols) {
   if (term === 'const') return '(Constant)';
   if (term === 'trend') return 'Trend';
   return term;
-}
-
-function metaMap(meta) {
-  return new Map(meta.map((m) => [m.name, m]));
-}
-
-function labelOf(meta, name) {
-  return meta?.label ? `${meta.label}` : name;
-}
-
-function f(n, d) {
-  return Number.isFinite(n) ? n.toFixed(d) : '—';
-}
-
-function fmtP(p) {
-  if (!Number.isFinite(p)) return '—';
-  return p < 0.001 ? '< .001' : p.toFixed(3);
-}
-
-function rStr(s) {
-  return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
 function flat(rList) {

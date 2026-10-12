@@ -10,6 +10,15 @@
  * epitools::riskratio / oddsratio.
  */
 
+/**
+ * The host's reporting formatters, from core/plugin-stdlib.js.
+ *
+ * Read from the sandbox global rather than `app.std` because these are module-scope
+ * helpers and `app` exists only inside an invoked function. One implementation, because
+ * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
+ */
+const { fixed: f, ci, labelOf, metaMap } = globalThis.ctStd;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-epi',
@@ -140,10 +149,6 @@ const BIN01_R = `bin01 <- function(v, want = NULL){
   structure(as.integer(ch == pos), pos = pos, neg = neg) }`;
 
 function pct(x) { return Number.isFinite(x) ? `${(100 * x).toFixed(1)}%` : '—'; }
-function metaMap(meta) { return new Map(meta.map((m) => [m.name, m])); }
-function labelOf(meta, name) { return meta?.label ? `${meta.label} (${name})` : name; }
-function f(n, d) { return Number.isFinite(n) ? n.toFixed(d) : '—'; }
-function ci(lo, hi) { return Number.isFinite(lo) && Number.isFinite(hi) ? `[${lo.toFixed(3)}, ${hi.toFixed(3)}]` : '—'; }
 function flat(rList) {
   const byName = {};
   if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) rList.names.forEach((n, i) => (byName[n] = rList.values[i]));

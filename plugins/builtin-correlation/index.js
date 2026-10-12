@@ -11,6 +11,15 @@
  * gathers the chosen variables and binds them in R as the data.frame `vars`.
  */
 
+/**
+ * The host's reporting formatters, from core/plugin-stdlib.js.
+ *
+ * Read from the sandbox global rather than `app.std` because these are module-scope
+ * helpers and `app` exists only inside an invoked function. One implementation, because
+ * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
+ */
+const { rStr, fmtPInline } = globalThis.ctStd;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-correlation',
@@ -158,7 +167,7 @@ export async function run(app, { vars, method, weight }) {
       const p = at(c.p, i, j);
       const n = at(c.n, i, j);
       if (!Number.isFinite(r)) return [''];
-      return [rFmt(r, p), pFmt(p), `N = ${nFmt(n)}`];
+      return [rFmt(r, p), fmtPInline(p), `N = ${nFmt(n)}`];
     });
     return [label(rowName), ...cells];
   });
@@ -227,7 +236,7 @@ export async function partial(app, { vars, controls, type }) {
       const r = at(c.r, i, j);
       const p = at(c.p, i, j);
       if (!Number.isFinite(r)) return [''];
-      return [rFmt(r, p), pFmt(p)];
+      return [rFmt(r, p), fmtPInline(p)];
     });
     return [label(rowName), ...cells];
   });
@@ -268,12 +277,6 @@ function rFmt(val, p) {
   const stars = !Number.isFinite(p) ? '' : p < 0.01 ? '**' : p < 0.05 ? '*' : '';
   return `${val.toFixed(3)}${stars}`;
 }
-function pFmt(val) {
-  return Number.isFinite(val) ? `p ${val < 0.001 ? '< .001' : '= ' + val.toFixed(3)}` : 'p = —';
-}
 function nFmt(val) {
   return Number.isFinite(val) ? String(Math.round(val)) : '';
-}
-function rStr(s) {
-  return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }

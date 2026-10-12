@@ -12,6 +12,15 @@
  *    against the `seg` package).
  */
 
+/**
+ * The host's reporting formatters, from core/plugin-stdlib.js.
+ *
+ * Read from the sandbox global rather than `app.std` because these are module-scope
+ * helpers and `app` exists only inside an invoked function. One implementation, because
+ * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
+ */
+const { fixed: f, labelOf, metaMap } = globalThis.ctStd;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-inequality',
@@ -136,9 +145,6 @@ export async function segregation(app, { groupA: aName, groupB: bName }) {
 function cleanSvg(svg) {
   return String(svg).replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1').replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1');
 }
-function metaMap(meta) { return new Map(meta.map((m) => [m.name, m])); }
-function labelOf(meta, name) { return meta?.label ? `${meta.label} (${name})` : name; }
-function f(n, d) { return Number.isFinite(n) ? n.toFixed(d) : '—'; }
 function flat(rList) {
   const byName = {};
   if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) rList.names.forEach((n, i) => (byName[n] = rList.values[i]));

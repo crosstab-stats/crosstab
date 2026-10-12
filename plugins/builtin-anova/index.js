@@ -13,6 +13,15 @@
  * ANOVA. User-missing codes are recoded to NA; analysis is listwise.
  */
 
+/**
+ * The host's reporting formatters, from core/plugin-stdlib.js.
+ *
+ * Read from the sandbox global rather than `app.std` because these are module-scope
+ * helpers and `app` exists only inside an invoked function. One implementation, because
+ * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
+ */
+const { fmtP, fixed: f, rounded: int, metaMap, rStr } = globalThis.ctStd;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-anova',
@@ -360,9 +369,6 @@ export async function repeated(app, { vars }) {
 
 // --- helpers -----------------------------------------------------------------
 
-function metaMap(meta) {
-  return new Map((meta || []).map((m) => [m.name, m]));
-}
 function label(meta, name) {
   return meta.get(name)?.label || name;
 }
@@ -393,10 +399,4 @@ function flat(rList) {
       return a.length ? (a[0] == null ? NaN : Number(a[0])) : NaN;
     },
   };
-}
-const f = (x, d) => (Number.isFinite(x) ? x.toFixed(d) : '—');
-const int = (x) => (Number.isFinite(x) ? String(Math.round(x)) : '—');
-const fmtP = (p) => (Number.isFinite(p) ? (p < 0.001 ? '< .001' : p.toFixed(3)) : '—');
-function rStr(s) {
-  return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }

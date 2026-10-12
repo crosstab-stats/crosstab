@@ -11,6 +11,15 @@
  * contribute equally.
  */
 
+/**
+ * The host's reporting formatters, from core/plugin-stdlib.js.
+ *
+ * Read from the sandbox global rather than `app.std` because these are module-scope
+ * helpers and `app` exists only inside an invoked function. One implementation, because
+ * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
+ */
+const { fixed: f, labelOf, metaMap } = globalThis.ctStd;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-cluster',
@@ -108,22 +117,6 @@ export async function kmeans(app, { vars, k, standardize }) {
 
 function identicalRaw(s) {
   return s === 'raw';
-}
-
-function metaMap(meta) {
-  return new Map(meta.map((m) => [m.name, m]));
-}
-
-function labelOf(meta, name) {
-  return meta?.label ? `${meta.label} (${name})` : name;
-}
-
-function f(n, d) {
-  return Number.isFinite(n) ? n.toFixed(d) : '—';
-}
-
-function rStr(s) {
-  return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
 function flat(rList) {

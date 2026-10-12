@@ -31,6 +31,15 @@ const CASEWISE_SD = 2;
  * under the table rather than silently applied. */
 const CASEWISE_CAP = 500;
 
+/**
+ * The host's reporting formatters, from core/plugin-stdlib.js.
+ *
+ * Read from the sandbox global rather than `app.std` because these are module-scope
+ * helpers and `app` exists only inside an invoked function. One implementation, because
+ * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
+ */
+const { fixed: f, fmtP, labelOf, rStr } = globalThis.ctStd;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-logistic',
@@ -230,7 +239,6 @@ ${needPred ? '    pred <- as.integer(p >= 0.5)\n' : ''}${want.has('class') ? `
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const m = normalizeResult(result);
-  const f = (n, d) => (Number.isFinite(n) ? n.toFixed(d) : '—');
   const dvLabel = labelOf(meta.get(dvName), dvName);
   /** A category shown through its value label, as everywhere else in the app. */
   const textOf = (varName, code) => {
@@ -409,15 +417,6 @@ ${needPred ? '    pred <- as.integer(p >= 0.5)\n' : ''}${want.has('class') ? `
 
 // --- helpers -----------------------------------------------------------------
 
-function labelOf(meta, name) {
-  return meta?.label ? `${meta.label} (${name})` : name;
-}
-
-function fmtP(p) {
-  if (!Number.isFinite(p)) return '—';
-  return p < 0.001 ? '< .001' : p.toFixed(3);
-}
-
 function normalizeResult(rList) {
   const byName = {};
   if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) {
@@ -474,10 +473,6 @@ function normalizeResult(rList) {
     plC0: num(byName.plC0),
     plC1: num(byName.plC1),
   };
-}
-
-function rStr(s) {
-  return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
 /** An R character vector literal, e.g. c("a","b") — or character(0) when empty. */

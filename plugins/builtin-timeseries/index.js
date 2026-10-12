@@ -13,6 +13,15 @@
  * non-finite values are dropped.
  */
 
+/**
+ * The host's reporting formatters, from core/plugin-stdlib.js.
+ *
+ * Read from the sandbox global rather than `app.std` because these are module-scope
+ * helpers and `app` exists only inside an invoked function. One implementation, because
+ * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
+ */
+const { fmtP, fixed: f, rounded: int, metaMap } = globalThis.ctStd;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-timeseries',
@@ -206,9 +215,6 @@ export async function arima(app, { series, h, frequency }) {
 
 // --- helpers -----------------------------------------------------------------
 
-function metaMap(meta) {
-  return new Map((meta || []).map((m) => [m.name, m]));
-}
 function label(meta, name) {
   return meta.get(name)?.label || name;
 }
@@ -236,6 +242,3 @@ function flat(rList) {
     },
   };
 }
-const f = (x, d) => (Number.isFinite(x) ? x.toFixed(d) : '—');
-const int = (x) => (Number.isFinite(x) ? String(Math.round(x)) : '—');
-const fmtP = (p) => (Number.isFinite(p) ? (p < 0.001 ? '< .001' : p.toFixed(3)) : '—');

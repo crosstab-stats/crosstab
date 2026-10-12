@@ -9,6 +9,15 @@
  * NA; analysis is listwise on the chosen items.
  */
 
+/**
+ * The host's reporting formatters, from core/plugin-stdlib.js.
+ *
+ * Read from the sandbox global rather than `app.std` because these are module-scope
+ * helpers and `app` exists only inside an invoked function. One implementation, because
+ * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
+ */
+const { fmtP, fixed: f, rounded: int, rStr } = globalThis.ctStd;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-factor',
@@ -192,10 +201,4 @@ function flat(rList) {
       return a.length ? String(a[0]) : '';
     },
   };
-}
-const f = (x, d) => (Number.isFinite(x) ? x.toFixed(d) : '—');
-const int = (x) => (Number.isFinite(x) ? String(Math.round(x)) : '—');
-const fmtP = (p) => (Number.isFinite(p) ? (p < 0.001 ? '< .001' : p.toFixed(3)) : '—');
-function rStr(s) {
-  return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }

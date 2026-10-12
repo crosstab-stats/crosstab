@@ -64,6 +64,15 @@ const WEIGHTED_R = `
   }
 `;
 
+/**
+ * The host's reporting formatters, from core/plugin-stdlib.js.
+ *
+ * Read from the sandbox global rather than `app.std` because these are module-scope
+ * helpers and `app` exists only inside an invoked function. One implementation, because
+ * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
+ */
+const { fmtP, fixed: f, rounded: int, ci, metaMap: metaMapOf } = globalThis.ctStd;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-compare',
@@ -628,9 +637,11 @@ async function weightNote(app, weight) {
   );
 }
 
-async function metaMap(app) {
-  return new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
-}
+/**
+ * Variable metadata as a Map, fetched. The stdlib's `metaMap` shapes an array that the
+ * caller already has; this one does the host round-trip too, which is why it stays local.
+ */
+const metaMap = async (app) => metaMapOf(await app.data.getVariableMeta());
 
 function label(meta, name) {
   return meta.get(name)?.label || name;
@@ -659,8 +670,4 @@ function flat(rList) {
   };
 }
 
-const f = (x, d) => (Number.isFinite(x) ? x.toFixed(d) : '—');
-const int = (x) => (Number.isFinite(x) ? String(Math.round(x)) : '—');
-const fmtP = (p) => (Number.isFinite(p) ? (p < 0.001 ? '< .001' : p.toFixed(3)) : '—');
 const fmtDf = (d) => (Number.isFinite(d) ? (Number.isInteger(d) ? String(d) : d.toFixed(2)) : '—');
-const ci = (lo, hi) => (Number.isFinite(lo) && Number.isFinite(hi) ? `[${lo.toFixed(3)}, ${hi.toFixed(3)}]` : '—');

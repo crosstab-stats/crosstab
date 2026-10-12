@@ -26,6 +26,15 @@ const DESIGN_INPUTS = [
   { name: 'cluster', kind: 'variables', label: 'Cluster / PSU id (optional)', hint: 'The id for the primary sampling unit, if cases were clustered.', multiple: false, optional: true, unique: true },
 ];
 
+/**
+ * The host's reporting formatters, from core/plugin-stdlib.js.
+ *
+ * Read from the sandbox global rather than `app.std` because these are module-scope
+ * helpers and `app` exists only inside an invoked function. One implementation, because
+ * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
+ */
+const { fmtP, fixed: f, ci, labelOf, metaMap, rStr } = globalThis.ctStd;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-survey',
@@ -269,14 +278,6 @@ async function runR(app, rCode) {
   return result;
 }
 
-function metaMap(meta) {
-  return new Map(meta.map((m) => [m.name, m]));
-}
-
-function labelOf(meta, name) {
-  return meta?.label ? `${meta.label} (${name})` : name;
-}
-
 /** A category shown through its value label — the same category the recode used. */
 function lvl(meta, code) {
   if (code == null || code === '' || code === 'NA') return '?';
@@ -287,23 +288,6 @@ function lvl(meta, code) {
 function prettyTerm(term) {
   const m = /^factor\(`?(.+?)`?\)(.*)$/.exec(term);
   return m ? `${m[1]}${m[2] ? ` = ${m[2]}` : ''}` : term.replace(/`/g, '');
-}
-
-function f(n, d) {
-  return Number.isFinite(n) ? n.toFixed(d) : '—';
-}
-
-function ci(lo, hi) {
-  return Number.isFinite(lo) && Number.isFinite(hi) ? `[${lo.toFixed(3)}, ${hi.toFixed(3)}]` : '—';
-}
-
-function fmtP(p) {
-  if (!Number.isFinite(p)) return '—';
-  return p < 0.001 ? '< .001' : p.toFixed(3);
-}
-
-function rStr(s) {
-  return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
 function flat(rList) {

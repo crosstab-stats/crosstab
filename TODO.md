@@ -116,6 +116,122 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       - **Not checked on hardware.** The stacking was confirmed in a desktop browser with
         the mode forced. How it actually feels under a thumb — touch targets, the on-screen
         keyboard over a 40vh text column — wants a phone.
+- [x] **DONE (2026-10-12). Plugin stdlib, part 3: the compute plugins get one set of
+      reporting formatters.** Parts 1 and 2 reached the plugins that draw DOM. This is the
+      other sixty — the ones that only emit tables — and the drift there was worse, because
+      it was **already visible in printed output**:
+
+      | helper | copies | variants | the drift |
+      |---|---|---|---|
+      | `fmtP` | 32 | 5 | **three spellings**: `< .001`, `<.001` (sced), `< 0.001` (spatial) |
+      | `rStr` | 32 | 2 | mediation + sem escaped the newline; the other thirty did not |
+      | `f` | 38 | 4 | cosmetic — all four agreed |
+      | `metaMap` | 34 | 3 | one a different signature |
+      | `labelOf` | 27 | 3 | one a different signature |
+      | `ci` | 18 | 3 | 3 dp in thirteen, 4 dp in three |
+
+      Nobody decided any of it. Each file got a helper when it was written and whichever
+      convention its author typed became that plugin's house style. **201 definitions
+      removed across 48 plugins.**
+
+      **Unlike the `el()` swap, this was never invisible — it printed.** A session could
+      carry three spellings of `p < .001` into one manuscript.
+
+      **The by-name scan missed four, and the convention scan caught them**: `fp` in
+      builtin-agreement (dead) and builtin-crosstabs, `pFmt` in builtin-correlation, and
+      builtin-trend had it written inline mid-sentence in a template string. So the guard
+      test checks the **printed literal** (`'< .001'`) and not only the names — guarding
+      names would have missed every one of those. It skips the `Math.abs(v) < 0.001` in the
+      chart tick formatters, which is scientific-notation switching and unrelated.
+
+      **Delivery: `globalThis.ctStd`, not `app.std`.** `app` exists only inside an invoked
+      function, and these are module-scope helpers in 36 plugins — builtin-spatial exports
+      nineteen entry points and builtin-sced thirteen. Binding per entry point would have
+      been ~100 insertion sites where a missed one silently keeps a local copy, which is
+      the drift being removed. `plugin-host.html` assigns the frozen namespace **before**
+      `importPlugin()`, because a module body reads it during evaluation; a test asserts
+      that ordering, since reversing it would break every migrated plugin at once.
+
+      The import map was the other candidate and was rejected: `installModules` early-
+      returns when a plugin has no modules (none of the 64 builtins declare any), and its
+      own comment documents that it only resolves while the document is blob-served.
+
+      **Decisions worth keeping:**
+      - **`rStr` takes the superset.** Mediation and sem escaped `\n` and they were right —
+        a raw newline is legal R but splits the generated line, and both the captured-R
+        audit trail and the `# df <- …` comment prelude are read line-wise, where a newline
+        in a column name pushes the rest of a comment onto a live code line. Twenty-eight
+        plugins were missing a fix two had made locally. `\r` goes too.
+      - **Three copies survive as wrappers, because they were distinctions and not drift.**
+        A 4-dp `ci` in margins/meta/trend (a slope can be small enough that 3 dp prints
+        `[0.000, 0.001]` — verified live: trend prints `[0.4000, 0.4059]`); a bare-label
+        `labelOf` in var (plot legends) and mixture (prose: "Baseline → Year 1 → Year 2");
+        and an async `metaMap` in compare/nonparametric/plots that does the host round-trip
+        as well. Each delegates, and a test asserts it still delegates rather than having
+        quietly become a fourth implementation.
+      - **mixture differed TWICE and only one half was drift.** Its `labelOf` took the meta
+        MAP rather than a resolved entry *and* dropped the `(column)` suffix. The signature
+        was the drift; the bare label was style. Three of its tests caught the half I got
+        wrong first — the failure the suite exists for.
+
+      Verified live in Chrome against the dev server, not just in Node: regression
+      (`Test score (outcome)`, `< .001`, `0.466`, `[-1.018, 2.181]`, and the em dash for a
+      statistic R did not return), crosstabs (all 11 renamed `fp` sites), correlation (the
+      migrated `pFmt` printing `p < .001`) and trend (the 4-dp wrapper and the inline
+      replacement: "A significant upward monotonic trend (p < .001)"). Suite 1659 → 1681.
+
+      **Left deliberately:**
+      - **`fmtP` keeps its leading zero on ordinary values** — `0.034` in a cell, `< .001`
+        at the floor. Strict APA drops it in both (a p cannot exceed 1, so the zero carries
+        no information) and SPSS's Sig. column prints `.034`. But every copy in the tree
+        used `toFixed(3)`, so `0.034` is the existing house style across every results
+        table, and changing it is a visible change to all of them — an owner's call, not a
+        tidy-up to slip inside a refactor. See the item below.
+      - **The test runner needs `scripts/test-globals.mjs`.** Tests import plugin modules
+        directly, with no frame to supply the global, so `npm test` preloads the REAL
+        stdlib — a plugin tested against stub formatters would be testing the stub. It
+        lives in `scripts/` because `node --test` treats everything under `test/` as a test
+        file.
+
+- [ ] **Should a p-value drop its leading zero? (owner decision, raised 2026-10-12).**
+      `fmtP` currently prints `0.034` in a cell and `< .001` at the floor, which is
+      internally inconsistent. Strict APA drops the zero in both (`.034`), as does SPSS's
+      Sig. column; R's `format.pval` keeps it.
+
+      It is one line in `core/plugin-stdlib.js` now that there is one implementation — the
+      point of the exercise — but it changes the Sig. column of **every results table in
+      the app**, so it wants a deliberate yes rather than being bundled into other work.
+      Relevant: the app's audience includes people pasting tables straight into a
+      manuscript, which is the argument for APA; against it, `0.034` is what SPSS users see
+      in every other product and what the tree has always printed.
+
+- [ ] **More duplication the drift scan found, not yet done (2026-10-12).** The same scan
+      that produced part 3 above. None of these are reporting conventions, so none print
+      inconsistently — they are maintenance risk rather than visible defects, which is why
+      they were not swept with the formatters:
+
+      - **`flat` / `normalizeResult` — 39 copies, 19 variants.** The R-result unpacker:
+        turns WebR's `{names, values}` list into a plain object with `num`/`str`/`n1`
+        accessors. Near-identical everywhere and individually hand-edited, which is the
+        worst combination. The hard part is that each plugin's accessor set has grown to
+        fit its own result shape, so this is a real interface design and not a lift — and
+        a wrong move here breaks every analysis, unlike a formatter.
+      - **`prettyTerm` — 13 copies, 3 variants.** Turns an R model term (`factor(x)y`)
+        into something readable. The variants differ in which R term shapes they know
+        about, so the union is probably right, but each needs reading first.
+      - **`runR` — 11 copies, 2 variants**, and **`cleanSvg` — 8 copies, 2 variants** (the
+        two differ only in whitespace). `cleanSvg` strips the width/height off an R plot so
+        it scales; that one is a straight lift.
+      - **`uniqueName` — 6 copies, 5 variants** and **`lvl` — 6 copies, 3 variants.**
+      - **The chart tick formatter is duplicated** between builtin-charts and builtin-plots
+        (`Math.abs(v) >= 10000 || Math.abs(v) < 0.001 ? toPrecision(4) : toFixed(3)`),
+        byte-identical. Belongs in the chart stdlib rather than the plugin stdlib.
+      - **builtin-correlation's `nFmt` prints a BLANK, not an em dash**, where every other
+        count formatter prints `—`. Possibly deliberate (a correlation matrix leaves empty
+        cells empty) and possibly drift; it needs a look rather than a sweep, which is why
+        `rounded` was not forced onto it.
+
+
 - [x] **DONE (2026-10-10). A project row says when it was last worked on and how big it
       is — and opening one no longer counts as working on it.**
 

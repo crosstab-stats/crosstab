@@ -36,6 +36,21 @@
  * import offer a Swap rather than an in-place replace ([[no-inplace-replace]]).
  */
 
+/**
+ * The host's reporting formatters, from core/plugin-stdlib.js.
+ *
+ * Read from the sandbox global rather than `app.std` because these are module-scope
+ * helpers and `app` exists only inside an invoked function. One implementation, because
+ * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
+ */
+const { fixed: f, labelOf: labelOfStd, metaMap } = globalThis.ctStd;
+
+/** Bare label, no `(column)` suffix. This plugin names occasions and indicators in
+ * PROSE — "Baseline → Year 1 → Year 2" — where the column name is noise. Its old copy
+ * differed from the shared one twice over: it took the meta map rather than a resolved
+ * entry, AND it dropped the suffix. Only the signature was drift; this part was style. */
+const labelOf = (meta, name) => labelOfStd(meta, name, { qualify: false });
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-mixture',
@@ -221,7 +236,7 @@ export async function lca(app, { items, classes, seed, save }) {
       });
       await app.results.appendTable({
         columns: ['Indicator', 'Categories, as modelled'],
-        rows: [...byItem].map(([it, parts]) => [labelOf(meta, it), parts.join(', ')]),
+        rows: [...byItem].map(([it, parts]) => [labelOf(meta.get(it), it), parts.join(', ')]),
         rowHeaders: true,
       }, { caption: 'How each indicator was coded' });
 
@@ -245,7 +260,7 @@ export async function lca(app, { items, classes, seed, save }) {
             cells.push(i < 0 ? '—' : f(pVal[i], 3));
           }
           const code = mc[mi.findIndex((x, j) => x === it && mr[j] === ct)];
-          rows.push([`${labelOf(meta, it)} = ${labelValue(meta, it, code)}`, ...cells]);
+          rows.push([`${labelOf(meta.get(it), it)} = ${labelValue(meta, it, code)}`, ...cells]);
         }
       }
       await app.results.appendTable({
@@ -342,7 +357,7 @@ export async function lpa(app, { items, classes, seed, save }) {
           const i = ci.findIndex((x, j) => x === nm && cc[j] === cl);
           cells.push(i < 0 ? '—' : f(cv[i], 3));
         }
-        return [labelOf(meta, nm), ...cells];
+        return [labelOf(meta.get(nm), nm), ...cells];
       });
       await app.results.appendTable({
         columns: ['', ...Array.from({ length: k }, (_, i) => `Profile ${i + 1}`)],
@@ -474,7 +489,7 @@ export async function gmm(app, { waves, classes, seed, save }) {
   await app.results.beginAnalysis('Growth mixture model');
   const dropped = r.num('nDropped');
   await app.results.appendText(
-    `Occasions, in order: ${names.map((nm) => labelOf(meta, nm)).join(' → ')}. Modelled at times `
+    `Occasions, in order: ${names.map((nm) => labelOf(meta.get(nm), nm)).join(' → ')}. Modelled at times `
     + `${names.map((_, i) => i).join(', ')} — equally spaced, so the slope is per OCCASION. `
     + `${f(r.num('n'), 0)} people${dropped ? `, ${f(dropped, 0)} dropped for having fewer than two usable occasions` : ''}. `
     + `Random seed ${seedVal}.`,
@@ -556,7 +571,7 @@ async function reportMixture(app, r, { kind, names, meta, seedVal, save, detail,
   // mixture counts PEOPLE with usable occasions, not complete cases.
   if (!quiet) {
     await app.results.appendText(
-      `Indicators: ${names.map((nm) => labelOf(meta, nm)).join(', ')}. `
+      `Indicators: ${names.map((nm) => labelOf(meta.get(nm), nm)).join(', ')}. `
       + `N = ${f(r.num('n'), 0)} complete cases. Random seed ${seedVal} — `
       + 'these models start from random values, so the seed is part of the result.',
     );
@@ -665,20 +680,11 @@ function clampK(v) {
   return Math.max(1, Math.min(10, n));
 }
 
-function metaMap(meta) {
-  return new Map((meta || []).map((m) => [m.name, m]));
-}
-function labelOf(meta, name) {
-  return meta.get(name)?.label || name;
-}
 /** A value's own label where the codebook has one, so a class profile reads "Agree", not "4". */
 function labelValue(meta, name, code) {
   const vl = meta.get(name)?.valueLabels;
   if (!vl) return String(code);
   return vl[code] ?? vl[Number(code)] ?? String(code);
-}
-function f(n, d) {
-  return Number.isFinite(n) ? Number(n).toFixed(d) : '—';
 }
 function pct(p) {
   return Number.isFinite(p) ? `${(p * 100).toFixed(1)}%` : '—';

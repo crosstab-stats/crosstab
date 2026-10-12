@@ -47,6 +47,15 @@
  * the one true log through the normal menu-action path with no state of its own.
  */
 
+/**
+ * The host's reporting formatters, from core/plugin-stdlib.js.
+ *
+ * Read from the sandbox global rather than `app.std` because these are module-scope
+ * helpers and `app` exists only inside an invoked function. One implementation, because
+ * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
+ */
+const { fmtP } = globalThis.ctStd;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-sced',
@@ -782,8 +791,3 @@ function fmt(v, dp) {
   return Number.isFinite(v) ? v.toFixed(dp) : '—';
 }
 
-/** p-values: three decimals, with the usual floor rather than a misleading 0.000. */
-function fmtP(p) {
-  if (!Number.isFinite(p)) return '—';
-  return p < 0.001 ? '<.001' : p.toFixed(3);
-}

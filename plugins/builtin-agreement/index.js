@@ -25,6 +25,15 @@
  * dependency and covers the same four metrics.
  */
 
+/**
+ * The host's reporting formatters, from core/plugin-stdlib.js.
+ *
+ * Read from the sandbox global rather than `app.std` because these are module-scope
+ * helpers and `app` exists only inside an invoked function. One implementation, because
+ * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
+ */
+const { fixed: f, rounded: int } = globalThis.ctStd;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-agreement',
@@ -327,10 +336,7 @@ function benchmarkAlpha(v) {
   return 'Below the usual threshold (< .667)';
 }
 
-const f = (v, d) => (Number.isFinite(v) ? v.toFixed(d) : '—');
-const int = (v) => (Number.isFinite(v) ? String(Math.round(v)) : '—');
 const pct = (v) => (Number.isFinite(v) ? `${v.toFixed(1)}%` : '—');
-const fp = (v) => (Number.isFinite(v) ? (v < 0.001 ? '< .001' : v.toFixed(3)) : '—');
 
 function flat(rList) {
   const byName = {};

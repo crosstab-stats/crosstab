@@ -7,6 +7,20 @@
  * years?" question. Uses the `trend` package.
  */
 
+/**
+ * The host's reporting formatters, from core/plugin-stdlib.js.
+ *
+ * Read from the sandbox global rather than `app.std` because these are module-scope
+ * helpers and `app` exists only inside an invoked function. One implementation, because
+ * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
+ */
+const { fmtP, fixed: f, labelOf, metaMap, ci: ciAt, fmtPInline } = globalThis.ctStd;
+
+/** This plugin reports four decimals: a marginal effect or a trend slope can be small
+ * enough that three prints `[0.000, 0.001]`. The precision is the caller's; the
+ * formatting is the stdlib's. */
+const ci = (lo, hi) => ciAt(lo, hi, 4);
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-trend',
@@ -65,17 +79,11 @@ export async function run(app, { series: sName }) {
   );
   const tau = r.num('tau'), p = r.num('p');
   await app.results.appendText(
-    `${p < 0.05 ? `A **significant ${tau > 0 ? 'upward' : 'downward'} monotonic trend** (p ${p < 0.001 ? '< .001' : '= ' + p.toFixed(3)}).` : 'No significant monotonic trend (p ≥ .05).'} ` +
+    `${p < 0.05 ? `A **significant ${tau > 0 ? 'upward' : 'downward'} monotonic trend** (${fmtPInline(p)}).` : 'No significant monotonic trend (p ≥ .05).'} ` +
       "**Kendall's tau** is the rank correlation with time (−1…1); **Sen's slope** is the median of all pairwise slopes — a robust per-step rate of change, far less sensitive to outliers than an OLS trend. Assumes observations are in time order and roughly evenly spaced.",
   );
 }
 
-// --- helpers -----------------------------------------------------------------
-function metaMap(meta) { return new Map(meta.map((m) => [m.name, m])); }
-function labelOf(meta, name) { return meta?.label ? `${meta.label} (${name})` : name; }
-function f(n, d) { return Number.isFinite(n) ? n.toFixed(d) : '—'; }
-function ci(lo, hi) { return Number.isFinite(lo) && Number.isFinite(hi) ? `[${lo.toFixed(4)}, ${hi.toFixed(4)}]` : '—'; }
-function fmtP(p) { return !Number.isFinite(p) ? '—' : p < 0.001 ? '< .001' : p.toFixed(3); }
 function flat(rList) {
   const byName = {};
   if (rList && Array.isArray(rList.names) && Array.isArray(rList.values)) rList.names.forEach((n, i) => (byName[n] = rList.values[i]));

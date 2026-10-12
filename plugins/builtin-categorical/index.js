@@ -14,6 +14,15 @@
  * for display. User-missing codes are recoded to NA.
  */
 
+/**
+ * The host's reporting formatters, from core/plugin-stdlib.js.
+ *
+ * Read from the sandbox global rather than `app.std` because these are module-scope
+ * helpers and `app` exists only inside an invoked function. One implementation, because
+ * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
+ */
+const { fmtP, fixed: f, rounded: int, ci, metaMap, rStr } = globalThis.ctStd;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-categorical',
@@ -171,10 +180,6 @@ function prettyLLTerm(term, vars, meta) {
       return m && vars[+m[1] - 1] != null ? label(meta, vars[+m[1] - 1]) : part;
     })
     .join(' × ');
-}
-
-function rStr(s) {
-  return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
 export async function gof(app, { variable, expected }) {
@@ -398,9 +403,6 @@ export async function mcnemar(app, { v1, v2 }) {
 
 // --- helpers -----------------------------------------------------------------
 
-function metaMap(meta) {
-  return new Map((meta || []).map((m) => [m.name, m]));
-}
 function label(meta, name) {
   return meta.get(name)?.label || name;
 }
@@ -442,7 +444,3 @@ function flat(rList) {
     },
   };
 }
-const f = (x, d) => (Number.isFinite(x) ? x.toFixed(d) : '—');
-const int = (x) => (Number.isFinite(x) ? String(Math.round(x)) : '—');
-const fmtP = (p) => (Number.isFinite(p) ? (p < 0.001 ? '< .001' : p.toFixed(3)) : '—');
-const ci = (lo, hi) => (Number.isFinite(lo) && Number.isFinite(hi) ? `[${lo.toFixed(3)}, ${hi.toFixed(3)}]` : '—');

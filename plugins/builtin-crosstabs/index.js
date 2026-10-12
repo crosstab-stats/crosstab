@@ -10,6 +10,15 @@
  * host binds them in R as the vectors `rowvar` and `colvar`.
  */
 
+/**
+ * The host's reporting formatters, from core/plugin-stdlib.js.
+ *
+ * Read from the sandbox global rather than `app.std` because these are module-scope
+ * helpers and `app` exists only inside an invoked function. One implementation, because
+ * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
+ */
+const { labelOf, fmtP } = globalThis.ctStd;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-crosstabs',
@@ -186,14 +195,13 @@ export async function run(app, { rowvar: rowName, colvar: colName, pmethod, meas
 
   // Chi-square test.
   const fmt = (n, d) => (Number.isFinite(n) ? n.toFixed(d) : '—');
-  const fp = (v) => (Number.isFinite(v) ? (v < 0.001 ? '< .001' : v.toFixed(3)) : '—');
-  const p = fp(x.p);
+  const p = fmtP(x.p);
   const chiRows = [['Pearson Chi-Square', fmt(x.chisq, 3), fmt(x.dfree, 0), p]];
   if (Number.isFinite(x.pMC)) {
-    chiRows.push(['Pearson Chi-Square — Monte Carlo', fmt(x.chisq, 3), '', fp(x.pMC)]);
+    chiRows.push(['Pearson Chi-Square — Monte Carlo', fmt(x.chisq, 3), '', fmtP(x.pMC)]);
   }
   if (Number.isFinite(x.pFisher)) {
-    chiRows.push(["Fisher's Exact — Monte Carlo", '', '', fp(x.pFisher)]);
+    chiRows.push(["Fisher's Exact — Monte Carlo", '', '', fmtP(x.pFisher)]);
   }
   chiRows.push(['N of Valid Cases', x.total, '', '']);
   await app.results.appendTable(
@@ -222,11 +230,11 @@ export async function run(app, { rowvar: rowName, colvar: colName, pmethod, meas
   if (Number.isFinite(x.phi)) sym.push(['Nominal — Phi', fmt(x.phi, 3), p]);
   if (Number.isFinite(x.cramerV)) sym.push(["Nominal — Cramér's V", fmt(x.cramerV, 3), p]);
   if (wantOrdinal) {
-    if (Number.isFinite(x.gamma)) sym.push(['Ordinal — Goodman & Kruskal Gamma', fmt(x.gamma, 3), fp(x.pOrdinal)]);
-    if (Number.isFinite(x.taub)) sym.push(["Ordinal — Kendall's tau-b", fmt(x.taub, 3), fp(x.pOrdinal)]);
-    if (Number.isFinite(x.tauc)) sym.push(["Ordinal — Kendall's tau-c", fmt(x.tauc, 3), fp(x.pOrdinal)]);
-    if (Number.isFinite(x.spearman)) sym.push(['Ordinal — Spearman Correlation', fmt(x.spearman, 3), fp(x.pSpearman)]);
-    if (Number.isFinite(x.pearson)) sym.push(["Interval — Pearson's R", fmt(x.pearson, 3), fp(x.pPearson)]);
+    if (Number.isFinite(x.gamma)) sym.push(['Ordinal — Goodman & Kruskal Gamma', fmt(x.gamma, 3), fmtP(x.pOrdinal)]);
+    if (Number.isFinite(x.taub)) sym.push(["Ordinal — Kendall's tau-b", fmt(x.taub, 3), fmtP(x.pOrdinal)]);
+    if (Number.isFinite(x.tauc)) sym.push(["Ordinal — Kendall's tau-c", fmt(x.tauc, 3), fmtP(x.pOrdinal)]);
+    if (Number.isFinite(x.spearman)) sym.push(['Ordinal — Spearman Correlation', fmt(x.spearman, 3), fmtP(x.pSpearman)]);
+    if (Number.isFinite(x.pearson)) sym.push(["Interval — Pearson's R", fmt(x.pearson, 3), fmtP(x.pPearson)]);
   }
   if (sym.length) {
     await app.results.appendTable(
@@ -243,9 +251,9 @@ export async function run(app, { rowvar: rowName, colvar: colName, pmethod, meas
   if (Number.isFinite(x.lambdaRC)) dir.push([`Nominal — Lambda (${rowLab} dependent)`, fmt(x.lambdaRC, 3), '—']);
   if (Number.isFinite(x.lambdaCR)) dir.push([`Nominal — Lambda (${colLab} dependent)`, fmt(x.lambdaCR, 3), '—']);
   if (wantOrdinal) {
-    if (Number.isFinite(x.somersSym)) dir.push(["Ordinal — Somers' d (symmetric)", fmt(x.somersSym, 3), fp(x.pOrdinal)]);
-    if (Number.isFinite(x.somersRC)) dir.push([`Ordinal — Somers' d (${rowLab} dependent)`, fmt(x.somersRC, 3), fp(x.pOrdinal)]);
-    if (Number.isFinite(x.somersCR)) dir.push([`Ordinal — Somers' d (${colLab} dependent)`, fmt(x.somersCR, 3), fp(x.pOrdinal)]);
+    if (Number.isFinite(x.somersSym)) dir.push(["Ordinal — Somers' d (symmetric)", fmt(x.somersSym, 3), fmtP(x.pOrdinal)]);
+    if (Number.isFinite(x.somersRC)) dir.push([`Ordinal — Somers' d (${rowLab} dependent)`, fmt(x.somersRC, 3), fmtP(x.pOrdinal)]);
+    if (Number.isFinite(x.somersCR)) dir.push([`Ordinal — Somers' d (${colLab} dependent)`, fmt(x.somersCR, 3), fmtP(x.pOrdinal)]);
   }
   if (dir.length) {
     await app.results.appendTable(
@@ -328,10 +336,6 @@ ord_measures <- function(tab){
 }`;
 
 // --- helpers -----------------------------------------------------------------
-
-function labelOf(meta, name) {
-  return meta?.label ? `${meta.label} (${name})` : name;
-}
 
 function normalizeResult(rList) {
   const byName = {};

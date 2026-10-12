@@ -27,6 +27,8 @@
  */
 
 /** @type {import('../../core/loader.js').PluginManifest} */
+const { metaMap: metaMapOf } = globalThis.ctStd;
+
 export const manifest = {
   id: 'builtin-plots',
   name: 'Plots',
@@ -689,9 +691,11 @@ export async function errorBars(app, { y, g }) {
 // --- tiny helpers ------------------------------------------------------------
 
 /** name → meta map for the current dataset. */
-async function metaMap(app) {
-  return new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
-}
+/**
+ * Variable metadata as a Map, fetched. The stdlib's `metaMap` shapes an array that the
+ * caller already has; this one does the host round-trip too, which is why it stays local.
+ */
+const metaMap = async (app) => metaMapOf(await app.data.getVariableMeta());
 
 /** Display label for a variable (its label, falling back to its name). */
 function label(meta, name) {

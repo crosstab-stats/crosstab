@@ -9,6 +9,15 @@
  * (Reverse-keyed items aren't auto-flipped; recode them first via Transform.)
  */
 
+/**
+ * The host's reporting formatters, from core/plugin-stdlib.js.
+ *
+ * Read from the sandbox global rather than `app.std` because these are module-scope
+ * helpers and `app` exists only inside an invoked function. One implementation, because
+ * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
+ */
+const { fixed: f, rounded: int } = globalThis.ctStd;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-reliability',
@@ -119,10 +128,5 @@ function flat(rList) {
     },
   };
 }
-const f = (x, d) => (Number.isFinite(x) ? x.toFixed(d) : '—');
 /** Alpha can't exceed 1; psych's "if deleted" is degenerate for a 2-item scale. */
 const fAlpha = (x) => (Number.isFinite(x) && x <= 1.0001 ? x.toFixed(3) : '—');
-const int = (x) => (Number.isFinite(x) ? String(Math.round(x)) : '—');
-function rStr(s) {
-  return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-}

@@ -18,7 +18,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { labelOf, fmtP, ci, rStr } = globalThis.ctStd;
+const { fixed: f, labelOf, fmtP, ci, rStr } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -113,7 +113,6 @@ export async function run(app, { dv: dvName, ivs: ivNames }) {
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const m = normalizeResult(result);
-  const f = (n, d) => (Number.isFinite(n) ? n.toFixed(d) : '—');
 
   await app.results.appendTable(
     {

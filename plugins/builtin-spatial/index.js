@@ -16,6 +16,15 @@
  * user's map view), which fights CrossTab's privacy/offline promise.
  */
 
+/**
+ * The host's reporting formatters, from core/plugin-stdlib.js.
+ *
+ * Read from the sandbox global rather than `app.std` because these are module-scope
+ * helpers and `app` exists only inside an invoked function. One implementation, because
+ * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
+ */
+const { fmtP, rStr } = globalThis.ctStd;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-spatial',
@@ -304,19 +313,10 @@ export async function choropleth(app, { region, value, boundary, keyprop }) {
 
 // --- helpers -----------------------------------------------------------------
 
-function fmtP(p) {
-  if (!Number.isFinite(p)) return '—';
-  return p < 0.001 ? '< 0.001' : p.toFixed(3);
-}
-
 function cleanSvg(svg) {
   return String(svg)
     .replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1')
     .replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1');
-}
-
-function rStr(s) {
-  return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
 function flat(rList) {

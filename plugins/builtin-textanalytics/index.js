@@ -18,6 +18,15 @@
  * code-the-transcript workspace is the separate CAQDAS build (Tier 3).
  */
 
+/**
+ * The host's reporting formatters, from core/plugin-stdlib.js.
+ *
+ * Read from the sandbox global rather than `app.std` because these are module-scope
+ * helpers and `app` exists only inside an invoked function. One implementation, because
+ * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
+ */
+const { rStr } = globalThis.ctStd;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-textanalytics',
@@ -589,9 +598,6 @@ function cleanSvg(svg) {
     .replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1');
 }
 
-function rStr(s) {
-  return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-}
 
 function flat(rList) {
   const byName = {};

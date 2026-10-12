@@ -79,6 +79,15 @@ export const WEIGHTED_R = `
   }
 `;
 
+/**
+ * The host's reporting formatters, from core/plugin-stdlib.js.
+ *
+ * Read from the sandbox global rather than `app.std` because these are module-scope
+ * helpers and `app` exists only inside an invoked function. One implementation, because
+ * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
+ */
+const { rStr } = globalThis.ctStd;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-frequencies',
@@ -420,8 +429,4 @@ function normalizeResult(rList) {
     mode_ties: scalar(byName.mode_ties),
     n_numeric: scalar(byName.n_numeric),
   };
-}
-
-function rStr(s) {
-  return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
