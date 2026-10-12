@@ -181,29 +181,42 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       replacement: "A significant upward monotonic trend (p < .001)"). Suite 1659 → 1681.
 
       **Left deliberately:**
-      - **`fmtP` keeps its leading zero on ordinary values** — `0.034` in a cell, `< .001`
-        at the floor. Strict APA drops it in both (a p cannot exceed 1, so the zero carries
-        no information) and SPSS's Sig. column prints `.034`. But every copy in the tree
-        used `toFixed(3)`, so `0.034` is the existing house style across every results
-        table, and changing it is a visible change to all of them — an owner's call, not a
-        tidy-up to slip inside a refactor. See the item below.
+      - **`fmtP`'s leading zero was left for the owner, and then dropped** the same day on
+        their call — see the entry below. The part that matters here: because there was now
+        **one** implementation, it was a one-line change plus three test assertions rather
+        than a 32-file sweep. That was the argument for doing this work at all.
       - **The test runner needs `scripts/test-globals.mjs`.** Tests import plugin modules
         directly, with no frame to supply the global, so `npm test` preloads the REAL
         stdlib — a plugin tested against stub formatters would be testing the stub. It
         lives in `scripts/` because `node --test` treats everything under `test/` as a test
         file.
 
-- [ ] **Should a p-value drop its leading zero? (owner decision, raised 2026-10-12).**
-      `fmtP` currently prints `0.034` in a cell and `< .001` at the floor, which is
-      internally inconsistent. Strict APA drops the zero in both (`.034`), as does SPSS's
-      Sig. column; R's `format.pval` keeps it.
+- [x] **DONE (2026-10-12). A p-value drops its leading zero.** Raised and settled the
+      same day; the owner's call was *"good to be consistent"*.
 
-      It is one line in `core/plugin-stdlib.js` now that there is one implementation — the
-      point of the exercise — but it changes the Sig. column of **every results table in
-      the app**, so it wants a deliberate yes rather than being bundled into other work.
-      Relevant: the app's audience includes people pasting tables straight into a
-      manuscript, which is the argument for APA; against it, `0.034` is what SPSS users see
-      in every other product and what the tree has always printed.
+      `fmtP` printed `0.034` in a cell but `< .001` at the floor, so the app disagreed with
+      itself inside a single column. It now prints **`.034`**, **`.500`**, **`< .001`** —
+      APA's rule and SPSS's Sig. column. The justification is that a p cannot exceed 1, so
+      the digit before the point can only ever be 0 or 1 and carries no information.
+
+      **`1.000` keeps its digit**, and that is the whole subtlety. p = 1 is a real result —
+      a χ² of exactly 0, or a two-sided test on a perfectly symmetric split — and `.000`
+      would say the precise opposite of what happened. So the zero is stripped from the
+      formatted STRING (`dropLeadingZero`) rather than by assuming the value is below 1.
+      A test pins `fmtP(1) === '1.000'` and `fmtP(0.9996) === '1.000'` for exactly this.
+
+      **Only the p-value changes.** Everything else in a results row keeps its zero,
+      because nothing else is bounded by 1 — verified live in a One-Sample t-Test row that
+      reads `Sig. .191` next to `Mean diff. 0.188`, `Cohen's d 0.120` and
+      `95% CI [-0.095, 0.470]`. Also checked that **every plugin with a real Sig. column
+      goes through `fmtP`** rather than through `f(p, 3)`; otherwise this change would have
+      created a fresh inconsistency instead of removing one.
+
+      `fmtPInline` now delegates to `fmtP` instead of formatting in parallel, so the two
+      cannot drift apart on this again.
+
+      One line of implementation, three test assertions, and one plugin test whose comment
+      already wrote the R value as `p .7529` without the zero. Suite 1681 → 1683.
 
 - [ ] **More duplication the drift scan found, not yet done (2026-10-12).** The same scan
       that produced part 3 above. None of these are reporting conventions, so none print

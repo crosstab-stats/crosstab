@@ -186,7 +186,9 @@ test('Hosmer–Lemeshow prints the test and its contingency table', async () => 
   const out = await invoke({ opts: ['hl'] });
   const test_ = captioned(out, 'Hosmer and Lemeshow Test');
   assert.deepEqual(test_.columns, ['Chi-square', 'df', 'Sig.']);
-  assert.deepEqual(test_.rows[0], ['5.044', '8', '0.753']); // R: chisq 5.0441, df 8, p .7529
+  // No leading zero on the p — the comment below always wrote it that way, which is the
+  // convention fmtP now prints (owner's call 2026-10-12).
+  assert.deepEqual(test_.rows[0], ['5.044', '8', '.753']); // R: chisq 5.0441, df 8, p .7529
   assert.match(test_.caption, /LARGE Sig\. is the good result/);
 
   const tab = captioned(out, 'Contingency Table');

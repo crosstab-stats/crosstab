@@ -216,31 +216,46 @@ const EMPTY = '\u2014';
  * depending on which menu item you ran, and someone pasting two of our tables into one
  * manuscript would be fixing it by hand.
  *
- * The settled form is **three decimals, and `< .001` below the floor** — with the space
- * and without the leading zero, which is what thirty of the thirty-two copies already
- * said. Spatial's `< 0.001` and SCED's `<.001` are the two that moved.
+ * The settled form is **three decimals, no leading zero, and `< .001` below the floor**:
+ * `.034`, `.500`, `< .001`. Spatial's `< 0.001` and SCED's `<.001` both moved, and so did
+ * the leading zero every copy in the tree printed.
+ *
+ * **Why the zero goes** (owner's call, 2026-10-12 — "good to be consistent"): a p cannot
+ * exceed 1, so a digit reserved for the part before the decimal point can only ever be 0
+ * or 1 and carries no information. This is APA's rule and SPSS's Sig. column, and it is
+ * what the floor case already did — printing `0.034` beside `< .001` was the app
+ * disagreeing with itself inside a single column.
  *
  * It reports `< .001` rather than a run of zeros because `0.000` claims a precision the
  * test does not have, and reads as "exactly zero", which no p-value is.
  *
- * **One inconsistency is preserved deliberately**: an ordinary value keeps its leading
- * zero (`0.034`), while the floor drops it (`< .001`). Strict APA drops it in both — a p
- * cannot exceed 1, so the zero carries no information, and SPSS's Sig. column prints
- * `.034`. Every copy in the tree used `toFixed(3)`, so `0.034` is the app's existing
- * house style across every results table; changing it is a visible change to all of
- * them, which is the owner's call rather than a tidy-up to slip into a refactor. Filed in
- * TODO.md. If it is taken, this function is the one place it changes.
+ * **`1.000` keeps its digit**, because that one is not a leading zero. p = 1 is a real
+ * result — a χ² of exactly 0, or a two-sided test on a perfectly symmetric split — and
+ * `.000` would say the opposite of what happened. So the zero is stripped by looking at
+ * the formatted string rather than by assuming the value is below 1.
  */
 export function fmtP(p) {
   if (!Number.isFinite(p)) return EMPTY;
-  return p < 0.001 ? '< .001' : p.toFixed(3);
+  if (p < 0.001) return '< .001';
+  return dropLeadingZero(p.toFixed(3));
 }
 
-/** The same value mid-sentence: `p < .001` / `p = 0.034`, for a results note rather than a
+/** The same value mid-sentence: `p < .001` / `p = .034`, for a results note rather than a
  * table cell. Was already identical in builtin-causal, builtin-mediation, builtin-meta. */
 export function fmtPInline(p) {
   if (!Number.isFinite(p)) return `p = ${EMPTY}`;
-  return p < 0.001 ? 'p < .001' : `p = ${p.toFixed(3)}`;
+  return p < 0.001 ? 'p < .001' : `p = ${fmtP(p)}`;
+}
+
+/**
+ * `0.034` -> `.034`, for a quantity that cannot exceed 1.
+ *
+ * Operates on the formatted STRING, so `1.000` is left alone — only a literal leading
+ * `0` before the point goes. `-0.250` would pass through untouched, though `fmtP` never
+ * gets that far: a negative trips its `< .001` floor first, as it did in all 32 copies.
+ */
+function dropLeadingZero(s) {
+  return s.startsWith('0.') ? s.slice(1) : s;
 }
 
 /**

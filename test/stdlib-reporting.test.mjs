@@ -26,13 +26,14 @@ import {
   fmtP, fmtPInline, fixed, rounded, ci, labelOf, metaMap, rStr,
 } from '../core/plugin-stdlib.js';
 
-test('fmtP prints three decimals, and the floor without a leading zero', () => {
-  // An ordinary value KEEPS its leading zero — every copy in the tree used toFixed(3), so
-  // that is the app's house style across every results table. Strict APA would print
-  // `.034`; changing it is a visible change to all of them and is the owner's call.
-  assert.equal(fmtP(0.0342), '0.034');
-  assert.equal(fmtP(0.5), '0.500');
-  assert.equal(fmtP(0.049), '0.049');
+test('fmtP prints three decimals and no leading zero', () => {
+  // A p cannot exceed 1, so the digit before the point can only be 0 or 1 and carries no
+  // information. APA's rule, and SPSS's Sig. column. Taken on the owner's call 2026-10-12
+  // ("good to be consistent") — the floor case already dropped it, so `0.034` beside
+  // `< .001` was the app disagreeing with itself inside one column.
+  assert.equal(fmtP(0.0342), '.034');
+  assert.equal(fmtP(0.5), '.500');
+  assert.equal(fmtP(0.049), '.049');
   // The floor. All three of the tree's spellings converge here: `< .001` wins, with the
   // space, without the zero. This is the assertion that would have caught sced and spatial.
   assert.equal(fmtP(0.0009), '< .001');
@@ -49,9 +50,28 @@ test('fmtP says nothing rather than something false', () => {
 });
 
 test('fmtPInline is the same number in a sentence', () => {
-  assert.equal(fmtPInline(0.0342), 'p = 0.034');
+  assert.equal(fmtPInline(0.0342), 'p = .034');
   assert.equal(fmtPInline(0.0001), 'p < .001');
   assert.equal(fmtPInline(NaN), 'p = \u2014');
+  // It delegates, so the two can never disagree about the leading zero.
+  assert.equal(fmtPInline(0.5), `p = ${fmtP(0.5)}`);
+  assert.equal(fmtPInline(1), 'p = 1.000');
+});
+
+test('p = 1 keeps its digit, because that is not a leading zero', () => {
+  // A real result: a chi-square of exactly 0, or a two-sided test on a perfectly
+  // symmetric split. `.000` would say the opposite of what happened. The zero is stripped
+  // from the formatted STRING, not by assuming the value is below 1.
+  assert.equal(fmtP(1), '1.000');
+  assert.equal(fmtP(0.9996), '1.000', 'rounds up to 1.000 and keeps it');
+  assert.equal(fmtP(0.9994), '.999');
+});
+
+test('a negative falls through the floor, as it always did', () => {
+  // Not a p-value at all, and nothing upstream should produce one. It lands on `< .001`
+  // because the floor test is `p < 0.001` — which is what all 32 copies did, so this is
+  // recorded rather than chosen. The leading-zero change did not touch it.
+  assert.equal(fmtP(-0.25), '< .001');
 });
 
 test('fixed holds its decimals, and non-finite is a real answer', () => {
