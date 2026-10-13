@@ -473,74 +473,6 @@ bottom; they are the project's memory and are not summarised away.
       bytes over the wire and is the part most likely to meet a platform limit. Until someone
       runs that, treat live-on-WebKit as unknown rather than supported.
 
-- [ ] **#161 — the launcher's "Start CrossTab" button is superfluous; clicking a
-
-      **EVIDENCE AGAINST, 2026-10-10 — the owner, now testing small-screen mode on an
-      iPhone: *"I'm still undecided on the value of the start button. even more so now
-      that I'm actively testing in small screen on the iphone, I've tapped the wrong
-      project more than once. maybe having a second tap to confirm isn't such a bad
-      thing."*** So the two-gesture commit is not simply friction: on a touch target you
-      can fat-finger it is a confirm step, and the cost of getting it wrong (loading the
-      wrong project over your session) is high. Deliberately NOT resolved while the
-      project list was unified around it — the question stays open, but it is no longer
-      "this is superfluous", it is "is a confirm worth a tap". Any future removal has to
-      answer the phone case.
-      source/project should just go (user request, 2026-08-19).** Today the rail
-      buttons (`[data-source]`, saved projects, remembered folders) only set
-      `#pendingSource` / `#pendingProject` / `#pendingFolder` and paint `is-active`;
-      nothing happens until the footer `.ctl__start` click (launcher.js ~288–371,
-      `#start()` ~472). That is a two-gesture commit for a screen whose whole job is
-      "pick the thing you want to open". Clicking **Demo · quantitative** or a saved
-      project should load it and enter the app.
-
-      **What this deletes.** All three `#pending*` fields, the mutual-exclusion
-      highlighting, the "default the source to Blank so Start always works" line
-      (~307), and the `#start()` branch tree — each rail button calls one of three
-      already-written paths directly. The `?launch=` bypass is untouched (it calls
-      `applyPreset`/`openProjectByName`, not the UI).
-
-      **Wrinkle 1 — reopen mode still needs a commit button.** Reopened over a live
-      session the footer button reads *Apply changes*, and a plugin-only change (no
-      source clicked) has **no other way to commit**.
-
-      **Wrinkle 2 — the ordering inverts, and the preset seeding has to change with
-      it.** Right now the sequence is *source → tweak plugins → Start*, and a source
-      click **overwrites** `#selected` with that preset's set (~297–303). If the
-      click also starts, that overwrite silently discards any tweaking done first,
-      and there is no window to tweak after.
-
-      **Likely resolution (sketched 2026-08-19, not yet decided): make the picker
-      LIVE, like the one it duplicates.** `Edit ▸ Plugins…` already applies toggles
-      immediately — "changes are live and saved across sessions", one **Done** button,
-      no Apply and no Cancel (plugin-manager.js ~947–960). The launcher's picker is
-      the odd one out, and both wrinkles are downstream of its deferral, not of the
-      Start button:
-        - live checkboxes leave *Apply changes* with nothing to apply, so the footer
-          keeps only `← Back to project` (which never promised a revert) — Wrinkle 1
-          dissolves;
-        - there is no pending selection left to clobber, so all that needs deciding is
-          what a source click ADDS. Rule: **union, never subtract** — clicking
-          `Demo · spatial` switches the spatial plugin on and takes nothing away. The
-          demo always works and no choice is silently removed. The selection creeps
-          upward across sessions; that is one uncheck to fix, versus destroying intent.
-      This is [[guard-means-missing-state]] read literally: `#pendingSource`,
-      `#pendingProject`, `#pendingFolder` and the deferred `#selected` exist *only* to
-      be committed later. Remove the deferral and all four stop existing.
-
-      **Verify before committing to that:** live toggling activates plugins *before a
-      project exists* — today `applyActivatedSet` runs at Start, after the source is
-      loaded. #158 made "no project open" tolerable so it should hold, but a
-      workspace-declaring plugin (CAQDAS, spatial) mounting against nothing is exactly
-      where it would bite. Check it in the browser early, not late.
-
-      Two things that get *better*, not worse: a remembered folder needs a user
-      gesture for the write-permission re-grant, and a direct click is a cleaner
-      gesture than the deferred Start; and a saved project can then open through its
-      own plugin restore (drop the `applyPlugins:false` + apply-picker-after dance at
-      ~490) since there is no picker edit to preserve. Accident cost is low — a
-      mis-click loads a demo, `loadingSeed` keeps it out of autosave, and the brand
-      click reopens the launcher.
-
 - [ ] **Duplicate a project (carved out of #167, 2026-10-12).** The remaining verb from
       #167: "fork this project" from the row's menu, alongside Rename and Delete/Remove.
       Wanted as the natural home for forking a codebook or a half-built analysis without
@@ -2113,28 +2045,6 @@ bottom; they are the project's memory and are not summarised away.
 > These three were captured during the college tour and lived only in the memory
 > notes, so this section read as complete when it was not (spotted 2026-08-05).
 
-- [x] **#141 — SUPERSEDED (2026-10-13); shipped 2026-09-29.** A third never-closed
-      duplicate, found the same way as #179 and #171. All three bullets below were built:
-      latent growth curves, LCA/LPA and growth mixture models — see the DONE entry under
-      **Completed ▸ More analyses**. One follow-up is still genuinely open and lives there
-      as a sub-item: *latent transition analysis*. Original text kept:
-
-      **#141 — Mplus parity (latent mixture models).** Gerontology faculty driver.
-      CrossTab already covers roughly 40% of Mplus's territory (SEM/CFA, EFA,
-      multilevel, mediation, survival, mixed ANOVA) but misses the latent-variable
-      mixture models that define its niche.
-
-      - **Latent growth curve modelling — START HERE.** Needs NO new R dependency:
-        lavaan already works, so this is a GUI wrapper in builtin-sem or its own
-        plugin. Best value-per-risk in the whole stats backlog.
-      - **LCA / LPA** — the single biggest reason people buy Mplus. `poLCA` is pure R
-        (no compiled deps) so it is plausibly WebR-feasible, but **run the probe in a
-        FRESH session** before believing either answer — see
-        [[webr-package-feasibility]] for why a long session lies about this.
-      - **Growth mixture models** (`lcmm` / `flexmix`) — feasibility unknown.
-      - Latent transition analysis and Bayesian SEM (`blavaan` needs Stan/JAGS) are
-        almost certainly not WASM-feasible. Do not spend a probe on them.
-
 - [ ] **#142 — Distance sampling — PARKED, possibly out of scope (user's call,
       2026-08-05).** The `Distance` R package (CRAN, GPL-2+) fits detection functions
       for line/point transect surveys; anthropology faculty use it alongside Raven.
@@ -2283,12 +2193,98 @@ this is the index.
 - **Not browser-tested:** the arrows on an analysis row, the busy state during a move. *(under #190)*
 - **[~] Browser pass by the owner** against a local bench. *(under #185)*
 
-
 ## Completed
 
 The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
+
+- [x] **#161 — DECIDED (2026-10-13): the Start button STAYS. Nothing was built; the
+      question is closed.** The owner, having tested both ends of it:
+
+      > *"the extra click on desktop is a little annoying, but the phone evidence of
+      > confirmation protecting against fatfinger is compelling enough. we will keep the
+      > 'start' button until a strong argument against it comes up, simple minor annoyance
+      > at the extra click isn't strong enough."*
+
+      **The reasoning, so a future reader does not reopen this on the original premise.**
+      The entry was written as *"the button is superfluous"* — a friction argument. Use on
+      a phone turned it into a different question, and answered it: the second gesture is
+      not friction, it is a **confirm**, and the thing it protects against (loading the
+      wrong project over a live session) is expensive and irreversible-feeling. A
+      mis-tapped row on a touch target is not hypothetical — it happened repeatedly during
+      small-screen testing.
+
+      So the bar has moved. **Minor annoyance is explicitly not enough to remove it**; a
+      removal now needs a strong argument that also answers the phone case. The analysis
+      below stays because it is still correct about what removal would involve — it is the
+      design for a change that is not being made.
+
+      **EVIDENCE, 2026-10-10 — the owner, then testing small-screen mode on an iPhone:
+      *"I'm still undecided on the value of the start button. even more so now that I'm
+      actively testing in small screen on the iphone, I've tapped the wrong project more
+      than once. maybe having a second tap to confirm isn't such a bad thing."*** This is
+      what the decision above rests on.
+
+      ---
+
+      **The original proposal (2026-08-19), kept for the reasoning — NOT the plan of
+      record.** *"The launcher's 'Start CrossTab' button is superfluous; clicking a
+      source/project should just go"* (user request). Today the rail
+      buttons (`[data-source]`, saved projects, remembered folders) only set
+      `#pendingSource` / `#pendingProject` / `#pendingFolder` and paint `is-active`;
+      nothing happens until the footer `.ctl__start` click (launcher.js ~288–371,
+      `#start()` ~472). That is a two-gesture commit for a screen whose whole job is
+      "pick the thing you want to open". Clicking **Demo · quantitative** or a saved
+      project should load it and enter the app.
+
+      **What this deletes.** All three `#pending*` fields, the mutual-exclusion
+      highlighting, the "default the source to Blank so Start always works" line
+      (~307), and the `#start()` branch tree — each rail button calls one of three
+      already-written paths directly. The `?launch=` bypass is untouched (it calls
+      `applyPreset`/`openProjectByName`, not the UI).
+
+      **Wrinkle 1 — reopen mode still needs a commit button.** Reopened over a live
+      session the footer button reads *Apply changes*, and a plugin-only change (no
+      source clicked) has **no other way to commit**.
+
+      **Wrinkle 2 — the ordering inverts, and the preset seeding has to change with
+      it.** Right now the sequence is *source → tweak plugins → Start*, and a source
+      click **overwrites** `#selected` with that preset's set (~297–303). If the
+      click also starts, that overwrite silently discards any tweaking done first,
+      and there is no window to tweak after.
+
+      **Likely resolution (sketched 2026-08-19, not yet decided): make the picker
+      LIVE, like the one it duplicates.** `Edit ▸ Plugins…` already applies toggles
+      immediately — "changes are live and saved across sessions", one **Done** button,
+      no Apply and no Cancel (plugin-manager.js ~947–960). The launcher's picker is
+      the odd one out, and both wrinkles are downstream of its deferral, not of the
+      Start button:
+        - live checkboxes leave *Apply changes* with nothing to apply, so the footer
+          keeps only `← Back to project` (which never promised a revert) — Wrinkle 1
+          dissolves;
+        - there is no pending selection left to clobber, so all that needs deciding is
+          what a source click ADDS. Rule: **union, never subtract** — clicking
+          `Demo · spatial` switches the spatial plugin on and takes nothing away. The
+          demo always works and no choice is silently removed. The selection creeps
+          upward across sessions; that is one uncheck to fix, versus destroying intent.
+      This is [[guard-means-missing-state]] read literally: `#pendingSource`,
+      `#pendingProject`, `#pendingFolder` and the deferred `#selected` exist *only* to
+      be committed later. Remove the deferral and all four stop existing.
+
+      **Verify before committing to that:** live toggling activates plugins *before a
+      project exists* — today `applyActivatedSet` runs at Start, after the source is
+      loaded. #158 made "no project open" tolerable so it should hold, but a
+      workspace-declaring plugin (CAQDAS, spatial) mounting against nothing is exactly
+      where it would bite. Check it in the browser early, not late.
+
+      Two things that get *better*, not worse: a remembered folder needs a user
+      gesture for the write-permission re-grant, and a direct click is a cleaner
+      gesture than the deferred Start; and a saved project can then open through its
+      own plugin restore (drop the `applyPlugins:false` + apply-picker-after dance at
+      ~490) since there is no picker edit to preserve. Accident cost is low — a
+      mis-click loads a demo, `loadingSeed` keeps it out of autosave, and the brand
+      click reopens the launcher.
 
 - [x] **FIXED (2026-10-13). The PWA sometimes froze at "Starting…" and never reached the
       launcher.** Reported with a screenshot after several sightings on a phone, then once
@@ -3616,6 +3612,13 @@ The record of what shipped and why. Kept in full, in the original sections.
 > component instead of its own rail"*), the launcher half of #171 (its Projects rail still renders
 > TWO lists — `listProjects()` at `core/launcher.js:346` and `listProjectLocations()` at :382 —
 > while the sidebar has rendered one since August), and the project-list duplication entry below.
+> **Update 2026-10-13 — the cluster is two members smaller.** #167 is DONE (the shared
+> row renderer plus Manage projects… on the launcher), and **#161 is DECIDED: the Start
+> button stays**, so the launcher's commit gesture is no longer in play. What is left of
+> the cluster is the #181 follow-on (reuse the project-manager rail inline instead of the
+> launcher's own), the launcher half of #171 (its Projects rail still builds TWO lists),
+> and the grouping question. Still the owner's call, but a smaller one.
+>
 > Each one rewrites part of the launcher. #181 already says it: *"do the three together,
 > deliberately, not as a follow-on"*, or the launcher gets rebuilt twice. **Parked on the owner**,
 > who is weighing the launcher's shape and has said the sidebar grouping is part of the same
@@ -7659,6 +7662,28 @@ The record of what shipped and why. Kept in full, in the original sections.
     tie-in); a clear/reset-session action.
 
 ### More analyses (each is just another plugin)
+
+- [x] **#141 — SUPERSEDED (2026-10-13); shipped 2026-09-29.** A third never-closed
+      duplicate, found the same way as #179 and #171. All three bullets below were built:
+      latent growth curves, LCA/LPA and growth mixture models — see the DONE entry under
+      **Completed ▸ More analyses**. One follow-up is still genuinely open and lives there
+      as a sub-item: *latent transition analysis*. Original text kept:
+
+      **#141 — Mplus parity (latent mixture models).** Gerontology faculty driver.
+      CrossTab already covers roughly 40% of Mplus's territory (SEM/CFA, EFA,
+      multilevel, mediation, survival, mixed ANOVA) but misses the latent-variable
+      mixture models that define its niche.
+
+      - **Latent growth curve modelling — START HERE.** Needs NO new R dependency:
+        lavaan already works, so this is a GUI wrapper in builtin-sem or its own
+        plugin. Best value-per-risk in the whole stats backlog.
+      - **LCA / LPA** — the single biggest reason people buy Mplus. `poLCA` is pure R
+        (no compiled deps) so it is plausibly WebR-feasible, but **run the probe in a
+        FRESH session** before believing either answer — see
+        [[webr-package-feasibility]] for why a long session lies about this.
+      - **Growth mixture models** (`lcmm` / `flexmix`) — feasibility unknown.
+      - Latent transition analysis and Bayesian SEM (`blavaan` needs Stan/JAGS) are
+        almost certainly not WASM-feasible. Do not spend a probe on them.
 
 - [x] **#131 Layer 3a — plugin-supplied chart KINDS (model-driven). DONE 2026-08-06.**
 
