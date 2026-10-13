@@ -1996,11 +1996,25 @@ The record of what shipped and why. Kept in full, in the original sections.
       what it said (unmentioned runs keep their relative position after the named ones),
       and a stale id for a removed run is skipped rather than fatal.
 
-      **A regression I introduced and caught:** once the arrows can reorder, "the last
-      entry" stops meaning "what just happened", so the History `current` badge followed
-      the bottom row instead of the most recent run. `AnalysisLog.latestRunId()` now reads
-      recency from the ops. That also fixes a pre-existing imprecision — the badge was
-      keyed on Map order, which a reposition never updated either.
+      **The `current` badge: I changed it, the owner changed it back, and they were
+      right.** Once the arrows can reorder, "the last entry" stops meaning "what just
+      happened", so I made the badge follow the most recent RUN. Within the hour the owner
+      corrected it with a better reason than mine:
+
+      > *"'Current' may be internally used primarily for 'what will be removed with undo'
+      > but it also is interpreted by the user as 'location of cursor in a stack where the
+      > next item will go'."*
+
+      A new analysis always appends at the BOTTOM. So a badge sitting mid-list after a
+      reorder quietly promises an insertion that will never happen — the user reorders,
+      sees `current` in the middle, runs something, and it lands somewhere else. The badge
+      marks the bottom row again, which is the promise it is actually making. Which
+      analysis Undo would remove is a different question, and the Edit menu answers it by
+      name. `AnalysisLog.latestRunId()` existed only for my version and is gone rather than
+      left as dead code.
+
+      Verified: after a swap the badge is on the new bottom row, and a freshly run Bar
+      chart appends directly beneath it — under the cursor, as the badge implies.
 
       Verified live against the owner's exact sequence: ▲ on the lower analysis swaps it
       with the upper one (one row, Output follows, badge stays put); ▲ again crosses the

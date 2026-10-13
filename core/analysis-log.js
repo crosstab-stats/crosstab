@@ -156,25 +156,6 @@ export class AnalysisLog {
    * @returns {object|null} the updated entry, or null if there is no such run
    */
   /**
-   * The runId of the most recently RUN analysis, or null.
-   *
-   * Not "the last entry": entries are in DISPLAY order now, and were in first-seen order
-   * before — neither is recency, because the projection's Map keeps a re-set key where it
-   * was. The History panel badges one row 'current', and that has to mean "this is what
-   * just happened", so it is read from the ops rather than from a list position.
-   *
-   * A reorder does not change it (nothing ran); a move across a data step does, because
-   * that re-runs the analysis.
-   */
-  latestRunId() {
-    let id = null;
-    for (const op of liveOps(this.#log.slice?.((o) => ANALYSIS.match(o)) ?? [])) {
-      if (op.type === 'runAnalysis' && op.payload?.runId) id = op.payload.runId;
-    }
-    return id;
-  }
-
-  /**
    * Set the display order of the recorded analyses.
    *
    * The companion to {@link AnalysisLog#reposition}: `at` says which DATA an analysis

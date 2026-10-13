@@ -323,14 +323,21 @@ test('setOrder refuses an empty list rather than wiping the order', () => {
   assert.deepEqual(log.entries().map((e) => e.label), ['Frequencies', 'Descriptives']);
 });
 
-test('`current` follows the most recent RUN, not the last row', () => {
-  // The regression this guards: once the arrows can reorder, "the last entry" stops
-  // meaning "what just happened", and the History badge would follow the wrong row.
+test('the `current` badge marks the BOTTOM row, not the most recent run', () => {
+  // Corrected by the owner (2026-10-13) within an hour of my getting it backwards. I had
+  // made the badge follow recency, on the reasoning that `current` is the undo target.
+  // Their reason is better: people read it as a CURSOR — "this is the stack, the next
+  // thing goes here". A new analysis always appends at the BOTTOM, so a badge sitting
+  // mid-list after a reorder promises an insertion that will not happen.
+  //
+  // So the rule is positional, and this test exists to stop it being "fixed" back.
   const log = freshLog();
   const [freq, desc] = twoAt(log);
-  assert.equal(log.latestRunId(), desc, 'the second run is the latest');
+  const bottom = () => log.entries()[log.entries().length - 1].label;
+  assert.equal(bottom(), 'Descriptives');
   log.setOrder([desc, freq]);
-  assert.equal(log.latestRunId(), desc, 'a reorder runs nothing, so it changes nothing');
-  log.reposition(freq, 1);
-  assert.equal(log.latestRunId(), freq, 'but a move re-runs, so that one is now the latest');
+  assert.equal(bottom(), 'Frequencies', 'after a reorder the badge follows the new bottom row');
+  // A later analysis appends at the bottom, which is exactly where the badge already was.
+  log.record({ pluginId: 'p', run: 'run', label: 'Bar chart', inputs: {}, at: 0 });
+  assert.equal(bottom(), 'Bar chart', 'and the new run lands under the cursor, as the badge implied');
 });

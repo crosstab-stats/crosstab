@@ -963,16 +963,26 @@ export class HistoryView {
     // case NEITHER the last data step nor an analysis is 'current' — otherwise two rows
     // claim it and Undo appears to target the wrong one.
     const itemIsCurrent = !!this.undo?.lastActionIsItem?.();
-    // The most recently RUN analysis, not the last ROW: the list is in display order,
-    // which the arrows can now change without anything having run.
-    const currentRunId = this.analysisLog?.latestRunId?.() ?? null;
+    // The BOTTOM analysis row, deliberately — not the most recently run one.
+    //
+    // I had this the other way round for about an hour on 2026-10-13, on the reasoning
+    // that `current` marks the undo target. The owner corrected it, and the reason is
+    // better than mine: people read this badge as a CURSOR — "this is the stack, and the
+    // next thing goes here". A new analysis always appends at the BOTTOM, so a badge
+    // sitting mid-list after a reorder quietly promises an insertion that will not
+    // happen. Marking the last row keeps the promise the badge is actually making.
+    //
+    // Which analysis Undo would remove is a different question, and the Edit menu
+    // answers it by name. `analysisIsCurrent` still gates whether any badge shows at
+    // all, so this only ever marks a row when an analysis WAS the last thing to happen.
+    const currentAnalysisIdx = analyses.length - 1;
     const emitAnalyses = (k) => {
       // `pos`/`count` are the analysis's place among the ones sharing this data step, so a
       // row knows whether its neighbour above/below is a SIBLING (swap, no re-run) or the
       // next data step (reposition, re-runs).
       const group = byAt.get(k) || [];
       group.forEach(({ e, idx }, pos) =>
-        ol.append(this.#analysisStep(e, idx, analysisIsCurrent && e.runId === currentRunId,
+        ol.append(this.#analysisStep(e, idx, analysisIsCurrent && idx === currentAnalysisIdx,
           { pos, group: group.map((g) => g.e.runId) })));
       byAt.delete(k);
     };
