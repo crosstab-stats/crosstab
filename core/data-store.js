@@ -1487,7 +1487,11 @@ export class DataStore {
     const created = [];
     for (const op of priorTx) created.push(this.#retract(op.id));
     for (const t of resolved) {
-      const { type, ...payload } = t;
+      // `id` and `author` belong to the OP, not to the step's content. They arrive here
+      // because getTransforms() returns flattened steps and callers hand those straight
+      // back; writing them into the new op's payload is what let a stale id shadow a
+      // real one in the fold (see flattenStep).
+      const { type, id: _id, author: _author, ...payload } = t;
       created.push(this.#append(type, payload, this.#transformTarget(t)));
     }
     try {

@@ -152,3 +152,57 @@ test('a retracted load stops acting as a barrier', () => {
   ];
   assert.deepEqual(liveStepIds(ops), ['s1', 't1']);
 });
+
+// --- identity is the OP's, and a payload cannot take it -------------------------------
+// Found 2026-10-13 by browser-verifying #190's History arrows. Moving an analysis grew the
+// transform list 1 → 2 → 5 → 10 → 20 → 30, and `replaceTransforms(getTransforms())` —
+// replacing the list with exactly what was already there — appended every time.
+//
+// The chain: getTransforms() returns FLATTENED steps, which include `id`.
+// replaceTransforms clones what it is given into the new ops' payloads. flattenStep used
+// to spread the payload LAST, so the stale `id` shadowed the new op's real one. The fold
+// then reported one id for thirty distinct ops, and the next rebuild's `retract(step.id)`
+// retracted an already-retracted op instead of the live one. Nothing threw; the data was
+// only correct because the transform under test was idempotent.
+
+test('a payload carrying an id cannot shadow the op it belongs to', () => {
+  const steps = foldDataOps([
+    op('real-1', 'computeVar', { name: 'x', expr: 'a + 1', id: 'STALE', author: 'ghost' }),
+  ]);
+  assert.equal(steps.length, 1);
+  assert.equal(steps[0].id, 'real-1', 'the op owns its identity; the payload does not');
+  assert.equal(steps[0].name, 'x', 'and the rest of the payload still comes through');
+  assert.equal(steps[0].expr, 'a + 1');
+});
+
+test('distinct ops stay distinct even when their payloads all claim one id', () => {
+  // This is the shape the bug produced: thirty live ops, one reported id, so retracting
+  // "each" of them retracted the same one thirty times and the rest stayed live.
+  const steps = foldDataOps([
+    op('a', 'computeVar', { name: 'x', id: 'SAME' }),
+    op('b', 'computeVar', { name: 'y', id: 'SAME' }),
+    op('c', 'computeVar', { name: 'z', id: 'SAME' }),
+  ]);
+  assert.deepEqual(steps.map((s) => s.id), ['a', 'b', 'c']);
+  assert.equal(new Set(steps.map((s) => s.id)).size, 3, 'three ops, three identities');
+});
+
+test('retracting by the folded id actually removes that step', () => {
+  // The property the bug broke: what the fold reports as a step's id must be the id a
+  // retract has to name. If they differ, retraction silently does nothing.
+  const ops = [
+    op('a', 'computeVar', { name: 'x', id: 'STALE' }),
+    op('b', 'computeVar', { name: 'y' }),
+  ];
+  const before = foldDataOps(ops);
+  const retractFirst = [...ops, op('r', 'retract', { opId: before[0].id })];
+  const after = foldDataOps(retractFirst);
+  assert.deepEqual(after.map((s) => s.name), ['y'], 'the step named by its folded id is gone');
+});
+
+test('author is the op\u2019s too', () => {
+  const steps = foldDataOps([
+    { id: 'a', type: 'computeVar', author: 'alice', payload: { name: 'x', author: 'ghost' } },
+  ]);
+  assert.equal(steps[0].author, 'alice');
+});

@@ -39,10 +39,28 @@
 
 import { liveOps, appliedState } from './op-log.js';
 
-/** Flatten one op into the replay/History shape: `{id, author, type, ...payload}`.
- * The inverse convention the mutators use when they `append({type, payload})`. */
+/**
+ * Flatten one op into the replay/History shape: `{...payload, id, author, type}`.
+ * The inverse convention the mutators use when they `append({type, payload})`.
+ *
+ * **Identity goes LAST, and that ordering is load-bearing.** It used to be first, so a
+ * payload that happened to carry an `id` shadowed the op's real one — and the fold then
+ * reported the wrong identity for a real op.
+ *
+ * That is not hypothetical: `replaceTransforms` clones the steps it is given straight
+ * into the new ops' payloads, and the steps it is given come from `getTransforms()`,
+ * which includes `id`. So every rebuild wrote the PREVIOUS id into the new op's payload,
+ * the fold reported that stale id, and the next rebuild's `retract(step.id)` retracted an
+ * op that was already retracted instead of the live one. The transforms then accumulated
+ * — measured at 1 → 2 → 5 → 10 → 20 → 30 across repeated History moves, with 30 folded
+ * steps all reporting one id. The data survived only because the transform under test was
+ * idempotent; a non-idempotent one would have been applied again on every move.
+ *
+ * The caller side is fixed too (payloads no longer carry identity), but this is the
+ * invariant: an op's id is the op's, and nothing inside it can overwrite that.
+ */
 export function flattenStep(op) {
-  return { id: op.id, author: op.author, type: op.type, ...(op.payload ?? {}) };
+  return { ...(op.payload ?? {}), id: op.id, author: op.author, type: op.type };
 }
 
 /** The live content ops in HLC order, split at the **replace barrier**: `kept` are the

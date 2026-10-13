@@ -1961,6 +1961,46 @@ The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
 
+- [x] **FIXED (2026-10-13). An op's payload could shadow its identity, so retraction
+      silently stopped working and transforms accumulated.** Found while browser-verifying
+      #190's History arrows — the verification item earned its keep.
+
+      **Symptom.** Moving an analysis in History grew the dataset's transform list:
+      **1 → 2 → 5 → 10 → 20 → 30**. Isolated from the UI, the minimal reproduction is
+      `replaceTransforms(getTransforms())` — replacing the pipeline with *exactly what is
+      already there* — which appended every time instead of replacing.
+
+      **Mechanism.** `flattenStep` built a step as `{id, author, type, ...payload}`, with
+      the payload spread LAST. `getTransforms()` returns those flattened steps, `id`
+      included. `replaceTransforms` clones what it is handed straight into the new ops'
+      payloads. So every rebuild wrote the PREVIOUS op's id into the new op's payload, and
+      the fold then reported that stale id as the new op's identity. Measured directly in
+      the running app: **30 live ops, 1 distinct reported id**, and 30 of the 31 raw
+      `computeVar` ops carrying an `id` inside their payload.
+
+      The retract is keyed on that id — so `retract(step.id)` retracted an op that was
+      already retracted, thirty times over, while the live ops stayed live.
+
+      **Why nothing caught it.** Nothing threw, and the DATA stayed correct, because the
+      transform under test was idempotent (`age2 = age * 2` recomputed is the same answer).
+      A non-idempotent step would have been applied again on every move. The op log also
+      grew without bound, which is a correctness problem for replay and for merge even when
+      the visible data looks right.
+
+      **Scope is wider than the arrows.** Any repeated `replaceTransforms` is affected —
+      including the Syntax editor's **Run**, which rebuilds the data from a script.
+
+      **Fix, in two parts.** `flattenStep` now spreads the payload FIRST and applies
+      `id`/`author`/`type` after it, so an op's identity cannot be overwritten by its own
+      contents — the invariant that makes this class of bug impossible. And
+      `replaceTransforms` strips `id`/`author` when building a new op's payload, so
+      identity stops being written into payloads at all. Verified live: four consecutive
+      self-replaces now leave the count at 1, and a deliberately NON-idempotent transform
+      (`bump = age + 1`) stays `21, 22, 23` instead of doubling.
+
+      Four tests in `data-fold.test.mjs`, mutation-checked — reverting the spread order
+      fails all four. Suite 1737 → 1741.
+
 - [x] **DONE (2026-10-13). The duplication the drift scan found is swept.** Every bullet
       is now either lifted or has a recorded reason not to be. Across this and the earlier
       passes the scan has removed **roughly 250 copied helpers**; what follows is the last
@@ -4331,7 +4371,25 @@ The record of what shipped and why. Kept in full, in the original sections.
           suite 1096 → 1101).
   - [ ] **The obvious pairing, when #184 happens:** ship a preset file per chapter, and #185's
         deployments could hand one out with the install.
-  - [ ] **Not browser-tested:** the dropdown, Save/Rename/Delete, and the missing-plugin note.
+  - [x] **DONE (2026-10-13) — browser-tested, all four.** Driven in the running app
+        against the dev server:
+        - **The dropdown** lists saved presets and starts on the "Plugin preset…"
+          placeholder; **Rename / Delete / Export are hidden until one is selected**, and
+          hide again after a delete.
+        - **Save** stores the current selection under a typed name (3 plugins, verified in
+          `localStorage` under `crosstab.plugin.presets`).
+        - **Rename** opens prefilled with the current name and a *Rename* confirm, and
+          renames IN PLACE rather than leaving a second copy behind.
+        - **Delete** asks *"Delete the preset “X”? The plugins stay as they are."* — and a
+          CANCELLED delete keeps the preset, which was checked as its own case.
+        - **The missing-plugin note** reads *"Applied “Has a ghost” — 12 plugins selected.
+          Not installed here: builtin-nosuchthing"*, styled `is-warn`.
+
+        One note for whoever drives this next: the picker's prompts resolve on the
+        `<dialog>` `close` EVENT, which does not fire in a background tab — so a scripted
+        `close('ok')` silently does nothing and leaves the dialog in the DOM for the next
+        selector to find. Dispatch `new Event('close')` explicitly. The app is fine; the
+        harness is the thing that needs to know. See [[local-testing-setup]].
 
 - [x] **#166 — THE CODING SYSTEM: one defect behind four symptoms. DONE (verified
       2026-08-20).** All four steps shipped across three commits
@@ -6339,8 +6397,22 @@ The record of what shipped and why. Kept in full, in the original sections.
       variable may not exist there yet) leaves an honest empty slot rather than a grid stuck
       rewound to a prefix. 14 tests in `test/analysis-reposition.test.mjs`; suite 1063 → 1077.
 
-  - [ ] **Not browser-tested yet:** the arrows on an analysis row, the busy state during a
-        WebR re-run, and that Output visibly reorders to match History.
+  - [x] **DONE (2026-10-13) — browser-tested, and it found a real bug on the way.**
+        All three confirmed in the running app, with two analyses and a compute step so the
+        arrows had somewhere to move to:
+        - **The arrows move an analysis between DATA steps.** Descriptives went from before
+          the compute to after it. They are correctly DISABLED when there is nowhere to go
+          (`at <= 0` / `at >= total`), which is why a first attempt with a single data step
+          looked like it did nothing — it was right.
+        - **The busy state is real and synchronous.** `#moveAnalysis` sets `#movingAnalysis`
+          and re-renders BEFORE awaiting, so the moving row's `▲ ▼ ✕` all read disabled in
+          the same tick as the click. A 100ms sampler missed it; reading synchronously
+          after `.click()` catches it.
+        - **Output visibly reorders to match History** — the sections went from
+          `[Descriptives, Frequencies]` to `[Frequencies, Descriptives]`, matching.
+
+        **The bug:** moving an analysis GREW the dataset's transform list — 1 → 2 → 5 → 10
+        → 20 → 30 across repeated moves. Its own entry is above; this item is what found it.
 
 ### Hardening before any public/shared deploy
 
