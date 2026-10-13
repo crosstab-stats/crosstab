@@ -8,7 +8,2287 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ---
 
-## Now / near-term
+## Open work
+
+Everything still to do, in one place. **The sub-headings below are the original section
+names and they carry meaning** — an item under *Deferred features* is deferred by a
+decision, not merely unstarted, and one under *More analyses* is a wishlist entry rather
+than a commitment. Completed entries keep their full reasoning under **Completed** at the
+bottom; they are the project's memory and are not summarised away.
+
+### Now / near-term
+
+- [ ] **More duplication the drift scan found, not yet done (2026-10-12).** The same scan
+      that produced **Plugin stdlib, part 3** (under Completed). None of these are reporting
+      conventions, so none print
+      inconsistently — they are maintenance risk rather than visible defects, which is why
+      they were not swept with the formatters:
+
+      - ~~**`flat` / `normalizeResult`**~~ — **DONE; see Plugin stdlib, part 4, under
+        Completed.** It turned out to
+        be 47 copies under four names, and not an interface design after all: two
+        vocabularies over identical plumbing, with `num` meaning a scalar in 28 plugins and
+        a vector in 10. It also carried the only *correctness* bug of the whole audit.
+      - **`prettyTerm` — 13 copies, 3 variants.** Turns an R model term (`factor(x)y`)
+        into something readable. The variants differ in which R term shapes they know
+        about, so the union is probably right, but each needs reading first.
+      - **`runR` — 11 copies, 2 variants**, and **`cleanSvg` — 8 copies, 2 variants** (the
+        two differ only in whitespace). `cleanSvg` strips the width/height off an R plot so
+        it scales; that one is a straight lift.
+      - **`uniqueName` — 6 copies, 5 variants** and **`lvl` — 6 copies, 3 variants.**
+      - **The chart tick formatter is duplicated** between builtin-charts and builtin-plots
+        (`Math.abs(v) >= 10000 || Math.abs(v) < 0.001 ? toPrecision(4) : toFixed(3)`),
+        byte-identical. Belongs in the chart stdlib rather than the plugin stdlib.
+      - **builtin-correlation's `nFmt` prints a BLANK, not an em dash**, where every other
+        count formatter prints `—`. Possibly deliberate (a correlation matrix leaves empty
+        cells empty) and possibly drift; it needs a look rather than a sweep, which is why
+        `rounded` was not forced onto it.
+
+- [ ] **Two functions named `wrapLabel` (found 2026-10-08).** `wrapToWidth` in the charts
+      stdlib wraps a legend entry with no ceiling; `wrapLabel` inside builtin-charts wraps
+      the SCED chart's rotated case captions with a `maxLines` and an ellipsis, because
+      those have to fit a panel's height. They are one function with an optional bound.
+      They were left separate deliberately: unifying them changes how the SCED captions
+      break (the stdlib version hard-splits a long word, the plugin's lets it overflow),
+      and the layer change had already touched every kind.
+
+- [ ] **"Titles & axes" wants splitting (16 rows).** `chart-groups.test.mjs` holds 16 as a
+      cap with the note "if a section grows past this, it wants splitting", and it is now
+      exactly at it — which is why the chart title's backing panel had to become automatic
+      instead of a toggle. Splitting it into Title / X axis / Y axis would make room, and
+      a `titlePlate` control is the first thing to add once there is any.
+
+- [~] **#181 — the three follow-ons #173 was carrying (split out 2026-09-21).** #173
+      shipped the project manager and is closed; these rode along inside its entry and
+      would have been closed with it. None blocks anything — they are the difference
+      between "the File menu stopped multiplying" and "the File menu is finished".
+
+      **Two of the three BUILT (2026-09-21), both menu moves; the third is not a menu
+      move and is still open — see below.** File is down to **two** project items:
+      `New project` and `Encryption settings…`. 840 tests (10 new).
+
+      **Browser pass: looked over by the owner on the deployed build (2026-09-21) — "looks
+      good from what I can see", no problems seen — and the **no-project-open** case
+      confirmed separately.** That was the one worth checking by hand: it is the state
+      #158 made real, it is unreachable from the menu of an open project, and getting it
+      wrong would have meant a dead first tab. The dialog lands on *New projects* with
+      the project tab saying why.
+
+      Still only covered as a function call: the **bundle round-trip** — Export ▸ the
+      `.crosstab` bundle, then Open ▸ Project bundle on the file it wrote. The two halves
+      used to be adjacent menu items and are now reached from two different tabs, so the
+      seam between them is new even though neither body changed.
+  - [x] **DONE (2026-09-21) — one per-project encryption modal, NOT a project-manager
+        tab (decided by the owner).** Four File items became one: `Encryption settings…`
+        opens `core/encryption-settings.js`, rewritten as a two-tab dialog — **This
+        project** (default) and **New projects**. `projectEncryptionOffer(state)` is the
+        extracted rule and decides what the project tab shows, so an unprotected project
+        is offered only *Set a passphrase…* and a protected one only *Change passphrase…*
+        / *Remove protection…*; the three `if (already protected) appendError` guards in
+        `project-sync.js` are now backstops for a direct call rather than the thing
+        standing between the user and a wrong state. `ProjectSync#protectionState()` is
+        the new read-only accessor — deliberately NOT `#settle()`ing, since settling only
+        writes when a binding already exists and so cannot change the answer, and saving
+        as a side effect of opening a dialog to *look* at a setting is a surprise. Both
+        empty states are distinguished and shown: `none` (no project open — real since
+        #158) and `unsaved` (exists, never written), with the dialog landing on the
+        defaults tab when there is nothing to act on. The defaults tab carries an
+        explicit scope disclaimer, and `docs/SECURITY.md` was updated where it named the
+        old menu path. 7 tests. *Original reasoning below.*
+
+        Today `core/project-sync.js` registers four File items:
+        `Protect this project…` (order 8), `Change passphrase…` (9), `Remove
+        protection…` (10) and `Encryption settings…` (also 10 — two items claiming one
+        slot, a small bug in its own right).
+
+        **The owner's reasoning, and it is right:** the manager is "the place for
+        opening, moving, exporting, or deleting projects **including** this one", while
+        these four are "update, enable, or disable encryption on **this one** project".
+        Different theme. A manager tab would only earn its place if it listed EVERY
+        project with encryption controls per row — and that variant is not merely
+        unwanted, it is close to unbuildable: `protectProject()` (~1609) works on the
+        ACTIVE project, `#settle()`s it to disk, then re-encrypts every file through
+        `#fullSave`/`#folderRewrite`. Doing that from a list would mean opening — and,
+        for an already-protected project, unlocking — each one first. So: a dedicated
+        modal for the active project.
+
+        **What it replaces, and why a modal beats three menu items.** The three verbs
+        are state-dependent and the menu fakes it: all three show always, and
+        `protectProject()` opens with a guard that errors "This project is already
+        protected." That is precisely [[guard-means-missing-state]] — a guard whose only
+        job is to neutralise a state means the state should not be reachable. A modal
+        reads the current state and offers only what applies: unprotected → *Set a
+        passphrase*; protected → *Change passphrase* / *Remove protection*. The guard
+        then has nothing to guard.
+
+        **DECIDED (owner, 2026-09-21): one File item, `Encryption settings…`, opening a
+        TABBED modal.** Default tab **this project** — set / change / remove its
+        passphrase; second tab **the global defaults** — encrypt new projects on this
+        device by default, and whatever else accrues later (passphrase-strength rules
+        were named as a likely example). Four File items become one, and the naming
+        collision dissolves instead of being negotiated: the organising axis is
+        *encryption*, not *scope*, which is also why this does not contradict the
+        manager decision above — that rejected mixing encryption with open/move/delete,
+        not mixing two scopes of one subject.
+
+        It absorbs `core/encryption-settings.js` (#144), which is the app-wide at-rest
+        POLICY dialog: one switch, with exports and folder projects as read-only
+        context. Evidence the seam was already wrong — it currently ends with "To
+        protect (or unprotect) a project you've already made, use **File ▸ Protect this
+        project…**". A settings dialog that has to send you back to the menu becomes a
+        tab switch.
+
+        Three things to get right when building it:
+    - [ ] **The two tabs must not look interchangeable.** One acts on the open project
+          NOW; the other changes a default for projects that don't exist yet and touches
+          no existing project. Name them by scope (*This project* / *New projects*
+          rather than *Project* / *Globals*), and let the defaults tab say plainly that
+          it changes nothing already saved. The failure to design out is someone
+          flipping a default believing they just protected the project in front of them.
+    - [ ] **Two degenerate states, expressed not guarded.** #158 shipped, so "no project
+          open" is a real state (sitting at the launcher) — and `protectProject()` also
+          refuses an empty unsaved one ("Add some data first — an empty project has
+          nothing to protect yet"). Both are facts the project tab should SHOW, with the
+          modal opening on the defaults tab when there is nothing to act on. Turning
+          those two errors into a visible state is the same [[guard-means-missing-state]]
+          move as collapsing the three verbs.
+    - [ ] **Keep the per-project verbs state-driven inside the tab**, as above:
+          unprotected → *Set a passphrase*; protected → *Change passphrase* / *Remove
+          protection*. Never all three at once.
+  - [x] **DONE (2026-09-21) — the two bundle items folded into the manager.** `Export
+        project bundle (.crosstab)…` and `Open project bundle (.crosstab)…` left File;
+        their bodies are unchanged, only where they are reached from. **Opening** is a
+        row in the **Open** rail (`kind: 'bundle'`); **writing** is a row on the
+        **Export** tab.
+
+        Two things had to be got right rather than wired. (1) A bundle is NOT a *Store
+        in* destination — it is a snapshot that stops receiving changes the moment it
+        lands — so `providersFor(providers, mode)` now decides which rail a location
+        belongs in. That also fixed a pre-existing bug found on the way: a provider with
+        no `chooseDestination` still drew a Store button that did nothing when clicked, a
+        dead control indistinguishable from a live one. (2) The Export tab's hint claimed
+        every export "is one-way — an exported file cannot be reopened as a project",
+        which the bundle makes false. It is now two groups — *A copy you can open again*
+        and *For another program* — which keeps [[format-equality-no-lockin]] intact: the
+        bundle is described by what it does, not promoted, and the other formats keep
+        equal billing. A bundle also cannot be ENUMERATED (there is no index of
+        `.crosstab` files on a disk), so the provider declares `enumerable: false` and
+        the pane says what it is instead of reporting an empty list. 3 tests.
+  - [ ] **STILL OPEN — and NOT a menu move.** *(Flagged 2026-09-21: the other two
+        sub-items were "move some menu items" and took an afternoon. This one is a
+        refactor and should not be waved through on the same estimate.)*
+        `core/project-manager.js` is written as a `<dialog>`-based modal that resolves a
+        promise on close; the launcher needs the same rail rendered INLINE in its
+        overlay. So reusing it means first extracting the rail/list rendering from the
+        dialog shell — a real change to a component that was browser-verified two days
+        ago — and it lands on top of #167 and #161, which both also rewrite the
+        launcher. Do the three together, deliberately, not as a follow-on.
+
+        **The launcher should reuse the manager component instead of its own rail.**
+        `core/launcher.js` builds its own saved-project list, remembered folders and
+        source buttons; `core/project-manager.js` now does the same job properly, with
+        the backend registry and the verbs. Two renderings of one list is the drift
+        `var-toolbar.js` was written to end, one layer up. **Overlaps [[#167]]** ("the
+        launcher should INCLUDE project management") and #161 ("clicking a
+        source/project should just go") — do these together or the launcher gets rebuilt
+        twice.
+
+- [ ] **#172 — the engine should not know where the bytes are (user, 2026-08-25).**
+      "If we are claiming a principle of *all are equal*, then the very existence of a
+      folder mode is a flawed design. The engine shouldn't care — or indeed even know —
+      where or how the bytes are stored."
+
+      **The evidence, because this is not a style argument.** `#folderMode` answers "which
+      UI flow did the user come through", and behaviour was keyed on it. Four bugs, all the
+      same shape, all found by use rather than by tests:
+      - saves took the plain-overwrite branch for remote, so two peers would clobber each
+        other whole-project at a time, silently (`2df5a8e`);
+      - the poll never ran, so a co-author's edit never arrived (same commit);
+      - `#keyStillCurrent` returned true immediately, so a remote project never noticed a
+        peer re-keying it — #144's protection absent exactly where bytes leave the machine;
+      - `listProjects` asked the LIVE store for the local catalog, so an open Dropbox
+        project made the sidebar query Dropbox for your OPFS projects.
+
+      **Mostly done (2026-08-25).** Everything about how bytes behave now comes from the
+      driver's declared capabilities: `externallySynced` drives merge-on-save and polling,
+      `flat` drives layout, the re-key check and reverting to local storage. Uses of the
+      flag went from 22 to 14, and the survivors are all one thing.
+
+      **What remains, and whether it should.** The rest is the File System Access API's
+      requirements, not an opinion about storage: a write-permission re-grant needs a user
+      gesture, the OS double-click shortcuts are real files in a real directory, and the
+      registry stores a structured-cloneable handle rather than an address. Those are true
+      of handles and of nothing else.
+
+      **VERIFIED IN THE BROWSER (2026-08-25), after the unification:** a local project
+      saves, survives a relaunch and reopens; move-to-folder writes the project AND its
+      shortcut files, and `Open in CrossTab.html` still lands on the open-folder button;
+      the folder project reopens from the launcher rail, which is the path where a refused
+      write permission would fail silently. **Not yet exercised: a PROTECTED project through
+      the shared flow** — the one place `#adopt`'s new lock actually bites, and the only
+      part of this change no test reaches.
+
+      **BUILT (2026-08-25).** `core/storage-backend.js`; `#folderMode` is gone from the
+      engine. Steps 1-4 of the plan below are done in one pass, since the owner lifted the
+      back-compat constraint ("no one's using this app yet, we can break existing saves").
+
+      - Four flows became two: `openLocation(backend)` and `moveTo(backend)`.
+        `#openExistingFolder` and `moveToFolder` are now three-line callers; the remote
+        pair is deleted. ~110 duplicated lines gone.
+      - `OpfsBackend` / `FolderBackend` / `DropboxBackend` / `WebDavBackend`, each owning
+        `capabilities`, `driver()`, `connect()`, `describe()`, `remember()`, `pollMs`, and
+        `shortcuts()` where a real directory makes one possible.
+      - The UI builds a backend and hands it over; `backendFor(entry, credentials)` rebuilds
+        one from a registry entry. No driver type is named anywhere in app.js any more.
+      - 12 new tests — the first coverage this area has ever had.
+
+      **Rolled up the same day, on the owner's "why not roll everything up?".** There was
+      no principled reason to stop — both loose ends were the same debt:
+      - `webdav-connections.js` deleted; the location registry is the only store of WebDAV
+        addresses, and the credential policy it documented moved there with it.
+      - The launcher holds a BACKEND rather than a folder handle, and defers to Start only
+        when `needsGesture` says the browser requires that click. `#pendingFolder` is gone.
+      - The sidebar renders `describe()`; the `LOCATION_KINDS` table is gone.
+
+      **A storage kind is now named in exactly one place in the UI** — the WebDAV dialog
+      filtering for WebDAV locations, which is correct, because that dialog is WebDAV.
+
+      **And local storage joined them (owner: "no favourite children allowed").** The
+      refactor had stopped at the boundary where OPFS's multi-project nature lives:
+      `openProject(id)` opened local projects while `openLocation(backend)` opened
+      everything else, and `OpfsBackend` existed only in its own tests. The same
+      privileged-path flaw as `#folderMode`, one layer further in — and invisible for the
+      same reason it was harmless, since local storage is the UNDEMANDING case with no
+      merge, no poll, no credential and no gesture to get wrong. Agreement by luck.
+
+      Now `openProject(id)` is `openLocation(new OpfsBackend(id))`, and the difference is
+      one field: `projectId`, which local storage names because it holds many and everyone
+      else leaves null because they hold one. `passphraseMode` came with it — unlocking one
+      project among many reads differently from unlocking a location. The shared flow also
+      caught something the split had hidden: `#adopt` now LOCKS before switching, because
+      opening an unencrypted project after an encrypted one would otherwise carry the old
+      key across.
+
+      **THE PLAN (owner's call, 2026-08-25: do it now, before more providers land).**
+
+      ### Why now, in numbers
+
+      - **Four bugs from one flag**, listed above, none caught by a test.
+      - **The flows are duplicated per backend.** `#openExistingFolder` is 48 lines and
+        `openRemote` 51; `moveToFolder` is 60 and `moveToRemote` 68. The remote pair was
+        written by copying the folder pair. Graph and Drive would each copy them again —
+        that is the "breaks every time we save to a new platform" mechanism, precisely.
+      - **None of those 227 lines is tested.** No test file touches the open or move paths;
+        `folder-sync` and `collab-sync` test the MERGE beneath them. The most bug-dense code
+        in the project has no coverage because it needs a real store to run.
+
+      ### The shape
+
+      One interface per platform, owning everything platform-specific. Not "driver" — a
+      driver is bytes, and bytes were never the hard part:
+
+          StorageBackend
+            capabilities   {flat, externallySynced, atomicWrite, canStream}   (exists)
+            driver()       the byte interface: read/write/list/stat/…         (exists)
+            connect()      permission re-grant | sign-in | no-op              (NEW)
+            describe()     {kind, glyph, label, detail} for lists             (NEW)
+            remember()     what the registry should store, never secrets      (NEW)
+            shortcuts?()   optional; folder-only today                        (NEW)
+
+      And **one flow each**, replacing four:
+
+          openLocation(backend)   ← #openExistingFolder + openRemote
+          moveTo(backend)         ← moveToFolder + moveToRemote
+
+      Both already have the same skeleton, which is why they were copyable: connect →
+      probe on a throwaway store → passphrase → validate → commit → remember → poll. Every
+      difference between them becomes a backend method instead of a second function.
+
+      ### What the engine stops knowing
+
+      `useDirectory`, `ensureReadWrite`, `#pickFolderHandle`, `shortcutFiles`, and the
+      remaining `#folderMode` all move behind a backend. The UI stops carrying kind strings
+      (13 occurrences of `'folder' | 'dropbox' | 'webdav'` across app.js and launcher.js)
+      and renders `describe()` instead. Adding Graph becomes **one file plus one line in a
+      registry** — no new branch in the sidebar, the launcher, the save path or the poll.
+
+      ### What the engine keeps
+
+      Capability-driven behaviour (merge, poll, layout), encryption (correctly above the
+      seam — a backend only ever sees ciphertext), and the op log. These are about the
+      PROJECT, not about where it sits.
+
+      ### The three hard parts, named in advance
+
+      1. **Layout is not really a capability.** `flat` says "one project per location", and
+         OPFS is the only backend where that is false. The honest model is that OPFS is a
+         CATALOG of locations rather than a special layout — which is #171's model arriving
+         from the other side. `FOLDER_PROJECT_ID` (19 uses) is the seam where the two meet.
+      2. **`connect()` is not uniform.** A folder needs a user GESTURE for its permission
+         re-grant; a remote needs a credential dialog it must not own. So `connect()` takes
+         a prompt-provider from the caller rather than opening UI itself — the same shape
+         `openWebDav` already uses for its password callback.
+      3. **The launcher defers a folder to the Start click** because that click *is* the
+         required gesture, while a remote opens immediately. Under one flow this becomes
+         `backend.needsGesture`, not two code paths — and it is the piece most likely to
+         regress, because it is invisible until a permission prompt silently fails.
+
+      ### Sequencing with #171
+
+      They are one refactor from two ends: #171 unifies the project LIST, #172 unifies the
+      backend behind it. Do #172 first — a unified list whose entries still fan out to four
+      bespoke open paths would keep the duplication and hide it behind a nicer surface.
+
+      ### Migration, and the risk that matters
+
+      **Folder backend first, behaviour unchanged.** Folders are in real use and are the
+      most demanding case: handles, permission re-grants, OS shortcuts. If the abstraction
+      survives the folder, the rest are simpler. Any step that requires "and now re-pick
+      your folder" is a failed step.
+
+      Order: (1) define the interface with the folder backend behind it and both old flows
+      still calling it; (2) collapse the two open flows into one; (3) collapse the two move
+      flows; (4) port Dropbox and WebDAV onto backends; (5) delete `#folderMode` and the
+      kind strings in the UI.
+
+      ### What it buys, concretely
+
+      A fake backend makes `openLocation` and `moveTo` **testable headlessly for the first
+      time** — the probe-then-commit ordering, the abort paths, the occupied-destination
+      refusal, remembering only on success. Those are the exact behaviours the four bugs
+      lived in, and they are currently verified by hand or not at all.
+
+- [~] **#171 — WHERE a project lives is not WHICH project is open (user, 2026-08-24).
+      THE INDEX IS BUILT (2026-08-25); the manager that consumes it is #173.**
+
+      `listAllProjects()` returns every project this device knows about, wherever it lives,
+      most-recently-opened first, with location as an attribute of a row. The sidebar
+      renders ONE list from it instead of two, capped at five, with the location shown
+      beside the name.
+
+      **The two stores stay, deliberately.** The local catalog is the nested store's own
+      bookkeeping — it is how the store knows what it holds — and the registry has to keep
+      `FileSystemDirectoryHandle`s, which only IndexedDB can. What changed is that nothing
+      above `listAllProjects()` sees either of them.
+
+      `lastOpenedAt` is added and, more importantly, SURVIVES A SAVE: both catalog writers
+      rebuild their summary from the manifest, and the stamp is not in the manifest and
+      never will be, since it is a fact about this device rather than about the project.
+      Without the carry-across the first autosave after opening would have reset it, and
+      "recent" would have quietly gone back to meaning "recently saved". Seven tests, using
+      the first in-memory driver — which is also the first time `ProjectStore` has been
+      testable at all.
+
+      **Destructive verbs left the sidebar** (delete, forget) — they sat one hover from the
+      row that opens the thing. They land in #173's Manage tab, where consequences can be
+      stated. Original:
+
+      **The principle, and the evidence — the original entry (2026-08-24).** Kept here
+      verbatim; it was a second copy of this item until 2026-10-13.
+
+      "When you open Word and see the recents list, it doesn't matter where each document
+      lives. Likewise for the launcher list and the sidebar list."
+
+      **The principle.** Location is an ATTRIBUTE of a project, not a category of project.
+      A saved project, a folder-backed project and a WebDAV project are one kind of thing
+      stored three ways, and the list a person picks from should say so — one list, with
+      where-it-lives as a detail on the row, beside the date and dataset count #167 also
+      wants there.
+
+      **What exists today is three parallel registries**, which is how the current shape
+      leaks into the UI:
+      - OPFS projects — the catalog in `project-store.js`
+      - folder projects — `core/folder-handle.js`, IndexedDB, because a
+        `FileSystemDirectoryHandle` needs structured clone
+      - WebDAV connections — `core/webdav-connections.js`, localStorage (2026-08-24)
+
+      Three stores means three renderings, three "forget" verbs, and a launcher rail that
+      grows a row per storage MECHANISM rather than per project. Adding WebDAV made this
+      concrete rather than theoretical: it is the third, and the first that was avoidable.
+
+      **What it wants to become:** one project index whose entries carry `{name, savedAt,
+      datasets, location: {kind, …}}`, with the per-kind stores demoted to what they
+      actually are — somewhere to keep a handle or an address that only the driver cares
+      about. The launcher rail and the sidebar then render the SAME list, which is also
+      what #167 asks for ("do not build a third rendering").
+
+      **Ordering constraint.** #167 wants verbs (rename/delete/duplicate) on that list;
+      doing that before this lands means writing each verb three times, once per registry.
+      This should come first, or at least alongside.
+
+      Not blocking the WebDAV work — a File-menu entry can open a connection without a
+      unified list — but every week it stays split, another feature gets written per-store.
+
+      **It has already bitten (2026-08-24).** A project moved to Dropbox vanishes from the
+      Projects list, while one moved to a folder does not — because folders have a registry
+      of their own (`folder-handle.js`) that the sidebar and launcher render beside the OPFS
+      catalog, and remote has no equivalent. So the app can put a project somewhere it
+      cannot then show you, inconsistently, depending on where you put it.
+
+      **The step that is neither a stopgap nor the whole refactor:** generalise the existing
+      folder registry into a registry of remembered LOCATIONS — `{kind: 'folder' | 'dropbox'
+      | 'webdav', name, savedAt, handle?, config?}` — rather than adding a third one beside
+      it. That makes remote projects first-class immediately, collapses two render paths into
+      one, and is a move toward this entry rather than away from it; folding the OPFS catalog
+      in afterwards is then the only step left.
+
+- [ ] **Collaboration on WebKit (Safari / iPhone / iPad) — three separate gaps, none of them
+      urgent (owner, 2026-10-07: *"we will eventually need collab support on WebKit devices so
+      let's flag that… but it can chill for now"*).** Filed so it is not rediscovered the hard
+      way; nothing here is broken today, and two of the three are unverified rather than known
+      bad.
+
+      **1. The FOLDER transport is Chromium-only, structurally.** `showDirectoryPicker` is
+      guarded in three places (`project-sync.js:565`, `:1953`, `storage-backend.js:113`) and
+      WebKit does not implement it, so a Safari user never sees folder projects at all. #143's
+      whole sharing story — drop the folder in Dropbox, both people hold it, folder-sync merges
+      — has **no answer on an iPad**. It degrades rather than breaks, which is why nobody has
+      hit it, but "share this with my colleague who works on an iPad" currently has no
+      folder-shaped answer. The live transport and `.crosstab` bundles are what is left.
+
+      **2. `atomicWrite: true` became a claim the driver can no longer always honour
+      (2026-10-07).** Today's `move()` fix falls back to writing in place on an engine whose
+      rename does not work, which is what makes saving work on WebKit at all — but it means the
+      temp-then-rename guarantee is conditional now while the capability is still declared
+      statically by `OpfsDriver` and `FsaFolderDriver`.
+
+      **It is latent, not broken: nothing in production reads the flag** (four drivers declare
+      it, four tests assert it, no consumer). That is exactly the hazard worth recording — the
+      FIRST consumer will believe it, and the obvious first consumer is folder-sync, whose
+      peer-safety argument is *"the driver's write is atomic (temp + rename), so a peer polling
+      `project.json` mid-write never reads a torn file."* On an engine using the fallback that
+      sentence stops being true. **Fix when it gets a reader:** have the driver downgrade the
+      declared capability once it has discovered rename does not work, rather than asserting it
+      up front — the same "probe by attempt, not by existence" lesson the fallback itself came
+      from.
+
+      **3. Live co-authoring is UNVERIFIED on WebKit, not known broken.** It is trystero over
+      MQTT (`core/live-sync.js`, loaded from CDN per `core/assets.js`), i.e. WebRTC, which iOS
+      Safari does have. So it may simply work. Nobody has tried, and the things that would bite
+      are iOS-shaped: a backgrounded tab suspending the peer connection, and the CDN import
+      versus the air-gap/offline path.
+
+      **What would settle it** — a Mac/iPhone pair on one project with Go live: does the room
+      join, do ops flow both ways, and does **gap-fill** work, since that moves Parquet source
+      bytes over the wire and is the part most likely to meet a platform limit. Until someone
+      runs that, treat live-on-WebKit as unknown rather than supported.
+
+- [ ] **#161 — the launcher's "Start CrossTab" button is superfluous; clicking a
+
+      **EVIDENCE AGAINST, 2026-10-10 — the owner, now testing small-screen mode on an
+      iPhone: *"I'm still undecided on the value of the start button. even more so now
+      that I'm actively testing in small screen on the iphone, I've tapped the wrong
+      project more than once. maybe having a second tap to confirm isn't such a bad
+      thing."*** So the two-gesture commit is not simply friction: on a touch target you
+      can fat-finger it is a confirm step, and the cost of getting it wrong (loading the
+      wrong project over your session) is high. Deliberately NOT resolved while the
+      project list was unified around it — the question stays open, but it is no longer
+      "this is superfluous", it is "is a confirm worth a tap". Any future removal has to
+      answer the phone case.
+      source/project should just go (user request, 2026-08-19).** Today the rail
+      buttons (`[data-source]`, saved projects, remembered folders) only set
+      `#pendingSource` / `#pendingProject` / `#pendingFolder` and paint `is-active`;
+      nothing happens until the footer `.ctl__start` click (launcher.js ~288–371,
+      `#start()` ~472). That is a two-gesture commit for a screen whose whole job is
+      "pick the thing you want to open". Clicking **Demo · quantitative** or a saved
+      project should load it and enter the app.
+
+      **What this deletes.** All three `#pending*` fields, the mutual-exclusion
+      highlighting, the "default the source to Blank so Start always works" line
+      (~307), and the `#start()` branch tree — each rail button calls one of three
+      already-written paths directly. The `?launch=` bypass is untouched (it calls
+      `applyPreset`/`openProjectByName`, not the UI).
+
+      **Wrinkle 1 — reopen mode still needs a commit button.** Reopened over a live
+      session the footer button reads *Apply changes*, and a plugin-only change (no
+      source clicked) has **no other way to commit**.
+
+      **Wrinkle 2 — the ordering inverts, and the preset seeding has to change with
+      it.** Right now the sequence is *source → tweak plugins → Start*, and a source
+      click **overwrites** `#selected` with that preset's set (~297–303). If the
+      click also starts, that overwrite silently discards any tweaking done first,
+      and there is no window to tweak after.
+
+      **Likely resolution (sketched 2026-08-19, not yet decided): make the picker
+      LIVE, like the one it duplicates.** `Edit ▸ Plugins…` already applies toggles
+      immediately — "changes are live and saved across sessions", one **Done** button,
+      no Apply and no Cancel (plugin-manager.js ~947–960). The launcher's picker is
+      the odd one out, and both wrinkles are downstream of its deferral, not of the
+      Start button:
+        - live checkboxes leave *Apply changes* with nothing to apply, so the footer
+          keeps only `← Back to project` (which never promised a revert) — Wrinkle 1
+          dissolves;
+        - there is no pending selection left to clobber, so all that needs deciding is
+          what a source click ADDS. Rule: **union, never subtract** — clicking
+          `Demo · spatial` switches the spatial plugin on and takes nothing away. The
+          demo always works and no choice is silently removed. The selection creeps
+          upward across sessions; that is one uncheck to fix, versus destroying intent.
+      This is [[guard-means-missing-state]] read literally: `#pendingSource`,
+      `#pendingProject`, `#pendingFolder` and the deferred `#selected` exist *only* to
+      be committed later. Remove the deferral and all four stop existing.
+
+      **Verify before committing to that:** live toggling activates plugins *before a
+      project exists* — today `applyActivatedSet` runs at Start, after the source is
+      loaded. #158 made "no project open" tolerable so it should hold, but a
+      workspace-declaring plugin (CAQDAS, spatial) mounting against nothing is exactly
+      where it would bite. Check it in the browser early, not late.
+
+      Two things that get *better*, not worse: a remembered folder needs a user
+      gesture for the write-permission re-grant, and a direct click is a cleaner
+      gesture than the deferred Start; and a saved project can then open through its
+      own plugin restore (drop the `applyPlugins:false` + apply-picker-after dance at
+      ~490) since there is no picker edit to preserve. Accident cost is low — a
+      mis-click loads a demo, `loadingSeed` keeps it out of autosave, and the brand
+      click reopens the launcher.
+
+- [ ] **Duplicate a project (carved out of #167, 2026-10-12).** The remaining verb from
+      #167: "fork this project" from the row's menu, alongside Rename and Delete/Remove.
+      Wanted as the natural home for forking a codebook or a half-built analysis without
+      opening it first.
+
+      **Why it was not done with the rest:** rename and delete already existed and only
+      needed a surface that reaches them from the launcher. Duplicate does not exist
+      anywhere, and it is not a trivial copy — it has to decide what a fork INCLUDES
+      (datasets, the op log, workspace blobs, plugin records) and what a fresh identity
+      means for the log (a duplicated project that keeps the original's op ids is a
+      collaboration hazard, per [[one-true-log-explicit-ops]]). It also wants #166's
+      copy-on-add semantics settled first.
+
+      Two things already in place that it should use: `removalOffer`'s pattern of saying
+      plainly what the action will do, and the kind distinction — duplicating an OPFS
+      project means a new OPFS project, while duplicating a FOLDER project has to ask
+      where the copy goes, since the app does not get to pick a directory on the user's
+      disk.
+
+- [~] **Stop sharing — BUILT (2026-08-21); the link-revocation half is still open.**
+      `core/share-state.js` + File ▸ Sharing…, 612 tests. Needs a browser pass.
+
+      **What shipped.** A `share:project` target carrying `enableSharing` /
+      `disableSharing`, folded last-writer-wins by HLC and registered as a projection, so
+      the decision merges and travels like every other tier. Three states, and the third
+      is the load-bearing one: `true` / `false` / `null` for never-said. `null` is not
+      `false` — every project built before this tier has said nothing, and reading silence
+      as refusal would have switched collaboration off across the whole install on upgrade.
+
+      One gate covers hosting, auto-live and rejoining: `activeRoom()` refuses first,
+      ahead of even the invite room, so there is no second path to drift out of step.
+      `collabReady` is false while closed (the Go live button hides), `inviteLink()`
+      returns null rather than minting a key to a door that will not open, and the live
+      session is dropped the moment a refusal lands — **including when it arrives from a
+      peer**, since a stop that left the current session running would be the same empty
+      gesture `stopCoauthoring()` already was.
+
+      **The two open questions below, answered:**
+      - *Does disabling blank the collab identity?* **No.** The entry's own "two separable
+        actions — do not conflate them" wins over its "probably the right default": the
+        identity is what a folder co-holder syncs, and blanking it would make an
+        irreversible link-revocation ride along with a reversible refusal. Sharing can be
+        turned back on and the same room resumes. Revoking links stays a separate action.
+      - *Warn on open, or quietly refuse?* **Neither.** The state is simply visible: Go
+        live disappears and File ▸ Sharing… reads "Sharing is currently OFF for this
+        project". A modal on open would nag a co-holder about a decision that is not
+        theirs to make, and a silent refusal would leave them hunting a bug.
+
+      **STILL OPEN — action 1, revoke outstanding links.** Rotating `collabSecret` (and/or
+      `collabId`) to kill every invite URL already sent. Nothing here does that: stopping
+      sharing refuses the room those links point at, which is a different and weaker
+      promise, and the UI says so in as many words. Note it does NOT stop folder
+      co-holders, who receive the new identity on the next sync and rejoin transparently.
+
+      **Verification owed:** turn sharing off with a peer live and confirm the session
+      drops on both sides; reopen and confirm it is still off; turn it back on and confirm
+      the same room resumes. Original entry follows.
+      **Stop sharing — an affirmative "this project is not shared" (user request,
+      2026-08-05).** Today the only way out of collaboration is
+      `projects.stopCoauthoring()` (app.js ~1565), which leaves the *current session's*
+      room. That is "don't go online right now", not "this project is no longer
+      shared" — reopen it and the machinery is armed again.
+
+      **Why leaving the room is not enough.** A project's room is derived, not stored:
+      `collabId` + `collabSecret` live in the manifest and `roomFor(manifest)` hashes
+      them into a room id (live-invite.js). So *anyone holding the manifest computes the
+      same room by themselves* — which is exactly the design goal for a folder synced
+      through Dropbox/Drive, and exactly why "I left the room" shares nothing about
+      intent. Every co-holder can still walk back in.
+
+      **Two separable actions — do not conflate them:**
+      1. **Revoke outstanding links.** Rotate `collabSecret` (and/or `collabId`). Kills
+         every invite URL already sent. Does NOT stop folder co-holders, who receive the
+         new identity on the next folder sync and rejoin transparently.
+      2. **Stop sharing** (the one requested). A persisted, affirmative flag that
+         disables joining AND hosting for this project while it is the active one,
+         independent of whether a collab identity exists. This is the real off switch.
+
+      **Make it an OP, not a manifest scalar.** Same argument that moved plugin
+      activation onto the log (#157): a scalar merged between peers cannot express
+      "off". If A stops sharing and B still has it on, a scalar/union merge silently
+      re-enables it — absence is indistinguishable from "never said". So: a
+      `share:<projectId>`-style target with `enableSharing` / `disableSharing`, folded
+      last-writer-wins by HLC, exactly like the plugin tier. For a folder project the
+      log travels in the folder, so the disable reaches co-holders on the next sync
+      even though the room is refused. See [[one-true-log-explicit-ops]] and
+      [[guard-means-missing-state]] — this is a positive fact about the project, not a
+      guard neutralising a state.
+
+      **Scope boundary, state it in the UI.** This prevents FUTURE joins and severs
+      current connections. It cannot retract what peers already hold — they have the
+      log. Nor can it govern a folder sitting in someone's Dropbox (the user's own
+      framing, and correct). The honest promise is the same shape as at-rest
+      encryption's: it protects what happens next, not what already happened.
+
+      Open questions: does disabling sharing also blank the collab identity (strongest,
+      but then re-enabling mints a new room and every existing link is dead — probably
+      the right default), or keep it so sharing can be resumed with the same room? And
+      should a folder project warn on open that a co-holder disabled sharing, or just
+      quietly refuse?
+
+- [ ] **#149 — GATE LIFTED (2026-08-04). 14/16 done; the 2 left are not bugs.**
+      A9b wants a project-level setting, not a fix, and A9c is a design note re-homed to
+      [[first-class-plugin-data]] / #150. Every correctness and data-corruption item is
+      closed and evidenced, and #152–#158 shipped on top of this foundation with live
+      two-window co-authoring verified. Treat the "blocks all new features" line below as
+      historical.
+      **One-true-log stability gate (post-#148 fresh-eyes audit). ORIGINALLY BLOCKED ALL
+      NEW FEATURES.** A full cross-model review of the #148 migration (done with a
+      different model as proofreader) found the gaps below. Several are silent data
+      corruption; nothing new ships until this list is cleared. Grouped by severity.
+      The test for "done": every user-data change is an appended op (or is
+      *deliberately* declared scalar/out-of-log and merges sanely), and no feature
+      path physically removes durable ops.
+
+  **A. Edits that escape the log / merge-safety violations**
+
+  - [x] **A1 (serious): `analysisLog.clear()` physically deleted durable ops
+        mid-session — DONE.** Both halves fixed. (a) *Merge resurrection:* `clear()`
+        now appends a `removeAnalysis` op per live run instead of `clearWhere`, so
+        the deletion propagates rather than dropping the runs out of the shared-id
+        ancestor for a peer to re-contribute. (b) *Overbroad trigger:* `replace` is
+        now emitted only when a load actually **destroyed existing data** — filling a
+        fresh dataset (`createWithData`, `extractColumns`, seeding a blank) reports
+        the new `load` reason — and the clear is scoped to the replaced dataset via
+        `clearFor(datasetId)`, with `datasetId` stamped on each entry by
+        `PluginActions`. Entries predating the field are left alone rather than
+        guessed at. Downstream consumers of the reason were updated with it:
+        `project-sync` marks sources dirty on `load` too (else a first import's
+        Parquet never gets written), and `undo-coordinator` resets on `switch`
+        (project open / new project) rather than relying on the seed's `replace`.
+  - [x] **A2 (serious): `library.pullLatest` rewrote a live dataset's history outside
+        the log — DONE.** The pull ran `restoreState` → `#resetDataHard` →
+        `clearWhere(#mine)`, physically dropping an established (possibly already
+        synced) slice and re-minting the ops. On the next merge the peer's copies of
+        the dropped ops read as *their additions* and unioned back in alongside the
+        re-minted duplicates — a doubled pipeline, the delete-inference class again.
+        *Fixed:* the pull now APPENDS (`replaceHistory: false`). Nothing is removed
+        from anyone's log; the recipe opens with a `load`, and B1's replace barrier
+        folds the superseded ops away identically on every peer. Verified: after a
+        pull every pre-pull op id is still present, only the new pipeline is live, the
+        data is v2 and the local transform is re-applied on top. (`#add` was always
+        safe — a fresh dataset has an empty slice.)
+  - [x] **A3: project NAME is user data and is now an op — DONE.** *Decision: name as
+        an op, not a merged scalar* — it's user data, and with `author` on every op it
+        answers "who named this project that?". `setProjectName` on target
+        `project/name`, folded by the `PROJECT_META` projection, carried in
+        `manifest.log`, applied on every load/merge path, and the folded value WINS over
+        `manifest.name` so a co-author's rename actually lands. Gotcha found in
+        testing: `store.rename` only patches `manifest.name` in place, so the rename now
+        also marks dirty + schedules a real save, or the op never reached disk.
+  - [x] **A4 (serious for qual): recycle-bin round-trip lost workspace/coding
+        state — DONE.** Restore minted a NEW dataset id, but `ws:` leaves are keyed
+        by dataset id, so a deleted-then-restored coded dataset came back with its
+        CAQDAS codebook silently gone. *Fixed by restoring under the ORIGINAL id*
+        (`DatasetManager.restoreDeleted`; the bin entry now carries `datasetId` in
+        its catalog record) — the leaves re-attach with nothing to re-home. The
+        replay is appended *alongside* the deleted dataset's orphaned ops rather than
+        clearing them (`restoreState(..., {replaceHistory:false})`): physically
+        dropping them is the A2 resurrection pattern, and the B1 replace barrier
+        already keeps them dead on every peer. `WorkspaceStore.dropDataset`'s fate
+        decided: **delete no longer calls it** (deletion must stay recoverable) — it
+        now runs on *permanent purge*, guarded to the project that's actually open.
+        Added `rehomeDataset(old,new)` as the log-native fallback for the
+        should-never-happen case where the original id is taken.
+  - [x] **A5: media assets are now INSIDE the project — DONE (bar gap-fill).** They
+        lived in their own OPFS root (`media-assets/`) with a `.json` metadata sidecar
+        per asset, so a shared project's audio/video/images simply weren't there for
+        the recipient. Now: bytes go to the project's own `assets/<id>.bin` through
+        `ProjectStore` (so at-rest encryption, folder mode and the project layout all
+        apply for free), and the metadata is an **op** — `addAsset`/`removeAsset` on
+        target `asset:<id>` — folded by the new `ASSETS` projection, so the index
+        merges, undoes and travels like every other tier. Writes stream through the
+        driver (`writeStream`), and an unprotected read hands back the file handle's
+        own Blob, so a multi-GB movie is never materialised in either direction; a
+        *protected* project buffers, deliberately, rather than storing media in the
+        clear. `.crosstab` carries `assets/<id>.bin` + the ops. Adding media to a
+        never-saved project creates the project first (`ProjectSync.ensureProject`).
+        **DONE (#155):** live-P2P gap-fill for assets — see below. The rest of this note
+        is the original state.
+        **Was open:** live-P2P gap-fill for assets (`MediaStore.missing()` is the
+        hook), and a one-time cleanup of the now-stale `media-assets/` and `recycle/`
+        OPFS roots left over from the old stores.
+  - [x] **A8: destructive replace-import — CLOSED by removing "Replace" entirely.**
+        *Decision:* a dataset can be created, deleted, and have rows/columns added or
+        removed — but NOT wholesale cleared and refilled. The import dialog's `Replace`
+        is gone; in its place `Swap in (old one goes to the bin)` imports into a NEW
+        dataset that **inherits the outgoing dataset's name**, then bins the old one —
+        after the import succeeds, so a failed import never costs data you still have.
+        Same one-click gesture, none of the machinery: nothing is superseded within a
+        dataset, so there is no generation to bin (A8a) and nothing is stranded (A7).
+        The old dataset keeps its rows, its id, and its coding, and is restorable for
+        free. NOTE: the engine's `loadDataset({mode:'replace'})` remains — it is how any
+        *empty* dataset gets filled, and `restoreState`/`pullLatest` rely on `load` as
+        the replace barrier (B1). Only the destructive user-facing option is gone.
+  - [x] **A9: project export now asks about linked building blocks — DONE (bundle
+        path).** *Finding that reshaped it:* the three options in the original plan
+        (embed / keep link / unlink) collapse to two, because a bundle already carries
+        every dataset's own sources — the DATA travels either way, so there is no
+        embed-vs-reference size trade-off. All that's at stake is the `libraryLink`
+        badge and its Pull-update button. *And that link is local by construction:* a
+        block's id is a `crypto.randomUUID()` minted on whichever machine first saved
+        it, and there is **no mechanism to share a block between machines at all**, so a
+        recipient's library will never hold that id — not even if they independently
+        imported the identical file. Keeping the link is only useful for a copy coming
+        back to the same machine. So: `.crosstab` export detects linked datasets and
+        asks Keep / **Drop (default)**, saying plainly that the link won't resolve for
+        anyone else. Drop nulls `libraryLink` in the exported `datasetMeta`.
+  - [ ] **A9b: the same prompt for the folder + live paths.** A folder-backed project
+        and a live hand-off leak the same dangling link, but they're *continuously*
+        synced — a one-shot modal is the wrong shape. Wants a project-level setting
+        ("share links to my building blocks: no") rather than a prompt per save.
+  - [ ] **A9c (design): building-block ids aren't portable.** The deeper issue A9
+        surfaced. Blocks are addressable only by a locally-minted random UUID, so a
+        shared block is *impossible*, not merely unsupported — two people who import the
+        same file get different ids. If cross-machine blocks should ever work, ids need
+        to be content- or origin-derived and blocks need an export/import path. Belongs
+        with [[first-class-plugin-data]] and #150.
+        *Related, measured:* adding a block **instantiates** it — `library.#add` creates a
+        real dataset and `restoreState`s the block's Parquet into the project — so the
+        link is pure provenance (`{id, version, baseLen}`), never a data reference. A
+        project with two native datasets plus one from a block holds three Parquet
+        sidecars of its own, and the block's bytes exist twice on the machine (library +
+        project) before any export. That's the honest cost of the template model, and it
+        is *why* dropping the link on export is harmless: the recipient already has the
+        data as an ordinary dataset. The library COULD be content-addressed to dedupe
+        instantiations (as media now is), but that would make projects non-self-contained
+        — directly against what A5/A8 established. Self-containment wins; recorded so the
+        trade-off is a decision, not an oversight. It also fits the design that upgrading
+        a project to a newer block version is deliberately opt-in (`pullLatest`).
+
+  **B. Bugs introduced/exposed by the rewrite**
+
+  - [x] **B1 (serious): undo past a replace-import bricks the dataset — DONE.**
+        `#resetData` retracted the old steps but `#dropDuckDB` physically dropped
+        their bytes, and the retracts stayed undoable: import-replace → Ctrl+Z ×2
+        revived a byte-less source, `rederive` threw, and kept throwing.
+        *Fixed by deriving the reset instead of logging it.* A `load` already
+        restarts the projection, so `foldDataOps` now treats the last live `load` as
+        a **replace barrier** and drops what precedes it (fixed by HLC order, so a
+        reorder moves steps but never resurrects them). A replace therefore appends
+        no ops at all — nothing is retracted, so one undo of the `load` lifts the
+        barrier and the whole previous pipeline returns. `#pruneDeadSources` frees
+        only what is *already* behind a barrier, so exactly one generation stays
+        materialised for that undo. And `rederive` now **skips** a source op whose
+        bytes this peer lacks (reporting it on `missingSources`) instead of throwing
+        — a durable op can no longer poison every later fold. That last part is also
+        the landing pad for B3 and for live gap-fill's byte-less window.
+  - [x] **B2 (serious, silent wrong data): row-id collision after reload — DONE.**
+        Restores restarted `#sourceSeq` at 0 while restored Parquet kept row ids
+        baked from the ORIGINAL seq, so with a gap in the log (routine after #148 —
+        every replace leaves a byte-less source that consumes no seq on restore) the
+        next appended file was handed a live range: duplicate `__ct_rid` across the
+        UNION, and a `setCell` CASE editing TWO rows. Verified in-browser both ways
+        (fix off → 2 rows changed by one edit; fix on → 1). *Fixed:* `#ensureRowId`
+        now returns the base actually in the table (read back off a restored source
+        via `min(__ct_rid)`), and every source-materialising path feeds it to
+        `#noteRowidBase`, which advances `#sourceSeq` past it.
+  - [x] **B3 (serious): a failed `rawRestore` dropped a dataset's ops from the next
+        save — DONE.** `receiveOps` ran only after ALL sources materialised, so one
+        unreadable Parquet threw, the dataset was dropped, and its data ops never
+        reached the in-memory log — while its collection membership survived. The next
+        save is a blind overwrite, not a merge, so it wrote a manifest permanently
+        missing that dataset's entire history. *Fixed:* materialisation is now guarded
+        **per source op** — a failure lands the envelope byte-less (bytes stripped,
+        `file` ref kept so it can heal) instead of aborting, and `receiveOps` always
+        runs before the re-derive, so the history is durable even if the re-derive
+        itself throws. B1's `missingSources` tolerance does the rest: the pipeline
+        replays without the dead source and names it. Verified by corrupting a
+        `src_<opId>.parquet` on disk and reopening: the dataset stays, reports
+        `missingSources: [{label: 'A'}]`, keeps all three steps applied, and after a
+        further edit the re-saved manifest still carries every op. The live-P2P
+        byte-less window (ops ahead of their gap-filled bytes) rides the same path.
+  - [x] **B4: deterministic workspace merge-op ids could violate op immutability —
+        DONE.** The id hashed only (target + resolved value), so a later merge that
+        resolved to a previously-emitted value re-minted the SAME id with a HIGHER hlc
+        — reachable via delete-and-redo cycles under add-wins. `receiveOps` dedups by
+        id, so the newer copy was dropped and the leaf's fold could then pick an
+        ordinary write over the merge result: peers genuinely out of step while
+        `manifestsEqual` (an id-set comparison) reported them in sync. *Fixed:* the
+        contributing op-id set (sorted, so operand order can't matter) is mixed into
+        the hash. Covered by a unit test on `deterministicOpId` plus a re-run
+        determinism test.
+  - [x] **B5: identical concurrent intents surfaced phantom conflicts — DONE.**
+        `threeWayLog`'s add/add target pass flagged two peers both undoing (or both
+        retracting) the SAME op as a conflict, though every resolution yields the
+        identical outcome. *Fixed:* an exemption for `undo`/`redo`/`retract` ops whose
+        `payload.opId` matches. Deliberately EXCLUDES `reorder` — rival orderings are a
+        real disagreement, and a reorder names no single op. Four tests pin it,
+        including two negative controls (undoing *different* ops on one target, and
+        rival reorders, both still conflict); verified load-bearing by disabling the
+        guard and watching exactly the two positive cases fail.
+
+  **C. Hygiene / decisions**
+
+  - [x] **C1: live-P2P applied peer ops never marked `#dirty` — DONE.** *Decision:
+        peer work is work.* Applied ops lived in memory until our OWN next edit, so a
+        crash, a closed tab or a power cut lost a co-author's contribution locally —
+        "it's still on their machine" isn't persistence. `#persistPeerWork` now marks
+        the project dirty and schedules a save on every successful live apply.
+        Deliberately NOT routed through `#onChange`, which would also fire
+        `#scheduleLivePublish` and echo the just-received state back at the peer — this
+        takes only the persistence half. When the data tier was rebuilt it also marks
+        every live dataset's sources dirty, or the incremental save would write a
+        manifest referencing `src_<opId>.parquet` sidecars never written for a peer's
+        new dataset.
+  - [x] **C2: byte files were never pruned — DONE.** A purged dataset's Parquet and
+        every replaced import's sidecar stayed on disk forever (`orphanDataOps` stripped
+        the `file` ref; nothing removed the file). `ProjectStore.#sweep` now runs after
+        each save, keyed on **the manifest just written**: a file survives iff some op in
+        the saved log names it. That rule can't drift from what a load will read, covers
+        source sidecars and media assets alike, and stays correct when #150 adds asset
+        ownership — and when A8a starts binning replaced generations, their ops will name
+        their files, so the sweep keeps them with no change. Runs after the manifest is
+        durable, so a crash mid-sweep loses only garbage; best-effort, never fails a save.
+        Verified: after a replace-import the superseded generation's sidecar is gone and
+        only the live one remains.
+  - [x] **C7 (decision): post-merge Undo semantics — DECIDED, no code change.**
+        Edit ▸ Undo targets the highest-HLC live op in the active dataset regardless of
+        author, so right after a sync Ctrl+Z can undo a COLLABORATOR's newest edit (and
+        the marker syncs back). *Decision: keep it.* Either rule disappoints someone;
+        this one is simple, matches "the log is shared history", and the History panel
+        already exists for undoing a specific action further back. Documented rather
+        than changed.
+
+- [ ] **CAQDAS cross-plugin invocation.** (Pulled out of #145 — a CAQDAS/#147
+      concern, not the ownership model.) The coding workspace should be able to run
+      analysis plugins on coded-theme subsets (e.g. run frequencies on all segments
+      coded "anxiety"). Needs design thought on: does the derived dataset contain the
+      coded text segments, the source rows, or a frequency table of codes? Different
+      analyses want different shapes. The `app.run.analysis` plumbing is ready — this
+      is a CAQDAS design question, not an infrastructure one.
+
+- [ ] **Spatial workspace features (post-verb).** Pulled out of #145's space-verb
+      item — these are `builtin-spatial` features, unrelated to verb dispatch.
+  - [ ] **Layer tree in region selection column.** Display loaded boundary sets as a
+        tree in the region-selection sidebar, so the user can expand/collapse layers
+        and select regions within each.
+  - [x] **Point-in-polygon geocoding — DONE (2026-09-29).** Map layers ▸ **Assign regions…**:
+        given the boundary set already loaded in the workspace and a longitude/latitude column
+        pair, every case is matched to the region whose shape contains it. The gap it closes is
+        mundane and constant — survey and admin data arrives with coordinates and no area code,
+        while the choropleth, Moran's I by region and "Analyse selection" all need a region
+        column nobody has, so today it comes from ArcGIS or a QGIS spatial join before CrossTab
+        is opened at all.
+
+        **Hand-rolled, not Turf.js** — this entry had assumed the dependency. Even-odd ray
+        casting with holes and multipolygons is about forty lines; the dependency is not forty
+        lines, because a plugin runs in a sandboxed opaque-origin iframe, so an external import
+        means a CSP allowance, an entry in `core/assets.js`, a runtime host for the offline cache
+        and a line in the air-gap vendor script — carried forever, for arithmetic that fits on a
+        screen. Same test the owner applied to vendoring and to hand-rolled statistics: judge a
+        dependency by what maintaining it costs. `rPackages` is unchanged; no R is involved.
+
+        **Four properties decide whether a geocode can be trusted, and each is tested:**
+        - **A case on a shared border lands in exactly ONE region.** The half-open comparison
+          `(yi > y) !== (yj > y)` gives that; the intuitive `>=` counts it in both, so a
+          respondent on a county line would inflate two counties. Swept along a whole shared
+          edge, vertices included, not spot-checked. The cost of that rule is pinned too: a point
+          exactly on the *excluded outer* edge of the coverage falls in no region, is reported as
+          `outside`, and must not be "fixed" into the double-counting version.
+        - **A hole is outside.** GeoJSON rings after the first are interior, so an enclave —
+          Lesotho, a lake, a city carved out of its county — is not the surrounding region.
+        - **Three different outcomes, counted separately and all reported:** no coordinates,
+          outside every region, and inside more than one (overlapping boundary files are common;
+          the first in file order wins and the count says a choice was made). A geocode that
+          reported only its successes would be the shape of a silent wrong answer.
+        - **A swapped column pair is named as the likely cause**, because it is the most common
+          way this goes wrong and it presents as "my boundary file doesn't cover my data". Only
+          when the columns as given place almost nothing AND flipping them places most of it — a
+          looser rule cried wolf on a file that genuinely does not cover every case.
+
+        **The bug the tests found, which is the reason for writing them:** `Number(null)` is
+        **0**, as are `Number('')` and `Number(' ')`. A case with a missing coordinate was
+        therefore geocoded to whichever region contains the point (0, 0) — silently, and with
+        full confidence. The app's own numeric columns arrive as NaN so the app path was safe,
+        but a string column or any caller passing plain arrays would have hit it. A `coord()`
+        helper rejects non-numbers before coercion, and a numeric `0` (or `"0"`) is still a
+        coordinate.
+
+        **It writes a new dataset, not a column**, and that is not a limitation to route around:
+        a plugin's data surface is read-only apart from `data.create`, because the data op-log
+        belongs to the host and a plugin adding a column would be a mutation with no op behind
+        it. Same rule that made import offer a Swap ([[no-inplace-replace]]). So the result is a
+        sibling dataset with the original columns plus the region, the original is untouched, and
+        the report says so — a user looking for a new column in the grid they were on needs
+        telling where it went.
+
+        A grid index over the features' bounding boxes, because unindexed this is
+        points × regions × vertices: 10,000 respondents against 3,000 census tracts is tens of
+        millions of ring walks, which is the difference between instant and a frozen tab. 5,000
+        cases against 400 regions runs in single-digit milliseconds. 28 tests.
+
+        **Checked against `sf`, which is the authority** (`spike/compare-geo-sf.mjs`, exits
+        non-zero on disagreement). Hand-rolled arithmetic only earns its dependency saving if it
+        is right, and the owner made it a standing rule: *"it's good to check ourselves any time
+        we need to hand-roll or modify a standard R library."* Against `sf::st_within` on planar
+        geometry, over 4,000 points across squares with a shared border, a concave L, a donut
+        with its enclave as a separate region, and a two-part island: **every interior point
+        agrees, same region and same count** — including the 92 in the enclave and the 1,722
+        outside everything.
+
+        **Boundary points are where the two deliberately differ, and the harness states it as
+        three separate facts.** `sf` follows DE-9IM: a point on an edge is within NEITHER
+        neighbour and intersects BOTH — the first drops a case on a county line, the second
+        double-counts it, and neither is usable for geocoding. The half-open rule gives: never
+        more than one (the load-bearing property, since a double count is a wrong NUMBER);
+        exactly one along a shared edge, and it is one `sf` agrees the point touches; and at a
+        VERTEX, sometimes none — 2 of 9 tested — which lands in the visible `outside` count, and
+        which `sf::st_within` also puts in none, so it is a tie-breaking difference rather than a
+        containment one.
+
+        **The planar assumption is now measured rather than asserted.** `sf` 1.x uses s2 for a
+        geographic CRS, where an edge between two lon/lat points is a great-circle arc that bows
+        poleward — which is why the comparison forces planar geometry on both sides. The gap is
+        quadratic in edge length: a 10° edge bows **11.4 km**, 1° bows **121 m**, 0.1° bows
+        **1.2 m**, 0.01° bows **1 cm**. Any real boundary file has vertices a few hundred metres
+        apart, so the two models sit millimetres apart and a case would have to fall within that
+        of a border to be assigned differently. A continent-sized polygon is the one place it
+        would matter, and nobody geocodes against one.
+
+        *(Finding the s2 default is what the comparison was for: the first run showed 16
+        "disagreements" that were nothing of the kind — sf was answering a spherical question.)*
+
+        **Still not handled:** the antimeridian and the poles, where a ring's coordinates wrap.
+        Not silently wrong — those cases land in the `outside` count rather than in a neighbouring
+        region. Projected coordinate systems are the user's to reconcile: the failure message says
+        so rather than guessing at a datum.
+
+- [ ] **Verify CAQDAS import/export round-trip + legacy-project load.** Runtime
+      regression check (not tied to any one code change): confirm a CAQDAS coding
+      project exports and re-imports losslessly (QDPX / project bundle), and that an
+      older-format saved project still loads and hydrates its coding state. Exercises
+      the workspace-store migration chain (legacy → v2 → v3 → v4) end to end in the app.
+
+### Deferred features (intentionally not built yet)
+
+- [~] **Online collaboration — async (folder-backed) + live (P2P) (#143). BOTH
+      TRANSPORTS SHIP** (verified 2026-08-21): folder-backed projects (`folder-sync.js`),
+      live P2P (`live-sync.js`, `live-presence.js`, `live-protocol.js`), invite links
+      (#156), asset gap-fill (#155). **What is left:** graph mode so iPads can join (below,
+      `showDirectoryPicker` is desktop-only), and the separate "Stop sharing" item near the
+      top of this file. Original:
+      **Online collaboration — async (folder-backed) + live (P2P) (#143).**
+      Recurring faculty ask; keeps coming back. Two features people picture as
+      separate — "put my project in a OneDrive folder" and "two of us edit at
+      once" — are really *one* build wearing two hats. **The load-bearing piece is
+      neither OneDrive nor WebRTC; it's making the op-log mergeable.** Live-sync and
+      folder-sync are just two *transports* over that foundation.
+  - **The foundation — a mergeable op-log (the real project). [x] DONE** — landed on main
+    as #148's one-true-log migration; the branch note below is historical.
+    **[~] STARTED (historical)** —
+    `core/merge.js` + op identity in `core/data-store.js` shipped on branch
+    `feat/collab-merge-kernel`, 13 headless tests (`npm test`). Done so far:
+    (1) every `#log` op carries a **stable id** (deterministic content+index id for
+    pre-collab legacy saves so they stay mergeable; random for new ops), persisted
+    in export/restore, undo/redo-safe; (2) the pure merge kernel — `threeWayLog`
+    (core tabular class), `addWinsSet` (CAQDAS codebook), `lww` (spatial slot bytes),
+    and `mergeProject()` which **dispatches each state class to its owner's declared
+    merger** and aggregates conflicts across tiers. **Key architecture decision (from
+    design chat): the engine coordinates, the *owner* defines "merge"** — a plugin
+    declares `manifest.merge = { strategy }` or exports a `merge()` fn; core is just
+    the owner of the tabular class (so its three-way merge isn't a kernel exception).
+    The #145/#146 integrity model contains an untrusted merger to its own blob, which
+    is what makes delegating merge *meaning* safe.
+    **CAQDAS + spatial builtins now declare their merge** (commit be8200a): caqdas
+    exports a custom `mergeState` (composite blob — `merge:{via:'mergeState'}`,
+    codes/segments add-wins + config LWW; the "two coders on the same transcripts"
+    Dedoose case is a passing test); spatial declares `merge:{strategy:'lww'}` per
+    slot (add-wins slot set + LWW bytes). 19 headless tests, all green, incl. the
+    real caqdas merger imported from the plugin. *Still open:* stored common-
+    ancestor marker (a transport concern — the merge fn takes ancestor as an arg
+    today); wiring `mergeProject` into a real transport (incl. the tiny glue that
+    resolves a manifest `merge.via` string → the module's exported fn); dependency-
+    aware op ordering (MVP appends mine-adds then theirs-adds); the host conflict-
+    resolution UI; **in-browser check of the op-id persistence path** (syntax-checked
+    only — DuckDB path can't run headlessly). See [[collab-merge-kernel]].
+    The transform log
+    (`core/data-store.js`, op types at ~L149–153: `load/append/join/setVariable/
+    setCell/computeVar/recodeVar`) is a **dependent pipeline**, not a bag of
+    commuting changes — each op folds onto the accumulated result of the prior ones
+    (`(sql) UNION ALL BY NAME (…)`, joins resolve columns against the `byName` map
+    built so far, recodes read earlier-derived vars). So you **cannot** drop a CRDT
+    (Yjs/Automerge) over the whole thing: if A renames a var and B concurrently
+    recodes reading the old name, "union the op sets" yields a pipeline that won't
+    run — a *dependency* conflict, not a merge conflict a CRDT resolves. Conflict
+    resolution therefore splits **per class of state**, and only one class is hard:
+    - *Transform pipeline* — **git-style three-way merge**: common ancestor + replay
+      each side, auto-merge provably-disjoint ops, and **surface** genuine collisions
+      / broken dependencies to the user. **No silent auto-merge here** — not just on
+      effort but on principle: a wrong silent merge in a stats tool doesn't crash, it
+      produces plausible numbers that feed a published finding. Faculty vastly prefer
+      being asked ("you and Pat both edited `income_recode` — keep yours / theirs /
+      see both"). This is also the cheapest correct MVP: detection + user resolution
+      ships long before any clever auto-merge.
+    - *Variable metadata* (`setVariable {name, patch}`) — per-field last-writer-wins;
+      commutes across different variables. CRDT-easy.
+    - *CAQDAS codebook* (the opaque workspace blob, `core/workspace-store.js`) —
+      set-like codes → add-wins CRDT. **This** is where Yjs actually earns its keep.
+    - *Output* — regenerable; union or replace.
+    - **The primitive that unifies both transports:** give every op a **stable id**
+      and record a **common ancestor** (last op both sides agreed on). Then folder =
+      three-way merge of two divergent files; live = the *same* three-way merge run
+      continuously. Same algorithm, different clock.
+  - **Async transport — folder-backed projects (FSA). [x] DONE + VERIFIED LIVE**
+    (branch `feat/collab-merge-kernel`). Shipped end-to-end and confirmed with **two
+    real Chrome windows co-editing a shared local folder**: File ▸ Move project to a
+    folder… / Open project from a folder… / Close project folder; one-gate passphrase
+    (set for a fresh folder, enter for an encrypted one); autosaves route through the
+    merge-aware `syncFolderProject`; a 3s poll pulls peer writes (backs off when
+    hidden); conflicts via `showConflictDialog`. On-disk everything is ciphertext bar
+    the plaintext salt/verifier. Bidirectional variable-recode merge, **step-reorder
+    merge**, rapid-edit debouncing, and idle quiescence all verified. Four real bugs
+    that live-testing caught (headless tests had missed) were fixed + regression-tested:
+    write-storm (undefined-key JSON asymmetry), two-window ping-pong (canonical operand
+    order), clobber/"A owns it" (per-peer base, not a shared `project.base.json`), and
+    reorder-not-synced (three-way-merge the step order). 93 headless tests.
+    *Remaining (NOT folder-sync):* recipient import-side decrypt of a `.enc` export;
+    live P2P 2-machine test + invite/presence UI; OPFS opt-in toggle + settings;
+    chunked-Parquet crypto. Original foundation notes kept below.
+  - **Async transport — folder-backed projects — foundation notes.** Commit 7e8cdb8. Done: the FSA **seam** —
+    `ProjectStore.useDirectory(handle)`/`folderBacked`, `#root()` now parameterized
+    around an injected picked-folder handle (falls back to OPFS); op `id` threaded
+    through source save/load; `readManifest()` (cheap stat+parse for change-detection
+    / reading "theirs"), `readBase()`/`writeBase()` (the `project.base.json`
+    common-ancestor snapshot). Plus **`core/collab-sync.js`** — the project-level
+    three-way merge (`mergeManifests`): per-dataset op-log three-way (add-wins the
+    dataset *set* — never drop data), owner-dispatched workspace-leaf merge,
+    `buildMergers` resolving each plugin's `merge` (strategy or `via`→exported fn),
+    one aggregated dataset-tagged conflict list. 9 headless tests (28 total).
+    **Orchestration + handle-persist now DONE too** (commits fd66f7d, 90fd138):
+    `core/folder-sync.js` — `decideSync` (seed/in-sync/push/merge) + `syncOnce`
+    (read theirs+base → decide → write manifest+base); `ProjectStore.writeManifest`
+    with atomic temp+`move()` rename (`#writeAtomic`, torn-read-safe);
+    `core/folder-handle.js` — IndexedDB persist of the picked dir handle +
+    `ensureReadWrite`. **34 headless tests + VERIFIED IN-BROWSER** against real OPFS
+    File System Access I/O (OPFS dir as a stand-in shared folder): a peer's on-disk
+    edits + local edits three-way merge (dataset op-log + caqdas codebook via the
+    real `mergeState`), 0 conflicts on disjoint edits, atomic write leaves no `.tmp`,
+    base updated to merged; dir handle round-trips IndexedDB as a live handle. Op-id
+    persistence path also verified end-to-end through real DuckDB.
+    **Conflict resolution now DONE too** (commit 4c22509): merge is a pure function
+    of user choices — every conflict carries a stable key, and feeding a `resolutions`
+    map (key→mine/theirs/both) back re-runs deterministically to 0 conflicts (threaded
+    through the whole kernel + `mergeManifests` + `syncOnce`, which withholds the write
+    until conflicts are resolved). `core/conflict-ui.js` renders the "keep yours /
+    theirs / both" modal. Resolution even reaches *inside* the caqdas custom merger
+    with no plugin change (resolveMerger pre-binds the ctx into its helpers). 40
+    headless tests; VERIFIED IN-BROWSER (2 conflicts → form → flip → re-merge → clean).
+    **The full app sync flow is now DONE too** (commit feaf9c1): `syncFolderProject`
+    — land my Parquet (`writeSourcesOnly`), build my manifest (`buildManifest`,
+    extracted from `save()` so save & sync never drift), read peer+base, merge,
+    resolve via a callback, write merged+base atomically, reload only when a peer
+    contributed. 44 headless tests; VERIFIED IN-BROWSER against real OPFS (peer+I
+    edit income → conflict → resolve → merged reloads). So the **entire reusable
+    engine** — kernel → clients → project merge → folder sync → conflict UI → app
+    flow — is built, tested, and in-browser-verified.
+    *Genuinely all that's left is the "clickable" layer, and ALL of it needs a MANUAL
+    folder pick to verify (`showDirectoryPicker` is an OS dialog CDP can't drive) — so
+    it's a LOCAL-session job:* (1) the File-menu **"Open folder…"** button
+    (`showDirectoryPicker` → `useDirectory` + `saveFolderHandle` → save/load there);
+    (2) **hook `project-sync.js`** to route folder-mode saves through `syncFolderProject`
+    (bundle from `#snapshot`, `resolveConflicts` = `showConflictDialog`, `applyMerged`
+    = re-open) instead of blind `store.save`; (3) a **poll loop** (`readManifest` mtime,
+    backoff when hidden) that syncs on peer change; (4) **IndexedDB handle restore** on
+    boot (reconnect via `ensureReadWrite`). See [[collab-merge-kernel]]. Original plan below.
+    `core/project-store.js` is *already* written entirely against
+    `FileSystemDirectoryHandle` (`getDirectoryHandle`/`getFileHandle`/
+    `createWritable`/`getFile`); the **only** OPFS-specific line is `#root()` at
+    `project-store.js:244` (`navigator.storage.getDirectory()`).
+    `showDirectoryPicker()` returns the *identical* handle type, so:
+    - Parameterize `#root()` to take an injected picked handle, falling back to OPFS.
+    - Persist the handle in IndexedDB (handles are structured-cloneable); re-grant
+      write via `requestPermission()` once per session (browser won't give silent
+      persistent write to a user folder — one click, unavoidable).
+    - **OneDrive sync itself is free**: CrossTab does plain local file I/O, the
+      OneDrive *desktop client* mirrors the folder to the cloud. No Graph, no OAuth,
+      no CrossTab cloud code. **Provider-agnostic** — Dropbox / Google Drive / iCloud
+      folders are the identical mechanism. The `writeSourcesFor` cheap-save
+      (`project-store.js:101`, rewrites `project.json` + only the changed dataset's
+      Parquet) is already sync-client-friendly (no gigabyte re-uploads per edit).
+    - **Costs:** Chromium **desktop only** (`showDirectoryPicker` absent in Firefox /
+      Safari / **iPad Safari**); needs the desktop sync client installed; good for
+      *sequential* use (laptop ↔ desktop, or close-then-hand-off) but **simultaneous**
+      open → OneDrive drops `project-DESKTOP-xyz.json` conflict copies (it syncs
+      files, not op-logs) → that's the doorway back to the live layer.
+    - **Change detection — watch the manifest, not the folder.** FSA gives **no change
+      events** (no `onchange`, no watch) in its baseline, so polling is the floor — but
+      "scan the folder every second" is wrong on both axes:
+      - *Wrong granularity.* `project.json` already rewrites on every save and already
+        indexes every dataset (`project-store.js:16-18,143`), so watching **that one
+        file** covers adds/removes/edits. `getFileHandle('project.json') → getFile()`
+        exposes `.lastModified`/`.size` — a **stat, not a read**. When mtime moves, *then*
+        parse it, diff the manifest, and fetch only the Parquet sources whose entries
+        changed (ties to the content-hashed index above). No directory walk.
+      - *Wrong rate.* The **sync client's latency (seconds–minutes) is the real floor**,
+        not the poll rate — 1 Hz just spins waiting for bytes the client hasn't landed.
+        Poll ~2–5 s while focused, **back off when the tab is hidden** (Page Visibility),
+        and **poll-now right after a local save** (when a reply is expected).
+      - *Two levers beyond a dumb timer:* (1) **`FileSystemObserver`** — emerging Chromium
+        API giving real change callbacks on FSA handles; use as progressive enhancement,
+        poll as universal fallback (**verify current availability** — new, uneven). (2)
+        **Trystero beacon as a "look now" nudge** — when both are online, an "I just
+        saved" ping means network says *look now*, filesystem delivers the bytes; near-
+        instant without fast polling, degrades to the timer when the beacon can't connect.
+      - *Sync-client gotchas:* **torn reads** (may read a half-written `project.json` mid-
+        sync → `JSON.parse` throws) → write **atomically (temp + rename)** and
+        **tolerate-and-retry** next tick rather than treating a parse failure as
+        corruption. **Conflict-copy filenames** (`project (conflicted copy).json`) are
+        themselves an after-the-fact concurrency signal → the doorway back to live.
+  - **Graph mode — to include iPads (wanted).** Because `showDirectoryPicker` doesn't
+    exist on iPad Safari, the folder route can't reach tablets. **Microsoft Graph /
+    OneDrive REST** works without the desktop client and *on iPad/mobile*. Cost:
+    OAuth + Azure app registration + token refresh + network handling, and it's
+    OneDrive-specific — reintroduces some backend coupling. Design it as a
+    **pluggable storage backend** so FSA-handle and Graph are two implementations
+    behind one seam (`project-store` root), and a future Google Drive / Dropbox API
+    backend slots in the same way. Only reach for Graph where iPad/mobile is the hard
+    requirement; on Chromium desktop the free folder-handle route stays strictly
+    better.
+    - **Same model, REST driver.** Graph isn't a distinct collab mode — it's the *same*
+      async folder-backed model with an HTTP driver: identical `project.json` + Parquet
+      layout in the same OneDrive, reached via `GET/PUT …/content` (small files simple
+      PUT, large Parquet via resumable **upload session**) instead of
+      `getFile`/`createWritable`. The cheap-save maps directly.
+    - **Change detection beats the folder route:** **delta query** (`/delta` + token →
+      server-computed diff, poll the *diff* not the files) and **ETag `If-Match`
+      compare-and-swap** (a `412` on write = detected collision → route into the
+      three-way merge, instead of OneDrive's silent conflict copies). But **webhooks
+      need a public HTTPS endpoint** a browser-only app lacks → for serverless CrossTab
+      the practical path is **delta polling, not webhooks**. Graph still only signals
+      "the *file* changed," never "someone has it *open*" → presence stays on the beacon.
+    - **Auth decision — own registration + device-code UX; borrowed first-party
+      client-id rejected.** The tempting shortcut (device-code flow against a well-known
+      pre-consented Microsoft client_id — Azure CLI / Office / Graph-PS — so *no* app
+      registration) is **rejected**: (1) Microsoft is actively closing it, and tenants
+      lock-down enough to block **device code flow via Conditional Access** are exactly
+      our university targets — it trips the same wire it was meant to dodge; (2) consent
+      screen + sign-in logs show the *borrowed* app ("Azure CLI"), not "CrossTab" — an
+      audit/IRB-integrity problem for human-subjects data; (3) we don't own it, can't
+      scope it, likely violates MS terms. Crucially it **doesn't escape the hard case** —
+      a tenant needing admin consent / blocking device-code blocks the borrowed app too.
+      So: **register our own Azure app** (free, one-time, stable id we control, correct
+      "CrossTab" naming, exact scopes) — the cost was always *admin consent*, not the
+      registration — but **keep the device-code *flow*** ("pop a short code, log in on
+      MS's page, poll for the token"; MFA/CA handled by Microsoft) with *our* client_id
+      for the same no-redirect ergonomics. Public client → **auth-code+PKCE or
+      device-code**, `offline_access` for refresh.
+    - **Invitation is half OneDrive's ACL.** Multi-user needs the folder actually
+      *shared* between accounts (OneDrive share, or a SharePoint/Teams library both
+      reach via `/me/drive/sharedWithMe` or the shared drive id) — so onboarding is half
+      CrossTab's invite-key, half Microsoft's sharing dialog; reconcile with the live-
+      mode self-contained invite when unifying modes.
+  - [~] **CLOUD STORAGE — the architecture, settled 2026-08-24.** The bullets below are
+    a wish-list of providers with no design attached. This is the design. Owner's framing:
+    modular, host-side, third-party-extensible, and deliberately NOT called plugins,
+    because the code is trusted and runs on main.
+
+    **1. The seam already exists, and it is narrow.** `core/storage-driver.js` is a
+    path-and-bytes store — `read` / `write` / `remove` / `removeTree` / `list` / `stat`
+    (plus `writeStream`, see gap B) — with `ProjectStore#useDriver()` already injecting
+    one, and OPFS + FSA folder as two working implementations. **Crypto sits ABOVE it**:
+    ProjectStore encrypts before `write` and decrypts after `read`, so a driver handles
+    opaque bytes and an untrusted provider can withhold or corrupt but never read.
+
+    **2. Sandboxed plugins are OFF the table, and not for a soft reason.** Every sandbox
+    CSP tier — strict, codec, media — carries `connect-src 'none'`. A sandboxed plugin
+    cannot open a socket at all. The one network path is `app.web.get(url)`: GET only,
+    text only, no custom headers, no redirects followed, per-origin consent-gated. A
+    storage driver needs PUT/DELETE, binary bodies, `Authorization` headers and ranges,
+    so this is not a starting point that needs widening — it is a different thing.
+    OAuth compounds it: redirect URIs need a real origin, which an opaque-origin iframe
+    does not have, and refresh tokens are a different trust tier from a codec.
+
+    **3. PROTOCOL drivers, not VENDOR drivers — this is the load-bearing decision.**
+    ownCloud, the case that prompted this, *is WebDAV*; so are Nextcloud, Synology and a
+    long tail of self-hosted boxes. One WebDAV driver plus a server URL covers all of
+    them with zero code per provider. S3-compatible is a second family (MinIO, B2,
+    Wasabi, R2) behind one driver plus an endpoint. Genuinely proprietary APIs are only
+    Graph, Drive and Dropbox. Two protocol drivers plus three vendor drivers is close to
+    full coverage, and the tail after that is short.
+
+    **4. A provider DESCRIPTOR is data, not code** — `{protocol, baseUrl, auth, scopes}`.
+    A third party adds their cloud by CONFIGURING a protocol driver, which needs no trust
+    decision, no review, and can be a dialog field. This is expected to absorb most of
+    the tail on its own.
+
+    **5. `registerStorageDriver(kind, factory)` for the genuine remainder** (Drive's
+    file-ids being the obvious one). **Say plainly what trusted means here:** crypto sits
+    above the seam, so main-thread driver code is on the PLAINTEXT side of it and can
+    read the data, the tokens and the page. "Not a plugin" describes the trust level
+    honestly but does not reduce it, so the distribution model is source-in-repo via PR —
+    trust earned by review — rather than an install button. Runtime loading would need
+    blunt, non-remembered consent and is a security decision, not plumbing.
+
+    **6. Three contract gaps that would bite the third implementation** — fix BEFORE the
+    first cloud driver, because each is currently satisfied only by accident of both
+    existing drivers being handle-based:
+    - *A. `folderBacked` is `driver.kind === 'folder'`* (project-store.js:149) — identity,
+      not capability, and it drives eight call sites covering flat-vs-nested layout,
+      encryption defaults, launcher flow and sync mode. A WebDAV driver is semantically
+      folder-like, so today it would have to LIE ABOUT ITS NAME to inherit the right
+      behaviour. Split into capability flags (`flat`, `externallySynced`).
+    - *B. `writeStream(path, blob)` is in the code but not in the documented interface.*
+      It is the multi-GB media path and the hardest thing to do over HTTP — every
+      provider has its own resumable-upload protocol. Put it in the contract with a
+      declared fallback for drivers that cannot stream.
+    - *C. `write` promises atomic temp-then-rename.* WebDAV has MOVE, Graph and Dropbox
+      have moves, S3 has no rename at all. Atomicity becomes a DECLARED capability, and
+      the store needs an answer for the non-atomic case — a folder-sync peer polling a
+      path is precisely who a half-written file hurts.
+
+    **7. SHIP A DEFAULT APP KEY — confirmed needed (owner, 2026-08-24): "I'll need to ship
+    a key for everyone eventually. For now dev is fine."** Bring-your-own is right for
+    institutions and wrong as the only option: telling a colleague to register a Dropbox
+    app before they can open a shared project is an absurd ask. What it needs, none of it
+    blocking today's work:
+    - A registration the PROJECT owns, per provider, through each provider's production
+      review — a Dropbox app starts in development mode with a hard cap on linked
+      accounts, so a shipped key fails for everyone but its owner until that clears.
+    - One constant per provider, with the existing BYO field kept as an override.
+    - Note what this does NOT cost, since it sounds like it cuts against the grain and
+      does not: no server, no CrossTab account, no third party in the data path. Bytes
+      still go browser-to-provider. The project simply owns a registration, and the
+      consent screen reads "CrossTab" instead of the user's own app name.
+
+    **STATUS (2026-08-24).** Contract gaps A/B/C done; WebDAV built (unverified — the
+    owner's campus turned off WebDAV, and no server with the CORS headers is to hand);
+    **Dropbox built and browser-verified BOTH WAYS (2026-08-24).** Move wrote
+    `crosstab-project.json`, `project.json` and a source parquet in the flat layout; open,
+    after a reload that dropped the token, brought the project back **with its two edited
+    cells and its full history** — so the op log, the sources and the manifest all survive
+    the round trip. That closes the loop on the driver, the seam, PKCE and the COOP handoff.
+
+    **Open follow-up: a Dropbox project is not in the project list** (owner, 2026-08-24).
+    The move deletes the OPFS copy, which is right, and nothing replaces it — so the only
+    route back is File ▸ Open from Dropbox… with the folder retyped.
+
+    *Corrected 2026-08-25.* I first wrote that there was "nowhere else for a project to be
+    listed from". That is wrong, and the owner caught it: a project moved to a FOLDER still
+    appears, because `moveToFolder` calls `rememberFolder()` and both the sidebar
+    (app.js:2357) and the launcher (launcher.js:350) render that IndexedDB registry beside
+    the OPFS catalog. So there IS a place for a non-OPFS project — one per mechanism. Remote
+    has none because I declined to add a fourth, which left the feature knowingly
+    incomplete without saying so. See #171 for the shape of the fix.
+
+    **Three bugs, all environment-specific, all invisible to the suite** — worth recording
+    because the next provider will meet the same class:
+    - `d250fa5` — the popup handoff assumed `window.opener`. COOP severs it, so the
+      callback page announced it had nothing to do while the app reported a cancellation
+      nobody made. Now BroadcastChannel + localStorage + postMessage.
+    - `58b31c4` — the service worker answered the callback navigation with the app shell,
+      so the popup booted a second CrossTab. Only when INSTALLED or offline; an online tab
+      falls through to network-first and works.
+    - `f8bce2c` — `win.closed` cannot distinguish a closed window from a severed handle,
+      and severance happens on NAVIGATION so sampling at open misses it. Cancellation is
+      no longer detected at all; the wait is the lesser mistake.
+
+    **Build order:** contract gaps (A/B/C) → WebDAV → Dropbox → Graph → Drive last (the
+    path-to-id cache). WebDAV first on purpose: it is the only one that both serves real
+    users immediately and proves the seam against a non-handle driver, before any OAuth
+    flow or trust tier is committed to.
+
+  - **Vendor-neutral cloud-API family — Dropbox & Google Drive are peers, not
+    afterthoughts.** Two corrections to "Graph = *the* tablet story": (1) the
+    `showDirectoryPicker` gap is **not iPad-specific** — Android Chrome and mobile
+    browsers generally lack the FSA directory picker too (**verify current support**), so
+    *every* tablet/phone needs *a* cloud API regardless of vendor; **Chromebooks** are the
+    edge case (Chrome OS is desktop Chrome → folder mode works), but a third-party cloud
+    folder isn't always mounted as a pickable local dir there, so the API may still be the
+    path. (2) Provider choice is the **user's**, not ours — Dropbox and Google Drive are
+    **peer backends**, not OneDrive-with-an-asterisk (the storage analog of format-equality
+    / no-lock-in: don't privilege one vendor). The seam makes it cheap: **device** decides
+    you need a cloud API, **the user's provider** decides which driver — all three sit
+    behind `project-store` root as near-identical drivers (OAuth2 + PKCE, `GET/PUT`
+    content + chunked upload, a delta/cursor change feed, rev/ETag conflict detection), so
+    build the *interface* once and vendor-neutrally, adding drivers as real demand appears:
+    - *Dropbox* (App Console reg): **friendlier to a serverless browser app** —
+      `list_folder/longpoll` waits for changes with **no public endpoint** (vs Graph
+      webhooks) and a **server-provided `content_hash`** partly hands you the shared-index
+      primitive. Downside: **no device-code flow** (redirect/popup PKCE only).
+    - *Google Drive* (Google Cloud reg): natural for **Chromebook** users; `changes.list`
+      + page tokens for delta, push webhooks need an endpoint (→ poll), OAuth2 + PKCE —
+      same shape as the others.
+    - *No shared/borrowed id across providers* — each is its own one-time registration
+      (the borrowed-client-id trap was Microsoft-specific and rejected anyway). But
+      **desktop users of any provider need none** — the desktop sync client + folder mode
+      already covers them (Dropbox/OneDrive/Drive/iCloud folders are identical to FSA).
+  - **Live transport — P2P over WebRTC. [~] BUILT AND WIRED; one verification outstanding**
+    (re-checked 2026-08-21). Everything the "still to build" list below names now exists:
+    - *The op-log wire protocol* is `core/live-protocol.js` (`LiveDoc`) — and it answered
+      late-join more simply than planned: "snapshot and tail are the same `state` message —
+      no separate path", with commutativity bought by canonicalising operand order on peer
+      id so both sides compute a byte-identical merge and reach a fixpoint.
+    - *The presence UI* shipped (chips in the top bar, `core/live-presence.js`) and the
+      *invite UI* shipped as #156 (File ▸ Copy invite link, plus consumption at boot).
+    - *Gap-fill* is wired into this channel, not just built headlessly —
+      `ProjectSync#initGapFill` runs both the source and asset exchanges and calls
+      `requestMissing` as manifests change.
+
+    **What is genuinely still owed is a TEST, not code: two machines on two networks.**
+    The two-window pass during #156 exercised the real broker and found four bugs, but both
+    peers sat on one host, so ICE succeeded trivially — NAT traversal and the TURN path
+    have never been exercised. That is the one thing a second window cannot fake, and it is
+    why this stays `[~]`. Original note follows.
+    **[~] SIGNALING LAYER BUILT** (commit 20d6427): `assets.js` pins trystero@0.21.5 (MQTT), lazy-loaded;
+    `core/live-invite.js` (rendezvous addressing = hashed-UUID topic + invite secret in
+    the URL fragment); `core/live-sync.js` (`LiveSession` wrapping a Trystero room —
+    presence + beacon + ordered/reliable op-log actions — plus `buildIceServers` /
+    get·setTurnConfig). 58 headless tests; in-browser verified the pinned lib loads +
+    TURN config threads. *Still to build:* the op-log WIRE PROTOCOL over the channel
+    (snapshot-then-tail late-join, gap detection — convergence reuses the mergeable
+    op-log), and the presence/invite UI. *Verification boundary:* the actual peer
+    CONNECTION is a 2-machine/2-network + reachable-broker test (Trystero filters
+    same-page selfId → un-testable in one tab), user-gated like the OS picker.
+    **[~] CONVERGENCE PROTOCOL + PRESENCE now BUILT too** (commits 8202ebc, 0eb4065):
+    `core/live-protocol.js` `LiveDoc` runs the same three-way merge continuously over
+    the channel — commutativity solved by canonicalising operand order by peer id (no
+    kernel change); late-join = same `state` message (empty joiner add-wins to full);
+    conflicts SHARED via a `resolve` message so peers don't re-surface them; full-
+    manifest exchange sidesteps per-op gap detection. `core/presence.js` `PresenceRoom`
+    = pure "who's here" roster. Glue: `attachLiveDoc` / `attachPresence`. 69 headless
+    tests + in-browser stack-load/run verified. *Still to build:* base-data gap-fill
+    (Parquet a peer lacks — detection headless, transfer channel-gated) + the UIs +
+    the real 2-machine connection test. Editing SHARED data needs no gap-fill.
+    The serverless-handshake part is already solved and battle-tested in *sortie*
+    (asteroids clone, https://lograh.github.io/sortie-game): **Trystero (MQTT
+    strategy)** does signaling via public MQTT brokers (EMQX/HiveMQ) — nothing we
+    host — then drops to a real WebRTC data channel. Its "repair" channels use
+    `createDataChannel()` defaults = **ordered + reliable**, exactly the mode an
+    op-log wants (and *not* the mode a game usually wants). What sortie did **not**
+    need and CrossTab does:
+    - *Convergence, not just dedup.* A game floods ephemeral state and self-heals each
+      frame; `_mid` dedup is enough. Op-logs must *converge* — a missed op can't be
+      papered over by "the next frame." Needs the mergeable-op-log foundation above
+      (sequenced, gap-detecting, or CRDT per state class).
+    - *TURN — DECIDED: bring-your-own, we host nothing.* Sortie's clever peer-**gossip**
+      relay dodged TURN — but it only rescues connectivity when there's a **third peer**
+      to route through. CrossTab's core case is **two** faculty behind university
+      symmetric NATs, no third party → sometimes needs a real **TURN** relay. Decision:
+      **we run none.** Instead the user (or their institution) can define a TURN server —
+      `setTurnConfig({urls,username,credential})`, threaded into `iceServers` by
+      `buildIceServers` (default = public STUN only). So an institution adopting the app
+      can stand up its own TURN for its faculty; without one, a hard-NAT pair simply
+      can't connect and the UI must say so (**detected ≠ connectable**). Built in
+      `core/live-sync.js` (commit 20d6427).
+    - *Late-join.* Snapshot-then-tail: ship the whole existing op-log to a joiner,
+      then follow with the live tail.
+  - **Concurrency detection / presence — "Jane has this open, co-author?"** The key
+    reframe: **presence is separable from storage** — "who else has project X open"
+    rides the *network*, not the bytes, so you answer it *once* (a thin layer keyed on
+    project id) and all three storage modes borrow it, rather than solving it per mode.
+    - *Live mode gets it free.* In Trystero the **room is the presence mechanism** —
+      `onPeerJoin`/`onPeerLeave` fire on join. Not a feature added on top of live mode;
+      a byproduct of it.
+    - *Folder + Graph borrow the same beacon.* On open, every client (wherever its
+      files live) joins a lightweight Trystero **presence room** and broadcasts a tiny
+      `{who, mode, since}` beacon — no data channel, just "I'm here." Seeing a peer →
+      prompt *"Jane also has this open — start co-authoring?"* → escalating promotes the
+      **same room** to a reliable data channel + op-log sync. So detection and the
+      live-mode handshake are the same machinery pointed at the same room.
+    - *Filesystem-native path is the degraded fallback.* A **lock file**
+      (`project.lock`, heartbeat + staleness timeout) is the offline answer but is
+      advisory and slow: OneDrive sync latency (seconds–minutes) means two people can
+      both "open simultaneously" inside the sync window and neither sees the other's
+      lock; crashes leave stale locks (hence heartbeats); OneDrive can conflict-copy the
+      lock file itself. **Graph** only offers change *notifications* (webhooks/delta —
+      "the file changed"), not "someone has it open," so it also falls back to a
+      drive-lock-file or (better) the beacon. Hierarchy: **beacon when networked
+      (good), lock file when not (best-effort warning only).**
+    - *Nice consequence:* presence-only is buildable **cheaply and early**, ahead of the
+      hard merge foundation — ship *"Jane's in here too"* + the co-author prompt on
+      Trystero alone, and it doubles as the escalation handshake later.
+    - *Caveats:* (1) **same population problem** — the beacon needs a reachable public
+      MQTT broker, so on locked-down university networks / air-gap it may not connect
+      (back to the lock file, which needs the sync client, or nothing); (2) **detected ≠
+      connectable** — the beacon can say "Jane's here" while TURN-less P2P then fails to
+      link up, so the UI must handle that gracefully (ties to the TURN note above);
+      (3) **room-key privacy** — derive the presence room key from a **salted hash of
+      the project UUID** (store already mints `crypto.randomUUID()` ids) so the room is
+      unguessable and non-enumerable on a public broker, not "is anyone editing
+      `dissertation`?".
+  - **Access control / confidentiality — a shared secret, kept separate from the
+    room key.** The salted-UUID-hash room key (caveat 3 above) makes the room
+    *unguessable to outsiders* but not *private from the broker/relay operator*, who
+    routes by that key and so necessarily knows it. A hash is one-way for the *string*
+    but not for *participation*: the operator still sees the topic has subscribers and
+    reads whatever rides it in the clear. Fix = split the two roles, don't conflate:
+    - *Addressing* stays the salted UUID hash — the operator sees this topic regardless.
+    - *Confidentiality* = a shared secret → strong KDF (Argon2id/scrypt) → AES key that
+      encrypts everything on the broker: **signaling and the presence beacon**. Keep it
+      **orthogonal** to the room key — folding the secret into the key means rotating it
+      changes the room *address* (collaborators lose each other) and a weak secret
+      becomes an enumerable topic.
+    - *What needs protecting is smaller than it looks.* Once WebRTC connects, the bulk
+      op-log is **DTLS-encrypted peer-to-peer** already, so the secret's real job is the
+      **signaling (which leaks participant IPs via ICE)** and the **beacon**
+      (`{who,mode,since}`) — not the data. **Trystero ships a built-in `password` config
+      that AES-encrypts its signaling**, which would do most of this for free (confirm
+      against the pinned version — not vendored yet, only referenced here).
+    - *Default should be a generated high-entropy key, not a typed password* — delivered
+      in the invite link/code (key in the URL fragment, never hits a server; the
+      Jitsi/Excalidraw E2EE pattern) so it's immune to the offline dictionary grind a
+      memorable password invites. Offer a user-chosen password as the memorable-but-
+      weaker opt-in.
+    - *Residual, stated honestly (no theatre):* even fully encrypted, the operator still
+      sees topic existence, subscriber count, timing, and message sizes — traffic
+      analysis that encryption can't hide.
+  - **[x] Base-data GAP-FILL — DONE and wired (re-checked 2026-08-21).** The two pieces
+    this note left open have both landed: the *invite half* is #156, and live asset
+    gap-fill is #155. `ProjectSync#initGapFill` drives `SourceExchange` over the live
+    channel. **The sneakernet index UI is the one piece still missing** — split out as its
+    own bullet below, because it is the air-gap story rather than part of this transfer
+    path. Original note follows.
+    **[~] Base-data GAP-FILL BUILT (headless) — commit 89e99a2.** `core/gap-fill.js`:
+    fetch a Parquet source a peer lacks over the channel — identity = the manifest source
+    **op id** (no schema change / no per-file hash), integrity = transfer-time SHA-256
+    verified before store, chunked (256 KiB) for multi-GB, consent/size-gated via
+    `allowSend`. `SourceExchange` (requestMissing → need → chunk+hash+send → reassemble+
+    verify+store) rides the live channel (`t:'need'/'src-chunk'`; LiveDoc ignores). 75
+    tests incl. full 2-peer round-trip, consent-decline, integrity-reject. Byte read/store
+    are ProjectStore callbacks; real transfer over Trystero is part of the 2-machine test.
+    The *invite* half + the sneakernet index UI below remain. Original design follows.
+  - **Onboarding + base-data sharing — the invite carries the key; an index fills the
+    gaps.** Two questions the op-log foundation quietly skips: how the second user gets
+    *in*, and how they get the *base bytes*. The log's first op is `load`, referencing an
+    immutable source the joiner may not hold — e.g. two field studies in different cities,
+    each holding only its own data file and needing to combine **both ways**.
+    - *Invitation = key distribution.* The invite link/code is exactly the artifact from
+      the access-control note: room topic (UUID hash) + high-entropy key. One thing to
+      share out-of-band; accepting it decrypts signaling, connects, and late-joins.
+    - *Late-join already ships the op-log snapshot* (above) — but its `load/append/join`
+      ops (`data-store.js` §log, the universal operation log) point at immutable sources
+      persisted as `ds{id}_src{i}.parquet` (`project-store.js:101`) that the joiner lacks.
+      **That's the gap.**
+    - *Index/manifest, separate from bytes (the user's instinct).* Broadcast a cheap
+      manifest — `{datasetId, sourceHash, name, rows, cols, byteSize}` — content-**hashing**
+      each Parquet source (today they're named only *positionally*, `ds{id}_src{i}`; a
+      hash is what makes "do I have this?" answerable, enables dedup so identical files
+      aren't re-sent, and lets a received file be integrity-checked against what the log
+      expects). Replaying a log and hitting a `load`/`join` for a hash you don't hold =
+      the gap → prompt **"share this file!"**.
+    - *"Both ways" falls out of the foundation.* A merged log with A's `load city-A` +
+      B's `load city-B` + an `append` means each peer, replaying, hits a gap for the
+      *other's* source and fetches it — combine-in-both-directions is just the mergeable
+      op-log plus on-demand fetch, not a separate feature.
+    - *Transfer is consent- and size-gated, not silent.* Sources can be multi-GB (codec
+      note); auto-streaming one over a field-site link is rude. Both sides see size —
+      needer: *"missing city-B.parquet (3.1 GB) — request from Jane?"*; haver: *"Jane
+      needs city-B.parquet (3.1 GB) — send?"* Bytes stream chunked over the same reliable
+      data channel.
+    - *Sneakernet fallback for locked-down / air-gap nets* (same population problem as the
+      beacon): when P2P won't connect, the index still names *exactly which file* to hand
+      over out-of-band, and CrossTab verifies the imported bytes' hash against the log's
+      expectation — the index earns its keep even with no automated transfer.
+    - *Async/folder mode mostly gets this free* — the sync client mirrors the Parquet
+      sources, so gaps appear only inside the sync-latency window; the mechanism is
+      chiefly a live-mode concern plus the sneakernet path.
+  - [ ] **Sneakernet index UI — the air-gap fallback, still unbuilt (2026-08-21).** When
+    P2P will not connect, the index should name *exactly which file* to hand over
+    out-of-band, and verify the imported bytes against what the log expects. The engine
+    half exists — `missingSources` / `missingAssets` in `core/gap-fill.js` answer "what do
+    I lack?" — but nothing surfaces that answer to a user outside the automated transfer.
+    Small, and it earns its keep precisely where the automation cannot run, which is the
+    population the air-gap work (#71) exists for.
+
+  - **Core-vs-plugin boundary — apply the doctrine we already have, don't invent one.**
+    `import-service.js` states the rule: the engine owns **"only what the security model
+    forces it to"** — host UI, the user-activated picker, and **the destructive commit**
+    (replace/append/join is host-only, so no plugin can overwrite your active data
+    unprompted; a plugin *may* create **new** datasets and write its **own** state —
+    additive vs destructive, not host vs plugin). No privileged importer; official CSV/SPSS register through the same
+    public call a third party uses. Plugins run in a **sandboxed opaque-origin iframe**
+    over the `plugin-broker` postMessage bridge. Collaboration = the *same* split applied
+    to storage + transport:
+    - **Kernel (core), because integrity/security force it:** the op-log +
+      **three-way merge** (a wrong silent merge = plausible-but-wrong published numbers —
+      can't live in untrusted code); the **crypto envelope** (KDF/AES/invite-key); the
+      **content-hash / index / gap** logic; the storage **interface + the commit**; and the
+      **presence *concept*** (who's-here keyed on project id).
+    - **Plugins (pure pipes) behind those contracts:** every **storage driver**
+      (FSA-folder, OneDrive/Graph, Dropbox, Google Drive, **WebDAV → Nextcloud/OwnCloud/
+      self-hosted in one adapter**, S3…); the **presence/signaling transport** (Trystero
+      strategy — MQTT/Nostr/…); provider **OAuth** bundled per driver. The WebRTC
+      data-channel⇄op-log stays core (coupled to merge); only the *rendezvous* is a plugin.
+    - **The insight that makes untrusted storage drivers safe:** core encrypts *before*
+      `write` and decrypts *after* `read`, so a driver only ever touches **ciphertext** —
+      even a malicious provider plugin can't read content (residual: metadata — paths,
+      sizes, timing). Pushing crypto into the kernel is what lets the whole provider
+      ecosystem be untrusted plugins. Analog of format-equality: no privileged provider.
+    - **[~] BUILT (core interface, not sandboxed) — commit 34fc4de.** `core/storage-driver.js`
+      is the path-based seam (`read/write/remove/removeTree/list/stat` + `kind/available`);
+      `OpfsDriver` + `FsaFolderDriver` extend a `HandleDriver` base, and `ProjectStore`
+      sits on it via `useDirectory()`/`useDriver()`. Deliberately a **core-registered
+      interface, NOT `app.storage.register` in a sandbox** — resolving the "two caveats"
+      below (FSA gesture/handle + gigabytes over postMessage) in favor of main-thread
+      drivers. **Crypto sits above it**, so drivers only ever see ciphertext. A cloud
+      driver now = implement the same surface over HTTP + `useDriver()`; the flags below
+      (CAS/contentHash/nativeWatch) are the still-unbuilt capability-negotiation layer.
+    - **Original proposed extension point** (by analogy to `importers.register`):
+      `app.storage.register({ id, label, auth, read→{bytes,rev,mtime,size,contentHash?},
+      write(path,bytes,{ifMatch:rev})→rev, delta(cursor)→{changes,cursor}, watch?(cb),
+      capabilities:{conditionalWrite,contentHash,nativeWatch,sharing} })`. Core reads the
+      **capability flags** and degrades: no CAS → lock-file/beacon; no `contentHash` → host
+      computes it; no `nativeWatch` → poll `delta` (longpoll/delta/PROPFIND all normalize
+      here).
+    - **Two caveats storage-plugins have that codecs don't:** (1) the postMessage boundary
+      vs **gigabytes** — must pass bytes by reference / transferable / streaming (importers
+      already pass `File` by handle to avoid copying into the sandbox), and it's open
+      whether a sandboxed iframe is even the right execution model for a high-throughput
+      network driver; (2) a storage driver makes its own `fetch()` and custodies **OAuth
+      tokens** — network + credentials → a **higher trust tier than a codec** (ciphertext
+      guards confidentiality, but a bad driver can still refuse/corrupt/DoS sync and sees
+      metadata). WebDAV extra: no native change-feed (→ poll) and **CORS** (self-hosted
+      servers must send headers; many don't by default).
+  - **Suggested build order:** (1) mergeable op-log foundation — stable op ids +
+    common-ancestor + per-class merge rules; (2) folder transport (FSA seam in
+    `project-store.js`) — first driver behind the new `app.storage` contract; (3) presence
+    beacon (cheap, standalone — the "Jane's here, co-author?" prompt on Trystero, no
+    convergence needed yet) + its confidentiality (encrypt the beacon; the beacon is where
+    metadata first leaks); (4) cloud-API drivers as plugins (Graph / Dropbox / WebDAV) for
+    tablet/mobile reach; (5) live transport (Trystero + reliable channel + TURN), which
+    reuses the presence room as its handshake, the invite link as its key distribution, and
+    the index/gap-fill for base-data sharing.
+
+- [~] **Collaborator identity, authorship & memos (#148).** Who did what — the human
+      layer on top of the merge kernel (#143). Driven by qualitative practice: **inter-
+      coder reliability** (Cohen's κ / Krippendorff's α, coder-vs-coder comparison, bias/
+      drift) is a first-class qual method and is *impossible without per-coder attribution*
+      — the Dedoose-parity gap. Decided with the user (chat rejected as out-of-scope side-
+      conversation; comments reframed as **memos/annotations**, a named qual technique —
+      grounded-theory memoing + reflexivity + audit trail — anchored, persistent, part of
+      the record, and useful SOLO not just in collab). Identity is **self-asserted** (no
+      auth, serverless) → attribution is advisory, not forensic; κ needs consistent labels,
+      not verified ones. Ties: [[collab-merge-kernel]] op identity, [[first-class-plugin-data]]
+      (a memo is exactly the first-class attachment that's currently second-class), the
+      "plugins add actions to the log" item, [[qualitative-first-class]].
+  - [x] **1. User identity profile (name / initials / colour). DONE.** Per-USER, per-device
+    (localStorage) — travels across all their projects, NOT per-project. A stable minted
+    `authorId` so attribution survives a display-name change; initials auto-derived from the
+    name but editable; a CB-safe colour for avatars. Small editor dialog. Distinct from the
+    project-level `collabId`/`collabSecret`. **BUILDING NOW.**
+  - [x] **2. Authorship stamp on codes / ops. DONE.** Snapshot `{authorId, initials, name, colour}`
+    into each code-application / log op the user creates (snapshot, so it survives a later
+    rename and other peers see it without the author's live profile). The prerequisite for
+    step 3.
+    - [x] **2a. Core log ops DONE** — stamped in `data-store.js#ensureIds` (new ops only,
+      never retroactive); round-trips export/restore; verified in-browser.
+    - [x] **2b. CAQDAS code-application authorship DONE** — `app.identity` broker RPC +
+      `app.identity` namespace in plugin-host; the CAQDAS mount fetches `me` and stamps
+      each code + each applied segment (text/region/time/track) via `authored()`; import-
+      resolved codings + the QDPX parser are left unstamped. Author survives the add-wins
+      merge (normalize spreads). End-to-end coding attribution to confirm by reading the
+      persisted blob after coding (CAQDAS is cross-origin, can't be driven from the page).
+  - **Authorship DISPLAY (tabled — user pondering the shape).** Surface who-coded-what
+    in the CAQDAS UI (colour + initials chip on segments / retrieve list). User's steer:
+    a plain "stamp every edit visibly" gets cluttered → lean toward **showing the chip only
+    when the author ≠ the current viewer** (your own edits stay clean). Data already stamps
+    everything (step 2); this is display-only. Revisit after the shape settles.
+  - [x] **PREREQUISITE for 3 + 4 — segment identity & author-aware merge. DONE.** Found while
+    verifying step 2b: `mergeState` keys segments by CONTENT
+    (`doc|codeId|start|end|tStart|tEnd|region`), with **no author** in the key. Two
+    consequences: (a) a content key is not a stable anchor for a memo (edit the span → key
+    changes); (b) worse — **two coders applying the SAME code to the SAME passage collapse to
+    ONE segment** under add-wins, silently discarding coder B's application. That *defeats
+    inter-coder reliability* (κ/α need to see BOTH coded it). Fix: give each segment a stable
+    `id` (fold into the `authored()` helper: `{ id: o.id || uid(), ...o, author }`), and make
+    `segKey` use the id when present (content-key fallback for legacy/imported segments) — so
+    per-coder codings stay DISTINCT and memos get a durable anchor. Changes merge semantics
+    (more segments survive a merge), so confirm the methodology intent before shipping.
+  - [x] **3. Memos / annotations (anchored comments). DONE (3a data+merge, 3b UI).** Word/Docs-style margin comments,
+    but anchored + persistent + part of the analytic record. **Decisions (with user):**
+    (i) memos REPLACE the old inline `memo` string going forward (legacy memo shown as a
+    read-only first note; no lossy migration); (ii) **flat / chronological, author-stamped**
+    — not nested threads — so a faculty reply in the teaching/office-hours case can't get
+    buried under a fold and all students see it (record leaves room for an optional
+    `replyTo` later); (iii) memos are their OWN add-wins collection anchored by id, NOT
+    nested in the segment — required so faculty + student can both annotate the same coding
+    without one clobbering the other. Anchor: coded segment / code first (segments now have
+    stable ids); generalise to cells/variables/outputs later.
+    - [x] **3a. Data model + merge DONE** — `state.memos = [{id, anchorKind, anchorId,
+      author, text, createdAt}]`; add-wins by memo id in `mergeState` + normalize; +1 test
+      (both people's annotations on one coding survive). 113 pass.
+    - [x] **3b. Thread UI DONE** — `renderThread()` replaces the inline memo editors on
+      the segment popup + code details: chronological author-stamped notes (colour+initials
+      chip), add (button / Ctrl+Cmd-Enter), delete your own; legacy memo shown read-only;
+      has-note markers updated; notes re-anchor when same-code segments merge. Verified via
+      the persisted blob (3 KC-stamped, anchored memos; deletion persisted). Overflow fixed.
+      **NOTE:** notes (like ALL CAQDAS actions) persist via the workspace blob, so they are
+      NOT covered by core Edit▸Undo — the pre-existing "plugins add actions to the log" gap.
+      **→ #152 fixes this** and generalises memos beyond CAQDAS (anchor becomes any op-log
+      target, so a memo can sit on a dataset, a variable, or an analysis run).
+  - **4. Inter-coder reliability analysis (κ / α) — MOVED.** This is an *analysis*
+    feature, not a collab one, so it lives in **"## More analyses"** below (the stats
+    backlog). The collab foundation it needs — per-coder attribution + distinct per-coder
+    segments — is DONE here (steps 2–3); the κ/α computation is the analysis-side work.
+  - [x] **5. Presence chips in the top bar. DONE — two-window verified during #156.** Live editors shown by initials/colour. Cheap
+    add-on, but coupled to **live P2P** (`core/presence.js` broadcasts peers) — lands WITH
+    the live co-authoring chunk, not before. The self-chip built in step 1 is its seed.
+    - **DESIGN (user, 2026) — collaboration is TRANSPORT-AGNOSTIC.** Do NOT assume OPFS
+      projects are non-collaborative: a user can export a bundle → flash drive → a
+      collaborator imports it to OPFS, and the two copies should meet in the SAME room.
+      So **every project carries a collab identity** (collabId/secret), minted on first
+      save and **carried in the export bundle** (+ restored on import), independent of
+      folder/live/cloud. `collabReady` becomes true for all saved projects. (Supersedes
+      5a's folder-only minting.) TODO: mint in `#snapshot` for any project; thread
+      collabId/secret through project-bundle export + openBundle import.
+    - **DESIGN (user) — presence gating = a global setting, not a per-session button.**
+      A profile setting (like name/initials) **"auto-check for live collaborators" on/off**:
+      OFF → today's manual "Go live" button stays; ON → CrossTab auto-joins the room on
+      project open (online + not air-gap) and the user only clicks the final **"start live
+      co-authoring with X"** offer. Presence = automatic awareness; the click consents to
+      DATA streaming.
+    - [x] **5a. Collab identity minted+persisted for folder projects** (roomFor now works)
+      — to be GENERALISED to all projects per the transport-agnostic design above.
+    - [x] **5b. Go-live toggle + peer chips — DONE (two-window verified during #156)** — `core/live-presence.js` (LiveSession +
+      PresenceRoom) + header UI; explicit opt-in; identity-beacon only. Solo-verified
+      (hidden for OPFS, wired, no errors); needs a two-window test on a shared folder to
+      confirm peers actually see each other's chips. This is also the first live-P2P
+      session wired — the handshake the future **live data co-authoring** layer reuses.
+  - [x] **6. Live DATA co-authoring — DONE. The two-window test happened in #156** and
+    earned its keep: it found three co-authoring bugs (`330a3b8`) plus a gap-fill bug
+    (`6f66025`), all fixed. #156's join-by-link path elevates a recipient straight to
+    co-authoring, which is this layer end to end. Body below is the original plan.** — the layer the "start co-authoring" prompt launches.**
+    Presence (step 5) is *awareness only*. The convergence **ENGINE is done + proven
+    headlessly** — `core/live-protocol.js` `LiveDoc` (canonical-peerId ordering → byte
+    convergence) + `attachLiveDoc`, with tests covering disjoint recodes, order-independence,
+    late-join, a genuine conflict resolving, AND CAQDAS codebooks converging live. `LiveSession`
+    now exposes `.selfId` (done) for the wiring. What remains is the **app integration**, and
+    studying it surfaced **three concrete prerequisites** (none trivial, so NOT built blind):
+    - [x] **6a. Live-apply materialisation. DONE.** Applying a peer's merged manifest live has NO
+      disk round-trip (unlike folder `#applyMergedManifest`, which reloads from the folder
+      after the merge wrote it). Need a path that rebuilds datasets from the merged manifest
+      **reusing the local Parquet** (matched by source id) + merged transforms + merged
+      workspace blobs — i.e. restoreState-from-manifest without re-fetching bytes we already
+      have. Feasible for the shared-base case (both peers hold the same sources).
+    - [x] **6b. Plugin-merger assembly DONE — (ALSO fixes folder-sync coding merge).** The app never
+      calls `buildMergers` with real plugin modules — `#folderSave` passes `{core}` only — so
+      plugin/blob (CAQDAS coding) merge doesn't happen in the REAL app today, folder OR live;
+      it surfaces as conflict/LWW. Need host access to builtin plugin mergers (import
+      builtin `mergeState` host-side — builtins are trusted) or the sandbox-bridge for
+      3rd-party. **High value: unblocks coder-merge for BOTH transports**, and it's the
+      office-hours driver. Ties [[plugin-verb-declaration]].
+    - [x] **6c. Base-data byte gap-fill. DONE (wired).** Cold join / a peer adding a NEW dataset → the
+      merged manifest references Parquet the other lacks → transfer over the channel
+      (content-hash index → "send this file"). `core/gap-fill.js` (`SourceExchange`) exists
+      but isn't wired. Required for the flash-drive/OPFS-import cold-start case; shared-base
+      editing (recodes/coding) needs no transfer.
+    - Then wire the **"start co-authoring with X" offer** (auto-offer on peer-appear) →
+      `attachLiveDoc` on the presence session → local change publishes, merged applies (6a),
+      conflicts → `showConflictDialog`. **DONE + wired.**
+    - **LANDED ON MAIN 2026-08-01** pending wider device/lab testing. Two-window
+      verification found + fixed: self-echo presence, the co-author-button "bounce"
+      (emitProject→PROJECT_CHANGED→stopLive recursion), phantom conflicts on sequential
+      edits + inverted conflict labels, MQTT broker spam, conflict-dialog auto-dismiss on
+      remote resolve, **gap-fill chunk bytes mangled by Trystero's JSON action encoding
+      (base64 fix)**, and **dataset deletion not propagating (add-wins → proper three-way
+      delete)**.
+    - **Known edges still open** (not blockers): (a) delete-vs-concurrent-edit keeps the
+      data with no user prompt (no silent loss, but no choice); (b) deleting the *last*
+      remaining dataset doesn't propagate live (empty-project apply path is guarded).
+  - **~~In-project chat~~ — DEFERRED / maybe never.** Disproportionate scope
+    (persistence, history, retention, notifications) for uncertain value when teams already
+    have Slack/Teams; and it's the *unanchored* opposite of a memo. If ever, rescope to
+    ephemeral live-session-only messages, decided on its own. (Talked through with the user.)
+
+- [ ] **Transcript-linked qualitative coding (#139 follow-on).** Broken out from the
+      multimedia item above (whose media-coding core is done). Still wanted — it's the
+      dominant real qual practice. Two parts + a deferred phase:
+  - [ ] **Transcript import (Phase 1).** Import existing time-aligned transcripts —
+        **VTT / SRT / timestamped rows** — as a first-class document that references the
+        media asset. ~80% of the value cheaply; no ML needed. New importer parsers
+        (`.vtt`/`.srt` → cues with `{tStart, tEnd, text}`), attach to a media row.
+  - [ ] **Transcript-linked coding surface.** A time-aligned transcript pane beside the
+        `<audio>`/`<video>`: code the *text* (reuse the char-span selector), and clicking
+        a line **seeks the playhead** (NVivo / oTranscribe style). The playhead/seek
+        machinery already exists (`builtin-caqdas`); this adds the transcript document
+        model + the line↔time binding.
+  - [ ] **Whisper auto-transcription (Phase 2 — DEFERRED, feasibility confirmed).** In-
+        browser transcription via transformers.js (WebGPU + WASM fallback) or whisper.cpp
+        WASM; models cache offline like the R packages. A real epic (30–180 MB model
+        download, worker architecture) — the deferral is scope/effort, not feasibility.
+        See the Whisper feasibility notes under #139 above.
+
+- [~] **File import — as a plugin extension point. THE FILE HALF IS NOW THE CODEC
+      INTERFACE** (#98/#130; verified 2026-08-21). `builtin-csv-codec` says it plainly:
+      it "replaces the separate builtin-csv-import and builtin-csv-export one-shot plugins
+      with a single read+write codec". Neither plugin named in the sub-items below exists
+      any more, and no plugin calls `app.importers` for a file format. What `importers`
+      still carries is the **`web`** source kind — FRED and Wikipedia declare one — so the
+      extension point is alive for fetch-your-own-bytes importers and superseded for files.
+      Also stale below: "delete the temporary core/demo-data.js seed" — demo data became a
+      launcher choice rather than a placeholder. Original:
+      **File import — as a plugin extension point.** Importers register via the
+      public `app.importers.register({ label, extensions, parse })`; the engine
+      (`core/import-service.js`) owns the File ▸ Import menu, the picker, and the
+      commit (`DataStore.loadDataset`), and hands the chosen file's bytes to the
+      plugin to parse. Dual return contract: `{variables, columns}` (JS-parsed)
+      or `{variables, parquet}` (R-parsed/large). Once the format coverage below
+      is enough, delete the temporary `core/demo-data.js` seed.
+  - [x] **CSV importer plugin** (`plugins/builtin-csv-import/`). Pure-JS parser
+        (quotes, embedded commas/newlines, `\r\n`, conservative numeric
+        inference) → `{variables, columns}`. Verified in Chrome end to end:
+        menu → picker → sandboxed parse → DuckDB; analyses run on the result.
+  - [x] **`haven` importer plugin (covers GSS)** (`plugins/builtin-haven-import/`).
+        Reads SPSS `.sav`/`.por`, Stata `.dta`, SAS `.sas7bdat`/`.xpt` via R
+        `haven`, extracts variable labels + value labels + user-missing +
+        measurement level as JSON, writes label-stripped data to Parquet, and
+        returns `{variables, parquet}`. New `app.webr.writeFile`/`readFile` stage
+        the bytes into / out of WebR's FS (the engine-side work). `haven` installs
+        on demand (~5.5s first time). SPSS read uses `user_na = TRUE` so distinct
+        GSS missing codes (DK/Refused/NAP) survive as sentinels + metadata rather
+        than collapsing to NA. **Verified in Chrome** with a haven-written `.sav`
+        round-trip: value labels render in Frequencies, `-99` recodes to Missing.
+    - [x] **Real GSS files — VERIFIED.** Real GSS `.sav` (including large) imported
+          end to end, not just the synthetic round-trip. *Residuals — BOTH FIXED 2026-08-04:*
+          **`.sas7bcat`** — SAS keeps value labels out of the data file (a format NAME
+          per variable, labels in a companion catalog), so a SAS import gave bare codes
+          where SAS itself shows labels. Added `ct_parse_catalog` to the ReadStat WASM
+          shim (`readstat_parse_sas7bcat`, value-label handler ONLY — a catalog has no
+          variables or rows, and wiring the others would emit metadata that overwrote the
+          dataset's), rebuilt `vendor/readstat`, and joined the two by format name.
+          ReadStat appends width/decimals to the format (`AGEGRP` → `AGEGRP8.2`) and the
+          catalog files sets under the bare name, so `sasFormatKey` strips the suffix in
+          one anchored pass — two passes got `$REGION12.` wrong, since the dot sits
+          between the width and the decimals. The importer offers the catalog only when
+          it would help (formats present, labels absent), reports what it attached, and
+          treats a catalog that fails to parse as non-fatal. New host-owned
+          `app.ui.pickFile` (a sandbox cannot open a picker). 8 tests.
+          **`na_range`** — see the missing-ranges entry; range-style missing is captured
+          and honoured at injection.
+    - [x] **Large-file ceilings (the haven-in-WebR path) — RESOLVED via the ReadStat
+          codec.** haven-in-WebR kept OOMing on large files, so the streaming
+          **ReadStat codec** (`plugins/builtin-readstat-codec/` — the "compile ReadStat
+          to wasm + stream rows → Parquet/DuckDB" lift noted below) became the
+          large-file path; real + large GSS now import through it, while haven stays
+          for the labelled small/extract case. Original per-limit analysis kept for
+          context. Two distinct limits, both hit by the full GSS 1972–2024 cumulative
+          (`.sav` 3.8 GB, `.sas7bdat` 2.4 GB, `.dta` 597 MB):
+      - **WebR `FS.writeFile` ~128 MB (the *first* wall) — LIFTED via WORKERFS.**
+        `FS.writeFile` throws "Invalid array length" above ~128–160 MB (a channel
+        limit). The haven importer no longer uses it: it stages the upload by
+        **mounting the `File` via WORKERFS** (`app.webr.mountFile`), which is lazy
+        and copy-free, so there's no staging size limit. **Verified:** a 181 MB
+        `.sav` mounts and `haven::read_sav` reads it (700k × 30). The importer
+        contract now hands plugins the `File` (by reference, no sandbox copy)
+        rather than an `ArrayBuffer`. (A failed import also no longer clobbers the
+        loaded dataset — that was a separate bug, fixed.)
+      - **`readFile` ~128 MB on the way *back out* (the new edge).** Pulling the
+        Parquet snapshot R writes back to JS still uses the channel, so a returned
+        Parquet > ~128 MB hits the same limit. Mitigate with **chunked readFile**
+        (R splits the file, JS concatenates — exactly the trick used to test the
+        181 MB case). Not yet wired into the importer; modest Parquet outputs are
+        fine today.
+      - **WebR ~4 GB wasm address space (the *second* wall) — now the live limit,
+        and it fails gracefully.** Confirmed on the real 597 MB GSS `.dta`: with
+        WORKERFS staging it gets *past* the FS wall and into `haven::read_dta`,
+        then R exhausts the heap ("cannot allocate vector of size …"). Verified
+        this errors **cleanly** — the dataset is preserved (not clobbered), WebR
+        recovers (subsequent runs + `lm()` still work), and the importer now shows
+        a plain-language out-of-memory message instead of R's cryptic one.
+        Confirmed empirically:
+        `R.version$platform` = `wasm32-unknown-emscripten`, `.Machine$sizeof.pointer`
+        = 4 — WebR is a **wasm32** build, so a single linear memory caps at ~4 GiB.
+        Even past the FS limit, haven materialises the whole frame in R (~3.9 GB of
+        doubles for the cumulative) and OOMs before our Parquet bridge.
+        *Note on wasm64:* the WebAssembly **Memory64** proposal lifts the 4 GiB cap
+        and Chrome ships it, but WebR isn't compiled for it (would require rebuilding
+        the whole package repo + Fortran toolchain for Memory64, costs perf, and
+        regresses Safari/iPad) — and it wouldn't even help here, since the ~128 MB
+        FS channel limit and JS ArrayBuffer limits sit earlier in the path. So don't
+        wait on wasm64. The real lift: compile **ReadStat** (the C lib haven wraps)
+        to wasm standalone and **stream** rows → Parquet/DuckDB without R holding the
+        frame — sidesteps the 4 GiB ceiling entirely.
+      - **Variable-subset at import — BUILT, and it's the practical answer to the
+        4 GB wall.** (Earlier note said this was "hard with haven"; that was wrong.)
+        haven's `n_max = 0` reads the variable catalog essentially free, and
+        `col_select` reads only chosen columns — so only the selected subset is
+        materialised, keeping memory bounded by the selection, not the file. New
+        **"SPSS / Stata / SAS — choose variables…"** importer + a searchable
+        `app.ui.selectFromList` picker. **Verified:** catalog read instant,
+        `col_select` of 3 of 1000 cols ~0.2 s (`.dta` seeks, doesn't parse all),
+        end-to-end pick-and-import correct with labels intact. So the full GSS is
+        now usable in-browser via choose-variables (only the columns you pick load);
+        whole-file import of the cumulative remains OOM-bound and needs the ReadStat
+        streaming lift above. Note: `.sav` is compressed so `col_select` there must
+        stream (slower than `.dta`), but still memory-safe.
+      - Typical GSS *extracts* (well under 128 MB) import whole fine today.
+  - Excel import broken out to its own top-level TODO below (in progress).
+  - *Note:* the Parquet return path (`DataStore.loadDataset` +
+    `DuckDBManager.replaceTableFromParquet`) is built and unit-exercised by the
+    contract but not yet driven end to end until the `haven` importer lands.
+
+- [~] **Import data from a web page (URL scrape).** Point the app at a URL; it
+      fetches and parses tabular data (e.g. HTML `<table>`s) into a new dataset
+      for analysis, with an option to save the parsed data locally as CSV (or
+      another suitable format) for archival.
+  - [x] **Wikipedia table importer built** — `plugins/builtin-wikipedia/`. The
+        first scrape-style importer and a concrete slice of this item. Paste an
+        article URL or title → fetches via Wikipedia's **CORS-open REST API**
+        (`/api/rest_v1/page/html/<Title>`), so **no proxy needed**; parses with
+        native `DOMParser` (no R, no Pyodide). Flattens `colspan`/`rowspan`,
+        strips Parsoid-inlined `<style>`/`<link>` (these leak into `textContent`
+        — caught a `font-size:80%` becoming a height of `80`), `<br>`→space for
+        multi-line headers, and infers numeric columns by leading-number match
+        (`"168.2 cm (5 ft 6 in)"`→168.2, `"1,234"`→1234). Multi-table pages show
+        a picker with `R×C` + header previews. Verified live end-to-end on the
+        height (140×8) and electricity (216×4) tables.
+    - *Known best-effort limits:* a messy mixed column like `"18–69 (N= m:…)"`
+      gets classed numeric (grabs the `18`); year ranges collapse to the first
+      year. The Variable-View retype (immutable transform) is the escape hatch.
+      Comma-decimal locales would misparse (en.wikipedia assumes `.` decimals).
+    - *Still open for the general case:* arbitrary non-Wikipedia pages still hit
+      the proxy-vs-paste fetch decision below, and JS-rendered SPAs won't expose
+      tables to a plain GET. The Wikipedia path sidesteps both via its API.
+  - **Approach is an open decision, not a given.** Two independent sub-decisions:
+    - *How to fetch (the real blocker):* the browser can't GET arbitrary
+      cross-origin URLs (CORS) — and this is true even inside a WASM runtime,
+      since Pyodide/WebR fetch through the browser too. So: a small serverless
+      proxy (e.g. Cloudflare Worker/Function) that does the cross-origin GET,
+      **or** a no-server fallback where the user pastes page HTML / uploads a
+      saved page. This choice touches the "purely static, no backend" positioning.
+      (Note: the FRED work added the **`web` importer source + `app.web.get(url)`**
+      primitives and proved a public CORS proxy works through our COEP isolation —
+      a scrape plugin can reuse both; the proxy-vs-paste decision still stands.)
+    - *How to parse:* Python + BeautifulSoup IS viable client-side via **Pyodide**
+      (CPython-in-WASM; bs4 is pure Python, installable with `micropip`) — but
+      that pulls in a *second* large WASM runtime on top of WebR. Lighter
+      alternatives that add zero new runtime: the browser's native `DOMParser`
+      table extraction, or R's `rvest`/`xml2` inside the WebR we already load.
+      (Server-side bs4 is also an option if we add the proxy above.) Choose
+      deliberately — bs4/Pyodide is the heaviest of these, not the default.
+  - Reuses the same ingest path as file import (`DataStore.setDataset`); the
+    "save as CSV" archival option overlaps with CSV export work.
+
+- [~] **Export data (exporter extension point). LARGELY SUPERSEDED, same as import**
+      (verified 2026-08-21). Writing is a codec responsibility now — CSV, Parquet, NDJSON
+      and ReadStat (`.sav`/`.dta`) all round-trip through `codecs`, and File ▸ Export data…
+      is the one unified picker (#113). `plugins/builtin-csv-export/` named below no longer
+      exists. Document-shaped exporters remain their own plugins (`builtin-docx-export`,
+      `builtin-html-export`, `builtin-rdata-export`, `builtin-syntax-export`). Of the
+      deferred decisions below, only the **labels-vs-codes toggle** is genuinely still open.
+      Original:
+      **Export data (exporter extension point).** Symmetric with import: a plugin
+      registers `app.exporters.register({ label, extensions, export })`, pulls the
+      current (transformed) data via `app.data`, and returns bytes; the engine owns
+      the File ▸ Export menu and the download. Exports the derived `dataset` VIEW,
+      so transforms/recodes are baked in while sources stay immutable.
+  - CSV export plugin (`plugins/builtin-csv-export/`) — RFC-4180 quoting; raw
+    values (codes, not labels) for round-tripping; missing → empty cell.
+  - *Decisions deferred (format coverage):* a labels-vs-codes toggle; SPSS `.sav` /
+    Stata `.dta` write (haven write-side, heavier); Parquet export
+    (`DuckDBManager.queryToParquet` exists — nearly free). CSV covers the common
+    need first.
+
+- [~] **In-app plugin creator / editor — BUILT** (`core/plugin-creator.js`;
+      **Edit ▸ Create plugin…**, and **"+ Create new…"** in the plugin manager).
+      A scaffolded editor so non-programmers build the plugin they need without a
+      toolchain — pick a template, fill in the analysis, **Save & load** hands the
+      source to the same sandboxed loader (`PluginManager.saveAuthored` →
+      `loader.loadSource`, untrusted). Authored plugins **persist in localStorage**
+      (`kind:'authored'`, source stored) so they survive a restart and re-open in
+      the editor (✎ in the manager) to edit in place; removable like any user plugin.
+  - **Declarative plugin API (v2) — BUILT (full rewrite; supersedes the `activate`/
+    `run`-string notes above).** A plugin is now **manifest (data) + named
+    functions**; the host does all wiring and there is **no `activate`** and **no
+    registration API** at all. This was the big redesign agreed in design review;
+    done in 4 phases (commits) with every built-in migrated. Shape:
+    - **Menus:** `manifest.menu = [{ label, run, order?, inputs? }]`; the host files
+      each under `category` (placement host-owned — a plugin can't choose), gathers
+      the item's declared `inputs` with host dialogs, **binds them into R by name**
+      (single var → vector, multi → data.frame, scalar → value), then `invoke`s the
+      named `run(app, inputs)`. So the author writes no menu/picker code and the R
+      is **static** (no JS interpolation).
+    - **Inputs** are general + declarative: `kind: 'variables'|'number'|'choice'|
+      'text'`, with `multiple`/`types`/`optional`/`unique` (unique greys out a var
+      chosen by an earlier round — scatter X≠Y). Imperative `app.ui.selectVariables`
+      survives as a hidden escape hatch for dynamic flows.
+    - **Results carry structured data:** `appendTable(data)` (a `{columns, rows,
+      caption?, rowHeaders?}` spec or a WebR data.frame result) is **rendered
+      host-side via DOM** — plugins ship **no table HTML**. `appendText` is
+      markdown (escaped); `appendPlot` is SVG (the lone sanitised surface). The big
+      injection surface is gone.
+    - **Importers/exporters declarative too:** `manifest.imports/exports/
+      outputExports` with named functions that **return** the dataset/bytes; the
+      host owns the File menus, picker, commit, download. The whole `*.register`
+      API is gone from the plugin surface.
+    - **Output attribution:** every output block carries a host-stamped
+      `name · origin` line (origin = built-in / from-URL / from-file / created-here);
+      the plugin can't forge the origin (anti-impersonation).
+    - **Plugin `app` surface shrank** to runtime verbs only (data reads + create,
+      webr, results, ui, web) — no menus/importers/exporters/events/transform.
+    - **Verified in Chrome (per phase):** all 8 analyses, all 8 importers/exporters,
+      and a template-authored plugin all run end-to-end on the new API; output shows
+      host attribution; an authored plugin reads "created here".
+  - **Templates** (now declarative): **Blank**, **One-variable analysis**,
+    **Two-group comparison** (seeds the *Comparison* family), **Plot (histogram)** —
+    each a manifest (menu + inputs) + a `run(app, inputs)` whose R references the
+    host-bound input names. Generated R uses string concatenation so the scaffold
+    carries no backticks/`${}`.
+  - **Simple mode (form → no JavaScript) — BUILT.** The creator opens in **Simple**
+    mode by default: a form (name, category dropdown, an inputs builder with
+    friendly presets — "Numeric variable(s)", "One categorical variable", "A
+    number", … — Table/Plot output, and an R-code box). On save it **generates** the
+    declarative plugin (the user's R embedded via `JSON.stringify`; for a plot it's
+    wrapped in an svglite device so the author writes only the plot call) and loads
+    it — so an R-literate, JS-shy social scientist never sees JavaScript. A live
+    hint shows which names are bound in R. A **Code** toggle reveals the full
+    generated source for power users / editing (one-way: editing leaves Simple
+    mode). **Verified in Chrome:** a form-built Table plugin (means by variable) and
+    a Plot plugin (histogram) each generate, load, file under their category, and
+    run end-to-end.
+  - **Editor surface (Code mode):** a textarea with a **line-number gutter** +
+    Tab-inserts-spaces — "more than Notepad". Save persists *before* loading (work
+    is never lost); a load error stays in the dialog with the message to fix.
+  - **Verified end to end in Chrome:** all 4 templates create + load with correct
+    categories; the one-variable plugin ran the full chain (menu → variable picker
+    → R → table: age N=30, Mean=41, SD=10.888); authored plugins **survive a
+    reload** (re-loaded from stored source), **edit-in-place** re-loads + persists,
+    and **remove** clears them from the list + storage.
+  - *Original framing + still-to-do below.*
+  - **Scaffold pre-wires the boilerplate:** a starting template with the **input
+    selector** (variable picking via `app.ui.selectVariables`) and the **output
+    channels** (`results.appendText`/`appendTable`/`appendPlot`) already typed in,
+    plus a filled-in manifest (api version, menu path, declared `rPackages`). The
+    author writes the bit in the middle. Offer a few template shapes (one-variable
+    analysis, two-picker analysis, plot) since those cover most needs.
+  - **Editor surface:** syntax highlighting to catch typos — "nothing crazy."
+    Decision point: a tiny self-rolled highlighter vs. vendoring **CodeMirror**
+    (the obvious "more than Notepad," but a vendored dep — fits the existing
+    "vendor + pin" hardening posture). Lean minimal for v1.
+  - **Where the authored plugin lives + runs:** it must persist (OPFS, alongside
+    projects/blocks) and load through the existing **sandboxed-iframe loader** via
+    blob/`data:`-URL module import — so it ties directly to the open questions on
+    **blob-module import inside the opaque-origin iframe** (Milestone 3) and
+    **multi-file plugins / import-map**. The trust boundary is unchanged: authored
+    code runs in the same sandbox as any other plugin, and its output still goes
+    through the HTML sanitiser (so that hardening item covers it too).
+  - *Nice follow-on:* a "fork this analysis" button that opens an existing builtin
+    plugin's source in the editor as a starting point.
+
+### More analyses (each is just another plugin)
+
+- [ ] **Baked-chart review — the lesson from #140 (2026-08-05).** Originally 21
+      `appendPlot` call sites across 16 plugins handed the host a FINISHED SVG, so they
+      got no live controls, no palette, no re-editability. Reviewed to find out why.
+      **Now 11 sites across 9 plugins, and every one of them is R-drawn** — box,
+      wordcloud (×2), steps, forest, the three diagnostic scatters, the cost-effectiveness
+      plane and both sensitivity figures have been migrated, and builtin-plots,
+      builtin-survival, builtin-meta, builtin-regression and builtin-assumptions each
+      dropped `svglite`. The JS-drawn half of this review is CLOSED: the only figure a
+      plugin still draws itself is the decision tree, deliberately (see below).
+
+      **The dividing line is not difficulty — it is who holds the numbers.**
+
+      - **10 are R-produced** (svglite): impulse-response, conditional volatility, CA
+        biplot, MDS map, NMDS, Lorenz curve, network graph, choropleth, STL
+        decomposition, ARIMA forecast. These share a property: the coordinates do not
+        exist until R has fitted something. But that is a DATA-EXTRACTION choice, not a
+        barrier — `survfit` already yields time/surv/lower/upper vectors; we ask R for a
+        picture instead of those numbers.
+      - **1 is produced in JavaScript by the plugin itself**: builtin-decisions' decision
+        tree, which is staying that way on purpose — see the end of this entry. The other
+        two JS-drawn figures (the cost-effectiveness plane, the sensitivity pair) were the
+        tell this line was written about — the plugin already held every number and was
+        hand-drawing SVG anyway — and both are migrated.
+
+      **Rule to apply going forward: ask R for NUMBERS, not pictures.** A plugin should
+      return fitted geometry and let the host draw it. Baking stays legitimate where the
+      geometry is the hard part and is not ours — force-directed network layouts, real
+      map projections, biplot arrow fields.
+
+      Ranked follow-ups, each a self-contained kind — **all four now DONE**:
+      1. ~~**`box`**~~ — done (04e5a7e); builtin-plots needs no R at all now.
+      2. ~~**`wordcloud`**~~ — done (7c24206); the two hand-rolled clouds became one
+         kind, and it established that **some colours are data, not style**.
+      3. ~~**`steps`**~~ — done (f841b1c); Kaplan–Meier, reusable for any step function
+         + CI band. Validated against local R 4.6.0.
+      4. ~~**`forest`**~~ — done (f841b1c); effect + CI + weight, summary diamond.
+
+      What is left is the genuinely hard residue, and it is the right residue: the 16
+      remaining sites are mostly cases where **the geometry is the hard part and is not
+      ours** — force-directed network layout, map projections, biplot arrow fields,
+      ordination configurations. Each of those needs the numbers extracting from R first,
+      which is a per-plugin data question rather than a chart-layer one.
+
+      5. ~~**the three diagnostic scatters**~~ — done (2026-09-27); regression's
+         *Residuals vs Fitted* and *Normal Q–Q*, and builtin-assumptions' per-variable
+         *Q–Q plot*, are chart models now. They needed no new kind: `scatter` gained a
+         `reference` field, which is the guide line a plot's MEANING requires (zero
+         residual, the normal line) as opposed to `trend`, which reports a finding — so
+         a reference is grey, dashed and prints no equation, because `Y = 0 + 1(X)`
+         beside a Q–Q plot is a tautology. Both plugins' `rPackages` are now empty,
+         which matters beyond tidiness: the offline cache pre-fetches the R packages of
+         every enabled plugin, so a stale entry is a download nobody uses.
+
+         Two things the migration turned up, neither blocking:
+         - The assumptions plugin returns every variable's Q–Q points in ONE
+           concatenated vector plus a 1-based index, because per-variable results are
+           ragged and a ragged list does not survive the flat marshalling. Any future
+           plugin returning per-group geometry hits the same wall.
+         - A view value has THREE possible sources, and they are not interchangeable:
+           `SHARED_DEFAULTS` → the kind's `baseView` → the saved `model.view`
+           (`viewFromSpec`), with a control descriptor's own `default` consulted only by
+           `controlValue`, and only for a key none of those three set. So pie's
+           `valueLabels: true` and forest's `gridlines: false` are not bugs even though
+           they contradict the shared descriptors — that is a kind overriding a shared
+           default, which is the mechanism working. (First read of this looked like three
+           bugs; two of them were the design.) Scatter's `trendLine` was the real one: a
+           kind-local descriptor saying `false` six lines from the `baseView` that sets
+           it `true`. Made to agree — dead either way, but not a trap any more.
+
+         **The defect this shipped with, and how it got past a green suite
+         (2026-09-28).** All three charts passed `xTitle`/`yTitle` at the top of the
+         model. The scatter kind reads `axes.x.title`. So every field was present and
+         correct and not one axis was labelled — a silent loss against the old baked
+         plots, which got their axis names from `qqnorm` for free. The test asserted
+         `model.xTitle === 'Theoretical quantiles'`, which was true, so it passed. **A
+         chart test that never renders the chart is testing the caller's spelling.**
+         Every axis assertion in the chart tests now draws the SVG and looks for the
+         text.
+
+      6. ~~**builtin-decisions' figures**~~ — done (2026-09-28). The *cost-effectiveness
+         plane* and both *sensitivity* figures are chart models. This closes the JS-drawn
+         half of the review; what is left is the R-drawn residue below.
+
+         The plane needed **point labels** on `scatter`: a CE plane of anonymous dots is
+         useless, and no kind could name a point. They are identities rather than
+         decoration, so they default to on when the model supplies them and a scatter of
+         ordinary observations neither draws them nor offers the control. Status became a
+         **group** rather than the hard-coded green/red it was — a legend the reader had to
+         infer, in the two colours a colourblind reader cannot separate.
+
+         The sweep needed a **connected scatter** (`model.line`: 61 samples of one
+         continuous function read as a cloud otherwise, and the shape IS the finding;
+         drawn in x order, because a polyline follows the order it is handed) and
+         **`guides`** — named, switchable, axis-aligned lines for the break-even crossing
+         and each point where the recommendation flips, which were hard-coded green and
+         amber before. A guide whose value falls off-scale is skipped rather than pinned
+         to the frame, because a line on the frame claims the crossing happens there.
+
+         The tornado got its **own kind**. Reusing `forest` was considered and rejected:
+         the geometry nearly matches, but the panel would then talk about studies, weights
+         and log scales, and the rows would be markers-with-whiskers rather than bars.
+         Widest-swing-first is enforced *in the kind*, not trusted to the caller — that
+         funnel outline is the only reason the chart reads at a glance, so a model in input
+         order would draw a correct chart of the wrong kind. `swing` is computed there too,
+         from |hi − lo|, so the ordering can never disagree with the bars it orders.
+
+         **What deliberately was NOT migrated: the live in-panel previews.** The same two
+         figures appear in the plugin's own panel, redrawing on every slider frame with a
+         marker for where the parameter currently sits. Routing that through the host
+         renderer would put a postMessage round-trip inside a drag handler, and a snapshot
+         of a pointer means nothing to a later reader. So the panel keeps its own drawing
+         and Output gets a model: two artefacts with different jobs, not one thing drawn
+         twice. The alternative — a `charts.render(model)` broker verb so a plugin could
+         preview with the host's renderer — is the right answer *if* a plugin ever wants a
+         non-interactive preview, and is worth building then rather than now.
+
+      **The decision tree stays baked, and that is the end state, not a backlog item.**
+      `builtin-decisions`' tree is a node-link diagram: a recursive layout, three node
+      shapes, probabilities on the edges and the optimal path picked out. Nothing in the
+      chart vocabulary applies to it — no axes, no scales, no palette, no legend — so a
+      `tree` kind would be a chart kind in name only, for exactly one caller. It already
+      has the one thing the frame gives ('opts.title' makes the title editable), and the
+      optimal branch is marked by stroke WIDTH as well as colour, so it is not colour-only.
+      This is the same judgement as the network graph and the map projections: the geometry
+      is the artefact.
+
+> These three were captured during the college tour and lived only in the memory
+> notes, so this section read as complete when it was not (spotted 2026-08-05).
+
+- [x] **#141 — SUPERSEDED (2026-10-13); shipped 2026-09-29.** A third never-closed
+      duplicate, found the same way as #179 and #171. All three bullets below were built:
+      latent growth curves, LCA/LPA and growth mixture models — see the DONE entry under
+      **Completed ▸ More analyses**. One follow-up is still genuinely open and lives there
+      as a sub-item: *latent transition analysis*. Original text kept:
+
+      **#141 — Mplus parity (latent mixture models).** Gerontology faculty driver.
+      CrossTab already covers roughly 40% of Mplus's territory (SEM/CFA, EFA,
+      multilevel, mediation, survival, mixed ANOVA) but misses the latent-variable
+      mixture models that define its niche.
+
+      - **Latent growth curve modelling — START HERE.** Needs NO new R dependency:
+        lavaan already works, so this is a GUI wrapper in builtin-sem or its own
+        plugin. Best value-per-risk in the whole stats backlog.
+      - **LCA / LPA** — the single biggest reason people buy Mplus. `poLCA` is pure R
+        (no compiled deps) so it is plausibly WebR-feasible, but **run the probe in a
+        FRESH session** before believing either answer — see
+        [[webr-package-feasibility]] for why a long session lies about this.
+      - **Growth mixture models** (`lcmm` / `flexmix`) — feasibility unknown.
+      - Latent transition analysis and Bayesian SEM (`blavaan` needs Stan/JAGS) are
+        almost certainly not WASM-feasible. Do not spend a probe on them.
+
+- [ ] **#142 — Distance sampling — PARKED, possibly out of scope (user's call,
+      2026-08-05).** The `Distance` R package (CRAN, GPL-2+) fits detection functions
+      for line/point transect surveys; anthropology faculty use it alongside Raven.
+      Parked on a SCOPE question rather than a technical one: distance sampling is a
+      field-survey / data-collection method, and CrossTab is not a data collection
+      tool — the downstream statistics (frequency tables, chi-square, ANOVA) are
+      already covered. Decide scope before spending a feasibility probe.
+      https://distancesampling.org/Distance/
+
+- [~] **Linear regression** (`plugins/builtin-regression/`) — `lm()`, SPSS-style
+      Model Summary + Coefficients; factor IVs dummy-coded; honours missingValues.
+      *R/stats verified; two-dialog UI click-through NOT auto-confirmed* (harness
+      can't drive sequential modal dialogs — see testing note). **Needs a manual
+      click-through check.**
+
+- [~] **Binary logistic regression** (`plugins/builtin-logistic/`) — `glm()`
+      binomial; outcome recoded 0/1 (models the higher category, named in the
+      caption); SPSS-style Model Summary (&minus;2LL, Cox & Snell / Nagelkerke R²)
+      + "Variables in the Equation" (B, S.E., Wald=z², df, Sig., Exp(B)); factor
+      predictors dummy-coded; honours missingValues. *R/stats verified directly*
+      (gender~age+income on the demo: B/z/p, &minus;2LL=31.348, Cox & Snell=.289,
+      Nagelkerke=.386, Wald all hand-checked); **two-dialog UI click-through needs
+      a manual check** (same harness limitation as Linear).
+
+- [~] **Plots / Graphs** (`plugins/builtin-plots/`) — SVG charts via **`svglite`'s
+      `svgstring()`** (R→SVG path **spiked & proven**: `svgstring()` → valid SVG →
+      `appendPlot` renders it through the sanitiser untouched, 32/32 points). Set:
+      histogram, scatter (+ linear OLS trend line, default on), boxplot (optional
+      factor split), pie chart (category shares — included for the audience despite
+      being a poor viz), and **bar chart with error bars** (group means by a factor,
+      **±95% CI**, t-based, labelled on the plot). Honours `missingValues`,
+      app-blue theme, responsive via `viewBox`.
+  - **Chart interaction architecture (#131) — DECIDED: three layers, not
+    "model-ise everything."** The host data-model renderer
+    (`app.results.appendChart` → `core/chart-renderer.js`) is great for common charts
+    but can't model the *variety* of statistical graphics — box/forest/biplot/network/
+    word-cloud/dendrogram/step/multi-panel all fell out of it. Forcing everything through
+    a host model both boils the ocean AND caps what plugins can draw. So interaction
+    splits into three layers (each chart picks a layer; we no longer force outliers into
+    the model):
+    - [x] **Layer 1 — universal host FRAME (model-free) — DONE.** Every `appendPlot`
+      chart now gets a host-owned **editable title + caption** rendered *around* the SVG
+      body (not baked into it), persisted in the model (survive save/reload), injection-
+      safe (`plaintext-only`). `app.results.appendPlot(svg, { title, caption })`;
+      `#buildPlotBlock` in `core/results-pane.js` (shared by append + restore).
+      **All 17 appendPlot plugins swept** to pass `opts.title` and drop the baked R
+      `main=` (auto-titles suppressed with `main=""`/`NULL`; `xlab`/`ylab` stay
+      plugin-drawn — axis-title editing remains model-only, Layer 2). Verified in Chrome:
+      boxplot title editable + persists; regression's two plots show host titles with no
+      baked doubles (incl. the `qqnorm(main=NULL)` edge). *Follow-ups if wanted:* a small
+      "frame options" popover for title font/size + a host caption default; axis-title
+      editing for svglite bodies (harder — host can't place them around an opaque SVG).
+    - [x] **Layer 2 — host data-model renderer (`appendChart`) — DONE (all strong
+      candidates).** Instant, no-round-trip body controls (recolour / reorder / restack)
+      for the common `categorical` / `scatter` / `pie` kinds. Reserved for high-value
+      **common** charts, NOT a universal mandate. *Migrated:* `plots` scatter, trends,
+      pie, histogram, errorBars; **`factor` scree** (line from eigenvalues), **`timeseries`
+      correlogram** (ACF/PACF bars from `acf`/`pacf` values), **`textanalytics` word
+      frequency** (bars from top-N counts). Each verified in Chrome (correct values, live
+      chart). The three R-extraction migrations also dropped `svglite` where it became
+      unused. **No further Layer-2 migrations planned** — the remaining charts are either
+      fine on the Layer 1 frame or need a new glyph; their optional body-interactivity is
+      deferred to Layer 3 (below), not forced into the model.
+    - [ ] **Layer 3b — host-mediated controls for BAKED plots.** *(Distinct from Layer
+      3a, which shipped 2026-08-06: that one is plugin-supplied model-driven KINDS. This
+      is the story for figures whose geometry only R can produce — the 16 remaining
+      `appendPlot` sites — where the picture stays baked but gains controls.)*
+      A plugin draws its own
+      SVG (full R power) AND declares the alterations it supports
+      (`controls: [{ id, label, type, options }]`); the host renders those controls and
+      calls back to re-chart on change (generalises the existing `onRedraw` size-recipe).
+      Opt-in, for everything not in Layer 2 where body edits are worth a round-trip:
+      - *Marginal-fit charts (weren't worth a Layer-2 model):* `decisions` tornado + CE
+        plane, `ecology` NMDS, `inequality` Lorenz, `cointegration` volatility,
+        `timeseries` forecast.
+      - *New-glyph charts (Tier B — no existing kind):* `plots` boxplot, `meta` forest,
+        `ordination` biplot, `survival` Kaplan-Meier (step line).
+      - *No-data-model charts (only Layer 1 + maybe a redraw/param control):* `sna`
+        network, `spatial` map, `decisions` tree, `timeseries` STL decomposition, `var`
+        IRF (multi-panel), word clouds (`textanalytics`, `caqdas` themed), 
+        `assumptions`/`regression` Q-Q + residual diagnostics.
+      *Coverage checked 2026-08-04:* every plugin still calling `appendPlot` (16 of them,
+      23 call sites) appears in one of the three groups above — so each remaining chart
+      has a recorded disposition, and "still on the old API" is a deliberate outcome
+      rather than a backlog. Layer 2 is closed; only Layer 3 itself is unbuilt.
+    - **Superseded:** the earlier Tier A/B/C "migrate-to-model" matrix. Outliers keep
+      their svglite bodies and gain Layer 1 (frame) + optional Layer 3 (declared controls);
+      only common charts warranted full Layer 2 model migration — now complete.
+  - *Generalise plots over derived data — RESOLVED via multi-dataset.* The
+    on-architecture answer ("analyses emit a derived dataset; plots consume
+    datasets like everything else") is now real: see the **multi-dataset workspace**
+    + `app.data.create` below. A plot doesn't take another plugin's output through a
+    bespoke channel — the analysis emits a dataset and the plot just plots it.
+
+### Nice-to-have / optimisations
+
+- [ ] Batch a multi-variable Frequencies run into one R call instead of one job
+      per variable (`plugins/builtin-frequencies/index.js`).
+
+- [~] Settings persistence (localStorage). **Still ad hoc as of 2026-08-21** — nine core
+      modules now reach for `localStorage` independently (app, at-rest, debug, launcher,
+      live-sync, plugin-broker, plugin-manager, plugin-package-store, user-identity), which
+      strengthens rather than weakens the case for one store. *Started:* the plugin manager persists
+      its disabled-set + catalog there (`core/plugin-manager.js`). A general
+      settings store can generalise that pattern. (Dataset persistence is its own
+      item — see **Dataset library** under Deferred features; OPFS, not IndexedDB.)
+
+- [ ] **Variable-picker polish (later).** The "Selected" group is a snapshot taken
+      when the dialog opens — ticking a box inside the dialog deliberately does
+      *not* live-reorder it to the top (reordering rows under the cursor causes
+      mis-clicks). Possible later refinements, none urgent: a live "N selected"
+      count in the dialog; a "selected only" filter inside the picker (mirroring
+      the grid's column filter) for very long lists; and an optional
+      **picker→selection write-back** so confirming a picker updates the shared
+      selection (today the picker's choice returns to the plugin but doesn't
+      change the grid/sidebar selection — a real design call, left as-is for now).
+
+- [ ] **#184 — a comprehensive how-to guide (owner, 2026-09-21).** Nothing like it
+      exists. What exists is scattered and each piece is deliberately narrow: *Getting
+      around* (four paragraphs of orientation, #182), the *Syntax guide* (the command
+      language + a live plugin-call list), per-plugin `howto` strings behind the 🔍 in
+      the plugin manager, *Caveats & limits*, and the launcher's onboarding. None of that
+      teaches someone how to DO a piece of work end to end.
+
+      Scope question to settle before writing a word: is this **task-oriented** ("how do
+      I recode a variable", "how do I run a crosstab with weights") or a **course** (a
+      methods walk-through using the demo data)? The college-tour material and the
+      Sarabia labs (#174) suggest the second is what teaching actually needs — and #174
+      proved the value of building from a real assignment rather than guessing at a
+      curriculum. Either way it must be **in-app and offline** — a docs site fails the
+      air-gap requirement ([[airgap-offline-requirement]]) — and it has to say which
+      plugins a walk-through needs enabled, which makes #183 a dependency rather than a
+      sibling.
+
+### Open follow-ups attached to completed entries
+
+Seven loose ends live as sub-items under entries that are otherwise **done**, where they
+are easy to miss. They stay there because the reasoning around them is the parent entry's;
+this is the index.
+
+- **Latent transition analysis** — not built, no longer ruled out. *(under #141, More analyses)*
+- **Building-block eligibility** — unblocked 2026-08-21, not built. *(under Plugin data as first-class citizens, #146)*
+- **A preset file per chapter**, paired with #185 deployments — *the obvious pairing when #184 happens*. *(under #162)*
+- **The Syntax guide says nothing about Import/Export.** *(under #176)*
+- **Not browser-tested:** the preset dropdown, Save/Rename/Delete, the missing-plugin note. *(under #162)*
+- **Not browser-tested:** the arrows on an analysis row, the busy state during a move. *(under #190)*
+- **[~] Browser pass by the owner** against a local bench. *(under #185)*
+
+
+## Completed
+
+The record of what shipped and why. Kept in full, in the original sections.
+
+### Now / near-term
 
 - [x] **FIXED (2026-10-13). The PWA sometimes froze at "Starting…" and never reached the
       launcher.** Reported with a screenshot after several sightings on a phone, then once
@@ -56,7 +2336,6 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       `launcher.open()`), where the symptom would be a launcher that appears but never
       fills — not looked at yet.
 
-
 - [x] **DONE (2026-10-10). Plugin stdlib, part 1: the utility library.** `app.std`, shipped
       as source into the sandbox. Built first on the owner's call — pre-release, so part 2's
       "a user cannot work" is not yet a real constraint, this half proves the delivery
@@ -102,6 +2381,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         rather than twice.
       - `STDLIB_VERSION` is not load-bearing yet — nothing reads it. It exists because it
         cannot be added retrospectively to builds already shipped.
+
 - [x] **DONE (2026-10-10). Plugin stdlib, part 2: the screen mode crosses the sandbox, and
       a pane can reflow.** The gap: a workspace pane is a separate opaque-origin document
       and inherits nothing, and the mode was never sent — `onScreenModeChange` had exactly
@@ -163,6 +2443,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       - **Not checked on hardware.** The stacking was confirmed in a desktop browser with
         the mode forced. How it actually feels under a thumb — touch targets, the on-screen
         keyboard over a 40vh text column — wants a phone.
+
 - [x] **DONE (2026-10-12). Plugin stdlib, part 3: the compute plugins get one set of
       reporting formatters.** Parts 1 and 2 reached the plugins that draw DOM. This is the
       other sixty — the ones that only emit tables — and the drift there was worse, because
@@ -321,7 +2602,6 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       failing on device, builtin-caqdas's colour TOKENS are failing the same way** (its
       layout is safe, but `var(--ct-text)` and friends would be unset).
 
-
       **Left:** theming is still CAQDAS-only; spatial's 42 colour literals stay literal
       while there is no second theme to prove the tokens against.
 
@@ -461,31 +2741,6 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       One line of implementation, three test assertions, and one plugin test whose comment
       already wrote the R value as `p .7529` without the zero. Suite 1681 → 1683.
 
-- [ ] **More duplication the drift scan found, not yet done (2026-10-12).** The same scan
-      that produced part 3 above. None of these are reporting conventions, so none print
-      inconsistently — they are maintenance risk rather than visible defects, which is why
-      they were not swept with the formatters:
-
-      - ~~**`flat` / `normalizeResult`**~~ — **DONE, see part 4 above.** It turned out to
-        be 47 copies under four names, and not an interface design after all: two
-        vocabularies over identical plumbing, with `num` meaning a scalar in 28 plugins and
-        a vector in 10. It also carried the only *correctness* bug of the whole audit.
-      - **`prettyTerm` — 13 copies, 3 variants.** Turns an R model term (`factor(x)y`)
-        into something readable. The variants differ in which R term shapes they know
-        about, so the union is probably right, but each needs reading first.
-      - **`runR` — 11 copies, 2 variants**, and **`cleanSvg` — 8 copies, 2 variants** (the
-        two differ only in whitespace). `cleanSvg` strips the width/height off an R plot so
-        it scales; that one is a straight lift.
-      - **`uniqueName` — 6 copies, 5 variants** and **`lvl` — 6 copies, 3 variants.**
-      - **The chart tick formatter is duplicated** between builtin-charts and builtin-plots
-        (`Math.abs(v) >= 10000 || Math.abs(v) < 0.001 ? toPrecision(4) : toFixed(3)`),
-        byte-identical. Belongs in the chart stdlib rather than the plugin stdlib.
-      - **builtin-correlation's `nFmt` prints a BLANK, not an em dash**, where every other
-        count formatter prints `—`. Possibly deliberate (a correlation matrix leaves empty
-        cells empty) and possibly drift; it needs a look rather than a sweep, which is why
-        `rounded` was not forced onto it.
-
-
 - [x] **DONE (2026-10-10). A project row says when it was last worked on and how big it
       is — and opening one no longer counts as working on it.**
 
@@ -538,7 +2793,6 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       have printed the latter the first time it saw a location).
 
       Suite 1569 → 1583.
-
 
 - [x] **R export, half two: the EXACT R each analysis ran — DONE 2026-10-09.** Recorded on
       the analysis, persisted in the project, shown in History, and folded into the R export
@@ -610,7 +2864,6 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       Open, and the owner's call: whether to mirror SPSS's doubled post-hoc rows. It is
       a lookup-vs-redundancy trade, not a correctness one.
 
-
 - [x] **DONE (2026-10-10). The `tornado` chart kind was unreachable — and it was a BROKEN
       FEATURE, not a dormant kind.** Filed 2026-10-08 as "add it is a product decision";
       that was wrong, and the owner caught it: *"I thought you added it in one of the
@@ -649,20 +2902,6 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       the `base 1,000` marker, and `role="img"` with a descriptive title.
 
       Suite 1564 → 1569.
-- [ ] **Two functions named `wrapLabel` (found 2026-10-08).** `wrapToWidth` in the charts
-      stdlib wraps a legend entry with no ceiling; `wrapLabel` inside builtin-charts wraps
-      the SCED chart's rotated case captions with a `maxLines` and an ellipsis, because
-      those have to fit a panel's height. They are one function with an optional bound.
-      They were left separate deliberately: unifying them changes how the SCED captions
-      break (the stdlib version hard-splits a long word, the plugin's lets it overflow),
-      and the layer change had already touched every kind.
-
-- [ ] **"Titles & axes" wants splitting (16 rows).** `chart-groups.test.mjs` holds 16 as a
-      cap with the note "if a section grows past this, it wants splitting", and it is now
-      exactly at it — which is why the chart title's backing panel had to become automatic
-      instead of a toggle. Splitting it into Title / X axis / Y axis would make room, and
-      a `titlePlate` control is the first thing to add once there is any.
-
 
 - [x] **#174 — DONE (2026-09-12). The gaps a real intro-soc methods class falls into
       (user, 2026-09-11).** Source: `sample-data/Sarabia_GSS2014_MODULES_ON_IMMIGRATION_…_STUDENT_VERSION.pdf`
@@ -1016,378 +3255,6 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         cleanup screen actionable rather than a list of names, and the asset tally already
         exists — but per-project size needs a walk of each project's tree.
 
-- [~] **#181 — the three follow-ons #173 was carrying (split out 2026-09-21).** #173
-      shipped the project manager and is closed; these rode along inside its entry and
-      would have been closed with it. None blocks anything — they are the difference
-      between "the File menu stopped multiplying" and "the File menu is finished".
-
-      **Two of the three BUILT (2026-09-21), both menu moves; the third is not a menu
-      move and is still open — see below.** File is down to **two** project items:
-      `New project` and `Encryption settings…`. 840 tests (10 new).
-
-      **Browser pass: looked over by the owner on the deployed build (2026-09-21) — "looks
-      good from what I can see", no problems seen — and the **no-project-open** case
-      confirmed separately.** That was the one worth checking by hand: it is the state
-      #158 made real, it is unreachable from the menu of an open project, and getting it
-      wrong would have meant a dead first tab. The dialog lands on *New projects* with
-      the project tab saying why.
-
-      Still only covered as a function call: the **bundle round-trip** — Export ▸ the
-      `.crosstab` bundle, then Open ▸ Project bundle on the file it wrote. The two halves
-      used to be adjacent menu items and are now reached from two different tabs, so the
-      seam between them is new even though neither body changed.
-  - [x] **DONE (2026-09-21) — one per-project encryption modal, NOT a project-manager
-        tab (decided by the owner).** Four File items became one: `Encryption settings…`
-        opens `core/encryption-settings.js`, rewritten as a two-tab dialog — **This
-        project** (default) and **New projects**. `projectEncryptionOffer(state)` is the
-        extracted rule and decides what the project tab shows, so an unprotected project
-        is offered only *Set a passphrase…* and a protected one only *Change passphrase…*
-        / *Remove protection…*; the three `if (already protected) appendError` guards in
-        `project-sync.js` are now backstops for a direct call rather than the thing
-        standing between the user and a wrong state. `ProjectSync#protectionState()` is
-        the new read-only accessor — deliberately NOT `#settle()`ing, since settling only
-        writes when a binding already exists and so cannot change the answer, and saving
-        as a side effect of opening a dialog to *look* at a setting is a surprise. Both
-        empty states are distinguished and shown: `none` (no project open — real since
-        #158) and `unsaved` (exists, never written), with the dialog landing on the
-        defaults tab when there is nothing to act on. The defaults tab carries an
-        explicit scope disclaimer, and `docs/SECURITY.md` was updated where it named the
-        old menu path. 7 tests. *Original reasoning below.*
-
-        Today `core/project-sync.js` registers four File items:
-        `Protect this project…` (order 8), `Change passphrase…` (9), `Remove
-        protection…` (10) and `Encryption settings…` (also 10 — two items claiming one
-        slot, a small bug in its own right).
-
-        **The owner's reasoning, and it is right:** the manager is "the place for
-        opening, moving, exporting, or deleting projects **including** this one", while
-        these four are "update, enable, or disable encryption on **this one** project".
-        Different theme. A manager tab would only earn its place if it listed EVERY
-        project with encryption controls per row — and that variant is not merely
-        unwanted, it is close to unbuildable: `protectProject()` (~1609) works on the
-        ACTIVE project, `#settle()`s it to disk, then re-encrypts every file through
-        `#fullSave`/`#folderRewrite`. Doing that from a list would mean opening — and,
-        for an already-protected project, unlocking — each one first. So: a dedicated
-        modal for the active project.
-
-        **What it replaces, and why a modal beats three menu items.** The three verbs
-        are state-dependent and the menu fakes it: all three show always, and
-        `protectProject()` opens with a guard that errors "This project is already
-        protected." That is precisely [[guard-means-missing-state]] — a guard whose only
-        job is to neutralise a state means the state should not be reachable. A modal
-        reads the current state and offers only what applies: unprotected → *Set a
-        passphrase*; protected → *Change passphrase* / *Remove protection*. The guard
-        then has nothing to guard.
-
-        **DECIDED (owner, 2026-09-21): one File item, `Encryption settings…`, opening a
-        TABBED modal.** Default tab **this project** — set / change / remove its
-        passphrase; second tab **the global defaults** — encrypt new projects on this
-        device by default, and whatever else accrues later (passphrase-strength rules
-        were named as a likely example). Four File items become one, and the naming
-        collision dissolves instead of being negotiated: the organising axis is
-        *encryption*, not *scope*, which is also why this does not contradict the
-        manager decision above — that rejected mixing encryption with open/move/delete,
-        not mixing two scopes of one subject.
-
-        It absorbs `core/encryption-settings.js` (#144), which is the app-wide at-rest
-        POLICY dialog: one switch, with exports and folder projects as read-only
-        context. Evidence the seam was already wrong — it currently ends with "To
-        protect (or unprotect) a project you've already made, use **File ▸ Protect this
-        project…**". A settings dialog that has to send you back to the menu becomes a
-        tab switch.
-
-        Three things to get right when building it:
-    - [ ] **The two tabs must not look interchangeable.** One acts on the open project
-          NOW; the other changes a default for projects that don't exist yet and touches
-          no existing project. Name them by scope (*This project* / *New projects*
-          rather than *Project* / *Globals*), and let the defaults tab say plainly that
-          it changes nothing already saved. The failure to design out is someone
-          flipping a default believing they just protected the project in front of them.
-    - [ ] **Two degenerate states, expressed not guarded.** #158 shipped, so "no project
-          open" is a real state (sitting at the launcher) — and `protectProject()` also
-          refuses an empty unsaved one ("Add some data first — an empty project has
-          nothing to protect yet"). Both are facts the project tab should SHOW, with the
-          modal opening on the defaults tab when there is nothing to act on. Turning
-          those two errors into a visible state is the same [[guard-means-missing-state]]
-          move as collapsing the three verbs.
-    - [ ] **Keep the per-project verbs state-driven inside the tab**, as above:
-          unprotected → *Set a passphrase*; protected → *Change passphrase* / *Remove
-          protection*. Never all three at once.
-  - [x] **DONE (2026-09-21) — the two bundle items folded into the manager.** `Export
-        project bundle (.crosstab)…` and `Open project bundle (.crosstab)…` left File;
-        their bodies are unchanged, only where they are reached from. **Opening** is a
-        row in the **Open** rail (`kind: 'bundle'`); **writing** is a row on the
-        **Export** tab.
-
-        Two things had to be got right rather than wired. (1) A bundle is NOT a *Store
-        in* destination — it is a snapshot that stops receiving changes the moment it
-        lands — so `providersFor(providers, mode)` now decides which rail a location
-        belongs in. That also fixed a pre-existing bug found on the way: a provider with
-        no `chooseDestination` still drew a Store button that did nothing when clicked, a
-        dead control indistinguishable from a live one. (2) The Export tab's hint claimed
-        every export "is one-way — an exported file cannot be reopened as a project",
-        which the bundle makes false. It is now two groups — *A copy you can open again*
-        and *For another program* — which keeps [[format-equality-no-lockin]] intact: the
-        bundle is described by what it does, not promoted, and the other formats keep
-        equal billing. A bundle also cannot be ENUMERATED (there is no index of
-        `.crosstab` files on a disk), so the provider declares `enumerable: false` and
-        the pane says what it is instead of reporting an empty list. 3 tests.
-  - [ ] **STILL OPEN — and NOT a menu move.** *(Flagged 2026-09-21: the other two
-        sub-items were "move some menu items" and took an afternoon. This one is a
-        refactor and should not be waved through on the same estimate.)*
-        `core/project-manager.js` is written as a `<dialog>`-based modal that resolves a
-        promise on close; the launcher needs the same rail rendered INLINE in its
-        overlay. So reusing it means first extracting the rail/list rendering from the
-        dialog shell — a real change to a component that was browser-verified two days
-        ago — and it lands on top of #167 and #161, which both also rewrite the
-        launcher. Do the three together, deliberately, not as a follow-on.
-
-        **The launcher should reuse the manager component instead of its own rail.**
-        `core/launcher.js` builds its own saved-project list, remembered folders and
-        source buttons; `core/project-manager.js` now does the same job properly, with
-        the backend registry and the verbs. Two renderings of one list is the drift
-        `var-toolbar.js` was written to end, one layer up. **Overlaps [[#167]]** ("the
-        launcher should INCLUDE project management") and #161 ("clicking a
-        source/project should just go") — do these together or the launcher gets rebuilt
-        twice.
-
-- [ ] **#172 — the engine should not know where the bytes are (user, 2026-08-25).**
-      "If we are claiming a principle of *all are equal*, then the very existence of a
-      folder mode is a flawed design. The engine shouldn't care — or indeed even know —
-      where or how the bytes are stored."
-
-      **The evidence, because this is not a style argument.** `#folderMode` answers "which
-      UI flow did the user come through", and behaviour was keyed on it. Four bugs, all the
-      same shape, all found by use rather than by tests:
-      - saves took the plain-overwrite branch for remote, so two peers would clobber each
-        other whole-project at a time, silently (`2df5a8e`);
-      - the poll never ran, so a co-author's edit never arrived (same commit);
-      - `#keyStillCurrent` returned true immediately, so a remote project never noticed a
-        peer re-keying it — #144's protection absent exactly where bytes leave the machine;
-      - `listProjects` asked the LIVE store for the local catalog, so an open Dropbox
-        project made the sidebar query Dropbox for your OPFS projects.
-
-      **Mostly done (2026-08-25).** Everything about how bytes behave now comes from the
-      driver's declared capabilities: `externallySynced` drives merge-on-save and polling,
-      `flat` drives layout, the re-key check and reverting to local storage. Uses of the
-      flag went from 22 to 14, and the survivors are all one thing.
-
-      **What remains, and whether it should.** The rest is the File System Access API's
-      requirements, not an opinion about storage: a write-permission re-grant needs a user
-      gesture, the OS double-click shortcuts are real files in a real directory, and the
-      registry stores a structured-cloneable handle rather than an address. Those are true
-      of handles and of nothing else.
-
-      **VERIFIED IN THE BROWSER (2026-08-25), after the unification:** a local project
-      saves, survives a relaunch and reopens; move-to-folder writes the project AND its
-      shortcut files, and `Open in CrossTab.html` still lands on the open-folder button;
-      the folder project reopens from the launcher rail, which is the path where a refused
-      write permission would fail silently. **Not yet exercised: a PROTECTED project through
-      the shared flow** — the one place `#adopt`'s new lock actually bites, and the only
-      part of this change no test reaches.
-
-      **BUILT (2026-08-25).** `core/storage-backend.js`; `#folderMode` is gone from the
-      engine. Steps 1-4 of the plan below are done in one pass, since the owner lifted the
-      back-compat constraint ("no one's using this app yet, we can break existing saves").
-
-      - Four flows became two: `openLocation(backend)` and `moveTo(backend)`.
-        `#openExistingFolder` and `moveToFolder` are now three-line callers; the remote
-        pair is deleted. ~110 duplicated lines gone.
-      - `OpfsBackend` / `FolderBackend` / `DropboxBackend` / `WebDavBackend`, each owning
-        `capabilities`, `driver()`, `connect()`, `describe()`, `remember()`, `pollMs`, and
-        `shortcuts()` where a real directory makes one possible.
-      - The UI builds a backend and hands it over; `backendFor(entry, credentials)` rebuilds
-        one from a registry entry. No driver type is named anywhere in app.js any more.
-      - 12 new tests — the first coverage this area has ever had.
-
-      **Rolled up the same day, on the owner's "why not roll everything up?".** There was
-      no principled reason to stop — both loose ends were the same debt:
-      - `webdav-connections.js` deleted; the location registry is the only store of WebDAV
-        addresses, and the credential policy it documented moved there with it.
-      - The launcher holds a BACKEND rather than a folder handle, and defers to Start only
-        when `needsGesture` says the browser requires that click. `#pendingFolder` is gone.
-      - The sidebar renders `describe()`; the `LOCATION_KINDS` table is gone.
-
-      **A storage kind is now named in exactly one place in the UI** — the WebDAV dialog
-      filtering for WebDAV locations, which is correct, because that dialog is WebDAV.
-
-      **And local storage joined them (owner: "no favourite children allowed").** The
-      refactor had stopped at the boundary where OPFS's multi-project nature lives:
-      `openProject(id)` opened local projects while `openLocation(backend)` opened
-      everything else, and `OpfsBackend` existed only in its own tests. The same
-      privileged-path flaw as `#folderMode`, one layer further in — and invisible for the
-      same reason it was harmless, since local storage is the UNDEMANDING case with no
-      merge, no poll, no credential and no gesture to get wrong. Agreement by luck.
-
-      Now `openProject(id)` is `openLocation(new OpfsBackend(id))`, and the difference is
-      one field: `projectId`, which local storage names because it holds many and everyone
-      else leaves null because they hold one. `passphraseMode` came with it — unlocking one
-      project among many reads differently from unlocking a location. The shared flow also
-      caught something the split had hidden: `#adopt` now LOCKS before switching, because
-      opening an unencrypted project after an encrypted one would otherwise carry the old
-      key across.
-
-      **THE PLAN (owner's call, 2026-08-25: do it now, before more providers land).**
-
-      ### Why now, in numbers
-
-      - **Four bugs from one flag**, listed above, none caught by a test.
-      - **The flows are duplicated per backend.** `#openExistingFolder` is 48 lines and
-        `openRemote` 51; `moveToFolder` is 60 and `moveToRemote` 68. The remote pair was
-        written by copying the folder pair. Graph and Drive would each copy them again —
-        that is the "breaks every time we save to a new platform" mechanism, precisely.
-      - **None of those 227 lines is tested.** No test file touches the open or move paths;
-        `folder-sync` and `collab-sync` test the MERGE beneath them. The most bug-dense code
-        in the project has no coverage because it needs a real store to run.
-
-      ### The shape
-
-      One interface per platform, owning everything platform-specific. Not "driver" — a
-      driver is bytes, and bytes were never the hard part:
-
-          StorageBackend
-            capabilities   {flat, externallySynced, atomicWrite, canStream}   (exists)
-            driver()       the byte interface: read/write/list/stat/…         (exists)
-            connect()      permission re-grant | sign-in | no-op              (NEW)
-            describe()     {kind, glyph, label, detail} for lists             (NEW)
-            remember()     what the registry should store, never secrets      (NEW)
-            shortcuts?()   optional; folder-only today                        (NEW)
-
-      And **one flow each**, replacing four:
-
-          openLocation(backend)   ← #openExistingFolder + openRemote
-          moveTo(backend)         ← moveToFolder + moveToRemote
-
-      Both already have the same skeleton, which is why they were copyable: connect →
-      probe on a throwaway store → passphrase → validate → commit → remember → poll. Every
-      difference between them becomes a backend method instead of a second function.
-
-      ### What the engine stops knowing
-
-      `useDirectory`, `ensureReadWrite`, `#pickFolderHandle`, `shortcutFiles`, and the
-      remaining `#folderMode` all move behind a backend. The UI stops carrying kind strings
-      (13 occurrences of `'folder' | 'dropbox' | 'webdav'` across app.js and launcher.js)
-      and renders `describe()` instead. Adding Graph becomes **one file plus one line in a
-      registry** — no new branch in the sidebar, the launcher, the save path or the poll.
-
-      ### What the engine keeps
-
-      Capability-driven behaviour (merge, poll, layout), encryption (correctly above the
-      seam — a backend only ever sees ciphertext), and the op log. These are about the
-      PROJECT, not about where it sits.
-
-      ### The three hard parts, named in advance
-
-      1. **Layout is not really a capability.** `flat` says "one project per location", and
-         OPFS is the only backend where that is false. The honest model is that OPFS is a
-         CATALOG of locations rather than a special layout — which is #171's model arriving
-         from the other side. `FOLDER_PROJECT_ID` (19 uses) is the seam where the two meet.
-      2. **`connect()` is not uniform.** A folder needs a user GESTURE for its permission
-         re-grant; a remote needs a credential dialog it must not own. So `connect()` takes
-         a prompt-provider from the caller rather than opening UI itself — the same shape
-         `openWebDav` already uses for its password callback.
-      3. **The launcher defers a folder to the Start click** because that click *is* the
-         required gesture, while a remote opens immediately. Under one flow this becomes
-         `backend.needsGesture`, not two code paths — and it is the piece most likely to
-         regress, because it is invisible until a permission prompt silently fails.
-
-      ### Sequencing with #171
-
-      They are one refactor from two ends: #171 unifies the project LIST, #172 unifies the
-      backend behind it. Do #172 first — a unified list whose entries still fan out to four
-      bespoke open paths would keep the duplication and hide it behind a nicer surface.
-
-      ### Migration, and the risk that matters
-
-      **Folder backend first, behaviour unchanged.** Folders are in real use and are the
-      most demanding case: handles, permission re-grants, OS shortcuts. If the abstraction
-      survives the folder, the rest are simpler. Any step that requires "and now re-pick
-      your folder" is a failed step.
-
-      Order: (1) define the interface with the folder backend behind it and both old flows
-      still calling it; (2) collapse the two open flows into one; (3) collapse the two move
-      flows; (4) port Dropbox and WebDAV onto backends; (5) delete `#folderMode` and the
-      kind strings in the UI.
-
-      ### What it buys, concretely
-
-      A fake backend makes `openLocation` and `moveTo` **testable headlessly for the first
-      time** — the probe-then-commit ordering, the abort paths, the occupied-destination
-      refusal, remembering only on success. Those are the exact behaviours the four bugs
-      lived in, and they are currently verified by hand or not at all.
-
-- [~] **#171 — WHERE a project lives is not WHICH project is open (user, 2026-08-24).
-      THE INDEX IS BUILT (2026-08-25); the manager that consumes it is #173.**
-
-      `listAllProjects()` returns every project this device knows about, wherever it lives,
-      most-recently-opened first, with location as an attribute of a row. The sidebar
-      renders ONE list from it instead of two, capped at five, with the location shown
-      beside the name.
-
-      **The two stores stay, deliberately.** The local catalog is the nested store's own
-      bookkeeping — it is how the store knows what it holds — and the registry has to keep
-      `FileSystemDirectoryHandle`s, which only IndexedDB can. What changed is that nothing
-      above `listAllProjects()` sees either of them.
-
-      `lastOpenedAt` is added and, more importantly, SURVIVES A SAVE: both catalog writers
-      rebuild their summary from the manifest, and the stamp is not in the manifest and
-      never will be, since it is a fact about this device rather than about the project.
-      Without the carry-across the first autosave after opening would have reset it, and
-      "recent" would have quietly gone back to meaning "recently saved". Seven tests, using
-      the first in-memory driver — which is also the first time `ProjectStore` has been
-      testable at all.
-
-      **Destructive verbs left the sidebar** (delete, forget) — they sat one hover from the
-      row that opens the thing. They land in #173's Manage tab, where consequences can be
-      stated. Original:
-
-- [ ] **#171 — WHERE a project lives is not WHICH project is open (user, 2026-08-24).**
-      "When you open Word and see the recents list, it doesn't matter where each document
-      lives. Likewise for the launcher list and the sidebar list."
-
-      **The principle.** Location is an ATTRIBUTE of a project, not a category of project.
-      A saved project, a folder-backed project and a WebDAV project are one kind of thing
-      stored three ways, and the list a person picks from should say so — one list, with
-      where-it-lives as a detail on the row, beside the date and dataset count #167 also
-      wants there.
-
-      **What exists today is three parallel registries**, which is how the current shape
-      leaks into the UI:
-      - OPFS projects — the catalog in `project-store.js`
-      - folder projects — `core/folder-handle.js`, IndexedDB, because a
-        `FileSystemDirectoryHandle` needs structured clone
-      - WebDAV connections — `core/webdav-connections.js`, localStorage (2026-08-24)
-
-      Three stores means three renderings, three "forget" verbs, and a launcher rail that
-      grows a row per storage MECHANISM rather than per project. Adding WebDAV made this
-      concrete rather than theoretical: it is the third, and the first that was avoidable.
-
-      **What it wants to become:** one project index whose entries carry `{name, savedAt,
-      datasets, location: {kind, …}}`, with the per-kind stores demoted to what they
-      actually are — somewhere to keep a handle or an address that only the driver cares
-      about. The launcher rail and the sidebar then render the SAME list, which is also
-      what #167 asks for ("do not build a third rendering").
-
-      **Ordering constraint.** #167 wants verbs (rename/delete/duplicate) on that list;
-      doing that before this lands means writing each verb three times, once per registry.
-      This should come first, or at least alongside.
-
-      Not blocking the WebDAV work — a File-menu entry can open a connection without a
-      unified list — but every week it stays split, another feature gets written per-store.
-
-      **It has already bitten (2026-08-24).** A project moved to Dropbox vanishes from the
-      Projects list, while one moved to a folder does not — because folders have a registry
-      of their own (`folder-handle.js`) that the sidebar and launcher render beside the OPFS
-      catalog, and remote has no equivalent. So the app can put a project somewhere it
-      cannot then show you, inconsistently, depending on where you put it.
-
-      **The step that is neither a stopgap nor the whole refactor:** generalise the existing
-      folder registry into a registry of remembered LOCATIONS — `{kind: 'folder' | 'dropbox'
-      | 'webdav', name, savedAt, handle?, config?}` — rather than adding a third one beside
-      it. That makes remote projects first-class immediately, collapses two render paths into
-      one, and is a move toward this entry rather than away from it; folding the OPFS catalog
-      in afterwards is then the only step left.
-
 - [x] **#169 — DECLINED (owner, 2026-08-21): "let's not build anything we don't really
       need."** A DOM stub for the plugin's offset math would have caught `a9db12c`, and five
       bugs have now come from the area the suite cannot reach (three in `5cf95cb`, two on
@@ -1449,6 +3316,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       ambiguous, and in practice every missing code is negative.
 
       Suite 1551 → 1564.
+
 - [x] **DONE (2026-10-09). Let the reader choose whether a variable shows its NAME or its
       LABEL — the other half of the variable-order preference (owner, 2026-10-07).**
 
@@ -1538,47 +3406,6 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       surface family and a saved table's headings are an artefact that
       [[output-outlives-its-maker]] says must not change under the reader, so probably **no** for
       saved output and yes only for live rendering. Decide deliberately rather than by default.
-
-- [ ] **Collaboration on WebKit (Safari / iPhone / iPad) — three separate gaps, none of them
-      urgent (owner, 2026-10-07: *"we will eventually need collab support on WebKit devices so
-      let's flag that… but it can chill for now"*).** Filed so it is not rediscovered the hard
-      way; nothing here is broken today, and two of the three are unverified rather than known
-      bad.
-
-      **1. The FOLDER transport is Chromium-only, structurally.** `showDirectoryPicker` is
-      guarded in three places (`project-sync.js:565`, `:1953`, `storage-backend.js:113`) and
-      WebKit does not implement it, so a Safari user never sees folder projects at all. #143's
-      whole sharing story — drop the folder in Dropbox, both people hold it, folder-sync merges
-      — has **no answer on an iPad**. It degrades rather than breaks, which is why nobody has
-      hit it, but "share this with my colleague who works on an iPad" currently has no
-      folder-shaped answer. The live transport and `.crosstab` bundles are what is left.
-
-      **2. `atomicWrite: true` became a claim the driver can no longer always honour
-      (2026-10-07).** Today's `move()` fix falls back to writing in place on an engine whose
-      rename does not work, which is what makes saving work on WebKit at all — but it means the
-      temp-then-rename guarantee is conditional now while the capability is still declared
-      statically by `OpfsDriver` and `FsaFolderDriver`.
-
-      **It is latent, not broken: nothing in production reads the flag** (four drivers declare
-      it, four tests assert it, no consumer). That is exactly the hazard worth recording — the
-      FIRST consumer will believe it, and the obvious first consumer is folder-sync, whose
-      peer-safety argument is *"the driver's write is atomic (temp + rename), so a peer polling
-      `project.json` mid-write never reads a torn file."* On an engine using the fallback that
-      sentence stops being true. **Fix when it gets a reader:** have the driver downgrade the
-      declared capability once it has discovered rename does not work, rather than asserting it
-      up front — the same "probe by attempt, not by existence" lesson the fallback itself came
-      from.
-
-      **3. Live co-authoring is UNVERIFIED on WebKit, not known broken.** It is trystero over
-      MQTT (`core/live-sync.js`, loaded from CDN per `core/assets.js`), i.e. WebRTC, which iOS
-      Safari does have. So it may simply work. Nobody has tried, and the things that would bite
-      are iOS-shaped: a backgrounded tab suspending the peer connection, and the CDN import
-      versus the air-gap/offline path.
-
-      **What would settle it** — a Mac/iPhone pair on one project with Go live: does the room
-      join, do ops flow both ways, and does **gap-fill** work, since that moves Parquet source
-      bytes over the wire and is the part most likely to meet a platform limit. Until someone
-      runs that, treat live-on-WebKit as unknown rather than supported.
 
 - [x] **BUILT (2026-10-07) — "small screen" mode: a layout the user owns, detected as a
       default and never as an override.** Three stages, one commit each, each browser-verified
@@ -1811,75 +3638,6 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 > `<dialog>` resolving a promise on close, so its list rendering has to come out of the shell
 > before anything can share it.
 
-- [ ] **#161 — the launcher's "Start CrossTab" button is superfluous; clicking a
-
-      **EVIDENCE AGAINST, 2026-10-10 — the owner, now testing small-screen mode on an
-      iPhone: *"I'm still undecided on the value of the start button. even more so now
-      that I'm actively testing in small screen on the iphone, I've tapped the wrong
-      project more than once. maybe having a second tap to confirm isn't such a bad
-      thing."*** So the two-gesture commit is not simply friction: on a touch target you
-      can fat-finger it is a confirm step, and the cost of getting it wrong (loading the
-      wrong project over your session) is high. Deliberately NOT resolved while the
-      project list was unified around it — the question stays open, but it is no longer
-      "this is superfluous", it is "is a confirm worth a tap". Any future removal has to
-      answer the phone case.
-      source/project should just go (user request, 2026-08-19).** Today the rail
-      buttons (`[data-source]`, saved projects, remembered folders) only set
-      `#pendingSource` / `#pendingProject` / `#pendingFolder` and paint `is-active`;
-      nothing happens until the footer `.ctl__start` click (launcher.js ~288–371,
-      `#start()` ~472). That is a two-gesture commit for a screen whose whole job is
-      "pick the thing you want to open". Clicking **Demo · quantitative** or a saved
-      project should load it and enter the app.
-
-      **What this deletes.** All three `#pending*` fields, the mutual-exclusion
-      highlighting, the "default the source to Blank so Start always works" line
-      (~307), and the `#start()` branch tree — each rail button calls one of three
-      already-written paths directly. The `?launch=` bypass is untouched (it calls
-      `applyPreset`/`openProjectByName`, not the UI).
-
-      **Wrinkle 1 — reopen mode still needs a commit button.** Reopened over a live
-      session the footer button reads *Apply changes*, and a plugin-only change (no
-      source clicked) has **no other way to commit**.
-
-      **Wrinkle 2 — the ordering inverts, and the preset seeding has to change with
-      it.** Right now the sequence is *source → tweak plugins → Start*, and a source
-      click **overwrites** `#selected` with that preset's set (~297–303). If the
-      click also starts, that overwrite silently discards any tweaking done first,
-      and there is no window to tweak after.
-
-      **Likely resolution (sketched 2026-08-19, not yet decided): make the picker
-      LIVE, like the one it duplicates.** `Edit ▸ Plugins…` already applies toggles
-      immediately — "changes are live and saved across sessions", one **Done** button,
-      no Apply and no Cancel (plugin-manager.js ~947–960). The launcher's picker is
-      the odd one out, and both wrinkles are downstream of its deferral, not of the
-      Start button:
-        - live checkboxes leave *Apply changes* with nothing to apply, so the footer
-          keeps only `← Back to project` (which never promised a revert) — Wrinkle 1
-          dissolves;
-        - there is no pending selection left to clobber, so all that needs deciding is
-          what a source click ADDS. Rule: **union, never subtract** — clicking
-          `Demo · spatial` switches the spatial plugin on and takes nothing away. The
-          demo always works and no choice is silently removed. The selection creeps
-          upward across sessions; that is one uncheck to fix, versus destroying intent.
-      This is [[guard-means-missing-state]] read literally: `#pendingSource`,
-      `#pendingProject`, `#pendingFolder` and the deferred `#selected` exist *only* to
-      be committed later. Remove the deferral and all four stop existing.
-
-      **Verify before committing to that:** live toggling activates plugins *before a
-      project exists* — today `applyActivatedSet` runs at Start, after the source is
-      loaded. #158 made "no project open" tolerable so it should hold, but a
-      workspace-declaring plugin (CAQDAS, spatial) mounting against nothing is exactly
-      where it would bite. Check it in the browser early, not late.
-
-      Two things that get *better*, not worse: a remembered folder needs a user
-      gesture for the write-permission re-grant, and a direct click is a cleaner
-      gesture than the deferred Start; and a saved project can then open through its
-      own plugin restore (drop the `applyPlugins:false` + apply-picker-after dance at
-      ~490) since there is no picker edit to preserve. Accident cost is low — a
-      mis-click loads a demo, `loadingSeed` keeps it out of autosave, and the brand
-      click reopens the launcher.
-
-
 - [x] **DONE (2026-10-12). #167 — the launcher manages projects too (user, 2026-08-19).**
       *Title corrected 2026-08-24: this was written up as "belongs in the launcher", which
       reads as exclusive and is not what was asked. The sidebar keeps its verbs; the
@@ -1919,26 +3677,6 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       **Not built: duplicate.** Filed as its own item below — it was the one verb in this
       entry that is a new capability rather than a relocation of an existing one, and
       closing #167 on the other four should not bury it.
-
-- [ ] **Duplicate a project (carved out of #167, 2026-10-12).** The remaining verb from
-      #167: "fork this project" from the row's menu, alongside Rename and Delete/Remove.
-      Wanted as the natural home for forking a codebook or a half-built analysis without
-      opening it first.
-
-      **Why it was not done with the rest:** rename and delete already existed and only
-      needed a surface that reaches them from the launcher. Duplicate does not exist
-      anywhere, and it is not a trivial copy — it has to decide what a fork INCLUDES
-      (datasets, the op log, workspace blobs, plugin records) and what a fresh identity
-      means for the log (a duplicated project that keeps the original's op ids is a
-      collaboration hazard, per [[one-true-log-explicit-ops]]). It also wants #166's
-      copy-on-add semantics settled first.
-
-      Two things already in place that it should use: `removalOffer`'s pattern of saying
-      plainly what the action will do, and the kind distinction — duplicating an OPFS
-      project means a new OPFS project, while duplicating a FOLDER project has to ask
-      where the copy goes, since the app does not get to pick a directory on the user's
-      disk.
-
 
 - [x] **DONE (2026-10-01) — the launcher's plugin picker and Edit ▸ Plugins are now one module.**
       Raised 2026-09-29 (*"The center section of the launcher is functionally almost identical to
@@ -2072,6 +3810,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       honest and said exactly the same thing for both rows.
 
       Suite 1594 → 1595.
+
 - [x] **DONE + owner-verified in the app (2026-10-02) — the building-block library is REMOVED, replaced by "copy dataset to
       a new project".** The owner pulled it after the provenance check above: *"I'm sold. Before
       we get too far down this rabbit hole let's just pull it."* Plus the replacement, which is
@@ -2740,7 +4479,6 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       every save. The manifest already anticipates "thousands of segments". Adding
       re-anchor ops grows the log further. Find the ceiling before a real corpus does.
 
-
 - [x] **#163 — DONE, as part of #166 (verified 2026-08-21).** A codebook contains its
       codes by COMPOSITION: `codes` declares `parent: {collection: 'codebooks', field:
       'codebookId'}` (builtin-caqdas/index.js:100), `childrenOf` traverses it, and a
@@ -2826,7 +4564,6 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       Ordering note to settle during build: "codebook order = layer order" (index.js:843),
       so whatever carries code order has to survive a promote/add round-trip.
 
-
 - [x] **#164 — FIXED by #166's anchor rebuild (verified 2026-08-21).** Codings resolve
       by what they QUOTE, not by stored offsets, and a coding the resolver is unsure about
       is reported in the amber drift banner rather than drawn confidently in the wrong
@@ -2879,7 +4616,6 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       maps A's row ids onto B's by identity or a named key); this is anchoring rotting
       WITHIN one. Same family, different failure.
 
-
 - [x] **#165 — DONE in #166 (verified 2026-08-21).** *Re-anchor to selection* and
       *Change code* both preserve the segment id, so the note thread survives — confirmed
       in the browser by the owner. The memo-orphaning bug noted below was fixed with the
@@ -2928,90 +4664,6 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       immediately flags every hand-adjusted coding as rotten — the repair mechanism would
       condemn the repairs. `text` is the anchor of record for both; exactly one code path
       should own writing it.
-
-
-- [~] **Stop sharing — BUILT (2026-08-21); the link-revocation half is still open.**
-      `core/share-state.js` + File ▸ Sharing…, 612 tests. Needs a browser pass.
-
-      **What shipped.** A `share:project` target carrying `enableSharing` /
-      `disableSharing`, folded last-writer-wins by HLC and registered as a projection, so
-      the decision merges and travels like every other tier. Three states, and the third
-      is the load-bearing one: `true` / `false` / `null` for never-said. `null` is not
-      `false` — every project built before this tier has said nothing, and reading silence
-      as refusal would have switched collaboration off across the whole install on upgrade.
-
-      One gate covers hosting, auto-live and rejoining: `activeRoom()` refuses first,
-      ahead of even the invite room, so there is no second path to drift out of step.
-      `collabReady` is false while closed (the Go live button hides), `inviteLink()`
-      returns null rather than minting a key to a door that will not open, and the live
-      session is dropped the moment a refusal lands — **including when it arrives from a
-      peer**, since a stop that left the current session running would be the same empty
-      gesture `stopCoauthoring()` already was.
-
-      **The two open questions below, answered:**
-      - *Does disabling blank the collab identity?* **No.** The entry's own "two separable
-        actions — do not conflate them" wins over its "probably the right default": the
-        identity is what a folder co-holder syncs, and blanking it would make an
-        irreversible link-revocation ride along with a reversible refusal. Sharing can be
-        turned back on and the same room resumes. Revoking links stays a separate action.
-      - *Warn on open, or quietly refuse?* **Neither.** The state is simply visible: Go
-        live disappears and File ▸ Sharing… reads "Sharing is currently OFF for this
-        project". A modal on open would nag a co-holder about a decision that is not
-        theirs to make, and a silent refusal would leave them hunting a bug.
-
-      **STILL OPEN — action 1, revoke outstanding links.** Rotating `collabSecret` (and/or
-      `collabId`) to kill every invite URL already sent. Nothing here does that: stopping
-      sharing refuses the room those links point at, which is a different and weaker
-      promise, and the UI says so in as many words. Note it does NOT stop folder
-      co-holders, who receive the new identity on the next sync and rejoin transparently.
-
-      **Verification owed:** turn sharing off with a peer live and confirm the session
-      drops on both sides; reopen and confirm it is still off; turn it back on and confirm
-      the same room resumes. Original entry follows.
-      **Stop sharing — an affirmative "this project is not shared" (user request,
-      2026-08-05).** Today the only way out of collaboration is
-      `projects.stopCoauthoring()` (app.js ~1565), which leaves the *current session's*
-      room. That is "don't go online right now", not "this project is no longer
-      shared" — reopen it and the machinery is armed again.
-
-      **Why leaving the room is not enough.** A project's room is derived, not stored:
-      `collabId` + `collabSecret` live in the manifest and `roomFor(manifest)` hashes
-      them into a room id (live-invite.js). So *anyone holding the manifest computes the
-      same room by themselves* — which is exactly the design goal for a folder synced
-      through Dropbox/Drive, and exactly why "I left the room" shares nothing about
-      intent. Every co-holder can still walk back in.
-
-      **Two separable actions — do not conflate them:**
-      1. **Revoke outstanding links.** Rotate `collabSecret` (and/or `collabId`). Kills
-         every invite URL already sent. Does NOT stop folder co-holders, who receive the
-         new identity on the next folder sync and rejoin transparently.
-      2. **Stop sharing** (the one requested). A persisted, affirmative flag that
-         disables joining AND hosting for this project while it is the active one,
-         independent of whether a collab identity exists. This is the real off switch.
-
-      **Make it an OP, not a manifest scalar.** Same argument that moved plugin
-      activation onto the log (#157): a scalar merged between peers cannot express
-      "off". If A stops sharing and B still has it on, a scalar/union merge silently
-      re-enables it — absence is indistinguishable from "never said". So: a
-      `share:<projectId>`-style target with `enableSharing` / `disableSharing`, folded
-      last-writer-wins by HLC, exactly like the plugin tier. For a folder project the
-      log travels in the folder, so the disable reaches co-holders on the next sync
-      even though the room is refused. See [[one-true-log-explicit-ops]] and
-      [[guard-means-missing-state]] — this is a positive fact about the project, not a
-      guard neutralising a state.
-
-      **Scope boundary, state it in the UI.** This prevents FUTURE joins and severs
-      current connections. It cannot retract what peers already hold — they have the
-      log. Nor can it govern a folder sitting in someone's Dropbox (the user's own
-      framing, and correct). The honest promise is the same shape as at-rest
-      encryption's: it protects what happens next, not what already happened.
-
-      Open questions: does disabling sharing also blank the collab identity (strongest,
-      but then re-enabling mints a new room and every existing link is dead — probably
-      the right default), or keep it so sharing can be resumed with the same room? And
-      should a folder project warn on open that a co-holder disabled sharing, or just
-      quietly refuse?
-
 
 - [x] **SCED — DONE (2026-08-05).** `plugins/builtin-sced` (NAP, PND, Tau-U, IRD) plus a
       `sced` chart kind in core/chart-renderer.js. **Needs no R at all** — the indices are
@@ -3301,231 +4953,6 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
             `unionArr(activePlugins)` all go: the ops merge by themselves. The
             blocked-analysis notice survives, narrowed to its real case — a plugin that
             genuinely isn't installed here, which is a human decision, not a merge rule.
-
-- [ ] **#149 — GATE LIFTED (2026-08-04). 14/16 done; the 2 left are not bugs.**
-      A9b wants a project-level setting, not a fix, and A9c is a design note re-homed to
-      [[first-class-plugin-data]] / #150. Every correctness and data-corruption item is
-      closed and evidenced, and #152–#158 shipped on top of this foundation with live
-      two-window co-authoring verified. Treat the "blocks all new features" line below as
-      historical.
-      **One-true-log stability gate (post-#148 fresh-eyes audit). ORIGINALLY BLOCKED ALL
-      NEW FEATURES.** A full cross-model review of the #148 migration (done with a
-      different model as proofreader) found the gaps below. Several are silent data
-      corruption; nothing new ships until this list is cleared. Grouped by severity.
-      The test for "done": every user-data change is an appended op (or is
-      *deliberately* declared scalar/out-of-log and merges sanely), and no feature
-      path physically removes durable ops.
-
-  **A. Edits that escape the log / merge-safety violations**
-
-  - [x] **A1 (serious): `analysisLog.clear()` physically deleted durable ops
-        mid-session — DONE.** Both halves fixed. (a) *Merge resurrection:* `clear()`
-        now appends a `removeAnalysis` op per live run instead of `clearWhere`, so
-        the deletion propagates rather than dropping the runs out of the shared-id
-        ancestor for a peer to re-contribute. (b) *Overbroad trigger:* `replace` is
-        now emitted only when a load actually **destroyed existing data** — filling a
-        fresh dataset (`createWithData`, `extractColumns`, seeding a blank) reports
-        the new `load` reason — and the clear is scoped to the replaced dataset via
-        `clearFor(datasetId)`, with `datasetId` stamped on each entry by
-        `PluginActions`. Entries predating the field are left alone rather than
-        guessed at. Downstream consumers of the reason were updated with it:
-        `project-sync` marks sources dirty on `load` too (else a first import's
-        Parquet never gets written), and `undo-coordinator` resets on `switch`
-        (project open / new project) rather than relying on the seed's `replace`.
-  - [x] **A2 (serious): `library.pullLatest` rewrote a live dataset's history outside
-        the log — DONE.** The pull ran `restoreState` → `#resetDataHard` →
-        `clearWhere(#mine)`, physically dropping an established (possibly already
-        synced) slice and re-minting the ops. On the next merge the peer's copies of
-        the dropped ops read as *their additions* and unioned back in alongside the
-        re-minted duplicates — a doubled pipeline, the delete-inference class again.
-        *Fixed:* the pull now APPENDS (`replaceHistory: false`). Nothing is removed
-        from anyone's log; the recipe opens with a `load`, and B1's replace barrier
-        folds the superseded ops away identically on every peer. Verified: after a
-        pull every pre-pull op id is still present, only the new pipeline is live, the
-        data is v2 and the local transform is re-applied on top. (`#add` was always
-        safe — a fresh dataset has an empty slice.)
-  - [x] **A3: project NAME is user data and is now an op — DONE.** *Decision: name as
-        an op, not a merged scalar* — it's user data, and with `author` on every op it
-        answers "who named this project that?". `setProjectName` on target
-        `project/name`, folded by the `PROJECT_META` projection, carried in
-        `manifest.log`, applied on every load/merge path, and the folded value WINS over
-        `manifest.name` so a co-author's rename actually lands. Gotcha found in
-        testing: `store.rename` only patches `manifest.name` in place, so the rename now
-        also marks dirty + schedules a real save, or the op never reached disk.
-  - [x] **A4 (serious for qual): recycle-bin round-trip lost workspace/coding
-        state — DONE.** Restore minted a NEW dataset id, but `ws:` leaves are keyed
-        by dataset id, so a deleted-then-restored coded dataset came back with its
-        CAQDAS codebook silently gone. *Fixed by restoring under the ORIGINAL id*
-        (`DatasetManager.restoreDeleted`; the bin entry now carries `datasetId` in
-        its catalog record) — the leaves re-attach with nothing to re-home. The
-        replay is appended *alongside* the deleted dataset's orphaned ops rather than
-        clearing them (`restoreState(..., {replaceHistory:false})`): physically
-        dropping them is the A2 resurrection pattern, and the B1 replace barrier
-        already keeps them dead on every peer. `WorkspaceStore.dropDataset`'s fate
-        decided: **delete no longer calls it** (deletion must stay recoverable) — it
-        now runs on *permanent purge*, guarded to the project that's actually open.
-        Added `rehomeDataset(old,new)` as the log-native fallback for the
-        should-never-happen case where the original id is taken.
-  - [x] **A5: media assets are now INSIDE the project — DONE (bar gap-fill).** They
-        lived in their own OPFS root (`media-assets/`) with a `.json` metadata sidecar
-        per asset, so a shared project's audio/video/images simply weren't there for
-        the recipient. Now: bytes go to the project's own `assets/<id>.bin` through
-        `ProjectStore` (so at-rest encryption, folder mode and the project layout all
-        apply for free), and the metadata is an **op** — `addAsset`/`removeAsset` on
-        target `asset:<id>` — folded by the new `ASSETS` projection, so the index
-        merges, undoes and travels like every other tier. Writes stream through the
-        driver (`writeStream`), and an unprotected read hands back the file handle's
-        own Blob, so a multi-GB movie is never materialised in either direction; a
-        *protected* project buffers, deliberately, rather than storing media in the
-        clear. `.crosstab` carries `assets/<id>.bin` + the ops. Adding media to a
-        never-saved project creates the project first (`ProjectSync.ensureProject`).
-        **DONE (#155):** live-P2P gap-fill for assets — see below. The rest of this note
-        is the original state.
-        **Was open:** live-P2P gap-fill for assets (`MediaStore.missing()` is the
-        hook), and a one-time cleanup of the now-stale `media-assets/` and `recycle/`
-        OPFS roots left over from the old stores.
-  - [x] **A8: destructive replace-import — CLOSED by removing "Replace" entirely.**
-        *Decision:* a dataset can be created, deleted, and have rows/columns added or
-        removed — but NOT wholesale cleared and refilled. The import dialog's `Replace`
-        is gone; in its place `Swap in (old one goes to the bin)` imports into a NEW
-        dataset that **inherits the outgoing dataset's name**, then bins the old one —
-        after the import succeeds, so a failed import never costs data you still have.
-        Same one-click gesture, none of the machinery: nothing is superseded within a
-        dataset, so there is no generation to bin (A8a) and nothing is stranded (A7).
-        The old dataset keeps its rows, its id, and its coding, and is restorable for
-        free. NOTE: the engine's `loadDataset({mode:'replace'})` remains — it is how any
-        *empty* dataset gets filled, and `restoreState`/`pullLatest` rely on `load` as
-        the replace barrier (B1). Only the destructive user-facing option is gone.
-  - [x] **A9: project export now asks about linked building blocks — DONE (bundle
-        path).** *Finding that reshaped it:* the three options in the original plan
-        (embed / keep link / unlink) collapse to two, because a bundle already carries
-        every dataset's own sources — the DATA travels either way, so there is no
-        embed-vs-reference size trade-off. All that's at stake is the `libraryLink`
-        badge and its Pull-update button. *And that link is local by construction:* a
-        block's id is a `crypto.randomUUID()` minted on whichever machine first saved
-        it, and there is **no mechanism to share a block between machines at all**, so a
-        recipient's library will never hold that id — not even if they independently
-        imported the identical file. Keeping the link is only useful for a copy coming
-        back to the same machine. So: `.crosstab` export detects linked datasets and
-        asks Keep / **Drop (default)**, saying plainly that the link won't resolve for
-        anyone else. Drop nulls `libraryLink` in the exported `datasetMeta`.
-  - [ ] **A9b: the same prompt for the folder + live paths.** A folder-backed project
-        and a live hand-off leak the same dangling link, but they're *continuously*
-        synced — a one-shot modal is the wrong shape. Wants a project-level setting
-        ("share links to my building blocks: no") rather than a prompt per save.
-  - [ ] **A9c (design): building-block ids aren't portable.** The deeper issue A9
-        surfaced. Blocks are addressable only by a locally-minted random UUID, so a
-        shared block is *impossible*, not merely unsupported — two people who import the
-        same file get different ids. If cross-machine blocks should ever work, ids need
-        to be content- or origin-derived and blocks need an export/import path. Belongs
-        with [[first-class-plugin-data]] and #150.
-        *Related, measured:* adding a block **instantiates** it — `library.#add` creates a
-        real dataset and `restoreState`s the block's Parquet into the project — so the
-        link is pure provenance (`{id, version, baseLen}`), never a data reference. A
-        project with two native datasets plus one from a block holds three Parquet
-        sidecars of its own, and the block's bytes exist twice on the machine (library +
-        project) before any export. That's the honest cost of the template model, and it
-        is *why* dropping the link on export is harmless: the recipient already has the
-        data as an ordinary dataset. The library COULD be content-addressed to dedupe
-        instantiations (as media now is), but that would make projects non-self-contained
-        — directly against what A5/A8 established. Self-containment wins; recorded so the
-        trade-off is a decision, not an oversight. It also fits the design that upgrading
-        a project to a newer block version is deliberately opt-in (`pullLatest`).
-
-  **B. Bugs introduced/exposed by the rewrite**
-
-  - [x] **B1 (serious): undo past a replace-import bricks the dataset — DONE.**
-        `#resetData` retracted the old steps but `#dropDuckDB` physically dropped
-        their bytes, and the retracts stayed undoable: import-replace → Ctrl+Z ×2
-        revived a byte-less source, `rederive` threw, and kept throwing.
-        *Fixed by deriving the reset instead of logging it.* A `load` already
-        restarts the projection, so `foldDataOps` now treats the last live `load` as
-        a **replace barrier** and drops what precedes it (fixed by HLC order, so a
-        reorder moves steps but never resurrects them). A replace therefore appends
-        no ops at all — nothing is retracted, so one undo of the `load` lifts the
-        barrier and the whole previous pipeline returns. `#pruneDeadSources` frees
-        only what is *already* behind a barrier, so exactly one generation stays
-        materialised for that undo. And `rederive` now **skips** a source op whose
-        bytes this peer lacks (reporting it on `missingSources`) instead of throwing
-        — a durable op can no longer poison every later fold. That last part is also
-        the landing pad for B3 and for live gap-fill's byte-less window.
-  - [x] **B2 (serious, silent wrong data): row-id collision after reload — DONE.**
-        Restores restarted `#sourceSeq` at 0 while restored Parquet kept row ids
-        baked from the ORIGINAL seq, so with a gap in the log (routine after #148 —
-        every replace leaves a byte-less source that consumes no seq on restore) the
-        next appended file was handed a live range: duplicate `__ct_rid` across the
-        UNION, and a `setCell` CASE editing TWO rows. Verified in-browser both ways
-        (fix off → 2 rows changed by one edit; fix on → 1). *Fixed:* `#ensureRowId`
-        now returns the base actually in the table (read back off a restored source
-        via `min(__ct_rid)`), and every source-materialising path feeds it to
-        `#noteRowidBase`, which advances `#sourceSeq` past it.
-  - [x] **B3 (serious): a failed `rawRestore` dropped a dataset's ops from the next
-        save — DONE.** `receiveOps` ran only after ALL sources materialised, so one
-        unreadable Parquet threw, the dataset was dropped, and its data ops never
-        reached the in-memory log — while its collection membership survived. The next
-        save is a blind overwrite, not a merge, so it wrote a manifest permanently
-        missing that dataset's entire history. *Fixed:* materialisation is now guarded
-        **per source op** — a failure lands the envelope byte-less (bytes stripped,
-        `file` ref kept so it can heal) instead of aborting, and `receiveOps` always
-        runs before the re-derive, so the history is durable even if the re-derive
-        itself throws. B1's `missingSources` tolerance does the rest: the pipeline
-        replays without the dead source and names it. Verified by corrupting a
-        `src_<opId>.parquet` on disk and reopening: the dataset stays, reports
-        `missingSources: [{label: 'A'}]`, keeps all three steps applied, and after a
-        further edit the re-saved manifest still carries every op. The live-P2P
-        byte-less window (ops ahead of their gap-filled bytes) rides the same path.
-  - [x] **B4: deterministic workspace merge-op ids could violate op immutability —
-        DONE.** The id hashed only (target + resolved value), so a later merge that
-        resolved to a previously-emitted value re-minted the SAME id with a HIGHER hlc
-        — reachable via delete-and-redo cycles under add-wins. `receiveOps` dedups by
-        id, so the newer copy was dropped and the leaf's fold could then pick an
-        ordinary write over the merge result: peers genuinely out of step while
-        `manifestsEqual` (an id-set comparison) reported them in sync. *Fixed:* the
-        contributing op-id set (sorted, so operand order can't matter) is mixed into
-        the hash. Covered by a unit test on `deterministicOpId` plus a re-run
-        determinism test.
-  - [x] **B5: identical concurrent intents surfaced phantom conflicts — DONE.**
-        `threeWayLog`'s add/add target pass flagged two peers both undoing (or both
-        retracting) the SAME op as a conflict, though every resolution yields the
-        identical outcome. *Fixed:* an exemption for `undo`/`redo`/`retract` ops whose
-        `payload.opId` matches. Deliberately EXCLUDES `reorder` — rival orderings are a
-        real disagreement, and a reorder names no single op. Four tests pin it,
-        including two negative controls (undoing *different* ops on one target, and
-        rival reorders, both still conflict); verified load-bearing by disabling the
-        guard and watching exactly the two positive cases fail.
-
-  **C. Hygiene / decisions**
-
-  - [x] **C1: live-P2P applied peer ops never marked `#dirty` — DONE.** *Decision:
-        peer work is work.* Applied ops lived in memory until our OWN next edit, so a
-        crash, a closed tab or a power cut lost a co-author's contribution locally —
-        "it's still on their machine" isn't persistence. `#persistPeerWork` now marks
-        the project dirty and schedules a save on every successful live apply.
-        Deliberately NOT routed through `#onChange`, which would also fire
-        `#scheduleLivePublish` and echo the just-received state back at the peer — this
-        takes only the persistence half. When the data tier was rebuilt it also marks
-        every live dataset's sources dirty, or the incremental save would write a
-        manifest referencing `src_<opId>.parquet` sidecars never written for a peer's
-        new dataset.
-  - [x] **C2: byte files were never pruned — DONE.** A purged dataset's Parquet and
-        every replaced import's sidecar stayed on disk forever (`orphanDataOps` stripped
-        the `file` ref; nothing removed the file). `ProjectStore.#sweep` now runs after
-        each save, keyed on **the manifest just written**: a file survives iff some op in
-        the saved log names it. That rule can't drift from what a load will read, covers
-        source sidecars and media assets alike, and stays correct when #150 adds asset
-        ownership — and when A8a starts binning replaced generations, their ops will name
-        their files, so the sweep keeps them with no change. Runs after the manifest is
-        durable, so a crash mid-sweep loses only garbage; best-effort, never fails a save.
-        Verified: after a replace-import the superseded generation's sidecar is gone and
-        only the live one remains.
-  - [x] **C7 (decision): post-merge Undo semantics — DECIDED, no code change.**
-        Edit ▸ Undo targets the highest-HLC live op in the active dataset regardless of
-        author, so right after a sync Ctrl+Z can undo a COLLABORATOR's newest edit (and
-        the marker syncs back). *Decision: keep it.* Either rule disappoints someone;
-        this one is simple, matches "the log is shared history", and the History panel
-        already exists for undoing a specific action further back. Documented rather
-        than changed.
-
 
 - [x] **#153 — DONE.** Converge plugin data and datasets into ONE notion of project content.
       Raised by the user looking at the shipped sidebar: Map Layers sit in their own
@@ -4264,108 +5691,6 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
           fully pre-filled skip the picker; missing required inputs show host
           dialogs. Spatial workspace uses this: "Analyse selection…" → filtered
           dataset → picker of available analyses → cross-plugin `app.run.analysis`.
-- [ ] **CAQDAS cross-plugin invocation.** (Pulled out of #145 — a CAQDAS/#147
-      concern, not the ownership model.) The coding workspace should be able to run
-      analysis plugins on coded-theme subsets (e.g. run frequencies on all segments
-      coded "anxiety"). Needs design thought on: does the derived dataset contain the
-      coded text segments, the source rows, or a frequency table of codes? Different
-      analyses want different shapes. The `app.run.analysis` plumbing is ready — this
-      is a CAQDAS design question, not an infrastructure one.
-- [ ] **Spatial workspace features (post-verb).** Pulled out of #145's space-verb
-      item — these are `builtin-spatial` features, unrelated to verb dispatch.
-  - [ ] **Layer tree in region selection column.** Display loaded boundary sets as a
-        tree in the region-selection sidebar, so the user can expand/collapse layers
-        and select regions within each.
-  - [x] **Point-in-polygon geocoding — DONE (2026-09-29).** Map layers ▸ **Assign regions…**:
-        given the boundary set already loaded in the workspace and a longitude/latitude column
-        pair, every case is matched to the region whose shape contains it. The gap it closes is
-        mundane and constant — survey and admin data arrives with coordinates and no area code,
-        while the choropleth, Moran's I by region and "Analyse selection" all need a region
-        column nobody has, so today it comes from ArcGIS or a QGIS spatial join before CrossTab
-        is opened at all.
-
-        **Hand-rolled, not Turf.js** — this entry had assumed the dependency. Even-odd ray
-        casting with holes and multipolygons is about forty lines; the dependency is not forty
-        lines, because a plugin runs in a sandboxed opaque-origin iframe, so an external import
-        means a CSP allowance, an entry in `core/assets.js`, a runtime host for the offline cache
-        and a line in the air-gap vendor script — carried forever, for arithmetic that fits on a
-        screen. Same test the owner applied to vendoring and to hand-rolled statistics: judge a
-        dependency by what maintaining it costs. `rPackages` is unchanged; no R is involved.
-
-        **Four properties decide whether a geocode can be trusted, and each is tested:**
-        - **A case on a shared border lands in exactly ONE region.** The half-open comparison
-          `(yi > y) !== (yj > y)` gives that; the intuitive `>=` counts it in both, so a
-          respondent on a county line would inflate two counties. Swept along a whole shared
-          edge, vertices included, not spot-checked. The cost of that rule is pinned too: a point
-          exactly on the *excluded outer* edge of the coverage falls in no region, is reported as
-          `outside`, and must not be "fixed" into the double-counting version.
-        - **A hole is outside.** GeoJSON rings after the first are interior, so an enclave —
-          Lesotho, a lake, a city carved out of its county — is not the surrounding region.
-        - **Three different outcomes, counted separately and all reported:** no coordinates,
-          outside every region, and inside more than one (overlapping boundary files are common;
-          the first in file order wins and the count says a choice was made). A geocode that
-          reported only its successes would be the shape of a silent wrong answer.
-        - **A swapped column pair is named as the likely cause**, because it is the most common
-          way this goes wrong and it presents as "my boundary file doesn't cover my data". Only
-          when the columns as given place almost nothing AND flipping them places most of it — a
-          looser rule cried wolf on a file that genuinely does not cover every case.
-
-        **The bug the tests found, which is the reason for writing them:** `Number(null)` is
-        **0**, as are `Number('')` and `Number(' ')`. A case with a missing coordinate was
-        therefore geocoded to whichever region contains the point (0, 0) — silently, and with
-        full confidence. The app's own numeric columns arrive as NaN so the app path was safe,
-        but a string column or any caller passing plain arrays would have hit it. A `coord()`
-        helper rejects non-numbers before coercion, and a numeric `0` (or `"0"`) is still a
-        coordinate.
-
-        **It writes a new dataset, not a column**, and that is not a limitation to route around:
-        a plugin's data surface is read-only apart from `data.create`, because the data op-log
-        belongs to the host and a plugin adding a column would be a mutation with no op behind
-        it. Same rule that made import offer a Swap ([[no-inplace-replace]]). So the result is a
-        sibling dataset with the original columns plus the region, the original is untouched, and
-        the report says so — a user looking for a new column in the grid they were on needs
-        telling where it went.
-
-        A grid index over the features' bounding boxes, because unindexed this is
-        points × regions × vertices: 10,000 respondents against 3,000 census tracts is tens of
-        millions of ring walks, which is the difference between instant and a frozen tab. 5,000
-        cases against 400 regions runs in single-digit milliseconds. 28 tests.
-
-        **Checked against `sf`, which is the authority** (`spike/compare-geo-sf.mjs`, exits
-        non-zero on disagreement). Hand-rolled arithmetic only earns its dependency saving if it
-        is right, and the owner made it a standing rule: *"it's good to check ourselves any time
-        we need to hand-roll or modify a standard R library."* Against `sf::st_within` on planar
-        geometry, over 4,000 points across squares with a shared border, a concave L, a donut
-        with its enclave as a separate region, and a two-part island: **every interior point
-        agrees, same region and same count** — including the 92 in the enclave and the 1,722
-        outside everything.
-
-        **Boundary points are where the two deliberately differ, and the harness states it as
-        three separate facts.** `sf` follows DE-9IM: a point on an edge is within NEITHER
-        neighbour and intersects BOTH — the first drops a case on a county line, the second
-        double-counts it, and neither is usable for geocoding. The half-open rule gives: never
-        more than one (the load-bearing property, since a double count is a wrong NUMBER);
-        exactly one along a shared edge, and it is one `sf` agrees the point touches; and at a
-        VERTEX, sometimes none — 2 of 9 tested — which lands in the visible `outside` count, and
-        which `sf::st_within` also puts in none, so it is a tie-breaking difference rather than a
-        containment one.
-
-        **The planar assumption is now measured rather than asserted.** `sf` 1.x uses s2 for a
-        geographic CRS, where an edge between two lon/lat points is a great-circle arc that bows
-        poleward — which is why the comparison forces planar geometry on both sides. The gap is
-        quadratic in edge length: a 10° edge bows **11.4 km**, 1° bows **121 m**, 0.1° bows
-        **1.2 m**, 0.01° bows **1 cm**. Any real boundary file has vertices a few hundred metres
-        apart, so the two models sit millimetres apart and a case would have to fall within that
-        of a border to be assigned differently. A continent-sized polygon is the one place it
-        would matter, and nobody geocodes against one.
-
-        *(Finding the s2 default is what the comparison was for: the first run showed 16
-        "disagreements" that were nothing of the kind — sf was answering a spherical question.)*
-
-        **Still not handled:** the antimeridian and the poles, where a ring's coordinates wrap.
-        Not silently wrong — those cases land in the `outside` count rather than in a neighbouring
-        region. Projected coordinate systems are the user's to reconcile: the failure message says
-        so rather than guessing at a datum.
 
 - [x] **Plugin data as first-class citizens (#146).** *Built.*
       Workspace blobs promoted from opaque side-cars to host-managed, independently
@@ -4557,19 +5882,17 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     `LIMIT/OFFSET` SQL windows over DuckDB — a natural fit), **Data
     transform/recode API** (becomes SQL / `CREATE TABLE AS`). Settle the
     `getDataFrame`/`getColumns` contract here so those don't get reworked later.
-- [ ] **Verify CAQDAS import/export round-trip + legacy-project load.** Runtime
-      regression check (not tied to any one code change): confirm a CAQDAS coding
-      project exports and re-imports losslessly (QDPX / project bundle), and that an
-      older-format saved project still loads and hydrates its coding state. Exercises
-      the workspace-store migration chain (legacy → v2 → v3 → v4) end to end in the app.
+
 - [x] **Add a committed dev server for contributors — DONE.**
       `scripts/dev-server.mjs` (zero-dependency Node) serves the repo root with
       COOP `same-origin` + COEP `credentialless` + CORP `cross-origin`, correct
       `.js`/`.mjs`/`.wasm` MIME types, and `Cache-Control: no-store`. Wired as
       `npm run dev`; README updated to use it instead of `python -m http.server`.
       This is the same server we use for internal Chrome testing — dogfood it.
+
 - [x] **Add a `LICENSE` — DONE.** Released public-domain under the **Unlicense**
       (#137); `vendor/readstat/` noted as MIT.
+
 - [x] **Provide the PWA icons — DONE.** `vendor/icon-192.png`, `vendor/icon-512.png`
       (+ `icon-180.png` Apple touch) exist and are referenced by `manifest.json`.
 
@@ -4885,7 +6208,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - [ ] **Not browser-tested yet:** the arrows on an analysis row, the busy state during a
         WebR re-run, and that Output visibly reorders to match History.
 
-## Hardening before any public/shared deploy
+### Hardening before any public/shared deploy
 
 > **#89 hardening pass — DONE (see [docs/SECURITY.md](docs/SECURITY.md)).** Full
 > exploit audit + 4 fixes shipped (stored-XSS on project open, plugin-name XSS on
@@ -4937,6 +6260,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         even a sanitiser miss can't execute in the host. The plugin *sandbox* CSP is
         already in place; this is just the host document. Its own small item, unaffected
         by the DOMPurify decision.
+
 - [x] **Pin the WebR version — DONE; vendoring decided against.** The CDN default now
       pins **WebR v0.6.0** (`core/assets.js`: `webrUrl` + `webrOptions.baseUrl` both on
       `…/v0.6.0/`), matching the already-pinned DuckDB/Arrow/hyparquet — so a silent
@@ -4946,6 +6270,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       runs R 4.6.0 (`mean(1:5)=3`). *Vendoring capability still exists* for the opt-in
       air-gap deploy (`./vendor/` via `scripts/vendor-assets.mjs`, which records the
       grabbed version). Bump the pin deliberately when adopting a new WebR.
+
 - [x] **PWA precaching — DONE** (stale framing: it never needed vendoring). `sw.js`
       already does a two-tier cache (#92): the same-origin app shell is precached on
       install + cached-on-use; the cross-origin runtimes (WebR/DuckDB/Arrow/hyparquet)
@@ -4961,7 +6286,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       network in the driver — but the cache is correctly populated and the SW serves it
       cache-first.)
 
-## Open questions / decisions to make
+### Open questions / decisions to make
 
 - [x] **API version mismatch → warn-and-allow — DONE.** No shims, no hard break: a
       plugin whose `apiVersion` differs from the engine (different major, or a newer
@@ -4974,6 +6299,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       a hard error (invalid manifest). **Verified in Chrome:** a builtin bumped to
       apiVersion `1.0.0` loaded, ran normally, and showed the red `⚠ new API` badge —
       only on that plugin.
+
 - [x] **R package pre-loading — DECIDED: keep on-demand.** Don't pre-declare a
       "preload" set — we won't guess which packages matter enough to warm speculatively,
       and heavy ones (Stan/brms, lavaan) risk the WebR ~4 GB ceiling. Packages install
@@ -4987,6 +6313,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     nothing for storage/transport/display (JS `Number` hits the same 2⁵³ wall),
     so it's only worth loading for genuine 64-bit *arithmetic in R* — a per-
     variable opt-in to add later, purely additive, no debt from deferring.
+
 - [x] **Multi-file plugins — DONE (2026-09-27). A plugin's code can span several files.**
       `import { x } from './util.js'` now works inside the sandbox. Authors declare nothing:
       the host scans the entry's source for relative specifiers, fetches those siblings, scans
@@ -5348,7 +6675,25 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
       Original:
 
-- [ ] **#179 — cross-dataset variable inputs: let a picker offer variables from EVERY
+- [x] **#179 — SUPERSEDED (2026-10-13) by the DONE entry above (shipped 2026-09-28).**
+      This was a second, never-closed copy. Its four "decide before building" questions
+      were all settled by the work that shipped, and the answers are worth keeping beside
+      the questions:
+      1. *A variable reference stops being a bare string* — the active dataset keeps bare
+         names, every other dataset is qualified, through the picker, the injected inputs
+         and the recorded analysis alike.
+      2. *What does "the same row" mean?* — nothing, deliberately. **One R frame per
+         dataset**, each input bound from its own, so the host asserts no relationship and
+         the analysis's own R raises if it needs one.
+      3. *Injection has to span datasets* — it does, by the same per-dataset frames; a
+         single-dataset run still emits a byte-identical prelude.
+      4. *Which dataset does the RESULT belong to?* — every run is stamped with its
+         `datasetId`, and `serialize()` / `replayScript()` / `repositionAnalysis()` were
+         fixed to honour it rather than placing by `at` alone.
+
+      The original text follows, unchanged.
+
+      **#179 — cross-dataset variable inputs: let a picker offer variables from EVERY
       open dataset, not just the active one (user, 2026-09-21).** "Rather than forcing
       the second dataset to be input as new columns it can instead be kept as a second
       dataset and the plugin variable picker simply lists the variables from all
@@ -5365,7 +6710,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
       Four things have to be decided before this is buildable; none is hard, but all
       four are load-bearing and cheap to get wrong:
-  - [ ] **A variable reference stops being a bare string.** Every plugin input passes
+  - [x] **A variable reference stops being a bare string.** Every plugin input passes
         variable NAMES (`{"ivs": ["age", "income"]}`), and two datasets may both have
         `AGE`. So a cross-dataset pick needs qualifying — `dataset:name`, or an object
         `{dataset, name}`. That touches far more than the picker: `toInjectInputs` /
@@ -5376,19 +6721,19 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         every plugin that echoes a chosen name into a caption. Decide the spelling
         ONCE, and make the qualifier optional so the thousands of existing
         single-dataset references keep parsing unchanged.
-  - [ ] **What does "the same row" mean?** The honest answer for "keep it as a second
+  - [x] **What does "the same row" mean?** The honest answer for "keep it as a second
         dataset" is *row position* — zip column A[i] with column B[i]. Then say what
         happens when the lengths differ: truncate to the shorter and SAY SO in the
         caption, rather than recycling (R's silent recycling rule would fabricate
         pairings) or padding with NA (which quietly changes N). This is the one place
         the user's "it's on the user" needs the app to be loud, because a
         length mismatch is invisible in the output otherwise.
-  - [ ] **Injection has to span datasets.** `getInjectionParquet({variables})` builds
+  - [x] **Injection has to span datasets.** `getInjectionParquet({variables})` builds
         the frame from the active dataset. Each dataset is its own DataStore with
         id-namespaced DuckDB tables, so the data CAN be read side by side in one
         engine — but the per-dataset boundary the manager maintains needs an explicit
         seam rather than an accidental one.
-  - [ ] **Which dataset does the RESULT belong to?** `analysis-log.js` records one
+  - [x] **Which dataset does the RESULT belong to?** `analysis-log.js` records one
         `datasetId` per run, and uses it for exactly one thing that matters: a
         destructive re-import of a dataset clears only that dataset's analyses
         (`clearFor`). An analysis spanning two datasets has two parents, and the
@@ -5403,736 +6748,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       variable list to the union would make `AGE` ambiguous in the one place a user
       most needs to trust what they clicked.
 
-## Deferred features (intentionally not built yet)
-
-- [~] **Online collaboration — async (folder-backed) + live (P2P) (#143). BOTH
-      TRANSPORTS SHIP** (verified 2026-08-21): folder-backed projects (`folder-sync.js`),
-      live P2P (`live-sync.js`, `live-presence.js`, `live-protocol.js`), invite links
-      (#156), asset gap-fill (#155). **What is left:** graph mode so iPads can join (below,
-      `showDirectoryPicker` is desktop-only), and the separate "Stop sharing" item near the
-      top of this file. Original:
-      **Online collaboration — async (folder-backed) + live (P2P) (#143).**
-      Recurring faculty ask; keeps coming back. Two features people picture as
-      separate — "put my project in a OneDrive folder" and "two of us edit at
-      once" — are really *one* build wearing two hats. **The load-bearing piece is
-      neither OneDrive nor WebRTC; it's making the op-log mergeable.** Live-sync and
-      folder-sync are just two *transports* over that foundation.
-  - **The foundation — a mergeable op-log (the real project). [x] DONE** — landed on main
-    as #148's one-true-log migration; the branch note below is historical.
-    **[~] STARTED (historical)** —
-    `core/merge.js` + op identity in `core/data-store.js` shipped on branch
-    `feat/collab-merge-kernel`, 13 headless tests (`npm test`). Done so far:
-    (1) every `#log` op carries a **stable id** (deterministic content+index id for
-    pre-collab legacy saves so they stay mergeable; random for new ops), persisted
-    in export/restore, undo/redo-safe; (2) the pure merge kernel — `threeWayLog`
-    (core tabular class), `addWinsSet` (CAQDAS codebook), `lww` (spatial slot bytes),
-    and `mergeProject()` which **dispatches each state class to its owner's declared
-    merger** and aggregates conflicts across tiers. **Key architecture decision (from
-    design chat): the engine coordinates, the *owner* defines "merge"** — a plugin
-    declares `manifest.merge = { strategy }` or exports a `merge()` fn; core is just
-    the owner of the tabular class (so its three-way merge isn't a kernel exception).
-    The #145/#146 integrity model contains an untrusted merger to its own blob, which
-    is what makes delegating merge *meaning* safe.
-    **CAQDAS + spatial builtins now declare their merge** (commit be8200a): caqdas
-    exports a custom `mergeState` (composite blob — `merge:{via:'mergeState'}`,
-    codes/segments add-wins + config LWW; the "two coders on the same transcripts"
-    Dedoose case is a passing test); spatial declares `merge:{strategy:'lww'}` per
-    slot (add-wins slot set + LWW bytes). 19 headless tests, all green, incl. the
-    real caqdas merger imported from the plugin. *Still open:* stored common-
-    ancestor marker (a transport concern — the merge fn takes ancestor as an arg
-    today); wiring `mergeProject` into a real transport (incl. the tiny glue that
-    resolves a manifest `merge.via` string → the module's exported fn); dependency-
-    aware op ordering (MVP appends mine-adds then theirs-adds); the host conflict-
-    resolution UI; **in-browser check of the op-id persistence path** (syntax-checked
-    only — DuckDB path can't run headlessly). See [[collab-merge-kernel]].
-    The transform log
-    (`core/data-store.js`, op types at ~L149–153: `load/append/join/setVariable/
-    setCell/computeVar/recodeVar`) is a **dependent pipeline**, not a bag of
-    commuting changes — each op folds onto the accumulated result of the prior ones
-    (`(sql) UNION ALL BY NAME (…)`, joins resolve columns against the `byName` map
-    built so far, recodes read earlier-derived vars). So you **cannot** drop a CRDT
-    (Yjs/Automerge) over the whole thing: if A renames a var and B concurrently
-    recodes reading the old name, "union the op sets" yields a pipeline that won't
-    run — a *dependency* conflict, not a merge conflict a CRDT resolves. Conflict
-    resolution therefore splits **per class of state**, and only one class is hard:
-    - *Transform pipeline* — **git-style three-way merge**: common ancestor + replay
-      each side, auto-merge provably-disjoint ops, and **surface** genuine collisions
-      / broken dependencies to the user. **No silent auto-merge here** — not just on
-      effort but on principle: a wrong silent merge in a stats tool doesn't crash, it
-      produces plausible numbers that feed a published finding. Faculty vastly prefer
-      being asked ("you and Pat both edited `income_recode` — keep yours / theirs /
-      see both"). This is also the cheapest correct MVP: detection + user resolution
-      ships long before any clever auto-merge.
-    - *Variable metadata* (`setVariable {name, patch}`) — per-field last-writer-wins;
-      commutes across different variables. CRDT-easy.
-    - *CAQDAS codebook* (the opaque workspace blob, `core/workspace-store.js`) —
-      set-like codes → add-wins CRDT. **This** is where Yjs actually earns its keep.
-    - *Output* — regenerable; union or replace.
-    - **The primitive that unifies both transports:** give every op a **stable id**
-      and record a **common ancestor** (last op both sides agreed on). Then folder =
-      three-way merge of two divergent files; live = the *same* three-way merge run
-      continuously. Same algorithm, different clock.
-  - **Async transport — folder-backed projects (FSA). [x] DONE + VERIFIED LIVE**
-    (branch `feat/collab-merge-kernel`). Shipped end-to-end and confirmed with **two
-    real Chrome windows co-editing a shared local folder**: File ▸ Move project to a
-    folder… / Open project from a folder… / Close project folder; one-gate passphrase
-    (set for a fresh folder, enter for an encrypted one); autosaves route through the
-    merge-aware `syncFolderProject`; a 3s poll pulls peer writes (backs off when
-    hidden); conflicts via `showConflictDialog`. On-disk everything is ciphertext bar
-    the plaintext salt/verifier. Bidirectional variable-recode merge, **step-reorder
-    merge**, rapid-edit debouncing, and idle quiescence all verified. Four real bugs
-    that live-testing caught (headless tests had missed) were fixed + regression-tested:
-    write-storm (undefined-key JSON asymmetry), two-window ping-pong (canonical operand
-    order), clobber/"A owns it" (per-peer base, not a shared `project.base.json`), and
-    reorder-not-synced (three-way-merge the step order). 93 headless tests.
-    *Remaining (NOT folder-sync):* recipient import-side decrypt of a `.enc` export;
-    live P2P 2-machine test + invite/presence UI; OPFS opt-in toggle + settings;
-    chunked-Parquet crypto. Original foundation notes kept below.
-  - **Async transport — folder-backed projects — foundation notes.** Commit 7e8cdb8. Done: the FSA **seam** —
-    `ProjectStore.useDirectory(handle)`/`folderBacked`, `#root()` now parameterized
-    around an injected picked-folder handle (falls back to OPFS); op `id` threaded
-    through source save/load; `readManifest()` (cheap stat+parse for change-detection
-    / reading "theirs"), `readBase()`/`writeBase()` (the `project.base.json`
-    common-ancestor snapshot). Plus **`core/collab-sync.js`** — the project-level
-    three-way merge (`mergeManifests`): per-dataset op-log three-way (add-wins the
-    dataset *set* — never drop data), owner-dispatched workspace-leaf merge,
-    `buildMergers` resolving each plugin's `merge` (strategy or `via`→exported fn),
-    one aggregated dataset-tagged conflict list. 9 headless tests (28 total).
-    **Orchestration + handle-persist now DONE too** (commits fd66f7d, 90fd138):
-    `core/folder-sync.js` — `decideSync` (seed/in-sync/push/merge) + `syncOnce`
-    (read theirs+base → decide → write manifest+base); `ProjectStore.writeManifest`
-    with atomic temp+`move()` rename (`#writeAtomic`, torn-read-safe);
-    `core/folder-handle.js` — IndexedDB persist of the picked dir handle +
-    `ensureReadWrite`. **34 headless tests + VERIFIED IN-BROWSER** against real OPFS
-    File System Access I/O (OPFS dir as a stand-in shared folder): a peer's on-disk
-    edits + local edits three-way merge (dataset op-log + caqdas codebook via the
-    real `mergeState`), 0 conflicts on disjoint edits, atomic write leaves no `.tmp`,
-    base updated to merged; dir handle round-trips IndexedDB as a live handle. Op-id
-    persistence path also verified end-to-end through real DuckDB.
-    **Conflict resolution now DONE too** (commit 4c22509): merge is a pure function
-    of user choices — every conflict carries a stable key, and feeding a `resolutions`
-    map (key→mine/theirs/both) back re-runs deterministically to 0 conflicts (threaded
-    through the whole kernel + `mergeManifests` + `syncOnce`, which withholds the write
-    until conflicts are resolved). `core/conflict-ui.js` renders the "keep yours /
-    theirs / both" modal. Resolution even reaches *inside* the caqdas custom merger
-    with no plugin change (resolveMerger pre-binds the ctx into its helpers). 40
-    headless tests; VERIFIED IN-BROWSER (2 conflicts → form → flip → re-merge → clean).
-    **The full app sync flow is now DONE too** (commit feaf9c1): `syncFolderProject`
-    — land my Parquet (`writeSourcesOnly`), build my manifest (`buildManifest`,
-    extracted from `save()` so save & sync never drift), read peer+base, merge,
-    resolve via a callback, write merged+base atomically, reload only when a peer
-    contributed. 44 headless tests; VERIFIED IN-BROWSER against real OPFS (peer+I
-    edit income → conflict → resolve → merged reloads). So the **entire reusable
-    engine** — kernel → clients → project merge → folder sync → conflict UI → app
-    flow — is built, tested, and in-browser-verified.
-    *Genuinely all that's left is the "clickable" layer, and ALL of it needs a MANUAL
-    folder pick to verify (`showDirectoryPicker` is an OS dialog CDP can't drive) — so
-    it's a LOCAL-session job:* (1) the File-menu **"Open folder…"** button
-    (`showDirectoryPicker` → `useDirectory` + `saveFolderHandle` → save/load there);
-    (2) **hook `project-sync.js`** to route folder-mode saves through `syncFolderProject`
-    (bundle from `#snapshot`, `resolveConflicts` = `showConflictDialog`, `applyMerged`
-    = re-open) instead of blind `store.save`; (3) a **poll loop** (`readManifest` mtime,
-    backoff when hidden) that syncs on peer change; (4) **IndexedDB handle restore** on
-    boot (reconnect via `ensureReadWrite`). See [[collab-merge-kernel]]. Original plan below.
-    `core/project-store.js` is *already* written entirely against
-    `FileSystemDirectoryHandle` (`getDirectoryHandle`/`getFileHandle`/
-    `createWritable`/`getFile`); the **only** OPFS-specific line is `#root()` at
-    `project-store.js:244` (`navigator.storage.getDirectory()`).
-    `showDirectoryPicker()` returns the *identical* handle type, so:
-    - Parameterize `#root()` to take an injected picked handle, falling back to OPFS.
-    - Persist the handle in IndexedDB (handles are structured-cloneable); re-grant
-      write via `requestPermission()` once per session (browser won't give silent
-      persistent write to a user folder — one click, unavoidable).
-    - **OneDrive sync itself is free**: CrossTab does plain local file I/O, the
-      OneDrive *desktop client* mirrors the folder to the cloud. No Graph, no OAuth,
-      no CrossTab cloud code. **Provider-agnostic** — Dropbox / Google Drive / iCloud
-      folders are the identical mechanism. The `writeSourcesFor` cheap-save
-      (`project-store.js:101`, rewrites `project.json` + only the changed dataset's
-      Parquet) is already sync-client-friendly (no gigabyte re-uploads per edit).
-    - **Costs:** Chromium **desktop only** (`showDirectoryPicker` absent in Firefox /
-      Safari / **iPad Safari**); needs the desktop sync client installed; good for
-      *sequential* use (laptop ↔ desktop, or close-then-hand-off) but **simultaneous**
-      open → OneDrive drops `project-DESKTOP-xyz.json` conflict copies (it syncs
-      files, not op-logs) → that's the doorway back to the live layer.
-    - **Change detection — watch the manifest, not the folder.** FSA gives **no change
-      events** (no `onchange`, no watch) in its baseline, so polling is the floor — but
-      "scan the folder every second" is wrong on both axes:
-      - *Wrong granularity.* `project.json` already rewrites on every save and already
-        indexes every dataset (`project-store.js:16-18,143`), so watching **that one
-        file** covers adds/removes/edits. `getFileHandle('project.json') → getFile()`
-        exposes `.lastModified`/`.size` — a **stat, not a read**. When mtime moves, *then*
-        parse it, diff the manifest, and fetch only the Parquet sources whose entries
-        changed (ties to the content-hashed index above). No directory walk.
-      - *Wrong rate.* The **sync client's latency (seconds–minutes) is the real floor**,
-        not the poll rate — 1 Hz just spins waiting for bytes the client hasn't landed.
-        Poll ~2–5 s while focused, **back off when the tab is hidden** (Page Visibility),
-        and **poll-now right after a local save** (when a reply is expected).
-      - *Two levers beyond a dumb timer:* (1) **`FileSystemObserver`** — emerging Chromium
-        API giving real change callbacks on FSA handles; use as progressive enhancement,
-        poll as universal fallback (**verify current availability** — new, uneven). (2)
-        **Trystero beacon as a "look now" nudge** — when both are online, an "I just
-        saved" ping means network says *look now*, filesystem delivers the bytes; near-
-        instant without fast polling, degrades to the timer when the beacon can't connect.
-      - *Sync-client gotchas:* **torn reads** (may read a half-written `project.json` mid-
-        sync → `JSON.parse` throws) → write **atomically (temp + rename)** and
-        **tolerate-and-retry** next tick rather than treating a parse failure as
-        corruption. **Conflict-copy filenames** (`project (conflicted copy).json`) are
-        themselves an after-the-fact concurrency signal → the doorway back to live.
-  - **Graph mode — to include iPads (wanted).** Because `showDirectoryPicker` doesn't
-    exist on iPad Safari, the folder route can't reach tablets. **Microsoft Graph /
-    OneDrive REST** works without the desktop client and *on iPad/mobile*. Cost:
-    OAuth + Azure app registration + token refresh + network handling, and it's
-    OneDrive-specific — reintroduces some backend coupling. Design it as a
-    **pluggable storage backend** so FSA-handle and Graph are two implementations
-    behind one seam (`project-store` root), and a future Google Drive / Dropbox API
-    backend slots in the same way. Only reach for Graph where iPad/mobile is the hard
-    requirement; on Chromium desktop the free folder-handle route stays strictly
-    better.
-    - **Same model, REST driver.** Graph isn't a distinct collab mode — it's the *same*
-      async folder-backed model with an HTTP driver: identical `project.json` + Parquet
-      layout in the same OneDrive, reached via `GET/PUT …/content` (small files simple
-      PUT, large Parquet via resumable **upload session**) instead of
-      `getFile`/`createWritable`. The cheap-save maps directly.
-    - **Change detection beats the folder route:** **delta query** (`/delta` + token →
-      server-computed diff, poll the *diff* not the files) and **ETag `If-Match`
-      compare-and-swap** (a `412` on write = detected collision → route into the
-      three-way merge, instead of OneDrive's silent conflict copies). But **webhooks
-      need a public HTTPS endpoint** a browser-only app lacks → for serverless CrossTab
-      the practical path is **delta polling, not webhooks**. Graph still only signals
-      "the *file* changed," never "someone has it *open*" → presence stays on the beacon.
-    - **Auth decision — own registration + device-code UX; borrowed first-party
-      client-id rejected.** The tempting shortcut (device-code flow against a well-known
-      pre-consented Microsoft client_id — Azure CLI / Office / Graph-PS — so *no* app
-      registration) is **rejected**: (1) Microsoft is actively closing it, and tenants
-      lock-down enough to block **device code flow via Conditional Access** are exactly
-      our university targets — it trips the same wire it was meant to dodge; (2) consent
-      screen + sign-in logs show the *borrowed* app ("Azure CLI"), not "CrossTab" — an
-      audit/IRB-integrity problem for human-subjects data; (3) we don't own it, can't
-      scope it, likely violates MS terms. Crucially it **doesn't escape the hard case** —
-      a tenant needing admin consent / blocking device-code blocks the borrowed app too.
-      So: **register our own Azure app** (free, one-time, stable id we control, correct
-      "CrossTab" naming, exact scopes) — the cost was always *admin consent*, not the
-      registration — but **keep the device-code *flow*** ("pop a short code, log in on
-      MS's page, poll for the token"; MFA/CA handled by Microsoft) with *our* client_id
-      for the same no-redirect ergonomics. Public client → **auth-code+PKCE or
-      device-code**, `offline_access` for refresh.
-    - **Invitation is half OneDrive's ACL.** Multi-user needs the folder actually
-      *shared* between accounts (OneDrive share, or a SharePoint/Teams library both
-      reach via `/me/drive/sharedWithMe` or the shared drive id) — so onboarding is half
-      CrossTab's invite-key, half Microsoft's sharing dialog; reconcile with the live-
-      mode self-contained invite when unifying modes.
-  - [~] **CLOUD STORAGE — the architecture, settled 2026-08-24.** The bullets below are
-    a wish-list of providers with no design attached. This is the design. Owner's framing:
-    modular, host-side, third-party-extensible, and deliberately NOT called plugins,
-    because the code is trusted and runs on main.
-
-    **1. The seam already exists, and it is narrow.** `core/storage-driver.js` is a
-    path-and-bytes store — `read` / `write` / `remove` / `removeTree` / `list` / `stat`
-    (plus `writeStream`, see gap B) — with `ProjectStore#useDriver()` already injecting
-    one, and OPFS + FSA folder as two working implementations. **Crypto sits ABOVE it**:
-    ProjectStore encrypts before `write` and decrypts after `read`, so a driver handles
-    opaque bytes and an untrusted provider can withhold or corrupt but never read.
-
-    **2. Sandboxed plugins are OFF the table, and not for a soft reason.** Every sandbox
-    CSP tier — strict, codec, media — carries `connect-src 'none'`. A sandboxed plugin
-    cannot open a socket at all. The one network path is `app.web.get(url)`: GET only,
-    text only, no custom headers, no redirects followed, per-origin consent-gated. A
-    storage driver needs PUT/DELETE, binary bodies, `Authorization` headers and ranges,
-    so this is not a starting point that needs widening — it is a different thing.
-    OAuth compounds it: redirect URIs need a real origin, which an opaque-origin iframe
-    does not have, and refresh tokens are a different trust tier from a codec.
-
-    **3. PROTOCOL drivers, not VENDOR drivers — this is the load-bearing decision.**
-    ownCloud, the case that prompted this, *is WebDAV*; so are Nextcloud, Synology and a
-    long tail of self-hosted boxes. One WebDAV driver plus a server URL covers all of
-    them with zero code per provider. S3-compatible is a second family (MinIO, B2,
-    Wasabi, R2) behind one driver plus an endpoint. Genuinely proprietary APIs are only
-    Graph, Drive and Dropbox. Two protocol drivers plus three vendor drivers is close to
-    full coverage, and the tail after that is short.
-
-    **4. A provider DESCRIPTOR is data, not code** — `{protocol, baseUrl, auth, scopes}`.
-    A third party adds their cloud by CONFIGURING a protocol driver, which needs no trust
-    decision, no review, and can be a dialog field. This is expected to absorb most of
-    the tail on its own.
-
-    **5. `registerStorageDriver(kind, factory)` for the genuine remainder** (Drive's
-    file-ids being the obvious one). **Say plainly what trusted means here:** crypto sits
-    above the seam, so main-thread driver code is on the PLAINTEXT side of it and can
-    read the data, the tokens and the page. "Not a plugin" describes the trust level
-    honestly but does not reduce it, so the distribution model is source-in-repo via PR —
-    trust earned by review — rather than an install button. Runtime loading would need
-    blunt, non-remembered consent and is a security decision, not plumbing.
-
-    **6. Three contract gaps that would bite the third implementation** — fix BEFORE the
-    first cloud driver, because each is currently satisfied only by accident of both
-    existing drivers being handle-based:
-    - *A. `folderBacked` is `driver.kind === 'folder'`* (project-store.js:149) — identity,
-      not capability, and it drives eight call sites covering flat-vs-nested layout,
-      encryption defaults, launcher flow and sync mode. A WebDAV driver is semantically
-      folder-like, so today it would have to LIE ABOUT ITS NAME to inherit the right
-      behaviour. Split into capability flags (`flat`, `externallySynced`).
-    - *B. `writeStream(path, blob)` is in the code but not in the documented interface.*
-      It is the multi-GB media path and the hardest thing to do over HTTP — every
-      provider has its own resumable-upload protocol. Put it in the contract with a
-      declared fallback for drivers that cannot stream.
-    - *C. `write` promises atomic temp-then-rename.* WebDAV has MOVE, Graph and Dropbox
-      have moves, S3 has no rename at all. Atomicity becomes a DECLARED capability, and
-      the store needs an answer for the non-atomic case — a folder-sync peer polling a
-      path is precisely who a half-written file hurts.
-
-    **7. SHIP A DEFAULT APP KEY — confirmed needed (owner, 2026-08-24): "I'll need to ship
-    a key for everyone eventually. For now dev is fine."** Bring-your-own is right for
-    institutions and wrong as the only option: telling a colleague to register a Dropbox
-    app before they can open a shared project is an absurd ask. What it needs, none of it
-    blocking today's work:
-    - A registration the PROJECT owns, per provider, through each provider's production
-      review — a Dropbox app starts in development mode with a hard cap on linked
-      accounts, so a shipped key fails for everyone but its owner until that clears.
-    - One constant per provider, with the existing BYO field kept as an override.
-    - Note what this does NOT cost, since it sounds like it cuts against the grain and
-      does not: no server, no CrossTab account, no third party in the data path. Bytes
-      still go browser-to-provider. The project simply owns a registration, and the
-      consent screen reads "CrossTab" instead of the user's own app name.
-
-    **STATUS (2026-08-24).** Contract gaps A/B/C done; WebDAV built (unverified — the
-    owner's campus turned off WebDAV, and no server with the CORS headers is to hand);
-    **Dropbox built and browser-verified BOTH WAYS (2026-08-24).** Move wrote
-    `crosstab-project.json`, `project.json` and a source parquet in the flat layout; open,
-    after a reload that dropped the token, brought the project back **with its two edited
-    cells and its full history** — so the op log, the sources and the manifest all survive
-    the round trip. That closes the loop on the driver, the seam, PKCE and the COOP handoff.
-
-    **Open follow-up: a Dropbox project is not in the project list** (owner, 2026-08-24).
-    The move deletes the OPFS copy, which is right, and nothing replaces it — so the only
-    route back is File ▸ Open from Dropbox… with the folder retyped.
-
-    *Corrected 2026-08-25.* I first wrote that there was "nowhere else for a project to be
-    listed from". That is wrong, and the owner caught it: a project moved to a FOLDER still
-    appears, because `moveToFolder` calls `rememberFolder()` and both the sidebar
-    (app.js:2357) and the launcher (launcher.js:350) render that IndexedDB registry beside
-    the OPFS catalog. So there IS a place for a non-OPFS project — one per mechanism. Remote
-    has none because I declined to add a fourth, which left the feature knowingly
-    incomplete without saying so. See #171 for the shape of the fix.
-
-    **Three bugs, all environment-specific, all invisible to the suite** — worth recording
-    because the next provider will meet the same class:
-    - `d250fa5` — the popup handoff assumed `window.opener`. COOP severs it, so the
-      callback page announced it had nothing to do while the app reported a cancellation
-      nobody made. Now BroadcastChannel + localStorage + postMessage.
-    - `58b31c4` — the service worker answered the callback navigation with the app shell,
-      so the popup booted a second CrossTab. Only when INSTALLED or offline; an online tab
-      falls through to network-first and works.
-    - `f8bce2c` — `win.closed` cannot distinguish a closed window from a severed handle,
-      and severance happens on NAVIGATION so sampling at open misses it. Cancellation is
-      no longer detected at all; the wait is the lesser mistake.
-
-    **Build order:** contract gaps (A/B/C) → WebDAV → Dropbox → Graph → Drive last (the
-    path-to-id cache). WebDAV first on purpose: it is the only one that both serves real
-    users immediately and proves the seam against a non-handle driver, before any OAuth
-    flow or trust tier is committed to.
-
-  - **Vendor-neutral cloud-API family — Dropbox & Google Drive are peers, not
-    afterthoughts.** Two corrections to "Graph = *the* tablet story": (1) the
-    `showDirectoryPicker` gap is **not iPad-specific** — Android Chrome and mobile
-    browsers generally lack the FSA directory picker too (**verify current support**), so
-    *every* tablet/phone needs *a* cloud API regardless of vendor; **Chromebooks** are the
-    edge case (Chrome OS is desktop Chrome → folder mode works), but a third-party cloud
-    folder isn't always mounted as a pickable local dir there, so the API may still be the
-    path. (2) Provider choice is the **user's**, not ours — Dropbox and Google Drive are
-    **peer backends**, not OneDrive-with-an-asterisk (the storage analog of format-equality
-    / no-lock-in: don't privilege one vendor). The seam makes it cheap: **device** decides
-    you need a cloud API, **the user's provider** decides which driver — all three sit
-    behind `project-store` root as near-identical drivers (OAuth2 + PKCE, `GET/PUT`
-    content + chunked upload, a delta/cursor change feed, rev/ETag conflict detection), so
-    build the *interface* once and vendor-neutrally, adding drivers as real demand appears:
-    - *Dropbox* (App Console reg): **friendlier to a serverless browser app** —
-      `list_folder/longpoll` waits for changes with **no public endpoint** (vs Graph
-      webhooks) and a **server-provided `content_hash`** partly hands you the shared-index
-      primitive. Downside: **no device-code flow** (redirect/popup PKCE only).
-    - *Google Drive* (Google Cloud reg): natural for **Chromebook** users; `changes.list`
-      + page tokens for delta, push webhooks need an endpoint (→ poll), OAuth2 + PKCE —
-      same shape as the others.
-    - *No shared/borrowed id across providers* — each is its own one-time registration
-      (the borrowed-client-id trap was Microsoft-specific and rejected anyway). But
-      **desktop users of any provider need none** — the desktop sync client + folder mode
-      already covers them (Dropbox/OneDrive/Drive/iCloud folders are identical to FSA).
-  - **Live transport — P2P over WebRTC. [~] BUILT AND WIRED; one verification outstanding**
-    (re-checked 2026-08-21). Everything the "still to build" list below names now exists:
-    - *The op-log wire protocol* is `core/live-protocol.js` (`LiveDoc`) — and it answered
-      late-join more simply than planned: "snapshot and tail are the same `state` message —
-      no separate path", with commutativity bought by canonicalising operand order on peer
-      id so both sides compute a byte-identical merge and reach a fixpoint.
-    - *The presence UI* shipped (chips in the top bar, `core/live-presence.js`) and the
-      *invite UI* shipped as #156 (File ▸ Copy invite link, plus consumption at boot).
-    - *Gap-fill* is wired into this channel, not just built headlessly —
-      `ProjectSync#initGapFill` runs both the source and asset exchanges and calls
-      `requestMissing` as manifests change.
-
-    **What is genuinely still owed is a TEST, not code: two machines on two networks.**
-    The two-window pass during #156 exercised the real broker and found four bugs, but both
-    peers sat on one host, so ICE succeeded trivially — NAT traversal and the TURN path
-    have never been exercised. That is the one thing a second window cannot fake, and it is
-    why this stays `[~]`. Original note follows.
-    **[~] SIGNALING LAYER BUILT** (commit 20d6427): `assets.js` pins trystero@0.21.5 (MQTT), lazy-loaded;
-    `core/live-invite.js` (rendezvous addressing = hashed-UUID topic + invite secret in
-    the URL fragment); `core/live-sync.js` (`LiveSession` wrapping a Trystero room —
-    presence + beacon + ordered/reliable op-log actions — plus `buildIceServers` /
-    get·setTurnConfig). 58 headless tests; in-browser verified the pinned lib loads +
-    TURN config threads. *Still to build:* the op-log WIRE PROTOCOL over the channel
-    (snapshot-then-tail late-join, gap detection — convergence reuses the mergeable
-    op-log), and the presence/invite UI. *Verification boundary:* the actual peer
-    CONNECTION is a 2-machine/2-network + reachable-broker test (Trystero filters
-    same-page selfId → un-testable in one tab), user-gated like the OS picker.
-    **[~] CONVERGENCE PROTOCOL + PRESENCE now BUILT too** (commits 8202ebc, 0eb4065):
-    `core/live-protocol.js` `LiveDoc` runs the same three-way merge continuously over
-    the channel — commutativity solved by canonicalising operand order by peer id (no
-    kernel change); late-join = same `state` message (empty joiner add-wins to full);
-    conflicts SHARED via a `resolve` message so peers don't re-surface them; full-
-    manifest exchange sidesteps per-op gap detection. `core/presence.js` `PresenceRoom`
-    = pure "who's here" roster. Glue: `attachLiveDoc` / `attachPresence`. 69 headless
-    tests + in-browser stack-load/run verified. *Still to build:* base-data gap-fill
-    (Parquet a peer lacks — detection headless, transfer channel-gated) + the UIs +
-    the real 2-machine connection test. Editing SHARED data needs no gap-fill.
-    The serverless-handshake part is already solved and battle-tested in *sortie*
-    (asteroids clone, https://lograh.github.io/sortie-game): **Trystero (MQTT
-    strategy)** does signaling via public MQTT brokers (EMQX/HiveMQ) — nothing we
-    host — then drops to a real WebRTC data channel. Its "repair" channels use
-    `createDataChannel()` defaults = **ordered + reliable**, exactly the mode an
-    op-log wants (and *not* the mode a game usually wants). What sortie did **not**
-    need and CrossTab does:
-    - *Convergence, not just dedup.* A game floods ephemeral state and self-heals each
-      frame; `_mid` dedup is enough. Op-logs must *converge* — a missed op can't be
-      papered over by "the next frame." Needs the mergeable-op-log foundation above
-      (sequenced, gap-detecting, or CRDT per state class).
-    - *TURN — DECIDED: bring-your-own, we host nothing.* Sortie's clever peer-**gossip**
-      relay dodged TURN — but it only rescues connectivity when there's a **third peer**
-      to route through. CrossTab's core case is **two** faculty behind university
-      symmetric NATs, no third party → sometimes needs a real **TURN** relay. Decision:
-      **we run none.** Instead the user (or their institution) can define a TURN server —
-      `setTurnConfig({urls,username,credential})`, threaded into `iceServers` by
-      `buildIceServers` (default = public STUN only). So an institution adopting the app
-      can stand up its own TURN for its faculty; without one, a hard-NAT pair simply
-      can't connect and the UI must say so (**detected ≠ connectable**). Built in
-      `core/live-sync.js` (commit 20d6427).
-    - *Late-join.* Snapshot-then-tail: ship the whole existing op-log to a joiner,
-      then follow with the live tail.
-  - **Concurrency detection / presence — "Jane has this open, co-author?"** The key
-    reframe: **presence is separable from storage** — "who else has project X open"
-    rides the *network*, not the bytes, so you answer it *once* (a thin layer keyed on
-    project id) and all three storage modes borrow it, rather than solving it per mode.
-    - *Live mode gets it free.* In Trystero the **room is the presence mechanism** —
-      `onPeerJoin`/`onPeerLeave` fire on join. Not a feature added on top of live mode;
-      a byproduct of it.
-    - *Folder + Graph borrow the same beacon.* On open, every client (wherever its
-      files live) joins a lightweight Trystero **presence room** and broadcasts a tiny
-      `{who, mode, since}` beacon — no data channel, just "I'm here." Seeing a peer →
-      prompt *"Jane also has this open — start co-authoring?"* → escalating promotes the
-      **same room** to a reliable data channel + op-log sync. So detection and the
-      live-mode handshake are the same machinery pointed at the same room.
-    - *Filesystem-native path is the degraded fallback.* A **lock file**
-      (`project.lock`, heartbeat + staleness timeout) is the offline answer but is
-      advisory and slow: OneDrive sync latency (seconds–minutes) means two people can
-      both "open simultaneously" inside the sync window and neither sees the other's
-      lock; crashes leave stale locks (hence heartbeats); OneDrive can conflict-copy the
-      lock file itself. **Graph** only offers change *notifications* (webhooks/delta —
-      "the file changed"), not "someone has it open," so it also falls back to a
-      drive-lock-file or (better) the beacon. Hierarchy: **beacon when networked
-      (good), lock file when not (best-effort warning only).**
-    - *Nice consequence:* presence-only is buildable **cheaply and early**, ahead of the
-      hard merge foundation — ship *"Jane's in here too"* + the co-author prompt on
-      Trystero alone, and it doubles as the escalation handshake later.
-    - *Caveats:* (1) **same population problem** — the beacon needs a reachable public
-      MQTT broker, so on locked-down university networks / air-gap it may not connect
-      (back to the lock file, which needs the sync client, or nothing); (2) **detected ≠
-      connectable** — the beacon can say "Jane's here" while TURN-less P2P then fails to
-      link up, so the UI must handle that gracefully (ties to the TURN note above);
-      (3) **room-key privacy** — derive the presence room key from a **salted hash of
-      the project UUID** (store already mints `crypto.randomUUID()` ids) so the room is
-      unguessable and non-enumerable on a public broker, not "is anyone editing
-      `dissertation`?".
-  - **Access control / confidentiality — a shared secret, kept separate from the
-    room key.** The salted-UUID-hash room key (caveat 3 above) makes the room
-    *unguessable to outsiders* but not *private from the broker/relay operator*, who
-    routes by that key and so necessarily knows it. A hash is one-way for the *string*
-    but not for *participation*: the operator still sees the topic has subscribers and
-    reads whatever rides it in the clear. Fix = split the two roles, don't conflate:
-    - *Addressing* stays the salted UUID hash — the operator sees this topic regardless.
-    - *Confidentiality* = a shared secret → strong KDF (Argon2id/scrypt) → AES key that
-      encrypts everything on the broker: **signaling and the presence beacon**. Keep it
-      **orthogonal** to the room key — folding the secret into the key means rotating it
-      changes the room *address* (collaborators lose each other) and a weak secret
-      becomes an enumerable topic.
-    - *What needs protecting is smaller than it looks.* Once WebRTC connects, the bulk
-      op-log is **DTLS-encrypted peer-to-peer** already, so the secret's real job is the
-      **signaling (which leaks participant IPs via ICE)** and the **beacon**
-      (`{who,mode,since}`) — not the data. **Trystero ships a built-in `password` config
-      that AES-encrypts its signaling**, which would do most of this for free (confirm
-      against the pinned version — not vendored yet, only referenced here).
-    - *Default should be a generated high-entropy key, not a typed password* — delivered
-      in the invite link/code (key in the URL fragment, never hits a server; the
-      Jitsi/Excalidraw E2EE pattern) so it's immune to the offline dictionary grind a
-      memorable password invites. Offer a user-chosen password as the memorable-but-
-      weaker opt-in.
-    - *Residual, stated honestly (no theatre):* even fully encrypted, the operator still
-      sees topic existence, subscriber count, timing, and message sizes — traffic
-      analysis that encryption can't hide.
-  - **[x] Base-data GAP-FILL — DONE and wired (re-checked 2026-08-21).** The two pieces
-    this note left open have both landed: the *invite half* is #156, and live asset
-    gap-fill is #155. `ProjectSync#initGapFill` drives `SourceExchange` over the live
-    channel. **The sneakernet index UI is the one piece still missing** — split out as its
-    own bullet below, because it is the air-gap story rather than part of this transfer
-    path. Original note follows.
-    **[~] Base-data GAP-FILL BUILT (headless) — commit 89e99a2.** `core/gap-fill.js`:
-    fetch a Parquet source a peer lacks over the channel — identity = the manifest source
-    **op id** (no schema change / no per-file hash), integrity = transfer-time SHA-256
-    verified before store, chunked (256 KiB) for multi-GB, consent/size-gated via
-    `allowSend`. `SourceExchange` (requestMissing → need → chunk+hash+send → reassemble+
-    verify+store) rides the live channel (`t:'need'/'src-chunk'`; LiveDoc ignores). 75
-    tests incl. full 2-peer round-trip, consent-decline, integrity-reject. Byte read/store
-    are ProjectStore callbacks; real transfer over Trystero is part of the 2-machine test.
-    The *invite* half + the sneakernet index UI below remain. Original design follows.
-  - **Onboarding + base-data sharing — the invite carries the key; an index fills the
-    gaps.** Two questions the op-log foundation quietly skips: how the second user gets
-    *in*, and how they get the *base bytes*. The log's first op is `load`, referencing an
-    immutable source the joiner may not hold — e.g. two field studies in different cities,
-    each holding only its own data file and needing to combine **both ways**.
-    - *Invitation = key distribution.* The invite link/code is exactly the artifact from
-      the access-control note: room topic (UUID hash) + high-entropy key. One thing to
-      share out-of-band; accepting it decrypts signaling, connects, and late-joins.
-    - *Late-join already ships the op-log snapshot* (above) — but its `load/append/join`
-      ops (`data-store.js` §log, the universal operation log) point at immutable sources
-      persisted as `ds{id}_src{i}.parquet` (`project-store.js:101`) that the joiner lacks.
-      **That's the gap.**
-    - *Index/manifest, separate from bytes (the user's instinct).* Broadcast a cheap
-      manifest — `{datasetId, sourceHash, name, rows, cols, byteSize}` — content-**hashing**
-      each Parquet source (today they're named only *positionally*, `ds{id}_src{i}`; a
-      hash is what makes "do I have this?" answerable, enables dedup so identical files
-      aren't re-sent, and lets a received file be integrity-checked against what the log
-      expects). Replaying a log and hitting a `load`/`join` for a hash you don't hold =
-      the gap → prompt **"share this file!"**.
-    - *"Both ways" falls out of the foundation.* A merged log with A's `load city-A` +
-      B's `load city-B` + an `append` means each peer, replaying, hits a gap for the
-      *other's* source and fetches it — combine-in-both-directions is just the mergeable
-      op-log plus on-demand fetch, not a separate feature.
-    - *Transfer is consent- and size-gated, not silent.* Sources can be multi-GB (codec
-      note); auto-streaming one over a field-site link is rude. Both sides see size —
-      needer: *"missing city-B.parquet (3.1 GB) — request from Jane?"*; haver: *"Jane
-      needs city-B.parquet (3.1 GB) — send?"* Bytes stream chunked over the same reliable
-      data channel.
-    - *Sneakernet fallback for locked-down / air-gap nets* (same population problem as the
-      beacon): when P2P won't connect, the index still names *exactly which file* to hand
-      over out-of-band, and CrossTab verifies the imported bytes' hash against the log's
-      expectation — the index earns its keep even with no automated transfer.
-    - *Async/folder mode mostly gets this free* — the sync client mirrors the Parquet
-      sources, so gaps appear only inside the sync-latency window; the mechanism is
-      chiefly a live-mode concern plus the sneakernet path.
-  - [ ] **Sneakernet index UI — the air-gap fallback, still unbuilt (2026-08-21).** When
-    P2P will not connect, the index should name *exactly which file* to hand over
-    out-of-band, and verify the imported bytes against what the log expects. The engine
-    half exists — `missingSources` / `missingAssets` in `core/gap-fill.js` answer "what do
-    I lack?" — but nothing surfaces that answer to a user outside the automated transfer.
-    Small, and it earns its keep precisely where the automation cannot run, which is the
-    population the air-gap work (#71) exists for.
-
-  - **Core-vs-plugin boundary — apply the doctrine we already have, don't invent one.**
-    `import-service.js` states the rule: the engine owns **"only what the security model
-    forces it to"** — host UI, the user-activated picker, and **the destructive commit**
-    (replace/append/join is host-only, so no plugin can overwrite your active data
-    unprompted; a plugin *may* create **new** datasets and write its **own** state —
-    additive vs destructive, not host vs plugin). No privileged importer; official CSV/SPSS register through the same
-    public call a third party uses. Plugins run in a **sandboxed opaque-origin iframe**
-    over the `plugin-broker` postMessage bridge. Collaboration = the *same* split applied
-    to storage + transport:
-    - **Kernel (core), because integrity/security force it:** the op-log +
-      **three-way merge** (a wrong silent merge = plausible-but-wrong published numbers —
-      can't live in untrusted code); the **crypto envelope** (KDF/AES/invite-key); the
-      **content-hash / index / gap** logic; the storage **interface + the commit**; and the
-      **presence *concept*** (who's-here keyed on project id).
-    - **Plugins (pure pipes) behind those contracts:** every **storage driver**
-      (FSA-folder, OneDrive/Graph, Dropbox, Google Drive, **WebDAV → Nextcloud/OwnCloud/
-      self-hosted in one adapter**, S3…); the **presence/signaling transport** (Trystero
-      strategy — MQTT/Nostr/…); provider **OAuth** bundled per driver. The WebRTC
-      data-channel⇄op-log stays core (coupled to merge); only the *rendezvous* is a plugin.
-    - **The insight that makes untrusted storage drivers safe:** core encrypts *before*
-      `write` and decrypts *after* `read`, so a driver only ever touches **ciphertext** —
-      even a malicious provider plugin can't read content (residual: metadata — paths,
-      sizes, timing). Pushing crypto into the kernel is what lets the whole provider
-      ecosystem be untrusted plugins. Analog of format-equality: no privileged provider.
-    - **[~] BUILT (core interface, not sandboxed) — commit 34fc4de.** `core/storage-driver.js`
-      is the path-based seam (`read/write/remove/removeTree/list/stat` + `kind/available`);
-      `OpfsDriver` + `FsaFolderDriver` extend a `HandleDriver` base, and `ProjectStore`
-      sits on it via `useDirectory()`/`useDriver()`. Deliberately a **core-registered
-      interface, NOT `app.storage.register` in a sandbox** — resolving the "two caveats"
-      below (FSA gesture/handle + gigabytes over postMessage) in favor of main-thread
-      drivers. **Crypto sits above it**, so drivers only ever see ciphertext. A cloud
-      driver now = implement the same surface over HTTP + `useDriver()`; the flags below
-      (CAS/contentHash/nativeWatch) are the still-unbuilt capability-negotiation layer.
-    - **Original proposed extension point** (by analogy to `importers.register`):
-      `app.storage.register({ id, label, auth, read→{bytes,rev,mtime,size,contentHash?},
-      write(path,bytes,{ifMatch:rev})→rev, delta(cursor)→{changes,cursor}, watch?(cb),
-      capabilities:{conditionalWrite,contentHash,nativeWatch,sharing} })`. Core reads the
-      **capability flags** and degrades: no CAS → lock-file/beacon; no `contentHash` → host
-      computes it; no `nativeWatch` → poll `delta` (longpoll/delta/PROPFIND all normalize
-      here).
-    - **Two caveats storage-plugins have that codecs don't:** (1) the postMessage boundary
-      vs **gigabytes** — must pass bytes by reference / transferable / streaming (importers
-      already pass `File` by handle to avoid copying into the sandbox), and it's open
-      whether a sandboxed iframe is even the right execution model for a high-throughput
-      network driver; (2) a storage driver makes its own `fetch()` and custodies **OAuth
-      tokens** — network + credentials → a **higher trust tier than a codec** (ciphertext
-      guards confidentiality, but a bad driver can still refuse/corrupt/DoS sync and sees
-      metadata). WebDAV extra: no native change-feed (→ poll) and **CORS** (self-hosted
-      servers must send headers; many don't by default).
-  - **Suggested build order:** (1) mergeable op-log foundation — stable op ids +
-    common-ancestor + per-class merge rules; (2) folder transport (FSA seam in
-    `project-store.js`) — first driver behind the new `app.storage` contract; (3) presence
-    beacon (cheap, standalone — the "Jane's here, co-author?" prompt on Trystero, no
-    convergence needed yet) + its confidentiality (encrypt the beacon; the beacon is where
-    metadata first leaks); (4) cloud-API drivers as plugins (Graph / Dropbox / WebDAV) for
-    tablet/mobile reach; (5) live transport (Trystero + reliable channel + TURN), which
-    reuses the presence room as its handshake, the invite link as its key distribution, and
-    the index/gap-fill for base-data sharing.
-
-- [~] **Collaborator identity, authorship & memos (#148).** Who did what — the human
-      layer on top of the merge kernel (#143). Driven by qualitative practice: **inter-
-      coder reliability** (Cohen's κ / Krippendorff's α, coder-vs-coder comparison, bias/
-      drift) is a first-class qual method and is *impossible without per-coder attribution*
-      — the Dedoose-parity gap. Decided with the user (chat rejected as out-of-scope side-
-      conversation; comments reframed as **memos/annotations**, a named qual technique —
-      grounded-theory memoing + reflexivity + audit trail — anchored, persistent, part of
-      the record, and useful SOLO not just in collab). Identity is **self-asserted** (no
-      auth, serverless) → attribution is advisory, not forensic; κ needs consistent labels,
-      not verified ones. Ties: [[collab-merge-kernel]] op identity, [[first-class-plugin-data]]
-      (a memo is exactly the first-class attachment that's currently second-class), the
-      "plugins add actions to the log" item, [[qualitative-first-class]].
-  - [x] **1. User identity profile (name / initials / colour). DONE.** Per-USER, per-device
-    (localStorage) — travels across all their projects, NOT per-project. A stable minted
-    `authorId` so attribution survives a display-name change; initials auto-derived from the
-    name but editable; a CB-safe colour for avatars. Small editor dialog. Distinct from the
-    project-level `collabId`/`collabSecret`. **BUILDING NOW.**
-  - [x] **2. Authorship stamp on codes / ops. DONE.** Snapshot `{authorId, initials, name, colour}`
-    into each code-application / log op the user creates (snapshot, so it survives a later
-    rename and other peers see it without the author's live profile). The prerequisite for
-    step 3.
-    - [x] **2a. Core log ops DONE** — stamped in `data-store.js#ensureIds` (new ops only,
-      never retroactive); round-trips export/restore; verified in-browser.
-    - [x] **2b. CAQDAS code-application authorship DONE** — `app.identity` broker RPC +
-      `app.identity` namespace in plugin-host; the CAQDAS mount fetches `me` and stamps
-      each code + each applied segment (text/region/time/track) via `authored()`; import-
-      resolved codings + the QDPX parser are left unstamped. Author survives the add-wins
-      merge (normalize spreads). End-to-end coding attribution to confirm by reading the
-      persisted blob after coding (CAQDAS is cross-origin, can't be driven from the page).
-  - **Authorship DISPLAY (tabled — user pondering the shape).** Surface who-coded-what
-    in the CAQDAS UI (colour + initials chip on segments / retrieve list). User's steer:
-    a plain "stamp every edit visibly" gets cluttered → lean toward **showing the chip only
-    when the author ≠ the current viewer** (your own edits stay clean). Data already stamps
-    everything (step 2); this is display-only. Revisit after the shape settles.
-  - [x] **PREREQUISITE for 3 + 4 — segment identity & author-aware merge. DONE.** Found while
-    verifying step 2b: `mergeState` keys segments by CONTENT
-    (`doc|codeId|start|end|tStart|tEnd|region`), with **no author** in the key. Two
-    consequences: (a) a content key is not a stable anchor for a memo (edit the span → key
-    changes); (b) worse — **two coders applying the SAME code to the SAME passage collapse to
-    ONE segment** under add-wins, silently discarding coder B's application. That *defeats
-    inter-coder reliability* (κ/α need to see BOTH coded it). Fix: give each segment a stable
-    `id` (fold into the `authored()` helper: `{ id: o.id || uid(), ...o, author }`), and make
-    `segKey` use the id when present (content-key fallback for legacy/imported segments) — so
-    per-coder codings stay DISTINCT and memos get a durable anchor. Changes merge semantics
-    (more segments survive a merge), so confirm the methodology intent before shipping.
-  - [x] **3. Memos / annotations (anchored comments). DONE (3a data+merge, 3b UI).** Word/Docs-style margin comments,
-    but anchored + persistent + part of the analytic record. **Decisions (with user):**
-    (i) memos REPLACE the old inline `memo` string going forward (legacy memo shown as a
-    read-only first note; no lossy migration); (ii) **flat / chronological, author-stamped**
-    — not nested threads — so a faculty reply in the teaching/office-hours case can't get
-    buried under a fold and all students see it (record leaves room for an optional
-    `replyTo` later); (iii) memos are their OWN add-wins collection anchored by id, NOT
-    nested in the segment — required so faculty + student can both annotate the same coding
-    without one clobbering the other. Anchor: coded segment / code first (segments now have
-    stable ids); generalise to cells/variables/outputs later.
-    - [x] **3a. Data model + merge DONE** — `state.memos = [{id, anchorKind, anchorId,
-      author, text, createdAt}]`; add-wins by memo id in `mergeState` + normalize; +1 test
-      (both people's annotations on one coding survive). 113 pass.
-    - [x] **3b. Thread UI DONE** — `renderThread()` replaces the inline memo editors on
-      the segment popup + code details: chronological author-stamped notes (colour+initials
-      chip), add (button / Ctrl+Cmd-Enter), delete your own; legacy memo shown read-only;
-      has-note markers updated; notes re-anchor when same-code segments merge. Verified via
-      the persisted blob (3 KC-stamped, anchored memos; deletion persisted). Overflow fixed.
-      **NOTE:** notes (like ALL CAQDAS actions) persist via the workspace blob, so they are
-      NOT covered by core Edit▸Undo — the pre-existing "plugins add actions to the log" gap.
-      **→ #152 fixes this** and generalises memos beyond CAQDAS (anchor becomes any op-log
-      target, so a memo can sit on a dataset, a variable, or an analysis run).
-  - **4. Inter-coder reliability analysis (κ / α) — MOVED.** This is an *analysis*
-    feature, not a collab one, so it lives in **"## More analyses"** below (the stats
-    backlog). The collab foundation it needs — per-coder attribution + distinct per-coder
-    segments — is DONE here (steps 2–3); the κ/α computation is the analysis-side work.
-  - [x] **5. Presence chips in the top bar. DONE — two-window verified during #156.** Live editors shown by initials/colour. Cheap
-    add-on, but coupled to **live P2P** (`core/presence.js` broadcasts peers) — lands WITH
-    the live co-authoring chunk, not before. The self-chip built in step 1 is its seed.
-    - **DESIGN (user, 2026) — collaboration is TRANSPORT-AGNOSTIC.** Do NOT assume OPFS
-      projects are non-collaborative: a user can export a bundle → flash drive → a
-      collaborator imports it to OPFS, and the two copies should meet in the SAME room.
-      So **every project carries a collab identity** (collabId/secret), minted on first
-      save and **carried in the export bundle** (+ restored on import), independent of
-      folder/live/cloud. `collabReady` becomes true for all saved projects. (Supersedes
-      5a's folder-only minting.) TODO: mint in `#snapshot` for any project; thread
-      collabId/secret through project-bundle export + openBundle import.
-    - **DESIGN (user) — presence gating = a global setting, not a per-session button.**
-      A profile setting (like name/initials) **"auto-check for live collaborators" on/off**:
-      OFF → today's manual "Go live" button stays; ON → CrossTab auto-joins the room on
-      project open (online + not air-gap) and the user only clicks the final **"start live
-      co-authoring with X"** offer. Presence = automatic awareness; the click consents to
-      DATA streaming.
-    - [x] **5a. Collab identity minted+persisted for folder projects** (roomFor now works)
-      — to be GENERALISED to all projects per the transport-agnostic design above.
-    - [x] **5b. Go-live toggle + peer chips — DONE (two-window verified during #156)** — `core/live-presence.js` (LiveSession +
-      PresenceRoom) + header UI; explicit opt-in; identity-beacon only. Solo-verified
-      (hidden for OPFS, wired, no errors); needs a two-window test on a shared folder to
-      confirm peers actually see each other's chips. This is also the first live-P2P
-      session wired — the handshake the future **live data co-authoring** layer reuses.
-  - [x] **6. Live DATA co-authoring — DONE. The two-window test happened in #156** and
-    earned its keep: it found three co-authoring bugs (`330a3b8`) plus a gap-fill bug
-    (`6f66025`), all fixed. #156's join-by-link path elevates a recipient straight to
-    co-authoring, which is this layer end to end. Body below is the original plan.** — the layer the "start co-authoring" prompt launches.**
-    Presence (step 5) is *awareness only*. The convergence **ENGINE is done + proven
-    headlessly** — `core/live-protocol.js` `LiveDoc` (canonical-peerId ordering → byte
-    convergence) + `attachLiveDoc`, with tests covering disjoint recodes, order-independence,
-    late-join, a genuine conflict resolving, AND CAQDAS codebooks converging live. `LiveSession`
-    now exposes `.selfId` (done) for the wiring. What remains is the **app integration**, and
-    studying it surfaced **three concrete prerequisites** (none trivial, so NOT built blind):
-    - [x] **6a. Live-apply materialisation. DONE.** Applying a peer's merged manifest live has NO
-      disk round-trip (unlike folder `#applyMergedManifest`, which reloads from the folder
-      after the merge wrote it). Need a path that rebuilds datasets from the merged manifest
-      **reusing the local Parquet** (matched by source id) + merged transforms + merged
-      workspace blobs — i.e. restoreState-from-manifest without re-fetching bytes we already
-      have. Feasible for the shared-base case (both peers hold the same sources).
-    - [x] **6b. Plugin-merger assembly DONE — (ALSO fixes folder-sync coding merge).** The app never
-      calls `buildMergers` with real plugin modules — `#folderSave` passes `{core}` only — so
-      plugin/blob (CAQDAS coding) merge doesn't happen in the REAL app today, folder OR live;
-      it surfaces as conflict/LWW. Need host access to builtin plugin mergers (import
-      builtin `mergeState` host-side — builtins are trusted) or the sandbox-bridge for
-      3rd-party. **High value: unblocks coder-merge for BOTH transports**, and it's the
-      office-hours driver. Ties [[plugin-verb-declaration]].
-    - [x] **6c. Base-data byte gap-fill. DONE (wired).** Cold join / a peer adding a NEW dataset → the
-      merged manifest references Parquet the other lacks → transfer over the channel
-      (content-hash index → "send this file"). `core/gap-fill.js` (`SourceExchange`) exists
-      but isn't wired. Required for the flash-drive/OPFS-import cold-start case; shared-base
-      editing (recodes/coding) needs no transfer.
-    - Then wire the **"start co-authoring with X" offer** (auto-offer on peer-appear) →
-      `attachLiveDoc` on the presence session → local change publishes, merged applies (6a),
-      conflicts → `showConflictDialog`. **DONE + wired.**
-    - **LANDED ON MAIN 2026-08-01** pending wider device/lab testing. Two-window
-      verification found + fixed: self-echo presence, the co-author-button "bounce"
-      (emitProject→PROJECT_CHANGED→stopLive recursion), phantom conflicts on sequential
-      edits + inverted conflict labels, MQTT broker spam, conflict-dialog auto-dismiss on
-      remote resolve, **gap-fill chunk bytes mangled by Trystero's JSON action encoding
-      (base64 fix)**, and **dataset deletion not propagating (add-wins → proper three-way
-      delete)**.
-    - **Known edges still open** (not blockers): (a) delete-vs-concurrent-edit keeps the
-      data with no user prompt (no silent loss, but no choice); (b) deleting the *last*
-      remaining dataset doesn't propagate live (empty-project apply path is guarded).
-  - **~~In-project chat~~ — DEFERRED / maybe never.** Disproportionate scope
-    (persistence, history, retention, notifications) for uncertain value when teams already
-    have Slack/Teams; and it's the *unanchored* opposite of a memo. If ever, rescope to
-    ephemeral live-session-only messages, decided on its own. (Talked through with the user.)
+### Deferred features (intentionally not built yet)
 
 - [x] **Encryption at rest — opt-in for local storage, opt-out for exports (#144). DONE 2026-08-10.**
       **CRYPTO KERNEL + FOLDER AT-REST DONE** (commit 341879e): `core/crypto-envelope.js`
@@ -6448,132 +7064,6 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       together; touches draw + vertex-edit + hit-test (point-in-polygon) + interpolation
       across BOTH image regions and video tracks. Still CrossTab-only (no QDPX round-trip).
 
-- [ ] **Transcript-linked qualitative coding (#139 follow-on).** Broken out from the
-      multimedia item above (whose media-coding core is done). Still wanted — it's the
-      dominant real qual practice. Two parts + a deferred phase:
-  - [ ] **Transcript import (Phase 1).** Import existing time-aligned transcripts —
-        **VTT / SRT / timestamped rows** — as a first-class document that references the
-        media asset. ~80% of the value cheaply; no ML needed. New importer parsers
-        (`.vtt`/`.srt` → cues with `{tStart, tEnd, text}`), attach to a media row.
-  - [ ] **Transcript-linked coding surface.** A time-aligned transcript pane beside the
-        `<audio>`/`<video>`: code the *text* (reuse the char-span selector), and clicking
-        a line **seeks the playhead** (NVivo / oTranscribe style). The playhead/seek
-        machinery already exists (`builtin-caqdas`); this adds the transcript document
-        model + the line↔time binding.
-  - [ ] **Whisper auto-transcription (Phase 2 — DEFERRED, feasibility confirmed).** In-
-        browser transcription via transformers.js (WebGPU + WASM fallback) or whisper.cpp
-        WASM; models cache offline like the R packages. A real epic (30–180 MB model
-        download, worker architecture) — the deferral is scope/effort, not feasibility.
-        See the Whisper feasibility notes under #139 above.
-
-- [~] **File import — as a plugin extension point. THE FILE HALF IS NOW THE CODEC
-      INTERFACE** (#98/#130; verified 2026-08-21). `builtin-csv-codec` says it plainly:
-      it "replaces the separate builtin-csv-import and builtin-csv-export one-shot plugins
-      with a single read+write codec". Neither plugin named in the sub-items below exists
-      any more, and no plugin calls `app.importers` for a file format. What `importers`
-      still carries is the **`web`** source kind — FRED and Wikipedia declare one — so the
-      extension point is alive for fetch-your-own-bytes importers and superseded for files.
-      Also stale below: "delete the temporary core/demo-data.js seed" — demo data became a
-      launcher choice rather than a placeholder. Original:
-      **File import — as a plugin extension point.** Importers register via the
-      public `app.importers.register({ label, extensions, parse })`; the engine
-      (`core/import-service.js`) owns the File ▸ Import menu, the picker, and the
-      commit (`DataStore.loadDataset`), and hands the chosen file's bytes to the
-      plugin to parse. Dual return contract: `{variables, columns}` (JS-parsed)
-      or `{variables, parquet}` (R-parsed/large). Once the format coverage below
-      is enough, delete the temporary `core/demo-data.js` seed.
-  - [x] **CSV importer plugin** (`plugins/builtin-csv-import/`). Pure-JS parser
-        (quotes, embedded commas/newlines, `\r\n`, conservative numeric
-        inference) → `{variables, columns}`. Verified in Chrome end to end:
-        menu → picker → sandboxed parse → DuckDB; analyses run on the result.
-  - [x] **`haven` importer plugin (covers GSS)** (`plugins/builtin-haven-import/`).
-        Reads SPSS `.sav`/`.por`, Stata `.dta`, SAS `.sas7bdat`/`.xpt` via R
-        `haven`, extracts variable labels + value labels + user-missing +
-        measurement level as JSON, writes label-stripped data to Parquet, and
-        returns `{variables, parquet}`. New `app.webr.writeFile`/`readFile` stage
-        the bytes into / out of WebR's FS (the engine-side work). `haven` installs
-        on demand (~5.5s first time). SPSS read uses `user_na = TRUE` so distinct
-        GSS missing codes (DK/Refused/NAP) survive as sentinels + metadata rather
-        than collapsing to NA. **Verified in Chrome** with a haven-written `.sav`
-        round-trip: value labels render in Frequencies, `-99` recodes to Missing.
-    - [x] **Real GSS files — VERIFIED.** Real GSS `.sav` (including large) imported
-          end to end, not just the synthetic round-trip. *Residuals — BOTH FIXED 2026-08-04:*
-          **`.sas7bcat`** — SAS keeps value labels out of the data file (a format NAME
-          per variable, labels in a companion catalog), so a SAS import gave bare codes
-          where SAS itself shows labels. Added `ct_parse_catalog` to the ReadStat WASM
-          shim (`readstat_parse_sas7bcat`, value-label handler ONLY — a catalog has no
-          variables or rows, and wiring the others would emit metadata that overwrote the
-          dataset's), rebuilt `vendor/readstat`, and joined the two by format name.
-          ReadStat appends width/decimals to the format (`AGEGRP` → `AGEGRP8.2`) and the
-          catalog files sets under the bare name, so `sasFormatKey` strips the suffix in
-          one anchored pass — two passes got `$REGION12.` wrong, since the dot sits
-          between the width and the decimals. The importer offers the catalog only when
-          it would help (formats present, labels absent), reports what it attached, and
-          treats a catalog that fails to parse as non-fatal. New host-owned
-          `app.ui.pickFile` (a sandbox cannot open a picker). 8 tests.
-          **`na_range`** — see the missing-ranges entry; range-style missing is captured
-          and honoured at injection.
-    - [x] **Large-file ceilings (the haven-in-WebR path) — RESOLVED via the ReadStat
-          codec.** haven-in-WebR kept OOMing on large files, so the streaming
-          **ReadStat codec** (`plugins/builtin-readstat-codec/` — the "compile ReadStat
-          to wasm + stream rows → Parquet/DuckDB" lift noted below) became the
-          large-file path; real + large GSS now import through it, while haven stays
-          for the labelled small/extract case. Original per-limit analysis kept for
-          context. Two distinct limits, both hit by the full GSS 1972–2024 cumulative
-          (`.sav` 3.8 GB, `.sas7bdat` 2.4 GB, `.dta` 597 MB):
-      - **WebR `FS.writeFile` ~128 MB (the *first* wall) — LIFTED via WORKERFS.**
-        `FS.writeFile` throws "Invalid array length" above ~128–160 MB (a channel
-        limit). The haven importer no longer uses it: it stages the upload by
-        **mounting the `File` via WORKERFS** (`app.webr.mountFile`), which is lazy
-        and copy-free, so there's no staging size limit. **Verified:** a 181 MB
-        `.sav` mounts and `haven::read_sav` reads it (700k × 30). The importer
-        contract now hands plugins the `File` (by reference, no sandbox copy)
-        rather than an `ArrayBuffer`. (A failed import also no longer clobbers the
-        loaded dataset — that was a separate bug, fixed.)
-      - **`readFile` ~128 MB on the way *back out* (the new edge).** Pulling the
-        Parquet snapshot R writes back to JS still uses the channel, so a returned
-        Parquet > ~128 MB hits the same limit. Mitigate with **chunked readFile**
-        (R splits the file, JS concatenates — exactly the trick used to test the
-        181 MB case). Not yet wired into the importer; modest Parquet outputs are
-        fine today.
-      - **WebR ~4 GB wasm address space (the *second* wall) — now the live limit,
-        and it fails gracefully.** Confirmed on the real 597 MB GSS `.dta`: with
-        WORKERFS staging it gets *past* the FS wall and into `haven::read_dta`,
-        then R exhausts the heap ("cannot allocate vector of size …"). Verified
-        this errors **cleanly** — the dataset is preserved (not clobbered), WebR
-        recovers (subsequent runs + `lm()` still work), and the importer now shows
-        a plain-language out-of-memory message instead of R's cryptic one.
-        Confirmed empirically:
-        `R.version$platform` = `wasm32-unknown-emscripten`, `.Machine$sizeof.pointer`
-        = 4 — WebR is a **wasm32** build, so a single linear memory caps at ~4 GiB.
-        Even past the FS limit, haven materialises the whole frame in R (~3.9 GB of
-        doubles for the cumulative) and OOMs before our Parquet bridge.
-        *Note on wasm64:* the WebAssembly **Memory64** proposal lifts the 4 GiB cap
-        and Chrome ships it, but WebR isn't compiled for it (would require rebuilding
-        the whole package repo + Fortran toolchain for Memory64, costs perf, and
-        regresses Safari/iPad) — and it wouldn't even help here, since the ~128 MB
-        FS channel limit and JS ArrayBuffer limits sit earlier in the path. So don't
-        wait on wasm64. The real lift: compile **ReadStat** (the C lib haven wraps)
-        to wasm standalone and **stream** rows → Parquet/DuckDB without R holding the
-        frame — sidesteps the 4 GiB ceiling entirely.
-      - **Variable-subset at import — BUILT, and it's the practical answer to the
-        4 GB wall.** (Earlier note said this was "hard with haven"; that was wrong.)
-        haven's `n_max = 0` reads the variable catalog essentially free, and
-        `col_select` reads only chosen columns — so only the selected subset is
-        materialised, keeping memory bounded by the selection, not the file. New
-        **"SPSS / Stata / SAS — choose variables…"** importer + a searchable
-        `app.ui.selectFromList` picker. **Verified:** catalog read instant,
-        `col_select` of 3 of 1000 cols ~0.2 s (`.dta` seeks, doesn't parse all),
-        end-to-end pick-and-import correct with labels intact. So the full GSS is
-        now usable in-browser via choose-variables (only the columns you pick load);
-        whole-file import of the cumulative remains OOM-bound and needs the ReadStat
-        streaming lift above. Note: `.sav` is compressed so `col_select` there must
-        stream (slower than `.dta`), but still memory-safe.
-      - Typical GSS *extracts* (well under 128 MB) import whole fine today.
-  - Excel import broken out to its own top-level TODO below (in progress).
-  - *Note:* the Parquet return path (`DataStore.loadDataset` +
-    `DuckDBManager.replaceTableFromParquet`) is built and unit-exercised by the
-    contract but not yet driven end to end until the `haven` importer lands.
 - [x] **Excel (`.xlsx`/`.xls`) import + export via SheetJS — DONE.**
       `plugins/builtin-excel-codec/` — a read+write format codec (#98). **Import** reads
       the workbook with SheetJS, prompts for a sheet when there's more than one
@@ -6597,6 +7087,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       the primary dataset takes the host's default import name (e.g. "Dataset 1") rather
       than its sheet name — a host-level codec-naming behavior shared by all codecs, not
       Excel-specific; extra sheets are already sheet-named.
+
 - [x] **Multi-file import / import-as-append (pooled, row-stack).** Decision:
       pool into ONE table with a `source_file` provenance column (not a
       multi-dataset workspace); row-stack only (column-join/merge is separate).
@@ -6623,47 +7114,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     (corrected 2026-08-07): see the "Real GSS files — VERIFIED" entry above, where
     `.sas7bcat` is listed among the residuals both fixed, via a
     `readstat_parse_sas7bcat` value-label shim.
-- [~] **Import data from a web page (URL scrape).** Point the app at a URL; it
-      fetches and parses tabular data (e.g. HTML `<table>`s) into a new dataset
-      for analysis, with an option to save the parsed data locally as CSV (or
-      another suitable format) for archival.
-  - [x] **Wikipedia table importer built** — `plugins/builtin-wikipedia/`. The
-        first scrape-style importer and a concrete slice of this item. Paste an
-        article URL or title → fetches via Wikipedia's **CORS-open REST API**
-        (`/api/rest_v1/page/html/<Title>`), so **no proxy needed**; parses with
-        native `DOMParser` (no R, no Pyodide). Flattens `colspan`/`rowspan`,
-        strips Parsoid-inlined `<style>`/`<link>` (these leak into `textContent`
-        — caught a `font-size:80%` becoming a height of `80`), `<br>`→space for
-        multi-line headers, and infers numeric columns by leading-number match
-        (`"168.2 cm (5 ft 6 in)"`→168.2, `"1,234"`→1234). Multi-table pages show
-        a picker with `R×C` + header previews. Verified live end-to-end on the
-        height (140×8) and electricity (216×4) tables.
-    - *Known best-effort limits:* a messy mixed column like `"18–69 (N= m:…)"`
-      gets classed numeric (grabs the `18`); year ranges collapse to the first
-      year. The Variable-View retype (immutable transform) is the escape hatch.
-      Comma-decimal locales would misparse (en.wikipedia assumes `.` decimals).
-    - *Still open for the general case:* arbitrary non-Wikipedia pages still hit
-      the proxy-vs-paste fetch decision below, and JS-rendered SPAs won't expose
-      tables to a plain GET. The Wikipedia path sidesteps both via its API.
-  - **Approach is an open decision, not a given.** Two independent sub-decisions:
-    - *How to fetch (the real blocker):* the browser can't GET arbitrary
-      cross-origin URLs (CORS) — and this is true even inside a WASM runtime,
-      since Pyodide/WebR fetch through the browser too. So: a small serverless
-      proxy (e.g. Cloudflare Worker/Function) that does the cross-origin GET,
-      **or** a no-server fallback where the user pastes page HTML / uploads a
-      saved page. This choice touches the "purely static, no backend" positioning.
-      (Note: the FRED work added the **`web` importer source + `app.web.get(url)`**
-      primitives and proved a public CORS proxy works through our COEP isolation —
-      a scrape plugin can reuse both; the proxy-vs-paste decision still stands.)
-    - *How to parse:* Python + BeautifulSoup IS viable client-side via **Pyodide**
-      (CPython-in-WASM; bs4 is pure Python, installable with `micropip`) — but
-      that pulls in a *second* large WASM runtime on top of WebR. Lighter
-      alternatives that add zero new runtime: the browser's native `DOMParser`
-      table extraction, or R's `rvest`/`xml2` inside the WebR we already load.
-      (Server-side bs4 is also an option if we add the proxy above.) Choose
-      deliberately — bs4/Pyodide is the heaviest of these, not the default.
-  - Reuses the same ingest path as file import (`DataStore.setDataset`); the
-    "save as CSV" archival option overlaps with CSV export work.
+
 - [x] **FRED import (economic time series).** *Built* — `plugins/builtin-fred/`.
       Pulls a St. Louis Fed **FRED** series by ID (e.g. `UNRATE`, `GDP`, `CPIAUCSL`)
       into a 2-column dataset (`date` + the series), best-effort labelled with the
@@ -6684,6 +7135,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     picker, calls `parse({ ticket })`, and the plugin fetches its own bytes via the
     new **`app.web.get(url)`** surface, then `deliver`s a dataset through the
     existing commit path. The URL-scrape item can reuse both primitives.
+
 - [x] **Merge / join datasets by a key variable.** *Built* — combines two datasets
       side by side on a shared key (e.g. Wikipedia height vs. electricity **by
       country**). Import gains a **Join** mode (alongside Replace / Add rows) for a
@@ -6711,6 +7163,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     it's the import path), and preview for parquet-only importers (haven — needs
     staging the incoming key to DuckDB first; columns-based importers work today).
     Row order isn't base-stable after a join (DuckDB join order) — polish later.
+
 - [x] **SPSS-style data grid view — DONE** (incl. edit-in-cell). Read-only grid
       (`core/data-views.js`) + the separate editable-cells item below; only cosmetic
       polish remains (see *Still to do*).
@@ -6744,6 +7197,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - *Still to do:* a raw-codes vs value-labels toggle; column sort/resize and
     per-column width (fixed 120px today). Possibly retire the sidebar variable list
     now that grid headers carry selection (under consideration).
+
 - [x] **Data editor (editable cells) — BUILT** (`core/data-views.js` +
       `core/data-store.js`). Double-click a cell in the Data View to edit it. The
       edit is a **sparse override transform** (`{type:'setCell', row, column,
@@ -6774,6 +7228,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - *Still to do:* edit a factor cell by picking a **label** (today you type the
     raw code); range/fill edits; the old `VariablesSidebar` stand-in in `app.js`
     can now lean on this for any remaining inline editing.
+
 - [x] **Source-immutability + transform log — DONE** (`core/data-store.js`).
       Re-architected per the README principle: immutable per-file source tables
       (`ct_source_N`) + an ordered transform log → a derived DuckDB **VIEW**
@@ -6874,6 +7329,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - **Accepted boundary (not a violation):** "source" = the *as-imported* table,
     not the original file bytes. Pair with the **Dataset library** to enable full
     file→result reproduction if wanted.
+
 - [x] **Data transform/recode — DONE** (both phases). Phase 1 *metadata transforms*
       via an **editable Variable View** — click a variable to edit it; Phase 2
       *compute/recode new variables* via the Transform menu (both below). The
@@ -6922,6 +7378,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     earlier idea of surfacing a warning when imported data has un-designated
     candidate missing codes. (The "honour `missingValues` in every analysis" gap is
     now its own item below.)
+
 - [x] **Honour `missingValues` centrally at injection — DONE.** (Correction to the
       earlier note: it was never "only Frequencies" — **~45 analysis plugins each
       re-implemented** the same `x[x %in% codes] <- NA` recode; the real risk was
@@ -6946,9 +7403,11 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         (emits the recode into the exported standalone `.R`). Verified: all plugins
         parse; `missingValues` gone from the 41; no dangling references; descriptives/
         correlation/regression run clean with `-99` still excluded (x: N=5, Missing=1).
+
 - [x] **`app.ui.showForm`** — a general declarative form dialog (text/password/
       number fields). Built (`core/ui-service.js`) for the FRED importer; also used
       by the dataset library's name prompt.
+
 - [x] **Two-tier persistence: Projects + building-block library.** *Built.*
   - **Projects (living documents)** — `core/project-store.js` + `core/project-sync.js`.
     A project is the whole working set (every open dataset + active), saved as one
@@ -6994,6 +7453,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     open + add); pruning orphaned Parquet after a dataset is removed mid-project;
     export to real disk (File System Access); `app.datasets` plugin API. Supersedes
     the old IndexedDB idea.
+
 - [x] **Export results / output — BUILT, and now plugin-architected.** Save the
       Output pane (tables, plots, notes) as a shareable report via **File ▸ Export
       output…**.
@@ -7059,25 +7519,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     that list); rich Markdown→Word (notes currently flatten to plain paragraphs);
     table-aware pagination via **Paged.js** for the PDF path; per-table CSV/HTML of
     an individual result table (overlaps with data export below).
-- [~] **Export data (exporter extension point). LARGELY SUPERSEDED, same as import**
-      (verified 2026-08-21). Writing is a codec responsibility now — CSV, Parquet, NDJSON
-      and ReadStat (`.sav`/`.dta`) all round-trip through `codecs`, and File ▸ Export data…
-      is the one unified picker (#113). `plugins/builtin-csv-export/` named below no longer
-      exists. Document-shaped exporters remain their own plugins (`builtin-docx-export`,
-      `builtin-html-export`, `builtin-rdata-export`, `builtin-syntax-export`). Of the
-      deferred decisions below, only the **labels-vs-codes toggle** is genuinely still open.
-      Original:
-      **Export data (exporter extension point).** Symmetric with import: a plugin
-      registers `app.exporters.register({ label, extensions, export })`, pulls the
-      current (transformed) data via `app.data`, and returns bytes; the engine owns
-      the File ▸ Export menu and the download. Exports the derived `dataset` VIEW,
-      so transforms/recodes are baked in while sources stay immutable.
-  - CSV export plugin (`plugins/builtin-csv-export/`) — RFC-4180 quoting; raw
-    values (codes, not labels) for round-tripping; missing → empty cell.
-  - *Decisions deferred (format coverage):* a labels-vs-codes toggle; SPSS `.sav` /
-    Stata `.dta` write (haven write-side, heavier); Parquet export
-    (`DuckDBManager.queryToParquet` exists — nearly free). CSV covers the common
-    need first.
+
 - [x] **Export-to-syntax (script) — BUILT** (`plugins/builtin-syntax-export/`,
       File ▸ Export ▸ R syntax). Turns the dataset's **transform log** (the same
       record the History panel shows) into a runnable **R script** that reproduces
@@ -7112,91 +7554,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
     already read were translated by inverting that table, with the round trip as the
     check. What remains genuinely blocked here is the same thing by a different name:
     **R** for an analysis can only come from the plugin that emits it.
-- [~] **In-app plugin creator / editor — BUILT** (`core/plugin-creator.js`;
-      **Edit ▸ Create plugin…**, and **"+ Create new…"** in the plugin manager).
-      A scaffolded editor so non-programmers build the plugin they need without a
-      toolchain — pick a template, fill in the analysis, **Save & load** hands the
-      source to the same sandboxed loader (`PluginManager.saveAuthored` →
-      `loader.loadSource`, untrusted). Authored plugins **persist in localStorage**
-      (`kind:'authored'`, source stored) so they survive a restart and re-open in
-      the editor (✎ in the manager) to edit in place; removable like any user plugin.
-  - **Declarative plugin API (v2) — BUILT (full rewrite; supersedes the `activate`/
-    `run`-string notes above).** A plugin is now **manifest (data) + named
-    functions**; the host does all wiring and there is **no `activate`** and **no
-    registration API** at all. This was the big redesign agreed in design review;
-    done in 4 phases (commits) with every built-in migrated. Shape:
-    - **Menus:** `manifest.menu = [{ label, run, order?, inputs? }]`; the host files
-      each under `category` (placement host-owned — a plugin can't choose), gathers
-      the item's declared `inputs` with host dialogs, **binds them into R by name**
-      (single var → vector, multi → data.frame, scalar → value), then `invoke`s the
-      named `run(app, inputs)`. So the author writes no menu/picker code and the R
-      is **static** (no JS interpolation).
-    - **Inputs** are general + declarative: `kind: 'variables'|'number'|'choice'|
-      'text'`, with `multiple`/`types`/`optional`/`unique` (unique greys out a var
-      chosen by an earlier round — scatter X≠Y). Imperative `app.ui.selectVariables`
-      survives as a hidden escape hatch for dynamic flows.
-    - **Results carry structured data:** `appendTable(data)` (a `{columns, rows,
-      caption?, rowHeaders?}` spec or a WebR data.frame result) is **rendered
-      host-side via DOM** — plugins ship **no table HTML**. `appendText` is
-      markdown (escaped); `appendPlot` is SVG (the lone sanitised surface). The big
-      injection surface is gone.
-    - **Importers/exporters declarative too:** `manifest.imports/exports/
-      outputExports` with named functions that **return** the dataset/bytes; the
-      host owns the File menus, picker, commit, download. The whole `*.register`
-      API is gone from the plugin surface.
-    - **Output attribution:** every output block carries a host-stamped
-      `name · origin` line (origin = built-in / from-URL / from-file / created-here);
-      the plugin can't forge the origin (anti-impersonation).
-    - **Plugin `app` surface shrank** to runtime verbs only (data reads + create,
-      webr, results, ui, web) — no menus/importers/exporters/events/transform.
-    - **Verified in Chrome (per phase):** all 8 analyses, all 8 importers/exporters,
-      and a template-authored plugin all run end-to-end on the new API; output shows
-      host attribution; an authored plugin reads "created here".
-  - **Templates** (now declarative): **Blank**, **One-variable analysis**,
-    **Two-group comparison** (seeds the *Comparison* family), **Plot (histogram)** —
-    each a manifest (menu + inputs) + a `run(app, inputs)` whose R references the
-    host-bound input names. Generated R uses string concatenation so the scaffold
-    carries no backticks/`${}`.
-  - **Simple mode (form → no JavaScript) — BUILT.** The creator opens in **Simple**
-    mode by default: a form (name, category dropdown, an inputs builder with
-    friendly presets — "Numeric variable(s)", "One categorical variable", "A
-    number", … — Table/Plot output, and an R-code box). On save it **generates** the
-    declarative plugin (the user's R embedded via `JSON.stringify`; for a plot it's
-    wrapped in an svglite device so the author writes only the plot call) and loads
-    it — so an R-literate, JS-shy social scientist never sees JavaScript. A live
-    hint shows which names are bound in R. A **Code** toggle reveals the full
-    generated source for power users / editing (one-way: editing leaves Simple
-    mode). **Verified in Chrome:** a form-built Table plugin (means by variable) and
-    a Plot plugin (histogram) each generate, load, file under their category, and
-    run end-to-end.
-  - **Editor surface (Code mode):** a textarea with a **line-number gutter** +
-    Tab-inserts-spaces — "more than Notepad". Save persists *before* loading (work
-    is never lost); a load error stays in the dialog with the message to fix.
-  - **Verified end to end in Chrome:** all 4 templates create + load with correct
-    categories; the one-variable plugin ran the full chain (menu → variable picker
-    → R → table: age N=30, Mean=41, SD=10.888); authored plugins **survive a
-    reload** (re-loaded from stored source), **edit-in-place** re-loads + persists,
-    and **remove** clears them from the list + storage.
-  - *Original framing + still-to-do below.*
-  - **Scaffold pre-wires the boilerplate:** a starting template with the **input
-    selector** (variable picking via `app.ui.selectVariables`) and the **output
-    channels** (`results.appendText`/`appendTable`/`appendPlot`) already typed in,
-    plus a filled-in manifest (api version, menu path, declared `rPackages`). The
-    author writes the bit in the middle. Offer a few template shapes (one-variable
-    analysis, two-picker analysis, plot) since those cover most needs.
-  - **Editor surface:** syntax highlighting to catch typos — "nothing crazy."
-    Decision point: a tiny self-rolled highlighter vs. vendoring **CodeMirror**
-    (the obvious "more than Notepad," but a vendored dep — fits the existing
-    "vendor + pin" hardening posture). Lean minimal for v1.
-  - **Where the authored plugin lives + runs:** it must persist (OPFS, alongside
-    projects/blocks) and load through the existing **sandboxed-iframe loader** via
-    blob/`data:`-URL module import — so it ties directly to the open questions on
-    **blob-module import inside the opaque-origin iframe** (Milestone 3) and
-    **multi-file plugins / import-map**. The trust boundary is unchanged: authored
-    code runs in the same sandbox as any other plugin, and its output still goes
-    through the HTML sanitiser (so that hardening item covers it too).
-  - *Nice follow-on:* a "fork this analysis" button that opens an existing builtin
-    plugin's source in the editor as a starting point.
+
 - [x] **Plugin manager (enable/disable plugins) — BUILT** (`core/plugin-manager.js`;
       **Edit ▸ Plugins…**). A dialog listing every built-in plugin with a checkbox;
       toggling is **live** — disabling unloads it (its broker disposer removes the
@@ -7273,6 +7631,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - *Deferred:* a "reload plugin" action for the plugin-creator loop; optional
     integrity-hash pinning for URL plugins (so a remote plugin can't silently
     change); per-domain (not per-plugin) network consent.
+
 - [x] **Direct R interface / console — BUILT** (`core/r-console.js` + a new
       **R Console** workspace tab). A live REPL on the **persistent** WebR session
       for power users and plugin authors testing ideas before wiring them into a
@@ -7299,7 +7658,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   - *Deferred:* a typed-command log feeding export-to-syntax (the reproducibility
     tie-in); a clear/reset-session action.
 
-## More analyses (each is just another plugin)
+### More analyses (each is just another plugin)
 
 - [x] **#131 Layer 3a — plugin-supplied chart KINDS (model-driven). DONE 2026-08-06.**
 
@@ -7513,135 +7872,6 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       survives its provider being absent. If a third-party SuperCharts ever turns up,
       the work is Layer 3 plus moving nine files — and the semantics it lands in are
       already the right ones.
-
-- [ ] **Baked-chart review — the lesson from #140 (2026-08-05).** Originally 21
-      `appendPlot` call sites across 16 plugins handed the host a FINISHED SVG, so they
-      got no live controls, no palette, no re-editability. Reviewed to find out why.
-      **Now 11 sites across 9 plugins, and every one of them is R-drawn** — box,
-      wordcloud (×2), steps, forest, the three diagnostic scatters, the cost-effectiveness
-      plane and both sensitivity figures have been migrated, and builtin-plots,
-      builtin-survival, builtin-meta, builtin-regression and builtin-assumptions each
-      dropped `svglite`. The JS-drawn half of this review is CLOSED: the only figure a
-      plugin still draws itself is the decision tree, deliberately (see below).
-
-      **The dividing line is not difficulty — it is who holds the numbers.**
-
-      - **10 are R-produced** (svglite): impulse-response, conditional volatility, CA
-        biplot, MDS map, NMDS, Lorenz curve, network graph, choropleth, STL
-        decomposition, ARIMA forecast. These share a property: the coordinates do not
-        exist until R has fitted something. But that is a DATA-EXTRACTION choice, not a
-        barrier — `survfit` already yields time/surv/lower/upper vectors; we ask R for a
-        picture instead of those numbers.
-      - **1 is produced in JavaScript by the plugin itself**: builtin-decisions' decision
-        tree, which is staying that way on purpose — see the end of this entry. The other
-        two JS-drawn figures (the cost-effectiveness plane, the sensitivity pair) were the
-        tell this line was written about — the plugin already held every number and was
-        hand-drawing SVG anyway — and both are migrated.
-
-      **Rule to apply going forward: ask R for NUMBERS, not pictures.** A plugin should
-      return fitted geometry and let the host draw it. Baking stays legitimate where the
-      geometry is the hard part and is not ours — force-directed network layouts, real
-      map projections, biplot arrow fields.
-
-      Ranked follow-ups, each a self-contained kind — **all four now DONE**:
-      1. ~~**`box`**~~ — done (04e5a7e); builtin-plots needs no R at all now.
-      2. ~~**`wordcloud`**~~ — done (7c24206); the two hand-rolled clouds became one
-         kind, and it established that **some colours are data, not style**.
-      3. ~~**`steps`**~~ — done (f841b1c); Kaplan–Meier, reusable for any step function
-         + CI band. Validated against local R 4.6.0.
-      4. ~~**`forest`**~~ — done (f841b1c); effect + CI + weight, summary diamond.
-
-      What is left is the genuinely hard residue, and it is the right residue: the 16
-      remaining sites are mostly cases where **the geometry is the hard part and is not
-      ours** — force-directed network layout, map projections, biplot arrow fields,
-      ordination configurations. Each of those needs the numbers extracting from R first,
-      which is a per-plugin data question rather than a chart-layer one.
-
-      5. ~~**the three diagnostic scatters**~~ — done (2026-09-27); regression's
-         *Residuals vs Fitted* and *Normal Q–Q*, and builtin-assumptions' per-variable
-         *Q–Q plot*, are chart models now. They needed no new kind: `scatter` gained a
-         `reference` field, which is the guide line a plot's MEANING requires (zero
-         residual, the normal line) as opposed to `trend`, which reports a finding — so
-         a reference is grey, dashed and prints no equation, because `Y = 0 + 1(X)`
-         beside a Q–Q plot is a tautology. Both plugins' `rPackages` are now empty,
-         which matters beyond tidiness: the offline cache pre-fetches the R packages of
-         every enabled plugin, so a stale entry is a download nobody uses.
-
-         Two things the migration turned up, neither blocking:
-         - The assumptions plugin returns every variable's Q–Q points in ONE
-           concatenated vector plus a 1-based index, because per-variable results are
-           ragged and a ragged list does not survive the flat marshalling. Any future
-           plugin returning per-group geometry hits the same wall.
-         - A view value has THREE possible sources, and they are not interchangeable:
-           `SHARED_DEFAULTS` → the kind's `baseView` → the saved `model.view`
-           (`viewFromSpec`), with a control descriptor's own `default` consulted only by
-           `controlValue`, and only for a key none of those three set. So pie's
-           `valueLabels: true` and forest's `gridlines: false` are not bugs even though
-           they contradict the shared descriptors — that is a kind overriding a shared
-           default, which is the mechanism working. (First read of this looked like three
-           bugs; two of them were the design.) Scatter's `trendLine` was the real one: a
-           kind-local descriptor saying `false` six lines from the `baseView` that sets
-           it `true`. Made to agree — dead either way, but not a trap any more.
-
-         **The defect this shipped with, and how it got past a green suite
-         (2026-09-28).** All three charts passed `xTitle`/`yTitle` at the top of the
-         model. The scatter kind reads `axes.x.title`. So every field was present and
-         correct and not one axis was labelled — a silent loss against the old baked
-         plots, which got their axis names from `qqnorm` for free. The test asserted
-         `model.xTitle === 'Theoretical quantiles'`, which was true, so it passed. **A
-         chart test that never renders the chart is testing the caller's spelling.**
-         Every axis assertion in the chart tests now draws the SVG and looks for the
-         text.
-
-      6. ~~**builtin-decisions' figures**~~ — done (2026-09-28). The *cost-effectiveness
-         plane* and both *sensitivity* figures are chart models. This closes the JS-drawn
-         half of the review; what is left is the R-drawn residue below.
-
-         The plane needed **point labels** on `scatter`: a CE plane of anonymous dots is
-         useless, and no kind could name a point. They are identities rather than
-         decoration, so they default to on when the model supplies them and a scatter of
-         ordinary observations neither draws them nor offers the control. Status became a
-         **group** rather than the hard-coded green/red it was — a legend the reader had to
-         infer, in the two colours a colourblind reader cannot separate.
-
-         The sweep needed a **connected scatter** (`model.line`: 61 samples of one
-         continuous function read as a cloud otherwise, and the shape IS the finding;
-         drawn in x order, because a polyline follows the order it is handed) and
-         **`guides`** — named, switchable, axis-aligned lines for the break-even crossing
-         and each point where the recommendation flips, which were hard-coded green and
-         amber before. A guide whose value falls off-scale is skipped rather than pinned
-         to the frame, because a line on the frame claims the crossing happens there.
-
-         The tornado got its **own kind**. Reusing `forest` was considered and rejected:
-         the geometry nearly matches, but the panel would then talk about studies, weights
-         and log scales, and the rows would be markers-with-whiskers rather than bars.
-         Widest-swing-first is enforced *in the kind*, not trusted to the caller — that
-         funnel outline is the only reason the chart reads at a glance, so a model in input
-         order would draw a correct chart of the wrong kind. `swing` is computed there too,
-         from |hi − lo|, so the ordering can never disagree with the bars it orders.
-
-         **What deliberately was NOT migrated: the live in-panel previews.** The same two
-         figures appear in the plugin's own panel, redrawing on every slider frame with a
-         marker for where the parameter currently sits. Routing that through the host
-         renderer would put a postMessage round-trip inside a drag handler, and a snapshot
-         of a pointer means nothing to a later reader. So the panel keeps its own drawing
-         and Output gets a model: two artefacts with different jobs, not one thing drawn
-         twice. The alternative — a `charts.render(model)` broker verb so a plugin could
-         preview with the host's renderer — is the right answer *if* a plugin ever wants a
-         non-interactive preview, and is worth building then rather than now.
-
-      **The decision tree stays baked, and that is the end state, not a backlog item.**
-      `builtin-decisions`' tree is a node-link diagram: a recursive layout, three node
-      shapes, probabilities on the edges and the optimal path picked out. Nothing in the
-      chart vocabulary applies to it — no axes, no scales, no palette, no legend — so a
-      `tree` kind would be a chart kind in name only, for exactly one caller. It already
-      has the one thing the frame gives ('opts.title' makes the title editable), and the
-      optimal branch is marked by stroke WIDTH as well as colour, so it is not colour-only.
-      This is the same judgement as the network graph and the map projections: the geometry
-      is the artefact.
-
-> These three were captured during the college tour and lived only in the memory
-> notes, so this section read as complete when it was not (spotted 2026-08-05).
 
 - [x] **#140 — DONE (2026-08-21), with SuperPlots deferred.** The engine toggles and
       three of the four requested kinds shipped — `violin`, `dots` and `paired`, alongside
@@ -7866,31 +8096,6 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
       Original:
 
-- [ ] **#141 — Mplus parity (latent mixture models).** Gerontology faculty driver.
-      CrossTab already covers roughly 40% of Mplus's territory (SEM/CFA, EFA,
-      multilevel, mediation, survival, mixed ANOVA) but misses the latent-variable
-      mixture models that define its niche.
-
-      - **Latent growth curve modelling — START HERE.** Needs NO new R dependency:
-        lavaan already works, so this is a GUI wrapper in builtin-sem or its own
-        plugin. Best value-per-risk in the whole stats backlog.
-      - **LCA / LPA** — the single biggest reason people buy Mplus. `poLCA` is pure R
-        (no compiled deps) so it is plausibly WebR-feasible, but **run the probe in a
-        FRESH session** before believing either answer — see
-        [[webr-package-feasibility]] for why a long session lies about this.
-      - **Growth mixture models** (`lcmm` / `flexmix`) — feasibility unknown.
-      - Latent transition analysis and Bayesian SEM (`blavaan` needs Stan/JAGS) are
-        almost certainly not WASM-feasible. Do not spend a probe on them.
-
-- [ ] **#142 — Distance sampling — PARKED, possibly out of scope (user's call,
-      2026-08-05).** The `Distance` R package (CRAN, GPL-2+) fits detection functions
-      for line/point transect surveys; anthropology faculty use it alongside Raven.
-      Parked on a SCOPE question rather than a technical one: distance sampling is a
-      field-survey / data-collection method, and CrossTab is not a data collection
-      tool — the downstream statistics (frequency tables, chi-square, ANOVA) are
-      already covered. Decide scope before spending a feasibility probe.
-      https://distancesampling.org/Distance/
-
 - [x] **DONE 2026-08-04 — `plugins/builtin-agreement/`.** Percent agreement, Cohen's κ
       (2 raters, unweighted/equal/squared), Fleiss' κ (3+), Krippendorff's α
       (nominal/ordinal/interval/ratio), all via `irr`. TWO entry points: rater COLUMNS,
@@ -7916,6 +8121,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       `icr` (WebR feasibility probe first, per house style), or hand-roll + validate
       against `irr`. Also decide the unit model (whole-doc code presence vs unitised
       overlap). Driven by faculty running coder-bias meta-analysis. See [[qualitative-first-class]].
+
 - [x] **Single-Case Experimental Design (SCED) — DONE 2026-08-05, see the entry at the
       top of this file.** Shipped as `builtin-sced` + a `sced` chart kind (multi-panel,
       staggered boundaries, per-run line segmentation, condition labels — so the
@@ -7935,6 +8141,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       non-overlap stats (**Tau-U, NAP, PND**). R **`scan`** does both graphs + stats;
       `SCDA`/ggplot are alternatives. *First step:* a WebR feasibility probe that `scan`
       installs and runs (like the Phase-0 probes). See the stats-coverage-backlog memory.
+
 - [x] **Comparison: t-tests + one-way ANOVA** (`plugins/builtin-compare/`) — fills
       the *Comparison* menu with four declarative analyses: one-sample t-test,
       independent-samples t-test (Welch), paired-samples t-test, one-way ANOVA.
@@ -7942,25 +8149,15 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       tables (group statistics + test). Verified in Chrome on the demo data
       (independent income~gender: Welch t=−3.01, df=25.81, p=.006). *Deferred:*
       post-hoc (Tukey) for ANOVA; Levene + equal-variance t as an option.
+
 - [x] **Descriptive Statistics** (`plugins/builtin-descriptives/`) — N, missing,
       mean, SD, min, quartiles, median, max for numeric vars. Honours
       missingValues. Verified end to end in Chrome.
+
 - [x] **Crosstabs** (`plugins/builtin-crosstabs/`) — two-way table + Pearson
       chi-square; two pickers (row, col); honours missingValues; value labels.
       Verified end to end in Chrome (hand-checked χ²).
-- [~] **Linear regression** (`plugins/builtin-regression/`) — `lm()`, SPSS-style
-      Model Summary + Coefficients; factor IVs dummy-coded; honours missingValues.
-      *R/stats verified; two-dialog UI click-through NOT auto-confirmed* (harness
-      can't drive sequential modal dialogs — see testing note). **Needs a manual
-      click-through check.**
-- [~] **Binary logistic regression** (`plugins/builtin-logistic/`) — `glm()`
-      binomial; outcome recoded 0/1 (models the higher category, named in the
-      caption); SPSS-style Model Summary (&minus;2LL, Cox & Snell / Nagelkerke R²)
-      + "Variables in the Equation" (B, S.E., Wald=z², df, Sig., Exp(B)); factor
-      predictors dummy-coded; honours missingValues. *R/stats verified directly*
-      (gender~age+income on the demo: B/z/p, &minus;2LL=31.348, Cox & Snell=.289,
-      Nagelkerke=.386, Wald all hand-checked); **two-dialog UI click-through needs
-      a manual check** (same harness limitation as Linear).
+
 - [x] **Bivariate correlation** (`plugins/builtin-correlation/`) — Pearson matrix
       (r / Sig. (2-tailed) / N per pair), pairwise-complete, significance stars;
       honours missingValues. *R verified directly* (r(age,income)=.558, p=.0014,
@@ -7968,75 +8165,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       render auto-capture was blocked by the same harness flakiness during this
       session (the proven Descriptives plugin failed to render the same way) —
       worth a manual eyeball.
-- [~] **Plots / Graphs** (`plugins/builtin-plots/`) — SVG charts via **`svglite`'s
-      `svgstring()`** (R→SVG path **spiked & proven**: `svgstring()` → valid SVG →
-      `appendPlot` renders it through the sanitiser untouched, 32/32 points). Set:
-      histogram, scatter (+ linear OLS trend line, default on), boxplot (optional
-      factor split), pie chart (category shares — included for the audience despite
-      being a poor viz), and **bar chart with error bars** (group means by a factor,
-      **±95% CI**, t-based, labelled on the plot). Honours `missingValues`,
-      app-blue theme, responsive via `viewBox`.
-  - **Chart interaction architecture (#131) — DECIDED: three layers, not
-    "model-ise everything."** The host data-model renderer
-    (`app.results.appendChart` → `core/chart-renderer.js`) is great for common charts
-    but can't model the *variety* of statistical graphics — box/forest/biplot/network/
-    word-cloud/dendrogram/step/multi-panel all fell out of it. Forcing everything through
-    a host model both boils the ocean AND caps what plugins can draw. So interaction
-    splits into three layers (each chart picks a layer; we no longer force outliers into
-    the model):
-    - [x] **Layer 1 — universal host FRAME (model-free) — DONE.** Every `appendPlot`
-      chart now gets a host-owned **editable title + caption** rendered *around* the SVG
-      body (not baked into it), persisted in the model (survive save/reload), injection-
-      safe (`plaintext-only`). `app.results.appendPlot(svg, { title, caption })`;
-      `#buildPlotBlock` in `core/results-pane.js` (shared by append + restore).
-      **All 17 appendPlot plugins swept** to pass `opts.title` and drop the baked R
-      `main=` (auto-titles suppressed with `main=""`/`NULL`; `xlab`/`ylab` stay
-      plugin-drawn — axis-title editing remains model-only, Layer 2). Verified in Chrome:
-      boxplot title editable + persists; regression's two plots show host titles with no
-      baked doubles (incl. the `qqnorm(main=NULL)` edge). *Follow-ups if wanted:* a small
-      "frame options" popover for title font/size + a host caption default; axis-title
-      editing for svglite bodies (harder — host can't place them around an opaque SVG).
-    - [x] **Layer 2 — host data-model renderer (`appendChart`) — DONE (all strong
-      candidates).** Instant, no-round-trip body controls (recolour / reorder / restack)
-      for the common `categorical` / `scatter` / `pie` kinds. Reserved for high-value
-      **common** charts, NOT a universal mandate. *Migrated:* `plots` scatter, trends,
-      pie, histogram, errorBars; **`factor` scree** (line from eigenvalues), **`timeseries`
-      correlogram** (ACF/PACF bars from `acf`/`pacf` values), **`textanalytics` word
-      frequency** (bars from top-N counts). Each verified in Chrome (correct values, live
-      chart). The three R-extraction migrations also dropped `svglite` where it became
-      unused. **No further Layer-2 migrations planned** — the remaining charts are either
-      fine on the Layer 1 frame or need a new glyph; their optional body-interactivity is
-      deferred to Layer 3 (below), not forced into the model.
-    - [ ] **Layer 3b — host-mediated controls for BAKED plots.** *(Distinct from Layer
-      3a, which shipped 2026-08-06: that one is plugin-supplied model-driven KINDS. This
-      is the story for figures whose geometry only R can produce — the 16 remaining
-      `appendPlot` sites — where the picture stays baked but gains controls.)*
-      A plugin draws its own
-      SVG (full R power) AND declares the alterations it supports
-      (`controls: [{ id, label, type, options }]`); the host renders those controls and
-      calls back to re-chart on change (generalises the existing `onRedraw` size-recipe).
-      Opt-in, for everything not in Layer 2 where body edits are worth a round-trip:
-      - *Marginal-fit charts (weren't worth a Layer-2 model):* `decisions` tornado + CE
-        plane, `ecology` NMDS, `inequality` Lorenz, `cointegration` volatility,
-        `timeseries` forecast.
-      - *New-glyph charts (Tier B — no existing kind):* `plots` boxplot, `meta` forest,
-        `ordination` biplot, `survival` Kaplan-Meier (step line).
-      - *No-data-model charts (only Layer 1 + maybe a redraw/param control):* `sna`
-        network, `spatial` map, `decisions` tree, `timeseries` STL decomposition, `var`
-        IRF (multi-panel), word clouds (`textanalytics`, `caqdas` themed), 
-        `assumptions`/`regression` Q-Q + residual diagnostics.
-      *Coverage checked 2026-08-04:* every plugin still calling `appendPlot` (16 of them,
-      23 call sites) appears in one of the three groups above — so each remaining chart
-      has a recorded disposition, and "still on the old API" is a deliberate outcome
-      rather than a backlog. Layer 2 is closed; only Layer 3 itself is unbuilt.
-    - **Superseded:** the earlier Tier A/B/C "migrate-to-model" matrix. Outliers keep
-      their svglite bodies and gain Layer 1 (frame) + optional Layer 3 (declared controls);
-      only common charts warranted full Layer 2 model migration — now complete.
-  - *Generalise plots over derived data — RESOLVED via multi-dataset.* The
-    on-architecture answer ("analyses emit a derived dataset; plots consume
-    datasets like everything else") is now real: see the **multi-dataset workspace**
-    + `app.data.create` below. A plot doesn't take another plugin's output through a
-    bespoke channel — the analysis emits a dataset and the plot just plots it.
+
 - [x] **Multi-dataset workspace + derived datasets** (`core/dataset-manager.js`).
       The engine now holds a *set* of open datasets with one active, not a single
       dataset. `DataStore` is per-instance (id-namespaced DuckDB tables, own library
@@ -8050,6 +8179,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       partly done:* the library's "single vs. multi-dataset" question (answered:
       multi), and **join across loaded datasets** (engine can hold both; the join UI
       still goes via import — wiring it to pick a loaded dataset is a small follow-up).
+
 - [x] **Bootstrap the mean** (`plugins/builtin-bootstrap/`) — the first analysis
       that emits a derived dataset: resamples a numeric variable B times, emits the
       B resampled means as a new (active) dataset (`boot_mean`) you can plot/describe,
@@ -8064,7 +8194,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   the analysis R directly and check rendering manually. Single-dialog analyses
   (Descriptives) drive fine.
 
-## Nice-to-have / optimisations
+### Nice-to-have / optimisations
 
 - [x] **Order the top-level menus: host menus first, then plugins A→Z — DONE**
       (`core/menu-shell.js` `byTopLevel`). The **built-in (host) menus** are pinned
@@ -8073,24 +8203,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       plugin and the base menus stay exactly where they are. Verified: the menubar
       reads File · Edit · Transform · Analyze · Graphs. Per-item order *within* a
       menu still uses the `order` field.
-- [ ] Batch a multi-variable Frequencies run into one R call instead of one job
-      per variable (`plugins/builtin-frequencies/index.js`).
-- [~] Settings persistence (localStorage). **Still ad hoc as of 2026-08-21** — nine core
-      modules now reach for `localStorage` independently (app, at-rest, debug, launcher,
-      live-sync, plugin-broker, plugin-manager, plugin-package-store, user-identity), which
-      strengthens rather than weakens the case for one store. *Started:* the plugin manager persists
-      its disabled-set + catalog there (`core/plugin-manager.js`). A general
-      settings store can generalise that pattern. (Dataset persistence is its own
-      item — see **Dataset library** under Deferred features; OPFS, not IndexedDB.)
-- [ ] **Variable-picker polish (later).** The "Selected" group is a snapshot taken
-      when the dialog opens — ticking a box inside the dialog deliberately does
-      *not* live-reorder it to the top (reordering rows under the cursor causes
-      mis-clicks). Possible later refinements, none urgent: a live "N selected"
-      count in the dialog; a "selected only" filter inside the picker (mirroring
-      the grid's column filter) for very long lists; and an optional
-      **picker→selection write-back** so confirming a picker updates the shared
-      selection (today the picker's choice returns to the plugin but doesn't
-      change the grid/sidebar selection — a real design call, left as-is for now).
+
 - [x] **#180 — DONE (2026-09-27). The selected variables float: to the top of Variable
       View, to the left of the Data grid.** The workflow that asked for it — seven variables
       with unrelated names for one homework question, seven different ones for the next, and
@@ -8467,23 +8580,6 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       labels are a searchable index of what CrossTab can do) seen from two surfaces.
       Note the 60 built-ins also carry `howto` text, which is worth matching too.
 
-- [ ] **#184 — a comprehensive how-to guide (owner, 2026-09-21).** Nothing like it
-      exists. What exists is scattered and each piece is deliberately narrow: *Getting
-      around* (four paragraphs of orientation, #182), the *Syntax guide* (the command
-      language + a live plugin-call list), per-plugin `howto` strings behind the 🔍 in
-      the plugin manager, *Caveats & limits*, and the launcher's onboarding. None of that
-      teaches someone how to DO a piece of work end to end.
-
-      Scope question to settle before writing a word: is this **task-oriented** ("how do
-      I recode a variable", "how do I run a crosstab with weights") or a **course** (a
-      methods walk-through using the demo data)? The college-tour material and the
-      Sarabia labs (#174) suggest the second is what teaching actually needs — and #174
-      proved the value of building from a real assignment rather than guessing at a
-      curriculum. Either way it must be **in-app and offline** — a docs site fails the
-      air-gap requirement ([[airgap-offline-requirement]]) — and it has to say which
-      plugins a walk-through needs enabled, which makes #183 a dependency rather than a
-      sibling.
-
 - [x] **#176 — DONE (2026-09-25). Export the syntax/history to a Stata `.do` (and SPSS
       `.sps`) file.** Import already translated a `.do`/`.sps` into the native syntax
       (`stataToScript`, `spssToScript`); there was no export the other way. There is now:
@@ -8804,7 +8900,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       asserted. That is the same manual-click gap the regression/logistic entries below
       already carry, and it wants the GSS-style `.sav` the assignment uses.
 
-## Blocked until public deploy (GitHub Pages)
+### Blocked until public deploy (GitHub Pages)
 
 - [x] **Milestone 3 — verify on iPad Safari — DONE.** The deploy gate is lifted (live
       at crosstab-stats.github.io/crosstab/) and the app has been **tested multiple times
