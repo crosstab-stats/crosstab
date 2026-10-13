@@ -5836,12 +5836,19 @@ The record of what shipped and why. Kept in full, in the original sections.
     `app.state.list()`, `app.state.delete(slotId)`.
   - **Migration:** v3 → v4 lifts all existing blobs under `_default` slot; labels
     get a 4-part key. v2/legacy migrations chain through.
-  - [ ] **Building-block eligibility — UNBLOCKED (2026-08-21), not built.** A slot can be
-    saved as a reusable building block. The stated blocker is gone: #152 shipped, and
-    `promoteRecordToBlock` already promotes a RECORD with its declared children and their
-    assets. What is still missing is the same gap the "first-class plugin data" note
-    describes — a workspace SLOT is a blob, so it has no children to gather and nothing to
-    promote. Reusable boundary sets remain the concrete driver.
+  - [x] **MOOT (closed 2026-10-13) — there are no building blocks to be eligible for.**
+    The building-block library was REMOVED on 2026-10-02; `promoteRecordToBlock` no longer
+    exists anywhere in the tree, and `core/copy-to-project.js` is its replacement. An item
+    about which slots may be promoted to a block cannot be built when nothing can be a
+    block. The underlying want — reusable boundary sets — is real and survives in
+    [[first-class-plugin-data]], which records that plugin records now have no reuse path
+    at all rather than an incomplete one.
+    *Original:* A slot can be saved as a reusable building block. The stated blocker is
+    gone: #152 shipped, and `promoteRecordToBlock` already promotes a RECORD with its
+    declared children and their assets. What is still missing is the same gap the
+    "first-class plugin data" note describes — a workspace SLOT is a blob, so it has no
+    children to gather and nothing to promote. Reusable boundary sets remain the concrete
+    driver.
     *Original: waits on #152: once a slot's content is item ops, promoting one is a log
     slice rather than a blob copy.*
 
@@ -8967,7 +8974,14 @@ The record of what shipped and why. Kept in full, in the original sections.
       **Found while checking for it:** `test/chart-static-fallback.test.mjs` had a literal
       backspace where `\b` was meant (`/Charts\b/`), from a heredoc escape mangled in the
       session that wrote it (a70132c, 2026-08-07). The assertion was weaker than it read;
-      restored, and it still passes. Worth a look wherever else a regex was written through
+      restored, and it still passes.
+
+      **That sweep is DONE (2026-10-13): nothing else is mangled.** Every `.js`/`.mjs`
+      in `core/` and `test/` was scanned for a raw control character (backspace, escape,
+      form feed, vertical tab, bell) sitting inside a regex literal — the signature of an
+      escape eaten by a heredoc. No hits.
+
+      Worth a look wherever else a regex was written through
       a shell heredoc.
 
 - [x] **#177 — DONE (2026-09-26), with #183 — see that entry above.** The two pickers
