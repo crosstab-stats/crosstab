@@ -299,9 +299,10 @@ export const TITLE_BAND = 34;
  * only once the title has actually grown down into the plot layer, which is the one
  * case where it is legibility rather than decoration.
  *
- * Not a control for a concrete reason: "Titles & axes" is already a 16-row section and
- * chart-groups.test.mjs holds that as a cap ("if a section grows past this, it wants
- * splitting"). A toggle for this belongs in the same pass that splits the section.
+ * Not a control YET, but no longer for want of room: the 16-row "Titles & axes" section
+ * that blocked it was split into **Chart title** / **X axis** / **Y axis** (2026-10-13),
+ * and Chart title is now four rows with headroom. A `titlePlate` toggle is the obvious
+ * next thing to put there, along with the typeface and colour the owner raised.
  *
  * @param {object} [plot] - the plot layer's rect, to detect the overlap. Omitted means
  *   "assume no overlap", so a kind that has not been layered yet keeps a bare title.
@@ -442,17 +443,23 @@ export function titleControls(model) {
       // the renderers honour via `?? default`. (An empty box with the default shown only
       // as a placeholder can't be cleared: there's nothing to backspace, so no change
       // fires.) The placeholder is what an emptied box shows.
-      id: 'titleText', label: 'Title', type: 'text', group: 'Titles & axes',
+      id: 'titleText', label: 'Title', type: 'text', group: 'Chart title',
       placeholder: '(no title)', default: model.title || '',
     },
-    { id: 'titleSize', label: 'Title size', type: 'number', min: 1, step: 1, group: 'Titles & axes', default: 15 },
-    { id: 'titleBold', label: 'Title bold', type: 'check', group: 'Titles & axes', default: true },
-    { id: 'titleItalic', label: 'Title italic', type: 'check', group: 'Titles & axes', default: false },
+    { id: 'titleSize', label: 'Title size', type: 'number', min: 1, step: 1, group: 'Chart title', default: 15 },
+    { id: 'titleBold', label: 'Title bold', type: 'check', group: 'Chart title', default: true },
+    { id: 'titleItalic', label: 'Title italic', type: 'check', group: 'Chart title', default: false },
   ];
 }
 
 /**
  * Axis title + formatting + min/max controls for one axis.
+ *
+ * Grouped per axis (`X axis`, `Y axis`), which is what split the old 16-row
+ * "Titles & axes" section: it was never 16 flat rows, it was this block twice plus the
+ * four chart-title rows. The grouping follows the generator rather than being imposed on
+ * it, and `group` is presentation only — a saved view is keyed by control id, so this
+ * changed no stored chart.
  *
  * @param {'x'|'y'} axis
  * @param {object} model
@@ -471,16 +478,16 @@ export function axisControls(axis, model, { defaultTitle, defaultFrom } = {}) {
   return [
     {
       // Pre-filled with the effective default so it's editable/clearable (see titleControls).
-      id: `${p}Title`, label: `${upper} axis title`, type: 'text', group: 'Titles & axes',
+      id: `${p}Title`, label: `${upper} axis title`, type: 'text', group: `${upper} axis`,
       placeholder: '(no title)', default: modelTitle || defaultTitle || '',
       ...(defaultFrom ? { defaultFrom } : {}),
     },
-    { id: `${p}TitleSize`, label: `${upper} title size`, type: 'number', min: 1, step: 1, group: 'Titles & axes', default: 12 },
-    { id: `${p}TitleBold`, label: `${upper} title bold`, type: 'check', group: 'Titles & axes', default: false },
-    { id: `${p}TitleItalic`, label: `${upper} title italic`, type: 'check', group: 'Titles & axes', default: false },
+    { id: `${p}TitleSize`, label: `${upper} title size`, type: 'number', min: 1, step: 1, group: `${upper} axis`, default: 12 },
+    { id: `${p}TitleBold`, label: `${upper} title bold`, type: 'check', group: `${upper} axis`, default: false },
+    { id: `${p}TitleItalic`, label: `${upper} title italic`, type: 'check', group: `${upper} axis`, default: false },
     // No default: blank means "auto", and a number here is an explicit override.
-    { id: `${p}Min`, label: `${upper} axis min`, type: 'number', placeholder: 'auto', group: 'Titles & axes' },
-    { id: `${p}Max`, label: `${upper} axis max`, type: 'number', placeholder: 'auto', group: 'Titles & axes' },
+    { id: `${p}Min`, label: `${upper} axis min`, type: 'number', placeholder: 'auto', group: `${upper} axis` },
+    { id: `${p}Max`, label: `${upper} axis max`, type: 'number', placeholder: 'auto', group: `${upper} axis` },
   ];
 }
 

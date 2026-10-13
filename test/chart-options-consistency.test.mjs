@@ -17,6 +17,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 const { KINDS } = await import('./chart-kinds-harness.mjs');
 
@@ -45,8 +46,14 @@ const MODELS = {
   },
 };
 
-/** The canonical section order the panel presents. */
-const ORDER = ['Chart', 'Bins', 'Phases', 'Panels', 'Style', 'Labels', 'Legend', 'Titles & axes'];
+/** The canonical section order the panel presents.
+ *
+ * "Titles & axes" became three sections on 2026-10-13 — it was 16 rows, which was the cap
+ * this file's sibling holds, and it was never 16 flat rows: it was titleControls() once
+ * and axisControls() twice. They keep the same place in the sequence, in generator order.
+ */
+const ORDER = ['Chart', 'Bins', 'Phases', 'Panels', 'Style', 'Labels', 'Legend',
+  'Chart title', 'X axis', 'Y axis'];
 
 const describe = (name) => KINDS[name].describe(MODELS[name]);
 const names = Object.keys(KINDS);
@@ -134,6 +141,50 @@ test('sections appear in one order, on every kind', () => {
     const ranks = groups.map((g) => ORDER.indexOf(g));
     assert.ok(ranks.every((r) => r >= 0), `${n} uses an unknown section: ${groups.join(' > ')}`);
     assert.deepEqual(ranks, [...ranks].sort((a, b) => a - b), `${n} is out of order: ${groups.join(' > ')}`);
+  }
+});
+
+test('every section a kind uses is RANKED, not falling through to the default', () => {
+  // The trap this closes, paid for on 2026-10-13. GROUP_ORDER in builtin-charts ranks the
+  // sections; an unlisted group falls to rank 4 — deliberately, so a kind that invents its
+  // own section lands beside Bins and Phases rather than after the shared furniture.
+  //
+  // Splitting "Titles & axes" into Chart title / X axis / Y axis added three SHARED
+  // sections and did not add them to the map, so all three silently took the
+  // kind-invented rank and moved into the middle of every panel. Nothing threw; the
+  // sections simply appeared in the wrong place, and the only symptom was a sibling test
+  // disagreeing about order — which is easy to "fix" by rewriting the expectation to
+  // match the accident.
+  //
+  // ORDER here is the intended layout, so any section missing from it is a section whose
+  // placement is an accident.
+  // Read the map OUT OF THE SOURCE. Checking against ORDER here was the first attempt and
+  // it was useless: removing a rank from the plugin left this test green, because ORDER
+  // still listed the name. The thing that can be wrong is the plugin's map, so that is
+  // what has to be read.
+  const src = readFileSync('plugins/builtin-charts/index.js', 'utf8');
+  const map = /const GROUP_ORDER = \{([\s\S]*?)\};/.exec(src);
+  assert.ok(map, 'GROUP_ORDER is no longer findable in builtin-charts — this guard is blind');
+  // Strip the comment lines, then take every `key: <number>` pair. Keys are quoted only
+  // when they contain a space, so the quote is simply not part of the match.
+  const body = map[1].split(String.fromCharCode(10))
+    .map((l) => l.replace(/\/\/.*$/, ''))
+    .join(' ');
+  const ranked = new Set([...body.matchAll(/([A-Za-z][A-Za-z &]*?)'?\s*:\s*\d+/g)]
+    .map((m2) => m2[1].replace(/^'/, '').trim()));
+
+  const unranked = new Set();
+  for (const n of names) {
+    for (const c of describe(n).controls) {
+      if (!ranked.has(c.group)) unranked.add(`${n}: ${c.group}`);
+    }
+  }
+  assert.deepEqual([...unranked], [],
+    'add the section to GROUP_ORDER in builtin-charts, or it silently lands at rank 4');
+  // ...and the two lists must agree, or this file's ORDER describes a layout nobody ships.
+  for (const g of ORDER) {
+    const used = names.some((n) => describe(n).controls.some((c) => c.group === g));
+    if (used) assert.ok(ranked.has(g), `ORDER lists "${g}" but GROUP_ORDER does not rank it`);
   }
 });
 

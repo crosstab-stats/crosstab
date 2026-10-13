@@ -2827,7 +2827,14 @@ export function chartKinds(lib) {
    * section means it by it, so it belongs beside Bins and Phases rather than
    * after the shared furniture.
    */
-  const GROUP_ORDER = { Chart: 0, Bins: 1, Phases: 2, Panels: 3, Style: 5, Labels: 6, Legend: 7, 'Titles & axes': 8 };
+  const GROUP_ORDER = {
+    Chart: 0, Bins: 1, Phases: 2, Panels: 3, Style: 5, Labels: 6, Legend: 7,
+    // "Titles & axes" was one 16-row section until 2026-10-13. Splitting it meant
+    // listing all THREE here: an unknown group falls to rank 4 by design (a
+    // kind-invented section belongs beside Bins and Phases), so leaving them out
+    // silently moved the title and axis sections into the middle of every panel.
+    'Chart title': 8, 'X axis': 9, 'Y axis': 10,
+  };
   const groupRank = (g) => (g in GROUP_ORDER ? GROUP_ORDER[g] : 4);
 
   /** Controls in canonical section order. Stable, so each section's own order —

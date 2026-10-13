@@ -52,12 +52,6 @@ bottom; they are the project's memory and are not summarised away.
       break (the stdlib version hard-splits a long word, the plugin's lets it overflow),
       and the layer change had already touched every kind.
 
-- [ ] **"Titles & axes" wants splitting (16 rows).** `chart-groups.test.mjs` holds 16 as a
-      cap with the note "if a section grows past this, it wants splitting", and it is now
-      exactly at it — which is why the chart title's backing panel had to become automatic
-      instead of a toggle. Splitting it into Title / X axis / Y axis would make room, and
-      a `titlePlate` control is the first thing to add once there is any.
-
 - [~] **#181 — the three follow-ons #173 was carrying (split out 2026-09-21).** #173
       shipped the project manager and is closed; these rode along inside its entry and
       would have been closed with it. None blocks anything — they are the difference
@@ -1981,6 +1975,40 @@ this is the index.
 The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
+
+- [x] **DONE (2026-10-13). "Titles & axes" is now Chart title / X axis / Y axis.**
+
+      **The section was never 16 flat rows** — it was `titleControls()` once (4) and
+      `axisControls()` twice (6 + 6). The structure already existed in the generator; it
+      just was not shown. That is what made the split obvious once it was looked at:
+      "where does Title go?" is unanswerable, but "show the three blocks that are already
+      there" is not. The owner raised it as hard to split elegantly, which it was, until
+      the shape was counted rather than eyeballed.
+
+      One line per generator: `group: 'Titles & axes'` became `'Chart title'` and
+      `` `${upper} axis` ``, the latter inside the per-axis generator that already had
+      `upper` in scope. No migration — `group` is presentation, and a saved view is keyed
+      by control id, so every stored chart was untouched. Named **Chart title**, not
+      *Title*, because with *X axis* and *Y axis* present, "Title" is ambiguous.
+
+      Sizes are 4 / 6 / 6, all under the 8-row cap the other sections use, so the cap's
+      special exemption for this section is GONE rather than raised. Chart title has room
+      for the typeface and colour the owner floated, and for the `titlePlate` toggle that
+      `titleBlock()` deferred *because* the section was full.
+
+      **A bug this nearly shipped, and the guard that now catches it.** `builtin-charts`
+      ranks sections with a `GROUP_ORDER` map, and an **unlisted group falls to rank 4 by
+      design** — a kind that invents its own section belongs beside Bins and Phases rather
+      than after the shared furniture. Three new SHARED sections went in without being
+      added to that map, so all three silently took the kind-invented rank and moved into
+      the MIDDLE of every panel. Nothing threw. The only symptom was a sibling test
+      disagreeing about order, which is trivially "fixed" by rewriting the expectation to
+      match the accident — and that is exactly what was nearly done before the source was
+      read. `chart-options-consistency.test.mjs` now parses `GROUP_ORDER` out of the
+      plugin and asserts every section a kind uses is ranked in it; mutation-checked by
+      removing a rank and confirming the failure.
+
+      Suite 1722 → 1725.
 
 - [x] **#171 — DONE (confirmed 2026-10-13). One list; location is an attribute of a
       project, not a category of it.** The owner spotted it from the project manager —

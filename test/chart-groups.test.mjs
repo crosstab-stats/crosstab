@@ -68,13 +68,14 @@ for (const [name, model] of Object.entries(MODELS)) {
   });
 
   test(`${name}: no single section is longer than the old flat panel was tolerable`, () => {
-    // 16 title/axis rows is already the outlier and is collapsed; nothing else may
-    // approach it. If a section grows past this, it wants splitting.
+    // ONE cap now, for every section. "Titles & axes" used to be exempt at 16 — it was
+    // the outlier the cap was written around, and it sat exactly ON its exemption, so the
+    // next control anywhere in it had nowhere to go. Splitting it (2026-10-13) into
+    // Chart title / X axis / Y axis removed the exemption rather than raising it.
     const counts = new Map();
     for (const c of visible(model)) counts.set(c.group, (counts.get(c.group) || 0) + 1);
     for (const [group, n] of counts) {
-      const cap = group === 'Titles & axes' ? 16 : 8;
-      assert.ok(n <= cap, `section "${group}" has ${n} controls (cap ${cap})`);
+      assert.ok(n <= 8, `section "${group}" has ${n} controls (cap 8) — it wants splitting`);
     }
   });
 }
@@ -91,12 +92,44 @@ test('the first section is small — it is the one that opens by default', () =>
 });
 
 test('the generic title/axis block is shared, not per-kind — so splitting a kind would duplicate it', () => {
-  // This is the measurement that decided against a separate multi-series chart kind.
-  const titleRows = (m) => visible(m).filter((c) => c.group === 'Titles & axes').length;
-  assert.equal(titleRows(MODELS.sced), 16);
-  assert.equal(titleRows(MODELS.categorical), 16);
-  assert.equal(titleRows(MODELS.scatter), 16);
-  assert.equal(titleRows(MODELS.sced), titleRows(MODELS.scatter), 'identical across kinds');
+  // This is the measurement that decided against a separate multi-series chart kind. The
+  // block is still 16 rows and still identical across kinds; it is now THREE sections
+  // rather than one, which is the only thing that changed.
+  const rows = (m, g) => visible(m).filter((c) => c.group === g).length;
+  const block = (m) => rows(m, 'Chart title') + rows(m, 'X axis') + rows(m, 'Y axis');
+  for (const kind of ['sced', 'categorical', 'scatter']) {
+    assert.equal(block(MODELS[kind]), 16, `${kind}: the shared block is still 16 rows`);
+  }
+  assert.equal(block(MODELS.sced), block(MODELS.scatter), 'identical across kinds');
+});
+
+test('the split is 4 / 6 / 6 — the shape the generator already had', () => {
+  // The section was never 16 flat rows: it was titleControls() once and axisControls()
+  // twice. The grouping follows that rather than being imposed on it, which is why the
+  // change was one line per generator and needed no migration — `group` is presentation,
+  // and a saved view is keyed by control id.
+  for (const [name, model] of Object.entries(MODELS)) {
+    const n = (g) => visible(model).filter((c) => c.group === g).length;
+    // Every kind that draws a title has the same four. Axes are per-kind: a pie has
+    // neither, and a tornado has an X axis and no Y — so each is checked only where the
+    // kind declares it, and when it does it is the whole 6-row block or nothing.
+    if (n('Chart title')) assert.equal(n('Chart title'), 4, `${name}: chart title`);
+    for (const axis of ['X axis', 'Y axis']) {
+      if (n(axis)) assert.equal(n(axis), 6, `${name}: ${axis}`);
+    }
+  }
+  // …and the kinds that do have both are the ones the 16-row measurement came from.
+  for (const kind of ['sced', 'categorical', 'scatter']) {
+    const n = (g) => visible(MODELS[kind]).filter((c) => c.group === g).length;
+    assert.deepEqual([n('Chart title'), n('X axis'), n('Y axis')], [4, 6, 6], kind);
+  }
+});
+
+test('no section is called "Titles & axes" any more', () => {
+  for (const [name, model] of Object.entries(MODELS)) {
+    const groups = new Set(visible(model).map((c) => c.group));
+    assert.ok(!groups.has('Titles & axes'), `${name} still has the old combined section`);
+  }
 });
 
 test('SCED stays navigable as the data gets harder', () => {
@@ -105,8 +138,14 @@ test('SCED stays navigable as the data gets harder', () => {
   const many = { ...MODELS.sced, panels: Array.from({ length: 8 }, (_, i) => ({ ...MODELS.sced.panels[0], key: `k${i}`, label: `K${i}` })) };
   assert.ok(visible(one).length < visible(many).length, 'controls scale with the data');
   const groupsOf = (m) => [...new Set(visible(m).map((c) => c.group))];
-  assert.deepEqual(groupsOf(many), ['Chart', 'Phases', 'Panels', 'Style', 'Legend', 'Titles & axes'],
-    'and the section list stays the same six either way');
+  // Eight sections since "Titles & axes" split into three (2026-10-13). Order comes from
+  // GROUP_ORDER in builtin-charts, NOT from where a kind happens to declare a control —
+  // which is the whole reason that map exists. The split briefly broke this: an unlisted
+  // group falls to rank 4 by design, so the three new sections landed mid-panel until
+  // they were added to the map.
+  assert.deepEqual(groupsOf(many),
+    ['Chart', 'Phases', 'Panels', 'Style', 'Legend', 'Chart title', 'X axis', 'Y axis'],
+    'the section list stays the same eight either way, with titles last');
   assert.deepEqual(groupsOf(one), groupsOf(many));
 });
 
