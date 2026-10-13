@@ -138,21 +138,43 @@ bottom; they are the project's memory and are not summarised away.
         project…**". A settings dialog that has to send you back to the menu becomes a
         tab switch.
 
-        Three things to get right when building it:
-    - [ ] **The two tabs must not look interchangeable.** One acts on the open project
+        Three things to get right when building it. **All three were built and are
+        DONE (confirmed 2026-10-13 from a screenshot the owner sent, then checked against
+        `core/encryption-settings.js` and `test/encryption-settings.test.mjs` — the
+        checkboxes were simply never ticked, the same staleness as #179, #171 and #141):**
+    - [x] **DONE — the two tabs do not look interchangeable.** `ENC_TABS` is
+          `{id: 'project', label: 'This project'}` / `{id: 'defaults', label: 'New
+          projects'}` — named by scope, as asked. The defaults tab carries the
+          load-bearing disclaimer in so many words: it *"will not unprotect or alter any
+          project that already exists — for those, use the “This project” tab."* Pinned by
+          *the project tab comes first, and the tabs are named by scope*. Original:
+          **The two tabs must not look interchangeable.** One acts on the open project
           NOW; the other changes a default for projects that don't exist yet and touches
           no existing project. Name them by scope (*This project* / *New projects*
           rather than *Project* / *Globals*), and let the defaults tab say plainly that
           it changes nothing already saved. The failure to design out is someone
           flipping a default believing they just protected the project in front of them.
-    - [ ] **Two degenerate states, expressed not guarded.** #158 shipped, so "no project
+    - [x] **DONE — both degenerate states are SHOWN, and the modal lands where there is
+          something to do.** `actionable` is false for `scope: 'none'` and for
+          `scope: 'unsaved'`, and `if (!actionable) active = 'defaults'` makes the
+          defaults tab the landing tab exactly as this asked. The two states stayed
+          distinct rather than being merged into one "nothing here": two tests,
+          *no project open offers nothing, and says why* and *an unsaved project is a
+          DIFFERENT empty state from no project*, the second noting that merging them
+          would print "no project is open" at someone looking at their data. Original:
+          **Two degenerate states, expressed not guarded.** #158 shipped, so "no project
           open" is a real state (sitting at the launcher) — and `protectProject()` also
           refuses an empty unsaved one ("Add some data first — an empty project has
           nothing to protect yet"). Both are facts the project tab should SHOW, with the
           modal opening on the defaults tab when there is nothing to act on. Turning
           those two errors into a visible state is the same [[guard-means-missing-state]]
           move as collapsing the three verbs.
-    - [ ] **Keep the per-project verbs state-driven inside the tab**, as above:
+    - [x] **DONE — the verbs are state-driven, never all three at once.**
+          `projectEncryptionOffer(state)` returns only what applies, and two tests pin it:
+          *an unprotected project is offered exactly one verb: set a passphrase* and
+          *a protected project is offered change and remove — never protect again*. A
+          third marks removal dangerous and setting one not. Original:
+          **Keep the per-project verbs state-driven inside the tab** as above:
           unprotected → *Set a passphrase*; protected → *Change passphrase* / *Remove
           protection*. Never all three at once.
   - [x] **DONE (2026-09-21) — the two bundle items folded into the manager.** `Export
