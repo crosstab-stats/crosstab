@@ -15,6 +15,9 @@
  * is a possible later refinement; CSV type inference needs all values to be exact.)
  */
 
+/** The host's shared helpers (core/plugin-stdlib.js). */
+const { uniqueName } = globalThis.ctStd;
+
 export const manifest = {
   id: 'builtin-csv-codec',
   name: 'CSV codec',
@@ -120,14 +123,6 @@ function isNumericColumn(values) {
     if (!Number.isFinite(Number(v))) return false;
   }
   return seen > 0;
-}
-
-/** Ensure a column name is unique within the dataset being built. */
-function uniqueName(base, used) {
-  if (!(base in used)) return base;
-  let i = 2;
-  while (`${base}_${i}` in used) i++;
-  return `${base}_${i}`;
 }
 
 /** Split delimited text into rows of fields, honouring RFC-4180 quoting (quoted

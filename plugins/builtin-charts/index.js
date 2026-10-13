@@ -39,6 +39,13 @@
  * its helpers from `lib`.
  */
 
+/**
+ * The host's general stdlib. This plugin also receives the CHART stdlib (via the
+ * manifest's charts.via), which is a different library for a different job: that one
+ * draws, this one formats.
+ */
+const { fitNumber } = globalThis.ctStd;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-charts',
@@ -716,8 +723,9 @@ export function chartKinds(lib) {
       // off the chart and predict from it; the slope and intercept were computed
       // to draw this very line and then thrown away at render, so the one number
       // on screen was the one you cannot predict with.
-      const coef = (v) =>
-        Math.abs(v) >= 10000 || (v !== 0 && Math.abs(v) < 0.001) ? v.toPrecision(4) : v.toFixed(3);
+      // The host's formatter: same rule, and it guards a non-finite coefficient, which
+      // this copy did not - R returning NA drew the text "NaN" onto the chart.
+      const coef = fitNumber;
       const eq = `Y = ${coef(intercept)} ${slope < 0 ? '−' : '+'} ${coef(Math.abs(slope))}(X)`;
       // Inside the plot, on a backing plate: the equation belongs in the top-right
       // corner, which is also exactly where a steep fit line passes through. No

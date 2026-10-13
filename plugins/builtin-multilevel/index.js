@@ -23,7 +23,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat, prettyTerm } = globalThis.ctStd;
+const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat, prettyTerm, levelLabel: lvl } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -202,11 +202,4 @@ async function runR(app, rCode) {
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   return result;
-}
-
-/** A category shown through its value label — the same category the recode used. */
-function lvl(meta, code) {
-  if (code == null || code === '' || code === 'NA') return '?';
-  const v = meta?.valueLabels?.[code] ?? meta?.valueLabels?.[Number(code)];
-  return v != null && v !== '' ? String(v) : String(code);
 }

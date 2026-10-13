@@ -43,7 +43,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, labelOf: labelOfStd, metaMap, unpackR: flat } = globalThis.ctStd;
+const { fixed: f, labelOf: labelOfStd, metaMap, unpackR: flat, uniqueName } = globalThis.ctStd;
 
 /** Bare label, no `(column)` suffix. This plugin names occasions and indicators in
  * PROSE — "Baseline → Year 1 → Year 2" — where the column name is noise. Its old copy
@@ -688,10 +688,4 @@ function labelValue(meta, name, code) {
 }
 function pct(p) {
   return Number.isFinite(p) ? `${(p * 100).toFixed(1)}%` : '—';
-}
-function uniqueName(name, taken) {
-  const used = new Set(taken || []);
-  if (!used.has(name)) return name;
-  for (let i = 2; i < 1000; i += 1) if (!used.has(`${name}_${i}`)) return `${name}_${i}`;
-  return `${name}_x`;
 }

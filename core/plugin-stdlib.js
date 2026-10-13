@@ -461,6 +461,73 @@ export function prettyTerm(term) {
   return m ? `${m[1]}${m[2] ? ` = ${m[2]}` : ''}` : String(term).replace(/`/g, '');
 }
 
+/**
+ * A factor level as a reader should see it: its value label, or the bare code.
+ *
+ * Bound as `lvl` at call sites. Six copies in three variants, and this is the SUPERSET,
+ * because two of the three were missing fixes the third had — the `rStr` pattern again:
+ *
+ *  - **`'NA'` is not a level.** R hands back the literal string `NA` for a missing factor
+ *    value, and a copy without this guard printed it as though a category called "NA"
+ *    existed. builtin-ordinal and builtin-survival were printing it.
+ *  - **Value labels are often keyed by NUMBER while R returns a string**, so the lookup
+ *    tries `[code]` and then `[Number(code)]`. Without the second, a labelled numeric
+ *    factor silently showed its raw codes — which is the one thing this function exists
+ *    to prevent.
+ *  - An EMPTY label falls back to the code rather than rendering a blank cell.
+ */
+export function levelLabel(meta, code) {
+  if (code == null || code === '' || code === 'NA') return '?';
+  const v = meta?.valueLabels?.[code] ?? meta?.valueLabels?.[Number(code)];
+  return v != null && v !== '' ? String(v) : String(code);
+}
+
+/**
+ * A name that is not taken yet: `age`, then `age_2`, `age_3`…
+ *
+ * Five copies, and they disagreed about things a caller can SEE, so both are options
+ * rather than a majority vote:
+ *
+ *  - **What "taken" is.** An Array, a Set, or an object keyed by name — the three
+ *    shapes the callers actually had. Accepting all three is why this could replace them
+ *    without rewriting their call sites.
+ *  - **Where the numbering starts.** builtin-aggregate counts from `_1`, everyone else
+ *    from `_2`. That is visible in a generated column name and in a round-trip, so it is
+ *    `start` rather than something to flatten.
+ *  - `fallback` names an empty base (builtin-wikipedia's scraped columns can be unnamed).
+ */
+export function uniqueName(base, taken, { start = 2, fallback = '' } = {}) {
+  const has = taken instanceof Set ? (n) => taken.has(n)
+    : Array.isArray(taken) ? (n) => taken.includes(n)
+      : (n) => Object.prototype.hasOwnProperty.call(taken ?? {}, n);
+  const name = String(base ?? '') || fallback;
+  if (!has(name)) return name;
+  let i = start;
+  while (has(`${name}_${i}`)) i += 1;
+  return `${name}_${i}`;
+}
+
+/**
+ * A number for a label whose magnitude cannot be predicted: three decimals in the
+ * ordinary range, four significant figures once that would be meaningless.
+ *
+ * The case it exists for is an annotation drawn ON a chart — a fitted slope, an intercept
+ * — where the value comes from the data rather than from a scale the chart chose. At
+ * 1.2e-7, `toFixed(3)` prints `0.000`; at 4.5e6 it prints a wall of digits. Either way the
+ * one number on screen is the one you cannot read.
+ *
+ * Two copies: `fitNum` in builtin-plots and an inline `coef` in builtin-charts. Identical
+ * rule, and only the first guarded a non-finite input — so a coefficient R could not
+ * compute was drawn on the chart as the text `NaN`. The guarded form wins, which is the
+ * same call made for `fixed` and `levelLabel`.
+ */
+export function fitNumber(v) {
+  if (!Number.isFinite(v)) return EMPTY;
+  return Math.abs(v) >= 10000 || (v !== 0 && Math.abs(v) < 0.001)
+    ? v.toPrecision(4)
+    : v.toFixed(3);
+}
+
 // =============================================================================
 // DOM
 // =============================================================================

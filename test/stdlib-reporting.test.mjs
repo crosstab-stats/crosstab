@@ -24,6 +24,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   fmtP, fmtPInline, fixed, rounded, ci, labelOf, metaMap, rStr, cleanSvg, prettyTerm,
+  levelLabel, uniqueName, fitNumber,
 } from '../core/plugin-stdlib.js';
 
 test('fmtP prints three decimals and no leading zero', () => {
@@ -182,4 +183,71 @@ test('prettyTerm turns an R model term into something a reader recognises', () =
   assert.equal(prettyTerm('age'), 'age');
   assert.equal(prettyTerm('`odd name`'), 'odd name', 'R quoting goes');
   assert.equal(prettyTerm('(Intercept)'), '(Intercept)');
+});
+
+test('levelLabel prefers the value label, and finds it under a numeric key', () => {
+  // The lookup that two of the six copies were missing. R returns the level as a STRING
+  // while value labels are usually keyed by number, so without the second lookup a
+  // labelled numeric factor printed its raw codes — the one thing this prevents.
+  const meta = { valueLabels: { 1: 'Male', 2: 'Female' } };
+  assert.equal(levelLabel(meta, '1'), 'Male', 'string code, numeric key');
+  assert.equal(levelLabel(meta, 1), 'Male');
+  assert.equal(levelLabel(meta, '2'), 'Female');
+});
+
+test('levelLabel treats R\u2019s "NA" as missing, not as a category called NA', () => {
+  // builtin-ordinal and builtin-survival were printing the literal string.
+  const meta = { valueLabels: { 1: 'Yes' } };
+  assert.equal(levelLabel(meta, 'NA'), '?');
+  assert.equal(levelLabel(meta, null), '?');
+  assert.equal(levelLabel(meta, ''), '?');
+});
+
+test('levelLabel falls back to the code rather than printing a blank', () => {
+  assert.equal(levelLabel({ valueLabels: { 1: '' } }, '1'), '1', 'an empty label is not a label');
+  assert.equal(levelLabel({ valueLabels: {} }, '7'), '7');
+  assert.equal(levelLabel(undefined, '7'), '7', 'no meta at all is still a usable answer');
+});
+
+test('uniqueName accepts the three shapes its callers actually had', () => {
+  // Array, Set and plain object — accepting all three is why five copies could collapse
+  // without rewriting their call sites.
+  assert.equal(uniqueName('age', ['age']), 'age_2');
+  assert.equal(uniqueName('age', new Set(['age'])), 'age_2');
+  assert.equal(uniqueName('age', { age: 1 }), 'age_2');
+  assert.equal(uniqueName('age', []), 'age', 'a free name is returned untouched');
+});
+
+test('uniqueName keeps counting until it finds a gap', () => {
+  assert.equal(uniqueName('age', ['age', 'age_2', 'age_3']), 'age_4');
+});
+
+test('uniqueName lets a caller start at _1, because that is visible output', () => {
+  // builtin-aggregate numbers from _1 where everyone else starts at _2. Flattening that
+  // would rename a generated column and break a round-trip.
+  assert.equal(uniqueName('age', ['age'], { start: 1 }), 'age_1');
+  assert.equal(uniqueName('age', ['age', 'age_1'], { start: 1 }), 'age_2');
+});
+
+test('uniqueName names an unnamed column', () => {
+  // builtin-wikipedia scrapes tables whose columns can have no header at all.
+  assert.equal(uniqueName('', {}, { fallback: 'Column' }), 'Column');
+  assert.equal(uniqueName(null, { Column: 1 }, { fallback: 'Column' }), 'Column_2');
+});
+
+test('fitNumber switches to significant figures when decimals stop meaning anything', () => {
+  // Drawn ON a chart, where the value comes from the data rather than a scale the chart
+  // chose: at 1.2e-7 toFixed(3) prints 0.000, and at 4.5e6 a wall of digits.
+  assert.equal(fitNumber(1.5), '1.500');
+  assert.equal(fitNumber(0.0012), '0.001');
+  assert.equal(fitNumber(0.00000012), '1.200e-7');
+  assert.equal(fitNumber(4500000), '4.500e+6');
+  assert.equal(fitNumber(0), '0.000', 'zero is in the ordinary range, not the tiny one');
+});
+
+test('fitNumber guards the non-finite case the chart copy did not', () => {
+  // builtin-charts drew the text "NaN" onto the chart when R returned NA for a slope.
+  for (const bad of [NaN, Infinity, null, undefined]) {
+    assert.equal(fitNumber(bad), '\u2014');
+  }
 });

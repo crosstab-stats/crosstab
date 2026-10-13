@@ -18,31 +18,16 @@ bottom; they are the project's memory and are not summarised away.
 
 ### Now / near-term
 
-- [ ] **More duplication the drift scan found, not yet done (2026-10-12).** The same scan
-      that produced **Plugin stdlib, part 3** (under Completed). None of these are reporting
-      conventions, so none print
-      inconsistently — they are maintenance risk rather than visible defects, which is why
-      they were not swept with the formatters:
+- [ ] **`runR` wants to be `app.webr.runOrThrow` (raised 2026-10-13).** Eleven plugins
+      carry `async function runR(app, code)` — run it, throw if `result` is null. One
+      (builtin-causal) takes an optional prelude, which is a strict superset.
 
-      - ~~**`flat` / `normalizeResult`**~~ — **DONE; see Plugin stdlib, part 4, under
-        Completed.** It turned out to
-        be 47 copies under four names, and not an interface design after all: two
-        vocabularies over identical plumbing, with `num` meaning a scalar in 28 plugins and
-        a vector in 10. It also carried the only *correctness* bug of the whole audit.
-      - **`prettyTerm` — 13 copies, 3 variants.** Turns an R model term (`factor(x)y`)
-        into something readable. The variants differ in which R term shapes they know
-        about, so the union is probably right, but each needs reading first.
-      - **`runR` — 11 copies, 2 variants**, and **`cleanSvg` — 8 copies, 2 variants** (the
-        two differ only in whitespace). `cleanSvg` strips the width/height off an R plot so
-        it scales; that one is a straight lift.
-      - **`uniqueName` — 6 copies, 5 variants** and **`lvl` — 6 copies, 3 variants.**
-      - **The chart tick formatter is duplicated** between builtin-charts and builtin-plots
-        (`Math.abs(v) >= 10000 || Math.abs(v) < 0.001 ? toPrecision(4) : toFixed(3)`),
-        byte-identical. Belongs in the chart stdlib rather than the plugin stdlib.
-      - **builtin-correlation's `nFmt` prints a BLANK, not an em dash**, where every other
-        count formatter prints `—`. Possibly deliberate (a correlation matrix leaves empty
-        cells empty) and possibly drift; it needs a look rather than a sweep, which is why
-        `rounded` was not forced onto it.
+      It is real duplication, but `core/plugin-stdlib.js` is the wrong home: it is for pure
+      synchronous functions, and an async helper that calls the host breaks the property
+      that makes `app.std` usable without `await`. The right move is a verb on the
+      `app.webr` namespace the plugins already have — which means touching the postMessage
+      proxy's method list rather than the stdlib, and is why it was not done in the same
+      pass.
 
 - [ ] **Two functions named `wrapLabel` (found 2026-10-08).** `wrapToWidth` in the charts
       stdlib wraps a legend entry with no ceiling; `wrapLabel` inside builtin-charts wraps
@@ -1975,6 +1960,48 @@ this is the index.
 The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
+
+- [x] **DONE (2026-10-13). The duplication the drift scan found is swept.** Every bullet
+      is now either lifted or has a recorded reason not to be. Across this and the earlier
+      passes the scan has removed **roughly 250 copied helpers**; what follows is the last
+      of them.
+
+      - **`cleanSvg` — 8 copies, lifted.** Two spellings differing only in line breaks.
+        svglite writes a fixed width/height on the root `<svg>`, so an R plot arrives at
+        whatever size R thought it was; stripping both leaves the viewBox, which is what
+        makes it scale.
+      - **`prettyTerm` — 11 byte-identical copies, lifted.** `builtin-anova` keeps its
+        own: it renders `Residuals` as "Residual" and splits an interaction on `:`. That
+        is a superset, and folding it in would change how eleven other plugins print an
+        interaction term — an output decision, not a tidy-up.
+      - **`lvl` — 6 copies, 3 variants, lifted as `levelLabel` AND as the superset.** The
+        `rStr` pattern once more: two of the three were missing fixes the third had.
+        **`'NA'` is not a level** — R returns the literal string for a missing factor
+        value, and builtin-ordinal and builtin-survival were printing it as though a
+        category called NA existed. And **value labels are usually keyed by number while R
+        returns a string**, so without the second lookup a labelled numeric factor
+        silently showed its raw codes, which is the one thing the function exists to stop.
+      - **`uniqueName` — 5 copies, 5 variants, lifted with options.** They disagreed about
+        things a caller can SEE, so neither was flattened: `taken` accepts an Array, a Set
+        or an object (the three shapes the callers had), and `start` keeps
+        builtin-aggregate numbering from `_1` where everyone else starts at `_2` — that is
+        a generated column name and a round-trip.
+      - **The chart tick formatter — 2 copies, lifted as `fitNumber`.** `fitNum` in
+        builtin-plots and an inline `coef` in builtin-charts. Only the first guarded a
+        non-finite input, so **a coefficient R could not compute was drawn onto the chart
+        as the text "NaN"**.
+      - **builtin-correlation's `nFmt` — resolved, not deliberate.** It returned `''`
+        where every other count formatter returns the em dash, and its single call site is
+        `` `N = ${nFmt(n)}` `` — so a missing N rendered as `N = ` with nothing after the
+        equals sign. Now `rounded`, which reads `N = —`.
+
+      **`runR` — 11 near-identical copies, deliberately NOT lifted.** It calls
+      `app.webr.run`, and the stdlib's own rule is that nothing stateful and nothing that
+      touches the host belongs there — that rule is what keeps `app.std` local and
+      synchronous. Its right home is the `app.webr` service surface, so lifting it into
+      `app.std` would have traded duplication for a broken contract. Filed below.
+
+      Suite 1725 → 1737.
 
 - [x] **DONE (2026-10-13). "Titles & axes" is now Chart title / X axis / Y axis.**
 

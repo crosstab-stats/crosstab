@@ -18,7 +18,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { rStr, fmtPInline, unpackR } = globalThis.ctStd;
+const { rStr, fmtPInline, unpackR, rounded } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -167,7 +167,7 @@ export async function run(app, { vars, method, weight }) {
       const p = at(c.p, i, j);
       const n = at(c.n, i, j);
       if (!Number.isFinite(r)) return [''];
-      return [rFmt(r, p), fmtPInline(p), `N = ${nFmt(n)}`];
+      return [rFmt(r, p), fmtPInline(p), `N = ${rounded(n)}`];
     });
     return [label(rowName), ...cells];
   });
@@ -265,7 +265,4 @@ function normalizeResult(rList) {
 function rFmt(val, p) {
   const stars = !Number.isFinite(p) ? '' : p < 0.01 ? '**' : p < 0.05 ? '*' : '';
   return `${val.toFixed(3)}${stars}`;
-}
-function nFmt(val) {
-  return Number.isFinite(val) ? String(Math.round(val)) : '';
 }

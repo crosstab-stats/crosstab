@@ -30,7 +30,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, labelOf, metaMap, rStr, ci: ciAt, unpackR: flat } = globalThis.ctStd;
+const { fmtP, fixed: f, labelOf, metaMap, rStr, ci: ciAt, unpackR: flat, levelLabel: lvl } = globalThis.ctStd;
 
 /** This plugin reports four decimals: a marginal effect or a trend slope can be small
  * enough that three prints `[0.000, 0.001]`. The precision is the caller's; the
@@ -228,11 +228,4 @@ function prettyMargin(term, meta) {
   const m = /^(.*)@@(.*)@@(.*)$/.exec(term);
   if (m) return `${labelOf(meta.get(m[1]), m[1])}: ${m[2]} vs ${m[3]}`;
   return labelOf(meta.get(term), term);
-}
-
-/** A category shown through its value label — the same category the recode used. */
-function lvl(meta, code) {
-  if (code == null || code === '' || code === 'NA') return '?';
-  const v = meta?.valueLabels?.[code] ?? meta?.valueLabels?.[Number(code)];
-  return v != null && v !== '' ? String(v) : String(code);
 }

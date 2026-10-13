@@ -27,7 +27,7 @@
  */
 
 /** @type {import('../../core/loader.js').PluginManifest} */
-const { metaMap: metaMapOf } = globalThis.ctStd;
+const { metaMap: metaMapOf, fitNumber: fitNum } = globalThis.ctStd;
 
 export const manifest = {
   id: 'builtin-plots',
@@ -480,10 +480,6 @@ export async function scatter(app, { x, y }) {
 
 /** A fit coefficient at a precision worth predicting from: 3 decimals in the
  * ordinary range, 4 significant figures when the scale makes that meaningless. */
-function fitNum(v) {
-  if (!Number.isFinite(v)) return '—';
-  return Math.abs(v) >= 10000 || (v !== 0 && Math.abs(v) < 0.001) ? v.toPrecision(4) : v.toFixed(3);
-}
 
 /**
  * Trends-over-time chart: aggregate a summary across X (often a time variable),
@@ -756,4 +752,3 @@ function leastSquares(points) {
   const r2 = dy === 0 ? 0 : (rNum * rNum) / (dx * dy);
   return { slope, intercept, r2 };
 }
-

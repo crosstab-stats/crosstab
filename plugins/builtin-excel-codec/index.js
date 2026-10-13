@@ -29,6 +29,9 @@
  * own named dataset via `app.data.create`. Export writes a single sheet.
  */
 
+/** The host's shared helpers (core/plugin-stdlib.js). */
+const { uniqueName } = globalThis.ctStd;
+
 export const manifest = {
   id: 'builtin-excel-codec',
   name: 'Excel codec',
@@ -227,14 +230,6 @@ function cellToString(v) {
   if (v === null || v === undefined) return null;
   if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v.toISOString();
   return String(v);
-}
-
-/** Ensure a column name is unique within the dataset being built. */
-function uniqueName(base, used) {
-  if (!(base in used)) return base;
-  let i = 2;
-  while (`${base}_${i}` in used) i++;
-  return `${base}_${i}`;
 }
 
 // --- write -------------------------------------------------------------------

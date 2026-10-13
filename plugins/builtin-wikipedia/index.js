@@ -25,6 +25,12 @@
  * engine doesn't have yet (append only stacks rows). See TODO.
  */
 
+/** The host's shared helpers (core/plugin-stdlib.js). */
+const { uniqueName: uniqueNameIn } = globalThis.ctStd;
+
+/** A scraped column may have no name at all. */
+const uniqueName = (base, cols) => uniqueNameIn(base, cols, { fallback: 'Column' });
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-wikipedia',
@@ -270,13 +276,4 @@ function isNumericColumn(values) {
     if (toNumber(v) !== null) numeric++;
   }
   return numeric >= 3 && numeric / nonEmpty >= 0.6;
-}
-
-/** Ensure a column name is unique (and non-empty) within the dataset. */
-function uniqueName(base, columns) {
-  const name = base || 'Column';
-  if (!(name in columns)) return name;
-  let i = 2;
-  while (`${name}_${i}` in columns) i++;
-  return `${name}_${i}`;
 }

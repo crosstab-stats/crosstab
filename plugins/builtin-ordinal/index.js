@@ -23,7 +23,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat, prettyTerm } = globalThis.ctStd;
+const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat, prettyTerm, levelLabel: lvl } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -228,10 +228,6 @@ export async function multinomial(app, { dv: dvName, base, ivs: ivNames }) {
 }
 
 // --- helpers -----------------------------------------------------------------
-
-function lvl(meta, code) {
-  return meta?.valueLabels?.[code] ?? code;
-}
 
 function prettyThreshold(name, dvMeta) {
   const parts = String(name).split('|');

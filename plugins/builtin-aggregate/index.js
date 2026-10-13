@@ -39,6 +39,12 @@ const FUNCS = {
   count: { label: 'Count', fn: (a) => a.length },
 };
 
+/** The host's shared helpers (core/plugin-stdlib.js). */
+const { uniqueName: uniqueNameIn } = globalThis.ctStd;
+
+/** This plugin numbers duplicates from _1, not _2. */
+const uniqueName = (base, taken) => uniqueNameIn(base, taken, { start: 1 });
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-aggregate',
@@ -156,11 +162,4 @@ function cmpKeys(a, b) {
     return String(x) < String(y) ? -1 : 1;
   }
   return 0;
-}
-/** A name not already taken by a group/measure column. */
-function uniqueName(base, taken) {
-  if (!taken.includes(base)) return base;
-  let i = 1;
-  while (taken.includes(`${base}_${i}`)) i++;
-  return `${base}_${i}`;
 }
