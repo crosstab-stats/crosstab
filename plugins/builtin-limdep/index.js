@@ -20,7 +20,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, labelOf, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
+const { fmtP, fixed: f, labelOf, metaMap, rStr, unpackR: flat, prettyTerm } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -223,9 +223,4 @@ function heckLabel(t) {
   if (t === 'sigma') return 'σ';
   if (t === 'rho') return 'ρ';
   return prettyTerm(t);
-}
-
-function prettyTerm(term) {
-  const m = /^factor\(`?(.+?)`?\)(.*)$/.exec(term);
-  return m ? `${m[1]}${m[2] ? ` = ${m[2]}` : ''}` : term.replace(/`/g, '');
 }

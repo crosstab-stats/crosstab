@@ -25,7 +25,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
+const { fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat, prettyTerm } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -327,9 +327,4 @@ function bfWords(bf, effectPhrase) {
 function labelLevel(meta, name, level) {
   const vl = meta?.valueLabels?.[level];
   return vl ? `${vl}` : `${name} = ${level}`;
-}
-
-function prettyTerm(term) {
-  const m = /^factor\(`?(.+?)`?\)(.*)$/.exec(term);
-  return m ? `${m[1]}${m[2] ? ` = ${m[2]}` : ''}` : term.replace(/`/g, '');
 }

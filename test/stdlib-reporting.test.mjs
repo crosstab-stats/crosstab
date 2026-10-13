@@ -23,7 +23,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  fmtP, fmtPInline, fixed, rounded, ci, labelOf, metaMap, rStr,
+  fmtP, fmtPInline, fixed, rounded, ci, labelOf, metaMap, rStr, cleanSvg, prettyTerm,
 } from '../core/plugin-stdlib.js';
 
 test('fmtP prints three decimals and no leading zero', () => {
@@ -152,4 +152,34 @@ test('rStr coerces rather than throwing on a non-string', () => {
   // Call sites pass value labels straight from the data, which can be numeric or null.
   assert.equal(rStr(42), '"42"');
   assert.equal(rStr(null), '"null"');
+});
+
+// --- R output shapes ---------------------------------------------------------
+// Lifted 2026-10-13: cleanSvg from 8 plugins, prettyTerm from 11 byte-identical ones.
+
+test('cleanSvg strips the fixed size svglite writes, and keeps the viewBox', () => {
+  // Without this an R plot arrives at whatever size R thought it was and ignores the
+  // column it lands in. The viewBox is what makes it scale, so it must survive.
+  const svg = "<svg xmlns='http://www.w3.org/2000/svg' width='720pt' height='576pt' viewBox='0 0 720 576'><g/></svg>";
+  const out = cleanSvg(svg);
+  assert.ok(!out.includes("width='720pt'"), 'width goes');
+  assert.ok(!out.includes("height='576pt'"), 'height goes');
+  assert.ok(out.includes("viewBox='0 0 720 576'"), 'viewBox stays — it is the whole point');
+  assert.ok(out.includes('<g/>'), 'the plot itself is untouched');
+});
+
+test('cleanSvg only touches the root element', () => {
+  // A nested <rect width=…> is the plot's content, not the canvas size.
+  const svg = "<svg width='10pt' height='10pt' viewBox='0 0 10 10'><rect width='5' height='5'/></svg>";
+  const out = cleanSvg(svg);
+  assert.ok(out.includes("<rect width='5' height='5'/>"), 'inner geometry survives');
+});
+
+test('prettyTerm turns an R model term into something a reader recognises', () => {
+  assert.equal(prettyTerm('factor(region)South'), 'region = South');
+  assert.equal(prettyTerm('factor(`household income`)High'), 'household income = High');
+  assert.equal(prettyTerm('factor(region)'), 'region', 'no level, no separator');
+  assert.equal(prettyTerm('age'), 'age');
+  assert.equal(prettyTerm('`odd name`'), 'odd name', 'R quoting goes');
+  assert.equal(prettyTerm('(Intercept)'), '(Intercept)');
 });

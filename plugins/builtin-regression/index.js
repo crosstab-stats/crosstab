@@ -18,7 +18,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, labelOf, fmtP, ci, rStr, unpackR } = globalThis.ctStd;
+const { fixed: f, labelOf, fmtP, ci, rStr, unpackR, prettyTerm } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -206,11 +206,6 @@ export async function run(app, { dv: dvName, ivs: ivNames }) {
 }
 
 // --- helpers -----------------------------------------------------------------
-
-function prettyTerm(term) {
-  const m = /^factor\(`?(.+?)`?\)(.*)$/.exec(term);
-  return m ? `${m[1]}${m[2] ? ` = ${m[2]}` : ''}` : term.replace(/`/g, '');
-}
 
 function normalizeResult(rList) {
   const r = unpackR(rList);

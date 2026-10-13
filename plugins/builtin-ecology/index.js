@@ -14,7 +14,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, unpackR: flat } = globalThis.ctStd;
+const { fixed: f, unpackR: flat, cleanSvg } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -95,6 +95,3 @@ export async function run(app, { species }) {
     '**Richness** = number of species present; **Shannon H** and **Simpson D** combine richness and evenness (higher = more diverse); **Pielou evenness J** = H / log(richness) is 1 when all species are equally abundant. The **NMDS** plot places similar communities close together (Bray-Curtis); a stress < 0.2 indicates a usable 2-D representation.',
   );
 }
-
-// --- helpers -----------------------------------------------------------------
-function cleanSvg(svg) { return String(svg).replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1').replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1'); }

@@ -21,7 +21,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, rounded: int, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
+const { fmtP, fixed: f, rounded: int, metaMap, rStr, unpackR: flat, prettyTerm } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -218,10 +218,6 @@ function label(meta, name) {
 }
 function term(meta, name) {
   return meta.get(name)?.categorical ? `factor(\`${name}\`)` : `\`${name}\``;
-}
-function prettyTerm(t) {
-  const m = /^factor\(`?(.+?)`?\)(.*)$/.exec(t);
-  return m ? `${m[1]}${m[2] ? ` = ${m[2]}` : ''}` : t.replace(/`/g, '');
 }
 function rNames(names) {
   return `c(${names.map((n) => rStr(n)).join(', ')})`;

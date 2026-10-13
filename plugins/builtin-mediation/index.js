@@ -33,7 +33,7 @@ if (!isTRUE(getOption("ct.lavaan.patched"))) {
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fmtPInline, fixed: f, ci, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
+const { fmtP, fmtPInline, fixed: f, ci, metaMap, rStr, unpackR: flat, prettyTerm } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -213,9 +213,4 @@ function modTerm(term, meta, xName, wName) {
     'X:W': `${shortLabel(meta, xName)} × ${shortLabel(meta, wName)}`,
   };
   return map[term] || prettyTerm(term);
-}
-
-function prettyTerm(term) {
-  const m = /^factor\(`?(.+?)`?\)(.*)$/.exec(term);
-  return m ? `${m[1]}${m[2] ? ` = ${m[2]}` : ''}` : term.replace(/`/g, '');
 }

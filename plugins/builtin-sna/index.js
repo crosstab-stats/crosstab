@@ -14,7 +14,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, unpackR: flat } = globalThis.ctStd;
+const { fixed: f, unpackR: flat, cleanSvg } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -110,6 +110,3 @@ export async function run(app, { from: fromName, to: toName, directed }) {
     '**Density** is the share of possible ties present; **components** are disconnected sub-networks; **transitivity** is the chance two of a node\'s contacts are themselves tied (clustering). Centrality flavours: **degree** (how many ties), **betweenness** (bridging/broker position), **closeness** (reach), **eigenvector** (tied to well-connected others).',
   );
 }
-
-// --- helpers -----------------------------------------------------------------
-function cleanSvg(svg) { return String(svg).replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1').replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1'); }

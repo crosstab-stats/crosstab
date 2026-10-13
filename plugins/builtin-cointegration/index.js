@@ -20,7 +20,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, labelOf, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
+const { fmtP, fixed: f, labelOf, metaMap, rStr, unpackR: flat, cleanSvg } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -199,12 +199,6 @@ async function runR(app, rCode) {
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   return result;
-}
-
-function cleanSvg(svg) {
-  return String(svg)
-    .replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1')
-    .replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1');
 }
 
 function garchTerm(t) {

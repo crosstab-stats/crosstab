@@ -426,6 +426,42 @@ export function unpackR(result) {
 }
 
 // =============================================================================
+// R output — the two shapes every analysis plugin reshapes by hand
+// =============================================================================
+
+/**
+ * An R plot as an SVG that will scale.
+ *
+ * `svglite` writes a fixed `width`/`height` on the root element, so the plot arrives at
+ * whatever size R thought it was and ignores the column it is dropped into. Stripping
+ * both leaves the `viewBox`, which is what makes it responsive.
+ *
+ * Eight plugins carried this, in two spellings that differed only in where the line
+ * breaks fell. Nothing had drifted — it is lifted because the next plot-producing plugin
+ * should not have to know the trick.
+ */
+export function cleanSvg(svg) {
+  return String(svg)
+    .replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1')
+    .replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1');
+}
+
+/**
+ * An R model term, as a reader should see it: `factor(region)South` becomes
+ * `region = South`, and stray backticks (R's quoting for a name with a space) go.
+ *
+ * Eleven plugins had this byte-identical. **builtin-anova deliberately keeps its own**,
+ * which is a superset: it renders `Residuals` as `Residual` and splits an interaction on
+ * `:` so each half is prettified. That is a real difference, not drift — folding it in
+ * here would change how the other eleven print an interaction term, which is a decision
+ * about output rather than a tidy-up.
+ */
+export function prettyTerm(term) {
+  const m = /^factor\(`?(.+?)`?\)(.*)$/.exec(term);
+  return m ? `${m[1]}${m[2] ? ` = ${m[2]}` : ''}` : String(term).replace(/`/g, '');
+}
+
+// =============================================================================
 // DOM
 // =============================================================================
 

@@ -22,7 +22,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, labelOf, metaMap, unpackR: flat } = globalThis.ctStd;
+const { fixed: f, labelOf, metaMap, unpackR: flat, cleanSvg } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -150,6 +150,3 @@ export async function mds(app, { vars, label: labelName }) {
     'Classical MDS places objects so that 2-D distances approximate their dissimilarity across the (standardized) attributes — objects close together are similar. **Goodness of fit** near 1 means two dimensions represent the structure well. This is the perceptual-map workhorse for branding/marketing and similarity studies.',
   );
 }
-
-// --- helpers -----------------------------------------------------------------
-function cleanSvg(svg) { return String(svg).replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1').replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1'); }

@@ -19,7 +19,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, labelOf, metaMap, unpackR: flat } = globalThis.ctStd;
+const { fixed: f, labelOf, metaMap, unpackR: flat, cleanSvg } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -141,7 +141,3 @@ export async function segregation(app, { groupA: aName, groupB: bName }) {
 }
 
 // --- helpers -----------------------------------------------------------------
-
-function cleanSvg(svg) {
-  return String(svg).replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1').replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1');
-}

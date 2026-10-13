@@ -23,7 +23,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, rStr, unpackR: flat } = globalThis.ctStd;
+const { fmtP, rStr, unpackR: flat, cleanSvg } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -312,12 +312,6 @@ export async function choropleth(app, { region, value, boundary, keyprop }) {
 }
 
 // --- helpers -----------------------------------------------------------------
-
-function cleanSvg(svg) {
-  return String(svg)
-    .replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1')
-    .replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1');
-}
 
 // === Spatial workspace tab ===================================================
 //

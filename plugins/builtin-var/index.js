@@ -18,7 +18,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, metaMap, rStr, labelOf: labelOfStd, unpackR: flat } = globalThis.ctStd;
+const { fmtP, fixed: f, metaMap, rStr, labelOf: labelOfStd, unpackR: flat, cleanSvg } = globalThis.ctStd;
 
 /** Bare label, no `(column)` suffix: these become series names in a plot legend, where
  * the column name is clutter. Not drift — a deliberate difference, kept as an option. */
@@ -167,12 +167,6 @@ async function runR(app, rCode) {
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   return result;
-}
-
-function cleanSvg(svg) {
-  return String(svg)
-    .replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1')
-    .replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1');
 }
 
 /** Map a VAR coefficient term like "V1.l1" / "const" / "trend" to a readable label. */
