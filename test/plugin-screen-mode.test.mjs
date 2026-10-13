@@ -42,6 +42,7 @@ const manager = readFileSync('core/workspace-manager.js', 'utf8');
 const host = readFileSync('plugin-host.html', 'utf8');
 const caqdas = readFileSync('plugins/builtin-caqdas/index.js', 'utf8');
 const spatial = readFileSync('plugins/builtin-spatial/index.js', 'utf8');
+const decisions = readFileSync('plugins/builtin-decisions/index.js', 'utf8');
 
 // =============================================================================
 // The chain, link by link
@@ -243,4 +244,57 @@ test('spatial keys off the mode attribute and never measures its own width', () 
   // who deliberately picked the full layout on a narrow screen.
   assert.ok(!/@media[^{]*width/.test(spatial), 'no width media query belongs in a pane');
   assert.ok(spatial.includes('[data-screen="small"]'));
+});
+
+test('the FRAME injects the base sheet, so a plugin cannot lose its theme to a missing call', () => {
+  // Moved host-side 2026-10-12. builtin-spatial DID call injectStdlibStyles and the sheet
+  // did not arrive — photographed on a phone, reproduced in a harness, root cause never
+  // pinned (an opaque-origin pane has no reachable console). Injecting from the frame, off
+  // the same `std` that `globalThis.ctStd` is built from, cannot fail in any scenario
+  // consistent with the symptom: the symptom REQUIRES std to have imported, because a
+  // migrated plugin destructures ctStd at module-evaluation time and the pane rendered.
+  assert.match(host, /std\?\.injectStdlibStyles\?\.\(document\)/);
+  const inject = host.indexOf('std?.injectStdlibStyles?.(document)');
+  const imp = host.indexOf('await importPlugin(');
+  assert.ok(inject > 0 && imp > 0 && inject < imp,
+    'inject before importPlugin, so a module body sees a styled document');
+});
+
+test('injecting twice is harmless, so the plugins that also call it keep working', () => {
+  // CAQDAS and Spatial both still call it. The function returns the existing <style>.
+  const lib = readFileSync('core/plugin-stdlib.js', 'utf8');
+  const fn = lib.slice(lib.indexOf('export function injectStdlibStyles'), lib.indexOf('export function screenMode'));
+  assert.ok(fn.includes('const existing = doc.getElementById(ID);'), 'it looks for an existing sheet');
+  assert.ok(fn.includes('if (existing) return existing;'), 'and returns it rather than adding a second');
+});
+
+// ---------------------------------------------------------------------------------------
+// builtin-decisions (2026-10-13) — the third and last pane. It never had the stacking
+// problem the TODO attributed to it: it is single-column. Its gap was entirely controls.
+//
+// Measured against the real stylesheets. Small mode, 390px: button, segmented button,
+// select, table input and the row-delete glyph are ALL 44px tall at 16px, and the body
+// does not scroll sideways. Full mode, 1200px: 33 / 29 / 23 / 27px at 14px — desktop
+// density untouched.
+// ---------------------------------------------------------------------------------------
+
+test('decisions sizes every control for a thumb, not just its buttons', () => {
+  // The table is where the work happens — you type costs and effects into it — so its
+  // inputs matter as much as the buttons do.
+  assert.match(decisions, /\[data-screen="small"\] \.ds \{ font-size: 16px; min-height: 0; \}/);
+  assert.match(decisions, /\[data-screen="small"\] \.ds__segbtn \{ font-size: 16px; min-height: 44px;/);
+  assert.match(decisions, /\[data-screen="small"\] \.ds input \{ font-size: 16px; min-height: 44px; \}/);
+  assert.match(decisions, /\[data-screen="small"\] \.ds td input \{ font-size: 16px; min-height: 44px;/);
+});
+
+test('the row-delete glyph gets a target, since it sits beside what it would discard', () => {
+  assert.match(decisions, /\[data-screen="small"\] \.ds \.del \{ min-width: 44px; min-height: 44px;/);
+});
+
+test('decisions states its touch rules locally, not through the optional base sheet', () => {
+  // Same lesson builtin-spatial paid for: a touch target and the no-zoom font are
+  // accessibility, so they must not ride on an injection that can silently not happen.
+  assert.ok(!/injectStdlibStyles/.test(decisions),
+    'decisions relies on nothing optional for its control sizing');
+  assert.ok(!/@media[^{]*width/.test(decisions), 'the mode is a choice, never a measurement');
 });

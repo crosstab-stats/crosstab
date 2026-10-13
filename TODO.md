@@ -275,10 +275,42 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       layout is safe, but `var(--ct-text)` and friends would be unset).
 
 
-      **Left:** `builtin-decisions` is single-column, so it has no stacking problem — its
-      gap is only control sizing (14px font, 6px padding). And theming is still CAQDAS-only;
-      spatial's 42 colour literals stay literal while there is no second theme to prove the
-      tokens against.
+      **Left:** theming is still CAQDAS-only; spatial's 42 colour literals stay literal
+      while there is no second theme to prove the tokens against.
+
+- [x] **DONE (2026-10-13). The frame injects the stdlib base sheet, and builtin-decisions
+      is sized for a thumb — the reflow sweep is complete.** Two things, both falling out
+      of spatial's half-width bug.
+
+      **1. `plugin-host.html` injects `BASE_CSS` itself**, right after it sets
+      `globalThis.ctStd` and before `importPlugin()`, instead of waiting for each plugin to
+      call `app.std?.injectStdlibStyles?.(document)`.
+
+      Spatial made that call and the sheet did not arrive; the root cause was never pinned,
+      because a sandboxed pane is opaque-origin, its console is not reachable from the host,
+      and screenshots of that tab were timing out. **This closes it without needing the
+      answer**: the symptom REQUIRES `std` to have imported — a migrated plugin's module
+      body destructures `globalThis.ctStd` during evaluation and would throw otherwise, and
+      the pane rendered — so injecting from the same `std`, at the same moment, on the
+      frame's own initiative cannot fail in any scenario consistent with what was seen.
+
+      It also makes the components real: `.ct-split` and `.ct-btn` now work for a
+      third-party plugin that never heard of `injectStdlibStyles`, and **a pane can no
+      longer lose its THEME to a forgotten line** — which was the live risk for CAQDAS's
+      colour tokens. Idempotent, so CAQDAS and Spatial calling it too stays harmless.
+      Layout still belongs to the plugin's own sheet; see spatial's `.sp-split`.
+
+      **2. `builtin-decisions` controls.** It never had the stacking problem this file
+      attributed to it — it is single-column — but at 14px every control made iOS zoom the
+      viewport on focus, and a button in 6px of padding was about 31px.
+
+      Measured, small mode at 390px: button, segmented button, select, **table input** and
+      the row-delete glyph are all **44px at 16px**, with no sideways scroll. Full mode at
+      1200px is untouched: 33 / 29 / 23 / 27px at 14px. The table inputs matter as much as
+      the buttons here, because typing costs and effects into that table IS the pane. The
+      rules live in the plugin's own sheet, for the reason spatial paid to learn.
+
+      All three workspace panes now reflow. Suite 1709 → 1714.
 
 - [x] **DONE (2026-10-12). Plugin stdlib, part 4: one R-result unpacker — and a real
       correctness bug closed.** The biggest duplication left after part 3, and the only one

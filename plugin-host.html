@@ -335,6 +335,39 @@
               // imports the same file for `el`, so a stdlib that cannot be served means
               // the host did not boot either.
               globalThis.ctStd = std ? Object.freeze({ ...std }) : undefined;
+
+              // The base sheet (tokens, .ct-btn, .ct-split, the small-screen touch rules)
+              // goes in HERE, from the frame, rather than waiting for each plugin to call
+              // `app.std?.injectStdlibStyles?.(document)` for itself.
+              //
+              // Why it moved (2026-10-12): builtin-spatial did make that call, and the
+              // sheet did not arrive — the owner photographed the result on a phone. The
+              // stacked region list sat in half the pane, because `.ct-split` was an
+              // unstyled block (which still stacks, by block flow, so the reflow LOOKED
+              // like it worked) while the rail kept its 220px desktop width. The root
+              // cause was never pinned down: a sandboxed pane is opaque-origin, its
+              // console is not reachable from the host, and screenshots of that tab were
+              // timing out.
+              //
+              // This closes it without needing the answer. The symptom requires `std` to
+              // have imported — a migrated plugin's module body destructures
+              // `globalThis.ctStd` at evaluation time and would throw otherwise, and the
+              // pane rendered — so injecting from the same `std`, at the same point, on
+              // the frame's own initiative, cannot fail in any scenario consistent with
+              // what was observed.
+              //
+              // It also makes the components real: `.ct-split` and `.ct-btn` can now be
+              // used by a third-party plugin that never heard of injectStdlibStyles, and
+              // a pane cannot lose its THEME to a forgotten line. Layout still belongs to
+              // the plugin's own sheet — see builtin-spatial's `.sp-split` for why.
+              //
+              // Before importPlugin(), so a module body that measures something at
+              // evaluation time sees the styled document. Idempotent: the function
+              // returns the existing <style> if one is already there, so a plugin that
+              // calls it too (CAQDAS, Spatial) is harmless and stays working.
+              try { std?.injectStdlibStyles?.(document); }
+              catch (err) { console.warn('[plugin-host] stdlib base sheet not injected', err); }
+
               await importPlugin(msg.code, msg.rid, msg.modules);
               break;
 

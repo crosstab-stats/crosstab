@@ -64,6 +64,35 @@ const STYLES = `
 .ds td input:focus { outline: 2px solid #bcd4ec; border-radius: 3px; }
 .ds td.num input { text-align: right; }
 .ds .del { border: 0; background: none; color: #b04a4a; cursor: pointer; font: inherit; }
+
+/* ---- Small-screen mode ----------------------------------------------------------
+   Decisions is SINGLE-COLUMN, so unlike CAQDAS and Spatial it never had a stacking
+   problem -- the TODO said it did, and that was wrong. Its gap is entirely the
+   controls: at 14px every one of them makes iOS zoom the viewport on focus, and a
+   button in 6px of padding is about 31px where a thumb wants 44.
+
+   The table is where the work happens here -- you type costs and effects into it --
+   so its inputs get the same treatment as the buttons. Three or four columns fits a
+   phone; .ds__body already scrolls if a wide one ever does not.
+
+   These live in THIS sheet, not the host's base sheet. A touch target and the
+   no-zoom font are accessibility rather than decoration, and builtin-spatial has
+   just demonstrated what happens when something load-bearing rides on an optional
+   injection. Keyed off the attribute the host sets, never a width query: the mode is
+   the user's choice. */
+[data-screen="small"] .ds { font-size: 16px; min-height: 0; }
+[data-screen="small"] .ds__body { padding: 12px; }
+[data-screen="small"] .ds__bar { flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
+[data-screen="small"] .ds__btn,
+[data-screen="small"] .ds__segbtn { font-size: 16px; min-height: 44px; padding-left: 14px; padding-right: 14px; }
+[data-screen="small"] .ds__bar select,
+[data-screen="small"] .ds input { font-size: 16px; min-height: 44px; }
+[data-screen="small"] .ds th,
+[data-screen="small"] .ds td { padding: 6px 8px; }
+[data-screen="small"] .ds td input { font-size: 16px; min-height: 44px; padding: 8px 6px; }
+/* The row-delete control is a single glyph with no border; without this it is about
+   20px square, which is a mis-tap next to the input it would discard. */
+[data-screen="small"] .ds .del { min-width: 44px; min-height: 44px; font-size: 18px; }
 `;
 
 const uid = () => 'n_' + Math.random().toString(36).slice(2, 9);
