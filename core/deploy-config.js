@@ -133,21 +133,75 @@ export function deployConfigLoaded() {
   return loaded;
 }
 
+
+/**
+ * How long boot will wait for a settings file before giving up on it.
+ *
+ * Generous, because the cost of timing out on a deployment that HAS a deploy.json is that
+ * its support routes and site plugins are missing for that session. Short enough that a
+ * stalled network does not read as a dead app.
+ */
+export const CONFIG_FETCH_TIMEOUT_MS = 5000;
+
+/**
+ * Fetch that is guaranteed to settle.
+ *
+ * **This is the fix for a boot hang that reached a user** (2026-10-13): the PWA opened to
+ * its shell, the status line said "Starting...", and the launcher never appeared — for
+ * minutes, until the app was force-quit. `loadDeployConfig()` is the FIRST await in
+ * `boot()`, and its `try/catch` covers a fetch that REJECTS, not one that never settles.
+ * Nothing downstream ran, including the `.catch()` that would have shown "Failed to
+ * start".
+ *
+ * Why a PWA hit it and a browser tab mostly did not: `deploy.json` is absent from the
+ * stock build, so it 404s; the service worker only caches `response.ok`, so it is never
+ * cached despite being in the precache list; and `cache: 'no-store'` forbids the HTTP
+ * cache. So every standalone cold start made a blocking, uncached network request before
+ * anything else happened — at exactly the moment a phone or a desktop PWA is most likely
+ * to have a cold network stack.
+ *
+ * Belt and braces on purpose: `AbortSignal.timeout` is the right mechanism, but the race
+ * also covers a runtime without it and any stall that does not honour the signal. A
+ * timeout returns `null`, which the callers already treat as "no file" — the documented
+ * behaviour for the stock build.
+ */
+export async function fetchConfigFile(f, url, timeoutMs = CONFIG_FETCH_TIMEOUT_MS) {
+  let timer = null;
+  try {
+    const opts = { cache: 'no-store' };
+    try {
+      if (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) {
+        opts.signal = AbortSignal.timeout(timeoutMs);
+      }
+    } catch { /* no AbortSignal.timeout — the race below still bounds it */ }
+    const res = await Promise.race([
+      f(url, opts),
+      new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+    ]);
+    if (res === null) {
+      console.warn(`[deploy] ${url} did not answer within ${timeoutMs}ms — continuing without it.`);
+      return null;
+    }
+    return res.ok ? await res.text() : null;
+  } catch {
+    return null; // offline, blocked, aborted, no fetch — defaults stand
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /**
  * Fetch and apply `deploy.json`, if the deployment ships one. Never throws.
  *
  * @param {{fetch?: typeof fetch, url?: string}} [opts]
  * @returns {Promise<object>} the resolved config (also available via {@link deployConfig})
  */
-export async function loadDeployConfig({ fetch: f = globalThis.fetch, url = DEPLOY_FILE } = {}) {
-  let text = null;
-  try {
-    const res = await f(url, { cache: 'no-store' });
-    // A 404 is the normal case for the stock build: no file, no configuration, no noise.
-    if (res.ok) text = await res.text();
-  } catch {
-    /* offline, blocked, no fetch — defaults stand */
-  }
+export async function loadDeployConfig({ fetch: f = globalThis.fetch, url = DEPLOY_FILE,
+  timeoutMs = CONFIG_FETCH_TIMEOUT_MS } = {}) {
+  // A 404 is the normal case for the stock build: no file, no configuration, no noise.
+  // A STALL used to be the abnormal case that froze the app at "Starting..." — see
+  // fetchConfigFile, which is why this cannot wait forever any more.
+  const text = await fetchConfigFile(f, url, timeoutMs);
   if (text == null) return resolved;
   const raw = parseDeployConfig(text);
   if (!raw) {

@@ -34,7 +34,7 @@
  * a server.
  */
 
-import { deployConfig, findFieldLine, parseDeployConfig } from './deploy-config.js';
+import { deployConfig, findFieldLine, parseDeployConfig, fetchConfigFile, CONFIG_FETCH_TIMEOUT_MS } from './deploy-config.js';
 
 /** The file inside a deployment's plugin directory that lists its plugins. */
 export const INDEX_FILE = 'index.json';
@@ -94,20 +94,18 @@ export function parsePluginIndex(value, dir) {
  * @param {{cfg?: object, fetch?: typeof fetch, parse?: (text:string)=>any}} [opts]
  * @returns {Promise<{dir: string|null, namespace: string, entries: Array<{url:string, defaultOn:boolean}>, issues: Array}>}
  */
-export async function loadSitePlugins({ cfg = deployConfig(), fetch: f = globalThis.fetch, parse = parseDeployConfig } = {}) {
+export async function loadSitePlugins({ cfg = deployConfig(), fetch: f = globalThis.fetch,
+  parse = parseDeployConfig, timeoutMs = CONFIG_FETCH_TIMEOUT_MS } = {}) {
   const dir = cfg?.pluginDir || null;
   const namespace = cfg?.pluginNamespace || 'site';
   const empty = { dir, namespace, entries: [], issues: [] };
   if (!dir) return empty;
 
   const url = `./${dir}/${INDEX_FILE}`;
-  let text = null;
-  try {
-    const res = await f(url, { cache: 'no-store' });
-    if (res.ok) text = await res.text();
-  } catch {
-    /* unreachable — fall through to the missing-index issue */
-  }
+  // Bounded, for the same reason deploy.json is: this runs in boot's second await, and a
+  // fetch that never settles froze the app at "Starting..." with no launcher and no error.
+  // Unreachable OR too slow both fall through to the missing-index issue below.
+  const text = await fetchConfigFile(f, url, timeoutMs);
   if (text == null) {
     // Reported against deploy.json, not the index: `pluginDir` is what pointed at a directory
     // with no index in it, and that is the line the user has to fix.

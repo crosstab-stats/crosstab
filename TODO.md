@@ -10,6 +10,53 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## Now / near-term
 
+- [x] **FIXED (2026-10-13). The PWA sometimes froze at "Starting…" and never reached the
+      launcher.** Reported with a screenshot after several sightings on a phone, then once
+      on the desktop PWA: the window opened, the shell painted, the status line read
+      "Starting…", and the launcher never came up. Minutes later, still nothing.
+      Force-quitting and reopening always worked.
+
+      **`boot()` was stuck on its first await, and could neither finish nor fail.** It
+      reaches the launcher through exactly two awaits:
+
+          const deploy = await loadDeployConfig();        // ./deploy.json
+          const sitePlugins = await loadSitePlugins(...); // ./<dir>/index.json
+
+      Both were plain fetches with no deadline. Their `try/catch` covers a fetch that
+      **rejects**; it does nothing for one that never **settles**. So boot neither resolved
+      nor rejected — and the `.catch()` in index.html that would have printed "Failed to
+      start: …" never ran either. The shell looked alive because it is static HTML, and
+      "Starting…" is the status element's INITIAL text.
+
+      **Why the PWA and not a browser tab.** Three things line up only in standalone mode:
+      `deploy.json` is absent from the stock build so it **404s**; the service worker caches
+      only a `response.ok`, so it is **never cached despite being listed in
+      `SHELL_PRECACHE`**; and `cache: 'no-store'` forbids the HTTP cache. So **every**
+      standalone cold start made a blocking, uncached network request before anything else
+      could happen — at exactly the moment a phone or a desktop PWA is most likely to have
+      a cold or asleep network stack. A warm browser tab usually answered instantly.
+
+      **Fix:** `fetchConfigFile()` in `core/deploy-config.js`, used by both loaders —
+      `AbortSignal.timeout` plus a `Promise.race`, belt and braces, because the race also
+      covers a runtime without `AbortSignal.timeout` and a stall that ignores the signal. A
+      timeout returns `null`, which both callers already treat as "no file", so the
+      degraded path is the documented stock behaviour. 5s: long enough that a slow link
+      does not lose a real deployment's settings, short enough not to read as a hang.
+
+      **The guard that matters** is in `test/boot-never-hangs.test.mjs`: the first two
+      things boot awaits must still be those two bounded loaders. A third await landing
+      ahead of them is on the critical path to the launcher and brings this class of freeze
+      straight back. Checked by ORDER, not by counting indented lines — boot also *defines*
+      ~17 async handlers whose awaits run much later.
+
+      **Worth knowing / not done:** even when healthy, a PWA boot still pays one network
+      round trip for a file that is normally a 404. Bounded now, but it could be skipped
+      when `navigator.onLine` is false, or the 404 could be remembered. And the same
+      unbounded-fetch shape may exist later in boot (plugin cataloguing inside
+      `launcher.open()`), where the symptom would be a launcher that appears but never
+      fills — not looked at yet.
+
+
 - [x] **DONE (2026-10-10). Plugin stdlib, part 1: the utility library.** `app.std`, shipped
       as source into the sandbox. Built first on the owner's call — pre-release, so part 2's
       "a user cannot work" is not yet a real constraint, this half proves the delivery
