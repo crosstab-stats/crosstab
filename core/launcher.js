@@ -343,7 +343,8 @@ export class Launcher {
     // the app showed one list that was secretly two: local projects as a bare name,
     // remembered folders as a glyph plus a name, in one undifferentiated column, with no
     // date and no size while the data carried both. The data layer was unified in August
-    // (#171) and this is the surface that never migrated.
+    // (#171); this rail was the last surface left on the old shape, and the code below
+    // is it migrated. Past tense throughout: nothing here is still outstanding.
     //
     // What stays launcher-shaped is what a click MEANS: here it stages a pick that Start
     // commits, rather than opening at once. That difference was challenged and kept, on

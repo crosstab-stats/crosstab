@@ -215,245 +215,6 @@ bottom; they are the project's memory and are not summarised away.
         source/project should just go") — do these together or the launcher gets rebuilt
         twice.
 
-- [ ] **#172 — the engine should not know where the bytes are (user, 2026-08-25).**
-      "If we are claiming a principle of *all are equal*, then the very existence of a
-      folder mode is a flawed design. The engine shouldn't care — or indeed even know —
-      where or how the bytes are stored."
-
-      **The evidence, because this is not a style argument.** `#folderMode` answers "which
-      UI flow did the user come through", and behaviour was keyed on it. Four bugs, all the
-      same shape, all found by use rather than by tests:
-      - saves took the plain-overwrite branch for remote, so two peers would clobber each
-        other whole-project at a time, silently (`2df5a8e`);
-      - the poll never ran, so a co-author's edit never arrived (same commit);
-      - `#keyStillCurrent` returned true immediately, so a remote project never noticed a
-        peer re-keying it — #144's protection absent exactly where bytes leave the machine;
-      - `listProjects` asked the LIVE store for the local catalog, so an open Dropbox
-        project made the sidebar query Dropbox for your OPFS projects.
-
-      **Mostly done (2026-08-25).** Everything about how bytes behave now comes from the
-      driver's declared capabilities: `externallySynced` drives merge-on-save and polling,
-      `flat` drives layout, the re-key check and reverting to local storage. Uses of the
-      flag went from 22 to 14, and the survivors are all one thing.
-
-      **What remains, and whether it should.** The rest is the File System Access API's
-      requirements, not an opinion about storage: a write-permission re-grant needs a user
-      gesture, the OS double-click shortcuts are real files in a real directory, and the
-      registry stores a structured-cloneable handle rather than an address. Those are true
-      of handles and of nothing else.
-
-      **VERIFIED IN THE BROWSER (2026-08-25), after the unification:** a local project
-      saves, survives a relaunch and reopens; move-to-folder writes the project AND its
-      shortcut files, and `Open in CrossTab.html` still lands on the open-folder button;
-      the folder project reopens from the launcher rail, which is the path where a refused
-      write permission would fail silently. **Not yet exercised: a PROTECTED project through
-      the shared flow** — the one place `#adopt`'s new lock actually bites, and the only
-      part of this change no test reaches.
-
-      **BUILT (2026-08-25).** `core/storage-backend.js`; `#folderMode` is gone from the
-      engine. Steps 1-4 of the plan below are done in one pass, since the owner lifted the
-      back-compat constraint ("no one's using this app yet, we can break existing saves").
-
-      - Four flows became two: `openLocation(backend)` and `moveTo(backend)`.
-        `#openExistingFolder` and `moveToFolder` are now three-line callers; the remote
-        pair is deleted. ~110 duplicated lines gone.
-      - `OpfsBackend` / `FolderBackend` / `DropboxBackend` / `WebDavBackend`, each owning
-        `capabilities`, `driver()`, `connect()`, `describe()`, `remember()`, `pollMs`, and
-        `shortcuts()` where a real directory makes one possible.
-      - The UI builds a backend and hands it over; `backendFor(entry, credentials)` rebuilds
-        one from a registry entry. No driver type is named anywhere in app.js any more.
-      - 12 new tests — the first coverage this area has ever had.
-
-      **Rolled up the same day, on the owner's "why not roll everything up?".** There was
-      no principled reason to stop — both loose ends were the same debt:
-      - `webdav-connections.js` deleted; the location registry is the only store of WebDAV
-        addresses, and the credential policy it documented moved there with it.
-      - The launcher holds a BACKEND rather than a folder handle, and defers to Start only
-        when `needsGesture` says the browser requires that click. `#pendingFolder` is gone.
-      - The sidebar renders `describe()`; the `LOCATION_KINDS` table is gone.
-
-      **A storage kind is now named in exactly one place in the UI** — the WebDAV dialog
-      filtering for WebDAV locations, which is correct, because that dialog is WebDAV.
-
-      **And local storage joined them (owner: "no favourite children allowed").** The
-      refactor had stopped at the boundary where OPFS's multi-project nature lives:
-      `openProject(id)` opened local projects while `openLocation(backend)` opened
-      everything else, and `OpfsBackend` existed only in its own tests. The same
-      privileged-path flaw as `#folderMode`, one layer further in — and invisible for the
-      same reason it was harmless, since local storage is the UNDEMANDING case with no
-      merge, no poll, no credential and no gesture to get wrong. Agreement by luck.
-
-      Now `openProject(id)` is `openLocation(new OpfsBackend(id))`, and the difference is
-      one field: `projectId`, which local storage names because it holds many and everyone
-      else leaves null because they hold one. `passphraseMode` came with it — unlocking one
-      project among many reads differently from unlocking a location. The shared flow also
-      caught something the split had hidden: `#adopt` now LOCKS before switching, because
-      opening an unencrypted project after an encrypted one would otherwise carry the old
-      key across.
-
-      **THE PLAN (owner's call, 2026-08-25: do it now, before more providers land).**
-
-      ### Why now, in numbers
-
-      - **Four bugs from one flag**, listed above, none caught by a test.
-      - **The flows are duplicated per backend.** `#openExistingFolder` is 48 lines and
-        `openRemote` 51; `moveToFolder` is 60 and `moveToRemote` 68. The remote pair was
-        written by copying the folder pair. Graph and Drive would each copy them again —
-        that is the "breaks every time we save to a new platform" mechanism, precisely.
-      - **None of those 227 lines is tested.** No test file touches the open or move paths;
-        `folder-sync` and `collab-sync` test the MERGE beneath them. The most bug-dense code
-        in the project has no coverage because it needs a real store to run.
-
-      ### The shape
-
-      One interface per platform, owning everything platform-specific. Not "driver" — a
-      driver is bytes, and bytes were never the hard part:
-
-          StorageBackend
-            capabilities   {flat, externallySynced, atomicWrite, canStream}   (exists)
-            driver()       the byte interface: read/write/list/stat/…         (exists)
-            connect()      permission re-grant | sign-in | no-op              (NEW)
-            describe()     {kind, glyph, label, detail} for lists             (NEW)
-            remember()     what the registry should store, never secrets      (NEW)
-            shortcuts?()   optional; folder-only today                        (NEW)
-
-      And **one flow each**, replacing four:
-
-          openLocation(backend)   ← #openExistingFolder + openRemote
-          moveTo(backend)         ← moveToFolder + moveToRemote
-
-      Both already have the same skeleton, which is why they were copyable: connect →
-      probe on a throwaway store → passphrase → validate → commit → remember → poll. Every
-      difference between them becomes a backend method instead of a second function.
-
-      ### What the engine stops knowing
-
-      `useDirectory`, `ensureReadWrite`, `#pickFolderHandle`, `shortcutFiles`, and the
-      remaining `#folderMode` all move behind a backend. The UI stops carrying kind strings
-      (13 occurrences of `'folder' | 'dropbox' | 'webdav'` across app.js and launcher.js)
-      and renders `describe()` instead. Adding Graph becomes **one file plus one line in a
-      registry** — no new branch in the sidebar, the launcher, the save path or the poll.
-
-      ### What the engine keeps
-
-      Capability-driven behaviour (merge, poll, layout), encryption (correctly above the
-      seam — a backend only ever sees ciphertext), and the op log. These are about the
-      PROJECT, not about where it sits.
-
-      ### The three hard parts, named in advance
-
-      1. **Layout is not really a capability.** `flat` says "one project per location", and
-         OPFS is the only backend where that is false. The honest model is that OPFS is a
-         CATALOG of locations rather than a special layout — which is #171's model arriving
-         from the other side. `FOLDER_PROJECT_ID` (19 uses) is the seam where the two meet.
-      2. **`connect()` is not uniform.** A folder needs a user GESTURE for its permission
-         re-grant; a remote needs a credential dialog it must not own. So `connect()` takes
-         a prompt-provider from the caller rather than opening UI itself — the same shape
-         `openWebDav` already uses for its password callback.
-      3. **The launcher defers a folder to the Start click** because that click *is* the
-         required gesture, while a remote opens immediately. Under one flow this becomes
-         `backend.needsGesture`, not two code paths — and it is the piece most likely to
-         regress, because it is invisible until a permission prompt silently fails.
-
-      ### Sequencing with #171
-
-      They are one refactor from two ends: #171 unifies the project LIST, #172 unifies the
-      backend behind it. Do #172 first — a unified list whose entries still fan out to four
-      bespoke open paths would keep the duplication and hide it behind a nicer surface.
-
-      ### Migration, and the risk that matters
-
-      **Folder backend first, behaviour unchanged.** Folders are in real use and are the
-      most demanding case: handles, permission re-grants, OS shortcuts. If the abstraction
-      survives the folder, the rest are simpler. Any step that requires "and now re-pick
-      your folder" is a failed step.
-
-      Order: (1) define the interface with the folder backend behind it and both old flows
-      still calling it; (2) collapse the two open flows into one; (3) collapse the two move
-      flows; (4) port Dropbox and WebDAV onto backends; (5) delete `#folderMode` and the
-      kind strings in the UI.
-
-      ### What it buys, concretely
-
-      A fake backend makes `openLocation` and `moveTo` **testable headlessly for the first
-      time** — the probe-then-commit ordering, the abort paths, the occupied-destination
-      refusal, remembering only on success. Those are the exact behaviours the four bugs
-      lived in, and they are currently verified by hand or not at all.
-
-- [~] **#171 — WHERE a project lives is not WHICH project is open (user, 2026-08-24).
-      THE INDEX IS BUILT (2026-08-25); the manager that consumes it is #173.**
-
-      `listAllProjects()` returns every project this device knows about, wherever it lives,
-      most-recently-opened first, with location as an attribute of a row. The sidebar
-      renders ONE list from it instead of two, capped at five, with the location shown
-      beside the name.
-
-      **The two stores stay, deliberately.** The local catalog is the nested store's own
-      bookkeeping — it is how the store knows what it holds — and the registry has to keep
-      `FileSystemDirectoryHandle`s, which only IndexedDB can. What changed is that nothing
-      above `listAllProjects()` sees either of them.
-
-      `lastOpenedAt` is added and, more importantly, SURVIVES A SAVE: both catalog writers
-      rebuild their summary from the manifest, and the stamp is not in the manifest and
-      never will be, since it is a fact about this device rather than about the project.
-      Without the carry-across the first autosave after opening would have reset it, and
-      "recent" would have quietly gone back to meaning "recently saved". Seven tests, using
-      the first in-memory driver — which is also the first time `ProjectStore` has been
-      testable at all.
-
-      **Destructive verbs left the sidebar** (delete, forget) — they sat one hover from the
-      row that opens the thing. They land in #173's Manage tab, where consequences can be
-      stated. Original:
-
-      **The principle, and the evidence — the original entry (2026-08-24).** Kept here
-      verbatim; it was a second copy of this item until 2026-10-13.
-
-      "When you open Word and see the recents list, it doesn't matter where each document
-      lives. Likewise for the launcher list and the sidebar list."
-
-      **The principle.** Location is an ATTRIBUTE of a project, not a category of project.
-      A saved project, a folder-backed project and a WebDAV project are one kind of thing
-      stored three ways, and the list a person picks from should say so — one list, with
-      where-it-lives as a detail on the row, beside the date and dataset count #167 also
-      wants there.
-
-      **What exists today is three parallel registries**, which is how the current shape
-      leaks into the UI:
-      - OPFS projects — the catalog in `project-store.js`
-      - folder projects — `core/folder-handle.js`, IndexedDB, because a
-        `FileSystemDirectoryHandle` needs structured clone
-      - WebDAV connections — `core/webdav-connections.js`, localStorage (2026-08-24)
-
-      Three stores means three renderings, three "forget" verbs, and a launcher rail that
-      grows a row per storage MECHANISM rather than per project. Adding WebDAV made this
-      concrete rather than theoretical: it is the third, and the first that was avoidable.
-
-      **What it wants to become:** one project index whose entries carry `{name, savedAt,
-      datasets, location: {kind, …}}`, with the per-kind stores demoted to what they
-      actually are — somewhere to keep a handle or an address that only the driver cares
-      about. The launcher rail and the sidebar then render the SAME list, which is also
-      what #167 asks for ("do not build a third rendering").
-
-      **Ordering constraint.** #167 wants verbs (rename/delete/duplicate) on that list;
-      doing that before this lands means writing each verb three times, once per registry.
-      This should come first, or at least alongside.
-
-      Not blocking the WebDAV work — a File-menu entry can open a connection without a
-      unified list — but every week it stays split, another feature gets written per-store.
-
-      **It has already bitten (2026-08-24).** A project moved to Dropbox vanishes from the
-      Projects list, while one moved to a folder does not — because folders have a registry
-      of their own (`folder-handle.js`) that the sidebar and launcher render beside the OPFS
-      catalog, and remote has no equivalent. So the app can put a project somewhere it
-      cannot then show you, inconsistently, depending on where you put it.
-
-      **The step that is neither a stopgap nor the whole refactor:** generalise the existing
-      folder registry into a registry of remembered LOCATIONS — `{kind: 'folder' | 'dropbox'
-      | 'webdav', name, savedAt, handle?, config?}` — rather than adding a third one beside
-      it. That makes remote projects first-class immediately, collapses two render paths into
-      one, and is a move toward this entry rather than away from it; folding the OPFS catalog
-      in afterwards is then the only step left.
-
 - [ ] **Collaboration on WebKit (Safari / iPhone / iPad) — three separate gaps, none of them
       urgent (owner, 2026-10-07: *"we will eventually need collab support on WebKit devices so
       let's flag that… but it can chill for now"*).** Filed so it is not rediscovered the hard
@@ -2221,6 +1982,289 @@ The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
 
+- [x] **#171 — DONE (confirmed 2026-10-13). One list; location is an attribute of a
+      project, not a category of it.** The owner spotted it from the project manager —
+      every location sitting in one rail, treated alike — and the code agrees all the way
+      down. `listProjects()` in `project-sync.js` carries the sentence that closes this
+      entry: *"Location becomes an attribute of a project rather than a category of
+      project — the whole of #171 in one sentence."*
+
+      One call returns every project from every store with `kind` as a field, ordered by
+      `lastOpenedAt`. **All three surfaces — launcher rail, sidebar, project manager —
+      render it through the same `renderProjectList`.** `listProjectLocations()` no longer
+      exists, and nothing renders a per-registry list any more.
+
+      The two underlying stores do remain, deliberately and as this entry allowed: the
+      local catalog is the store's own bookkeeping, and `FileSystemDirectoryHandle`s can
+      only live in IndexedDB. What changed is that nothing above `listProjects()` sees
+      either.
+
+      **A correction worth recording.** Earlier on 2026-10-13 I repeated a note saying the
+      launcher *"still builds TWO lists"* — `listProjects()` plus `listProjectLocations()`.
+      That was already false when I wrote it; the launcher had been migrated onto the
+      shared renderer and `listProjectLocations()` had been deleted. The stale claim was
+      copied forward instead of checked, which is the same failure this file keeps
+      producing in checkbox form.
+
+      Original entry below.
+
+      **#171 — WHERE a project lives is not WHICH project is open (user, 2026-08-24).
+      THE INDEX IS BUILT (2026-08-25); the manager that consumes it is #173.**
+
+      `listAllProjects()` returns every project this device knows about, wherever it lives,
+      most-recently-opened first, with location as an attribute of a row. The sidebar
+      renders ONE list from it instead of two, capped at five, with the location shown
+      beside the name.
+
+      **The two stores stay, deliberately.** The local catalog is the nested store's own
+      bookkeeping — it is how the store knows what it holds — and the registry has to keep
+      `FileSystemDirectoryHandle`s, which only IndexedDB can. What changed is that nothing
+      above `listAllProjects()` sees either of them.
+
+      `lastOpenedAt` is added and, more importantly, SURVIVES A SAVE: both catalog writers
+      rebuild their summary from the manifest, and the stamp is not in the manifest and
+      never will be, since it is a fact about this device rather than about the project.
+      Without the carry-across the first autosave after opening would have reset it, and
+      "recent" would have quietly gone back to meaning "recently saved". Seven tests, using
+      the first in-memory driver — which is also the first time `ProjectStore` has been
+      testable at all.
+
+      **Destructive verbs left the sidebar** (delete, forget) — they sat one hover from the
+      row that opens the thing. They land in #173's Manage tab, where consequences can be
+      stated. Original:
+
+      **The principle, and the evidence — the original entry (2026-08-24).** Kept here
+      verbatim; it was a second copy of this item until 2026-10-13.
+
+      "When you open Word and see the recents list, it doesn't matter where each document
+      lives. Likewise for the launcher list and the sidebar list."
+
+      **The principle.** Location is an ATTRIBUTE of a project, not a category of project.
+      A saved project, a folder-backed project and a WebDAV project are one kind of thing
+      stored three ways, and the list a person picks from should say so — one list, with
+      where-it-lives as a detail on the row, beside the date and dataset count #167 also
+      wants there.
+
+      **What exists today is three parallel registries**, which is how the current shape
+      leaks into the UI:
+      - OPFS projects — the catalog in `project-store.js`
+      - folder projects — `core/folder-handle.js`, IndexedDB, because a
+        `FileSystemDirectoryHandle` needs structured clone
+      - WebDAV connections — `core/webdav-connections.js`, localStorage (2026-08-24)
+
+      Three stores means three renderings, three "forget" verbs, and a launcher rail that
+      grows a row per storage MECHANISM rather than per project. Adding WebDAV made this
+      concrete rather than theoretical: it is the third, and the first that was avoidable.
+
+      **What it wants to become:** one project index whose entries carry `{name, savedAt,
+      datasets, location: {kind, …}}`, with the per-kind stores demoted to what they
+      actually are — somewhere to keep a handle or an address that only the driver cares
+      about. The launcher rail and the sidebar then render the SAME list, which is also
+      what #167 asks for ("do not build a third rendering").
+
+      **Ordering constraint.** #167 wants verbs (rename/delete/duplicate) on that list;
+      doing that before this lands means writing each verb three times, once per registry.
+      This should come first, or at least alongside.
+
+      Not blocking the WebDAV work — a File-menu entry can open a connection without a
+      unified list — but every week it stays split, another feature gets written per-store.
+
+      **It has already bitten (2026-08-24).** A project moved to Dropbox vanishes from the
+      Projects list, while one moved to a folder does not — because folders have a registry
+      of their own (`folder-handle.js`) that the sidebar and launcher render beside the OPFS
+      catalog, and remote has no equivalent. So the app can put a project somewhere it
+      cannot then show you, inconsistently, depending on where you put it.
+
+      **The step that is neither a stopgap nor the whole refactor:** generalise the existing
+      folder registry into a registry of remembered LOCATIONS — `{kind: 'folder' | 'dropbox'
+      | 'webdav', name, savedAt, handle?, config?}` — rather than adding a third one beside
+      it. That makes remote projects first-class immediately, collapses two render paths into
+      one, and is a move toward this entry rather than away from it; folding the OPFS catalog
+      in afterwards is then the only step left.
+
+- [x] **#172 — DONE (confirmed 2026-10-13). The engine no longer knows where the bytes
+      are.** `core/storage-backend.js` is the answer, and its own header states the ask:
+      *"Where a project lives, as one interface per platform (#172)."*
+
+      **`#folderMode` is gone.** Every surviving mention is past tense, in comments
+      explaining what was removed — *"The engine used to ask 'which UI flow did the user
+      come through?'"*. Behaviour now reads a **capability** (`{flat, externallySynced,
+      atomicWrite, canStream}`) rather than a flow, which is exactly what the four bugs
+      below each needed.
+
+      It also went one level deeper than this entry asked. `openProject(id)` for local and
+      `openLocation(backend)` for everything else was *"the same privileged-path flaw as
+      `#folderMode`, just further in"* — local storage is now a backend like any other, on
+      the grounds that it only looked safe because it is the undemanding case: *"Agreement
+      by luck is not agreement, and it is where the next storage bug would have lived."*
+
+      Original entry below.
+
+      **#172 — the engine should not know where the bytes are (user, 2026-08-25).**
+      "If we are claiming a principle of *all are equal*, then the very existence of a
+      folder mode is a flawed design. The engine shouldn't care — or indeed even know —
+      where or how the bytes are stored."
+
+      **The evidence, because this is not a style argument.** `#folderMode` answers "which
+      UI flow did the user come through", and behaviour was keyed on it. Four bugs, all the
+      same shape, all found by use rather than by tests:
+      - saves took the plain-overwrite branch for remote, so two peers would clobber each
+        other whole-project at a time, silently (`2df5a8e`);
+      - the poll never ran, so a co-author's edit never arrived (same commit);
+      - `#keyStillCurrent` returned true immediately, so a remote project never noticed a
+        peer re-keying it — #144's protection absent exactly where bytes leave the machine;
+      - `listProjects` asked the LIVE store for the local catalog, so an open Dropbox
+        project made the sidebar query Dropbox for your OPFS projects.
+
+      **Mostly done (2026-08-25).** Everything about how bytes behave now comes from the
+      driver's declared capabilities: `externallySynced` drives merge-on-save and polling,
+      `flat` drives layout, the re-key check and reverting to local storage. Uses of the
+      flag went from 22 to 14, and the survivors are all one thing.
+
+      **What remains, and whether it should.** The rest is the File System Access API's
+      requirements, not an opinion about storage: a write-permission re-grant needs a user
+      gesture, the OS double-click shortcuts are real files in a real directory, and the
+      registry stores a structured-cloneable handle rather than an address. Those are true
+      of handles and of nothing else.
+
+      **VERIFIED IN THE BROWSER (2026-08-25), after the unification:** a local project
+      saves, survives a relaunch and reopens; move-to-folder writes the project AND its
+      shortcut files, and `Open in CrossTab.html` still lands on the open-folder button;
+      the folder project reopens from the launcher rail, which is the path where a refused
+      write permission would fail silently. **Not yet exercised: a PROTECTED project through
+      the shared flow** — the one place `#adopt`'s new lock actually bites, and the only
+      part of this change no test reaches.
+
+      **BUILT (2026-08-25).** `core/storage-backend.js`; `#folderMode` is gone from the
+      engine. Steps 1-4 of the plan below are done in one pass, since the owner lifted the
+      back-compat constraint ("no one's using this app yet, we can break existing saves").
+
+      - Four flows became two: `openLocation(backend)` and `moveTo(backend)`.
+        `#openExistingFolder` and `moveToFolder` are now three-line callers; the remote
+        pair is deleted. ~110 duplicated lines gone.
+      - `OpfsBackend` / `FolderBackend` / `DropboxBackend` / `WebDavBackend`, each owning
+        `capabilities`, `driver()`, `connect()`, `describe()`, `remember()`, `pollMs`, and
+        `shortcuts()` where a real directory makes one possible.
+      - The UI builds a backend and hands it over; `backendFor(entry, credentials)` rebuilds
+        one from a registry entry. No driver type is named anywhere in app.js any more.
+      - 12 new tests — the first coverage this area has ever had.
+
+      **Rolled up the same day, on the owner's "why not roll everything up?".** There was
+      no principled reason to stop — both loose ends were the same debt:
+      - `webdav-connections.js` deleted; the location registry is the only store of WebDAV
+        addresses, and the credential policy it documented moved there with it.
+      - The launcher holds a BACKEND rather than a folder handle, and defers to Start only
+        when `needsGesture` says the browser requires that click. `#pendingFolder` is gone.
+      - The sidebar renders `describe()`; the `LOCATION_KINDS` table is gone.
+
+      **A storage kind is now named in exactly one place in the UI** — the WebDAV dialog
+      filtering for WebDAV locations, which is correct, because that dialog is WebDAV.
+
+      **And local storage joined them (owner: "no favourite children allowed").** The
+      refactor had stopped at the boundary where OPFS's multi-project nature lives:
+      `openProject(id)` opened local projects while `openLocation(backend)` opened
+      everything else, and `OpfsBackend` existed only in its own tests. The same
+      privileged-path flaw as `#folderMode`, one layer further in — and invisible for the
+      same reason it was harmless, since local storage is the UNDEMANDING case with no
+      merge, no poll, no credential and no gesture to get wrong. Agreement by luck.
+
+      Now `openProject(id)` is `openLocation(new OpfsBackend(id))`, and the difference is
+      one field: `projectId`, which local storage names because it holds many and everyone
+      else leaves null because they hold one. `passphraseMode` came with it — unlocking one
+      project among many reads differently from unlocking a location. The shared flow also
+      caught something the split had hidden: `#adopt` now LOCKS before switching, because
+      opening an unencrypted project after an encrypted one would otherwise carry the old
+      key across.
+
+      **THE PLAN (owner's call, 2026-08-25: do it now, before more providers land).**
+
+      ### Why now, in numbers
+
+      - **Four bugs from one flag**, listed above, none caught by a test.
+      - **The flows are duplicated per backend.** `#openExistingFolder` is 48 lines and
+        `openRemote` 51; `moveToFolder` is 60 and `moveToRemote` 68. The remote pair was
+        written by copying the folder pair. Graph and Drive would each copy them again —
+        that is the "breaks every time we save to a new platform" mechanism, precisely.
+      - **None of those 227 lines is tested.** No test file touches the open or move paths;
+        `folder-sync` and `collab-sync` test the MERGE beneath them. The most bug-dense code
+        in the project has no coverage because it needs a real store to run.
+
+      ### The shape
+
+      One interface per platform, owning everything platform-specific. Not "driver" — a
+      driver is bytes, and bytes were never the hard part:
+
+          StorageBackend
+            capabilities   {flat, externallySynced, atomicWrite, canStream}   (exists)
+            driver()       the byte interface: read/write/list/stat/…         (exists)
+            connect()      permission re-grant | sign-in | no-op              (NEW)
+            describe()     {kind, glyph, label, detail} for lists             (NEW)
+            remember()     what the registry should store, never secrets      (NEW)
+            shortcuts?()   optional; folder-only today                        (NEW)
+
+      And **one flow each**, replacing four:
+
+          openLocation(backend)   ← #openExistingFolder + openRemote
+          moveTo(backend)         ← moveToFolder + moveToRemote
+
+      Both already have the same skeleton, which is why they were copyable: connect →
+      probe on a throwaway store → passphrase → validate → commit → remember → poll. Every
+      difference between them becomes a backend method instead of a second function.
+
+      ### What the engine stops knowing
+
+      `useDirectory`, `ensureReadWrite`, `#pickFolderHandle`, `shortcutFiles`, and the
+      remaining `#folderMode` all move behind a backend. The UI stops carrying kind strings
+      (13 occurrences of `'folder' | 'dropbox' | 'webdav'` across app.js and launcher.js)
+      and renders `describe()` instead. Adding Graph becomes **one file plus one line in a
+      registry** — no new branch in the sidebar, the launcher, the save path or the poll.
+
+      ### What the engine keeps
+
+      Capability-driven behaviour (merge, poll, layout), encryption (correctly above the
+      seam — a backend only ever sees ciphertext), and the op log. These are about the
+      PROJECT, not about where it sits.
+
+      ### The three hard parts, named in advance
+
+      1. **Layout is not really a capability.** `flat` says "one project per location", and
+         OPFS is the only backend where that is false. The honest model is that OPFS is a
+         CATALOG of locations rather than a special layout — which is #171's model arriving
+         from the other side. `FOLDER_PROJECT_ID` (19 uses) is the seam where the two meet.
+      2. **`connect()` is not uniform.** A folder needs a user GESTURE for its permission
+         re-grant; a remote needs a credential dialog it must not own. So `connect()` takes
+         a prompt-provider from the caller rather than opening UI itself — the same shape
+         `openWebDav` already uses for its password callback.
+      3. **The launcher defers a folder to the Start click** because that click *is* the
+         required gesture, while a remote opens immediately. Under one flow this becomes
+         `backend.needsGesture`, not two code paths — and it is the piece most likely to
+         regress, because it is invisible until a permission prompt silently fails.
+
+      ### Sequencing with #171
+
+      They are one refactor from two ends: #171 unifies the project LIST, #172 unifies the
+      backend behind it. Do #172 first — a unified list whose entries still fan out to four
+      bespoke open paths would keep the duplication and hide it behind a nicer surface.
+
+      ### Migration, and the risk that matters
+
+      **Folder backend first, behaviour unchanged.** Folders are in real use and are the
+      most demanding case: handles, permission re-grants, OS shortcuts. If the abstraction
+      survives the folder, the rest are simpler. Any step that requires "and now re-pick
+      your folder" is a failed step.
+
+      Order: (1) define the interface with the folder backend behind it and both old flows
+      still calling it; (2) collapse the two open flows into one; (3) collapse the two move
+      flows; (4) port Dropbox and WebDAV onto backends; (5) delete `#folderMode` and the
+      kind strings in the UI.
+
+      ### What it buys, concretely
+
+      A fake backend makes `openLocation` and `moveTo` **testable headlessly for the first
+      time** — the probe-then-commit ordering, the abort paths, the occupied-destination
+      refusal, remembering only on success. Those are the exact behaviours the four bugs
+      lived in, and they are currently verified by hand or not at all.
+
 - [x] **#161 — DECIDED (2026-10-13): the Start button STAYS. Nothing was built; the
       question is closed.** The owner, having tested both ends of it:
 
@@ -3634,12 +3678,15 @@ The record of what shipped and why. Kept in full, in the original sections.
 > component instead of its own rail"*), the launcher half of #171 (its Projects rail still renders
 > TWO lists — `listProjects()` at `core/launcher.js:346` and `listProjectLocations()` at :382 —
 > while the sidebar has rendered one since August), and the project-list duplication entry below.
-> **Update 2026-10-13 — the cluster is two members smaller.** #167 is DONE (the shared
-> row renderer plus Manage projects… on the launcher), and **#161 is DECIDED: the Start
-> button stays**, so the launcher's commit gesture is no longer in play. What is left of
-> the cluster is the #181 follow-on (reuse the project-manager rail inline instead of the
-> launcher's own), the launcher half of #171 (its Projects rail still builds TWO lists),
-> and the grouping question. Still the owner's call, but a smaller one.
+> **Update 2026-10-13 — the cluster is nearly gone.** #167 is DONE (the shared row
+> renderer plus Manage projects… on the launcher); **#161 is DECIDED: the Start button
+> stays**, so the launcher's commit gesture is settled; and **#171 is DONE** — the
+> launcher rail renders the one shared list, which this note previously claimed it did
+> not. (It said the rail *"still builds TWO lists"*. It had not done so for weeks; the
+> claim was copied forward rather than checked.) What actually remains is the #181
+> follow-on — reuse the project-manager rail inline instead of the launcher keeping its
+> own — and the sidebar grouping question. One decision, much smaller than this note made
+> it look.
 >
 > Each one rewrites part of the launcher. #181 already says it: *"do the three together,
 > deliberately, not as a follow-on"*, or the launcher gets rebuilt twice. **Parked on the owner**,
