@@ -246,3 +246,91 @@ test('the position is clamped to the transforms that exist', async () => {
   await h.actions.repositionAnalysis(runId, 99);
   assert.equal(h.log.entries()[0].at, 2, 'past the end is the end, not a broken prefix');
 });
+
+// =============================================================================
+// 4. Sibling order (2026-10-13) — the order op #148 deferred
+// =============================================================================
+// The owner, from the desktop app, with two analyses sharing a data step: the lower one
+// had no working ▼ at all, and ▲ on it jumped TWO rows because it leapfrogged the sibling
+// AND the transform. Both followed from the same gap — `at` was the only thing an arrow
+// could change, so two analyses at the same `at` were unorderable. The code said as much:
+// "Swapping two analyses at the SAME position is the one move this cannot make."
+//
+// Order is PRESENTATION. `at` still decides which data an analysis ran against, so a swap
+// changes no numbers and re-runs nothing — which is what makes this cheap and safe.
+
+const twoAt = (log, at = 0) => {
+  log.record({ pluginId: 'p', run: 'run', label: 'Frequencies', inputs: {}, at });
+  log.record({ pluginId: 'p', run: 'run', label: 'Descriptives', inputs: {}, at });
+  return log.entries().map((e) => e.runId);
+};
+
+test('setOrder reorders two analyses that share a data position', () => {
+  const log = freshLog();
+  const [freq, desc] = twoAt(log);
+  assert.deepEqual(log.entries().map((e) => e.label), ['Frequencies', 'Descriptives']);
+  log.setOrder([desc, freq]);
+  assert.deepEqual(log.entries().map((e) => e.label), ['Descriptives', 'Frequencies']);
+  // and `at` is untouched — the data each ran against did not change
+  assert.deepEqual(log.entries().map((e) => e.at), [0, 0]);
+});
+
+test('re-recording cannot reorder, which is why the order op exists', () => {
+  // The projection keeps runs in a Map, and re-setting an existing key does NOT move it.
+  // Measured in the running app before the fix: repositioning an analysis twice left the
+  // list in its original order, so "swap by touching it again" was never available.
+  const log = freshLog();
+  const [freq] = twoAt(log);
+  log.reposition(freq, 2);
+  log.reposition(freq, 0);
+  assert.deepEqual(log.entries().map((e) => e.label), ['Frequencies', 'Descriptives']);
+});
+
+test('an order survives a save and reload, like every other change', () => {
+  const log = freshLog();
+  const [freq, desc] = twoAt(log);
+  log.setOrder([desc, freq]);
+  const reloaded = freshLog();
+  reloaded.load(log.toJSON());
+  assert.deepEqual(reloaded.entries().map((e) => e.label), ['Descriptives', 'Frequencies'],
+    'the order is an op, so it is in the saved stream like everything else');
+});
+
+test('an order written before a new analysis existed still means what it said', () => {
+  // Forgiving on purpose: ids the order does not mention keep their relative position
+  // AFTER the ones it does, so a later analysis appends rather than scrambling the list.
+  const log = freshLog();
+  const [freq, desc] = twoAt(log);
+  log.setOrder([desc, freq]);
+  log.record({ pluginId: 'p', run: 'run', label: 'Crosstabs', inputs: {}, at: 0 });
+  assert.deepEqual(log.entries().map((e) => e.label), ['Descriptives', 'Frequencies', 'Crosstabs']);
+});
+
+test('a stale id for a removed run is ignored rather than breaking the order', () => {
+  const log = freshLog();
+  const [freq, desc] = twoAt(log);
+  log.setOrder([desc, freq]);
+  // `remove` takes the INDEX in the current (now reordered) list — Descriptives is first.
+  log.remove(0);
+  assert.deepEqual(log.entries().map((e) => e.label), ['Frequencies'],
+    'the order still names the removed run; it is skipped, not fatal');
+});
+
+test('setOrder refuses an empty list rather than wiping the order', () => {
+  const log = freshLog();
+  twoAt(log);
+  assert.equal(log.setOrder([]), false);
+  assert.deepEqual(log.entries().map((e) => e.label), ['Frequencies', 'Descriptives']);
+});
+
+test('`current` follows the most recent RUN, not the last row', () => {
+  // The regression this guards: once the arrows can reorder, "the last entry" stops
+  // meaning "what just happened", and the History badge would follow the wrong row.
+  const log = freshLog();
+  const [freq, desc] = twoAt(log);
+  assert.equal(log.latestRunId(), desc, 'the second run is the latest');
+  log.setOrder([desc, freq]);
+  assert.equal(log.latestRunId(), desc, 'a reorder runs nothing, so it changes nothing');
+  log.reposition(freq, 1);
+  assert.equal(log.latestRunId(), freq, 'but a move re-runs, so that one is now the latest');
+});

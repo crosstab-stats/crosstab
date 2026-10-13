@@ -963,10 +963,17 @@ export class HistoryView {
     // case NEITHER the last data step nor an analysis is 'current' — otherwise two rows
     // claim it and Undo appears to target the wrong one.
     const itemIsCurrent = !!this.undo?.lastActionIsItem?.();
-    const currentAnalysisIdx = analyses.length - 1;
+    // The most recently RUN analysis, not the last ROW: the list is in display order,
+    // which the arrows can now change without anything having run.
+    const currentRunId = this.analysisLog?.latestRunId?.() ?? null;
     const emitAnalyses = (k) => {
-      for (const { e, idx } of byAt.get(k) || [])
-        ol.append(this.#analysisStep(e, idx, analysisIsCurrent && idx === currentAnalysisIdx));
+      // `pos`/`count` are the analysis's place among the ones sharing this data step, so a
+      // row knows whether its neighbour above/below is a SIBLING (swap, no re-run) or the
+      // next data step (reposition, re-runs).
+      const group = byAt.get(k) || [];
+      group.forEach(({ e, idx }, pos) =>
+        ol.append(this.#analysisStep(e, idx, analysisIsCurrent && e.runId === currentRunId,
+          { pos, group: group.map((g) => g.e.runId) })));
       byAt.delete(k);
     };
 
@@ -1107,7 +1114,7 @@ export class HistoryView {
   /** A timeline row for a logged analysis (crosstab / regression / plot). Shown at
    * its data position, with the data steps. Display-only (not a data state to rewind
    * to) plus a ✕ to drop it from the recorded analyses. */
-  #analysisStep(entry, idx, isCurrent = false) {
+  #analysisStep(entry, idx, isCurrent = false, { pos = 0, group = [] } = {}) {
     const li = document.createElement('li');
     li.className = 'history__step history__step--analysis';
     const row = el('span', { class: 'history__btn' });
@@ -1128,20 +1135,37 @@ export class HistoryView {
       // ✕, because `AnalysisLog#move` was a no-op and arrows would have done nothing; the
       // Syntax view could reorder an analysis and this view could not (user, 2026-09-27).
       //
-      // Bounded by the data, not by the neighbours: up is possible while there is a transform
-      // above to cross, down while there is one below. An analysis sharing a position with a
-      // sibling therefore jumps past it too — coherent ("one data step earlier"), and never a
-      // button that does nothing. Swapping two analyses at the SAME position is the one move
-      // this cannot make; it needs the order op #148 deferred, and the Syntax view can do it.
+      // ONE ROW PER CLICK, which is how the list reads (owner, 2026-10-13). The arrows used
+      // to move one DATA step regardless of neighbours, so two analyses sharing a step could
+      // not be reordered at all, the lower one had no working ▼, and ▲ leapfrogged the
+      // sibling AND the transform in a single click — two rows for one press.
+      //
+      // So the neighbour decides the move:
+      //  - a SIBLING at the same data step → swap them. Presentation only: same data, same
+      //    numbers, nothing re-runs.
+      //  - a data step → cross it, which changes which data the analysis describes and
+      //    therefore re-runs it (#190).
       const at = Number.isFinite(entry.at) ? entry.at : this.store.getTransforms?.().length ?? 0;
       const total = this.store.getTransforms?.().length ?? 0;
       const busy = !!this.pluginActions && this.#movingAnalysis === entry.runId;
+      const hasSiblingAbove = pos > 0;
+      const hasSiblingBelow = pos < group.length - 1;
+      const canUp = hasSiblingAbove || at > 0;
+      const canDown = hasSiblingBelow || at < total;
+      const upTip = hasSiblingAbove ? 'Show this analysis above the one before it'
+        : 'Run this one data step earlier';
+      const downTip = hasSiblingBelow ? 'Show this analysis below the one after it'
+        : 'Run this one data step later';
       const ctl = el('span', { class: 'history__ctl' });
       ctl.append(
-        ctlBtn('▲', 'Run this one data step earlier', !this.pluginActions || busy || at <= 0,
-          () => this.#moveAnalysis(entry, at - 1)),
-        ctlBtn('▼', 'Run this one data step later', !this.pluginActions || busy || at >= total,
-          () => this.#moveAnalysis(entry, at + 1)),
+        ctlBtn('▲', upTip, !this.pluginActions || busy || !canUp,
+          () => (hasSiblingAbove
+            ? this.#swapAnalyses(entry.runId, group[pos - 1])
+            : this.#moveAnalysis(entry, at - 1))),
+        ctlBtn('▼', downTip, !this.pluginActions || busy || !canDown,
+          () => (hasSiblingBelow
+            ? this.#swapAnalyses(entry.runId, group[pos + 1])
+            : this.#moveAnalysis(entry, at + 1))),
         ctlBtn('✕', 'Remove this analysis from the history', busy, () => this.#removeAnalysis(idx)),
       );
       // The R this result came from, if it was recorded. Shown here rather than only in the
@@ -1171,6 +1195,24 @@ export class HistoryView {
    * draft-then-Run. The row is marked busy meanwhile, because a WebR analysis is not instant
    * and a second click mid-run would queue a move against a stale position.
    */
+  /**
+   * Swap two analyses that share a data step.
+   *
+   * No re-run and no data rebuild: both ran against the same data, so only the order they
+   * are SHOWN in changes — in History and, through `reorderRuns`, in Output.
+   */
+  #swapAnalyses(runId, otherRunId) {
+    if (!this.analysisLog || !runId || !otherRunId) return;
+    const order = this.analysisLog.entries().map((e) => e.runId).filter(Boolean);
+    const a = order.indexOf(runId);
+    const b = order.indexOf(otherRunId);
+    if (a < 0 || b < 0) return;
+    [order[a], order[b]] = [order[b], order[a]];
+    this.analysisLog.setOrder(order);
+    this.results?.reorderRuns?.(order);
+    this.render();
+  }
+
   async #moveAnalysis(entry, to) {
     if (!this.pluginActions || !entry?.runId || this.#movingAnalysis) return;
     this.#movingAnalysis = entry.runId;

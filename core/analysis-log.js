@@ -53,11 +53,32 @@ const ANALYSIS = {
   match: (op) => op.owner === 'core' && typeof op.target === 'string' && op.target.startsWith('analysis:'),
   fold: (ops) => {
     const runs = new Map();
+    let order = null;
     for (const op of liveOps(ops)) { // undone run/remove ops are hidden by the liveness fold
       if (op.type === 'runAnalysis') runs.set(op.payload.runId, op.payload);
       else if (op.type === 'removeAnalysis') runs.delete(op.payload.runId);
+      // HLC-ordered, so the last live one wins — the same rule the data `reorder` uses.
+      else if (op.type === 'reorderAnalyses' && Array.isArray(op.payload?.order)) order = op.payload.order;
     }
-    return [...runs.values()];
+    const list = [...runs.values()];
+    if (!order) return list;
+    // A Map re-set does NOT move an existing key, which is why the natural order here is
+    // "first run, first shown" and why re-recording an analysis could never reorder it.
+    // An explicit order is the only way to express "this one comes after that one" when
+    // two analyses share a data position (#148 deferred this; the History arrows need it).
+    //
+    // Stable and forgiving: ids the order does not mention keep their relative position
+    // AFTER the ones it does, so an order written before a new analysis existed still
+    // means what it said, and a stale id for a removed run is simply ignored.
+    const rank = new Map(order.map((id, i) => [id, i]));
+    return list
+      .map((e, i) => ({ e, i }))
+      .sort((a, b) => {
+        const ra = rank.has(a.e.runId) ? rank.get(a.e.runId) : Number.POSITIVE_INFINITY;
+        const rb = rank.has(b.e.runId) ? rank.get(b.e.runId) : Number.POSITIVE_INFINITY;
+        return (ra - rb) || (a.i - b.i);
+      })
+      .map(({ e }) => e);
   },
 };
 
@@ -134,6 +155,47 @@ export class AnalysisLog {
    * @param {string} runId @param {number} at
    * @returns {object|null} the updated entry, or null if there is no such run
    */
+  /**
+   * The runId of the most recently RUN analysis, or null.
+   *
+   * Not "the last entry": entries are in DISPLAY order now, and were in first-seen order
+   * before — neither is recency, because the projection's Map keeps a re-set key where it
+   * was. The History panel badges one row 'current', and that has to mean "this is what
+   * just happened", so it is read from the ops rather than from a list position.
+   *
+   * A reorder does not change it (nothing ran); a move across a data step does, because
+   * that re-runs the analysis.
+   */
+  latestRunId() {
+    let id = null;
+    for (const op of liveOps(this.#log.slice?.((o) => ANALYSIS.match(o)) ?? [])) {
+      if (op.type === 'runAnalysis' && op.payload?.runId) id = op.payload.runId;
+    }
+    return id;
+  }
+
+  /**
+   * Set the display order of the recorded analyses.
+   *
+   * The companion to {@link AnalysisLog#reposition}: `at` says which DATA an analysis
+   * ran against, this says where it sits among the analyses that share that data. Two
+   * analyses at the same `at` are otherwise unorderable — the History arrows could only
+   * leapfrog one past the other, and the lower of the two had no down arrow at all.
+   *
+   * **Changes no numbers and re-runs nothing.** Order is presentation; `at` is meaning.
+   * That is why this appends one small op and emits `changed`, where `reposition` has to
+   * rebuild the data and re-execute the analysis.
+   *
+   * @param {string[]} runIds - every known runId, in the order to show them.
+   */
+  setOrder(runIds) {
+    const order = (runIds || []).filter((id) => typeof id === 'string' && id);
+    if (!order.length) return false;
+    this.#log.append({ target: 'analysis:order', owner: 'core', type: 'reorderAnalyses', payload: { order } });
+    this.#changed();
+    return true;
+  }
+
   reposition(runId, at) {
     const entry = this.#log.state('analysis').find((e) => e.runId === runId);
     if (!entry) return null;

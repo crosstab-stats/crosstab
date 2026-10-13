@@ -1961,6 +1961,53 @@ The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
 
+- [x] **FIXED (2026-10-13). The History arrows move ONE ROW, and two analyses at the same
+      data step can finally be ordered.** Three reports from the owner on the desktop app,
+      all one root cause:
+
+      1. With both analyses below the transform, **neither had a working ▼** — the lower
+         one had nowhere to go, and the upper one could not pass it.
+      2. **▲ jumped two rows**, leapfrogging the sibling AND the transform in one press.
+      3. The result did not read like what the list showed.
+
+      **This was documented as intentional**, and the design is what was wrong. The old
+      comment said it plainly: *"An analysis sharing a position with a sibling therefore
+      jumps past it too — coherent ('one data step earlier')… Swapping two analyses at the
+      SAME position is the one move this cannot make; it needs the order op #148
+      deferred."* Coherent with the tooltip, but not with a list a person reads top to
+      bottom.
+
+      **Why it was unorderable.** The analysis projection folds runs into a `Map`, and a
+      `Map` re-set does NOT move an existing key — so the order was "first run, first
+      shown" and re-recording could never change it. Verified in the running app before
+      touching anything: repositioning an analysis twice left the list exactly as it was.
+
+      **The fix is that deferred order op**, for analyses only, mirroring the `reorder`
+      the data steps already have: a `reorderAnalyses` op carrying the runId order, folded
+      last-live-wins. The arrows then pick their move from the NEIGHBOUR — a sibling at the
+      same step swaps, a data step is crossed.
+
+      **A swap is presentation only.** `at` still decides which data an analysis ran
+      against, so swapping siblings changes no numbers and **re-runs nothing** — which is
+      what makes this cheap and low-risk despite touching the log. Crossing a step still
+      re-runs, as it must.
+
+      Forgiving by design: an order written before a later analysis existed still means
+      what it said (unmentioned runs keep their relative position after the named ones),
+      and a stale id for a removed run is skipped rather than fatal.
+
+      **A regression I introduced and caught:** once the arrows can reorder, "the last
+      entry" stops meaning "what just happened", so the History `current` badge followed
+      the bottom row instead of the most recent run. `AnalysisLog.latestRunId()` now reads
+      recency from the ops. That also fixes a pre-existing imprecision — the badge was
+      keyed on Map order, which a reposition never updated either.
+
+      Verified live against the owner's exact sequence: ▲ on the lower analysis swaps it
+      with the upper one (one row, Output follows, badge stays put); ▲ again crosses the
+      transform (one row, re-runs, Output still matches). Transform count stayed at 1
+      throughout. Nine tests, mutation-checked — removing the fold fails all nine.
+      Suite 1744 → 1751.
+
 - [x] **FIXED (2026-10-13). An op's payload could shadow its identity, so retraction
       silently stopped working and transforms accumulated.** Found while browser-verifying
       #190's History arrows — the verification item earned its keep.
