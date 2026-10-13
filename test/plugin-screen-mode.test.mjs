@@ -173,15 +173,41 @@ test('CAQDAS takes the host base sheet before layering its own', () => {
 // is unchanged: 980 + 220 side by side at 1200px, 30px buttons, 22px rows.
 // ---------------------------------------------------------------------------------------
 
-test('spatial stacks by USING .ct-split, not by reimplementing the stacking', () => {
-  // The argument for the stdlib shipping components rather than only tokens was that a
-  // plugin should get reflow by using one. Until this, nothing used `.ct-split` or
-  // `.ct-btn` at all — they were shipped and unexercised.
-  assert.match(spatial, /const split = el\('div', \{ class: 'ct-split' \}\);/);
+test('spatial OWNS its layout rather than borrowing it from an optional sheet', () => {
+  // Corrected 2026-10-12 after the owner photographed the bug on a phone: the stacked
+  // region list sat in half the pane, because `.ct-split` lives in BASE_CSS and BASE_CSS
+  // arrives through `app.std?.injectStdlibStyles?.(document)` — an optional chain. When
+  // that did not land, `.ct-split` was an unstyled block, the rail kept its 220px desktop
+  // width, and the pane looked exactly like the screenshot.
+  //
+  // Optional is right for a token or a button style, where the loss is cosmetic. It is
+  // wrong for LAYOUT. So the pane carries its own `.sp-split`, the way builtin-caqdas
+  // carries its own rules — which is why CAQDAS never had this failure. Measured in a
+  // browser: with BASE_CSS and without it, small mode is identical (map 430x405, list
+  // 430x360, 44px button, 44px row); only the button's appearance degrades at full width.
+  assert.match(spatial, /const split = el\('div', \{ class: 'sp-split ct-split' \}\);/);
   assert.match(spatial, /split\.append\(mapPane, listPane\);/);
   assert.match(spatial, /root\.append\(split\);/);
   // body becomes the column that holds the split, so the split is the row that flips.
   assert.match(spatial, /body \{[^}]*display: flex; flex-direction: column; height: 100vh/);
+});
+
+test('the stacking rules are in the plugin’s own sheet, not only the stdlib’s', () => {
+  // The duplication of .ct-split is deliberate and commented as such. Without these the
+  // pane is one failed injection away from the 220px-rail bug again.
+  assert.match(spatial, /\.sp-split \{ display: flex; flex: 1; min-height: 0; \}/);
+  assert.match(spatial, /\[data-screen="small"\] \.sp-split \{ flex-direction: column; \}/);
+  assert.match(spatial, /\[data-screen="small"\] \.sp-split > \* \{ width: auto; flex: none; \}/);
+  // A 44px target and the 16px no-zoom font are accessibility, not decoration, so they
+  // are stated locally too rather than riding on the optional sheet.
+  assert.match(spatial, /\[data-screen="small"\] \.list-header button \{ font-size: 16px; min-height: 44px; \}/);
+});
+
+test('spatial says so when the base sheet is missing, instead of just looking wrong', () => {
+  // Same reasoning as plugin-host's import-map canary: a silent layout fallback is
+  // something a maintainer would otherwise have to reverse-engineer from a photograph.
+  assert.match(spatial, /getElementById\('ct-stdlib-styles'\)/);
+  assert.match(spatial, /console\.warn\('\[builtin-spatial\] stdlib base sheet absent/);
 });
 
 test('spatial takes the host base sheet before layering its own', () => {

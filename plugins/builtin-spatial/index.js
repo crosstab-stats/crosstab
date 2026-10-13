@@ -351,6 +351,13 @@ export const workspace = {
     // also what supplies `.ct-split`, which does the stacking, and the two rules that stop
     // iOS zooming the viewport when a control under 16px takes focus.
     app.std?.injectStdlibStyles?.(document);
+    // A canary, in the spirit of plugin-host's import-map one: if the base sheet is not
+    // there the pane still renders, just wrong — the region rail keeps its desktop width
+    // and the stacked list sits in half the pane. That is a layout a maintainer would
+    // have to reverse-engineer, so say it instead.
+    if (!document.getElementById('ct-stdlib-styles')) {
+      try { console.warn('[builtin-spatial] stdlib base sheet absent (app.std=' + (app.std ? 'present' : 'MISSING') + ') - layout will fall back'); } catch {}
+    }
 
     const sheet = new CSSStyleSheet();
     sheet.replaceSync(`
@@ -379,6 +386,23 @@ export const workspace = {
       .set-links a { color: #2980b9; cursor: pointer; text-decoration: underline; }
       .set-links a:hover { color: #1a5276; }
 
+      /* ---- Layout ------------------------------------------------------------------
+         These duplicate .ct-split from the stdlib's BASE_CSS ON PURPOSE, under this
+         plugin's own class name.
+
+         BASE_CSS arrives through app.std?.injectStdlibStyles?.(document) — an optional
+         chain, because a pane must not die when a convenience library is missing. That is
+         right for a token or a button style, where the failure is cosmetic. It is WRONG
+         for layout: when the sheet did not arrive, .ct-split was an unstyled block, the
+         region rail kept its 220px desktop width, and the stacked list sat in half the
+         pane. A hard dependency dressed as a soft one.
+
+         So the pane owns its layout, the way builtin-caqdas does — and that is why CAQDAS
+         never had this failure. The stdlib sheet is still injected, for tokens and for
+         .ct-btn; losing it now costs appearance, not usability. */
+      .sp-split { display: flex; flex: 1; min-height: 0; }
+      .sp-split > * { min-width: 0; }
+
       /* ---- Small-screen mode -------------------------------------------------------
          Same structural problem CAQDAS had, same cause: 220px of fixed rail beside a
          flexible map leaves the map about 170px on a 390px phone, which is not a map.
@@ -391,6 +415,8 @@ export const workspace = {
          document's root. Never a width media query: the mode is the user's CHOICE, and
          measuring the iframe would override someone who picked the full layout on a
          narrow screen. */
+      [data-screen="small"] .sp-split { flex-direction: column; }
+      [data-screen="small"] .sp-split > * { width: auto; flex: none; }
       [data-screen="small"] .map-pane {
         /* flex:none comes from .ct-split, so the height has to be stated. The map is why
            this pane exists; below about this it stops being readable. */
@@ -404,6 +430,9 @@ export const workspace = {
       [data-screen="small"] .region-row { min-height: 44px; padding: 6px 12px; }
       [data-screen="small"] .region-row input { width: 20px; height: 20px; }
       [data-screen="small"] .list-header { padding: 8px 12px; }
+      /* Also stated locally: a 44px target and the 16px that stops iOS zooming on focus
+         are accessibility, not decoration, so they must not ride on an optional sheet. */
+      [data-screen="small"] .list-header button { font-size: 16px; min-height: 44px; }
       [data-screen="small"] .status, [data-screen="small"] .set-links { font-size: 14px; padding: 10px; }
     `);
     document.adoptedStyleSheets = [sheet];
@@ -439,7 +468,9 @@ export const workspace = {
     // The split is the reflow: a row at full width, a column in small-screen mode, with
     // the list pane's fixed 220px neutralised. Using the component rather than writing
     // the stacking again is the whole argument for the stdlib shipping components.
-    const split = el('div', { class: 'ct-split' });
+    // Both classes: `.sp-split` is this plugin's own and always present, `.ct-split`
+    // keeps it participating in the stdlib's component when that sheet IS there.
+    const split = el('div', { class: 'sp-split ct-split' });
     split.append(mapPane, listPane);
     root.append(split);
 

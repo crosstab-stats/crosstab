@@ -239,7 +239,41 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       numbers rather than an impression; it is the better technique here even when a
       screenshot works. See [[local-testing-setup]].
 
-      Suite 1701 → 1707.
+      Suite 1701 → 1709.
+
+      **FOLLOW-UP, same day — the first version of this shipped a bug, photographed by the
+      owner on a phone: the stacked region list sat in half the pane.** Reproduced exactly
+      in a harness: `.ct-split` lives in `BASE_CSS`, and `BASE_CSS` arrives through
+      `app.std?.injectStdlibStyles?.(document)`. When that did not land, `.ct-split` was an
+      unstyled block — which still *stacks* (block flow), so the reflow looked like it had
+      worked — while `.list-pane` kept its 220px desktop width.
+
+      **The rule this establishes: a pane's LAYOUT must not depend on a stylesheet
+      delivered through an optional chain.** Optional is right for a token or a button
+      style, where the failure is cosmetic and a pane must not die for a missing
+      convenience. It is wrong for layout, where the failure is a broken screen that still
+      renders. This is also why builtin-caqdas never had the problem — it owns its layout
+      rules; spatial borrowed its own.
+
+      So spatial now carries `.sp-split` in its own adopted sheet (which cannot be absent),
+      keeps the `ct-split` class so it still participates when the stdlib sheet IS there,
+      and states the 44px/16px touch rules locally as well, because those are accessibility
+      rather than decoration. Measured both ways: small mode is **identical** with and
+      without `BASE_CSS` (map 430×405, list 430×360, 44px button, 44px row); only the
+      button's appearance degrades at full width. A canary warns when the base sheet is
+      absent, in the spirit of plugin-host's import-map one.
+
+      **Root cause of the missing injection is NOT established.** The local code path is
+      correct end to end (`sendLoad` carries the source, `makeApp` runs after it, the
+      module-scope `globalThis.ctStd` destructure would throw if the stdlib were absent,
+      and the pane renders), and the service worker is network-first with explicit
+      revalidation so a stale cache is unlikely. A sandboxed pane is opaque-origin, its
+      console is not captured by the automation tool, and screenshots of this tab time out
+      — so it could not be observed directly. The fix makes the question moot for layout;
+      the canary is there to answer it if it recurs. **Worth knowing: if the injection IS
+      failing on device, builtin-caqdas's colour TOKENS are failing the same way** (its
+      layout is safe, but `var(--ct-text)` and friends would be unset).
+
 
       **Left:** `builtin-decisions` is single-column, so it has no stacking problem — its
       gap is only control sizing (14px font, 6px padding). And theming is still CAQDAS-only;
