@@ -91,9 +91,9 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
       Suite 1632 → 1648.
 
       **Left deliberately:**
-      - **`builtin-spatial` and `builtin-decisions` are NOT reflowed.** They have the same
-        structural problem for the same reason and now have the same tools; CAQDAS was the
-        one with evidence. Do them when someone hits them, or opportunistically.
+      - ~~**`builtin-spatial` and `builtin-decisions` are NOT reflowed.**~~ **spatial is
+        DONE (2026-10-12, entry above)** — and it turned out `builtin-decisions` never had
+        the structural problem: it is single-column, so its only gap is control sizing.
       - **`el()` migration: COMPLETE (2026-10-11).** All **612 call sites** across core and
         every plugin now use the options form; **331 were positional** and were rewritten
         from each file's OWN definition rather than a guess, because the four signatures
@@ -190,6 +190,61 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
         stdlib — a plugin tested against stub formatters would be testing the stub. It
         lives in `scripts/` because `node --test` treats everything under `test/` as a test
         file.
+
+- [x] **DONE (2026-10-12). builtin-spatial reflows — and the stdlib's layout components
+      finally have a caller.** The last pane with CAQDAS's structural problem: `body` was a
+      flex ROW with a fixed 220px region rail beside a flexible map, so the map got
+      whatever was left.
+
+      **Measured in a browser against the real stylesheets, before and after, at 390px:**
+
+      | | before | after |
+      |---|---|---|
+      | map pane | **170 × 780** | **390 × 351** (stacked above) |
+      | region list | 220 wide, at x=170 | 390 wide, at y=351 |
+      | All / None button | 25px tall, 12px font | 44px, 16px |
+      | region row | 23px | 44px |
+
+      170px of map is not a map. The full-width layout is untouched — 980 + 220 side by
+      side at 1200px, 30px buttons, 22px rows — and `body.scrollWidth === clientWidth` in
+      both, so nothing scrolls sideways.
+
+      **It uses `.ct-split` instead of hand-rolling the stacking, and that was the point.**
+      Part 2 argued the stdlib should ship components rather than only tokens, because then
+      "a plugin gets reflow by USING the component". Until now **nothing used `.ct-split` or
+      `.ct-btn` at all** — they shipped and sat unexercised, the same not-load-bearing smell
+      as `STDLIB_VERSION`. CAQDAS wrote its own rules because it came first; spatial is the
+      proof that the component works for the second caller. `body` becomes the column that
+      holds the split, and the split is the row that flips.
+
+      What the component **cannot** decide is how tall each pane should be once stacked,
+      because `.ct-split` sets `flex: none` on its children and that is a question about
+      what the pane is FOR. Here the map is the answer: it keeps `min-height: 45vh` and the
+      region list is capped at `40vh` and scrolls inside itself, so the map can never be
+      pushed off the top. The map's `border-right` also has to become a `border-bottom`, or
+      the divider draws between stacked rows.
+
+      The All / None buttons moved from a local `button.sm` (12px in 2px of padding) to
+      `.ct-btn`, which is what the stdlib's own small-screen rules reach — so the 44px
+      target and the 16px no-zoom label come for free rather than being retyped. The `.sm`
+      rules are deleted, not left dangling. Region rows get 44px and a 20px checkbox,
+      because selecting regions is the entire purpose of the pane.
+
+      **Verification note, worth keeping:** a workspace pane is an opaque-origin iframe, so
+      the host page cannot read into it, and extension screenshots timed out repeatedly on
+      this tab (the known CDP/paint quirk, not a real freeze — the page answered JS fine
+      throughout). So the layout was measured by rebuilding the pane's exact DOM in a
+      same-origin iframe with the REAL `BASE_CSS` and the plugin's own stylesheet text
+      fetched from the dev server, at a chosen width. That is reproducible and gives
+      numbers rather than an impression; it is the better technique here even when a
+      screenshot works. See [[local-testing-setup]].
+
+      Suite 1701 → 1707.
+
+      **Left:** `builtin-decisions` is single-column, so it has no stacking problem — its
+      gap is only control sizing (14px font, 6px padding). And theming is still CAQDAS-only;
+      spatial's 42 colour literals stay literal while there is no second theme to prove the
+      tokens against.
 
 - [x] **DONE (2026-10-12). Plugin stdlib, part 4: one R-result unpacker — and a real
       correctness bug closed.** The biggest duplication left after part 3, and the only one

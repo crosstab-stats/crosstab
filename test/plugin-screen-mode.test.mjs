@@ -41,6 +41,7 @@ const broker = readFileSync('core/plugin-broker.js', 'utf8');
 const manager = readFileSync('core/workspace-manager.js', 'utf8');
 const host = readFileSync('plugin-host.html', 'utf8');
 const caqdas = readFileSync('plugins/builtin-caqdas/index.js', 'utf8');
+const spatial = readFileSync('plugins/builtin-spatial/index.js', 'utf8');
 
 // =============================================================================
 // The chain, link by link
@@ -154,4 +155,66 @@ test('CAQDAS takes the host base sheet before layering its own', () => {
   // Optional-chained: a build that failed to serve the stdlib must not take the pane down.
   assert.ok(caqdas.indexOf('injectStdlibStyles') < caqdas.indexOf('sheet.replaceSync(STYLES)'),
     'host tokens first, plugin rules on top');
+});
+
+// ---------------------------------------------------------------------------------------
+// builtin-spatial (2026-10-12) — the second pane to reflow, and the first caller of the
+// stdlib's layout COMPONENTS rather than a hand-rolled copy of them.
+//
+// Measured in a browser against the real stylesheets before these were written. At 390px:
+//
+//                      before              after
+//   map pane           170 x 780           390 x 351   (stacked above, not squeezed beside)
+//   region list        220 wide at x=170   390 wide at y=351
+//   All / None button  25px tall, 12px     44px tall, 16px
+//   region row         23px                44px
+//
+// 170px of map is not a map, which is the same failure CAQDAS had. The full-width layout
+// is unchanged: 980 + 220 side by side at 1200px, 30px buttons, 22px rows.
+// ---------------------------------------------------------------------------------------
+
+test('spatial stacks by USING .ct-split, not by reimplementing the stacking', () => {
+  // The argument for the stdlib shipping components rather than only tokens was that a
+  // plugin should get reflow by using one. Until this, nothing used `.ct-split` or
+  // `.ct-btn` at all — they were shipped and unexercised.
+  assert.match(spatial, /const split = el\('div', \{ class: 'ct-split' \}\);/);
+  assert.match(spatial, /split\.append\(mapPane, listPane\);/);
+  assert.match(spatial, /root\.append\(split\);/);
+  // body becomes the column that holds the split, so the split is the row that flips.
+  assert.match(spatial, /body \{[^}]*display: flex; flex-direction: column; height: 100vh/);
+});
+
+test('spatial takes the host base sheet before layering its own', () => {
+  assert.match(spatial, /app\.std\?\.injectStdlibStyles\?\.\(document\)/);
+  assert.ok(spatial.indexOf('injectStdlibStyles') < spatial.indexOf('sheet.replaceSync('),
+    'host tokens first, plugin rules on top');
+});
+
+test('the map keeps room to be a map, and the list is capped so it cannot push it away', () => {
+  // .ct-split sets `flex: none` on its children when stacked, so each pane's height has to
+  // be stated — the component cannot know which pane is the point of the pane.
+  assert.match(spatial, /\[data-screen="small"\] \.map-pane \{[\s\S]{0,320}min-height: 45vh/);
+  assert.match(spatial, /\[data-screen="small"\] \.list-pane \{ max-height: 40vh; \}/);
+  // The divider has to move with the layout, or it draws between stacked rows.
+  assert.match(spatial, /\[data-screen="small"\] \.map-pane \{[\s\S]{0,360}border-right: 0/);
+});
+
+test('a region row is a touch target, because selecting regions is what the pane is for', () => {
+  assert.match(spatial, /\[data-screen="small"\] \.region-row \{ min-height: 44px/);
+  assert.match(spatial, /\[data-screen="small"\] \.region-row input \{ width: 20px; height: 20px; \}/);
+});
+
+test('the All / None buttons are the host button, so they inherit the 44px and the 16px', () => {
+  // `.ct-btn` is reached by the stdlib's own small-screen rules; the old local `button.sm`
+  // (12px in 2px of padding) was not, and its rules are gone rather than left dangling.
+  assert.match(spatial, /el\('button', \{ class: 'ct-btn', text: 'All' \}\)/);
+  assert.match(spatial, /el\('button', \{ class: 'ct-btn', text: 'None' \}\)/);
+  assert.ok(!/button\.sm \{/.test(spatial), 'the superseded .sm rules should be deleted');
+});
+
+test('spatial keys off the mode attribute and never measures its own width', () => {
+  // The mode is the user's CHOICE. A pane that measured its iframe would override someone
+  // who deliberately picked the full layout on a narrow screen.
+  assert.ok(!/@media[^{]*width/.test(spatial), 'no width media query belongs in a pane');
+  assert.ok(spatial.includes('[data-screen="small"]'));
 });

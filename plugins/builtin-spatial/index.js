@@ -346,10 +346,18 @@ export const workspace = {
       svgEl: null, listEl: null, statusEl: null, root,
     };
 
+    // The stdlib's tokens and components first, so the plugin's own rules below win at
+    // equal specificity (adoptedStyleSheets apply after a <style> in the cascade). This is
+    // also what supplies `.ct-split`, which does the stacking, and the two rules that stop
+    // iOS zooming the viewport when a control under 16px takes focus.
+    app.std?.injectStdlibStyles?.(document);
+
     const sheet = new CSSStyleSheet();
     sheet.replaceSync(`
       :host, * { box-sizing: border-box; }
-      body { margin: 0; font: 13px/1.4 system-ui, sans-serif; color: #2c3e50; display: flex; height: 100vh; }
+      /* A column, with .ct-split as the row inside it — the split is what knows how to
+         stack itself when the user is in small-screen mode. */
+      body { margin: 0; font: 13px/1.4 system-ui, sans-serif; color: #2c3e50; display: flex; flex-direction: column; height: 100vh; }
       .map-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid #e2e6ea; }
       .map-pane svg { flex: 1; background: #fafbfc; cursor: crosshair; }
       .map-pane svg path { stroke: #fff; stroke-width: 0.5; fill: #d5dbe2; transition: fill 0.15s; }
@@ -364,14 +372,39 @@ export const workspace = {
       .region-row:hover { background: #f0f4f8; }
       .region-row input { margin: 0; }
       .swatch { width: 12px; height: 12px; border-radius: 2px; border: 1px solid #ccc; flex: none; }
-      button.sm { font: inherit; font-size: 12px; padding: 2px 8px; border: 1px solid #ccd2d8; border-radius: 4px; background: #fff; cursor: pointer; }
-      button.sm:hover { background: #eef3f8; }
       .map-pane.unlinked svg { opacity: 0.35; }
       .map-pane.unlinked .status { background: #fef9e7; color: #7d6608; }
       .empty { padding: 20px; text-align: center; color: #8899a6; }
       .set-links { padding: 6px 10px; text-align: center; color: #5a6a78; font-size: 12px; border-top: 1px solid #e2e6ea; }
       .set-links a { color: #2980b9; cursor: pointer; text-decoration: underline; }
       .set-links a:hover { color: #1a5276; }
+
+      /* ---- Small-screen mode -------------------------------------------------------
+         Same structural problem CAQDAS had, same cause: 220px of fixed rail beside a
+         flexible map leaves the map about 170px on a 390px phone, which is not a map.
+         .ct-split stacks the two and neutralises the fixed width; what it cannot decide
+         is how tall each one should then be, because that is a question about what the
+         pane is FOR. Here the map is the answer, so it gets the room and the region list
+         is capped and scrolls inside itself.
+
+         Keyed off the same [data-screen="small"] attribute the host sets on this
+         document's root. Never a width media query: the mode is the user's CHOICE, and
+         measuring the iframe would override someone who picked the full layout on a
+         narrow screen. */
+      [data-screen="small"] .map-pane {
+        /* flex:none comes from .ct-split, so the height has to be stated. The map is why
+           this pane exists; below about this it stops being readable. */
+        min-height: 45vh;
+        border-right: 0;
+        border-bottom: 1px solid #e2e6ea;
+      }
+      [data-screen="small"] .list-pane { max-height: 40vh; }
+      /* A region row is the primary gesture here — a checkbox and a label, 20px tall at
+         desktop density. Under a thumb that is a miss waiting to happen. */
+      [data-screen="small"] .region-row { min-height: 44px; padding: 6px 12px; }
+      [data-screen="small"] .region-row input { width: 20px; height: 20px; }
+      [data-screen="small"] .list-header { padding: 8px 12px; }
+      [data-screen="small"] .status, [data-screen="small"] .set-links { font-size: 14px; padding: 10px; }
     `);
     document.adoptedStyleSheets = [sheet];
 
@@ -388,20 +421,27 @@ export const workspace = {
     mapPane.append(status);
 
     const listPane = el('div', { class: 'list-pane' });
-    const listHeader = el('div', { class: 'list-header' });
+    const listHeader = el('div', { class: 'list-header ct-row' });
     const title = document.createElement('strong');
     title.textContent = 'Regions';
-    const btnAll = document.createElement('button');
-    btnAll.className = 'sm'; btnAll.textContent = 'All';
+    // `.ct-btn` rather than a local `.sm`: it is the host's button, and it is what the
+    // stdlib's small-screen rules reach to give it a 44px target and a 16px label.
+    const btnAll = el('button', { class: 'ct-btn', text: 'All' });
+    btnAll.type = 'button';
     btnAll.addEventListener('click', () => wsSelectAll(true));
-    const btnNone = document.createElement('button');
-    btnNone.className = 'sm'; btnNone.textContent = 'None';
+    const btnNone = el('button', { class: 'ct-btn', text: 'None' });
+    btnNone.type = 'button';
     btnNone.addEventListener('click', () => wsSelectAll(false));
     listHeader.append(title, btnAll, btnNone);
     const listBody = el('div', { class: 'list-body' });
     _ws.listEl = listBody;
     listPane.append(listHeader, listBody);
-    root.append(mapPane, listPane);
+    // The split is the reflow: a row at full width, a column in small-screen mode, with
+    // the list pane's fixed 220px neutralised. Using the component rather than writing
+    // the stacking again is the whole argument for the stdlib shipping components.
+    const split = el('div', { class: 'ct-split' });
+    split.append(mapPane, listPane);
+    root.append(split);
 
     // Restore from the boundary-set registry (#152).
     const sets = await app.items.list('boundarySets');
