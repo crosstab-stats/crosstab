@@ -298,3 +298,40 @@ test('decisions states its touch rules locally, not through the optional base sh
     'decisions relies on nothing optional for its control sizing');
   assert.ok(!/@media[^{]*width/.test(decisions), 'the mode is a choice, never a measurement');
 });
+
+// ---------------------------------------------------------------------------------------
+// The workspace pane's own toolbar (2026-10-13). Reported from an iPhone: the Decisions
+// pane's "Restart" was "SUPER tiny". It was 12px text in 3px of padding — about 22px tall,
+// the smallest control in the app — and the verb buttons beside it were 13px/25px.
+//
+// The cause was not a missing rule. The toolbar set `style.cssText`, and an inline style
+// outranks every rule in index.html, so the small-screen pass could not reach it however
+// it was written. Measured after the fix: 44px/16px for all seven of builtin-spatial's
+// verbs AND Restart, and 28px/13px at full width.
+// ---------------------------------------------------------------------------------------
+
+test('the workspace verb toolbar is styled by CLASS, never inline', () => {
+  // The actual defect. A control styled inline has opted out of the app's layout rules,
+  // and nothing downstream can put it back — which is why this is the assertion rather
+  // than "a rule exists somewhere".
+  assert.ok(!/\.style\.cssText/.test(manager.slice(manager.indexOf('function buildVerbToolbar'))),
+    'buildVerbToolbar must not set inline styles');
+  assert.match(manager, /bar\.className = 'ws-verb-toolbar';/);
+  assert.match(manager, /btn\.className = 'ws-verb';/);
+  assert.match(manager, /restart\.className = 'ws-verb ws-verb--restart';/);
+});
+
+test('…and those classes are sized for a thumb in small-screen mode', () => {
+  const html = readFileSync('index.html', 'utf8');
+  assert.match(html, /\.ws-verb \{[\s\S]{0,200}font-size: 13px/, 'a desktop size exists');
+  assert.match(html,
+    /\[data-screen="small"\] \.ws-verb \{ font-size: 16px; min-height: 44px;/,
+    'and the small-screen size the inline styles used to block');
+});
+
+test('Restart stays visually secondary without being too small to hit', () => {
+  // It is a recovery action, so it is de-emphasised by COLOUR rather than by being
+  // shrunk below a usable target — which is what it was before.
+  const html = readFileSync('index.html', 'utf8');
+  assert.match(html, /\.ws-verb--restart \{ color: #5a6470; \}/);
+});

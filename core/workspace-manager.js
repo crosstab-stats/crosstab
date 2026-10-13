@@ -689,21 +689,19 @@ function ensureSpinKeyframes() {
  * toolbar verbs get the strip (for restart). `needsFile` verbs open a file picker
  * synchronously on click (preserving user activation). */
 function buildVerbToolbar(verbs, onInvoke, onRestart) {
+  // Styled from the stylesheet, NOT inline. It used to set `style.cssText`, which
+  // outranks every rule in index.html — so the small-screen pass could not reach these
+  // buttons, and the owner found this pane's "Restart" at 12px in 3px of padding (about
+  // 22px tall) on an iPhone. Styling a control inline is a quiet opt-out of the app's
+  // own layout rules.
   const bar = document.createElement('div');
   bar.className = 'ws-verb-toolbar';
-  bar.style.cssText =
-    'display:flex;align-items:center;gap:6px;padding:6px 10px;border-bottom:1px solid #e2e6ea;' +
-    'background:#f7f8fa;flex:none;flex-wrap:wrap;';
   for (const verb of verbs) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.textContent = verb.label.replace(/\s*[…\.]+\s*$/, '');
     btn.title = verb.label;
-    btn.style.cssText =
-      'font:inherit;font-size:13px;padding:4px 10px;border:1px solid #ccd2d8;border-radius:6px;' +
-      'background:#fff;cursor:pointer;';
-    btn.addEventListener('mouseenter', () => { btn.style.background = '#eef3f8'; });
-    btn.addEventListener('mouseleave', () => { btn.style.background = '#fff'; });
+    btn.className = 'ws-verb';
     btn.addEventListener('click', () => {
       if (verb.needsFile) {
         verbPickFile(verb.needsFile.extensions).then((file) => {
@@ -718,16 +716,12 @@ function buildVerbToolbar(verbs, onInvoke, onRestart) {
 
   // Restart button — right-aligned, always present.
   const spacer = document.createElement('div');
-  spacer.style.cssText = 'flex:1;';
+  spacer.className = 'ws-verb-toolbar__spacer';
   const restart = document.createElement('button');
   restart.type = 'button';
   restart.textContent = 'Restart';
   restart.title = 'Restart this workspace (saves state first)';
-  restart.style.cssText =
-    'font:inherit;font-size:12px;padding:3px 8px;border:1px solid #ccd2d8;border-radius:6px;' +
-    'background:#fff;cursor:pointer;color:#5a6470;';
-  restart.addEventListener('mouseenter', () => { restart.style.background = '#eef3f8'; });
-  restart.addEventListener('mouseleave', () => { restart.style.background = '#fff'; });
+  restart.className = 'ws-verb ws-verb--restart';
   restart.addEventListener('click', () => onRestart());
   bar.append(spacer, restart);
 

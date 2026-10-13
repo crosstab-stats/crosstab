@@ -897,6 +897,22 @@
         animation: busy-spin .7s linear infinite;
       }
       @keyframes busy-spin { to { transform: rotate(360deg); } }
+      /* --- a workspace pane's verb toolbar ----------------------------------
+         These were inline styles until 2026-10-13, which meant no rule below could
+         resize them: the owner found "Restart" at roughly 22px on an iPhone. A control
+         styled inline has quietly opted out of the app's layout. */
+      .ws-verb-toolbar {
+        display: flex; align-items: center; gap: 6px; padding: 6px 10px;
+        border-bottom: 1px solid #e2e6ea; background: #f7f8fa; flex: none; flex-wrap: wrap;
+      }
+      .ws-verb-toolbar__spacer { flex: 1; }
+      .ws-verb {
+        font: inherit; font-size: 13px; padding: 4px 10px; border: 1px solid #ccd2d8;
+        border-radius: 6px; background: #fff; cursor: pointer;
+      }
+      .ws-verb:hover { background: #eef3f8; }
+      .ws-verb--restart { color: #5a6470; }
+
       /* --- small-screen arrangement (core/screen-mode.js) ---------------------
          Every rule here keys off `data-screen="small"` on <html> and NOTHING keys off
          viewport width: the user owns the mode, so the layout must not re-decide behind
@@ -929,6 +945,11 @@
       }
       /* Touch targets: the same items, a little taller, which is a resize and not a redesign. */
       [data-screen="small"] .menu__item { padding: 11px 12px; }
+      /* A workspace pane's toolbar is a row of real controls, so it gets the same 44px
+         and 16px as everything else here. `Restart` was the smallest control in the app
+         at 12px/22px — and it is the one you reach for when a pane has wedged. */
+      [data-screen="small"] .ws-verb { font-size: 16px; min-height: 44px; padding: 6px 14px; }
+      [data-screen="small"] .ws-verb-toolbar { gap: 8px; padding: 8px 10px; }
       /* Collapsible sections in the ☰ panel. The heading becomes a real button, so it is
          bigger, tappable and reachable by keyboard — and reads as a control rather than a
          caption, which a plain uppercase label did not. */
