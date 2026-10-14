@@ -1830,6 +1830,8 @@ export async function boot(mounts) {
     },
   });
   services.howto = { open: (topicId) => openHowto({ library: howtoLibrary, topicId }) };
+  // The plugin manager's About dialog offers a plugin's full how-to (#192).
+  if (plugins) plugins.onHowto = (topicId) => services.howto.open(topicId);
   // A changed plugin set invalidates the cached sidecars — a plugin may have gone, or
   // arrived with different docs. It does NOT reset where the reader is: pressing the
   // guide's own "Enable" button fires this, and throwing them off the page they were

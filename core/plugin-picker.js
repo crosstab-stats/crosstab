@@ -170,6 +170,8 @@ export function groupByCategory(items) {
 // --- the component -----------------------------------------------------------
 
 export class PluginPicker {
+  #onHowto = null;
+
   #plugins;
   #mode;
   /** @type {Set<string>} the desired set — `'select'` mode only. */
@@ -196,7 +198,11 @@ export class PluginPicker {
    * @param {?Node} [o.headLead] a host node to sit first in the filter row (the launcher's
    *   "Cataloguing plugins…" indicator, which belongs to the loading screen, not here)
    */
-  constructor({ plugins, mode = 'live', selected = null, onChange = null, headLead = null }) {
+  constructor({ plugins, mode = 'live', selected = null, onChange = null, headLead = null,
+    onHowto = null }) {
+    // Opens the how-to guide at a topic (#192). Injected rather than imported so the
+    // picker keeps no opinion about where documentation lives.
+    this.#onHowto = onHowto;
     this.#plugins = plugins;
     this.#mode = mode === 'select' ? 'select' : 'live';
     this.#selected = new Set(selected || []);
@@ -412,7 +418,7 @@ export class PluginPicker {
     this.#clearStatus();
     const { creator } = this.#plugins;
     try {
-      if (act === 'about') return openPluginAbout(p);
+      if (act === 'about') return openPluginAbout(p, { onHowto: this.#onHowto });
       if (act === 'web') {
         this.#plugins.revokeWeb(p.id);
         return this.refresh();
@@ -747,7 +753,7 @@ export class PluginPicker {
  * @param {import('./plugin-manager.js').PluginManager} plugins
  * @returns {PluginPicker}
  */
-export function openPluginModal(plugins) {
+export function openPluginModal(plugins, { onHowto = null } = {}) {
   injectStyles();
   const dialog = document.createElement('dialog');
   dialog.className = 'ct-dialog ct-dialog--wide ctp-dialog';
@@ -771,7 +777,7 @@ export function openPluginModal(plugins) {
   dialog.addEventListener('close', () => dialog.remove());
   document.body.append(dialog);
 
-  const picker = new PluginPicker({ plugins, mode: 'live' });
+  const picker = new PluginPicker({ plugins, mode: 'live', onHowto });
   picker.mount(body);
   dialog.showModal();
   picker.focusSearch();

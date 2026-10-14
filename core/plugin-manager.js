@@ -1104,7 +1104,9 @@ export class PluginManager {
     // the picker (and its download/preset chain) into every context that only wants the
     // manager - the headless tests among them.
     const { openPluginModal } = await import('./plugin-picker.js');
-    openPluginModal(this);
+    // The how-to hook, set by the app (#192). A plugin's full guide opens from its
+    // About dialog rather than being inlined there twice.
+    openPluginModal(this, { onHowto: this.onHowto ?? null });
   }
 
   /** A nested prompt for a plugin URL. Resolves the trimmed URL, or null. */
@@ -1153,7 +1155,7 @@ export class PluginManager {
  *
  * @param {{name?:string, menu?:string[], howto?:string}} p  a catalogue row
  */
-export function openPluginAbout(p) {
+export function openPluginAbout(p, { onHowto } = {}) {
   const adds = (p?.menu || []).filter(Boolean);
   const dialog = document.createElement('dialog');
   dialog.className = 'ct-dialog ct-dialog--wide';
@@ -1188,6 +1190,23 @@ export function openPluginAbout(p) {
   }
 
   const menu = el('menu', { class: 'ct-dialog__buttons' });
+  // The full how-to, when this plugin ships one (#192). The one-line note above is the
+  // summary; this is the written guide, in the same index every other plugin's is in.
+  // A link rather than the prose inlined here: two copies of a plugin's documentation is
+  // how the pie chart's entry came to carry bar-chart notes.
+  const topics = Array.isArray(p?.howtoIndex) ? p.howtoIndex.filter((t) => t?.id) : [];
+  if (topics.length && onHowto) {
+    const read = el('button', {
+      text: topics.length > 1 ? `Read the how-to (${topics.length} topics)` : 'Read the how-to',
+    });
+    read.type = 'button';
+    read.addEventListener('click', () => {
+      dialog.close('cancel');
+      dialog.dispatchEvent(new Event('close'));
+      onHowto(topics[0].id);
+    });
+    menu.append(read);
+  }
   const close = el('button', { text: 'Close', class: 'ct-dialog__primary' });
   close.value = 'cancel';
   close.type = 'submit';

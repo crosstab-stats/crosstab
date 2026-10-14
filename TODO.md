@@ -18,7 +18,9 @@ bottom; they are the project's memory and are not summarised away.
 
 ### Now / near-term
 
-- [ ] **#192 — the how-to system, extensible by any plugin author (owner, 2026-10-14).**
+- [~] **#192 — the how-to system, extensible by any plugin author (owner, 2026-10-14).**
+      **BUILT 2026-10-14** (H1–H6). What remains is CONTENT, not mechanism — see #184 — plus
+      screenshots, which the renderer supports and nothing yet uses.
       The design settled with the owner before any code. #184 (the comprehensive guide)
       is the CONTENT; this is the mechanism it and everyone else writes into.
 
@@ -105,6 +107,23 @@ bottom; they are the project's memory and are not summarised away.
       inline-styled controls remain in `core/` (2 in data-views.js, 2 in app.js, 1 each in
       syntax-guide.js and r-script.js). Close the class, not the instance.
       See [[accessibility-baseline]].
+
+      **Shipped.** `core/howto.js` (index + sidecar contract + the reader's position),
+      `howto-render.js` (the link boundary), `howto-library.js` (fetch/cache/failure),
+      `howto-ui.js` (the overlay), `howto-core.js` + `docs/howto-core.md` (the host's own
+      topics, declared the way a plugin's are). Suite 1834 → 1881.
+
+      **92 topics on first open**, measured in the app: 15 syntax commands migrated out of
+      the old dialog, 10 authored core topics, 3 authored for `builtin-frequencies` as the
+      reference implementation, and the rest bridged automatically from the one-line
+      `howto` strings 64 built-ins already carried. That bridge is what makes the guide
+      useful on day one instead of after a 64-manifest rewrite; writing a real
+      `howtoIndex` supersedes it.
+
+      **Still to do:** screenshots (the renderer handles `![alt](asset:name.png)` with
+      `.small` variants, but no topic uses one yet — and they rot, so use them sparingly);
+      the ⓘ inside an analysis dialog (the plugin-list one is done); and authoring real
+      topics for the other 63 built-ins, which is #184's job rather than this one's.
 
 - [ ] **`runR` wants to be `app.webr.runOrThrow` (raised 2026-10-13).** Eleven plugins
       carry `async function runR(app, code)` — run it, throw if `result` is null. One
