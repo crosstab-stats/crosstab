@@ -186,6 +186,15 @@ function probeServices() {
  *   manager and in the Syntax guide. Write a line or two on using it from the GUI,
  *   then the syntax call form, e.g. `Pick variables in Descriptive Statistics ▸
  *   Frequencies. Syntax: run builtin-frequencies.run {"vars": ["gender","region"]}`.
+ * @property {Array<HowtoTopic>} [howtoIndex] - The plugin's how-to topics, INDEX ONLY
+ *   (#192). Small and always-resident: the catalogue is cached in localStorage and read
+ *   on every boot, so the prose lives in {@link PluginManifest.howtoFile} instead. Any
+ *   plugin may contribute — core's own topics are declared exactly this way.
+ * @property {string} [howtoFile] - The markdown sidecar holding those topics' bodies,
+ *   resolved like any other declared asset (the plugin's bundle, or a same-origin
+ *   sibling). Sections are delimited by a line reading `--- id: <topic-id>`, and each id
+ *   MUST appear in `howtoIndex`: an undeclared section is unreachable and a declared topic
+ *   with no section is a dead row, so both are reported to the author.
  * @property {Array<MenuItem>} [menu] - Menu actions. Each item is filed under
  *   `category`; clicking it gathers the item's `inputs`, binds them into R by name,
  *   then calls the named `run` function. Each variable's **designated missing codes
@@ -194,6 +203,19 @@ function probeServices() {
  * @property {Array<ImporterDecl>} [imports] - File/web importers (File ▸ Import).
  * @property {Array<ExporterDecl>} [exports] - Data exporters (File ▸ Export).
  * @property {Array<ExporterDecl>} [outputExports] - Report exporters (Export output…).
+ *
+ * @typedef {Object} HowtoTopic
+ * @property {string} id - Stable, globally unique, and the address a `howto:` link uses.
+ * @property {string} title - What the index row says.
+ * @property {string} [category] - Groups the index; free text (missing — "Other").
+ * @property {string[]} [keywords] - Search terms. Search covers titles, categories,
+ *   keywords and the plugin name — NOT bodies, which would mean fetching every sidecar.
+ *   Be generous here; it is the only thing standing between a reader's word and a miss.
+ * @property {string[]} [needs] - Plugin ids this topic's instructions require. Rendered
+ *   as an inline Enable rather than a warning: discovering the plugin you actually meant
+ *   to use is the common case, not an error case.
+ * @property {string[]} [seeAlso] - Related topic ids, including other plugins'.
+ * @property {string} [file] - Override the plugin's `howtoFile` for this one topic.
  *
  * @typedef {Object} MenuItem
  * @property {string} label - Menu item text, e.g. `'Descriptives…'`.

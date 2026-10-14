@@ -44,7 +44,7 @@ const LS_WEB = 'crosstab.plugins.web';
 /** Bump when the catalog shape OR built-in manifests' metadata change, so a
  * stale persisted catalog (e.g. missing newly-declared `disciplines`) is dropped
  * and re-probed on next load. */
-const CATALOG_VERSION = 29; // 29: builtin-logistic gains the SPSS Options inputs (cats/ref/opts) (#178); // 28: caqdas codebook CSV import moved to the File import picker; // 27: caqdas codebook CSV import/export verbs; // 26: caqdas codebooks collection + per-collection scope; // 25: builtin-charts renamed "Chart engine", filed under Graphs; // 24: builtin-charts — all chart kinds left core for a plugin (#131 Layer 3); // 23: steps+forest kinds, survival+meta drop svglite; // 22: wordcloud kind, textanalytics+caqdas migrated; // 21: builtin-plots boxplot -> box kind, plugin now R-free; // 20: builtin-plots violin/dots/paired (#140); // 19: builtin-sced (single-case design, `sced` chart kind); 18: builtin-agreement (inter-rater κ/α); 16: `howto` authored for all 60 built-ins (#135); 15: `howto` field (#135); 14: builtin-plots scatter+pie → data-driven charts (#131); 13: trends → chart; 12: re-added ReadStat codec (#130); 11: `version` (#91); 10: `codecs` (#98)
+const CATALOG_VERSION = 30; // 30: howtoIndex + howtoFile (#192); // 29: builtin-logistic gains the SPSS Options inputs (cats/ref/opts) (#178); // 28: caqdas codebook CSV import moved to the File import picker; // 27: caqdas codebook CSV import/export verbs; // 26: caqdas codebooks collection + per-collection scope; // 25: builtin-charts renamed "Chart engine", filed under Graphs; // 24: builtin-charts — all chart kinds left core for a plugin (#131 Layer 3); // 23: steps+forest kinds, survival+meta drop svglite; // 22: wordcloud kind, textanalytics+caqdas migrated; // 21: builtin-plots boxplot -> box kind, plugin now R-free; // 20: builtin-plots violin/dots/paired (#140); // 19: builtin-sced (single-case design, `sced` chart kind); 18: builtin-agreement (inter-rater κ/α); 16: `howto` authored for all 60 built-ins (#135); 15: `howto` field (#135); 14: builtin-plots scatter+pie → data-driven charts (#131); 13: trends → chart; 12: re-added ReadStat codec (#130); 11: `version` (#91); 10: `codecs` (#98)
 
 export class PluginManager {
   /** @type {import('./loader.js').PluginLoader} */
@@ -398,6 +398,13 @@ export class PluginManager {
       // Optional author-written usage note (GUI how-to + the syntax call form). Shown
       // behind the 🔍 in the plugin manager and surfaced in the Syntax guide.
       howto: typeof manifest.howto === 'string' ? manifest.howto : null,
+      // The how-to INDEX (#192) — ids, titles and search terms only. Deliberately not the
+      // prose: this object is JSON in localStorage, parsed on every boot and re-probed in
+      // full on a CATALOG_VERSION bump, and #150 already moved plugin sources out of that
+      // store for being too big for it. Bodies live in `howtoFile`, which ships with the
+      // plugin and is fetched when a topic is opened.
+      howtoIndex: Array.isArray(manifest.howtoIndex) ? manifest.howtoIndex : [],
+      howtoFile: typeof manifest.howtoFile === 'string' ? manifest.howtoFile : null,
       category: typeof manifest.category === 'string' ? manifest.category : '',
       keywords: Array.isArray(manifest.keywords) ? manifest.keywords : [],
       disciplines: Array.isArray(manifest.disciplines) ? manifest.disciplines : [],
@@ -1053,6 +1060,8 @@ export class PluginManager {
         category: cat?.category || 'Other',
         version: cat?.version ?? null,
         howto: cat?.howto ?? null,
+        howtoIndex: cat?.howtoIndex ?? [],
+        howtoFile: cat?.howtoFile ?? null,
         keywords: cat?.keywords ?? [],
         disciplines: cat?.disciplines ?? [],
         rPackages: cat?.rPackages ?? [],
