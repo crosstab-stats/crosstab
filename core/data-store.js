@@ -1409,8 +1409,14 @@ export class DataStore {
    * @returns {{applied: object[], future: object[]}}
    */
   getHistory() {
+    // Each row carries its op TARGET as well as its contents, so a caller can tell which
+    // step a record is anchored to (“this memo is about `ds:3/cell:age:17`”). The flattened
+    // step deliberately does NOT carry it — `replaceTransforms` spreads a step straight into
+    // a new op's payload, and an address inside a payload is the identity-shadowing bug
+    // class all over again. So it is added here, where nothing writes it back.
+    const targets = new Map(this.#log.slice(this.#mine).map((o) => [o.id, o.target]));
     return {
-      applied: this.#steps().map((t) => structuredClone(t)),
+      applied: this.#steps().map((t) => ({ ...structuredClone(t), target: targets.get(t.id) ?? null })),
       future: this.#log
         .undoneOps(this.#mine)
         .reverse() // most-recently-undone first — the next op a redo would re-apply

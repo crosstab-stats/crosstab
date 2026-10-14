@@ -161,7 +161,12 @@ export class MemoStore {
       // Wall-clock, so a reader can order a conversation. NOT used for merge ordering —
       // that is the HLC's job, and a peer's clock may disagree with ours.
       createdAt: Date.now(),
-    }, { scope: { dsId: this.#scopeFor(a) } });
+      // The causal edge the log has always supported and the item tier never used (#166).
+      // It is what lets the History cursor know that withdrawing a chart has to take the
+      // note on that chart down with it — and bring it back on the way down. Without it a
+      // memo on an undone analysis is left pointing at nothing, or silently dropped by a
+      // redo that only restores the thing it was written about.
+    }, { scope: { dsId: this.#scopeFor(a) }, reads: [a.target] });
     return id;
   }
 

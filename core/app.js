@@ -30,7 +30,7 @@ import { loadSitePlugins } from './site-plugins.js';
 import { openSyntaxGuide } from './syntax-guide.js';
 import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } from './user-identity.js';
 import { ProjectLog } from './project-log.js';
-import { ItemStore, newItemId, isItemOp, parseItemTarget, itemTarget } from './item-store.js';
+import { ItemStore, newItemId, parseItemTarget, itemTarget } from './item-store.js';
 import { MemoStore, createMemoService, ANCHOR_KINDS, datasetOfTarget } from './memo-store.js';
 import { SelectionStore, createSelectionService, SELECTION_CHANGED } from './selection.js';
 import { parseInviteLink } from './live-invite.js';
@@ -65,7 +65,6 @@ import { Launcher } from './launcher.js';
 import { OfflineManager } from './offline.js';
 import { exportProjectBundle, importProjectBundle, pickBundleFile, downloadBlob, slug } from './project-bundle.js';
 import { WorkspaceStore, ownerToken } from './workspace-store.js';
-import { liveOps } from './op-log.js';
 import { WorkspaceManager } from './workspace-manager.js';
 import { PluginPackageStore } from './plugin-package-store.js';
 import { AssetStore, createAssetService, ASSETS_CHANGED } from './asset-store.js';
@@ -881,7 +880,7 @@ export async function boot(mounts) {
   /**
    * One item op described: what it did, to which record, in which collection.
    *
-   * Pulled out of {@link itemHistory} so the Edit menu can name an item op too —
+   * Describes one item op so the Edit menu can name it —
    * undoing a memo should say so. `seen` is how a first `putItem` reads as an ADD and a
    * later one as an EDIT; omit it (the menu does) and a put reads as an edit, which is
    * the safe way round for a one-off description.
@@ -926,30 +925,6 @@ export async function boot(mounts) {
     };
   };
 
-  const itemHistory = () => {
-    const decls = itemDecls();
-    const ops = liveOps(projectLog.slice(isItemOp));
-    const seen = new Set();
-    const rows = [];
-    const activeDs = datasets.activeId;
-    for (const op of ops) {
-      const described = describeItemOp(op, decls, seen);
-      seen.add(op.target);
-      // History is per-dataset, so show only records belonging to the dataset in view,
-      // plus project-scoped ones (a boundary set, a project note).
-      const ds = described.scope?.dsId;
-      if (ds != null && String(ds) !== String(activeDs)) continue;
-      rows.push({
-        id: op.id,
-        hlc: op.hlc,
-        group: described.group, // the collection's own label — the heading is built from these
-        title: described.title,
-        detail: described.detail,
-        who: described.who,
-      });
-    }
-    return rows;
-  };
 
   const undoCoordinator = new UndoCoordinator({
     datasets,
@@ -1049,7 +1024,20 @@ export async function boot(mounts) {
   // beside Undo/Redo. Distinct from the Data/Variables/Output tabs (inputs &
   // outputs); History is what you did. Click a step to rewind live, reorder with
   // ▲▼, or remove with ✕.
-  const historyPanel = new HistoryPanel(datasets, bus, { analysisLog, pluginActions, undo: undoCoordinator, results, itemHistory });
+  const historyPanel = new HistoryPanel(datasets, bus, {
+    analysisLog,
+    pluginActions,
+    undo: undoCoordinator,
+    results,
+    itemRecords,
+    // Deleting a note from History is a REMOVAL, not a withdrawal: a tombstone that
+    // propagates on merge and does not come back on a fast-forward, unlike a record the
+    // cursor merely took down with its step.
+    removeRecord: (rec) => {
+      itemStore.remove(rec.owner, rec.collection, rec.id);
+      void workspaceManager?.notifyWorkspaceRefresh?.();
+    },
+  });
   menus.register({
     id: 'core:history',
     path: ['Edit'],

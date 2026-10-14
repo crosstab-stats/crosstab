@@ -925,6 +925,10 @@ export class HistoryView {
    * mid-run would queue an order against a timeline that is about to change. */
   #busy = false;
 
+  /** Parent row ids whose record list the user has expanded. A cell's notes all hang off
+   * the import, so a busy dataset would otherwise bury the recipe under its annotations. */
+  #expandedRecords = new Set();
+
   /**
    * @param {HTMLElement} host
    * @param {import('./data-store.js').DataStore} store
@@ -937,7 +941,8 @@ export class HistoryView {
     this.analysisLog = opts.analysisLog ?? null;
     this.results = opts.results ?? null; // to drop an analysis's output when its step is deleted
     this.undo = opts.undo ?? null; // undo coordinator — tells us if an analysis is the latest action
-    this.itemHistory = opts.itemHistory ?? null; // plugin-action rows (#152)
+    this.itemRecords = opts.itemRecords ?? null; // live annotations, by anchor (#152/#191)
+    this.removeRecord = opts.removeRecord ?? null; // deleting one is a tombstone, not a withdrawal
     this.pluginActions = opts.pluginActions ?? null; // to re-run an analysis moved to a new position (#190)
     host.classList.add('ct-historyhost');
   }
@@ -959,6 +964,7 @@ export class HistoryView {
       future,
       analyses,
       futureAnalyses: this.analysisLog?.withdrawnEntries?.() ?? [],
+      records: this.itemRecords ? this.itemRecords() : [],
       order: this.store.getOrder?.() ?? null,
     });
     this.#rows = rows;
@@ -976,25 +982,36 @@ export class HistoryView {
     // which is how people read this badge (owner, 2026-10-13).
     const cursorId = movable.length ? movable[movable.length - 1].id : null;
 
-    for (const row of rows) ol.append(this.#timelineRow(row, { movable, pinIdx, cursorId }));
-
-    // Records: memos, coding, boundary sets (#152), listed after the timeline in the order
-    // they happened. A memo is not a step in the recipe — it is not re-run to reproduce the
-    // data — so it is not numbered and not a cursor position.
-    const itemRows = this.itemHistory ? this.itemHistory() : [];
-    if (itemRows.length) {
-      const groups = [...new Set(itemRows.map((r) => r.group).filter(Boolean))];
-      const sub = el('li', { class: 'history__step history__step--sub' });
-      sub.append(el('span', { text: groups.join(' \u00b7 ') || 'Records', class: 'history__body' }));
-      sub.title = 'Not steps in the data pipeline — rewinding the data does not undo these';
-      ol.append(sub);
-      for (const r of itemRows) {
-        ol.append(this.#recordRow(r));
+    // Records are drawn as a RUN under the row they annotate, so a long one can collapse.
+    let run = [];
+    const flushRecords = () => {
+      if (!run.length) return;
+      const parentId = run[0].parentId;
+      if (parentId === null) {
+        // Nothing on the timeline to hang these off: a project note, a codebook entry.
+        // Their own group, and labelled as such rather than implied by position.
+        const sub = el('li', { class: 'history__step history__step--sub' });
+        sub.append(el('span', { text: 'Not about a step', class: 'history__body' }));
+        sub.title = 'Notes about the project rather than about any one step in it';
+        ol.append(sub);
       }
+      const key = parentId ?? 'loose';
+      const expanded = this.#expandedRecords.has(key);
+      const shown = expanded ? run : run.slice(0, RECORD_PREVIEW);
+      for (const rec of shown) ol.append(this.#recordRow(rec));
+      if (run.length > RECORD_PREVIEW) ol.append(this.#recordToggle(key, run.length, expanded));
+      run = [];
+    };
+
+    for (const row of rows) {
+      if (row.kind === 'record') { run.push(row); continue; }
+      flushRecords();
+      ol.append(this.#timelineRow(row, { movable, pinIdx, cursorId }));
     }
+    flushRecords();
 
     this.host.replaceChildren(ol);
-    if (applied.length === 0 && future.length === 0 && itemRows.length === 0) {
+    if (applied.length === 0 && future.length === 0 && !rows.some((r) => r.kind === 'record')) {
       this.host.append(
         el('p', { text: 'No data yet. Importing, then recoding/computing/editing in this dataset appears here as steps you can rewind to, reorder, or remove.', class: 'history-hint' }),
       );
@@ -1075,15 +1092,52 @@ export class HistoryView {
     return ctl;
   }
 
-  /** A record row (a memo, a coding). Not numbered: it is not a step in the recipe. */
-  #recordRow(r) {
+  /**
+   * A record row (a memo, a coding), under the step it is about.
+   *
+   * Not numbered and not a cursor position: nothing re-runs a memo to reproduce the data.
+   * It does get a — because History is the first place a live note is listed at all,
+   * and until now deleting one meant hunting for the thing it was written on.
+   */
+  #recordRow(rec) {
     const li = el('li', { class: 'history__step history__step--applied history__step--record' });
+    if (!rec.live) li.classList.add('history__step--future');
     const btn = el('span', { class: 'history__btn' });
     btn.append(el('span', { text: '\u25c6', class: 'history__marker' }));
     const body = el('span', { class: 'history__body' });
-    body.append(el('span', { text: r.title, class: 'history__title' }));
-    if (r.detail) body.append(el('span', { text: r.detail, class: 'history__detail' }));
+    body.append(el('span', { text: rec.title, class: 'history__title' }));
+    if (rec.detail) body.append(el('span', { text: rec.detail, class: 'history__detail' }));
     btn.append(body);
+    li.append(btn);
+    if (this.removeRecord) {
+      const ctl = el('span', { class: 'history__ctl' });
+      // A DELETION, not a withdrawal. The cursor takes a note down with its step and
+      // brings it back; this ends it, and a fast-forward will not resurrect it.
+      ctl.append(ctlBtn('\u2715', `Delete this ${(rec.group || 'record').toLowerCase().replace(/s$/, '')}`, false, () => {
+        this.removeRecord(rec);
+        this.render();
+      }));
+      li.append(ctl);
+    }
+    return li;
+  }
+
+  /** "+ 4 more" / "show fewer" for a long run of records under one step. */
+  #recordToggle(key, total, expanded) {
+    const li = el('li', { class: 'history__step history__step--record history__step--more' });
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'history__btn';
+    btn.append(el('span', { text: '', class: 'history__marker' }));
+    btn.append(el('span', {
+      text: expanded ? 'Show fewer' : `${total - RECORD_PREVIEW} more`,
+      class: 'history__body',
+    }));
+    btn.addEventListener('click', () => {
+      if (expanded) this.#expandedRecords.delete(key);
+      else this.#expandedRecords.add(key);
+      this.render();
+    });
     li.append(btn);
     return li;
   }
@@ -1284,6 +1338,11 @@ export class HistoryView {
  * base import, which is pinned — every later step is expressed against the data it brought. */
 const SOURCE_TYPES = new Set(['load', 'append', 'join']);
 
+/** How many records to show under one step before collapsing the rest. Cell notes all
+ * hang off the import — its anchor is the only live writer of `ds:N/cell:...` until the
+ * cell is edited — so a well-annotated dataset would otherwise bury the recipe. */
+const RECORD_PREVIEW = 3;
+
 /**
  * What an arrow will do, said in terms of the NEIGHBOUR it will cross.
  *
@@ -1353,7 +1412,9 @@ export class HistoryPanel {
   #dirtyHint = null;
   #syntaxBtn = null;
   /** () => plugin-action rows for the timeline (#152). */
-  #itemHistory = null;
+  #itemRecords = null;
+
+  #removeRecord = null;
 
   /**
    * @param {import('./data-store.js').DataStore} store
@@ -1362,14 +1423,18 @@ export class HistoryPanel {
    *   enable the Syntax editor (read/replay the analysis log + rebuild via Run) and
    *   pass the undo coordinator so the timeline can mark a just-run analysis 'current'.
    */
-  constructor(store, bus, { analysisLog = null, pluginActions = null, undo = null, results = null, itemHistory = null } = {}) {
+  constructor(store, bus, {
+    analysisLog = null, pluginActions = null, undo = null, results = null,
+    itemRecords = null, removeRecord = null,
+  } = {}) {
     this.#store = store;
     this.#bus = bus;
     this.#analysisLog = analysisLog;
     this.#pluginActions = pluginActions;
     this.#undo = undo;
     this.#results = results;
-    this.#itemHistory = itemHistory;
+    this.#itemRecords = itemRecords;
+    this.#removeRecord = removeRecord;
   }
 
   #build() {
@@ -1442,7 +1507,8 @@ export class HistoryPanel {
       analysisLog: this.#analysisLog,
       undo: this.#undo,
       results: this.#results,
-      itemHistory: this.#itemHistory,
+      itemRecords: this.#itemRecords,
+      removeRecord: this.#removeRecord,
       pluginActions: this.#pluginActions,
     });
   }

@@ -546,6 +546,10 @@
       .history__step--record .history__marker { background: transparent; color: #8b96a1; }
       .history__step--record .history__title { font-weight: 500; }
       .history__step--sub { opacity: 0.7; padding-top: 6px; font-size: 12px; }
+      /* Nested under the step they annotate, set in so the numbered sequence still
+         reads as a sequence down the left edge. */
+      .history__step--record > .history__btn { padding-left: 26px; }
+      .history__step--more > .history__btn { font-size: 12px; color: #5a7fa8; padding-left: 26px; }
       .history__title { font-weight: 600; }
       .history__detail { font-size: 12px; color: #646e77; }
       .history__step--future .history__detail { color: #aeb7c0; }

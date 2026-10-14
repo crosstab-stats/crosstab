@@ -25,6 +25,7 @@
  */
 
 import { stripEllipsis } from './text.js';
+import { readAncestors } from './op-log.js';
 
 /**
  * Op types that count as a data **transform** for positioning.
@@ -44,6 +45,10 @@ export const TRANSFORM_TYPES = new Set([
   'setVariable', 'setCell', 'computeVar', 'recodeVar', 'filterCases',
   'dropVars', 'keepVars', 'renameVar', 'setWeight',
 ]);
+
+/** Ops that bring data in rather than change it. They replace the whole dataset, so for
+ * anchor matching they count as a write to the aggregate root (see {@link attachRecords}). */
+const SOURCE_OP_TYPES = new Set(['load', 'append', 'join']);
 
 /** The id a timeline row is addressed by: an op id for a data step, the runId for an
  * analysis. One id space, so a single `reorder` payload can name any row. */
@@ -101,6 +106,77 @@ function applyOrder(seq, order) {
 }
 
 /**
+ * Place each record under the timeline row it annotates.
+ *
+ * A record is not a step — nothing re-runs a memo to reproduce the data — so it gets no
+ * number and is not a cursor position. What it does have is an ANCHOR, which is an op-log
+ * target, and the row that wrote (or contains) that target is the row it belongs to.
+ *
+ * The match is by address path, so `ds:3/cell:age:17` is satisfied by the step that edited
+ * that very cell if there is one, and otherwise by the import that brought the column in.
+ * The LAST matching live row wins: a note about a cell belongs under the most recent step
+ * that touched it, which is the one a rewind past it would undo.
+ *
+ * This is what makes the owner's case work — a memo on a chart travels with the chart,
+ * instead of being orphaned when the chart is withdrawn or silently dropped by the redo
+ * that brings the chart back.
+ *
+ * @param {object[]} rows @param {object[]} records
+ * @returns {object[]} rows with each record spliced in after its parent; unanchored
+ *   records (a project note) come last, in their own group, parented to nothing.
+ */
+function attachRecords(rows, records) {
+  const list = Array.isArray(records) ? records : [];
+  if (!list.length) return rows;
+
+  // Address -> the last row that wrote it, so a later edit to a cell wins over the import.
+  const writers = new Map();
+  for (const row of rows) {
+    if (row.kind === 'analysis') { writers.set(`analysis:${row.id}`, row); continue; }
+    if (row.kind !== 'data' || !row.step?.target) continue;
+    writers.set(row.step.target, row);
+    // A SOURCE op replaces the whole aggregate, yet its address (`ds:3/source:<tok>`) is a
+    // SIBLING of the cells it brought in rather than an ancestor of them — the exact case
+    // `staleReaders` documents and solves by promoting such a write to its aggregate root.
+    // Without the same promotion here, a note on a cell nobody has edited since the import
+    // has no writer to hang off and would be filed as "not about a step", which is untrue:
+    // it is about data the import created.
+    if (SOURCE_OP_TYPES.has(row.step.type)) {
+      const anc = readAncestors(row.step.target);
+      const root = anc[anc.length - 1];
+      if (root) writers.set(root, row);
+    }
+  }
+  const parentOf = (target) => {
+    for (const addr of readAncestors(target || '')) {
+      const hit = writers.get(addr);
+      if (hit) return hit;
+    }
+    return null;
+  };
+
+  const under = new Map(); // parent row id -> records
+  const loose = [];
+  for (const rec of list) {
+    const parent = parentOf(rec.anchorTarget);
+    if (!parent) { loose.push({ ...rec, parentId: null }); continue; }
+    const key = parent.kind === 'start' ? 'start' : parent.id;
+    if (!under.has(key)) under.set(key, []);
+    under.get(key).push({ ...rec, parentId: parent.id });
+  }
+
+  const out = [];
+  for (const row of rows) {
+    out.push(row);
+    const mine = under.get(row.id);
+    if (!mine) continue;
+    for (const rec of mine) out.push({ ...rec, kind: 'record', n: null, live: row.live });
+  }
+  for (const rec of loose) out.push({ ...rec, kind: 'record', n: null, live: true });
+  return out;
+}
+
+/**
  * The timeline: one ordered, numbered list of rows covering the data pipeline and the
  * analyses run against it.
  *
@@ -119,12 +195,12 @@ function applyOrder(seq, order) {
  *
  * @param {{steps?: object[], future?: object[], analyses?: object[], order?: string[]|null}} input
  *   `steps` are the dataset's live data steps in fold order; `future` the undone ones;
- *   `analyses` the entries ALREADY scoped to this dataset; `order` the latest applied
- *   timeline `reorder` payload, if any.
+ *   `analyses` the entries ALREADY scoped to this dataset; `records` the live annotations
+ *   (each with an `anchorTarget`); `order` the latest applied timeline `reorder` payload.
  * @returns {{rows: object[], ids: string[]}}
  */
 export function buildTimeline({
-  steps = [], future = [], analyses = [], futureAnalyses = [], order = null,
+  steps = [], future = [], analyses = [], futureAnalyses = [], records = [], order = null,
 } = {}) {
   const order_ = Array.isArray(order) && order.length ? order : null;
   const place = (seq) => (order_ ? applyOrder(seq, order_) : seq);
@@ -169,7 +245,7 @@ export function buildTimeline({
   emit(liveSeq, true);
   emit(aheadSeq, false);
 
-  return { rows, ids: liveSeq.map(rowId) };
+  return { rows: attachRecords(rows, records), ids: liveSeq.map(rowId) };
 }
 
 /**
