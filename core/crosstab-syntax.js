@@ -41,12 +41,15 @@
  */
 
 import { stripEllipsis } from './text.js';
+import { buildTimeline, TRANSFORM_TYPES } from './timeline.js';
 
 const TYPES = new Set(['numeric', 'string', 'factor']);
 const MEASURES = new Set(['nominal', 'ordinal', 'scale']);
 /** Op types that count as a "data transform" (what getTransforms returns) — used to
  * position analyses in the timeline by how many transforms preceded them. */
-const TRANSFORM_TYPES = new Set(['setVariable', 'setCell', 'computeVar', 'recodeVar', 'filterCases', 'dropVars', 'keepVars', 'renameVar', 'setWeight']);
+// TRANSFORM_TYPES and the interleaving rule both live in core/timeline.js now. This
+// file held two copies of the rule (bodyLines and timeline) and a transform set that
+// disagreed with the History panel's and the data store's.
 
 // =============================================================================
 // SERIALIZE  (timeline → text)
@@ -57,8 +60,8 @@ const TRANSFORM_TYPES = new Set(['setVariable', 'setCell', 'computeVar', 'recode
  * @param {import('./analysis-log.js').AnalysisEntry[]} [analyses] - analysis log entries.
  * @returns {string}
  */
-export function serialize(applied, analyses = []) {
-  return `${[HEADER, '', ...bodyLines(applied, analyses)].join('\n')}\n`;
+export function serialize(applied, analyses = [], order = null) {
+  return `${[HEADER, '', ...bodyLines(applied, analyses, order)].join('\n')}\n`;
 }
 
 /** The one-line preamble every script carries. */
@@ -72,38 +75,15 @@ const HEADER = '# CrossTab syntax — edit and Run to rebuild. Lines starting wi
  * @param {object[]} applied @param {object[]} analyses  ALREADY scoped to this dataset
  * @returns {string[]}
  */
-function bodyLines(applied, analyses = []) {
+function bodyLines(applied, analyses = [], order = null) {
+  const { rows } = buildTimeline({ steps: applied || [], analyses: analyses || [], order });
   const lines = [];
-
-  // Place each analysis at the data position it was run at (`at` = number of data
-  // transforms applied then), so the script shows — and Run reproduces — its output
-  // against the data AS OF that point, not the final dataset.
-  const byAt = new Map();
-  for (const a of analyses || []) {
-    const k = Number.isFinite(a.at) ? a.at : Infinity;
-    if (!byAt.has(k)) byAt.set(k, []);
-    byAt.get(k).push(a);
-  }
-  const flush = (k) => {
-    for (const a of byAt.get(k) || []) lines.push(analysisToLine(a));
-    byAt.delete(k);
-  };
-
-  let tcount = 0;
-  let flushedZero = false;
-  const flushZeroOnce = () => { if (!flushedZero) { flush(0); flushedZero = true; } };
-  for (const op of applied || []) {
-    const isT = TRANSFORM_TYPES.has(op.type);
-    if (isT) flushZeroOnce(); // analyses run before any transform sit after the sources
-    const out = opToLines(op);
+  for (const row of rows) {
+    if (row.kind === 'analysis') { lines.push(analysisToLine(row.entry)); continue; }
+    if (row.kind !== 'data') continue; // the Start row has no text
+    const out = opToLines(row.step);
     if (out) for (const l of out) lines.push(l);
-    if (isT) { tcount++; flush(tcount); }
   }
-  flushZeroOnce(); // (no transforms at all)
-  // Any analyses whose recorded position is past the last transform (or unpositioned)
-  // go at the end, in ascending order.
-  for (const k of [...byAt.keys()].sort((a, b) => a - b)) flush(k);
-
   return lines;
 }
 
@@ -140,7 +120,7 @@ function bodyLines(applied, analyses = []) {
  */
 export function serializeProject(datasets, analyses = []) {
   const sets = Array.isArray(datasets) ? datasets.filter(Boolean) : [];
-  if (sets.length <= 1) return serialize(sets[0]?.applied ?? [], analyses);
+  if (sets.length <= 1) return serialize(sets[0]?.applied ?? [], analyses, sets[0]?.order ?? null);
 
   const runs = Array.isArray(analyses) ? analyses : [];
   // An analysis recorded before `datasetId` was tracked cannot be attributed, and guessing
@@ -153,7 +133,7 @@ export function serializeProject(datasets, analyses = []) {
   sets.forEach((d, i) => {
     const mine = runs.filter((a) => String(a.datasetId) === String(d.id));
     lines.push(`dataset ${str(d.name ?? '')}`);
-    lines.push(...bodyLines(d.applied ?? [], i === 0 ? [...orphans, ...mine] : mine));
+    lines.push(...bodyLines(d.applied ?? [], i === 0 ? [...orphans, ...mine] : mine, d.order ?? null));
     if (i < sets.length - 1) lines.push('');
   });
   return `${lines.join('\n')}\n`;
@@ -169,33 +149,21 @@ export function serializeProject(datasets, analyses = []) {
  * @param {import('./analysis-log.js').AnalysisEntry[]} [analyses]
  * @returns {Array<{kind:'transform'|'source'|'analysis', op?:object, entry?:object, text:string, editable:boolean}>}
  */
-export function timeline(applied, analyses = []) {
-  const byAt = new Map();
-  for (const a of analyses || []) {
-    const k = Number.isFinite(a.at) ? a.at : Infinity;
-    if (!byAt.has(k)) byAt.set(k, []);
-    byAt.get(k).push(a);
-  }
+export function timeline(applied, analyses = [], order = null) {
+  const built = buildTimeline({ steps: applied || [], analyses: analyses || [], order });
   const rows = [];
-  const pushAnalyses = (k) => {
-    for (const a of byAt.get(k) || []) rows.push({ kind: 'analysis', entry: a, text: analysisToLine(a), editable: true });
-    byAt.delete(k);
-  };
-  let tcount = 0;
-  let flushedZero = false;
-  const flushZero = () => { if (!flushedZero) { pushAnalyses(0); flushedZero = true; } };
-  for (const op of applied || []) {
-    const isT = TRANSFORM_TYPES.has(op.type);
-    if (isT) flushZero();
-    const lines = opToLines(op) || [];
-    // Every data transform — including a cell edit — is editable as text; only the
-    // data sources (load/append/join) are read-only (you can't re-type the data).
-    const editable = isT;
-    rows.push({ kind: editable ? 'transform' : 'source', op, text: lines.join('\n'), editable });
-    if (isT) { tcount += 1; pushAnalyses(tcount); }
+  for (const row of built.rows) {
+    if (row.kind === 'analysis') {
+      rows.push({ kind: 'analysis', entry: row.entry, text: analysisToLine(row.entry), editable: true });
+      continue;
+    }
+    if (row.kind !== 'data') continue; // Start has no line
+    // Every data transform — including a cell edit — is editable as text; only the data
+    // sources (load/append/join) are read-only (you cannot re-type the data).
+    const editable = TRANSFORM_TYPES.has(row.step.type);
+    const out = opToLines(row.step) || [];
+    rows.push({ kind: editable ? 'transform' : 'source', op: row.step, text: out.join('\n'), editable });
   }
-  flushZero();
-  for (const k of [...byAt.keys()].sort((a, b) => a - b)) pushAnalyses(k);
   return rows;
 }
 

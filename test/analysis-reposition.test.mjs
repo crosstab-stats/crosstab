@@ -149,7 +149,12 @@ test('three runs reorder as a whole, not pairwise', () => {
  * analysis there, put the data back, then reorder the output. Driven through the real
  * `repositionAnalysis` with fakes for the pieces it only pokes.
  */
-function harness(transforms = ['t1', 't2', 't3']) {
+/** Real step objects, because the prefix is computed from each step's op TYPE now
+ * (one definition of a transform, in core/timeline.js) rather than from an array length. */
+const asSteps = (names) => names.map((n) => ({ id: n, type: 'computeVar', name: n, expr: '1' }));
+
+function harness(names = ['t1', 't2', 't3']) {
+  const transforms = asSteps(names);
   const rebuilds = [];
   const invoked = [];
   const reorders = [];
@@ -176,7 +181,10 @@ function harness(transforms = ['t1', 't2', 't3']) {
     analysisLog: log,
     dataStore: {
       getTransforms: () => transforms,
-      replaceTransforms: async (t) => { rebuilds.push(t.length); },
+      getHistory: () => ({ applied: transforms, future: [] }),
+      // `materialize(null)` is "put the live pipeline back", which is the whole point of
+      // the finally - so it records the full length, exactly as the old restore did.
+      materialize: async (steps) => { rebuilds.push((steps ?? transforms).length); },
     },
   });
   return { actions, log, rebuilds, invoked, reorders, removed };
@@ -225,7 +233,11 @@ test('the data is restored even when the analysis throws', async () => {
     },
     bus: { emit() {}, on() { return () => {}; } },
     analysisLog: h.log,
-    dataStore: { getTransforms: () => ['t1', 't2', 't3'], replaceTransforms: async (t) => { h.rebuilds.push(t.length); } },
+    dataStore: {
+      getTransforms: () => asSteps(['t1', 't2', 't3']),
+      getHistory: () => ({ applied: asSteps(['t1', 't2', 't3']), future: [] }),
+      materialize: async (steps) => { h.rebuilds.push((steps ?? asSteps(['t1', 't2', 't3'])).length); },
+    },
   });
   await h.actions.repositionAnalysis(runId, 0);
   assert.deepEqual(h.rebuilds, [0, 3], 'the final rebuild has to happen in a finally');

@@ -240,6 +240,9 @@ export class DatasetManager {
       id: c.id,
       name: c.name,
       applied: this.#datasets.get(c.id)?.getHistory()?.applied ?? [],
+      // The timeline order travels with the steps: a script writer that placed analyses
+      // without it would put them where they USED to be.
+      order: this.#datasets.get(c.id)?.getOrder?.() ?? null,
     }));
   }
 

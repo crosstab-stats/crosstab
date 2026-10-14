@@ -78,7 +78,13 @@ const CT_ROW = '__ct_row';
 
 /** Log op types that are *data transforms* (vs. load/append/join source ops).
  * `getTransforms()` and the persisted `transforms` array carry only these. */
-const DATA_OPS = new Set(['setVariable', 'setCell', 'computeVar', 'recodeVar', 'filterCases', 'dropVars', 'keepVars', 'renameVar']);
+// NB `setWeight` belongs here, and its absence was a real bug: `getTransforms()`
+// excluded it while `replaceTransforms` (which filters on !SOURCE_OPS) retracted it,
+// so rebuilding a pipeline from getTransforms() dropped the dataset's weight. It also
+// put an analysis's generated `at` one behind the position the script writer gave it.
+// One definition now lives in core/timeline.js; this is the data tier's view of it,
+// which is the same list minus nothing.
+const DATA_OPS = new Set(['setVariable', 'setCell', 'computeVar', 'recodeVar', 'filterCases', 'dropVars', 'keepVars', 'renameVar', 'setWeight']);
 
 /** Log op types that are *source* operations (data loads). */
 const SOURCE_OPS = new Set(['load', 'append', 'join']);
@@ -799,14 +805,25 @@ export class DataStore {
    *   autosave, unbind, or ignore.
    * @returns {Promise<void>}
    */
-  async rederive(reason = 'change') {
+  /**
+   * Replay this dataset's pipeline into DuckDB.
+   *
+   * `steps` materialises an ARBITRARY list instead of the live fold — used to show the
+   * data as of some earlier point (an analysis being re-run at its own position, the
+   * History cursor) without touching the log. Materialising is not editing: no op is
+   * written, no id changes, and the next plain `rederive()` puts the live pipeline back.
+   *
+   * @param {string} [reason]
+   * @param {{steps?: object[]|null}} [opts]
+   */
+  async rederive(reason = 'change', { steps = null } = {}) {
     // STRICT SEQUENTIAL REPLAY: fold this dataset's slice of the shared log (retract
     // tombstones + reorder applied → the ordered live steps), so each op sees exactly
     // the dataset state the ops before it produced — true script semantics. A compute
     // logged before a join is evaluated over the pre-join data (and appended rows
     // added after it get NULL for it, via UNION ALL BY NAME). This guarantees the
     // engine's result matches running the log as a script.
-    const log = this.#steps();
+    const log = steps ?? this.#steps();
     // A source op whose bytes this peer doesn't hold is SKIPPED, not fatal: it can be
     // one a deep undo revived after its bytes were released (#pruneDeadSources), one
     // restored from a save that no longer carries them, or one that arrived from a peer
@@ -1298,6 +1315,55 @@ export class DataStore {
     return this.#steps()
       .filter((t) => DATA_OPS.has(t.type))
       .map((t) => structuredClone(t));
+  }
+
+  /**
+   * Show the data as of `steps`, or — with no argument — put the live pipeline back.
+   *
+   * The honest primitive for "rewind the grid for a moment": it rebuilds what DuckDB
+   * holds and leaves the log alone. Its predecessor went through `replaceTransforms`,
+   * which retracts and re-appends every transform, so a temporary rewind permanently
+   * rewrote the history it was only supposed to look at.
+   *
+   * @param {object[]|null} [steps]
+   */
+  async materialize(steps = null) {
+    await this.rederive('materialize', { steps });
+  }
+
+  /**
+   * The latest applied timeline `reorder` payload, or null.
+   *
+   * One order covers BOTH tiers: the payload names data op ids and analysis runIds in one
+   * sequence. The data fold already honours it (it sorts the ids it recognises and ignores
+   * the rest — see `applyReorder` in data-fold.js), and {@link module:core/timeline} reads
+   * the same array to place the analyses. That is what keeps the list the user drags and
+   * the pipeline that gets replayed from being two different orders.
+   *
+   * @returns {string[]|null}
+   */
+  getOrder() {
+    const raw = this.#log.slice(this.#mine);
+    const applied = appliedState(raw);
+    let latest = null;
+    for (const op of raw) {
+      if (op.type === 'reorder' && applied(op.id) && Array.isArray(op.payload?.order)) latest = op.payload.order;
+    }
+    return latest ? [...latest] : null;
+  }
+
+  /**
+   * Record a new timeline order (the History panel's arrows).
+   *
+   * Goes through the same guard every structural edit does: the resulting DATA order is
+   * validated, the re-derive is rolled back on failure, and the op is discarded so the
+   * pipeline is exactly as it was. Analysis ids in the payload are inert here — they
+   * matter to the timeline, not to the replay.
+   *
+   * @param {string[]} order every timeline row id, in the order to show them
+   */
+  async applyTimelineOrder(order) {
+    await this.#applyReorder(order, 'reorder');
   }
 
   /** @returns {boolean} Whether this dataset has an operation to undo. */

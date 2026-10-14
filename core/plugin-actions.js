@@ -22,6 +22,7 @@ import { registerRemoteChartKind, unregisterChartKind } from './chart-renderer.j
 import { newOpId } from './merge.js';
 import { collectR } from './r-capture.js';
 import { stripEllipsis } from './text.js';
+import { transformCount, prefixForAt } from './timeline.js';
 
 export class PluginActions {
   #loader;
@@ -726,7 +727,7 @@ export class PluginActions {
    * @param {string} runId @param {number} at  the new transform count to run it after
    * @returns {Promise<boolean>} whether it moved
    */
-  async repositionAnalysis(runId, at) {
+  async repositionAnalysis(runId, at, { prefix = null } = {}) {
     if (!this.#analysisLog || !this.#dataStore) return false;
     // Its OWN dataset, not whatever is active (#179). `at` counts the transforms of the dataset
     // the analysis ran against, so measuring it against a different dataset's transform list
@@ -734,8 +735,8 @@ export class PluginActions {
     const existing = this.#analysisLog.entries().find((e) => e.runId === runId);
     const restoreTo = this.#dataStore.activeId ?? null;
     if (existing?.datasetId != null) this.#activate(existing.datasetId);
-    const all = this.#dataStore.getTransforms?.() ?? [];
-    const target = Math.max(0, Math.min(Math.floor(Number(at) || 0), all.length));
+    const all = this.#dataStore.getHistory?.().applied ?? [];
+    const target = Math.max(0, Math.min(Math.floor(Number(at) || 0), transformCount(all)));
     const moved = this.#analysisLog.reposition(runId, target);
     if (!moved) { this.#activate(restoreTo); return false; }
 
@@ -745,12 +746,14 @@ export class PluginActions {
     // old block left in place would claim a result for a position it never ran at.
     this.#results.removeRun?.(runId);
     try {
-      await this.#dataStore.replaceTransforms(all.slice(0, target));
+      // A caller holding the timeline rows passes the exact prefix; `at` alone cannot say
+      // where an analysis sits among sources that follow a transform.
+      await this.#dataStore.materialize(prefix ?? prefixForAt(all, target));
       await this.#execute(entry);
     } finally {
       // Always put the dataset back, even if the analysis threw: leaving the grid rewound to a
       // prefix because a plugin failed would be a much worse outcome than a missing table.
-      await this.#dataStore.replaceTransforms(all);
+      await this.#dataStore.materialize();
       this.#activate(restoreTo); // and the user's dataset tab back where they left it
     }
     this.#results.reorderRuns?.(analysisOrder(this.#analysisLog.entries()));

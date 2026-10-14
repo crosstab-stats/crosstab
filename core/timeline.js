@@ -24,6 +24,224 @@
  * why {@link describeStep} lives here rather than inside the view that draws it.
  */
 
+import { stripEllipsis } from './text.js';
+
+/**
+ * Op types that count as a data **transform** for positioning.
+ *
+ * There were THREE of these sets, and they disagreed - which is a bug, not untidiness.
+ * `crosstab-syntax` counted nine types, the History panel counted five (no `dropVars`,
+ * `keepVars`, `renameVar` or `setWeight`), and `data-store`'s `DATA_OPS` counted eight.
+ * An analysis's position was GENERATED with one of them (`getTransforms().length`),
+ * DRAWN with another and SERIALISED with a third, so after a drop or a weight the three
+ * views of one history disagreed about where an analysis belonged - and the script a Run
+ * replayed put it somewhere the panel never showed it.
+ *
+ * `setWeight` is in the list on purpose: weighting changes what the next Frequencies
+ * reports, which is exactly what "the data this analysis describes" means.
+ */
+export const TRANSFORM_TYPES = new Set([
+  'setVariable', 'setCell', 'computeVar', 'recodeVar', 'filterCases',
+  'dropVars', 'keepVars', 'renameVar', 'setWeight',
+]);
+
+/** The id a timeline row is addressed by: an op id for a data step, the runId for an
+ * analysis. One id space, so a single `reorder` payload can name any row. */
+const rowId = (r) => (r.kind === 'data' ? r.step.id : r.entry.runId);
+
+/**
+ * Interleave analyses into the data steps by their RECORDED `at` - the seed order.
+ *
+ * This is the rule the four old copies implemented, kept in exactly one place and used
+ * for exactly one purpose: to establish an initial order for a project that has never
+ * been reordered. Once the user moves anything, an explicit order op supersedes it and
+ * `at` stops being an input at all (it is then derived - see {@link buildTimeline}).
+ */
+function seedOrder(steps, analyses) {
+  const byAt = new Map();
+  analyses.forEach((entry, srcIndex) => {
+    const k = Number.isFinite(entry.at) ? entry.at : Infinity;
+    if (!byAt.has(k)) byAt.set(k, []);
+    byAt.get(k).push({ kind: 'analysis', entry, srcIndex });
+  });
+  const seq = [];
+  const flush = (k) => { for (const r of byAt.get(k) || []) seq.push(r); byAt.delete(k); };
+  let flushedZero = false;
+  const flushZero = () => { if (!flushedZero) { flush(0); flushedZero = true; } };
+
+  let transforms = 0;
+  steps.forEach((step, srcIndex) => {
+    const isTransform = TRANSFORM_TYPES.has(step.type);
+    // Analyses run before any transform sit after the SOURCES, not above them: an
+    // analysis of freshly imported data describes the import, and nothing can precede it.
+    if (isTransform) flushZero();
+    seq.push({ kind: 'data', step, srcIndex });
+    if (isTransform) { transforms += 1; flush(transforms); }
+  });
+  flushZero(); // (a dataset with no transforms at all)
+  // Anything positioned past the last transform, or never positioned, goes at the end.
+  for (const k of [...byAt.keys()].sort((a, b) => a - b)) flush(k);
+  return seq;
+}
+
+/** Apply an explicit order, stably: rows it does not name keep their seed order AFTER
+ * the ones it does. Same rule as the data fold's `reorder`, for the same reasons - an
+ * order written before a row existed still means what it said, and a stale id for a
+ * removed row is simply ignored. */
+function applyOrder(seq, order) {
+  const rank = new Map(order.map((id, i) => [id, i]));
+  return seq
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => {
+      const ra = rank.has(rowId(a.r)) ? rank.get(rowId(a.r)) : Number.POSITIVE_INFINITY;
+      const rb = rank.has(rowId(b.r)) ? rank.get(rowId(b.r)) : Number.POSITIVE_INFINITY;
+      return (ra - rb) || (a.i - b.i);
+    })
+    .map(({ r }) => r);
+}
+
+/**
+ * The timeline: one ordered, numbered list of rows covering the data pipeline and the
+ * analyses run against it.
+ *
+ * **The number IS the cursor.** Row `n` means "the recipe up to and including this row",
+ * so clicking it and rewinding to it are the same coordinate. The old panel secretly used
+ * two: a data row was numbered by its index among all applied steps (loads included)
+ * while an analysis was placed by `at`, a count of transforms only. Everything downstream
+ * of that mismatch - arrows that moved two rows, a position that disagreed with the list,
+ * a rewind that passed analyses by - came from reconciling the two by hand.
+ *
+ * **`at` is DERIVED**, never read back from the entry except to seed a never-reordered
+ * project. An analysis's `at` is the number of transforms above it in this list, so the
+ * order shown and the data an analysis describes cannot drift apart: there is one fact.
+ * {@link staleAnalyses} reports the rows whose stored `at` no longer matches, which is
+ * precisely the set a caller must re-run after a move.
+ *
+ * @param {{steps?: object[], future?: object[], analyses?: object[], order?: string[]|null}} input
+ *   `steps` are the dataset's live data steps in fold order; `future` the undone ones;
+ *   `analyses` the entries ALREADY scoped to this dataset; `order` the latest applied
+ *   timeline `reorder` payload, if any.
+ * @returns {{rows: object[], ids: string[]}}
+ */
+export function buildTimeline({ steps = [], future = [], analyses = [], order = null } = {}) {
+  const seq = seedOrder(steps, analyses);
+  const ordered = Array.isArray(order) && order.length ? applyOrder(seq, order) : seq;
+
+  const rows = [];
+  // Row 0 is a real cursor position, not decoration: rewinding to it is "before any data".
+  rows.push({
+    n: 0, kind: 'start', id: null, title: 'Start', detail: 'empty — before any data',
+    dataCount: 0, at: 0,
+  });
+
+  let n = 0;
+  let transforms = 0; // how many TRANSFORM_TYPES rows are above the row being built
+  let dataCount = 0; // how many data steps are at or above it (the rewind coordinate)
+  for (const r of ordered) {
+    n += 1;
+    if (r.kind === 'data') {
+      dataCount += 1;
+      const { title, detail } = describeStep(r.step);
+      rows.push({
+        n,
+        kind: 'data',
+        id: r.step.id,
+        type: r.step.type,
+        step: r.step,
+        stepIndex: r.srcIndex,
+        title,
+        detail,
+        dataCount,
+        at: transforms,
+      });
+      if (TRANSFORM_TYPES.has(r.step.type)) transforms += 1;
+    } else {
+      rows.push({
+        n,
+        kind: 'analysis',
+        id: r.entry.runId,
+        entry: r.entry,
+        index: r.srcIndex,
+        title: stripEllipsis(r.entry.label || 'Analysis'),
+        detail: r.entry.pluginName || '',
+        dataCount,
+        at: transforms, // DERIVED: the transforms above this row, whatever the entry says
+      });
+    }
+  }
+
+  // Undone rows, still ahead of the cursor. Numbered in sequence because they are
+  // positions a fast-forward can reach, and drawn after everything applied.
+  future.forEach((step, i) => {
+    const { title, detail } = describeStep(step);
+    rows.push({
+      n: n + i + 1, kind: 'future', id: step.id, type: step.type, step, title, detail,
+      dataCount: dataCount + i + 1, at: transforms,
+    });
+  });
+
+  return { rows, ids: ordered.map(rowId) };
+}
+
+/** How many of these steps are transforms — an analysis's `at` if it ran after all of
+ * them. One counter, one definition (see {@link TRANSFORM_TYPES}). */
+export function transformCount(steps) {
+  return (steps || []).filter((s) => TRANSFORM_TYPES.has(s.type)).length;
+}
+
+/**
+ * The steps ABOVE an analysis recorded at position `at` — what has to be materialised to
+ * reproduce the data it described.
+ *
+ * `at` counts transforms, so the prefix is every step up to and including the `at`-th one,
+ * sources included. At `at = 0` that is the leading sources alone: an analysis of freshly
+ * imported data describes the import.
+ *
+ * A caller holding the timeline rows should pass the prefix it can see exactly, rather
+ * than this. `at` cannot express where an analysis sits among SOURCES that follow a
+ * transform (an append after a compute), because it does not count them; the rows can.
+ */
+export function prefixForAt(steps, at) {
+  const want = Math.max(0, Math.floor(Number(at) || 0));
+  const out = [];
+  let t = 0;
+  for (const step of steps || []) {
+    const isTransform = TRANSFORM_TYPES.has(step.type);
+    if (isTransform && t >= want) break;
+    out.push(step);
+    if (isTransform) t += 1;
+  }
+  return out;
+}
+
+/**
+ * The analyses whose stored `at` disagrees with where they now sit — the exact set a
+ * caller must re-run, and nothing more.
+ *
+ * This is what makes a move honest without re-running the world: moving an analysis past
+ * another analysis changes no derived `at`, so nothing recomputes, while moving it past a
+ * transform changes one, so exactly that one analysis recomputes. The caller does not
+ * decide which case it is - the numbers do.
+ *
+ * @param {object[]} rows from {@link buildTimeline}
+ * @returns {Array<{runId: string, from: number, to: number, entry: object}>}
+ */
+export function staleAnalyses(rows) {
+  const out = [];
+  for (const row of rows) {
+    if (row.kind !== 'analysis') continue;
+    const stored = Number.isFinite(row.entry?.at) ? row.entry.at : null;
+    if (stored !== row.at) out.push({ runId: row.id, from: stored, to: row.at, entry: row.entry });
+  }
+  return out;
+}
+
+/** The runIds in timeline order — what the Output pane is sorted by, so the sections
+ * read in the same order the History panel lists them. */
+export function analysisOrder(rows) {
+  return rows.filter((r) => r.kind === 'analysis').map((r) => r.id);
+}
+
 /** Human-readable title + detail for any operation-log entry — data loads
  * (load/append/join) and data transforms alike. */
 export function describeStep(t) {
@@ -60,6 +278,14 @@ export function describeStep(t) {
   if (t && t.type === 'keepVars') {
     const n = (t.names || []).length;
     return { title: `Kept ${n} variable${n === 1 ? '' : 's'}`, detail: (t.names || []).join(', ') };
+  }
+  if (t && t.type === 'setWeight') {
+    // A weight is a transform (see TRANSFORM_TYPES), so it gets a row — and a row with
+    // no describer here falls through to printing its raw op type, which is how History
+    // came to show a step called 'setWeight'.
+    return t.name
+      ? { title: 'Weighted cases', detail: 'by ' + t.name }
+      : { title: 'Weighting off', detail: 'cases count once each' };
   }
   if (t && t.type === 'renameVar') {
     return { title: `Renamed ${t.from} → ${t.to}`, detail: '' };

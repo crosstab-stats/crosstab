@@ -1770,7 +1770,10 @@ export class HistoryPanel {
     const histories = this.#store.getHistories?.();
     if (histories?.length) return serializeProject(histories, analyses);
     // No manager (a bare store, as in tests): one unnamed dataset.
-    return serializeProject([{ id: null, name: '', applied: this.#store.getHistory().applied }], analyses);
+    return serializeProject(
+      [{ id: null, name: '', applied: this.#store.getHistory().applied, order: this.#store.getOrder?.() ?? null }],
+      analyses,
+    );
   }
 
   /**
