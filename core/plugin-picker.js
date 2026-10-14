@@ -198,6 +198,17 @@ export class PluginPicker {
    * @param {?Node} [o.headLead] a host node to sit first in the filter row (the launcher's
    *   "Cataloguing plugins…" indicator, which belongs to the loading screen, not here)
    */
+  /**
+   * Two kinds of argument, and the difference is load-bearing:
+   *
+   *  - **ambient** (`plugins`, `onHowto`) — identical wherever a picker is shown. These
+   *    arrive together from {@link pluginPickerHost}, spread by the caller, so adding one
+   *    reaches every surface at once. They are NOT listed separately at the call sites;
+   *    that is exactly how `onHowto` reached the plugin manager and missed the launcher.
+   *  - **per-site** (`mode`, `selected`, `onChange`, `headLead`) — genuinely different.
+   *    The launcher picks a desired set before anything is running; the manager toggles a
+   *    live one.
+   */
   constructor({ plugins, mode = 'live', selected = null, onChange = null, headLead = null,
     onHowto = null }) {
     // Opens the how-to guide at a topic (#192). Injected rather than imported so the
@@ -760,7 +771,8 @@ export class PluginPicker {
  * @param {import('./plugin-manager.js').PluginManager} plugins
  * @returns {PluginPicker}
  */
-export function openPluginModal(plugins, { onHowto = null } = {}) {
+export function openPluginModal(host) {
+  const { plugins, onHowto = null } = host ?? {};
   injectStyles();
   const dialog = document.createElement('dialog');
   dialog.className = 'ct-dialog ct-dialog--wide ctp-dialog';
@@ -784,7 +796,9 @@ export function openPluginModal(plugins, { onHowto = null } = {}) {
   dialog.addEventListener('close', () => dialog.remove());
   document.body.append(dialog);
 
-  const picker = new PluginPicker({ plugins, mode: 'live', onHowto });
+  // The ambient bundle, spread whole. Naming its members here would re-open the gap
+  // this closes.
+  const picker = new PluginPicker({ ...host, mode: 'live' });
   picker.mount(body);
   dialog.showModal();
   picker.focusSearch();

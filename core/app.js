@@ -1837,6 +1837,23 @@ export async function boot(mounts) {
     library: howtoLibrary,
     topicId: howtoLibrary.pluginPage(pluginId) ?? undefined,
   });
+
+  /**
+   * Everything a plugin PICKER needs that is the same wherever it is shown — defined
+   * once, spread at every site (#192).
+   *
+   * The plugin manager and the launcher have shared a picker component since #177, and
+   * that sharing worked: deleting the About dialog fixed both at once. What they did NOT
+   * share was their WIRING, so each new ambient dependency had to be remembered twice,
+   * and `onHowto` reached the manager and missed the launcher. The number of places to
+   * remember is now independent of the number of dependencies.
+   *
+   * A thunk because it names `plugins`, which is constructed below it.
+   */
+  const pluginPickerHost = () => ({
+    plugins,
+    onHowto: (pluginId) => services.howto.openPlugin(pluginId),
+  });
   // A changed plugin set invalidates the cached sidecars — a plugin may have gone, or
   // arrived with different docs. It does NOT reset where the reader is: pressing the
   // guide's own "Enable" button fires this, and throwing them off the page they were
@@ -1890,12 +1907,8 @@ export async function boot(mounts) {
     // Durable store for added multi-file `.ctplugin` packages — their bundled assets
     // are too big/binary for localStorage (#119).
     packageStore: new PluginPackageStore(),
+    pickerHost: pluginPickerHost,
   });
-  // The ⓘ beside a plugin opens its page in the how-to guide. Assigned HERE rather
-  // than beside the library, because `plugins` is declared early and only constructed
-  // at this point — the first attempt set it against an undefined binding, so the
-  // button silently did nothing and the suite could not see it.
-  plugins.onHowto = (pluginId) => services.howto.openPlugin(pluginId);
   plugins.activate();
 
   // Workspace-state read from a plugin's compute frame (#139) — so an exporter (e.g.
@@ -2136,11 +2149,9 @@ export async function boot(mounts) {
     // dialog rather than a launcher-shaped copy of it (#167). Defined above, well before
     // this line, so there is nothing to defer.
     openManager,
-    // The ⓘ beside a plugin on the launcher. Passing it is not optional dressing: the
-    // picker's call is `this.#onHowto?.(id)`, so a missing one is a button that silently
-    // does nothing — which is exactly how it shipped, and how the SAME optional-call
-    // reflex hid a missing delegation in the History panel a day earlier.
-    onHowto: (pluginId) => services.howto.openPlugin(pluginId),
+    // The same bundle the plugin manager gets. Not a second copy of its contents — that
+    // is what drifted.
+    pickerHost: pluginPickerHost,
   });
   engine.launcher = launcher;
   const launchFlag = new URLSearchParams(location.search).get('launch');

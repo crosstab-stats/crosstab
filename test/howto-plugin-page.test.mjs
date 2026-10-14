@@ -1,18 +1,21 @@
 /**
  * @file howto-plugin-page.test.mjs
- * Every plugin has a page, and the ⓘ beside it leads there (#192).
+ * Every plugin has a page, the ⓘ beside it leads there, and both surfaces share the
+ * wiring that makes that true (#192).
  *
  * Reported by the owner: clicking ⓘ on Frequencies "does not pull up the howto page, it
- * still falls through to the old placeholder". Two separate faults, and only one was a bug:
+ * still falls through to the old placeholder" — and then, after that was fixed, the same
+ * button on the LAUNCHER did nothing. Their follow-up is the question that produced the
+ * last group of tests here: *"I thought we unified the plugin manager and launcher to use
+ * the same machinery specifically to avoid this kind of drift."*
  *
- *  - the hook was assigned where `plugins` was still undefined, so it was never set;
- *  - and even wired, the old About dialog repeated the plugin's one-line `howto`, which
- *    the legacy bridge ALSO publishes as a topic — a plugin documented twice in two
- *    renderings, which is what this system exists to stop.
- *
- * So the dialog is gone and ⓘ opens the plugin's page. These pin the three cases that
- * page has to cover, because they are easy to get right one at a time and wrong together:
- * a plugin that authored topics, one with only the legacy note, and one with nothing.
+ * They had. #177 unified the RENDERING — one `PluginPicker`, one `addsTooltip`, one About
+ * dialog — and it worked exactly as intended: deleting that dialog fixed both screens at
+ * once with no second edit. What stayed duplicated was the WIRING. Each site assembled its
+ * own options object, so the picker's arguments split into two kinds that looked alike:
+ * ambient (`plugins`, `onHowto` — identical everywhere) and per-site (`mode`, `selected`,
+ * `headLead` — genuinely different). Passing the ambient kind per site means every new one
+ * must be remembered N times, and N had quietly become 2.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -45,8 +48,7 @@ test('the entry page is the topic the AUTHOR listed first, not the one that sort
   // call, and alphabetically-first is nobody's.
   const l = lib([AUTHORED]);
   assert.equal(l.pluginPage('p-authored'), 'first');
-  const sorted = l.topics().map((t) => t.id);
-  assert.deepEqual(sorted, ['second', 'first'], 'the READER still gets them sorted');
+  assert.deepEqual(l.topics().map((t) => t.id), ['second', 'first'], 'the READER still gets them sorted');
 });
 
 test('a plugin with only the legacy one-line note gets a listed page', async () => {
@@ -95,35 +97,45 @@ test('one rule decides what an entry contributes', async () => {
   }
 });
 
-// --- the wiring ------------------------------------------------------------------
+// --- the wiring both surfaces share ----------------------------------------------
 
 const app = readFileSync('core/app.js', 'utf8');
 const picker = readFileSync('core/plugin-picker.js', 'utf8');
 const manager = readFileSync('core/plugin-manager.js', 'utf8');
+const launcher = readFileSync('core/launcher.js', 'utf8');
 
-test('the ⓘ hook is assigned where `plugins` actually exists', () => {
-  // The original bug: assigned at a point where `plugins` was declared but not yet
-  // constructed, so `if (plugins)` was false and the button silently did nothing. No unit
-  // test could see it; the app said so immediately.
-  const decl = app.indexOf('  let plugins;');
-  const ctor = app.indexOf('plugins = new PluginManager({');
-  const hook = app.indexOf('plugins.onHowto =');
-  assert.ok(decl !== -1 && ctor !== -1 && hook !== -1);
-  assert.ok(hook > ctor, 'the hook must come after the constructor, not merely after the declaration');
+test('the ambient deps a picker needs are defined ONCE', () => {
+  assert.equal([...app.matchAll(/const pluginPickerHost = /g)].length, 1);
+  assert.match(app, /onHowto: \(pluginId\) => services\.howto\.openPlugin\(pluginId\)/);
 });
 
-test('EVERY picker that renders ⓘ is given the hook', () => {
-  // The picker calls `this.#onHowto?.(id)`, so a picker constructed without it has a
-  // button that silently does nothing — which is how the launcher shipped: the plugin
-  // manager was wired and the launcher was not. The optional call is what hid it, the
-  // same reflex that hid a missing delegation in the History panel a day earlier.
-  const launcher = readFileSync('core/launcher.js', 'utf8');
-  const constructions = [...picker.matchAll(/new PluginPicker\(\{/g)].length
-    + [...launcher.matchAll(/new PluginPicker\(\{/g)].length;
-  const wired = [...picker.matchAll(/onHowto/g)].length > 0 && /onHowto: this\.#onHowto/.test(launcher);
-  assert.ok(constructions >= 2, 'both pickers accounted for');
-  assert.ok(wired, 'the launcher forwards its hook');
-  assert.match(app, /onHowto: \(pluginId\) => services\.howto\.openPlugin\(pluginId\)/);
+test('EVERY picker SPREADS that bundle instead of naming its members', () => {
+  // The invariant that actually closes the hole. A site listing `plugins:` or `onHowto:`
+  // by hand is a site the NEXT ambient dependency can miss — so this is about the SHAPE
+  // of the call, not about the dependency that happened to drift this time.
+  let found = 0;
+  for (const [name, src] of [['plugin-picker.js', picker], ['launcher.js', launcher]]) {
+    for (const m of src.matchAll(/new PluginPicker\(\{([\s\S]{0,400}?)\}\)/g)) {
+      found += 1;
+      assert.match(m[1], /\.\.\./, `${name}: a picker must spread the host bundle`);
+      assert.doesNotMatch(m[1], /\bplugins:/, `${name}: ambient deps come from the bundle`);
+      assert.doesNotMatch(m[1], /\bonHowto:/, `${name}: ambient deps come from the bundle`);
+    }
+  }
+  assert.ok(found >= 2, `both picker sites found (saw ${found})`);
+});
+
+test('both surfaces are handed the SAME bundle, not a copy of its contents', () => {
+  assert.equal([...app.matchAll(/pickerHost: pluginPickerHost/g)].length, 2);
+});
+
+test('the bundle is a thunk, because it names things built after its consumers', () => {
+  // `plugins` is constructed after the manager's options object is written, and the
+  // launcher later still. A plain value would have captured undefined — which is exactly
+  // the first version of this bug, where the hook was assigned against an unconstructed
+  // binding and the button silently did nothing.
+  assert.match(app, /const pluginPickerHost = \(\) => \(\{/);
+  assert.match(manager, /this\.#pickerHost = pickerHost \?\?/);
 });
 
 test('ⓘ opens the plugin page, and the About dialog is gone', () => {

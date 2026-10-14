@@ -47,6 +47,9 @@ const LS_WEB = 'crosstab.plugins.web';
 const CATALOG_VERSION = 30; // 30: howtoIndex + howtoFile (#192); // 29: builtin-logistic gains the SPSS Options inputs (cats/ref/opts) (#178); // 28: caqdas codebook CSV import moved to the File import picker; // 27: caqdas codebook CSV import/export verbs; // 26: caqdas codebooks collection + per-collection scope; // 25: builtin-charts renamed "Chart engine", filed under Graphs; // 24: builtin-charts — all chart kinds left core for a plugin (#131 Layer 3); // 23: steps+forest kinds, survival+meta drop svglite; // 22: wordcloud kind, textanalytics+caqdas migrated; // 21: builtin-plots boxplot -> box kind, plugin now R-free; // 20: builtin-plots violin/dots/paired (#140); // 19: builtin-sced (single-case design, `sced` chart kind); 18: builtin-agreement (inter-rater κ/α); 16: `howto` authored for all 60 built-ins (#135); 15: `howto` field (#135); 14: builtin-plots scatter+pie → data-driven charts (#131); 13: trends → chart; 12: re-added ReadStat codec (#130); 11: `version` (#91); 10: `codecs` (#98)
 
 export class PluginManager {
+  /** @type {() => object} the ambient deps every plugin picker needs (#192). */
+  #pickerHost;
+
   /** @type {import('./loader.js').PluginLoader} */
   #loader;
   /** Built-in plugin entry-module URLs. @type {string[]} */
@@ -125,7 +128,11 @@ export class PluginManager {
    *   are installed is install state. localStorage keeps the latter, plus the current
    *   set as the next boot's default; the log is what merges, undoes and travels.
    */
-  constructor({ loader, urls, sitePlugins, menus, results, actions, bus, projectReferences, workspaceStore, project, packageStore, projectLog }) {
+  constructor({ loader, urls, sitePlugins, menus, results, actions, bus, projectReferences,
+    workspaceStore, project, packageStore, projectLog, pickerHost }) {
+    // A THUNK, not a value: the bundle names this manager, which does not exist until
+    // this constructor returns. Resolved when a picker is actually opened.
+    this.#pickerHost = pickerHost ?? (() => ({ plugins: this }));
     this.#log = projectLog ?? null;
     this.#loader = loader;
     this.#urls = urls;
@@ -1104,9 +1111,7 @@ export class PluginManager {
     // the picker (and its download/preset chain) into every context that only wants the
     // manager - the headless tests among them.
     const { openPluginModal } = await import('./plugin-picker.js');
-    // The how-to hook, set by the app (#192). A plugin's full guide opens from its
-    // About dialog rather than being inlined there twice.
-    openPluginModal(this, { onHowto: this.onHowto ?? null });
+    openPluginModal(this.#pickerHost());
   }
 
   /** A nested prompt for a plugin URL. Resolves the trimmed URL, or null. */

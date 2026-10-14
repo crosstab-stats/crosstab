@@ -59,8 +59,9 @@ const PRESETS = {
 const LS_SEEN = 'crosstab.launcher.seen';
 
 export class Launcher {
-  /** Opens the how-to guide at a plugin's page (#192). */
-  #onHowto = null;
+  /** @type {() => object} the ambient deps a plugin picker needs (#192). A thunk because
+   * the bundle names services created after this screen is constructed. */
+  #pickerHost = () => ({});
 
   #plugins; #datasets; #bus; #projects; #offline; #workspaceStore; #itemStore; #assetStore;
   #root = null;
@@ -103,9 +104,9 @@ export class Launcher {
    * @param {import('./asset-store.js').AssetStore} [deps.assetStore] - Stores demo
    *   geometry as asset bytes, the same way a loaded file is stored.
    */
-  constructor({ plugins, datasets, bus, projects, offline, workspaceStore, itemStore, assetStore, makeBackend, openBackend, openManager, onHowto }) {
+  constructor({ plugins, datasets, bus, projects, offline, workspaceStore, itemStore, assetStore, makeBackend, openBackend, openManager, pickerHost }) {
     this.#plugins = plugins;
-    this.#onHowto = onHowto ?? null;
+    if (pickerHost) this.#pickerHost = pickerHost;
     this.#datasets = datasets;
     this.#bus = bus;
     this.#projects = projects ?? null;
@@ -310,13 +311,14 @@ export class Launcher {
     // `select` mode: nothing is running yet, so a tick edits a DESIRED set that Start (or
     // "Apply changes", reopened over a session) commits. The loading indicator is handed over
     // as the picker's lead control, which is exactly where it used to sit.
+    // The ambient bundle spread whole, then this screen's own settings. Listing an
+    // ambient dep by name here is what left the launcher's ⓘ inert while the plugin
+    // manager's worked: the two screens share a picker, and used to not share its wiring.
     this.#picker = new PluginPicker({
-      plugins: this.#plugins, mode: 'select', selected: seed, headLead: indicator,
-      // The ⓘ beside a plugin, which on THIS screen is the one that matters most: nothing
-      // is activated yet, so the launcher is exactly where someone needs to find out what a
-      // plugin is before ticking it. The guide reads the catalogue rather than the loaded
-      // set, so it can answer that here.
-      onHowto: this.#onHowto,
+      ...this.#pickerHost(),
+      mode: 'select',
+      selected: seed,
+      headLead: indicator,
     });
     this.#picker.mount(overlay.querySelector('.ctl__picker'));
 
