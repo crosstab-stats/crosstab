@@ -29,7 +29,7 @@ import { el } from './plugin-stdlib.js';
 /** Syntax editor metrics: the textarea uses a FIXED line-height so the step gutter
  * can place each marker at `PAD + lineIndex * LINE_H` (and the textarea is no-wrap,
  * so one logical line is always exactly one visual row — the alignment math holds). */
-const SYN_LINE_H = 26;
+const SYN_LINE_H = 26; // fallback only — the live value is MEASURED (see HistoryPanel#metrics)
 const SYN_PAD = 8;
 
 const ROW_H = 28; // px; must match the CSS cell height for scrollbar accuracy.
@@ -1485,6 +1485,14 @@ export class HistoryPanel {
     this.#results = results;
     this.#itemRecords = itemRecords;
     this.#removeRecord = removeRecord;
+    // The Syntax gutter positions each label at `pad + i * lineHeight`, and the line
+    // height DIFFERS between screen modes (26px, 44px on a phone — the taller line is
+    // what gives its per-line controls room to be a real touch target). So a mode change
+    // invalidates every marker position, and nothing was redrawing them: the gutter kept
+    // the old spacing until the next keystroke happened to trigger a render.
+    this.#bus?.on?.(CoreEvents.SCREEN_MODE_CHANGED, () => {
+      if (this.#syntax && this.#ta) this.#renderGutter();
+    });
   }
 
   #build() {
@@ -1630,10 +1638,11 @@ export class HistoryPanel {
     // The textarea stays the interactive layer (typing/selection/caret); the backdrop is
     // purely visual (pointer-events:none) and is translated to follow the textarea scroll.
     ensureSyntaxStyles();
-    const FONT = `font:13px/${SYN_LINE_H}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;`;
-    // Slashed zero + no ligatures: makes 0-vs-O (and l-vs-1) unambiguous and keeps
-    // operators like -> from being fused into a glyph.
-    const GLYPH = 'font-feature-settings:"zero" 1; font-variant-ligatures:none;';
+    // The font (and the slashed zero + no ligatures that make 0-vs-O and l-vs-1
+    // unambiguous) now live in the stylesheet, on `.history-panel__ta` and
+    // `.history-panel__code` together. Inline they could not be overridden for a small
+    // screen — an inline `font:` shorthand beats every rule — and the gutter's alignment
+    // depended on a number written in two places agreeing forever.
 
     const taWrap = el('div', { class: 'history-panel__tawrap' });
     taWrap.style.cssText = 'position:relative; flex:1 1 auto; min-width:0; overflow:hidden;';
@@ -1643,7 +1652,7 @@ export class HistoryPanel {
     const backdropInner = el('div', { class: 'history-panel__code' });
     backdropInner.style.cssText =
       `position:absolute; top:0; left:0; min-width:100%; box-sizing:border-box; will-change:transform; ` +
-      `white-space:pre; tab-size:2; ${FONT} ${GLYPH} padding:${SYN_PAD}px 8px;`;
+      `white-space:pre; tab-size:2; padding:${SYN_PAD}px 8px;`;
     backdrop.append(backdropInner);
     this.#backdropInner = backdropInner;
 
@@ -1656,7 +1665,7 @@ export class HistoryPanel {
     ta.setAttribute('wrap', 'off'); // 1 logical line = 1 visual row → gutter math stays exact
     ta.style.cssText =
       `position:absolute; inset:0; width:100%; height:100%; resize:none; border:0; outline:none; box-sizing:border-box; ` +
-      `white-space:pre; overflow:auto; tab-size:2; background:transparent; ${FONT} ${GLYPH} ` +
+      `white-space:pre; overflow:auto; tab-size:2; background:transparent; ` +
       `padding:${SYN_PAD}px 8px;`;
     // Reorder without leaving Syntax view. Replay is sequential and rebuilt from the text
     // in order, so moving a line IS moving the step — it just had no gesture, and the only
@@ -1757,8 +1766,32 @@ export class HistoryPanel {
    * pixel offset (`PAD + lineIndex * LINE_H`). Re-derives the step kind/label from the
    * line text each time, so it tracks edits live. Blank and plain `#` comment lines
    * get no marker. Runs on every keystroke — cheap for the small line counts here. */
+  /**
+   * The editor's ACTUAL line height and top padding, read from the element.
+   *
+   * The gutter places one label per line at `pad + i * lineHeight`, which is only correct
+   * while that number matches what the text really measures. It was a constant written in
+   * two places (an inline `font:13px/26px` and `SYN_LINE_H`), so anything that changed the
+   * rendered size broke the alignment silently and cumulatively — further off with every
+   * line. On an iPhone that was mobile WebKit's text auto-inflation; it could equally be a
+   * font that failed to load, a user's zoom, or the small-screen rule that now deliberately
+   * makes the line taller.
+   *
+   * Measuring costs one `getComputedStyle` per redraw and removes the whole class.
+   */
+  #metrics() {
+    const cs = this.#ta ? getComputedStyle(this.#ta) : null;
+    const lh = cs ? parseFloat(cs.lineHeight) : NaN;
+    const pad = cs ? parseFloat(cs.paddingTop) : NaN;
+    return {
+      lineH: Number.isFinite(lh) && lh > 0 ? lh : SYN_LINE_H,
+      pad: Number.isFinite(pad) ? pad : SYN_PAD,
+    };
+  }
+
   #renderGutter() {
     if (!this.#gutterInner || !this.#ta) return;
+    const { lineH, pad } = this.#metrics();
     this.#renderHighlight(); // keep the colour backdrop in lockstep with the gutter
     const lines = this.#ta.value.split('\n');
     const frag = document.createDocumentFragment();
@@ -1774,7 +1807,7 @@ export class HistoryPanel {
       if (info.kind !== 'analysis' && info.kind !== 'dataset') stepNo += 1;
       const marker = el('div', { class: `history-panel__gmark is-${info.kind}` });
       marker.style.cssText =
-        `position:absolute; left:0; right:0; height:${SYN_LINE_H}px; top:${SYN_PAD + i * SYN_LINE_H}px; ` +
+        `position:absolute; left:0; right:0; height:${lineH}px; top:${pad + i * lineH}px; ` +
         'display:flex; gap:5px; align-items:center; padding:0 6px 0 8px; overflow:hidden; white-space:nowrap;';
       const mk = el('span', { text: info.kind === 'analysis' ? '∑' : info.kind === 'source' ? '🔒' : info.kind === 'dataset' ? '▤' : String(stepNo), class: 'history__marker' });
       mk.style.cssText = 'flex:0 0 auto; opacity:.7; font-size:11px;' + (info.kind === 'analysis' ? 'color:var(--accent,#2572a5);' : '');

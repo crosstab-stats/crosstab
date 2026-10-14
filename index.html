@@ -29,6 +29,13 @@
       }
       * { box-sizing: border-box; }
       html, body { height: 100%; margin: 0; }
+      /* Mobile WebKit inflates text inside wide blocks unless told not to, which silently
+         breaks any layout that assumes a line is the height it was asked for. The Syntax
+         gutter is exactly that: labels positioned at `i * lineHeight` beside a textarea.
+         results-pane.js has carried this declaration for its tables since iPad Safari did
+         the same thing to them; the document itself never had it. 100%, not `none`, so a
+         reader who has raised their system text size still gets it. */
+      html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
       body {
         font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
         color: #1a1a1a;
@@ -498,6 +505,43 @@
       }
       .history__ctlbtn:hover:not(:disabled) { background: #e3e8ee; color: #1a1a1a; }
       .history__ctlbtn:disabled { opacity: .25; cursor: default; }
+      /* 44px on a touch screen, per the accessibility baseline. These were 20x22 and had
+         no small-screen rule at all — a leak the contrast/keyboard pass never covered,
+         and one that got worse when the row gained a re-run button and records gained a
+         delete. The row WRAPS rather than squeezing the title: five controls at 44px is
+         220px, which would leave a step's name a couple of words wide. */
+      [data-screen="small"] .history__step { flex-wrap: wrap; }
+      /* A floor on the step’s own width, or `flex: 1` just shrinks it and the controls
+         never wrap: a stale analysis carries five of them (↻ R ▲ ▼ ✕) = 244px, which left
+         the title 82px wide. A PERCENTAGE, not a px floor — a fixed one is what breaks
+         `.ct-edit` below ~404px, and this panel has to reflow too (1.4.10). */
+      [data-screen="small"] .history__btn { min-width: 60%; }
+      [data-screen="small"] .history__ctl { gap: 4px; padding: 0 4px 6px; }
+      [data-screen="small"] .history__ctlbtn {
+        min-width: 44px; height: 44px; font-size: 16px; border-radius: 6px;
+      }
+      /* The gutter's copies sit inside one absolutely-positioned line box, so they can only
+         be as tall as the line — which is why the small-screen line height above is 44px. */
+      [data-screen="small"] .history-panel__gctl .history__ctlbtn {
+        min-width: 40px; height: 40px; font-size: 15px;
+      }
+      /* The Syntax editor's text metrics. In CSS rather than inline because the gutter
+         aligns to them and a small screen needs different ones — and because an inline
+         `font:` shorthand cannot be overridden by a media/screen-mode rule at all, which
+         is why `[data-screen="small"] textarea { font-size: 16px }` had no effect here.
+         The textarea and the colour backdrop MUST share this rule exactly: the caret is
+         positioned by one and the glyphs are drawn by the other. */
+      .history-panel__ta,
+      .history-panel__code {
+        font: 13px/26px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-feature-settings: "zero" 1;
+        font-variant-ligatures: none;
+      }
+      /* Roomier on a phone: 16px stops iOS zooming on focus, and the taller line is what
+         gives the gutter's per-line controls somewhere to be 44px tall. */
+      [data-screen="small"] .history-panel__ta,
+      [data-screen="small"] .history-panel__code { font-size: 16px; line-height: 44px; }
+
       /* floating History panel (Edit ▸ History…) — non-blocking, grid stays live */
       .history-panel {
         position: fixed; top: 52px; right: 12px; bottom: 12px; width: 340px; z-index: 50;
