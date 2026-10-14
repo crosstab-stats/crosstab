@@ -41,9 +41,31 @@ export const manifest = {
     'Syntax: run builtin-multilevel.logistic {"y": "passed", "fixed": ["ses"], "group": "school"}\n' +
     '  • y — outcome (binary for logistic); fixed — one or more fixed-effect predictors; group — the cluster variable (random intercept).\n' +
     '  • slope — (linear only) optional predictor given a random slope across groups.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'multilevel-linear',
+      title: 'Linear mixed model',
+      category: 'Regression',
+      keywords: ['multilevel', 'mixed', 'hierarchical', 'random effects', 'icc', 'nested', 'school', 'cluster', 'random intercept', 'random slope'],
+      needs: ['builtin-multilevel'],
+      seeAlso: ['multilevel-logistic', 'clusterse-robust'],
+    },
+    {
+      id: 'multilevel-logistic',
+      title: 'Logistic mixed model',
+      category: 'Regression',
+      keywords: ['multilevel logistic', 'mixed', 'binary', 'random effects', 'odds ratio', 'nested', 'cluster', 'glmm'],
+      needs: ['builtin-multilevel'],
+      seeAlso: ['multilevel-linear', 'logistic-binary'],
+    },
+  ],
   rPackages: ['lme4', 'lmerTest'],
   menu: [
     {
+      howto: 'multilevel-linear',
       label: 'Linear mixed model…',
       run: 'linear',
       order: 100,
@@ -55,6 +77,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'multilevel-logistic',
       label: 'Logistic mixed model…',
       run: 'logistic',
       order: 110,

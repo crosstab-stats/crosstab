@@ -33,9 +33,23 @@ export const manifest = {
     'Syntax: run builtin-epi.run {"exposure": "treated", "outcome": "relapse"}\n' +
     '  • exposure — binary exposure/treatment (1 = exposed).\n' +
     '  • outcome — binary outcome (1 = case/event).',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'epi-measures',
+      title: 'Risk and odds ratios (2×2)',
+      category: 'Categorical',
+      keywords: ['risk ratio', 'relative risk', 'odds ratio', 'rr', 'or', 'nnt', 'nnh', 'attributable fraction', 'risk difference', 'epidemiology', '2x2'],
+      needs: ['builtin-epi'],
+      seeAlso: ['categorical-twoprop', 'logistic-binary'],
+    },
+  ],
   rPackages: [],
   menu: [
     {
+      howto: 'epi-measures',
       label: 'Risk / odds ratios (2×2)…',
       run: 'run',
       order: 60,

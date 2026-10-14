@@ -41,9 +41,55 @@ export const manifest = {
     '  • category (oneProp) — which of the two categories is tested against p0; omit to test the second category.\n' +
     '  • weight (oneProp) — optional frequency weight; with it N is the sum of weights and the test uses a normal approximation instead of the exact binomial.\n' +
     '  • other actions: McNemar\'s test (paired) — run builtin-categorical.mcnemar {"v1": "before", "v2": "after"}; Log-linear model — run builtin-categorical.loglinear {"vars": ["a", "b"], "model": "homogeneous"}.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'categorical-gof',
+      title: 'Chi-square goodness-of-fit',
+      category: 'Categorical',
+      keywords: ['goodness of fit', 'chi-square', 'chisquare', 'expected', 'one variable', 'distribution', 'proportions'],
+      needs: ['builtin-categorical'],
+      seeAlso: ['crosstabs-basics', 'categorical-oneprop'],
+    },
+    {
+      id: 'categorical-oneprop',
+      title: 'One-proportion test',
+      category: 'Categorical',
+      keywords: ['proportion', 'one proportion', 'binomial', 'p0', 'percentage', 'test value', 'exact', 'weight'],
+      needs: ['builtin-categorical'],
+      seeAlso: ['categorical-twoprop', 'categorical-gof'],
+    },
+    {
+      id: 'categorical-twoprop',
+      title: 'Two-proportion test',
+      category: 'Categorical',
+      keywords: ['two proportion', 'compare proportions', 'difference', 'groups', 'percentage', 'binary outcome'],
+      needs: ['builtin-categorical'],
+      seeAlso: ['categorical-oneprop', 'epi-measures'],
+    },
+    {
+      id: 'categorical-mcnemar',
+      title: 'McNemar\'s test (paired)',
+      category: 'Categorical',
+      keywords: ['mcnemar', 'paired', 'before after', 'same subjects', 'binary', 'discordant', 'change'],
+      needs: ['builtin-categorical'],
+      seeAlso: ['categorical-twoprop', 'compare-paired'],
+    },
+    {
+      id: 'categorical-loglinear',
+      title: 'Log-linear model',
+      category: 'Categorical',
+      keywords: ['log-linear', 'loglinear', 'multiway', 'three way', 'contingency', 'association', 'homogeneous', 'saturated'],
+      needs: ['builtin-categorical'],
+      seeAlso: ['crosstabs-basics', 'count-poisson'],
+    },
+  ],
   rPackages: [],
   menu: [
     {
+      howto: 'categorical-gof',
       label: 'Chi-square goodness-of-fit…',
       run: 'gof',
       order: 10,
@@ -53,6 +99,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'categorical-oneprop',
       label: 'One-proportion test…',
       run: 'oneProp',
       order: 20,
@@ -64,6 +111,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'categorical-twoprop',
       label: 'Two-proportion test…',
       run: 'twoProp',
       order: 30,
@@ -85,6 +133,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'categorical-loglinear',
       label: 'Log-linear model…',
       run: 'loglinear',
       order: 50,

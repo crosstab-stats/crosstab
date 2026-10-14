@@ -51,9 +51,31 @@ export const manifest = {
     'Syntax: run builtin-mediation.moderation {"y": "wellbeing", "x": "stress", "w": "support"}\n' +
     '  • mediation: x / m / y — predictor, mediator, outcome; covs — optional controls; se — "delta" (default) | "bootstrap".\n' +
     '  • moderation: y / x / w — outcome, focal predictor, moderator; covs — optional controls.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'mediation-indirect',
+      title: 'Mediation (X → M → Y)',
+      category: 'Regression',
+      keywords: ['mediation', 'indirect', 'direct', 'total effect', 'mediator', 'path', 'bootstrap', 'sobel', 'decompose'],
+      needs: ['builtin-mediation'],
+      seeAlso: ['mediation-moderation'],
+    },
+    {
+      id: 'mediation-moderation',
+      title: 'Moderation (X × W)',
+      category: 'Regression',
+      keywords: ['moderation', 'interaction', 'moderator', 'simple slopes', 'depends on', 'conditional effect'],
+      needs: ['builtin-mediation'],
+      seeAlso: ['mediation-indirect', 'regression-linear'],
+    },
+  ],
   rPackages: ['lavaan'],
   menu: [
     {
+      howto: 'mediation-indirect',
       label: 'Mediation (X → M → Y)…',
       run: 'mediation',
       order: 120,
@@ -69,6 +91,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'mediation-moderation',
       label: 'Moderation (X × W)…',
       run: 'moderation',
       order: 130,

@@ -39,9 +39,23 @@ export const manifest = {
   // No svglite: the diagnostics are chart MODELS now, drawn by the host. Dropping the
   // declaration matters beyond tidiness — the offline cache pre-fetches the R packages of
   // ENABLED plugins, so a stale entry costs every user a download they never use.
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'regression-linear',
+      title: 'Linear regression',
+      category: 'Regression',
+      keywords: ['regression', 'linear', 'ols', 'predict', 'coefficient', 'beta', 'r squared', 'least squares', 'model', 'explain'],
+      needs: ['builtin-regression'],
+      seeAlso: ['regression-assumptions', 'correlation-bivariate', 'margins-effects'],
+    },
+  ],
   rPackages: [],
   menu: [
     {
+      howto: 'regression-linear',
       label: 'Linear…',
       run: 'run',
       order: 10,

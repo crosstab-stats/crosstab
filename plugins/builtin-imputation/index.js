@@ -32,9 +32,23 @@ export const manifest = {
     '  • ivs — one or more predictors.\n' +
     '  • m — number of imputations (default 5).\n' +
     '  • model — "linear" (default) | "logistic".',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'imputation-mi',
+      title: 'Multiple imputation regression',
+      category: 'Regression',
+      keywords: ['imputation', 'missing data', 'multiple imputation', 'rubin', 'pooled', 'fmi', 'listwise', 'incomplete'],
+      needs: ['builtin-imputation'],
+      seeAlso: ['regression-linear', 'variable-types'],
+    },
+  ],
   rPackages: ['mice'],
   menu: [
     {
+      howto: 'imputation-mi',
       label: 'Multiple imputation regression…',
       run: 'run',
       order: 180,

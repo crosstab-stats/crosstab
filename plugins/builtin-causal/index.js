@@ -42,9 +42,39 @@ export const manifest = {
     'Syntax: run builtin-causal.matching {"y": "outcome", "treat": "treated", "covs": ["age", "sex"], "distance": "glm"}\n' +
     '  • y — the numeric outcome; treat / post — 1 = treated / 1 = after indicators; covs — covariates.\n' +
     '  • run / cutoff / bw — running variable, threshold, and bandwidth (0 = automatic); distance — "glm" (propensity) or "mahalanobis".',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'causal-did',
+      title: 'Difference-in-differences',
+      category: 'Regression',
+      keywords: ['difference in differences', 'did', 'treatment effect', 'policy', 'before after', 'control group', 'parallel trends'],
+      needs: ['builtin-causal'],
+      seeAlso: ['causal-rdd', 'causal-matching'],
+    },
+    {
+      id: 'causal-rdd',
+      title: 'Regression discontinuity',
+      category: 'Regression',
+      keywords: ['regression discontinuity', 'rdd', 'cutoff', 'threshold', 'running variable', 'bandwidth', 'treatment effect', 'eligibility'],
+      needs: ['builtin-causal'],
+      seeAlso: ['causal-did', 'causal-matching'],
+    },
+    {
+      id: 'causal-matching',
+      title: 'Matching (propensity / nearest neighbour)',
+      category: 'Regression',
+      keywords: ['matching', 'propensity score', 'nearest neighbour', 'nearest neighbor', 'balance', 'covariates', 'treatment effect', 'observational'],
+      needs: ['builtin-causal'],
+      seeAlso: ['causal-did', 'causal-rdd'],
+    },
+  ],
   rPackages: ['sandwich', 'lmtest', 'MatchIt', 'rdrobust'],
   menu: [
     {
+      howto: 'causal-did',
       label: 'Difference-in-differences…',
       run: 'did',
       order: 70,
@@ -58,6 +88,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'causal-rdd',
       label: 'Regression discontinuity…',
       run: 'rdd',
       order: 80,
@@ -69,6 +100,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'causal-matching',
       label: 'Matching (propensity / nearest neighbour)…',
       run: 'matching',
       order: 90,

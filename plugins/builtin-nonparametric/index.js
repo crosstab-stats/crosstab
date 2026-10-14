@@ -39,9 +39,39 @@ export const manifest = {
     'Syntax: run builtin-nonparametric.kruskal {"y": "score", "g": "group"}\n' +
     '  • mannWhitney / kruskal: y — test variable; g — grouping variable (2 groups vs 3+).\n' +
     '  • wilcoxon: x1 / x2 — two paired measures on the same cases.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'nonparametric-mannwhitney',
+      title: 'Mann-Whitney U (two groups)',
+      category: 'Nonparametric',
+      keywords: ['mann whitney', 'mannwhitney', 'u test', 'rank', 'nonparametric', 'two groups', 'distribution free', 'ordinal'],
+      needs: ['builtin-nonparametric'],
+      seeAlso: ['compare-independent', 'nonparametric-kruskal', 'regression-assumptions'],
+    },
+    {
+      id: 'nonparametric-wilcoxon',
+      title: 'Wilcoxon signed-rank (paired)',
+      category: 'Nonparametric',
+      keywords: ['wilcoxon', 'signed rank', 'paired', 'nonparametric', 'before after', 'same subjects', 'rank'],
+      needs: ['builtin-nonparametric'],
+      seeAlso: ['compare-paired', 'nonparametric-mannwhitney'],
+    },
+    {
+      id: 'nonparametric-kruskal',
+      title: 'Kruskal-Wallis (k groups)',
+      category: 'Nonparametric',
+      keywords: ['kruskal', 'wallis', 'k groups', 'nonparametric', 'rank', 'anova alternative', 'three groups', 'ordinal'],
+      needs: ['builtin-nonparametric'],
+      seeAlso: ['compare-oneway', 'nonparametric-mannwhitney'],
+    },
+  ],
   rPackages: [],
   menu: [
     {
+      howto: 'nonparametric-mannwhitney',
       label: 'Mann-Whitney U (2 groups)…',
       run: 'mannWhitney',
       order: 10,
@@ -53,6 +83,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'nonparametric-wilcoxon',
       label: 'Wilcoxon signed-rank (paired)…',
       run: 'wilcoxon',
       order: 20,
@@ -62,6 +93,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'nonparametric-kruskal',
       label: 'Kruskal-Wallis (k groups)…',
       run: 'kruskal',
       order: 30,

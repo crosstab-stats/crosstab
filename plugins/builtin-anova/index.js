@@ -42,9 +42,31 @@ export const manifest = {
     '    is run and the single row stands.\n' +
     '  • dv — the numeric outcome to compare; facs — two or more grouping factors.\n' +
     '  • vars — the repeated-measure columns (same people at each time/condition).',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'anova-factorial',
+      title: 'Factorial ANOVA',
+      category: 'Comparison',
+      keywords: ['factorial', 'anova', 'two way', 'interaction', 'main effect', 'factors', 'between subjects', 'design'],
+      needs: ['builtin-anova'],
+      seeAlso: ['compare-oneway', 'anova-repeated', 'ancova-adjusted'],
+    },
+    {
+      id: 'anova-repeated',
+      title: 'Repeated-measures ANOVA',
+      category: 'Comparison',
+      keywords: ['repeated measures', 'within subjects', 'anova', 'sphericity', 'time points', 'wide format', 'same subjects'],
+      needs: ['builtin-anova'],
+      seeAlso: ['anova-factorial', 'ancova-mixed', 'compare-paired'],
+    },
+  ],
   rPackages: [],
   menu: [
     {
+      howto: 'anova-factorial',
       label: 'Factorial ANOVA…',
       run: 'factorial',
       order: 50,
@@ -54,6 +76,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'anova-repeated',
       label: 'Repeated-measures ANOVA…',
       run: 'repeated',
       order: 60,

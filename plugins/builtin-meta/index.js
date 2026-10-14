@@ -42,9 +42,23 @@ export const manifest = {
     '  • precType — "se" (default) | "var".\n' +
     '  • model — "REML" random effects (default) | "FE" fixed/common effect.\n' +
     '  • mods — optional moderators (meta-regression); label — optional study label for the forest plot.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'meta-analysis',
+      title: 'Meta-analysis',
+      category: 'Regression',
+      keywords: ['meta-analysis', 'meta analysis', 'pooled', 'forest plot', 'heterogeneity', 'i2', 'tau', 'random effects', 'reml', 'effect size', 'studies'],
+      needs: ['builtin-meta'],
+      seeAlso: ['regression-linear'],
+    },
+  ],
   rPackages: ['metafor'],
   menu: [
     {
+      howto: 'meta-analysis',
       label: 'Meta-analysis…',
       run: 'metaAnalysis',
       order: 140,

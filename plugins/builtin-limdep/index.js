@@ -39,9 +39,39 @@ export const manifest = {
     '  • tobit: left/right — lower/upper censoring limits (0/blank = none).\n' +
     'Syntax: run builtin-limdep.heckman {"y": "wage", "outIv": ["educ"], "sel": "working", "selIv": ["kids"]}\n' +
     '  • heckman: sel — selection indicator (1 = observed); outIv/selIv — outcome / selection predictors.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'limdep-quantile',
+      title: 'Quantile regression',
+      category: 'Regression',
+      keywords: ['quantile', 'median regression', 'tau', 'percentile', 'distribution', 'robust', 'tails'],
+      needs: ['builtin-limdep'],
+      seeAlso: ['limdep-tobit', 'regression-linear'],
+    },
+    {
+      id: 'limdep-tobit',
+      title: 'Tobit (censored) regression',
+      category: 'Regression',
+      keywords: ['tobit', 'censored', 'censoring', 'floor', 'ceiling', 'limit', 'bounded', 'corner solution'],
+      needs: ['builtin-limdep'],
+      seeAlso: ['limdep-quantile', 'limdep-heckman'],
+    },
+    {
+      id: 'limdep-heckman',
+      title: 'Heckman selection model',
+      category: 'Regression',
+      keywords: ['heckman', 'selection', 'sample selection', 'selection bias', 'two step', 'inverse mills', 'observed'],
+      needs: ['builtin-limdep'],
+      seeAlso: ['limdep-tobit'],
+    },
+  ],
   rPackages: ['quantreg', 'AER', 'sampleSelection'],
   menu: [
     {
+      howto: 'limdep-quantile',
       label: 'Quantile regression…',
       run: 'quantile',
       order: 150,
@@ -52,6 +82,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'limdep-tobit',
       label: 'Tobit (censored) regression…',
       run: 'tobit',
       order: 160,
@@ -63,6 +94,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'limdep-heckman',
       label: 'Heckman selection model…',
       run: 'heckman',
       order: 170,

@@ -98,9 +98,47 @@ export const manifest = {
     '    Brown-Forsythe), Tukey post-hoc. SPSS adds 95% CIs on the effect sizes and a random-effects\n' +
     '    ω²; we print point estimates. SPSS only prints its Tukey table when Post Hoc is ticked.\n' +
     '  • Every test takes an optional weight — a survey weight read as a frequency weight, so N and df follow its sum.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'compare-one-sample',
+      title: 'One-sample t-test',
+      category: 'Comparison',
+      keywords: ['one sample', 't-test', 'ttest', 'mu', 'reference value', 'test value', 'mean', 'compare to'],
+      needs: ['builtin-compare'],
+      seeAlso: ['compare-independent', 'compare-paired'],
+    },
+    {
+      id: 'compare-independent',
+      title: 'Independent-samples t-test',
+      category: 'Comparison',
+      keywords: ['independent samples', 't-test', 'ttest', 'two groups', 'between subjects', 'levene', 'welch', 'equal variances', 'difference'],
+      needs: ['builtin-compare'],
+      seeAlso: ['compare-paired', 'compare-oneway', 'assumptions-levene'],
+    },
+    {
+      id: 'compare-paired',
+      title: 'Paired-samples t-test',
+      category: 'Comparison',
+      keywords: ['paired', 'dependent', 't-test', 'before after', 'pre post', 'repeated', 'same subjects', 'matched'],
+      needs: ['builtin-compare'],
+      seeAlso: ['compare-independent', 'nonparametric-wilcoxon', 'plots-before-after'],
+    },
+    {
+      id: 'compare-oneway',
+      title: 'One-way ANOVA',
+      category: 'Comparison',
+      keywords: ['anova', 'one way', 'oneway', 'f test', 'three groups', 'k groups', 'between subjects', 'post hoc'],
+      needs: ['builtin-compare'],
+      seeAlso: ['compare-independent', 'anova-factorial', 'nonparametric-kruskal'],
+    },
+  ],
   rPackages: [],
   menu: [
     {
+      howto: 'compare-one-sample',
       label: 'One-sample t-test…',
       run: 'oneSample',
       order: 10,
@@ -111,6 +149,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'compare-independent',
       label: 'Independent-samples t-test…',
       run: 'independent',
       order: 20,
@@ -123,6 +162,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'compare-paired',
       label: 'Paired-samples t-test…',
       run: 'paired',
       order: 30,
@@ -133,6 +173,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'compare-oneway',
       label: 'One-way ANOVA…',
       run: 'oneway',
       order: 40,

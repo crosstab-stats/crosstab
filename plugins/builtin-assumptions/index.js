@@ -39,9 +39,31 @@ export const manifest = {
   // Nothing to install: the Q–Q plots are chart models now, drawn by the host. The offline
   // cache pre-fetches the R packages of enabled plugins, so a stale entry here is a
   // download every user pays for.
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'regression-assumptions',
+      title: 'Check normality (Shapiro–Wilk)',
+      category: 'Assumptions',
+      keywords: ['normality', 'shapiro', 'wilk', 'qq plot', 'skewness', 'kurtosis', 'assumption', 'normal', 'distribution', 'check'],
+      needs: ['builtin-assumptions'],
+      seeAlso: ['assumptions-levene', 'plots-histogram', 'nonparametric-mannwhitney'],
+    },
+    {
+      id: 'assumptions-levene',
+      title: 'Homogeneity of variance (Levene\'s)',
+      category: 'Assumptions',
+      keywords: ['levene', 'homogeneity', 'variance', 'equal variances', 'spread', 'assumption', 'welch', 'groups'],
+      needs: ['builtin-assumptions'],
+      seeAlso: ['regression-assumptions', 'compare-independent'],
+    },
+  ],
   rPackages: [],
   menu: [
     {
+      howto: 'regression-assumptions',
       label: 'Normality (Shapiro–Wilk)…',
       run: 'normality',
       order: 10,

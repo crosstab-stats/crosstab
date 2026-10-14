@@ -31,9 +31,23 @@ export const manifest = {
     'Syntax: run builtin-doe.run {"y": "yield", "factors": ["temp", "time"]}\n' +
     '  • y — the numeric response to optimize.\n' +
     '  • factors — two or more continuous factor variables.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'doe-response-surface',
+      title: 'Response surface (second-order)',
+      category: 'Regression',
+      keywords: ['response surface', 'doe', 'design of experiments', 'optimise', 'optimize', 'quadratic', 'stationary point', 'saddle', 'canonical', 'factors'],
+      needs: ['builtin-doe'],
+      seeAlso: ['regression-linear'],
+    },
+  ],
   rPackages: ['rsm'],
   menu: [
     {
+      howto: 'doe-response-surface',
       label: 'Response surface (second-order)…',
       run: 'run',
       order: 190,

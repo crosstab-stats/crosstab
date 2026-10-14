@@ -33,15 +33,38 @@ export const manifest = {
     'Syntax: run builtin-countmodels.negbin {"dv": "events", "ivs": ["age", "treatment"]}\n' +
     '  • dv — non-negative count outcome.\n' +
     '  • ivs — one or more predictors. (negbin is the over-dispersed alternative to poisson.)',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'count-poisson',
+      title: 'Poisson regression',
+      category: 'Regression',
+      keywords: ['poisson', 'count', 'events', 'rate', 'incidence', 'irr', 'exposure', 'overdispersion'],
+      needs: ['builtin-countmodels'],
+      seeAlso: ['count-negbin', 'regression-linear'],
+    },
+    {
+      id: 'count-negbin',
+      title: 'Negative binomial regression',
+      category: 'Regression',
+      keywords: ['negative binomial', 'negbin', 'overdispersion', 'count', 'events', 'irr'],
+      needs: ['builtin-countmodels'],
+      seeAlso: ['count-poisson'],
+    },
+  ],
   rPackages: ['MASS'],
   menu: [
     {
+      howto: 'count-poisson',
       label: 'Poisson regression…',
       run: 'poisson',
       order: 40,
       inputs: COUNT_INPUTS('Count outcome'),
     },
     {
+      howto: 'count-negbin',
       label: 'Negative binomial regression…',
       run: 'negbin',
       order: 50,

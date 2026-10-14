@@ -54,9 +54,23 @@ export const manifest = {
     '  • ivs — one or more predictors.\n' +
     '  • family — "logistic" (default) | "probit" | "poisson" | "linear".\n' +
     '  • kind — "ame" (default) | "mem".',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'margins-effects',
+      title: 'Marginal effects (AME / MEM)',
+      category: 'Regression',
+      keywords: ['marginal effects', 'ame', 'mem', 'average', 'probability', 'delta method', 'interpret', 'natural metric', 'logistic', 'probit'],
+      needs: ['builtin-margins'],
+      seeAlso: ['logistic-binary', 'count-poisson'],
+    },
+  ],
   rPackages: [],
   menu: [
     {
+      howto: 'margins-effects',
       label: 'Marginal effects (AME / MEM)…',
       run: 'margins',
       order: 60,

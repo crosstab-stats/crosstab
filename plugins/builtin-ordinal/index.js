@@ -41,9 +41,31 @@ export const manifest = {
     'Syntax: run builtin-ordinal.multinomial {"dv": "party", "ivs": ["age", "income"]}\n' +
     '  • dv — the categorical outcome (ordered for ordinal, unordered for multinomial).\n' +
     '  • ivs — one or more predictors.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'ordinal-ordinal',
+      title: 'Ordinal logistic regression',
+      category: 'Regression',
+      keywords: ['ordinal', 'proportional odds', 'ordered', 'likert', 'threshold', 'cumulative', 'odds ratio', 'satisfaction'],
+      needs: ['builtin-ordinal'],
+      seeAlso: ['ordinal-multinomial', 'logistic-binary'],
+    },
+    {
+      id: 'ordinal-multinomial',
+      title: 'Multinomial logistic regression',
+      category: 'Regression',
+      keywords: ['multinomial', 'unordered', 'categories', 'relative risk', 'rrr', 'party', 'choice', 'nominal outcome'],
+      needs: ['builtin-ordinal'],
+      seeAlso: ['ordinal-ordinal', 'logistic-binary'],
+    },
+  ],
   rPackages: ['MASS', 'nnet'],
   menu: [
     {
+      howto: 'ordinal-ordinal',
       label: 'Ordinal logistic regression…',
       run: 'ordinal',
       order: 30,
@@ -53,6 +75,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'ordinal-multinomial',
       label: 'Multinomial logistic regression…',
       run: 'multinomial',
       order: 35,

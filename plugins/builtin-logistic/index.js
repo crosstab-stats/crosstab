@@ -58,9 +58,31 @@ export const manifest = {
     + '  • ref — "first" (default) or "last": which category of each dummy-coded predictor is the reference. SPSS defaults to LAST, which is why assignments tell you to change it; CrossTab defaults to first.\n'
     + '  • opts — any of "class" (classification table, on by default, as in SPSS), "ci" (95% CI for Exp(B)), "hl" (Hosmer–Lemeshow + its contingency table), "plot" (classification plot), "casewise" (cases with |ZResid| > 2).\n'
     + 'Entry is the only method, so there are no steps and nothing for SPSS\'s "Display: at last step" to choose between.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'logistic-binary',
+      title: 'Binary logistic regression',
+      category: 'Regression',
+      keywords: ['logistic', 'binary', 'odds ratio', 'exp b', 'wald', 'nagelkerke', 'hosmer', 'lemeshow', 'classification', 'probability', 'yes no'],
+      needs: ['builtin-logistic'],
+      seeAlso: ['logistic-categorical', 'margins-effects', 'ordinal-ordinal'],
+    },
+    {
+      id: 'logistic-categorical',
+      title: 'Categorical predictors and the reference category',
+      category: 'Regression',
+      keywords: ['categorical', 'dummy', 'reference', 'ref', 'first', 'last', 'cats', 'indicator', 'coding', 'spss'],
+      needs: ['builtin-logistic'],
+      seeAlso: ['logistic-binary', 'variable-types'],
+    },
+  ],
   rPackages: [],
   menu: [
     {
+      howto: 'logistic-binary',
       label: 'Binary Logistic…',
       run: 'run',
       order: 20,

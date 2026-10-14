@@ -41,9 +41,31 @@ export const manifest = {
     'Syntax: run builtin-mixedanova.mixedAnova {"within": ["time1", "time2", "time3"], "between": "group"}\n' +
     '  • ancova: y — outcome; factors — one or more grouping factors; covs — one or more covariates to adjust for.\n' +
     '  • mixedAnova: within — one column per condition/time (wide format); between — optional between-subjects factor.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'ancova-adjusted',
+      title: 'ANCOVA',
+      category: 'Compare Means',
+      keywords: ['ancova', 'covariate', 'adjusted means', 'type iii', 'partial eta', 'control for', 'pretest', 'baseline'],
+      needs: ['builtin-mixedanova'],
+      seeAlso: ['anova-factorial', 'ancova-mixed'],
+    },
+    {
+      id: 'ancova-mixed',
+      title: 'Repeated-measures / mixed ANOVA',
+      category: 'Compare Means',
+      keywords: ['mixed anova', 'repeated measures', 'within', 'between', 'sphericity', 'greenhouse', 'interaction', 'time'],
+      needs: ['builtin-mixedanova'],
+      seeAlso: ['anova-repeated', 'ancova-adjusted'],
+    },
+  ],
   rPackages: ['car', 'emmeans', 'afex'],
   menu: [
     {
+      howto: 'ancova-adjusted',
       label: 'ANCOVA…',
       run: 'ancova',
       order: 60,
@@ -54,6 +76,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'ancova-mixed',
       label: 'Repeated-measures / mixed ANOVA…',
       run: 'mixedAnova',
       order: 65,

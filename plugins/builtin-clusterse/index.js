@@ -32,9 +32,23 @@ export const manifest = {
     '  • y — the numeric outcome to explain.\n' +
     '  • ivs — one or more predictors.\n' +
     '  • cluster — the grouping variable (e.g. school or person) SEs allow correlation within.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'clusterse-robust',
+      title: 'Cluster-robust regression',
+      category: 'Regression',
+      keywords: ['cluster robust', 'clustered', 'standard errors', 'cr', 'hc1', 'sandwich', 'school', 'firm', 'panel', 'correlation within'],
+      needs: ['builtin-clusterse'],
+      seeAlso: ['multilevel-linear', 'regression-linear'],
+    },
+  ],
   rPackages: ['sandwich', 'lmtest'],
   menu: [
     {
+      howto: 'clusterse-robust',
       label: 'Cluster-robust regression…',
       run: 'run',
       order: 65,
