@@ -71,6 +71,19 @@ export const manifest = {
   // The declarative section. `kinds` is the list the host registers by name; `via` is
   // the exported factory that builds them. No app.charts.registerKind() verb exists:
   // the loader is explicit that a plugin can only do what a manifest section allows.
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'charts-engine',
+      title: 'The chart engine',
+      category: 'Graphs',
+      keywords: ['chart engine', 'charts', 'drawing', 'figures', 'infrastructure', 'dependency', 'chart options', 'svg', 'plots'],
+      needs: ['builtin-charts'],
+      seeAlso: ['plots-choosing', 'find-an-analysis'],
+    },
+  ],
   charts: {
     via: 'chartKinds',
     // `tornado` was missing here from the commit that introduced the kind (24b8efc) until

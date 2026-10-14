@@ -28,6 +28,19 @@ export const manifest = {
   howto:
     'GUI: File ▸ Import data… (or Export data…), choose CSV (.csv / .tsv / .txt). Reads and writes RFC-4180 delimited text.\n' +
     'Used through the File menu, not a run command.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'codec-csv',
+      title: 'CSV and delimited text',
+      category: 'Data',
+      keywords: ['csv', 'tsv', 'txt', 'delimited', 'comma', 'tab', 'text file', 'import', 'export', 'rfc 4180'],
+      needs: ['builtin-csv-codec'],
+      seeAlso: ['import-data', 'export-data'],
+    },
+  ],
   codecs: [
     { id: 'csv', label: 'CSV…', extensions: ['.csv', '.tsv', '.txt'], read: 'readCsv', write: 'writeCsv', order: 10, multiple: true },
   ],

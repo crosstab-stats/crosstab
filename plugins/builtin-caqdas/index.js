@@ -35,6 +35,19 @@ export const manifest = {
   howto:
     'GUI: appears as a workspace tab (Coding) — pick a dataset column of documents (a text column, or a media column from an image/audio/video import), then tag passages/regions with codes and export code frequencies/segments to Output.\n' +
     'Used through its workspace tab, not a run command.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'caqdas-coding',
+      title: 'Qualitative coding (CAQDAS)',
+      category: 'Qualitative',
+      keywords: ['caqdas', 'qualitative', 'coding', 'codes', 'passages', 'transcripts', 'nvivo', 'atlas', 'workspace', 'segments', 'media'],
+      needs: ['builtin-caqdas'],
+      seeAlso: ['agreement-codings', 'import-data'],
+    },
+  ],
   imports: [
     {
       label: 'Text files → one row per file…',

@@ -19,6 +19,19 @@ export const manifest = {
   howto:
     'GUI: File ▸ Import data… (or Export data…), choose Parquet (.parquet). Reads/writes Apache Parquet, streaming row-group by row-group.\n' +
     'Used through the File menu, not a run command.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'codec-parquet',
+      title: 'Parquet',
+      category: 'Data',
+      keywords: ['parquet', 'apache', 'columnar', 'big data', 'compressed', 'arrow', 'import', 'export'],
+      needs: ['builtin-parquet-codec'],
+      seeAlso: ['import-data', 'export-data'],
+    },
+  ],
   codecs: [
     {
       id: 'parquet',

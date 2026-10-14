@@ -28,6 +28,19 @@ export const manifest = {
   howto:
     'GUI: appears as a workspace tab (Decisions); inside it pick a tool — Cost-effectiveness (ICER), Decision matrix, Cost-benefit (NPV), Expected value, or Decision tree. Results push to the Output tab.\n' +
     'Used as a workspace tab, not a run command.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'decisions-tools',
+      title: 'Decision support tools',
+      category: 'Decision',
+      keywords: ['decision', 'icer', 'cost effectiveness', 'decision matrix', 'npv', 'cost benefit', 'expected value', 'decision tree', 'workspace', 'health economics'],
+      needs: ['builtin-decisions'],
+      seeAlso: ['charts-engine'],
+    },
+  ],
   workspaces: [{ id: 'decision-support', title: 'Decisions' }],
 };
 

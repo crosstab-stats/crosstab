@@ -42,6 +42,19 @@ export const manifest = {
   howto:
     'GUI: File ▸ Import data… ▸ Wikipedia table…, then paste an article URL or title and pick a table. Scrapes one wikitable off the page into a dataset.\n' +
     'Used through the File menu, not a run command.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'import-wikipedia',
+      title: 'Import a Wikipedia table',
+      category: 'Import',
+      keywords: ['wikipedia', 'table', 'scrape', 'web', 'wikitable', 'article', 'import', 'url'],
+      needs: ['builtin-wikipedia'],
+      seeAlso: ['import-data', 'variable-types'],
+    },
+  ],
   rPackages: [],
   imports: [{ label: 'Wikipedia table…', source: 'web', order: 60, parse: 'importTable' }],
 };

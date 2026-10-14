@@ -28,6 +28,19 @@ export const manifest = {
     'GUI: File ▸ Export data…, choose R data frame (.rds) or R workspace (.RData). ' +
     'Writes a real R object (typed columns, value-labelled vars as factors) that reopens with readRDS()/load().\n' +
     'Used through the File menu, not a run command.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'export-rdata',
+      title: 'Export data for R',
+      category: 'Export',
+      keywords: ['r', 'rds', 'rdata', 'data frame', 'export', 'readrds', 'factors', 'rstudio'],
+      needs: ['builtin-rdata-export'],
+      seeAlso: ['export-data', 'export-rsyntax'],
+    },
+  ],
   rPackages: [],
   exports: [
     { label: 'R data frame (.rds)…', extensions: ['.rds'], order: 31, export: 'exportRds' },

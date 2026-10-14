@@ -38,6 +38,19 @@ export const manifest = {
   howto:
     'GUI: appears as a workspace tab (Hello WS) once enabled in Edit ▸ Plugins. A reference demo: type a note that persists with the project and count dataset rows.\n' +
     'Used as a workspace tab, not a run command.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'hello-workspace',
+      title: 'Hello Workspace (reference demo)',
+      category: 'Workspaces',
+      keywords: ['hello workspace', 'demo', 'example', 'reference', 'plugin development', 'workspace tab', 'template', 'developer'],
+      needs: ['builtin-hello-workspace'],
+      seeAlso: ['find-an-analysis'],
+    },
+  ],
   workspaces: [{ id: 'hello-workspace', title: 'Hello WS' }],
 };
 

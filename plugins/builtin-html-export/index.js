@@ -21,6 +21,19 @@ export const manifest = {
   howto:
     'GUI: File ▸ Export output… ▸ HTML (.html). You get a self-contained HTML report of the Output pane (tables, plots, notes).\n' +
     'Used through the File menu, not a run command.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'export-html',
+      title: 'Export output as HTML',
+      category: 'Export',
+      keywords: ['html', 'report', 'export output', 'self-contained', 'share', 'web page'],
+      needs: ['builtin-html-export'],
+      seeAlso: ['export-data', 'export-docx'],
+    },
+  ],
   rPackages: [],
   outputExports: [{ label: 'HTML (.html)', extensions: ['.html'], order: 10, export: 'exportHtml' }],
 };

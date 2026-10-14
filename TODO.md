@@ -125,10 +125,26 @@ bottom; they are the project's memory and are not summarised away.
       on an analysis dialog, which resolves the menu item's declared `howto` or falls back
       to the plugin's entry page through the SAME function the plugin row uses.
 
+      **Every built-in is now documented (2026-10-14).** 64 plugins, 135 authored topics,
+      one page per MENU ITEM — so Plots' eleven charts, Bootstrap's five methods and Text
+      analytics' seven tools each have their own page and their own dialog ⓘ instead of
+      sharing one note. With core's 26, the index holds **161 topics**. The legacy
+      one-line bridge is therefore no longer load-bearing for the built-ins; it remains for
+      third-party plugins that have not written an index.
+
+      Measured in the app after the final batch: catalogue **109.7 KiB**, parsed in
+      **0.47 ms** on every boot — well inside the budget the owner's pathological test
+      established, and a third of what the synthetic 845-topic run cost.
+
+      **The one-file-per-plugin question, answered with numbers.** Plots is the worst case
+      at twelve sections in one sidecar: the cold open (fetch + parse the whole file) is
+      **7.2 ms**, and the other eleven topics then cost **7.1 ms between them** from cache.
+      All twelve sections parse distinct — no bleed — which is the defect this replaced
+      (the pie chart's entry used to carry bar-chart notes). The per-topic `file` override
+      stays available if a plugin ever outgrows one file.
+
       **Still to do:** screenshots (the renderer handles `![alt](asset:name.png)` with
-      `.small` variants, but no topic uses one yet — and they rot, so use them sparingly);
-      and authoring real topics for the other 63 built-ins, which is #184's job rather than
-      this one's.
+      `.small` variants, but no topic uses one yet — and they rot, so use them sparingly).
 
       **A drift the owner caught, worth keeping.** The launcher's ⓘ was inert while the
       plugin manager's worked, and their question was the right one: *"I thought we unified

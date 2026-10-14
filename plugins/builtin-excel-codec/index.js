@@ -39,6 +39,19 @@ export const manifest = {
   apiVersion: '0.1.0',
   category: 'Data',
   keywords: ['excel', 'xlsx', 'xls', 'spreadsheet', 'workbook', 'sheetjs', 'file'],
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'codec-excel',
+      title: 'Excel workbooks',
+      category: 'Data',
+      keywords: ['excel', 'xlsx', 'xls', 'spreadsheet', 'workbook', 'worksheet', 'sheet', 'import', 'export'],
+      needs: ['builtin-excel-codec'],
+      seeAlso: ['import-data', 'export-data'],
+    },
+  ],
   rPackages: [],
   howto:
     'GUI: File ▸ Import data… (or Export data…), choose Excel (.xlsx / .xls). Import reads a worksheet as a table — first row is the header, one column per spreadsheet column (multi-sheet workbooks ask which sheet). Export writes the current dataset to a single-sheet .xlsx.\n' +

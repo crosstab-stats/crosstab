@@ -18,6 +18,19 @@ export const manifest = {
   howto:
     'GUI: File ▸ Import data… (or Export data…), choose JSON Lines (.ndjson / .jsonl). Streams newline-delimited JSON, one object per row.\n' +
     'Used through the File menu, not a run command.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'codec-ndjson',
+      title: 'JSON Lines',
+      category: 'Data',
+      keywords: ['json', 'ndjson', 'jsonl', 'json lines', 'newline delimited', 'stream', 'api', 'import', 'export'],
+      needs: ['builtin-ndjson-codec'],
+      seeAlso: ['import-data', 'export-data'],
+    },
+  ],
   codecs: [
     {
       id: 'ndjson',

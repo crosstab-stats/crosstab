@@ -32,6 +32,19 @@ export const manifest = {
   howto:
     'GUI: File ▸ Import data… ▸ FRED (economic data)…, then enter a series id (e.g. UNRATE) and your free FRED API key. You get a date + value dataset.\n' +
     'Used through the File menu, not a run command.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'import-fred',
+      title: 'Import economic data from FRED',
+      category: 'Import',
+      keywords: ['fred', 'economic', 'federal reserve', 'series', 'time series', 'unrate', 'api key', 'import', 'macro'],
+      needs: ['builtin-fred'],
+      seeAlso: ['import-data', 'ts-correlogram'],
+    },
+  ],
   rPackages: [],
   imports: [{ label: 'FRED (economic data)…', source: 'web', order: 50, parse: 'importSeries' }],
 };

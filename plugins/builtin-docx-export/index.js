@@ -26,6 +26,19 @@ export const manifest = {
   howto:
     'GUI: File ▸ Export output…, choose Word (.docx). Builds an editable Word report from the Output pane (tables → flextables, plots → embedded PNGs).\n' +
     'Used through the File menu, not a run command.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'export-docx',
+      title: 'Export output as a Word document',
+      category: 'Export',
+      keywords: ['word', 'docx', 'report', 'export output', 'editable', 'flextable', 'manuscript'],
+      needs: ['builtin-docx-export'],
+      seeAlso: ['export-data', 'export-html'],
+    },
+  ],
   rPackages: ['officer', 'flextable'],
   outputExports: [{ label: 'Word (.docx)', extensions: ['.docx'], order: 20, export: 'exportDocx' }],
 };

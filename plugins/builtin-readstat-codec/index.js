@@ -33,6 +33,19 @@ export const manifest = {
     { name: 'readstat-glue', path: '../../vendor/readstat/readstat.mjs', kind: 'text' },
     { name: 'readstat-wasm', path: '../../vendor/readstat/readstat.wasm', kind: 'bytes' },
   ],
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'codec-readstat',
+      title: 'SPSS, Stata and SAS files',
+      category: 'Data',
+      keywords: ['spss', 'sav', 'zsav', 'stata', 'dta', 'sas', 'sas7bdat', 'por', 'xpt', 'import', 'export', 'labels', 'value labels'],
+      needs: ['builtin-readstat-codec'],
+      seeAlso: ['import-data', 'export-data'],
+    },
+  ],
   codecs: [
     { id: 'readstat', label: 'SPSS / Stata / SAS…', extensions: ['.sav', '.zsav', '.dta', '.por', '.xpt', '.sas7bdat'], read: 'readImport', order: 20, multiple: true },
     { id: 'readstat-pick', label: 'SPSS / Stata / SAS — choose variables…', extensions: ['.sav', '.zsav', '.dta', '.por', '.xpt', '.sas7bdat'], read: 'readImportPick', order: 21, multiple: true },

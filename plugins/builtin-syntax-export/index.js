@@ -27,6 +27,19 @@ export const manifest = {
   howto:
     'GUI: File ▸ Export data… ▸ R syntax (.R)…, then save the file. Exports the data-preparation steps (the History panel) as a runnable R script.\n' +
     'Used through the File menu, not a run command.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'export-rsyntax',
+      title: 'Export the data steps as R code',
+      category: 'Export',
+      keywords: ['r script', 'syntax', 'export', 'reproducible', 'code', 'history', 'pipeline'],
+      needs: ['builtin-syntax-export'],
+      seeAlso: ['export-rdata', 'history-and-undo', 'syntax-basics'],
+    },
+  ],
   rPackages: [],
   exports: [{ label: 'R syntax (.R)…', extensions: ['.R'], order: 30, export: 'exportSyntax' }],
 };
