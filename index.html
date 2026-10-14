@@ -536,6 +536,16 @@
       .history__step--future > .history__btn { color: #9aa6b1; }
       .history__step--future > .history__btn > .history__marker { background: #f0f2f5; color: #b3bcc6; }
       .history__body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+      /* The kind glyph sits WITH the title, so an analysis can keep its number. It used
+         to replace the number, which is how analysis rows ended up unnumbered and —
+         since only numbered rows were clickable — unable to be rewound to at all. */
+      .history__glyph { color: var(--accent, #2572a5); font-weight: 700; margin-right: 6px; }
+      .history__step--analysis .history__title { font-weight: 600; }
+      /* Records (memos, coding) are not steps in the recipe: no number, and set back so
+         the numbered sequence still reads as a sequence. */
+      .history__step--record .history__marker { background: transparent; color: #8b96a1; }
+      .history__step--record .history__title { font-weight: 500; }
+      .history__step--sub { opacity: 0.7; padding-top: 6px; font-size: 12px; }
       .history__title { font-weight: 600; }
       .history__detail { font-size: 12px; color: #646e77; }
       .history__step--future .history__detail { color: #aeb7c0; }

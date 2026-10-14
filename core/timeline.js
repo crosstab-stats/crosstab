@@ -123,64 +123,70 @@ function applyOrder(seq, order) {
  *   timeline `reorder` payload, if any.
  * @returns {{rows: object[], ids: string[]}}
  */
-export function buildTimeline({ steps = [], future = [], analyses = [], order = null } = {}) {
-  const seq = seedOrder(steps, analyses);
-  const ordered = Array.isArray(order) && order.length ? applyOrder(seq, order) : seq;
+export function buildTimeline({
+  steps = [], future = [], analyses = [], futureAnalyses = [], order = null,
+} = {}) {
+  const order_ = Array.isArray(order) && order.length ? order : null;
+  const place = (seq) => (order_ ? applyOrder(seq, order_) : seq);
+  // Applied rows first, then the ones below the cursor. The partition is what makes the
+  // list linear: an undone row is always drawn after every applied one, which is also
+  // where a redo now puts it back (see the retract-on-new-action discard).
+  const liveSeq = place(seedOrder(steps, analyses));
+  const aheadSeq = place(seedOrder(future, futureAnalyses));
 
   const rows = [];
   // Row 0 is a real cursor position, not decoration: rewinding to it is "before any data".
   rows.push({
-    n: 0, kind: 'start', id: null, title: 'Start', detail: 'empty — before any data',
-    dataCount: 0, at: 0,
+    n: 0, kind: 'start', id: null, live: true, title: 'Start',
+    detail: 'empty — before any data', dataCount: 0, at: 0,
   });
 
   let n = 0;
   let transforms = 0; // how many TRANSFORM_TYPES rows are above the row being built
   let dataCount = 0; // how many data steps are at or above it (the rewind coordinate)
-  for (const r of ordered) {
-    n += 1;
-    if (r.kind === 'data') {
-      dataCount += 1;
-      const { title, detail } = describeStep(r.step);
-      rows.push({
-        n,
-        kind: 'data',
-        id: r.step.id,
-        type: r.step.type,
-        step: r.step,
-        stepIndex: r.srcIndex,
-        title,
-        detail,
-        dataCount,
-        at: transforms,
-      });
-      if (TRANSFORM_TYPES.has(r.step.type)) transforms += 1;
-    } else {
-      rows.push({
-        n,
-        kind: 'analysis',
-        id: r.entry.runId,
-        entry: r.entry,
-        index: r.srcIndex,
-        title: stripEllipsis(r.entry.label || 'Analysis'),
-        detail: r.entry.pluginName || '',
-        dataCount,
-        at: transforms, // DERIVED: the transforms above this row, whatever the entry says
-      });
+  const emit = (seq, live) => {
+    for (const r of seq) {
+      n += 1;
+      if (r.kind === 'data') {
+        dataCount += 1;
+        const { title, detail } = describeStep(r.step);
+        rows.push({
+          n, kind: 'data', id: r.step.id, live, type: r.step.type, step: r.step,
+          stepIndex: r.srcIndex, title, detail, dataCount, at: transforms,
+        });
+        if (TRANSFORM_TYPES.has(r.step.type)) transforms += 1;
+      } else {
+        rows.push({
+          n, kind: 'analysis', id: r.entry.runId, live, entry: r.entry, index: r.srcIndex,
+          title: stripEllipsis(r.entry.label || 'Analysis'),
+          detail: r.entry.pluginName || '',
+          dataCount,
+          at: transforms, // DERIVED: the transforms above this row, whatever the entry says
+        });
+      }
     }
+  };
+  emit(liveSeq, true);
+  emit(aheadSeq, false);
+
+  return { rows, ids: liveSeq.map(rowId) };
+}
+
+/**
+ * The live data steps ABOVE a row — the exact prefix to materialise so that row's
+ * analysis sees the data it describes.
+ *
+ * Preferred over {@link prefixForAt} wherever the rows are to hand: `at` counts
+ * transforms and therefore cannot say where an analysis sits among SOURCES that follow
+ * one (an append after a compute). The rows can, because they ARE the order.
+ */
+export function stepsAbove(rows, id) {
+  const out = [];
+  for (const row of rows || []) {
+    if (row.id === id) break;
+    if (row.kind === 'data' && row.live !== false) out.push(row.step);
   }
-
-  // Undone rows, still ahead of the cursor. Numbered in sequence because they are
-  // positions a fast-forward can reach, and drawn after everything applied.
-  future.forEach((step, i) => {
-    const { title, detail } = describeStep(step);
-    rows.push({
-      n: n + i + 1, kind: 'future', id: step.id, type: step.type, step, title, detail,
-      dataCount: dataCount + i + 1, at: transforms,
-    });
-  });
-
-  return { rows, ids: ordered.map(rowId) };
+  return out;
 }
 
 /** How many of these steps are transforms — an analysis's `at` if it ran after all of
@@ -229,7 +235,7 @@ export function prefixForAt(steps, at) {
 export function staleAnalyses(rows) {
   const out = [];
   for (const row of rows) {
-    if (row.kind !== 'analysis') continue;
+    if (row.kind !== 'analysis' || row.live === false) continue;
     const stored = Number.isFinite(row.entry?.at) ? row.entry.at : null;
     if (stored !== row.at) out.push({ runId: row.id, from: stored, to: row.at, entry: row.entry });
   }
@@ -239,7 +245,7 @@ export function staleAnalyses(rows) {
 /** The runIds in timeline order — what the Output pane is sorted by, so the sections
  * read in the same order the History panel lists them. */
 export function analysisOrder(rows) {
-  return rows.filter((r) => r.kind === 'analysis').map((r) => r.id);
+  return rows.filter((r) => r.kind === 'analysis' && r.live !== false).map((r) => r.id);
 }
 
 /** Human-readable title + detail for any operation-log entry — data loads

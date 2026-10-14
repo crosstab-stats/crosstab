@@ -57,7 +57,10 @@ const ANALYSIS = {
     for (const op of liveOps(ops)) { // undone run/remove ops are hidden by the liveness fold
       if (op.type === 'runAnalysis') runs.set(op.payload.runId, op.payload);
       else if (op.type === 'removeAnalysis') runs.delete(op.payload.runId);
-      // HLC-ordered, so the last live one wins — the same rule the data `reorder` uses.
+      // LEGACY, read-only. Nothing writes `reorderAnalyses` any more: the timeline's single
+      // `reorder` op orders data steps and analyses in ONE sequence (core/timeline.js), and
+      // an analyses-only order beside it was a second authority on the same question. Kept
+      // so a project saved while it existed still opens in the order it was left in.
       else if (op.type === 'reorderAnalyses' && Array.isArray(op.payload?.order)) order = op.payload.order;
     }
     const list = [...runs.values()];
@@ -120,6 +123,40 @@ export class AnalysisLog {
     this.#changed();
   }
 
+  /**
+   * Hide a run without deleting it — the History cursor moving above it.
+   *
+   * An `undo` op, the same append-only hide the undo coordinator uses, so the run drops
+   * out of {@link AnalysisLog#entries} and comes back on {@link AnalysisLog#admit}. This
+   * is NOT `remove`: a removal is a `removeAnalysis` tombstone that propagates as a
+   * deletion, where a withdrawal is a position the user can walk back out of.
+   *
+   * @param {string} runId @returns {boolean} whether anything was withdrawn
+   */
+  withdraw(runId) {
+    if (!runId) return false;
+    const hit = this.#log.undoWhere((o) => o.type === 'runAnalysis' && o.payload?.runId === runId);
+    if (hit) this.#changed();
+    return !!hit;
+  }
+
+  /** Bring a withdrawn run back (a `redo` op). The mirror of {@link AnalysisLog#withdraw}.
+   * @param {string} runId @returns {boolean} whether anything came back */
+  admit(runId) {
+    if (!runId) return false;
+    const hit = this.#log.redoWhere((o) => o.type === 'runAnalysis' && o.payload?.runId === runId);
+    if (hit) this.#changed();
+    return !!hit;
+  }
+
+  /** The runs currently hidden by an undo, oldest-undo first — the timeline's "below the
+   * cursor" analyses, which are shown greyed rather than simply vanishing. */
+  withdrawnEntries() {
+    return this.#log.undoneOps(ANALYSIS.match)
+      .filter((o) => o.type === 'runAnalysis' && o.payload)
+      .map((o) => structuredClone(o.payload));
+  }
+
   /** A deep copy of the ordered entries (safe to hand to callers/serialisers). */
   entries() {
     return this.#log.state('analysis').map((e) => structuredClone(e));
@@ -155,28 +192,6 @@ export class AnalysisLog {
    * @param {string} runId @param {number} at
    * @returns {object|null} the updated entry, or null if there is no such run
    */
-  /**
-   * Set the display order of the recorded analyses.
-   *
-   * The companion to {@link AnalysisLog#reposition}: `at` says which DATA an analysis
-   * ran against, this says where it sits among the analyses that share that data. Two
-   * analyses at the same `at` are otherwise unorderable — the History arrows could only
-   * leapfrog one past the other, and the lower of the two had no down arrow at all.
-   *
-   * **Changes no numbers and re-runs nothing.** Order is presentation; `at` is meaning.
-   * That is why this appends one small op and emits `changed`, where `reposition` has to
-   * rebuild the data and re-execute the analysis.
-   *
-   * @param {string[]} runIds - every known runId, in the order to show them.
-   */
-  setOrder(runIds) {
-    const order = (runIds || []).filter((id) => typeof id === 'string' && id);
-    if (!order.length) return false;
-    this.#log.append({ target: 'analysis:order', owner: 'core', type: 'reorderAnalyses', payload: { order } });
-    this.#changed();
-    return true;
-  }
-
   reposition(runId, at) {
     const entry = this.#log.state('analysis').find((e) => e.runId === runId);
     if (!entry) return null;

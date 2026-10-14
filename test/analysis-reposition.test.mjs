@@ -20,6 +20,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { AnalysisLog } from '../core/analysis-log.js';
 import { ProjectLog } from '../core/project-log.js';
@@ -277,79 +278,40 @@ const twoAt = (log, at = 0) => {
   return log.entries().map((e) => e.runId);
 };
 
-test('setOrder reorders two analyses that share a data position', () => {
+test('a legacy reorderAnalyses op is still READ, so an old project opens as it was left', () => {
+  // Written by the version that shipped between these two commits. Nothing writes them
+  // now - the timeline's one `reorder` op orders every row - but a project saved while
+  // they existed must not silently come back in a different order.
   const log = freshLog();
   const [freq, desc] = twoAt(log);
-  assert.deepEqual(log.entries().map((e) => e.label), ['Frequencies', 'Descriptives']);
-  log.setOrder([desc, freq]);
-  assert.deepEqual(log.entries().map((e) => e.label), ['Descriptives', 'Frequencies']);
-  // and `at` is untouched — the data each ran against did not change
-  assert.deepEqual(log.entries().map((e) => e.at), [0, 0]);
+  log.load([
+    ...log.toJSON(),
+    {
+      id: 'legacy-order', hlc: { wall: Date.now() + 1000, counter: 0, node: 'z' },
+      target: 'analysis:order', owner: 'core', type: 'reorderAnalyses', reads: [],
+      payload: { order: [desc, freq] },
+    },
+  ]);
+  assert.deepEqual(log.entries().map((e) => e.runId), [desc, freq]);
 });
 
-test('re-recording cannot reorder, which is why the order op exists', () => {
-  // The projection keeps runs in a Map, and re-setting an existing key does NOT move it.
-  // Measured in the running app before the fix: repositioning an analysis twice left the
-  // list in its original order, so "swap by touching it again" was never available.
-  const log = freshLog();
-  const [freq] = twoAt(log);
-  log.reposition(freq, 2);
-  log.reposition(freq, 0);
-  assert.deepEqual(log.entries().map((e) => e.label), ['Frequencies', 'Descriptives']);
+test('nothing writes an analyses-only order any more', () => {
+  // Two authorities on one question is the duplication this rebuild exists to remove.
+  const src = readFileSync('core/analysis-log.js', 'utf8');
+  assert.doesNotMatch(src, /setOrder\s*\(/, 'setOrder is gone');
+  assert.doesNotMatch(src, /type: 'reorderAnalyses'/, 'and nothing appends one');
 });
 
-test('an order survives a save and reload, like every other change', () => {
-  const log = freshLog();
-  const [freq, desc] = twoAt(log);
-  log.setOrder([desc, freq]);
-  const reloaded = freshLog();
-  reloaded.load(log.toJSON());
-  assert.deepEqual(reloaded.entries().map((e) => e.label), ['Descriptives', 'Frequencies'],
-    'the order is an op, so it is in the saved stream like everything else');
-});
-
-test('an order written before a new analysis existed still means what it said', () => {
-  // Forgiving on purpose: ids the order does not mention keep their relative position
-  // AFTER the ones it does, so a later analysis appends rather than scrambling the list.
-  const log = freshLog();
-  const [freq, desc] = twoAt(log);
-  log.setOrder([desc, freq]);
-  log.record({ pluginId: 'p', run: 'run', label: 'Crosstabs', inputs: {}, at: 0 });
-  assert.deepEqual(log.entries().map((e) => e.label), ['Descriptives', 'Frequencies', 'Crosstabs']);
-});
-
-test('a stale id for a removed run is ignored rather than breaking the order', () => {
-  const log = freshLog();
-  const [freq, desc] = twoAt(log);
-  log.setOrder([desc, freq]);
-  // `remove` takes the INDEX in the current (now reordered) list — Descriptives is first.
-  log.remove(0);
-  assert.deepEqual(log.entries().map((e) => e.label), ['Frequencies'],
-    'the order still names the removed run; it is skipped, not fatal');
-});
-
-test('setOrder refuses an empty list rather than wiping the order', () => {
-  const log = freshLog();
-  twoAt(log);
-  assert.equal(log.setOrder([]), false);
-  assert.deepEqual(log.entries().map((e) => e.label), ['Frequencies', 'Descriptives']);
-});
-
-test('the `current` badge marks the BOTTOM row, not the most recent run', () => {
+test('the cursor badge is the LAST LIVE row — the rule, stated where it is implemented', () => {
   // Corrected by the owner (2026-10-13) within an hour of my getting it backwards. I had
   // made the badge follow recency, on the reasoning that `current` is the undo target.
-  // Their reason is better: people read it as a CURSOR — "this is the stack, the next
-  // thing goes here". A new analysis always appends at the BOTTOM, so a badge sitting
-  // mid-list after a reorder promises an insertion that will not happen.
+  // Their reason is better: people read it as a CURSOR — "this is the stack, the next thing
+  // goes here". A new analysis always appends at the BOTTOM, so a badge sitting mid-list
+  // promises an insertion that will not happen.
   //
-  // So the rule is positional, and this test exists to stop it being "fixed" back.
-  const log = freshLog();
-  const [freq, desc] = twoAt(log);
-  const bottom = () => log.entries()[log.entries().length - 1].label;
-  assert.equal(bottom(), 'Descriptives');
-  log.setOrder([desc, freq]);
-  assert.equal(bottom(), 'Frequencies', 'after a reorder the badge follows the new bottom row');
-  // A later analysis appends at the bottom, which is exactly where the badge already was.
-  log.record({ pluginId: 'p', run: 'run', label: 'Bar chart', inputs: {}, at: 0 });
-  assert.equal(bottom(), 'Bar chart', 'and the new run lands under the cursor, as the badge implied');
+  // It is now literally positional: the cursor is the last applied row, and clicking a row
+  // withdraws everything below it, so the badge lands where the user put it. Which analysis
+  // Undo would remove is a different question, and the Edit menu answers it by name.
+  const view = readFileSync('core/data-views.js', 'utf8');
+  assert.match(view, /cursorId = movable\.length \? movable\[movable\.length - 1\]\.id : null/);
 });

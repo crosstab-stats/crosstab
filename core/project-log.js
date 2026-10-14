@@ -311,14 +311,24 @@ export class ProjectLog {
   /** Ops matching `pred` currently hidden by an undo (redoable), each with the undo
    * marker that hid it — sorted oldest-undo first (the newest is the next redo target). */
   #redoable(pred) {
+    const ordered = orderByHlc(this.#ops);
     const latest = new Map();
-    for (const m of orderByHlc(this.#ops)) {
+    for (const m of ordered) {
       if ((m.type === 'undo' || m.type === 'redo') && m.payload?.opId != null) latest.set(m.payload.opId, m);
+    }
+    // A RETRACTED op is gone, not merely hidden, so it must not be offered to a redo.
+    // Without this an undone op stayed redoable after the branch below the cursor was
+    // discarded — and redoing it put it back in the middle of the live list, which is
+    // the behaviour "linear by design" exists to rule out.
+    const applied = appliedState(ordered);
+    const retracted = new Set();
+    for (const op of ordered) {
+      if (op.type === 'retract' && applied(op.id) && op.payload?.opId != null) retracted.add(op.payload.opId);
     }
     const byId = new Map(this.#ops.map((o) => [o.id, o]));
     const out = [];
     for (const [opId, m] of latest) {
-      if (m.type !== 'undo') continue;
+      if (m.type !== 'undo' || retracted.has(opId)) continue;
       const op = byId.get(opId);
       if (op && op.type !== 'undo' && op.type !== 'redo' && pred(op)) out.push({ op, marker: m });
     }

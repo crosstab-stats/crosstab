@@ -15,7 +15,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildTimeline, staleAnalyses, analysisOrder, TRANSFORM_TYPES } from '../core/timeline.js';
+import { buildTimeline, staleAnalyses, analysisOrder, stepsAbove, TRANSFORM_TYPES } from '../core/timeline.js';
 
 const load = (id = 'op-load') => ({ id, type: 'load', src: { label: 'gss.sav', meta: [] } });
 const compute = (id, name) => ({ id, type: 'computeVar', name, expr: '1' });
@@ -165,15 +165,51 @@ test('dataCount is the rewind coordinate: how many data steps are at or above a 
   ]);
 });
 
-test('undone steps are numbered in sequence after the applied ones', () => {
+test('rows below the cursor are the SAME kinds, flagged not-live, and come last', () => {
+  // Applied rows first, then everything below the cursor. That partition is what makes
+  // the list linear: an undone row is always drawn after every applied one — which is
+  // also where a redo now puts it back, since a new action retracts the branch.
   const { rows } = buildTimeline({
     steps: [load(), compute('c1', 'a')],
     future: [compute('c2', 'b')],
     analyses: [run('r1', 'A', 1)],
+    futureAnalyses: [run('r2', 'Withdrawn', 2)],
   });
-  assert.deepEqual(shape(rows), [
-    '1 data Imported data', '2 data Computed a', '3 analysis A', '4 future Computed b',
+  assert.deepEqual(rows.filter((r) => r.kind !== 'start').map((r) => `${r.n} ${r.kind} ${r.live} ${r.title}`), [
+    '1 data true Imported data',
+    '2 data true Computed a',
+    '3 analysis true A',
+    '4 data false Computed b',
+    '5 analysis false Withdrawn',
   ]);
+});
+
+test('a withdrawn analysis is not re-run and does not order the Output', () => {
+  // It sits below the cursor: its numbers are stashed, not stale, and nothing recomputes.
+  const { rows } = buildTimeline({
+    steps: [load(), compute('c1', 'a')],
+    analyses: [run('r1', 'Shown', 1)],
+    futureAnalyses: [run('r2', 'Withdrawn', 99)],
+  });
+  assert.deepEqual(analysisOrder(rows), ['r1']);
+  assert.deepEqual(staleAnalyses(rows), []);
+});
+
+test('stepsAbove is the prefix to materialise for a row', () => {
+  const { rows } = buildTimeline({
+    steps: [load(), compute('c1', 'a'), compute('c2', 'b')],
+    analyses: [run('r1', 'Mid', 1)],
+  });
+  assert.deepEqual(stepsAbove(rows, 'r1').map((s) => s.id), ['op-load', 'c1']);
+});
+
+test('`ids` covers the live rows only — a reorder cannot name the discarded branch', () => {
+  const { ids } = buildTimeline({
+    steps: [load()],
+    future: [compute('c9', 'gone')],
+    analyses: [run('r1', 'A', 0)],
+  });
+  assert.deepEqual(ids, ['op-load', 'r1']);
 });
 
 test('`ids` is the row order, ready to be written as a reorder payload', () => {

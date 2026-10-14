@@ -377,6 +377,21 @@ export class ResultsPane {
    */
   #model = [];
 
+  /**
+   * Output blocks taken down by the History cursor, by runId — NOT deleted.
+   *
+   * `removeRun` is a deletion and must stay one. This is the reversible counterpart: the
+   * blocks come back exactly as they were when the cursor moves back down past the
+   * analysis that made them. They are still valid, because the data state they describe
+   * is the one being returned to.
+   *
+   * Lost on reload, deliberately: a withdrawn analysis is an undone op, and a project
+   * that comes back with the cursor at the bottom has nothing withdrawn to restore. The
+   * caller falls back to re-running, which is why {@link ResultsPane#restoreRun} reports
+   * whether it had anything.
+   */
+  #withdrawn = new Map();
+
   /** Host-tracked attribution of the plugin whose `results.*` call is currently
    * being dispatched (set by the broker around each call; see {@link ResultsPane#setActiveAttribution}).
    * While set, an append made with no open section is placed in a fallback
@@ -1058,6 +1073,7 @@ export class ResultsPane {
 
   /** Remove all output and reset to the empty state. */
   clear() {
+    this.#withdrawn.clear();
     this.#content.replaceChildren();
     this.#currentSection = null;
     this.#pendingSection = null;
@@ -1272,8 +1288,58 @@ export class ResultsPane {
    * disturbing later analyses' output — the thing positional `truncateTo` can't do. */
   removeRun(runId) {
     if (!runId) return;
+    // A deletion ends the run, including any copy the cursor was holding — otherwise
+    // deleting a withdrawn analysis and then fast-forwarding would bring its output back.
+    this.#withdrawn.delete(runId);
     const kept = this.#model.filter((b) => b.runId !== runId);
     if (kept.length !== this.#model.length) this.restoreModel(kept, { divider: false });
+  }
+
+  /**
+   * Take this run's output down, keeping it to put back — the History cursor moving above
+   * the analysis.
+   *
+   * @param {string} runId
+   * @returns {boolean} whether anything was withdrawn
+   */
+  withdrawRun(runId) {
+    if (!runId || this.#withdrawn.has(runId)) return false;
+    const blocks = [];
+    const kept = [];
+    this.#model.forEach((b, i) => {
+      if (b.runId === runId) blocks.push({ at: i, block: b });
+      else kept.push(b);
+    });
+    if (!blocks.length) return false;
+    this.#withdrawn.set(runId, blocks);
+    this.restoreModel(kept, { divider: false });
+    return true;
+  }
+
+  /**
+   * Put a withdrawn run's output back where it was.
+   *
+   * Returns false when there is nothing stashed — after a reload, or for a run that was
+   * deleted rather than withdrawn — so the caller can re-run instead of silently showing
+   * a gap. The index each block was taken from is used as a hint and clamped, since other
+   * analyses may have come and gone meanwhile.
+   *
+   * @param {string} runId
+   * @returns {boolean} whether anything was restored
+   */
+  restoreRun(runId) {
+    const blocks = runId ? this.#withdrawn.get(runId) : null;
+    if (!blocks?.length) return false;
+    this.#withdrawn.delete(runId);
+    const next = this.#model.slice();
+    for (const { at, block } of blocks) next.splice(Math.min(at, next.length), 0, block);
+    this.restoreModel(next, { divider: false });
+    return true;
+  }
+
+  /** Whether this run's output is stashed rather than gone. */
+  isWithdrawn(runId) {
+    return this.#withdrawn.has(runId);
   }
 
   /**

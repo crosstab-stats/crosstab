@@ -1362,8 +1362,15 @@ export class DataStore {
    *
    * @param {string[]} order every timeline row id, in the order to show them
    */
-  async applyTimelineOrder(order) {
-    await this.#applyReorder(order, 'reorder');
+  async applyTimelineOrder(order, { rederive = true } = {}) {
+    if (rederive) {
+      await this.#applyReorder(order, 'reorder');
+      return;
+    }
+    // The DATA order is unchanged — two analyses swapped at the same step — so there is
+    // nothing to validate and nothing to replay. The op is still written, because the
+    // analyses' places live in it; skipping it would lose the move entirely.
+    this.#append('reorder', { order }, 'order');
   }
 
   /** @returns {boolean} Whether this dataset has an operation to undo. */

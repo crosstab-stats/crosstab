@@ -67,12 +67,50 @@ export class UndoCoordinator {
       // A destructive re-import or a change of which project is in view invalidates the
       // analysis side-stack; the log tiers look after themselves.
       if (s?.reason === 'replace' || s?.reason === 'switch') this.#undoneAnalyses = [];
-      void NEW_DATA_REASONS;
+      // A NEW action discards whatever was still ahead of the cursor (see #discardFuture).
+      if (NEW_DATA_REASONS.has(s?.reason)) this.#discardFuture();
     });
     bus.on('analysislog:recorded', (entry) => {
       if (entry?.runId) this.#analysisById.set(entry.runId, entry);
       this.#undoneAnalyses = [];
+      this.#discardFuture();
     });
+  }
+
+  /** Guards the discard against the DATA_CHANGED its own retracts emit. */
+  #discarding = false;
+
+  /**
+   * Discard the branch below the cursor when a NEW action is taken.
+   *
+   * `rewindTo` has documented this since it was written — "a subsequent fresh operation
+   * discards whatever is still ahead (standard linear branch-discard), so the timeline
+   * stays linear" — and it was never implemented. The consequence was not cosmetic:
+   * undo C, append D, and redoing C put it back ABOVE D (the fold orders by HLC), so the
+   * History panel drew the undone rows below the applied ones while a redo inserted them
+   * in the middle. It also meant a stashed analysis output could be restored into a data
+   * state that had moved on underneath it.
+   *
+   * The discard is an explicit `retract` per op, not a deletion: append-only, auditable,
+   * and it propagates to a peer instead of looking like their addition on the next merge.
+   */
+  #discardFuture() {
+    if (!this.#log || this.#discarding) return;
+    const undone = this.#log.undoneOps(() => true);
+    if (!undone.length) return;
+    this.#discarding = true;
+    try {
+      for (const op of undone) {
+        this.#log.append({ target: op.target, owner: op.owner, type: 'retract', payload: { opId: op.id } });
+        // That branch is gone, so any output held aside for it is gone too — otherwise a
+        // later fast-forward could restore a result whose steps no longer exist.
+        const runId = isAnalysisOp(op) ? op.payload?.runId : null;
+        if (runId) this.#results.removeRun?.(runId);
+      }
+      this.#undoneAnalyses = [];
+    } finally {
+      this.#discarding = false;
+    }
   }
 
   /** The newest applied op in each tier, tagged — the candidates for "most recent action". */

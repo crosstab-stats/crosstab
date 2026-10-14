@@ -21,7 +21,9 @@ import { floatSelected, loadVarOrder, saveVarOrder, sortVars, loadVarDisplay, sa
 import { makeVarToolbar, filterVars, getWorkspaceFilter, setWorkspaceFilter } from './var-toolbar.js';
 import { labelForValue, summariseMissing } from './var-role.js';
 import { escapeHtml, stripEllipsis } from './text.js';
-import { describeStep as describeTransform } from './timeline.js';
+import {
+  describeStep as describeTransform, buildTimeline, staleAnalyses, analysisOrder, stepsAbove,
+} from './timeline.js';
 import { el } from './plugin-stdlib.js';
 
 /** Syntax editor metrics: the textarea uses a FIXED line-height so the step gutter
@@ -916,8 +918,12 @@ export class VariableView {
  * with a message. Linear by design (not git branching).
  */
 export class HistoryView {
-  /** @type {string|null} */
-  #movingAnalysis = null;
+  /** The timeline as last drawn — what the arrows and the cursor act on. @type {object[]} */
+  #rows = [];
+
+  /** True while a move/rewind is in flight. Every control disables: a second click
+   * mid-run would queue an order against a timeline that is about to change. */
+  #busy = false;
 
   /**
    * @param {HTMLElement} host
@@ -933,134 +939,58 @@ export class HistoryView {
     this.undo = opts.undo ?? null; // undo coordinator — tells us if an analysis is the latest action
     this.itemHistory = opts.itemHistory ?? null; // plugin-action rows (#152)
     this.pluginActions = opts.pluginActions ?? null; // to re-run an analysis moved to a new position (#190)
-    /** runId currently being moved+recomputed, so its row's controls disable. @type {string|null} */
-    this.#movingAnalysis = null;
     host.classList.add('ct-historyhost');
   }
 
-  /** Rebuild the timeline from the universal log (call on show + on data change).
-   * Analyses (which aren't in the data-store log) are interleaved at the data
-   * position they were run at, so History shows the whole story — data steps AND
-   * the analyses run against them. */
+  /**
+   * Rebuild the panel from the timeline — ONE ordered, numbered list covering the data
+   * pipeline and the analyses run against it.
+   *
+   * The ordering itself lives in {@link module:core/timeline}, which the Syntax view and
+   * the script writer read too. This method only draws what that returns, which is the
+   * point: the panel used to compute its own interleave on a different transform set from
+   * the one that generated the positions, so the list and the semantics could disagree.
+   */
   render() {
     const { applied, future } = this.store.getHistory();
+    const analyses = this.analysisLog ? this.analysisLog.entries() : [];
+    const { rows } = buildTimeline({
+      steps: applied,
+      future,
+      analyses,
+      futureAnalyses: this.analysisLog?.withdrawnEntries?.() ?? [],
+      order: this.store.getOrder?.() ?? null,
+    });
+    this.#rows = rows;
+
     const ol = document.createElement('ol');
     ol.className = 'history';
 
-    // Analyses grouped by `at` (number of data transforms applied when each ran),
-    // so they slot in right after the transform they followed.
-    const analyses = this.analysisLog ? this.analysisLog.entries() : [];
-    const byAt = new Map();
-    analyses.forEach((e, idx) => {
-      const k = Number.isFinite(e.at) ? e.at : Infinity;
-      if (!byAt.has(k)) byAt.set(k, []);
-      byAt.get(k).push({ e, idx });
-    });
-    // When the most recent action is an analysis, IT is "current" — not the last
-    // data op (so Undo visibly targets the analysis). The latest run is the last
-    // entry in the log (highest idx).
-    const analysisIsCurrent = !!this.undo?.lastActionIsAnalysis?.() && analyses.length > 0;
-    // A plugin action can also be the most recent thing that happened (#152), in which
-    // case NEITHER the last data step nor an analysis is 'current' — otherwise two rows
-    // claim it and Undo appears to target the wrong one.
-    const itemIsCurrent = !!this.undo?.lastActionIsItem?.();
-    // The BOTTOM analysis row, deliberately — not the most recently run one.
-    //
-    // I had this the other way round for about an hour on 2026-10-13, on the reasoning
-    // that `current` marks the undo target. The owner corrected it, and the reason is
-    // better than mine: people read this badge as a CURSOR — "this is the stack, and the
-    // next thing goes here". A new analysis always appends at the BOTTOM, so a badge
-    // sitting mid-list after a reorder quietly promises an insertion that will not
-    // happen. Marking the last row keeps the promise the badge is actually making.
-    //
-    // Which analysis Undo would remove is a different question, and the Edit menu
-    // answers it by name. `analysisIsCurrent` still gates whether any badge shows at
-    // all, so this only ever marks a row when an analysis WAS the last thing to happen.
-    const currentAnalysisIdx = analyses.length - 1;
-    const emitAnalyses = (k) => {
-      // `pos`/`count` are the analysis's place among the ones sharing this data step, so a
-      // row knows whether its neighbour above/below is a SIBLING (swap, no re-run) or the
-      // next data step (reposition, re-runs).
-      const group = byAt.get(k) || [];
-      group.forEach(({ e, idx }, pos) =>
-        ol.append(this.#analysisStep(e, idx, analysisIsCurrent && idx === currentAnalysisIdx,
-          { pos, group: group.map((g) => g.e.runId) })));
-      byAt.delete(k);
-    };
+    // The movable rows, in order. The base import is PINNED: nothing may sit above it and
+    // it may not move, because every later step is expressed against the data it brought.
+    const movable = rows.filter((r) => r.live && r.kind !== 'start');
+    const pinIdx = movable.findIndex((r) => r.kind === 'data' && SOURCE_TYPES.has(r.type));
+    // THE CURSOR is the last applied row — not separate state. Clicking a row withdraws
+    // everything below it, so "the last applied row" is always where the user left it. It
+    // is therefore both "the state you are looking at" and "where the next thing will go",
+    // which is how people read this badge (owner, 2026-10-13).
+    const cursorId = movable.length ? movable[movable.length - 1].id : null;
 
-    // Step 0: the empty start, before any data is loaded. Rewinding here clears
-    // the dataset back to nothing (you can then import fresh).
-    ol.append(
-      this.#step({
-        n: 0,
-        marker: '○',
-        title: 'Start',
-        detail: 'empty — before any data',
-        state: applied.length === 0 && !analysisIsCurrent && !itemIsCurrent ? 'current' : 'applied',
-      }),
-    );
+    for (const row of rows) ol.append(this.#timelineRow(row, { movable, pinIdx, cursorId }));
 
-    // Applied operations 1..k (k = current position) — loads and transforms alike.
-    // Every applied op except the base import (log index 0) can be reordered/deleted.
-    let tcount = 0;
-    let flushedZero = false;
-    const flushZero = () => { if (!flushedZero) { emitAnalyses(0); flushedZero = true; } };
-    applied.forEach((t, i) => {
-      const n = i + 1;
-      const d = describeTransform(t);
-      const isTransform = TRANSFORM_TYPES.has(t.type);
-      if (isTransform) flushZero(); // analyses run before any transform sit after the sources
-      ol.append(
-        this.#step({
-          n,
-          marker: n,
-          title: d.title,
-          detail: d.detail,
-          state: n === applied.length && !analysisIsCurrent && !itemIsCurrent ? 'current' : 'applied',
-          index: i,
-          canUp: i >= 2,
-          canDown: i >= 1 && i < applied.length - 1,
-          canDelete: i >= 1,
-        }),
-      );
-      if (isTransform) { tcount += 1; emitAnalyses(tcount); }
-    });
-    flushZero();
-    for (const k of [...byAt.keys()].sort((a, b) => a - b)) emitAnalyses(k);
-
-    // Future (undone) operations — greyed, still clickable to fast-forward.
-    future.forEach((t, i) => {
-      const n = applied.length + i + 1;
-      const d = describeTransform(t);
-      ol.append(this.#step({ n, marker: n, title: d.title, detail: d.detail, state: 'future' }));
-    });
-
-    // Records: memos, coding, boundary sets (#152). They are listed after the data
-    // steps, in the order they happened, and deliberately NOT interleaved: a memo is not
-    // a step in the data pipeline, and rewinding to step 2 does not un-write it. Showing
-    // them as their own chronological group is the truthful shape, not a compromise.
-    //
-    // The heading is assembled from the collections actually present rather than being a
-    // fixed word. It said "Plugin actions", which was wrong for the commonest case — a
-    // memo is owned by CORE, and memos being host-owned is the whole point of #152 L2.
-    // Naming the group after its contents cannot make that mistake.
+    // Records: memos, coding, boundary sets (#152), listed after the timeline in the order
+    // they happened. A memo is not a step in the recipe — it is not re-run to reproduce the
+    // data — so it is not numbered and not a cursor position.
     const itemRows = this.itemHistory ? this.itemHistory() : [];
     if (itemRows.length) {
       const groups = [...new Set(itemRows.map((r) => r.group).filter(Boolean))];
-      const sub = el('li', { class: 'history__step history__step--applied' });
-      sub.append(el('span', { text: groups.join(' · ') || 'Records', class: 'history__body' }));
+      const sub = el('li', { class: 'history__step history__step--sub' });
+      sub.append(el('span', { text: groups.join(' \u00b7 ') || 'Records', class: 'history__body' }));
       sub.title = 'Not steps in the data pipeline — rewinding the data does not undo these';
-      sub.style.opacity = '0.7';
       ol.append(sub);
-      itemRows.forEach((r, i) => {
-        ol.append(this.#step({
-          n: '',
-          marker: '◆',
-          title: r.title,
-          detail: r.detail,
-          state: i === itemRows.length - 1 && itemIsCurrent ? 'current' : 'applied',
-        }));
-      });
+      for (const r of itemRows) {
+        ol.append(this.#recordRow(r));
+      }
     }
 
     this.host.replaceChildren(ol);
@@ -1071,169 +1001,203 @@ export class HistoryView {
     }
   }
 
-  /** One timeline row: a clickable body that rewinds to having `n` ops applied,
-   * plus (for reorderable applied steps) move/delete controls. */
-  #step({ n, marker, title, detail, state, index, canUp, canDown, canDelete }) {
+  /** One timeline row: a clickable body that moves the cursor here, plus its controls. */
+  #timelineRow(row, { movable, pinIdx, cursorId }) {
     const li = document.createElement('li');
+    const isCursor = row.kind === 'start' ? cursorId === null : row.id === cursorId;
+    const state = !row.live ? 'future' : isCursor ? 'current' : 'applied';
     li.className = `history__step history__step--${state}`;
+    if (row.kind === 'analysis') li.classList.add('history__step--analysis');
 
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'history__btn';
-    btn.append(el('span', { text: String(marker), class: 'history__marker' }));
+    btn.append(el('span', { text: row.kind === 'start' ? '\u25cb' : String(row.n), class: 'history__marker' }));
     const body = el('span', { class: 'history__body' });
-    body.append(el('span', { text: title, class: 'history__title' }));
-    if (detail) body.append(el('span', { text: detail, class: 'history__detail' }));
+    // The glyph says WHAT KIND of step this is without costing the row its number. An
+    // analysis used to be marked by replacing the number with a sigma, which is how it
+    // ended up unnumbered and — because only numbered rows were clickable — unclickable.
+    if (row.kind === 'analysis') body.append(el('span', { text: '\u2211', class: 'history__glyph' }));
+    body.append(el('span', { text: row.title, class: 'history__title' }));
+    if (row.detail) body.append(el('span', { text: row.detail, class: 'history__detail' }));
     btn.append(body);
-    if (state === 'current') {
-      btn.append(el('span', { text: 'current', class: 'history__badge' }));
-    }
-    // The body always rewinds to this step (even the current one is harmlessly
-    // re-applied); reorder/delete live in the controls so they don't trigger it.
-    btn.title = state === 'current' ? 'Current state' : `Rewind to: ${title}`;
-    btn.addEventListener('click', () => void this.store.rewindTo(n));
+    if (isCursor && row.live) btn.append(el('span', { text: 'current', class: 'history__badge' }));
+
+    btn.title = isCursor
+      ? 'The state you are looking at — the next step goes here'
+      : row.live
+        ? `Rewind to: ${row.title}`
+        : `Fast-forward to: ${row.title}`;
+    btn.disabled = this.#busy;
+    btn.addEventListener('click', () => void this.#cursorTo(row));
     li.append(btn);
 
-    if (canUp || canDown || canDelete) {
-      const ctl = el('span', { class: 'history__ctl' });
-      ctl.append(
-        ctlBtn('▲', 'Move up', !canUp, () => this.#move(index, index - 1)),
-        ctlBtn('▼', 'Move down', !canDown, () => this.#move(index, index + 1)),
-        ctlBtn('✕', 'Remove this step', !canDelete, () => this.#remove(index)),
-      );
-      li.append(ctl);
-    }
+    const ctl = this.#rowControls(row, { movable, pinIdx });
+    if (ctl) li.append(ctl);
     return li;
   }
 
-  async #move(from, to) {
-    try {
-      await this.store.moveOp(from, to);
-    } catch (err) {
-      this.onError(err.message);
+  /**
+   * The per-row controls, and the rule that replaced four special cases.
+   *
+   * An arrow swaps this row with its NEIGHBOUR — always exactly one row, whatever kind the
+   * neighbour is. What that costs is then computed from the result rather than chosen by
+   * which button was pressed: see {@link HistoryView#applyOrder}.
+   */
+  #rowControls(row, { movable, pinIdx }) {
+    if (row.kind === 'start' || !row.live) return null;
+    const i = movable.findIndex((r) => r.id === row.id);
+    if (i < 0) return null;
+    const locked = i === pinIdx; // the base import
+    const canUp = !locked && i > pinIdx + 1;
+    const canDown = !locked && i < movable.length - 1;
+    const above = movable[i - 1];
+    const below = movable[i + 1];
+    const busy = this.#busy;
+
+    const ctl = el('span', { class: 'history__ctl' });
+    // The R this result came from, if it was recorded. Shown here rather than only in the R
+    // export because the point of keeping it is reading a project you did not run: a bundle
+    // can arrive with results from a plugin you do not have. Absent — not disabled — when
+    // there is nothing to show, since a disabled button would imply the source exists and is
+    // merely out of reach (guard-means-missing-state).
+    if (row.kind === 'analysis' && Array.isArray(row.entry?.rSource) && row.entry.rSource.length) {
+      ctl.append(ctlBtn('R', 'Show the R this analysis ran', busy, () => this.#showAnalysisSource(row.entry)));
     }
+    ctl.append(
+      ctlBtn('\u25b2', moveTip(row, above, -1), busy || !canUp, () => this.#moveRow(row, -1)),
+      ctlBtn('\u25bc', moveTip(row, below, 1), busy || !canDown, () => this.#moveRow(row, 1)),
+      ctlBtn('\u2715',
+        row.kind === 'analysis' ? 'Remove this analysis from the history' : 'Remove this step',
+        busy || locked,
+        () => this.#removeRow(row)),
+    );
+    return ctl;
   }
 
-  async #remove(index) {
-    try {
-      await this.store.removeOp(index);
-    } catch (err) {
-      this.onError(err.message);
-    }
-  }
-
-  /** A timeline row for a logged analysis (crosstab / regression / plot). Shown at
-   * its data position, with the data steps. Display-only (not a data state to rewind
-   * to) plus a ✕ to drop it from the recorded analyses. */
-  #analysisStep(entry, idx, isCurrent = false, { pos = 0, group = [] } = {}) {
-    const li = document.createElement('li');
-    li.className = 'history__step history__step--analysis';
-    const row = el('span', { class: 'history__btn' });
-    row.style.cursor = 'default';
-    const mk = el('span', { text: '∑', class: 'history__marker' });
-    mk.style.color = 'var(--accent, #2572a5)';
+  /** A record row (a memo, a coding). Not numbered: it is not a step in the recipe. */
+  #recordRow(r) {
+    const li = el('li', { class: 'history__step history__step--applied history__step--record' });
+    const btn = el('span', { class: 'history__btn' });
+    btn.append(el('span', { text: '\u25c6', class: 'history__marker' }));
     const body = el('span', { class: 'history__body' });
-    body.append(el('span', { text: stripEllipsis(entry.label || 'Analysis'), class: 'history__title' }));
-    const detail = entry.pluginName || '';
-    if (detail) body.append(el('span', { text: detail, class: 'history__detail' }));
-    row.append(mk, body);
-    if (isCurrent) row.append(el('span', { text: 'current', class: 'history__badge' }));
-    li.append(row);
-    if (this.analysisLog) {
-      // ▲/▼ move the analysis one DATA step, which is what its position means: `at` is how
-      // many transforms had run when it did, so moving it changes which data the result
-      // describes — and that is why each move re-runs it (#190). Before this the row had only
-      // ✕, because `AnalysisLog#move` was a no-op and arrows would have done nothing; the
-      // Syntax view could reorder an analysis and this view could not (user, 2026-09-27).
-      //
-      // ONE ROW PER CLICK, which is how the list reads (owner, 2026-10-13). The arrows used
-      // to move one DATA step regardless of neighbours, so two analyses sharing a step could
-      // not be reordered at all, the lower one had no working ▼, and ▲ leapfrogged the
-      // sibling AND the transform in a single click — two rows for one press.
-      //
-      // So the neighbour decides the move:
-      //  - a SIBLING at the same data step → swap them. Presentation only: same data, same
-      //    numbers, nothing re-runs.
-      //  - a data step → cross it, which changes which data the analysis describes and
-      //    therefore re-runs it (#190).
-      const at = Number.isFinite(entry.at) ? entry.at : this.store.getTransforms?.().length ?? 0;
-      const total = this.store.getTransforms?.().length ?? 0;
-      const busy = !!this.pluginActions && this.#movingAnalysis === entry.runId;
-      const hasSiblingAbove = pos > 0;
-      const hasSiblingBelow = pos < group.length - 1;
-      const canUp = hasSiblingAbove || at > 0;
-      const canDown = hasSiblingBelow || at < total;
-      const upTip = hasSiblingAbove ? 'Show this analysis above the one before it'
-        : 'Run this one data step earlier';
-      const downTip = hasSiblingBelow ? 'Show this analysis below the one after it'
-        : 'Run this one data step later';
-      const ctl = el('span', { class: 'history__ctl' });
-      ctl.append(
-        ctlBtn('▲', upTip, !this.pluginActions || busy || !canUp,
-          () => (hasSiblingAbove
-            ? this.#swapAnalyses(entry.runId, group[pos - 1])
-            : this.#moveAnalysis(entry, at - 1))),
-        ctlBtn('▼', downTip, !this.pluginActions || busy || !canDown,
-          () => (hasSiblingBelow
-            ? this.#swapAnalyses(entry.runId, group[pos + 1])
-            : this.#moveAnalysis(entry, at + 1))),
-        ctlBtn('✕', 'Remove this analysis from the history', busy, () => this.#removeAnalysis(idx)),
-      );
-      // The R this result came from, if it was recorded. Shown here rather than only in the
-      // R export because the point of keeping it is reading a project you did not run: a
-      // bundle can arrive with results from a plugin you do not have, and having to export a
-      // file to find out what was computed is not an audit trail, it is a workaround.
-      // Absent — not disabled — when there is nothing to show, since a disabled button
-      // would imply the source exists and is merely out of reach (guard-means-missing-state).
-      if (Array.isArray(entry.rSource) && entry.rSource.length) {
-        ctl.insertBefore(
-          ctlBtn('R', 'Show the R this analysis ran', false, () => this.#showAnalysisSource(entry)),
-          ctl.firstChild,
-        );
-      }
-      li.append(ctl);
-    }
+    body.append(el('span', { text: r.title, class: 'history__title' }));
+    if (r.detail) body.append(el('span', { text: r.detail, class: 'history__detail' }));
+    btn.append(body);
+    li.append(btn);
     return li;
   }
 
   /**
-   * Move an analysis to a new data position and recompute it there.
+   * Move the cursor to a row: everything below it goes into the future.
    *
-   * Applied immediately, like every other control in this view (rewinding, moving a transform,
-   * deleting) — Steps is the direct-manipulation view, and deferring just this one would put
-   * two models in one panel. Only the moved analysis re-runs, so the cost is one analysis
-   * rather than the script; bulk reordering has a better home in the Syntax view's
-   * draft-then-Run. The row is marked busy meanwhile, because a WebR analysis is not instant
-   * and a second click mid-run would queue a move against a stale position.
-   */
-  /**
-   * Swap two analyses that share a data step.
+   * This is the fix for the inconsistency the owner reported — clicking a data step
+   * rewound the data and left the analyses below it standing, so Output went on showing
+   * numbers whose input data no longer existed. The timeline is a recipe for the grid AND
+   * the outputs, so the cursor has to govern both.
    *
-   * No re-run and no data rebuild: both ran against the same data, so only the order they
-   * are SHOWN in changes — in History and, through `reorderRuns`, in Output.
+   * Withdrawing an analysis stashes its output rather than deleting it: the blocks were
+   * computed from exactly the data state being returned to, so restoring them is both
+   * instant and true. Re-running is the fallback for when there is no stash (after a
+   * reload), and it re-runs at the analysis's OWN position, not at the cursor's.
    */
-  #swapAnalyses(runId, otherRunId) {
-    if (!this.analysisLog || !runId || !otherRunId) return;
-    const order = this.analysisLog.entries().map((e) => e.runId).filter(Boolean);
-    const a = order.indexOf(runId);
-    const b = order.indexOf(otherRunId);
-    if (a < 0 || b < 0) return;
-    [order[a], order[b]] = [order[b], order[a]];
-    this.analysisLog.setOrder(order);
-    this.results?.reorderRuns?.(order);
-    this.render();
-  }
-
-  async #moveAnalysis(entry, to) {
-    if (!this.pluginActions || !entry?.runId || this.#movingAnalysis) return;
-    this.#movingAnalysis = entry.runId;
+  async #cursorTo(row) {
+    if (this.#busy) return;
+    this.#busy = true;
     this.render();
     try {
-      await this.pluginActions.repositionAnalysis(entry.runId, to);
+      const seq = this.#rows.filter((r) => r.kind !== 'start');
+      const cut = row.kind === 'start' ? -1 : seq.findIndex((r) => r.id === row.id);
+      // The data tier first, so a replay below lands on the right state.
+      await this.store.rewindTo(row.dataCount);
+      for (let k = 0; k < seq.length; k += 1) {
+        const r = seq[k];
+        if (r.kind !== 'analysis') continue;
+        const wanted = k <= cut;
+        if (wanted && !r.live) {
+          this.analysisLog?.admit?.(r.id);
+          if (!this.results?.restoreRun?.(r.id)) {
+            // eslint-disable-next-line no-await-in-loop -- analyses must come back in order
+            await this.pluginActions?.repositionAnalysis?.(r.id, r.at, { prefix: stepsAbove(seq, r.id) });
+          }
+        } else if (!wanted && r.live) {
+          this.results?.withdrawRun?.(r.id);
+          this.analysisLog?.withdraw?.(r.id);
+        }
+      }
     } catch (err) {
       this.onError(err.message);
     } finally {
-      this.#movingAnalysis = null;
+      this.#busy = false;
+      this.render();
+    }
+  }
+
+  /** Swap a row with its neighbour, one row per click. */
+  async #moveRow(row, dir) {
+    if (this.#busy) return;
+    const movable = this.#rows.filter((r) => r.live && r.kind !== 'start');
+    const i = movable.findIndex((r) => r.id === row.id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= movable.length) return;
+    const ids = movable.map((r) => r.id);
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    await this.#applyOrder(ids);
+  }
+
+  /**
+   * Record a new timeline order and pay only what it actually costs.
+   *
+   * The consequences are DERIVED, which is what lets one gesture serve every case:
+   *  - the data order changed — the pipeline is validated and re-derived;
+   *  - an analysis's derived `at` changed — that analysis, and only that analysis, re-runs
+   *    at its new position;
+   *  - neither — two analyses swapped at the same data step — nothing recomputes at all.
+   *
+   * Before this the caller chose: one button swapped siblings and another crossed a data
+   * step, so the lower of two siblings had no working arrow and crossing one moved two rows.
+   */
+  async #applyOrder(ids) {
+    this.#busy = true;
+    this.render();
+    try {
+      const { applied } = this.store.getHistory();
+      const analyses = this.analysisLog ? this.analysisLog.entries() : [];
+      const next = buildTimeline({ steps: applied, analyses, order: ids });
+      const dataBefore = applied.map((s) => s.id).join(',');
+      const dataAfter = next.rows.filter((r) => r.kind === 'data').map((r) => r.id).join(',');
+      await this.store.applyTimelineOrder(ids, { rederive: dataBefore !== dataAfter });
+      for (const { runId, to } of staleAnalyses(next.rows)) {
+        // eslint-disable-next-line no-await-in-loop -- one at a time, each against its own data
+        await this.pluginActions?.repositionAnalysis?.(runId, to, { prefix: stepsAbove(next.rows, runId) });
+      }
+      this.results?.reorderRuns?.(analysisOrder(next.rows));
+    } catch (err) {
+      this.onError(err.message);
+    } finally {
+      this.#busy = false;
+      this.render();
+    }
+  }
+
+  /** Delete a row: a data step is retracted from the pipeline, an analysis from the log. */
+  async #removeRow(row) {
+    if (this.#busy) return;
+    this.#busy = true;
+    this.render();
+    try {
+      if (row.kind === 'analysis') {
+        const idx = (this.analysisLog?.entries() ?? []).findIndex((e) => e.runId === row.id);
+        if (idx >= 0) this.analysisLog.remove(idx);
+        // Deleting a step from History must not orphan its table/plot in the Output pane.
+        this.results?.removeRun?.(row.id);
+      } else {
+        await this.store.removeOp(row.stepIndex);
+      }
+    } catch (err) {
+      this.onError(err.message);
+    } finally {
+      this.#busy = false;
       this.render();
     }
   }
@@ -1314,6 +1278,29 @@ export class HistoryView {
       this.onError(err.message);
     }
   }
+}
+
+/** Source ops: a row that brings data in rather than changing it. The first one is the
+ * base import, which is pinned — every later step is expressed against the data it brought. */
+const SOURCE_TYPES = new Set(['load', 'append', 'join']);
+
+/**
+ * What an arrow will do, said in terms of the NEIGHBOUR it will cross.
+ *
+ * The tooltip is where the cost shows up before the click: crossing another analysis is
+ * presentation, crossing a data step changes which data the result describes and re-runs it.
+ */
+function moveTip(row, neighbour, dir) {
+  const where = dir < 0 ? 'above' : 'below';
+  if (!neighbour) return dir < 0 ? 'Already first' : 'Already last';
+  if (row.kind === 'analysis' && neighbour.kind === 'analysis') {
+    return `Show this analysis ${where} “${neighbour.title}”`;
+  }
+  if (row.kind === 'analysis') {
+    return `Run this ${dir < 0 ? 'before' : 'after'} “${neighbour.title}” — it will be recomputed`;
+  }
+  if (neighbour.kind === 'analysis') return `Move this step ${where} “${neighbour.title}”`;
+  return `Move this step ${dir < 0 ? 'earlier' : 'later'}`;
 }
 
 /** A small control button for a history step (move/delete). */
