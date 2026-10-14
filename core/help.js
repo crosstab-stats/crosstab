@@ -401,8 +401,22 @@ async function openBugReport(deps) {
  * @param {Function} [deps.openSyntaxGuide]
  * @param {object} [deps.pluginActions]
  */
-export function registerHelpMenu({ menus, datasets, loader, plugins, openSyntaxGuide, pluginActions }) {
+export function registerHelpMenu({ menus, datasets, loader, plugins, openSyntaxGuide, pluginActions, openHowto }) {
   const link = (url) => window.open(url, '_blank', 'noopener');
+
+  // The guide itself (#192). This item waited until there was something behind it: an
+  // item promising documentation and opening a blurb spends the reader's trust once and
+  // teaches them the menu lies. "Getting around" stays as orientation, which is what it
+  // is named for and what it actually contains.
+  if (openHowto) {
+    menus.register({
+      id: 'core:help-howto',
+      path: ['Help'],
+      label: 'How to…',
+      order: 0,
+      command: () => openHowto(),
+    });
+  }
 
   menus.register({
     id: 'core:help-around',
@@ -411,10 +425,6 @@ export function registerHelpMenu({ menus, datasets, loader, plugins, openSyntaxG
     order: 1,
     command: () => showGettingAround(),
   });
-  // No "How to use CrossTab…" item yet: the guide is #184 and does not exist. "Getting
-  // around" is four paragraphs of orientation and is named as such — an item promising
-  // documentation and opening a blurb spends the reader's trust once and teaches them
-  // the menu lies.
   if (openSyntaxGuide) {
     menus.register({
       id: 'core:help-syntax',

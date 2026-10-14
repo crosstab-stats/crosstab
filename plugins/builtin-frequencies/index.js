@@ -106,6 +106,40 @@ export const manifest = {
     '  • vars — one or more variables to tabulate.\n' +
     '  • statistics — optional list from: ' + STATS.map((s) => s.value).join(', ') + '.\n' +
     '  • weight — optional survey weight; counts become weighted case counts and the caption names it.',
+  // The how-to INDEX (#192) — ids, titles and search terms only; the prose lives in
+  // `howtoFile`, which ships with the plugin and is read on demand. The one-line `howto`
+  // above stays: it is the short form shown behind the 🔍 in the plugin manager.
+  //
+  // This is the reference implementation for plugin authors, and there is deliberately
+  // nothing privileged about it — a third-party plugin writing these same two fields gets
+  // the same placement, the same search and the same rendering.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'frequencies-basics',
+      title: 'Make a frequency table',
+      category: 'Descriptive Statistics',
+      keywords: ['frequency', 'frequencies', 'counts', 'count', 'table', 'distribution', 'percent', 'tabulate', 'how many'],
+      needs: ['builtin-frequencies'],
+      seeAlso: ['frequencies-statistics', 'frequencies-weighted'],
+    },
+    {
+      id: 'frequencies-statistics',
+      title: 'Add a mode, median or variance',
+      category: 'Descriptive Statistics',
+      keywords: ['mode', 'median', 'variance', 'range', 'statistics', 'summary', 'central tendency'],
+      needs: ['builtin-frequencies'],
+      seeAlso: ['frequencies-basics'],
+    },
+    {
+      id: 'frequencies-weighted',
+      title: 'Count weighted cases',
+      category: 'Descriptive Statistics',
+      keywords: ['weight', 'weighted', 'survey', 'population', 'design weight'],
+      needs: ['builtin-frequencies'],
+      seeAlso: ['frequencies-basics'],
+    },
+  ],
   rPackages: [],
   menu: [
     {

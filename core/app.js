@@ -28,6 +28,9 @@ import { registerHelpMenu } from './help.js';
 import { addDeployIssues, loadDeployConfig } from './deploy-config.js';
 import { loadSitePlugins } from './site-plugins.js';
 import { openSyntaxGuide } from './syntax-guide.js';
+import { createHowtoLibrary } from './howto-library.js';
+import { openHowto } from './howto-ui.js';
+import { CORE_HOWTO } from './howto-core.js';
 import { installIdentityChip, getIdentity, onIdentityChange, currentAuthor } from './user-identity.js';
 import { ProjectLog } from './project-log.js';
 import { ItemStore, newItemId, parseItemTarget, itemTarget } from './item-store.js';
@@ -1780,6 +1783,59 @@ export async function boot(mounts) {
   // report's diagnostics, and both exist by now. `plugins` is read through a getter
   // rather than captured: the PluginManager is constructed BELOW this point, so passing
   // the value would pass `undefined` and the report would list no plugins.
+  /**
+   * The how-to library (#192).
+   *
+   * `catalogue` is the plugin catalogue with ONE synthesised row prepended for the host
+   * itself. That row is the only place core is special, and it is special for a boring
+   * reason: the host has no manifest file to declare itself in. Everything downstream
+   * — ordering, search, resolution, rendering — treats it as one entry among the rest,
+   * so a third-party topic and a core topic are indistinguishable to every rule that
+   * decides what the reader sees.
+   */
+  const howtoLibrary = createHowtoLibrary({
+    catalogue: () => [CORE_HOWTO, ...(plugins ? plugins.list() : [])],
+    readFile: async (pluginId, path) => {
+      // The host's own files are same-origin siblings of the app — which is exactly what
+      // `resolveAsset` falls back to for a URL-loaded plugin, so this is the same path,
+      // not a privileged one.
+      if (pluginId === CORE_HOWTO.id) {
+        const res = await fetch(new URL(path, document.baseURI), { cache: 'no-cache' });
+        if (!res.ok) throw new Error(`${res.status}`);
+        return { kind: 'text', value: await res.text() };
+      }
+      // An ACTIVATED plugin can serve from its own bundle.
+      try {
+        const hit = await loader.resolveAsset(pluginId, path);
+        if (hit) return hit;
+      } catch { /* fall through to the sibling fetch */ }
+      // A catalogued-but-not-activated plugin still has documentation, which is the
+      // point: the guide has to be able to teach you about something BEFORE you enable
+      // it. For a URL-loaded plugin its files sit beside its entry.
+      const row = (plugins?.list() ?? []).find((e) => e.id === pluginId);
+      if (!row?.url) throw new Error('no readable source');
+      const res = await fetch(new URL(path, new URL(row.url, document.baseURI)), { cache: 'no-cache' });
+      if (!res.ok) throw new Error(`${res.status}`);
+      const text = await res.text();
+      return { kind: 'text', value: text };
+    },
+    enable: async (ids) => {
+      // `setManyEnabled` speaks in catalogue KEYS; a topic's `needs` speaks in plugin ids.
+      const rows = plugins?.list() ?? [];
+      const keys = (Array.isArray(ids) ? ids : [ids])
+        .map((id) => rows.find((e) => e.id === id)?.key)
+        .filter(Boolean);
+      if (keys.length) await plugins.setManyEnabled(keys, true);
+    },
+  });
+  services.howto = { open: (topicId) => openHowto({ library: howtoLibrary, topicId }) };
+  // A changed plugin set invalidates the cached sidecars — a plugin may have gone, or
+  // arrived with different docs. It does NOT reset where the reader is: pressing the
+  // guide's own "Enable" button fires this, and throwing them off the page they were
+  // reading as a reward for following its advice is precisely backwards. A topic that no
+  // longer exists is handled where it is opened, which is the honest place for it.
+  bus.on(CoreEvents.PLUGINS_CHANGED, () => howtoLibrary.dispose());
+
   registerHelpMenu({
     menus,
     datasets,
@@ -1787,6 +1843,7 @@ export async function boot(mounts) {
     plugins: { list: () => (plugins ? plugins.list() : []) },
     openSyntaxGuide,
     pluginActions,
+    openHowto: () => services.howto.open(),
   });
 
   // The sidebar project manager: the open project and its datasets, plus the other

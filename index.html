@@ -979,6 +979,114 @@
       .ws-verb:hover { background: #eef3f8; }
       .ws-verb--restart { color: #5a6470; }
 
+      /* --- the How-to overlay (#192) -----------------------------------------
+         Class-based throughout, deliberately. The Syntax guide it replaces was styled
+         inline, which is why its close button was ~16x19px and why no small-screen rule
+         could resize it. Touch targets here are 44px from the start rather than
+         retrofitted, and the top bar never scrolls away. */
+      .howto { max-width: 860px; width: 94vw; padding: 0; }
+      .howto__form { display: flex; flex-direction: column; max-height: 86vh; padding: 0; }
+      .howto__bar {
+        display: flex; align-items: center; gap: 8px; flex: none;
+        padding: 8px 10px; border-bottom: 1px solid var(--line, #e2e7ec); background: #f7f9fb;
+        border-radius: 10px 10px 0 0;
+      }
+      .howto__nav {
+        min-width: 44px; min-height: 44px; padding: 0 12px; font: inherit; font-size: 14px;
+        border: 1px solid #ccd4dc; border-radius: 8px; background: #fff; cursor: pointer; color: #2a323a;
+      }
+      .howto__nav:hover:not(:disabled) { background: #eef5fb; }
+      .howto__nav:disabled { opacity: .4; cursor: default; }
+      .howto__close { margin-left: auto; font-size: 16px; }
+      /* Where you are. After two or three cross-links this is the only thing on screen
+         that says which page this is, so it gets the room and truncates rather than wraps. */
+      .howto__where {
+        flex: 1 1 auto; min-width: 0; font-weight: 600; font-size: 14px;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 4px;
+      }
+      .howto__content { overflow: auto; padding: 14px 18px 20px; }
+
+      .howto__filterbar { position: sticky; top: 0; background: var(--panel, #fff); padding-bottom: 8px; z-index: 1; }
+      .howto__filter {
+        width: 100%; box-sizing: border-box; font: inherit; font-size: 16px;
+        min-height: 44px; padding: 8px 12px; border: 1px solid #ccd4dc; border-radius: 8px;
+      }
+      /* The scope, said out loud: a reader who searches a word that lives inside a page
+         and gets nothing would otherwise conclude the topic does not exist. */
+      .howto__scope { margin: 6px 2px 0; font-size: 12px; color: #6b7682; }
+
+      .howto__group {
+        margin: 16px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+        color: #8b96a1; font-weight: 700;
+      }
+      .howto__row {
+        display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+        min-height: 44px; padding: 8px 10px; margin: 0 0 2px; font: inherit;
+        background: none; border: 0; border-radius: 8px; cursor: pointer; color: #1a1a1a;
+      }
+      .howto__row:hover { background: #eef5fb; }
+      .howto__rowmain { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
+      .howto__rowtitle { font-weight: 600; }
+      /* Attribution, never a sort key. */
+      .howto__rowfrom { font-size: 12px; color: #6b7682; }
+      .howto__badge {
+        flex: none; font-size: 11px; font-weight: 600; color: #8a5a00; background: #fdf0d5;
+        padding: 2px 8px; border-radius: 10px;
+      }
+      .howto__empty { color: #6b7682; padding: 12px 2px; }
+
+      /* "Needs Crosstabs - Enable": an affordance, not a warning. Going from "huh, that
+         wasn't the one I wanted" to "ah, there's the one I meant" is the common case. */
+      .howto__needs {
+        display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+        padding: 10px 12px; margin: 0 0 12px; border-radius: 8px;
+        background: #eaf2fb; border: 1px solid #cfe0f2;
+      }
+      .howto__needstext { font-size: 13px; color: #2a4a68; }
+      .howto__enable {
+        font: inherit; font-size: 14px; min-height: 44px; padding: 0 14px;
+        border: 1px solid var(--accent, #2572a5); border-radius: 8px;
+        background: var(--accent, #2572a5); color: #fff; cursor: pointer;
+      }
+      .howto__enable:disabled { opacity: .6; cursor: default; }
+
+      .howto__body { line-height: 1.6; }
+      .howto__h { margin: 18px 0 6px; font-size: 16px; }
+      .howto__p { margin: 0 0 12px; }
+      .howto__list { margin: 0 0 12px; padding-left: 22px; }
+      .howto__list li { margin: 0 0 6px; }
+      .howto__body code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: .92em; background: #f1f4f7; padding: 1px 5px; border-radius: 4px;
+      }
+
+      /* A link to another topic is a BUTTON: it navigates the overlay, not the page. */
+      .howto__link--topic {
+        font: inherit; background: none; border: 0; padding: 0; cursor: pointer;
+        color: var(--accent, #2572a5); text-decoration: underline; text-underline-offset: 2px;
+      }
+      .howto__link--external { color: var(--accent, #2572a5); text-underline-offset: 2px; }
+      /* The destination host, shown rather than implied. This is what defeats a link
+         captioned "SPSS documentation" that points at evil.tld - no dialog to dismiss. */
+      .howto__host { color: #6b7682; font-size: .85em; white-space: nowrap; }
+
+      .howto__fig { margin: 0 0 14px; }
+      .howto__img {
+        max-width: 100%; height: auto; display: block;
+        border: 1px solid var(--line, #e2e7ec); border-radius: 8px; cursor: zoom-in;
+      }
+      .howto__caption { margin: 6px 2px 0; font-size: 12px; color: #6b7682; }
+      .howto__missing { font-size: 13px; color: #8a5a00; background: #fdf0d5; padding: 8px 10px; border-radius: 6px; }
+
+      .howto__loading { color: #6b7682; padding: 12px 2px; }
+      /* Never blank: a blank panel reads as "no documentation exists". */
+      .howto__problem { padding: 12px 14px; border-radius: 8px; background: #fdf0d5; border: 1px solid #f0dcb0; }
+      .howto__problemtitle { margin: 0 0 4px; font-weight: 600; color: #6b4600; }
+      .howto__problemdetail { margin: 0; font-size: 13px; color: #6b4600; }
+      .howto__authornotes { margin: 16px 0 0; font-size: 12px; color: #6b7682; }
+      .howto__authornotes summary { cursor: pointer; }
+      .howto__seealso { margin-top: 18px; border-top: 1px solid var(--line, #e2e7ec); padding-top: 8px; }
+
       /* --- small-screen arrangement (core/screen-mode.js) ---------------------
          Every rule here keys off `data-screen="small"` on <html> and NOTHING keys off
          viewport width: the user owns the mode, so the layout must not re-decide behind
@@ -1011,6 +1119,13 @@
       }
       /* Touch targets: the same items, a little taller, which is a resize and not a redesign. */
       [data-screen="small"] .menu__item { padding: 11px 12px; }
+      /* The overlay fills a phone: a reading surface with a persistent top bar, not a
+         card floating in a dimmed page. */
+      [data-screen="small"] .howto { width: 100vw; max-width: 100vw; }
+      [data-screen="small"] .howto__form { max-height: 92vh; }
+      [data-screen="small"] .howto__content { padding: 12px 12px 20px; }
+      [data-screen="small"] .howto__where { font-size: 15px; }
+      [data-screen="small"] .howto__row { min-height: 52px; }
       /* A workspace pane's toolbar is a row of real controls, so it gets the same 44px
          and 16px as everything else here. `Restart` was the smallest control in the app
          at 12px/22px — and it is the one you reach for when a pane has wedged. */
