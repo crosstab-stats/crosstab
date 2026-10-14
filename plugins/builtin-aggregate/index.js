@@ -59,9 +59,23 @@ export const manifest = {
     '  • groupby — the variable(s) that define the groups (one output row per group).\n' +
     '  • measures — the numeric variable(s) to summarise within each group.\n' +
     '  • func — "mean" (default), "sum", "median", "min", "max", "sd", or "count".',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'aggregate-collapse',
+      title: 'Aggregate / collapse to one row per group',
+      category: 'Transform',
+      keywords: ['aggregate', 'collapse', 'group by', 'summarise', 'summarize', 'mean', 'sum', 'count', 'new dataset', 'roll up'],
+      needs: ['builtin-aggregate'],
+      seeAlso: ['compute-a-variable', 'select-cases'],
+    },
+  ],
   rPackages: [],
   menu: [
     {
+      howto: 'aggregate-collapse',
       label: 'Aggregate / collapse…',
       run: 'run',
       order: 30,

@@ -44,9 +44,71 @@ export const manifest = {
     'Syntax: run builtin-textanalytics.kwic {"text": "response", "term": "text", "window": 6}\n' +
     '  • text — the free-text column to analyse.\n' +
     '  • other actions: Word cloud, Topic modeling (LDA), Content-analysis dictionary — run builtin-textanalytics.wordCloud / topicModel / dictionary {…}.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'text-wordfreq',
+      title: 'Word frequency',
+      category: 'Text',
+      keywords: ['word frequency', 'counts', 'terms', 'stopwords', 'free text', 'open ended', 'tokens', 'common words'],
+      needs: ['builtin-textanalytics'],
+      seeAlso: ['text-tfidf', 'text-wordcloud', 'text-kwic'],
+    },
+    {
+      id: 'text-wordcloud',
+      title: 'Word cloud',
+      category: 'Text',
+      keywords: ['word cloud', 'wordcloud', 'visualisation', 'visualization', 'terms', 'frequency', 'text'],
+      needs: ['builtin-textanalytics'],
+      seeAlso: ['text-wordfreq'],
+    },
+    {
+      id: 'text-sentiment',
+      title: 'Sentiment analysis',
+      category: 'Text',
+      keywords: ['sentiment', 'polarity', 'positive', 'negative', 'opinion', 'tone', 'lexicon', 'text'],
+      needs: ['builtin-textanalytics'],
+      seeAlso: ['text-dictionary', 'text-wordfreq'],
+    },
+    {
+      id: 'text-tfidf',
+      title: 'TF-IDF (distinctive terms)',
+      category: 'Text',
+      keywords: ['tfidf', 'tf-idf', 'distinctive', 'characteristic', 'terms', 'compare', 'groups', 'documents'],
+      needs: ['builtin-textanalytics'],
+      seeAlso: ['text-wordfreq', 'text-topics'],
+    },
+    {
+      id: 'text-kwic',
+      title: 'Keyword in context (KWIC)',
+      category: 'Text',
+      keywords: ['kwic', 'keyword in context', 'concordance', 'search', 'passages', 'window', 'quotes', 'text'],
+      needs: ['builtin-textanalytics'],
+      seeAlso: ['text-wordfreq', 'text-dictionary'],
+    },
+    {
+      id: 'text-topics',
+      title: 'Topic modelling (LDA)',
+      category: 'Text',
+      keywords: ['topic model', 'lda', 'topics', 'themes', 'latent dirichlet', 'clusters of words', 'text'],
+      needs: ['builtin-textanalytics'],
+      seeAlso: ['text-tfidf', 'text-kwic'],
+    },
+    {
+      id: 'text-dictionary',
+      title: 'Content-analysis dictionary',
+      category: 'Text',
+      keywords: ['dictionary', 'content analysis', 'categories', 'coding', 'terms', 'count', 'theory driven', 'text'],
+      needs: ['builtin-textanalytics'],
+      seeAlso: ['text-sentiment', 'text-kwic'],
+    },
+  ],
   rPackages: ['tidytext', 'dplyr', 'tibble', 'topicmodels', 'reshape2'],
   menu: [
     {
+      howto: 'text-wordfreq',
       label: 'Word frequency…',
       run: 'wordFrequency',
       order: 10,
@@ -61,6 +123,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'text-wordcloud',
       label: 'Word cloud…',
       run: 'wordCloud',
       order: 15,
@@ -80,6 +143,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'text-sentiment',
       label: 'Sentiment analysis…',
       run: 'sentiment',
       order: 20,
@@ -89,6 +153,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'text-tfidf',
       label: 'TF-IDF (distinctive terms)…',
       run: 'tfidf',
       order: 30,
@@ -99,6 +164,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'text-kwic',
       label: 'Keyword in context (KWIC)…',
       run: 'kwic',
       order: 40,
@@ -109,6 +175,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'text-topics',
       label: 'Topic modeling (LDA)…',
       run: 'topicModel',
       order: 50,
@@ -119,6 +186,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'text-dictionary',
       label: 'Content-analysis dictionary…',
       run: 'dictionary',
       order: 60,

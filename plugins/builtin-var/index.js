@@ -40,9 +40,23 @@ export const manifest = {
     '  • lag — number of past periods (0 = choose by AIC).\n' +
     '  • type — "const" | "trend" | "both" | "none".\n' +
     '  • horizon — impulse-response horizon in steps.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'var-model',
+      title: 'Vector autoregression (VAR)',
+      category: 'Time Series',
+      keywords: ['var', 'vector autoregression', 'granger', 'impulse response', 'lag', 'multivariate time series', 'shock'],
+      needs: ['builtin-var'],
+      seeAlso: ['ts-stationarity', 'cointegration-johansen'],
+    },
+  ],
   rPackages: ['vars', 'svglite'],
   menu: [
     {
+      howto: 'var-model',
       label: 'Vector autoregression (VAR)…',
       run: 'varModel',
       order: 60,

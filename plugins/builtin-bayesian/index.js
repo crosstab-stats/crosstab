@@ -44,9 +44,47 @@ export const manifest = {
     'Syntax: run builtin-bayesian.bvar {"series": ["gdp", "cpi"], "lags": 2, "horizon": 8}\n' +
     '  • dv/ivs — outcome and predictors; y/group — numeric outcome and 2-level group.\n' +
     '  • series — 2+ numeric columns in time order; lags / horizon — past steps in, future steps out.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'bayes-regression',
+      title: 'Bayesian linear regression',
+      category: 'Bayesian',
+      keywords: ['bayesian', 'posterior', 'credible interval', 'regression', 'prior', 'mcmc', 'uncertainty'],
+      needs: ['builtin-bayesian'],
+      seeAlso: ['bayes-ttest', 'regression-linear'],
+    },
+    {
+      id: 'bayes-ttest',
+      title: 'Bayes factor: t-test',
+      category: 'Bayesian',
+      keywords: ['bayes factor', 'bf', 't-test', 'evidence', 'null', 'alternative', 'two groups', 'support'],
+      needs: ['builtin-bayesian'],
+      seeAlso: ['bayes-corr', 'compare-independent'],
+    },
+    {
+      id: 'bayes-corr',
+      title: 'Bayes factor: correlation',
+      category: 'Bayesian',
+      keywords: ['bayes factor', 'correlation', 'evidence', 'bf', 'null'],
+      needs: ['builtin-bayesian'],
+      seeAlso: ['bayes-ttest', 'correlation-bivariate'],
+    },
+    {
+      id: 'bayes-bvar',
+      title: 'Bayesian VAR',
+      category: 'Bayesian',
+      keywords: ['bvar', 'bayesian var', 'forecast', 'shrinkage', 'time series', 'horizon', 'credible band'],
+      needs: ['builtin-bayesian'],
+      seeAlso: ['var-model', 'bayes-regression'],
+    },
+  ],
   rPackages: [],
   menu: [
     {
+      howto: 'bayes-regression',
       label: 'Linear regression…',
       run: 'regression',
       order: 10,
@@ -56,6 +94,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'bayes-ttest',
       label: 'Bayes factor: t-test…',
       run: 'bfTTest',
       order: 20,
@@ -67,6 +106,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'bayes-corr',
       label: 'Bayes factor: correlation…',
       run: 'bfCorr',
       order: 30,
@@ -76,6 +116,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'bayes-bvar',
       label: 'Vector autoregression (BVAR)…',
       run: 'bvar',
       order: 40,

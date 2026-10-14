@@ -48,6 +48,35 @@ export const manifest = {
     + 'column added. That is the column the choropleth and “Analyse selection” need, and survey data rarely arrives with it. '
     + 'Point-in-polygon, on device, no service and no API key.',
   disciplines: ['Environmental Studies', 'Public Policy & Administration', 'Sociology', 'Economics', 'Public Health', 'Ethnic Studies'],
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'spatial-autocorrelation',
+      title: 'Spatial autocorrelation (Moran\'s I)',
+      category: 'Spatial',
+      keywords: ['moran', 'spatial autocorrelation', 'geary', 'clustering', 'neighbours', 'neighbors', 'coordinates', 'geography', 'spatial'],
+      needs: ['builtin-spatial'],
+      seeAlso: ['spatial-lag', 'spatial-choropleth', 'inequality-segregation'],
+    },
+    {
+      id: 'spatial-lag',
+      title: 'Spatial lag regression',
+      category: 'Spatial',
+      keywords: ['spatial lag', 'spatial regression', 'neighbours', 'spillover', 'autocorrelation', 'coordinates', 'geography'],
+      needs: ['builtin-spatial'],
+      seeAlso: ['spatial-autocorrelation', 'regression-linear'],
+    },
+    {
+      id: 'spatial-choropleth',
+      title: 'Choropleth map',
+      category: 'Spatial',
+      keywords: ['choropleth', 'map', 'geojson', 'boundary', 'shade', 'region', 'geocode', 'assign regions', 'thematic map'],
+      needs: ['builtin-spatial'],
+      seeAlso: ['spatial-autocorrelation', 'import-data'],
+    },
+  ],
   rPackages: ['sf', 'spdep', 'spatialreg', 'svglite'],
   // Item collections this plugin owns (#152 Layer 5). Top-level, because a collection is
   // addressed by (owner, collection) with no workspace in the key. Declaring it is what
@@ -95,6 +124,7 @@ export const manifest = {
   ],
   menu: [
     {
+      howto: 'spatial-autocorrelation',
       label: 'Spatial autocorrelation (Moran’s I)…',
       run: 'autocorrelation',
       order: 10,
@@ -106,6 +136,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'spatial-lag',
       label: 'Spatial lag regression…',
       run: 'lagregression',
       order: 15,
@@ -118,6 +149,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'spatial-choropleth',
       label: 'Choropleth map…',
       run: 'choropleth',
       order: 20,

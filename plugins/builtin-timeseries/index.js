@@ -39,9 +39,47 @@ export const manifest = {
     'Syntax: run builtin-timeseries.arima {"series": "value", "h": 10, "frequency": 1}\n' +
     '  • series — the numeric column, in time order.\n' +
     '  • frequency — steps per seasonal cycle (12 monthly, 4 quarterly); h — forecast horizon.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'ts-correlogram',
+      title: 'Correlogram (ACF / PACF)',
+      category: 'Time Series',
+      keywords: ['acf', 'pacf', 'autocorrelation', 'correlogram', 'lag', 'time series', 'serial correlation'],
+      needs: ['builtin-timeseries'],
+      seeAlso: ['ts-stationarity', 'ts-arima'],
+    },
+    {
+      id: 'ts-stationarity',
+      title: 'Stationarity tests (ADF, KPSS)',
+      category: 'Time Series',
+      keywords: ['stationarity', 'adf', 'kpss', 'unit root', 'dickey fuller', 'differencing', 'trend', 'time series'],
+      needs: ['builtin-timeseries'],
+      seeAlso: ['ts-correlogram', 'ts-arima', 'cointegration-johansen'],
+    },
+    {
+      id: 'ts-decompose',
+      title: 'Decomposition (STL)',
+      category: 'Time Series',
+      keywords: ['decomposition', 'stl', 'seasonal', 'trend', 'remainder', 'frequency', 'seasonality', 'time series'],
+      needs: ['builtin-timeseries'],
+      seeAlso: ['ts-arima', 'plots-trends'],
+    },
+    {
+      id: 'ts-arima',
+      title: 'ARIMA forecast (auto)',
+      category: 'Time Series',
+      keywords: ['arima', 'forecast', 'prediction', 'auto arima', 'horizon', 'time series', 'seasonal', 'projection'],
+      needs: ['builtin-timeseries'],
+      seeAlso: ['ts-stationarity', 'ts-decompose'],
+    },
+  ],
   rPackages: ['tseries', 'forecast', 'svglite'],
   menu: [
     {
+      howto: 'ts-correlogram',
       label: 'Correlogram (ACF / PACF)…',
       run: 'correlogram',
       order: 10,
@@ -51,12 +89,14 @@ export const manifest = {
       ],
     },
     {
+      howto: 'ts-stationarity',
       label: 'Stationarity tests (ADF, KPSS)…',
       run: 'stationarity',
       order: 20,
       inputs: [{ name: 'series', kind: 'variables', label: 'Series', hint: 'The numeric column to test for a stable mean over time.', types: ['numeric'] }],
     },
     {
+      howto: 'ts-decompose',
       label: 'Decomposition (STL)…',
       run: 'decompose',
       order: 30,
@@ -66,6 +106,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'ts-arima',
       label: 'ARIMA forecast (auto)…',
       run: 'arima',
       order: 40,

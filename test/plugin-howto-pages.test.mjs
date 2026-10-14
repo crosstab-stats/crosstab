@@ -51,6 +51,19 @@ test('at least one plugin ships an authored how-to', () => {
   assert.ok(documented.length > 0, 'nothing to check — did the batches land?');
 });
 
+test('a how-to file with no declaration is caught', () => {
+  // The generator once wrote a sidecar and then bailed on a mismatched menu label,
+  // leaving a plugin with a how-to file and nothing pointing at it. Invisible to every
+  // other check here, because they all start from the plugins that DECLARE an index.
+  for (const d of readdirSync('plugins', { withFileTypes: true }).filter((e) => e.isDirectory())) {
+    const hasFile = existsSync(`plugins/${d.name}/howto.md`);
+    const declares = documented.some((p) => p.dir === d.name);
+    assert.equal(hasFile, declares,
+      hasFile ? `${d.name}: howto.md exists but nothing declares it`
+        : `${d.name}: declares topics but ships no howto.md`);
+  }
+});
+
 test('every declared topic has a section, and every section is declared', () => {
   for (const { dir, index } of documented) {
     assert.ok(index.file, `${dir}: declares topics but no howtoFile`);

@@ -79,8 +79,38 @@ export const manifest = {
     + 'Syntax: run builtin-sced.graphSeries {"y": "value", "measure": "measure", "phase": "condition", "caseVar": "behaviour", "session": "session"}\n'
     + '  • direction — "increase" (default; improvement means higher scores) | "decrease".\n'
     + '  • Needs no R: the indices are computed in JavaScript and match the R package `scan` (validated in test/sced.test.mjs).',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'sced-indices',
+      title: 'Non-overlap indices (NAP, PND, Tau-U, IRD)',
+      category: 'Single-Case Design',
+      keywords: ['single case', 'sced', 'nap', 'pnd', 'tau-u', 'ird', 'non-overlap', 'baseline', 'intervention', 'phase', 'aba'],
+      needs: ['builtin-sced'],
+      seeAlso: ['sced-graph', 'sced-graph-series'],
+    },
+    {
+      id: 'sced-graph',
+      title: 'Multiple-baseline graph',
+      category: 'Single-Case Design',
+      keywords: ['multiple baseline', 'graph', 'chart', 'single case', 'phase', 'panels', 'sced', 'visual analysis'],
+      needs: ['builtin-sced'],
+      seeAlso: ['sced-indices', 'sced-graph-series'],
+    },
+    {
+      id: 'sced-graph-series',
+      title: 'Multiple-baseline graph, several measures',
+      category: 'Single-Case Design',
+      keywords: ['multiple measures', 'long format', 'several behaviours', 'markers', 'multiple baseline', 'sced', 'graph'],
+      needs: ['builtin-sced'],
+      seeAlso: ['sced-graph', 'sced-indices'],
+    },
+  ],
   menu: [
     {
+      howto: 'sced-indices',
       label: 'Non-overlap indices (NAP, PND, Tau-U, IRD)…',
       run: 'run',
       order: 10,
@@ -103,6 +133,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'sced-graph',
       label: 'Multiple-baseline graph…',
       run: 'graph',
       order: 20,
@@ -120,6 +151,7 @@ export const manifest = {
       // long format (one row per measure per session), and asking for a Measure column
       // is the whole difference. Both drive the same engine — `graphSeries` is `graph`
       // with one extra input — so the split costs a manifest entry, not a code path.
+      howto: 'sced-graph-series',
       label: 'Multiple-baseline graph, several measures…',
       run: 'graphSeries',
       order: 30,

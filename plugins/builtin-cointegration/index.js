@@ -41,9 +41,31 @@ export const manifest = {
     '  • series — the return/series to model.\n' +
     '  • q / p — ARCH and GARCH orders (default 1, 1).\n' +
     '  • dist — "norm" (default) | "std" | "ged".',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'cointegration-johansen',
+      title: 'Cointegration (Johansen)',
+      category: 'Time Series',
+      keywords: ['cointegration', 'johansen', 'trace test', 'vecm', 'long run', 'equilibrium', 'spurious regression', 'non-stationary'],
+      needs: ['builtin-cointegration'],
+      seeAlso: ['ts-stationarity', 'var-model', 'cointegration-garch'],
+    },
+    {
+      id: 'cointegration-garch',
+      title: 'GARCH volatility',
+      category: 'Time Series',
+      keywords: ['garch', 'volatility', 'conditional variance', 'returns', 'arch', 'clustering', 'finance', 'risk'],
+      needs: ['builtin-cointegration'],
+      seeAlso: ['cointegration-johansen', 'ts-arima'],
+    },
+  ],
   rPackages: ['urca', 'fGarch', 'svglite'],
   menu: [
     {
+      howto: 'cointegration-johansen',
       label: 'Cointegration (Johansen)…',
       run: 'cointegration',
       order: 70,
@@ -58,6 +80,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'cointegration-garch',
       label: 'GARCH volatility…',
       run: 'garch',
       order: 80,

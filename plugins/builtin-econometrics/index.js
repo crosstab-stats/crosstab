@@ -40,9 +40,39 @@ export const manifest = {
     '  • iv: endog — endogenous regressor(s); instruments — instrument(s); controls — optional exogenous controls.\n' +
     'Syntax: run builtin-econometrics.panel {"dv": "wage", "ivs": ["educ"], "id": "person", "time": "year", "model": "within"}\n' +
     '  • panel: id — unit id; time — time index; model — "within" (default) | "random" | "pooling".',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'econ-robust',
+      title: 'Robust (HC) regression',
+      category: 'Econometrics',
+      keywords: ['robust', 'heteroskedasticity', 'hc1', 'sandwich', 'breusch pagan', 'standard errors', 'ols'],
+      needs: ['builtin-econometrics'],
+      seeAlso: ['regression-linear', 'clusterse-robust', 'econ-panel'],
+    },
+    {
+      id: 'econ-iv',
+      title: 'Instrumental variables (2SLS)',
+      category: 'Econometrics',
+      keywords: ['instrumental variables', 'iv', '2sls', 'two stage', 'endogenous', 'instrument', 'weak instrument', 'causal'],
+      needs: ['builtin-econometrics'],
+      seeAlso: ['econ-robust', 'causal-did'],
+    },
+    {
+      id: 'econ-panel',
+      title: 'Panel regression (FE / RE)',
+      category: 'Econometrics',
+      keywords: ['panel', 'fixed effects', 'random effects', 'hausman', 'within', 'between', 'longitudinal', 'entity', 'time'],
+      needs: ['builtin-econometrics'],
+      seeAlso: ['econ-robust', 'multilevel-linear'],
+    },
+  ],
   rPackages: ['sandwich', 'lmtest', 'AER', 'plm'],
   menu: [
     {
+      howto: 'econ-robust',
       label: 'Robust (HC) regression…',
       run: 'robust',
       order: 10,
@@ -52,6 +82,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'econ-iv',
       label: 'Instrumental variables (2SLS)…',
       run: 'iv',
       order: 20,
@@ -63,6 +94,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'econ-panel',
       label: 'Panel regression (FE / RE)…',
       run: 'panel',
       order: 30,

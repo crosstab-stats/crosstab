@@ -85,9 +85,39 @@ export const manifest = {
     '  • waves — one column per occasion, in time order. Equally spaced, so the slope is per occasion.',
   // poLCA closure: poLCA, scatterplot3d, MASS. flexmix closure: flexmix, lattice, modeltools,
   // nnet. Both tiny — checked against repo.r-wasm.org's index for R 4.6, not guessed.
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'mixture-lca',
+      title: 'Latent class analysis',
+      category: 'Analyze',
+      keywords: ['latent class', 'lca', 'classes', 'categorical items', 'typology', 'bic', 'entropy', 'subgroups', 'mixture'],
+      needs: ['builtin-mixture'],
+      seeAlso: ['mixture-lpa', 'mixture-gmm', 'cluster-kmeans'],
+    },
+    {
+      id: 'mixture-lpa',
+      title: 'Latent profile analysis',
+      category: 'Analyze',
+      keywords: ['latent profile', 'lpa', 'continuous items', 'profiles', 'classes', 'mixture', 'subgroups', 'bic'],
+      needs: ['builtin-mixture'],
+      seeAlso: ['mixture-lca', 'cluster-kmeans'],
+    },
+    {
+      id: 'mixture-gmm',
+      title: 'Growth mixture model',
+      category: 'Analyze',
+      keywords: ['growth mixture', 'gmm', 'trajectory classes', 'longitudinal', 'latent class', 'change over time', 'subgroups'],
+      needs: ['builtin-mixture'],
+      seeAlso: ['mixture-lpa', 'sem-growth'],
+    },
+  ],
   rPackages: ['poLCA', 'flexmix'],
   menu: [
     {
+      howto: 'mixture-lca',
       label: 'Latent class analysis (categorical items)…',
       run: 'lca',
       order: 60,
@@ -99,6 +129,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'mixture-lpa',
       label: 'Latent profile analysis (continuous items)…',
       run: 'lpa',
       order: 61,
@@ -110,6 +141,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'mixture-gmm',
       label: 'Growth mixture model (classes of trajectory)…',
       run: 'gmm',
       order: 62,

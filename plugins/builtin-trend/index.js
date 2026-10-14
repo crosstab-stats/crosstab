@@ -34,6 +34,19 @@ export const manifest = {
     "GUI: Time Series ▸ Mann-Kendall trend + Sen's slope…, then pick a numeric series in time order. You get Kendall's tau, the trend test, and Sen's slope (a robust per-step rate).\n" +
     'Syntax: run builtin-trend.run {"series": "value"}\n' +
     '  • series — the numeric measure to test, rows in time order.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'trend-mann-kendall',
+      title: 'Mann-Kendall trend test',
+      category: 'Time Series',
+      keywords: ['mann kendall', 'trend', 'monotonic', 'nonparametric', 'sen slope', 'time series', 'environmental', 'increase', 'decrease'],
+      needs: ['builtin-trend'],
+      seeAlso: ['ts-stationarity', 'plots-trends'],
+    },
+  ],
   rPackages: ['trend'],
   menu: [
     {

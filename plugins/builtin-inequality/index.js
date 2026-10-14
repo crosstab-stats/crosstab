@@ -36,9 +36,31 @@ export const manifest = {
     '  • inequality: x — non-negative quantity (Gini, Theil, Atkinson, CV + Lorenz curve).\n' +
     'Syntax: run builtin-inequality.segregation {"groupA": "minority", "groupB": "majority"}\n' +
     '  • segregation: groupA / groupB — per-unit group counts (dissimilarity, isolation, interaction).',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'inequality-indices',
+      title: 'Inequality (Gini / Theil / Lorenz)',
+      category: 'Descriptive Statistics',
+      keywords: ['inequality', 'gini', 'theil', 'atkinson', 'lorenz', 'income', 'distribution', 'concentration', 'dispersion'],
+      needs: ['builtin-inequality'],
+      seeAlso: ['inequality-segregation', 'descriptives-basics'],
+    },
+    {
+      id: 'inequality-segregation',
+      title: 'Segregation indices',
+      category: 'Descriptive Statistics',
+      keywords: ['segregation', 'dissimilarity', 'isolation', 'interaction', 'index', 'neighbourhood', 'spatial', 'groups'],
+      needs: ['builtin-inequality'],
+      seeAlso: ['inequality-indices', 'spatial-autocorrelation'],
+    },
+  ],
   rPackages: ['ineq', 'svglite'],
   menu: [
     {
+      howto: 'inequality-indices',
       label: 'Inequality (Gini / Theil / Lorenz)…',
       run: 'inequality',
       order: 50,
@@ -47,6 +69,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'inequality-segregation',
       label: 'Segregation indices…',
       run: 'segregation',
       order: 55,
