@@ -105,7 +105,8 @@ export function collectTopics(catalogue) {
     // the upgrade path: write real topics and the placeholder disappears.
     //
     // Its body is INLINE, so no sidecar fetch happens for it.
-    if (!declared.length && typeof entry?.howto === 'string' && entry.howto.trim() && entry?.id) {
+    if (!declared.length && entry?.id) {
+      const note = typeof entry.howto === 'string' ? entry.howto.trim() : '';
       const topic = normalizeTopic({
         id: `plugin-${entry.id}`,
         title: `Using ${entry.name ?? entry.id}`,
@@ -115,20 +116,34 @@ export function collectTopics(catalogue) {
       }, owner);
       if (topic && !seen.has(topic.id)) {
         seen.add(topic.id);
-        out.push({ ...topic, file: null, inlineBody: entry.howto });
+        out.push({
+          ...topic,
+          file: null,
+          inlineBody: note,
+          // EVERY plugin has a page, because the ⓘ beside it has to lead somewhere. One
+          // that documents nothing is HIDDEN from the index rather than absent from the
+          // system: an infrastructure plugin (a chart-kind provider, say) would otherwise
+          // pad the list with a row that teaches nobody anything.
+          hidden: !note,
+        });
       }
     }
-    for (const raw of declared) {
+    declared.forEach((raw, declaredAt) => {
       const topic = normalizeTopic(raw, owner);
-      if (!topic) continue;
+      if (!topic) return;
       // A topic id has to be unique across the whole index, because `howto:` links
       // address it globally. First declaration wins and the duplicate is dropped rather
       // than silently shadowing — reported through `indexProblems`.
       const key = topic.id;
-      if (seen.has(key)) continue;
+      if (seen.has(key)) return;
       seen.add(key);
-      out.push(topic);
-    }
+      // The author's position in their own index. The global list is sorted for the
+      // reader (category, then title), which loses the order the author chose — and that
+      // order is intent: the first topic they listed is where they want someone starting.
+      // It is what the ⓘ beside the plugin opens. Without it, Frequencies' entry page was
+      // "Add a mode, median or variance" because it sorts before "Make a frequency table".
+      out.push({ ...topic, declaredAt });
+    });
   }
   return out.sort((a, b) =>
     a.category.localeCompare(b.category)
@@ -238,10 +253,15 @@ export function parseSidecar(text, declared = []) {
  * @param {object[]} topics @param {string} query
  */
 export function filterTopics(topics, query) {
+  // Hidden pages are dropped FIRST, before the empty-query shortcut: they exist so the
+  // ⓘ beside a plugin has a destination, not so the reader can browse their way to
+  // "this plugin documents nothing". Filtering after the shortcut listed every one of
+  // them in the default view, which is the view people actually see.
+  const listed = (topics ?? []).filter((t) => !t.hidden);
   const q = String(query ?? '').trim().toLowerCase();
-  if (!q) return topics ?? [];
+  if (!q) return listed;
   const terms = q.split(/\s+/);
-  return (topics ?? []).filter((t) => {
+  return listed.filter((t) => {
     const hay = `${t.title} ${t.category} ${t.keywords.join(' ')} ${t.pluginName ?? ''}`.toLowerCase();
     return terms.every((term) => hay.includes(term));
   });

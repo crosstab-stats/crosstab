@@ -42,7 +42,7 @@
  */
 
 import {
-  addsTooltip, matchPlugin, openPluginAbout, originMeta,
+  addsTooltip, matchPlugin, originMeta,
 } from './plugin-manager.js';
 import {
   deletePreset, exportPresetFile, listPresets, parsePresetFile, presetExists, presetFileName,
@@ -418,7 +418,14 @@ export class PluginPicker {
     this.#clearStatus();
     const { creator } = this.#plugins;
     try {
-      if (act === 'about') return openPluginAbout(p, { onHowto: this.#onHowto });
+      if (act === 'about') {
+        // ⓘ opens the plugin's page in the how-to guide. It used to open a dialog that
+        // repeated the plugin's one-line note — which the guide ALSO publishes as a
+        // topic, so a plugin's documentation existed twice with two renderings. The
+        // one thing that dialog knew and the guide did not (what it adds to the menus)
+        // is now generated onto the plugin's entry page.
+        return this.#onHowto?.(p?.id);
+      }
       if (act === 'web') {
         this.#plugins.revokeWeb(p.id);
         return this.refresh();

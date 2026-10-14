@@ -59,9 +59,23 @@ test('topics sort by category then title — NEVER by origin', () => {
   assert.deepEqual(collectTopics(cat).map((t) => t.id), ['t1', 'b1']);
 });
 
-test('a plugin with no topics contributes nothing and breaks nothing', () => {
+test('a plugin that documents nothing still gets a page — hidden from the index', () => {
+  // Every plugin needs a destination, because the ⓘ beside it has to lead somewhere.
+  // But an infrastructure plugin (a chart-kind provider, say) must not pad the list with
+  // a row that teaches nobody anything, so its page exists and is not listed.
   const cat = [plugin('a', 'A', []), { id: 'b', name: 'B' }, null];
-  assert.deepEqual(collectTopics(cat), []);
+  const topics = collectTopics(cat);
+  assert.deepEqual(topics.map((t) => t.id), ['plugin-a', 'plugin-b']);
+  assert.ok(topics.every((t) => t.hidden), 'hidden');
+  assert.deepEqual(filterTopics(topics, ''), [], 'and absent from the index');
+  assert.deepEqual(filterTopics(topics, 'A'), [], 'and from search');
+});
+
+test('a plugin WITH a one-line howto is listed, not hidden', () => {
+  const topics = collectTopics([{ id: 'c', name: 'C', howto: 'Pick it from the menu.' }]);
+  assert.equal(topics.length, 1);
+  assert.ok(!topics[0].hidden);
+  assert.equal(topics[0].inlineBody, 'Pick it from the menu.');
 });
 
 test('a duplicate topic id is dropped, not silently shadowed', () => {

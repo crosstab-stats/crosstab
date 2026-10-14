@@ -1140,83 +1140,12 @@ export class PluginManager {
 
 // --- helpers ---------------------------------------------------------------
 
-/**
- * "What does this plugin add?", as a dialog — the **touch-reachable** answer.
- *
- * #177 gave both pickers a hover tooltip listing a plugin's actions, and the owner found the
- * hole in that on the first phone check (2026-09-26): *"hover doesn't work on the phone."*
- * A `title` needs a pointer that can rest somewhere, so on touch neither picker said what a
- * plugin adds — and a title is no better for a keyboard or a screen reader, which is the same
- * gap wearing different clothes. The tooltips stay (they are a good quick read on a desktop),
- * but the answer now also lives behind a real button on every row.
- *
- * Shared by the plugin manager and the launcher so the two cannot drift again — the same
- * reason `addsTooltip` is one function.
- *
- * @param {{name?:string, menu?:string[], howto?:string}} p  a catalogue row
- */
-export function openPluginAbout(p, { onHowto } = {}) {
-  const adds = (p?.menu || []).filter(Boolean);
-  const dialog = document.createElement('dialog');
-  dialog.className = 'ct-dialog ct-dialog--wide';
-  const form = el('form', { class: 'ct-dialog__form' });
-  form.method = 'dialog';
-  form.append(el('h2', { text: String(p?.name ?? 'Plugin'), class: 'ct-dialog__title' }));
-
-  if (adds.length) {
-    form.append(el('p', { text: `Adds ${adds.length} item${adds.length === 1 ? '' : 's'} to the menus:`, class: 'ct-dialog__hint' }));
-    const ul = el('ul', { class: 'ct-about__adds' });
-    ul.style.cssText = 'margin:0 0 14px; padding-left:20px; line-height:1.6; font-size:14px; color:#2a323a;';
-    for (const label of adds) ul.append(el('li', { text: label }));
-    form.append(ul);
-  }
-
-  if (p?.howto) {
-    if (adds.length) form.append(el('h3', { text: 'How to use it', class: 'ct-about__h' }));
-    const body = el('div', { class: 'ct-howto' });
-    body.style.cssText =
-      'white-space:pre-wrap; line-height:1.5; font-size:14px; color:#2a323a; max-height:50vh; overflow:auto; margin:0 0 16px;';
-    body.textContent = p.howto;
-    form.append(body);
-  }
-
-  // Neither a menu nor a note: say so rather than opening an empty box. Infrastructure
-  // plugins (a chart-kind provider, say) legitimately add no menu items of their own.
-  if (!adds.length && !p?.howto) {
-    form.append(
-      el('p', { text: 'This plugin adds no menu items of its own and carries no usage note — it is likely '
-          + 'infrastructure another plugin depends on.', class: 'ct-dialog__hint' }),
-    );
-  }
-
-  const menu = el('menu', { class: 'ct-dialog__buttons' });
-  // The full how-to, when this plugin ships one (#192). The one-line note above is the
-  // summary; this is the written guide, in the same index every other plugin's is in.
-  // A link rather than the prose inlined here: two copies of a plugin's documentation is
-  // how the pie chart's entry came to carry bar-chart notes.
-  const topics = Array.isArray(p?.howtoIndex) ? p.howtoIndex.filter((t) => t?.id) : [];
-  if (topics.length && onHowto) {
-    const read = el('button', {
-      text: topics.length > 1 ? `Read the how-to (${topics.length} topics)` : 'Read the how-to',
-    });
-    read.type = 'button';
-    read.addEventListener('click', () => {
-      dialog.close('cancel');
-      dialog.dispatchEvent(new Event('close'));
-      onHowto(topics[0].id);
-    });
-    menu.append(read);
-  }
-  const close = el('button', { text: 'Close', class: 'ct-dialog__primary' });
-  close.value = 'cancel';
-  close.type = 'submit';
-  menu.append(close);
-  form.append(menu);
-  dialog.append(form);
-  dialog.addEventListener('close', () => dialog.remove());
-  document.body.append(dialog);
-  dialog.showModal();
-}
+// `openPluginAbout` was deleted with #192. The ⓘ it served now opens the plugin's page
+// in the how-to guide, where its documentation already lived: the dialog showed the
+// plugin's one-line `howto`, and the legacy bridge publishes that same string as a
+// topic, so a plugin was documented twice in two different renderings. What the dialog
+// knew and the guide did not — "adds N items to the menus" — is generated onto the
+// entry page from the same catalogue row.
 /** A short, collision-resistant hex token. */
 function randHex(n) {
   return crypto.randomUUID().replace(/-/g, '').slice(0, n);

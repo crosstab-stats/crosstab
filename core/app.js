@@ -1830,8 +1830,13 @@ export async function boot(mounts) {
     },
   });
   services.howto = { open: (topicId) => openHowto({ library: howtoLibrary, topicId }) };
-  // The plugin manager's About dialog offers a plugin's full how-to (#192).
-  if (plugins) plugins.onHowto = (topicId) => services.howto.open(topicId);
+  /** Open the guide at a PLUGIN's page — what the ⓘ beside it does (#192). Resolving the
+   * page id lazily matters: `pluginPage` reads the live catalogue, so a plugin installed
+   * after boot still has a destination. */
+  services.howto.openPlugin = (pluginId) => openHowto({
+    library: howtoLibrary,
+    topicId: howtoLibrary.pluginPage(pluginId) ?? undefined,
+  });
   // A changed plugin set invalidates the cached sidecars — a plugin may have gone, or
   // arrived with different docs. It does NOT reset where the reader is: pressing the
   // guide's own "Enable" button fires this, and throwing them off the page they were
@@ -1886,6 +1891,11 @@ export async function boot(mounts) {
     // are too big/binary for localStorage (#119).
     packageStore: new PluginPackageStore(),
   });
+  // The ⓘ beside a plugin opens its page in the how-to guide. Assigned HERE rather
+  // than beside the library, because `plugins` is declared early and only constructed
+  // at this point — the first attempt set it against an undefined binding, so the
+  // button silently did nothing and the suite could not see it.
+  plugins.onHowto = (pluginId) => services.howto.openPlugin(pluginId);
   plugins.activate();
 
   // Workspace-state read from a plugin's compute frame (#139) — so an exporter (e.g.

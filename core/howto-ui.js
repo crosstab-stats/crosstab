@@ -174,6 +174,8 @@ function renderIndex(content, library, dialog) {
 
   const draw = () => {
     list.replaceChildren();
+    // Hidden pages are dropped by filterTopics, not here — one place decides what the
+    // index lists, or the two drift and only one of them is tested.
     const scoped = state.category ? all.filter((t) => t.category === state.category) : all;
     const shown = filterTopics(scoped, state.query);
     if (!all.length) {
@@ -230,6 +232,21 @@ function renderTopic(content, library, dialog, topicId, topic) {
   const needs = library.unmetNeeds(topic);
   if (needs.length) content.append(needsBlock(needs, library, dialog));
 
+  // What this plugin adds to the menus. Generated from the manifest, shown on the
+  // plugin's FIRST page only, and the one thing the deleted About dialog knew that the
+  // guide did not. It answers the question the ⓘ is actually asked: "what IS this?"
+  if (library.isEntryPage?.(topic)) {
+    const adds = library.menuAdds?.(topic.pluginId) ?? [];
+    if (adds.length) {
+      const box = el('div', { class: 'howto__adds' });
+      box.append(el('h3', { text: `Adds ${adds.length} item${adds.length === 1 ? '' : 's'} to the menus`, class: 'howto__group' }));
+      const ul = el('ul', { class: 'howto__list' });
+      for (const label of adds) ul.append(el('li', { text: label }));
+      box.append(ul);
+      content.append(box);
+    }
+  }
+
   const bodyHost = el('div', { class: 'howto__loading', text: 'Loading…' });
   content.append(bodyHost);
 
@@ -240,6 +257,14 @@ function renderTopic(content, library, dialog, topicId, topic) {
     if (result.error) {
       // Specific, never blank: a blank panel reads as "no documentation exists".
       bodyHost.append(problemBlock('This page could not be loaded.', result.error));
+    } else if (!String(result.md ?? '').trim()) {
+      // A plugin that documents nothing. Saying so plainly beats an empty page, and
+      // naming the likely reason beats implying the plugin is broken.
+      bodyHost.append(el('p', {
+        text: `${topic.pluginName ?? 'This plugin'} has not written a how-to. It may be `
+          + 'infrastructure another plugin depends on rather than something you use directly.',
+        class: 'howto__empty',
+      }));
     } else {
       bodyHost.append(renderHowto(result.md, {
         onTopic: (id) => { state.history.push(id); renderInto(dialog, library); },
