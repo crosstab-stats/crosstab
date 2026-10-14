@@ -104,6 +104,34 @@ export class UndoCoordinator {
     return !!this.#log.topRedoable(() => true) || this.#undoneAnalyses.length > 0;
   }
 
+  /**
+   * The action Undo would act on — `{kind, op}` — or null when there is nothing.
+   *
+   * Exposed so the Edit menu can NAME it ("Undo: Computed age2"). The coordinator has
+   * always known which op it would hit; a bare "Undo" simply never said, which is worst
+   * precisely when it matters — after a reorder, or when the last thing you did was in
+   * a different tier from the thing you are looking at.
+   */
+  undoTarget() {
+    return this.#top();
+  }
+
+  /**
+   * The action Redo would act on — `{kind, op}` — or null.
+   *
+   * Deliberately mirrors what {@link UndoCoordinator#redo} ACTUALLY does (the most
+   * recently undone op in the log) rather than {@link UndoCoordinator#canRedo}, which
+   * also returns true for an undone analysis whose op is no longer redoable. A menu item
+   * that is enabled must do something when clicked.
+   */
+  redoTarget() {
+    if (!this.#log) return null;
+    const op = this.#log.topRedoable(() => true);
+    if (!op) return null;
+    const kind = isDataOp(op) ? 'data' : isItemOp(op) ? 'item' : isAnalysisOp(op) ? 'analysis' : 'data';
+    return { kind, op };
+  }
+
   /** True when the most recent action is an analysis — the History timeline marks it. */
   lastActionIsAnalysis() {
     return this.#top()?.kind === 'analysis';

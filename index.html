@@ -91,6 +91,11 @@
         border: 0; font: inherit; padding: 9px 12px; border-radius: 4px; cursor: pointer;
       }
       .menu__item:hover { background: #eef5fb; }
+      /* An item whose action is unavailable right now (a computed `enabled`, #191).
+         Greyed rather than hidden: a missing Undo reads as a broken menu, where a
+         greyed one reads as "nothing to undo", which is the true statement. */
+      .menu__item:disabled { color: #9aa4ae; cursor: default; }
+      .menu__item:disabled:hover { background: transparent; }
       .menu__group { padding: 4px 0; }
       .menu__group-label {
         font-size: 11px; text-transform: uppercase; letter-spacing: .05em;

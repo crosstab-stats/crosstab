@@ -70,7 +70,9 @@ import { WorkspaceManager } from './workspace-manager.js';
 import { PluginPackageStore } from './plugin-package-store.js';
 import { AssetStore, createAssetService, ASSETS_CHANGED } from './asset-store.js';
 import { makeZip, readZipEntries } from './zip.js';
-import { escapeHtml } from './text.js';
+import { escapeHtml, stripEllipsis } from './text.js';
+import { describeStep } from './timeline.js';
+import { flattenStep } from './data-fold.js';
 import { el } from './plugin-stdlib.js';
 
 /**
@@ -869,58 +871,82 @@ export async function boot(mounts) {
    * Returns rows oldest-first with their HLC, so the panel can place them in time against
    * the data steps rather than guessing.
    */
+  /** The collection declarations, keyed `owner\0id`. Rebuilt per call because a plugin
+   * can be activated or deactivated between two of them. */
+  const itemDecls = () => new Map(
+    [...CORE_COLLECTIONS, ...declaredCollections(plugins?.list() ?? [], ownerToken)]
+      .map((d) => [`${d.owner}\u0000${d.id}`, d]),
+  );
+
+  /**
+   * One item op described: what it did, to which record, in which collection.
+   *
+   * Pulled out of {@link itemHistory} so the Edit menu can name an item op too —
+   * undoing a memo should say so. `seen` is how a first `putItem` reads as an ADD and a
+   * later one as an EDIT; omit it (the menu does) and a put reads as an edit, which is
+   * the safe way round for a one-off description.
+   */
+  const describeItemOp = (op, decls = itemDecls(), seen = null) => {
+    const [owner, collection, id] = parseItemTarget(op.target);
+    // Scope lives on the RECORD rather than on every op, since a later partial put may
+    // omit it.
+    const scope = itemStore.get(owner, collection, id)?.scope
+      ?? itemStore.binned(owner, collection).find((r) => r.id === id)?.scope
+      ?? op.payload?.scope ?? null;
+    const decl = decls.get(`${owner}\u0000${collection}`);
+    const noun = (decl?.label ?? collection).replace(/s$/, '');
+    // A removeItem op carries no fields, so read the label off the RECORD instead — it
+    // is in the bin, not destroyed. Without this a deletion reads "Removed memo" with no
+    // indication of WHICH, which is the one line in the audit trail where knowing what
+    // went is the entire point.
+    const rec = itemStore.get(owner, collection, id)
+      ?? itemStore.binned(owner, collection).find((r) => r.id === id);
+    const label = decl?.labelField
+      ? (op.payload?.fields?.[decl.labelField] ?? rec?.fields?.[decl.labelField])
+      : null;
+    const named = typeof label === 'string' && label.trim()
+      ? ` “${label.length > 32 ? `${label.slice(0, 31)}…` : label}”` : '';
+    const first = seen ? !seen.has(op.target) : false;
+    const group = decl?.label ?? collection;
+    return {
+      scope,
+      group,
+      // purgeItem must be named explicitly: without it a permanent delete fell through to
+      // the else and reported itself as an EDIT — the audit trail describing the one
+      // irreversible act as the most routine one.
+      title: op.type === 'removeItem' ? `Removed ${noun.toLowerCase()}${named}`
+        : op.type === 'purgeItem' ? `Deleted ${noun.toLowerCase()}${named} permanently`
+          : first ? `Added ${noun.toLowerCase()}${named}`
+            : `Edited ${noun.toLowerCase()}${named}`,
+      // Always name the collection, and add the author when there is one. The label used
+      // to be DROPPED whenever an author existed, which is how a core-owned memo ended up
+      // with nothing identifying it but a heading that called it a plugin.
+      detail: op.author?.initials ? `${group} · by ${op.author.initials}` : group,
+      who: op.author?.initials ?? null,
+    };
+  };
+
   const itemHistory = () => {
-    const decls = new Map(
-      [...CORE_COLLECTIONS, ...declaredCollections(plugins?.list() ?? [], ownerToken)]
-        .map((d) => [`${d.owner}\u0000${d.id}`, d]),
-    );
+    const decls = itemDecls();
     const ops = liveOps(projectLog.slice(isItemOp));
     const seen = new Set();
     const rows = [];
     const activeDs = datasets.activeId;
     for (const op of ops) {
-      const [owner, collection, id] = parseItemTarget(op.target);
-      // History is per-dataset, so show only records belonging to the dataset in view,
-      // plus project-scoped ones (a boundary set, a project note). Scope lives on the
-      // RECORD rather than on every op, since a later partial put may omit it.
-      const scope = itemStore.get(owner, collection, id)?.scope
-        ?? itemStore.binned(owner, collection).find((r) => r.id === id)?.scope
-        ?? op.payload?.scope ?? null;
-      const ds = scope?.dsId;
-      if (ds != null && String(ds) !== String(activeDs)) continue;
-      const decl = decls.get(`${owner}\u0000${collection}`);
-      const noun = (decl?.label ?? collection).replace(/s$/, '');
-      // A removeItem op carries no fields, so read the label off the RECORD instead —
-      // it is in the bin, not destroyed. Without this a deletion reads "Removed memo"
-      // with no indication of WHICH, which is the one line in the audit trail where
-      // knowing what went is the entire point.
-      const rec = itemStore.get(owner, collection, id)
-        ?? itemStore.binned(owner, collection).find((r) => r.id === id);
-      const label = decl?.labelField
-        ? (op.payload?.fields?.[decl.labelField] ?? rec?.fields?.[decl.labelField])
-        : null;
-      const named = typeof label === 'string' && label.trim() ? ` “${label.length > 32 ? `${label.slice(0, 31)}…` : label}”` : '';
-      const first = !seen.has(op.target);
+      const described = describeItemOp(op, decls, seen);
       seen.add(op.target);
-      const group = decl?.label ?? collection;
+      // History is per-dataset, so show only records belonging to the dataset in view,
+      // plus project-scoped ones (a boundary set, a project note).
+      const ds = described.scope?.dsId;
+      if (ds != null && String(ds) !== String(activeDs)) continue;
       rows.push({
         id: op.id,
         hlc: op.hlc,
-        group, // the collection's own label — the heading is built from these
-        // purgeItem must be named explicitly: without it a permanent delete fell through
-        // to the else and reported itself as an EDIT — the audit trail describing the one
-        // irreversible act as the most routine one.
-        title: op.type === 'removeItem' ? `Removed ${noun.toLowerCase()}${named}`
-          : op.type === 'purgeItem' ? `Deleted ${noun.toLowerCase()}${named} permanently`
-            : first ? `Added ${noun.toLowerCase()}${named}`
-              : `Edited ${noun.toLowerCase()}${named}`,
-        // Always name the collection, and add the author when there is one. The label
-        // used to be DROPPED whenever an author existed, which is how a core-owned memo
-        // ended up with nothing identifying it but a heading that called it a plugin.
-        detail: op.author?.initials ? `${group} · by ${op.author.initials}` : group,
-        who: op.author?.initials ?? null,
+        group: described.group, // the collection's own label — the heading is built from these
+        title: described.title,
+        detail: described.detail,
+        who: described.who,
       });
-      void id;
     }
     return rows;
   };
@@ -972,19 +998,51 @@ export async function boot(mounts) {
   // the most recent action whether it was a data op OR an analysis run. Host-owned
   // (like the data grid), registered through the same `menus.register` everything
   // uses. No-ops when there's nothing to undo/redo; views refresh on DATA_CHANGED.
+  // Both items NAME their target, resolved when the Edit menu opens (#191). The
+  // coordinator picks the target by HLC across every tier, so this is also the only
+  // place that says out loud which tier Undo is about to act on — the question a bare
+  // "Undo" leaves you to guess at after you have been reordering things.
+  const ACTION_MAX = 34; // characters of the target's name, before the ellipsis
+  const clipAction = (text) => (text.length > ACTION_MAX ? `${text.slice(0, ACTION_MAX - 1)}…` : text);
+
+  /** What an undo/redo target is called, or null when it has no useful name. */
+  const describeAction = (target) => {
+    const op = target?.op;
+    if (!op) return null;
+    try {
+      if (target.kind === 'analysis') return stripEllipsis(op.payload?.label || '') || 'analysis';
+      if (target.kind === 'item') return describeItemOp(op).title;
+      return describeStep(flattenStep(op)).title;
+    } catch {
+      // A target we cannot name is still a target: the item stays enabled and simply
+      // reads as the bare verb, rather than the menu losing a working command.
+      return null;
+    }
+  };
+
+  /** "Undo: Computed age2", or a plain "Undo" when there is nothing (and it is disabled). */
+  const actionLabel = (verb, target) => {
+    const named = describeAction(target);
+    return named ? `${verb}: ${clipAction(named)}` : verb;
+  };
+
   menus.register({
     id: 'core:undo',
     path: ['Edit'],
-    label: 'Undo',
+    sortLabel: 'Undo',
+    label: () => actionLabel('Undo', undoCoordinator.undoTarget()),
+    enabled: () => !!undoCoordinator.undoTarget(),
     order: 10,
-    command: () => void undoCoordinator.undo(),
+    command: () => undoCoordinator.undo(),
   });
   menus.register({
     id: 'core:redo',
     path: ['Edit'],
-    label: 'Redo',
+    sortLabel: 'Redo',
+    label: () => actionLabel('Redo', undoCoordinator.redoTarget()),
+    enabled: () => !!undoCoordinator.redoTarget(),
     order: 20,
-    command: () => void undoCoordinator.redo(),
+    command: () => undoCoordinator.redo(),
   });
 
   // Edit ▸ History… — the *actions* log (loads + transforms) in a floating panel

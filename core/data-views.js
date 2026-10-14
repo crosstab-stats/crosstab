@@ -21,6 +21,7 @@ import { floatSelected, loadVarOrder, saveVarOrder, sortVars, loadVarDisplay, sa
 import { makeVarToolbar, filterVars, getWorkspaceFilter, setWorkspaceFilter } from './var-toolbar.js';
 import { labelForValue, summariseMissing } from './var-role.js';
 import { escapeHtml, stripEllipsis } from './text.js';
+import { describeStep as describeTransform } from './timeline.js';
 import { el } from './plugin-stdlib.js';
 
 /** Syntax editor metrics: the textarea uses a FIXED line-height so the step gutter
@@ -1988,62 +1989,9 @@ export class HistoryPanel {
 
 // --- helpers -----------------------------------------------------------------
 
-/** Human-readable title + detail for any operation-log entry — data loads
- * (load/append/join) and data transforms alike. */
-function describeTransform(t) {
-  if (t && t.type === 'load') {
-    return { title: 'Imported data', detail: t.src?.label || 'the original data' };
-  }
-  if (t && t.type === 'append') {
-    return { title: 'Appended rows', detail: t.src?.label || 'more data' };
-  }
-  if (t && t.type === 'join') {
-    const key = t.joinKey ? `${t.joinKey.left} ↔ ${t.joinKey.right}` : 'a key';
-    return { title: `Joined ${t.src?.label || 'data'}`, detail: `on ${key}` };
-  }
-  if (t && t.type === 'setCell') {
-    return {
-      title: `Edited cell · ${t.column}`,
-      detail: `row ${t.row + 1} = ${t.value == null || t.value === '' ? '(blank)' : t.value}`,
-    };
-  }
-  if (t && t.type === 'computeVar') {
-    return { title: `Computed ${t.name}`, detail: t.expr };
-  }
-  if (t && t.type === 'recodeVar') {
-    const n = (t.rules || []).length;
-    return { title: `Recoded ${t.source} → ${t.name}`, detail: `${n} rule${n === 1 ? '' : 's'}` };
-  }
-  if (t && t.type === 'filterCases') {
-    return { title: 'Selected cases', detail: t.label || t.expr || '' };
-  }
-  if (t && t.type === 'dropVars') {
-    const n = (t.names || []).length;
-    return { title: `Dropped ${n} variable${n === 1 ? '' : 's'}`, detail: (t.names || []).join(', ') };
-  }
-  if (t && t.type === 'keepVars') {
-    const n = (t.names || []).length;
-    return { title: `Kept ${n} variable${n === 1 ? '' : 's'}`, detail: (t.names || []).join(', ') };
-  }
-  if (t && t.type === 'renameVar') {
-    return { title: `Renamed ${t.from} → ${t.to}`, detail: '' };
-  }
-  if (!t || t.type !== 'setVariable') return { title: t?.type || 'Change', detail: '' };
-  const p = t.patch || {};
-  const bits = [];
-  if ('type' in p) bits.push(`type → ${p.type}`);
-  if ('label' in p) bits.push(p.label ? `label “${p.label}”` : 'cleared label');
-  if ('measurementLevel' in p) bits.push(p.measurementLevel ? `measure → ${p.measurementLevel}` : 'cleared measure');
-  if ('missingValues' in p) {
-    const m = p.missingValues;
-    bits.push(m && m.length ? `missing: ${m.join(', ')}` : 'cleared missing');
-  }
-  if ('valueLabels' in p) {
-    const k = p.valueLabels ? Object.keys(p.valueLabels).length : 0;
-    bits.push(k ? `${k} value label${k === 1 ? '' : 's'}` : 'cleared value labels');
-  }
-  return { title: `Edited ${t.name}`, detail: bits.join(' · ') };
-}
+// `describeTransform` moved to core/timeline.js (imported above as `describeStep`).
+// It names a timeline ROW, which is not a property of the view that happens to draw
+// it: the Edit menu needs the same name to say what Undo would undo.
 
 /** Classify one script line for the Syntax-mode gutter. Returns null for blank lines
  * and plain comments (no marker), else `{ kind, title, detail }` where kind is

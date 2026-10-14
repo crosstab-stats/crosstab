@@ -22,14 +22,60 @@ import { currentScreenMode } from './screen-mode.js';
  * @property {string[]} path - Menu hierarchy this item lives under, top-level
  *   first, e.g. `['Analyze', 'Descriptive Statistics']`. An empty array places
  *   the item directly on the menubar (rare).
- * @property {string} label - Visible item text, e.g. `'Frequencies…'`.
+ * @property {string | (() => string)} label - Visible item text, e.g. `'Frequencies…'`.
+ *   A FUNCTION is re-evaluated every time the containing menu opens, so an item can name
+ *   what it would actually act on - `Undo: Computed age2` rather than a bare `Undo`. Keep
+ *   it cheap and side-effect free; it runs on every open. A throw falls back to
+ *   `sortLabel`/`id` rather than taking the menubar down.
  * @property {() => any} command - Invoked when the item is chosen. **Return the promise**
  *   when the work is async: a command written `() => void doThing()` discards it, so a
  *   rejection cannot be reported and the item looks like it did nothing.
+ * @property {() => boolean} [enabled] - Also re-evaluated on open. `false` disables the
+ *   item (and takes it out of the arrow-key rota). Absent means always enabled. Use this
+ *   for an action that is genuinely unavailable, not to neutralise a state that should
+ *   not exist - see the guard-means-missing-state rule.
+ * @property {string} [sortLabel] - The text to SORT by when `label` is dynamic. Sorting on
+ *   a label that changes would let a menu reshuffle itself as the user works; items with
+ *   an explicit `order` (the usual case for dynamic ones) never reach the label tiebreak.
  * @property {string} [id] - Stable id (defaults to `path.join('/')+'/'+label`).
  *   Registering the same id again replaces the previous item.
  * @property {number} [order=100] - Sort weight within its submenu (lower first).
  */
+
+/**
+ * An item's text right now. A dynamic label that throws must not take the menubar with
+ * it - the item falls back to its sort label, which is always a string.
+ * @param {MenuItem} item @returns {string}
+ */
+export function labelOf(item) {
+  if (typeof item?.label !== 'function') return String(item?.label ?? '');
+  try {
+    const text = item.label();
+    return typeof text === 'string' && text ? text : staticLabel(item);
+  } catch (err) {
+    recordError(err, `menu:label:${item?.id ?? '?'}`);
+    return staticLabel(item);
+  }
+}
+
+/** The non-changing text for an item: what the tree sorts by, and the fallback when a
+ * dynamic label fails. Never a function, so sorting is stable as the user works. */
+function staticLabel(item) {
+  if (item?.sortLabel) return item.sortLabel;
+  return typeof item?.label === 'string' ? item.label : String(item?.id ?? '');
+}
+
+/** Whether an item is selectable right now. A throwing predicate leaves the item ENABLED:
+ * a broken check should not silently remove a working command from the menu. */
+export function isEnabled(item) {
+  if (typeof item?.enabled !== 'function') return true;
+  try {
+    return item.enabled() !== false;
+  } catch (err) {
+    recordError(err, `menu:enabled:${item?.id ?? '?'}`);
+    return true;
+  }
+}
 
 /**
  * Invoke a menu item's command and make a failure VISIBLE.
@@ -135,7 +181,9 @@ export class MenuShell {
     if (typeof item.command !== 'function') {
       throw new TypeError(`menus.register: item "${item.label}" needs a command function`);
     }
-    const id = item.id ?? `${item.path.join('/')}/${item.label}`;
+    // A dynamic label cannot spell an id - it changes - so such an item must bring its
+    // own `id` or `sortLabel` rather than getting an id that moves under it.
+    const id = item.id ?? `${item.path.join('/')}/${staticLabel(item)}`;
     const normalised = { order: 100, ...item, id };
 
     this.#items.set(id, normalised);
@@ -196,8 +244,10 @@ export class MenuShell {
         }
         node = child;
       }
-      // Leaf for the item itself, keyed by label under its parent submenu.
-      const leaf = makeNode(item.label, item.order);
+      // Leaf for the item itself, keyed by id under its parent submenu. The node carries
+      // the STATIC label: the tree is built once and sorted by it, so a dynamic label must
+      // not be what decides where an item sits.
+      const leaf = makeNode(staticLabel(item), item.order);
       leaf.item = item;
       node.children.set(`leaf:${item.id}`, leaf);
     }
@@ -306,15 +356,46 @@ export class MenuShell {
     const el = document.createElement('button');
     el.type = 'button';
     el.className = 'menu__item';
-    el.textContent = node.label;
     el.setAttribute('role', 'menuitem');
     el.tabIndex = -1; // reached with arrows, not Tab (see render's roving tabindex)
+    // Items with a computed label or enabled-state are refreshed on every open
+    // ({@link MenuShell#refreshDynamic}); the id is how the panel finds them again.
+    if (typeof node.item?.label === 'function' || typeof node.item?.enabled === 'function') {
+      el.dataset.menuItem = node.item.id;
+    }
+    this.#paintLeaf(el, node.item);
     el.addEventListener('click', (e) => {
       e.stopPropagation();
       this.#closeOpenMenu();
       void runCommand(node.item, this.#onError);
     });
     return el;
+  }
+
+  /** Write an item's CURRENT text and availability onto its button. */
+  #paintLeaf(el, item) {
+    el.textContent = labelOf(item);
+    const ok = isEnabled(item);
+    el.disabled = !ok;
+    // `disabled` already takes it out of the arrow rota (#menuItems filters on it) and
+    // stops the click; aria-disabled is for the screen reader, which announces a disabled
+    // menuitem rather than skipping it silently.
+    el.setAttribute('aria-disabled', ok ? 'false' : 'true');
+  }
+
+  /**
+   * Re-evaluate every computed label/enabled state inside a panel, just before it is shown.
+   *
+   * Open time is the only moment this has to be right, and it is the cheapest one: a
+   * menu change does not have to chase every data change, and nothing recomputes while
+   * menus are closed. The alternative - re-registering an item whenever its target
+   * changes - rebuilds the whole menubar on every keystroke-ish edit.
+   */
+  #refreshDynamic(root) {
+    for (const el of root.querySelectorAll('.menu__item[data-menu-item]')) {
+      const item = this.#items.get(el.dataset.menuItem);
+      if (item) this.#paintLeaf(el, item);
+    }
   }
 
   /** Render a nested submenu as a labelled group with an inline flyout. */
@@ -419,6 +500,8 @@ export class MenuShell {
     const button = wrapper.querySelector('.menu__button');
     if (!panel || !button) return;
     if (this.#openMenu && this.#openMenu !== wrapper) this.#closeOpenMenu();
+    // Before it is visible, so a computed label never flashes its previous text.
+    this.#refreshDynamic(panel);
     panel.hidden = false;
     button.setAttribute('aria-expanded', 'true');
     this.#openMenu = wrapper;
