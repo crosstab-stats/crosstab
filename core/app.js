@@ -925,6 +925,50 @@ export async function boot(mounts) {
     };
   };
 
+  /**
+   * The LIVE annotation records for the dataset in view, each with the op-log target it
+   * is anchored to — what the History panel nests under the step it is about.
+   *
+   * One row per RECORD rather than per op, because the question it answers is different:
+   * not "what happened" but "what is attached to this step, and how do I get rid of this
+   * note". Until #191 the answer to the second was: find the thing it is on. The sidebar
+   * lists memos as an inert count, and the only per-memo control lives on the annotated
+   * object itself or in the orphan list, which appears only once the anchor is gone.
+   */
+  const itemRecords = () => {
+    const activeDs = datasets.activeId;
+    const out = [];
+    for (const decl of itemDecls().values()) {
+      let recs = [];
+      try {
+        recs = itemStore.list(decl.owner, decl.id);
+      } catch {
+        continue; // a collection whose plugin is not activated has nothing to show
+      }
+      for (const rec of recs) {
+        const ds = rec.scope?.dsId;
+        if (ds != null && String(ds) !== String(activeDs)) continue;
+        const target = rec.fields?.anchor?.target;
+        // A note's own words are its name. `recordLabel` falls back to the record id when
+        // a collection declares no label field, and an id is not something to show anyone.
+        const text = typeof rec.fields?.text === 'string' ? rec.fields.text.trim() : '';
+        const title = text
+          ? (text.length > 60 ? `${text.slice(0, 59)}…` : text)
+          : recordLabel(decl, rec);
+        const group = decl.label ?? decl.id;
+        out.push({
+          id: rec.id,
+          owner: decl.owner,
+          collection: decl.id,
+          group,
+          anchorTarget: typeof target === 'string' ? target : null,
+          title,
+          detail: rec.author?.initials ? `${group} · by ${rec.author.initials}` : group,
+        });
+      }
+    }
+    return out;
+  };
 
   const undoCoordinator = new UndoCoordinator({
     datasets,

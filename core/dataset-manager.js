@@ -808,6 +808,22 @@ export class DatasetManager {
   moveOp(from, to) {
     return this.active.moveOp(from, to);
   }
+
+  /** The active dataset's timeline order, and how to set it (#191). The History panel
+   * holds the MANAGER, not a store, so a method that only exists downstream is a method
+   * the panel cannot call — and `this.store.getOrder?.()` fails SILENTLY, which is how a
+   * missing delegation here showed up as "the arrows do nothing" rather than as an error. */
+  getOrder() {
+    return this.active?.getOrder?.() ?? null;
+  }
+
+  applyTimelineOrder(order, opts) {
+    return this.active.applyTimelineOrder(order, opts);
+  }
+
+  materialize(steps) {
+    return this.active.materialize(steps);
+  }
   removeOp(index) {
     return this.active.removeOp(index);
   }

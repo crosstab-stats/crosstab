@@ -361,6 +361,16 @@ export function describeStep(t) {
     const n = (t.names || []).length;
     return { title: `Kept ${n} variable${n === 1 ? '' : 's'}`, detail: (t.names || []).join(', ') };
   }
+  // STRUCTURAL ops never appear as timeline rows — the fold consumes them — but they do
+  // reach the Edit menu, because reordering or deleting a step is an undoable action like
+  // any other. Without a name here, Undo read "Undo: reorder": the raw op type, which is
+  // the one place a user should never be shown one.
+  if (t && t.type === 'reorder') {
+    return { title: 'Reordered the history', detail: '' };
+  }
+  if (t && t.type === 'retract') {
+    return { title: 'Removed a step', detail: '' };
+  }
   if (t && t.type === 'setWeight') {
     // A weight is a transform (see TRANSFORM_TYPES), so it gets a row — and a row with
     // no describer here falls through to printing its raw op type, which is how History

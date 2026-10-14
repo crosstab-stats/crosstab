@@ -42,7 +42,7 @@
  */
 
 import { newOpId } from './merge.js';
-import { liveOps } from './op-log.js';
+import { liveOps, orderByHlc } from './op-log.js';
 import { ProjectLog } from './project-log.js';
 import { retargetRefs, varsNamed } from './var-ref.js';
 import { staleReaders } from './op-log.js';
@@ -174,27 +174,45 @@ export class AnalysisLog {
    */
   withdraw(runId) {
     if (!runId) return false;
-    const hit = this.#log.undoWhere((o) => o.type === 'runAnalysis' && o.payload?.runId === runId);
-    if (hit) this.#changed();
-    return !!hit;
+    // EVERY live op for this run, not just the newest. A run accumulates `runAnalysis` ops
+    // — a move, a rename, a re-run each append one — and the fold takes any applied op as
+    // evidence the run exists. Hiding only the latest left an older one standing, so the
+    // analysis showed up TWICE in the timeline: once live, once below the cursor. Measured
+    // in the app on a run that had been re-run once.
+    let n = 0;
+    while (n < 1000 && this.#log.undoWhere((o) => o.type === 'runAnalysis' && o.payload?.runId === runId)) n += 1;
+    if (n) this.#changed();
+    return n > 0;
   }
 
-  /** Bring a withdrawn run back (a `redo` op). The mirror of {@link AnalysisLog#withdraw}.
-   * @param {string} runId @returns {boolean} whether anything came back */
+  /** Bring a withdrawn run back: the mirror of {@link AnalysisLog#withdraw}, and equally
+   * all-of-them — a partial redo would leave the run live on a stale payload. */
   admit(runId) {
     if (!runId) return false;
-    const hit = this.#log.redoWhere((o) => o.type === 'runAnalysis' && o.payload?.runId === runId);
-    if (hit) this.#changed();
-    return !!hit;
+    let n = 0;
+    while (n < 1000 && this.#log.redoWhere((o) => o.type === 'runAnalysis' && o.payload?.runId === runId)) n += 1;
+    if (n) this.#changed();
+    return n > 0;
   }
 
-  /** The runs currently hidden by an undo, oldest-undo first — the timeline's "below the
-   * cursor" analyses, which are shown greyed rather than simply vanishing. */
+  /** The runs currently hidden by an undo — the timeline's "below the cursor" analyses,
+   * shown greyed rather than simply vanishing. One entry per RUN, newest payload wins:
+   * a run with several ops would otherwise be listed once per op. */
   withdrawnEntries() {
-    return this.#log.undoneOps(ANALYSIS.match)
-      .filter((o) => o.type === 'runAnalysis' && o.payload)
-      .map((o) => structuredClone(o.payload));
+    const byRun = new Map();
+    // Sorted by the OPS' own HLC, not by `undoneOps`'s order — that is oldest-UNDO-MARKER
+    // first, and `withdraw` undoes a run's newest op first, so reading it directly left the
+    // ORIGINAL payload winning and a withdrawn run showed the position it was first run at.
+    for (const op of orderByHlc(this.#log.undoneOps(ANALYSIS.match))) {
+      if (op.type === 'runAnalysis' && op.payload?.runId) byRun.set(op.payload.runId, op.payload);
+    }
+    // A run that is still live somewhere (a partially-undone history) is not withdrawn.
+    const live = new Set(this.#log.state('analysis').map((e) => e.runId));
+    return [...byRun.entries()]
+      .filter(([runId]) => !live.has(runId))
+      .map(([, payload]) => structuredClone(payload));
   }
+
 
   /**
    * The runs whose data has changed since they ran — results that no longer describe what
@@ -261,6 +279,31 @@ export class AnalysisLog {
    * @param {string} runId @param {number} at
    * @returns {object|null} the updated entry, or null if there is no such run
    */
+  /**
+   * Record that a run was re-executed where it already is.
+   *
+   * {@link AnalysisLog#reposition} returns early when the position has not changed, which
+   * is right for a MOVE — there is nothing to record. But a re-run is a real event, and
+   * without an op for it the log still shows the result as older than the edit that made
+   * it stale, so the `stale` mark never clears however many times you press ↻.
+   *
+   * The fresh op also re-derives `reads[]`, so an analysis re-run after its variables
+   * changed declares what it reads NOW.
+   *
+   * @param {string} runId @returns {object|null} the entry, or null if there is no such run
+   */
+  touch(runId) {
+    const entry = this.#log.state('analysis').find((e) => e.runId === runId);
+    if (!entry) return null;
+    const payload = structuredClone(entry);
+    this.#log.append({
+      target: `analysis:${runId}`, owner: 'core', type: 'runAnalysis', payload,
+      reads: readsOf(payload),
+    });
+    this.#changed();
+    return payload;
+  }
+
   reposition(runId, at) {
     const entry = this.#log.state('analysis').find((e) => e.runId === runId);
     if (!entry) return null;

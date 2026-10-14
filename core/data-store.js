@@ -49,6 +49,7 @@ import { newOpId } from './merge.js';
 import { foldDataOps, flattenStep, barrierDroppedIds } from './data-fold.js';
 import { isCategorical, isQuantitative } from './var-role.js';
 import { ProjectLog } from './project-log.js';
+import { appliedState } from './op-log.js';
 
 /** Column auto-added when stacking files, tagging each row with its origin so a
  * pooled multi-file/multi-year dataset stays distinguishable (group/filter by

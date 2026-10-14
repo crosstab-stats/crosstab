@@ -737,7 +737,12 @@ export class PluginActions {
     if (existing?.datasetId != null) this.#activate(existing.datasetId);
     const all = this.#dataStore.getHistory?.().applied ?? [];
     const target = Math.max(0, Math.min(Math.floor(Number(at) || 0), transformCount(all)));
-    const moved = this.#analysisLog.reposition(runId, target);
+    // `reposition` is a no-op when the position has not changed, which is right for a
+    // move and wrong for a RE-RUN: without a fresh op the log still reads the result as
+    // older than whatever made it stale, so the mark would never clear.
+    const moved = (existing && existing.at === target)
+      ? this.#analysisLog.touch(runId)
+      : this.#analysisLog.reposition(runId, target);
     if (!moved) { this.#activate(restoreTo); return false; }
 
     const entry = this.#analysisLog.entries().find((e) => e.runId === runId);

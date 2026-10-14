@@ -1195,6 +1195,17 @@ export class HistoryView {
           this.analysisLog?.withdraw?.(r.id);
         }
       }
+      // The timeline is what decides the order, not the order things were restored in.
+      // Each stashed block remembers the index it was taken FROM, and those indices shift
+      // as earlier runs are removed — so restoring them one by one reproduced the order
+      // the analyses were first run in rather than the order the user had put them in.
+      // Measured: History read [Descriptives, Frequencies] and Output came back
+      // [Frequencies, Descriptives]. One authoritative sort at the end settles it.
+      // Every analysis row in timeline order, live or not: `analysisOrder` keeps only the
+      // live ones, and the rows being restored are still flagged not-live in this snapshot,
+      // so using it here would leave exactly the restored runs unordered. Naming a still-
+      // withdrawn run is harmless — it has no blocks in the model to place.
+      this.results?.reorderRuns?.(seq.filter((r) => r.kind === 'analysis').map((r) => r.id));
     } catch (err) {
       this.onError(err.message);
     } finally {
