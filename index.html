@@ -979,6 +979,18 @@
       .ws-verb:hover { background: #eef3f8; }
       .ws-verb--restart { color: #5a6470; }
 
+      /* A dialog's title row, with the ⓘ that opens its how-to (#192). Help at the
+         moment the question is asked, rather than three menus away. */
+      .ct-dialog__head { display: flex; align-items: center; gap: 8px; }
+      .ct-dialog__head .ct-dialog__title { margin: 0; flex: 1 1 auto; min-width: 0; }
+      .ct-dialog__howto {
+        flex: none; min-width: 32px; min-height: 32px; font: inherit; font-size: 17px;
+        border: 0; border-radius: 8px; background: none; cursor: pointer;
+        color: var(--accent, #2572a5); line-height: 1;
+      }
+      .ct-dialog__howto:hover { background: #eef5fb; }
+      [data-screen="small"] .ct-dialog__howto { min-width: 44px; min-height: 44px; font-size: 20px; }
+
       /* --- shared small controls ---------------------------------------------
          These replace `style.cssText` on five controls (#192). An inline style cannot be
          overridden by ANY rule, so a control styled that way is a control the

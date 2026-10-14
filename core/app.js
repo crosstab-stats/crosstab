@@ -582,7 +582,9 @@ export async function boot(mounts) {
       `“${item?.label ?? 'That menu item'}” failed: ${err?.message || err}`,
     ),
   });
-  const ui = new UiService(datasets);
+  // `onHowto` puts a ⓘ beside a dialog's title when the caller names a topic (#192).
+  // A thunk through `services`, because the guide is built further down.
+  const ui = new UiService(datasets, { onHowto: (topicId) => services.howto?.open(topicId) });
   // Offered at a SWAP (the moment coding would otherwise be orphaned) and from the Data
   // menu (for an import to a NEW dataset, where nothing detaches but the user may still
   // want the coding moved). Both go through the same dialog (#151).
@@ -736,6 +738,10 @@ export async function boot(mounts) {
     codecs,
     analysisLog,
     dataStore: datasets,
+    // Which how-to page a plugin's dialogs offer. Resolved lazily against the live
+    // catalogue, so a plugin installed after boot still has one — and so this does not
+    // need the guide to exist yet at this point in the wiring.
+    howtoPage: (pluginId) => services.howto?.pageFor?.(pluginId) ?? null,
   });
 
   // Cross-plugin invocation (#147): a plugin can call `app.run.analysis(target, opts)`
@@ -1833,6 +1839,9 @@ export async function boot(mounts) {
   /** Open the guide at a PLUGIN's page — what the ⓘ beside it does (#192). Resolving the
    * page id lazily matters: `pluginPage` reads the live catalogue, so a plugin installed
    * after boot still has a destination. */
+  /** The page a plugin's ⓘ leads to — shared by the picker rows and the analysis dialogs
+   * so the two cannot point at different pages for the same plugin. */
+  services.howto.pageFor = (pluginId) => howtoLibrary.pluginPage(pluginId);
   services.howto.openPlugin = (pluginId) => openHowto({
     library: howtoLibrary,
     topicId: howtoLibrary.pluginPage(pluginId) ?? undefined,

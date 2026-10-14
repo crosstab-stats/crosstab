@@ -25,6 +25,9 @@ import { stripEllipsis } from './text.js';
 import { transformCount, prefixForAt } from './timeline.js';
 
 export class PluginActions {
+  /** @type {((pluginId: string) => string|null)|null} resolves a plugin's entry how-to page (#192). */
+  #howtoPage = null;
+
   #loader;
   #menus;
   #results;
@@ -61,7 +64,8 @@ export class PluginActions {
    * @param {object} deps.exporters - ExportService#api (register/deliver).
    * @param {object} deps.outputExporters - OutputExportService#api.
    */
-  constructor({ loader, menus, results, ui, bus, importers, exporters, outputExporters, codecs, analysisLog, dataStore }) {
+  constructor({ loader, menus, results, ui, bus, importers, exporters, outputExporters, codecs, analysisLog, dataStore, howtoPage }) {
+    this.#howtoPage = typeof howtoPage === 'function' ? howtoPage : null;
     this.#loader = loader;
     this.#menus = menus;
     this.#results = results;
@@ -342,11 +346,24 @@ export class PluginActions {
 
   /** Run a workspace verb with category:'menu'. Gathers optional inputs, invokes
    * the verb function, and processes the result envelope. */
+  /**
+   * The how-to topic a dialog should offer, or null.
+   *
+   * The menu ITEM may name one; otherwise it falls back to the plugin's entry page — the
+   * same resolution the ⓘ beside a plugin row uses. So every analysis dialog has a working
+   * ⓘ on day one, and an author who wants the precise page says so in their manifest
+   * without the host needing to learn anything new.
+   */
+  #howtoFor(manifest, item) {
+    if (typeof item?.howto === 'string' && item.howto.trim()) return item.howto.trim();
+    return this.#howtoPage?.(manifest?.id) ?? null;
+  }
+
   async #runVerb(manifest, originLabel, verb) {
     const specs = Array.isArray(verb.inputs) ? verb.inputs : [];
     let gathered = {};
     if (specs.length) {
-      gathered = await gatherInputs(this.#ui, specs, verb, this.#dataStore);
+      gathered = await gatherInputs(this.#ui, specs, verb, this.#dataStore, this.#howtoFor(manifest, verb));
       if (gathered === null) return;
     }
     if (verb.needsFile) {
@@ -391,7 +408,7 @@ export class PluginActions {
       this.#results.appendError(`${item.label}: open or start a project first — there's no data to analyse.`);
       return;
     }
-    const gathered = await gatherInputs(this.#ui, specs, item, this.#dataStore);
+    const gathered = await gatherInputs(this.#ui, specs, item, this.#dataStore, this.#howtoFor(manifest, item));
     if (gathered === null) return; // a required input was cancelled
 
     const entry = {
@@ -654,7 +671,7 @@ export class PluginActions {
 
     let gathered;
     if (missing.length) {
-      gathered = await gatherInputs(this.#ui, specs, t.item, this.#dataStore);
+      gathered = await gatherInputs(this.#ui, specs, t.item, this.#dataStore, this.#howtoFor(t.manifest, t.item));
       if (gathered === null) return { ok: false, error: 'cancelled' };
       Object.assign(gathered, supplied);
     } else {
@@ -960,7 +977,12 @@ function analysisOrder(entries) {
  *   used by dynamic input kinds (e.g. `level`) that enumerate a chosen variable's
  *   categories at gather time so the pick is recorded and replays non-interactively.
  */
-async function gatherInputs(ui, specs, item, data) {
+/**
+ * @param {object} ui @param {object[]} specs @param {object} item @param {object} data
+ * @param {string|null} [howto] a topic id, put on every dialog this gathers through so the
+ *   ⓘ is there at the moment the question is asked rather than three menus away (#192).
+ */
+async function gatherInputs(ui, specs, item, data, howto = null) {
   const out = {};
   const takenUnique = []; // variables chosen by earlier `unique` inputs → excluded later
 
@@ -987,7 +1009,7 @@ async function gatherInputs(ui, specs, item, data) {
       // so third-party plugins written the same way get it too.
       const wantsWeight = spec.role === 'weight' || spec.name === 'weight';
       const dsWeight = wantsWeight && !spec.multiple ? (data?.active?.weightVar ?? null) : null;
-      const res = await ui.selectVariables({
+      const res = await ui.selectVariables({ howto,
         title,
         hint,
         multiple: !!spec.multiple,
@@ -1006,7 +1028,7 @@ async function gatherInputs(ui, specs, item, data) {
       out[spec.name] = spec.multiple ? res : res[0] ?? null;
       if (spec.unique) takenUnique.push(...(spec.multiple ? res : res.slice(0, 1)));
     } else if (kind === 'number' || kind === 'text') {
-      const r = await ui.showForm({
+      const r = await ui.showForm({ howto,
         title,
         fields: [
           {
@@ -1039,7 +1061,7 @@ async function gatherInputs(ui, specs, item, data) {
       // (#174d). A multi choice hands the plugin an array; a single one a string.
       const many = !!spec.multiple;
       const seed = spec.default == null ? [] : [].concat(spec.default).map(String);
-      const r = await ui.selectFromList({ title, hint, items, multiple: many, selected: seed });
+      const r = await ui.selectFromList({ howto, title, hint, items, multiple: many, selected: seed });
       if (r === null) {
         if (spec.optional) {
           out[spec.name] = many ? seed : spec.default ?? null;
@@ -1085,7 +1107,7 @@ async function gatherInputs(ui, specs, item, data) {
       // decides which choice is already ticked when the dialog opens.
       const fallback = spec.preferLast ? cats[cats.length - 1].value : cats[0].value;
       const seed = spec.default != null ? [].concat(spec.default).map(String) : many ? [] : [fallback];
-      const r = await ui.selectFromList({ title, hint, items: cats, multiple: many, selected: seed });
+      const r = await ui.selectFromList({ howto, title, hint, items: cats, multiple: many, selected: seed });
       if (r === null) {
         if (spec.optional) {
           out[spec.name] = spec.default != null ? (many ? [].concat(spec.default).map(String) : String(spec.default)) : emptyVal();

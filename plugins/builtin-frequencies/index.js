@@ -143,6 +143,10 @@ export const manifest = {
   rPackages: [],
   menu: [
     {
+      // The topic this dialog's ⓘ opens (#192). Optional — without it the ⓘ falls back
+      // to the plugin's entry page, which is why every dialog has one on day one. Naming
+      // it matters for a plugin whose items want DIFFERENT pages.
+      howto: 'frequencies-basics',
       label: 'Frequencies…',
       run: 'run',
       order: 10,

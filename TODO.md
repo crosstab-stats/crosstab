@@ -120,10 +120,26 @@ bottom; they are the project's memory and are not summarised away.
       useful on day one instead of after a 64-manifest rewrite; writing a real
       `howtoIndex` supersedes it.
 
+      **All three entry points are in:** Help ▸ How to…, the ⓘ beside a plugin (launcher
+      AND plugin manager, through one shared bundle of ambient deps — see below), and the ⓘ
+      on an analysis dialog, which resolves the menu item's declared `howto` or falls back
+      to the plugin's entry page through the SAME function the plugin row uses.
+
       **Still to do:** screenshots (the renderer handles `![alt](asset:name.png)` with
       `.small` variants, but no topic uses one yet — and they rot, so use them sparingly);
-      the ⓘ inside an analysis dialog (the plugin-list one is done); and authoring real
-      topics for the other 63 built-ins, which is #184's job rather than this one's.
+      and authoring real topics for the other 63 built-ins, which is #184's job rather than
+      this one's.
+
+      **A drift the owner caught, worth keeping.** The launcher's ⓘ was inert while the
+      plugin manager's worked, and their question was the right one: *"I thought we unified
+      these to avoid this kind of drift."* #177 HAD unified the rendering — deleting the
+      About dialog fixed both screens at once. What stayed duplicated was the WIRING: each
+      site assembled its own options object, so the picker's arguments were two kinds that
+      looked alike, **ambient** (`plugins`, `onHowto` — identical everywhere) and
+      **per-site** (`mode`, `selected`, `headLead`). Passing the ambient kind per site means
+      each new one must be remembered N times, and N had become 2 without anything marking
+      the moment. One `pluginPickerHost` bundle now, spread at both sites; the tests pin the
+      SHAPE of the call rather than the dependency that happened to drift.
 
 - [ ] **`runR` wants to be `app.webr.runOrThrow` (raised 2026-10-13).** Eleven plugins
       carry `async function runR(app, code)` — run it, throw if `result` is null. One

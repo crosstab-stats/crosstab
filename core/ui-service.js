@@ -37,6 +37,40 @@ import { makeVarToolbar, filterVars } from './var-toolbar.js';
 import { isCategorical, isQuantitative } from './var-role.js';
 import { escapeHtml } from './text.js';
 
+/**
+ * A dialog's title row, with the ⓘ when there is a topic to open (#192).
+ *
+ * One builder for all three dialog kinds here: the alternative is three copies of a
+ * title+button row, which is how the plugin manager and the launcher came to disagree
+ * about a button they both rendered.
+ *
+ * @param {string} title @param {string|null} howto @param {Function|null} onHowto
+ * @returns {HTMLElement}
+ */
+function dialogHead(title, howto, onHowto) {
+  const head = document.createElement('div');
+  head.className = 'ct-dialog__head';
+  const h2 = document.createElement('h2');
+  h2.className = 'ct-dialog__title';
+  h2.textContent = title;
+  head.append(h2);
+  if (howto && onHowto) {
+    const info = document.createElement('button');
+    info.type = 'button';
+    info.className = 'ct-dialog__howto';
+    info.textContent = '\u24d8';
+    info.title = 'How to use this';
+    info.setAttribute('aria-label', 'How to use this');
+    info.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      onHowto(howto);
+    });
+    head.append(info);
+  }
+  return head;
+}
+
 export class UiService {
   /** @type {import('./data-store.js').DataStore} */
   #store;
@@ -45,7 +79,18 @@ export class UiService {
    * @param {import('./data-store.js').DataStore} dataStore - Source of variable
    *   metadata and the current selection.
    */
-  constructor(dataStore) {
+  /** @type {(topicId: string) => void} opens the how-to guide (#192). */
+  #onHowto = null;
+
+  /**
+   * @param {object} dataStore
+   * @param {{onHowto?: (topicId: string) => void}} [deps] — `onHowto` puts a ⓘ beside a
+   *   dialog's title when the caller names a topic. Injected rather than imported so the
+   *   UI service keeps no opinion about where documentation lives, and so a dialog opened
+   *   in a test does not need a guide.
+   */
+  constructor(dataStore, { onHowto = null } = {}) {
+    this.#onHowto = onHowto;
     this.#store = dataStore;
   }
 
@@ -77,6 +122,9 @@ export class UiService {
       exclude,
       optional = false,
       okLabel = 'OK',
+          // A how-to topic id. Present, and with a guide wired, the dialog shows a ⓘ (#192)
+      // — help at the moment the question is actually asked.
+      howto = null,
     } = options;
 
     // Cross-dataset scope (#179). OFF by default — for most analyses mixing datasets is a
@@ -129,7 +177,7 @@ export class UiService {
       dialog.className = 'ct-dialog';
       dialog.innerHTML = `
         <form method="dialog" class="ct-dialog__form">
-          <h2 class="ct-dialog__title">${escapeHtml(title)}</h2>
+          <div class="ct-dialog__head-slot"></div>
           ${hint ? `<p class="ct-dialog__hint">${escapeHtml(hint)}</p>` : ''}
           <div class="ct-vartools-slot"></div>
           <p class="ct-vartools__count ct-vartools__count--dialog" role="status" aria-live="polite"></p>
@@ -141,6 +189,8 @@ export class UiService {
         </form>`;
 
       const countEl = dialog.querySelector('.ct-vartools__count');
+      dialog.querySelector('.ct-dialog__head-slot')
+        .replaceWith(dialogHead(title, howto, this.#onHowto));
       const list = dialog.querySelector('.ct-dialog__vars');
 
       // The same filter + order strip the Data grid and Variable View carry
@@ -350,6 +400,9 @@ export class UiService {
       okLabel = 'OK',
       searchPlaceholder = 'Filter…',
       selected: initialSelected = [],
+          // A how-to topic id. Present, and with a guide wired, the dialog shows a ⓘ (#192)
+      // — help at the moment the question is actually asked.
+      howto = null,
     } = options;
     const CAP = 500; // max rows rendered at once; refine search to see more
     const seed = multiple ? initialSelected : initialSelected.slice(0, 1);
@@ -362,10 +415,7 @@ export class UiService {
       form.method = 'dialog';
       form.className = 'ct-dialog__form';
 
-      const h2 = document.createElement('h2');
-      h2.className = 'ct-dialog__title';
-      h2.textContent = title;
-      form.append(h2);
+      form.append(dialogHead(title, howto, this.#onHowto));
       if (hint) {
         const p = document.createElement('p');
         p.className = 'ct-dialog__hint';
@@ -498,7 +548,8 @@ export class UiService {
    * @returns {Promise<Record<string,string> | null>}
    */
   showForm(options = {}) {
-    const { title = 'Form', hint, fields = [], okLabel = 'OK' } = options;
+    // `howto` puts a ⓘ beside the title when a guide is wired (#192).
+    const { title = 'Form', hint, fields = [], okLabel = 'OK', howto = null } = options;
     return new Promise((resolve) => {
       const dialog = document.createElement('dialog');
       dialog.className = 'ct-dialog';
@@ -540,7 +591,7 @@ export class UiService {
         .join('');
       dialog.innerHTML = `
         <form method="dialog" class="ct-dialog__form ct-edit">
-          <h2 class="ct-dialog__title">${escapeHtml(title)}</h2>
+          <div class="ct-dialog__head-slot"></div>
           ${hint ? `<p class="ct-dialog__hint">${escapeHtml(hint)}</p>` : ''}
           ${fieldHtml}
           <menu class="ct-dialog__buttons">
@@ -548,6 +599,7 @@ export class UiService {
             <button value="ok" type="submit" class="ct-dialog__primary">${escapeHtml(okLabel)}</button>
           </menu>
         </form>`;
+      dialog.querySelector('.ct-dialog__head-slot').replaceWith(dialogHead(title, howto, this.#onHowto));
       dialog.addEventListener('close', () => {
         const ok = dialog.returnValue === 'ok';
         const out = {};

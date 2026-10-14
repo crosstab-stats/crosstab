@@ -219,6 +219,9 @@ function probeServices() {
  *
  * @typedef {Object} MenuItem
  * @property {string} label - Menu item text, e.g. `'Descriptives…'`.
+ * @property {string} [howto] - The how-to topic this item's dialogs offer behind a ⓘ
+ *   (#192). Optional: without it the ⓘ falls back to the plugin's entry page, so every
+ *   dialog has one either way. Name it when a plugin's items want DIFFERENT pages.
  * @property {string} run - Name of the exported function to call: `run(app, inputs)`.
  * @property {number} [order] - Sort weight within the category menu (lower first).
  * @property {Array<InputDecl>} [inputs] - Inputs gathered (in order) before `run`.
