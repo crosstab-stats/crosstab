@@ -41,9 +41,31 @@ export const manifest = {
     '  • time — follow-up time until the event or censoring.\n' +
     '  • status — event indicator (1 = event, 0 = censored).\n' +
     '  • group — optional grouping variable (Kaplan–Meier); preds — covariates (Cox).',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'survival-km',
+      title: 'Kaplan–Meier and log-rank',
+      category: 'Survival',
+      keywords: ['kaplan meier', 'survival', 'log-rank', 'censored', 'time to event', 'median survival', 'curve', 'follow-up'],
+      needs: ['builtin-survival'],
+      seeAlso: ['survival-cox'],
+    },
+    {
+      id: 'survival-cox',
+      title: 'Cox proportional hazards',
+      category: 'Survival',
+      keywords: ['cox', 'proportional hazards', 'hazard ratio', 'survival', 'covariates', 'censored', 'regression', 'time to event'],
+      needs: ['builtin-survival'],
+      seeAlso: ['survival-km'],
+    },
+  ],
   rPackages: ['survival'],
   menu: [
     {
+      howto: 'survival-km',
       label: 'Kaplan–Meier & log-rank…',
       run: 'kaplanMeier',
       order: 10,
@@ -55,6 +77,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'survival-cox',
       label: 'Cox proportional hazards…',
       run: 'cox',
       order: 20,

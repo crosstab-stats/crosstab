@@ -38,9 +38,55 @@ export const manifest = {
     '  • x / y — the numeric variable; reps — number of resamples (default 2000) or permutations (5000).\n' +
     '  • stat — bootStatistic: "mean"|"median"|"sd"|"var"|"IQR"|"trim"; permutation: "mean"|"median".\n' +
     '  • other actions: Bootstrap a correlation — run builtin-bootstrap.bootCorr {"x": "x", "y": "y", "reps": 2000}; Power by simulation — run builtin-bootstrap.power {"n": 30, "d": 0.5, "alpha": 0.05, "reps": 2000}.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'bootstrap-mean',
+      title: 'Bootstrap the mean',
+      category: 'Resampling',
+      keywords: ['bootstrap', 'resample', 'mean', 'confidence interval', 'percentile', 'standard error', 'reps', 'simulation'],
+      needs: ['builtin-bootstrap'],
+      seeAlso: ['bootstrap-statistic', 'bootstrap-permutation', 'descriptives-explore'],
+    },
+    {
+      id: 'bootstrap-statistic',
+      title: 'Bootstrap a statistic',
+      category: 'Resampling',
+      keywords: ['bootstrap', 'median', 'sd', 'variance', 'iqr', 'trimmed', 'statistic', 'confidence interval', 'resample'],
+      needs: ['builtin-bootstrap'],
+      seeAlso: ['bootstrap-mean', 'bootstrap-correlation'],
+    },
+    {
+      id: 'bootstrap-correlation',
+      title: 'Bootstrap a correlation',
+      category: 'Resampling',
+      keywords: ['bootstrap', 'correlation', 'confidence interval', 'resample', 'r'],
+      needs: ['builtin-bootstrap'],
+      seeAlso: ['correlation-bivariate', 'bootstrap-statistic'],
+    },
+    {
+      id: 'bootstrap-permutation',
+      title: 'Permutation test (two groups)',
+      category: 'Resampling',
+      keywords: ['permutation', 'randomisation', 'randomization', 'exact', 'shuffle', 'two groups', 'nonparametric', 'resample'],
+      needs: ['builtin-bootstrap'],
+      seeAlso: ['compare-independent', 'nonparametric-mannwhitney', 'bootstrap-mean'],
+    },
+    {
+      id: 'bootstrap-power',
+      title: 'Power by simulation (t-test)',
+      category: 'Resampling',
+      keywords: ['power', 'simulation', 'sample size', 'effect size', 'planning', 'ttest', 'design', 'n'],
+      needs: ['builtin-bootstrap'],
+      seeAlso: ['compare-independent', 'bootstrap-permutation'],
+    },
+  ],
   rPackages: ['boot'],
   menu: [
     {
+      howto: 'bootstrap-mean',
       label: 'Bootstrap the mean…',
       run: 'run',
       order: 10,
@@ -50,6 +96,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'bootstrap-statistic',
       label: 'Bootstrap a statistic…',
       run: 'bootStatistic',
       order: 20,
@@ -74,6 +121,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'bootstrap-correlation',
       label: 'Bootstrap a correlation…',
       run: 'bootCorr',
       order: 30,
@@ -84,6 +132,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'bootstrap-permutation',
       label: 'Permutation test (2 groups)…',
       run: 'permutation',
       order: 40,
@@ -107,6 +156,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'bootstrap-power',
       label: 'Power by simulation (t-test)…',
       run: 'power',
       order: 50,

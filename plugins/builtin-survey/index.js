@@ -53,9 +53,39 @@ export const manifest = {
     '  • vars / rowvar+colvar / dv+ivs — the measures, the two crosstab variables, or the outcome + predictors.\n' +
     '  • family — regression only: "linear" (default) or "logistic".',
   disciplines: ['Social Science', 'Sociology', 'Political Science', 'Ethnic Studies', "Women's & Gender Studies", 'Public Health'],
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'survey-means',
+      title: 'Weighted means',
+      category: 'Survey',
+      keywords: ['survey', 'weighted mean', 'design', 'strata', 'cluster', 'psu', 'standard error', 'complex sample', 'population'],
+      needs: ['builtin-survey'],
+      seeAlso: ['survey-crosstab', 'survey-regression', 'weight-cases'],
+    },
+    {
+      id: 'survey-crosstab',
+      title: 'Weighted crosstab',
+      category: 'Survey',
+      keywords: ['survey crosstab', 'weighted', 'design', 'strata', 'cluster', 'contingency', 'rao scott', 'population'],
+      needs: ['builtin-survey'],
+      seeAlso: ['survey-means', 'crosstabs-basics'],
+    },
+    {
+      id: 'survey-regression',
+      title: 'Survey regression',
+      category: 'Survey',
+      keywords: ['survey regression', 'weighted regression', 'design', 'strata', 'cluster', 'logistic', 'linear', 'population'],
+      needs: ['builtin-survey'],
+      seeAlso: ['survey-means', 'regression-linear', 'logistic-binary'],
+    },
+  ],
   rPackages: ['survey'],
   menu: [
     {
+      howto: 'survey-means',
       label: 'Weighted means…',
       run: 'means',
       order: 10,
@@ -65,6 +95,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'survey-crosstab',
       label: 'Weighted crosstab…',
       run: 'crosstab',
       order: 20,
@@ -75,6 +106,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'survey-regression',
       label: 'Survey regression…',
       run: 'regression',
       order: 30,

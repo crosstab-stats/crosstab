@@ -34,9 +34,23 @@ export const manifest = {
     '  • nfactors — number of factors (0 = auto, eigenvalue > 1).\n' +
     '  • method — "principal" (default) | "pa" | "ml".\n' +
     '  • rotation — "varimax" (default) | "none" | "oblimin" | "promax".',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'factor-analysis',
+      title: 'Factor analysis',
+      category: 'Multivariate',
+      keywords: ['factor analysis', 'efa', 'loadings', 'rotation', 'varimax', 'oblimin', 'scree', 'kmo', 'bartlett', 'dimensions', 'items', 'scale'],
+      needs: ['builtin-factor'],
+      seeAlso: ['reliability-alpha', 'sem-cfa'],
+    },
+  ],
   rPackages: ['psych', 'GPArotation'],
   menu: [
     {
+      howto: 'factor-analysis',
       label: 'Factor analysis…',
       run: 'run',
       order: 10,

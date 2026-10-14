@@ -40,9 +40,31 @@ export const manifest = {
     'Syntax: run builtin-ordination.mds {"vars": ["price", "quality", "service"], "label": "brand"}\n' +
     '  • correspondence: rowvar / colvar — the two category variables.\n' +
     '  • mds: vars — numeric attributes; label — optional object label for the map.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'ordination-correspondence',
+      title: 'Correspondence analysis',
+      category: 'Multivariate',
+      keywords: ['correspondence', 'ca', 'biplot', 'inertia', 'contingency', 'map', 'rows', 'columns', 'brands', 'attributes'],
+      needs: ['builtin-ordination'],
+      seeAlso: ['ordination-mds', 'crosstabs-basics'],
+    },
+    {
+      id: 'ordination-mds',
+      title: 'Multidimensional scaling (MDS)',
+      category: 'Multivariate',
+      keywords: ['mds', 'multidimensional scaling', 'similarity', 'dissimilarity', 'map', 'distance', 'perceptual map', 'ordination'],
+      needs: ['builtin-ordination'],
+      seeAlso: ['ordination-correspondence', 'cluster-kmeans'],
+    },
+  ],
   rPackages: ['ca', 'svglite'],
   menu: [
     {
+      howto: 'ordination-correspondence',
       label: 'Correspondence analysis…',
       run: 'correspondence',
       order: 46,
@@ -52,6 +74,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'ordination-mds',
       label: 'Multidimensional scaling (MDS)…',
       run: 'mds',
       order: 47,

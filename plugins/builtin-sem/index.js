@@ -62,9 +62,39 @@ export const manifest = {
     '  • items / factorName — CFA: the one-factor items and an optional factor name.\n' +
     '  • vars / model — SEM: every variable used, plus lavaan model syntax (equations separated by ";").',
   disciplines: ['Psychology', 'Sociology'],
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'sem-cfa',
+      title: 'Confirmatory factor analysis',
+      category: 'Multivariate',
+      keywords: ['cfa', 'confirmatory', 'factor', 'loadings', 'fit', 'cfi', 'tli', 'rmsea', 'srmr', 'lavaan', 'measurement model'],
+      needs: ['builtin-sem'],
+      seeAlso: ['sem-model', 'factor-analysis'],
+    },
+    {
+      id: 'sem-growth',
+      title: 'Latent growth curve',
+      category: 'Multivariate',
+      keywords: ['growth curve', 'latent growth', 'trajectory', 'change over time', 'intercept', 'slope', 'longitudinal', 'lavaan'],
+      needs: ['builtin-sem'],
+      seeAlso: ['sem-model', 'multilevel-linear'],
+    },
+    {
+      id: 'sem-model',
+      title: 'Structural equation model (lavaan syntax)',
+      category: 'Multivariate',
+      keywords: ['sem', 'structural equation', 'lavaan', 'path model', 'latent', 'syntax', 'model', 'fit indices'],
+      needs: ['builtin-sem'],
+      seeAlso: ['sem-cfa', 'mediation-indirect'],
+    },
+  ],
   rPackages: ['lavaan'],
   menu: [
     {
+      howto: 'sem-cfa',
       label: 'Confirmatory factor analysis…',
       run: 'cfa',
       order: 30,
@@ -74,6 +104,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'sem-growth',
       label: 'Latent growth curve…',
       run: 'growth',
       order: 35,
@@ -83,6 +114,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'sem-model',
       label: 'Structural equation model (syntax)…',
       run: 'sem',
       order: 40,

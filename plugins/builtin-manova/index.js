@@ -32,9 +32,23 @@ export const manifest = {
     'Syntax: run builtin-manova.run {"dvs": ["score1", "score2"], "group": "treatment"}\n' +
     '  • dvs — two or more numeric outcomes compared at once.\n' +
     '  • group — the factor that sorts cases into groups.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'manova-multivariate',
+      title: 'MANOVA',
+      category: 'Multivariate',
+      keywords: ['manova', 'multivariate', 'pillai', 'wilks', 'hotelling', 'roy', 'several outcomes', 'anova', 'groups'],
+      needs: ['builtin-manova'],
+      seeAlso: ['compare-oneway', 'anova-factorial'],
+    },
+  ],
   rPackages: [],
   menu: [
     {
+      howto: 'manova-multivariate',
       label: 'MANOVA…',
       run: 'run',
       order: 20,

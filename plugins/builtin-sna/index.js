@@ -31,9 +31,23 @@ export const manifest = {
     '  • from / to — the two columns naming each tie\'s endpoints.\n' +
     '  • directed — "undirected" (default) or "directed".',
   disciplines: ['Sociology', 'Anthropology', 'Communication', 'Political Science'],
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'sna-network',
+      title: 'Network analysis (edge list)',
+      category: 'Multivariate',
+      keywords: ['network', 'sna', 'social network', 'edge list', 'centrality', 'density', 'components', 'clustering', 'graph', 'ties', 'directed'],
+      needs: ['builtin-sna'],
+      seeAlso: ['cluster-kmeans'],
+    },
+  ],
   rPackages: ['igraph', 'svglite'],
   menu: [
     {
+      howto: 'sna-network',
       label: 'Network analysis (edge list)…',
       run: 'run',
       order: 48,

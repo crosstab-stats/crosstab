@@ -64,9 +64,31 @@ export const manifest = {
     + 'weights a disagreement (nominal treats all disagreements alike).\n'
     + '  • weight — κ weighting for exactly 2 raters: "unweighted" (default) | "equal" | "squared".\n'
     + 'Syntax: run builtin-agreement.fromCodings {"metric": "nominal"}',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'agreement-raters',
+      title: 'Inter-rater agreement',
+      category: 'Scale',
+      keywords: ['agreement', 'kappa', 'cohen', 'fleiss', 'krippendorff', 'alpha', 'inter-rater', 'reliability', 'coders', 'raters'],
+      needs: ['builtin-agreement'],
+      seeAlso: ['agreement-codings', 'reliability-alpha'],
+    },
+    {
+      id: 'agreement-codings',
+      title: 'Inter-coder agreement from codings',
+      category: 'Scale',
+      keywords: ['inter-coder', 'coding', 'caqdas', 'qualitative', 'agreement', 'kappa', 'coders', 'reliability', 'passages'],
+      needs: ['builtin-agreement'],
+      seeAlso: ['agreement-raters'],
+    },
+  ],
   rPackages: ['irr'],
   menu: [
     {
+      howto: 'agreement-raters',
       label: 'Inter-rater agreement…',
       run: 'run',
       order: 20,
@@ -95,6 +117,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'agreement-codings',
       label: 'Inter-coder agreement from codings…',
       run: 'fromCodings',
       order: 21,

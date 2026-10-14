@@ -32,9 +32,23 @@ export const manifest = {
     "You get Cronbach's α (raw + standardized), McDonald's ω, and per-item statistics (item-total r, α if deleted).\n" +
     'Syntax: run builtin-reliability.run {"vars": ["q1", "q2", "q3"]}\n' +
     '  • vars — the numeric scale items expected to measure one construct.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'reliability-alpha',
+      title: 'Reliability analysis',
+      category: 'Scale',
+      keywords: ['reliability', 'cronbach', 'alpha', 'internal consistency', 'scale', 'items', 'item total', 'if deleted'],
+      needs: ['builtin-reliability'],
+      seeAlso: ['factor-analysis', 'agreement-raters'],
+    },
+  ],
   rPackages: ['psych'],
   menu: [
     {
+      howto: 'reliability-alpha',
       label: 'Reliability analysis…',
       run: 'run',
       order: 10,

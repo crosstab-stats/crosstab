@@ -29,9 +29,23 @@ export const manifest = {
     'GUI: Multivariate ▸ Diversity & ordination…, pick one count column per species (each row a site). You get per-site richness/Shannon/Simpson/evenness plus an NMDS ordination plot.\n' +
     'Syntax: run builtin-ecology.run {"species": ["sp1", "sp2", "sp3"]}\n' +
     '  • species — 2+ numeric count columns (one per species/category).',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'ecology-diversity',
+      title: 'Diversity & ordination',
+      category: 'Multivariate',
+      keywords: ['diversity', 'richness', 'shannon', 'simpson', 'evenness', 'nmds', 'ordination', 'species', 'ecology', 'sites', 'abundance'],
+      needs: ['builtin-ecology'],
+      seeAlso: ['ordination-mds', 'cluster-kmeans'],
+    },
+  ],
   rPackages: ['vegan', 'svglite'],
   menu: [
     {
+      howto: 'ecology-diversity',
       label: 'Diversity & ordination…',
       run: 'run',
       order: 45,

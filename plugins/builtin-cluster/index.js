@@ -35,9 +35,23 @@ export const manifest = {
     '  • vars — the numeric variables used to judge similarity between cases.\n' +
     '  • k — number of clusters to split cases into (default 3).\n' +
     '  • standardize — "z" (z-scores, default) or "raw".',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'cluster-kmeans',
+      title: 'k-means cluster analysis',
+      category: 'Multivariate',
+      keywords: ['cluster', 'kmeans', 'k-means', 'segment', 'grouping', 'centres', 'centers', 'standardize', 'typology', 'unsupervised'],
+      needs: ['builtin-cluster'],
+      seeAlso: ['factor-analysis', 'ordination-mds'],
+    },
+  ],
   rPackages: [],
   menu: [
     {
+      howto: 'cluster-kmeans',
       label: 'k-means cluster analysis…',
       run: 'kmeans',
       order: 40,
