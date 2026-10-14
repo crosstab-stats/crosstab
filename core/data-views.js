@@ -981,6 +981,9 @@ export class HistoryView {
     // is therefore both "the state you are looking at" and "where the next thing will go",
     // which is how people read this badge (owner, 2026-10-13).
     const cursorId = movable.length ? movable[movable.length - 1].id : null;
+    // Results whose data has changed since they ran. Marked, never silently re-run: the
+    // numbers were true of the data at the time, which is what a history is for.
+    const stale = this.analysisLog?.staleRuns?.() ?? new Set();
 
     // Records are drawn as a RUN under the row they annotate, so a long one can collapse.
     let run = [];
@@ -1006,7 +1009,7 @@ export class HistoryView {
     for (const row of rows) {
       if (row.kind === 'record') { run.push(row); continue; }
       flushRecords();
-      ol.append(this.#timelineRow(row, { movable, pinIdx, cursorId }));
+      ol.append(this.#timelineRow(row, { movable, pinIdx, cursorId, stale }));
     }
     flushRecords();
 
@@ -1019,7 +1022,7 @@ export class HistoryView {
   }
 
   /** One timeline row: a clickable body that moves the cursor here, plus its controls. */
-  #timelineRow(row, { movable, pinIdx, cursorId }) {
+  #timelineRow(row, { movable, pinIdx, cursorId, stale }) {
     const li = document.createElement('li');
     const isCursor = row.kind === 'start' ? cursorId === null : row.id === cursorId;
     const state = !row.live ? 'future' : isCursor ? 'current' : 'applied';
@@ -1039,6 +1042,13 @@ export class HistoryView {
     if (row.detail) body.append(el('span', { text: row.detail, class: 'history__detail' }));
     btn.append(body);
     if (isCursor && row.live) btn.append(el('span', { text: 'current', class: 'history__badge' }));
+    const isStale = row.kind === 'analysis' && row.live && stale?.has(row.id);
+    if (isStale) {
+      const mark = el('span', { text: 'stale', class: 'history__badge history__badge--stale' });
+      mark.title = 'A variable this used was changed after it ran — its numbers describe'
+        + ' data that is no longer there. Re-run it to bring it up to date.';
+      btn.append(mark);
+    }
 
     btn.title = isCursor
       ? 'The state you are looking at — the next step goes here'
@@ -1049,7 +1059,7 @@ export class HistoryView {
     btn.addEventListener('click', () => void this.#cursorTo(row));
     li.append(btn);
 
-    const ctl = this.#rowControls(row, { movable, pinIdx });
+    const ctl = this.#rowControls(row, { movable, pinIdx, isStale });
     if (ctl) li.append(ctl);
     return li;
   }
@@ -1061,7 +1071,7 @@ export class HistoryView {
    * neighbour is. What that costs is then computed from the result rather than chosen by
    * which button was pressed: see {@link HistoryView#applyOrder}.
    */
-  #rowControls(row, { movable, pinIdx }) {
+  #rowControls(row, { movable, pinIdx, isStale = false }) {
     if (row.kind === 'start' || !row.live) return null;
     const i = movable.findIndex((r) => r.id === row.id);
     if (i < 0) return null;
@@ -1073,6 +1083,12 @@ export class HistoryView {
     const busy = this.#busy;
 
     const ctl = el('span', { class: 'history__ctl' });
+    // Offered only when there IS something to bring up to date. A re-run button on every
+    // row would be an action with no occasion; this one appears exactly when the log says
+    // the result no longer describes the data (guard-means-missing-state).
+    if (isStale) {
+      ctl.append(ctlBtn('\u21bb', 'Re-run this against the data as it is now', busy, () => this.#rerun(row)));
+    }
     // The R this result came from, if it was recorded. Shown here rather than only in the R
     // export because the point of keeping it is reading a project you did not run: a bundle
     // can arrive with results from a plugin you do not have. Absent — not disabled — when
@@ -1226,6 +1242,29 @@ export class HistoryView {
         await this.pluginActions?.repositionAnalysis?.(runId, to, { prefix: stepsAbove(next.rows, runId) });
       }
       this.results?.reorderRuns?.(analysisOrder(next.rows));
+    } catch (err) {
+      this.onError(err.message);
+    } finally {
+      this.#busy = false;
+      this.render();
+    }
+  }
+
+  /**
+   * Re-run one analysis at its own position, against the data as it is now.
+   *
+   * The same machinery a move uses — materialise the prefix above it, execute, put the
+   * pipeline back — with the position left alone. This is the only thing that clears a
+   * `stale` mark, and it is the user's call: re-running automatically would cost a WebR
+   * round trip per affected result on every edit, and would quietly overwrite numbers
+   * somebody may be in the middle of reading.
+   */
+  async #rerun(row) {
+    if (this.#busy || row.kind !== 'analysis') return;
+    this.#busy = true;
+    this.render();
+    try {
+      await this.pluginActions?.repositionAnalysis?.(row.id, row.at, { prefix: stepsAbove(this.#rows, row.id) });
     } catch (err) {
       this.onError(err.message);
     } finally {

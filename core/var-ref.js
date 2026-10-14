@@ -129,6 +129,38 @@ export function datasetsNamed(inputs, specs) {
 }
 
 /**
+ * Every VARIABLE this input set refers to, as `{dataset, name}` — the companion to
+ * {@link datasetsNamed}, which keeps only the dataset half.
+ *
+ * Used to give a `runAnalysis` op its `reads[]`, so the log can tell when the data an
+ * analysis described has changed since it ran. Only variable inputs are read, for the same
+ * reason {@link datasetsNamed} requires the specs: a chart title reading "Results: Wave 2"
+ * is prose, and parsing it as a qualified reference would invent a variable nobody named.
+ *
+ * @param {Object<string, any>} inputs @param {Array<{name: string, kind?: string}>} specs
+ * @returns {Array<{dataset: string|null, name: string}>}
+ */
+export function varsNamed(inputs, specs) {
+  const varInputs = new Set(
+    (Array.isArray(specs) ? specs : [])
+      .filter((sp) => (sp?.kind || 'variables') === 'variables')
+      .map((sp) => sp.name),
+  );
+  const out = [];
+  const note = (v) => {
+    const { dataset, name } = parseVarRef(v);
+    if (!name) return;
+    if (!out.some((r) => r.dataset === dataset && r.name === name)) out.push({ dataset, name });
+  };
+  for (const [key, v] of Object.entries(inputs || {})) {
+    if (!varInputs.has(key)) continue;
+    if (typeof v === 'string') note(v);
+    else if (Array.isArray(v)) for (const x of v) if (typeof x === 'string') note(x);
+  }
+  return out;
+}
+
+/**
  * Re-point every reference to `oldName` at `newName`, across one gathered input set (#179).
  *
  * Lives here because this module owns the spelling: a rename that rewrote references by string

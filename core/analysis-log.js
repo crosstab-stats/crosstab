@@ -44,7 +44,8 @@
 import { newOpId } from './merge.js';
 import { liveOps } from './op-log.js';
 import { ProjectLog } from './project-log.js';
-import { retargetRefs } from './var-ref.js';
+import { retargetRefs, varsNamed } from './var-ref.js';
+import { staleReaders } from './op-log.js';
 
 /** The analysis-run projection: folds runAnalysis/removeAnalysis ops into the ordered
  * list of runs (keyed by `runId`, so a re-added run after a remove reappears). */
@@ -85,6 +86,38 @@ const ANALYSIS = {
   },
 };
 
+/** Source ops: they replace the whole dataset, so a staleness check has to treat them as a
+ * write to every variable in it rather than to one sibling address. */
+const SOURCE_OPS = new Set(['load', 'append', 'join']);
+
+/**
+ * The op-log targets a run depends on: one per variable it actually read.
+ *
+ * This is what lets {@link AnalysisLog#staleRuns} work at all. `staleReaders` has been in
+ * op-log.js since #166, answering exactly the right question — "does something I depend on
+ * change after me?" — and it could not see analyses, because a `runAnalysis` op declared
+ * no reads. A result computed from a variable recoded afterwards sat in Output looking as
+ * authoritative as one computed a second ago.
+ *
+ * An unqualified reference means the run's own dataset, which is what `datasetId` says.
+ * A run whose dataset is unknown (recorded before it was tracked) declares nothing rather
+ * than guessing: under-reporting staleness is the safer direction for a mark shown to a user.
+ */
+function readsOf(entry) {
+  const own = entry?.datasetId;
+  const out = [];
+  for (const { dataset, name } of varsNamed(entry?.inputs, entry?.specs)) {
+    // A qualified reference names another dataset BY NAME, which is not an op address;
+    // resolving it needs the collection, which this module deliberately does not have.
+    // Its own dataset covers the overwhelmingly common case.
+    if (dataset != null) continue;
+    if (own == null) continue;
+    const target = `ds:${own}/var:${name}`;
+    if (!out.includes(target)) out.push(target);
+  }
+  return out;
+}
+
 export class AnalysisLog {
   /** @type {import('./event-bus.js').EventBus|null} */
   #bus;
@@ -109,7 +142,10 @@ export class AnalysisLog {
     // (PluginActions#execute), so the log entry and its output share ONE identity and
     // output can be removed by id. Mint one only if a caller records without running.
     const payload = { ...structuredClone(entry), runId: entry.runId ?? newOpId() };
-    this.#log.append({ target: `analysis:${payload.runId}`, owner: 'core', type: 'runAnalysis', payload });
+    this.#log.append({
+      target: `analysis:${payload.runId}`, owner: 'core', type: 'runAnalysis', payload,
+      reads: readsOf(payload),
+    });
     this.#bus?.emit?.('analysislog:recorded', structuredClone(payload));
     this.#changed();
   }
@@ -119,7 +155,10 @@ export class AnalysisLog {
   restore(entry) {
     const payload = structuredClone(entry);
     if (!payload.runId) payload.runId = newOpId();
-    this.#log.append({ target: `analysis:${payload.runId}`, owner: 'core', type: 'runAnalysis', payload });
+    this.#log.append({
+      target: `analysis:${payload.runId}`, owner: 'core', type: 'runAnalysis', payload,
+      reads: readsOf(payload),
+    });
     this.#changed();
   }
 
@@ -155,6 +194,36 @@ export class AnalysisLog {
     return this.#log.undoneOps(ANALYSIS.match)
       .filter((o) => o.type === 'runAnalysis' && o.payload)
       .map((o) => structuredClone(o.payload));
+  }
+
+  /**
+   * The runs whose data has changed since they ran — results that no longer describe what
+   * they claim to.
+   *
+   * Detection only, and deliberately: the honest thing to do with a stale result is to SAY
+   * it is stale, not to silently re-run it (which would cost a WebR round trip per result
+   * on every edit) and not to hide it (the numbers were true of the data at the time, which
+   * is exactly what a history is for).
+   *
+   * Only the LATEST op per run counts. A reposition or a dataset rename appends a fresh
+   * `runAnalysis` for the same runId, and the superseded ones are older than everything,
+   * so counting them would report every moved analysis as permanently stale.
+   *
+   * @returns {Set<string>} runIds
+   */
+  staleRuns() {
+    const ops = liveOps(this.#log.slice((o) => (
+      (typeof o.target === 'string' && o.target.startsWith('analysis:'))
+      || (o.owner === 'core' && typeof o.target === 'string' && o.target.startsWith('ds:'))
+    )));
+    const newest = new Map();
+    for (const op of ops) if (op.type === 'runAnalysis' && op.payload?.runId) newest.set(op.payload.runId, op.id);
+    const current = new Set(newest.values());
+    const problems = staleReaders(ops, {
+      isReader: (op) => op.type === 'runAnalysis' && current.has(op.id),
+      isAggregateWrite: (op) => SOURCE_OPS.has(op.type),
+    });
+    return new Set(problems.map((p) => p.op.payload?.runId).filter(Boolean));
   }
 
   /** A deep copy of the ordered entries (safe to hand to callers/serialisers). */
@@ -198,7 +267,10 @@ export class AnalysisLog {
     const next = Math.max(0, Math.floor(Number(at) || 0));
     if (next === entry.at) return entry;
     const payload = { ...structuredClone(entry), at: next };
-    this.#log.append({ target: `analysis:${runId}`, owner: 'core', type: 'runAnalysis', payload });
+    this.#log.append({
+      target: `analysis:${runId}`, owner: 'core', type: 'runAnalysis', payload,
+      reads: readsOf(payload),
+    });
     this.#changed();
     return payload;
   }
@@ -233,7 +305,10 @@ export class AnalysisLog {
       const inputs = retargetRefs(entry.inputs, entry.specs, from, to);
       if (!inputs) continue;
       const payload = { ...structuredClone(entry), inputs };
-      this.#log.append({ target: `analysis:${entry.runId}`, owner: 'core', type: 'runAnalysis', payload });
+      this.#log.append({
+        target: `analysis:${entry.runId}`, owner: 'core', type: 'runAnalysis', payload,
+        reads: readsOf(payload),
+      });
       n += 1;
     }
     if (n) this.#changed();

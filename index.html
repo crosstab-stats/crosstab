@@ -557,6 +557,9 @@
         margin-left: auto; align-self: center; font-size: 11px; font-weight: 600;
         color: var(--accent); background: #eaf2fb; padding: 1px 8px; border-radius: 10px;
       }
+      /* A result whose data moved after it ran. Amber rather than red: the numbers are not
+         wrong, they describe an earlier state — which is the whole point of a history. */
+      .history__badge--stale { color: #8a5a00; background: #fdf0d5; }
       .history-hint { color: #646e77; font-size: 13px; line-height: 1.5; padding: 4px 12px 0; max-width: 48ch; }
 
       /* variable metadata editor (recode), and every plugin dialog raised through
