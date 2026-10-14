@@ -2136,6 +2136,11 @@ export async function boot(mounts) {
     // dialog rather than a launcher-shaped copy of it (#167). Defined above, well before
     // this line, so there is nothing to defer.
     openManager,
+    // The ⓘ beside a plugin on the launcher. Passing it is not optional dressing: the
+    // picker's call is `this.#onHowto?.(id)`, so a missing one is a button that silently
+    // does nothing — which is exactly how it shipped, and how the SAME optional-call
+    // reflex hid a missing delegation in the History panel a day earlier.
+    onHowto: (pluginId) => services.howto.openPlugin(pluginId),
   });
   engine.launcher = launcher;
   const launchFlag = new URLSearchParams(location.search).get('launch');

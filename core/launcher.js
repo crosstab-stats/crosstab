@@ -59,6 +59,9 @@ const PRESETS = {
 const LS_SEEN = 'crosstab.launcher.seen';
 
 export class Launcher {
+  /** Opens the how-to guide at a plugin's page (#192). */
+  #onHowto = null;
+
   #plugins; #datasets; #bus; #projects; #offline; #workspaceStore; #itemStore; #assetStore;
   #root = null;
   /** Selected plugin keys (the checked set). @type {Set<string>} */
@@ -100,8 +103,9 @@ export class Launcher {
    * @param {import('./asset-store.js').AssetStore} [deps.assetStore] - Stores demo
    *   geometry as asset bytes, the same way a loaded file is stored.
    */
-  constructor({ plugins, datasets, bus, projects, offline, workspaceStore, itemStore, assetStore, makeBackend, openBackend, openManager }) {
+  constructor({ plugins, datasets, bus, projects, offline, workspaceStore, itemStore, assetStore, makeBackend, openBackend, openManager, onHowto }) {
     this.#plugins = plugins;
+    this.#onHowto = onHowto ?? null;
     this.#datasets = datasets;
     this.#bus = bus;
     this.#projects = projects ?? null;
@@ -308,6 +312,11 @@ export class Launcher {
     // as the picker's lead control, which is exactly where it used to sit.
     this.#picker = new PluginPicker({
       plugins: this.#plugins, mode: 'select', selected: seed, headLead: indicator,
+      // The ⓘ beside a plugin, which on THIS screen is the one that matters most: nothing
+      // is activated yet, so the launcher is exactly where someone needs to find out what a
+      // plugin is before ticking it. The guide reads the catalogue rather than the loaded
+      // set, so it can answer that here.
+      onHowto: this.#onHowto,
     });
     this.#picker.mount(overlay.querySelector('.ctl__picker'));
 

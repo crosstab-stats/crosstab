@@ -112,6 +112,20 @@ test('the ⓘ hook is assigned where `plugins` actually exists', () => {
   assert.ok(hook > ctor, 'the hook must come after the constructor, not merely after the declaration');
 });
 
+test('EVERY picker that renders ⓘ is given the hook', () => {
+  // The picker calls `this.#onHowto?.(id)`, so a picker constructed without it has a
+  // button that silently does nothing — which is how the launcher shipped: the plugin
+  // manager was wired and the launcher was not. The optional call is what hid it, the
+  // same reflex that hid a missing delegation in the History panel a day earlier.
+  const launcher = readFileSync('core/launcher.js', 'utf8');
+  const constructions = [...picker.matchAll(/new PluginPicker\(\{/g)].length
+    + [...launcher.matchAll(/new PluginPicker\(\{/g)].length;
+  const wired = [...picker.matchAll(/onHowto/g)].length > 0 && /onHowto: this\.#onHowto/.test(launcher);
+  assert.ok(constructions >= 2, 'both pickers accounted for');
+  assert.ok(wired, 'the launcher forwards its hook');
+  assert.match(app, /onHowto: \(pluginId\) => services\.howto\.openPlugin\(pluginId\)/);
+});
+
 test('ⓘ opens the plugin page, and the About dialog is gone', () => {
   assert.match(picker, /if \(act === 'about'\) \{[\s\S]*this\.#onHowto\?\.\(p\?\.id\)/);
   assert.doesNotMatch(picker, /openPluginAbout/);
