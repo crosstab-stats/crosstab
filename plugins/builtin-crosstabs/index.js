@@ -37,9 +37,39 @@ export const manifest = {
     '  • percent — "none" | "row" | "column" | "total".\n' +
     '  • measures — association measures (see the dialog for options).\n' +
     '  • weight — optional survey weight; cells become weighted case counts.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'crosstabs-basics',
+      title: 'Cross-tabulate two variables',
+      category: 'Descriptive Statistics',
+      keywords: ['crosstab', 'crosstabs', 'contingency', 'two-way', 'table', 'chi-square', 'chisquare', 'association', 'cross tabulation', 'by'],
+      needs: ['builtin-crosstabs'],
+      seeAlso: ['crosstabs-percentages', 'crosstabs-measures'],
+    },
+    {
+      id: 'crosstabs-percentages',
+      title: 'Choose row, column or total percentages',
+      category: 'Descriptive Statistics',
+      keywords: ['percent', 'percentage', 'row', 'column', 'total', 'proportion', 'base'],
+      needs: ['builtin-crosstabs'],
+      seeAlso: ['crosstabs-basics'],
+    },
+    {
+      id: 'crosstabs-measures',
+      title: 'Add an association measure, or a Monte Carlo p-value',
+      category: 'Descriptive Statistics',
+      keywords: ['association', 'cramer', 'phi', 'lambda', 'gamma', 'tau', 'monte carlo', 'montecarlo', 'sparse', 'exact', 'p-value', 'effect size'],
+      needs: ['builtin-crosstabs'],
+      seeAlso: ['crosstabs-basics'],
+    },
+  ],
   rPackages: [],
   menu: [
     {
+      howto: 'crosstabs-basics',
       label: 'Crosstabs…',
       run: 'run',
       order: 30,

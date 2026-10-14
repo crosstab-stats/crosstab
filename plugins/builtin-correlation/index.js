@@ -36,9 +36,31 @@ export const manifest = {
     'Syntax: run builtin-correlation.partial {"vars": ["age", "income"], "controls": ["education"], "type": "partial"}\n' +
     '  • controls — variables to partial out.\n' +
     '  • type — "partial" (default) | "semipartial".',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'correlation-bivariate',
+      title: 'Correlate two or more variables',
+      category: 'Correlation',
+      keywords: ['correlation', 'correlate', 'pearson', 'spearman', 'kendall', 'r', 'matrix', 'bivariate', 'rank', 'association', 'scatter'],
+      needs: ['builtin-correlation'],
+      seeAlso: ['correlation-partial'],
+    },
+    {
+      id: 'correlation-partial',
+      title: 'Control for another variable',
+      category: 'Correlation',
+      keywords: ['partial', 'semipartial', 'part', 'control', 'covariate', 'confound', 'holding constant', 'adjusted'],
+      needs: ['builtin-correlation'],
+      seeAlso: ['correlation-bivariate'],
+    },
+  ],
   rPackages: [],
   menu: [
     {
+      howto: 'correlation-bivariate',
       label: 'Bivariate…',
       run: 'run',
       order: 10,
@@ -70,6 +92,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'correlation-partial',
       label: 'Partial / part correlation…',
       run: 'partial',
       order: 20,

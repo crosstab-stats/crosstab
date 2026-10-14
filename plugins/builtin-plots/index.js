@@ -55,8 +55,110 @@ export const manifest = {
     '  • trends summary — "percent" (default) | "count" | "mean" (needs y); display — "lines" (default) | "stacked" | "stacked100".\n' +
     '  • other charts: Boxplot — run builtin-plots.boxplot {"y": "income", "g": "region"}; ' +
     'Pie — run builtin-plots.pie {"v": "region"}; Bar+error bars — run builtin-plots.errorBars {"y": "income", "g": "region"}.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'plots-choosing',
+      title: 'Choose the right chart',
+      category: 'Graphs',
+      keywords: ['chart', 'graph', 'plot', 'which', 'choose', 'picture', 'visualise', 'visualize', 'measurement', 'nominal', 'scale'],
+      needs: ['builtin-plots'],
+      seeAlso: ['plots-histogram', 'plots-bar', 'plots-scatter'],
+    },
+    {
+      id: 'plots-histogram',
+      title: 'Histogram',
+      category: 'Graphs',
+      keywords: ['histogram', 'distribution', 'bins', 'shape', 'spread', 'skew', 'continuous'],
+      needs: ['builtin-plots'],
+      seeAlso: ['plots-choosing', 'plots-line'],
+    },
+    {
+      id: 'plots-bar',
+      title: 'Bar chart',
+      category: 'Graphs',
+      keywords: ['bar', 'barchart', 'category', 'categorical', 'count', 'percent', 'nominal'],
+      needs: ['builtin-plots'],
+      seeAlso: ['plots-choosing', 'plots-pie', 'plots-error-bars'],
+    },
+    {
+      id: 'plots-line',
+      title: 'Line chart',
+      category: 'Graphs',
+      keywords: ['line', 'linechart', 'distribution', 'continuous', 'percent', 'count'],
+      needs: ['builtin-plots'],
+      seeAlso: ['plots-histogram', 'plots-trends'],
+    },
+    {
+      id: 'plots-scatter',
+      title: 'Scatter plot',
+      category: 'Graphs',
+      keywords: ['scatter', 'scatterplot', 'xy', 'relationship', 'two variables', 'correlation', 'linear'],
+      needs: ['builtin-plots'],
+      seeAlso: ['correlation-bivariate', 'plots-choosing'],
+    },
+    {
+      id: 'plots-trends',
+      title: 'Trends over time',
+      category: 'Graphs',
+      keywords: ['trend', 'trends', 'time', 'year', 'over time', 'series', 'stacked', 'percent', 'group', 'change'],
+      needs: ['builtin-plots'],
+      seeAlso: ['plots-line', 'plots-choosing'],
+    },
+    {
+      id: 'plots-boxplot',
+      title: 'Boxplot',
+      category: 'Graphs',
+      keywords: ['boxplot', 'box', 'whisker', 'quartile', 'median', 'outlier', 'by group', 'spread'],
+      needs: ['builtin-plots'],
+      seeAlso: ['plots-violin', 'plots-dotplot', 'plots-choosing'],
+    },
+    {
+      id: 'plots-pie',
+      title: 'Pie chart',
+      category: 'Graphs',
+      keywords: ['pie', 'piechart', 'share', 'proportion', 'composition', 'categorical'],
+      needs: ['builtin-plots'],
+      seeAlso: ['plots-bar', 'plots-choosing'],
+    },
+    {
+      id: 'plots-error-bars',
+      title: 'Bar chart with error bars',
+      category: 'Graphs',
+      keywords: ['error bars', 'errorbars', 'mean', 'group means', 'uncertainty', 'confidence', 'comparison'],
+      needs: ['builtin-plots'],
+      seeAlso: ['plots-bar', 'plots-dotplot', 'plots-choosing'],
+    },
+    {
+      id: 'plots-violin',
+      title: 'Violin plot (and SuperPlots)',
+      category: 'Graphs',
+      keywords: ['violin', 'density', 'distribution', 'shape', 'superplot', 'replicate', 'experiment', 'by group'],
+      needs: ['builtin-plots'],
+      seeAlso: ['plots-dotplot', 'plots-boxplot'],
+    },
+    {
+      id: 'plots-dotplot',
+      title: 'Dot plot (column scatter)',
+      category: 'Graphs',
+      keywords: ['dot plot', 'dotplot', 'column scatter', 'points', 'raw data', 'superplot', 'replicate', 'small n'],
+      needs: ['builtin-plots'],
+      seeAlso: ['plots-violin', 'plots-error-bars'],
+    },
+    {
+      id: 'plots-before-after',
+      title: 'Before-after plot',
+      category: 'Graphs',
+      keywords: ['before after', 'paired', 'pre post', 'repeated', 'same subject', 'change', 'slope', 'spaghetti'],
+      needs: ['builtin-plots'],
+      seeAlso: ['plots-dotplot', 'plots-choosing'],
+    },
+  ],
   menu: [
     {
+      howto: 'plots-histogram',
       label: 'Histogram…',
       run: 'histogram',
       order: 10,
@@ -65,6 +167,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'plots-bar',
       label: 'Bar chart…',
       run: 'bar',
       order: 12,
@@ -73,6 +176,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'plots-line',
       label: 'Line chart…',
       run: 'line',
       order: 14,
@@ -81,6 +185,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'plots-scatter',
       label: 'Scatter…',
       run: 'scatter',
       order: 20,
@@ -90,6 +195,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'plots-trends',
       label: 'Trends over time…',
       run: 'trends',
       order: 25,
@@ -115,6 +221,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'plots-boxplot',
       label: 'Boxplot…',
       run: 'boxplot',
       order: 30,
@@ -124,12 +231,14 @@ export const manifest = {
       ],
     },
     {
+      howto: 'plots-pie',
       label: 'Pie chart…',
       run: 'pie',
       order: 40,
       inputs: [{ name: 'v', kind: 'variables', hint: 'The category variable whose shares form the slices.', multiple: false, types: ['factor', 'string'] }],
     },
     {
+      howto: 'plots-error-bars',
       label: 'Bar chart with error bars…',
       run: 'errorBars',
       order: 50,
@@ -139,6 +248,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'plots-violin',
       label: 'Violin plot…',
       run: 'violin',
       order: 60,
@@ -149,6 +259,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'plots-dotplot',
       label: 'Dot plot (column scatter)…',
       run: 'dotplot',
       order: 70,
@@ -159,6 +270,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'plots-before-after',
       label: 'Before-after plot…',
       run: 'beforeAfter',
       order: 80,

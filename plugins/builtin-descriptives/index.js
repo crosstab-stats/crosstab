@@ -82,9 +82,31 @@ export const manifest = {
     'Syntax: run builtin-descriptives.explore {"vars": ["tvhours"], "level": 99, "by": "sex"}\n' +
     '  • vars — the measures; level — confidence level in percent (default 95); by — optional grouping variable.\n' +
     '  • Both actions take an optional weight — a survey weight read as a frequency weight, so N becomes its sum.',
+  // How-to topics (#192). The index is small and always-resident; the prose lives
+  // in howto.md, which ships with the plugin and is read when a topic is opened.
+  howtoFile: 'howto.md',
+  howtoIndex: [
+    {
+      id: 'descriptives-basics',
+      title: 'Summarise a variable',
+      category: 'Descriptive Statistics',
+      keywords: ['descriptives', 'mean', 'median', 'sd', 'standard deviation', 'variance', 'minimum', 'maximum', 'range', 'quartiles', 'summary', 'n', 'missing'],
+      needs: ['builtin-descriptives'],
+      seeAlso: ['descriptives-explore', 'frequencies-basics'],
+    },
+    {
+      id: 'descriptives-explore',
+      title: 'Confidence interval for a mean',
+      category: 'Descriptive Statistics',
+      keywords: ['explore', 'confidence interval', 'ci', 'mean', 'estimate', 'level', 'split', 'by group', 'bound'],
+      needs: ['builtin-descriptives'],
+      seeAlso: ['descriptives-basics'],
+    },
+  ],
   rPackages: [],
   menu: [
     {
+      howto: 'descriptives-basics',
       label: 'Descriptives…',
       run: 'run',
       order: 20,
@@ -110,6 +132,7 @@ export const manifest = {
       ],
     },
     {
+      howto: 'descriptives-explore',
       label: 'Explore (confidence interval for the mean)…',
       run: 'explore',
       order: 30,
