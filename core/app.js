@@ -789,7 +789,7 @@ export async function boot(mounts) {
         del.type = 'button';
         del.textContent = '✕';
         del.title = 'Delete this memo';
-        del.style.cssText = 'margin-left:6px;border:0;background:none;color:#687381;cursor:pointer;';
+        del.className = 'ct-iconbtn ct-iconbtn--inline';
         del.addEventListener('click', () => { memoStore.remove(m.id); render(); });
         line.append(del);
         wrap.append(line);
@@ -798,7 +798,7 @@ export async function boot(mounts) {
       add.type = 'button';
       add.textContent = memoStore.countFor(anchor) ? '＋ memo' : '💬 Add a memo';
       add.title = 'Record why this analysis was run, or what to make of it';
-      add.style.cssText = 'border:0;background:none;color:#5a6570;cursor:pointer;padding:2px 0;font-size:12px;';
+      add.className = 'ct-textbtn';
       add.addEventListener('click', () => {
         const input = document.createElement('input');
         input.placeholder = 'Why this analysis, caveats, what you noticed…';
@@ -1080,6 +1080,7 @@ export async function boot(mounts) {
     // Deleting a note from History is a REMOVAL, not a withdrawal: a tombstone that
     // propagates on merge and does not come back on a fast-forward, unlike a record the
     // cursor merely took down with its step.
+    openGuide: () => openSyntaxGuide({ library: howtoLibrary }),
     removeRecord: (rec) => {
       itemStore.remove(rec.owner, rec.collection, rec.id);
       void workspaceManager?.notifyWorkspaceRefresh?.();
@@ -1841,7 +1842,7 @@ export async function boot(mounts) {
     datasets,
     loader, // the authority on what is actually wired — see collectDiagnostics
     plugins: { list: () => (plugins ? plugins.list() : []) },
-    openSyntaxGuide,
+    openSyntaxGuide: () => openSyntaxGuide({ library: howtoLibrary }),
     pluginActions,
     openHowto: () => services.howto.open(),
   });

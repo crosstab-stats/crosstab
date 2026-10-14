@@ -33,6 +33,12 @@ import { renderHowto } from './howto-render.js';
 const state = {
   history: new HowtoHistory(),
   query: '',
+  /** An exact-category restriction, for an entry point that means one section of the
+   * index — "Syntax guide…" is the command reference, not everything matching the word
+   * "syntax" (which also catches a plugin NAMED "R Syntax Export"). Shown as a chip the
+   * reader can clear, because a filtered list that does not say it is filtered is how
+   * someone concludes a topic does not exist. */
+  category: null,
 };
 
 /** The open dialog, so a second request navigates it rather than stacking another. */
@@ -42,6 +48,7 @@ let openDialog = null;
 export function resetHowtoState() {
   state.history.reset();
   state.query = '';
+  state.category = null;
 }
 
 /**
@@ -51,7 +58,14 @@ export function resetHowtoState() {
  *   {@link createHowtoLibrary}'s return; `topicId` jumps to one page (the ⓘ on a plugin
  *   row or an analysis dialog), pushing it so Back still returns where the reader was.
  */
-export function openHowto({ library, topicId } = {}) {
+export function openHowto({ library, topicId, query, category } = {}) {
+  // A caller may open the index pre-filtered. Either kind of filter means going TO the
+  // index, since a filter applied to a page nobody is looking at would be a lie.
+  if (typeof query === 'string' || typeof category === 'string') {
+    state.query = typeof query === 'string' ? query : '';
+    state.category = typeof category === 'string' ? category : null;
+    state.history.push(null);
+  }
   if (topicId) state.history.push(topicId);
   if (openDialog) {
     renderInto(openDialog, library);
@@ -144,6 +158,15 @@ function renderIndex(content, library, dialog) {
     class: 'howto__scope',
   });
   filterBar.append(input, scope);
+  // The restriction, said out loud and removable in one tap.
+  if (state.category) {
+    const chip = el('button', { class: 'howto__chip' });
+    chip.type = 'button';
+    chip.append(el('span', { text: `Showing ${state.category}` }), el('span', { text: '✕', class: 'howto__chipx' }));
+    chip.title = 'Show every topic';
+    chip.addEventListener('click', () => { state.category = null; renderInto(dialog, library); });
+    filterBar.append(chip);
+  }
   content.append(filterBar);
 
   const list = el('div', { class: 'howto__list' });
@@ -151,7 +174,8 @@ function renderIndex(content, library, dialog) {
 
   const draw = () => {
     list.replaceChildren();
-    const shown = filterTopics(all, state.query);
+    const scoped = state.category ? all.filter((t) => t.category === state.category) : all;
+    const shown = filterTopics(scoped, state.query);
     if (!all.length) {
       list.append(el('p', {
         text: 'No how-to topics are installed yet. Plugins provide these, so enabling more plugins adds more.',
@@ -160,7 +184,9 @@ function renderIndex(content, library, dialog) {
       return;
     }
     if (!shown.length) {
-      list.append(el('p', { text: `Nothing matches “${state.query}”.`, class: 'howto__empty' }));
+      const why = state.category && state.query ? `“${state.query}” in ${state.category}`
+        : state.category ? state.category : `“${state.query}”`;
+      list.append(el('p', { text: `Nothing matches ${why}.`, class: 'howto__empty' }));
       return;
     }
     for (const [category, topics] of groupTopics(shown)) {

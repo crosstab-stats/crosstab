@@ -13,7 +13,6 @@
 
 import { CoreEvents } from './event-bus.js';
 import { serializeProject, parse } from './crosstab-syntax.js';
-import { openSyntaxGuide } from './syntax-guide.js';
 import { stataToScript } from './stata-import.js';
 import { spssToScript } from './spss-import.js';
 import { scriptToStata, scriptToSpss, scriptFileName, scriptToR } from './script-export.js';
@@ -632,7 +631,7 @@ export class DataView {
       const del = el('button', { text: '✕' });
       del.type = 'button';
       del.title = 'Delete this memo';
-      del.style.cssText = 'border:0;background:none;color:#687381;cursor:pointer;';
+      del.className = 'ct-iconbtn ct-iconbtn--inline';
       del.addEventListener('click', () => { this.memos.remove(m.id); close(); this.#applyMemoMark(td, anchor); });
       line.append(txt, del);
       menu.append(line);
@@ -640,7 +639,7 @@ export class DataView {
 
     const add = el('button', { text: this.memos.countFor(anchor) ? '＋ Add another memo' : '💬 Add memo…' });
     add.type = 'button';
-    add.style.cssText = 'display:block;width:100%;text-align:left;padding:6px 10px;border:0;background:none;cursor:pointer;color:#2b6cb0;';
+    add.className = 'cellmenu__add';
     add.addEventListener('click', () => {
       add.replaceWith(this.#memoInput(anchor, close, td));
     });
@@ -1466,6 +1465,8 @@ export class HistoryPanel {
 
   #removeRecord = null;
 
+  #openGuide = null;
+
   /**
    * @param {import('./data-store.js').DataStore} store
    * @param {import('./event-bus.js').EventBus} bus
@@ -1475,7 +1476,7 @@ export class HistoryPanel {
    */
   constructor(store, bus, {
     analysisLog = null, pluginActions = null, undo = null, results = null,
-    itemRecords = null, removeRecord = null,
+    itemRecords = null, removeRecord = null, openGuide = null,
   } = {}) {
     this.#store = store;
     this.#bus = bus;
@@ -1485,6 +1486,10 @@ export class HistoryPanel {
     this.#results = results;
     this.#itemRecords = itemRecords;
     this.#removeRecord = removeRecord;
+    // The syntax reference, opened by the editor's ❓. Injected rather than imported so
+    // this view keeps no opinion about what the guide IS — it moved from a dialog of its
+    // own into the shared how-to index without this file noticing.
+    this.#openGuide = openGuide;
     // The Syntax gutter positions each label at `pad + i * lineHeight`, and the line
     // height DIFFERS between screen modes (26px, 44px on a phone — the taller line is
     // what gives its per-line controls room to be a real touch target). So a mode change
@@ -1608,8 +1613,8 @@ export class HistoryPanel {
     });
     const guide = el('button', { text: '❓ Syntax guide', class: 'history-panel__action' });
     guide.type = 'button';
-    guide.title = 'Open the CrossTab syntax reference and the list of plugin calls';
-    guide.addEventListener('click', () => openSyntaxGuide({ pluginActions: this.#pluginActions }));
+    guide.title = 'Open the CrossTab syntax reference';
+    guide.addEventListener('click', () => this.#openGuide?.());
     // "Unsaved edits" indicator — the textarea is a draft until you Run; this makes
     // that visible so a draft never feels silently lost.
     const dirtyHint = el('span', { class: 'history-panel__dirty' });

@@ -101,3 +101,178 @@ Your work leaves in whatever shape you need it:
 - **The project** itself saves everything: data, history, analyses and notes together, so reopening it puts you exactly where you left off.
 
 Keep your own copies of anything that matters. This is pre-release software and it says so on the launcher for a reason.
+
+--- id: syntax-compute
+`compute NAME [as TYPE] = EXPR`
+
+Create or overwrite a variable from a DuckDB expression.
+
+**Example**
+
+`compute bmi = weight / pow(height / 100, 2)`
+
+One statement per line. See [reading and running the script](howto:syntax-basics) for how to edit and re-run them together.
+
+
+--- id: syntax-recode
+`recode SRC into NAME [as TYPE]: RULES`
+
+Map values into a new variable. Rules: `V -> TO`, `LO..HI -> TO`, `missing -> TO`, and a trailing `else TO`. TO is a value, `copy`, or `sysmis`.
+
+**Example**
+
+`recode age into agegrp: 0..17 -> 1; 18..64 -> 2; else 3`
+
+One statement per line. See [reading and running the script](howto:syntax-basics) for how to edit and re-run them together.
+
+
+--- id: syntax-keep-if
+`keep if EXPR`
+
+Filter rows — keep only those where the boolean expression holds.
+
+**Example**
+
+`keep if region = 1 and age >= 18`
+
+One statement per line. See [reading and running the script](howto:syntax-basics) for how to edit and re-run them together.
+
+
+--- id: syntax-drop
+`drop VAR1, VAR2 …`
+
+Remove columns from the dataset view (sources stay intact; reversible).
+
+**Example**
+
+`drop id notes rawscore`
+
+One statement per line. See [reading and running the script](howto:syntax-basics) for how to edit and re-run them together.
+
+
+--- id: syntax-keep-vars
+`keep VAR1, VAR2 …`
+
+Keep only these columns (drops the rest). Note: `keep if` filters rows, `keep VARS` keeps columns.
+
+**Example**
+
+`keep age income region`
+
+One statement per line. See [reading and running the script](howto:syntax-basics) for how to edit and re-run them together.
+
+
+--- id: syntax-rename
+`rename OLD to NEW`
+
+Rename a variable (keeps its position, type, and labels).
+
+**Example**
+
+`rename q1 to satisfaction`
+
+One statement per line. See [reading and running the script](howto:syntax-basics) for how to edit and re-run them together.
+
+
+--- id: syntax-set-cell
+`set cell row N COLUMN = VALUE`
+
+Edit one cell. Row is 1-based; an empty string ("") sets it blank (NA).
+
+**Example**
+
+`set cell row 8 income = 52000`
+
+One statement per line. See [reading and running the script](howto:syntax-basics) for how to edit and re-run them together.
+
+
+--- id: syntax-label-variable
+`label variable NAME "Text"`
+
+Set a variable’s descriptive label.
+
+**Example**
+
+`label variable agegrp "Age group"`
+
+One statement per line. See [reading and running the script](howto:syntax-basics) for how to edit and re-run them together.
+
+
+--- id: syntax-label-values
+`label values NAME code "Label", …`
+
+Attach value labels to codes.
+
+**Example**
+
+`label values agegrp 1 "Minor", 2 "Adult", 3 "Senior"`
+
+One statement per line. See [reading and running the script](howto:syntax-basics) for how to edit and re-run them together.
+
+
+--- id: syntax-set-type
+`set type NAME = numeric | string | factor`
+
+Change a variable’s storage type.
+
+**Example**
+
+`set type agegrp = factor`
+
+One statement per line. See [reading and running the script](howto:syntax-basics) for how to edit and re-run them together.
+
+
+--- id: syntax-set-measure
+`set measure NAME = nominal | ordinal | scale`
+
+Set the measurement level.
+
+**Example**
+
+`set measure agegrp = ordinal`
+
+One statement per line. See [reading and running the script](howto:syntax-basics) for how to edit and re-run them together.
+
+
+--- id: syntax-set-missing
+`set missing NAME = v1, v2   (or none)`
+
+Declare user-missing codes (or clear them with `none`).
+
+**Example**
+
+`set missing income = -99, -98`
+
+One statement per line. See [reading and running the script](howto:syntax-basics) for how to edit and re-run them together.
+
+
+--- id: syntax-run
+`run pluginId.fn {json-inputs}`
+
+Run an analysis or plugin, passing its inputs as JSON. See “Running analyses” below for each plugin’s exact call.
+
+**Example**
+
+`run builtin-frequencies.run {"vars": ["gender"]}`
+
+One statement per line. See [reading and running the script](howto:syntax-basics) for how to edit and re-run them together.
+
+
+--- id: syntax-comment
+`# comment`
+
+A comment line, ignored on Run. Data sources (imports/appends/joins) appear as # comments — they’re read-only anchors; re-import to change them.
+
+**Example**
+
+`# use "survey.sav"`
+
+One statement per line. See [reading and running the script](howto:syntax-basics) for how to edit and re-run them together.
+
+
+--- id: syntax-expressions
+Expressions (EXPR) are DuckDB SQL, kept verbatim — anything DuckDB can evaluate works.
+
+Variable names with spaces or punctuation go in `backticks`. Strings use "double quotes"; numbers are bare.
+
+Tip: run any analysis once from the menu, then open History ▸ ✎ Syntax — its exact `run …` line is right there to copy as a template.

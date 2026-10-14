@@ -979,6 +979,41 @@
       .ws-verb:hover { background: #eef3f8; }
       .ws-verb--restart { color: #5a6470; }
 
+      /* --- shared small controls ---------------------------------------------
+         These replace `style.cssText` on five controls (#192). An inline style cannot be
+         overridden by ANY rule, so a control styled that way is a control the
+         small-screen pass cannot reach — which is how the workspace "Restart" stayed at
+         22px, how the Syntax editor's font could not be resized, and how a 16x19px close
+         button came to be missed five times in a row. Styling a control inline is a quiet
+         opt-out of the app's own layout. */
+      .ct-iconbtn {
+        border: 0; background: none; color: #687381; cursor: pointer;
+        font: inherit; line-height: 1; border-radius: 6px; min-width: 28px; min-height: 28px;
+      }
+      .ct-iconbtn:hover { background: #eef3f8; color: #1a1a1a; }
+      .ct-iconbtn--inline { margin-left: 6px; }
+      .ct-textbtn {
+        border: 0; background: none; color: #5a6570; cursor: pointer;
+        font: inherit; font-size: 12px; padding: 2px 0; text-align: left;
+      }
+      .ct-textbtn:hover { color: var(--accent, #2572a5); }
+      .ct-primarybtn {
+        font: inherit; background: var(--accent, #2572a5); color: #fff;
+        border: 1px solid var(--accent, #2572a5); border-radius: 6px;
+        padding: 6px 12px; cursor: pointer;
+      }
+      .ct-primarybtn:disabled { opacity: .55; cursor: default; }
+      .cellmenu__add {
+        display: block; width: 100%; text-align: left; padding: 6px 10px;
+        border: 0; background: none; cursor: pointer; color: #2b6cb0; font: inherit;
+      }
+      .cellmenu__add:hover { background: #eef5fb; }
+      /* The touch sizes those controls could never have been given before. */
+      [data-screen="small"] .ct-iconbtn { min-width: 44px; min-height: 44px; font-size: 16px; }
+      [data-screen="small"] .ct-textbtn { font-size: 15px; min-height: 44px; }
+      [data-screen="small"] .ct-primarybtn { font-size: 16px; min-height: 44px; }
+      [data-screen="small"] .cellmenu__add { font-size: 16px; min-height: 44px; }
+
       /* --- the How-to overlay (#192) -----------------------------------------
          Class-based throughout, deliberately. The Syntax guide it replaces was styled
          inline, which is why its close button was ~16x19px and why no small-screen rule
@@ -1015,6 +1050,16 @@
          and gets nothing would otherwise conclude the topic does not exist. */
       .howto__scope { margin: 6px 2px 0; font-size: 12px; color: #6b7682; }
 
+      /* The category restriction an entry point applied, visible and removable. */
+      .howto__chip {
+        display: inline-flex; align-items: center; gap: 8px; margin: 8px 2px 0;
+        font: inherit; font-size: 13px; min-height: 36px; padding: 0 12px;
+        border: 1px solid #cfe0f2; border-radius: 18px; background: #eaf2fb;
+        color: #2a4a68; cursor: pointer;
+      }
+      .howto__chip:hover { background: #ddeafa; }
+      .howto__chipx { color: #5a7fa8; font-size: 12px; }
+      [data-screen="small"] .howto__chip { min-height: 44px; font-size: 15px; }
       .howto__group {
         margin: 16px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
         color: #8b96a1; font-weight: 700;

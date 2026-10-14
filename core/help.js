@@ -431,7 +431,7 @@ export function registerHelpMenu({ menus, datasets, loader, plugins, openSyntaxG
       path: ['Help'],
       label: 'Syntax guide…',
       order: 2,
-      command: () => openSyntaxGuide({ pluginActions }),
+      command: () => openSyntaxGuide(),
     });
   }
   menus.register({

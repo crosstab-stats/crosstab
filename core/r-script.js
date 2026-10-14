@@ -144,7 +144,10 @@ async function offerImport({ webr, datasets, runId = null }) {
   close.value = 'cancel';
   const importBtn = el('button', { text: 'Import', class: 'ct-dialog__primary' });
   importBtn.type = 'button';
-  importBtn.style.cssText = 'background:var(--accent,#2572a5); color:#fff; border:1px solid var(--accent,#2572a5); border-radius:6px; padding:6px 14px; cursor:pointer;';
+  // classList.add, not className: the element already carries 'ct-dialog__primary', and
+  // the inline style this replaces was duplicating that rule for the case where the
+  // button sits outside a .ct-dialog__buttons row.
+  importBtn.classList.add('ct-primarybtn');
   importBtn.addEventListener('click', async () => {
     importBtn.disabled = true;
     msg.textContent = 'Importing…';

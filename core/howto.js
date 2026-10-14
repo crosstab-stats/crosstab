@@ -42,9 +42,6 @@ const DELIM = /^-{3,}\s*id:\s*(\S+)\s*$/;
 /** A topic id: the same shape as a plugin id, so it can be spoken in a `howto:` link. */
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
 
-/** Which screen a screenshot is OF. `any` (the default) is shown in either mode. */
-const SCREENS = new Set(['full', 'small', 'any']);
-
 /**
  * Normalise one declared index entry, or null if it cannot be trusted.
  *
@@ -99,7 +96,29 @@ export function collectTopics(catalogue) {
   const seen = new Set();
   for (const entry of catalogue ?? []) {
     const owner = { pluginId: entry?.id ?? null, pluginName: entry?.name ?? null, howtoFile: entry?.howtoFile };
-    for (const raw of Array.isArray(entry?.howtoIndex) ? entry.howtoIndex : []) {
+    const declared = Array.isArray(entry?.howtoIndex) ? entry.howtoIndex : [];
+    // LEGACY BRIDGE. 64 built-ins already carry a one-line `howto` written for the plugin
+    // manager's magnifier, and it usually contains the GUI route and the syntax call form
+    // — the two things a reader most wants. Rather than strand that content until every
+    // manifest is rewritten, a plugin with a `howto` and no index contributes one topic
+    // whose body is that string. An authored `howtoIndex` supersedes it entirely, which is
+    // the upgrade path: write real topics and the placeholder disappears.
+    //
+    // Its body is INLINE, so no sidecar fetch happens for it.
+    if (!declared.length && typeof entry?.howto === 'string' && entry.howto.trim() && entry?.id) {
+      const topic = normalizeTopic({
+        id: `plugin-${entry.id}`,
+        title: `Using ${entry.name ?? entry.id}`,
+        category: entry.category || 'Other',
+        keywords: Array.isArray(entry.keywords) ? entry.keywords : [],
+        needs: [entry.id],
+      }, owner);
+      if (topic && !seen.has(topic.id)) {
+        seen.add(topic.id);
+        out.push({ ...topic, file: null, inlineBody: entry.howto });
+      }
+    }
+    for (const raw of declared) {
       const topic = normalizeTopic(raw, owner);
       if (!topic) continue;
       // A topic id has to be unique across the whole index, because `howto:` links
